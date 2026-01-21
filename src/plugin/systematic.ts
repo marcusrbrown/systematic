@@ -16,6 +16,40 @@ const bundledSkillsDir = path.join(packageRoot, 'defaults/skills')
 const bundledAgentsDir = path.join(packageRoot, 'defaults/agents')
 const bundledCommandsDir = path.join(packageRoot, 'defaults/commands')
 
+type NamedItem = { name: string; sourceType: string }
+
+function deduplicateItems(
+  lists: NamedItem[][],
+  disabled: string[],
+): NamedItem[] {
+  const seen = new Set<string>()
+  const items: NamedItem[] = []
+
+  for (const list of lists) {
+    for (const item of list) {
+      if (seen.has(item.name) || disabled.includes(item.name)) continue
+      seen.add(item.name)
+      items.push(item)
+    }
+  }
+
+  return items.sort((a, b) => a.name.localeCompare(b.name))
+}
+
+function formatItemList(
+  items: NamedItem[],
+  emptyMessage: string,
+  header: string,
+): string {
+  if (items.length === 0) return emptyMessage
+
+  let output = header
+  for (const item of items) {
+    output += `- ${item.name} (${item.sourceType})\n`
+  }
+  return output
+}
+
 interface PluginContext {
   client: {
     session: {
@@ -256,30 +290,16 @@ export const SystematicPlugin = async ({
             'bundled',
           )
 
-          const seen = new Set<string>()
-          const agents: Array<{ name: string; sourceType: string }> = []
+          const agents = deduplicateItems(
+            [projectAgents, userAgents, bundledAgents],
+            config.disabled_agents,
+          )
 
-          for (const list of [projectAgents, userAgents, bundledAgents]) {
-            for (const agent of list) {
-              if (seen.has(agent.name)) continue
-              if (config.disabled_agents.includes(agent.name)) continue
-              seen.add(agent.name)
-              agents.push({ name: agent.name, sourceType: agent.sourceType })
-            }
-          }
-
-          if (agents.length === 0) {
-            return 'No agents available.'
-          }
-
-          let output = 'Available agents:\n\n'
-          for (const agent of agents.sort((a, b) =>
-            a.name.localeCompare(b.name),
-          )) {
-            output += `- ${agent.name} (${agent.sourceType})\n`
-          }
-
-          return output
+          return formatItemList(
+            agents,
+            'No agents available.',
+            'Available agents:\n\n',
+          )
         },
       }),
 
@@ -300,30 +320,16 @@ export const SystematicPlugin = async ({
             'bundled',
           )
 
-          const seen = new Set<string>()
-          const commands: Array<{ name: string; sourceType: string }> = []
+          const commands = deduplicateItems(
+            [projectCommands, userCommands, bundledCommands],
+            config.disabled_commands,
+          )
 
-          for (const list of [projectCommands, userCommands, bundledCommands]) {
-            for (const cmd of list) {
-              if (seen.has(cmd.name)) continue
-              if (config.disabled_commands.includes(cmd.name)) continue
-              seen.add(cmd.name)
-              commands.push({ name: cmd.name, sourceType: cmd.sourceType })
-            }
-          }
-
-          if (commands.length === 0) {
-            return 'No commands available.'
-          }
-
-          let output = 'Available commands:\n\n'
-          for (const cmd of commands.sort((a, b) =>
-            a.name.localeCompare(b.name),
-          )) {
-            output += `- ${cmd.name} (${cmd.sourceType})\n`
-          }
-
-          return output
+          return formatItemList(
+            commands,
+            'No commands available.',
+            'Available commands:\n\n',
+          )
         },
       }),
     },
