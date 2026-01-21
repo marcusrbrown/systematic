@@ -17,8 +17,9 @@
   "scripts": {
     "build": "bun build src/index.ts src/cli.ts --outdir dist --target node --format esm --splitting --external @opencode-ai/plugin/tool",
     "dev": "bun --watch src/index.ts",
-    "test": "bash tests/run-tests.sh",
-    "test:integration": "bash tests/run-tests.sh --integration",
+    "test": "bun test tests/unit",
+    "test:integration": "bun test tests/integration",
+    "test:all": "bun test",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "prepublishOnly": "bun run build && bun run test"
@@ -34,10 +35,11 @@
     "node": ">=18"
   },
   "peerDependencies": {
-    "@opencode-ai/plugin": ">=0.1.0"
+    "@opencode-ai/plugin": "^1.1.30"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",
+    "@opencode-ai/plugin": "^1.1.30",
     "@types/bun": "latest",
     "@types/node": "^22.0.0",
     "typescript": "^5.7.0"
