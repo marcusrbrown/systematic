@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs'
 import path from 'node:path'
-import * as skillsCore from '../lib/skills-core.js'
+import * as skillsCore from './lib/skills-core.js'
 
 const VERSION = '0.1.0'
 
@@ -74,8 +74,9 @@ type SourceType = 'project' | 'user' | 'bundled'
 function listItems(type: string): void {
   const userDir = getUserConfigDir()
   const projectDir = getProjectConfigDir()
-  const packageRoot = path.resolve(import.meta.dirname, '../..')
-  const bundledDir = path.join(packageRoot, 'defaults')
+  // dist/cli.js -> ../
+  const packageRoot = path.resolve(import.meta.dirname, '..')
+  const bundledDir = packageRoot
 
   let finder: (
     dir: string,

@@ -3,17 +3,20 @@
   "version": "0.1.0",
   "description": "Structured engineering workflows for OpenCode",
   "type": "module",
-  "main": "./dist/plugin/systematic.js",
+  "main": "./dist/index.js",
   "bin": {
-    "systematic": "./dist/cli/index.js"
+    "systematic": "./dist/cli.js"
   },
-  "files": ["dist", "skills", "agents", "commands", "defaults"],
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": ["dist", "skills", "agents", "commands", "bootstrap.md"],
   "scripts": {
-    "build": "bun run build:lib && bun run build:plugin && bun run build:cli",
-    "build:lib": "bun build src/lib/skills-core.ts --outfile dist/lib/skills-core.js --target node --format esm",
-    "build:plugin": "bun build src/plugin/systematic.ts --outfile dist/plugin/systematic.js --target node --format esm --external @opencode-ai/plugin/tool",
-    "build:cli": "bun build src/cli/index.ts --outfile dist/cli/index.js --target node --format esm",
-    "dev": "bun --watch src/plugin/systematic.ts",
+    "build": "bun build src/index.ts src/cli.ts --outdir dist --target node --format esm --splitting --external @opencode-ai/plugin/tool",
+    "dev": "bun --watch src/index.ts",
     "test": "bash tests/run-tests.sh",
     "test:integration": "bash tests/run-tests.sh --integration",
     "typecheck": "tsc --noEmit",

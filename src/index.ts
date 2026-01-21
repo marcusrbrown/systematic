@@ -3,18 +3,16 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { tool } from '@opencode-ai/plugin/tool'
-import { type SystematicConfig, loadConfig } from '../lib/config'
-import * as skillsCore from '../lib/skills-core'
+import { type SystematicConfig, loadConfig } from './lib/config.js'
+import * as skillsCore from './lib/skills-core.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-// Find package root by walking up from dist/plugin/
-// In npm package: dist/plugin/systematic.js -> ../../defaults/skills
-// In dev: dist/plugin/systematic.js -> ../../defaults/skills
-const packageRoot = path.resolve(__dirname, '../..')
-const bundledSkillsDir = path.join(packageRoot, 'defaults/skills')
-const bundledAgentsDir = path.join(packageRoot, 'defaults/agents')
-const bundledCommandsDir = path.join(packageRoot, 'defaults/commands')
+// Find package root: dist/index.js -> ../
+const packageRoot = path.resolve(__dirname, '..')
+const bundledSkillsDir = path.join(packageRoot, 'skills')
+const bundledAgentsDir = path.join(packageRoot, 'agents')
+const bundledCommandsDir = path.join(packageRoot, 'commands')
 
 type NamedItem = { name: string; sourceType: string }
 
