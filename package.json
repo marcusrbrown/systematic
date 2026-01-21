@@ -28,13 +28,7 @@
     "lint": "biome check .",
     "prepublishOnly": "bun run build && bun run test"
   },
-  "keywords": [
-    "opencode",
-    "plugin",
-    "ai",
-    "workflow",
-    "engineering"
-  ],
+  "keywords": ["opencode", "plugin", "ai", "workflow", "engineering"],
   "author": "Marcus R. Brown",
   "license": "MIT",
   "repository": {
