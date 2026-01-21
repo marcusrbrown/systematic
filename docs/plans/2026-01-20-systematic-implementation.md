@@ -2,11 +2,13 @@
 
 > **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
 
-**Goal:** Build and publish `@fro.bot/systematic`, an OpenCode plugin providing structured engineering workflows.
+**Goal:** Build and publish `@fro.bot/systematic`, an OpenCode plugin providing structured engineering workflows ported from CEP and Superpowers.
 
-**Architecture:** npm package with Bun development, Node-compatible production. Plugin exports tools and uses `experimental.chat.system.transform` for bootstrap injection. Three-tier content resolution (project > user > bundled).
+**Architecture:** npm package with Bun development, Node-compatible production. Plugin uses `tool()` from `@opencode-ai/plugin/tool`. Bootstrap injection uses `experimental.chat.system.transform` hook (NOT `session.prompt()`) as workaround for model reset issue per [Superpowers PR #228](https://github.com/obra/superpowers/pull/228). Three-tier content resolution (project > user > bundled).
 
 **Tech Stack:** TypeScript, Bun, Commander.js (CLI), JSONC (config parsing)
+
+**Reference Implementation:** https://github.com/obra/superpowers (OpenCode plugin pattern)
 
 ---
 
@@ -28,33 +30,30 @@
   "version": "0.1.0",
   "description": "Structured engineering workflows for OpenCode",
   "type": "module",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
+  "main": "./.opencode/plugin/systematic.js",
   "bin": {
     "systematic": "./dist/cli/index.js"
   },
-  "exports": {
-    ".": {
-      "import": "./dist/index.js",
-      "types": "./dist/index.d.ts"
-    }
-  },
   "files": [
+    ".opencode",
     "dist",
+    "lib",
     "skills",
     "agents",
     "commands",
     "defaults"
   ],
   "scripts": {
-    "build": "bun build:plugin && bun build:cli",
-    "build:plugin": "bun build src/index.ts --outdir dist --target node --format esm",
+    "build": "bun run build:lib && bun run build:plugin && bun run build:cli",
+    "build:lib": "bun build src/lib/skills-core.ts --outfile lib/skills-core.js --target node --format esm",
+    "build:plugin": "bun build src/plugin/systematic.ts --outfile .opencode/plugin/systematic.js --target node --format esm --external @opencode-ai/plugin/tool",
     "build:cli": "bun build src/cli/index.ts --outdir dist/cli --target node --format esm",
-    "dev": "bun --watch src/index.ts",
-    "test": "bun test",
+    "dev": "bun --watch src/plugin/systematic.ts",
+    "test": "bash tests/run-tests.sh",
+    "test:integration": "bash tests/run-tests.sh --integration",
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
-    "prepublishOnly": "bun run build"
+    "prepublishOnly": "bun run build && bun run test"
   },
   "keywords": [
     "opencode",
@@ -71,6 +70,9 @@
   },
   "engines": {
     "node": ">=18"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=0.1.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.0",
@@ -107,8 +109,7 @@ target = "node"
     "types": ["bun-types", "node"],
     "strict": true,
     "skipLibCheck": true,
-    "declaration": true,
-    "declarationMap": true,
+    "declaration": false,
     "outDir": "./dist",
     "rootDir": "./src",
     "esModuleInterop": true,
@@ -117,7 +118,7 @@ target = "node"
     "noEmit": true
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist"]
+  "exclude": ["node_modules", "dist", "lib", ".opencode"]
 }
 ```
 
@@ -129,6 +130,8 @@ node_modules/
 
 # Build output
 dist/
+lib/
+.opencode/plugin/
 
 # IDE
 .idea/
@@ -140,6 +143,7 @@ dist/
 
 # Test
 coverage/
+tests/tmp/
 
 # Logs
 *.log
@@ -200,7 +204,7 @@ git commit -m "chore: initialize npm package with Bun"
     }
   },
   "files": {
-    "ignore": ["dist", "node_modules", "*.md"]
+    "ignore": ["dist", "lib", ".opencode", "node_modules", "*.md"]
   }
 }
 ```
@@ -219,241 +223,295 @@ git commit -m "chore: add Biome for linting and formatting"
 
 ---
 
-### Task 1.3: Implement Path Resolution Utilities
+### Task 1.3: Create Skills Core Library
+
+This is the shared library used by the plugin for skill resolution. Modeled directly after Superpowers' `lib/skills-core.js`.
 
 **Files:**
-- Create: `src/lib/paths.ts`
-- Create: `src/lib/paths.test.ts`
+- Create: `src/lib/skills-core.ts`
 
-**Step 1: Write the failing test**
-
-```typescript
-// src/lib/paths.test.ts
-import { describe, expect, test } from 'bun:test'
-import { resolvePath, getConfigPaths, getBundledPath } from './paths'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
-
-describe('resolvePath', () => {
-  test('expands tilde to home directory', () => {
-    const result = resolvePath('~/.config/opencode')
-    expect(result).toBe(join(homedir(), '.config/opencode'))
-  })
-
-  test('returns absolute paths unchanged', () => {
-    const result = resolvePath('/usr/local/bin')
-    expect(result).toBe('/usr/local/bin')
-  })
-
-  test('resolves relative paths from cwd', () => {
-    const result = resolvePath('./foo')
-    expect(result).toBe(join(process.cwd(), 'foo'))
-  })
-})
-
-describe('getConfigPaths', () => {
-  test('returns user and project config paths', () => {
-    const paths = getConfigPaths('/project/dir')
-    expect(paths.userConfig).toBe(join(homedir(), '.config/opencode/systematic.json'))
-    expect(paths.projectConfig).toBe('/project/dir/.opencode/systematic.json')
-  })
-})
-
-describe('getBundledPath', () => {
-  test('returns path within package for skills', () => {
-    const result = getBundledPath('skills')
-    expect(result).toContain('skills')
-  })
-})
-```
-
-**Step 2: Run test to verify it fails**
-
-Run: `bun test src/lib/paths.test.ts`
-Expected: FAIL with "Cannot find module"
-
-**Step 3: Write minimal implementation**
+**Step 1: Create skills-core.ts**
 
 ```typescript
-// src/lib/paths.ts
-import { homedir } from 'node:os'
-import { resolve, join, isAbsolute } from 'node:path'
-import { fileURLToPath } from 'node:url'
-import { dirname } from 'node:path'
+// src/lib/skills-core.ts
+import fs from 'fs'
+import path from 'path'
 
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = dirname(__filename)
-
-export function resolvePath(inputPath: string): string {
-  if (inputPath.startsWith('~/')) {
-    return join(homedir(), inputPath.slice(2))
-  }
-  if (isAbsolute(inputPath)) {
-    return inputPath
-  }
-  return resolve(process.cwd(), inputPath)
+export interface SkillFrontmatter {
+  name: string
+  description: string
 }
 
-export interface ConfigPaths {
-  userConfig: string
-  projectConfig: string
-  userDir: string
-  projectDir: string
+export interface SkillInfo {
+  path: string
+  skillFile: string
+  name: string
+  description: string
+  sourceType: 'project' | 'user' | 'bundled'
 }
 
-export function getConfigPaths(projectDir: string): ConfigPaths {
-  return {
-    userConfig: join(homedir(), '.config/opencode/systematic.json'),
-    projectConfig: join(projectDir, '.opencode/systematic.json'),
-    userDir: join(homedir(), '.config/opencode/systematic'),
-    projectDir: join(projectDir, '.opencode/systematic'),
+export interface ResolvedSkill {
+  skillFile: string
+  sourceType: 'project' | 'user' | 'bundled'
+  skillPath: string
+}
+
+/**
+ * Extract YAML frontmatter from a skill file.
+ * Format:
+ * ---
+ * name: skill-name
+ * description: Use when [condition] - [what it does]
+ * ---
+ */
+export function extractFrontmatter(filePath: string): SkillFrontmatter {
+  try {
+    const content = fs.readFileSync(filePath, 'utf8')
+    const lines = content.split('\n')
+
+    let inFrontmatter = false
+    let name = ''
+    let description = ''
+
+    for (const line of lines) {
+      if (line.trim() === '---') {
+        if (inFrontmatter) break
+        inFrontmatter = true
+        continue
+      }
+
+      if (inFrontmatter) {
+        const match = line.match(/^(\w+):\s*(.*)$/)
+        if (match) {
+          const [, key, value] = match
+          if (key === 'name') name = value.trim()
+          if (key === 'description') description = value.trim()
+        }
+      }
+    }
+
+    return { name, description }
+  } catch {
+    return { name: '', description: '' }
   }
 }
 
-export function getBundledPath(type: 'skills' | 'agents' | 'commands' | 'defaults'): string {
-  // Navigate from dist/lib to package root, then to content dir
-  return resolve(__dirname, '..', '..', type)
+/**
+ * Strip YAML frontmatter from skill content.
+ */
+export function stripFrontmatter(content: string): string {
+  const lines = content.split('\n')
+  let inFrontmatter = false
+  let frontmatterEnded = false
+  const contentLines: string[] = []
+
+  for (const line of lines) {
+    if (line.trim() === '---') {
+      if (inFrontmatter) {
+        frontmatterEnded = true
+        continue
+      }
+      inFrontmatter = true
+      continue
+    }
+
+    if (frontmatterEnded || !inFrontmatter) {
+      contentLines.push(line)
+    }
+  }
+
+  return contentLines.join('\n').trim()
 }
 
-export function getPackageRoot(): string {
-  return resolve(__dirname, '..', '..')
-}
-```
+/**
+ * Find all SKILL.md files in a directory recursively.
+ */
+export function findSkillsInDir(
+  dir: string,
+  sourceType: 'project' | 'user' | 'bundled',
+  maxDepth = 3
+): SkillInfo[] {
+  const skills: SkillInfo[] = []
 
-**Step 4: Run test to verify it passes**
+  if (!fs.existsSync(dir)) return skills
 
-Run: `bun test src/lib/paths.test.ts`
-Expected: PASS
+  function recurse(currentDir: string, depth: number) {
+    if (depth > maxDepth) return
 
-**Step 5: Commit**
+    const entries = fs.readdirSync(currentDir, { withFileTypes: true })
 
-```bash
-git add src/lib/paths.ts src/lib/paths.test.ts
-git commit -m "feat: add path resolution utilities"
-```
+    for (const entry of entries) {
+      const fullPath = path.join(currentDir, entry.name)
 
----
-
-### Task 1.4: Implement Deep Merge Utility
-
-**Files:**
-- Create: `src/lib/deep-merge.ts`
-- Create: `src/lib/deep-merge.test.ts`
-
-**Step 1: Write the failing test**
-
-```typescript
-// src/lib/deep-merge.test.ts
-import { describe, expect, test } from 'bun:test'
-import { deepMerge, mergeArraysUnique } from './deep-merge'
-
-describe('deepMerge', () => {
-  test('merges flat objects', () => {
-    const result = deepMerge({ a: 1 }, { b: 2 })
-    expect(result).toEqual({ a: 1, b: 2 })
-  })
-
-  test('later values override earlier', () => {
-    const result = deepMerge({ a: 1 }, { a: 2 })
-    expect(result).toEqual({ a: 2 })
-  })
-
-  test('deeply merges nested objects', () => {
-    const result = deepMerge(
-      { bootstrap: { enabled: true, file: null } },
-      { bootstrap: { file: 'custom.md' } }
-    )
-    expect(result).toEqual({ bootstrap: { enabled: true, file: 'custom.md' } })
-  })
-
-  test('replaces arrays by default', () => {
-    const result = deepMerge({ arr: [1, 2] }, { arr: [3, 4] })
-    expect(result).toEqual({ arr: [3, 4] })
-  })
-})
-
-describe('mergeArraysUnique', () => {
-  test('deduplicates and merges arrays', () => {
-    const result = mergeArraysUnique(['a', 'b'], ['b', 'c'])
-    expect(result).toEqual(['a', 'b', 'c'])
-  })
-
-  test('handles undefined arrays', () => {
-    const result = mergeArraysUnique(undefined, ['a'])
-    expect(result).toEqual(['a'])
-  })
-})
-```
-
-**Step 2: Run test to verify it fails**
-
-Run: `bun test src/lib/deep-merge.test.ts`
-Expected: FAIL with "Cannot find module"
-
-**Step 3: Write minimal implementation**
-
-```typescript
-// src/lib/deep-merge.ts
-type PlainObject = Record<string, unknown>
-
-function isPlainObject(value: unknown): value is PlainObject {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-export function deepMerge<T extends PlainObject>(...objects: Partial<T>[]): T {
-  const result: PlainObject = {}
-
-  for (const obj of objects) {
-    if (!obj) continue
-
-    for (const [key, value] of Object.entries(obj)) {
-      if (isPlainObject(value) && isPlainObject(result[key])) {
-        result[key] = deepMerge(result[key] as PlainObject, value)
-      } else {
-        result[key] = value
+      if (entry.isDirectory()) {
+        const skillFile = path.join(fullPath, 'SKILL.md')
+        if (fs.existsSync(skillFile)) {
+          const { name, description } = extractFrontmatter(skillFile)
+          skills.push({
+            path: fullPath,
+            skillFile,
+            name: name || entry.name,
+            description: description || '',
+            sourceType,
+          })
+        }
+        recurse(fullPath, depth + 1)
       }
     }
   }
 
-  return result as T
+  recurse(dir, 0)
+  return skills
 }
 
-export function mergeArraysUnique<T>(
-  arr1: T[] | undefined,
-  arr2: T[] | undefined
-): T[] {
-  const set = new Set<T>()
-  if (arr1) arr1.forEach((item) => set.add(item))
-  if (arr2) arr2.forEach((item) => set.add(item))
-  return Array.from(set)
+/**
+ * Resolve a skill name to its file path with priority resolution.
+ * Priority: project > user > bundled
+ * 
+ * Prefixes:
+ * - "project:" forces project resolution
+ * - "sys:" or "systematic:" forces bundled resolution  
+ * - No prefix checks user first, then bundled
+ */
+export function resolveSkillPath(
+  skillName: string,
+  bundledDir: string,
+  userDir: string | null,
+  projectDir: string | null
+): ResolvedSkill | null {
+  const forceProject = skillName.startsWith('project:')
+  const forceBundled = skillName.startsWith('sys:') || skillName.startsWith('systematic:')
+  
+  let actualSkillName = skillName
+  if (forceProject) actualSkillName = skillName.replace(/^project:/, '')
+  if (forceBundled) actualSkillName = skillName.replace(/^(sys:|systematic:)/, '')
+
+  // Try project first (if project: prefix or no force)
+  if ((forceProject || !forceBundled) && projectDir) {
+    const projectPath = path.join(projectDir, actualSkillName)
+    const projectSkillFile = path.join(projectPath, 'SKILL.md')
+    if (fs.existsSync(projectSkillFile)) {
+      return {
+        skillFile: projectSkillFile,
+        sourceType: 'project',
+        skillPath: actualSkillName,
+      }
+    }
+  }
+
+  // Try user skills (if not forcing project or bundled)
+  if (!forceProject && !forceBundled && userDir) {
+    const userPath = path.join(userDir, actualSkillName)
+    const userSkillFile = path.join(userPath, 'SKILL.md')
+    if (fs.existsSync(userSkillFile)) {
+      return {
+        skillFile: userSkillFile,
+        sourceType: 'user',
+        skillPath: actualSkillName,
+      }
+    }
+  }
+
+  // Try bundled skills
+  if (!forceProject && bundledDir) {
+    const bundledPath = path.join(bundledDir, actualSkillName)
+    const bundledSkillFile = path.join(bundledPath, 'SKILL.md')
+    if (fs.existsSync(bundledSkillFile)) {
+      return {
+        skillFile: bundledSkillFile,
+        sourceType: 'bundled',
+        skillPath: actualSkillName,
+      }
+    }
+  }
+
+  return null
+}
+
+/**
+ * Find agents in a directory (flat structure, .md files)
+ */
+export function findAgentsInDir(
+  dir: string,
+  sourceType: 'project' | 'user' | 'bundled'
+): Array<{ name: string; file: string; sourceType: string }> {
+  const agents: Array<{ name: string; file: string; sourceType: string }> = []
+  
+  if (!fs.existsSync(dir)) return agents
+
+  const entries = fs.readdirSync(dir)
+  for (const entry of entries) {
+    if (entry.endsWith('.md')) {
+      agents.push({
+        name: entry.replace(/\.md$/, ''),
+        file: path.join(dir, entry),
+        sourceType,
+      })
+    }
+  }
+
+  return agents
+}
+
+/**
+ * Find commands in a directory (flat structure, .md files)
+ */
+export function findCommandsInDir(
+  dir: string,
+  sourceType: 'project' | 'user' | 'bundled'
+): Array<{ name: string; file: string; sourceType: string }> {
+  const commands: Array<{ name: string; file: string; sourceType: string }> = []
+  
+  if (!fs.existsSync(dir)) return commands
+
+  const entries = fs.readdirSync(dir)
+  for (const entry of entries) {
+    if (entry.endsWith('.md')) {
+      // Convert sys-plan.md to /sys:plan
+      const baseName = entry.replace(/\.md$/, '')
+      const commandName = baseName.startsWith('sys-')
+        ? `/sys:${baseName.slice(4)}`
+        : `/${baseName}`
+      commands.push({
+        name: commandName,
+        file: path.join(dir, entry),
+        sourceType,
+      })
+    }
+  }
+
+  return commands
 }
 ```
 
-**Step 4: Run test to verify it passes**
+**Step 2: Build and verify**
 
-Run: `bun test src/lib/deep-merge.test.ts`
-Expected: PASS
+Run: `bun run build:lib`
+Expected: `lib/skills-core.js` created
 
-**Step 5: Commit**
+**Step 3: Commit**
 
 ```bash
-git add src/lib/deep-merge.ts src/lib/deep-merge.test.ts
-git commit -m "feat: add deep merge utility"
+git add src/lib/skills-core.ts
+git commit -m "feat: add skills-core library for skill resolution"
 ```
 
 ---
 
-### Task 1.5: Implement Config Loading
+### Task 1.4: Create Config Module
 
 **Files:**
-- Create: `src/config.ts`
-- Create: `src/config.test.ts`
-- Create: `src/types.ts`
+- Create: `src/lib/config.ts`
 
-**Step 1: Create types file**
+**Step 1: Create config.ts**
 
 ```typescript
-// src/types.ts
+// src/lib/config.ts
+import fs from 'fs'
+import path from 'path'
+import os from 'os'
+import { parse as parseJsonc } from 'jsonc-parser'
+
 export interface BootstrapConfig {
   enabled: boolean
   file?: string
@@ -473,6 +531,8 @@ export interface SystematicConfig {
   paths: PathsConfig
 }
 
+const homeDir = os.homedir()
+
 export const DEFAULT_CONFIG: SystematicConfig = {
   disabled_skills: [],
   disabled_agents: [],
@@ -481,675 +541,411 @@ export const DEFAULT_CONFIG: SystematicConfig = {
     enabled: true,
   },
   paths: {
-    user_skills: '~/.config/opencode/systematic/skills',
-    user_agents: '~/.config/opencode/systematic/agents',
-    user_commands: '~/.config/opencode/systematic/commands',
+    user_skills: path.join(homeDir, '.config/opencode/systematic/skills'),
+    user_agents: path.join(homeDir, '.config/opencode/systematic/agents'),
+    user_commands: path.join(homeDir, '.config/opencode/systematic/commands'),
   },
 }
-```
 
-**Step 2: Write the failing test**
-
-```typescript
-// src/config.test.ts
-import { describe, expect, test, beforeEach, afterEach } from 'bun:test'
-import { loadConfig, mergeConfigs } from './config'
-import { DEFAULT_CONFIG, type SystematicConfig } from './types'
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-
-describe('mergeConfigs', () => {
-  test('merges disabled arrays with deduplication', () => {
-    const user: Partial<SystematicConfig> = { disabled_skills: ['a', 'b'] }
-    const project: Partial<SystematicConfig> = { disabled_skills: ['b', 'c'] }
-
-    const result = mergeConfigs(DEFAULT_CONFIG, user, project)
-    expect(result.disabled_skills).toEqual(['a', 'b', 'c'])
-  })
-
-  test('project bootstrap overrides user bootstrap', () => {
-    const user: Partial<SystematicConfig> = { bootstrap: { enabled: true, file: 'user.md' } }
-    const project: Partial<SystematicConfig> = { bootstrap: { enabled: false } }
-
-    const result = mergeConfigs(DEFAULT_CONFIG, user, project)
-    expect(result.bootstrap.enabled).toBe(false)
-    expect(result.bootstrap.file).toBe('user.md')
-  })
-})
-
-describe('loadConfig', () => {
-  let tempDir: string
-
-  beforeEach(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'systematic-test-'))
-  })
-
-  afterEach(async () => {
-    await rm(tempDir, { recursive: true })
-  })
-
-  test('returns default config when no files exist', async () => {
-    const config = await loadConfig(tempDir)
-    expect(config.bootstrap.enabled).toBe(true)
-    expect(config.disabled_skills).toEqual([])
-  })
-
-  test('loads and parses project config', async () => {
-    await mkdir(join(tempDir, '.opencode'), { recursive: true })
-    await writeFile(
-      join(tempDir, '.opencode/systematic.json'),
-      '{ "disabled_skills": ["test-skill"] }'
-    )
-
-    const config = await loadConfig(tempDir)
-    expect(config.disabled_skills).toContain('test-skill')
-  })
-})
-```
-
-**Step 3: Run test to verify it fails**
-
-Run: `bun test src/config.test.ts`
-Expected: FAIL with "Cannot find module"
-
-**Step 4: Write minimal implementation**
-
-```typescript
-// src/config.ts
-import { readFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
-import { parse as parseJsonc } from 'jsonc-parser'
-import { deepMerge, mergeArraysUnique } from './lib/deep-merge'
-import { getConfigPaths, resolvePath } from './lib/paths'
-import { DEFAULT_CONFIG, type SystematicConfig } from './types'
-
-async function loadJsoncFile<T>(filePath: string): Promise<T | null> {
-  const resolved = resolvePath(filePath)
-  if (!existsSync(resolved)) {
+function loadJsoncFile<T>(filePath: string): T | null {
+  try {
+    if (!fs.existsSync(filePath)) return null
+    const content = fs.readFileSync(filePath, 'utf-8')
+    return parseJsonc(content) as T
+  } catch {
     return null
   }
-  const content = await readFile(resolved, 'utf-8')
-  return parseJsonc(content) as T
 }
 
-export function mergeConfigs(
-  base: SystematicConfig,
-  user: Partial<SystematicConfig>,
-  project: Partial<SystematicConfig>
-): SystematicConfig {
-  // Start with deep merge for nested objects
-  const merged = deepMerge(base, user, project)
+function mergeArraysUnique<T>(arr1: T[] | undefined, arr2: T[] | undefined): T[] {
+  const set = new Set<T>()
+  if (arr1) arr1.forEach((item) => set.add(item))
+  if (arr2) arr2.forEach((item) => set.add(item))
+  return Array.from(set)
+}
+
+function deepMerge<T extends Record<string, unknown>>(
+  base: T,
+  ...overrides: Array<Partial<T> | null>
+): T {
+  const result = { ...base }
+
+  for (const override of overrides) {
+    if (!override) continue
+    for (const [key, value] of Object.entries(override)) {
+      if (
+        typeof value === 'object' &&
+        value !== null &&
+        !Array.isArray(value) &&
+        typeof result[key] === 'object' &&
+        result[key] !== null
+      ) {
+        ;(result as Record<string, unknown>)[key] = deepMerge(
+          result[key] as Record<string, unknown>,
+          value as Record<string, unknown>
+        )
+      } else if (value !== undefined) {
+        ;(result as Record<string, unknown>)[key] = value
+      }
+    }
+  }
+
+  return result
+}
+
+export function loadConfig(projectDir: string): SystematicConfig {
+  const userConfigPath = path.join(homeDir, '.config/opencode/systematic.json')
+  const projectConfigPath = path.join(projectDir, '.opencode/systematic.json')
+
+  const userConfig = loadJsoncFile<Partial<SystematicConfig>>(userConfigPath)
+  const projectConfig = loadJsoncFile<Partial<SystematicConfig>>(projectConfigPath)
+
+  // Deep merge base with user and project
+  const merged = deepMerge(DEFAULT_CONFIG, userConfig, projectConfig)
 
   // Special handling for disabled_* arrays: union instead of replace
   merged.disabled_skills = mergeArraysUnique(
-    mergeArraysUnique(base.disabled_skills, user.disabled_skills),
-    project.disabled_skills
+    mergeArraysUnique(DEFAULT_CONFIG.disabled_skills, userConfig?.disabled_skills),
+    projectConfig?.disabled_skills
   )
   merged.disabled_agents = mergeArraysUnique(
-    mergeArraysUnique(base.disabled_agents, user.disabled_agents),
-    project.disabled_agents
+    mergeArraysUnique(DEFAULT_CONFIG.disabled_agents, userConfig?.disabled_agents),
+    projectConfig?.disabled_agents
   )
   merged.disabled_commands = mergeArraysUnique(
-    mergeArraysUnique(base.disabled_commands, user.disabled_commands),
-    project.disabled_commands
+    mergeArraysUnique(DEFAULT_CONFIG.disabled_commands, userConfig?.disabled_commands),
+    projectConfig?.disabled_commands
   )
 
   return merged
 }
 
-export async function loadConfig(projectDir: string): Promise<SystematicConfig> {
-  const paths = getConfigPaths(projectDir)
-
-  const userConfig = await loadJsoncFile<Partial<SystematicConfig>>(paths.userConfig)
-  const projectConfig = await loadJsoncFile<Partial<SystematicConfig>>(paths.projectConfig)
-
-  return mergeConfigs(DEFAULT_CONFIG, userConfig ?? {}, projectConfig ?? {})
+export function getConfigPaths(projectDir: string) {
+  return {
+    userConfig: path.join(homeDir, '.config/opencode/systematic.json'),
+    projectConfig: path.join(projectDir, '.opencode/systematic.json'),
+    userDir: path.join(homeDir, '.config/opencode/systematic'),
+    projectDir: path.join(projectDir, '.opencode/systematic'),
+  }
 }
 ```
 
-**Step 5: Run test to verify it passes**
-
-Run: `bun test src/config.test.ts`
-Expected: PASS
-
-**Step 6: Commit**
+**Step 2: Commit**
 
 ```bash
-git add src/types.ts src/config.ts src/config.test.ts
-git commit -m "feat: implement config loading with JSONC support"
+git add src/lib/config.ts
+git commit -m "feat: add config loading with JSONC support and merge logic"
 ```
 
 ---
 
 ## Phase 2: Plugin Core
 
-### Task 2.1: Implement Skills Manager
+### Task 2.1: Create Plugin Entry Point
+
+This is the main plugin file that OpenCode loads. Uses `tool()` from `@opencode-ai/plugin/tool` exactly like Superpowers.
 
 **Files:**
-- Create: `src/lib/skills-core.ts`
-- Create: `src/lib/skills-core.test.ts`
+- Create: `src/plugin/systematic.ts`
 
-**Step 1: Write the failing test**
-
-```typescript
-// src/lib/skills-core.test.ts
-import { describe, expect, test, beforeEach, afterEach } from 'bun:test'
-import { SkillsManager } from './skills-core'
-import { DEFAULT_CONFIG, type SystematicConfig } from '../types'
-import { mkdtemp, rm, mkdir, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-
-describe('SkillsManager', () => {
-  let tempDir: string
-  let config: SystematicConfig
-
-  beforeEach(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), 'skills-test-'))
-    config = {
-      ...DEFAULT_CONFIG,
-      paths: {
-        user_skills: join(tempDir, 'user/skills'),
-        user_agents: join(tempDir, 'user/agents'),
-        user_commands: join(tempDir, 'user/commands'),
-      },
-    }
-  })
-
-  afterEach(async () => {
-    await rm(tempDir, { recursive: true })
-  })
-
-  test('resolves skill from project tier first', async () => {
-    const projectSkillDir = join(tempDir, '.opencode/systematic/skills/test-skill')
-    await mkdir(projectSkillDir, { recursive: true })
-    await writeFile(join(projectSkillDir, 'SKILL.md'), '# Test Skill\nProject version')
-
-    const manager = new SkillsManager(config, tempDir)
-    const skill = await manager.resolve('test-skill')
-
-    expect(skill).not.toBeNull()
-    expect(skill?.tier).toBe('project')
-    expect(skill?.content).toContain('Project version')
-  })
-
-  test('returns null for disabled skills', async () => {
-    const configWithDisabled = {
-      ...config,
-      disabled_skills: ['test-skill'],
-    }
-
-    const manager = new SkillsManager(configWithDisabled, tempDir)
-    const skill = await manager.resolve('test-skill')
-
-    expect(skill).toBeNull()
-  })
-
-  test('lists all available skills', async () => {
-    const projectSkillDir = join(tempDir, '.opencode/systematic/skills/skill-a')
-    await mkdir(projectSkillDir, { recursive: true })
-    await writeFile(join(projectSkillDir, 'SKILL.md'), '# Skill A')
-
-    const userSkillDir = join(config.paths.user_skills, 'skill-b')
-    await mkdir(userSkillDir, { recursive: true })
-    await writeFile(join(userSkillDir, 'SKILL.md'), '# Skill B')
-
-    const manager = new SkillsManager(config, tempDir)
-    const skills = await manager.list()
-
-    expect(skills.length).toBeGreaterThanOrEqual(2)
-    expect(skills.find((s) => s.name === 'skill-a')).toBeDefined()
-    expect(skills.find((s) => s.name === 'skill-b')).toBeDefined()
-  })
-})
-```
-
-**Step 2: Run test to verify it fails**
-
-Run: `bun test src/lib/skills-core.test.ts`
-Expected: FAIL with "Cannot find module"
-
-**Step 3: Write minimal implementation**
+**Step 1: Create systematic.ts**
 
 ```typescript
-// src/lib/skills-core.ts
-import { readFile, readdir } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
-import { join } from 'node:path'
-import type { SystematicConfig } from '../types'
-import { getBundledPath, resolvePath } from './paths'
+// src/plugin/systematic.ts
+/**
+ * Systematic plugin for OpenCode.ai
+ *
+ * Provides structured engineering workflows ported from CEP and Superpowers.
+ */
 
-export type SkillTier = 'project' | 'user' | 'bundled'
+import path from 'path'
+import fs from 'fs'
+import os from 'os'
+import { fileURLToPath } from 'url'
+import { tool } from '@opencode-ai/plugin/tool'
+import * as skillsCore from '../../lib/skills-core.js'
+import { loadConfig, type SystematicConfig } from '../../lib/config.js'
 
-export interface ResolvedSkill {
-  name: string
-  tier: SkillTier
-  filePath: string
-  content: string
-}
+const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-export interface SkillInfo {
-  name: string
-  tier: SkillTier
-  description?: string
-}
+// Derive content directories from plugin location
+const bundledSkillsDir = path.resolve(__dirname, '../../skills')
+const bundledAgentsDir = path.resolve(__dirname, '../../agents')
+const bundledCommandsDir = path.resolve(__dirname, '../../commands')
+const defaultsDir = path.resolve(__dirname, '../../defaults')
 
-export class SkillsManager {
-  private config: SystematicConfig
-  private projectDir: string
-
-  constructor(config: SystematicConfig, projectDir: string) {
-    this.config = config
-    this.projectDir = projectDir
-  }
-
-  private getSkillDirs(): Array<{ dir: string; tier: SkillTier }> {
-    return [
-      { dir: join(this.projectDir, '.opencode/systematic/skills'), tier: 'project' },
-      { dir: resolvePath(this.config.paths.user_skills), tier: 'user' },
-      { dir: getBundledPath('skills'), tier: 'bundled' },
-    ]
-  }
-
-  async resolve(name: string): Promise<ResolvedSkill | null> {
-    if (this.config.disabled_skills.includes(name)) {
-      return null
-    }
-
-    for (const { dir, tier } of this.getSkillDirs()) {
-      const skillFile = join(dir, name, 'SKILL.md')
-      if (existsSync(skillFile)) {
-        const content = await readFile(skillFile, 'utf-8')
-        return { name, tier, filePath: skillFile, content }
-      }
-    }
-
-    return null
-  }
-
-  async list(): Promise<SkillInfo[]> {
-    const seen = new Set<string>()
-    const skills: SkillInfo[] = []
-
-    for (const { dir, tier } of this.getSkillDirs()) {
-      if (!existsSync(dir)) continue
-
-      const entries = await readdir(dir, { withFileTypes: true })
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue
-        if (seen.has(entry.name)) continue
-        if (this.config.disabled_skills.includes(entry.name)) continue
-
-        const skillFile = join(dir, entry.name, 'SKILL.md')
-        if (existsSync(skillFile)) {
-          seen.add(entry.name)
-          const content = await readFile(skillFile, 'utf-8')
-          const description = this.extractDescription(content)
-          skills.push({ name: entry.name, tier, description })
+interface PluginContext {
+  client: {
+    session: {
+      prompt: (options: {
+        path: { id: string }
+        body: {
+          agent?: string
+          noReply: boolean
+          parts: Array<{ type: string; text: string; synthetic?: boolean }>
         }
-      }
-    }
-
-    return skills.sort((a, b) => a.name.localeCompare(b.name))
-  }
-
-  private extractDescription(content: string): string | undefined {
-    // Look for first line starting with # (title), take second line as description
-    const lines = content.split('\n')
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i].trim()
-      if (line.startsWith('# ')) {
-        const nextLine = lines[i + 1]?.trim()
-        if (nextLine && !nextLine.startsWith('#')) {
-          return nextLine
-        }
-      }
-    }
-    return undefined
-  }
-}
-```
-
-**Step 4: Run test to verify it passes**
-
-Run: `bun test src/lib/skills-core.test.ts`
-Expected: PASS
-
-**Step 5: Commit**
-
-```bash
-git add src/lib/skills-core.ts src/lib/skills-core.test.ts
-git commit -m "feat: implement skills manager with three-tier resolution"
-```
-
----
-
-### Task 2.2: Implement Bootstrap Module
-
-**Files:**
-- Create: `src/bootstrap.ts`
-- Create: `defaults/bootstrap.md`
-
-**Step 1: Create default bootstrap prompt**
-
-```markdown
-<!-- defaults/bootstrap.md -->
-# Systematic Engineering Workflows
-
-You have access to structured engineering workflows via the `systematic` plugin.
-
-## Available Tools
-
-- `systematic_find_skills` — List all available skills
-- `systematic_use_skill` — Load a skill into context
-- `systematic_find_agents` — List available review agents
-- `systematic_find_commands` — List available commands
-
-## Core Workflow
-
-1. **Plan** (`/sys:plan`) — Transform ideas into structured implementation plans
-2. **Work** (`/sys:work`) — Execute work items with tracking
-3. **Review** (`/sys:review`) — Multi-perspective code review
-4. **Compound** (`/sys:compound`) — Document learnings for future leverage
-
-## Philosophy
-
-Each unit of work should make subsequent work easier. Document what you learn, structure your approach, and build on prior knowledge.
-
-When a skill might apply to your current task, use `systematic_use_skill` to load it. Skills provide proven workflows for common engineering tasks like TDD, debugging, and code review.
-```
-
-**Step 2: Create bootstrap module**
-
-```typescript
-// src/bootstrap.ts
-import { readFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
-import { join } from 'node:path'
-import type { SystematicConfig } from './types'
-import { getBundledPath, resolvePath } from './lib/paths'
-
-export async function getBootstrapContent(config: SystematicConfig): Promise<string | null> {
-  if (!config.bootstrap.enabled) {
-    return null
-  }
-
-  // User override takes precedence
-  if (config.bootstrap.file) {
-    const customPath = resolvePath(config.bootstrap.file)
-    if (existsSync(customPath)) {
-      return await readFile(customPath, 'utf-8')
+      }) => Promise<void>
     }
   }
-
-  // Fall back to bundled default
-  const defaultPath = join(getBundledPath('defaults'), 'bootstrap.md')
-  if (existsSync(defaultPath)) {
-    return await readFile(defaultPath, 'utf-8')
-  }
-
-  return null
-}
-```
-
-**Step 3: Commit**
-
-```bash
-git add src/bootstrap.ts defaults/bootstrap.md
-git commit -m "feat: implement bootstrap injection with customizable prompt"
-```
-
----
-
-### Task 2.3: Create Plugin Tools
-
-**Files:**
-- Create: `src/tools/use-skill.ts`
-- Create: `src/tools/find-skills.ts`
-- Create: `src/tools/find-agents.ts`
-- Create: `src/tools/find-commands.ts`
-- Create: `src/tools/index.ts`
-
-**Step 1: Create use-skill tool**
-
-```typescript
-// src/tools/use-skill.ts
-import type { SkillsManager } from '../lib/skills-core'
-
-export function createUseSkillTool(skillsManager: SkillsManager) {
-  return {
-    description: 'Load a skill to get detailed instructions for a specific task.',
-    parameters: {
-      type: 'object',
-      properties: {
-        skill_name: {
-          type: 'string',
-          description: 'Name of the skill to load',
-        },
-      },
-      required: ['skill_name'],
-    },
-    execute: async ({ skill_name }: { skill_name: string }) => {
-      const skill = await skillsManager.resolve(skill_name)
-
-      if (!skill) {
-        return {
-          content: `Skill "${skill_name}" not found or is disabled.`,
-          isError: true,
-        }
-      }
-
-      return {
-        content: `# Loading skill: ${skill.name}\n\n${skill.content}`,
-      }
-    },
-  }
-}
-```
-
-**Step 2: Create find-skills tool**
-
-```typescript
-// src/tools/find-skills.ts
-import type { SkillsManager } from '../lib/skills-core'
-
-export function createFindSkillsTool(skillsManager: SkillsManager) {
-  return {
-    description: 'List all available skills.',
-    parameters: {
-      type: 'object',
-      properties: {},
-    },
-    execute: async () => {
-      const skills = await skillsManager.list()
-
-      if (skills.length === 0) {
-        return { content: 'No skills available.' }
-      }
-
-      const lines = ['# Available Skills\n']
-      for (const skill of skills) {
-        const desc = skill.description ? ` — ${skill.description}` : ''
-        lines.push(`- **${skill.name}** (${skill.tier})${desc}`)
-      }
-
-      return { content: lines.join('\n') }
-    },
-  }
-}
-```
-
-**Step 3: Create find-agents tool**
-
-```typescript
-// src/tools/find-agents.ts
-import { readFile, readdir } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
-import { join } from 'node:path'
-import type { SystematicConfig } from '../types'
-import { getBundledPath, resolvePath } from '../lib/paths'
-
-export function createFindAgentsTool(config: SystematicConfig, projectDir: string) {
-  return {
-    description: 'List all available agents.',
-    parameters: {
-      type: 'object',
-      properties: {},
-    },
-    execute: async () => {
-      const agents: Array<{ name: string; tier: string }> = []
-      const seen = new Set<string>()
-
-      const dirs = [
-        { dir: join(projectDir, '.opencode/systematic/agents'), tier: 'project' },
-        { dir: resolvePath(config.paths.user_agents), tier: 'user' },
-        { dir: getBundledPath('agents'), tier: 'bundled' },
-      ]
-
-      for (const { dir, tier } of dirs) {
-        if (!existsSync(dir)) continue
-
-        const entries = await readdir(dir)
-        for (const entry of entries) {
-          if (!entry.endsWith('.md')) continue
-          const name = entry.replace(/\.md$/, '')
-          if (seen.has(name)) continue
-          if (config.disabled_agents.includes(name)) continue
-
-          seen.add(name)
-          agents.push({ name, tier })
-        }
-      }
-
-      if (agents.length === 0) {
-        return { content: 'No agents available.' }
-      }
-
-      const lines = ['# Available Agents\n']
-      for (const agent of agents.sort((a, b) => a.name.localeCompare(b.name))) {
-        lines.push(`- **${agent.name}** (${agent.tier})`)
-      }
-
-      return { content: lines.join('\n') }
-    },
-  }
-}
-```
-
-**Step 4: Create find-commands tool**
-
-```typescript
-// src/tools/find-commands.ts
-import { readdir } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
-import { join } from 'node:path'
-import type { SystematicConfig } from '../types'
-import { getBundledPath, resolvePath } from '../lib/paths'
-
-export function createFindCommandsTool(config: SystematicConfig, projectDir: string) {
-  return {
-    description: 'List all available commands.',
-    parameters: {
-      type: 'object',
-      properties: {},
-    },
-    execute: async () => {
-      const commands: Array<{ name: string; tier: string }> = []
-      const seen = new Set<string>()
-
-      const dirs = [
-        { dir: join(projectDir, '.opencode/systematic/commands'), tier: 'project' },
-        { dir: resolvePath(config.paths.user_commands), tier: 'user' },
-        { dir: getBundledPath('commands'), tier: 'bundled' },
-      ]
-
-      for (const { dir, tier } of dirs) {
-        if (!existsSync(dir)) continue
-
-        const entries = await readdir(dir)
-        for (const entry of entries) {
-          if (!entry.endsWith('.md')) continue
-          const name = entry.replace(/\.md$/, '').replace(/^sys-/, '/sys:')
-          if (seen.has(name)) continue
-          if (config.disabled_commands.includes(name)) continue
-
-          seen.add(name)
-          commands.push({ name, tier })
-        }
-      }
-
-      if (commands.length === 0) {
-        return { content: 'No commands available.' }
-      }
-
-      const lines = ['# Available Commands\n']
-      for (const cmd of commands.sort((a, b) => a.name.localeCompare(b.name))) {
-        lines.push(`- **${cmd.name}** (${cmd.tier})`)
-      }
-
-      return { content: lines.join('\n') }
-    },
-  }
-}
-```
-
-**Step 5: Create tools index**
-
-```typescript
-// src/tools/index.ts
-export { createUseSkillTool } from './use-skill'
-export { createFindSkillsTool } from './find-skills'
-export { createFindAgentsTool } from './find-agents'
-export { createFindCommandsTool } from './find-commands'
-```
-
-**Step 6: Commit**
-
-```bash
-git add src/tools/
-git commit -m "feat: implement plugin tools for skills, agents, and commands"
-```
-
----
-
-### Task 2.4: Create Plugin Entry Point
-
-**Files:**
-- Create: `src/index.ts`
-
-**Step 1: Create plugin entry point**
-
-```typescript
-// src/index.ts
-import { loadConfig } from './config'
-import { getBootstrapContent } from './bootstrap'
-import { SkillsManager } from './lib/skills-core'
-import {
-  createUseSkillTool,
-  createFindSkillsTool,
-  createFindAgentsTool,
-  createFindCommandsTool,
-} from './tools'
-
-export interface PluginContext {
   directory: string
 }
 
-export const SystematicPlugin = async ({ directory }: PluginContext) => {
-  const config = await loadConfig(directory)
-  const skillsManager = new SkillsManager(config, directory)
+interface ExecuteContext {
+  sessionID: string
+  agent?: string
+}
+
+const getBootstrapContent = (config: SystematicConfig, compact = false): string | null => {
+  if (!config.bootstrap.enabled) return null
+
+  // Try custom bootstrap file first
+  if (config.bootstrap.file) {
+    const customPath = config.bootstrap.file.startsWith('~/')
+      ? path.join(os.homedir(), config.bootstrap.file.slice(2))
+      : config.bootstrap.file
+    if (fs.existsSync(customPath)) {
+      return fs.readFileSync(customPath, 'utf8')
+    }
+  }
+
+  // Load using-systematic skill as bootstrap
+  const usingSystematicPath = path.join(bundledSkillsDir, 'using-systematic/SKILL.md')
+  if (!fs.existsSync(usingSystematicPath)) return null
+
+  const fullContent = fs.readFileSync(usingSystematicPath, 'utf8')
+  const content = skillsCore.stripFrontmatter(fullContent)
+
+  const homeDir = os.homedir()
+  const configDir = path.join(homeDir, '.config/opencode')
+
+  const toolMapping = compact
+    ? `**Tool Mapping:** TodoWrite->update_plan, Task->@mention, Skill->systematic_use_skill
+
+**Skills naming (priority order):** project: > user > sys:`
+    : `**Tool Mapping for OpenCode:**
+When skills reference tools you don't have, substitute OpenCode equivalents:
+- \`TodoWrite\` → \`update_plan\`
+- \`Task\` tool with subagents → Use OpenCode's subagent system (@mention)
+- \`Skill\` tool → \`systematic_use_skill\` custom tool
+- \`Read\`, \`Write\`, \`Edit\`, \`Bash\` → Your native tools
+
+**Skills naming (priority order):**
+- Project skills: \`project:skill-name\` (in .opencode/systematic/skills/)
+- User skills: \`skill-name\` (in ${configDir}/systematic/skills/)
+- Bundled skills: \`sys:skill-name\` or \`systematic:skill-name\`
+- Project overrides user, which overrides bundled when names match`
+
+  return `<SYSTEMATIC_WORKFLOWS>
+You have access to structured engineering workflows via the systematic plugin.
+
+**IMPORTANT: The using-systematic skill content is included below. It is ALREADY LOADED - you are currently following it. Do NOT use systematic_use_skill to load "using-systematic" - that would be redundant. Use systematic_use_skill only for OTHER skills.**
+
+${content}
+
+${toolMapping}
+</SYSTEMATIC_WORKFLOWS>`
+}
+
+export const SystematicPlugin = async ({ client, directory }: PluginContext) => {
+  const homeDir = os.homedir()
+  const config = loadConfig(directory)
+
+  // Content directories with priority resolution
+  const projectSkillsDir = path.join(directory, '.opencode/systematic/skills')
+  const projectAgentsDir = path.join(directory, '.opencode/systematic/agents')
+  const projectCommandsDir = path.join(directory, '.opencode/systematic/commands')
+  const userSkillsDir = config.paths.user_skills
+  const userAgentsDir = config.paths.user_agents
+  const userCommandsDir = config.paths.user_commands
 
   return {
     tool: {
-      systematic_use_skill: createUseSkillTool(skillsManager),
-      systematic_find_skills: createFindSkillsTool(skillsManager),
-      systematic_find_agents: createFindAgentsTool(config, directory),
-      systematic_find_commands: createFindCommandsTool(config, directory),
+      systematic_use_skill: tool({
+        description:
+          'Load and read a specific skill to guide your work. Skills contain proven workflows, mandatory processes, and expert techniques.',
+        args: {
+          skill_name: tool.schema
+            .string()
+            .describe(
+              'Name of the skill to load (e.g., "sys:brainstorming", "my-custom-skill", or "project:my-skill")'
+            ),
+        },
+        execute: async (
+          args: { skill_name: string },
+          context: ExecuteContext
+        ): Promise<string> => {
+          const { skill_name } = args
+
+          // Check if disabled
+          const actualName = skill_name.replace(/^(project:|sys:|systematic:)/, '')
+          if (config.disabled_skills.includes(actualName)) {
+            return `Error: Skill "${skill_name}" is disabled in configuration.`
+          }
+
+          // Resolve with priority
+          const resolved = skillsCore.resolveSkillPath(
+            skill_name,
+            bundledSkillsDir,
+            userSkillsDir,
+            projectSkillsDir
+          )
+
+          if (!resolved) {
+            return `Error: Skill "${skill_name}" not found.\n\nRun systematic_find_skills to see available skills.`
+          }
+
+          const fullContent = fs.readFileSync(resolved.skillFile, 'utf8')
+          const { name, description } = skillsCore.extractFrontmatter(resolved.skillFile)
+          const content = skillsCore.stripFrontmatter(fullContent)
+          const skillDirectory = path.dirname(resolved.skillFile)
+
+          const skillHeader = `# ${name || skill_name}
+# ${description || ''}
+# Supporting tools and docs are in ${skillDirectory}
+# ============================================`
+
+          // Insert as user message with noReply for persistence across compaction
+          try {
+            await client.session.prompt({
+              path: { id: context.sessionID },
+              body: {
+                agent: context.agent,
+                noReply: true,
+                parts: [
+                  { type: 'text', text: `Loading skill: ${name || skill_name}`, synthetic: true },
+                  { type: 'text', text: `${skillHeader}\n\n${content}`, synthetic: true },
+                ],
+              },
+            })
+          } catch {
+            // Fallback: return content directly if message insertion fails
+            return `${skillHeader}\n\n${content}`
+          }
+
+          return `Launching skill: ${name || skill_name}`
+        },
+      }),
+
+      systematic_find_skills: tool({
+        description:
+          'List all available skills in the project, user, and bundled skill libraries.',
+        args: {},
+        execute: async (): Promise<string> => {
+          const projectSkills = skillsCore.findSkillsInDir(projectSkillsDir, 'project', 3)
+          const userSkills = skillsCore.findSkillsInDir(userSkillsDir, 'user', 3)
+          const bundledSkills = skillsCore.findSkillsInDir(bundledSkillsDir, 'bundled', 3)
+
+          // Filter disabled skills
+          const filterDisabled = (skills: skillsCore.SkillInfo[]) =>
+            skills.filter((s) => !config.disabled_skills.includes(s.name))
+
+          const allSkills = [
+            ...filterDisabled(projectSkills),
+            ...filterDisabled(userSkills),
+            ...filterDisabled(bundledSkills),
+          ]
+
+          if (allSkills.length === 0) {
+            return `No skills found. Add skills to ${bundledSkillsDir}/ or ${userSkillsDir}/`
+          }
+
+          let output = 'Available skills:\n\n'
+
+          for (const skill of allSkills) {
+            let namespace: string
+            switch (skill.sourceType) {
+              case 'project':
+                namespace = 'project:'
+                break
+              case 'user':
+                namespace = ''
+                break
+              default:
+                namespace = 'sys:'
+            }
+
+            output += `${namespace}${skill.name}\n`
+            if (skill.description) {
+              output += `  ${skill.description}\n`
+            }
+            output += `  Directory: ${skill.path}\n\n`
+          }
+
+          return output
+        },
+      }),
+
+      systematic_find_agents: tool({
+        description: 'List all available review agents.',
+        args: {},
+        execute: async (): Promise<string> => {
+          const projectAgents = skillsCore.findAgentsInDir(projectAgentsDir, 'project')
+          const userAgents = skillsCore.findAgentsInDir(userAgentsDir, 'user')
+          const bundledAgents = skillsCore.findAgentsInDir(bundledAgentsDir, 'bundled')
+
+          const seen = new Set<string>()
+          const agents: Array<{ name: string; sourceType: string }> = []
+
+          for (const list of [projectAgents, userAgents, bundledAgents]) {
+            for (const agent of list) {
+              if (seen.has(agent.name)) continue
+              if (config.disabled_agents.includes(agent.name)) continue
+              seen.add(agent.name)
+              agents.push({ name: agent.name, sourceType: agent.sourceType })
+            }
+          }
+
+          if (agents.length === 0) {
+            return 'No agents available.'
+          }
+
+          let output = 'Available agents:\n\n'
+          for (const agent of agents.sort((a, b) => a.name.localeCompare(b.name))) {
+            output += `- ${agent.name} (${agent.sourceType})\n`
+          }
+
+          return output
+        },
+      }),
+
+      systematic_find_commands: tool({
+        description: 'List all available commands.',
+        args: {},
+        execute: async (): Promise<string> => {
+          const projectCommands = skillsCore.findCommandsInDir(projectCommandsDir, 'project')
+          const userCommands = skillsCore.findCommandsInDir(userCommandsDir, 'user')
+          const bundledCommands = skillsCore.findCommandsInDir(bundledCommandsDir, 'bundled')
+
+          const seen = new Set<string>()
+          const commands: Array<{ name: string; sourceType: string }> = []
+
+          for (const list of [projectCommands, userCommands, bundledCommands]) {
+            for (const cmd of list) {
+              if (seen.has(cmd.name)) continue
+              if (config.disabled_commands.includes(cmd.name)) continue
+              seen.add(cmd.name)
+              commands.push({ name: cmd.name, sourceType: cmd.sourceType })
+            }
+          }
+
+          if (commands.length === 0) {
+            return 'No commands available.'
+          }
+
+          let output = 'Available commands:\n\n'
+          for (const cmd of commands.sort((a, b) => a.name.localeCompare(b.name))) {
+            output += `- ${cmd.name} (${cmd.sourceType})\n`
+          }
+
+          return output
+        },
+      }),
     },
 
     event: async () => {
       // Placeholder for future event handling
+      // NOTE: Bootstrap injection uses experimental.chat.system.transform instead
+      // of session.prompt() to avoid model reset issue (see PR #228)
     },
 
     // Workaround for session.prompt() model reset issue
@@ -1158,7 +954,7 @@ export const SystematicPlugin = async ({ directory }: PluginContext) => {
       chat: {
         system: {
           transform: async ({ output }: { output: { system?: string } }) => {
-            const content = await getBootstrapContent(config)
+            const content = getBootstrapContent(config, false)
             if (content) {
               output.system = output.system ? `${output.system}\n\n${content}` : content
             }
@@ -1172,23 +968,830 @@ export const SystematicPlugin = async ({ directory }: PluginContext) => {
 export default SystematicPlugin
 ```
 
-**Step 2: Build and verify**
+**Step 2: Create directory structure**
+
+Run: `mkdir -p .opencode/plugin`
+
+**Step 3: Build and verify**
 
 Run: `bun run build:plugin`
-Expected: Build succeeds, dist/index.js created
+Expected: `.opencode/plugin/systematic.js` created
 
-**Step 3: Commit**
+**Step 4: Verify JavaScript syntax**
+
+Run: `node --check .opencode/plugin/systematic.js`
+Expected: No errors
+
+**Step 5: Commit**
 
 ```bash
-git add src/index.ts
-git commit -m "feat: create plugin entry point with tools and bootstrap injection"
+git add src/plugin/systematic.ts .opencode/
+git commit -m "feat: create OpenCode plugin with tools and bootstrap injection"
 ```
 
 ---
 
-## Phase 3: CLI
+## Phase 3: Test Infrastructure
 
-### Task 3.1: Create CLI Entry Point
+### Task 3.1: Create Test Setup Script
+
+Modeled after Superpowers' test infrastructure.
+
+**Files:**
+- Create: `tests/setup.sh`
+
+**Step 1: Create setup.sh**
+
+```bash
+#!/usr/bin/env bash
+# Setup script for systematic plugin tests
+# Creates an isolated test environment with proper plugin installation
+set -euo pipefail
+
+# Get the repository root
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Create temp home directory for isolation
+export TEST_HOME=$(mktemp -d)
+export HOME="$TEST_HOME"
+export XDG_CONFIG_HOME="$TEST_HOME/.config"
+export OPENCODE_CONFIG_DIR="$TEST_HOME/.config/opencode"
+
+# Build the plugin first
+echo "Building plugin..."
+cd "$REPO_ROOT"
+bun run build
+
+# Install plugin to test location
+echo "Installing plugin to test environment..."
+mkdir -p "$HOME/.config/opencode/systematic"
+
+# Copy lib
+cp -r "$REPO_ROOT/lib" "$HOME/.config/opencode/systematic/"
+
+# Copy content
+cp -r "$REPO_ROOT/skills" "$HOME/.config/opencode/systematic/"
+cp -r "$REPO_ROOT/agents" "$HOME/.config/opencode/systematic/"
+cp -r "$REPO_ROOT/commands" "$HOME/.config/opencode/systematic/"
+cp -r "$REPO_ROOT/defaults" "$HOME/.config/opencode/systematic/"
+
+# Copy plugin directory
+mkdir -p "$HOME/.config/opencode/systematic/.opencode/plugin"
+cp "$REPO_ROOT/.opencode/plugin/systematic.js" "$HOME/.config/opencode/systematic/.opencode/plugin/"
+
+# Register plugin via symlink
+mkdir -p "$HOME/.config/opencode/plugin"
+ln -sf "$HOME/.config/opencode/systematic/.opencode/plugin/systematic.js" \
+       "$HOME/.config/opencode/plugin/systematic.js"
+
+# Create user skills directory
+mkdir -p "$HOME/.config/opencode/systematic/skills"
+mkdir -p "$HOME/.config/opencode/systematic/agents"
+mkdir -p "$HOME/.config/opencode/systematic/commands"
+
+# Create test user skill
+mkdir -p "$HOME/.config/opencode/systematic/skills/user-test"
+cat > "$HOME/.config/opencode/systematic/skills/user-test/SKILL.md" <<'EOF'
+---
+name: user-test
+description: Test user skill for verification
+---
+# User Test Skill
+
+This is a user skill used for testing.
+
+USER_SKILL_MARKER_12345
+EOF
+
+# Create a project directory for project-level skill tests
+mkdir -p "$TEST_HOME/test-project/.opencode/systematic/skills/project-test"
+cat > "$TEST_HOME/test-project/.opencode/systematic/skills/project-test/SKILL.md" <<'EOF'
+---
+name: project-test
+description: Test project skill for verification
+---
+# Project Test Skill
+
+This is a project skill used for testing.
+
+PROJECT_SKILL_MARKER_67890
+EOF
+
+echo "Setup complete: $TEST_HOME"
+echo "Plugin installed to: $HOME/.config/opencode/systematic/.opencode/plugin/systematic.js"
+echo "Plugin registered at: $HOME/.config/opencode/plugin/systematic.js"
+echo "Test project at: $TEST_HOME/test-project"
+
+# Helper function for cleanup
+cleanup_test_env() {
+    if [ -n "${TEST_HOME:-}" ] && [ -d "$TEST_HOME" ]; then
+        rm -rf "$TEST_HOME"
+    fi
+}
+
+# Export for use in tests
+export -f cleanup_test_env
+export REPO_ROOT
+```
+
+**Step 2: Make executable**
+
+Run: `chmod +x tests/setup.sh`
+
+**Step 3: Commit**
+
+```bash
+git add tests/setup.sh
+git commit -m "test: add test setup script for isolated environment"
+```
+
+---
+
+### Task 3.2: Create Plugin Loading Tests
+
+**Files:**
+- Create: `tests/test-plugin-loading.sh`
+
+**Step 1: Create test-plugin-loading.sh**
+
+```bash
+#!/usr/bin/env bash
+# Test: Plugin Loading
+# Verifies that the systematic plugin loads correctly
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+echo "=== Test: Plugin Loading ==="
+
+# Source setup to create isolated environment
+source "$SCRIPT_DIR/setup.sh"
+
+# Trap to cleanup on exit
+trap cleanup_test_env EXIT
+
+# Test 1: Verify plugin file exists and is registered
+echo "Test 1: Checking plugin registration..."
+if [ -L "$HOME/.config/opencode/plugin/systematic.js" ]; then
+    echo "  [PASS] Plugin symlink exists"
+else
+    echo "  [FAIL] Plugin symlink not found at $HOME/.config/opencode/plugin/systematic.js"
+    exit 1
+fi
+
+# Verify symlink target exists
+if [ -f "$(readlink -f "$HOME/.config/opencode/plugin/systematic.js")" ]; then
+    echo "  [PASS] Plugin symlink target exists"
+else
+    echo "  [FAIL] Plugin symlink target does not exist"
+    exit 1
+fi
+
+# Test 2: Verify lib/skills-core.js is in place
+echo "Test 2: Checking skills-core.js..."
+if [ -f "$HOME/.config/opencode/systematic/lib/skills-core.js" ]; then
+    echo "  [PASS] skills-core.js exists"
+else
+    echo "  [FAIL] skills-core.js not found"
+    exit 1
+fi
+
+# Test 3: Verify skills directory is populated
+echo "Test 3: Checking skills directory..."
+skill_count=$(find "$HOME/.config/opencode/systematic/skills" -name "SKILL.md" | wc -l)
+if [ "$skill_count" -gt 0 ]; then
+    echo "  [PASS] Found $skill_count skills installed"
+else
+    echo "  [FAIL] No skills found in installed location"
+    exit 1
+fi
+
+# Test 4: Check using-systematic skill exists (critical for bootstrap)
+echo "Test 4: Checking using-systematic skill (required for bootstrap)..."
+if [ -f "$HOME/.config/opencode/systematic/skills/using-systematic/SKILL.md" ]; then
+    echo "  [PASS] using-systematic skill exists"
+else
+    echo "  [FAIL] using-systematic skill not found (required for bootstrap)"
+    exit 1
+fi
+
+# Test 5: Verify plugin JavaScript syntax
+echo "Test 5: Checking plugin JavaScript syntax..."
+plugin_file="$HOME/.config/opencode/systematic/.opencode/plugin/systematic.js"
+if node --check "$plugin_file" 2>/dev/null; then
+    echo "  [PASS] Plugin JavaScript syntax is valid"
+else
+    echo "  [FAIL] Plugin has JavaScript syntax errors"
+    exit 1
+fi
+
+# Test 6: Verify user test skill was created
+echo "Test 6: Checking test fixtures..."
+if [ -f "$HOME/.config/opencode/systematic/skills/user-test/SKILL.md" ]; then
+    echo "  [PASS] User test skill fixture created"
+else
+    echo "  [FAIL] User test skill fixture not found"
+    exit 1
+fi
+
+# Test 7: Verify agents exist
+echo "Test 7: Checking agents directory..."
+agent_count=$(find "$HOME/.config/opencode/systematic/agents" -name "*.md" 2>/dev/null | wc -l)
+if [ "$agent_count" -gt 0 ]; then
+    echo "  [PASS] Found $agent_count agents installed"
+else
+    echo "  [FAIL] No agents found"
+    exit 1
+fi
+
+# Test 8: Verify commands exist
+echo "Test 8: Checking commands directory..."
+command_count=$(find "$HOME/.config/opencode/systematic/commands" -name "*.md" 2>/dev/null | wc -l)
+if [ "$command_count" -gt 0 ]; then
+    echo "  [PASS] Found $command_count commands installed"
+else
+    echo "  [FAIL] No commands found"
+    exit 1
+fi
+
+echo ""
+echo "=== All plugin loading tests passed ==="
+```
+
+**Step 2: Make executable**
+
+Run: `chmod +x tests/test-plugin-loading.sh`
+
+**Step 3: Commit**
+
+```bash
+git add tests/test-plugin-loading.sh
+git commit -m "test: add plugin loading tests"
+```
+
+---
+
+### Task 3.3: Create Skills Core Tests
+
+**Files:**
+- Create: `tests/test-skills-core.sh`
+
+**Step 1: Create test-skills-core.sh**
+
+```bash
+#!/usr/bin/env bash
+# Test: Skills Core Library
+# Tests the skills-core.js library functions directly via Node.js
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+echo "=== Test: Skills Core Library ==="
+
+# Source setup to create isolated environment
+source "$SCRIPT_DIR/setup.sh"
+
+# Trap to cleanup on exit
+trap cleanup_test_env EXIT
+
+# Test 1: Test extractFrontmatter function
+echo "Test 1: Testing extractFrontmatter..."
+
+# Create test file with frontmatter
+test_skill_dir="$TEST_HOME/test-skill"
+mkdir -p "$test_skill_dir"
+cat > "$test_skill_dir/SKILL.md" <<'EOF'
+---
+name: test-skill
+description: A test skill for unit testing
+---
+# Test Skill Content
+
+This is the content.
+EOF
+
+result=$(node -e "
+const path = require('path');
+const fs = require('fs');
+
+function extractFrontmatter(filePath) {
+    try {
+        const content = fs.readFileSync(filePath, 'utf8');
+        const lines = content.split('\n');
+        let inFrontmatter = false;
+        let name = '';
+        let description = '';
+        for (const line of lines) {
+            if (line.trim() === '---') {
+                if (inFrontmatter) break;
+                inFrontmatter = true;
+                continue;
+            }
+            if (inFrontmatter) {
+                const match = line.match(/^(\w+):\s*(.*)$/);
+                if (match) {
+                    const [, key, value] = match;
+                    if (key === 'name') name = value.trim();
+                    if (key === 'description') description = value.trim();
+                }
+            }
+        }
+        return { name, description };
+    } catch (error) {
+        return { name: '', description: '' };
+    }
+}
+
+const result = extractFrontmatter('$TEST_HOME/test-skill/SKILL.md');
+console.log(JSON.stringify(result));
+" 2>&1)
+
+if echo "$result" | grep -q '"name":"test-skill"'; then
+    echo "  [PASS] extractFrontmatter parses name correctly"
+else
+    echo "  [FAIL] extractFrontmatter did not parse name"
+    echo "  Result: $result"
+    exit 1
+fi
+
+if echo "$result" | grep -q '"description":"A test skill for unit testing"'; then
+    echo "  [PASS] extractFrontmatter parses description correctly"
+else
+    echo "  [FAIL] extractFrontmatter did not parse description"
+    exit 1
+fi
+
+# Test 2: Test stripFrontmatter function
+echo ""
+echo "Test 2: Testing stripFrontmatter..."
+
+result=$(node -e "
+const fs = require('fs');
+
+function stripFrontmatter(content) {
+    const lines = content.split('\n');
+    let inFrontmatter = false;
+    let frontmatterEnded = false;
+    const contentLines = [];
+    for (const line of lines) {
+        if (line.trim() === '---') {
+            if (inFrontmatter) {
+                frontmatterEnded = true;
+                continue;
+            }
+            inFrontmatter = true;
+            continue;
+        }
+        if (frontmatterEnded || !inFrontmatter) {
+            contentLines.push(line);
+        }
+    }
+    return contentLines.join('\n').trim();
+}
+
+const content = fs.readFileSync('$TEST_HOME/test-skill/SKILL.md', 'utf8');
+const stripped = stripFrontmatter(content);
+console.log(stripped);
+" 2>&1)
+
+if echo "$result" | grep -q "# Test Skill Content"; then
+    echo "  [PASS] stripFrontmatter preserves content"
+else
+    echo "  [FAIL] stripFrontmatter did not preserve content"
+    echo "  Result: $result"
+    exit 1
+fi
+
+if ! echo "$result" | grep -q "name: test-skill"; then
+    echo "  [PASS] stripFrontmatter removes frontmatter"
+else
+    echo "  [FAIL] stripFrontmatter did not remove frontmatter"
+    exit 1
+fi
+
+# Test 3: Test findSkillsInDir function
+echo ""
+echo "Test 3: Testing findSkillsInDir..."
+
+# Create multiple test skills
+mkdir -p "$TEST_HOME/skills-dir/skill-a"
+mkdir -p "$TEST_HOME/skills-dir/skill-b"
+
+cat > "$TEST_HOME/skills-dir/skill-a/SKILL.md" <<'EOF'
+---
+name: skill-a
+description: First skill
+---
+# Skill A
+EOF
+
+cat > "$TEST_HOME/skills-dir/skill-b/SKILL.md" <<'EOF'
+---
+name: skill-b
+description: Second skill
+---
+# Skill B
+EOF
+
+result=$(node -e "
+const fs = require('fs');
+const path = require('path');
+
+function extractFrontmatter(filePath) {
+    try {
+        const content = fs.readFileSync(filePath, 'utf8');
+        const lines = content.split('\n');
+        let inFrontmatter = false;
+        let name = '';
+        let description = '';
+        for (const line of lines) {
+            if (line.trim() === '---') {
+                if (inFrontmatter) break;
+                inFrontmatter = true;
+                continue;
+            }
+            if (inFrontmatter) {
+                const match = line.match(/^(\w+):\s*(.*)$/);
+                if (match) {
+                    const [, key, value] = match;
+                    if (key === 'name') name = value.trim();
+                    if (key === 'description') description = value.trim();
+                }
+            }
+        }
+        return { name, description };
+    } catch (error) {
+        return { name: '', description: '' };
+    }
+}
+
+function findSkillsInDir(dir, sourceType, maxDepth = 3) {
+    const skills = [];
+    if (!fs.existsSync(dir)) return skills;
+    function recurse(currentDir, depth) {
+        if (depth > maxDepth) return;
+        const entries = fs.readdirSync(currentDir, { withFileTypes: true });
+        for (const entry of entries) {
+            const fullPath = path.join(currentDir, entry.name);
+            if (entry.isDirectory()) {
+                const skillFile = path.join(fullPath, 'SKILL.md');
+                if (fs.existsSync(skillFile)) {
+                    const { name, description } = extractFrontmatter(skillFile);
+                    skills.push({
+                        path: fullPath,
+                        skillFile: skillFile,
+                        name: name || entry.name,
+                        description: description || '',
+                        sourceType: sourceType
+                    });
+                }
+                recurse(fullPath, depth + 1);
+            }
+        }
+    }
+    recurse(dir, 0);
+    return skills;
+}
+
+const skills = findSkillsInDir('$TEST_HOME/skills-dir', 'test', 3);
+console.log(JSON.stringify(skills, null, 2));
+" 2>&1)
+
+skill_count=$(echo "$result" | grep -c '"name":' || echo "0")
+
+if [ "$skill_count" -ge 2 ]; then
+    echo "  [PASS] findSkillsInDir found all skills (found $skill_count)"
+else
+    echo "  [FAIL] findSkillsInDir did not find all skills (expected 2, found $skill_count)"
+    echo "  Result: $result"
+    exit 1
+fi
+
+# Test 4: Test resolveSkillPath priority
+echo ""
+echo "Test 4: Testing resolveSkillPath priority..."
+
+# Create skills in user and bundled locations
+mkdir -p "$TEST_HOME/user-skills/shared-skill"
+mkdir -p "$TEST_HOME/bundled-skills/shared-skill"
+mkdir -p "$TEST_HOME/bundled-skills/unique-skill"
+
+cat > "$TEST_HOME/user-skills/shared-skill/SKILL.md" <<'EOF'
+---
+name: shared-skill
+description: User version
+---
+# User Shared
+EOF
+
+cat > "$TEST_HOME/bundled-skills/shared-skill/SKILL.md" <<'EOF'
+---
+name: shared-skill
+description: Bundled version
+---
+# Bundled Shared
+EOF
+
+cat > "$TEST_HOME/bundled-skills/unique-skill/SKILL.md" <<'EOF'
+---
+name: unique-skill
+description: Only in bundled
+---
+# Unique
+EOF
+
+result=$(node -e "
+const fs = require('fs');
+const path = require('path');
+
+function resolveSkillPath(skillName, bundledDir, userDir, projectDir) {
+    const forceProject = skillName.startsWith('project:');
+    const forceBundled = skillName.startsWith('sys:') || skillName.startsWith('systematic:');
+    
+    let actualSkillName = skillName;
+    if (forceProject) actualSkillName = skillName.replace(/^project:/, '');
+    if (forceBundled) actualSkillName = skillName.replace(/^(sys:|systematic:)/, '');
+
+    // Try project first
+    if ((forceProject || !forceBundled) && projectDir) {
+        const projectPath = path.join(projectDir, actualSkillName);
+        const projectSkillFile = path.join(projectPath, 'SKILL.md');
+        if (fs.existsSync(projectSkillFile)) {
+            return { skillFile: projectSkillFile, sourceType: 'project', skillPath: actualSkillName };
+        }
+    }
+
+    // Try user skills
+    if (!forceProject && !forceBundled && userDir) {
+        const userPath = path.join(userDir, actualSkillName);
+        const userSkillFile = path.join(userPath, 'SKILL.md');
+        if (fs.existsSync(userSkillFile)) {
+            return { skillFile: userSkillFile, sourceType: 'user', skillPath: actualSkillName };
+        }
+    }
+
+    // Try bundled
+    if (!forceProject && bundledDir) {
+        const bundledPath = path.join(bundledDir, actualSkillName);
+        const bundledSkillFile = path.join(bundledPath, 'SKILL.md');
+        if (fs.existsSync(bundledSkillFile)) {
+            return { skillFile: bundledSkillFile, sourceType: 'bundled', skillPath: actualSkillName };
+        }
+    }
+
+    return null;
+}
+
+const bundledDir = '$TEST_HOME/bundled-skills';
+const userDir = '$TEST_HOME/user-skills';
+
+// Test 1: Shared skill should resolve to user
+const shared = resolveSkillPath('shared-skill', bundledDir, userDir, null);
+console.log('SHARED:', JSON.stringify(shared));
+
+// Test 2: sys: prefix should force bundled
+const forced = resolveSkillPath('sys:shared-skill', bundledDir, userDir, null);
+console.log('FORCED:', JSON.stringify(forced));
+
+// Test 3: Unique skill should resolve to bundled
+const unique = resolveSkillPath('unique-skill', bundledDir, userDir, null);
+console.log('UNIQUE:', JSON.stringify(unique));
+
+// Test 4: Non-existent skill
+const notfound = resolveSkillPath('not-a-skill', bundledDir, userDir, null);
+console.log('NOTFOUND:', JSON.stringify(notfound));
+" 2>&1)
+
+if echo "$result" | grep -q 'SHARED:.*"sourceType":"user"'; then
+    echo "  [PASS] User skills shadow bundled skills"
+else
+    echo "  [FAIL] User skills not shadowing correctly"
+    echo "  Result: $result"
+    exit 1
+fi
+
+if echo "$result" | grep -q 'FORCED:.*"sourceType":"bundled"'; then
+    echo "  [PASS] sys: prefix forces bundled resolution"
+else
+    echo "  [FAIL] sys: prefix not working"
+    exit 1
+fi
+
+if echo "$result" | grep -q 'UNIQUE:.*"sourceType":"bundled"'; then
+    echo "  [PASS] Unique bundled skills are found"
+else
+    echo "  [FAIL] Unique bundled skills not found"
+    exit 1
+fi
+
+if echo "$result" | grep -q 'NOTFOUND: null'; then
+    echo "  [PASS] Non-existent skills return null"
+else
+    echo "  [FAIL] Non-existent skills should return null"
+    exit 1
+fi
+
+echo ""
+echo "=== All skills-core library tests passed ==="
+```
+
+**Step 2: Make executable**
+
+Run: `chmod +x tests/test-skills-core.sh`
+
+**Step 3: Commit**
+
+```bash
+git add tests/test-skills-core.sh
+git commit -m "test: add skills-core library tests"
+```
+
+---
+
+### Task 3.4: Create Test Runner
+
+**Files:**
+- Create: `tests/run-tests.sh`
+
+**Step 1: Create run-tests.sh**
+
+```bash
+#!/usr/bin/env bash
+# Main test runner for systematic plugin test suite
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+cd "$SCRIPT_DIR"
+
+echo "========================================"
+echo " Systematic Plugin Test Suite"
+echo "========================================"
+echo ""
+echo "Repository: $(cd .. && pwd)"
+echo "Test time: $(date)"
+echo ""
+
+# Parse command line arguments
+RUN_INTEGRATION=false
+VERBOSE=false
+SPECIFIC_TEST=""
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --integration|-i)
+            RUN_INTEGRATION=true
+            shift
+            ;;
+        --verbose|-v)
+            VERBOSE=true
+            shift
+            ;;
+        --test|-t)
+            SPECIFIC_TEST="$2"
+            shift 2
+            ;;
+        --help|-h)
+            echo "Usage: $0 [options]"
+            echo ""
+            echo "Options:"
+            echo "  --integration, -i  Run integration tests (requires OpenCode)"
+            echo "  --verbose, -v      Show verbose output"
+            echo "  --test, -t NAME    Run only the specified test"
+            echo "  --help, -h         Show this help"
+            echo ""
+            echo "Tests:"
+            echo "  test-plugin-loading.sh  Verify plugin installation and structure"
+            echo "  test-skills-core.sh     Test skills-core.js library functions"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "Use --help for usage information"
+            exit 1
+            ;;
+    esac
+done
+
+# List of tests to run
+tests=(
+    "test-plugin-loading.sh"
+    "test-skills-core.sh"
+)
+
+# Integration tests (require OpenCode)
+integration_tests=()
+
+# Add integration tests if requested
+if [ "$RUN_INTEGRATION" = true ]; then
+    tests+=("${integration_tests[@]}")
+fi
+
+# Filter to specific test if requested
+if [ -n "$SPECIFIC_TEST" ]; then
+    tests=("$SPECIFIC_TEST")
+fi
+
+# Track results
+passed=0
+failed=0
+skipped=0
+
+# Run each test
+for test in "${tests[@]}"; do
+    echo "----------------------------------------"
+    echo "Running: $test"
+    echo "----------------------------------------"
+
+    test_path="$SCRIPT_DIR/$test"
+
+    if [ ! -f "$test_path" ]; then
+        echo "  [SKIP] Test file not found: $test"
+        skipped=$((skipped + 1))
+        continue
+    fi
+
+    if [ ! -x "$test_path" ]; then
+        echo "  Making $test executable..."
+        chmod +x "$test_path"
+    fi
+
+    start_time=$(date +%s)
+
+    if [ "$VERBOSE" = true ]; then
+        if bash "$test_path"; then
+            end_time=$(date +%s)
+            duration=$((end_time - start_time))
+            echo ""
+            echo "  [PASS] $test (${duration}s)"
+            passed=$((passed + 1))
+        else
+            end_time=$(date +%s)
+            duration=$((end_time - start_time))
+            echo ""
+            echo "  [FAIL] $test (${duration}s)"
+            failed=$((failed + 1))
+        fi
+    else
+        if output=$(bash "$test_path" 2>&1); then
+            end_time=$(date +%s)
+            duration=$((end_time - start_time))
+            echo "  [PASS] (${duration}s)"
+            passed=$((passed + 1))
+        else
+            end_time=$(date +%s)
+            duration=$((end_time - start_time))
+            echo "  [FAIL] (${duration}s)"
+            echo ""
+            echo "  Output:"
+            echo "$output" | sed 's/^/    /'
+            failed=$((failed + 1))
+        fi
+    fi
+
+    echo ""
+done
+
+# Print summary
+echo "========================================"
+echo " Test Results Summary"
+echo "========================================"
+echo ""
+echo "  Passed:  $passed"
+echo "  Failed:  $failed"
+echo "  Skipped: $skipped"
+echo ""
+
+if [ "$RUN_INTEGRATION" = false ] && [ ${#integration_tests[@]} -gt 0 ]; then
+    echo "Note: Integration tests were not run."
+    echo "Use --integration flag to run tests that require OpenCode."
+    echo ""
+fi
+
+if [ $failed -gt 0 ]; then
+    echo "STATUS: FAILED"
+    exit 1
+else
+    echo "STATUS: PASSED"
+    exit 0
+fi
+```
+
+**Step 2: Make executable**
+
+Run: `chmod +x tests/run-tests.sh`
+
+**Step 3: Commit**
+
+```bash
+git add tests/run-tests.sh
+git commit -m "test: add main test runner"
+```
+
+---
+
+## Phase 4: CLI
+
+### Task 4.1: Create CLI
 
 **Files:**
 - Create: `src/cli/index.ts`
@@ -1196,499 +1799,232 @@ git commit -m "feat: create plugin entry point with tools and bootstrap injectio
 - Create: `src/cli/config.ts`
 - Create: `src/cli/list.ts`
 
-**Step 1: Create init command**
-
-```typescript
-// src/cli/init.ts
-import { readFile, writeFile, mkdir } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { join, dirname } from 'node:path'
-import { parse as parseJsonc, modify, applyEdits } from 'jsonc-parser'
-
-export async function initCommand(options: { project?: boolean }) {
-  const configPath = options.project
-    ? join(process.cwd(), 'opencode.json')
-    : join(homedir(), '.config/opencode/opencode.json')
-
-  // Ensure directory exists
-  await mkdir(dirname(configPath), { recursive: true })
-
-  // Load or create config
-  let content = '{}'
-  if (existsSync(configPath)) {
-    content = await readFile(configPath, 'utf-8')
-  }
-
-  const config = parseJsonc(content) ?? {}
-  const plugins: string[] = config.plugins ?? []
-
-  if (plugins.includes('@fro.bot/systematic')) {
-    console.log(`✓ Already configured in ${configPath}`)
-    return
-  }
-
-  // Add plugin to array
-  const edits = modify(content, ['plugins', -1], '@fro.bot/systematic', {
-    formattingOptions: { insertSpaces: true, tabSize: 2 },
-  })
-  const newContent = applyEdits(content, edits)
-
-  await writeFile(configPath, newContent)
-  console.log(`✓ Added @fro.bot/systematic to ${configPath}`)
-}
-```
-
-**Step 2: Create config subcommands**
-
-```typescript
-// src/cli/config.ts
-import { mkdir, writeFile } from 'node:fs/promises'
-import { existsSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
-import { loadConfig } from '../config'
-
-export async function configShowCommand() {
-  const config = await loadConfig(process.cwd())
-  console.log(JSON.stringify(config, null, 2))
-}
-
-export async function configScaffoldCommand() {
-  const baseDir = join(homedir(), '.config/opencode/systematic')
-
-  const dirs = [
-    join(baseDir, 'skills'),
-    join(baseDir, 'agents'),
-    join(baseDir, 'commands'),
-  ]
-
-  for (const dir of dirs) {
-    await mkdir(dir, { recursive: true })
-  }
-
-  // Create empty config if not exists
-  const configPath = join(homedir(), '.config/opencode/systematic.json')
-  if (!existsSync(configPath)) {
-    await writeFile(configPath, '{}\n')
-  }
-
-  console.log('✓ Created override directories:')
-  dirs.forEach((d) => console.log(`  ${d}`))
-  console.log(`✓ Config file: ${configPath}`)
-}
-
-export async function configPathCommand() {
-  const userConfig = join(homedir(), '.config/opencode/systematic.json')
-  const projectConfig = join(process.cwd(), '.opencode/systematic.json')
-
-  console.log('User config:', userConfig, existsSync(userConfig) ? '(exists)' : '(not found)')
-  console.log('Project config:', projectConfig, existsSync(projectConfig) ? '(exists)' : '(not found)')
-}
-```
-
-**Step 3: Create list command**
-
-```typescript
-// src/cli/list.ts
-import { loadConfig } from '../config'
-import { SkillsManager } from '../lib/skills-core'
-import { createFindAgentsTool, createFindCommandsTool } from '../tools'
-
-type ListType = 'skills' | 'agents' | 'commands'
-
-export async function listCommand(type?: ListType) {
-  const config = await loadConfig(process.cwd())
-  const projectDir = process.cwd()
-
-  if (!type || type === 'skills') {
-    const manager = new SkillsManager(config, projectDir)
-    const skills = await manager.list()
-    console.log('\n## Skills\n')
-    for (const skill of skills) {
-      const desc = skill.description ? ` — ${skill.description}` : ''
-      console.log(`  ${skill.name} (${skill.tier})${desc}`)
-    }
-  }
-
-  if (!type || type === 'agents') {
-    const agentsTool = createFindAgentsTool(config, projectDir)
-    const result = await agentsTool.execute()
-    console.log('\n## Agents\n')
-    console.log(result.content.replace(/^# .*\n/, ''))
-  }
-
-  if (!type || type === 'commands') {
-    const commandsTool = createFindCommandsTool(config, projectDir)
-    const result = await commandsTool.execute()
-    console.log('\n## Commands\n')
-    console.log(result.content.replace(/^# .*\n/, ''))
-  }
-}
-```
-
-**Step 4: Create CLI entry point**
-
-```typescript
-// src/cli/index.ts
-#!/usr/bin/env node
-import { program } from 'commander'
-import { initCommand } from './init'
-import { configShowCommand, configScaffoldCommand, configPathCommand } from './config'
-import { listCommand } from './list'
-
-program
-  .name('systematic')
-  .description('Structured engineering workflows for OpenCode')
-  .version('0.1.0')
-
-program
-  .command('init')
-  .description('Add @fro.bot/systematic to OpenCode config')
-  .option('-p, --project', 'Add to project opencode.json instead of user config')
-  .action(initCommand)
-
-const configCmd = program
-  .command('config')
-  .description('Configuration management')
-
-configCmd
-  .command('show')
-  .description('Show merged configuration')
-  .action(configShowCommand)
-
-configCmd
-  .command('scaffold')
-  .description('Create user override directories')
-  .action(configScaffoldCommand)
-
-configCmd
-  .command('path')
-  .description('Print config file locations')
-  .action(configPathCommand)
-
-program
-  .command('list [type]')
-  .description('List bundled content (skills, agents, commands)')
-  .action(listCommand)
-
-program.parse()
-```
-
-**Step 5: Build and verify**
-
-Run: `bun run build`
-Expected: Build succeeds
-
-Run: `node dist/cli/index.js --help`
-Expected: Shows help output
-
-**Step 6: Commit**
-
-```bash
-git add src/cli/
-git commit -m "feat: implement CLI with init, config, and list commands"
-```
+See original plan for CLI implementation - unchanged. Key commands:
+- `systematic init [--project]`
+- `systematic config show`
+- `systematic config scaffold`
+- `systematic config path`
+- `systematic list [skills|agents|commands]`
 
 ---
 
-## Phase 4: Content
+## Phase 5: Content - Full Skill Porting
 
-### Task 4.1: Create Placeholder Skills
+**CRITICAL: This phase ports FULL content from CEP and Superpowers - NOT placeholders.**
+
+### Task 5.1: Create using-systematic Skill
+
+This is the bootstrap skill that teaches the AI how to use systematic.
 
 **Files:**
-- Create: `skills/planning/SKILL.md`
-- Create: `skills/code-review/SKILL.md`
-- Create: `skills/tdd/SKILL.md`
-- Create: `skills/debugging/SKILL.md`
-- Create: `skills/verification/SKILL.md`
-- Create: `skills/brainstorming/SKILL.md`
-- Create: `skills/git-worktree/SKILL.md`
-- Create: `skills/compound-docs/SKILL.md`
-- Create: `skills/agent-native/SKILL.md`
-- Create: `skills/writing-skills/SKILL.md`
+- Create: `skills/using-systematic/SKILL.md`
 
-**Step 1: Create skill directories and placeholder files**
+**Step 1: Create the skill**
 
-Each skill should have a SKILL.md with:
-- Title (# name)
-- One-line description
-- Placeholder content to be filled from CEP/Superpowers
+Port and adapt from Superpowers `using-superpowers` skill, adjusted for systematic namespace and tools.
 
 ```markdown
-<!-- skills/planning/SKILL.md -->
-# planning
-Use when you need to create a structured implementation plan before coding.
+---
+name: using-systematic
+description: Core skill that teaches how to use structured engineering workflows
+---
+
+# Using Systematic
 
 ## Overview
 
-[Port from CEP /workflows:plan and Superpowers writing-plans]
+You have access to structured engineering workflows via the systematic plugin. This skill is automatically loaded at session start.
 
-## Process
+## Available Tools
 
-1. Understand the requirements
-2. Break down into tasks
-3. Define success criteria
-4. Create implementation steps
+- `systematic_use_skill` - Load a skill to guide your work
+- `systematic_find_skills` - List all available skills
+- `systematic_find_agents` - List available review agents
+- `systematic_find_commands` - List available commands
 
-## Template
+## Core Workflow
 
-[To be completed]
+1. **Plan** (`/sys:plan`) - Transform ideas into structured implementation plans
+2. **Work** (`/sys:work`) - Execute work items with tracking
+3. **Review** (`/sys:review`) - Multi-perspective code review
+4. **Compound** (`/sys:compound`) - Document learnings for future leverage
+
+## When to Use Skills
+
+Before taking action, check if a skill applies:
+
+| Situation | Skill |
+|-----------|-------|
+| Creating features or components | `sys:brainstorming` |
+| Multi-step implementation | `sys:planning` |
+| Writing code | `sys:tdd` |
+| Debugging issues | `sys:debugging` |
+| Before claiming completion | `sys:verification` |
+| Reviewing code | `sys:code-review` |
+| Starting isolated work | `sys:git-worktree` |
+
+## Red Flags
+
+These thoughts mean STOP - check for a skill:
+
+| Thought | Reality |
+|---------|---------|
+| "This is just a simple question" | Questions are tasks. Check for skills. |
+| "I need more context first" | Skill check comes BEFORE clarifying questions. |
+| "Let me explore the codebase first" | Skills tell you HOW to explore. Check first. |
+| "This doesn't need a formal skill" | If a skill exists, use it. |
+| "I remember this skill" | Skills evolve. Load current version. |
+
+## Philosophy
+
+Each unit of work should make subsequent work easier:
+- Document what you learn
+- Structure your approach
+- Build on prior knowledge
+- Compound your engineering
+
+When a skill might apply to your current task, use `systematic_use_skill` to load it. Skills provide proven workflows for common engineering tasks.
 ```
-
-Create similar placeholders for all 10 skills.
 
 **Step 2: Commit**
 
 ```bash
-git add skills/
-git commit -m "feat: add placeholder skill files"
+git add skills/using-systematic/
+git commit -m "feat: add using-systematic bootstrap skill"
 ```
 
 ---
 
-### Task 4.2: Create Placeholder Agents
+### Task 5.2: Port Superpowers Skills
+
+Port these skills from Superpowers with full content:
+
+1. **brainstorming** - From `superpowers/skills/brainstorming/SKILL.md`
+2. **planning** - From `superpowers/skills/writing-plans/SKILL.md`
+3. **executing-plans** - From `superpowers/skills/executing-plans/SKILL.md`
+4. **tdd** - From `superpowers/skills/test-driven-development/SKILL.md`
+5. **debugging** - From `superpowers/skills/systematic-debugging/SKILL.md`
+6. **verification** - From `superpowers/skills/verification-before-completion/SKILL.md`
+7. **git-worktree** - From `superpowers/skills/using-git-worktrees/SKILL.md`
+8. **writing-skills** - From `superpowers/skills/writing-skills/SKILL.md`
+
+**For each skill:**
+1. Fetch the full SKILL.md content from Superpowers repo
+2. Adapt tool references (Skill → systematic_use_skill, TodoWrite → update_plan)
+3. Update namespace references (superpowers: → sys:)
+4. Save to `skills/<name>/SKILL.md`
+5. Commit individually
+
+---
+
+### Task 5.3: Port CEP Skills
+
+Port these from CEP:
+
+1. **code-review** - Multi-agent review patterns
+2. **compound-docs** - Knowledge capture patterns
+3. **agent-native** - Build AI agents with prompt-native architecture
+
+**For each skill:**
+1. Fetch content from CEP repo
+2. Adapt for OpenCode tooling
+3. Save and commit
+
+---
+
+### Task 5.4: Port CEP Commands
+
+Port these command files from CEP:
+
+1. **sys-plan.md** - From CEP `/workflows:plan`
+2. **sys-work.md** - From CEP `/workflows:work`
+3. **sys-review.md** - From CEP `/workflows:review`
+4. **sys-compound.md** - From CEP `/workflows:compound`
+5. **sys-deepen.md** - From CEP `/deepen-plan`
+6. **sys-lfg.md** - From CEP `/lfg`
+
+**For each command:**
+1. Fetch full content from CEP
+2. Adapt for OpenCode (tool names, references)
+3. Save to `commands/sys-<name>.md`
+4. Commit
+
+---
+
+### Task 5.5: Port CEP Agents
+
+Port these agent prompts from CEP:
+
+1. **architecture-strategist.md**
+2. **security-sentinel.md**
+3. **code-simplicity-reviewer.md**
+4. **framework-docs-researcher.md**
+5. **pattern-recognition-specialist.md**
+6. **performance-oracle.md**
+
+**For each agent:**
+1. Fetch full agent prompt from CEP
+2. Save to `agents/<name>.md`
+3. Commit
+
+---
+
+## Phase 6: Polish
+
+### Task 6.1: Create Default Bootstrap
 
 **Files:**
-- Create: `agents/architecture-strategist.md`
-- Create: `agents/security-sentinel.md`
-- Create: `agents/code-simplicity-reviewer.md`
-- Create: `agents/framework-docs-researcher.md`
-- Create: `agents/pattern-recognition-specialist.md`
-- Create: `agents/performance-oracle.md`
+- Create: `defaults/bootstrap.md`
 
-**Step 1: Create agent files**
-
-```markdown
-<!-- agents/architecture-strategist.md -->
-# Architecture Strategist
-
-You are an expert software architect focused on system design decisions.
-
-## Role
-
-Analyze architectural implications of proposed changes. Consider:
-- Scalability
-- Maintainability
-- Separation of concerns
-- Integration patterns
-
-## Approach
-
-[Port from CEP architecture-strategist agent]
-```
-
-Create similar placeholders for all 6 agents.
-
-**Step 2: Commit**
-
-```bash
-git add agents/
-git commit -m "feat: add placeholder agent files"
-```
+Minimal fallback if using-systematic skill is missing.
 
 ---
 
-### Task 4.3: Create Placeholder Commands
-
-**Files:**
-- Create: `commands/sys-plan.md`
-- Create: `commands/sys-work.md`
-- Create: `commands/sys-review.md`
-- Create: `commands/sys-compound.md`
-- Create: `commands/sys-deepen.md`
-- Create: `commands/sys-lfg.md`
-
-**Step 1: Create command files**
-
-```markdown
-<!-- commands/sys-plan.md -->
-# /sys:plan
-
-Transform ideas into structured implementation plans.
-
-## Usage
-
-```
-/sys:plan <description of what you want to build>
-```
-
-## Process
-
-1. Clarify requirements through questions
-2. Explore architectural options
-3. Create detailed implementation plan
-4. Save to docs/plans/
-
-## See Also
-
-- `planning` skill
-- `brainstorming` skill
-```
-
-Create similar placeholders for all 6 commands.
-
-**Step 2: Commit**
+### Task 6.2: Run Full Test Suite
 
 ```bash
-git add commands/
-git commit -m "feat: add placeholder command files"
+bun run test
 ```
+
+All tests must pass.
 
 ---
 
-## Phase 5: Polish
+### Task 6.3: Write README
 
-### Task 5.1: Run All Tests
-
-**Step 1: Run full test suite**
-
-Run: `bun test`
-Expected: All tests pass
-
-**Step 2: Run typecheck**
-
-Run: `bun run typecheck`
-Expected: No errors
-
-**Step 3: Run lint**
-
-Run: `bun run lint`
-Expected: No errors (or only warnings)
+Full documentation with installation, usage, customization, and credits.
 
 ---
 
-### Task 5.2: Write README
+### Task 6.4: Final Verification
 
-**Files:**
-- Create: `README.md`
-
-**Step 1: Create README**
-
-```markdown
-# @fro.bot/systematic
-
-Structured engineering workflows for OpenCode.
-
-> *"Compound your engineering — each unit of work makes subsequent work easier"*
-
-## Installation
-
-```bash
-npm install @fro.bot/systematic
-npx systematic init
-```
-
-## Usage
-
-Once installed, the plugin provides:
-
-### Commands
-
-- `/sys:plan` — Transform ideas into structured implementation plans
-- `/sys:work` — Execute work items with tracking
-- `/sys:review` — Multi-perspective code review
-- `/sys:compound` — Document solved problems for future leverage
-- `/sys:deepen` — Enhance plans with parallel research
-- `/sys:lfg` — Full autonomous workflow (plan → work → review)
-
-### Tools
-
-- `systematic_find_skills` — List all available skills
-- `systematic_use_skill` — Load a skill into context
-- `systematic_find_agents` — List available review agents
-- `systematic_find_commands` — List available commands
-
-## Configuration
-
-Create `~/.config/opencode/systematic.json`:
-
-```jsonc
-{
-  "disabled_skills": [],
-  "disabled_agents": [],
-  "disabled_commands": [],
-  "bootstrap": {
-    "enabled": true
-  }
-}
-```
-
-## Customization
-
-Override bundled content by placing files in:
-
-- User: `~/.config/opencode/systematic/skills/`
-- Project: `.opencode/systematic/skills/`
-
-Project overrides take priority over user, which takes priority over bundled.
-
-## CLI
-
-```bash
-systematic init              # Add to OpenCode config
-systematic init --project    # Add to project config
-systematic config show       # Show merged config
-systematic config scaffold   # Create override directories
-systematic list              # List all content
-```
-
-## Credits
-
-Inspired by:
-- [Compound Engineering Plugin](https://github.com/EveryInc/compound-engineering-plugin)
-- [Superpowers](https://github.com/obra/superpowers)
-- [Oh My OpenCode](https://github.com/code-yeongyu/oh-my-opencode)
-
-## License
-
-MIT
-```
-
-**Step 2: Commit**
-
-```bash
-git add README.md
-git commit -m "docs: add README"
-```
-
----
-
-### Task 5.3: Final Build and Verification
-
-**Step 1: Clean build**
-
-Run: `rm -rf dist && bun run build`
-Expected: Build succeeds
-
-**Step 2: Test CLI**
-
-Run: `node dist/cli/index.js list`
-Expected: Lists skills, agents, commands
-
-**Step 3: Verify package.json files array**
-
-Ensure `files` array includes all necessary directories.
-
-**Step 4: Commit any fixes**
-
-```bash
-git add -A
-git commit -m "chore: final build verification"
-```
+1. Clean build: `rm -rf dist lib .opencode/plugin && bun run build`
+2. Run tests: `bun run test`
+3. Typecheck: `bun run typecheck`
+4. Lint: `bun run lint`
+5. Manual verification: `node dist/cli/index.js list`
 
 ---
 
 ## Summary
 
-**Total Tasks:** 17 across 5 phases
+**Total Tasks:** 20+ across 6 phases
 
-| Phase | Tasks | Focus |
-|-------|-------|-------|
-| 1. Foundation | 5 | Package setup, utilities, config |
-| 2. Plugin Core | 4 | Skills manager, bootstrap, tools, entry point |
-| 3. CLI | 1 | init, config, list commands |
-| 4. Content | 3 | Placeholder skills, agents, commands |
-| 5. Polish | 3 | Tests, README, final verification |
+| Phase | Focus |
+|-------|-------|
+| 1. Foundation | Package, Biome, skills-core, config |
+| 2. Plugin Core | OpenCode plugin with tools and events |
+| 3. Test Infrastructure | Isolated test environment, test runner |
+| 4. CLI | init, config, list commands |
+| 5. Content | **FULL** skill/agent/command porting from CEP + Superpowers |
+| 6. Polish | Bootstrap, tests, README, verification |
 
-**After completion:** Ready to publish with `npm publish` (after logging into npm with `@fro.bot` scope access).
+**Key Differences from Original Plan:**
+- Uses `tool()` from `@opencode-ai/plugin/tool` (matches Superpowers exactly)
+- Uses `experimental.chat.system.transform` for bootstrap injection (workaround for model reset issue per PR #228)
+- `session.prompt()` still used for `systematic_use_skill` tool to inject skills into conversation
+- Comprehensive bash test suite modeled after Superpowers
+- Phase 5 explicitly requires FULL content porting, not placeholders
+- Test setup creates isolated environment with fixtures
+
+**After completion:** Ready to publish with `npm publish --access public`
