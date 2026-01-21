@@ -9,10 +9,10 @@
   },
   "files": ["dist", "skills", "agents", "commands", "defaults"],
   "scripts": {
-    "build": "bun run build:lib && bun run build:plugin",
+    "build": "bun run build:lib && bun run build:plugin && bun run build:cli",
     "build:lib": "bun build src/lib/skills-core.ts --outfile dist/lib/skills-core.js --target node --format esm",
     "build:plugin": "bun build src/plugin/systematic.ts --outfile dist/plugin/systematic.js --target node --format esm --external @opencode-ai/plugin/tool",
-    "build:cli": "bun build src/cli/index.ts --outdir dist/cli --target node --format esm",
+    "build:cli": "bun build src/cli/index.ts --outfile dist/cli/index.js --target node --format esm",
     "dev": "bun --watch src/plugin/systematic.ts",
     "test": "bash tests/run-tests.sh",
     "test:integration": "bash tests/run-tests.sh --integration",
@@ -40,7 +40,6 @@
     "typescript": "^5.7.0"
   },
   "dependencies": {
-    "commander": "^13.0.0",
     "jsonc-parser": "^3.3.0"
   }
 }
