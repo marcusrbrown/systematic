@@ -10,7 +10,6 @@
   "files": [
     ".opencode",
     "dist",
-    "lib",
     "skills",
     "agents",
     "commands",
@@ -18,7 +17,7 @@
   ],
   "scripts": {
     "build": "bun run build:lib && bun run build:plugin && bun run build:cli",
-    "build:lib": "bun build src/lib/skills-core.ts --outfile lib/skills-core.js --target node --format esm",
+    "build:lib": "bun build src/lib/skills-core.ts --outfile dist/lib/skills-core.js --target node --format esm",
     "build:plugin": "bun build src/plugin/systematic.ts --outfile .opencode/plugin/systematic.js --target node --format esm --external @opencode-ai/plugin/tool",
     "build:cli": "bun build src/cli/index.ts --outdir dist/cli --target node --format esm",
     "dev": "bun --watch src/plugin/systematic.ts",
