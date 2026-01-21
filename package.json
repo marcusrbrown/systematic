@@ -7,14 +7,7 @@
   "bin": {
     "systematic": "./dist/cli/index.js"
   },
-  "files": [
-    ".opencode",
-    "dist",
-    "skills",
-    "agents",
-    "commands",
-    "defaults"
-  ],
+  "files": [".opencode", "dist", "skills", "agents", "commands", "defaults"],
   "scripts": {
     "build": "bun run build:lib && bun run build:plugin && bun run build:cli",
     "build:lib": "bun build src/lib/skills-core.ts --outfile dist/lib/skills-core.js --target node --format esm",
