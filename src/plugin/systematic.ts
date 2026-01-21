@@ -8,9 +8,13 @@ import * as skillsCore from '../lib/skills-core'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
-const bundledSkillsDir = path.resolve(__dirname, '../../skills')
-const bundledAgentsDir = path.resolve(__dirname, '../../agents')
-const bundledCommandsDir = path.resolve(__dirname, '../../commands')
+// Find package root by walking up from dist/plugin/
+// In npm package: dist/plugin/systematic.js -> ../../defaults/skills
+// In dev: dist/plugin/systematic.js -> ../../defaults/skills
+const packageRoot = path.resolve(__dirname, '../..')
+const bundledSkillsDir = path.join(packageRoot, 'defaults/skills')
+const bundledAgentsDir = path.join(packageRoot, 'defaults/agents')
+const bundledCommandsDir = path.join(packageRoot, 'defaults/commands')
 
 interface PluginContext {
   client: {
