@@ -3,15 +3,15 @@
   "version": "0.1.0",
   "description": "Structured engineering workflows for OpenCode",
   "type": "module",
-  "main": "./.opencode/plugin/systematic.js",
+  "main": "./dist/plugin/systematic.js",
   "bin": {
     "systematic": "./dist/cli/index.js"
   },
-  "files": [".opencode", "dist", "skills", "agents", "commands", "defaults"],
+  "files": ["dist", "skills", "agents", "commands", "defaults"],
   "scripts": {
     "build": "bun run build:lib && bun run build:plugin",
     "build:lib": "bun build src/lib/skills-core.ts --outfile dist/lib/skills-core.js --target node --format esm",
-    "build:plugin": "bun build src/plugin/systematic.ts --outfile .opencode/plugin/systematic.js --target node --format esm --external @opencode-ai/plugin/tool",
+    "build:plugin": "bun build src/plugin/systematic.ts --outfile dist/plugin/systematic.js --target node --format esm --external @opencode-ai/plugin/tool",
     "build:cli": "bun build src/cli/index.ts --outdir dist/cli --target node --format esm",
     "dev": "bun --watch src/plugin/systematic.ts",
     "test": "bash tests/run-tests.sh",
