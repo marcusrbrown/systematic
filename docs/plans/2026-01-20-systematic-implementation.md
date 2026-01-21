@@ -367,10 +367,10 @@ export function findSkillsInDir(
 /**
  * Resolve a skill name to its file path with priority resolution.
  * Priority: project > user > bundled
- * 
+ *
  * Prefixes:
  * - "project:" forces project resolution
- * - "sys:" or "systematic:" forces bundled resolution  
+ * - "sys:" or "systematic:" forces bundled resolution
  * - No prefix checks user first, then bundled
  */
 export function resolveSkillPath(
@@ -381,7 +381,7 @@ export function resolveSkillPath(
 ): ResolvedSkill | null {
   const forceProject = skillName.startsWith('project:')
   const forceBundled = skillName.startsWith('sys:') || skillName.startsWith('systematic:')
-  
+
   let actualSkillName = skillName
   if (forceProject) actualSkillName = skillName.replace(/^project:/, '')
   if (forceBundled) actualSkillName = skillName.replace(/^(sys:|systematic:)/, '')
@@ -436,7 +436,7 @@ export function findAgentsInDir(
   sourceType: 'project' | 'user' | 'bundled'
 ): Array<{ name: string; file: string; sourceType: string }> {
   const agents: Array<{ name: string; file: string; sourceType: string }> = []
-  
+
   if (!fs.existsSync(dir)) return agents
 
   const entries = fs.readdirSync(dir)
@@ -461,7 +461,7 @@ export function findCommandsInDir(
   sourceType: 'project' | 'user' | 'bundled'
 ): Array<{ name: string; file: string; sourceType: string }> {
   const commands: Array<{ name: string; file: string; sourceType: string }> = []
-  
+
   if (!fs.existsSync(dir)) return commands
 
   const entries = fs.readdirSync(dir)
@@ -1507,7 +1507,7 @@ const path = require('path');
 function resolveSkillPath(skillName, bundledDir, userDir, projectDir) {
     const forceProject = skillName.startsWith('project:');
     const forceBundled = skillName.startsWith('sys:') || skillName.startsWith('systematic:');
-    
+
     let actualSkillName = skillName;
     if (forceProject) actualSkillName = skillName.replace(/^project:/, '');
     if (forceBundled) actualSkillName = skillName.replace(/^(sys:|systematic:)/, '');
@@ -1923,7 +1923,7 @@ Port these from CEP:
 
 1. **code-review** - Multi-agent review patterns
 2. **compound-docs** - Knowledge capture patterns
-3. **agent-native** - Build AI agents with prompt-native architecture
+3. **agent-native-architecture** - Build AI agents with prompt-native architecture
 
 **For each skill:**
 1. Fetch content from CEP repo

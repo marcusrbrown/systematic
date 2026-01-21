@@ -1,7 +1,7 @@
 # @fro.bot/systematic — OpenCode Plugin Design
 
-**Date:** 2026-01-20  
-**Status:** Draft  
+**Date:** 2026-01-20
+**Status:** Draft
 **Author:** Marcus R. Brown + Claude
 
 ---
@@ -310,18 +310,18 @@ npx @fro.bot/systematic list [skills|agents|commands]
 
 ### Skills (10)
 
-| Skill            | Source            | Purpose                                         |
-| ---------------- | ----------------- | ----------------------------------------------- |
-| `planning`       | CEP + Superpowers | Structured plan creation                        |
-| `code-review`    | CEP               | Multi-agent review patterns                     |
-| `git-worktree`   | Superpowers       | Isolated workspace management                   |
-| `tdd`            | Superpowers       | Test-driven development workflow                |
-| `debugging`      | Superpowers       | Systematic root-cause analysis                  |
-| `verification`   | Superpowers       | Evidence-before-assertions                      |
-| `brainstorming`  | Superpowers       | Requirements exploration                        |
-| `compound-docs`  | CEP               | Knowledge capture patterns                      |
-| `agent-native`   | CEP               | Build AI agents with prompt-native architecture |
-| `writing-skills` | Superpowers       | Create and edit skills                          |
+| Skill                       | Source            | Purpose                                         |
+| --------------------------- | ----------------- | ----------------------------------------------- |
+| `planning`                  | CEP + Superpowers | Structured plan creation                        |
+| `code-review`               | CEP               | Multi-agent review patterns                     |
+| `git-worktree`              | Superpowers       | Isolated workspace management                   |
+| `tdd`                       | Superpowers       | Test-driven development workflow                |
+| `debugging`                 | Superpowers       | Systematic root-cause analysis                  |
+| `verification`              | Superpowers       | Evidence-before-assertions                      |
+| `brainstorming`             | Superpowers       | Requirements exploration                        |
+| `compound-docs`             | CEP               | Knowledge capture patterns                      |
+| `agent-native-architecture` | CEP               | Build AI agents with prompt-native architecture |
+| `writing-skills`            | Superpowers       | Create and edit skills                          |
 
 ### Agents (6)
 
