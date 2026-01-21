@@ -1,2 +1,29 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+lib/
+.opencode/plugin/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+
+# Test
+coverage/
+tests/tmp/
+
+# Logs
+*.log
+
+# Environment
+.env
+.env.local
+
 # Worktrees
 .worktrees/

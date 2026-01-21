@@ -1,0 +1,60 @@
+{
+  "name": "@fro.bot/systematic",
+  "version": "0.1.0",
+  "description": "Structured engineering workflows for OpenCode",
+  "type": "module",
+  "main": "./.opencode/plugin/systematic.js",
+  "bin": {
+    "systematic": "./dist/cli/index.js"
+  },
+  "files": [
+    ".opencode",
+    "dist",
+    "lib",
+    "skills",
+    "agents",
+    "commands",
+    "defaults"
+  ],
+  "scripts": {
+    "build": "bun run build:lib && bun run build:plugin && bun run build:cli",
+    "build:lib": "bun build src/lib/skills-core.ts --outfile lib/skills-core.js --target node --format esm",
+    "build:plugin": "bun build src/plugin/systematic.ts --outfile .opencode/plugin/systematic.js --target node --format esm --external @opencode-ai/plugin/tool",
+    "build:cli": "bun build src/cli/index.ts --outdir dist/cli --target node --format esm",
+    "dev": "bun --watch src/plugin/systematic.ts",
+    "test": "bash tests/run-tests.sh",
+    "test:integration": "bash tests/run-tests.sh --integration",
+    "typecheck": "tsc --noEmit",
+    "lint": "biome check .",
+    "prepublishOnly": "bun run build && bun run test"
+  },
+  "keywords": [
+    "opencode",
+    "plugin",
+    "ai",
+    "workflow",
+    "engineering"
+  ],
+  "author": "Marcus R. Brown",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/marcusrbrown/systematic.git"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=0.1.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.0",
+    "@types/bun": "latest",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "commander": "^13.0.0",
+    "jsonc-parser": "^3.3.0"
+  }
+}
