@@ -155,14 +155,24 @@ description: Test command
       fs.mkdirSync(skillDir)
       fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# Test')
 
-      const result = skillsCore.resolveSkillPath('test-skill', testDir, null, null)
+      const result = skillsCore.resolveSkillPath(
+        'test-skill',
+        testDir,
+        null,
+        null,
+      )
       expect(result).not.toBeNull()
       expect(result?.skillFile).toBe(path.join(skillDir, 'SKILL.md'))
       expect(result?.sourceType).toBe('bundled')
     })
 
     test('returns null for non-existent skill', () => {
-      const result = skillsCore.resolveSkillPath('nonexistent', testDir, null, null)
+      const result = skillsCore.resolveSkillPath(
+        'nonexistent',
+        testDir,
+        null,
+        null,
+      )
       expect(result).toBeNull()
     })
 

@@ -163,9 +163,7 @@ describe('opencode availability check', () => {
   test('reports opencode installation status', () => {
     console.log(`OpenCode available: ${OPENCODE_AVAILABLE}`)
     if (!OPENCODE_AVAILABLE) {
-      console.log(
-        'OpenCode not installed. Install from: https://opencode.ai',
-      )
+      console.log('OpenCode not installed. Install from: https://opencode.ai')
     }
     expect(true).toBe(true)
   })

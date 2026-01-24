@@ -13,7 +13,9 @@ describe('skill priority resolution', () => {
   }
 
   beforeEach(() => {
-    const tempBase = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-priority-'))
+    const tempBase = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-priority-'),
+    )
 
     testEnv = {
       tempDir: tempBase,
@@ -131,9 +133,15 @@ PRIORITY_MARKER_${marker.toUpperCase()}_VERSION
     createSkill(testEnv.userDir, 'user-skill', 'user')
     createSkill(testEnv.bundledDir, 'bundled-skill', 'bundled')
 
-    const projectSkills = skillsCore.findSkillsInDir(testEnv.projectDir, 'project')
+    const projectSkills = skillsCore.findSkillsInDir(
+      testEnv.projectDir,
+      'project',
+    )
     const userSkills = skillsCore.findSkillsInDir(testEnv.userDir, 'user')
-    const bundledSkills = skillsCore.findSkillsInDir(testEnv.bundledDir, 'bundled')
+    const bundledSkills = skillsCore.findSkillsInDir(
+      testEnv.bundledDir,
+      'bundled',
+    )
 
     expect(projectSkills[0].sourceType).toBe('project')
     expect(userSkills[0].sourceType).toBe('user')
@@ -145,9 +153,15 @@ PRIORITY_MARKER_${marker.toUpperCase()}_VERSION
     createSkill(testEnv.userDir, 'shared-skill', 'user')
     createSkill(testEnv.bundledDir, 'shared-skill', 'bundled')
 
-    const projectSkills = skillsCore.findSkillsInDir(testEnv.projectDir, 'project')
+    const projectSkills = skillsCore.findSkillsInDir(
+      testEnv.projectDir,
+      'project',
+    )
     const userSkills = skillsCore.findSkillsInDir(testEnv.userDir, 'user')
-    const bundledSkills = skillsCore.findSkillsInDir(testEnv.bundledDir, 'bundled')
+    const bundledSkills = skillsCore.findSkillsInDir(
+      testEnv.bundledDir,
+      'bundled',
+    )
 
     const seen = new Set<string>()
     const deduped: Array<{ name: string; sourceType: string }> = []
