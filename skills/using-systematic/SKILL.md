@@ -94,3 +94,39 @@ Skills are resolved in priority order:
 3. **Bundled skills**: Provided by systematic plugin
 
 Use `systematic_find_skills` to see all available skills and their sources.
+
+## Available Content
+
+### Skills
+| Skill | Purpose |
+|-------|---------|
+| `brainstorming` | Explore ideas before implementing features or changes |
+| `agent-browser` | Browser automation with Playwright |
+| `agent-native-architecture` | Design systems for AI agents (includes extensive references) |
+| `compound-docs` | Create and maintain compound documentation |
+| `create-agent-skills` | Write new skills for AI agents |
+| `file-todos` | Manage TODO items in files |
+| `git-worktree` | Use git worktrees for isolated development |
+
+### Commands
+| Command | Purpose |
+|---------|---------|
+| `/workflows:brainstorm` | Start collaborative brainstorming |
+| `/workflows:compound` | Build compound documentation |
+| `/workflows:plan` | Create implementation plans |
+| `/workflows:review` | Run code review with agents |
+| `/workflows:work` | Execute planned work |
+| `/agent-native-audit` | Audit code for agent-native patterns |
+| `/create-agent-skill` | Create a new skill |
+| `/deepen-plan` | Add detail to existing plans |
+| `/lfg` | Let's go - start working immediately |
+
+### Agents
+| Agent | Category | Purpose |
+|-------|----------|---------|
+| `architecture-strategist` | review | System architecture review |
+| `code-simplicity-reviewer` | review | Simplicity and readability review |
+| `pattern-recognition-specialist` | review | Pattern consistency review |
+| `performance-oracle` | review | Performance analysis |
+| `security-sentinel` | review | Security vulnerability review |
+| `framework-docs-researcher` | research | Research framework documentation |

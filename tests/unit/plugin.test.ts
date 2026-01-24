@@ -63,8 +63,9 @@ describe('bundled content', () => {
 
   test('bundled agents have valid structure', () => {
     const agentsDir = path.join(ROOT_DIR, 'agents')
+    const reviewDir = path.join(agentsDir, 'review')
     const agentFiles = fs
-      .readdirSync(agentsDir)
+      .readdirSync(reviewDir)
       .filter((f) => f.endsWith('.md'))
 
     expect(agentFiles.length).toBeGreaterThan(0)
@@ -120,7 +121,7 @@ describe('CLI functionality', () => {
     const result = Bun.spawnSync(['node', CLI_PATH, 'list', 'commands'])
     const output = result.stdout.toString()
     expect(result.exitCode).toBe(0)
-    expect(output).toContain('/sys:plan')
+    expect(output).toContain('/workflows:plan')
     expect(output).toContain('bundled')
   })
 

@@ -195,56 +195,75 @@ export function resolveSkillPath(
 }
 
 /**
- * Find agents in a directory (flat structure, .md files)
+ * Find agents in a directory (supports nested folders like review/, research/)
  */
 export function findAgentsInDir(
   dir: string,
-  sourceType: 'project' | 'user' | 'bundled'
-): Array<{ name: string; file: string; sourceType: string }> {
-  const agents: Array<{ name: string; file: string; sourceType: string }> = []
+  sourceType: 'project' | 'user' | 'bundled',
+  maxDepth = 2
+): Array<{ name: string; file: string; sourceType: string; category?: string }> {
+  const agents: Array<{ name: string; file: string; sourceType: string; category?: string }> = []
 
   if (!fs.existsSync(dir)) return agents
 
-  const entries = fs.readdirSync(dir)
-  for (const entry of entries) {
-    if (entry.endsWith('.md')) {
-      agents.push({
-        name: entry.replace(/\.md$/, ''),
-        file: path.join(dir, entry),
-        sourceType,
-      })
+  function recurse(currentDir: string, depth: number, category?: string) {
+    if (depth > maxDepth) return
+
+    const entries = fs.readdirSync(currentDir, { withFileTypes: true })
+    for (const entry of entries) {
+      const fullPath = path.join(currentDir, entry.name)
+
+      if (entry.isDirectory()) {
+        recurse(fullPath, depth + 1, entry.name)
+      } else if (entry.name.endsWith('.md')) {
+        agents.push({
+          name: entry.name.replace(/\.md$/, ''),
+          file: fullPath,
+          sourceType,
+          category,
+        })
+      }
     }
   }
 
+  recurse(dir, 0)
   return agents
 }
 
 /**
- * Find commands in a directory (flat structure, .md files)
+ * Find commands in a directory (supports nested folders like workflows/)
  */
 export function findCommandsInDir(
   dir: string,
-  sourceType: 'project' | 'user' | 'bundled'
-): Array<{ name: string; file: string; sourceType: string }> {
-  const commands: Array<{ name: string; file: string; sourceType: string }> = []
+  sourceType: 'project' | 'user' | 'bundled',
+  maxDepth = 2
+): Array<{ name: string; file: string; sourceType: string; category?: string }> {
+  const commands: Array<{ name: string; file: string; sourceType: string; category?: string }> = []
 
   if (!fs.existsSync(dir)) return commands
 
-  const entries = fs.readdirSync(dir)
-  for (const entry of entries) {
-    if (entry.endsWith('.md')) {
-      // Convert sys-plan.md to /sys:plan
-      const baseName = entry.replace(/\.md$/, '')
-      const commandName = baseName.startsWith('sys-')
-        ? `/sys:${baseName.slice(4)}`
-        : `/${baseName}`
-      commands.push({
-        name: commandName,
-        file: path.join(dir, entry),
-        sourceType,
-      })
+  function recurse(currentDir: string, depth: number, category?: string) {
+    if (depth > maxDepth) return
+
+    const entries = fs.readdirSync(currentDir, { withFileTypes: true })
+    for (const entry of entries) {
+      const fullPath = path.join(currentDir, entry.name)
+
+      if (entry.isDirectory()) {
+        recurse(fullPath, depth + 1, entry.name)
+      } else if (entry.name.endsWith('.md')) {
+        const baseName = entry.name.replace(/\.md$/, '')
+        const commandName = category ? `/${category}:${baseName}` : `/${baseName}`
+        commands.push({
+          name: commandName,
+          file: fullPath,
+          sourceType,
+          category,
+        })
+      }
     }
   }
 
+  recurse(dir, 0)
   return commands
 }

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs'
 import path from 'node:path'
+import * as converter from './lib/converter.js'
 import * as skillsCore from './lib/skills-core.js'
 
 const VERSION = '0.1.0'
@@ -14,6 +15,9 @@ Usage:
 Commands:
   init [--project]     Initialize systematic (global or project-local)
   list [type]          List available skills, agents, or commands
+  convert <type> <source> [--output <path>] [--dry-run]
+                       Convert Claude Code content to OpenCode format
+    Types: skill, agent, command
   config [subcommand]  Configuration management
     show               Show merged configuration
     scaffold           Create user override directories
@@ -21,6 +25,8 @@ Commands:
 
 Options:
   --project            Apply to current project only (for init)
+  --output, -o         Output path for convert command
+  --dry-run            Preview conversion without writing files
   -h, --help           Show this help message
   -v, --version        Show version
 
@@ -28,6 +34,8 @@ Examples:
   systematic init                # Initialize globally
   systematic init --project      # Initialize for current project
   systematic list skills
+  systematic convert skill /path/to/cep/skills/agent-browser -o ./skills/agent-browser
+  systematic convert agent /path/to/agent.md --dry-run
   systematic config scaffold
 `
 
@@ -250,6 +258,61 @@ function configPath(): void {
   console.log(`  Project: ${path.join(projectDir, 'systematic.json')}`)
 }
 
+function runConvert(args: string[]): void {
+  const typeArg = args[1]
+  const sourceArg = args[2]
+
+  if (!typeArg || !sourceArg) {
+    console.error(
+      'Usage: systematic convert <type> <source> [--output <path>] [--dry-run]',
+    )
+    console.error('Types: skill, agent, command')
+    process.exit(1)
+  }
+
+  const validTypes = ['skill', 'agent', 'command']
+  if (!validTypes.includes(typeArg)) {
+    console.error(
+      `Invalid type: ${typeArg}. Must be one of: ${validTypes.join(', ')}`,
+    )
+    process.exit(1)
+  }
+
+  const sourcePath = path.resolve(sourceArg)
+  if (!fs.existsSync(sourcePath)) {
+    console.error(`Source not found: ${sourcePath}`)
+    process.exit(1)
+  }
+
+  const outputIndex = args.findIndex((a) => a === '--output' || a === '-o')
+  const outputPath =
+    outputIndex !== -1 ? path.resolve(args[outputIndex + 1]) : undefined
+  const dryRun = args.includes('--dry-run')
+
+  try {
+    const result = converter.convert(
+      typeArg as converter.ConvertType,
+      sourcePath,
+      { output: outputPath, dryRun },
+    )
+
+    if (dryRun) {
+      console.log(`[DRY RUN] Would convert ${result.type}:`)
+    } else {
+      console.log(`Converted ${result.type}:`)
+    }
+    console.log(`  Source: ${result.sourcePath}`)
+    console.log(`  Output: ${result.outputPath}`)
+    console.log('  Files:')
+    for (const file of result.files) {
+      console.log(`    - ${file}`)
+    }
+  } catch (err) {
+    console.error(`Conversion failed: ${(err as Error).message}`)
+    process.exit(1)
+  }
+}
+
 const args = process.argv.slice(2)
 const command = args[0]
 
@@ -259,6 +322,9 @@ switch (command) {
     break
   case 'list':
     listItems(args[1] || 'skills')
+    break
+  case 'convert':
+    runConvert(args)
     break
   case 'config':
     switch (args[1]) {

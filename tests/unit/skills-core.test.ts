@@ -136,7 +136,7 @@ description: Test command
 
       const commands = skillsCore.findCommandsInDir(testDir, 'project')
       expect(commands).toHaveLength(1)
-      expect(commands[0].name).toBe('/sys:test')
+      expect(commands[0].name).toBe('/sys-test')
       expect(commands[0].sourceType).toBe('project')
     })
 

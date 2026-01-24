@@ -1,6 +1,6 @@
 # @fro.bot/systematic
 
-An OpenCode plugin providing systematic engineering workflows, skills, and review agents.
+An OpenCode plugin providing systematic engineering workflows from the Compound Engineering Plugin (CEP), adapted for OpenCode.
 
 ## Installation
 
@@ -8,11 +8,11 @@ An OpenCode plugin providing systematic engineering workflows, skills, and revie
 npm install @fro.bot/systematic
 ```
 
-Add to your OpenCode config (`~/.config/opencode/config.json`):
+Add to your OpenCode config (`~/.config/opencode/opencode.json`):
 
 ```json
 {
-  "plugins": ["@fro.bot/systematic"]
+  "plugin": ["@fro.bot/systematic"]
 }
 ```
 
@@ -26,35 +26,43 @@ Systematic includes battle-tested engineering workflows:
 |-------|-------------|
 | `using-systematic` | Bootstrap skill for discovering and using other skills |
 | `brainstorming` | Collaborative design workflow |
-| `writing-plans` | Create detailed implementation plans |
-| `test-driven-development` | TDD with red-green-refactor cycle |
-| `systematic-debugging` | Root cause investigation process |
-| `verification-before-completion` | Evidence before claims |
-| `executing-plans` | Batch execution with checkpoints |
-| `using-git-worktrees` | Isolated workspace creation |
-| `writing-skills` | Create new skills |
+| `agent-browser` | Browser automation with Playwright |
+| `agent-native-architecture` | Design systems for AI agents |
+| `compound-docs` | Create and maintain compound documentation |
+| `create-agent-skills` | Write new skills for AI agents |
+| `file-todos` | Manage TODO items in files |
+| `git-worktree` | Use git worktrees for isolated development |
 
 ### Commands
 
-Quick shortcuts to invoke skills:
+Quick shortcuts to invoke workflows:
 
-- `/sys-plan` - Start planning with brainstorming
-- `/sys-work` - Execute an implementation plan
-- `/sys-review` - Run verification before completion
-- `/sys-debug` - Debug an issue systematically
-- `/sys-tdd` - Implement with TDD
-- `/sys-worktree` - Create isolated workspace
+**Workflows:**
+- `/workflows:brainstorm` - Start collaborative brainstorming
+- `/workflows:compound` - Build compound documentation
+- `/workflows:plan` - Create implementation plans
+- `/workflows:review` - Run code review with agents
+- `/workflows:work` - Execute planned work
+
+**Utilities:**
+- `/agent-native-audit` - Audit code for agent-native patterns
+- `/create-agent-skill` - Create a new skill
+- `/deepen-plan` - Add detail to existing plans
+- `/lfg` - Let's go - start working immediately
 
 ### Review Agents
 
-Specialized code review agents:
+Specialized code review agents organized by category:
 
+**Review:**
 - `architecture-strategist` - Architectural review
 - `security-sentinel` - Security review
 - `code-simplicity-reviewer` - Complexity review
-- `framework-docs-researcher` - Documentation research
 - `pattern-recognition-specialist` - Pattern analysis
 - `performance-oracle` - Performance review
+
+**Research:**
+- `framework-docs-researcher` - Documentation research
 
 ## Tools
 
@@ -87,6 +95,42 @@ Create `~/.config/opencode/systematic.json` or `.opencode/systematic.json`:
   "disabled_agents": [],
   "disabled_commands": []
 }
+```
+
+## Converting CEP Content
+
+The CLI includes a converter for adapting Compound Engineering Plugin (CEP) content to OpenCode format.
+
+### Convert a Skill
+
+Skills are directories containing `SKILL.md` and supporting files:
+
+```bash
+npx @fro.bot/systematic convert skill /path/to/cep/skills/my-skill -o ./skills/my-skill
+```
+
+### Convert an Agent
+
+Agents are markdown files that get OpenCode-compatible YAML frontmatter:
+
+```bash
+npx @fro.bot/systematic convert agent /path/to/cep/agents/review/my-agent.md -o ./agents/review/my-agent.md
+```
+
+### Convert a Command
+
+Commands are markdown templates:
+
+```bash
+npx @fro.bot/systematic convert command /path/to/cep/commands/my-command.md -o ./commands/my-command.md
+```
+
+### Dry Run
+
+Preview conversion without writing files:
+
+```bash
+npx @fro.bot/systematic convert skill /path/to/skill --dry-run
 ```
 
 ## Development
