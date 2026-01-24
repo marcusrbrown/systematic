@@ -1,7 +1,8 @@
 # @fro.bot/systematic — OpenCode Plugin Design
 
-**Date:** 2026-01-20  
-**Status:** Draft  
+**Date:** 2026-01-20
+**Updated:** 2026-01-21
+**Status:** Implemented
 **Author:** Marcus R. Brown + Claude
 
 ---
@@ -53,35 +54,43 @@ Port CEP's "compounding engineering" philosophy to OpenCode:
 systematic/
 ├── src/
 │   ├── index.ts                   # Plugin export
-│   ├── cli/
-│   │   ├── index.ts               # CLI entry point
-│   │   ├── init.ts                # Init command
-│   │   ├── config.ts              # Config subcommands
-│   │   └── list.ts                # List command
-│   ├── bootstrap.ts               # Session injection logic
-│   ├── config.ts                  # Config loading + merging
-│   ├── tools/
-│   │   ├── use-skill.ts           # use_skill tool
-│   │   ├── find-skills.ts         # find_skills tool
-│   │   └── index.ts
+│   ├── cli.ts                     # CLI entry point
 │   └── lib/
 │       ├── skills-core.ts         # Skill discovery + parsing
-│       ├── deep-merge.ts          # Config merge logic
-│       └── paths.ts               # Path resolution utilities
-├── skills/                        # Bundled skills
-│   ├── planning/
-│   │   └── SKILL.md
-│   ├── code-review/
-│   │   └── SKILL.md
-│   └── ...
-├── agents/                        # Bundled agents
+│       └── config.ts              # Config loading + merging
+├── skills/                        # Bundled skills (11)
+│   ├── using-systematic/
+│   ├── brainstorming/
+│   ├── writing-plans/
+│   ├── test-driven-development/
+│   ├── systematic-debugging/
+│   ├── verification-before-completion/
+│   ├── executing-plans/
+│   ├── using-git-worktrees/
+│   ├── writing-skills/
+│   ├── compound-docs/
+│   └── agent-native-architecture/
+├── agents/                        # Bundled agents (6)
 │   ├── architecture-strategist.md
-│   └── ...
-├── commands/                      # Bundled commands
+│   ├── security-sentinel.md
+│   ├── code-simplicity-reviewer.md
+│   ├── framework-docs-researcher.md
+│   ├── pattern-recognition-specialist.md
+│   └── performance-oracle.md
+├── commands/                      # Bundled commands (9)
 │   ├── sys-plan.md
-│   └── ...
-├── defaults/
-│   └── bootstrap.md               # Default bootstrap prompt
+│   ├── sys-work.md
+│   ├── sys-review.md
+│   ├── sys-debug.md
+│   ├── sys-tdd.md
+│   ├── sys-worktree.md
+│   ├── sys-compound.md
+│   ├── sys-deepen.md
+│   └── sys-lfg.md
+├── bootstrap.md                   # Default bootstrap prompt
+├── tests/
+│   ├── unit/                      # Unit tests (Bun)
+│   └── integration/               # Integration tests (Bun)
 ├── package.json
 ├── tsconfig.json
 ├── bunfig.toml
@@ -92,9 +101,9 @@ systematic/
 
 ```
 dist/
-├── index.js                       # Plugin entry (ESM)
-├── cli.js                         # CLI entry
-└── ...
+├── index.js           # Plugin entry (ESM)
+├── cli.js             # CLI entry (ESM)
+└── chunk-*.js         # Shared code (ESM)
 ```
 
 ---
@@ -148,10 +157,9 @@ Highest priority — placed in project root:
 
 ```
 .opencode/
-└── systematic/
-    ├── skills/
-    ├── agents/
-    └── commands/
+├── skills/
+├── agents/
+└── commands/
 ```
 
 ---
@@ -202,8 +210,8 @@ Same schema — project config merges over user config.
 
 | Tier    | Scope                               |
 | ------- | ----------------------------------- |
-| project | `.opencode/systematic/`             |
-| user    | `~/.config/opencode/systematic/`    |
+| project | `.opencode/skills/` etc.            |
+| user    | `~/.config/opencode/skills/` etc.   |
 | bundled | `node_modules/@fro.bot/systematic/` |
 
 ---
@@ -218,18 +226,13 @@ import { tool } from "@opencode-ai/plugin/tool"
 
 export const SystematicPlugin = async ({ client, directory }) => {
   const config = await loadConfig(directory)
-  const skillsManager = new SkillsManager(config, directory)
 
   return {
     tool: {
-      systematic_use_skill: createUseSkillTool(client, skillsManager),
-      systematic_find_skills: createFindSkillsTool(skillsManager),
-      systematic_find_agents: createFindAgentsTool(config, directory),
-      systematic_find_commands: createFindCommandsTool(config, directory),
-    },
-
-    event: async ({ event }) => {
-      // Placeholder for future event handling
+      systematic_use_skill: tool({...}),
+      systematic_find_skills: tool({...}),
+      systematic_find_agents: tool({...}),
+      systematic_find_commands: tool({...}),
     },
 
     // Workaround for session.prompt() model reset issue
@@ -240,7 +243,7 @@ export const SystematicPlugin = async ({ client, directory }) => {
           transform: async ({ output }) => {
             if (!config.bootstrap.enabled) return
 
-            const content = await getBootstrapContent(config, skillsManager)
+            const content = await getBootstrapContent(config)
             output.system ||= ""
             output.system += `\n\n${content}`
           }
@@ -295,44 +298,48 @@ npx @fro.bot/systematic list [skills|agents|commands]
 
 ---
 
-## Curated Content (v1)
+## Curated Content (v1) — IMPLEMENTED
 
-### Commands (6)
+### Commands (9)
 
-| Command       | Source                  | Purpose                                              |
-| ------------- | ----------------------- | ---------------------------------------------------- |
-| `/sys:plan`   | CEP `/workflows:plan`   | Transform ideas into structured implementation plans |
-| `/sys:work`   | CEP `/workflows:work`   | Execute work items with tracking                     |
-| `/sys:review` | CEP `/workflows:review` | Multi-perspective code review                        |
-| `/sys:compound` | CEP `/workflows:compound` | Document solved problems for future leverage       |
-| `/sys:deepen` | CEP `/deepen-plan`      | Enhance plans with parallel research                 |
-| `/sys:lfg`    | CEP `/lfg`              | Full autonomous workflow (plan → work → review)      |
+| Command         | Source                    | Purpose                                              |
+| --------------- | ------------------------- | ---------------------------------------------------- |
+| `/sys:plan`     | CEP `/workflows:plan`     | Transform ideas into structured implementation plans |
+| `/sys:work`     | CEP `/workflows:work`     | Execute work items with tracking                     |
+| `/sys:review`   | Superpowers               | Verification before completion                       |
+| `/sys:debug`    | Superpowers               | Systematic debugging                                 |
+| `/sys:tdd`      | Superpowers               | Test-driven development                              |
+| `/sys:worktree` | Superpowers               | Git worktree creation                                |
+| `/sys:compound` | CEP `/workflows:compound` | Document solved problems for future leverage         |
+| `/sys:deepen`   | CEP `/deepen-plan`        | Enhance plans with parallel research                 |
+| `/sys:lfg`      | CEP `/lfg`                | Full autonomous workflow (plan → work → review)      |
 
-### Skills (10)
+### Skills (11)
 
-| Skill            | Source            | Purpose                                         |
-| ---------------- | ----------------- | ----------------------------------------------- |
-| `planning`       | CEP + Superpowers | Structured plan creation                        |
-| `code-review`    | CEP               | Multi-agent review patterns                     |
-| `git-worktree`   | Superpowers       | Isolated workspace management                   |
-| `tdd`            | Superpowers       | Test-driven development workflow                |
-| `debugging`      | Superpowers       | Systematic root-cause analysis                  |
-| `verification`   | Superpowers       | Evidence-before-assertions                      |
-| `brainstorming`  | Superpowers       | Requirements exploration                        |
-| `compound-docs`  | CEP               | Knowledge capture patterns                      |
-| `agent-native`   | CEP               | Build AI agents with prompt-native architecture |
-| `writing-skills` | Superpowers       | Create and edit skills                          |
+| Skill                         | Source            | Purpose                                         |
+| ----------------------------- | ----------------- | ----------------------------------------------- |
+| `using-systematic`            | Superpowers       | Bootstrap skill discovery                       |
+| `brainstorming`               | Superpowers       | Requirements exploration                        |
+| `writing-plans`               | Superpowers       | Structured plan creation                        |
+| `test-driven-development`     | Superpowers       | TDD workflow                                    |
+| `systematic-debugging`        | Superpowers       | Root-cause analysis                             |
+| `verification-before-completion` | Superpowers    | Evidence-before-assertions                      |
+| `executing-plans`             | Superpowers       | Plan execution with checkpoints                 |
+| `using-git-worktrees`         | Superpowers       | Isolated workspace management                   |
+| `writing-skills`              | Superpowers       | Create and edit skills                          |
+| `compound-docs`               | CEP               | Knowledge capture patterns                      |
+| `agent-native-architecture`   | CEP               | Build AI agents with prompt-native architecture |
 
 ### Agents (6)
 
-| Agent                          | Source | Purpose                       |
-| ------------------------------ | ------ | ----------------------------- |
-| `architecture-strategist`      | CEP    | System design decisions       |
-| `security-sentinel`            | CEP    | Security review               |
-| `code-simplicity-reviewer`     | CEP    | Complexity reduction          |
-| `framework-docs-researcher`    | CEP    | External documentation lookup |
-| `pattern-recognition-specialist` | CEP  | Codebase pattern analysis     |
-| `performance-oracle`           | CEP    | Performance review            |
+| Agent                            | Source | Purpose                       |
+| -------------------------------- | ------ | ----------------------------- |
+| `architecture-strategist`        | CEP    | System design decisions       |
+| `security-sentinel`              | CEP    | Security review               |
+| `code-simplicity-reviewer`       | CEP    | Complexity reduction          |
+| `framework-docs-researcher`      | CEP    | External documentation lookup |
+| `pattern-recognition-specialist` | CEP    | Codebase pattern analysis     |
+| `performance-oracle`             | CEP    | Performance review            |
 
 ### Not Included (v1)
 
@@ -343,37 +350,49 @@ npx @fro.bot/systematic list [skills|agents|commands]
 
 ---
 
-## Implementation Plan
+## Testing
 
-### Phase 1: Foundation
-1. Initialize npm package with Bun
-2. Set up TypeScript + build pipeline
-3. Implement config loading + merging
-4. Implement path resolution utilities
+### Test Suite (42 tests)
 
-### Phase 2: Plugin Core
-1. Create plugin entry point
-2. Implement bootstrap injection (system transform hook)
-3. Implement skill discovery + resolution
-4. Create `systematic_use_skill` tool
-5. Create `systematic_find_*` tools
+```bash
+# Unit tests only
+bun run test
 
-### Phase 3: CLI
-1. Create CLI entry point
-2. Implement `init` command
-3. Implement `config` subcommands
-4. Implement `list` command
+# Integration tests (includes OpenCode if installed)
+bun run test:integration
 
-### Phase 4: Content
-1. Port curated commands (6)
-2. Port curated skills (10)
-3. Port curated agents (6)
-4. Write default bootstrap prompt
+# All tests
+bun run test:all
+```
 
-### Phase 5: Polish
-1. Write README
-2. Add tests
-3. Publish to npm
+**Unit Tests:**
+- skills-core: frontmatter parsing, skill discovery, priority resolution
+- plugin: file existence, JavaScript validity, CLI functionality
+
+**Integration Tests:**
+- priority: project > user > bundled resolution
+- opencode: tool discovery, skill loading (runs automatically if OpenCode installed)
+
+---
+
+## Implementation Status
+
+| Phase | Component | Status |
+|-------|-----------|--------|
+| 1 | npm package + build | ✅ |
+| 1 | Config loading + merging | ✅ |
+| 1 | Path resolution | ✅ |
+| 2 | Plugin entry point | ✅ |
+| 2 | Bootstrap injection | ✅ |
+| 2 | Skill discovery | ✅ |
+| 2 | Tools (use_skill, find_*) | ✅ |
+| 3 | CLI (init, config, list) | ✅ |
+| 4 | Commands (9) | ✅ |
+| 4 | Skills (11) | ✅ |
+| 4 | Agents (6) | ✅ |
+| 5 | README | ✅ |
+| 5 | Tests (42) | ✅ |
+| 5 | npm publish | 🔲 |
 
 ---
 
