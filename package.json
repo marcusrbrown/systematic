@@ -15,7 +15,7 @@
   },
   "files": ["dist", "skills", "agents", "commands", "bootstrap.md"],
   "scripts": {
-    "build": "bun build src/index.ts src/cli.ts --outdir dist --target node --format esm --splitting --external @opencode-ai/plugin/tool",
+    "build": "bun build src/index.ts src/cli.ts --outdir dist --target node --format esm --splitting --external @opencode-ai/plugin/tool --external jsonc-parser",
     "dev": "bun --watch src/index.ts",
     "test": "bun test tests/unit",
     "test:integration": "bun test tests/integration",
