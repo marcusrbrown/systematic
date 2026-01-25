@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import type { Plugin } from '@opencode-ai/plugin'
 import { tool } from '@opencode-ai/plugin/tool'
 import { type SystematicConfig, loadConfig } from './lib/config.js'
 import * as skillsCore from './lib/skills-core.js'
@@ -48,27 +49,6 @@ function formatItemList(
   return output
 }
 
-interface PluginContext {
-  client: {
-    session: {
-      prompt: (options: {
-        path: { id: string }
-        body: {
-          agent?: string
-          noReply: boolean
-          parts: Array<{ type: string; text: string; synthetic?: boolean }>
-        }
-      }) => Promise<void>
-    }
-  }
-  directory: string
-}
-
-interface ExecuteContext {
-  sessionID: string
-  agent?: string
-}
-
 const getBootstrapContent = (
   config: SystematicConfig,
   _compact = false,
@@ -100,7 +80,7 @@ const getBootstrapContent = (
 When skills reference tools you don't have, substitute OpenCode equivalents:
 - \`TodoWrite\` → \`update_plan\`
 - \`Task\` tool with subagents → Use OpenCode's subagent system (@mention)
-- \`Skill\` tool → \`systematic_use_skill\` custom tool
+- \`Skill\` tool → OpenCode's native \`skill\` tool
 - \`Read\`, \`Write\`, \`Edit\`, \`Bash\` → Your native tools
 
 **Skills naming (priority order):**
@@ -112,7 +92,7 @@ When skills reference tools you don't have, substitute OpenCode equivalents:
   return `<SYSTEMATIC_WORKFLOWS>
 You have access to structured engineering workflows via the systematic plugin.
 
-**IMPORTANT: The using-systematic skill content is included below. It is ALREADY LOADED - you are currently following it. Do NOT use systematic_use_skill to load "using-systematic" - that would be redundant. Use systematic_use_skill only for OTHER skills.**
+**IMPORTANT: The using-systematic skill content is included below. It is ALREADY LOADED - you are currently following it. Do NOT use the skill tool to load "using-systematic" again - that would be redundant.**
 
 ${content}
 
@@ -120,10 +100,7 @@ ${toolMapping}
 </SYSTEMATIC_WORKFLOWS>`
 }
 
-export const SystematicPlugin = async ({
-  client,
-  directory,
-}: PluginContext) => {
+export const SystematicPlugin: Plugin = async ({ client, directory }) => {
   const config = loadConfig(directory)
 
   const projectSkillsDir = path.join(directory, '.opencode/systematic/skills')
@@ -138,82 +115,6 @@ export const SystematicPlugin = async ({
 
   return {
     tool: {
-      systematic_use_skill: tool({
-        description:
-          'Load and read a specific skill to guide your work. Skills contain proven workflows, mandatory processes, and expert techniques.',
-        args: {
-          skill_name: tool.schema
-            .string()
-            .describe(
-              'Name of the skill to load (e.g., "sys:brainstorming", "my-custom-skill", or "project:my-skill")',
-            ),
-        },
-        execute: async (
-          args: { skill_name: string },
-          ctx: unknown,
-        ): Promise<string> => {
-          const context = ctx as ExecuteContext
-          const { skill_name } = args
-
-          const actualName = skill_name.replace(
-            /^(project:|sys:|systematic:)/,
-            '',
-          )
-          if (config.disabled_skills.includes(actualName)) {
-            return `Error: Skill "${skill_name}" is disabled in configuration.`
-          }
-
-          const resolved = skillsCore.resolveSkillPath(
-            skill_name,
-            bundledSkillsDir,
-            userSkillsDir,
-            projectSkillsDir,
-          )
-
-          if (!resolved) {
-            return `Error: Skill "${skill_name}" not found.\n\nRun systematic_find_skills to see available skills.`
-          }
-
-          const fullContent = fs.readFileSync(resolved.skillFile, 'utf8')
-          const { name, description } = skillsCore.extractFrontmatter(
-            resolved.skillFile,
-          )
-          const content = skillsCore.stripFrontmatter(fullContent)
-          const skillDirectory = path.dirname(resolved.skillFile)
-
-          const skillHeader = `# ${name || skill_name}
-# ${description || ''}
-# Supporting tools and docs are in ${skillDirectory}
-# ============================================`
-
-          try {
-            await client.session.prompt({
-              path: { id: context.sessionID },
-              body: {
-                agent: context.agent,
-                noReply: true,
-                parts: [
-                  {
-                    type: 'text',
-                    text: `Loading skill: ${name || skill_name}`,
-                    synthetic: true,
-                  },
-                  {
-                    type: 'text',
-                    text: `${skillHeader}\n\n${content}`,
-                    synthetic: true,
-                  },
-                ],
-              },
-            })
-          } catch {
-            return `${skillHeader}\n\n${content}`
-          }
-
-          return `Launching skill: ${name || skill_name}`
-        },
-      }),
-
       systematic_find_skills: tool({
         description:
           'List all available skills in the project, user, and bundled skill libraries.',
@@ -332,29 +233,16 @@ export const SystematicPlugin = async ({
       }),
     },
 
-    event: async () => {
-      // Bootstrap injection uses experimental.chat.system.transform instead
-    },
-
     // Workaround for session.prompt() model reset issue
-    // See: https://github.com/obra/superpowers/pull/228
-    experimental: {
-      chat: {
-        system: {
-          transform: async ({
-            output,
-          }: {
-            output: { system?: string }
-          }) => {
-            const content = getBootstrapContent(config, false)
-            if (content) {
-              output.system = output.system
-                ? `${output.system}\n\n${content}`
-                : content
-            }
-          },
-        },
-      },
+    // See: https://github.com/obra/superpowers/pull/226
+    'experimental.chat.system.transform': async (_input, output) => {
+      const content = getBootstrapContent(config, false)
+      if (content) {
+        if (!output.system) {
+          output.system = []
+        }
+        output.system.push(content)
+      }
     },
   }
 }

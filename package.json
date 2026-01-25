@@ -13,7 +13,7 @@
       "types": "./dist/index.d.ts"
     }
   },
-  "files": ["dist", "skills", "agents", "commands", "bootstrap.md"],
+  "files": ["dist", "skills", "agents", "commands"],
   "scripts": {
     "build": "bun build src/index.ts src/cli.ts --outdir dist --target node --format esm --splitting --external @opencode-ai/plugin/tool --external jsonc-parser",
     "dev": "bun --watch src/index.ts",
@@ -42,6 +42,7 @@
     "@opencode-ai/plugin": "^1.1.30",
     "@types/bun": "latest",
     "@types/node": "^22.0.0",
+    "markdownlint-cli": "^0.47.0",
     "typescript": "^5.7.0"
   },
   "dependencies": {

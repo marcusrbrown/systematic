@@ -38,6 +38,7 @@ Systematic includes battle-tested engineering workflows:
 Quick shortcuts to invoke workflows:
 
 **Workflows:**
+
 - `/workflows:brainstorm` - Start collaborative brainstorming
 - `/workflows:compound` - Build compound documentation
 - `/workflows:plan` - Create implementation plans
@@ -45,6 +46,7 @@ Quick shortcuts to invoke workflows:
 - `/workflows:work` - Execute planned work
 
 **Utilities:**
+
 - `/agent-native-audit` - Audit code for agent-native patterns
 - `/create-agent-skill` - Create a new skill
 - `/deepen-plan` - Add detail to existing plans
@@ -55,6 +57,7 @@ Quick shortcuts to invoke workflows:
 Specialized code review agents organized by category:
 
 **Review:**
+
 - `architecture-strategist` - Architectural review
 - `security-sentinel` - Security review
 - `code-simplicity-reviewer` - Complexity review
@@ -62,6 +65,7 @@ Specialized code review agents organized by category:
 - `performance-oracle` - Performance review
 
 **Research:**
+
 - `framework-docs-researcher` - Documentation research
 
 ## Tools
@@ -70,7 +74,6 @@ The plugin provides these tools to OpenCode:
 
 | Tool | Description |
 |------|-------------|
-| `systematic_use_skill` | Load and read a skill |
 | `systematic_find_skills` | List available skills |
 | `systematic_find_agents` | List available agents |
 | `systematic_find_commands` | List available commands |
