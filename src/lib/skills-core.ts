@@ -14,20 +14,6 @@ export interface SkillInfo {
   sourceType: 'bundled'
 }
 
-export interface ResolvedSkill {
-  skillFile: string
-  sourceType: 'bundled'
-  skillPath: string
-}
-
-/**
- * Extract YAML frontmatter from a skill file.
- * Format:
- * ---
- * name: skill-name
- * description: Use when [condition] - [what it does]
- * ---
- */
 export function extractFrontmatter(filePath: string): SkillFrontmatter {
   try {
     const content = fs.readFileSync(filePath, 'utf8')
@@ -60,9 +46,6 @@ export function extractFrontmatter(filePath: string): SkillFrontmatter {
   }
 }
 
-/**
- * Strip YAML frontmatter from skill content.
- */
 export function stripFrontmatter(content: string): string {
   const lines = content.split('\n')
   let inFrontmatter = false
@@ -87,9 +70,6 @@ export function stripFrontmatter(content: string): string {
   return contentLines.join('\n').trim()
 }
 
-/**
- * Find all SKILL.md files in a directory recursively.
- */
 export function findSkillsInDir(
   dir: string,
   sourceType: 'bundled',
@@ -128,44 +108,12 @@ export function findSkillsInDir(
   return skills
 }
 
-/**
- * Resolve a skill name to its file path.
- *
- * The "systematic:" prefix explicitly requests bundled resolution,
- * but since only bundled skills are supported, all resolutions use bundled.
- */
-export function resolveSkillPath(
-  skillName: string,
-  bundledDir: string,
-  _userDir: string | null,
-  _projectDir: string | null
-): ResolvedSkill | null {
-  const actualSkillName = skillName.replace(/^systematic:/, '')
-
-  if (bundledDir) {
-    const bundledPath = path.join(bundledDir, actualSkillName)
-    const bundledSkillFile = path.join(bundledPath, 'SKILL.md')
-    if (fs.existsSync(bundledSkillFile)) {
-      return {
-        skillFile: bundledSkillFile,
-        sourceType: 'bundled',
-        skillPath: actualSkillName,
-      }
-    }
-  }
-
-  return null
-}
-
-/**
- * Find agents in a directory (supports nested folders like review/, research/)
- */
 export function findAgentsInDir(
   dir: string,
   sourceType: 'bundled',
   maxDepth = 2
-): Array<{ name: string; file: string; sourceType: string; category?: string }> {
-  const agents: Array<{ name: string; file: string; sourceType: string; category?: string }> = []
+): Array<{ name: string; file: string; sourceType: 'bundled'; category?: string }> {
+  const agents: Array<{ name: string; file: string; sourceType: 'bundled'; category?: string }> = []
 
   if (!fs.existsSync(dir)) return agents
 
@@ -193,15 +141,12 @@ export function findAgentsInDir(
   return agents
 }
 
-/**
- * Find commands in a directory (supports nested folders like workflows/)
- */
 export function findCommandsInDir(
   dir: string,
   sourceType: 'bundled',
   maxDepth = 2
-): Array<{ name: string; file: string; sourceType: string; category?: string }> {
-  const commands: Array<{ name: string; file: string; sourceType: string; category?: string }> = []
+): Array<{ name: string; file: string; sourceType: 'bundled'; category?: string }> {
+  const commands: Array<{ name: string; file: string; sourceType: 'bundled'; category?: string }> = []
 
   if (!fs.existsSync(dir)) return commands
 
