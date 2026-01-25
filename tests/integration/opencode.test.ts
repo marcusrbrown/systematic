@@ -8,17 +8,23 @@ const OPENCODE_AVAILABLE = (() => {
   return result.exitCode === 0
 })()
 
-const TIMEOUT_MS = 90_000
-const MAX_RETRIES = 3
-const RETRY_DELAY_MS = 2_000
+const TIMEOUT_MS = 120_000
+const MAX_RETRIES = 2
+const RETRY_DELAY_MS = 3_000
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..')
+
+function buildOpencodeConfig(): string {
+  const pluginPath = `file://${path.join(REPO_ROOT, 'src/index.ts')}`
+  return JSON.stringify({
+    plugin: [pluginPath],
+  })
+}
 
 describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
   let testEnv: {
     tempDir: string
     projectDir: string
-    homeDir: string
     originalCwd: string
   }
 
@@ -30,35 +36,10 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
     testEnv = {
       tempDir: tempBase,
       projectDir: path.join(tempBase, 'project'),
-      homeDir: path.join(tempBase, 'home'),
       originalCwd: process.cwd(),
     }
 
     fs.mkdirSync(testEnv.projectDir, { recursive: true })
-    fs.mkdirSync(
-      path.join(testEnv.homeDir, '.config/opencode/skills/personal-test'),
-      { recursive: true },
-    )
-
-    fs.writeFileSync(
-      path.join(
-        testEnv.homeDir,
-        '.config/opencode/skills/personal-test/SKILL.md',
-      ),
-      `---
-name: personal-test
-description: Personal test skill for integration testing
----
-# Personal Test Skill
-
-This is a personal test skill.
-
-PERSONAL_SKILL_MARKER_12345
-`,
-    )
-
-    copyEnvFileIfExists(REPO_ROOT, testEnv.projectDir)
-    copyEnvFileIfExists(REPO_ROOT, testEnv.homeDir)
   })
 
   afterEach(() => {
@@ -68,16 +49,8 @@ PERSONAL_SKILL_MARKER_12345
     }
   })
 
-  function copyEnvFileIfExists(srcDir: string, destDir: string): void {
-    const envFile = path.join(srcDir, '.env')
-    if (fs.existsSync(envFile)) {
-      fs.copyFileSync(envFile, path.join(destDir, '.env'))
-    }
-  }
-
-  async function runOpencodeWithRetry(
+  async function runOpencode(
     prompt: string,
-    cwd?: string,
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     let lastResult: { stdout: string; stderr: string; exitCode: number } = {
       stdout: '',
@@ -86,17 +59,14 @@ PERSONAL_SKILL_MARKER_12345
     }
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      const result = Bun.spawnSync(
-        ['opencode', 'run', '--print-logs', prompt],
-        {
-          cwd: cwd || testEnv.projectDir,
-          env: {
-            ...process.env,
-            HOME: testEnv.homeDir,
-          },
-          timeout: TIMEOUT_MS,
+      const result = Bun.spawnSync(['opencode', 'run', prompt], {
+        cwd: testEnv.projectDir,
+        env: {
+          ...process.env,
+          OPENCODE_CONFIG_CONTENT: buildOpencodeConfig(),
         },
-      )
+        timeout: TIMEOUT_MS,
+      })
 
       lastResult = {
         stdout: result.stdout.toString(),
@@ -105,14 +75,11 @@ PERSONAL_SKILL_MARKER_12345
       }
 
       const isTimeout =
-        lastResult.exitCode === -1 ||
-        lastResult.stderr.includes('timeout') ||
-        lastResult.stderr.includes('ETIMEDOUT')
+        lastResult.exitCode === -1 || lastResult.stderr.includes('ETIMEDOUT')
 
       const isRateLimit =
         lastResult.stderr.includes('rate limit') ||
-        lastResult.stderr.includes('429') ||
-        lastResult.stderr.includes('too many requests')
+        lastResult.stderr.includes('429')
 
       if (!isTimeout && !isRateLimit && lastResult.exitCode === 0) {
         return lastResult
@@ -121,7 +88,7 @@ PERSONAL_SKILL_MARKER_12345
       if (attempt < MAX_RETRIES) {
         const delay = RETRY_DELAY_MS * attempt
         console.log(
-          `Attempt ${attempt}/${MAX_RETRIES} failed (timeout/rate-limit), retrying in ${delay}ms...`,
+          `Attempt ${attempt}/${MAX_RETRIES} failed, retrying in ${delay}ms...`,
         )
         await Bun.sleep(delay)
       }
@@ -131,14 +98,36 @@ PERSONAL_SKILL_MARKER_12345
   }
 
   test(
-    'find_skills tool discovers bundled skills',
+    'systematic_find_skills tool discovers bundled skills',
     async () => {
-      const result = await runOpencodeWithRetry(
-        'Use the find_skills tool to list available skills. Just call the tool and show me the raw output.',
-      )
+      const result = await runOpencode('Call systematic_find_skills')
 
       expect(result.stdout.toLowerCase()).toMatch(
-        /brainstorming|using-systematic|available skills/i,
+        /brainstorming|systematic:.*|available skills/i,
+      )
+    },
+    TIMEOUT_MS * MAX_RETRIES,
+  )
+
+  test(
+    'systematic_find_agents tool discovers bundled agents',
+    async () => {
+      const result = await runOpencode('Call systematic_find_agents')
+
+      expect(result.stdout.toLowerCase()).toMatch(
+        /architecture-strategist|security-sentinel|available.*agents|bundled/i,
+      )
+    },
+    TIMEOUT_MS * MAX_RETRIES,
+  )
+
+  test(
+    'systematic_find_commands tool discovers bundled commands',
+    async () => {
+      const result = await runOpencode('Call systematic_find_commands')
+
+      expect(result.stdout.toLowerCase()).toMatch(
+        /\/lfg|\/workflows|available.*commands|bundled/i,
       )
     },
     TIMEOUT_MS * MAX_RETRIES,
