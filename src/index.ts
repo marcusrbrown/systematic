@@ -4,6 +4,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Plugin } from '@opencode-ai/plugin'
 import { tool } from '@opencode-ai/plugin/tool'
+import { createConfigHandler } from './lib/config-handler.js'
 import { type SystematicConfig, loadConfig } from './lib/config.js'
 import * as skillsCore from './lib/skills-core.js'
 
@@ -113,7 +114,16 @@ export const SystematicPlugin: Plugin = async ({ client, directory }) => {
   const userAgentsDir = config.paths.user_agents
   const userCommandsDir = config.paths.user_commands
 
+  const configHandler = createConfigHandler({
+    directory,
+    bundledSkillsDir,
+    bundledAgentsDir,
+    bundledCommandsDir,
+  })
+
   return {
+    config: configHandler,
+
     tool: {
       systematic_find_skills: tool({
         description:
