@@ -8,18 +8,11 @@ export interface BootstrapConfig {
   file?: string
 }
 
-export interface PathsConfig {
-  user_skills: string
-  user_agents: string
-  user_commands: string
-}
-
 export interface SystematicConfig {
   disabled_skills: string[]
   disabled_agents: string[]
   disabled_commands: string[]
   bootstrap: BootstrapConfig
-  paths: PathsConfig
 }
 
 const homeDir = os.homedir()
@@ -30,11 +23,6 @@ export const DEFAULT_CONFIG: SystematicConfig = {
   disabled_commands: [],
   bootstrap: {
     enabled: true,
-  },
-  paths: {
-    user_skills: path.join(homeDir, '.config/opencode/systematic/skills'),
-    user_agents: path.join(homeDir, '.config/opencode/systematic/agents'),
-    user_commands: path.join(homeDir, '.config/opencode/systematic/commands'),
   },
 }
 
@@ -108,11 +96,6 @@ export function loadConfig(projectDir: string): SystematicConfig {
       ...DEFAULT_CONFIG.bootstrap,
       ...userConfig?.bootstrap,
       ...projectConfig?.bootstrap,
-    },
-    paths: {
-      ...DEFAULT_CONFIG.paths,
-      ...userConfig?.paths,
-      ...projectConfig?.paths,
     },
   }
 

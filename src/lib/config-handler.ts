@@ -1,5 +1,4 @@
 import fs from 'node:fs'
-import path from 'node:path'
 import type { AgentConfig, Config } from '@opencode-ai/sdk'
 import { loadConfig } from './config.js'
 import * as skillsCore from './skills-core.js'
@@ -64,7 +63,7 @@ function loadSkillAsCommand(
 
 function collectAgents(
   dir: string,
-  sourceType: 'project' | 'user' | 'bundled',
+  sourceType: 'bundled',
   disabledAgents: string[]
 ): NonNullable<Config['agent']> {
   const agents: NonNullable<Config['agent']> = {}
@@ -84,7 +83,7 @@ function collectAgents(
 
 function collectCommands(
   dir: string,
-  sourceType: 'project' | 'user' | 'bundled',
+  sourceType: 'bundled',
   disabledCommands: string[]
 ): NonNullable<Config['command']> {
   const commands: NonNullable<Config['command']> = {}
@@ -105,7 +104,7 @@ function collectCommands(
 
 function collectSkillsAsCommands(
   dir: string,
-  sourceType: 'project' | 'user' | 'bundled',
+  sourceType: 'bundled',
   disabledSkills: string[]
 ): NonNullable<Config['command']> {
   const commands: NonNullable<Config['command']> = {}
@@ -129,11 +128,8 @@ function collectSkillsAsCommands(
  * This follows the pattern used by oh-my-opencode to inject bundled agents,
  * skills (as commands), and commands into OpenCode's configuration.
  *
- * Priority order (highest priority last, so they override earlier):
- * 1. Bundled content (from this plugin)
- * 2. User content (~/.config/opencode/systematic/)
- * 3. Project content (.opencode/systematic/)
- * 4. Existing OpenCode config (preserved)
+ * Only bundled content is loaded. User/project overrides are not supported.
+ * Existing OpenCode config is preserved and takes precedence.
  */
 export function createConfigHandler(deps: ConfigHandlerDeps) {
   const { directory, bundledSkillsDir, bundledAgentsDir, bundledCommandsDir } = deps
@@ -141,26 +137,9 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
   return async (config: Config): Promise<void> => {
     const systematicConfig = loadConfig(directory)
 
-    const userSkillsDir = systematicConfig.paths.user_skills
-    const userAgentsDir = systematicConfig.paths.user_agents
-    const userCommandsDir = systematicConfig.paths.user_commands
-    const projectSkillsDir = path.join(directory, '.opencode/systematic/skills')
-    const projectAgentsDir = path.join(directory, '.opencode/systematic/agents')
-    const projectCommandsDir = path.join(directory, '.opencode/systematic/commands')
-
     const bundledAgents = collectAgents(
       bundledAgentsDir,
       'bundled',
-      systematicConfig.disabled_agents
-    )
-    const userAgents = collectAgents(
-      userAgentsDir,
-      'user',
-      systematicConfig.disabled_agents
-    )
-    const projectAgents = collectAgents(
-      projectAgentsDir,
-      'project',
       systematicConfig.disabled_agents
     )
 
@@ -169,38 +148,16 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
       'bundled',
       systematicConfig.disabled_commands
     )
-    const userCommands = collectCommands(
-      userCommandsDir,
-      'user',
-      systematicConfig.disabled_commands
-    )
-    const projectCommands = collectCommands(
-      projectCommandsDir,
-      'project',
-      systematicConfig.disabled_commands
-    )
 
     const bundledSkills = collectSkillsAsCommands(
       bundledSkillsDir,
       'bundled',
       systematicConfig.disabled_skills
     )
-    const userSkills = collectSkillsAsCommands(
-      userSkillsDir,
-      'user',
-      systematicConfig.disabled_skills
-    )
-    const projectSkills = collectSkillsAsCommands(
-      projectSkillsDir,
-      'project',
-      systematicConfig.disabled_skills
-    )
 
     const existingAgents = config.agent ?? {}
     config.agent = {
       ...bundledAgents,
-      ...userAgents,
-      ...projectAgents,
       ...existingAgents,
     }
 
@@ -208,10 +165,6 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
     config.command = {
       ...bundledCommands,
       ...bundledSkills,
-      ...userCommands,
-      ...userSkills,
-      ...projectCommands,
-      ...projectSkills,
       ...existingCommands,
     }
   }
