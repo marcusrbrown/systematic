@@ -1,6 +1,6 @@
-# @fro.bot/systematic
+# Systematic
 
-An OpenCode plugin providing systematic engineering workflows from the Compound Engineering Plugin (CEP), adapted for OpenCode.
+An OpenCode plugin providing systematic engineering workflows from the [Compound Engineering Plugin (CEP)](https://github.com/EveryInc/compound-engineering-plugin) Claude Code plugin, adapted for OpenCode.
 
 ## Installation
 
@@ -102,7 +102,7 @@ Create `~/.config/opencode/systematic.json` or `.opencode/systematic.json`:
 
 ## Converting CEP Content
 
-The CLI includes a converter for adapting Compound Engineering Plugin (CEP) content to OpenCode format.
+The CLI includes a converter for adapting Claude Code agents, skills, and commands from Compound Engineering Plugin (CEP) to OpenCode.
 
 ### Convert a Skill
 
