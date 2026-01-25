@@ -13,30 +13,24 @@ Usage:
   systematic <command> [options]
 
 Commands:
-  init [--project]     Initialize systematic (global or project-local)
   list [type]          List available skills, agents, or commands
   convert <type> <source> [--output <path>] [--dry-run]
                        Convert Claude Code content to OpenCode format
     Types: skill, agent, command
   config [subcommand]  Configuration management
-    show               Show merged configuration
-    scaffold           Create user override directories
+    show               Show configuration
     path               Print config file locations
 
 Options:
-  --project            Apply to current project only (for init)
   --output, -o         Output path for convert command
   --dry-run            Preview conversion without writing files
   -h, --help           Show this help message
   -v, --version        Show version
 
 Examples:
-  systematic init                # Initialize globally
-  systematic init --project      # Initialize for current project
   systematic list skills
   systematic convert skill /path/to/cep/skills/agent-browser -o ./skills/agent-browser
   systematic convert agent /path/to/agent.md --dry-run
-  systematic config scaffold
 `
 
 function getUserConfigDir(): string {
@@ -50,99 +44,13 @@ function getProjectConfigDir(): string {
   return path.join(process.cwd(), '.opencode')
 }
 
-function init(projectOnly: boolean): void {
-  if (projectOnly) {
-    initProject()
-  } else {
-    initGlobal()
-  }
-}
-
-function initProject(): void {
-  const projectDir = getProjectConfigDir()
-  const skillsDir = path.join(projectDir, 'skills')
-  const agentsDir = path.join(projectDir, 'agents')
-  const commandsDir = path.join(projectDir, 'commands')
-
-  const dirs = [skillsDir, agentsDir, commandsDir]
-
-  for (const dir of dirs) {
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true })
-      console.log(`Created: ${dir}`)
-    } else {
-      console.log(`Exists: ${dir}`)
-    }
-  }
-
-  const configPath = path.join(projectDir, 'systematic.json')
-  if (!fs.existsSync(configPath)) {
-    const config = {
-      disabled_skills: [],
-      disabled_agents: [],
-      disabled_commands: [],
-    }
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2))
-    console.log(`Created: ${configPath}`)
-  } else {
-    console.log(`Exists: ${configPath}`)
-  }
-
-  console.log('\nSystematic initialized for project!')
-}
-
-function initGlobal(): void {
-  const userDir = getUserConfigDir()
-  const systematicDir = path.join(userDir, 'systematic')
-  const skillsDir = path.join(systematicDir, 'skills')
-  const agentsDir = path.join(systematicDir, 'agents')
-  const commandsDir = path.join(systematicDir, 'commands')
-
-  const dirs = [skillsDir, agentsDir, commandsDir]
-
-  for (const dir of dirs) {
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true })
-      console.log(`Created: ${dir}`)
-    } else {
-      console.log(`Exists: ${dir}`)
-    }
-  }
-
-  const configPath = path.join(userDir, 'systematic.json')
-  if (!fs.existsSync(configPath)) {
-    const config = {
-      disabled_skills: [],
-      disabled_agents: [],
-      disabled_commands: [],
-    }
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2))
-    console.log(`Created: ${configPath}`)
-  } else {
-    console.log(`Exists: ${configPath}`)
-  }
-
-  const opencodeConfig = path.join(userDir, 'config.json')
-  if (fs.existsSync(opencodeConfig)) {
-    console.log(
-      `\nNote: Add "@fro.bot/systematic" to plugins in ${opencodeConfig}`,
-    )
-  }
-
-  console.log('\nSystematic initialized globally!')
-}
-
-type SourceType = 'project' | 'user' | 'bundled'
-
 function listItems(type: string): void {
-  const userDir = getUserConfigDir()
-  const projectDir = getProjectConfigDir()
   const packageRoot = path.resolve(import.meta.dirname, '..')
   const bundledDir = packageRoot
 
   let finder: (
     dir: string,
-    sourceType: SourceType,
+    sourceType: 'bundled',
   ) => Array<{ name: string; sourceType: string }>
   let subdir: string
 
@@ -164,20 +72,7 @@ function listItems(type: string): void {
       process.exit(1)
   }
 
-  const projectItems = finder(path.join(projectDir, subdir), 'project')
-  const userItems = finder(path.join(userDir, subdir), 'user')
-  const bundledItems = finder(path.join(bundledDir, subdir), 'bundled')
-
-  const seen = new Set<string>()
-  const items: Array<{ name: string; sourceType: string }> = []
-
-  for (const list of [projectItems, userItems, bundledItems]) {
-    for (const item of list) {
-      if (seen.has(item.name)) continue
-      seen.add(item.name)
-      items.push(item)
-    }
-  }
+  const items = finder(path.join(bundledDir, subdir), 'bundled')
 
   if (items.length === 0) {
     console.log(`No ${type} found.`)
@@ -209,44 +104,6 @@ function configShow(): void {
     console.log('\nUser configuration:')
     console.log(fs.readFileSync(userConfig, 'utf-8'))
   }
-}
-
-function configScaffold(): void {
-  const userDir = getUserConfigDir()
-  const systematicDir = path.join(userDir, 'systematic')
-  const skillsDir = path.join(systematicDir, 'skills')
-  const agentsDir = path.join(systematicDir, 'agents')
-  const commandsDir = path.join(systematicDir, 'commands')
-
-  const dirs = [skillsDir, agentsDir, commandsDir]
-
-  for (const dir of dirs) {
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true })
-      console.log(`Created: ${dir}`)
-    } else {
-      console.log(`Exists: ${dir}`)
-    }
-  }
-
-  const configPath = path.join(userDir, 'systematic.json')
-  if (!fs.existsSync(configPath)) {
-    const config = {
-      disabled_skills: [],
-      disabled_agents: [],
-      disabled_commands: [],
-      bootstrap: {
-        enabled: true,
-      },
-    }
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2))
-    console.log(`Created: ${configPath}`)
-  } else {
-    console.log(`Exists: ${configPath}`)
-  }
-
-  console.log('\nUser override directories created!')
-  console.log('Add custom skills/agents/commands to these directories.')
 }
 
 function configPath(): void {
@@ -317,9 +174,6 @@ const args = process.argv.slice(2)
 const command = args[0]
 
 switch (command) {
-  case 'init':
-    init(args.includes('--project') || args.includes('-p'))
-    break
   case 'list':
     listItems(args[1] || 'skills')
     break
@@ -332,15 +186,12 @@ switch (command) {
       case undefined:
         configShow()
         break
-      case 'scaffold':
-        configScaffold()
-        break
       case 'path':
         configPath()
         break
       default:
         console.error(`Unknown config subcommand: ${args[1]}`)
-        console.log('Available: show, scaffold, path')
+        console.log('Available: show, path')
         process.exit(1)
     }
     break

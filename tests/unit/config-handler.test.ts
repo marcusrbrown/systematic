@@ -210,28 +210,4 @@ Command template for ${name}.`,
       expect(config.agent?.['test-agent']?.description).toBe('User override')
     })
   })
-
-  describe('priority ordering', () => {
-    test('project overrides bundled', async () => {
-      createAgent(path.join(bundledDir, 'agents'), 'priority-test', 'bundled')
-
-      const projectAgentsDir = path.join(
-        projectDir,
-        '.opencode/systematic/agents',
-      )
-      createAgent(projectAgentsDir, 'priority-test', 'project')
-
-      const handler = createConfigHandler({
-        directory: projectDir,
-        bundledSkillsDir: path.join(bundledDir, 'skills'),
-        bundledAgentsDir: path.join(bundledDir, 'agents'),
-        bundledCommandsDir: path.join(bundledDir, 'commands'),
-      })
-
-      const config: Config = {}
-      await handler(config)
-
-      expect(config.agent?.['priority-test']?.description).toBe('project')
-    })
-  })
 })

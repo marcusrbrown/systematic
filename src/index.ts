@@ -18,24 +18,6 @@ const bundledCommandsDir = path.join(packageRoot, 'commands')
 
 type NamedItem = { name: string; sourceType: string }
 
-function deduplicateItems(
-  lists: NamedItem[][],
-  disabled: string[],
-): NamedItem[] {
-  const seen = new Set<string>()
-  const items: NamedItem[] = []
-
-  for (const list of lists) {
-    for (const item of list) {
-      if (seen.has(item.name) || disabled.includes(item.name)) continue
-      seen.add(item.name)
-      items.push(item)
-    }
-  }
-
-  return items.sort((a, b) => a.name.localeCompare(b.name))
-}
-
 function formatItemList(
   items: NamedItem[],
   emptyMessage: string,
@@ -74,9 +56,6 @@ const getBootstrapContent = (
   const fullContent = fs.readFileSync(usingSystematicPath, 'utf8')
   const content = skillsCore.stripFrontmatter(fullContent)
 
-  const homeDir = os.homedir()
-  const configDir = path.join(homeDir, '.config/opencode')
-
   const toolMapping = `**Tool Mapping for OpenCode:**
 When skills reference tools you don't have, substitute OpenCode equivalents:
 - \`TodoWrite\` → \`update_plan\`
@@ -84,11 +63,9 @@ When skills reference tools you don't have, substitute OpenCode equivalents:
 - \`Skill\` tool → OpenCode's native \`skill\` tool
 - \`Read\`, \`Write\`, \`Edit\`, \`Bash\` → Your native tools
 
-**Skills naming (priority order):**
-- Project skills: \`project:skill-name\` (in .opencode/systematic/skills/)
-- User skills: \`skill-name\` (in ${configDir}/systematic/skills/)
-- Bundled skills: \`sys:skill-name\` or \`systematic:skill-name\`
-- Project overrides user, which overrides bundled when names match`
+**Skills naming:**
+- Bundled skills use the \`systematic:\` prefix (e.g., \`systematic:brainstorming\`)
+- Skills can also be invoked without prefix if unambiguous`
 
   return `<SYSTEMATIC_WORKFLOWS>
 You have access to structured engineering workflows via the systematic plugin.
@@ -104,16 +81,6 @@ ${toolMapping}
 export const SystematicPlugin: Plugin = async ({ client, directory }) => {
   const config = loadConfig(directory)
 
-  const projectSkillsDir = path.join(directory, '.opencode/systematic/skills')
-  const projectAgentsDir = path.join(directory, '.opencode/systematic/agents')
-  const projectCommandsDir = path.join(
-    directory,
-    '.opencode/systematic/commands',
-  )
-  const userSkillsDir = config.paths.user_skills
-  const userAgentsDir = config.paths.user_agents
-  const userCommandsDir = config.paths.user_commands
-
   const configHandler = createConfigHandler({
     directory,
     bundledSkillsDir,
@@ -126,55 +93,27 @@ export const SystematicPlugin: Plugin = async ({ client, directory }) => {
 
     tool: {
       systematic_find_skills: tool({
-        description:
-          'List all available skills in the project, user, and bundled skill libraries.',
+        description: 'List all available skills in the bundled skill library.',
         args: {},
         execute: async (): Promise<string> => {
-          const projectSkills = skillsCore.findSkillsInDir(
-            projectSkillsDir,
-            'project',
-            3,
-          )
-          const userSkills = skillsCore.findSkillsInDir(
-            userSkillsDir,
-            'user',
-            3,
-          )
           const bundledSkills = skillsCore.findSkillsInDir(
             bundledSkillsDir,
             'bundled',
             3,
           )
 
-          const filterDisabled = (skills: skillsCore.SkillInfo[]) =>
-            skills.filter((s) => !config.disabled_skills.includes(s.name))
-
-          const allSkills = [
-            ...filterDisabled(projectSkills),
-            ...filterDisabled(userSkills),
-            ...filterDisabled(bundledSkills),
-          ]
+          const allSkills = bundledSkills.filter(
+            (s) => !config.disabled_skills.includes(s.name),
+          )
 
           if (allSkills.length === 0) {
-            return `No skills found. Add skills to ${bundledSkillsDir}/ or ${userSkillsDir}/`
+            return 'No skills found. Skills are bundled with the systematic plugin.'
           }
 
           let output = 'Available skills:\n\n'
 
           for (const skill of allSkills) {
-            let namespace: string
-            switch (skill.sourceType) {
-              case 'project':
-                namespace = 'project:'
-                break
-              case 'user':
-                namespace = ''
-                break
-              default:
-                namespace = 'sys:'
-            }
-
-            output += `${namespace}${skill.name}\n`
+            output += `systematic:${skill.name}\n`
             if (skill.description) {
               output += `  ${skill.description}\n`
             }
@@ -189,20 +128,14 @@ export const SystematicPlugin: Plugin = async ({ client, directory }) => {
         description: 'List all available review agents.',
         args: {},
         execute: async (): Promise<string> => {
-          const projectAgents = skillsCore.findAgentsInDir(
-            projectAgentsDir,
-            'project',
-          )
-          const userAgents = skillsCore.findAgentsInDir(userAgentsDir, 'user')
           const bundledAgents = skillsCore.findAgentsInDir(
             bundledAgentsDir,
             'bundled',
           )
 
-          const agents = deduplicateItems(
-            [projectAgents, userAgents, bundledAgents],
-            config.disabled_agents,
-          )
+          const agents = bundledAgents
+            .filter((a) => !config.disabled_agents.includes(a.name))
+            .sort((a, b) => a.name.localeCompare(b.name))
 
           return formatItemList(
             agents,
@@ -216,23 +149,17 @@ export const SystematicPlugin: Plugin = async ({ client, directory }) => {
         description: 'List all available commands.',
         args: {},
         execute: async (): Promise<string> => {
-          const projectCommands = skillsCore.findCommandsInDir(
-            projectCommandsDir,
-            'project',
-          )
-          const userCommands = skillsCore.findCommandsInDir(
-            userCommandsDir,
-            'user',
-          )
           const bundledCommands = skillsCore.findCommandsInDir(
             bundledCommandsDir,
             'bundled',
           )
 
-          const commands = deduplicateItems(
-            [projectCommands, userCommands, bundledCommands],
-            config.disabled_commands,
-          )
+          const commands = bundledCommands
+            .filter(
+              (c) =>
+                !config.disabled_commands.includes(c.name.replace(/^\//, '')),
+            )
+            .sort((a, b) => a.name.localeCompare(b.name))
 
           return formatItemList(
             commands,

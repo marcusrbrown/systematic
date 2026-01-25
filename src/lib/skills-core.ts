@@ -11,12 +11,12 @@ export interface SkillInfo {
   skillFile: string
   name: string
   description: string
-  sourceType: 'project' | 'user' | 'bundled'
+  sourceType: 'bundled'
 }
 
 export interface ResolvedSkill {
   skillFile: string
-  sourceType: 'project' | 'user' | 'bundled'
+  sourceType: 'bundled'
   skillPath: string
 }
 
@@ -92,7 +92,7 @@ export function stripFrontmatter(content: string): string {
  */
 export function findSkillsInDir(
   dir: string,
-  sourceType: 'project' | 'user' | 'bundled',
+  sourceType: 'bundled',
   maxDepth = 3
 ): SkillInfo[] {
   const skills: SkillInfo[] = []
@@ -129,57 +129,20 @@ export function findSkillsInDir(
 }
 
 /**
- * Resolve a skill name to its file path with priority resolution.
- * Priority: project > user > bundled
+ * Resolve a skill name to its file path.
  *
- * Prefixes:
- * - "project:" forces project resolution
- * - "sys:" or "systematic:" forces bundled resolution
- * - No prefix checks project first, then user, then bundled
+ * The "systematic:" prefix explicitly requests bundled resolution,
+ * but since only bundled skills are supported, all resolutions use bundled.
  */
 export function resolveSkillPath(
   skillName: string,
   bundledDir: string,
-  userDir: string | null,
-  projectDir: string | null
+  _userDir: string | null,
+  _projectDir: string | null
 ): ResolvedSkill | null {
-  const forceProject = skillName.startsWith('project:')
-  const forceBundled =
-    skillName.startsWith('sys:') || skillName.startsWith('systematic:')
+  const actualSkillName = skillName.replace(/^systematic:/, '')
 
-  let actualSkillName = skillName
-  if (forceProject) actualSkillName = skillName.replace(/^project:/, '')
-  if (forceBundled)
-    actualSkillName = skillName.replace(/^(sys:|systematic:)/, '')
-
-  // Try project first (if project: prefix or no force)
-  if ((forceProject || !forceBundled) && projectDir) {
-    const projectPath = path.join(projectDir, actualSkillName)
-    const projectSkillFile = path.join(projectPath, 'SKILL.md')
-    if (fs.existsSync(projectSkillFile)) {
-      return {
-        skillFile: projectSkillFile,
-        sourceType: 'project',
-        skillPath: actualSkillName,
-      }
-    }
-  }
-
-  // Try user skills (if not forcing project or bundled)
-  if (!forceProject && !forceBundled && userDir) {
-    const userPath = path.join(userDir, actualSkillName)
-    const userSkillFile = path.join(userPath, 'SKILL.md')
-    if (fs.existsSync(userSkillFile)) {
-      return {
-        skillFile: userSkillFile,
-        sourceType: 'user',
-        skillPath: actualSkillName,
-      }
-    }
-  }
-
-  // Try bundled skills
-  if (!forceProject && bundledDir) {
+  if (bundledDir) {
     const bundledPath = path.join(bundledDir, actualSkillName)
     const bundledSkillFile = path.join(bundledPath, 'SKILL.md')
     if (fs.existsSync(bundledSkillFile)) {
@@ -199,7 +162,7 @@ export function resolveSkillPath(
  */
 export function findAgentsInDir(
   dir: string,
-  sourceType: 'project' | 'user' | 'bundled',
+  sourceType: 'bundled',
   maxDepth = 2
 ): Array<{ name: string; file: string; sourceType: string; category?: string }> {
   const agents: Array<{ name: string; file: string; sourceType: string; category?: string }> = []
@@ -235,7 +198,7 @@ export function findAgentsInDir(
  */
 export function findCommandsInDir(
   dir: string,
-  sourceType: 'project' | 'user' | 'bundled',
+  sourceType: 'bundled',
   maxDepth = 2
 ): Array<{ name: string; file: string; sourceType: string; category?: string }> {
   const commands: Array<{ name: string; file: string; sourceType: string; category?: string }> = []
