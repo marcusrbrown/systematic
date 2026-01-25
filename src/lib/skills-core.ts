@@ -267,3 +267,71 @@ export function findCommandsInDir(
   recurse(dir, 0)
   return commands
 }
+
+export interface AgentFrontmatter {
+  name: string
+  description: string
+  prompt: string
+}
+
+export interface CommandFrontmatter {
+  name: string
+  description: string
+  argumentHint: string
+}
+
+export function extractAgentFrontmatter(content: string): AgentFrontmatter {
+  const lines = content.split('\n')
+
+  let inFrontmatter = false
+  let name = ''
+  let description = ''
+
+  for (const line of lines) {
+    if (line.trim() === '---') {
+      if (inFrontmatter) break
+      inFrontmatter = true
+      continue
+    }
+
+    if (inFrontmatter) {
+      const match = line.match(/^(\w+(?:-\w+)*):\s*(.*)$/)
+      if (match) {
+        const [, key, value] = match
+        if (key === 'name') name = value.trim()
+        if (key === 'description') description = value.trim()
+      }
+    }
+  }
+
+  return { name, description, prompt: stripFrontmatter(content) }
+}
+
+export function extractCommandFrontmatter(content: string): CommandFrontmatter {
+  const lines = content.split('\n')
+
+  let inFrontmatter = false
+  let name = ''
+  let description = ''
+  let argumentHint = ''
+
+  for (const line of lines) {
+    if (line.trim() === '---') {
+      if (inFrontmatter) break
+      inFrontmatter = true
+      continue
+    }
+
+    if (inFrontmatter) {
+      const match = line.match(/^(\w+(?:-\w+)*):\s*(.*)$/)
+      if (match) {
+        const [, key, value] = match
+        if (key === 'name') name = value.trim()
+        if (key === 'description') description = value.trim()
+        if (key === 'argument-hint') argumentHint = value.trim().replace(/^["']|["']$/g, '')
+      }
+    }
+  }
+
+  return { name, description, argumentHint }
+}
