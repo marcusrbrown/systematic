@@ -1,0 +1,24 @@
+# .markdownlint.yaml - Markdown linting rules
+
+# Disable overly strict rules for technical documentation
+MD013: false # Line length - code examples often exceed 80 chars
+MD041: false # First line heading - not required for all files
+MD022: false # Blanks around headings - allow compact sections
+MD024: false # Duplicate headings - allow for long pages
+MD025: false # Multiple top-level headings - acceptable in long docs
+MD029: false # Ordered list item prefix - allow flexible numbering
+MD031: false # Blanks around fences - allow compact code blocks
+MD032: false # Blanks around lists - allow compact lists
+MD033: false # Allow inline HTML for special formatting
+MD034: false # Allow bare URLs in documentation
+MD035: false # Horizontal rule style - allow any style
+MD036: false # Emphasis as heading - allow for examples/notes
+MD040: false # Fenced code language - not always applicable
+MD046: false # Code block style - allow both fenced and indented
+MD055: false # Table pipe style - allow any style
+MD056: false # Table column count - allow variable columns
+MD058: false # Blanks around tables - allow compact tables
+MD060: false # Table column style - allow any style
+
+# Keep other quality checks enabled
+default: true

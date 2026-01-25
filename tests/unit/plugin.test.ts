@@ -42,10 +42,6 @@ describe('bundled content', () => {
     expect(fs.existsSync(path.join(ROOT_DIR, 'commands'))).toBe(true)
   })
 
-  test('bootstrap.md exists at top level', () => {
-    expect(fs.existsSync(path.join(ROOT_DIR, 'bootstrap.md'))).toBe(true)
-  })
-
   test('bundled skills have valid structure', () => {
     const skillsDir = path.join(ROOT_DIR, 'skills')
     const skillDirs = fs.readdirSync(skillsDir).filter((f) => {

@@ -143,20 +143,6 @@ PERSONAL_SKILL_MARKER_12345
     },
     TIMEOUT_MS * MAX_RETRIES,
   )
-
-  test(
-    'use_skill tool loads skill content',
-    async () => {
-      const result = await runOpencodeWithRetry(
-        'Use the use_skill tool to load the personal-test skill and show me what you get.',
-      )
-
-      expect(result.stdout.toLowerCase()).toMatch(
-        /personal_skill_marker_12345|personal test skill|launching skill/i,
-      )
-    },
-    TIMEOUT_MS * MAX_RETRIES,
-  )
 })
 
 describe('opencode availability check', () => {

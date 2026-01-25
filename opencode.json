@@ -1,4 +1,10 @@
 {
   "$schema": "https://opencode.ai/config.json",
-  "plugin": ["./dist/index.js"]
+  "plugin": ["./src/index.ts"],
+  "formatter": {
+    "markdownlint": {
+      "command": ["markdownlint", "--dot", "--fix", "$FILE"],
+      "extensions": [".md"]
+    }
+  }
 }

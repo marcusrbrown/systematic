@@ -1,6 +1,6 @@
 ---
 name: using-systematic
-description: Use when starting any conversation - establishes how to find and use skills, requiring systematic_use_skill tool invocation before ANY response including clarifying questions
+description: Use when starting any conversation - establishes how to find and use skills, requiring skill tool invocation before ANY response including clarifying questions
 ---
 
 <EXTREMELY-IMPORTANT>
@@ -13,9 +13,7 @@ This is not negotiable. This is not optional. You cannot rationalize your way ou
 
 ## How to Access Skills
 
-Use the `systematic_use_skill` tool. When you invoke a skill, its content is loaded and presented to you—follow it directly.
-
-Use `systematic_find_skills` to discover available skills when unsure which applies.
+Use the `skill` tool. When you invoke a skill, its content is loaded and presented to you—follow it directly.
 
 # Using Skills
 
@@ -27,7 +25,7 @@ Use `systematic_find_skills` to discover available skills when unsure which appl
 digraph skill_flow {
     "User message received" [shape=doublecircle];
     "Might any skill apply?" [shape=diamond];
-    "Invoke systematic_use_skill" [shape=box];
+    "Invoke `skill` tool" [shape=box];
     "Announce: 'Using [skill] to [purpose]'" [shape=box];
     "Has checklist?" [shape=diamond];
     "Create todo per item" [shape=box];
@@ -35,9 +33,9 @@ digraph skill_flow {
     "Respond (including clarifications)" [shape=doublecircle];
 
     "User message received" -> "Might any skill apply?";
-    "Might any skill apply?" -> "Invoke systematic_use_skill" [label="yes, even 1%"];
+    "Might any skill apply?" -> "Invoke `skill` tool" [label="yes, even 1%"];
     "Might any skill apply?" -> "Respond (including clarifications)" [label="definitely not"];
-    "Invoke systematic_use_skill" -> "Announce: 'Using [skill] to [purpose]'";
+    "Invoke `skill` tool" -> "Announce: 'Using [skill] to [purpose]'";
     "Announce: 'Using [skill] to [purpose]'" -> "Has checklist?";
     "Has checklist?" -> "Create todo per item" [label="yes"];
     "Has checklist?" -> "Follow skill exactly" [label="no"];
@@ -94,39 +92,3 @@ Skills are resolved in priority order:
 3. **Bundled skills**: Provided by systematic plugin
 
 Use `systematic_find_skills` to see all available skills and their sources.
-
-## Available Content
-
-### Skills
-| Skill | Purpose |
-|-------|---------|
-| `brainstorming` | Explore ideas before implementing features or changes |
-| `agent-browser` | Browser automation with Playwright |
-| `agent-native-architecture` | Design systems for AI agents (includes extensive references) |
-| `compound-docs` | Create and maintain compound documentation |
-| `create-agent-skills` | Write new skills for AI agents |
-| `file-todos` | Manage TODO items in files |
-| `git-worktree` | Use git worktrees for isolated development |
-
-### Commands
-| Command | Purpose |
-|---------|---------|
-| `/workflows:brainstorm` | Start collaborative brainstorming |
-| `/workflows:compound` | Build compound documentation |
-| `/workflows:plan` | Create implementation plans |
-| `/workflows:review` | Run code review with agents |
-| `/workflows:work` | Execute planned work |
-| `/agent-native-audit` | Audit code for agent-native patterns |
-| `/create-agent-skill` | Create a new skill |
-| `/deepen-plan` | Add detail to existing plans |
-| `/lfg` | Let's go - start working immediately |
-
-### Agents
-| Agent | Category | Purpose |
-|-------|----------|---------|
-| `architecture-strategist` | review | System architecture review |
-| `code-simplicity-reviewer` | review | Simplicity and readability review |
-| `pattern-recognition-specialist` | review | Pattern consistency review |
-| `performance-oracle` | review | Performance analysis |
-| `security-sentinel` | review | Security vulnerability review |
-| `framework-docs-researcher` | research | Research framework documentation |
