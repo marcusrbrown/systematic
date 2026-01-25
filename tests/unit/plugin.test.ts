@@ -85,7 +85,7 @@ describe('CLI functionality', () => {
     const output = result.stdout.toString()
     expect(result.exitCode).toBe(0)
     expect(output).toContain('systematic')
-    expect(output).toContain('init')
+    expect(output).toContain('convert')
     expect(output).toContain('list')
     expect(output).toContain('config')
   })

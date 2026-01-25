@@ -58,7 +58,7 @@ PRIORITY_MARKER_${marker.toUpperCase()}_VERSION
     )
 
     expect(result).not.toBeNull()
-    const content = fs.readFileSync(result!.skillFile, 'utf-8')
+    const content = fs.readFileSync(result?.skillFile as string, 'utf-8')
     expect(content).toContain('PRIORITY_MARKER_BUNDLED_VERSION')
   })
 
