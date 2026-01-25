@@ -31,10 +31,7 @@ function formatItemList(
   return output
 }
 
-const getBootstrapContent = (
-  config: SystematicConfig,
-  _compact = false,
-): string | null => {
+const getBootstrapContent = (config: SystematicConfig): string | null => {
   if (!config.bootstrap.enabled) return null
 
   if (config.bootstrap.file) {
@@ -174,7 +171,7 @@ export const SystematicPlugin: Plugin = async ({ client, directory }) => {
     },
 
     'experimental.chat.system.transform': async (_input, output) => {
-      const content = getBootstrapContent(config, false)
+      const content = getBootstrapContent(config)
       if (content) {
         if (!output.system) {
           output.system = []
