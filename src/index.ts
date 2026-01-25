@@ -56,9 +56,6 @@ const getBootstrapContent = (
   const fullContent = fs.readFileSync(usingSystematicPath, 'utf8')
   const content = skillsCore.stripFrontmatter(fullContent)
 
-  const homeDir = os.homedir()
-  const configDir = path.join(homeDir, '.config/opencode')
-
   const toolMapping = `**Tool Mapping for OpenCode:**
 When skills reference tools you don't have, substitute OpenCode equivalents:
 - \`TodoWrite\` → \`update_plan\`
@@ -66,11 +63,9 @@ When skills reference tools you don't have, substitute OpenCode equivalents:
 - \`Skill\` tool → OpenCode's native \`skill\` tool
 - \`Read\`, \`Write\`, \`Edit\`, \`Bash\` → Your native tools
 
-**Skills naming (priority order):**
-- Project skills: \`project:skill-name\` (in .opencode/systematic/skills/)
-- User skills: \`skill-name\` (in ${configDir}/systematic/skills/)
-- Bundled skills: \`sys:skill-name\` or \`systematic:skill-name\`
-- Project overrides user, which overrides bundled when names match`
+**Skills naming:**
+- Bundled skills use the \`systematic:\` prefix (e.g., \`systematic:brainstorming\`)
+- Skills can also be invoked without prefix if unambiguous`
 
   return `<SYSTEMATIC_WORKFLOWS>
 You have access to structured engineering workflows via the systematic plugin.
@@ -98,8 +93,7 @@ export const SystematicPlugin: Plugin = async ({ client, directory }) => {
 
     tool: {
       systematic_find_skills: tool({
-        description:
-          'List all available skills in the project, user, and bundled skill libraries.',
+        description: 'List all available skills in the bundled skill library.',
         args: {},
         execute: async (): Promise<string> => {
           const bundledSkills = skillsCore.findSkillsInDir(
@@ -119,7 +113,7 @@ export const SystematicPlugin: Plugin = async ({ client, directory }) => {
           let output = 'Available skills:\n\n'
 
           for (const skill of allSkills) {
-            output += `sys:${skill.name}\n`
+            output += `systematic:${skill.name}\n`
             if (skill.description) {
               output += `  ${skill.description}\n`
             }

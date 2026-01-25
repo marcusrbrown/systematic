@@ -99,7 +99,7 @@ description: Test skill
       fs.mkdirSync(skillDir)
       fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# Just content')
 
-      const skills = skillsCore.findSkillsInDir(testDir, 'project')
+      const skills = skillsCore.findSkillsInDir(testDir, 'bundled')
       expect(skills).toHaveLength(1)
       expect(skills[0].name).toBe('unnamed-skill')
     })
@@ -116,15 +116,15 @@ description: Test agent
 # My Agent`,
       )
 
-      const agents = skillsCore.findAgentsInDir(testDir, 'user')
+      const agents = skillsCore.findAgentsInDir(testDir, 'bundled')
       expect(agents).toHaveLength(1)
       expect(agents[0].name).toBe('my-agent')
-      expect(agents[0].sourceType).toBe('user')
+      expect(agents[0].sourceType).toBe('bundled')
     })
   })
 
   describe('findCommandsInDir', () => {
-    test('finds command markdown files and converts sys- to /sys:', () => {
+    test('finds command markdown files', () => {
       fs.writeFileSync(
         path.join(testDir, 'sys-test.md'),
         `---
@@ -134,10 +134,10 @@ description: Test command
 # Test Command`,
       )
 
-      const commands = skillsCore.findCommandsInDir(testDir, 'project')
+      const commands = skillsCore.findCommandsInDir(testDir, 'bundled')
       expect(commands).toHaveLength(1)
       expect(commands[0].name).toBe('/sys-test')
-      expect(commands[0].sourceType).toBe('project')
+      expect(commands[0].sourceType).toBe('bundled')
     })
 
     test('handles non-sys commands', () => {
@@ -176,42 +176,16 @@ description: Test command
       expect(result).toBeNull()
     })
 
-    test('project skills override user and bundled', () => {
-      const bundledDir = path.join(testDir, 'bundled')
-      const userDir = path.join(testDir, 'user')
-      const projectDir = path.join(testDir, 'project')
-
-      for (const dir of [bundledDir, userDir, projectDir]) {
-        const skillDir = path.join(dir, 'test-skill')
-        fs.mkdirSync(skillDir, { recursive: true })
-        fs.writeFileSync(path.join(skillDir, 'SKILL.md'), `# ${dir}`)
-      }
+    test('systematic: prefix resolves bundled skill', () => {
+      const skillDir = path.join(testDir, 'test-skill')
+      fs.mkdirSync(skillDir)
+      fs.writeFileSync(path.join(skillDir, 'SKILL.md'), '# bundled skill')
 
       const result = skillsCore.resolveSkillPath(
-        'test-skill',
-        bundledDir,
-        userDir,
-        projectDir,
-      )
-      expect(result).not.toBeNull()
-      expect(result?.sourceType).toBe('project')
-    })
-
-    test('sys: prefix forces bundled resolution', () => {
-      const bundledDir = path.join(testDir, 'bundled')
-      const projectDir = path.join(testDir, 'project')
-
-      for (const dir of [bundledDir, projectDir]) {
-        const skillDir = path.join(dir, 'test-skill')
-        fs.mkdirSync(skillDir, { recursive: true })
-        fs.writeFileSync(path.join(skillDir, 'SKILL.md'), `# ${dir}`)
-      }
-
-      const result = skillsCore.resolveSkillPath(
-        'sys:test-skill',
-        bundledDir,
+        'systematic:test-skill',
+        testDir,
         null,
-        projectDir,
+        null,
       )
       expect(result).not.toBeNull()
       expect(result?.sourceType).toBe('bundled')
