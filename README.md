@@ -74,32 +74,7 @@ Systematic uses OpenCode's `config` hook to automatically register bundled agent
 
 - **Zero configuration required** - All bundled content is available immediately after installing the plugin
 - **No file copying** - Skills, agents, and commands ship with the npm package
-- **Priority-based overrides** - Project and user content override bundled defaults
-
-### Priority Order
-
-Content is merged with the following priority (highest priority wins):
-
-1. **Existing OpenCode config** - Your `opencode.json` settings are preserved
-2. **Project content** - `.opencode/systematic/` in current project
-3. **User content** - `~/.config/opencode/systematic/`
-4. **Bundled content** - Provided by this plugin
-
-This allows you to override any bundled skill, agent, or command by creating your own version in the project or user directory.
-
-### Directory Structure
-
-```
-~/.config/opencode/systematic/
-├── skills/           # User-level skill overrides
-├── agents/           # User-level agent overrides
-└── commands/         # User-level command overrides
-
-.opencode/systematic/
-├── skills/           # Project-level skill overrides
-├── agents/           # Project-level agent overrides
-└── commands/         # Project-level command overrides
-```
+- **Existing config preserved** - Your OpenCode configuration settings take precedence over bundled content
 
 ## Tools
 
@@ -111,19 +86,9 @@ The plugin provides these tools to OpenCode:
 | `systematic_find_agents` | List available agents |
 | `systematic_find_commands` | List available commands |
 
-## Skill Resolution
-
-Skills are resolved in priority order:
-
-1. **Project skills** - `.opencode/skills/` in current project
-2. **User skills** - `~/.config/opencode/skills/`
-3. **Bundled skills** - Provided by this plugin
-
-Project and user skills can override bundled skills with the same name.
-
 ## Configuration
 
-Create `~/.config/opencode/systematic.json` or `.opencode/systematic.json`:
+Create `~/.config/opencode/systematic.json` or `.opencode/systematic.json` to disable specific bundled content:
 
 ```json
 {
