@@ -39,7 +39,7 @@
     "@opencode-ai/plugin": "^1.1.30"
   },
   "devDependencies": {
-    "@biomejs/biome": "^1.9.0",
+    "@biomejs/biome": "^2.0.0",
     "@opencode-ai/plugin": "^1.1.30",
     "@types/bun": "latest",
     "@types/node": "^22.0.0",
