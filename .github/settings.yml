@@ -1,0 +1,18 @@
+---
+_extends: .github:common-settings.yaml
+
+repository:
+  name: systematic
+  description: Structured engineering workflows for OpenCode
+  topics: opencode, plugin, ai, workflow, systematic, semantic-release, bun
+
+branches:
+  - name: main
+    protection:
+      required_status_checks:
+        strict: true
+        contexts: [Build, Typecheck, Lint, Test, Release, Analyze, Renovate / Renovate]
+      enforce_admins: true
+      required_pull_request_reviews: null
+      restrictions: null
+      required_linear_history: true

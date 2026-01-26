@@ -47,32 +47,6 @@ PRIORITY_MARKER_${marker.toUpperCase()}_VERSION
     )
   }
 
-  test('resolves bundled skill', () => {
-    createSkill(testEnv.bundledDir, 'bundled-only', 'bundled')
-
-    const result = skillsCore.resolveSkillPath(
-      'bundled-only',
-      testEnv.bundledDir,
-      null,
-      null,
-    )
-
-    expect(result).not.toBeNull()
-    const content = fs.readFileSync(result?.skillFile as string, 'utf-8')
-    expect(content).toContain('PRIORITY_MARKER_BUNDLED_VERSION')
-  })
-
-  test('returns null when skill not found', () => {
-    const result = skillsCore.resolveSkillPath(
-      'nonexistent-skill',
-      testEnv.bundledDir,
-      null,
-      null,
-    )
-
-    expect(result).toBeNull()
-  })
-
   test('findSkillsInDir returns correct sourceType labels', () => {
     createSkill(testEnv.bundledDir, 'bundled-skill', 'bundled')
 

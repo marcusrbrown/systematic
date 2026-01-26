@@ -42,10 +42,17 @@
     "@opencode-ai/plugin": "^1.1.30",
     "@types/bun": "latest",
     "@types/node": "^22.0.0",
+    "conventional-changelog-conventionalcommits": "^9.0.0",
     "markdownlint-cli": "^0.47.0",
+    "semantic-release": "^25.0.0",
+    "semantic-release-export-data": "^1.2.0",
     "typescript": "^5.7.0"
   },
   "dependencies": {
     "jsonc-parser": "^3.3.0"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }

@@ -1,0 +1,24 @@
+{
+  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+  description: ['Use the config preset for the @fro.bot/systematic repository'],
+  extends: ['local>marcusrbrown/renovate-config', 'github>sanity-io/renovate-config:semantic-commit-type'],
+  packageRules: [
+    {
+      matchPackageNames: [
+        '@semantic-release/{/,}**',
+        'conventional-changelog-conventionalcommits',
+        'semantic-release',
+        'semantic-release-export-data',
+      ],
+      semanticCommitType: 'build',
+    },
+    {
+      matchPackageNames: ['@opencode-ai/{/,}**'],
+      semanticCommitType: 'build',
+    },
+  ],
+  postUpgradeTasks: {
+    commands: ['bun install', 'bun run lint -- --fix || true'],
+    executionMode: 'branch',
+  },
+}

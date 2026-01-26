@@ -15,8 +15,6 @@ export interface SystematicConfig {
   bootstrap: BootstrapConfig
 }
 
-const homeDir = os.homedir()
-
 export const DEFAULT_CONFIG: SystematicConfig = {
   disabled_skills: [],
   disabled_agents: [],
@@ -73,6 +71,7 @@ function deepMerge<T extends Record<string, unknown>>(
 }
 
 export function loadConfig(projectDir: string): SystematicConfig {
+  const homeDir = os.homedir()
   const userConfigPath = path.join(homeDir, '.config/opencode/systematic.json')
   const projectConfigPath = path.join(projectDir, '.opencode/systematic.json')
 
@@ -103,6 +102,7 @@ export function loadConfig(projectDir: string): SystematicConfig {
 }
 
 export function getConfigPaths(projectDir: string) {
+  const homeDir = os.homedir()
   return {
     userConfig: path.join(homeDir, '.config/opencode/systematic.json'),
     projectConfig: path.join(projectDir, '.opencode/systematic.json'),
