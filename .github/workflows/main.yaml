@@ -30,7 +30,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@735343b667d3e6f658f6a0a2f01e1a1292a71f36 # v2.0.2
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -45,7 +45,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@735343b667d3e6f658f6a0a2f01e1a1292a71f36 # v2.0.2
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -60,7 +60,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@735343b667d3e6f658f6a0a2f01e1a1292a71f36 # v2.0.2
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -75,7 +75,7 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@735343b667d3e6f658f6a0a2f01e1a1292a71f36 # v2.0.2
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -109,7 +109,7 @@ jobs:
           token: ${{ steps.get-workflow-app-token.outputs.token }}
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@735343b667d3e6f658f6a0a2f01e1a1292a71f36 # v2.0.2
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
 
       - name: Setup Node.js for NPM publishing
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
