@@ -13,7 +13,12 @@
       "types": "./dist/index.d.ts"
     }
   },
-  "files": ["dist", "skills", "agents", "commands"],
+  "files": [
+    "dist",
+    "skills",
+    "agents",
+    "commands"
+  ],
   "scripts": {
     "build": "bun build src/index.ts src/cli.ts --outdir dist --target node --format esm --splitting --external @opencode-ai/plugin/tool --external jsonc-parser",
     "dev": "bun --watch src/index.ts",
@@ -25,7 +30,13 @@
     "fix": "bun run lint --fix",
     "prepublishOnly": "bun run build && bun run test"
   },
-  "keywords": ["opencode", "plugin", "ai", "workflow", "engineering"],
+  "keywords": [
+    "opencode",
+    "plugin",
+    "ai",
+    "workflow",
+    "engineering"
+  ],
   "author": "Marcus R. Brown",
   "license": "MIT",
   "repository": {
