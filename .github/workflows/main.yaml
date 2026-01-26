@@ -102,6 +102,19 @@ jobs:
           app-id: ${{ secrets.APPLICATION_ID }}
           private-key: ${{ secrets.APPLICATION_PRIVATE_KEY }}
 
+      - id: setup-git-user
+        name: Get GitHub App User ID and Setup Git user
+        env:
+          GH_TOKEN: ${{ steps.get-workflow-app-token.outputs.token }}
+        run: |
+          name="${{ steps.get-workflow-app-token.outputs.app-slug }}[bot]"
+          user_id=$(gh api "/users/${name}" --jq .id)
+          email="${user_id}+${name}@users.noreply.github.com"
+          echo "user-email=${email}" >> "$GITHUB_OUTPUT"
+          echo "user-name=${name}" >> "$GITHUB_OUTPUT"
+          git config --global user.email "${email}"
+          git config --global user.name "${name}"
+
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0
@@ -136,10 +149,10 @@ jobs:
         id: semantic-release
         env:
           CI_FLAG: ${{ env.DRY_RUN == 'true' && 'false' || 'true' }}
-          GIT_AUTHOR_EMAIL: '137683033+mrbro-bot[bot]@users.noreply.github.com'
-          GIT_AUTHOR_NAME: 'mrbro-bot[bot]'
-          GIT_COMMITTER_EMAIL: '137683033+mrbro-bot[bot]@users.noreply.github.com'
-          GIT_COMMITTER_NAME: 'mrbro-bot[bot]'
+          GIT_AUTHOR_EMAIL: ${{ steps.setup-git-user.outputs.user-email }}
+          GIT_AUTHOR_NAME: ${{ steps.setup-git-user.outputs.user-name }}
+          GIT_COMMITTER_EMAIL: ${{ steps.setup-git-user.outputs.user-email }}
+          GIT_COMMITTER_NAME: ${{ steps.setup-git-user.outputs.user-name }}
           GITHUB_TOKEN: ${{ steps.get-workflow-app-token.outputs.token }}
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
           NPM_CONFIG_PROVENANCE: true

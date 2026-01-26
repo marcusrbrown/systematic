@@ -1,30 +1,31 @@
 import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
-const DIST_DIR = path.resolve(import.meta.dirname, '../../dist')
+const SRC_DIR = path.resolve(import.meta.dirname, '../../src')
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
 
 describe('plugin loading', () => {
-  test('plugin file exists at dist/index.js', () => {
-    const pluginPath = path.join(DIST_DIR, 'index.js')
+  test('plugin file exists at src/index.ts', () => {
+    const pluginPath = path.join(SRC_DIR, 'index.ts')
     expect(fs.existsSync(pluginPath)).toBe(true)
   })
 
-  test('cli file exists at dist/cli.js', () => {
-    const cliPath = path.join(DIST_DIR, 'cli.js')
+  test('cli file exists at src/cli.ts', () => {
+    const cliPath = path.join(SRC_DIR, 'cli.ts')
     expect(fs.existsSync(cliPath)).toBe(true)
   })
 
-  test('plugin is valid JavaScript', async () => {
-    const pluginPath = path.join(DIST_DIR, 'index.js')
-    const result = Bun.spawnSync(['node', '--check', pluginPath])
-    expect(result.exitCode).toBe(0)
+  test('plugin module loads', async () => {
+    const pluginPath = path.join(SRC_DIR, 'index.ts')
+    const pluginModule = await import(pathToFileURL(pluginPath).href)
+    expect(pluginModule.SystematicPlugin).toBeDefined()
   })
 
-  test('cli is valid JavaScript', async () => {
-    const cliPath = path.join(DIST_DIR, 'cli.js')
-    const result = Bun.spawnSync(['node', '--check', cliPath])
+  test('cli runs under Bun', async () => {
+    const cliPath = path.join(SRC_DIR, 'cli.ts')
+    const result = Bun.spawnSync(['bun', cliPath, '--help'])
     expect(result.exitCode).toBe(0)
   })
 })
@@ -78,10 +79,10 @@ describe('bundled content', () => {
 })
 
 describe('CLI functionality', () => {
-  const CLI_PATH = path.join(DIST_DIR, 'cli.js')
+  const CLI_PATH = path.join(SRC_DIR, 'cli.ts')
 
   test('cli --help returns usage info', () => {
-    const result = Bun.spawnSync(['node', CLI_PATH, '--help'])
+    const result = Bun.spawnSync(['bun', CLI_PATH, '--help'])
     const output = result.stdout.toString()
     expect(result.exitCode).toBe(0)
     expect(output).toContain('systematic')
@@ -91,14 +92,14 @@ describe('CLI functionality', () => {
   })
 
   test('cli --version returns version', () => {
-    const result = Bun.spawnSync(['node', CLI_PATH, '--version'])
+    const result = Bun.spawnSync(['bun', CLI_PATH, '--version'])
     const output = result.stdout.toString()
     expect(result.exitCode).toBe(0)
     expect(output).toMatch(/systematic v\d+\.\d+\.\d+/)
   })
 
   test('cli list skills shows bundled skills', () => {
-    const result = Bun.spawnSync(['node', CLI_PATH, 'list', 'skills'])
+    const result = Bun.spawnSync(['bun', CLI_PATH, 'list', 'skills'])
     const output = result.stdout.toString()
     expect(result.exitCode).toBe(0)
     expect(output).toContain('brainstorming')
@@ -106,7 +107,7 @@ describe('CLI functionality', () => {
   })
 
   test('cli list agents shows bundled agents', () => {
-    const result = Bun.spawnSync(['node', CLI_PATH, 'list', 'agents'])
+    const result = Bun.spawnSync(['bun', CLI_PATH, 'list', 'agents'])
     const output = result.stdout.toString()
     expect(result.exitCode).toBe(0)
     expect(output).toContain('architecture-strategist')
@@ -114,7 +115,7 @@ describe('CLI functionality', () => {
   })
 
   test('cli list commands shows bundled commands', () => {
-    const result = Bun.spawnSync(['node', CLI_PATH, 'list', 'commands'])
+    const result = Bun.spawnSync(['bun', CLI_PATH, 'list', 'commands'])
     const output = result.stdout.toString()
     expect(result.exitCode).toBe(0)
     expect(output).toContain('/workflows:plan')
@@ -122,7 +123,7 @@ describe('CLI functionality', () => {
   })
 
   test('cli config path shows paths', () => {
-    const result = Bun.spawnSync(['node', CLI_PATH, 'config', 'path'])
+    const result = Bun.spawnSync(['bun', CLI_PATH, 'config', 'path'])
     const output = result.stdout.toString()
     expect(result.exitCode).toBe(0)
     expect(output).toContain('User:')
