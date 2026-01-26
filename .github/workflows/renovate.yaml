@@ -24,7 +24,7 @@ on:
   workflow_run:
     branches: [main]
     types: [completed]
-    workflows: [main]
+    workflows: [Main]
 
 permissions:
   contents: read

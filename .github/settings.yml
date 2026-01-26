@@ -11,7 +11,7 @@ branches:
     protection:
       required_status_checks:
         strict: true
-        contexts: [Build, Typecheck, Lint, Test, Release, Analyze, Renovate / Renovate]
+        contexts: [Build, Typecheck, Lint, Test, Release, Analyze (typescript), CodeQL, Renovate / Renovate]
       enforce_admins: true
       required_pull_request_reviews: null
       restrictions: null
