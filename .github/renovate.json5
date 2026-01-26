@@ -18,7 +18,7 @@
     },
   ],
   postUpgradeTasks: {
-    commands: ['bun install', 'bun run lint -- --fix || true'],
+    commands: ['bun install', 'bun run fix'],
     executionMode: 'branch',
   },
 }
