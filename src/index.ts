@@ -4,8 +4,8 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Plugin } from '@opencode-ai/plugin'
 import { tool } from '@opencode-ai/plugin/tool'
+import { loadConfig, type SystematicConfig } from './lib/config.js'
 import { createConfigHandler } from './lib/config-handler.js'
-import { type SystematicConfig, loadConfig } from './lib/config.js'
 import * as skillsCore from './lib/skills-core.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
