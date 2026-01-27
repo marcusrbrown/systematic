@@ -3,9 +3,9 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Plugin } from '@opencode-ai/plugin'
-import { tool } from '@opencode-ai/plugin/tool'
 import { loadConfig, type SystematicConfig } from './lib/config.js'
 import { createConfigHandler } from './lib/config-handler.js'
+import { createSkillTool } from './lib/skill-tool.js'
 import * as skillsCore from './lib/skills-core.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -14,21 +14,18 @@ const packageRoot = path.resolve(__dirname, '..')
 const bundledSkillsDir = path.join(packageRoot, 'skills')
 const bundledAgentsDir = path.join(packageRoot, 'agents')
 const bundledCommandsDir = path.join(packageRoot, 'commands')
+const packageJsonPath = path.join(packageRoot, 'package.json')
+let hasLoggedInit = false
 
-type NamedItem = { name: string; sourceType: string }
-
-function formatItemList(
-  items: NamedItem[],
-  emptyMessage: string,
-  header: string,
-): string {
-  if (items.length === 0) return emptyMessage
-
-  let output = header
-  for (const item of items) {
-    output += `- ${item.name} (${item.sourceType})\n`
+const getPackageVersion = (): string => {
+  try {
+    if (!fs.existsSync(packageJsonPath)) return 'unknown'
+    const content = fs.readFileSync(packageJsonPath, 'utf8')
+    const parsed = JSON.parse(content) as { version?: string }
+    return parsed.version ?? 'unknown'
+  } catch {
+    return 'unknown'
   }
-  return output
 }
 
 const getBootstrapContent = (config: SystematicConfig): string | null => {
@@ -57,20 +54,24 @@ When skills reference tools you don't have, substitute OpenCode equivalents:
 - \`TodoWrite\` → \`update_plan\`
 - \`Task\` tool with subagents → Use OpenCode's subagent system (@mention)
 - \`Skill\` tool → OpenCode's native \`skill\` tool
+- \`SystematicSkill\` tool → \`systematic_skill\` (Systematic plugin skills)
 - \`Read\`, \`Write\`, \`Edit\`, \`Bash\` → Your native tools
 
 **Skills naming:**
 - Bundled skills use the \`systematic:\` prefix (e.g., \`systematic:brainstorming\`)
 - Skills can also be invoked without prefix if unambiguous
 
+**Skills usage:**
+- Use \`systematic_skill\` to load Systematic bundled skills
+- Use the native \`skill\` tool for non-Systematic skills
+
 **Skills location:**
-Bundled skills are in \`${bundledSkillsDir}/\`
-Use \`systematic_find_skills\` to list all available skills.`
+Bundled skills are in \`${bundledSkillsDir}/\``
 
   return `<SYSTEMATIC_WORKFLOWS>
 You have access to structured engineering workflows via the systematic plugin.
 
-**IMPORTANT: The using-systematic skill content is included below. It is ALREADY LOADED - you are currently following it. Do NOT use the skill tool to load "using-systematic" again - that would be redundant.**
+**IMPORTANT: The using-systematic skill content is included below. It is ALREADY LOADED - you are currently following it. Do NOT use the systematic_skill tool to load "using-systematic" again - that would be redundant.**
 
 ${content}
 
@@ -92,85 +93,44 @@ export const SystematicPlugin: Plugin = async ({ client, directory }) => {
     config: configHandler,
 
     tool: {
-      systematic_find_skills: tool({
-        description: 'List all available skills in the bundled skill library.',
-        args: {},
-        execute: async (): Promise<string> => {
-          const bundledSkills = skillsCore.findSkillsInDir(
-            bundledSkillsDir,
-            'bundled',
-            3,
-          )
-
-          const skills = bundledSkills
-            .filter((s) => !config.disabled_skills.includes(s.name))
-            .sort((a, b) => a.name.localeCompare(b.name))
-
-          if (skills.length === 0) {
-            return 'No skills available. Skills are bundled with the systematic plugin.'
-          }
-
-          let output = 'Available skills:\n\n'
-
-          for (const skill of skills) {
-            output += `systematic:${skill.name}\n`
-            if (skill.description) {
-              output += `  ${skill.description}\n`
-            }
-            output += `  Directory: ${skill.path}\n\n`
-          }
-
-          return output.trim()
-        },
-      }),
-
-      systematic_find_agents: tool({
-        description: 'List all available review agents.',
-        args: {},
-        execute: async (): Promise<string> => {
-          const bundledAgents = skillsCore.findAgentsInDir(
-            bundledAgentsDir,
-            'bundled',
-          )
-
-          const agents = bundledAgents
-            .filter((a) => !config.disabled_agents.includes(a.name))
-            .sort((a, b) => a.name.localeCompare(b.name))
-
-          return formatItemList(
-            agents,
-            'No agents available.',
-            'Available agents:\n\n',
-          )
-        },
-      }),
-
-      systematic_find_commands: tool({
-        description: 'List all available commands.',
-        args: {},
-        execute: async (): Promise<string> => {
-          const bundledCommands = skillsCore.findCommandsInDir(
-            bundledCommandsDir,
-            'bundled',
-          )
-
-          const commands = bundledCommands
-            .filter(
-              (c) =>
-                !config.disabled_commands.includes(c.name.replace(/^\//, '')),
-            )
-            .sort((a, b) => a.name.localeCompare(b.name))
-
-          return formatItemList(
-            commands,
-            'No commands available.',
-            'Available commands:\n\n',
-          )
-        },
+      systematic_skill: createSkillTool({
+        bundledSkillsDir,
+        disabledSkills: config.disabled_skills,
       }),
     },
 
     'experimental.chat.system.transform': async (_input, output) => {
+      if (!hasLoggedInit) {
+        hasLoggedInit = true
+        const packageVersion = getPackageVersion()
+        try {
+          await client.app.log({
+            body: {
+              service: 'systematic',
+              level: 'info',
+              message: 'Systematic plugin initialized',
+              extra: {
+                version: packageVersion,
+                bootstrapEnabled: config.bootstrap.enabled,
+                disabledSkillsCount: config.disabled_skills.length,
+                disabledAgentsCount: config.disabled_agents.length,
+                disabledCommandsCount: config.disabled_commands.length,
+              },
+            },
+          })
+        } catch {
+          // ignore logging failures to avoid blocking the hook
+        }
+      }
+
+      // Skip for title generation requests
+      const existingSystem = output.system.join('\n').toLowerCase()
+      if (
+        existingSystem.includes('title generator') ||
+        existingSystem.includes('generate a title')
+      ) {
+        return
+      }
       const content = getBootstrapContent(config)
       if (content) {
         if (!output.system) {

@@ -82,9 +82,9 @@ The plugin provides these tools to OpenCode:
 
 | Tool | Description |
 |------|-------------|
-| `systematic_find_skills` | List available skills |
-| `systematic_find_agents` | List available agents |
-| `systematic_find_commands` | List available commands |
+| `systematic_skill` | Load Systematic bundled skills |
+
+The bootstrap skill instructs OpenCode to use the native `skill` tool to load non-Systematic skills.
 
 ## Configuration
 

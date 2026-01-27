@@ -719,14 +719,15 @@ const getBootstrapContent = (config: SystematicConfig, compact = false): string 
   const configDir = path.join(homeDir, '.config/opencode')
 
   const toolMapping = compact
-    ? `**Tool Mapping:** TodoWrite->update_plan, Task->@mention, Skill->systematic_use_skill
+    ? `**Tool Mapping:** TodoWrite->update_plan, Task->@mention, Skill->systematic_skill (Systematic), skill (native)
 
 **Skills naming (priority order):** project: > user > sys:`
     : `**Tool Mapping for OpenCode:**
 When skills reference tools you don't have, substitute OpenCode equivalents:
 - \`TodoWrite\` → \`update_plan\`
 - \`Task\` tool with subagents → Use OpenCode's subagent system (@mention)
-- \`Skill\` tool → \`systematic_use_skill\` custom tool
+- \`Skill\` tool → \`systematic_skill\` (Systematic plugin skills)
+- Native \`skill\` tool → non-Systematic skills
 - \`Read\`, \`Write\`, \`Edit\`, \`Bash\` → Your native tools
 
 **Skills naming (priority order):**
@@ -738,7 +739,7 @@ When skills reference tools you don't have, substitute OpenCode equivalents:
   return `<SYSTEMATIC_WORKFLOWS>
 You have access to structured engineering workflows via the systematic plugin.
 
-**IMPORTANT: The using-systematic skill content is included below. It is ALREADY LOADED - you are currently following it. Do NOT use systematic_use_skill to load "using-systematic" - that would be redundant. Use systematic_use_skill only for OTHER skills.**
+**IMPORTANT: The using-systematic skill content is included below. It is ALREADY LOADED - you are currently following it. Do NOT use systematic_skill to load "using-systematic" - that would be redundant. Use systematic_skill only for Systematic bundled skills and the native skill tool for everything else.**
 
 ${content}
 
@@ -760,7 +761,7 @@ export const SystematicPlugin = async ({ client, directory }: PluginContext) => 
 
   return {
     tool: {
-      systematic_use_skill: tool({
+      systematic_skill: tool({
         description:
           'Load and read a specific skill to guide your work. Skills contain proven workflows, mandatory processes, and expert techniques.',
         args: {
@@ -790,9 +791,9 @@ export const SystematicPlugin = async ({ client, directory }: PluginContext) => 
             projectSkillsDir
           )
 
-          if (!resolved) {
-            return `Error: Skill "${skill_name}" not found.\n\nRun systematic_find_skills to see available skills.`
-          }
+           if (!resolved) {
+             return `Error: Skill "${skill_name}" not found.\n\nUse the systematic_skill tool description to see available Systematic skills.`
+           }
 
           const fullContent = fs.readFileSync(resolved.skillFile, 'utf8')
           const { name, description } = skillsCore.extractFrontmatter(resolved.skillFile)
@@ -826,120 +827,7 @@ export const SystematicPlugin = async ({ client, directory }: PluginContext) => 
         },
       }),
 
-      systematic_find_skills: tool({
-        description:
-          'List all available skills in the project, user, and bundled skill libraries.',
-        args: {},
-        execute: async (): Promise<string> => {
-          const projectSkills = skillsCore.findSkillsInDir(projectSkillsDir, 'project', 3)
-          const userSkills = skillsCore.findSkillsInDir(userSkillsDir, 'user', 3)
-          const bundledSkills = skillsCore.findSkillsInDir(bundledSkillsDir, 'bundled', 3)
-
-          // Filter disabled skills
-          const filterDisabled = (skills: skillsCore.SkillInfo[]) =>
-            skills.filter((s) => !config.disabled_skills.includes(s.name))
-
-          const allSkills = [
-            ...filterDisabled(projectSkills),
-            ...filterDisabled(userSkills),
-            ...filterDisabled(bundledSkills),
-          ]
-
-          if (allSkills.length === 0) {
-            return `No skills found. Add skills to ${bundledSkillsDir}/ or ${userSkillsDir}/`
-          }
-
-          let output = 'Available skills:\n\n'
-
-          for (const skill of allSkills) {
-            let namespace: string
-            switch (skill.sourceType) {
-              case 'project':
-                namespace = 'project:'
-                break
-              case 'user':
-                namespace = ''
-                break
-              default:
-                namespace = 'sys:'
-            }
-
-            output += `${namespace}${skill.name}\n`
-            if (skill.description) {
-              output += `  ${skill.description}\n`
-            }
-            output += `  Directory: ${skill.path}\n\n`
-          }
-
-          return output
-        },
-      }),
-
-      systematic_find_agents: tool({
-        description: 'List all available review agents.',
-        args: {},
-        execute: async (): Promise<string> => {
-          const projectAgents = skillsCore.findAgentsInDir(projectAgentsDir, 'project')
-          const userAgents = skillsCore.findAgentsInDir(userAgentsDir, 'user')
-          const bundledAgents = skillsCore.findAgentsInDir(bundledAgentsDir, 'bundled')
-
-          const seen = new Set<string>()
-          const agents: Array<{ name: string; sourceType: string }> = []
-
-          for (const list of [projectAgents, userAgents, bundledAgents]) {
-            for (const agent of list) {
-              if (seen.has(agent.name)) continue
-              if (config.disabled_agents.includes(agent.name)) continue
-              seen.add(agent.name)
-              agents.push({ name: agent.name, sourceType: agent.sourceType })
-            }
-          }
-
-          if (agents.length === 0) {
-            return 'No agents available.'
-          }
-
-          let output = 'Available agents:\n\n'
-          for (const agent of agents.sort((a, b) => a.name.localeCompare(b.name))) {
-            output += `- ${agent.name} (${agent.sourceType})\n`
-          }
-
-          return output
-        },
-      }),
-
-      systematic_find_commands: tool({
-        description: 'List all available commands.',
-        args: {},
-        execute: async (): Promise<string> => {
-          const projectCommands = skillsCore.findCommandsInDir(projectCommandsDir, 'project')
-          const userCommands = skillsCore.findCommandsInDir(userCommandsDir, 'user')
-          const bundledCommands = skillsCore.findCommandsInDir(bundledCommandsDir, 'bundled')
-
-          const seen = new Set<string>()
-          const commands: Array<{ name: string; sourceType: string }> = []
-
-          for (const list of [projectCommands, userCommands, bundledCommands]) {
-            for (const cmd of list) {
-              if (seen.has(cmd.name)) continue
-              if (config.disabled_commands.includes(cmd.name)) continue
-              seen.add(cmd.name)
-              commands.push({ name: cmd.name, sourceType: cmd.sourceType })
-            }
-          }
-
-          if (commands.length === 0) {
-            return 'No commands available.'
-          }
-
-          let output = 'Available commands:\n\n'
-          for (const cmd of commands.sort((a, b) => a.name.localeCompare(b.name))) {
-            output += `- ${cmd.name} (${cmd.sourceType})\n`
-          }
-
-          return output
-        },
-      }),
+      // system lists provided by config hook; no find_* tools
     },
 
     event: async () => {
@@ -1837,10 +1725,8 @@ You have access to structured engineering workflows via the systematic plugin. T
 
 ## Available Tools
 
-- `systematic_use_skill` - Load a skill to guide your work
-- `systematic_find_skills` - List all available skills
-- `systematic_find_agents` - List available review agents
-- `systematic_find_commands` - List available commands
+- `systematic_skill` - Load Systematic bundled skills
+- Native `skill` tool - Load non-Systematic skills
 
 ## Core Workflow
 
@@ -1883,7 +1769,7 @@ Each unit of work should make subsequent work easier:
 - Build on prior knowledge
 - Compound your engineering
 
-When a skill might apply to your current task, use `systematic_use_skill` to load it. Skills provide proven workflows for common engineering tasks.
+When a skill might apply to your current task, use `systematic_skill` for Systematic bundled skills or the native `skill` tool for everything else.
 ```
 
 **Step 2: Commit**
@@ -1910,7 +1796,7 @@ Port these skills from Superpowers with full content:
 
 **For each skill:**
 1. Fetch the full SKILL.md content from Superpowers repo
-2. Adapt tool references (Skill → systematic_use_skill, TodoWrite → update_plan)
+2. Adapt tool references (Skill → systematic_skill for Systematic skills, Skill → native skill for non-Systematic, TodoWrite → update_plan)
 3. Update namespace references (superpowers: → sys:)
 4. Save to `skills/<name>/SKILL.md`
 5. Commit individually
@@ -2022,7 +1908,7 @@ Full documentation with installation, usage, customization, and credits.
 **Key Differences from Original Plan:**
 - Uses `tool()` from `@opencode-ai/plugin/tool` (matches Superpowers exactly)
 - Uses `experimental.chat.system.transform` for bootstrap injection (workaround for model reset issue per PR #228)
-- `session.prompt()` still used for `systematic_use_skill` tool to inject skills into conversation
+- `session.prompt()` still used for `systematic_skill` tool to inject skills into conversation
 - Comprehensive bash test suite modeled after Superpowers
 - Phase 5 explicitly requires FULL content porting, not placeholders
 - Test setup creates isolated environment with fixtures
