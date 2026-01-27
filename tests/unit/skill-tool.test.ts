@@ -169,7 +169,7 @@ This is the skill content.`,
       )
 
       expect(result).toContain('systematic:load-test')
-      expect(result).toContain('<skill_instruction>')
+      expect(result).toContain('<skill-instruction>')
       expect(result).toContain('# Load Test Skill')
       expect(result).toContain('This is the skill content.')
     })
@@ -269,7 +269,7 @@ No frontmatter visible here.`,
       expect(result).toContain('# Actual Content')
     })
 
-    test('wraps content with skill_instruction tags', async () => {
+    test('wraps content with skill-instruction tags', async () => {
       const skillDir = path.join(testDir, 'wrap-test')
       fs.mkdirSync(skillDir)
       fs.writeFileSync(
@@ -288,8 +288,8 @@ description: Test wrapper
 
       const result = await tool.execute({ name: 'wrap-test' }, mockContext)
 
-      expect(result).toContain('<skill_instruction>')
-      expect(result).toContain('</skill_instruction>')
+      expect(result).toContain('<skill-instruction>')
+      expect(result).toContain('</skill-instruction>')
       expect(result).toContain('Base directory for this skill:')
     })
   })

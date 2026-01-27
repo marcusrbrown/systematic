@@ -26,3 +26,6 @@ tests/tmp/
 
 # Worktrees
 .worktrees/
+
+# Sisyphus (OMO)
+.sisyphus/

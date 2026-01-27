@@ -1,6 +1,6 @@
-import fs from 'node:fs'
 import type { AgentConfig, Config } from '@opencode-ai/sdk'
 import { loadConfig } from './config.js'
+import { convertFileWithCache } from './converter.js'
 import * as skillsCore from './skills-core.js'
 
 export interface ConfigHandlerDeps {
@@ -16,12 +16,15 @@ function loadAgentAsConfig(
   agentInfo: { name: string; file: string; sourceType: string; category?: string }
 ): AgentConfig | null {
   try {
-    const content = fs.readFileSync(agentInfo.file, 'utf8')
-    const { name, description, prompt } = skillsCore.extractAgentFrontmatter(content)
+    const converted = convertFileWithCache(agentInfo.file, 'agent', {
+      source: 'bundled',
+      agentMode: 'subagent',
+    })
+    const { description, prompt } = skillsCore.extractAgentFrontmatter(converted)
 
     return {
-      description: description || `${name || agentInfo.name} agent`,
-      prompt: prompt || skillsCore.stripFrontmatter(content),
+      description: description || `${agentInfo.name} agent`,
+      prompt: prompt || skillsCore.stripFrontmatter(converted),
     }
   } catch {
     return null
@@ -32,13 +35,13 @@ function loadCommandAsConfig(
   commandInfo: { name: string; file: string; sourceType: string; category?: string }
 ): CommandConfig | null {
   try {
-    const content = fs.readFileSync(commandInfo.file, 'utf8')
-    const { name, description } = skillsCore.extractCommandFrontmatter(content)
+    const converted = convertFileWithCache(commandInfo.file, 'command', { source: 'bundled' })
+    const { name, description } = skillsCore.extractCommandFrontmatter(converted)
 
     const cleanName = commandInfo.name.replace(/^\//, '')
 
     return {
-      template: skillsCore.stripFrontmatter(content),
+      template: skillsCore.stripFrontmatter(converted),
       description: description || `${name || cleanName} command`,
     }
   } catch {
@@ -50,10 +53,10 @@ function loadSkillAsCommand(
   skillInfo: skillsCore.SkillInfo
 ): CommandConfig | null {
   try {
-    const content = fs.readFileSync(skillInfo.skillFile, 'utf8')
+    const converted = convertFileWithCache(skillInfo.skillFile, 'skill', { source: 'bundled' })
 
     return {
-      template: skillsCore.stripFrontmatter(content),
+      template: skillsCore.stripFrontmatter(converted),
       description: skillInfo.description || `${skillInfo.name} skill`,
     }
   } catch {

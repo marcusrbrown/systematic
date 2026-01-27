@@ -2,6 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { ToolDefinition } from '@opencode-ai/plugin'
 import { tool } from '@opencode-ai/plugin/tool'
+import { convertContent } from './converter.js'
 import type { SkillInfo } from './skills-core.js'
 import { findSkillsInDir, stripFrontmatter } from './skills-core.js'
 
@@ -104,14 +105,15 @@ function mergeDescriptions(
 
 function wrapSkillContent(skillPath: string, content: string): string {
   const skillDir = path.dirname(skillPath)
-  const body = stripFrontmatter(content)
+  const converted = convertContent(content, 'skill', { source: 'bundled' })
+  const body = stripFrontmatter(converted)
 
-  return `<skill_instruction>
+  return `<skill-instruction>
 Base directory for this skill: ${skillDir}/
 File references (@path) in this skill are relative to this directory.
 
 ${body.trim()}
-</skill_instruction>`
+</skill-instruction>`
 }
 
 export interface SkillToolOptions {
