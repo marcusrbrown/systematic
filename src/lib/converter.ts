@@ -147,19 +147,24 @@ export function convertFileWithCache(
   type: ContentType,
   options: ConvertOptions = {}
 ): string {
-  const stats = fs.statSync(filePath)
-  const cacheKey = `${filePath}:${type}:${options.source ?? 'bundled'}:${options.agentMode ?? 'subagent'}`
-  const cached = cache.get(cacheKey)
+  const fd = fs.openSync(filePath, 'r')
+  try {
+    const stats = fs.fstatSync(fd)
+    const cacheKey = `${filePath}:${type}:${options.source ?? 'bundled'}:${options.agentMode ?? 'subagent'}`
+    const cached = cache.get(cacheKey)
 
-  if (cached != null && cached.mtimeMs === stats.mtimeMs) {
-    return cached.converted
+    if (cached != null && cached.mtimeMs === stats.mtimeMs) {
+      return cached.converted
+    }
+
+    const content = fs.readFileSync(fd, 'utf8')
+    const converted = convertContent(content, type, options)
+
+    cache.set(cacheKey, { mtimeMs: stats.mtimeMs, converted })
+    return converted
+  } finally {
+    fs.closeSync(fd)
   }
-
-  const content = fs.readFileSync(filePath, 'utf8')
-  const converted = convertContent(content, type, options)
-
-  cache.set(cacheKey, { mtimeMs: stats.mtimeMs, converted })
-  return converted
 }
 
 export function clearConverterCache(): void {
