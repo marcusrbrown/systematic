@@ -229,10 +229,7 @@ export const SystematicPlugin = async ({ client, directory }) => {
 
   return {
     tool: {
-      systematic_use_skill: tool({...}),
-      systematic_find_skills: tool({...}),
-      systematic_find_agents: tool({...}),
-      systematic_find_commands: tool({...}),
+      systematic_skill: tool({...}),
     },
 
     // Workaround for session.prompt() model reset issue
@@ -260,10 +257,9 @@ export default SystematicPlugin
 
 | Tool                       | Purpose                           |
 | -------------------------- | --------------------------------- |
-| `systematic_use_skill`     | Load a skill into context         |
-| `systematic_find_skills`   | List available skills (all tiers) |
-| `systematic_find_agents`   | List available agents             |
-| `systematic_find_commands` | List available commands           |
+| `systematic_skill`         | Load Systematic bundled skills    |
+
+Use the native `skill` tool for non-Systematic skills.
 
 ### Bootstrap Injection
 

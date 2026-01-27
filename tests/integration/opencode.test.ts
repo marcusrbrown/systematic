@@ -98,36 +98,28 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
   }
 
   test(
-    'systematic_find_skills tool discovers bundled skills',
+    'systematic_skill tool loads systematic:brainstorming skill',
     async () => {
-      const result = await runOpencode('Call systematic_find_skills')
+      const result = await runOpencode(
+        'Use the systematic_skill tool to load systematic:brainstorming',
+      )
 
-      expect(result.stdout.toLowerCase()).toMatch(
-        /brainstorming|systematic:.*|available skills/i,
+      expect(result.stdout).toMatch(
+        /<skill_instruction>|brainstorming|systematic/i,
       )
     },
     TIMEOUT_MS * MAX_RETRIES,
   )
 
   test(
-    'systematic_find_agents tool discovers bundled agents',
+    'systematic_skill tool lists systematic skills in description',
     async () => {
-      const result = await runOpencode('Call systematic_find_agents')
-
-      expect(result.stdout.toLowerCase()).toMatch(
-        /architecture-strategist|security-sentinel|available.*agents|bundled/i,
+      const result = await runOpencode(
+        'What skills are available? List the systematic skills you can load.',
       )
-    },
-    TIMEOUT_MS * MAX_RETRIES,
-  )
 
-  test(
-    'systematic_find_commands tool discovers bundled commands',
-    async () => {
-      const result = await runOpencode('Call systematic_find_commands')
-
-      expect(result.stdout.toLowerCase()).toMatch(
-        /\/lfg|\/workflows|available.*commands|bundled/i,
+      expect(result.stdout).toMatch(
+        /systematic:brainstorming|systematic:.*|available.*skills/i,
       )
     },
     TIMEOUT_MS * MAX_RETRIES,

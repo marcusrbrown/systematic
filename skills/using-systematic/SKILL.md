@@ -13,7 +13,7 @@ This is not negotiable. This is not optional. You cannot rationalize your way ou
 
 ## How to Access Skills
 
-Use the `skill` tool. When you invoke a skill, its content is loaded and presented to you—follow it directly.
+Use the `systematic_skill` tool for Systematic bundled skills. Use the native `skill` tool for non-Systematic skills. When you invoke a skill, its content is loaded and presented to you—follow it directly.
 
 # Using Skills
 
@@ -25,7 +25,7 @@ Use the `skill` tool. When you invoke a skill, its content is loaded and present
 digraph skill_flow {
     "User message received" [shape=doublecircle];
     "Might any skill apply?" [shape=diamond];
-    "Invoke `skill` tool" [shape=box];
+    "Invoke `systematic_skill` tool" [shape=box];
     "Announce: 'Using [skill] to [purpose]'" [shape=box];
     "Has checklist?" [shape=diamond];
     "Create todo per item" [shape=box];
@@ -33,9 +33,9 @@ digraph skill_flow {
     "Respond (including clarifications)" [shape=doublecircle];
 
     "User message received" -> "Might any skill apply?";
-    "Might any skill apply?" -> "Invoke `skill` tool" [label="yes, even 1%"];
+    "Might any skill apply?" -> "Invoke `systematic_skill` tool" [label="yes, even 1%"];
     "Might any skill apply?" -> "Respond (including clarifications)" [label="definitely not"];
-    "Invoke `skill` tool" -> "Announce: 'Using [skill] to [purpose]'";
+    "Invoke `systematic_skill` tool" -> "Announce: 'Using [skill] to [purpose]'";
     "Announce: 'Using [skill] to [purpose]'" -> "Has checklist?";
     "Has checklist?" -> "Create todo per item" [label="yes"];
     "Has checklist?" -> "Follow skill exactly" [label="no"];
@@ -91,4 +91,4 @@ Skills are resolved in priority order:
 2. **User skills**: `~/.config/opencode/skills/`
 3. **Bundled skills**: Provided by systematic plugin
 
-Use `systematic_find_skills` to see all available skills and their sources.
+Systematic bundled skills are listed in the `systematic_skill` tool description. Use the native `skill` tool for skills outside the Systematic plugin.
