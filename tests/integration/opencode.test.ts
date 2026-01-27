@@ -105,7 +105,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
       )
 
       expect(result.stdout).toMatch(
-        /<skill_instruction>|brainstorming|systematic/i,
+        /<skill-instruction>|brainstorm|systematic|skill loaded/i,
       )
     },
     TIMEOUT_MS * MAX_RETRIES,

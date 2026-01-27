@@ -52,9 +52,9 @@ Quick shortcuts to invoke workflows:
 - `/deepen-plan` - Add detail to existing plans
 - `/lfg` - Let's go - start working immediately
 
-### Review Agents
+### Agents
 
-Specialized code review agents organized by category:
+Specialized agents organized by category:
 
 **Review:**
 
@@ -96,42 +96,6 @@ Create `~/.config/opencode/systematic.json` or `.opencode/systematic.json` to di
   "disabled_agents": [],
   "disabled_commands": []
 }
-```
-
-## Converting CEP Content
-
-The CLI includes a converter for adapting Claude Code agents, skills, and commands from Compound Engineering Plugin (CEP) to OpenCode.
-
-### Convert a Skill
-
-Skills are directories containing `SKILL.md` and supporting files:
-
-```bash
-npx @fro.bot/systematic convert skill /path/to/cep/skills/my-skill -o ./skills/my-skill
-```
-
-### Convert an Agent
-
-Agents are markdown files that get OpenCode-compatible YAML frontmatter:
-
-```bash
-npx @fro.bot/systematic convert agent /path/to/cep/agents/review/my-agent.md -o ./agents/review/my-agent.md
-```
-
-### Convert a Command
-
-Commands are markdown templates:
-
-```bash
-npx @fro.bot/systematic convert command /path/to/cep/commands/my-command.md -o ./commands/my-command.md
-```
-
-### Dry Run
-
-Preview conversion without writing files:
-
-```bash
-npx @fro.bot/systematic convert skill /path/to/skill --dry-run
 ```
 
 ## Development

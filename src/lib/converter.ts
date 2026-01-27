@@ -1,32 +1,31 @@
 import fs from 'node:fs'
-import path from 'node:path'
 
-export type ConvertType = 'skill' | 'agent' | 'command'
+export type ContentType = 'skill' | 'agent' | 'command'
+export type SourceType = 'bundled' | 'external'
+export type AgentMode = 'primary' | 'subagent'
 
 export interface ConvertOptions {
-  dryRun?: boolean
-  output?: string
+  source?: SourceType
+  agentMode?: AgentMode
 }
 
-export interface ConvertResult {
-  type: ConvertType
-  sourcePath: string
-  outputPath: string
-  converted: boolean
-  files: string[]
+interface CacheEntry {
+  mtimeMs: number
+  converted: string
 }
 
-interface FrontmatterData {
-  description?: string
-  mode?: string
-  model?: string
-  temperature?: number
+const cache = new Map<string, CacheEntry>()
+
+interface ParsedFrontmatter {
+  data: Record<string, string | number | boolean>
+  body: string
+  raw: string
 }
 
-function parseFrontmatter(raw: string): { data: Record<string, unknown>; body: string } {
-  const lines = raw.split(/\r?\n/)
+function parseFrontmatter(content: string): ParsedFrontmatter {
+  const lines = content.split(/\r?\n/)
   if (lines.length === 0 || lines[0].trim() !== '---') {
-    return { data: {}, body: raw }
+    return { data: {}, body: content, raw: '' }
   }
 
   let endIndex = -1
@@ -38,15 +37,16 @@ function parseFrontmatter(raw: string): { data: Record<string, unknown>; body: s
   }
 
   if (endIndex === -1) {
-    return { data: {}, body: raw }
+    return { data: {}, body: content, raw: '' }
   }
 
   const yamlLines = lines.slice(1, endIndex)
   const body = lines.slice(endIndex + 1).join('\n')
-  const data: Record<string, unknown> = {}
+  const raw = lines.slice(0, endIndex + 1).join('\n')
+  const data: Record<string, string | number | boolean> = {}
 
   for (const line of yamlLines) {
-    const match = line.match(/^(\w+):\s*(.*)$/)
+    const match = line.match(/^([\w-]+):\s*(.*)$/)
     if (match) {
       const [, key, value] = match
       if (value === 'true') data[key] = true
@@ -56,23 +56,20 @@ function parseFrontmatter(raw: string): { data: Record<string, unknown>; body: s
     }
   }
 
-  return { data, body }
+  return { data, body, raw }
 }
 
-function formatFrontmatter(data: FrontmatterData, body: string): string {
-  const lines: string[] = []
-  if (data.description) lines.push(`description: ${data.description}`)
-  if (data.mode) lines.push(`mode: ${data.mode}`)
-  if (data.model) lines.push(`model: ${data.model}`)
-  if (data.temperature !== undefined) lines.push(`temperature: ${data.temperature}`)
-
-  if (lines.length === 0) return body
-
-  return ['---', ...lines, '---', '', body].join('\n')
+function formatFrontmatter(data: Record<string, string | number | boolean>): string {
+  const lines: string[] = ['---']
+  for (const [key, value] of Object.entries(data)) {
+    lines.push(`${key}: ${value}`)
+  }
+  lines.push('---')
+  return lines.join('\n')
 }
 
 function inferTemperature(name: string, description?: string): number {
-  const sample = `${name} ${description || ''}`.toLowerCase()
+  const sample = `${name} ${description ?? ''}`.toLowerCase()
   if (/(review|audit|security|sentinel|oracle|lint|verification|guardian)/.test(sample)) {
     return 0.1
   }
@@ -90,148 +87,86 @@ function inferTemperature(name: string, description?: string): number {
 
 function normalizeModel(model: string): string {
   if (model.includes('/')) return model
+  if (model === 'inherit') return model
   if (/^claude-/.test(model)) return `anthropic/${model}`
   if (/^(gpt-|o1-|o3-)/.test(model)) return `openai/${model}`
   if (/^gemini-/.test(model)) return `google/${model}`
   return `anthropic/${model}`
 }
 
-export function convertAgent(sourcePath: string, options: ConvertOptions = {}): ConvertResult {
-  const content = fs.readFileSync(sourcePath, 'utf-8')
-  const name = path.basename(sourcePath, '.md')
-  const { data, body } = parseFrontmatter(content)
+function transformAgentFrontmatter(
+  data: Record<string, string | number | boolean>,
+  agentMode: AgentMode
+): Record<string, string | number | boolean> {
+  const name = typeof data.name === 'string' ? data.name : ''
+  const description = typeof data.description === 'string' ? data.description : ''
 
-  const existingDescription = data.description as string | undefined
-  const existingModel = data.model as string | undefined
-
-  let description = existingDescription
-  if (!description) {
-    const firstLine = body.split('\n').find(l => l.trim() && !l.startsWith('#'))
-    description = firstLine?.slice(0, 100) || `${name} agent`
+  const newData: Record<string, string | number | boolean> = {
+    description: description || `${name} agent`,
+    mode: agentMode,
   }
 
-  const frontmatter: FrontmatterData = {
-    description,
-    mode: 'subagent',
-    temperature: inferTemperature(name, description),
+  if (typeof data.model === 'string' && data.model !== 'inherit') {
+    newData.model = normalizeModel(data.model)
   }
 
-  if (existingModel && existingModel !== 'inherit') {
-    frontmatter.model = normalizeModel(existingModel)
+  if (typeof data.temperature === 'number') {
+    newData.temperature = data.temperature
+  } else {
+    newData.temperature = inferTemperature(name, description)
   }
 
-  const converted = formatFrontmatter(frontmatter, body.trim())
-  const outputPath = options.output || sourcePath
-
-  if (!options.dryRun) {
-    fs.mkdirSync(path.dirname(outputPath), { recursive: true })
-    fs.writeFileSync(outputPath, converted)
-  }
-
-  return {
-    type: 'agent',
-    sourcePath,
-    outputPath,
-    converted: true,
-    files: [path.basename(outputPath)],
-  }
+  return newData
 }
 
-export function convertCommand(sourcePath: string, options: ConvertOptions = {}): ConvertResult {
-  const content = fs.readFileSync(sourcePath, 'utf-8')
-  const outputPath = options.output || sourcePath
+export function convertContent(
+  content: string,
+  type: ContentType,
+  options: ConvertOptions = {}
+): string {
+  if (content === '') return ''
 
-  if (!options.dryRun) {
-    fs.mkdirSync(path.dirname(outputPath), { recursive: true })
-    fs.writeFileSync(outputPath, content)
+  const { data, body, raw } = parseFrontmatter(content)
+  const hasFrontmatter = raw !== ''
+
+  if (!hasFrontmatter) {
+    return content
   }
 
-  return {
-    type: 'command',
-    sourcePath,
-    outputPath,
-    converted: true,
-    files: [path.basename(outputPath)],
+  if (type === 'agent') {
+    const agentMode = options.agentMode ?? 'subagent'
+    const transformedData = transformAgentFrontmatter(data, agentMode)
+    return `${formatFrontmatter(transformedData)}\n${body}`
   }
+
+  return content
 }
 
-export function convertSkill(sourcePath: string, options: ConvertOptions = {}): ConvertResult {
-  const stats = fs.statSync(sourcePath)
-  if (!stats.isDirectory()) {
-    throw new Error(`Skill source must be a directory: ${sourcePath}`)
-  }
+export function convertFileWithCache(
+  filePath: string,
+  type: ContentType,
+  options: ConvertOptions = {}
+): string {
+  const fd = fs.openSync(filePath, 'r')
+  try {
+    const stats = fs.fstatSync(fd)
+    const cacheKey = `${filePath}:${type}:${options.source ?? 'bundled'}:${options.agentMode ?? 'subagent'}`
+    const cached = cache.get(cacheKey)
 
-  const skillName = path.basename(sourcePath)
-  const outputPath = options.output || sourcePath
-  const files: string[] = []
-
-  function copyDir(src: string, dest: string): void {
-    if (!options.dryRun) {
-      fs.mkdirSync(dest, { recursive: true })
+    if (cached != null && cached.mtimeMs === stats.mtimeMs) {
+      return cached.converted
     }
 
-    for (const entry of fs.readdirSync(src, { withFileTypes: true })) {
-      const srcPath = path.join(src, entry.name)
-      const destPath = path.join(dest, entry.name)
+    const content = fs.readFileSync(fd, 'utf8')
+    const converted = convertContent(content, type, options)
 
-      if (entry.isDirectory()) {
-        copyDir(srcPath, destPath)
-      } else {
-        files.push(path.relative(outputPath, destPath))
-        if (!options.dryRun) {
-          fs.copyFileSync(srcPath, destPath)
-        }
-      }
-    }
-  }
-
-  copyDir(sourcePath, outputPath)
-
-  return {
-    type: 'skill',
-    sourcePath,
-    outputPath,
-    converted: true,
-    files,
+    cache.set(cacheKey, { mtimeMs: stats.mtimeMs, converted })
+    return converted
+  } finally {
+    fs.closeSync(fd)
   }
 }
 
-export function convert(
-  type: ConvertType,
-  sourcePath: string,
-  options: ConvertOptions = {},
-): ConvertResult {
-  switch (type) {
-    case 'agent':
-      return convertAgent(sourcePath, options)
-    case 'command':
-      return convertCommand(sourcePath, options)
-    case 'skill':
-      return convertSkill(sourcePath, options)
-    default:
-      throw new Error(`Unknown type: ${type}`)
-  }
-}
-
-export function detectType(sourcePath: string): ConvertType | null {
-  const stats = fs.statSync(sourcePath)
-
-  if (stats.isDirectory()) {
-    if (fs.existsSync(path.join(sourcePath, 'SKILL.md'))) {
-      return 'skill'
-    }
-    return null
-  }
-
-  if (!sourcePath.endsWith('.md')) return null
-
-  const parentDir = path.basename(path.dirname(sourcePath))
-  if (parentDir === 'agents' || ['review', 'research', 'design', 'docs', 'workflow'].includes(parentDir)) {
-    return 'agent'
-  }
-  if (parentDir === 'commands' || parentDir === 'workflows') {
-    return 'command'
-  }
-
-  return null
+export function clearConverterCache(): void {
+  cache.clear()
 }
