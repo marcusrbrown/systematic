@@ -1,5 +1,0 @@
-[install]
-peer = false
-
-[build]
-target = "node"
