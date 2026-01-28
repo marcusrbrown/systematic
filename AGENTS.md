@@ -1,8 +1,14 @@
 # AGENTS.md - Coding Agent Guidelines for Systematic
 
+**Generated:** 2026-01-28 | **Commit:** d4bfa75 | **Branch:** main
+
 ## Project Overview
 
-OpenCode plugin providing systematic engineering workflows. Converts and adapts Claude Code agents, skills, and commands from Compound Engineering Plugin (CEP) to OpenCode. Includes skills, agents, and commands for structured AI-assisted development.
+OpenCode plugin providing systematic engineering workflows. Converts/adapts Claude Code agents, skills, and commands from Compound Engineering Plugin (CEP) to OpenCode.
+
+**Key insight:** This repo has two distinct parts:
+1. **TypeScript source** (`src/`) - Plugin logic, tools, config handling
+2. **Bundled assets** (`skills/`, `agents/`, `commands/`) - OpenCode Markdown content shipped with npm package
 
 ## Build & Test Commands
 
@@ -175,21 +181,28 @@ describe('module-name', () => {
 ```
 systematic/
 ├── src/
-│   ├── index.ts          # Plugin entry point
-│   ├── cli.ts            # CLI entry point
+│   ├── index.ts              # Plugin entry point (SystematicPlugin)
+│   ├── cli.ts                # CLI entry point
 │   └── lib/
-│       ├── config.ts     # Configuration loading
-│       ├── converter.ts  # CEP to OpenCode conversion
-│       └── skills-core.ts # Skill discovery/resolution
+│       ├── agents.ts         # Agent discovery + frontmatter parsing
+│       ├── bootstrap.ts      # System prompt injection
+│       ├── commands.ts       # Command discovery + frontmatter parsing
+│       ├── config.ts         # JSONC config loading (project > user)
+│       ├── config-handler.ts # OpenCode config hook (merges bundled → existing)
+│       ├── converter.ts      # CEP to OpenCode conversion
+│       ├── frontmatter.ts    # YAML frontmatter utilities
+│       ├── skill-tool.ts     # `systematic_skill` tool implementation
+│       ├── skills.ts         # Skill discovery + frontmatter parsing
+│       └── walk-dir.ts       # Recursive directory traversal
 ├── tests/
-│   ├── unit/             # Unit tests (bun test tests/unit)
-│   └── integration/      # Integration tests
-├── skills/               # Bundled skill definitions
-├── agents/               # Bundled agent definitions
-├── commands/             # Bundled command definitions
-├── dist/                 # Build output (git-ignored)
-├── biome.json            # Linter/formatter config
-├── tsconfig.json         # TypeScript config
+│   ├── unit/                 # Unit tests (bun test tests/unit)
+│   └── integration/          # Integration tests
+├── skills/                   # Bundled OpenCode skill definitions (SKILL.md)
+├── agents/                   # Bundled OpenCode agent definitions (Markdown)
+├── commands/                 # Bundled OpenCode command definitions (Markdown)
+├── dist/                     # Build output (git-ignored)
+├── biome.json                # Biome linter/formatter config
+├── tsconfig.json             # TypeScript config
 └── package.json
 ```
 

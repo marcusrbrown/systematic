@@ -7,7 +7,6 @@ import { stripFrontmatter } from './frontmatter.js'
 import type { SkillInfo } from './skills.js'
 import { findSkillsInDir, formatSkillsXml } from './skills.js'
 
-
 function wrapSkillContent(skillPath: string, content: string): string {
   const skillDir = path.dirname(skillPath)
   const converted = convertContent(content, 'skill', { source: 'bundled' })
@@ -60,7 +59,7 @@ Use this when a task matches an available skill's description.`
       name: tool.schema
         .string()
         .describe(
-          "The skill identifier from available_skills (e.g., 'systematic:brainstorming')"
+          "The skill identifier from available_skills (e.g., 'systematic:brainstorming')",
         ),
     },
     async execute(args: { name: string }): Promise<string> {
@@ -87,14 +86,14 @@ ${wrapped}`
           const errorMessage =
             error instanceof Error ? error.message : String(error)
           throw new Error(
-            `Failed to load skill "${requestedName}": ${errorMessage}`
+            `Failed to load skill "${requestedName}": ${errorMessage}`,
           )
         }
       }
 
       const availableSystematic = skills.map((s) => `systematic:${s.name}`)
       throw new Error(
-        `Skill "${requestedName}" not found. Available systematic skills: ${availableSystematic.join(', ')}`
+        `Skill "${requestedName}" not found. Available systematic skills: ${availableSystematic.join(', ')}`,
       )
     },
   })

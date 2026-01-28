@@ -28,7 +28,6 @@
     "includes": [
       "**",
       "!**/dist",
-      "!**/lib",
       "!**/.opencode",
       "!**/node_modules",
       "!**/*.md"
