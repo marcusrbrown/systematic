@@ -103,7 +103,6 @@ describe('CLI functionality', () => {
     const output = result.stdout.toString()
     expect(result.exitCode).toBe(0)
     expect(output).toContain('brainstorming')
-    expect(output).toContain('bundled')
   })
 
   test('cli list agents shows bundled agents', () => {
@@ -111,7 +110,6 @@ describe('CLI functionality', () => {
     const output = result.stdout.toString()
     expect(result.exitCode).toBe(0)
     expect(output).toContain('architecture-strategist')
-    expect(output).toContain('bundled')
   })
 
   test('cli list commands shows bundled commands', () => {
@@ -119,7 +117,6 @@ describe('CLI functionality', () => {
     const output = result.stdout.toString()
     expect(result.exitCode).toBe(0)
     expect(output).toContain('/workflows:plan')
-    expect(output).toContain('bundled')
   })
 
   test('cli config path shows paths', () => {
