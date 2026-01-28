@@ -2,13 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import {
-  createSkillTool,
-  getHookedTool,
-  isAlreadyHooked,
-  resetHookState,
-  setHookedTool,
-} from '../../src/lib/skill-tool.ts'
+import { createSkillTool } from '../../src/lib/skill-tool.ts'
 
 const mockContext = {} as never
 
@@ -17,38 +11,10 @@ describe('skill-tool', () => {
 
   beforeEach(() => {
     testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-skill-test-'))
-    resetHookState()
   })
 
   afterEach(() => {
     fs.rmSync(testDir, { recursive: true, force: true })
-    resetHookState()
-  })
-
-  describe('hook state management', () => {
-    test('isAlreadyHooked returns false before initialization', () => {
-      expect(isAlreadyHooked()).toBe(false)
-    })
-
-    test('isAlreadyHooked returns true after setHookedTool', () => {
-      setHookedTool(null)
-      expect(isAlreadyHooked()).toBe(true)
-    })
-
-    test('getHookedTool returns null after initialization with null', () => {
-      setHookedTool(null)
-      expect(getHookedTool()).toBeNull()
-    })
-
-    test('getHookedTool returns set tool', () => {
-      const mockTool = {
-        description: 'Mock tool',
-        args: {},
-        execute: async () => 'result',
-      }
-      setHookedTool(mockTool as never)
-      expect(getHookedTool()).toBe(mockTool)
-    })
   })
 
   describe('createSkillTool', () => {
@@ -104,42 +70,6 @@ description: Disabled
 
       expect(tool.description).toContain('systematic:enabled-skill')
       expect(tool.description).not.toContain('systematic:disabled-skill')
-    })
-
-    test('merges hooked tool description', () => {
-      const skillDir = path.join(testDir, 'my-skill')
-      fs.mkdirSync(skillDir)
-      fs.writeFileSync(
-        path.join(skillDir, 'SKILL.md'),
-        `---
-name: my-skill
-description: My skill
----
-# Content`,
-      )
-
-      const mockHookedTool = {
-        description: `Load a skill.
-
-<available_skills>
-  <skill>
-    <name>other-skill</name>
-    <description>Other skill from hooked tool</description>
-  </skill>
-</available_skills>`,
-        args: {},
-        execute: async () => 'hooked result',
-      }
-
-      setHookedTool(mockHookedTool as never)
-
-      const tool = createSkillTool({
-        bundledSkillsDir: testDir,
-        disabledSkills: [],
-      })
-
-      expect(tool.description).toContain('systematic:my-skill')
-      expect(tool.description).toContain('other-skill')
     })
   })
 
@@ -197,40 +127,7 @@ description: Test
       expect(result).toContain('# No Prefix Content')
     })
 
-    test('falls back to hooked tool for unknown skill', async () => {
-      fs.mkdirSync(path.join(testDir, 'known-skill'))
-      fs.writeFileSync(
-        path.join(testDir, 'known-skill', 'SKILL.md'),
-        `---
-name: known-skill
-description: Known
----
-# Known`,
-      )
-
-      const mockHookedTool = {
-        description: 'Mock',
-        args: {},
-        execute: async (args: { name: string }) =>
-          `Hooked skill loaded: ${args.name}`,
-      }
-
-      setHookedTool(mockHookedTool as never)
-
-      const tool = createSkillTool({
-        bundledSkillsDir: testDir,
-        disabledSkills: [],
-      })
-
-      const result = await tool.execute(
-        { name: 'unknown-external-skill' },
-        mockContext,
-      )
-
-      expect(result).toBe('Hooked skill loaded: unknown-external-skill')
-    })
-
-    test('throws error when skill not found and no hooked tool', async () => {
+    test('throws error when skill not found', async () => {
       const tool = createSkillTool({
         bundledSkillsDir: testDir,
         disabledSkills: [],

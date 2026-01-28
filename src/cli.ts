@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 import fs from 'node:fs'
 import path from 'node:path'
+import * as agents from './lib/agents.js'
+import * as commands from './lib/commands.js'
+import { getConfigPaths } from './lib/config.js'
 import {
   type AgentMode,
   type ContentType,
   convertContent,
 } from './lib/converter.js'
-import * as skillsCore from './lib/skills-core.js'
+import * as skills from './lib/skills.js'
 
 const VERSION = '0.1.0'
 
@@ -37,38 +40,24 @@ Examples:
   systematic config show
 `
 
-function getUserConfigDir(): string {
-  return path.join(
-    process.env.HOME || process.env.USERPROFILE || '.',
-    '.config/opencode',
-  )
-}
-
-function getProjectConfigDir(): string {
-  return path.join(process.cwd(), '.opencode')
-}
-
 function listItems(type: string): void {
   const packageRoot = path.resolve(import.meta.dirname, '..')
   const bundledDir = packageRoot
 
-  let finder: (
-    dir: string,
-    sourceType: 'bundled',
-  ) => Array<{ name: string; sourceType: string }>
+  let finder: (dir: string) => Array<{ name: string }>
   let subdir: string
 
   switch (type) {
     case 'skills':
-      finder = skillsCore.findSkillsInDir
+      finder = skills.findSkillsInDir
       subdir = 'skills'
       break
     case 'agents':
-      finder = skillsCore.findAgentsInDir
+      finder = agents.findAgentsInDir
       subdir = 'agents'
       break
     case 'commands':
-      finder = skillsCore.findCommandsInDir
+      finder = commands.findCommandsInDir
       subdir = 'commands'
       break
     default:
@@ -76,7 +65,7 @@ function listItems(type: string): void {
       process.exit(1)
   }
 
-  const items = finder(path.join(bundledDir, subdir), 'bundled')
+  const items = finder(path.join(bundledDir, subdir))
 
   if (items.length === 0) {
     console.log(`No ${type} found.`)
@@ -85,7 +74,7 @@ function listItems(type: string): void {
 
   console.log(`Available ${type}:\n`)
   for (const item of items.sort((a, b) => a.name.localeCompare(b.name))) {
-    console.log(`  ${item.name} (${item.sourceType})`)
+    console.log(`  ${item.name}`)
   }
 }
 
@@ -124,33 +113,29 @@ function runConvert(type: string, filePath: string, modeArg?: string): void {
 }
 
 function configShow(): void {
-  const userDir = getUserConfigDir()
-  const projectDir = getProjectConfigDir()
+  const paths = getConfigPaths(process.cwd())
 
   console.log('Configuration locations:\n')
-  console.log(`  User config:    ${path.join(userDir, 'systematic.json')}`)
-  console.log(`  Project config: ${path.join(projectDir, 'systematic.json')}`)
+  console.log(`  User config:    ${paths.userConfig}`)
+  console.log(`  Project config: ${paths.projectConfig}`)
 
-  const projectConfig = path.join(projectDir, 'systematic.json')
-  if (fs.existsSync(projectConfig)) {
+  if (fs.existsSync(paths.projectConfig)) {
     console.log('\nProject configuration:')
-    console.log(fs.readFileSync(projectConfig, 'utf-8'))
+    console.log(fs.readFileSync(paths.projectConfig, 'utf-8'))
   }
 
-  const userConfig = path.join(userDir, 'systematic.json')
-  if (fs.existsSync(userConfig)) {
+  if (fs.existsSync(paths.userConfig)) {
     console.log('\nUser configuration:')
-    console.log(fs.readFileSync(userConfig, 'utf-8'))
+    console.log(fs.readFileSync(paths.userConfig, 'utf-8'))
   }
 }
 
 function configPath(): void {
-  const userDir = getUserConfigDir()
-  const projectDir = getProjectConfigDir()
+  const paths = getConfigPaths(process.cwd())
 
   console.log('Config file paths:')
-  console.log(`  User:    ${path.join(userDir, 'systematic.json')}`)
-  console.log(`  Project: ${path.join(projectDir, 'systematic.json')}`)
+  console.log(`  User:    ${paths.userConfig}`)
+  console.log(`  Project: ${paths.projectConfig}`)
 }
 
 const args = process.argv.slice(2)

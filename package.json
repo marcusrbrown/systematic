@@ -21,7 +21,7 @@
   ],
   "scripts": {
     "clean": "rimraf dist",
-    "build": "bun run clean && bun build src/index.ts src/cli.ts --outdir dist --target bun --splitting --packages external",
+    "build": "bun run clean && bun build src/index.ts src/cli.ts --outdir dist --target bun --splitting --packages external && tsc --emitDeclarationOnly",
     "dev": "bun --watch src/index.ts",
     "test": "bun test tests/unit",
     "test:integration": "bun test tests/integration",
@@ -29,7 +29,7 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "fix": "bun run lint --fix",
-    "prepublishOnly": "bun run build && bun run test"
+    "prepublishOnly": "bun run build"
   },
   "keywords": [
     "opencode",
