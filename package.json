@@ -54,6 +54,7 @@
     "@biomejs/biome": "^2.0.0",
     "@opencode-ai/plugin": "^1.1.30",
     "@types/bun": "latest",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.0.0",
     "conventional-changelog-conventionalcommits": "^9.0.0",
     "markdownlint-cli": "^0.47.0",
@@ -63,6 +64,7 @@
     "typescript": "^5.7.0"
   },
   "dependencies": {
+    "js-yaml": "^4.1.1",
     "jsonc-parser": "^3.3.0"
   },
   "publishConfig": {

@@ -1,10 +1,10 @@
 import type { AgentConfig, Config } from '@opencode-ai/sdk'
+import { extractAgentFrontmatter, findAgentsInDir } from './agents.js'
+import { extractCommandFrontmatter, findCommandsInDir } from './commands.js'
 import { loadConfig } from './config.js'
 import { convertFileWithCache } from './converter.js'
 import { stripFrontmatter } from './frontmatter.js'
-import { extractAgentFrontmatter, findAgentsInDir } from './agents.js'
-import { extractCommandFrontmatter, findCommandsInDir } from './commands.js'
-import { type SkillInfo, findSkillsInDir } from './skills.js'
+import { findSkillsInDir, type SkillInfo } from './skills.js'
 
 export interface ConfigHandlerDeps {
   directory: string
@@ -15,9 +15,11 @@ export interface ConfigHandlerDeps {
 
 type CommandConfig = NonNullable<Config['command']>[string]
 
-function loadAgentAsConfig(
-  agentInfo: { name: string; file: string; category?: string }
-): AgentConfig | null {
+function loadAgentAsConfig(agentInfo: {
+  name: string
+  file: string
+  category?: string
+}): AgentConfig | null {
   try {
     const converted = convertFileWithCache(agentInfo.file, 'agent', {
       source: 'bundled',
@@ -34,11 +36,15 @@ function loadAgentAsConfig(
   }
 }
 
-function loadCommandAsConfig(
-  commandInfo: { name: string; file: string; category?: string }
-): CommandConfig | null {
+function loadCommandAsConfig(commandInfo: {
+  name: string
+  file: string
+  category?: string
+}): CommandConfig | null {
   try {
-    const converted = convertFileWithCache(commandInfo.file, 'command', { source: 'bundled' })
+    const converted = convertFileWithCache(commandInfo.file, 'command', {
+      source: 'bundled',
+    })
     const { name, description } = extractCommandFrontmatter(converted)
 
     const cleanName = commandInfo.name.replace(/^\//, '')
@@ -52,11 +58,11 @@ function loadCommandAsConfig(
   }
 }
 
-function loadSkillAsCommand(
-  skillInfo: SkillInfo
-): CommandConfig | null {
+function loadSkillAsCommand(skillInfo: SkillInfo): CommandConfig | null {
   try {
-    const converted = convertFileWithCache(skillInfo.skillFile, 'skill', { source: 'bundled' })
+    const converted = convertFileWithCache(skillInfo.skillFile, 'skill', {
+      source: 'bundled',
+    })
 
     return {
       template: stripFrontmatter(converted),
@@ -69,7 +75,7 @@ function loadSkillAsCommand(
 
 function collectAgents(
   dir: string,
-  disabledAgents: string[]
+  disabledAgents: string[],
 ): NonNullable<Config['agent']> {
   const agents: NonNullable<Config['agent']> = {}
   const agentList = findAgentsInDir(dir)
@@ -88,7 +94,7 @@ function collectAgents(
 
 function collectCommands(
   dir: string,
-  disabledCommands: string[]
+  disabledCommands: string[],
 ): NonNullable<Config['command']> {
   const commands: NonNullable<Config['command']> = {}
   const commandList = findCommandsInDir(dir)
@@ -108,7 +114,7 @@ function collectCommands(
 
 function collectSkillsAsCommands(
   dir: string,
-  disabledSkills: string[]
+  disabledSkills: string[],
 ): NonNullable<Config['command']> {
   const commands: NonNullable<Config['command']> = {}
   const skillList = findSkillsInDir(dir)
@@ -135,24 +141,25 @@ function collectSkillsAsCommands(
  * Existing OpenCode config is preserved and takes precedence.
  */
 export function createConfigHandler(deps: ConfigHandlerDeps) {
-  const { directory, bundledSkillsDir, bundledAgentsDir, bundledCommandsDir } = deps
+  const { directory, bundledSkillsDir, bundledAgentsDir, bundledCommandsDir } =
+    deps
 
   return async (config: Config): Promise<void> => {
     const systematicConfig = loadConfig(directory)
 
     const bundledAgents = collectAgents(
       bundledAgentsDir,
-      systematicConfig.disabled_agents
+      systematicConfig.disabled_agents,
     )
 
     const bundledCommands = collectCommands(
       bundledCommandsDir,
-      systematicConfig.disabled_commands
+      systematicConfig.disabled_commands,
     )
 
     const bundledSkills = collectSkillsAsCommands(
       bundledSkillsDir,
-      systematicConfig.disabled_skills
+      systematicConfig.disabled_skills,
     )
 
     const existingAgents = config.agent ?? {}

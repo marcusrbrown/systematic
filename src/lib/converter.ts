@@ -1,5 +1,5 @@
 import fs from 'node:fs'
-import { parseFrontmatter, formatFrontmatter, type ParsedFrontmatter } from './frontmatter.js'
+import { formatFrontmatter, parseFrontmatter } from './frontmatter.js'
 
 export type ContentType = 'skill' | 'agent' | 'command'
 export type SourceType = 'bundled' | 'external'
@@ -19,10 +19,16 @@ const cache = new Map<string, CacheEntry>()
 
 function inferTemperature(name: string, description?: string): number {
   const sample = `${name} ${description ?? ''}`.toLowerCase()
-  if (/(review|audit|security|sentinel|oracle|lint|verification|guardian)/.test(sample)) {
+  if (
+    /(review|audit|security|sentinel|oracle|lint|verification|guardian)/.test(
+      sample,
+    )
+  ) {
     return 0.1
   }
-  if (/(plan|planning|architecture|strategist|analysis|research)/.test(sample)) {
+  if (
+    /(plan|planning|architecture|strategist|analysis|research)/.test(sample)
+  ) {
     return 0.2
   }
   if (/(doc|readme|changelog|editor|writer)/.test(sample)) {
@@ -45,10 +51,11 @@ function normalizeModel(model: string): string {
 
 function transformAgentFrontmatter(
   data: Record<string, string | number | boolean>,
-  agentMode: AgentMode
+  agentMode: AgentMode,
 ): Record<string, string | number | boolean> {
   const name = typeof data.name === 'string' ? data.name : ''
-  const description = typeof data.description === 'string' ? data.description : ''
+  const description =
+    typeof data.description === 'string' ? data.description : ''
 
   const newData: Record<string, string | number | boolean> = {
     description: description || `${name} agent`,
@@ -71,14 +78,14 @@ function transformAgentFrontmatter(
 export function convertContent(
   content: string,
   type: ContentType,
-  options: ConvertOptions = {}
+  options: ConvertOptions = {},
 ): string {
   if (content === '') return ''
 
-  const { data, body, raw } = parseFrontmatter(content)
-  const hasFrontmatter = raw !== ''
+  const { data, body, hadFrontmatter } =
+    parseFrontmatter<Record<string, string | number | boolean>>(content)
 
-  if (!hasFrontmatter) {
+  if (!hadFrontmatter) {
     return content
   }
 
@@ -94,7 +101,7 @@ export function convertContent(
 export function convertFileWithCache(
   filePath: string,
   type: ContentType,
-  options: ConvertOptions = {}
+  options: ConvertOptions = {},
 ): string {
   const fd = fs.openSync(filePath, 'r')
   try {

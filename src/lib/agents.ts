@@ -1,5 +1,5 @@
+import { parseFrontmatter, stripFrontmatter } from './frontmatter.js'
 import { walkDir } from './walk-dir.js'
-import { stripFrontmatter } from './frontmatter.js'
 
 export interface AgentFrontmatter {
   name: string
@@ -27,28 +27,17 @@ export function findAgentsInDir(dir: string, maxDepth = 2): AgentInfo[] {
 }
 
 export function extractAgentFrontmatter(content: string): AgentFrontmatter {
-  const lines = content.split('\n')
+  const { data, parseError } = parseFrontmatter<{
+    name?: string
+    description?: string
+  }>(content)
 
-  let inFrontmatter = false
-  let name = ''
-  let description = ''
-
-  for (const line of lines) {
-    if (line.trim() === '---') {
-      if (inFrontmatter) break
-      inFrontmatter = true
-      continue
-    }
-
-    if (inFrontmatter) {
-      const match = line.match(/^(\w+(?:-\w+)*):\s*(.*)$/)
-      if (match) {
-        const [, key, value] = match
-        if (key === 'name') name = value.trim()
-        if (key === 'description') description = value.trim()
-      }
-    }
+  return {
+    name: !parseError && typeof data.name === 'string' ? data.name : '',
+    description:
+      !parseError && typeof data.description === 'string'
+        ? data.description
+        : '',
+    prompt: stripFrontmatter(content),
   }
-
-  return { name, description, prompt: stripFrontmatter(content) }
 }

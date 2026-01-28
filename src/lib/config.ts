@@ -1,6 +1,6 @@
 import fs from 'node:fs'
-import path from 'node:path'
 import os from 'node:os'
+import path from 'node:path'
 import { parse as parseJsonc } from 'jsonc-parser'
 
 export interface BootstrapConfig {
@@ -34,40 +34,14 @@ function loadJsoncFile<T>(filePath: string): T | null {
   }
 }
 
-function mergeArraysUnique<T>(arr1: T[] | undefined, arr2: T[] | undefined): T[] {
+function mergeArraysUnique<T>(
+  arr1: T[] | undefined,
+  arr2: T[] | undefined,
+): T[] {
   const set = new Set<T>()
-  if (arr1) arr1.forEach((item) => set.add(item))
-  if (arr2) arr2.forEach((item) => set.add(item))
+  if (arr1) for (const item of arr1) set.add(item)
+  if (arr2) for (const item of arr2) set.add(item)
   return Array.from(set)
-}
-
-function deepMerge<T extends Record<string, unknown>>(
-  base: T,
-  ...overrides: Array<Partial<T> | null>
-): T {
-  const result = { ...base }
-
-  for (const override of overrides) {
-    if (!override) continue
-    for (const [key, value] of Object.entries(override)) {
-      if (
-        typeof value === 'object' &&
-        value !== null &&
-        !Array.isArray(value) &&
-        typeof result[key] === 'object' &&
-        result[key] !== null
-      ) {
-        ;(result as Record<string, unknown>)[key] = deepMerge(
-          result[key] as Record<string, unknown>,
-          value as Record<string, unknown>
-        )
-      } else if (value !== undefined) {
-        ;(result as Record<string, unknown>)[key] = value
-      }
-    }
-  }
-
-  return result
 }
 
 export function loadConfig(projectDir: string): SystematicConfig {
@@ -76,20 +50,30 @@ export function loadConfig(projectDir: string): SystematicConfig {
   const projectConfigPath = path.join(projectDir, '.opencode/systematic.json')
 
   const userConfig = loadJsoncFile<Partial<SystematicConfig>>(userConfigPath)
-  const projectConfig = loadJsoncFile<Partial<SystematicConfig>>(projectConfigPath)
+  const projectConfig =
+    loadJsoncFile<Partial<SystematicConfig>>(projectConfigPath)
 
   const result: SystematicConfig = {
     disabled_skills: mergeArraysUnique(
-      mergeArraysUnique(DEFAULT_CONFIG.disabled_skills, userConfig?.disabled_skills),
-      projectConfig?.disabled_skills
+      mergeArraysUnique(
+        DEFAULT_CONFIG.disabled_skills,
+        userConfig?.disabled_skills,
+      ),
+      projectConfig?.disabled_skills,
     ),
     disabled_agents: mergeArraysUnique(
-      mergeArraysUnique(DEFAULT_CONFIG.disabled_agents, userConfig?.disabled_agents),
-      projectConfig?.disabled_agents
+      mergeArraysUnique(
+        DEFAULT_CONFIG.disabled_agents,
+        userConfig?.disabled_agents,
+      ),
+      projectConfig?.disabled_agents,
     ),
     disabled_commands: mergeArraysUnique(
-      mergeArraysUnique(DEFAULT_CONFIG.disabled_commands, userConfig?.disabled_commands),
-      projectConfig?.disabled_commands
+      mergeArraysUnique(
+        DEFAULT_CONFIG.disabled_commands,
+        userConfig?.disabled_commands,
+      ),
+      projectConfig?.disabled_commands,
     ),
     bootstrap: {
       ...DEFAULT_CONFIG.bootstrap,

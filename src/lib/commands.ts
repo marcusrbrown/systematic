@@ -1,3 +1,4 @@
+import { parseFrontmatter } from './frontmatter.js'
 import { walkDir } from './walk-dir.js'
 
 export interface CommandFrontmatter {
@@ -20,7 +21,9 @@ export function findCommandsInDir(dir: string, maxDepth = 2): CommandInfo[] {
 
   return entries.map((entry) => {
     const baseName = entry.name.replace(/\.md$/, '')
-    const commandName = entry.category ? `/${entry.category}:${baseName}` : `/${baseName}`
+    const commandName = entry.category
+      ? `/${entry.category}:${baseName}`
+      : `/${baseName}`
     return {
       name: commandName,
       file: entry.path,
@@ -30,30 +33,23 @@ export function findCommandsInDir(dir: string, maxDepth = 2): CommandInfo[] {
 }
 
 export function extractCommandFrontmatter(content: string): CommandFrontmatter {
-  const lines = content.split('\n')
+  const { data, parseError } = parseFrontmatter<{
+    name?: string
+    description?: string
+    'argument-hint'?: string
+  }>(content)
 
-  let inFrontmatter = false
-  let name = ''
-  let description = ''
-  let argumentHint = ''
+  const argumentHintRaw =
+    !parseError && typeof data['argument-hint'] === 'string'
+      ? data['argument-hint']
+      : ''
 
-  for (const line of lines) {
-    if (line.trim() === '---') {
-      if (inFrontmatter) break
-      inFrontmatter = true
-      continue
-    }
-
-    if (inFrontmatter) {
-      const match = line.match(/^(\w+(?:-\w+)*):\s*(.*)$/)
-      if (match) {
-        const [, key, value] = match
-        if (key === 'name') name = value.trim()
-        if (key === 'description') description = value.trim()
-        if (key === 'argument-hint') argumentHint = value.trim().replace(/^["']|["']$/g, '')
-      }
-    }
+  return {
+    name: !parseError && typeof data.name === 'string' ? data.name : '',
+    description:
+      !parseError && typeof data.description === 'string'
+        ? data.description
+        : '',
+    argumentHint: argumentHintRaw.replace(/^["']|["']$/g, ''),
   }
-
-  return { name, description, argumentHint }
 }

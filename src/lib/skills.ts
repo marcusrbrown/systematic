@@ -1,5 +1,6 @@
 import fs from 'node:fs'
 import path from 'node:path'
+import { parseFrontmatter } from './frontmatter.js'
 import { walkDir } from './walk-dir.js'
 
 export interface SkillFrontmatter {
@@ -17,30 +18,19 @@ export interface SkillInfo {
 export function extractFrontmatter(filePath: string): SkillFrontmatter {
   try {
     const content = fs.readFileSync(filePath, 'utf8')
-    const lines = content.split('\n')
+    const { data, parseError } = parseFrontmatter<{
+      name?: string
+      description?: string
+    }>(content)
 
-    let inFrontmatter = false
-    let name = ''
-    let description = ''
-
-    for (const line of lines) {
-      if (line.trim() === '---') {
-        if (inFrontmatter) break
-        inFrontmatter = true
-        continue
-      }
-
-      if (inFrontmatter) {
-        const match = line.match(/^(\w+):\s*(.*)$/)
-        if (match) {
-          const [, key, value] = match
-          if (key === 'name') name = value.trim()
-          if (key === 'description') description = value.trim()
-        }
-      }
+    if (parseError) {
+      return { name: '', description: '' }
     }
 
-    return { name, description }
+    return {
+      name: typeof data.name === 'string' ? data.name : '',
+      description: typeof data.description === 'string' ? data.description : '',
+    }
   } catch {
     return { name: '', description: '' }
   }

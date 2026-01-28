@@ -14,7 +14,10 @@ export interface WalkOptions {
   filter?: (entry: WalkEntry) => boolean
 }
 
-export function walkDir(rootDir: string, options: WalkOptions = {}): WalkEntry[] {
+export function walkDir(
+  rootDir: string,
+  options: WalkOptions = {},
+): WalkEntry[] {
   const { maxDepth = 3, filter } = options
   const results: WalkEntry[] = []
 

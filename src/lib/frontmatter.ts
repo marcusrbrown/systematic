@@ -1,49 +1,51 @@
-interface ParsedFrontmatter {
-  data: Record<string, string | number | boolean>
+import yaml from 'js-yaml'
+
+export interface FrontmatterResult<T = Record<string, unknown>> {
+  data: T
   body: string
-  raw: string
+  hadFrontmatter: boolean
+  parseError: boolean
 }
 
-export type { ParsedFrontmatter }
+/**
+ * Parses YAML frontmatter from Markdown content.
+ *
+ * Uses js-yaml with JSON_SCHEMA for security (prevents code execution via YAML tags).
+ * Supports all standard YAML keys including hyphenated ones (e.g., 'argument-hint').
+ *
+ * @param content - Markdown content with optional frontmatter
+ * @returns Parsed frontmatter data, body content, and parsing status
+ */
+export function parseFrontmatter<T = Record<string, unknown>>(
+  content: string,
+): FrontmatterResult<T> {
+  const frontmatterRegex = /^---\r?\n([\s\S]*?)\r?\n?---\r?\n([\s\S]*)$/
+  const match = content.match(frontmatterRegex)
 
-export function parseFrontmatter(content: string): ParsedFrontmatter {
-  const lines = content.split(/\r?\n/)
-  if (lines.length === 0 || lines[0].trim() !== '---') {
-    return { data: {}, body: content, raw: '' }
-  }
-
-  let endIndex = -1
-  for (let i = 1; i < lines.length; i++) {
-    if (lines[i].trim() === '---') {
-      endIndex = i
-      break
+  if (!match) {
+    return {
+      data: {} as T,
+      body: content,
+      hadFrontmatter: false,
+      parseError: false,
     }
   }
 
-  if (endIndex === -1) {
-    return { data: {}, body: content, raw: '' }
+  const yamlContent = match[1]
+  const body = match[2]
+
+  try {
+    const parsed = yaml.load(yamlContent, { schema: yaml.JSON_SCHEMA })
+    const data = (parsed ?? {}) as T
+    return { data, body, hadFrontmatter: true, parseError: false }
+  } catch {
+    return { data: {} as T, body, hadFrontmatter: true, parseError: true }
   }
-
-  const yamlLines = lines.slice(1, endIndex)
-  const body = lines.slice(endIndex + 1).join('\n')
-  const raw = lines.slice(0, endIndex + 1).join('\n')
-  const data: Record<string, string | number | boolean> = {}
-
-  for (const line of yamlLines) {
-    const match = line.match(/^([\w-]+):\s*(.*)$/)
-    if (match) {
-      const [, key, value] = match
-      if (value === 'true') data[key] = true
-      else if (value === 'false') data[key] = false
-      else if (/^\d+(\.\d+)?$/.test(value)) data[key] = parseFloat(value)
-      else data[key] = value
-    }
-  }
-
-  return { data, body, raw }
 }
 
-export function formatFrontmatter(data: Record<string, string | number | boolean>): string {
+export function formatFrontmatter(
+  data: Record<string, string | number | boolean>,
+): string {
   const lines: string[] = ['---']
   for (const [key, value] of Object.entries(data)) {
     lines.push(`${key}: ${value}`)
@@ -53,25 +55,6 @@ export function formatFrontmatter(data: Record<string, string | number | boolean
 }
 
 export function stripFrontmatter(content: string): string {
-  const lines = content.split('\n')
-  let inFrontmatter = false
-  let frontmatterEnded = false
-  const contentLines: string[] = []
-
-  for (const line of lines) {
-    if (line.trim() === '---') {
-      if (inFrontmatter) {
-        frontmatterEnded = true
-        continue
-      }
-      inFrontmatter = true
-      continue
-    }
-
-    if (frontmatterEnded || !inFrontmatter) {
-      contentLines.push(line)
-    }
-  }
-
-  return contentLines.join('\n').trim()
+  const { body, hadFrontmatter } = parseFrontmatter(content)
+  return hadFrontmatter ? body.trim() : content.trim()
 }
