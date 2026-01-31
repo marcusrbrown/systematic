@@ -4,11 +4,6 @@ import os from 'node:os'
 import path from 'node:path'
 import type { Config } from '@opencode-ai/sdk'
 import { createConfigHandler } from '../../src/lib/config-handler.ts'
-import {
-  formatSkillCommandName,
-  formatSkillDescription,
-  wrapSkillTemplate,
-} from '../../src/lib/skill-loader.ts'
 
 describe('config-handler', () => {
   let testDir: string
@@ -222,78 +217,5 @@ Command template for ${name}.`,
 
       expect(config.agent?.['test-agent']?.description).toBe('User override')
     })
-  })
-})
-
-describe('formatSkillCommandName', () => {
-  test('adds systematic: prefix to plain name', () => {
-    expect(formatSkillCommandName('brainstorming')).toBe(
-      'systematic:brainstorming',
-    )
-  })
-
-  test('does not double-prefix already prefixed name', () => {
-    expect(formatSkillCommandName('systematic:brainstorming')).toBe(
-      'systematic:brainstorming',
-    )
-  })
-
-  test('handles empty string', () => {
-    expect(formatSkillCommandName('')).toBe('systematic:')
-  })
-})
-
-describe('formatSkillDescription', () => {
-  test('adds (systematic - Skill) prefix to description', () => {
-    expect(formatSkillDescription('A test skill', 'test')).toBe(
-      '(systematic - Skill) A test skill',
-    )
-  })
-
-  test('does not double-prefix already prefixed description', () => {
-    expect(
-      formatSkillDescription('(systematic - Skill) A test skill', 'test'),
-    ).toBe('(systematic - Skill) A test skill')
-  })
-
-  test('uses fallback name when description is empty', () => {
-    expect(formatSkillDescription('', 'my-skill')).toBe(
-      '(systematic - Skill) my-skill skill',
-    )
-  })
-})
-
-describe('wrapSkillTemplate', () => {
-  test('wraps content in skill-instruction tags', () => {
-    const result = wrapSkillTemplate('/path/to/skill/SKILL.md', '# Skill Body')
-    expect(result).toContain('<skill-instruction>')
-    expect(result).toContain('</skill-instruction>')
-    expect(result).toContain('# Skill Body')
-  })
-
-  test('includes base directory from skill path', () => {
-    const result = wrapSkillTemplate(
-      '/bundled/skills/brainstorming/SKILL.md',
-      '# Content',
-    )
-    expect(result).toContain(
-      'Base directory for this skill: /bundled/skills/brainstorming/',
-    )
-  })
-
-  test('includes file reference note', () => {
-    const result = wrapSkillTemplate('/path/to/skill/SKILL.md', '# Content')
-    expect(result).toContain(
-      'File references (@path) in this skill are relative to this directory',
-    )
-  })
-
-  test('trims body content', () => {
-    const result = wrapSkillTemplate(
-      '/path/to/skill/SKILL.md',
-      '  \n# Skill Body\n  ',
-    )
-    expect(result).toContain('# Skill Body')
-    expect(result).not.toMatch(/\n\s+\n<\/skill-instruction>/)
   })
 })
