@@ -55,7 +55,7 @@
     "@opencode-ai/plugin": "^1.1.30",
     "@types/bun": "latest",
     "@types/js-yaml": "^4.0.9",
-    "@types/node": "^22.0.0",
+    "@types/node": "^25.0.0",
     "conventional-changelog-conventionalcommits": "^9.0.0",
     "markdownlint-cli": "^0.47.0",
     "rimraf": "^6.1.2",
