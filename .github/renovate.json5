@@ -4,6 +4,17 @@
   extends: ['local>marcusrbrown/renovate-config', 'github>sanity-io/renovate-config:semantic-commit-type'],
   packageRules: [
     {
+      description: 'Only allow LTS versions of @types/node (even major versions)',
+      matchPackageNames: ['@types/node'],
+      allowedVersions: '/^v?([0-9]*[02468])\\./',
+    },
+    {
+      description: 'Only allow LTS versions of Node.js in GitHub Actions',
+      matchManagers: ['github-actions'],
+      matchPackageNames: ['node'],
+      allowedVersions: '/^([0-9]*[02468])$/',
+    },
+    {
       matchPackageNames: [
         '@semantic-release/{/,}**',
         'conventional-changelog-conventionalcommits',
