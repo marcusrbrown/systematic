@@ -43,15 +43,20 @@ export function parseFrontmatter<T = Record<string, unknown>>(
   }
 }
 
-export function formatFrontmatter(
-  data: Record<string, string | number | boolean>,
-): string {
-  const lines: string[] = ['---']
-  for (const [key, value] of Object.entries(data)) {
-    lines.push(`${key}: ${value}`)
+export function formatFrontmatter(data: Record<string, unknown>): string {
+  if (Object.keys(data).length === 0) {
+    return ['---', '---'].join('\n')
   }
-  lines.push('---')
-  return lines.join('\n')
+
+  const yamlContent = yaml
+    .dump(data, {
+      schema: yaml.JSON_SCHEMA,
+      lineWidth: -1,
+      noRefs: true,
+    })
+    .trimEnd()
+
+  return ['---', yamlContent, '---'].join('\n')
 }
 
 export function stripFrontmatter(content: string): string {

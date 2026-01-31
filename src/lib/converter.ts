@@ -8,6 +8,8 @@ export type AgentMode = 'primary' | 'subagent'
 export interface ConvertOptions {
   source?: SourceType
   agentMode?: AgentMode
+  /** Skip body content transformations (tool names, paths, etc.) */
+  skipBodyTransform?: boolean
 }
 
 interface CacheEntry {
@@ -16,6 +18,73 @@ interface CacheEntry {
 }
 
 const cache = new Map<string, CacheEntry>()
+
+/**
+ * Claude Code tool names mapped to OpenCode equivalents.
+ * Only includes tools that need transformation (case changes or renames).
+ *
+ * Task transformation strategy:
+ * - Match Task followed by parentheses or agent-name pattern (tool invocation)
+ * - Match "Task tool" explicitly
+ * - Avoid standalone "Task" as noun (e.g., "Complete the Task")
+ */
+const TOOL_MAPPINGS: ReadonlyArray<readonly [RegExp, string]> = [
+  // Semantic tool renames (different names in OC)
+  // Task tool explicit reference
+  [/\bTask\s+tool\b/gi, 'delegate_task tool'],
+  // Task followed by agent name + parens: Task agent-name(args)
+  [/\bTask\s+([\w-]+)\s*\(/g, 'delegate_task $1('],
+  // Task with immediate parens: Task(args) or Task (args)
+  [/\bTask\s*\(/g, 'delegate_task('],
+  // Task followed by "to" verb pattern: use Task to spawn
+  [/\bTask\b(?=\s+to\s+\w)/g, 'delegate_task'],
+  [/\bTodoWrite\b/g, 'todowrite'],
+  [/\bAskUserQuestion\b/g, 'question'],
+  [/\bWebSearch\b/g, 'google_search'],
+  // Case normalization (CC uses PascalCase, OC uses lowercase)
+  [/\bRead\b(?=\s+tool|\s+to\s+|\()/g, 'read'],
+  [/\bWrite\b(?=\s+tool|\s+to\s+|\()/g, 'write'],
+  [/\bEdit\b(?=\s+tool|\s+to\s+|\()/g, 'edit'],
+  [/\bBash\b(?=\s+tool|\s+to\s+|\()/g, 'bash'],
+  [/\bGrep\b(?=\s+tool|\s+to\s+|\()/g, 'grep'],
+  [/\bGlob\b(?=\s+tool|\s+to\s+|\()/g, 'glob'],
+  [/\bWebFetch\b/g, 'webfetch'],
+  // Skill tool (context-aware to avoid false positives)
+  [/\bSkill\b(?=\s+tool)/g, 'skill'],
+] as const
+
+/**
+ * Path and reference replacements for CC → OC migration.
+ */
+const PATH_REPLACEMENTS: ReadonlyArray<readonly [RegExp, string]> = [
+  [/\.claude\/skills\//g, '.opencode/skills/'],
+  [/\.claude\/commands\//g, '.opencode/commands/'],
+  [/\.claude\/agents\//g, '.opencode/agents/'],
+  [/~\/\.claude\//g, '~/.config/opencode/'],
+  [/CLAUDE\.md/g, 'AGENTS.md'],
+  [/\/compound-engineering:/g, '/systematic:'],
+  [/compound-engineering:/g, 'systematic:'],
+] as const
+
+/**
+ * CC-only frontmatter fields that should be removed from skills.
+ */
+const CC_ONLY_SKILL_FIELDS = [
+  'model',
+  'allowed-tools',
+  'allowedTools',
+  'disable-model-invocation',
+  'disableModelInvocation',
+  'user-invocable',
+  'userInvocable',
+  'context',
+  'agent',
+] as const
+
+/**
+ * CC-only frontmatter fields that should be removed from commands.
+ */
+const CC_ONLY_COMMAND_FIELDS = ['argument-hint', 'argumentHint'] as const
 
 function inferTemperature(name: string, description?: string): number {
   const sample = `${name} ${description ?? ''}`.toLowerCase()
@@ -40,6 +109,53 @@ function inferTemperature(name: string, description?: string): number {
   return 0.3
 }
 
+function transformBody(body: string): string {
+  let result = body
+
+  for (const [pattern, replacement] of TOOL_MAPPINGS) {
+    result = result.replace(pattern, replacement)
+  }
+
+  for (const [pattern, replacement] of PATH_REPLACEMENTS) {
+    result = result.replace(pattern, replacement)
+  }
+
+  return result
+}
+
+function removeFields(
+  data: Record<string, unknown>,
+  fieldsToRemove: readonly string[],
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(data)) {
+    if (!fieldsToRemove.includes(key)) {
+      result[key] = value
+    }
+  }
+  return result
+}
+
+function transformSkillFrontmatter(
+  data: Record<string, unknown>,
+): Record<string, unknown> {
+  return removeFields(data, CC_ONLY_SKILL_FIELDS)
+}
+
+function transformCommandFrontmatter(
+  data: Record<string, unknown>,
+): Record<string, unknown> {
+  const cleaned = removeFields(data, CC_ONLY_COMMAND_FIELDS)
+
+  if (typeof cleaned.model === 'string' && cleaned.model !== 'inherit') {
+    cleaned.model = normalizeModel(cleaned.model)
+  } else if (cleaned.model === 'inherit') {
+    delete cleaned.model
+  }
+
+  return cleaned
+}
+
 function normalizeModel(model: string): string {
   if (model.includes('/')) return model
   if (model === 'inherit') return model
@@ -50,14 +166,14 @@ function normalizeModel(model: string): string {
 }
 
 function transformAgentFrontmatter(
-  data: Record<string, string | number | boolean>,
+  data: Record<string, unknown>,
   agentMode: AgentMode,
-): Record<string, string | number | boolean> {
+): Record<string, unknown> {
   const name = typeof data.name === 'string' ? data.name : ''
   const description =
     typeof data.description === 'string' ? data.description : ''
 
-  const newData: Record<string, string | number | boolean> = {
+  const newData: Record<string, unknown> = {
     description: description || `${name} agent`,
     mode: agentMode,
   }
@@ -83,16 +199,29 @@ export function convertContent(
   if (content === '') return ''
 
   const { data, body, hadFrontmatter } =
-    parseFrontmatter<Record<string, string | number | boolean>>(content)
+    parseFrontmatter<Record<string, unknown>>(content)
 
   if (!hadFrontmatter) {
-    return content
+    return options.skipBodyTransform ? content : transformBody(content)
   }
+
+  const shouldTransformBody = !options.skipBodyTransform
+  const transformedBody = shouldTransformBody ? transformBody(body) : body
 
   if (type === 'agent') {
     const agentMode = options.agentMode ?? 'subagent'
     const transformedData = transformAgentFrontmatter(data, agentMode)
-    return `${formatFrontmatter(transformedData)}\n${body}`
+    return `${formatFrontmatter(transformedData)}\n${transformedBody}`
+  }
+
+  if (type === 'skill') {
+    const transformedData = transformSkillFrontmatter(data)
+    return `${formatFrontmatter(transformedData)}\n${transformedBody}`
+  }
+
+  if (type === 'command') {
+    const transformedData = transformCommandFrontmatter(data)
+    return `${formatFrontmatter(transformedData)}\n${transformedBody}`
   }
 
   return content
@@ -106,7 +235,7 @@ export function convertFileWithCache(
   const fd = fs.openSync(filePath, 'r')
   try {
     const stats = fs.fstatSync(fd)
-    const cacheKey = `${filePath}:${type}:${options.source ?? 'bundled'}:${options.agentMode ?? 'subagent'}`
+    const cacheKey = `${filePath}:${type}:${options.source ?? 'bundled'}:${options.agentMode ?? 'subagent'}:${options.skipBodyTransform ?? false}`
     const cached = cache.get(cacheKey)
 
     if (cached != null && cached.mtimeMs === stats.mtimeMs) {

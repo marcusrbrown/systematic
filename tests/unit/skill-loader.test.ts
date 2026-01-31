@@ -156,11 +156,15 @@ description: A test skill
       const loaded = loadSkill(skillInfo)
 
       expect(loaded).not.toBeNull()
-      expect(loaded!.name).toBe('test-skill')
-      expect(loaded!.prefixedName).toBe('systematic:test-skill')
-      expect(loaded!.description).toBe('(systematic - Skill) A test skill')
-      expect(loaded!.wrappedTemplate).toContain('<skill-instruction>')
-      expect(loaded!.wrappedTemplate).toContain('# Test Content')
+      if (loaded == null) {
+        throw new Error('Expected skill to load')
+      }
+
+      expect(loaded.name).toBe('test-skill')
+      expect(loaded.prefixedName).toBe('systematic:test-skill')
+      expect(loaded.description).toBe('(systematic - Skill) A test skill')
+      expect(loaded.wrappedTemplate).toContain('<skill-instruction>')
+      expect(loaded.wrappedTemplate).toContain('# Test Content')
     })
 
     test('returns null for non-existent file', () => {
@@ -195,7 +199,11 @@ Content here.`,
       }
 
       const loaded = loadSkill(skillInfo)
-      const extracted = extractSkillBody(loaded!.wrappedTemplate)
+      if (loaded == null) {
+        throw new Error('Expected skill to load')
+      }
+
+      const extracted = extractSkillBody(loaded.wrappedTemplate)
 
       expect(extracted).toContain('# Original Body')
       expect(extracted).toContain('Content here.')

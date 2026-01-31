@@ -154,39 +154,181 @@ Content`
       })
     })
 
-    describe('Skills and commands - no transformation', () => {
-      test('returns skill content unchanged', () => {
+    describe('Skills and commands transformation', () => {
+      test('removes CC-only fields from skill frontmatter', () => {
+        const input = `---
+name: my-skill
+description: A skill
+model: sonnet
+allowed-tools: Read, Grep
+disable-model-invocation: false
+---
+Skill content`
+        const result = convertContent(input, 'skill')
+        expect(result).toContain('name: my-skill')
+        expect(result).toContain('description: A skill')
+        expect(result).not.toContain('model:')
+        expect(result).not.toContain('allowed-tools:')
+        expect(result).not.toContain('disable-model-invocation:')
+      })
+
+      test('removes camelCase CC-only fields from skill frontmatter', () => {
+        const input = `---
+name: my-skill
+description: A skill
+allowedTools: Read, Grep
+disableModelInvocation: false
+userInvocable: true
+---
+Skill content`
+        const result = convertContent(input, 'skill')
+        expect(result).not.toContain('allowedTools:')
+        expect(result).not.toContain('disableModelInvocation:')
+        expect(result).not.toContain('userInvocable:')
+      })
+
+      test('removes context and agent fields from skill frontmatter', () => {
+        const input = `---
+name: my-skill
+description: A skill
+context: fork
+agent: oracle
+---
+Skill content`
+        const result = convertContent(input, 'skill')
+        expect(result).not.toContain('context:')
+        expect(result).not.toContain('agent:')
+      })
+
+      test('removes argument-hint from command frontmatter', () => {
+        const input = `---
+name: my-command
+description: A command
+argument-hint: <file>
+---
+Command content`
+        const result = convertContent(input, 'command')
+        expect(result).not.toContain('argument-hint:')
+        expect(result).toContain('name: my-command')
+      })
+
+      test('normalizes model in command frontmatter', () => {
+        const input = `---
+name: my-command
+description: A command
+model: claude-sonnet-4-20250514
+---
+Command content`
+        const result = convertContent(input, 'command')
+        expect(result).toContain('model: anthropic/claude-sonnet-4-20250514')
+      })
+
+      test('removes inherit model from command frontmatter', () => {
+        const input = `---
+name: my-command
+description: A command
+model: inherit
+---
+Command content`
+        const result = convertContent(input, 'command')
+        expect(result).not.toContain('model:')
+      })
+    })
+
+    describe('Body content transformations', () => {
+      test('transforms tool names in body', () => {
         const input = `---
 name: my-skill
 description: A skill
 ---
-Skill content`
+Use TodoWrite to track progress.
+Then use Task to spawn agents.
+Use AskUserQuestion when unclear.`
         const result = convertContent(input, 'skill')
-        expect(result).toBe(input)
+        expect(result).toContain('todowrite')
+        expect(result).toContain('delegate_task')
+        expect(result).toContain('question')
       })
 
-      test('returns command content unchanged', () => {
+      test('transforms path references in body', () => {
         const input = `---
-name: my-command
-description: A command
+name: my-skill
+description: A skill
 ---
-Command content`
-        const result = convertContent(input, 'command')
-        expect(result).toBe(input)
+Check .claude/skills/ for other skills.
+Also look in ~/.claude/ for user config.
+Reference CLAUDE.md for setup.`
+        const result = convertContent(input, 'skill')
+        expect(result).toContain('.opencode/skills/')
+        expect(result).toContain('~/.config/opencode/')
+        expect(result).toContain('AGENTS.md')
       })
-    })
 
-    describe('Body content - no transformation', () => {
-      test('agent body is not transformed', () => {
+      test('transforms prefix references', () => {
+        const input = `---
+name: my-skill
+description: A skill
+---
+Use /compound-engineering:skill-name to invoke.
+The compound-engineering:brainstorming skill is useful.`
+        const result = convertContent(input, 'skill')
+        expect(result).toContain('/systematic:skill-name')
+        expect(result).toContain('systematic:brainstorming')
+      })
+
+      test('transforms WebSearch and WebFetch', () => {
+        const input = `---
+name: my-skill
+description: A skill
+---
+Use WebSearch to find info.
+Use WebFetch to get page content.`
+        const result = convertContent(input, 'skill')
+        expect(result).toContain('google_search')
+        expect(result).toContain('webfetch')
+      })
+
+      test('preserves Skill in non-tool contexts', () => {
+        const input = `---
+name: my-skill
+description: A skill
+---
+This skill is powerful. Use the Skill tool to load skills.`
+        const result = convertContent(input, 'skill')
+        expect(result).toContain('This skill is powerful')
+        expect(result).toContain('skill tool')
+      })
+
+      test('skips body transformation when option set', () => {
+        const input = `---
+name: my-skill
+description: A skill
+---
+Use TodoWrite to track. Check .claude/skills/ for more.`
+        const result = convertContent(input, 'skill', {
+          skipBodyTransform: true,
+        })
+        expect(result).toContain('TodoWrite')
+        expect(result).toContain('.claude/skills/')
+      })
+
+      test('transforms body for content without frontmatter', () => {
+        const input = `Use TodoWrite to track. Check .claude/skills/ for more.`
+        const result = convertContent(input, 'skill')
+        expect(result).toContain('todowrite')
+        expect(result).toContain('.opencode/skills/')
+      })
+
+      test('agent body is also transformed', () => {
         const input = `---
 name: test-agent
 description: Test
 ---
-Use TodoWrite to track. Task explorer(find files). Use Skill tool.`
+Use TodoWrite to track. Task explorer(find files). Check .claude/skills/.`
         const result = convertContent(input, 'agent')
-        expect(result).toContain('Use TodoWrite to track')
-        expect(result).toContain('Task explorer(find files)')
-        expect(result).toContain('Use Skill tool')
+        expect(result).toContain('todowrite')
+        expect(result).toContain('delegate_task')
+        expect(result).toContain('.opencode/skills/')
       })
     })
 
@@ -205,7 +347,7 @@ Just plain content`
     })
 
     describe('Combined transformations', () => {
-      test('produces correct output format for agent', () => {
+      test('produces correct output format for agent with transformed body', () => {
         const input = `---
 name: review-agent
 description: Code review agent
@@ -222,7 +364,7 @@ Use TodoWrite to track.`
         expect(result).toContain('temperature: 0.1')
         expect(result).not.toContain('name:')
         expect(result).toContain('# Review Agent')
-        expect(result).toContain('Use TodoWrite to track')
+        expect(result).toContain('Use todowrite to track')
       })
     })
   })
