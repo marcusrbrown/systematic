@@ -99,9 +99,9 @@ This is the skill content.`,
       )
 
       expect(result).toContain('systematic:load-test')
-      expect(result).toContain('<skill-instruction>')
       expect(result).toContain('# Load Test Skill')
       expect(result).toContain('This is the skill content.')
+      expect(result).not.toContain('<skill-instruction>')
     })
 
     test('loads systematic skill without prefix', async () => {
@@ -166,7 +166,7 @@ No frontmatter visible here.`,
       expect(result).toContain('# Actual Content')
     })
 
-    test('wraps content with skill-instruction tags', async () => {
+    test('extracts body from wrapped template (matches OMO pattern)', async () => {
       const skillDir = path.join(testDir, 'wrap-test')
       fs.mkdirSync(skillDir)
       fs.writeFileSync(
@@ -185,9 +185,11 @@ description: Test wrapper
 
       const result = await tool.execute({ name: 'wrap-test' }, mockContext)
 
-      expect(result).toContain('<skill-instruction>')
-      expect(result).toContain('</skill-instruction>')
-      expect(result).toContain('Base directory for this skill:')
+      expect(result).toContain('## Skill: systematic:wrap-test')
+      expect(result).toContain('**Base directory**:')
+      expect(result).toContain('# Wrapped Content')
+      expect(result).not.toContain('<skill-instruction>')
+      expect(result).not.toContain('</skill-instruction>')
     })
   })
 })

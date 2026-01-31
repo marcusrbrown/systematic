@@ -1,24 +1,12 @@
-import fs from 'node:fs'
 import path from 'node:path'
 import type { ToolDefinition } from '@opencode-ai/plugin'
 import { tool } from '@opencode-ai/plugin/tool'
-import { convertContent } from './converter.js'
-import { stripFrontmatter } from './frontmatter.js'
-import type { SkillInfo } from './skills.js'
+import {
+  extractSkillBody,
+  type LoadedSkill,
+  loadSkill,
+} from './skill-loader.js'
 import { findSkillsInDir, formatSkillsXml } from './skills.js'
-
-function wrapSkillContent(skillPath: string, content: string): string {
-  const skillDir = path.dirname(skillPath)
-  const converted = convertContent(content, 'skill', { source: 'bundled' })
-  const body = stripFrontmatter(converted)
-
-  return `<skill-instruction>
-Base directory for this skill: ${skillDir}/
-File references (@path) in this skill are relative to this directory.
-
-${body.trim()}
-</skill-instruction>`
-}
 
 export interface SkillToolOptions {
   bundledSkillsDir: string
@@ -28,15 +16,23 @@ export interface SkillToolOptions {
 export function createSkillTool(options: SkillToolOptions): ToolDefinition {
   const { bundledSkillsDir, disabledSkills } = options
 
-  const getSystematicSkills = (): SkillInfo[] => {
+  const getSystematicSkills = (): LoadedSkill[] => {
     return findSkillsInDir(bundledSkillsDir)
       .filter((s) => !disabledSkills.includes(s.name))
+      .map((skillInfo) => loadSkill(skillInfo))
+      .filter((s): s is LoadedSkill => s !== null)
       .sort((a, b) => a.name.localeCompare(b.name))
   }
 
   const buildDescription = (): string => {
     const skills = getSystematicSkills()
-    const systematicXml = formatSkillsXml(skills)
+    const skillInfos = skills.map((s) => ({
+      name: s.name,
+      description: s.description,
+      path: s.path,
+      skillFile: s.skillFile,
+    }))
+    const systematicXml = formatSkillsXml(skillInfos)
 
     const baseDescription = `Load a skill to get detailed instructions for a specific task.
 
@@ -73,25 +69,17 @@ Use this when a task matches an available skill's description.`
       const matchedSkill = skills.find((s) => s.name === normalizedName)
 
       if (matchedSkill) {
-        try {
-          const content = fs.readFileSync(matchedSkill.skillFile, 'utf8')
-          const wrapped = wrapSkillContent(matchedSkill.skillFile, content)
+        const body = extractSkillBody(matchedSkill.wrappedTemplate)
+        const dir = path.dirname(matchedSkill.skillFile)
 
-          return `## Skill: systematic:${matchedSkill.name}
+        return `## Skill: ${matchedSkill.prefixedName}
 
-**Base directory**: ${matchedSkill.path}
+**Base directory**: ${dir}
 
-${wrapped}`
-        } catch (error) {
-          const errorMessage =
-            error instanceof Error ? error.message : String(error)
-          throw new Error(
-            `Failed to load skill "${requestedName}": ${errorMessage}`,
-          )
-        }
+${body}`
       }
 
-      const availableSystematic = skills.map((s) => `systematic:${s.name}`)
+      const availableSystematic = skills.map((s) => s.prefixedName)
       throw new Error(
         `Skill "${requestedName}" not found. Available systematic skills: ${availableSystematic.join(', ')}`,
       )

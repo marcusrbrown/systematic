@@ -4,7 +4,8 @@ import { extractCommandFrontmatter, findCommandsInDir } from './commands.js'
 import { loadConfig } from './config.js'
 import { convertFileWithCache } from './converter.js'
 import { stripFrontmatter } from './frontmatter.js'
-import { findSkillsInDir, type SkillInfo } from './skills.js'
+import { type LoadedSkill, loadSkill } from './skill-loader.js'
+import { findSkillsInDir } from './skills.js'
 
 export interface ConfigHandlerDeps {
   directory: string
@@ -58,18 +59,10 @@ function loadCommandAsConfig(commandInfo: {
   }
 }
 
-function loadSkillAsCommand(skillInfo: SkillInfo): CommandConfig | null {
-  try {
-    const converted = convertFileWithCache(skillInfo.skillFile, 'skill', {
-      source: 'bundled',
-    })
-
-    return {
-      template: stripFrontmatter(converted),
-      description: skillInfo.description || `${skillInfo.name} skill`,
-    }
-  } catch {
-    return null
+function loadSkillAsCommand(loaded: LoadedSkill): CommandConfig {
+  return {
+    template: loaded.wrappedTemplate,
+    description: loaded.description,
   }
 }
 
@@ -122,9 +115,9 @@ function collectSkillsAsCommands(
   for (const skillInfo of skillList) {
     if (disabledSkills.includes(skillInfo.name)) continue
 
-    const config = loadSkillAsCommand(skillInfo)
-    if (config) {
-      commands[skillInfo.name] = config
+    const loaded = loadSkill(skillInfo)
+    if (loaded) {
+      commands[loaded.prefixedName] = loadSkillAsCommand(loaded)
     }
   }
 
