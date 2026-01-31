@@ -40,7 +40,11 @@ Base directory for this skill: ${skillDir}/
 File references (@path) in this skill are relative to this directory.
 
 ${body.trim()}
-</skill-instruction>`
+</skill-instruction>
+
+<user-request>
+$ARGUMENTS
+</user-request>`
 }
 
 export function extractSkillBody(wrappedTemplate: string): string {
