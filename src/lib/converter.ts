@@ -32,6 +32,8 @@ const TOOL_MAPPINGS: ReadonlyArray<readonly [RegExp, string]> = [
   // Semantic tool renames (different names in OC)
   // Task tool explicit reference
   [/\bTask\s+tool\b/gi, 'delegate_task tool'],
+  // Task followed by agent name + colon: Task agent-name: "prompt"
+  [/\bTask\s+([\w-]+)\s*:/g, 'delegate_task $1:'],
   // Task followed by agent name + parens: Task agent-name(args)
   [/\bTask\s+([\w-]+)\s*\(/g, 'delegate_task $1('],
   // Task with immediate parens: Task(args) or Task (args)
@@ -49,8 +51,8 @@ const TOOL_MAPPINGS: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bGrep\b(?=\s+tool|\s+to\s+|\()/g, 'grep'],
   [/\bGlob\b(?=\s+tool|\s+to\s+|\()/g, 'glob'],
   [/\bWebFetch\b/g, 'webfetch'],
-  // Skill tool (context-aware to avoid false positives)
-  [/\bSkill\b(?=\s+tool)/g, 'skill'],
+  // Skill tool invocation: Skill("name") or Skill tool reference
+  [/\bSkill\b(?=\s+tool|\s*\()/g, 'skill'],
 ] as const
 
 /**
@@ -109,8 +111,18 @@ function inferTemperature(name: string, description?: string): number {
   return 0.3
 }
 
+const CODE_BLOCK_PATTERN = /```[\s\S]*?```|`[^`\n]+`/g
+
 function transformBody(body: string): string {
-  let result = body
+  const codeBlocks: string[] = []
+  let placeholderIndex = 0
+
+  const withPlaceholders = body.replace(CODE_BLOCK_PATTERN, (match) => {
+    codeBlocks.push(match)
+    return `__CODE_BLOCK_${placeholderIndex++}__`
+  })
+
+  let result = withPlaceholders
 
   for (const [pattern, replacement] of TOOL_MAPPINGS) {
     result = result.replace(pattern, replacement)
@@ -118,6 +130,10 @@ function transformBody(body: string): string {
 
   for (const [pattern, replacement] of PATH_REPLACEMENTS) {
     result = result.replace(pattern, replacement)
+  }
+
+  for (let i = 0; i < codeBlocks.length; i++) {
+    result = result.replace(`__CODE_BLOCK_${i}__`, codeBlocks[i])
   }
 
   return result
