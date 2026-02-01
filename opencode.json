@@ -6,5 +6,6 @@
       "command": ["markdownlint", "--dot", "--fix", "$FILE"],
       "extensions": [".md"]
     }
-  }
+  },
+  "theme": "systematic"
 }
