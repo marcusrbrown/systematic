@@ -117,21 +117,36 @@ The AI is instructed to invoke skills **before** taking action — even with a 1
 
 Agents are specialized subagents with pre-configured prompts and expertise. They're registered automatically via the config hook.
 
-### Review Agents
+### Design Agents
 
 | Agent | Purpose |
 |-------|---------|
-| `architecture-strategist` | Analyze code changes from an architectural perspective |
-| `security-sentinel` | Security audits, vulnerability assessment, OWASP compliance |
-| `code-simplicity-reviewer` | Final review pass for simplicity and YAGNI principles |
-| `pattern-recognition-specialist` | Detect design patterns, anti-patterns, and code smells |
-| `performance-oracle` | Performance analysis, bottleneck identification, scalability |
+| `design-implementation-reviewer` | Verify UI implementations match Figma design specifications |
+| `design-iterator` | Systematic UI/UX refinement through iterative screenshots and improvements |
 
 ### Research Agents
 
 | Agent | Purpose |
 |-------|---------|
+| `best-practices-researcher` | Research external best practices, documentation, and examples for any technology |
 | `framework-docs-researcher` | Gather framework documentation and best practices |
+
+### Review Agents
+
+| Agent | Purpose |
+|-------|---------|
+| `architecture-strategist` | Analyze code changes from an architectural perspective |
+| `code-simplicity-reviewer` | Final review pass for simplicity and YAGNI principles |
+| `pattern-recognition-specialist` | Detect design patterns, anti-patterns, and code smells |
+| `performance-oracle` | Performance analysis, bottleneck identification, scalability |
+| `security-sentinel` | Security audits, vulnerability assessment, OWASP compliance |
+
+### Workflow Agents
+
+| Agent | Purpose |
+|-------|---------|
+| `bug-reproduction-validator` | Systematically verify and reproduce reported bugs |
+| `spec-flow-analyzer` | Analyze specifications for user flow gaps and missing requirements |
 
 ### Using Agents
 
