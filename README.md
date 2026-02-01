@@ -165,10 +165,10 @@ Commands are slash-invokable shortcuts that trigger workflows or actions.
 
 | Command | Description |
 |---------|-------------|
-| `/lfg` | "Let's go" — start working immediately |
-| `/create-agent-skill` | Create a new skill with guidance |
-| `/deepen-plan` | Add detail to existing plans |
-| `/agent-native-audit` | Audit code for agent-native patterns |
+| `/systematic:lfg` | "Let's go" — start working immediately |
+| `/systematic:create-agent-skill` | Create a new skill with guidance |
+| `/systematic:deepen-plan` | Add detail to existing plans |
+| `/systematic:agent-native-audit` | Audit code for agent-native patterns |
 
 ## Configuration
 
@@ -218,6 +218,7 @@ For non-Systematic skills (project or user-level), use OpenCode's native `skill`
 Systematic uses three OpenCode plugin hooks:
 
 ```mermaid
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#1a1a2e', 'primaryTextColor': '#fff', 'primaryBorderColor': '#4FD1C5', 'lineColor': '#4FD1C5', 'secondaryColor': '#16213e', 'tertiaryColor': '#0f0f23'}}}%%
 flowchart TB
     A[Plugin Loaded] --> B[config hook]
     A --> C[tool hook]
@@ -227,10 +228,13 @@ flowchart TB
     C --> F[Register systematic_skill tool]
     D --> G[Inject bootstrap prompt into every conversation]
 
-    style A fill:#e1f5fe
-    style E fill:#f1f8e9
-    style F fill:#fff3e0
-    style G fill:#fce4ec
+    style A fill:#1a1a2e,stroke:#4FD1C5,color:#fff
+    style B fill:#16213e,stroke:#4FD1C5,color:#4FD1C5
+    style C fill:#16213e,stroke:#E91E8C,color:#E91E8C
+    style D fill:#16213e,stroke:#F5A623,color:#F5A623
+    style E fill:#0f0f23,stroke:#4FD1C5,color:#B2F5EA
+    style F fill:#0f0f23,stroke:#E91E8C,color:#B2F5EA
+    style G fill:#0f0f23,stroke:#F5A623,color:#B2F5EA
 ```
 
 1. **`config` hook** — Merges bundled assets into your OpenCode configuration
