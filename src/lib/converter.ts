@@ -1,9 +1,14 @@
 import fs from 'node:fs'
 import { formatFrontmatter, parseFrontmatter } from './frontmatter.js'
+import {
+  type AgentMode,
+  isAgentMode,
+  isToolsMap,
+  normalizePermission,
+} from './validation.js'
 
 export type ContentType = 'skill' | 'agent' | 'command'
 export type SourceType = 'bundled' | 'external'
-export type AgentMode = 'primary' | 'subagent'
 
 export interface ConvertOptions {
   source?: SourceType
@@ -181,6 +186,20 @@ function normalizeModel(model: string): string {
   return `anthropic/${model}`
 }
 
+function addOptionalFields(
+  target: Record<string, unknown>,
+  data: Record<string, unknown>,
+): void {
+  if (typeof data.top_p === 'number') target.top_p = data.top_p
+  if (isToolsMap(data.tools)) target.tools = data.tools
+  if (typeof data.disable === 'boolean') target.disable = data.disable
+  if (typeof data.color === 'string') target.color = data.color
+  if (typeof data.maxSteps === 'number') target.maxSteps = data.maxSteps
+
+  const permission = normalizePermission(data.permission)
+  if (permission) target.permission = permission
+}
+
 function transformAgentFrontmatter(
   data: Record<string, unknown>,
   agentMode: AgentMode,
@@ -189,20 +208,25 @@ function transformAgentFrontmatter(
   const description =
     typeof data.description === 'string' ? data.description : ''
 
-  const newData: Record<string, unknown> = {
-    description: description || `${name} agent`,
-    mode: agentMode,
+  const mode = isAgentMode(data.mode) ? data.mode : agentMode
+
+  const newData: Record<string, unknown> = { mode }
+  if (description) {
+    newData.description = description
+  } else if (name) {
+    newData.description = `${name} agent`
   }
 
   if (typeof data.model === 'string' && data.model !== 'inherit') {
     newData.model = normalizeModel(data.model)
   }
 
-  if (typeof data.temperature === 'number') {
-    newData.temperature = data.temperature
-  } else {
-    newData.temperature = inferTemperature(name, description)
-  }
+  newData.temperature =
+    typeof data.temperature === 'number'
+      ? data.temperature
+      : inferTemperature(name, description)
+
+  addOptionalFields(newData, data)
 
   return newData
 }
@@ -214,11 +238,15 @@ export function convertContent(
 ): string {
   if (content === '') return ''
 
-  const { data, body, hadFrontmatter } =
+  const { data, body, hadFrontmatter, parseError } =
     parseFrontmatter<Record<string, unknown>>(content)
 
   if (!hadFrontmatter) {
     return options.skipBodyTransform ? content : transformBody(content)
+  }
+
+  if (parseError) {
+    return content
   }
 
   const shouldTransformBody = !options.skipBodyTransform

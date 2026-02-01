@@ -1,6 +1,6 @@
 import path from 'node:path'
 import { convertFileWithCache } from './converter.js'
-import { stripFrontmatter } from './frontmatter.js'
+import { parseFrontmatter } from './frontmatter.js'
 import type { SkillInfo } from './skills.js'
 
 const SKILL_PREFIX = 'systematic:'
@@ -59,7 +59,7 @@ export function loadSkill(skillInfo: SkillInfo): LoadedSkill | null {
     const converted = convertFileWithCache(skillInfo.skillFile, 'skill', {
       source: 'bundled',
     })
-    const body = stripFrontmatter(converted)
+    const { body } = parseFrontmatter(converted)
     const wrappedTemplate = wrapSkillTemplate(skillInfo.skillFile, body)
 
     return {

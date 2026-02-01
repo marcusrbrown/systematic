@@ -59,6 +59,10 @@ export function formatFrontmatter(data: Record<string, unknown>): string {
   return ['---', yamlContent, '---'].join('\n')
 }
 
+/**
+ * Removes YAML frontmatter from content and returns the body.
+ * Convenience wrapper around parseFrontmatter.
+ */
 export function stripFrontmatter(content: string): string {
   const { body, hadFrontmatter } = parseFrontmatter(content)
   return hadFrontmatter ? body.trim() : content.trim()

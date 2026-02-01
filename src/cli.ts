@@ -4,12 +4,9 @@ import path from 'node:path'
 import * as agents from './lib/agents.js'
 import * as commands from './lib/commands.js'
 import { getConfigPaths } from './lib/config.js'
-import {
-  type AgentMode,
-  type ContentType,
-  convertContent,
-} from './lib/converter.js'
+import { type ContentType, convertContent } from './lib/converter.js'
 import * as skills from './lib/skills.js'
+import type { AgentMode } from './lib/validation.js'
 
 const VERSION = '0.1.0'
 

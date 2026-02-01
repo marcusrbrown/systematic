@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { Config } from '@opencode-ai/sdk'
 import { createConfigHandler } from '../../src/lib/config-handler.ts'
+import { formatFrontmatter } from '../../src/lib/frontmatter.ts'
 
 describe('config-handler', () => {
   let testDir: string
@@ -48,16 +49,19 @@ Skill content for ${name}.`,
     )
   }
 
-  function createAgent(dir: string, name: string, description: string): void {
+  function createAgent(
+    dir: string,
+    name: string,
+    frontmatterOrDescription: string | Record<string, unknown>,
+  ): void {
+    const frontmatter =
+      typeof frontmatterOrDescription === 'string'
+        ? { name, description: frontmatterOrDescription }
+        : frontmatterOrDescription
+
     fs.writeFileSync(
       path.join(dir, `${name}.md`),
-      `---
-name: ${name}
-description: ${description}
----
-# ${name}
-
-Agent prompt for ${name}.`,
+      `${formatFrontmatter(frontmatter)}\n# ${name}\n\nAgent prompt for ${name}.`,
     )
   }
 
@@ -216,6 +220,147 @@ Command template for ${name}.`,
       await handler(config)
 
       expect(config.agent?.['test-agent']?.description).toBe('User override')
+    })
+
+    test('includes color field in agent config', async () => {
+      createAgent(path.join(bundledDir, 'agents'), 'colored', {
+        name: 'colored',
+        description: 'Agent with color',
+        color: '#FF5733',
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.colored?.color).toBe('#FF5733')
+    })
+
+    test('includes maxSteps field in agent config', async () => {
+      createAgent(path.join(bundledDir, 'agents'), 'stepping', {
+        name: 'stepping',
+        description: 'Agent with maxSteps',
+        maxSteps: 10,
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.stepping?.maxSteps).toBe(10)
+    })
+
+    test('includes tools field in agent config', async () => {
+      createAgent(path.join(bundledDir, 'agents'), 'tooled', {
+        name: 'tooled',
+        description: 'Agent with tools',
+        tools: { bash: true, read: true },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.tooled?.tools).toEqual({ bash: true, read: true })
+    })
+
+    test('includes permission object in agent config', async () => {
+      createAgent(path.join(bundledDir, 'agents'), 'secure', {
+        name: 'secure',
+        description: 'Agent with permissions',
+        permission: {
+          edit: 'ask',
+          bash: 'deny',
+        },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.secure?.permission?.edit).toBe('ask')
+      expect(config.agent?.secure?.permission?.bash).toBe('deny')
+    })
+
+    test('includes disable field in agent config', async () => {
+      createAgent(path.join(bundledDir, 'agents'), 'disabled-agent', {
+        name: 'disabled-agent',
+        description: 'Disabled agent',
+        disable: true,
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.['disabled-agent']?.disable).toBe(true)
+    })
+
+    test('extracts all agent frontmatter fields into config', async () => {
+      createAgent(path.join(bundledDir, 'agents'), 'full-agent', {
+        name: 'full-agent',
+        description: 'A full agent',
+        model: 'gpt-4',
+        temperature: 0.7,
+        top_p: 1,
+        maxSteps: 10,
+        color: '#ff0000',
+        mode: 'subagent',
+        tools: { bash: true, read: false },
+        permission: { edit: 'ask' },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      const agent = config.agent?.['full-agent']
+      expect(agent).toBeDefined()
+      expect(agent?.description).toBe('A full agent')
+      expect(agent?.model).toBe('openai/gpt-4')
+      expect(agent?.temperature).toBe(0.7)
+      expect(agent?.top_p).toBe(1)
+      expect(agent?.maxSteps).toBe(10)
+      expect(agent?.color).toBe('#ff0000')
+      expect(agent?.mode).toBe('subagent')
+      expect(agent?.tools).toEqual({ bash: true, read: false })
+      expect(agent?.permission).toEqual({ edit: 'ask' })
     })
   })
 })
