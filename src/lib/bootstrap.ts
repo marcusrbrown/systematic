@@ -2,7 +2,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { SystematicConfig } from './config.js'
-import { stripFrontmatter } from './frontmatter.js'
+import { parseFrontmatter } from './frontmatter.js'
 
 export interface BootstrapDeps {
   bundledSkillsDir: string
@@ -53,7 +53,8 @@ export function getBootstrapContent(
   if (!fs.existsSync(usingSystematicPath)) return null
 
   const fullContent = fs.readFileSync(usingSystematicPath, 'utf8')
-  const content = stripFrontmatter(fullContent)
+  const { body } = parseFrontmatter(fullContent)
+  const content = body.trim()
   const toolMapping = getToolMappingTemplate(bundledSkillsDir)
 
   return `<SYSTEMATIC_WORKFLOWS>

@@ -44,6 +44,17 @@ Content`
         expect(result).toContain('mode: subagent')
       })
 
+      test('preserves explicit frontmatter mode over option', () => {
+        const input = `---
+name: my-agent
+description: Some agent
+mode: primary
+---
+Content`
+        const result = convertContent(input, 'agent', { agentMode: 'subagent' })
+        expect(result).toContain('mode: primary')
+      })
+
       test('normalizes unprefixed claude model', () => {
         const input = `---
 name: test-agent
@@ -97,6 +108,107 @@ model: inherit
 Content`
         const result = convertContent(input, 'agent')
         expect(result).not.toContain('model:')
+      })
+
+      test('preserves top_p field', () => {
+        const content = `---
+name: test-agent
+top_p: 0.9
+---
+Prompt`
+        const result = convertContent(content, 'agent')
+        expect(result).toContain('top_p: 0.9')
+      })
+
+      test('preserves tools object', () => {
+        const content = `---
+name: test-agent
+tools:
+  read: true
+  write: false
+---
+Prompt`
+        const result = convertContent(content, 'agent')
+        expect(result).toContain('read: true')
+        expect(result).toContain('write: false')
+      })
+
+      test('drops invalid tools map entries', () => {
+        const content = `---
+name: test-agent
+tools:
+  read: true
+  write: maybe
+---
+Prompt`
+        const result = convertContent(content, 'agent')
+        expect(result).not.toContain('tools:')
+      })
+
+      test('preserves disable field', () => {
+        const content = `---
+name: test-agent
+disable: true
+---
+Prompt`
+        const result = convertContent(content, 'agent')
+        expect(result).toContain('disable: true')
+      })
+
+      test('preserves color field', () => {
+        const content = `---
+name: test-agent
+color: blue
+---
+Prompt`
+        const result = convertContent(content, 'agent')
+        expect(result).toContain('color: blue')
+      })
+
+      test('preserves maxSteps field', () => {
+        const content = `---
+name: test-agent
+maxSteps: 10
+---
+Prompt`
+        const result = convertContent(content, 'agent')
+        expect(result).toContain('maxSteps: 10')
+      })
+
+      test('preserves permission object', () => {
+        const content = `---
+name: test-agent
+permission:
+  edit: allow
+  bash: ask
+---
+Prompt`
+        const result = convertContent(content, 'agent')
+        expect(result).toContain('edit: allow')
+        expect(result).toContain('bash: ask')
+      })
+
+      test('drops invalid permission settings', () => {
+        const content = `---
+name: test-agent
+permission:
+  edit: maybe
+---
+Prompt`
+        const result = convertContent(content, 'agent')
+        expect(result).not.toContain('permission:')
+      })
+
+      test('drops invalid permission bash map values', () => {
+        const content = `---
+name: test-agent
+permission:
+  bash:
+    rm: maybe
+---
+Prompt`
+        const result = convertContent(content, 'agent')
+        expect(result).not.toContain('permission:')
       })
     })
 
@@ -343,6 +455,14 @@ Just plain content`
       test('handles empty content', () => {
         const result = convertContent('', 'skill')
         expect(result).toBe('')
+      })
+    })
+
+    describe('Malformed frontmatter handling', () => {
+      test('returns original content when frontmatter is invalid', () => {
+        const input = '---\nname: test\ninvalid yaml: [unclosed\n---\nBody'
+        const result = convertContent(input, 'skill')
+        expect(result).toBe(input)
       })
     })
 

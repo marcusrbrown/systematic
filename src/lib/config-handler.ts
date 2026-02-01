@@ -3,7 +3,7 @@ import { extractAgentFrontmatter, findAgentsInDir } from './agents.js'
 import { extractCommandFrontmatter, findCommandsInDir } from './commands.js'
 import { loadConfig } from './config.js'
 import { convertFileWithCache } from './converter.js'
-import { stripFrontmatter } from './frontmatter.js'
+import { parseFrontmatter } from './frontmatter.js'
 import { type LoadedSkill, loadSkill } from './skill-loader.js'
 import { findSkillsInDir } from './skills.js'
 
@@ -26,12 +26,36 @@ function loadAgentAsConfig(agentInfo: {
       source: 'bundled',
       agentMode: 'subagent',
     })
-    const { description, prompt } = extractAgentFrontmatter(converted)
+    const {
+      description,
+      prompt,
+      model,
+      temperature,
+      top_p,
+      tools,
+      disable,
+      mode,
+      color,
+      maxSteps,
+      permission,
+    } = extractAgentFrontmatter(converted)
 
-    return {
+    const config: AgentConfig = {
       description: description || `${agentInfo.name} agent`,
-      prompt: prompt || stripFrontmatter(converted),
+      prompt,
     }
+
+    if (model !== undefined) config.model = model
+    if (temperature !== undefined) config.temperature = temperature
+    if (top_p !== undefined) config.top_p = top_p
+    if (tools !== undefined) config.tools = tools
+    if (disable !== undefined) config.disable = disable
+    if (mode !== undefined) config.mode = mode
+    if (color !== undefined) config.color = color
+    if (maxSteps !== undefined) config.maxSteps = maxSteps
+    if (permission !== undefined) config.permission = permission
+
+    return config
   } catch {
     return null
   }
@@ -47,11 +71,12 @@ function loadCommandAsConfig(commandInfo: {
       source: 'bundled',
     })
     const { name, description } = extractCommandFrontmatter(converted)
+    const { body } = parseFrontmatter(converted)
 
     const cleanName = commandInfo.name.replace(/^\//, '')
 
     return {
-      template: stripFrontmatter(converted),
+      template: body.trim(),
       description: description || `${name || cleanName} command`,
     }
   } catch {
