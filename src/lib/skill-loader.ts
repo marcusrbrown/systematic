@@ -13,6 +13,12 @@ export interface LoadedSkill {
   path: string
   skillFile: string
   wrappedTemplate: string
+  disableModelInvocation?: boolean
+  userInvocable?: boolean
+  subtask?: boolean
+  agent?: string
+  model?: string
+  argumentHint?: string
 }
 
 export function formatSkillCommandName(name: string): string {
@@ -72,6 +78,12 @@ export function loadSkill(skillInfo: SkillInfo): LoadedSkill | null {
       path: skillInfo.path,
       skillFile: skillInfo.skillFile,
       wrappedTemplate,
+      disableModelInvocation: skillInfo.disableModelInvocation,
+      userInvocable: skillInfo.userInvocable,
+      subtask: skillInfo.subtask,
+      agent: skillInfo.agent,
+      model: skillInfo.model,
+      argumentHint: skillInfo.argumentHint,
     }
   } catch {
     return null

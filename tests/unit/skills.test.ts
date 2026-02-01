@@ -54,6 +54,113 @@ description: A test skill
       expect(result.name).toBe('')
       expect(result.description).toBe('')
     })
+
+    test('extracts OpenCode SDK fields', () => {
+      const filePath = path.join(testDir, 'test.md')
+      fs.writeFileSync(
+        filePath,
+        `---
+name: test-skill
+description: A test skill
+license: MIT
+compatibility: opencode
+---
+# Skill Content`,
+      )
+      const result = skills.extractFrontmatter(filePath)
+      expect(result.license).toBe('MIT')
+      expect(result.compatibility).toBe('opencode')
+    })
+
+    test('extracts metadata object with string values', () => {
+      const filePath = path.join(testDir, 'test.md')
+      fs.writeFileSync(
+        filePath,
+        `---
+name: test-skill
+description: A test skill
+metadata:
+  author: Test Author
+  version: '1.0.0'
+---
+# Skill Content`,
+      )
+      const result = skills.extractFrontmatter(filePath)
+      expect(result.metadata).toEqual({
+        author: 'Test Author',
+        version: '1.0.0',
+      })
+    })
+
+    test('extracts Claude Code converted fields', () => {
+      const filePath = path.join(testDir, 'test.md')
+      fs.writeFileSync(
+        filePath,
+        `---
+name: test-skill
+description: A test skill
+disable-model-invocation: true
+user-invocable: false
+agent: oracle
+model: gpt-4
+argument-hint: "[file]"
+allowed-tools: read,write
+---
+# Skill Content`,
+      )
+      const result = skills.extractFrontmatter(filePath)
+      expect(result.disableModelInvocation).toBe(true)
+      expect(result.userInvocable).toBe(false)
+      expect(result.agent).toBe('oracle')
+      expect(result.model).toBe('gpt-4')
+      expect(result.argumentHint).toBe('[file]')
+      expect(result.allowedTools).toBe('read,write')
+    })
+
+    test('derives subtask from context: fork', () => {
+      const filePath = path.join(testDir, 'test.md')
+      fs.writeFileSync(
+        filePath,
+        `---
+name: test-skill
+description: A test skill
+context: fork
+---
+# Skill Content`,
+      )
+      const result = skills.extractFrontmatter(filePath)
+      expect(result.subtask).toBe(true)
+    })
+
+    test('subtask is undefined when context is not fork', () => {
+      const filePath = path.join(testDir, 'test.md')
+      fs.writeFileSync(
+        filePath,
+        `---
+name: test-skill
+description: A test skill
+context: other
+---
+# Skill Content`,
+      )
+      const result = skills.extractFrontmatter(filePath)
+      expect(result.subtask).toBeUndefined()
+    })
+
+    test('strips quotes from argument-hint', () => {
+      const filePath = path.join(testDir, 'test.md')
+      fs.writeFileSync(
+        filePath,
+        `---
+name: test-skill
+description: A test skill
+argument-hint: '"[pattern]"'
+---
+# Skill Content`,
+      )
+      const result = skills.extractFrontmatter(filePath)
+      expect(result.argumentHint).toBe('[pattern]')
+    })
   })
 
   describe('findSkillsInDir', () => {

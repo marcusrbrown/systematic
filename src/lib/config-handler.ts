@@ -92,10 +92,16 @@ function loadCommandAsConfig(commandInfo: {
 }
 
 function loadSkillAsCommand(loaded: LoadedSkill): CommandConfig {
-  return {
+  const config: CommandConfig = {
     template: loaded.wrappedTemplate,
     description: loaded.description,
   }
+
+  if (loaded.agent !== undefined) config.agent = loaded.agent
+  if (loaded.model !== undefined) config.model = loaded.model
+  if (loaded.subtask !== undefined) config.subtask = loaded.subtask
+
+  return config
 }
 
 function collectAgents(
@@ -149,6 +155,8 @@ function collectSkillsAsCommands(
 
     const loaded = loadSkill(skillInfo)
     if (loaded) {
+      if (loaded.userInvocable === false) continue
+
       commands[loaded.prefixedName] = loadSkillAsCommand(loaded)
     }
   }
