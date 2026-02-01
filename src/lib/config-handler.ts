@@ -76,9 +76,11 @@ function loadCommandAsConfig(commandInfo: {
 
     const cleanName = commandInfo.name.replace(/^\//, '')
 
+    const baseDescription = description || `${name || cleanName} command`
+
     const config: CommandConfig = {
       template: body.trim(),
-      description: description || `${name || cleanName} command`,
+      description: `(systematic) ${baseDescription}`,
     }
 
     if (agent !== undefined) config.agent = agent
@@ -136,7 +138,11 @@ function collectCommands(
 
     const config = loadCommandAsConfig(commandInfo)
     if (config) {
-      commands[cleanName] = config
+      // Prefix commands without a colon with 'systematic:'
+      const prefixedName = cleanName.includes(':')
+        ? cleanName
+        : `systematic:${cleanName}`
+      commands[prefixedName] = config
     }
   }
 

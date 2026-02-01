@@ -125,11 +125,11 @@ Command template for ${name}.`,
       await handler(config)
 
       expect(config.command).toBeDefined()
-      expect(config.command?.['test-command']).toBeDefined()
-      expect(config.command?.['test-command']?.description).toBe(
-        'A test command',
+      expect(config.command?.['systematic:test-command']).toBeDefined()
+      expect(config.command?.['systematic:test-command']?.description).toBe(
+        '(systematic) A test command',
       )
-      expect(config.command?.['test-command']?.template).toContain(
+      expect(config.command?.['systematic:test-command']?.template).toContain(
         'Command template for test-command',
       )
     })
@@ -384,7 +384,7 @@ Use oracle for this task.`,
       const config: Config = {}
       await handler(config)
 
-      expect(config.command?.routed?.agent).toBe('oracle')
+      expect(config.command?.['systematic:routed']?.agent).toBe('oracle')
     })
 
     test('includes model field in command config', async () => {
@@ -408,7 +408,7 @@ Use gpt-4 for this task.`,
       const config: Config = {}
       await handler(config)
 
-      expect(config.command?.modeled?.model).toBe('openai/gpt-4')
+      expect(config.command?.['systematic:modeled']?.model).toBe('openai/gpt-4')
     })
 
     test('includes subtask field in command config', async () => {
@@ -432,7 +432,7 @@ Run as subtask.`,
       const config: Config = {}
       await handler(config)
 
-      expect(config.command?.subtasked?.subtask).toBe(true)
+      expect(config.command?.['systematic:subtasked']?.subtask).toBe(true)
     })
 
     test('extracts all command frontmatter fields into config', async () => {
@@ -458,9 +458,9 @@ Full command template.`,
       const config: Config = {}
       await handler(config)
 
-      const command = config.command?.['full-command']
+      const command = config.command?.['systematic:full-command']
       expect(command).toBeDefined()
-      expect(command?.description).toBe('A full command')
+      expect(command?.description).toBe('(systematic) A full command')
       expect(command?.agent).toBe('oracle')
       expect(command?.model).toBe('openai/gpt-4')
       expect(command?.subtask).toBe(true)
