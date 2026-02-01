@@ -1,10 +1,21 @@
 import { parseFrontmatter } from './frontmatter.js'
+import {
+  extractBoolean,
+  extractNonEmptyString,
+  extractString,
+} from './validation.js'
 import { walkDir } from './walk-dir.js'
 
 export interface CommandFrontmatter {
   name: string
   description: string
   argumentHint: string
+  /** Agent ID to use for this command */
+  agent?: string
+  /** Model override for this command */
+  model?: string
+  /** Whether this command should run as a subtask */
+  subtask?: boolean
 }
 
 export interface CommandInfo {
@@ -33,23 +44,28 @@ export function findCommandsInDir(dir: string, maxDepth = 2): CommandInfo[] {
 }
 
 export function extractCommandFrontmatter(content: string): CommandFrontmatter {
-  const { data, parseError } = parseFrontmatter<{
-    name?: string
-    description?: string
-    'argument-hint'?: string
-  }>(content)
+  const { data, parseError } =
+    parseFrontmatter<Record<string, unknown>>(content)
 
-  const argumentHintRaw =
-    !parseError && typeof data['argument-hint'] === 'string'
-      ? data['argument-hint']
-      : ''
+  if (parseError) {
+    return {
+      name: '',
+      description: '',
+      argumentHint: '',
+      agent: undefined,
+      model: undefined,
+      subtask: undefined,
+    }
+  }
+
+  const argumentHintRaw = extractString(data, 'argument-hint')
 
   return {
-    name: !parseError && typeof data.name === 'string' ? data.name : '',
-    description:
-      !parseError && typeof data.description === 'string'
-        ? data.description
-        : '',
+    name: extractString(data, 'name'),
+    description: extractString(data, 'description'),
     argumentHint: argumentHintRaw.replace(/^["']|["']$/g, ''),
+    agent: extractNonEmptyString(data, 'agent'),
+    model: extractNonEmptyString(data, 'model'),
+    subtask: extractBoolean(data, 'subtask'),
   }
 }

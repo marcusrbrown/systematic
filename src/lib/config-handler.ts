@@ -70,15 +70,22 @@ function loadCommandAsConfig(commandInfo: {
     const converted = convertFileWithCache(commandInfo.file, 'command', {
       source: 'bundled',
     })
-    const { name, description } = extractCommandFrontmatter(converted)
+    const { name, description, agent, model, subtask } =
+      extractCommandFrontmatter(converted)
     const { body } = parseFrontmatter(converted)
 
     const cleanName = commandInfo.name.replace(/^\//, '')
 
-    return {
+    const config: CommandConfig = {
       template: body.trim(),
       description: description || `${name || cleanName} command`,
     }
+
+    if (agent !== undefined) config.agent = agent
+    if (model !== undefined) config.model = model
+    if (subtask !== undefined) config.subtask = subtask
+
+    return config
   } catch {
     return null
   }

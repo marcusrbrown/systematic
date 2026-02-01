@@ -362,5 +362,109 @@ Command template for ${name}.`,
       expect(agent?.tools).toEqual({ bash: true, read: false })
       expect(agent?.permission).toEqual({ edit: 'ask' })
     })
+
+    test('includes agent field in command config', async () => {
+      fs.writeFileSync(
+        path.join(bundledDir, 'commands', 'routed.md'),
+        `---
+name: routed
+description: Command with agent
+agent: oracle
+---
+Use oracle for this task.`,
+      )
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.command?.routed?.agent).toBe('oracle')
+    })
+
+    test('includes model field in command config', async () => {
+      fs.writeFileSync(
+        path.join(bundledDir, 'commands', 'modeled.md'),
+        `---
+name: modeled
+description: Command with model
+model: gpt-4
+---
+Use gpt-4 for this task.`,
+      )
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.command?.modeled?.model).toBe('openai/gpt-4')
+    })
+
+    test('includes subtask field in command config', async () => {
+      fs.writeFileSync(
+        path.join(bundledDir, 'commands', 'subtasked.md'),
+        `---
+name: subtasked
+description: Command as subtask
+subtask: true
+---
+Run as subtask.`,
+      )
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.command?.subtasked?.subtask).toBe(true)
+    })
+
+    test('extracts all command frontmatter fields into config', async () => {
+      fs.writeFileSync(
+        path.join(bundledDir, 'commands', 'full-command.md'),
+        `---
+name: full-command
+description: A full command
+agent: oracle
+model: gpt-4
+subtask: true
+---
+Full command template.`,
+      )
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      const command = config.command?.['full-command']
+      expect(command).toBeDefined()
+      expect(command?.description).toBe('A full command')
+      expect(command?.agent).toBe('oracle')
+      expect(command?.model).toBe('openai/gpt-4')
+      expect(command?.subtask).toBe(true)
+      expect(command?.template).toContain('Full command template')
+    })
   })
 })
