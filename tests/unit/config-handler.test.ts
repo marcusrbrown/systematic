@@ -466,5 +466,85 @@ Full command template.`,
       expect(command?.subtask).toBe(true)
       expect(command?.template).toContain('Full command template')
     })
+
+    test('skills with userInvocable: false are not loaded as commands', async () => {
+      const skillDir = path.join(bundledDir, 'skills', 'hidden-skill')
+      fs.mkdirSync(skillDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(skillDir, 'SKILL.md'),
+        `---
+name: hidden-skill
+description: A hidden skill
+user-invocable: false
+---
+# Hidden Skill Content`,
+      )
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.command?.['systematic:hidden-skill']).toBeUndefined()
+    })
+
+    test('skills include subtask field in command config', async () => {
+      const skillDir = path.join(bundledDir, 'skills', 'forked-skill')
+      fs.mkdirSync(skillDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(skillDir, 'SKILL.md'),
+        `---
+name: forked-skill
+description: A forked skill
+context: fork
+---
+# Forked Skill Content`,
+      )
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.command?.['systematic:forked-skill']?.subtask).toBe(true)
+    })
+
+    test('skills include agent and model fields in command config', async () => {
+      const skillDir = path.join(bundledDir, 'skills', 'routed-skill')
+      fs.mkdirSync(skillDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(skillDir, 'SKILL.md'),
+        `---
+name: routed-skill
+description: A routed skill
+agent: oracle
+model: gpt-4
+---
+# Routed Skill Content`,
+      )
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.command?.['systematic:routed-skill']?.agent).toBe('oracle')
+      expect(config.command?.['systematic:routed-skill']?.model).toBe('gpt-4')
+    })
   })
 })

@@ -2,9 +2,12 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { createSkillTool } from '../../src/lib/skill-tool.ts'
+import { createSkillTool, formatSkillsXml } from '../../src/lib/skill-tool.ts'
 
-const mockContext = {} as never
+const mockContext = {
+  ask: async () => {},
+  metadata: () => {},
+} as never
 
 describe('skill-tool', () => {
   let testDir: string
@@ -15,6 +18,72 @@ describe('skill-tool', () => {
 
   afterEach(() => {
     fs.rmSync(testDir, { recursive: true, force: true })
+  })
+
+  describe('formatSkillsXml', () => {
+    test('returns empty string for empty skills array', () => {
+      const result = formatSkillsXml([])
+      expect(result).toBe('')
+    })
+
+    test('formats single skill with space delimiters and indented structure', () => {
+      const result = formatSkillsXml([
+        {
+          path: '/test/path',
+          skillFile: '/test/path/SKILL.md',
+          name: 'test-skill',
+          description: 'A test skill',
+        },
+      ])
+      expect(result).toBe(
+        '<available_skills>   <skill>     <name>systematic:test-skill</name>     <description>A test skill</description>   </skill> </available_skills>',
+      )
+    })
+
+    test('formats multiple skills with space delimiters and indented structure', () => {
+      const result = formatSkillsXml([
+        {
+          path: '/test/path1',
+          skillFile: '/test/path1/SKILL.md',
+          name: 'skill-one',
+          description: 'First skill',
+        },
+        {
+          path: '/test/path2',
+          skillFile: '/test/path2/SKILL.md',
+          name: 'skill-two',
+          description: 'Second skill',
+        },
+      ])
+      expect(result).toContain('<available_skills>')
+      expect(result).toContain('</available_skills>')
+      expect(result).toContain('<name>systematic:skill-one</name>')
+      expect(result).toContain('<name>systematic:skill-two</name>')
+      expect(result).toContain('<description>First skill</description>')
+      expect(result).toContain('<description>Second skill</description>')
+      // Ensure no newlines in output (space-delimited format)
+      expect(result).not.toContain('\n')
+    })
+
+    test('includes skills even when disableModelInvocation is true', () => {
+      const result = formatSkillsXml([
+        {
+          path: '/test/path1',
+          skillFile: '/test/path1/SKILL.md',
+          name: 'skill-one',
+          description: 'First skill',
+        },
+        {
+          path: '/test/path2',
+          skillFile: '/test/path2/SKILL.md',
+          name: 'skill-two',
+          description: 'Second skill',
+          disableModelInvocation: true,
+        },
+      ])
+      expect(result).toContain('skill-one')
+      expect(result).toContain('skill-two')
+    })
   })
 
   describe('createSkillTool', () => {

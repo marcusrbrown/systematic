@@ -47,6 +47,14 @@
 | `compatibility` | `compatibility` | **Keep** (optional) |
 | `metadata` | `metadata` | **Keep** (optional) |
 
+**Systematic compatibility note:** Systematic reads skill frontmatter directly for its own tooling. CC-only fields are still accepted for bundled skills to power **systematic_skill** and **skills-as-commands** behavior, but they are not emitted into OpenCode's native skill definitions.
+
+- `disable-model-invocation`: hides skills from the Systematic skill tool list.
+- `user-invocable`: controls whether a skill is exposed as a command (skills-as-commands only).
+- `context: fork`: maps to `subtask` when a skill is exposed as a command.
+- `agent` / `model`: routed through when a skill is exposed as a command.
+- `allowed-tools`: reserved for future use (stored but not enforced).
+
 #### Example Transformation
 
 **Before (Claude Code):**
