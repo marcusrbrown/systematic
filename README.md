@@ -52,17 +52,11 @@ Most AI coding assistants respond to requests without structure or methodology. 
 
 ### Installation
 
-Install the plugin via npm:
-
-```bash
-npm install @fro.bot/systematic
-```
-
-Add it to your OpenCode configuration (`~/.config/opencode/opencode.json`):
+Add the plugin to your OpenCode configuration (`~/.config/opencode/opencode.json`):
 
 ```json
 {
-  "plugins": ["@fro.bot/systematic"]
+  "plugins": ["@fro.bot/systematic@latest"]
 }
 ```
 
