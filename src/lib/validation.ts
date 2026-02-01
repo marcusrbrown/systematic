@@ -106,3 +106,49 @@ export function normalizePermission(
     external_directory,
   )
 }
+
+/**
+ * Shared frontmatter extraction helpers.
+ * Centralized to ensure consistent behavior across agents, commands, and skills.
+ */
+
+export function extractString(
+  data: Record<string, unknown>,
+  key: string,
+  fallback = '',
+): string {
+  const value = data[key]
+  return typeof value === 'string' ? value : fallback
+}
+
+export function extractNonEmptyString(
+  data: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = data[key]
+  if (typeof value !== 'string') return undefined
+  const trimmed = value.trim()
+  return trimmed !== '' ? trimmed : undefined
+}
+
+export function extractNumber(
+  data: Record<string, unknown>,
+  key: string,
+): number | undefined {
+  const value = data[key]
+  return typeof value === 'number' ? value : undefined
+}
+
+export function extractBoolean(
+  data: Record<string, unknown>,
+  key: string,
+): boolean | undefined {
+  const value = data[key]
+  if (typeof value === 'boolean') return value
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase()
+    if (normalized === 'true') return true
+    if (normalized === 'false') return false
+  }
+  return undefined
+}

@@ -1,5 +1,9 @@
 import { parseFrontmatter } from './frontmatter.js'
 import {
+  extractBoolean,
+  extractNonEmptyString,
+  extractNumber,
+  extractString,
   isAgentMode,
   isToolsMap,
   normalizePermission,
@@ -53,31 +57,6 @@ export function findAgentsInDir(dir: string, maxDepth = 2): AgentInfo[] {
   }))
 }
 
-function extractString(
-  data: Record<string, unknown>,
-  key: string,
-  fallback = '',
-): string {
-  const value = data[key]
-  return typeof value === 'string' ? value : fallback
-}
-
-function extractNumber(
-  data: Record<string, unknown>,
-  key: string,
-): number | undefined {
-  const value = data[key]
-  return typeof value === 'number' ? value : undefined
-}
-
-function extractBoolean(
-  data: Record<string, unknown>,
-  key: string,
-): boolean | undefined {
-  const value = data[key]
-  return typeof value === 'boolean' ? value : undefined
-}
-
 export function extractAgentFrontmatter(content: string): AgentFrontmatter {
   const { data, parseError, body } =
     parseFrontmatter<Record<string, unknown>>(content)
@@ -90,13 +69,13 @@ export function extractAgentFrontmatter(content: string): AgentFrontmatter {
     name: extractString(data, 'name'),
     description: extractString(data, 'description'),
     prompt: body.trim(),
-    model: extractString(data, 'model') || undefined,
+    model: extractNonEmptyString(data, 'model'),
     temperature: extractNumber(data, 'temperature'),
     top_p: extractNumber(data, 'top_p'),
     tools: isToolsMap(data.tools) ? data.tools : undefined,
     disable: extractBoolean(data, 'disable'),
     mode: isAgentMode(data.mode) ? data.mode : undefined,
-    color: extractString(data, 'color') || undefined,
+    color: extractNonEmptyString(data, 'color'),
     maxSteps: extractNumber(data, 'maxSteps'),
     permission: normalizePermission(data.permission),
   }
