@@ -86,7 +86,7 @@ Skills are structured workflows that guide the AI through systematic engineering
 | `agent-browser` | Browser automation using Vercel's agent-browser CLI |
 | `agent-native-architecture` | Design systems where AI agents are first-class citizens |
 | `compound-docs` | Capture solved problems as categorized documentation |
-| `create-agent-skills` | Expert guidance for writing and refining skills |
+| `creating-agent-skills` | Expert guidance for writing and refining skills |
 | `file-todos` | File-based todo tracking with status and dependency management |
 | `git-worktree` | Manage git worktrees for isolated parallel development |
 
