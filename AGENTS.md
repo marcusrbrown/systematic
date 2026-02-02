@@ -1,264 +1,153 @@
 # AGENTS.md - Coding Agent Guidelines for Systematic
 
-**Generated:** 2026-01-28 | **Commit:** d4bfa75 | **Branch:** main
+**Generated:** 2026-02-02 | **Commit:** decbf40 | **Branch:** main
 
-## Project Overview
+## Overview
 
-OpenCode plugin providing systematic engineering workflows. Converts/adapts Claude Code agents, skills, and commands from Compound Engineering Plugin (CEP) to OpenCode.
+OpenCode plugin providing systematic engineering workflows. Converts Claude Code (CEP) agents, skills, and commands to OpenCode format.
 
-**Key insight:** This repo has two distinct parts:
-1. **TypeScript source** (`src/`) - Plugin logic, tools, config handling
-2. **Bundled assets** (`skills/`, `agents/`, `commands/`) - OpenCode Markdown content shipped with npm package
+**Two distinct parts:**
+1. **TypeScript source** (`src/`) — Plugin logic, tools, config handling
+2. **Bundled assets** (`skills/`, `agents/`, `commands/`) — Markdown content shipped with npm package
 
-## Build & Test Commands
+## Commands
 
 ```bash
-# Install dependencies
-bun install
-
-# Build (outputs to dist/)
-bun run build
-
-# Type checking (strict mode)
-bun run typecheck
-
-# Lint with Biome
-bun run lint
-
-# Run unit tests
-bun test tests/unit
-
-# Run a single test file
-bun test tests/unit/skills-core.test.ts
-
-# Run tests matching a pattern
-bun test --filter "extractFrontmatter"
-
-# Run all tests (unit + integration)
-bun test
-
-# Run integration tests only
-bun test tests/integration
+bun install              # Install deps
+bun run build            # Build to dist/
+bun run typecheck        # Type check (strict)
+bun run lint             # Biome linter
+bun test tests/unit      # Unit tests
+bun test tests/integration  # Integration tests
+bun test                 # All tests
+bun test --filter "pattern"  # Filter tests
 ```
 
-## Technology Stack
+## Stack
 
-- **Runtime**: Bun (not Node.js for execution, but Node.js API compatible)
-- **Language**: TypeScript 5.7+ with strict mode
-- **Module System**: ESM (`"type": "module"`)
-- **Target**: ES2022
-- **Linter/Formatter**: Biome (not ESLint/Prettier)
-- **Testing**: Bun's native test runner (`bun:test`)
+- **Runtime:** Bun (Node.js API compatible)
+- **Language:** TypeScript 5.7+ strict mode
+- **Modules:** ESM (`"type": "module"`)
+- **Linter:** Biome (not ESLint/Prettier)
+- **Tests:** `bun:test`
 
-## Code Style
-
-### Formatting (Biome)
-
-- **Indent**: 2 spaces
-- **Quotes**: Single quotes for strings
-- **Semicolons**: As needed (omit where possible)
-- **Line width**: Default (no strict limit)
-
-### Imports
-
-```typescript
-// 1. Node.js built-ins with node: protocol
-import fs from 'node:fs'
-import path from 'node:path'
-import os from 'node:os'
-
-// 2. External dependencies
-import type { Plugin } from '@opencode-ai/plugin'
-import { tool } from '@opencode-ai/plugin/tool'
-
-// 3. Internal modules with .js extension (ESM requirement)
-import { loadConfig } from './lib/config.js'
-import * as skillsCore from './lib/skills-core.js'
-```
-
-### TypeScript Patterns
-
-```typescript
-// Prefer function declarations over classes
-export function extractFrontmatter(filePath: string): SkillFrontmatter {
-  // implementation
-}
-
-// Use explicit return types
-export function findSkillsInDir(
-  dir: string,
-  sourceType: 'project' | 'user' | 'bundled',
-  maxDepth = 3
-): SkillInfo[] {
-  // implementation
-}
-
-// Define interfaces for data structures
-export interface SkillInfo {
-  path: string
-  skillFile: string
-  name: string
-  description: string
-  sourceType: 'project' | 'user' | 'bundled'
-}
-
-// Use union types for constrained values
-type SourceType = 'project' | 'user' | 'bundled'
-
-// Prefer const for immutable bindings
-const packageRoot = path.resolve(__dirname, '..')
-
-// Arrow functions for inline callbacks
-const filtered = skills.filter((s) => !disabled.includes(s.name))
-```
-
-### Error Handling
-
-```typescript
-// Return null/empty for non-critical failures
-export function extractFrontmatter(filePath: string): SkillFrontmatter {
-  try {
-    const content = fs.readFileSync(filePath, 'utf8')
-    // parse...
-    return { name, description }
-  } catch {
-    return { name: '', description: '' }
-  }
-}
-
-// Early return for guard clauses
-if (!fs.existsSync(dir)) return skills
-
-// Throw for critical errors with context
-if (!validTypes.includes(typeArg)) {
-  console.error(`Invalid type: ${typeArg}. Must be one of: ${validTypes.join(', ')}`)
-  process.exit(1)
-}
-```
-
-### Naming Conventions
-
-- **Files**: kebab-case (`skills-core.ts`, `config.ts`)
-- **Functions**: camelCase (`findSkillsInDir`, `loadConfig`)
-- **Interfaces/Types**: PascalCase (`SkillInfo`, `SystematicConfig`)
-- **Constants**: SCREAMING_SNAKE_CASE or camelCase based on scope
-- **Test files**: `*.test.ts` in `tests/` directory
-
-## Testing Patterns
-
-```typescript
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import fs from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
-
-describe('module-name', () => {
-  let testDir: string
-
-  beforeEach(() => {
-    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-test-'))
-  })
-
-  afterEach(() => {
-    fs.rmSync(testDir, { recursive: true, force: true })
-  })
-
-  describe('functionName', () => {
-    test('describes expected behavior', () => {
-      const result = functionUnderTest(input)
-      expect(result).toBe(expected)
-    })
-
-    test('handles edge case', () => {
-      expect(functionUnderTest(null)).toEqual([])
-    })
-  })
-})
-```
-
-## Project Structure
+## Structure
 
 ```
 systematic/
 ├── src/
-│   ├── index.ts              # Plugin entry point (SystematicPlugin)
-│   ├── cli.ts                # CLI entry point
-│   └── lib/
-│       ├── agents.ts         # Agent discovery + frontmatter parsing
-│       ├── bootstrap.ts      # System prompt injection
-│       ├── commands.ts       # Command discovery + frontmatter parsing
-│       ├── config.ts         # JSONC config loading (project > user)
-│       ├── config-handler.ts # OpenCode config hook (merges bundled → existing)
-│       ├── converter.ts      # CEP to OpenCode conversion
-│       ├── frontmatter.ts    # YAML frontmatter utilities
-│       ├── skill-tool.ts     # `systematic_skill` tool implementation
-│       ├── skills.ts         # Skill discovery + frontmatter parsing
-│       └── walk-dir.ts       # Recursive directory traversal
+│   ├── index.ts          # Plugin entry (SystematicPlugin)
+│   ├── cli.ts            # CLI entry
+│   └── lib/              # Core implementation (see src/lib/AGENTS.md)
+├── skills/               # 8 bundled skills (SKILL.md format)
+├── agents/               # 11 bundled agents (4 categories)
+├── commands/             # 9 bundled commands
 ├── tests/
-│   ├── unit/                 # Unit tests (bun test tests/unit)
-│   └── integration/          # Integration tests
-├── skills/                   # Bundled OpenCode skill definitions (SKILL.md)
-├── agents/                   # Bundled OpenCode agent definitions (Markdown)
-├── commands/                 # Bundled OpenCode command definitions (Markdown)
-├── dist/                     # Build output (git-ignored)
-├── biome.json                # Biome linter/formatter config
-├── tsconfig.json             # TypeScript config
-└── package.json
+│   ├── unit/             # 9 test files
+│   └── integration/      # 2 test files
+└── dist/                 # Build output
 ```
 
-## Key Patterns
+## Where to Look
 
-### Plugin Export Pattern
+| Task | Location |
+|------|----------|
+| Plugin hooks (config, tool, system.transform) | `src/index.ts` |
+| Config merging logic | `src/lib/config-handler.ts` |
+| Skill tool implementation | `src/lib/skill-tool.ts` |
+| Bootstrap injection | `src/lib/bootstrap.ts` |
+| CEP conversion | `src/lib/converter.ts` |
+| Asset discovery | `src/lib/skills.ts`, `agents.ts`, `commands.ts` |
+| Add new skill | `skills/<name>/SKILL.md` |
+| Add new agent | `agents/<category>/<name>.md` |
+| Add new command | `commands/<name>.md` |
 
+## Code Map
+
+| Symbol | Type | Location | Role |
+|--------|------|----------|------|
+| `SystematicPlugin` | export | src/index.ts:30 | Main plugin factory |
+| `createConfigHandler` | fn | src/lib/config-handler.ts:182 | Config hook impl |
+| `createSkillTool` | fn | src/lib/skill-tool.ts:35 | systematic_skill tool |
+| `getBootstrapContent` | fn | src/lib/bootstrap.ts:32 | System prompt injection |
+| `convertContent` | fn | src/lib/converter.ts:234 | CEP→OpenCode conversion |
+| `findSkillsInDir` | fn | src/lib/skills.ts:90 | Skill discovery |
+| `loadConfig` | fn | src/lib/config.ts:47 | JSONC config loading |
+
+## Conventions
+
+### Formatting (Biome)
+- 2 spaces, single quotes, semicolons as-needed
+
+### Imports
 ```typescript
-export const SystematicPlugin: Plugin = async ({ client, directory }) => {
-  const config = loadConfig(directory)
-
-  return {
-    tool: {
-      tool_name: tool({
-        description: 'Tool description',
-        args: {},
-        execute: async (): Promise<string> => {
-          // implementation
-        },
-      }),
-    },
-  }
-}
-
-export default SystematicPlugin
+import fs from 'node:fs'              // Node built-ins with node: protocol
+import type { Plugin } from '@opencode-ai/plugin'  // External deps
+import { loadConfig } from './lib/config.js'  // Internal with .js extension
 ```
 
-### Skill File Format
+### TypeScript
+- Function declarations over classes
+- Explicit return types
+- Interfaces for data structures
+- Union types for constrained values
 
-Skills are directories containing `SKILL.md` with YAML frontmatter:
+### Error Handling
+- Return null/empty for non-critical failures
+- Early return for guard clauses
+- Throw with context for critical errors
+
+### Naming
+- Files: kebab-case
+- Functions: camelCase
+- Types/Interfaces: PascalCase
+- Tests: `*.test.ts`
+
+## Anti-Patterns
+
+- `require()` — use ESM imports
+- Omitting `.js` extension in relative imports
+- Classes when functions suffice
+- `any` — use `unknown` with type guards
+- `@ts-ignore` or `@ts-expect-error`
+- Non-null assertions (`!`) — Biome warns
+
+## Plugin Architecture
+
+```
+OpenCode loads plugin
+       ↓
+SystematicPlugin({ client, directory })
+       ↓
+┌──────────────────────────────────────────┐
+│ config hook: createConfigHandler()       │
+│   → Merges bundled agents/commands/skills│
+├──────────────────────────────────────────┤
+│ tool hook: systematic_skill              │
+│   → Loads bundled skills on demand       │
+├──────────────────────────────────────────┤
+│ system.transform hook                    │
+│   → Injects using-systematic bootstrap   │
+└──────────────────────────────────────────┘
+```
+
+## Skill Format
 
 ```markdown
 ---
 name: skill-name
-description: Use when [condition] - [what it does]
+description: Use when [condition] — [what it does]
 ---
 
 # Skill Content
 ```
 
-### Configuration Loading
+## Config Priority
 
-Supports JSONC (JSON with comments). Priority: project > user > bundled.
+project `.opencode/systematic.json` > user `~/.config/opencode/systematic.json` > defaults
 
-## Linting Rules (Biome)
+## Notes
 
-- `noExcessiveCognitiveComplexity`: warn
-- `noNonNullAssertion`: warn
-- All recommended rules enabled
-- Markdown files excluded from linting
-
-## Don'ts
-
-- Don't use `require()` - use ESM imports
-- Don't omit `.js` extension in relative imports
-- Don't use classes when functions suffice
-- Don't use `any` - prefer `unknown` with type guards
-- Don't ignore Biome warnings without justification
-- Don't use `@ts-ignore` or `@ts-expect-error`
+- Bootstrap injection is opt-out via `bootstrap.enabled: false`
+- Skills are registered as commands (prefixed `systematic:`)
+- Experimental hook: `experimental.chat.system.transform`
