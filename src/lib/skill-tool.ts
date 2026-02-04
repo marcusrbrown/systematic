@@ -1,4 +1,6 @@
+import fs from 'node:fs'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import type { ToolDefinition } from '@opencode-ai/plugin'
 import { tool } from '@opencode-ai/plugin/tool'
 import {
@@ -26,10 +28,36 @@ export function formatSkillsXml(skills: SkillInfo[]): string {
     '  <skill>',
     `    <name>systematic:${skill.name}</name>`,
     `    <description>${skill.description}</description>`,
+    `    <location>${pathToFileURL(skill.path).href}</location>`,
     '  </skill>',
   ])
 
   return ['<available_skills>', ...skillLines, '</available_skills>'].join(' ')
+}
+
+/**
+ * Discovers skill files in a directory and formats them as XML tags.
+ * Lists top-level files only (no recursion), filters out SKILL.md and hidden files.
+ *
+ * @param dir - Directory path to search for skill files
+ * @param limit - Maximum number of files to return (default: 10)
+ * @returns String with file names formatted as XML tags, one per line
+ */
+export function discoverSkillFiles(dir: string, limit?: number): string {
+  try {
+    const entries = fs.readdirSync(dir, { withFileTypes: true })
+
+    const files = entries
+      .filter((entry) => entry.isFile())
+      .filter((entry) => !entry.name.startsWith('.'))
+      .filter((entry) => entry.name !== 'SKILL.md')
+      .map((entry) => entry.name)
+      .slice(0, limit ?? 10)
+
+    return files.map((name) => `  <file>${name}</file>`).join('\n')
+  } catch {
+    return ''
+  }
 }
 
 export function createSkillTool(options: SkillToolOptions): ToolDefinition {
@@ -60,12 +88,19 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
     const systematicXml = formatSkillsXml(skillInfos)
 
     return [
-      'Load a skill to get detailed instructions for a specific task.',
-      'Skills provide specialized knowledge and step-by-step guidance.',
-      "Use this when a task matches an available skill's description.",
-      'Only the skills listed here are available:',
+      'Load a specialized skill that provides domain-specific instructions and workflows.',
+      '',
+      'When you recognize that a task matches one of the available skills listed below, use this tool to load the full skill instructions.',
+      '',
+      'The skill will inject detailed instructions, workflows, and access to bundled resources (scripts, references, templates) into the conversation context.',
+      '',
+      'Tool output includes a `<skill_content name="...">` block with the loaded content.',
+      '',
+      'The following skills provide specialized sets of instructions for particular tasks.',
+      'Invoke this tool to load a skill when a task matches one of the available skills listed below:',
+      '',
       systematicXml,
-    ].join(' ')
+    ].join('\n')
   }
 
   const buildParameterHint = (): string => {
@@ -75,7 +110,7 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
       .map((s) => `'systematic:${s.name}'`)
       .join(', ')
     const hint = examples.length > 0 ? ` (e.g., ${examples}, ...)` : ''
-    return `The skill identifier from available_skills${hint}`
+    return `The name of the skill from available_skills${hint}`
   }
 
   let cachedDescription: string | null = null
