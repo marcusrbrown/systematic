@@ -37,25 +37,54 @@ export function formatSkillsXml(skills: SkillInfo[]): string {
 
 /**
  * Discovers skill files in a directory and formats them as XML tags.
- * Lists top-level files only (no recursion), filters out SKILL.md and hidden files.
+ * Recursively searches subdirectories, includes hidden files, excludes .git and SKILL.md.
+ * Matches OpenCode v1.1.50 behavior exactly.
  *
  * @param dir - Directory path to search for skill files
  * @param limit - Maximum number of files to return (default: 10)
- * @returns String with file names formatted as XML tags, one per line
+ * @returns String with absolute file paths formatted as XML tags, one per line
  */
-export function discoverSkillFiles(dir: string, limit?: number): string {
+export function discoverSkillFiles(dir: string, limit = 10): string {
   try {
-    const entries = fs.readdirSync(dir, { withFileTypes: true })
+    const files: string[] = []
 
-    const files = entries
-      .filter((entry) => entry.isFile())
-      .filter((entry) => !entry.name.startsWith('.'))
-      .filter((entry) => entry.name !== 'SKILL.md')
-      .map((entry) => entry.name)
+    function walk(currentDir: string): void {
+      if (files.length >= limit) return
+
+      let entries: fs.Dirent[]
+      try {
+        entries = fs.readdirSync(currentDir, { withFileTypes: true })
+      } catch {
+        return // Skip unreadable directories
+      }
+
+      for (const entry of entries) {
+        if (files.length >= limit) return
+
+        const entryPath = path.join(currentDir, entry.name)
+
+        // Skip .git directory (matches OpenCode's --glob=!.git/*)
+        if (entry.name === '.git') continue
+
+        // Skip SKILL.md files
+        if (entry.name === 'SKILL.md') continue
+
+        if (entry.isDirectory()) {
+          walk(entryPath)
+        } else if (entry.isFile()) {
+          // Use absolute path (matches OpenCode's path.resolve behavior)
+          files.push(path.resolve(entryPath))
+        }
+      }
+    }
+
+    walk(dir)
+
+    return files
       .sort()
-      .slice(0, limit ?? 10)
-
-    return files.map((name) => `  <file>${name}</file>`).join('\n')
+      .slice(0, limit)
+      .map((file) => `  <file>${file}</file>`)
+      .join('\n')
   } catch {
     return ''
   }
