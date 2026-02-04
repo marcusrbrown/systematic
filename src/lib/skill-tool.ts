@@ -1,4 +1,3 @@
-import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { ToolDefinition } from '@opencode-ai/plugin'
@@ -9,6 +8,7 @@ import {
   loadSkill,
 } from './skill-loader.js'
 import { findSkillsInDir, type SkillInfo } from './skills.js'
+import { walkDir } from './walk-dir.js'
 
 export interface SkillToolOptions {
   bundledSkillsDir: string
@@ -46,41 +46,20 @@ export function formatSkillsXml(skills: SkillInfo[]): string {
  */
 export function discoverSkillFiles(dir: string, limit = 10): string {
   try {
-    const files: string[] = []
-
-    function walk(currentDir: string): void {
-      if (files.length >= limit) return
-
-      let entries: fs.Dirent[]
-      try {
-        entries = fs.readdirSync(currentDir, { withFileTypes: true })
-      } catch {
-        return // Skip unreadable directories
-      }
-
-      for (const entry of entries) {
-        if (files.length >= limit) return
-
-        const entryPath = path.join(currentDir, entry.name)
-
-        // Skip .git directory (matches OpenCode's --glob=!.git/*)
-        if (entry.name === '.git') continue
-
+    const entries = walkDir(dir, {
+      maxDepth: Infinity,
+      filter: (entry) => {
+        // Skip .git directory
+        if (entry.name === '.git') return false
         // Skip SKILL.md files
-        if (entry.name === 'SKILL.md') continue
+        if (entry.name === 'SKILL.md') return false
+        // Only files (not directories)
+        return !entry.isDirectory
+      },
+    })
 
-        if (entry.isDirectory()) {
-          walk(entryPath)
-        } else if (entry.isFile()) {
-          // Use absolute path (matches OpenCode's path.resolve behavior)
-          files.push(path.resolve(entryPath))
-        }
-      }
-    }
-
-    walk(dir)
-
-    return files
+    return entries
+      .map((entry) => path.resolve(entry.path))
       .sort()
       .slice(0, limit)
       .map((file) => `  <file>${file}</file>`)
