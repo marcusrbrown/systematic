@@ -345,7 +345,7 @@ description: Test file limit
       // Count the number of <file> tags
       const fileMatches = result.match(/<file>/g)
       expect(fileMatches).toBeDefined()
-      expect(fileMatches!.length).toBe(10)
+      expect(fileMatches?.length).toBe(10)
       // Verify at least one of the first 10 files is present
       const hasLimitedFiles = /file[0-9]\.ts/.test(result)
       expect(hasLimitedFiles).toBe(true)
