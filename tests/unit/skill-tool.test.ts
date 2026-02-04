@@ -26,7 +26,7 @@ describe('skill-tool', () => {
       expect(result).toBe('')
     })
 
-    test('formats single skill with space delimiters and indented structure', () => {
+    test('formats single skill with space delimiters, indented structure, and location field', () => {
       const result = formatSkillsXml([
         {
           path: '/test/path',
@@ -35,9 +35,13 @@ describe('skill-tool', () => {
           description: 'A test skill',
         },
       ])
-      expect(result).toBe(
-        '<available_skills>   <skill>     <name>systematic:test-skill</name>     <description>A test skill</description>   </skill> </available_skills>',
-      )
+      expect(result).toContain('<available_skills>')
+      expect(result).toContain('</available_skills>')
+      expect(result).toContain('<name>systematic:test-skill</name>')
+      expect(result).toContain('<description>A test skill</description>')
+      expect(result).toContain('<location>file:///test/path</location>')
+      // Ensure space-delimited format (no newlines)
+      expect(result).not.toContain('\n')
     })
 
     test('formats multiple skills with space delimiters and indented structure', () => {
@@ -235,7 +239,7 @@ No frontmatter visible here.`,
       expect(result).toContain('# Actual Content')
     })
 
-    test('extracts body from wrapped template (matches OMO pattern)', async () => {
+    test('wraps output with skill_content tags and uses new format', async () => {
       const skillDir = path.join(testDir, 'wrap-test')
       fs.mkdirSync(skillDir)
       fs.writeFileSync(
@@ -254,11 +258,97 @@ description: Test wrapper
 
       const result = await tool.execute({ name: 'wrap-test' }, mockContext)
 
-      expect(result).toContain('## Skill: systematic:wrap-test')
-      expect(result).toContain('**Base directory**:')
+      // New wrapper format
+      expect(result).toContain('<skill_content name="systematic:wrap-test">')
+      expect(result).toContain('</skill_content>')
+      // New heading format
+      expect(result).toContain('# Skill: systematic:wrap-test')
+      // New base directory format with file:// URL
+      expect(result).toContain('Base directory for this skill: file://')
       expect(result).toContain('# Wrapped Content')
-      expect(result).not.toContain('<skill-instruction>')
-      expect(result).not.toContain('</skill-instruction>')
+      // File discovery section
+      expect(result).toContain('<skill_files>')
+      expect(result).toContain('</skill_files>')
+    })
+
+    test('includes discovered files in skill_files section', async () => {
+      const skillDir = path.join(testDir, 'file-discovery-test')
+      fs.mkdirSync(skillDir)
+      fs.writeFileSync(
+        path.join(skillDir, 'SKILL.md'),
+        `---
+name: file-discovery-test
+description: Test file discovery
+---
+# Test Content`,
+      )
+      // Add extra files to be discovered
+      fs.writeFileSync(
+        path.join(skillDir, 'helper.ts'),
+        'export function helper() {}',
+      )
+      fs.writeFileSync(
+        path.join(skillDir, 'utils.ts'),
+        'export function util() {}',
+      )
+      fs.writeFileSync(path.join(skillDir, '.hidden'), 'hidden file')
+
+      const tool = createSkillTool({
+        bundledSkillsDir: testDir,
+        disabledSkills: [],
+      })
+
+      const result = await tool.execute(
+        { name: 'file-discovery-test' },
+        mockContext,
+      )
+
+      expect(result).toContain('<skill_files>')
+      expect(result).toContain('</skill_files>')
+      expect(result).toContain('<file>helper.ts</file>')
+      expect(result).toContain('<file>utils.ts</file>')
+      // SKILL.md should not be in the file list
+      expect(result).not.toContain('<file>SKILL.md</file>')
+      // Hidden files should not be included
+      expect(result).not.toContain('<file>.hidden</file>')
+    })
+
+    test('enforces 10-file limit in skill_files section', async () => {
+      const skillDir = path.join(testDir, 'file-limit-test')
+      fs.mkdirSync(skillDir)
+      fs.writeFileSync(
+        path.join(skillDir, 'SKILL.md'),
+        `---
+name: file-limit-test
+description: Test file limit
+---
+# Test Content`,
+      )
+      // Create 15 extra files
+      for (let i = 1; i <= 15; i++) {
+        fs.writeFileSync(
+          path.join(skillDir, `file${i}.ts`),
+          `export const file${i} = ${i}`,
+        )
+      }
+
+      const tool = createSkillTool({
+        bundledSkillsDir: testDir,
+        disabledSkills: [],
+      })
+
+      const result = await tool.execute(
+        { name: 'file-limit-test' },
+        mockContext,
+      )
+
+      // Count the number of <file> tags
+      const fileMatches = result.match(/<file>/g)
+      expect(fileMatches).toBeDefined()
+      expect(fileMatches!.length).toBe(10)
+      // Verify at least one of the first 10 files is present
+      const hasLimitedFiles = /file[0-9]\.ts/.test(result)
+      expect(hasLimitedFiles).toBe(true)
     })
   })
 })
