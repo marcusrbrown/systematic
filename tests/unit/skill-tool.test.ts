@@ -305,12 +305,13 @@ description: Test file discovery
 
       expect(result).toContain('<skill_files>')
       expect(result).toContain('</skill_files>')
-      expect(result).toContain('<file>helper.ts</file>')
-      expect(result).toContain('<file>utils.ts</file>')
+      // Check for absolute paths ending with the filenames
+      expect(result).toMatch(/<file>.*\/helper\.ts<\/file>/)
+      expect(result).toMatch(/<file>.*\/utils\.ts<\/file>/)
       // SKILL.md should not be in the file list
       expect(result).not.toContain('<file>SKILL.md</file>')
-      // Hidden files should not be included
-      expect(result).not.toContain('<file>.hidden</file>')
+      // Hidden files should be included (matches OpenCode v1.1.50 behavior)
+      expect(result).toMatch(/<file>.*\/\.hidden<\/file>/)
     })
 
     test('enforces 10-file limit in skill_files section', async () => {
