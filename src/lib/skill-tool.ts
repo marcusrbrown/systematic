@@ -52,6 +52,7 @@ export function discoverSkillFiles(dir: string, limit?: number): string {
       .filter((entry) => !entry.name.startsWith('.'))
       .filter((entry) => entry.name !== 'SKILL.md')
       .map((entry) => entry.name)
+      .sort()
       .slice(0, limit ?? 10)
 
     return files.map((name) => `  <file>${name}</file>`).join('\n')
