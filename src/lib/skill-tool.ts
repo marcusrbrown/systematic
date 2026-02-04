@@ -152,6 +152,8 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
 
       const body = extractSkillBody(matchedSkill.wrappedTemplate)
       const dir = path.dirname(matchedSkill.skillFile)
+      const base = pathToFileURL(dir).href
+      const files = discoverSkillFiles(dir)
 
       await context.ask({
         permission: 'skill',
@@ -169,11 +171,19 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
       })
 
       return [
-        `## Skill: ${matchedSkill.prefixedName}`,
-        '',
-        `**Base directory**: ${dir}`,
+        `<skill_content name="${matchedSkill.prefixedName}">`,
+        `# Skill: ${matchedSkill.prefixedName}`,
         '',
         body.trim(),
+        '',
+        `Base directory for this skill: ${base}`,
+        'Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.',
+        'Note: file list is sampled.',
+        '',
+        '<skill_files>',
+        files,
+        '</skill_files>',
+        '</skill_content>',
       ].join('\n')
     },
   })
