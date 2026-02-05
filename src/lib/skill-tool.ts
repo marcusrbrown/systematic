@@ -1,4 +1,6 @@
+import fs from 'node:fs'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import type { ToolDefinition } from '@opencode-ai/plugin'
 import { tool } from '@opencode-ai/plugin/tool'
 import {
@@ -26,10 +28,60 @@ export function formatSkillsXml(skills: SkillInfo[]): string {
     '  <skill>',
     `    <name>systematic:${skill.name}</name>`,
     `    <description>${skill.description}</description>`,
+    `    <location>${pathToFileURL(skill.path).href}</location>`,
     '  </skill>',
   ])
 
   return ['<available_skills>', ...skillLines, '</available_skills>'].join(' ')
+}
+
+/**
+ * Discovers skill files in a directory and formats them as XML tags.
+ * Recursively searches subdirectories, includes hidden files, excludes .git and SKILL.md.
+ * Matches OpenCode v1.1.50 behavior exactly.
+ *
+ * @param dir - Directory path to search for skill files
+ * @param limit - Maximum number of files to return (default: 10)
+ * @returns String with absolute file paths formatted as XML tags, one per line
+ */
+export function discoverSkillFiles(dir: string, limit = 10): string {
+  const files: string[] = []
+
+  function shouldSkipDirectory(name: string): boolean {
+    return name === '.git'
+  }
+
+  function shouldIncludeFile(name: string): boolean {
+    return name !== 'SKILL.md'
+  }
+
+  function handleEntry(entry: fs.Dirent, currentDir: string): void {
+    if (entry.isDirectory()) {
+      if (!shouldSkipDirectory(entry.name)) {
+        recurse(path.resolve(currentDir, entry.name))
+      }
+    } else if (shouldIncludeFile(entry.name)) {
+      files.push(path.resolve(currentDir, entry.name))
+    }
+  }
+
+  function recurse(currentDir: string): void {
+    if (files.length >= limit) return
+
+    try {
+      const entries = fs.readdirSync(currentDir, { withFileTypes: true })
+
+      for (const entry of entries) {
+        if (files.length >= limit) break
+        handleEntry(entry, currentDir)
+      }
+    } catch {
+      // Silently ignore read errors
+    }
+  }
+
+  recurse(dir)
+  return files.map((file) => `  <file>${file}</file>`).join('\n')
 }
 
 export function createSkillTool(options: SkillToolOptions): ToolDefinition {
@@ -60,12 +112,19 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
     const systematicXml = formatSkillsXml(skillInfos)
 
     return [
-      'Load a skill to get detailed instructions for a specific task.',
-      'Skills provide specialized knowledge and step-by-step guidance.',
-      "Use this when a task matches an available skill's description.",
-      'Only the skills listed here are available:',
+      'Load a specialized skill that provides domain-specific instructions and workflows.',
+      '',
+      'When you recognize that a task matches one of the available skills listed below, use this tool to load the full skill instructions.',
+      '',
+      'The skill will inject detailed instructions, workflows, and access to bundled resources (scripts, references, templates) into the conversation context.',
+      '',
+      'Tool output includes a `<skill_content name="...">` block with the loaded content.',
+      '',
+      'The following skills provide specialized sets of instructions for particular tasks.',
+      'Invoke this tool to load a skill when a task matches one of the available skills listed below:',
+      '',
       systematicXml,
-    ].join(' ')
+    ].join('\n')
   }
 
   const buildParameterHint = (): string => {
@@ -75,7 +134,7 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
       .map((s) => `'systematic:${s.name}'`)
       .join(', ')
     const hint = examples.length > 0 ? ` (e.g., ${examples}, ...)` : ''
-    return `The skill identifier from available_skills${hint}`
+    return `The name of the skill from available_skills${hint}`
   }
 
   let cachedDescription: string | null = null
@@ -117,6 +176,8 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
 
       const body = extractSkillBody(matchedSkill.wrappedTemplate)
       const dir = path.dirname(matchedSkill.skillFile)
+      const base = pathToFileURL(dir).href
+      const files = discoverSkillFiles(dir)
 
       await context.ask({
         permission: 'skill',
@@ -133,13 +194,23 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
         },
       })
 
-      return [
-        `## Skill: ${matchedSkill.prefixedName}`,
-        '',
-        `**Base directory**: ${dir}`,
+      const output = [
+        `<skill_content name="${matchedSkill.prefixedName}">`,
+        `# Skill: ${matchedSkill.prefixedName}`,
         '',
         body.trim(),
-      ].join('\n')
+        '',
+        `Base directory for this skill: ${base}`,
+        'Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.',
+        'Note: file list is sampled.',
+      ]
+
+      if (files) {
+        output.push('', '<skill_files>', files, '</skill_files>')
+      }
+
+      output.push('</skill_content>')
+      return output.join('\n')
     },
   })
 }
