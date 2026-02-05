@@ -45,13 +45,12 @@ function mergeArraysUnique<T>(
 }
 
 export function loadConfig(projectDir: string): SystematicConfig {
-  const homeDir = os.homedir()
-  const userConfigPath = path.join(homeDir, '.config/opencode/systematic.json')
-  const projectConfigPath = path.join(projectDir, '.opencode/systematic.json')
+  const paths = getConfigPaths(projectDir)
 
-  const userConfig = loadJsoncFile<Partial<SystematicConfig>>(userConfigPath)
-  const projectConfig =
-    loadJsoncFile<Partial<SystematicConfig>>(projectConfigPath)
+  const userConfig = loadJsoncFile<Partial<SystematicConfig>>(paths.userConfig)
+  const projectConfig = loadJsoncFile<Partial<SystematicConfig>>(
+    paths.projectConfig,
+  )
 
   const result: SystematicConfig = {
     disabled_skills: mergeArraysUnique(
