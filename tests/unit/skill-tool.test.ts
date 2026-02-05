@@ -239,7 +239,7 @@ No frontmatter visible here.`,
       expect(result).toContain('# Actual Content')
     })
 
-    test('wraps output with skill_content tags and uses new format', async () => {
+    test('wraps output with skill_content tags and omits skill_files when no files found', async () => {
       const skillDir = path.join(testDir, 'wrap-test')
       fs.mkdirSync(skillDir)
       fs.writeFileSync(
@@ -266,9 +266,9 @@ description: Test wrapper
       // New base directory format with file:// URL
       expect(result).toContain('Base directory for this skill: file://')
       expect(result).toContain('# Wrapped Content')
-      // File discovery section
-      expect(result).toContain('<skill_files>')
-      expect(result).toContain('</skill_files>')
+      // skill_files section should be omitted when no files
+      expect(result).not.toContain('<skill_files>')
+      expect(result).not.toContain('</skill_files>')
     })
 
     test('includes discovered files in skill_files section', async () => {

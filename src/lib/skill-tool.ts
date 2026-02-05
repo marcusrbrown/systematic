@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { ToolDefinition } from '@opencode-ai/plugin'
@@ -8,7 +9,6 @@ import {
   loadSkill,
 } from './skill-loader.js'
 import { findSkillsInDir, type SkillInfo } from './skills.js'
-import { walkDir } from './walk-dir.js'
 
 export interface SkillToolOptions {
   bundledSkillsDir: string
@@ -45,28 +45,43 @@ export function formatSkillsXml(skills: SkillInfo[]): string {
  * @returns String with absolute file paths formatted as XML tags, one per line
  */
 export function discoverSkillFiles(dir: string, limit = 10): string {
-  try {
-    const entries = walkDir(dir, {
-      maxDepth: Infinity,
-      filter: (entry) => {
-        // Skip .git directory
-        if (entry.name === '.git') return false
-        // Skip SKILL.md files
-        if (entry.name === 'SKILL.md') return false
-        // Only files (not directories)
-        return !entry.isDirectory
-      },
-    })
+  const files: string[] = []
 
-    return entries
-      .map((entry) => path.resolve(entry.path))
-      .sort()
-      .slice(0, limit)
-      .map((file) => `  <file>${file}</file>`)
-      .join('\n')
-  } catch {
-    return ''
+  function shouldSkipDirectory(name: string): boolean {
+    return name === '.git'
   }
+
+  function shouldIncludeFile(name: string): boolean {
+    return name !== 'SKILL.md'
+  }
+
+  function handleEntry(entry: fs.Dirent, currentDir: string): void {
+    if (entry.isDirectory()) {
+      if (!shouldSkipDirectory(entry.name)) {
+        recurse(path.resolve(currentDir, entry.name))
+      }
+    } else if (shouldIncludeFile(entry.name)) {
+      files.push(path.resolve(currentDir, entry.name))
+    }
+  }
+
+  function recurse(currentDir: string): void {
+    if (files.length >= limit) return
+
+    try {
+      const entries = fs.readdirSync(currentDir, { withFileTypes: true })
+
+      for (const entry of entries) {
+        if (files.length >= limit) break
+        handleEntry(entry, currentDir)
+      }
+    } catch {
+      // Silently ignore read errors
+    }
+  }
+
+  recurse(dir)
+  return files.map((file) => `  <file>${file}</file>`).join('\n')
 }
 
 export function createSkillTool(options: SkillToolOptions): ToolDefinition {
@@ -179,7 +194,7 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
         },
       })
 
-      return [
+      const output = [
         `<skill_content name="${matchedSkill.prefixedName}">`,
         `# Skill: ${matchedSkill.prefixedName}`,
         '',
@@ -188,12 +203,14 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
         `Base directory for this skill: ${base}`,
         'Relative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.',
         'Note: file list is sampled.',
-        '',
-        '<skill_files>',
-        files,
-        '</skill_files>',
-        '</skill_content>',
-      ].join('\n')
+      ]
+
+      if (files) {
+        output.push('', '<skill_files>', files, '</skill_files>')
+      }
+
+      output.push('</skill_content>')
+      return output.join('\n')
     },
   })
 }
