@@ -6,7 +6,6 @@ import {
   DEFAULT_CONFIG,
   getConfigPaths,
   loadConfig,
-  type SystematicConfig,
 } from '../../src/lib/config.ts'
 
 describe('config', () => {
@@ -504,6 +503,175 @@ describe('config', () => {
 
     test('has bootstrap.file undefined by default', () => {
       expect(DEFAULT_CONFIG.bootstrap.file).toBeUndefined()
+    })
+  })
+
+  describe('OPENCODE_CONFIG_DIR environment variable', () => {
+    afterEach(() => {
+      delete process.env.OPENCODE_CONFIG_DIR
+    })
+
+    test('custom config from OPENCODE_CONFIG_DIR has highest priority', () => {
+      const customDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'systematic-custom-'),
+      )
+      process.env.OPENCODE_CONFIG_DIR = customDir
+
+      fs.writeFileSync(
+        path.join(customDir, 'systematic.json'),
+        JSON.stringify({ disabled_skills: ['custom-skill'] }),
+      )
+
+      const projectConfigDir = path.join(testDir, '.opencode')
+      fs.mkdirSync(projectConfigDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(projectConfigDir, 'systematic.json'),
+        JSON.stringify({ disabled_skills: ['project-skill'] }),
+      )
+
+      const config = loadConfig(testDir)
+
+      expect(config.disabled_skills).toContain('custom-skill')
+      expect(config.disabled_skills).toContain('project-skill')
+
+      fs.rmSync(customDir, { recursive: true, force: true })
+    })
+
+    test('empty string OPENCODE_CONFIG_DIR is treated as unset', () => {
+      process.env.OPENCODE_CONFIG_DIR = ''
+
+      const paths = getConfigPaths(testDir)
+
+      expect(paths.customConfig).toBeUndefined()
+      expect(paths.customDir).toBeUndefined()
+    })
+
+    test('whitespace-only OPENCODE_CONFIG_DIR is treated as unset', () => {
+      process.env.OPENCODE_CONFIG_DIR = '   '
+
+      const paths = getConfigPaths(testDir)
+
+      expect(paths.customConfig).toBeUndefined()
+      expect(paths.customDir).toBeUndefined()
+    })
+
+    test('non-existent OPENCODE_CONFIG_DIR path is handled gracefully', () => {
+      process.env.OPENCODE_CONFIG_DIR = '/nonexistent/path/that/does/not/exist'
+
+      expect(() => loadConfig(testDir)).not.toThrow()
+
+      const config = loadConfig(testDir)
+      expect(config.disabled_skills).toEqual([])
+    })
+
+    test('getConfigPaths includes customConfig and customDir when env var is set', () => {
+      const customDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'systematic-custom-'),
+      )
+      process.env.OPENCODE_CONFIG_DIR = customDir
+
+      const paths = getConfigPaths(testDir)
+
+      expect(paths.customConfig).toBe(path.join(customDir, 'systematic.json'))
+      expect(paths.customDir).toBe(path.join(customDir, 'systematic'))
+      expect(paths.userConfig).toBeTruthy()
+      expect(paths.projectConfig).toBeTruthy()
+
+      fs.rmSync(customDir, { recursive: true, force: true })
+    })
+
+    test('custom config bootstrap settings override project and user', () => {
+      const customDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'systematic-custom-'),
+      )
+      process.env.OPENCODE_CONFIG_DIR = customDir
+
+      fs.writeFileSync(
+        path.join(customDir, 'systematic.json'),
+        JSON.stringify({ bootstrap: { enabled: false } }),
+      )
+
+      const projectConfigDir = path.join(testDir, '.opencode')
+      fs.mkdirSync(projectConfigDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(projectConfigDir, 'systematic.json'),
+        JSON.stringify({
+          bootstrap: { enabled: true, file: 'project.md' },
+        }),
+      )
+
+      const config = loadConfig(testDir)
+
+      expect(config.bootstrap.enabled).toBe(false)
+      expect(config.bootstrap.file).toBe('project.md')
+
+      fs.rmSync(customDir, { recursive: true, force: true })
+    })
+
+    test('custom disabled_skills merges with project and user config', () => {
+      const userConfigDir = path.join(os.homedir(), '.config/opencode')
+      const userConfigPath = path.join(userConfigDir, 'systematic.json')
+      let userConfigBackup: string | null = null
+      const oldUserExists = fs.existsSync(userConfigPath)
+
+      if (oldUserExists) {
+        userConfigBackup = fs.readFileSync(userConfigPath, 'utf-8')
+      }
+
+      try {
+        const customDir = fs.mkdtempSync(
+          path.join(os.tmpdir(), 'systematic-custom-'),
+        )
+        process.env.OPENCODE_CONFIG_DIR = customDir
+
+        fs.mkdirSync(userConfigDir, { recursive: true })
+        fs.writeFileSync(
+          userConfigPath,
+          JSON.stringify({ disabled_skills: ['user-skill'] }),
+        )
+
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir, { recursive: true })
+        fs.writeFileSync(
+          path.join(projectConfigDir, 'systematic.json'),
+          JSON.stringify({ disabled_skills: ['project-skill'] }),
+        )
+
+        fs.writeFileSync(
+          path.join(customDir, 'systematic.json'),
+          JSON.stringify({ disabled_skills: ['custom-skill'] }),
+        )
+
+        const config = loadConfig(testDir)
+
+        expect(config.disabled_skills).toContain('user-skill')
+        expect(config.disabled_skills).toContain('project-skill')
+        expect(config.disabled_skills).toContain('custom-skill')
+
+        fs.rmSync(customDir, { recursive: true, force: true })
+      } finally {
+        if (userConfigBackup) {
+          fs.writeFileSync(userConfigPath, userConfigBackup)
+        } else if (fs.existsSync(userConfigPath)) {
+          fs.unlinkSync(userConfigPath)
+        }
+      }
+    })
+
+    test('custom config directory directory contents are loaded', () => {
+      const customDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'systematic-custom-'),
+      )
+      process.env.OPENCODE_CONFIG_DIR = customDir
+
+      const customDirContents = path.join(customDir, 'systematic')
+      fs.mkdirSync(customDirContents, { recursive: true })
+
+      const paths = getConfigPaths(testDir)
+
+      expect(paths.customDir).toBe(customDirContents)
+
+      fs.rmSync(customDir, { recursive: true, force: true })
     })
   })
 })
