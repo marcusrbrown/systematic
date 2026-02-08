@@ -3,7 +3,11 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { Config } from '@opencode-ai/sdk'
-import { createConfigHandler } from '../../src/lib/config-handler.ts'
+import {
+  createConfigHandler,
+  formatAgentDescription,
+  toTitleCase,
+} from '../../src/lib/config-handler.ts'
 import { formatFrontmatter } from '../../src/lib/frontmatter.ts'
 
 describe('config-handler', () => {
@@ -78,6 +82,67 @@ Command template for ${name}.`,
     )
   }
 
+  describe('toTitleCase', () => {
+    test('converts kebab-case to Title-Case', () => {
+      expect(toTitleCase('architecture-strategist')).toBe(
+        'Architecture-Strategist',
+      )
+    })
+
+    test('handles single word', () => {
+      expect(toTitleCase('oracle')).toBe('Oracle')
+    })
+
+    test('handles empty string', () => {
+      expect(toTitleCase('')).toBe('')
+    })
+
+    test('handles single-character segments', () => {
+      expect(toTitleCase('a-b-c')).toBe('A-B-C')
+    })
+
+    test('handles numbers in segments', () => {
+      expect(toTitleCase('v2-api-agent')).toBe('V2-Api-Agent')
+    })
+
+    test('preserves already-capitalized characters after first', () => {
+      expect(toTitleCase('REST-API')).toBe('REST-API')
+      expect(toTitleCase('AI-reviewer')).toBe('AI-Reviewer')
+    })
+  })
+
+  describe('formatAgentDescription', () => {
+    test('appends branding suffix with title-cased name', () => {
+      expect(
+        formatAgentDescription(
+          'code-simplicity-reviewer',
+          'Reviews code for simplicity',
+        ),
+      ).toBe(
+        'Reviews code for simplicity (Code-Simplicity-Reviewer - Systematic)',
+      )
+    })
+
+    test('uses fallback when description is undefined', () => {
+      expect(formatAgentDescription('test-agent', undefined)).toBe(
+        'test-agent agent (Test-Agent - Systematic)',
+      )
+    })
+
+    test('uses fallback when description is empty', () => {
+      expect(formatAgentDescription('test-agent', '')).toBe(
+        'test-agent agent (Test-Agent - Systematic)',
+      )
+    })
+
+    test('does not double-brand if suffix already present', () => {
+      const alreadyBranded = 'Some description (Test-Agent - Systematic)'
+      expect(formatAgentDescription('test-agent', alreadyBranded)).toBe(
+        alreadyBranded,
+      )
+    })
+  })
+
   describe('createConfigHandler', () => {
     test('returns a function', () => {
       const handler = createConfigHandler({
@@ -104,7 +169,9 @@ Command template for ${name}.`,
 
       expect(config.agent).toBeDefined()
       expect(config.agent?.['test-agent']).toBeDefined()
-      expect(config.agent?.['test-agent']?.description).toBe('A test agent')
+      expect(config.agent?.['test-agent']?.description).toBe(
+        'A test agent (Test-Agent - Systematic)',
+      )
     })
 
     test('collects bundled commands into config', async () => {
@@ -127,7 +194,7 @@ Command template for ${name}.`,
       expect(config.command).toBeDefined()
       expect(config.command?.['systematic:test-command']).toBeDefined()
       expect(config.command?.['systematic:test-command']?.description).toBe(
-        '(systematic) A test command',
+        '(Systematic) A test command',
       )
       expect(config.command?.['systematic:test-command']?.template).toContain(
         'Command template for test-command',
@@ -150,7 +217,7 @@ Command template for ${name}.`,
       expect(config.command).toBeDefined()
       expect(config.command?.['systematic:test-skill']).toBeDefined()
       expect(config.command?.['systematic:test-skill']?.description).toBe(
-        '(systematic - Skill) A test skill',
+        '(Systematic - Skill) A test skill',
       )
       expect(config.command?.['systematic:test-skill']?.template).toContain(
         '<skill-instruction>',
@@ -352,7 +419,7 @@ Command template for ${name}.`,
 
       const agent = config.agent?.['full-agent']
       expect(agent).toBeDefined()
-      expect(agent?.description).toBe('A full agent')
+      expect(agent?.description).toBe('A full agent (Full-Agent - Systematic)')
       expect(agent?.model).toBe('openai/gpt-4')
       expect(agent?.temperature).toBe(0.7)
       expect(agent?.top_p).toBe(1)
@@ -460,7 +527,7 @@ Full command template.`,
 
       const command = config.command?.['systematic:full-command']
       expect(command).toBeDefined()
-      expect(command?.description).toBe('(systematic) A full command')
+      expect(command?.description).toBe('(Systematic) A full command')
       expect(command?.agent).toBe('oracle')
       expect(command?.model).toBe('openai/gpt-4')
       expect(command?.subtask).toBe(true)

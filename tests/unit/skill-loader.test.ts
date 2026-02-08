@@ -31,21 +31,21 @@ describe('skill-loader', () => {
   })
 
   describe('formatSkillDescription', () => {
-    test('adds (systematic - Skill) prefix to description', () => {
+    test('adds (Systematic - Skill) prefix to description', () => {
       expect(formatSkillDescription('A test skill', 'test')).toBe(
-        '(systematic - Skill) A test skill',
+        '(Systematic - Skill) A test skill',
       )
     })
 
     test('does not double-prefix already prefixed description', () => {
       expect(
-        formatSkillDescription('(systematic - Skill) A test skill', 'test'),
-      ).toBe('(systematic - Skill) A test skill')
+        formatSkillDescription('(Systematic - Skill) A test skill', 'test'),
+      ).toBe('(Systematic - Skill) A test skill')
     })
 
     test('uses fallback name when description is empty', () => {
       expect(formatSkillDescription('', 'my-skill')).toBe(
-        '(systematic - Skill) my-skill skill',
+        '(Systematic - Skill) my-skill skill',
       )
     })
   })
@@ -162,7 +162,7 @@ description: A test skill
 
       expect(loaded.name).toBe('test-skill')
       expect(loaded.prefixedName).toBe('systematic:test-skill')
-      expect(loaded.description).toBe('(systematic - Skill) A test skill')
+      expect(loaded.description).toBe('(Systematic - Skill) A test skill')
       expect(loaded.wrappedTemplate).toContain('<skill-instruction>')
       expect(loaded.wrappedTemplate).toContain('# Test Content')
     })
