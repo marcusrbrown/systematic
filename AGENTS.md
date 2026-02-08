@@ -1,6 +1,6 @@
 # AGENTS.md - Coding Agent Guidelines for Systematic
 
-**Generated:** 2026-02-02 | **Commit:** decbf40 | **Branch:** main
+**Generated:** 2026-02-08 | **Commit:** 38e69f0 | **Branch:** main
 
 ## Overview
 
@@ -30,6 +30,7 @@ bun test --filter "pattern"  # Filter tests
 - **Modules:** ESM (`"type": "module"`)
 - **Linter:** Biome (not ESLint/Prettier)
 - **Tests:** `bun:test`
+- **CI:** GitHub Actions (semantic-release, OSSF Scorecard, CodeQL)
 
 ## Structure
 
@@ -37,13 +38,13 @@ bun test --filter "pattern"  # Filter tests
 systematic/
 ├── src/
 │   ├── index.ts          # Plugin entry (SystematicPlugin)
-│   ├── cli.ts            # CLI entry
+│   ├── cli.ts            # CLI entry (list/convert/config commands)
 │   └── lib/              # Core implementation (see src/lib/AGENTS.md)
 ├── skills/               # 8 bundled skills (SKILL.md format)
 ├── agents/               # 11 bundled agents (4 categories)
-├── commands/             # 9 bundled commands
+├── commands/             # 9 bundled commands (with workflows/ subdir)
 ├── tests/
-│   ├── unit/             # 9 test files
+│   ├── unit/             # 10 test files
 │   └── integration/      # 2 test files
 └── dist/                 # Build output
 ```
@@ -55,29 +56,41 @@ systematic/
 | Plugin hooks (config, tool, system.transform) | `src/index.ts` |
 | Config merging logic | `src/lib/config-handler.ts` |
 | Skill tool implementation | `src/lib/skill-tool.ts` |
+| Skill loading + formatting | `src/lib/skill-loader.ts` |
 | Bootstrap injection | `src/lib/bootstrap.ts` |
-| CEP conversion | `src/lib/converter.ts` |
+| CEP→OpenCode conversion | `src/lib/converter.ts` |
+| YAML frontmatter parsing | `src/lib/frontmatter.ts` |
+| Agent config validation | `src/lib/validation.ts` |
 | Asset discovery | `src/lib/skills.ts`, `agents.ts`, `commands.ts` |
+| Directory walking | `src/lib/walk-dir.ts` |
+| Config loading (JSONC) | `src/lib/config.ts` |
+| CLI commands | `src/cli.ts` |
 | Add new skill | `skills/<name>/SKILL.md` |
 | Add new agent | `agents/<category>/<name>.md` |
 | Add new command | `commands/<name>.md` |
 
 ## Code Map
 
-| Symbol | Type | Location | Role |
-|--------|------|----------|------|
-| `SystematicPlugin` | export | src/index.ts:30 | Main plugin factory |
-| `createConfigHandler` | fn | src/lib/config-handler.ts:182 | Config hook impl |
-| `createSkillTool` | fn | src/lib/skill-tool.ts:35 | systematic_skill tool |
-| `getBootstrapContent` | fn | src/lib/bootstrap.ts:32 | System prompt injection |
-| `convertContent` | fn | src/lib/converter.ts:234 | CEP→OpenCode conversion |
-| `findSkillsInDir` | fn | src/lib/skills.ts:90 | Skill discovery |
-| `loadConfig` | fn | src/lib/config.ts:47 | JSONC config loading |
+| Symbol | Type | Location | Refs | Role |
+|--------|------|----------|------|------|
+| `SystematicPlugin` | export | src/index.ts:30 | 2 | Main plugin factory |
+| `createConfigHandler` | fn | src/lib/config-handler.ts:182 | 3 | Config hook impl |
+| `createSkillTool` | fn | src/lib/skill-tool.ts:87 | 2 | systematic_skill tool factory |
+| `getBootstrapContent` | fn | src/lib/bootstrap.ts:32 | 2 | System prompt injection |
+| `convertContent` | fn | src/lib/converter.ts:234 | 4 | CEP→OpenCode conversion |
+| `findSkillsInDir` | fn | src/lib/skills.ts:90 | 6 | Skill discovery (highest centrality) |
+| `findAgentsInDir` | fn | src/lib/agents.ts:47 | — | Agent discovery |
+| `findCommandsInDir` | fn | src/lib/commands.ts:27 | — | Command discovery |
+| `loadConfig` | fn | src/lib/config.ts:47 | — | JSONC config loading |
+| `parseFrontmatter` | fn | src/lib/frontmatter.ts | — | YAML frontmatter extraction |
+| `walkDir` | fn | src/lib/walk-dir.ts | — | Recursive dir walker |
+| `loadSkill` | fn | src/lib/skill-loader.ts | — | Skill content loading + wrapping |
 
 ## Conventions
 
 ### Formatting (Biome)
 - 2 spaces, single quotes, semicolons as-needed
+- Biome warns on: `noExcessiveCognitiveComplexity`, `noNonNullAssertion`
 
 ### Imports
 ```typescript
@@ -87,10 +100,11 @@ import { loadConfig } from './lib/config.js'  // Internal with .js extension
 ```
 
 ### TypeScript
-- Function declarations over classes
-- Explicit return types
-- Interfaces for data structures
-- Union types for constrained values
+- Function declarations over classes (zero classes in codebase)
+- Explicit return types on exported functions
+- Interfaces for data structures (SkillInfo, AgentInfo, etc.)
+- Union types + const enums for constrained values
+- `unknown` with type guards instead of `any`
 
 ### Error Handling
 - Return null/empty for non-critical failures
@@ -102,6 +116,13 @@ import { loadConfig } from './lib/config.js'  // Internal with .js extension
 - Functions: camelCase
 - Types/Interfaces: PascalCase
 - Tests: `*.test.ts`
+
+### Testing
+- Bun built-in test runner (`bun:test`)
+- `describe`/`it` nesting with `beforeEach`/`afterEach`
+- Real temp directories for FS isolation (`mkdtempSync`/`rmSync`)
+- No mocking libraries — creates real temp files
+- Integration tests gracefully skip if external deps unavailable
 
 ## Anti-Patterns
 
@@ -142,6 +163,8 @@ description: Use when [condition] — [what it does]
 # Skill Content
 ```
 
+Skills are registered as commands with `systematic:` prefix.
+
 ## Config Priority
 
 project `.opencode/systematic.json` > user `~/.config/opencode/systematic.json` > defaults
@@ -149,5 +172,6 @@ project `.opencode/systematic.json` > user `~/.config/opencode/systematic.json` 
 ## Notes
 
 - Bootstrap injection is opt-out via `bootstrap.enabled: false`
-- Skills are registered as commands (prefixed `systematic:`)
+- Converter caches results using file mtime
+- CLI commands: `list` (skills/agents/commands), `convert` (file conversion), `config show/path`
 - Experimental hook: `experimental.chat.system.transform`
