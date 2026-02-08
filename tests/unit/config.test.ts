@@ -8,6 +8,22 @@ import {
   loadConfig,
 } from '../../src/lib/config.ts'
 
+// Avoid TOCTOU (time-of-check-time-of-use) race conditions
+// flagged by CodeQL's js/file-system-race rule.
+function tryReadFile(filePath: string): string | null {
+  try {
+    return fs.readFileSync(filePath, 'utf-8')
+  } catch {
+    return null
+  }
+}
+
+function tryUnlink(filePath: string): void {
+  try {
+    fs.unlinkSync(filePath)
+  } catch {}
+}
+
 describe('config', () => {
   let testDir: string
 
@@ -93,13 +109,8 @@ describe('config', () => {
     describe('user config only', () => {
       test('merges user config with defaults', () => {
         const userConfigDir = path.join(os.homedir(), '.config/opencode')
-        const oldExists = fs.existsSync(userConfigDir)
         const userConfigPath = path.join(userConfigDir, 'systematic.json')
-        let userConfigBackup: string | null = null
-
-        if (oldExists && fs.existsSync(userConfigPath)) {
-          userConfigBackup = fs.readFileSync(userConfigPath, 'utf-8')
-        }
+        const userConfigBackup = tryReadFile(userConfigPath)
 
         try {
           fs.mkdirSync(userConfigDir, { recursive: true })
@@ -115,10 +126,10 @@ describe('config', () => {
           expect(result.disabled_skills).toEqual([])
           expect(result.disabled_commands).toEqual([])
         } finally {
-          if (userConfigBackup) {
+          if (userConfigBackup !== null) {
             fs.writeFileSync(userConfigPath, userConfigBackup)
-          } else if (fs.existsSync(userConfigPath)) {
-            fs.unlinkSync(userConfigPath)
+          } else {
+            tryUnlink(userConfigPath)
           }
         }
       })
@@ -128,12 +139,7 @@ describe('config', () => {
       test('project config overrides user config', () => {
         const userConfigDir = path.join(os.homedir(), '.config/opencode')
         const userConfigPath = path.join(userConfigDir, 'systematic.json')
-        let userConfigBackup: string | null = null
-        const oldUserExists = fs.existsSync(userConfigPath)
-
-        if (oldUserExists) {
-          userConfigBackup = fs.readFileSync(userConfigPath, 'utf-8')
-        }
+        const userConfigBackup = tryReadFile(userConfigPath)
 
         try {
           fs.mkdirSync(userConfigDir, { recursive: true })
@@ -157,10 +163,10 @@ describe('config', () => {
           expect(result.disabled_skills).toContain('user-skill')
           expect(result.disabled_skills).toContain('project-skill')
         } finally {
-          if (userConfigBackup) {
+          if (userConfigBackup !== null) {
             fs.writeFileSync(userConfigPath, userConfigBackup)
-          } else if (fs.existsSync(userConfigPath)) {
-            fs.unlinkSync(userConfigPath)
+          } else {
+            tryUnlink(userConfigPath)
           }
         }
       })
@@ -168,12 +174,7 @@ describe('config', () => {
       test('project bootstrap overrides user bootstrap', () => {
         const userConfigDir = path.join(os.homedir(), '.config/opencode')
         const userConfigPath = path.join(userConfigDir, 'systematic.json')
-        let userConfigBackup: string | null = null
-        const oldUserExists = fs.existsSync(userConfigPath)
-
-        if (oldUserExists) {
-          userConfigBackup = fs.readFileSync(userConfigPath, 'utf-8')
-        }
+        const userConfigBackup = tryReadFile(userConfigPath)
 
         try {
           fs.mkdirSync(userConfigDir, { recursive: true })
@@ -200,10 +201,10 @@ describe('config', () => {
           const result = loadConfig(testDir)
           expect(result.bootstrap.enabled).toBe(false)
         } finally {
-          if (userConfigBackup) {
+          if (userConfigBackup !== null) {
             fs.writeFileSync(userConfigPath, userConfigBackup)
-          } else if (fs.existsSync(userConfigPath)) {
-            fs.unlinkSync(userConfigPath)
+          } else {
+            tryUnlink(userConfigPath)
           }
         }
       })
@@ -228,12 +229,7 @@ describe('config', () => {
       test('combines user and project disabled_skills arrays', () => {
         const userConfigDir = path.join(os.homedir(), '.config/opencode')
         const userConfigPath = path.join(userConfigDir, 'systematic.json')
-        let userConfigBackup: string | null = null
-        const oldUserExists = fs.existsSync(userConfigPath)
-
-        if (oldUserExists) {
-          userConfigBackup = fs.readFileSync(userConfigPath, 'utf-8')
-        }
+        const userConfigBackup = tryReadFile(userConfigPath)
 
         try {
           fs.mkdirSync(userConfigDir, { recursive: true })
@@ -257,10 +253,10 @@ describe('config', () => {
           expect(result.disabled_skills).toContain('skill-a')
           expect(result.disabled_skills).toContain('skill-b')
         } finally {
-          if (userConfigBackup) {
+          if (userConfigBackup !== null) {
             fs.writeFileSync(userConfigPath, userConfigBackup)
-          } else if (fs.existsSync(userConfigPath)) {
-            fs.unlinkSync(userConfigPath)
+          } else {
+            tryUnlink(userConfigPath)
           }
         }
       })
@@ -268,12 +264,7 @@ describe('config', () => {
       test('combines user and project disabled_agents arrays', () => {
         const userConfigDir = path.join(os.homedir(), '.config/opencode')
         const userConfigPath = path.join(userConfigDir, 'systematic.json')
-        let userConfigBackup: string | null = null
-        const oldUserExists = fs.existsSync(userConfigPath)
-
-        if (oldUserExists) {
-          userConfigBackup = fs.readFileSync(userConfigPath, 'utf-8')
-        }
+        const userConfigBackup = tryReadFile(userConfigPath)
 
         try {
           fs.mkdirSync(userConfigDir, { recursive: true })
@@ -297,10 +288,10 @@ describe('config', () => {
           expect(result.disabled_agents).toContain('agent-a')
           expect(result.disabled_agents).toContain('agent-b')
         } finally {
-          if (userConfigBackup) {
+          if (userConfigBackup !== null) {
             fs.writeFileSync(userConfigPath, userConfigBackup)
-          } else if (fs.existsSync(userConfigPath)) {
-            fs.unlinkSync(userConfigPath)
+          } else {
+            tryUnlink(userConfigPath)
           }
         }
       })
@@ -308,12 +299,7 @@ describe('config', () => {
       test('combines user and project disabled_commands arrays', () => {
         const userConfigDir = path.join(os.homedir(), '.config/opencode')
         const userConfigPath = path.join(userConfigDir, 'systematic.json')
-        let userConfigBackup: string | null = null
-        const oldUserExists = fs.existsSync(userConfigPath)
-
-        if (oldUserExists) {
-          userConfigBackup = fs.readFileSync(userConfigPath, 'utf-8')
-        }
+        const userConfigBackup = tryReadFile(userConfigPath)
 
         try {
           fs.mkdirSync(userConfigDir, { recursive: true })
@@ -337,10 +323,10 @@ describe('config', () => {
           expect(result.disabled_commands).toContain('cmd-a')
           expect(result.disabled_commands).toContain('cmd-b')
         } finally {
-          if (userConfigBackup) {
+          if (userConfigBackup !== null) {
             fs.writeFileSync(userConfigPath, userConfigBackup)
-          } else if (fs.existsSync(userConfigPath)) {
-            fs.unlinkSync(userConfigPath)
+          } else {
+            tryUnlink(userConfigPath)
           }
         }
       })
@@ -350,12 +336,7 @@ describe('config', () => {
       test('spreads bootstrap properties from user config', () => {
         const userConfigDir = path.join(os.homedir(), '.config/opencode')
         const userConfigPath = path.join(userConfigDir, 'systematic.json')
-        let userConfigBackup: string | null = null
-        const oldUserExists = fs.existsSync(userConfigPath)
-
-        if (oldUserExists) {
-          userConfigBackup = fs.readFileSync(userConfigPath, 'utf-8')
-        }
+        const userConfigBackup = tryReadFile(userConfigPath)
 
         try {
           fs.mkdirSync(userConfigDir, { recursive: true })
@@ -372,10 +353,10 @@ describe('config', () => {
           expect(result.bootstrap.file).toBe('user-bootstrap.md')
           expect(result.bootstrap.enabled).toBe(true)
         } finally {
-          if (userConfigBackup) {
+          if (userConfigBackup !== null) {
             fs.writeFileSync(userConfigPath, userConfigBackup)
-          } else if (fs.existsSync(userConfigPath)) {
-            fs.unlinkSync(userConfigPath)
+          } else {
+            tryUnlink(userConfigPath)
           }
         }
       })
@@ -383,12 +364,7 @@ describe('config', () => {
       test('project bootstrap fields override user bootstrap fields via spread merge', () => {
         const userConfigDir = path.join(os.homedir(), '.config/opencode')
         const userConfigPath = path.join(userConfigDir, 'systematic.json')
-        let userConfigBackup: string | null = null
-        const oldUserExists = fs.existsSync(userConfigPath)
-
-        if (oldUserExists) {
-          userConfigBackup = fs.readFileSync(userConfigPath, 'utf-8')
-        }
+        const userConfigBackup = tryReadFile(userConfigPath)
 
         try {
           fs.mkdirSync(userConfigDir, { recursive: true })
@@ -419,8 +395,8 @@ describe('config', () => {
         } finally {
           if (userConfigBackup) {
             fs.writeFileSync(userConfigPath, userConfigBackup)
-          } else if (fs.existsSync(userConfigPath)) {
-            fs.unlinkSync(userConfigPath)
+          } else {
+            tryUnlink(userConfigPath)
           }
         }
       })
@@ -611,12 +587,7 @@ describe('config', () => {
     test('custom disabled_skills merges with project and user config', () => {
       const userConfigDir = path.join(os.homedir(), '.config/opencode')
       const userConfigPath = path.join(userConfigDir, 'systematic.json')
-      let userConfigBackup: string | null = null
-      const oldUserExists = fs.existsSync(userConfigPath)
-
-      if (oldUserExists) {
-        userConfigBackup = fs.readFileSync(userConfigPath, 'utf-8')
-      }
+      const userConfigBackup = tryReadFile(userConfigPath)
 
       try {
         const customDir = fs.mkdtempSync(
@@ -650,10 +621,10 @@ describe('config', () => {
 
         fs.rmSync(customDir, { recursive: true, force: true })
       } finally {
-        if (userConfigBackup) {
+        if (userConfigBackup !== null) {
           fs.writeFileSync(userConfigPath, userConfigBackup)
-        } else if (fs.existsSync(userConfigPath)) {
-          fs.unlinkSync(userConfigPath)
+        } else {
+          tryUnlink(userConfigPath)
         }
       }
     })
