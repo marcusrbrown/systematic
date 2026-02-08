@@ -16,6 +16,29 @@ export interface ConfigHandlerDeps {
 
 type CommandConfig = NonNullable<Config['command']>[string]
 
+export function toTitleCase(name: string): string {
+  return name
+    .split('-')
+    .map((segment) =>
+      segment.length > 0
+        ? segment.charAt(0).toUpperCase() + segment.slice(1)
+        : segment,
+    )
+    .join('-')
+}
+
+export function formatAgentDescription(
+  name: string,
+  description: string | undefined,
+): string {
+  const baseDescription = description || `${name} agent`
+  const suffix = `(${toTitleCase(name)} - Systematic)`
+  if (baseDescription.endsWith(suffix)) {
+    return baseDescription
+  }
+  return `${baseDescription} ${suffix}`
+}
+
 function loadAgentAsConfig(agentInfo: {
   name: string
   file: string
@@ -41,7 +64,7 @@ function loadAgentAsConfig(agentInfo: {
     } = extractAgentFrontmatter(converted)
 
     const config: AgentConfig = {
-      description: description || `${agentInfo.name} agent`,
+      description: formatAgentDescription(agentInfo.name, description),
       prompt,
     }
 
@@ -80,7 +103,7 @@ function loadCommandAsConfig(commandInfo: {
 
     const config: CommandConfig = {
       template: body.trim(),
-      description: `(systematic) ${baseDescription}`,
+      description: `(Systematic) ${baseDescription}`,
     }
 
     if (agent !== undefined) config.agent = agent

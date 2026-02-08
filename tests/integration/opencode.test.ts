@@ -185,7 +185,7 @@ Integration test content.`,
     expect(commandNames).not.toContain('test-skill')
   })
 
-  test('adds (systematic - Skill) prefix to skill descriptions', async () => {
+  test('adds (Systematic - Skill) prefix to skill descriptions', async () => {
     const handler = createConfigHandler({
       directory: testEnv.projectDir,
       bundledSkillsDir: path.join(testEnv.bundledDir, 'skills'),
@@ -197,9 +197,9 @@ Integration test content.`,
     await handler(config)
 
     const skillCommand = config.command?.['systematic:test-skill']
-    expect(skillCommand?.description).toMatch(/^\(systematic - Skill\) /)
+    expect(skillCommand?.description).toMatch(/^\(Systematic - Skill\) /)
     expect(skillCommand?.description).toBe(
-      '(systematic - Skill) A skill for integration testing',
+      '(Systematic - Skill) A skill for integration testing',
     )
   })
 
