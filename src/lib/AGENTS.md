@@ -1,128 +1,91 @@
-# src/lib — Core Implementation Modules
+# src/lib — Core Implementation
 
-Plugin internals. 12 modules handling config, conversion, discovery, and tool implementation.
-
-## Module Map
-
-| Module | Purpose | Key Exports |
-|--------|---------|-------------|
-| `config-handler.ts` | OpenCode config hook | `createConfigHandler()` |
-| `skill-tool.ts` | systematic_skill tool | `createSkillTool()` |
-| `skill-loader.ts` | Skill file loading | `loadSkill()` |
-| `skills.ts` | Skill discovery | `findSkillsInDir()`, `extractFrontmatter()` |
-| `agents.ts` | Agent discovery | `findAgentsInDir()`, `extractAgentFrontmatter()` |
-| `commands.ts` | Command discovery | `findCommandsInDir()`, `extractCommandFrontmatter()` |
-| `converter.ts` | CEP→OpenCode conversion | `convertContent()`, `convertFileWithCache()` |
-| `frontmatter.ts` | YAML frontmatter utils | `parseFrontmatter()`, `serializeFrontmatter()` |
-| `bootstrap.ts` | System prompt injection | `getBootstrapContent()` |
-| `config.ts` | JSONC config loading | `loadConfig()`, `getConfigPaths()` |
-| `validation.ts` | Input validation | Validation helpers |
-| `walk-dir.ts` | Directory traversal | `walkDir()` |
+13 modules implementing plugin logic: discovery, conversion, config, and tool registration.
 
 ## Data Flow
 
 ```
-Plugin init
-    ↓
-loadConfig() ← reads JSONC from project/user paths
-    ↓
-createConfigHandler() ← merges bundled assets into OpenCode config
-    │
-    ├─ findSkillsInDir() + loadSkill() → skills as commands
-    ├─ findAgentsInDir() + extractAgentFrontmatter() → agent configs
-    └─ findCommandsInDir() + extractCommandFrontmatter() → command configs
-           │
-           └─ convertContent() / convertFileWithCache() ← CEP→OpenCode transform
+loadConfig() → createConfigHandler() → {
+  findSkillsInDir()  → loadSkillAsCommand()  → OpenCode config
+  findAgentsInDir()  → loadAgentAsConfig()   → OpenCode config
+  findCommandsInDir() → loadCommandAsConfig() → OpenCode config
+}
 
-createSkillTool() ← registers systematic_skill tool
-    │
-    └─ findSkillsInDir() → formats skill list as XML
-    └─ loadSkill() → returns skill body on demand
-
-getBootstrapContent() ← reads using-systematic SKILL.md for system prompt
+createSkillTool() → discoverSkillFiles() → loadSkill() → formatted output
+getBootstrapContent() → reads using-systematic SKILL.md → system prompt
 ```
+
+All discovery follows same pattern: `dir → walkDir() → find files → parseFrontmatter() → typed array`
+
+## Modules
+
+### Discovery Layer
+
+| Module | Key Exports | Role |
+|--------|-------------|------|
+| `walk-dir.ts` | `walkDir`, `WalkEntry`, `WalkOptions` | Recursive dir walker with depth + category tracking |
+| `skills.ts` | `findSkillsInDir`, `SkillInfo`, `SkillFrontmatter` | Skill discovery (maxDepth, frontmatter extraction) |
+| `agents.ts` | `findAgentsInDir`, `AgentInfo`, `AgentFrontmatter` | Agent discovery (category from subdir name) |
+| `commands.ts` | `findCommandsInDir`, `CommandInfo`, `CommandFrontmatter` | Command discovery |
+| `frontmatter.ts` | `parseFrontmatter`, `formatFrontmatter`, `stripFrontmatter` | YAML frontmatter parse/format/strip |
+
+### Conversion Layer
+
+| Module | Key Exports | Role |
+|--------|-------------|------|
+| `converter.ts` | `convertContent`, `convertFileWithCache`, `clearConverterCache` | CEP→OpenCode transforms (tool names, models, body refs) |
+| `skill-loader.ts` | `loadSkill`, `LoadedSkill`, `SKILL_PREFIX` | Loads + wraps skill content in XML template |
+| `validation.ts` | `isAgentMode`, `isPermissionSetting`, `buildPermissionObject` | Agent config extraction + type guards |
+
+### Config & Integration Layer
+
+| Module | Key Exports | Role |
+|--------|-------------|------|
+| `config.ts` | `loadConfig`, `getConfigPaths`, `SystematicConfig`, `DEFAULT_CONFIG` | JSONC config loading + merging |
+| `config-handler.ts` | `createConfigHandler`, `ConfigHandlerDeps` | OpenCode config hook (collects + converts all assets) |
+| `skill-tool.ts` | `createSkillTool`, `SkillToolOptions` | `systematic_skill` tool (XML description, skill execution) |
+| `bootstrap.ts` | `getBootstrapContent`, `BootstrapDeps` | System prompt injection (using-systematic skill) |
 
 ## Key Interfaces
 
 ```typescript
-// skills.ts
-interface SkillInfo {
-  path: string
-  skillFile: string
-  name: string
-  description: string
-  // ... frontmatter fields
-}
+// Discovery
+interface SkillInfo { path, skillFile, name, description }
+interface AgentInfo { name, file, category }
+interface CommandInfo { name, file, category }
+interface WalkEntry { path, name, isDirectory, depth, category }
 
-// config.ts
-interface SystematicConfig {
-  disabled_skills: string[]
-  disabled_agents: string[]
-  disabled_commands: string[]
-  bootstrap: { enabled: boolean; file?: string }
-}
+// Config
+interface SystematicConfig { disabled_skills, disabled_agents, disabled_commands, bootstrap: BootstrapConfig }
+interface ConfigHandlerDeps { directory, bundledSkillsDir, bundledAgentsDir, bundledCommandsDir }
 
-// config-handler.ts
-interface ConfigHandlerDeps {
-  directory: string
-  bundledSkillsDir: string
-  bundledAgentsDir: string
-  bundledCommandsDir: string
-}
+// Conversion
+type ContentType = 'skill' | 'agent' | 'command'
+type SourceType = 'cep' | 'opencode'
+interface ConvertOptions { source, agentMode, skipBodyTransform }
 ```
 
 ## Converter Details
 
-Transforms Claude Code (CEP) content to OpenCode format:
+CEP→OpenCode transforms:
+- **Tool names**: `TodoWrite`→`todowrite`, `Task`→`delegate_task`, `Skill`→`skill`
+- **Models**: Claude model name normalization
+- **Body**: Replaces tool references outside code blocks (regex-based)
+- **Frontmatter**: Strips CEP-only fields, adds OpenCode fields
+- **Caching**: `convertFileWithCache` uses file mtime for invalidation
 
-| Transformation | From | To |
-|----------------|------|-----|
-| Tool names | `TodoWrite` | `todowrite` |
-| Tool refs | `Task` | `delegate_task` |
-| Path separators | `\` | `/` |
-| Model names | `claude-3-opus` | Normalized |
-| Temperature | Inferred from content | 0.0-1.0 |
+## Patterns
 
-Caching: `convertFileWithCache()` uses file mtime to avoid re-parsing.
+- **Function-only**: Zero classes. All modules export factory functions or pure helpers
+- **Interface-first**: Data shapes defined as interfaces, logic as functions
+- **Null returns**: Non-critical failures return `null`/`undefined` (not throws)
+- **Type guards**: `validation.ts` provides safe extraction from `unknown` frontmatter data
+- **Const enums**: `AgentMode`, `PermissionSetting` for compile-time safety
 
-## Discovery Patterns
+## Notes
 
-All discovery functions:
-1. Take a directory path
-2. Use `walkDir()` for traversal
-3. Look for specific files (SKILL.md, *.md)
-4. Extract YAML frontmatter
-5. Return typed array of results
-
-Example:
-```typescript
-const skills = findSkillsInDir(bundledSkillsDir, 'bundled', 3)
-// Returns SkillInfo[] with name, description, path, etc.
-```
-
-## Config Loading
-
-Priority chain:
-1. `loadConfig(projectDir)` reads from:
-   - `~/.config/opencode/systematic.json` (user)
-   - `<projectDir>/.opencode/systematic.json` (project)
-2. Merges with `DEFAULT_CONFIG`
-3. Arrays merged uniquely via `mergeArraysUnique()`
-
-## Testing
-
-Unit tests in `tests/unit/`:
-- `skills.test.ts` — skill discovery
-- `config-handler.test.ts` — config merging
-- `converter.test.ts` — CEP conversion
-- `frontmatter.test.ts` — YAML parsing
-
-Pattern:
-```typescript
-describe('moduleName', () => {
-  let testDir: string
-  beforeEach(() => { testDir = fs.mkdtempSync(...) })
-  afterEach(() => { fs.rmSync(testDir, { recursive: true }) })
-  test('behavior', () => { ... })
-})
-```
+- `findSkillsInDir` is highest-centrality function (6 references across 3 modules)
+- `SKILL_PREFIX` = `'systematic:'` — all skills registered with this prefix
+- `parseFrontmatter` is regex-based (not a YAML library for delimiter detection)
+- `formatFrontmatter` uses `js-yaml` dump with `noRefs` and core schema
+- `config-handler.ts` contains internal `loadAgentAsConfig`/`loadCommandAsConfig`/`loadSkillAsCommand` — the glue between discovery and OpenCode config output
