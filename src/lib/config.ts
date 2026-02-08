@@ -45,40 +45,52 @@ function mergeArraysUnique<T>(
 }
 
 export function loadConfig(projectDir: string): SystematicConfig {
-  const homeDir = os.homedir()
-  const userConfigPath = path.join(homeDir, '.config/opencode/systematic.json')
-  const projectConfigPath = path.join(projectDir, '.opencode/systematic.json')
+  const paths = getConfigPaths(projectDir)
 
-  const userConfig = loadJsoncFile<Partial<SystematicConfig>>(userConfigPath)
-  const projectConfig =
-    loadJsoncFile<Partial<SystematicConfig>>(projectConfigPath)
+  const userConfig = loadJsoncFile<Partial<SystematicConfig>>(paths.userConfig)
+  const projectConfig = loadJsoncFile<Partial<SystematicConfig>>(
+    paths.projectConfig,
+  )
+  const customConfig = paths.customConfig
+    ? loadJsoncFile<Partial<SystematicConfig>>(paths.customConfig)
+    : null
 
   const result: SystematicConfig = {
     disabled_skills: mergeArraysUnique(
       mergeArraysUnique(
-        DEFAULT_CONFIG.disabled_skills,
-        userConfig?.disabled_skills,
+        mergeArraysUnique(
+          DEFAULT_CONFIG.disabled_skills,
+          userConfig?.disabled_skills,
+        ),
+        projectConfig?.disabled_skills,
       ),
-      projectConfig?.disabled_skills,
+      customConfig?.disabled_skills,
     ),
     disabled_agents: mergeArraysUnique(
       mergeArraysUnique(
-        DEFAULT_CONFIG.disabled_agents,
-        userConfig?.disabled_agents,
+        mergeArraysUnique(
+          DEFAULT_CONFIG.disabled_agents,
+          userConfig?.disabled_agents,
+        ),
+        projectConfig?.disabled_agents,
       ),
-      projectConfig?.disabled_agents,
+      customConfig?.disabled_agents,
     ),
     disabled_commands: mergeArraysUnique(
       mergeArraysUnique(
-        DEFAULT_CONFIG.disabled_commands,
-        userConfig?.disabled_commands,
+        mergeArraysUnique(
+          DEFAULT_CONFIG.disabled_commands,
+          userConfig?.disabled_commands,
+        ),
+        projectConfig?.disabled_commands,
       ),
-      projectConfig?.disabled_commands,
+      customConfig?.disabled_commands,
     ),
     bootstrap: {
       ...DEFAULT_CONFIG.bootstrap,
       ...userConfig?.bootstrap,
       ...projectConfig?.bootstrap,
+      ...customConfig?.bootstrap,
     },
   }
 
@@ -87,10 +99,18 @@ export function loadConfig(projectDir: string): SystematicConfig {
 
 export function getConfigPaths(projectDir: string) {
   const homeDir = os.homedir()
-  return {
+  const customConfigDir = process.env.OPENCODE_CONFIG_DIR?.trim()
+
+  const result = {
     userConfig: path.join(homeDir, '.config/opencode/systematic.json'),
     projectConfig: path.join(projectDir, '.opencode/systematic.json'),
     userDir: path.join(homeDir, '.config/opencode/systematic'),
     projectDir: path.join(projectDir, '.opencode/systematic'),
+    ...(customConfigDir && {
+      customConfig: path.join(customConfigDir, 'systematic.json'),
+      customDir: path.join(customConfigDir, 'systematic'),
+    }),
   }
+
+  return result
 }
