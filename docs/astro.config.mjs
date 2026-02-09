@@ -7,9 +7,13 @@ export default defineConfig({
     starlight({
       title: 'Systematic',
       description: 'Structured engineering workflows for OpenCode',
-      social: {
-        github: 'https://github.com/marcusrbrown/systematic',
-      },
+      social: [
+        {
+          icon: 'github',
+          label: 'GitHub',
+          href: 'https://github.com/marcusrbrown/systematic',
+        },
+      ],
       customCss: ['./src/styles/custom.css'],
       sidebar: [
         {

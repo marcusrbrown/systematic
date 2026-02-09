@@ -56,12 +56,25 @@ jobs:
           git config --global user.email "${email}"
           git config --global user.name "${name}"
 
+          # Verify docs build output exists
+          if [ ! -d "docs/dist" ]; then
+            echo "✗ Docs build output not found"
+            exit 1
+          fi
+
+          # Clone deployment repository
           git clone https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/fro-bot/systematic.git deploy-repo
           cd deploy-repo
 
-          rm -rf *
+          # Clean and copy new docs (preserve .git)
+          find . -mindepth 1 -not -name '.git' -delete
           cp -r ../docs/dist/* .
 
+          # Commit and push if there are changes
           git add -A
-          git commit -m "Deploy docs from marcusrbrown/systematic@${{ github.sha }}" || echo "No changes to commit"
-          git push
+          if ! git diff-index --quiet HEAD --; then
+            git commit -m "Deploy docs from marcusrbrown/systematic@${{ github.sha }}"
+            git push
+          else
+            echo "ℹ️  No changes to commit"
+          fi

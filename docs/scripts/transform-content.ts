@@ -25,7 +25,9 @@ function parseFrontmatter(content: string): {
   try {
     const parsed = yaml.load(match[1], { schema: yaml.JSON_SCHEMA })
     return { data: (parsed ?? {}) as Frontmatter, body: match[2] }
-  } catch {
+  } catch (error) {
+    const filename = error instanceof Error ? error.message : 'unknown'
+    console.warn(`⚠️  Failed to parse frontmatter: ${filename}`)
     return { data: {}, body: match[2] }
   }
 }
@@ -33,7 +35,7 @@ function parseFrontmatter(content: string): {
 function transformFrontmatter(data: Frontmatter): Record<string, unknown> {
   const transformed: Record<string, unknown> = {}
   if (data.name) transformed.title = data.name
-  if (data.description)
+  if (data.description && typeof data.description === 'string')
     transformed.description = data.description
       .replace(/<[^>]+>/g, '')
       .replace(/\\\\n/g, '\n')
@@ -57,32 +59,59 @@ function processDirectory(
   outputSubdir: string,
   filePattern: RegExp = /\.md$/,
 ) {
+  if (!fs.existsSync(sourceDir)) {
+    console.warn(`⚠️  Source directory not found: ${sourceDir}`)
+    return 0
+  }
+
   const outputDir = path.join(OUTPUT_DIR, outputSubdir)
-  fs.mkdirSync(outputDir, { recursive: true })
+  try {
+    fs.mkdirSync(outputDir, { recursive: true })
+  } catch (error) {
+    console.error(`✗ Failed to create output directory: ${outputDir}`, error)
+    process.exit(1)
+  }
 
   const files: string[] = []
   const walk = (dir: string) => {
     if (!fs.existsSync(dir)) return
-    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-      const fullPath = path.join(dir, entry.name)
-      if (entry.isDirectory()) walk(fullPath)
-      else if (filePattern.test(entry.name)) files.push(fullPath)
+    try {
+      for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+        const fullPath = path.join(dir, entry.name)
+        if (entry.isDirectory()) walk(fullPath)
+        else if (filePattern.test(entry.name)) files.push(fullPath)
+      }
+    } catch (error) {
+      console.warn(`⚠️  Failed to read directory: ${dir}`, error)
     }
   }
   walk(sourceDir)
 
   let count = 0
   for (const file of files) {
-    const content = fs.readFileSync(file, 'utf8')
-    const { data, body } = parseFrontmatter(content)
+    try {
+      const content = fs.readFileSync(file, 'utf8')
+      const { data, body } = parseFrontmatter(content)
 
-    const name = data.name ?? path.basename(file, '.md')
-    const frontmatter = transformFrontmatter({ ...data, name })
-    const mdx = generatePage(frontmatter, body)
+      const name = data.name ?? path.basename(file, '.md')
+      const frontmatter = transformFrontmatter({ ...data, name })
+      const mdx = generatePage(frontmatter, body)
 
-    const slug = name.toLowerCase().replace(/[^a-z0-9-]/g, '-')
-    fs.writeFileSync(path.join(outputDir, `${slug}.mdx`), mdx)
-    count++
+      const slug = name
+        .toLowerCase()
+        .replace(/[^a-z0-9-]/g, '-')
+        .replace(/^-+|-+$/g, '')
+        .replace(/-+/g, '-')
+      if (!slug) {
+        console.warn(`⚠️  Could not generate valid slug for: ${name}`)
+        continue
+      }
+
+      fs.writeFileSync(path.join(outputDir, `${slug}.mdx`), mdx)
+      count++
+    } catch (error) {
+      console.error(`✗ Failed to process file: ${file}`, error)
+    }
   }
 
   return count
