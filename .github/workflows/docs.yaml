@@ -1,0 +1,83 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'docs/**'
+      - 'skills/**'
+      - 'agents/**'
+      - 'commands/**'
+      - 'README.md'
+  workflow_dispatch:
+
+concurrency:
+  group: docs-deploy
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-deploy:
+    name: Build and Deploy Docs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Generate reference content
+        run: bun run docs:generate
+
+      - name: Build docs
+        run: bun run --cwd docs build
+
+      - name: Create GitHub App token
+        if: github.repository == 'marcusrbrown/systematic'
+        uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
+        id: app-token
+        with:
+          app-id: ${{ secrets.FRO_BOT_APPLICATION_ID }}
+          private-key: ${{ secrets.FRO_BOT_APPLICATION_PRIVATE_KEY }}
+          owner: fro-bot
+
+      - name: Deploy to fro-bot/systematic
+        if: github.repository == 'marcusrbrown/systematic'
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+        run: |
+          name="${APP_SLUG}[bot]"
+          user_id=$(gh api "/users/${name}" --jq .id)
+          email="${user_id}+${name}@users.noreply.github.com"
+          git config --global user.email "${email}"
+          git config --global user.name "${name}"
+
+          # Verify docs build output exists
+          if [ ! -d "docs/dist" ]; then
+            echo "✗ Docs build output not found"
+            exit 1
+          fi
+
+          # Clone deployment repository
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/fro-bot/systematic.git" deploy-repo
+          cd deploy-repo
+
+          # Clean and copy new docs (preserve .git directory)
+          find . -mindepth 1 -not -path './.git' -not -path './.git/*' -delete
+          cp -r ../docs/dist/* .
+
+          # Commit and push if there are changes
+          git add -A
+          if ! git diff-index --quiet HEAD --; then
+            git commit -m "Deploy docs from marcusrbrown/systematic@${{ github.sha }}"
+            git push
+          else
+            echo "No changes to commit"
+          fi

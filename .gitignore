@@ -29,3 +29,10 @@ tests/tmp/
 
 # Sisyphus (OMO)
 .sisyphus/
+
+# Docs build artifacts
+docs/dist/
+docs/.astro/
+docs/src/content/docs/reference/**
+!docs/src/content/docs/reference/**/
+!docs/src/content/docs/reference/**/index.mdx

@@ -1,0 +1,61 @@
+---
+title: Installation
+description: How to install and verify the Systematic plugin for OpenCode.
+sidebar:
+  order: 1
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+## Prerequisites
+
+Before installing Systematic, ensure you have the following:
+
+- **OpenCode** installed and configured on your machine.
+- **Node.js 18+** or the **Bun** runtime installed.
+
+## Installation
+
+Systematic is distributed as an npm package and integrates directly into OpenCode via its plugin system.
+
+<Steps>
+1.  **Add the plugin to your configuration**
+    
+    Open your global OpenCode configuration file (typically located at `~/.config/opencode/opencode.json`) and add `@fro.bot/systematic` to the `plugins` array:
+
+    ```json
+    {
+      "plugins": ["@fro.bot/systematic@latest"]
+    }
+    ```
+
+2.  **Restart OpenCode**
+
+    Restart your OpenCode session to load the new plugin. Systematic uses OpenCode's `config` hook to automatically register all bundled skills, agents, and commands.
+
+3.  **Verify Installation**
+
+    In any OpenCode conversation, run the bootstrap skill to verify that the plugin is working:
+
+    ```bash
+    /systematic:using-systematic
+    ```
+
+    If the skill loads and displays usage instructions, the installation was successful.
+</Steps>
+
+## Automatic Asset Discovery
+
+One of the key features of Systematic is that it requires zero manual file copying. When the plugin loads, it automatically:
+
+- Discovers all bundled **skills** and makes them available via the `systematic_skill` tool.
+- Registers bundled **agents** so you can @mention them immediately.
+- Loads bundled **commands** (slash-invokable shortcuts) into your environment.
+
+## Next Steps
+
+Once you've verified the installation, you can:
+
+- [Configure the plugin](/systematic/getting-started/configuration/) to disable specific bundled content.
+- Learn how to [create your own skills](/systematic/guides/creating-skills/).
+- Explore the [architecture](/systematic/guides/architecture/) to understand how Systematic works under the hood.

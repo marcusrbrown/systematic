@@ -30,7 +30,9 @@
       "!**/dist",
       "!**/.opencode",
       "!**/node_modules",
-      "!**/*.md"
+      "!**/*.md",
+      "!**/.astro",
+      "!.sisyphus"
     ]
   }
 }
