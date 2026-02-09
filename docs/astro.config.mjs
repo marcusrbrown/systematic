@@ -4,6 +4,7 @@ import { defineConfig } from 'astro/config'
 export default defineConfig({
   site: 'https://fro.bot',
   base: '/systematic',
+  trailingSlash: 'always',
   integrations: [
     starlight({
       title: 'Systematic',
