@@ -100,10 +100,10 @@ Be a security expert.`
       expect(result.color).toBe('#ff0000')
     })
 
-    test('extracts maxSteps', () => {
-      const content = '---\nmaxSteps: 10\n---\nPrompt'
+    test('extracts steps', () => {
+      const content = '---\nsteps: 10\n---\nPrompt'
       const result = extractAgentFrontmatter(content)
-      expect(result.maxSteps).toBe(10)
+      expect(result.steps).toBe(10)
     })
 
     test('extracts permission', () => {

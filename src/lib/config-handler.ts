@@ -59,7 +59,8 @@ function loadAgentAsConfig(agentInfo: {
       disable,
       mode,
       color,
-      maxSteps,
+      steps,
+      hidden,
       permission,
     } = extractAgentFrontmatter(converted)
 
@@ -75,7 +76,8 @@ function loadAgentAsConfig(agentInfo: {
     if (disable !== undefined) config.disable = disable
     if (mode !== undefined) config.mode = mode
     if (color !== undefined) config.color = color
-    if (maxSteps !== undefined) config.maxSteps = maxSteps
+    if (steps !== undefined) config.steps = steps
+    if (hidden !== undefined) config.hidden = hidden
     if (permission !== undefined) config.permission = permission
 
     return config
