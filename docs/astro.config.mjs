@@ -2,6 +2,7 @@ import starlight from '@astrojs/starlight'
 import { defineConfig } from 'astro/config'
 
 export default defineConfig({
+  site: 'https://fro.bot',
   base: '/systematic',
   integrations: [
     starlight({
@@ -21,20 +22,25 @@ export default defineConfig({
           autogenerate: { directory: 'getting-started' },
         },
         {
-          label: 'Skills',
-          autogenerate: { directory: 'skills' },
-        },
-        {
-          label: 'Agents',
-          autogenerate: { directory: 'agents' },
-        },
-        {
-          label: 'Commands',
-          autogenerate: { directory: 'commands' },
-        },
-        {
           label: 'Guides',
           autogenerate: { directory: 'guides' },
+        },
+        {
+          label: 'Reference',
+          items: [
+            {
+              label: 'Skills',
+              autogenerate: { directory: 'reference/skills' },
+            },
+            {
+              label: 'Agents',
+              autogenerate: { directory: 'reference/agents' },
+            },
+            {
+              label: 'Commands',
+              autogenerate: { directory: 'reference/commands' },
+            },
+          ],
         },
       ],
     }),

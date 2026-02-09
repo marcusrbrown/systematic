@@ -9,6 +9,10 @@ const __dirname = path.dirname(__filename)
 const PROJECT_ROOT = path.resolve(__dirname, '../..')
 const OUTPUT_DIR = path.join(__dirname, '../src/content/docs/reference')
 
+if (fs.existsSync(OUTPUT_DIR)) {
+  fs.rmSync(OUTPUT_DIR, { recursive: true })
+}
+
 interface Frontmatter {
   name?: string
   description?: string
@@ -47,10 +51,7 @@ function generatePage(
   body: string,
 ): string {
   const fm = yaml.dump(frontmatter, { lineWidth: -1 }).trim()
-  const cleanedBody = body
-    .replace(/<[^>]+>/g, '')
-    .replace(/\n{3,}/g, '\n\n')
-    .trim()
+  const cleanedBody = body.replace(/\n{3,}/g, '\n\n').trim()
   return `---\n${fm}\n---\n\n${cleanedBody}`
 }
 
@@ -88,6 +89,7 @@ function processDirectory(
   walk(sourceDir)
 
   let count = 0
+  const slugsSeen = new Map<string, string>()
   for (const file of files) {
     try {
       const content = fs.readFileSync(file, 'utf8')
@@ -107,7 +109,15 @@ function processDirectory(
         continue
       }
 
-      fs.writeFileSync(path.join(outputDir, `${slug}.mdx`), mdx)
+      const existingFile = slugsSeen.get(slug)
+      if (existingFile != null) {
+        console.warn(
+          `⚠️  Slug collision: "${slug}" from ${file} overwrites ${existingFile}`,
+        )
+      }
+      slugsSeen.set(slug, file)
+
+      fs.writeFileSync(path.join(outputDir, `${slug}.md`), mdx)
       count++
     } catch (error) {
       console.error(`✗ Failed to process file: ${file}`, error)

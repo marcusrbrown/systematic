@@ -49,8 +49,9 @@ jobs:
       - name: Deploy to fro-bot/systematic
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
         run: |
-          name="${{ steps.app-token.outputs.app-slug }}[bot]"
+          name="${APP_SLUG}[bot]"
           user_id=$(gh api "/users/${name}" --jq .id)
           email="${user_id}+${name}@users.noreply.github.com"
           git config --global user.email "${email}"
@@ -63,11 +64,11 @@ jobs:
           fi
 
           # Clone deployment repository
-          git clone https://x-access-token:${{ steps.app-token.outputs.token }}@github.com/fro-bot/systematic.git deploy-repo
+          git clone "https://x-access-token:${GH_TOKEN}@github.com/fro-bot/systematic.git" deploy-repo
           cd deploy-repo
 
-          # Clean and copy new docs (preserve .git)
-          find . -mindepth 1 -not -name '.git' -delete
+          # Clean and copy new docs (preserve .git directory)
+          find . -mindepth 1 -not -path './.git' -not -path './.git/*' -delete
           cp -r ../docs/dist/* .
 
           # Commit and push if there are changes
@@ -76,5 +77,5 @@ jobs:
             git commit -m "Deploy docs from marcusrbrown/systematic@${{ github.sha }}"
             git push
           else
-            echo "ℹ️  No changes to commit"
+            echo "No changes to commit"
           fi
