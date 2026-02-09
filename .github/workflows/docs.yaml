@@ -39,6 +39,7 @@ jobs:
         run: bun run --cwd docs build
 
       - name: Create GitHub App token
+        if: github.repository == 'marcusrbrown/systematic'
         uses: actions/create-github-app-token@29824e69f54612133e76f7eaac726eef6c875baf # v2.2.1
         id: app-token
         with:
@@ -47,6 +48,7 @@ jobs:
           owner: fro-bot
 
       - name: Deploy to fro-bot/systematic
+        if: github.repository == 'marcusrbrown/systematic'
         env:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
