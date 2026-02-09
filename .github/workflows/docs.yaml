@@ -69,15 +69,18 @@ jobs:
           git clone "https://x-access-token:${GH_TOKEN}@github.com/fro-bot/systematic.git" deploy-repo
           cd deploy-repo
 
+          # Create or switch to gh-pages branch
+          git checkout gh-pages 2>/dev/null || git checkout --orphan gh-pages
+
           # Clean and copy new docs (preserve .git directory)
           find . -mindepth 1 -not -path './.git' -not -path './.git/*' -delete
           cp -r ../docs/dist/* .
 
           # Commit and push if there are changes
           git add -A
-          if ! git diff-index --quiet HEAD --; then
+          if ! git diff-index --quiet HEAD -- 2>/dev/null; then
             git commit -m "Deploy docs from marcusrbrown/systematic@${{ github.sha }}"
-            git push
+            git push --force origin gh-pages
           else
             echo "No changes to commit"
           fi
