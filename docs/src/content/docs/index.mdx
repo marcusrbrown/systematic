@@ -1,0 +1,33 @@
+---
+title: Systematic
+description: Structured Engineering Workflows for OpenCode
+template: splash
+hero:
+  tagline: Transform your AI assistant into a disciplined engineering collaborator.
+  actions:
+    - text: Get Started
+      link: /systematic/getting-started/
+      icon: right-arrow
+      variant: primary
+    - text: View on GitHub
+      link: https://github.com/marcusrbrown/systematic
+      icon: external
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components'
+
+<CardGrid stagger>
+  <Card title="Structured Skills" icon="open-book">
+    Pre-built workflows for brainstorming, planning, and code review that guide the AI through systematic processes.
+  </Card>
+  <Card title="Specialized Agents" icon="rocket">
+    Purpose-built subagents for architecture, security, performance, and UI/UX refinement.
+  </Card>
+  <Card title="Zero Configuration" icon="setting">
+    Works immediately after installation via OpenCode config hooks. No manual setup required.
+  </Card>
+  <Card title="Extensible" icon="puzzle">
+    Add project-specific skills and commands alongside bundled ones to match your team's patterns.
+  </Card>
+</CardGrid>

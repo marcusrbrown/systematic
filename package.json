@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Structured engineering workflows for OpenCode",
   "type": "module",
+  "homepage": "https://fro.bot/systematic",
   "main": "./dist/index.js",
   "bin": {
     "systematic": "./dist/cli.js"
@@ -19,6 +20,9 @@
     "agents",
     "commands"
   ],
+  "workspaces": [
+    "docs"
+  ],
   "scripts": {
     "clean": "rimraf dist",
     "build": "bun run clean && bun build src/index.ts src/cli.ts --outdir dist --target bun --splitting --packages external && tsc --emitDeclarationOnly",
@@ -29,6 +33,10 @@
     "typecheck": "tsc --noEmit",
     "lint": "biome check .",
     "fix": "bun run lint --fix",
+    "docs:dev": "bun run --cwd docs dev",
+    "docs:build": "bun run docs:generate && bun run --cwd docs build",
+    "docs:preview": "bun run --cwd docs preview",
+    "docs:generate": "bun docs/scripts/transform-content.ts",
     "prepublishOnly": "bun run build"
   },
   "keywords": [

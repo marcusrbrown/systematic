@@ -1,0 +1,70 @@
+---
+title: Configuration
+description: How to customize Systematic through configuration files and project-specific content.
+---
+
+Systematic works out of the box with sensible defaults, but it provides several ways to customize its behavior and content.
+
+## Plugin Configuration
+
+You can customize the plugin by creating a configuration file. Systematic looks for configuration in two places:
+
+1.  **Global:** `~/.config/opencode/systematic.json`
+2.  **Project-specific:** `.opencode/systematic.json` (takes precedence)
+
+### Disabling Bundled Content
+
+If you want to hide certain bundled skills, agents, or commands, you can list them in the `disabled_*` arrays:
+
+```json
+{
+  "disabled_skills": ["git-worktree"],
+  "disabled_agents": [],
+  "disabled_commands": []
+}
+```
+
+## Project-Specific Content
+
+One of Systematic's most powerful features is the ability to add your own skills, agents, and commands that live alongside (or override) the bundled ones.
+
+Add your content to the `.opencode/` directory in your project:
+
+```
+.opencode/
+├── skills/
+│   └── my-team-workflow/
+│       └── SKILL.md
+├── agents/
+│   └── custom-reviewer.md
+└── commands/
+    └── deploy.md
+```
+
+### Overriding Bundled Content
+
+If you create a project-specific asset with the same name as a bundled one, yours will take precedence. This allows you to customize bundled workflows for your specific project needs without modifying the plugin itself.
+
+## Configuration Priority
+
+Systematic resolves configuration and content in the following order (highest priority first):
+
+1.  **Project-level assets:** Files in `.opencode/`
+2.  **Project-level config:** `.opencode/systematic.json`
+3.  **User-level assets:** Files in `~/.config/opencode/`
+4.  **User-level config:** `~/.config/opencode/systematic.json`
+5.  **Bundled assets:** Content shipped with the plugin package
+
+## Advanced Configuration
+
+The Systematic configuration file is parsed as JSONC, meaning you can include comments to document your settings.
+
+```jsonc
+{
+  // Disable git-worktree as we use a different branching model
+  "disabled_skills": ["git-worktree"],
+  
+  // Custom agents are added in .opencode/agents/
+  "disabled_agents": []
+}
+```

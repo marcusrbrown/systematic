@@ -1,0 +1,156 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640">
+  <title>Systematic - Structured Engineering Workflows for OpenCode</title>
+  <desc>Banner for the Systematic OpenCode plugin featuring Skills, Agents, and Commands for disciplined AI-assisted engineering.</desc>
+  
+  <defs>
+    <!-- Gradient inspired by Fro Bot's afro (blue-purple) -->
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#1a1a2e"/>
+      <stop offset="50%" style="stop-color:#16213e"/>
+      <stop offset="100%" style="stop-color:#0f0f23"/>
+    </linearGradient>
+    
+    <!-- Accent gradient (cyan to magenta from Fro Bot) -->
+    <linearGradient id="accentGradient" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#4FD1C5"/>
+      <stop offset="50%" style="stop-color:#E91E8C"/>
+      <stop offset="100%" style="stop-color:#F5A623"/>
+    </linearGradient>
+
+    <!-- Line gradient for icon connections -->
+    <linearGradient id="lineGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#4FD1C5"/>
+      <stop offset="100%" style="stop-color:#E91E8C"/>
+    </linearGradient>
+    
+    <!-- Glow effect -->
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Text glow -->
+    <filter id="textGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="2" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  
+  <!-- Background -->
+  <rect width="1280" height="640" fill="url(#bgGradient)"/>
+  
+  <!-- Decorative grid pattern -->
+  <g opacity="0.05">
+    <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+      <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#4FD1C5" stroke-width="0.5"/>
+    </pattern>
+    <rect width="1280" height="640" fill="url(#grid)"/>
+  </g>
+  
+  <!-- Decorative circles (inspired by Fro Bot's afro curls) -->
+  <g opacity="0.1">
+    <circle cx="100" cy="100" r="150" fill="none" stroke="#4FD1C5" stroke-width="1"/>
+    <circle cx="1180" cy="540" r="200" fill="none" stroke="#E91E8C" stroke-width="1"/>
+    <circle cx="200" cy="500" r="100" fill="none" stroke="#F5A623" stroke-width="1"/>
+    <circle cx="1100" cy="150" r="120" fill="none" stroke="#4FD1C5" stroke-width="1"/>
+  </g>
+  
+  <!-- Accent line at top -->
+  <rect x="0" y="0" width="1280" height="4" fill="url(#accentGradient)"/>
+  
+  <!-- Main content area -->
+  <g transform="translate(640, 280)">
+    <!-- Icon: Stylized workflow/systematic symbol -->
+    <g transform="translate(0, -60)">
+      <!-- Three interconnected nodes representing systematic workflow -->
+      <g filter="url(#glow)">
+        <!-- Connecting lines (now with gradient and bolder stroke) -->
+        <line x1="0" y1="0" x2="-70" y2="40" stroke="url(#lineGradient)" stroke-width="3.5" opacity="0.8"/>
+        <line x1="0" y1="0" x2="70" y2="40" stroke="url(#lineGradient)" stroke-width="3.5" opacity="0.8"/>
+        <line x1="-70" y1="40" x2="70" y2="40" stroke="url(#accentGradient)" stroke-width="3.5" opacity="0.8"/>
+        
+        <!-- Central node -->
+        <circle cx="0" cy="0" r="24" fill="#4FD1C5"/>
+        <!-- Left node -->
+        <circle cx="-70" cy="40" r="16" fill="#E91E8C"/>
+        <!-- Right node -->
+        <circle cx="70" cy="40" r="16" fill="#F5A623"/>
+      </g>
+    </g>
+    
+    <!-- Title -->
+    <text 
+      x="0" 
+      y="60" 
+      font-family="'SF Pro Display', 'Helvetica Neue', -apple-system, BlinkMacSystemFont, sans-serif" 
+      font-size="72" 
+      font-weight="700" 
+      letter-spacing="-1"
+      fill="white" 
+      text-anchor="middle"
+      filter="url(#textGlow)"
+    >
+      Systematic
+    </text>
+    
+    <!-- Tagline (brighter for better accessibility) -->
+    <text 
+      x="0" 
+      y="110" 
+      font-family="'SF Pro Text', 'Helvetica Neue', -apple-system, BlinkMacSystemFont, sans-serif" 
+      font-size="22" 
+      font-weight="400" 
+      letter-spacing="0.5"
+      fill="#B2F5EA" 
+      text-anchor="middle"
+    >
+      Structured Engineering Workflows for OpenCode
+    </text>
+    
+    <!-- Feature pills (tighter grouping: -140, 0, 140) -->
+    <g transform="translate(0, 160)">
+      <!-- Skills pill -->
+      <g transform="translate(-150, 0)">
+        <rect x="-60" y="-16" width="120" height="32" rx="16" fill="#4FD1C5" opacity="0.15"/>
+        <rect x="-60" y="-16" width="120" height="32" rx="16" fill="none" stroke="#4FD1C5" stroke-width="1"/>
+        <text x="0" y="5" font-family="'SF Pro Text', 'Helvetica Neue', sans-serif" font-size="14" font-weight="500" letter-spacing="0.5" fill="#4FD1C5" text-anchor="middle">Skills</text>
+      </g>
+      
+      <!-- Agents pill -->
+      <g transform="translate(0, 0)">
+        <rect x="-60" y="-16" width="120" height="32" rx="16" fill="#E91E8C" opacity="0.15"/>
+        <rect x="-60" y="-16" width="120" height="32" rx="16" fill="none" stroke="#E91E8C" stroke-width="1"/>
+        <text x="0" y="5" font-family="'SF Pro Text', 'Helvetica Neue', sans-serif" font-size="14" font-weight="500" letter-spacing="0.5" fill="#E91E8C" text-anchor="middle">Agents</text>
+      </g>
+      
+      <!-- Commands pill -->
+      <g transform="translate(150, 0)">
+        <rect x="-60" y="-16" width="120" height="32" rx="16" fill="#F5A623" opacity="0.15"/>
+        <rect x="-60" y="-16" width="120" height="32" rx="16" fill="none" stroke="#F5A623" stroke-width="1"/>
+        <text x="0" y="5" font-family="'SF Pro Text', 'Helvetica Neue', sans-serif" font-size="14" font-weight="500" letter-spacing="0.5" fill="#F5A623" text-anchor="middle">Commands</text>
+      </g>
+    </g>
+  </g>
+  
+  <!-- Bottom accent line -->
+  <rect x="0" y="636" width="1280" height="4" fill="url(#accentGradient)"/>
+  
+  <!-- Subtle brand mark (brighter for legibility) -->
+  <text 
+    x="1240" 
+    y="610" 
+    font-family="'SF Mono', 'Fira Code', 'JetBrains Mono', Consolas, monospace" 
+    font-size="11" 
+    letter-spacing="0.5"
+    fill="#718096" 
+    text-anchor="end"
+  >
+    @fro.bot/systematic
+  </text>
+</svg>

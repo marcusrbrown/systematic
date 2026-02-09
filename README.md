@@ -10,6 +10,7 @@
 
 [![Build Status](https://img.shields.io/github/actions/workflow/status/marcusrbrown/systematic/main.yaml?style=flat-square&label=build&labelColor=1a1a2e&color=4FD1C5)](https://github.com/marcusrbrown/systematic/actions)
 [![npm version](https://img.shields.io/npm/v/@fro.bot/systematic?style=flat-square&label=npm&labelColor=1a1a2e&color=E91E8C)](https://www.npmjs.com/package/@fro.bot/systematic)
+[![Docs](https://img.shields.io/badge/docs-fro.bot/systematic-4FD1C5?style=flat-square&labelColor=1a1a2e)](https://fro.bot/systematic)
 [![License](https://img.shields.io/badge/license-MIT-F5A623?style=flat-square&labelColor=1a1a2e)](LICENSE)
 
 <br>
@@ -324,7 +325,7 @@ See [`AGENTS.md`](./AGENTS.md) for detailed development guidelines, code style c
 
 ## Converting from Claude Code
 
-Migrating skills, agents, or commands from Claude Code (CEP) to Systematic? See the [Conversion Guide](./docs/CONVERSION-GUIDE.md) for field mappings and examples.
+Migrating skills, agents, or commands from Claude Code (CEP) to Systematic? See the [Conversion Guide](https://fro.bot/systematic/guides/conversion-guide) for field mappings and examples. (Also available as [local Markdown](./docs/CONVERSION-GUIDE.md).)
 
 ## References
 
