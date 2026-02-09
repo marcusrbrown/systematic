@@ -1,6 +1,6 @@
 # src/lib — Core Implementation
 
-13 modules implementing plugin logic: discovery, conversion, config, and tool registration.
+12 modules implementing plugin logic: discovery, conversion, config, and tool registration.
 
 ## Data Flow
 
@@ -35,44 +35,26 @@ All discovery follows same pattern: `dir → walkDir() → find files → parseF
 |--------|-------------|------|
 | `converter.ts` | `convertContent`, `convertFileWithCache`, `clearConverterCache` | CEP→OpenCode transforms (tool names, models, body refs) |
 | `skill-loader.ts` | `loadSkill`, `LoadedSkill`, `SKILL_PREFIX` | Loads + wraps skill content in XML template |
-| `validation.ts` | `isAgentMode`, `isPermissionSetting`, `buildPermissionObject` | Agent config extraction + type guards |
+| `validation.ts` | `isAgentMode`, `isPermissionSetting`, `buildPermissionObject`, `normalizePermission`, `extractString`, `extractBoolean` | Agent config extraction + type guards + safe value extraction |
 
 ### Config & Integration Layer
 
 | Module | Key Exports | Role |
 |--------|-------------|------|
 | `config.ts` | `loadConfig`, `getConfigPaths`, `SystematicConfig`, `DEFAULT_CONFIG` | JSONC config loading + merging |
-| `config-handler.ts` | `createConfigHandler`, `ConfigHandlerDeps` | OpenCode config hook (collects + converts all assets) |
+| `config-handler.ts` | `createConfigHandler`, `ConfigHandlerDeps`, `formatAgentDescription`, `toTitleCase` | OpenCode config hook (collects + converts all assets) |
 | `skill-tool.ts` | `createSkillTool`, `SkillToolOptions` | `systematic_skill` tool (XML description, skill execution) |
 | `bootstrap.ts` | `getBootstrapContent`, `BootstrapDeps` | System prompt injection (using-systematic skill) |
 
-## Key Interfaces
+## Key Types
 
-```typescript
-// Discovery
-interface SkillInfo { path, skillFile, name, description }
-interface AgentInfo { name, file, category }
-interface CommandInfo { name, file, category }
-interface WalkEntry { path, name, isDirectory, depth, category }
+- **Discovery:** `SkillInfo`, `AgentInfo`, `CommandInfo`, `WalkEntry` — all have `name` + path/file fields
+- **Config:** `SystematicConfig` (disabled lists + bootstrap), `ConfigHandlerDeps` (directory paths)
+- **Conversion:** `ContentType` = `'skill' | 'agent' | 'command'`, `ConvertOptions` (source, agentMode, skipBodyTransform)
 
-// Config
-interface SystematicConfig { disabled_skills, disabled_agents, disabled_commands, bootstrap: BootstrapConfig }
-interface ConfigHandlerDeps { directory, bundledSkillsDir, bundledAgentsDir, bundledCommandsDir }
+## Converter
 
-// Conversion
-type ContentType = 'skill' | 'agent' | 'command'
-type SourceType = 'cep' | 'opencode'
-interface ConvertOptions { source, agentMode, skipBodyTransform }
-```
-
-## Converter Details
-
-CEP→OpenCode transforms:
-- **Tool names**: `TodoWrite`→`todowrite`, `Task`→`delegate_task`, `Skill`→`skill`
-- **Models**: Claude model name normalization
-- **Body**: Replaces tool references outside code blocks (regex-based)
-- **Frontmatter**: Strips CEP-only fields, adds OpenCode fields
-- **Caching**: `convertFileWithCache` uses file mtime for invalidation
+CEP→OpenCode: tool names (`TodoWrite`→`todowrite`, `Task`→`delegate_task`), Claude model normalization, body reference replacement (regex, outside code blocks), frontmatter field mapping. `convertFileWithCache` uses mtime for invalidation.
 
 ## Patterns
 
@@ -84,7 +66,8 @@ CEP→OpenCode transforms:
 
 ## Notes
 
-- `findSkillsInDir` is highest-centrality function (6 references across 3 modules)
+- `parseFrontmatter` is most-imported function (7 references across codebase)
+- `findSkillsInDir` is highest-centrality discovery function (6 references across 3 modules)
 - `SKILL_PREFIX` = `'systematic:'` — all skills registered with this prefix
 - `parseFrontmatter` is regex-based (not a YAML library for delimiter detection)
 - `formatFrontmatter` uses `js-yaml` dump with `noRefs` and core schema
