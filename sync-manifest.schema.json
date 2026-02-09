@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://fro.bot/systematic/sync-manifest.schema.json",
+  "title": "Systematic Sync Manifest",
+  "description": "Provenance manifest tracking upstream sources for bundled definitions",
+  "type": "object",
+  "required": ["sources", "definitions"],
+  "properties": {
+    "$schema": {
+      "type": "string"
+    },
+    "sources": {
+      "type": "object",
+      "description": "Named upstream source repositories",
+      "additionalProperties": {
+        "type": "object",
+        "required": ["repo", "branch", "url"],
+        "properties": {
+          "repo": {
+            "type": "string",
+            "description": "GitHub owner/repo"
+          },
+          "branch": {
+            "type": "string",
+            "description": "Default branch name"
+          },
+          "url": {
+            "type": "string",
+            "description": "Full repository URL",
+            "format": "uri"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "definitions": {
+      "type": "object",
+      "description": "Bundled definitions mapped to their upstream provenance",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "source",
+          "upstream_path",
+          "upstream_commit",
+          "synced_at",
+          "notes"
+        ],
+        "properties": {
+          "source": {
+            "type": "string",
+            "description": "Key into sources map"
+          },
+          "upstream_path": {
+            "type": "string",
+            "description": "File path within source repo"
+          },
+          "upstream_commit": {
+            "type": "string",
+            "description": "Commit SHA at time of sync"
+          },
+          "synced_at": {
+            "type": "string",
+            "description": "ISO 8601 timestamp of last sync",
+            "format": "date-time"
+          },
+          "notes": {
+            "type": "string",
+            "description": "What was changed or adapted during import"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}
