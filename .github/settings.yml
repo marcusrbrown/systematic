@@ -4,6 +4,7 @@ _extends: .github:common-settings.yaml
 repository:
   name: systematic
   description: Structured engineering workflows for OpenCode
+  homepage: https://fro.bot/systematic
   topics: opencode, plugin, ai, workflow, systematic, semantic-release, bun
 
 branches:

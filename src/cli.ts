@@ -8,7 +8,23 @@ import { type ContentType, convertContent } from './lib/converter.js'
 import * as skills from './lib/skills.js'
 import type { AgentMode } from './lib/validation.js'
 
-const VERSION = '0.1.0'
+const getPackageVersion = (): string => {
+  try {
+    const packageJsonPath = path.resolve(
+      import.meta.dirname,
+      '..',
+      'package.json',
+    )
+    if (!fs.existsSync(packageJsonPath)) return 'unknown'
+    const content = fs.readFileSync(packageJsonPath, 'utf8')
+    const parsed = JSON.parse(content) as { version?: string }
+    return parsed.version ?? 'unknown'
+  } catch {
+    return 'unknown'
+  }
+}
+
+const VERSION = getPackageVersion()
 
 const HELP = `
 systematic - OpenCode plugin for systematic engineering workflows

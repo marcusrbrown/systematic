@@ -1,6 +1,6 @@
 {
   "name": "@fro.bot/systematic",
-  "version": "0.1.0",
+  "version": "0.0.0-semantic-release",
   "description": "Structured engineering workflows for OpenCode",
   "type": "module",
   "homepage": "https://fro.bot/systematic",

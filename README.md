@@ -15,7 +15,7 @@
 
 <br>
 
-**[Overview](#overview)** · **[Quick Start](#quick-start)** · **[Skills](#skills)** · **[Agents](#agents)** · **[Commands](#commands)** · **[Development](#development)**
+**[Overview](#overview)** · **[Quick Start](#quick-start)** · **[Skills](#skills)** · **[Agents](#agents)** · **[Commands](#commands)** · **[CLI](#cli)** · **[Configuration](#configuration)** · **[Development](#development)**
 
 </div>
 
@@ -38,11 +38,12 @@ Most AI coding assistants respond to requests without structure or methodology. 
 
 ### Key Features
 
-- **🧠 Structured Skills** — Pre-built workflows for brainstorming, planning, and code review
-- **🤖 Specialized Agents** — Purpose-built subagents for architecture, security, and performance
-- **⚡ Zero Configuration** — Works immediately after installation via config hooks
-- **🔧 Extensible** — Add project-specific skills and commands alongside bundled ones
-- **📦 Batteries Included** — Skills, agents, and commands ship with the npm package
+- **Structured Skills** — Pre-built workflows for brainstorming, planning, and code review
+- **Specialized Agents** — Purpose-built subagents for architecture, security, and performance
+- **Zero Configuration** — Works immediately after installation via config hooks
+- **Extensible** — Add project-specific skills and commands alongside bundled ones
+- **Batteries Included** — 8 skills, 11 agents, and 9 commands ship with the npm package
+- **CLI Tooling** — Inspect, list, and convert assets from the command line
 
 ## Quick Start
 
@@ -169,16 +170,52 @@ Commands are slash-invokable shortcuts that trigger workflows or actions.
 | `/workflows:plan` | Create detailed implementation plans |
 | `/workflows:review` | Run code review with specialized agents |
 | `/workflows:work` | Execute planned work systematically |
-| `/workflows:compound` | Build compound documentation |
+| `/workflows:compound` | Document recently solved problems to build team knowledge |
 
 ### Utility Commands
 
 | Command | Description |
 |---------|-------------|
-| `/systematic:lfg` | "Let's go" — start working immediately |
-| `/systematic:create-agent-skill` | Create a new skill with guidance |
-| `/systematic:deepen-plan` | Add detail to existing plans |
-| `/systematic:agent-native-audit` | Audit code for agent-native patterns |
+| `/systematic:lfg` | Full autonomous engineering workflow — plan, then execute |
+| `/systematic:create-agent-skill` | Create a new skill with expert guidance |
+| `/systematic:deepen-plan` | Enhance a plan with parallel research for each section |
+| `/systematic:agent-native-audit` | Audit code for agent-native architecture patterns |
+
+## CLI
+
+Systematic includes a CLI for inspecting and converting assets outside of OpenCode.
+
+```
+systematic <command> [options]
+```
+
+### Commands
+
+| Command | Description |
+|---------|-------------|
+| `list [type]` | List available skills, agents, or commands |
+| `convert <type> <file>` | Convert a CEP file and output the result to stdout |
+| `config show` | Show current configuration and file contents |
+| `config path` | Print config file locations |
+
+### Examples
+
+```bash
+# List all bundled skills
+systematic list skills
+
+# List all bundled agents
+systematic list agents
+
+# Convert a Claude Code agent to OpenCode format
+systematic convert agent ./agents/my-agent.md
+
+# Convert with a specific agent mode
+systematic convert agent ./agents/my-agent.md --mode=primary
+
+# Show configuration
+systematic config show
+```
 
 ## Configuration
 
@@ -186,15 +223,30 @@ Systematic works out of the box, but you can customize it via configuration file
 
 ### Plugin Configuration
 
-Create `~/.config/opencode/systematic.json` or `.opencode/systematic.json` to disable specific bundled content:
+Configuration is loaded from multiple locations and merged (later sources override earlier ones):
+
+1. **User config:** `~/.config/opencode/systematic.json`
+2. **Project config:** `.opencode/systematic.json`
+3. **Custom config:** `$OPENCODE_CONFIG_DIR/systematic.json` (if `OPENCODE_CONFIG_DIR` is set)
 
 ```json
 {
   "disabled_skills": ["git-worktree"],
   "disabled_agents": [],
-  "disabled_commands": []
+  "disabled_commands": [],
+  "bootstrap": {
+    "enabled": true
+  }
 }
 ```
+
+| Option | Type | Default | Description |
+|--------|------|---------|-------------|
+| `disabled_skills` | `string[]` | `[]` | Skills to exclude from registration |
+| `disabled_agents` | `string[]` | `[]` | Agents to exclude from registration |
+| `disabled_commands` | `string[]` | `[]` | Commands to exclude from registration |
+| `bootstrap.enabled` | `boolean` | `true` | Inject the `using-systematic` guide into system prompts |
+| `bootstrap.file` | `string` | — | Custom bootstrap file path (overrides default) |
 
 ### Project-Specific Content
 
@@ -219,7 +271,7 @@ The plugin exposes one tool to OpenCode:
 
 | Tool | Description |
 |------|-------------|
-| `systematic_skill` | Load Systematic bundled skills by name |
+| `systematic_skill` | Load Systematic bundled skills by name. Lists available skills in its description and returns formatted skill content when invoked. |
 
 For non-Systematic skills (project or user-level), use OpenCode's native `skill` tool.
 
@@ -247,9 +299,9 @@ flowchart TB
     style G fill:#0f0f23,stroke:#F5A623,color:#B2F5EA
 ```
 
-1. **`config` hook** — Merges bundled assets into your OpenCode configuration
-2. **`tool` hook** — Registers the `systematic_skill` tool for loading skills
-3. **`system.transform` hook** — Injects the "Using Systematic" guide into system prompts
+1. **`config` hook** — Discovers and merges bundled skills, agents, and commands into your OpenCode configuration. Existing config takes precedence over bundled content. Skills are registered as commands with the `systematic:` prefix.
+2. **`tool` hook** — Registers the `systematic_skill` tool, which lists available skills in its XML description and loads skill content on demand.
+3. **`system.transform` hook** — Injects the "Using Systematic" bootstrap guide into system prompts, teaching the AI how to discover and invoke skills.
 
 This architecture ensures skills, agents, and commands are available immediately without manual setup.
 
@@ -286,20 +338,27 @@ bun test
 ### Project Structure
 
 ```
+systematic/
 ├── src/
-│   ├── index.ts              # Plugin entry point
+│   ├── index.ts              # Plugin entry point (SystematicPlugin)
 │   ├── cli.ts                # CLI entry point
 │   └── lib/
 │       ├── bootstrap.ts      # System prompt injection
-│       ├── config.ts         # JSONC config loading
-│       ├── config-handler.ts # OpenCode config hook
-│       ├── skill-tool.ts     # systematic_skill tool
+│       ├── config.ts         # JSONC config loading + merging
+│       ├── config-handler.ts # OpenCode config hook implementation
+│       ├── converter.ts      # CEP-to-OpenCode content conversion
+│       ├── skill-tool.ts     # systematic_skill tool factory
+│       ├── skill-loader.ts   # Skill content loading + formatting
 │       ├── skills.ts         # Skill discovery
 │       ├── agents.ts         # Agent discovery
-│       └── commands.ts       # Command discovery
-├── skills/                   # Bundled skills (SKILL.md files)
-├── agents/                   # Bundled agents (Markdown)
-├── commands/                 # Bundled commands (Markdown)
+│       ├── commands.ts       # Command discovery
+│       ├── frontmatter.ts    # YAML frontmatter parsing
+│       ├── validation.ts     # Agent config validation + type guards
+│       └── walk-dir.ts       # Recursive directory walker
+├── skills/                   # 8 bundled skills (SKILL.md files)
+├── agents/                   # 11 bundled agents (4 categories)
+├── commands/                 # 9 bundled commands (with workflows/ subdir)
+├── docs/                     # Starlight documentation site
 ├── tests/
 │   ├── unit/                 # Unit tests
 │   └── integration/          # Integration tests
@@ -317,6 +376,9 @@ bun test tests/unit/skills.test.ts
 
 # Run integration tests
 bun test tests/integration
+
+# Run all tests
+bun test
 ```
 
 ### Contributing
@@ -325,13 +387,15 @@ See [`AGENTS.md`](./AGENTS.md) for detailed development guidelines, code style c
 
 ## Converting from Claude Code
 
-Migrating skills, agents, or commands from Claude Code (CEP) to Systematic? See the [Conversion Guide](https://fro.bot/systematic/guides/conversion-guide) for field mappings and examples. (Also available as [local Markdown](./docs/CONVERSION-GUIDE.md).)
+Migrating skills, agents, or commands from Claude Code (CEP) to Systematic? See the [Conversion Guide](https://fro.bot/systematic/guides/conversion-guide/) for field mappings and examples. Also available as [local Markdown](./docs/CONVERSION-GUIDE.md).
 
 ## References
 
+- [Systematic Documentation](https://fro.bot/systematic) — Full documentation site
 - [OpenCode Documentation](https://opencode.ai/docs/) — Official OpenCode platform docs
+- [OpenCode Plugin API](https://opencode.ai/docs/plugins) — Plugin development reference
 - [Compound Engineering Plugin](https://github.com/EveryInc/compound-engineering-plugin) — Original Claude Code workflows
-- [Plugin Source Code](https://github.com/marcusrbrown/systematic) — View the implementation
+- [Source Code](https://github.com/marcusrbrown/systematic) — View the implementation
 
 ## License
 
