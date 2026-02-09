@@ -9,17 +9,16 @@ const __dirname = path.dirname(__filename)
 const PROJECT_ROOT = path.resolve(__dirname, '../..')
 const OUTPUT_DIR = path.join(__dirname, '../src/content/docs/reference')
 
-if (fs.existsSync(OUTPUT_DIR)) {
-  fs.rmSync(OUTPUT_DIR, { recursive: true })
-}
-
 interface Frontmatter {
   name?: string
   description?: string
   [key: string]: unknown
 }
 
-function parseFrontmatter(content: string): {
+function parseFrontmatter(
+  content: string,
+  sourcePath: string,
+): {
   data: Frontmatter
   body: string
 } {
@@ -30,8 +29,7 @@ function parseFrontmatter(content: string): {
     const parsed = yaml.load(match[1], { schema: yaml.JSON_SCHEMA })
     return { data: (parsed ?? {}) as Frontmatter, body: match[2] }
   } catch (error) {
-    const filename = error instanceof Error ? error.message : 'unknown'
-    console.warn(`⚠️  Failed to parse frontmatter: ${filename}`)
+    console.warn(`⚠️  Failed to parse frontmatter in: ${sourcePath}`, error)
     return { data: {}, body: match[2] }
   }
 }
@@ -68,6 +66,13 @@ function processDirectory(
   const outputDir = path.join(OUTPUT_DIR, outputSubdir)
   try {
     fs.mkdirSync(outputDir, { recursive: true })
+    for (const entry of fs.readdirSync(outputDir, { withFileTypes: true })) {
+      if (entry.isFile() && entry.name === 'index.mdx') continue
+      fs.rmSync(path.join(outputDir, entry.name), {
+        recursive: true,
+        force: true,
+      })
+    }
   } catch (error) {
     console.error(`✗ Failed to create output directory: ${outputDir}`, error)
     process.exit(1)
@@ -93,7 +98,7 @@ function processDirectory(
   for (const file of files) {
     try {
       const content = fs.readFileSync(file, 'utf8')
-      const { data, body } = parseFrontmatter(content)
+      const { data, body } = parseFrontmatter(content, file)
 
       const name = data.name ?? path.basename(file, '.md')
       const frontmatter = transformFrontmatter({ ...data, name })
@@ -111,9 +116,11 @@ function processDirectory(
 
       const existingFile = slugsSeen.get(slug)
       if (existingFile != null) {
-        console.warn(
-          `⚠️  Slug collision: "${slug}" from ${file} overwrites ${existingFile}`,
+        console.error(
+          `✗ Slug collision: "${slug}" from ${file} overwrites ${existingFile}`,
         )
+        process.exitCode = 1
+        continue
       }
       slugsSeen.set(slug, file)
 
