@@ -77,10 +77,9 @@ const PATH_REPLACEMENTS: ReadonlyArray<readonly [RegExp, string]> = [
   [/compound-engineering:/g, 'systematic:'],
 ] as const
 
-/**
- * Tool name mapping for frontmatter `tools` arrays.
- * Derived from TOOL_MAPPINGS to ensure frontmatter tool keys match OC tool IDs.
- */
+// Maps CC tool names (lowercased) to OC tool IDs for frontmatter `tools` arrays.
+// Must stay in sync with TOOL_MAPPINGS above. Not derived programmatically because
+// TOOL_MAPPINGS uses context-dependent regex patterns that can't be reliably parsed.
 const TOOL_NAME_MAP: Record<string, string> = {
   task: 'delegate_task',
   todowrite: 'todowrite',
