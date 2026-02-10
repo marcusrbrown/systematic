@@ -65,22 +65,16 @@ Dynamically discover all available skills and match them to plan sections. Don't
 
 ```bash
 # 1. Project-local skills (highest priority - project-specific)
-ls .claude/skills/
+ls .opencode/skills/
 
-# 2. User's global skills (~/.claude/)
-ls ~/.claude/skills/
+# 2. User's global skills
+ls ~/.config/opencode/skills/
 
-# 3. compound-engineering plugin skills
-ls ~/.claude/plugins/cache/*/compound-engineering/*/skills/
-
-# 4. ALL other installed plugins - check every plugin for skills
-find ~/.claude/plugins/cache -type d -name "skills" 2>/dev/null
-
-# 5. Also check installed_plugins.json for all plugin locations
-cat ~/.claude/plugins/installed_plugins.json
+# 3. List bundled skills from systematic plugin
+systematic list skills
 ```
 
-**Important:** Check EVERY source. Don't assume compound-engineering is the only plugin. Use skills from ANY installed plugin that's relevant.
+**Important:** Check EVERY source. Use skills from ANY installed plugin that's relevant.
 
 **Step 2: For each discovered skill, read its SKILL.md to understand what it does**
 
@@ -131,13 +125,11 @@ The skill tells you what to do - follow it. Execute the skill completely."
 
 **Example spawns:**
 ```
-Task general-purpose: "Use the dhh-rails-style skill at ~/.claude/plugins/.../dhh-rails-style. Read SKILL.md and apply it to: [Rails sections of plan]"
+task: "Load the systematic:agent-native-architecture skill and apply it to: [agent/tool sections of plan]"
 
-Task general-purpose: "Use the frontend-design skill at ~/.claude/plugins/.../frontend-design. Read SKILL.md and apply it to: [UI sections of plan]"
+task: "Load the systematic:brainstorming skill and apply it to: [sections needing design exploration]"
 
-Task general-purpose: "Use the agent-native-architecture skill at ~/.claude/plugins/.../agent-native-architecture. Read SKILL.md and apply it to: [agent/tool sections of plan]"
-
-Task general-purpose: "Use the security-patterns skill at ~/.claude/skills/security-patterns. Read SKILL.md and apply it to: [full plan]"
+task: "Load the systematic:compound-docs skill and search for relevant documented solutions for: [plan topic]"
 ```
 
 **No limit on skill sub-agents. Spawn one for every skill that could possibly be relevant.**
@@ -175,8 +167,7 @@ Run these commands to get every learning file:
 find docs/solutions -name "*.md" -type f 2>/dev/null
 
 # If docs/solutions doesn't exist, check alternate locations:
-find .claude/docs -name "*.md" -type f 2>/dev/null
-find ~/.claude/docs -name "*.md" -type f 2>/dev/null
+find .opencode/docs -name "*.md" -type f 2>/dev/null
 ```
 
 **Step 2: Read frontmatter of each learning to filter**
@@ -285,11 +276,7 @@ Return concrete, actionable recommendations."
 
 **Also use Context7 MCP for framework documentation:**
 
-For any technologies/frameworks mentioned in the plan, query Context7:
-```
-mcp__plugin_compound-engineering_context7__resolve-library-id: Find library ID for [framework]
-mcp__plugin_compound-engineering_context7__query-docs: Query documentation for specific patterns
-```
+For any technologies/frameworks mentioned in the plan, use Context7 (if available) to query library documentation for specific patterns and best practices.
 
 **Use WebSearch for current best practices:**
 
@@ -305,36 +292,19 @@ Dynamically discover every available agent and run them ALL against the plan. Do
 
 ```bash
 # 1. Project-local agents (highest priority - project-specific)
-find .claude/agents -name "*.md" 2>/dev/null
+find .opencode/agents -name "*.md" 2>/dev/null
 
-# 2. User's global agents (~/.claude/)
-find ~/.claude/agents -name "*.md" 2>/dev/null
+# 2. User's global agents
+find ~/.config/opencode/agents -name "*.md" 2>/dev/null
 
-# 3. compound-engineering plugin agents (all subdirectories)
-find ~/.claude/plugins/cache/*/compound-engineering/*/agents -name "*.md" 2>/dev/null
-
-# 4. ALL other installed plugins - check every plugin for agents
-find ~/.claude/plugins/cache -path "*/agents/*.md" 2>/dev/null
-
-# 5. Check installed_plugins.json to find all plugin locations
-cat ~/.claude/plugins/installed_plugins.json
-
-# 6. For local plugins (isLocal: true), check their source directories
-# Parse installed_plugins.json and find local plugin paths
+# 3. List bundled agents from systematic plugin
+systematic list agents
 ```
 
 **Important:** Check EVERY source. Include agents from:
-- Project `.claude/agents/`
-- User's `~/.claude/agents/`
-- compound-engineering plugin (but SKIP workflow/ agents - only use review/, research/, design/, docs/)
-- ALL other installed plugins (agent-sdk-dev, frontend-design, etc.)
-- Any local plugins
-
-**For compound-engineering plugin specifically:**
-- USE: `agents/review/*` (all reviewers)
-- USE: `agents/research/*` (all researchers)
-- USE: `agents/design/*` (design agents)
-- USE: `agents/docs/*` (documentation agents)
+- Project `.opencode/agents/`
+- User's `~/.config/opencode/agents/`
+- Systematic plugin bundled agents (review/, research/, design/ categories)
 - SKIP: `agents/workflow/*` (these are workflow orchestrators, not reviewers)
 
 **Step 2: For each discovered agent, read its description**
@@ -474,7 +444,7 @@ Before finalizing:
 
 ## Post-Enhancement Options
 
-After writing the enhanced plan, use the **AskUserQuestion tool** to present these options:
+After writing the enhanced plan, use the **question tool** to present these options:
 
 **Question:** "Plan deepened at `[plan_path]`. What would you like to do next?"
 

@@ -65,19 +65,17 @@ If a review agent flags any file in these directories for cleanup or removal, di
 
 Run ALL or most of these agents at the same time:
 
-1. task kieran-rails-reviewer(PR content)
-2. task dhh-rails-reviewer(PR title)
-3. If turbo is used: task rails-turbo-expert(PR content)
+1. task kieran-rails-reviewer(PR content) - If Rails project
+2. task dhh-rails-reviewer(PR title) - If Rails project
+3. task kieran-typescript-reviewer(PR content) - If TypeScript project
 4. task git-history-analyzer(PR content)
-5. task dependency-detective(PR content)
-6. task pattern-recognition-specialist(PR content)
-7. task architecture-strategist(PR content)
-8. task code-philosopher(PR content)
-9. task security-sentinel(PR content)
-10. task performance-oracle(PR content)
-11. task devops-harmony-analyst(PR content)
-12. task data-integrity-guardian(PR content)
-13. task agent-native-reviewer(PR content) - Verify new features are agent-accessible
+5. task pattern-recognition-specialist(PR content)
+6. task architecture-strategist(PR content)
+7. task security-sentinel(PR content)
+8. task performance-oracle(PR content)
+9. task data-integrity-guardian(PR content)
+10. task agent-native-reviewer(PR content) - Verify new features are agent-accessible
+11. task code-simplicity-reviewer(PR content)
 
 </parallel_tasks>
 

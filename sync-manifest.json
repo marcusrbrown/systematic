@@ -8,6 +8,221 @@
     }
   },
   "definitions": {
+    "agents/design/figma-design-sync": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/design/figma-design-sync.md",
+      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
+      "synced_at": "2026-02-10T20:00:00Z",
+      "notes": "Imported from CEP. Mechanical conversion applied. CLAUDE.md references converted to AGENTS.md by converter.",
+      "upstream_content_hash": "245ae1e93971a777598c65c66dbe581ea380d13dcf296f3290bed9819d3a48b6",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:path-references",
+          "reason": "Converter handled CLAUDE.md->AGENTS.md path replacements"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/research/git-history-analyzer": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/research/git-history-analyzer.md",
+      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
+      "synced_at": "2026-02-10T20:00:00Z",
+      "notes": "Imported from CEP. Mechanical conversion + intelligent rewrite: compound-engineering pipeline artifacts -> systematic pipeline artifacts.",
+      "upstream_content_hash": "59e7c2d949baf7ed7b7b25b77897293672213f60070a85da37fc71338d990c87",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:branding",
+          "reason": "compound-engineering pipeline artifacts -> systematic pipeline artifacts (line 60)"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/research/learnings-researcher": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/research/learnings-researcher.md",
+      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
+      "synced_at": "2026-02-10T20:00:00Z",
+      "notes": "Imported from CEP. Mechanical conversion + intelligent rewrite: fixed relative path to compound-docs skill schema reference.",
+      "upstream_content_hash": "e00e3057c2f36279bca01b1940419cfdbc400566bf9ccd42dec819ac15f6c705",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:path-references",
+          "reason": "Fixed relative link to compound-docs skill yaml-schema.md — replaced with prose reference (relative path not valid from bundled agents directory)"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/research/repo-research-analyst": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/research/repo-research-analyst.md",
+      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
+      "synced_at": "2026-02-10T20:00:00Z",
+      "notes": "Imported from CEP. Mechanical conversion + intelligent rewrite: fixed **/CLAUDE.md glob example in search strategies.",
+      "upstream_content_hash": "a6f57387aeef71b8fbd370dd1280abfdc7e4fc4a19582bb05d1b2027875f08e0",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:path-references",
+          "reason": "Converter handled CLAUDE.md->AGENTS.md in prose; manually fixed **/CLAUDE.md glob example to **/AGENTS.md"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/review/agent-native-reviewer": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/review/agent-native-reviewer.md",
+      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
+      "synced_at": "2026-02-10T20:00:00Z",
+      "notes": "Imported from CEP. Mechanical conversion applied. No additional intelligent rewrites needed.",
+      "upstream_content_hash": "e2dab6f133fb7680bcab8642704365915d9ce6b55e205981efe9c7783eebf437",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/review/data-integrity-guardian": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/review/data-integrity-guardian.md",
+      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
+      "synced_at": "2026-02-10T20:00:00Z",
+      "notes": "Imported from CEP. Mechanical conversion applied. No additional intelligent rewrites needed.",
+      "upstream_content_hash": "cc738ff437ad71145889960c1bdda7e244ca6cf4c939c6bc47feb0788503fd72",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/review/data-migration-expert": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/review/data-migration-expert.md",
+      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
+      "synced_at": "2026-02-10T20:00:00Z",
+      "notes": "Imported from CEP. Mechanical conversion applied. No additional intelligent rewrites needed.",
+      "upstream_content_hash": "28be6a248f39bd3a2bfc3e6735cfa12accfcab3c4aac3a76d887a6115df3faab",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/review/deployment-verification-agent": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/review/deployment-verification-agent.md",
+      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
+      "synced_at": "2026-02-10T20:00:00Z",
+      "notes": "Imported from CEP. Mechanical conversion applied. No additional intelligent rewrites needed.",
+      "upstream_content_hash": "05e23f6e1e0809e8ebb71205699144f001db71709d02cf43a834ddcf4d24116a",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/review/dhh-rails-reviewer": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/review/dhh-rails-reviewer.md",
+      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
+      "synced_at": "2026-02-10T20:00:00Z",
+      "notes": "Imported from CEP. Mechanical conversion applied. Rails-specific reviewer.",
+      "upstream_content_hash": "d081cada84dca1815871a127f415bbae42b6debf4d79c29f5fd7f62177c0e675",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/review/kieran-rails-reviewer": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/review/kieran-rails-reviewer.md",
+      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
+      "synced_at": "2026-02-10T20:00:00Z",
+      "notes": "Imported from CEP. Mechanical conversion applied. Rails-specific reviewer — referenced 3x across workflow commands.",
+      "upstream_content_hash": "f9a8e73aeea0412969aaddfcf43d8729619a9d3b10fe9040c7c47f8b7eca8c77",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/review/kieran-typescript-reviewer": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/review/kieran-typescript-reviewer.md",
+      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
+      "synced_at": "2026-02-10T20:00:00Z",
+      "notes": "Imported from CEP. Mechanical conversion applied. General-purpose TypeScript reviewer.",
+      "upstream_content_hash": "6ba8978c5bea5ebd03d9556564e1ece4f073d79e7a84e2133c1c69135cacdcaa",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/workflow/lint": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/workflow/lint.md",
+      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
+      "synced_at": "2026-02-10T20:00:00Z",
+      "notes": "Imported from CEP. Mechanical conversion applied. Ruby/ERB-specific linting agent.",
+      "upstream_content_hash": "2c4cfdd31a9caa43c6521038d90fd85738c935b79069b2fbd8c5879362512f16",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/workflow/pr-comment-resolver": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/workflow/pr-comment-resolver.md",
+      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
+      "synced_at": "2026-02-10T20:00:00Z",
+      "notes": "Imported from CEP. Mechanical conversion + CLAUDE.md->AGENTS.md handled by converter.",
+      "upstream_content_hash": "b932da190dbee461ce467213998c71579e02832e05a16c48ca752c4bb128d491",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:path-references",
+          "reason": "Converter handled CLAUDE.md->AGENTS.md path replacement"
+        }
+      ],
+      "manual_overrides": []
+    },
     "commands/workflows/brainstorm": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/commands/workflows/brainstorm.md",
@@ -128,6 +343,183 @@
         {
           "field": "body:cc-specific-features",
           "reason": "Swarm Mode section uses CC Teammate API (spawnTeam, requestShutdown, cleanup) with no OC equivalent — kept as aspirational reference with explanatory note"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/review/architecture-strategist": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/review/architecture-strategist.md",
+      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
+      "synced_at": "2026-02-10T07:45:08Z",
+      "notes": "Imported from CEP. Mechanical conversion applied. No additional intelligent rewrites needed.",
+      "upstream_content_hash": "3b6179eff5a427c106e416e1400514eaf4f6a62b945ac8b88ddd90519e2b8f82",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/research/best-practices-researcher": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/research/best-practices-researcher.md",
+      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
+      "synced_at": "2026-02-10T07:45:08Z",
+      "notes": "Imported from CEP. Mechanical conversion + intelligent rewrite: fixed skill discovery paths (.claude/skills/ -> .opencode/skills/, ~/.claude/skills/ -> ~/.config/opencode/skills/).",
+      "upstream_content_hash": "41b1c435dbfabee447e1868f50455a0d297eaf86d6e13927faa061e062feb137",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:path-references",
+          "reason": "Manual fix: ~/.claude/skills/ -> ~/.config/opencode/skills/, .claude/skills/ -> .opencode/skills/ (converter does not handle these skill path patterns)"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/workflow/bug-reproduction-validator": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/workflow/bug-reproduction-validator.md",
+      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
+      "synced_at": "2026-02-10T07:45:08Z",
+      "notes": "Imported from CEP. Mechanical conversion applied. No additional intelligent rewrites needed.",
+      "upstream_content_hash": "ce8f54b3ada0f87f20b2dd0cba14fa660e94a1de1482aae9f7649a4083d364dc",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/review/code-simplicity-reviewer": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/review/code-simplicity-reviewer.md",
+      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
+      "synced_at": "2026-02-10T07:45:08Z",
+      "notes": "Imported from CEP. Mechanical conversion + intelligent rewrite: removed CC-specific compound-engineering pipeline artifacts exclusion rule.",
+      "upstream_content_hash": "79ea6dd7b3bed0d6215353a15e0a229c2cf4f823506f183a284cabd96f1c352d",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:cc-specific-content",
+          "reason": "Removed line: 'Never flag docs/plans/*.md or docs/solutions/*.md for removal — these are compound-engineering pipeline artifacts' (CC-specific exclusion rule not applicable to Systematic)"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/design/design-implementation-reviewer": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/design/design-implementation-reviewer.md",
+      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
+      "synced_at": "2026-02-10T07:45:08Z",
+      "notes": "Imported from CEP. Mechanical conversion applied. No additional intelligent rewrites needed.",
+      "upstream_content_hash": "da0f0693f6a86d2d687e9f7b3a67aa6019c5e3f6ef737124bc44fb3a299bfe80",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/design/design-iterator": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/design/design-iterator.md",
+      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
+      "synced_at": "2026-02-10T07:45:08Z",
+      "notes": "Imported from CEP. Mechanical conversion applied. No additional intelligent rewrites needed.",
+      "upstream_content_hash": "f9b5720baaedac15aaac11cb8e4cd39650ce4805cef1d595081e1c1876b309d0",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/research/framework-docs-researcher": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/research/framework-docs-researcher.md",
+      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
+      "synced_at": "2026-02-10T07:45:08Z",
+      "notes": "Imported from CEP. Mechanical conversion applied. No additional intelligent rewrites needed.",
+      "upstream_content_hash": "df795717714939a7a6e513c35d35723bf71fb7a2a30dd27c4e6bc3afe61a3782",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/review/pattern-recognition-specialist": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/review/pattern-recognition-specialist.md",
+      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
+      "synced_at": "2026-02-10T07:45:08Z",
+      "notes": "Imported from CEP. Mechanical conversion + intelligent rewrites: tool name capitalization (grep -> Grep), CLAUDE.md -> AGENTS.md handled by converter.",
+      "upstream_content_hash": "74745f04f550d37ec47bdbd10d5001db63bcec2f52371889ff0dc9f0e9c6bacd",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings; manual fix: 'the built-in grep tool' -> 'the built-in Grep tool' (OC tool naming convention)"
+        },
+        {
+          "field": "body:path-references",
+          "reason": "Converter handled CLAUDE.md -> AGENTS.md path replacement"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/review/performance-oracle": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/review/performance-oracle.md",
+      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
+      "synced_at": "2026-02-10T07:45:08Z",
+      "notes": "Imported from CEP. Mechanical conversion applied. No additional intelligent rewrites needed.",
+      "upstream_content_hash": "b77fe7f9b45df6214e25f05208ef556ed2a6ad9af69ffb89875916e7732ab7b3",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/review/security-sentinel": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/review/security-sentinel.md",
+      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
+      "synced_at": "2026-02-10T07:45:08Z",
+      "notes": "Imported from CEP. Mechanical conversion applied. No additional intelligent rewrites needed.",
+      "upstream_content_hash": "453e7b24b6c18c7210941bd3202a11f218608771f4f335f0d9829509e3d7b672",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/workflow/spec-flow-analyzer": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/workflow/spec-flow-analyzer.md",
+      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
+      "synced_at": "2026-02-10T07:45:08Z",
+      "notes": "Imported from CEP. Mechanical conversion applied. No additional intelligent rewrites needed.",
+      "upstream_content_hash": "30f6bba5df0369b337dcaa8ae94b78e6956b95ae993152d240e8042b2a5d842d",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
         }
       ],
       "manual_overrides": []
