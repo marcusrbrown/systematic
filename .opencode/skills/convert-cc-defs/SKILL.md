@@ -68,19 +68,32 @@ Determine what to import. Supported sources:
 | **Superpowers** | `obra/superpowers` | Skills (personal workflow skills) |
 | **Local file** | N/A | Single CC-format .md file |
 
-For GitHub repos, use `gh` CLI to fetch content:
+For GitHub repos, use `gh` CLI to fetch content. Note: CEP content lives under `plugins/compound-engineering/` — always use the full path:
 
 ```bash
-# Fetch a specific file from CEP
-gh api repos/EveryInc/compound-engineering-plugin/contents/agents/review/security-sentinel.md \
+# Fetch a specific file from CEP (note the full path under plugins/)
+gh api repos/EveryInc/compound-engineering-plugin/contents/plugins/compound-engineering/agents/review/security-sentinel.md \
   --jq '.content' | base64 -d > /tmp/upstream-security-sentinel.md
 
-# Get the latest commit SHA for the file
-gh api repos/EveryInc/compound-engineering-plugin/commits?path=agents/review/security-sentinel.md\&per_page=1 \
+# Get the latest commit SHA for the agents directory
+gh api "repos/EveryInc/compound-engineering-plugin/commits?path=plugins/compound-engineering/agents&per_page=1" \
   --jq '.[0].sha'
 
 # Get content hash for change detection
 shasum -a 256 /tmp/upstream-security-sentinel.md | cut -d' ' -f1
+```
+
+**Batch fetch pattern** — for importing multiple files, loop over a list:
+
+```bash
+mkdir -p /tmp/cep-upstream
+AGENTS=("review/architecture-strategist" "research/best-practices-researcher" "workflow/bug-reproduction-validator")
+for agent_path in "${AGENTS[@]}"; do
+  name=$(basename "$agent_path")
+  gh api "repos/EveryInc/compound-engineering-plugin/contents/plugins/compound-engineering/agents/${agent_path}.md" \
+    --jq '.content' | base64 -d > "/tmp/cep-upstream/${name}.md"
+  shasum -a 256 "/tmp/cep-upstream/${name}.md"
+done
 ```
 
 ### 1b. Check Existing Manifest
@@ -107,7 +120,12 @@ If updating an existing definition:
 2. **Philosophy fit:** Is it consistent with Systematic's opinionated workflow approach? (Structured phases, explicit deliverables, skill-driven discipline)
 3. **Overlap check:** Does it duplicate an existing bundled definition? If partial overlap, propose enhancing the existing definition instead.
 4. **Dependency check:** Does the definition reference agents, skills, or commands that don't exist in Systematic? List any missing dependencies — note as WARN (they can be imported later using this skill, and references should be kept).
-5. **User value:** Would a Systematic plugin user actually invoke this? Niche CC-specific tools (e.g., `feature-video`, `test-browser`) may not translate.
+5. **Phantom check:** If importing agents referenced by commands, verify the agents actually exist upstream. Commands may reference agents that were never created upstream ("phantom agents"). Fetch the upstream directory listing to confirm:
+   ```bash
+   gh api repos/EveryInc/compound-engineering-plugin/contents/plugins/compound-engineering/agents/review \
+     --jq '.[].name'
+   ```
+6. **User value:** Would a Systematic plugin user actually invoke this? Niche CC-specific tools (e.g., `feature-video`, `test-browser`) may not translate.
 
 **Present your evaluation as a table:**
 
@@ -134,6 +152,8 @@ Apply the existing converter pipeline. This handles:
 - Frontmatter field mapping (tools array->map, permissionMode->permission, maxSteps->steps, etc.)
 - Model normalization (provider prefix)
 
+> **Note:** The `color` field in CC agent frontmatter (e.g., `color: violet`) is passed through by the converter. OpenCode does not currently use this field, but it is harmless to keep.
+
 **For a single file via CLI:**
 
 ```bash
@@ -155,9 +175,11 @@ const converted = convertContent(upstreamContent, 'agent')
 - Content restructuring for Systematic's style
 - Removing CC-specific features with no OC equivalent (`${CLAUDE_SESSION_ID}`)
 - Adding Systematic-specific sections (integration points, skill cross-references)
+- **Skill path patterns in body text** — the converter handles `.claude/` -> `.opencode/` in general, but does NOT handle `~/.claude/skills/` -> `~/.config/opencode/skills/` or bare `.claude/skills/` -> `.opencode/skills/` references embedded in skill-discovery instructions. Audit these manually.
 - **Tool/path references inside code blocks** — the converter skips fenced code blocks to avoid false positives, so `Task()`, `TodoWrite`, `CLAUDE.md`, `.claude/skills/` inside ``` blocks must be fixed manually
 - **Attribution badges and footers** inside heredoc code blocks (commit messages, PR bodies)
 - **CC-specific features with no OC equivalent** (Swarm Mode / `Teammate` API, "remote" execution via Claude Code web)
+- **CC-specific exclusion rules** — some agents reference `compound-engineering pipeline artifacts` or other CC-specific content (e.g., `docs/plans/*.md` exclusions) that should be removed as they're not applicable to Systematic
 - **Frontmatter quoting normalization** — the converter may change double quotes to single quotes in `argument-hint` and other frontmatter string values. This is cosmetic but verify quoting consistency after conversion.
 
 ## Phase 3: Intelligent Rewrite
@@ -198,6 +220,8 @@ The mechanical converter catches regex-matchable patterns. You must catch contex
 | References to CC-specific behavior | Adapt or remove |
 | `Task agent-name("prompt")` patterns | `task` tool or `@agent-name` |
 | `TodoWrite` in prose (not just tool calls) | `todowrite` or "update your task list" |
+| "the built-in grep tool" (lowercase tool name) | "the built-in Grep tool" (OC capitalizes tool names) |
+| `compound-engineering pipeline artifacts` | Remove or replace with "systematic pipeline artifacts" |
 
 ### 3c. Content Adaptation
 
@@ -293,7 +317,7 @@ Run this once at the start of a batch import and use the same timestamp for all 
   "definitions": {
     "agents/review/security-sentinel": {
       "source": "cep",
-      "upstream_path": "agents/review/security-sentinel.md",
+      "upstream_path": "plugins/compound-engineering/agents/review/security-sentinel.md",
       "upstream_commit": "abc123def456...",
       "synced_at": "<run: date -u +'%Y-%m-%dT%H:%M:%SZ'>",
       "notes": "Imported from CEP. Enhanced description with trigger examples. Updated tool references.",
@@ -357,7 +381,17 @@ If `manual_overrides` contains entries, those fields/sections were customized af
 4. Merge overrides back in
 5. Update manifest `synced_at` and `upstream_commit` but keep `manual_overrides` intact
 
-**Override entries are structured objects** (not plain strings):
+**Override entries can be plain strings or structured objects:**
+
+**Plain string format** (for initial import or lightweight tracking):
+
+```json
+{
+  "manual_overrides": ["description", "frontmatter:mode->model"]
+}
+```
+
+**Structured object format** (for post-import customization with full provenance):
 
 ```json
 {
@@ -372,7 +406,7 @@ If `manual_overrides` contains entries, those fields/sections were customized af
 }
 ```
 
-Each entry has:
+When using structured entries, each has:
 - `field`: Same naming convention as `rewrites[].field` (e.g., `description`, `body:section-name`, `frontmatter:<field>`, `*` for full local ownership)
 - `reason`: Why the override exists — one sentence
 - `original`: Pre-override value (for conflict detection and rollback; truncate to 500 chars for large sections)
@@ -487,10 +521,12 @@ Options:
 
 For importing multiple definitions at once:
 
-1. List target definitions (files to import)
-2. For each definition, run Phases 1-4 sequentially
-3. Run Phase 5 once at the end (build/test covers all)
-4. Commit all changes together with a descriptive message:
+1. **Get shared metadata** — fetch the upstream commit SHA and generate a UTC timestamp (`date -u +'%Y-%m-%dT%H:%M:%SZ'`) once at the start. Use the same values for all entries in the batch.
+2. **Fetch all upstream files** — use the batch fetch pattern from Phase 1a to download all targets in one pass.
+3. List target definitions (files to import)
+4. For each definition, run Phases 1-4 sequentially (converter + intelligent rewrite + write + manifest)
+5. Run Phase 5 once at the end (build/test covers all)
+6. Commit all changes together with a descriptive message:
 
 ```bash
 git add agents/ skills/ commands/ sync-manifest.json
