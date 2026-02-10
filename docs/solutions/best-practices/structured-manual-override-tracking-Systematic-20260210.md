@@ -121,3 +121,4 @@ With idempotency rules: no duplicate entries (check field name), don't overwrite
 ## Related Issues
 
 - See also: [Map-and-Preserve Strategy for CEP-to-OpenCode Conversion](./destructive-to-nondestructive-converter-Systematic-20260209.md) — the converter infrastructure that this override tracking builds upon
+- See also: [Batch Importing CEP Agents to Systematic](../integration-issues/batch-import-cep-agents-to-systematic-20260210.md) — the batch import that exercised this override tracking at scale (24 agents, 29 manifest entries)
