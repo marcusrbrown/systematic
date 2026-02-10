@@ -18,7 +18,7 @@
 **If user just invoked skill without context:**
 → Ask what they want to build
 
-### Using AskUserQuestion
+### Using question tool
 
 Ask 2-4 domain-specific questions based on actual gaps. Each question should:
 - Have specific options with descriptions
@@ -42,7 +42,7 @@ Options:
 
 ## Step 2: Research Trigger (If External API)
 
-**When external service detected**, ask using AskUserQuestion:
+**When external service detected**, ask using question tool:
 "This involves [service name] API. Would you like me to research current endpoints and patterns before building?"
 
 Options:
@@ -90,13 +90,13 @@ See references/recommended-structure.md for templates.
 ## Step 4: Create Directory
 
 ```bash
-mkdir -p ~/.claude/skills/{skill-name}
+mkdir -p ~/.config/opencode/skills/{skill-name}
 # If complex:
-mkdir -p ~/.claude/skills/{skill-name}/workflows
-mkdir -p ~/.claude/skills/{skill-name}/references
+mkdir -p ~/.config/opencode/skills/{skill-name}/workflows
+mkdir -p ~/.config/opencode/skills/{skill-name}/references
 # If needed:
-mkdir -p ~/.claude/skills/{skill-name}/templates  # for output structures
-mkdir -p ~/.claude/skills/{skill-name}/scripts    # for reusable code
+mkdir -p ~/.config/opencode/skills/{skill-name}/templates  # for output structures
+mkdir -p ~/.config/opencode/skills/{skill-name}/scripts    # for reusable code
 ```
 
 ## Step 5: Write SKILL.md
@@ -154,7 +154,7 @@ Check:
 ## Step 9: Create Slash Command
 
 ```bash
-cat > ~/.claude/commands/{skill-name}.md << 'EOF'
+cat > ~/.config/opencode/commands/{skill-name}.md << 'EOF'
 ---
 description: {Brief description}
 argument-hint: [{argument hint}]

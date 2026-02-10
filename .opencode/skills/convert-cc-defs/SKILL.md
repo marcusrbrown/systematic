@@ -96,6 +96,21 @@ for agent_path in "${AGENTS[@]}"; do
 done
 ```
 
+**Recursive file listing** — the contents API fails on subdirectories. Use the git tree API for a complete one-shot listing:
+
+```bash
+# List ALL files under skills/ recursively (one API call)
+gh api "repos/EveryInc/compound-engineering-plugin/git/trees/<COMMIT_SHA>?recursive=1" \
+  --jq '.tree[] | select(.path | startswith("plugins/compound-engineering/skills/")) | select(.type == "blob") | .path' \
+  | sed 's|plugins/compound-engineering/skills/||'
+```
+
+**Skill folders** — Skills are directories, not just SKILL.md files. A skill folder may contain references/, templates/, workflows/, scripts/, assets/, and schema files. The CLI converter (`bun src/cli.ts convert skill`) ONLY processes SKILL.md files. All other files in the skill folder must be:
+1. Fetched from upstream individually via the contents API
+2. Copied to the local skill directory, preserving the folder structure
+3. Manually rewritten with CC→OC text replacements (`.claude/` → `.opencode/`, `CLAUDE.md` → `AGENTS.md`, `Claude Code` → `OpenCode`, `compound-engineering:` → `systematic:`, etc.)
+4. `${CLAUDE_PLUGIN_ROOT}/skills/<name>/...` paths simplified to relative paths (skills are bundled in the plugin — no env var prefix needed)
+
 ### 1b. Check Existing Manifest
 
 Read `sync-manifest.json` to determine if this is a new import or an update:
@@ -120,10 +135,15 @@ If updating an existing definition:
 2. **Philosophy fit:** Is it consistent with Systematic's opinionated workflow approach? (Structured phases, explicit deliverables, skill-driven discipline)
 3. **Overlap check:** Does it duplicate an existing bundled definition? If partial overlap, propose enhancing the existing definition instead.
 4. **Dependency check:** Does the definition reference agents, skills, or commands that don't exist in Systematic? List any missing dependencies — note as WARN (they can be imported later using this skill, and references should be kept).
-5. **Phantom check:** If importing agents referenced by commands, verify the agents actually exist upstream. Commands may reference agents that were never created upstream ("phantom agents"). Fetch the upstream directory listing to confirm:
+5. **Phantom check:** If importing agents or skills referenced by commands, verify they actually exist upstream. Commands may reference definitions that were never created upstream ("phantoms"). Fetch the upstream directory listing to confirm:
    ```bash
+   # Check agents
    gh api repos/EveryInc/compound-engineering-plugin/contents/plugins/compound-engineering/agents/review \
      --jq '.[].name'
+   # Check skills
+   gh api "repos/EveryInc/compound-engineering-plugin/git/trees/<COMMIT_SHA>?recursive=1" \
+     --jq '.tree[] | select(.path | startswith("plugins/compound-engineering/skills/")) | select(.type == "tree") | .path' \
+     | sed 's|plugins/compound-engineering/skills/||' | grep -v '/'
    ```
 6. **User value:** Would a Systematic plugin user actually invoke this? Niche CC-specific tools (e.g., `feature-video`, `test-browser`) may not translate.
 
@@ -222,6 +242,8 @@ The mechanical converter catches regex-matchable patterns. You must catch contex
 | `TodoWrite` in prose (not just tool calls) | `todowrite` or "update your task list" |
 | "the built-in grep tool" (lowercase tool name) | "the built-in Grep tool" (OC capitalizes tool names) |
 | `compound-engineering pipeline artifacts` | Remove or replace with "systematic pipeline artifacts" |
+| Version attribution footers (e.g., `*Based on Claude Code v2.1.19*`) | **Remove entirely** — CC version numbers are not applicable to Systematic. Blind `Claude Code` → `OpenCode` rewrite turns these into nonsensical `Based on OpenCode v2.1.19`. |
+| Source attribution URLs (e.g., `claude.com`, `docs.anthropic.com`) | **Keep as-is** — these are upstream source references, not branding |
 
 ### 3c. Content Adaptation
 
@@ -259,6 +281,8 @@ The mechanical converter intentionally skips content inside fenced code blocks t
 | Attribution badges/footers (`Compound Engineered`, `Claude Code` links) | → Systematic branding |
 | `AskUserQuestion` | → `question tool` |
 
+> **High-risk pattern:** Long skills with many code examples (e.g., orchestrating-swarms has 47 `Task({` calls across 1700+ lines). After mechanical conversion, run a targeted search for capitalized tool names inside code blocks: `grep -n "Task(\|TodoWrite\|AskUserQuestion" <file>`. Fix all occurrences — users copying broken examples will get runtime errors.
+
 ### 3e. CC-Specific Features
 
 Some CC features have no direct OC equivalent. For each, make a case-by-case decision:
@@ -267,7 +291,8 @@ Some CC features have no direct OC equivalent. For each, make a case-by-case dec
 |------------|---------------|----------------|
 | `Teammate` API (spawnTeam, requestShutdown, cleanup) | None — `task` with `run_in_background` is partial | Keep as aspirational reference with explanatory note |
 | "Remote" execution (Claude Code web background) | None | Remove — no OC equivalent exists |
-| `${CLAUDE_SESSION_ID}` | None | Remove |
+| `${CLAUDE_SESSION_ID}` | None | Remove (keep in upstream API spec docs as-is) |
+| `${CLAUDE_PLUGIN_ROOT}` | None — bundled skills use relative paths | Simplify to relative paths (e.g., `scripts/worktree-manager.sh` not `${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh`) |
 | `AskUserQuestion` with complex schemas | `question` tool (simpler) | Adapt to OC's question tool format |
 
 Present CC-specific feature decisions to the user before proceeding.
