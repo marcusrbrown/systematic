@@ -350,18 +350,61 @@ Each rewrite entry needs:
 
 ### 4d. Respect Manual Overrides
 
-If `manual_overrides` contains field names, those fields/sections were customized by a human. On re-import:
+If `manual_overrides` contains entries, those fields/sections were customized after import. On re-import:
 1. Read the current bundled file
 2. Extract the overridden fields/sections
-3. Apply conversion to non-overridden content
+3. Apply conversion to non-overridden content only
 4. Merge overrides back in
 5. Update manifest `synced_at` and `upstream_commit` but keep `manual_overrides` intact
 
-**To mark a field as manually overridden** (done by a human contributor, not by this skill):
-```bash
-# Edit sync-manifest.json directly
-jq '.definitions["agents/review/security-sentinel"].manual_overrides += ["description"]' sync-manifest.json > tmp.json && mv tmp.json sync-manifest.json
+**Override entries are structured objects** (not plain strings):
+
+```json
+{
+  "manual_overrides": [
+    {
+      "field": "description",
+      "reason": "Customized triggers for our auth-heavy codebase",
+      "original": "Security audits, vulnerability assessment, OWASP compliance",
+      "overridden_at": "2026-02-10T06:30:00Z"
+    }
+  ]
+}
 ```
+
+Each entry has:
+- `field`: Same naming convention as `rewrites[].field` (e.g., `description`, `body:section-name`, `frontmatter:<field>`, `*` for full local ownership)
+- `reason`: Why the override exists — one sentence
+- `original`: Pre-override value (for conflict detection and rollback; truncate to 500 chars for large sections)
+- `overridden_at`: ISO 8601 UTC timestamp (`date -u +'%Y-%m-%dT%H:%M:%SZ'`)
+
+**Override vs rewrite precedence:** If a field appears in both `rewrites` and `manual_overrides`, the manual override takes precedence. The rewrite is kept for historical record but will NOT be re-applied to that field on re-sync.
+
+### 4e. Record Manual Edit
+
+When you make a targeted edit to an already-imported definition file (NOT during initial import — this is for post-import customization):
+
+1. **Before editing**: Read and store the current value of the field(s) you will change
+2. **Make your edit** to the bundled definition file
+3. **Update `sync-manifest.json`**:
+   a. Read the current manifest entry for this definition
+   b. For each field you changed:
+      - If field is already in `manual_overrides`: update `reason` if it changed, keep the `original` from the FIRST override (don't overwrite history), keep `overridden_at` unchanged
+      - If field is NOT in `manual_overrides`: add new entry with `field`, `reason`, `original` (value from step 1), and `overridden_at` (current UTC timestamp)
+   c. Write the updated manifest
+4. **Validate**: `cat sync-manifest.json | python3 -m json.tool > /dev/null` (confirm valid JSON)
+
+**Idempotency rules:**
+- Running this workflow twice for the same edit MUST NOT duplicate entries (check `field` name before adding)
+- MUST NOT overwrite the `original` value (first override's original is canonical)
+- MUST NOT change `overridden_at` if the field was already overridden
+
+| Thought | Reality |
+|---------|---------|
+| "I'll update the manifest later" | Update NOW, in the same operation as the edit |
+| "The reason is obvious" | Future agents can't read your mind. Write it. |
+| "I don't need to store the original" | Without it, you can't detect conflicts on re-sync |
+| "This field is too small to track" | If you changed it, track it. No exceptions. |
 
 ## Phase 5: Verify
 
@@ -405,10 +448,40 @@ When pulling upstream changes for an already-imported definition:
 3. **Compare hashes** — If unchanged, skip (idempotent)
 4. **Diff upstream changes** — Use `git diff` or text diff to understand what changed
 5. **Re-apply mechanical conversion** on the new upstream content
-6. **Re-apply rewrites** from the manifest log — same fields, same reasons, adapted to new content
-7. **Preserve manual_overrides** — Merge from current bundled file
+6. **Re-apply rewrites** from the manifest log — same fields, same reasons, adapted to new content (skip fields that have manual overrides — overrides take precedence)
+7. **Handle manual overrides** using the merge matrix below
 8. **Update manifest** — New commit SHA, hash, timestamp (`date -u +'%Y-%m-%dT%H:%M:%SZ'`). Update rewrites if they changed.
 9. **Verify** — Build, test, spot-check
+
+### Override Merge Matrix
+
+| Scenario | Detection | Agent Behavior |
+|----------|-----------|----------------|
+| Upstream unchanged + override exists | New upstream hash matches stored hash | **Preserve override.** No action needed. |
+| Upstream changed + override on SAME field | Changed upstream field overlaps `manual_overrides[].field` | **Flag conflict.** Present both versions to user. Do NOT auto-merge. |
+| Upstream changed + override on DIFFERENT field | Changed fields don't intersect with override fields | **Apply upstream changes normally**, preserve override fields. |
+| Override is `"*"` (full local ownership) | Any upstream change | **Skip re-sync entirely.** Log that upstream was skipped. |
+
+### Conflict Presentation
+
+When upstream changes conflict with a manual override, present to the user:
+
+```markdown
+CONFLICT: `agents/review/security-sentinel` field `description`
+
+**Your override** (overridden_at: 2026-02-15T10:30:00Z):
+> "Use when auditing authentication flows for OWASP Top 10..."
+
+**Upstream change** (commit abc123):
+> "Security audits with enhanced SAST integration..."
+
+**Override reason**: "Customized triggers for our auth-heavy codebase"
+
+Options:
+1. Keep override (skip upstream change for this field)
+2. Accept upstream (remove override entry from manifest)
+3. Merge manually (edit the field, then record as new override via Phase 4e)
+```
 
 ## Batch Import
 
@@ -443,7 +516,7 @@ git commit -m "feat: import N definitions from CEP upstream (commit abc123)"
 | Copy file and only run converter | Always do intelligent rewrite pass |
 | Import everything from upstream | Curate — evaluate fit before importing |
 | Skip manifest update | Every import MUST have a manifest entry |
-| Overwrite human edits on re-sync | Check `manual_overrides` first |
+| Overwrite human edits on re-sync | Check `manual_overrides` first, use merge matrix |
 | Leave CC descriptions as-is | Rewrite with OC trigger conditions |
 | Forget to log rewrites | Every intelligent change goes in `rewrites[]` |
 | Import definition that duplicates existing | Enhance existing instead |

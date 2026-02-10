@@ -12,6 +12,13 @@ export interface ManifestRewrite {
   original?: string
 }
 
+export interface ManualOverride {
+  field: string
+  reason: string
+  original?: string
+  overridden_at: string
+}
+
 export interface ManifestDefinition {
   source: string
   upstream_path: string
@@ -20,7 +27,7 @@ export interface ManifestDefinition {
   notes: string
   upstream_content_hash?: string
   rewrites?: ManifestRewrite[]
-  manual_overrides?: string[]
+  manual_overrides?: ManualOverride[]
 }
 
 export interface SyncManifest {
@@ -47,12 +54,21 @@ function isManifestRewrite(value: unknown): value is ManifestRewrite {
   return typeof value.field === 'string' && typeof value.reason === 'string'
 }
 
-function isStringArray(value: unknown): value is string[] {
-  return Array.isArray(value) && value.every((v) => typeof v === 'string')
+function isManualOverride(value: unknown): value is ManualOverride {
+  if (!isRecord(value)) return false
+  return (
+    typeof value.field === 'string' &&
+    typeof value.reason === 'string' &&
+    typeof value.overridden_at === 'string'
+  )
 }
 
 function isRewriteArray(value: unknown): value is ManifestRewrite[] {
   return Array.isArray(value) && value.every(isManifestRewrite)
+}
+
+function isOverrideArray(value: unknown): value is ManualOverride[] {
+  return Array.isArray(value) && value.every(isManualOverride)
 }
 
 function isManifestDefinition(value: unknown): value is ManifestDefinition {
@@ -74,7 +90,7 @@ function isManifestDefinition(value: unknown): value is ManifestDefinition {
     return false
   if (
     value.manual_overrides !== undefined &&
-    !isStringArray(value.manual_overrides)
+    !isOverrideArray(value.manual_overrides)
   )
     return false
 

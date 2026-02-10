@@ -96,9 +96,30 @@
           },
           "manual_overrides": {
             "type": "array",
-            "description": "Fields or sections that have been manually customized by a human contributor. These MUST be preserved on future re-imports — the skill will skip rewriting these fields.",
+            "description": "Fields or sections that have been manually customized after import. These MUST be preserved on future re-imports — the re-sync workflow will skip rewriting these fields. Overrides take precedence over rewrites for the same field.",
             "items": {
-              "type": "string"
+              "type": "object",
+              "required": ["field", "reason", "overridden_at"],
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "description": "Field or section that was overridden, using the same naming convention as rewrites (e.g., 'description', 'body:section-name', 'frontmatter:<field>', '*' for full local ownership)"
+                },
+                "reason": {
+                  "type": "string",
+                  "description": "Why this override exists — helps future agents decide whether to keep or reconsider it"
+                },
+                "original": {
+                  "type": "string",
+                  "description": "Pre-override value or snippet (for conflict detection and rollback). For large sections, store first 500 characters."
+                },
+                "overridden_at": {
+                  "type": "string",
+                  "description": "ISO 8601 UTC timestamp when the override was first recorded",
+                  "format": "date-time"
+                }
+              },
+              "additionalProperties": false
             }
           }
         },
