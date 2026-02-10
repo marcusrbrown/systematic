@@ -108,20 +108,13 @@ function analyzeFrontmatter(
   return { removed, preserved }
 }
 
-// CC-only fields that SHOULD be removed
-const CC_ONLY_SKILL_FIELDS = [
-  'model',
-  'allowed-tools',
-  'allowedTools',
-  'disable-model-invocation',
-  'disableModelInvocation',
-  'user-invocable',
-  'userInvocable',
-  'context',
-  'agent',
+// Fields that should be mapped (transformed) during conversion, not just preserved
+const MAPPED_AGENT_FIELDS = [
+  'permissionMode',
+  'maxTurns',
+  'maxSteps',
+  'disallowedTools',
 ]
-
-const CC_ONLY_COMMAND_FIELDS = ['argument-hint', 'argumentHint']
 
 function validateFile(filePath: string, type: ContentType): ValidationResult {
   const original = fs.readFileSync(filePath, 'utf8')
@@ -132,29 +125,23 @@ function validateFile(filePath: string, type: ContentType): ValidationResult {
   const falseNegatives = detectFalseNegatives(original, converted)
   const frontmatterChanges = analyzeFrontmatter(original, converted, type)
 
-  // Validate CC-only fields were removed
-  if (type === 'skill') {
-    for (const field of CC_ONLY_SKILL_FIELDS) {
-      if (frontmatterChanges.preserved.includes(field)) {
-        issues.push(`CC-only field "${field}" should be removed from skill`)
-      }
-    }
-  }
-
-  if (type === 'command') {
-    for (const field of CC_ONLY_COMMAND_FIELDS) {
-      if (frontmatterChanges.preserved.includes(field)) {
-        issues.push(`CC-only field "${field}" should be removed from command`)
-      }
-    }
-  }
-
-  // Validate required fields preserved (agents intentionally drop 'name' and use 'description' instead)
-  if (type !== 'agent' && frontmatterChanges.removed.includes('name')) {
+  // Validate required fields preserved
+  if (frontmatterChanges.removed.includes('name')) {
     issues.push('Required field "name" was incorrectly removed')
   }
   if (frontmatterChanges.removed.includes('description')) {
     issues.push('Required field "description" was incorrectly removed')
+  }
+
+  // Validate mapped fields are consumed (not preserved as-is) for agents
+  if (type === 'agent') {
+    for (const field of MAPPED_AGENT_FIELDS) {
+      if (frontmatterChanges.preserved.includes(field)) {
+        issues.push(
+          `Mapped field "${field}" should be consumed during agent conversion`,
+        )
+      }
+    }
   }
 
   return {
@@ -228,18 +215,16 @@ describe('Converter Validation Against Real CEP Content', () => {
       })
     }
 
-    test('removes CC-only frontmatter fields from skills', () => {
+    test('preserves CC frontmatter fields in skills', () => {
       if (skipIfNoCEP()) return
 
-      // Test compound-docs which has allowed-tools
       const fullPath = path.join(CEP_ROOT, 'skills', 'compound-docs/SKILL.md')
       if (!fs.existsSync(fullPath)) return
 
       const result = validateFile(fullPath, 'skill')
 
-      // allowed-tools should be removed
-      expect(result.frontmatterChanges.removed).toContain('allowed-tools')
-      // name and description should be preserved
+      // allowed-tools should now be preserved (non-destructive)
+      expect(result.frontmatterChanges.preserved).toContain('allowed-tools')
       expect(result.frontmatterChanges.preserved).toContain('name')
       expect(result.frontmatterChanges.preserved).toContain('description')
     })
@@ -267,7 +252,7 @@ describe('Converter Validation Against Real CEP Content', () => {
       })
     }
 
-    test('removes argument-hint from command frontmatter', () => {
+    test('preserves argument-hint in command frontmatter', () => {
       if (skipIfNoCEP()) return
 
       const fullPath = path.join(CEP_ROOT, 'commands', 'workflows/plan.md')
@@ -275,8 +260,8 @@ describe('Converter Validation Against Real CEP Content', () => {
 
       const result = validateFile(fullPath, 'command')
 
-      // argument-hint should be removed
-      expect(result.frontmatterChanges.removed).toContain('argument-hint')
+      // argument-hint should now be preserved (non-destructive)
+      expect(result.frontmatterChanges.preserved).toContain('argument-hint')
     })
   })
 

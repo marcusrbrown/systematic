@@ -12,14 +12,14 @@ import {
 describe('converter', () => {
   describe('convertContent', () => {
     describe('Agent frontmatter transformation', () => {
-      test('removes name field and adds mode field', () => {
+      test('preserves name field and adds mode field', () => {
         const input = `---
 name: security-sentinel
 description: Security review agent
 ---
 Agent content`
         const result = convertContent(input, 'agent')
-        expect(result).not.toContain('name:')
+        expect(result).toContain('name: security-sentinel')
         expect(result).toContain('mode: subagent')
         expect(result).toContain('description: Security review agent')
       })
@@ -133,7 +133,7 @@ Prompt`
         expect(result).toContain('write: false')
       })
 
-      test('drops invalid tools map entries', () => {
+      test('preserves non-boolean tools map as-is', () => {
         const content = `---
 name: test-agent
 tools:
@@ -142,7 +142,8 @@ tools:
 ---
 Prompt`
         const result = convertContent(content, 'agent')
-        expect(result).not.toContain('tools:')
+        expect(result).toContain('read: true')
+        expect(result).toContain('write: maybe')
       })
 
       test('preserves disable field', () => {
@@ -165,14 +166,15 @@ Prompt`
         expect(result).toContain('color: blue')
       })
 
-      test('preserves maxSteps field', () => {
+      test('maps maxSteps to steps', () => {
         const content = `---
 name: test-agent
 maxSteps: 10
 ---
 Prompt`
         const result = convertContent(content, 'agent')
-        expect(result).toContain('maxSteps: 10')
+        expect(result).toContain('steps: 10')
+        expect(result).not.toContain('maxSteps:')
       })
 
       test('preserves permission object', () => {
@@ -188,7 +190,7 @@ Prompt`
         expect(result).toContain('bash: ask')
       })
 
-      test('drops invalid permission settings', () => {
+      test('preserves invalid permission settings as-is', () => {
         const content = `---
 name: test-agent
 permission:
@@ -196,10 +198,10 @@ permission:
 ---
 Prompt`
         const result = convertContent(content, 'agent')
-        expect(result).not.toContain('permission:')
+        expect(result).toContain('edit: maybe')
       })
 
-      test('drops invalid permission bash map values', () => {
+      test('preserves invalid permission bash map values as-is', () => {
         const content = `---
 name: test-agent
 permission:
@@ -208,7 +210,7 @@ permission:
 ---
 Prompt`
         const result = convertContent(content, 'agent')
-        expect(result).not.toContain('permission:')
+        expect(result).toContain('rm: maybe')
       })
     })
 
@@ -267,7 +269,7 @@ Content`
     })
 
     describe('Skills and commands transformation', () => {
-      test('removes CC-only fields from skill frontmatter', () => {
+      test('preserves CC fields in skill frontmatter and normalizes model', () => {
         const input = `---
 name: my-skill
 description: A skill
@@ -279,12 +281,12 @@ Skill content`
         const result = convertContent(input, 'skill')
         expect(result).toContain('name: my-skill')
         expect(result).toContain('description: A skill')
-        expect(result).not.toContain('model:')
-        expect(result).not.toContain('allowed-tools:')
-        expect(result).not.toContain('disable-model-invocation:')
+        expect(result).toContain('model: anthropic/sonnet')
+        expect(result).toContain('allowed-tools:')
+        expect(result).toContain('disable-model-invocation: false')
       })
 
-      test('removes camelCase CC-only fields from skill frontmatter', () => {
+      test('preserves camelCase CC fields in skill frontmatter', () => {
         const input = `---
 name: my-skill
 description: A skill
@@ -294,12 +296,12 @@ userInvocable: true
 ---
 Skill content`
         const result = convertContent(input, 'skill')
-        expect(result).not.toContain('allowedTools:')
-        expect(result).not.toContain('disableModelInvocation:')
-        expect(result).not.toContain('userInvocable:')
+        expect(result).toContain('allowedTools:')
+        expect(result).toContain('disableModelInvocation: false')
+        expect(result).toContain('userInvocable: true')
       })
 
-      test('removes context and agent fields from skill frontmatter', () => {
+      test('preserves context and agent fields, maps fork to subtask', () => {
         const input = `---
 name: my-skill
 description: A skill
@@ -308,11 +310,12 @@ agent: oracle
 ---
 Skill content`
         const result = convertContent(input, 'skill')
-        expect(result).not.toContain('context:')
-        expect(result).not.toContain('agent:')
+        expect(result).toContain('context: fork')
+        expect(result).toContain('agent: oracle')
+        expect(result).toContain('subtask: true')
       })
 
-      test('removes argument-hint from command frontmatter', () => {
+      test('preserves argument-hint in command frontmatter', () => {
         const input = `---
 name: my-command
 description: A command
@@ -320,7 +323,7 @@ argument-hint: <file>
 ---
 Command content`
         const result = convertContent(input, 'command')
-        expect(result).not.toContain('argument-hint:')
+        expect(result).toContain('argument-hint:')
         expect(result).toContain('name: my-command')
       })
 
@@ -459,9 +462,18 @@ Just plain content`
     })
 
     describe('Malformed frontmatter handling', () => {
-      test('returns original content when frontmatter is invalid', () => {
-        const input = '---\nname: test\ninvalid yaml: [unclosed\n---\nBody'
+      test('transforms body even when frontmatter has parse error', () => {
+        const input =
+          '---\nname: test\ninvalid yaml: [unclosed\n---\nUse TodoWrite to track.'
         const result = convertContent(input, 'skill')
+        expect(result).toContain('todowrite')
+      })
+
+      test('returns original content on parse error when body transform skipped', () => {
+        const input = '---\nname: test\ninvalid yaml: [unclosed\n---\nBody'
+        const result = convertContent(input, 'skill', {
+          skipBodyTransform: true,
+        })
         expect(result).toBe(input)
       })
     })
@@ -478,13 +490,532 @@ model: claude-sonnet-4-20250514
 Use TodoWrite to track.`
         const result = convertContent(input, 'agent')
 
+        expect(result).toContain('name: review-agent')
         expect(result).toContain('description: Code review agent')
         expect(result).toContain('mode: subagent')
         expect(result).toContain('model: anthropic/claude-sonnet-4-20250514')
         expect(result).toContain('temperature: 0.1')
-        expect(result).not.toContain('name:')
         expect(result).toContain('# Review Agent')
         expect(result).toContain('Use todowrite to track')
+      })
+    })
+
+    describe('Field mapping', () => {
+      describe('tools array → map', () => {
+        test('converts CC tools array to OC tools map', () => {
+          const input = `---
+name: test-agent
+tools:
+  - Read
+  - Grep
+  - Bash
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).toContain('read: true')
+          expect(result).toContain('grep: true')
+          expect(result).toContain('bash: true')
+        })
+
+        test('handles empty tools array', () => {
+          const input = `---
+name: test-agent
+tools: []
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).not.toContain('tools:')
+        })
+
+        test('canonicalizes tool names to lowercase', () => {
+          const input = `---
+name: test-agent
+tools:
+  - READ
+  - BASH
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).toContain('read: true')
+          expect(result).toContain('bash: true')
+        })
+
+        test('applies tool renames (WebSearch → google_search)', () => {
+          const input = `---
+name: test-agent
+tools:
+  - WebSearch
+  - Task
+  - AskUserQuestion
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).toContain('google_search: true')
+          expect(result).toContain('delegate_task: true')
+          expect(result).toContain('question: true')
+        })
+
+        test('leaves non-boolean tools object untouched', () => {
+          const input = `---
+name: test-agent
+tools:
+  bash: allow
+  read: deny
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).toContain('bash: allow')
+          expect(result).toContain('read: deny')
+        })
+      })
+
+      describe('disallowedTools', () => {
+        test('converts disallowedTools to false entries in tools map', () => {
+          const input = `---
+name: test-agent
+disallowedTools:
+  - Write
+  - Bash
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).toContain('write: false')
+          expect(result).toContain('bash: false')
+          expect(result).not.toContain('disallowedTools:')
+        })
+
+        test('disallowed overrides allowed on conflict', () => {
+          const input = `---
+name: test-agent
+tools:
+  - Bash
+  - Read
+disallowedTools:
+  - Bash
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).toContain('bash: false')
+          expect(result).toContain('read: true')
+        })
+
+        test('merges disallowedTools into existing tools map', () => {
+          const input = `---
+name: test-agent
+tools:
+  read: true
+  bash: true
+disallowedTools:
+  - Write
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).toContain('read: true')
+          expect(result).toContain('bash: true')
+          expect(result).toContain('write: false')
+          expect(result).not.toContain('disallowedTools:')
+        })
+      })
+
+      describe('steps migration', () => {
+        test('maps maxTurns to steps', () => {
+          const input = `---
+name: test-agent
+maxTurns: 5
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).toContain('steps: 5')
+          expect(result).not.toContain('maxTurns:')
+        })
+
+        test('maps maxSteps to steps', () => {
+          const input = `---
+name: test-agent
+maxSteps: 10
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).toContain('steps: 10')
+          expect(result).not.toContain('maxSteps:')
+        })
+
+        test('prefers steps over maxTurns/maxSteps', () => {
+          const input = `---
+name: test-agent
+steps: 3
+maxTurns: 5
+maxSteps: 10
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).toContain('steps: 3')
+          expect(result).not.toContain('maxTurns:')
+          expect(result).not.toContain('maxSteps:')
+        })
+
+        test('uses minimum when both maxTurns and maxSteps present', () => {
+          const input = `---
+name: test-agent
+maxTurns: 5
+maxSteps: 10
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).toContain('steps: 5')
+        })
+
+        test('cleans up maxTurns/maxSteps after mapping', () => {
+          const input = `---
+name: test-agent
+maxTurns: 5
+maxSteps: 10
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).not.toContain('maxTurns:')
+          expect(result).not.toContain('maxSteps:')
+        })
+
+        test('rejects non-positive-integer steps values', () => {
+          const input = `---
+name: test-agent
+maxSteps: -1
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).not.toContain('steps:')
+          expect(result).toContain('maxSteps: -1')
+        })
+
+        test('preserves original fields when steps value is zero', () => {
+          const input = `---
+name: test-agent
+maxTurns: 0
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).not.toContain('steps:')
+          expect(result).toContain('maxTurns: 0')
+        })
+      })
+
+      describe('permissionMode', () => {
+        test('maps full permissionMode to allow permissions', () => {
+          const input = `---
+name: test-agent
+permissionMode: full
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).toContain('edit: allow')
+          expect(result).toContain('bash: allow')
+          expect(result).toContain('webfetch: allow')
+          expect(result).not.toContain('permissionMode:')
+        })
+
+        test('maps default permissionMode to ask permissions', () => {
+          const input = `---
+name: test-agent
+permissionMode: default
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).toContain('edit: ask')
+          expect(result).toContain('bash: ask')
+          expect(result).toContain('webfetch: ask')
+        })
+
+        test('maps plan permissionMode to deny/ask permissions', () => {
+          const input = `---
+name: test-agent
+permissionMode: plan
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).toContain('edit: deny')
+          expect(result).toContain('bash: deny')
+          expect(result).toContain('webfetch: ask')
+        })
+
+        test('unknown permissionMode defaults to ask', () => {
+          const input = `---
+name: test-agent
+permissionMode: unknown-mode
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).toContain('edit: ask')
+          expect(result).toContain('bash: ask')
+          expect(result).toContain('webfetch: ask')
+          expect(result).not.toContain('permissionMode:')
+        })
+
+        test('existing valid permission takes precedence over permissionMode', () => {
+          const input = `---
+name: test-agent
+permission:
+  edit: allow
+  bash: deny
+permissionMode: full
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).toContain('edit: allow')
+          expect(result).toContain('bash: deny')
+          expect(result).not.toContain('permissionMode:')
+          expect(result).not.toContain('webfetch: allow')
+        })
+
+        test('falls back to permissionMode when permission is invalid', () => {
+          const input = `---
+name: test-agent
+permission:
+  edit: maybe
+permissionMode: full
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).toContain('edit: allow')
+          expect(result).toContain('bash: allow')
+          expect(result).not.toContain('permissionMode:')
+        })
+      })
+
+      describe('hidden field', () => {
+        test('maps disable-model-invocation to hidden', () => {
+          const input = `---
+name: test-agent
+disable-model-invocation: true
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).toContain('hidden: true')
+          expect(result).not.toContain('disable-model-invocation:')
+        })
+
+        test('maps camelCase disableModelInvocation to hidden', () => {
+          const input = `---
+name: test-agent
+disableModelInvocation: true
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).toContain('hidden: true')
+          expect(result).not.toContain('disableModelInvocation:')
+        })
+
+        test('does not set hidden when disable-model-invocation is false', () => {
+          const input = `---
+name: test-agent
+disable-model-invocation: false
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).not.toContain('hidden: true')
+        })
+      })
+
+      describe('agent name preservation', () => {
+        test('preserves agent name in converted output', () => {
+          const input = `---
+name: my-agent
+description: Test agent
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).toContain('name: my-agent')
+        })
+      })
+
+      describe('pass-through', () => {
+        test('preserves unknown CC fields on agents', () => {
+          const input = `---
+name: test-agent
+description: Test
+hooks:
+  pre_run: echo hello
+memory: persistent
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).toContain('hooks:')
+          expect(result).toContain('pre_run: echo hello')
+          expect(result).toContain('memory: persistent')
+        })
+
+        test('preserves unknown CC fields on skills', () => {
+          const input = `---
+name: test-skill
+description: Test
+custom_field: value
+---
+Content`
+          const result = convertContent(input, 'skill')
+          expect(result).toContain('custom_field: value')
+        })
+
+        test('preserves unknown CC fields on commands', () => {
+          const input = `---
+name: test-command
+description: Test
+custom_field: value
+---
+Content`
+          const result = convertContent(input, 'command')
+          expect(result).toContain('custom_field: value')
+        })
+
+        test('preserves hooks field', () => {
+          const input = `---
+name: test-agent
+hooks:
+  post_run: cleanup
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).toContain('post_run: cleanup')
+        })
+
+        test('preserves mcpServers field', () => {
+          const input = `---
+name: test-agent
+mcpServers:
+  - name: server1
+---
+Prompt`
+          const result = convertContent(input, 'agent')
+          expect(result).toContain('name: server1')
+        })
+      })
+
+      describe('skill-specific mappings', () => {
+        test('normalizes model on skills', () => {
+          const input = `---
+name: test-skill
+description: Test
+model: claude-sonnet-4-20250514
+---
+Content`
+          const result = convertContent(input, 'skill')
+          expect(result).toContain('model: anthropic/claude-sonnet-4-20250514')
+        })
+
+        test('maps context: fork to subtask: true', () => {
+          const input = `---
+name: test-skill
+description: Test
+context: fork
+---
+Content`
+          const result = convertContent(input, 'skill')
+          expect(result).toContain('subtask: true')
+          expect(result).toContain('context: fork')
+        })
+
+        test('removes inherit model from skills', () => {
+          const input = `---
+name: test-skill
+description: Test
+model: inherit
+---
+Content`
+          const result = convertContent(input, 'skill')
+          expect(result).not.toContain('model:')
+        })
+      })
+    })
+
+    describe('Idempotency', () => {
+      test('converting already-converted agent content is idempotent', () => {
+        const input = `---
+name: test-agent
+description: Test agent
+model: claude-sonnet-4-20250514
+maxSteps: 10
+permissionMode: full
+tools:
+  - Read
+  - Bash
+---
+Use TodoWrite to track.`
+        const first = convertContent(input, 'agent')
+        const second = convertContent(first, 'agent')
+        expect(second).toBe(first)
+      })
+
+      test('model normalization is idempotent', () => {
+        const input = `---
+name: test-agent
+model: anthropic/claude-sonnet-4-20250514
+---
+Content`
+        const first = convertContent(input, 'agent')
+        const second = convertContent(first, 'agent')
+        expect(second).toBe(first)
+      })
+
+      test('tools map conversion is idempotent', () => {
+        const input = `---
+name: test-agent
+tools:
+  read: true
+  bash: false
+---
+Content`
+        const first = convertContent(input, 'agent')
+        const second = convertContent(first, 'agent')
+        expect(second).toBe(first)
+      })
+
+      test('steps mapping is idempotent', () => {
+        const input = `---
+name: test-agent
+steps: 10
+---
+Content`
+        const first = convertContent(input, 'agent')
+        const second = convertContent(first, 'agent')
+        expect(second).toBe(first)
+      })
+
+      test('permission mapping is idempotent', () => {
+        const input = `---
+name: test-agent
+permission:
+  edit: allow
+  bash: ask
+---
+Content`
+        const first = convertContent(input, 'agent')
+        const second = convertContent(first, 'agent')
+        expect(second).toBe(first)
+      })
+
+      test('skill conversion is idempotent', () => {
+        const input = `---
+name: test-skill
+description: Test
+model: anthropic/claude-sonnet-4-20250514
+context: fork
+---
+Content`
+        const first = convertContent(input, 'skill')
+        const second = convertContent(first, 'skill')
+        expect(second).toBe(first)
+      })
+
+      test('command conversion is idempotent', () => {
+        const input = `---
+name: test-command
+description: Test
+model: anthropic/claude-sonnet-4-20250514
+argument-hint: <file>
+---
+Content`
+        const first = convertContent(input, 'command')
+        const second = convertContent(first, 'command')
+        expect(second).toBe(first)
       })
     })
   })

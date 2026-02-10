@@ -12,6 +12,8 @@ export interface PermissionConfig {
   webfetch?: PermissionSetting
   doom_loop?: PermissionSetting
   external_directory?: PermissionSetting
+  task?: PermissionSetting
+  skill?: PermissionSetting
 }
 
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -65,6 +67,8 @@ function buildPermissionObject(
   webfetch: PermissionSetting | null | undefined,
   doom_loop: PermissionSetting | null | undefined,
   external_directory: PermissionSetting | null | undefined,
+  task: PermissionSetting | null | undefined,
+  skill: PermissionSetting | null | undefined,
 ): PermissionConfig | undefined {
   const permission: PermissionConfig = {}
   if (edit) permission.edit = edit
@@ -72,6 +76,8 @@ function buildPermissionObject(
   if (webfetch) permission.webfetch = webfetch
   if (doom_loop) permission.doom_loop = doom_loop
   if (external_directory) permission.external_directory = external_directory
+  if (task) permission.task = task
+  if (skill) permission.skill = skill
   return Object.keys(permission).length > 0 ? permission : undefined
 }
 
@@ -98,12 +104,20 @@ export function normalizePermission(
   )
   if (external_directory === null) return undefined
 
+  const task = extractSimplePermission(value, 'task')
+  if (task === null) return undefined
+
+  const skill = extractSimplePermission(value, 'skill')
+  if (skill === null) return undefined
+
   return buildPermissionObject(
     edit,
     bash,
     webfetch,
     doom_loop,
     external_directory,
+    task,
+    skill,
   )
 }
 

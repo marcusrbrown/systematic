@@ -309,11 +309,11 @@ Command template for ${name}.`,
       expect(config.agent?.colored?.color).toBe('#FF5733')
     })
 
-    test('includes maxSteps field in agent config', async () => {
+    test('includes steps field in agent config', async () => {
       createAgent(path.join(bundledDir, 'agents'), 'stepping', {
         name: 'stepping',
-        description: 'Agent with maxSteps',
-        maxSteps: 10,
+        description: 'Agent with steps',
+        steps: 10,
       })
 
       const handler = createConfigHandler({
@@ -326,7 +326,7 @@ Command template for ${name}.`,
       const config: Config = {}
       await handler(config)
 
-      expect(config.agent?.stepping?.maxSteps).toBe(10)
+      expect(config.agent?.stepping?.steps).toBe(10)
     })
 
     test('includes tools field in agent config', async () => {
@@ -400,7 +400,7 @@ Command template for ${name}.`,
         model: 'gpt-4',
         temperature: 0.7,
         top_p: 1,
-        maxSteps: 10,
+        steps: 10,
         color: '#ff0000',
         mode: 'subagent',
         tools: { bash: true, read: false },
@@ -423,7 +423,7 @@ Command template for ${name}.`,
       expect(agent?.model).toBe('openai/gpt-4')
       expect(agent?.temperature).toBe(0.7)
       expect(agent?.top_p).toBe(1)
-      expect(agent?.maxSteps).toBe(10)
+      expect(agent?.steps).toBe(10)
       expect(agent?.color).toBe('#ff0000')
       expect(agent?.mode).toBe('subagent')
       expect(agent?.tools).toEqual({ bash: true, read: false })

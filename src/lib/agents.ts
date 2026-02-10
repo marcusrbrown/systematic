@@ -33,7 +33,9 @@ export interface AgentFrontmatter {
   /** Hex color code */
   color?: string
   /** Max agentic iterations */
-  maxSteps?: number
+  steps?: number
+  /** Whether this agent is hidden from model invocation */
+  hidden?: boolean
   /** Permission settings */
   permission?: PermissionConfig
 }
@@ -76,7 +78,8 @@ export function extractAgentFrontmatter(content: string): AgentFrontmatter {
     disable: extractBoolean(data, 'disable'),
     mode: isAgentMode(data.mode) ? data.mode : undefined,
     color: extractNonEmptyString(data, 'color'),
-    maxSteps: extractNumber(data, 'maxSteps'),
+    steps: extractNumber(data, 'steps'),
+    hidden: extractBoolean(data, 'hidden') ?? undefined,
     permission: normalizePermission(data.permission),
   }
 }

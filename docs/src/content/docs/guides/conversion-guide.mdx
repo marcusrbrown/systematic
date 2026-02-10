@@ -21,7 +21,7 @@ This guide provides instructions for converting Claude Code (CC) definitions (sk
 | **Skill tool** | `Skill` | `skill` (native) or `systematic_skill` (bundled) |
 | **Task/subagent tool** | `Task` | `@mention` or `delegate_task` |
 | **Todo tool** | `TodoWrite` | `todowrite` |
-| **AskUserQuestion tool** | `AskUserQuestion` | `question` |
+| **Question tool** | `AskUserQuestion` | `question` |
 | **Command prefix** | `/compound-engineering:` | `/systematic:` |
 | **Plugin prefix** | `compound-engineering:` | `systematic:` |
 
@@ -37,24 +37,26 @@ This guide provides instructions for converting Claude Code (CC) definitions (sk
 |----------|----------|-------------------|
 | `name` | `name` | **Keep** - lowercase, hyphens, max 64 chars |
 | `description` | `description` | **Keep** - critical for trigger matching |
-| `model` | ❌ | **REMOVE** - OC uses global/agent-level model selection |
-| `allowed-tools` | ❌ | **REMOVE** - OC handles permissions via config |
+| `model` | `model` | **Normalize** - adds provider prefix (e.g., `sonnet` → `anthropic/sonnet`), removes `inherit` |
+| `allowed-tools` | — | **Pass through** - stored but not enforced by OC |
 | `argument-hint` | `argument-hint` | **Keep** (used for autocomplete hints) |
-| `disable-model-invocation` | ❌ | **REMOVE** - not supported in OC |
-| `user-invocable` | ❌ | **REMOVE** - not supported in OC |
-| `context: fork` | ❌ | **REMOVE** - subagent execution not automatic |
-| `agent` | ❌ | **REMOVE** - use explicit delegation in content |
+| `disable-model-invocation` | `hidden` | **Map** - `true` → `hidden: true` |
+| `user-invocable` | — | **Pass through** - used by skills-as-commands |
+| `context: fork` | `subtask` | **Map** - `fork` → `subtask: true` |
+| `agent` | `agent` | **Pass through** - routed through for skills-as-commands |
 | `license` | `license` | **Keep** (optional) |
 | `compatibility` | `compatibility` | **Keep** (optional) |
 | `metadata` | `metadata` | **Keep** (optional) |
 
-**Systematic compatibility note:** Systematic reads skill frontmatter directly for its own tooling. CC-only fields are still accepted for bundled skills to power **systematic_skill** and **skills-as-commands** behavior, but they are not emitted into OpenCode's native skill definitions.
+**Map-and-preserve strategy:** The converter uses a non-destructive approach — known CC fields are mapped to OC equivalents, and unknown fields pass through untouched. No fields are silently dropped.
 
-- `disable-model-invocation`: hides skills from the Systematic skill tool list.
+**Systematic compatibility note:** Systematic reads skill frontmatter directly for its own tooling. CC fields are preserved for bundled skills to power **systematic_skill** and **skills-as-commands** behavior.
+
+- `disable-model-invocation`: maps to `hidden: true` (hides from skill tool list).
 - `user-invocable`: controls whether a skill is exposed as a command (skills-as-commands only).
-- `context: fork`: maps to `subtask` when a skill is exposed as a command.
+- `context: fork`: maps to `subtask: true` when a skill is exposed as a command.
 - `agent` / `model`: routed through when a skill is exposed as a command.
-- `allowed-tools`: reserved for future use (stored but not enforced).
+- `allowed-tools`: stored but not enforced by OC runtime.
 
 #### Example Transformation
 
@@ -86,9 +88,10 @@ When brainstorming, use delegate_task to spawn research agents...
 ```
 
 **Key changes:**
-1. Removed `model`, `allowed-tools`, `disable-model-invocation`
-2. Enhanced `description` to include **trigger conditions** (critical for auto-invocation)
-3. Updated tool references in content
+1. `model` normalized (adds provider prefix) or removed if `inherit`
+2. `allowed-tools` and `disable-model-invocation` passed through or mapped
+3. Enhanced `description` to include **trigger conditions** (critical for auto-invocation)
+4. Updated tool references in content
 
 ### Commands
 
@@ -119,19 +122,52 @@ When brainstorming, use delegate_task to spawn research agents...
 
 | CC Field | OC Field | Conversion Action |
 |----------|----------|-------------------|
-| `name` | ❌ | **REMOVE** - derived from filename |
+| `name` | — | **Pass through** (OC derives from filename but field is preserved) |
 | `description` | `description` | **Keep** - required |
-| `model: inherit` | ❌ | **REMOVE** - OC inherits by default |
+| `model: inherit` | ❌ | **Remove** - OC inherits by default |
 | `model: sonnet` | `model: anthropic/claude-3-5-sonnet` | **Normalize** - add provider prefix |
 | `model: opus` | `model: anthropic/claude-3-opus` | **Normalize** |
 | `model: haiku` | `model: anthropic/claude-3-haiku` | **Normalize** |
-| `tools` | `tools` | **Keep** - array of allowed tools |
-| `disallowedTools` | ❌ | **REMOVE** - use OC permission system |
-| `permissionMode` | ❌ | **REMOVE** - use OC permission config |
-| `skills` | ❌ | **REMOVE** - skills load via tool calls |
-| `hooks` | ❌ | **REMOVE** - hooks configured separately |
+| `tools` (array) | `tools` (map) | **Map** - `["Read", "Bash"]` → `{ read: true, bash: true }` |
+| `disallowedTools` | merged into `tools` | **Merge** - `["Write"]` → adds `{ write: false }` to tools map |
+| `maxSteps` / `maxTurns` | `steps` | **Rename** - takes `min(maxTurns, maxSteps)` if both present |
+| `permissionMode` | `permission` | **Map** - `"full"` → `{ edit: "allow", bash: "allow", webfetch: "allow" }` |
+| `disable-model-invocation` | `hidden` | **Map** - `true` → `hidden: true` |
+| `skills` | — | **Pass through** - skills load via tool calls at runtime |
+| `hooks` | — | **Pass through** - hooks configured separately in OC |
 | N/A | `mode` | **ADD** - `primary`, `subagent`, or `all` |
 | N/A | `temperature` | **ADD** - inferred from agent purpose |
+
+#### Permission Mode Mapping
+
+| CC `permissionMode` | OC `permission` |
+|---------------------|-----------------|
+| `full` | `{ edit: "allow", bash: "allow", webfetch: "allow" }` |
+| `default` | `{ edit: "ask", bash: "ask", webfetch: "ask" }` |
+| `plan` | `{ edit: "deny", bash: "deny", webfetch: "ask" }` |
+| `bypassPermissions` | `{ edit: "allow", bash: "allow", webfetch: "allow" }` |
+| (unknown) | `{ edit: "ask", bash: "ask", webfetch: "ask" }` (secure default) |
+
+#### Tools Array → Map Conversion
+
+The converter transforms CC `tools` arrays into OC tool permission maps:
+
+```yaml
+# Before (Claude Code):
+tools: Read, Grep, Glob, Bash
+disallowedTools: Write, Edit
+
+# After (OpenCode):
+tools:
+  read: true
+  grep: true
+  glob: true
+  bash: true
+  write: false
+  edit: false
+```
+
+Tool names are canonicalized using `TOOL_NAME_MAP` (e.g., `TodoWrite` → `todowrite`, `Task` → `delegate_task`).
 
 #### Model Normalization Rules
 
@@ -149,7 +185,7 @@ inherit      → (remove field)
 
 | Agent Keywords | Temperature |
 |----------------|-------------|
-| review, audit, security, sentinel, oracle, lint, verification | 0.1 |
+| review, audit, security, sentinel, oracle, lint, verification, guardian | 0.1 |
 | plan, planning, architecture, strategist, analysis, research | 0.2 |
 | doc, readme, changelog, editor, writer | 0.3 |
 | brainstorm, creative, ideate, design, concept | 0.6 |
@@ -164,6 +200,8 @@ name: code-simplicity-reviewer
 description: Reviews code for unnecessary complexity and suggests simplifications
 model: inherit
 tools: Read, Grep, Glob
+permissionMode: default
+maxSteps: 20
 ---
 
 You are a code simplicity expert...
@@ -172,13 +210,30 @@ You are a code simplicity expert...
 **After (OpenCode):**
 ```yaml
 ---
+name: code-simplicity-reviewer
 description: Reviews code for unnecessary complexity and suggests simplifications
+tools:
+  read: true
+  grep: true
+  glob: true
+permission:
+  edit: ask
+  bash: ask
+  webfetch: ask
+steps: 20
 mode: subagent
 temperature: 0.1
 ---
 
 You are a code simplicity expert...
 ```
+
+**Key changes:**
+1. `model: inherit` removed (OC inherits by default)
+2. `tools` array mapped to `tools` map with canonicalized names
+3. `permissionMode: default` mapped to `permission` object
+4. `maxSteps: 20` renamed to `steps: 20`
+5. `mode` and `temperature` added by converter
 
 ---
 
@@ -192,7 +247,8 @@ Update references in markdown content:
 |---------|---------|-------|
 | `Task` | `delegate_task` / `@mention` | Use delegate_task for programmatic, @agent for inline |
 | `Skill` | `skill` (native) or `systematic_skill` | Systematic bundled skills use `systematic_skill` |
-| `TodoWrite` | `update_plan` or `todowrite` | Depends on environment |
+| `TodoWrite` | `todowrite` | Direct mapping |
+| `AskUserQuestion` | `question` | Direct mapping |
 | `Read` | `read` | Lowercase |
 | `Write` | `write` | Lowercase |
 | `Edit` | `edit` | Lowercase |
@@ -200,7 +256,7 @@ Update references in markdown content:
 | `Grep` | `grep` | Lowercase |
 | `Glob` | `glob` | Lowercase |
 | `WebFetch` | `webfetch` | Lowercase |
-| `WebSearch` | `google_search` | Different name - depends on environment |
+| `WebSearch` | `google_search` | Different name |
 
 ### Prefix Conversions
 
@@ -210,15 +266,15 @@ Update references in markdown content:
 | `/workflows:` | `/workflows:` | (keep if present) |
 | `compound-engineering:` | `systematic:` |
 
-### CC-Specific Syntax Removal
+### CC-Specific Syntax Handling
 
-Remove or adapt these CC-specific patterns:
+These CC-specific patterns are mapped or removed by the converter:
 
 | Pattern | Action |
 |---------|--------|
-| `context: fork` in frontmatter | Remove - use explicit delegation |
-| `${CLAUDE_SESSION_ID}` | Remove - not available in OC |
-| `CLAUDE.md` references | Convert to `AGENTS.md` or skill references |
+| `context: fork` in frontmatter | **Mapped** to `subtask: true` |
+| `${CLAUDE_SESSION_ID}` | **Remove** - not available in OC |
+| `CLAUDE.md` references | **Converted** to `AGENTS.md` by body transformer |
 
 ### Reference Updates
 
@@ -260,7 +316,7 @@ Include this instruction in skills that reference tools:
 ```markdown
 **Tool Mapping for OpenCode:**
 When skills reference tools you don't have, substitute OpenCode equivalents:
-- `TodoWrite` → `update_plan`
+- `TodoWrite` → `todowrite`
 - `Task` tool with subagents → Use OpenCode's subagent system (@mention)
 - `Skill` tool → OpenCode's native `skill` tool
 - `SystematicSkill` tool → `systematic_skill` (Systematic plugin skills)
@@ -279,57 +335,63 @@ The `using-systematic` skill is injected into the system prompt and teaches the 
 
 ## Conversion Checklist
 
-### Skills
+### Skills (automated by converter)
 
-- [ ] Remove `model` field from frontmatter
-- [ ] Remove `allowed-tools` field from frontmatter
-- [ ] Remove `disable-model-invocation` field
-- [ ] Remove `user-invocable` field
-- [ ] Remove `context: fork` field
-- [ ] Remove `agent` field (handle delegation in content)
-- [ ] Enhance `description` with trigger conditions
-- [ ] Update tool references in content (Task → delegate_task, etc.)
-- [ ] Update directory references (.claude → .opencode)
-- [ ] Convert dynamic injection syntax if present
-- [ ] Add tool mapping instruction if skill references CC tools
+- [x] `model` normalized (provider prefix added) or removed if `inherit`
+- [x] `disable-model-invocation` mapped to `hidden: true`
+- [x] `context: fork` mapped to `subtask: true`
+- [ ] `allowed-tools`, `user-invocable`, `agent` — pass through (used by skills-as-commands)
+- [ ] Enhance `description` with trigger conditions (manual — requires understanding of skill purpose)
+- [x] Tool references updated in content (Task → delegate_task, etc.)
+- [x] Directory references updated (.claude → .opencode)
+- [ ] Convert dynamic injection syntax if present (manual)
+- [ ] Add tool mapping instruction if skill references CC tools (manual)
 
-### Commands
+### Commands (automated by converter)
 
-- [ ] Remove unsupported frontmatter fields
-- [ ] Normalize model field if present (add provider prefix)
-- [ ] Shift positional argument indices ($0 → $1)
-- [ ] Convert bash injection syntax
-- [ ] Update prefix from `/compound-engineering:` to `/systematic:`
+- [x] `model` normalized (provider prefix added) or removed if `inherit`
+- [ ] Shift positional argument indices ($0 → $1) (manual)
+- [ ] Convert bash injection syntax (manual)
+- [x] Prefix updated from `/compound-engineering:` to `/systematic:`
 
-### Agents
+### Agents (automated by converter)
 
-- [ ] Remove `name` field (derived from filename)
-- [ ] Normalize `model` field (add provider prefix) or remove if `inherit`
-- [ ] Remove `permissionMode` field
-- [ ] Remove `skills` field (load via tool calls instead)
-- [ ] Remove `hooks` field (configure separately)
-- [ ] Add `mode` field (`primary`, `subagent`, or `all`)
-- [ ] Add `temperature` field (infer from purpose)
-- [ ] Update tool references in content
+- [x] `model` normalized (provider prefix) or removed if `inherit`
+- [x] `tools` array mapped to tools permission map (canonicalized names)
+- [x] `disallowedTools` merged into tools map as `false` entries
+- [x] `maxSteps`/`maxTurns` renamed to `steps`
+- [x] `permissionMode` mapped to `permission` object
+- [x] `disable-model-invocation` mapped to `hidden: true`
+- [x] `mode` field added (`primary`, `subagent`, or `all`)
+- [x] `temperature` field inferred from agent purpose
+- [x] Tool references updated in content
+- [ ] `skills`, `hooks` — pass through (not enforced by OC runtime)
 
 ---
 
 ## Features Not Supported in OpenCode
 
-These CC features have no direct OC equivalent:
+These CC features have no direct OC equivalent and require manual handling:
 
-| CC Feature | Workaround |
-|------------|------------|
-| `model` in skill frontmatter | Use agent-level model selection |
-| `allowed-tools` in skills | Configure via OC permissions |
-| `disable-model-invocation` | No equivalent - all skills can be auto-invoked |
-| `user-invocable: false` | No equivalent - use naming conventions |
-| `context: fork` | Explicitly use subagent delegation |
-| Dynamic injection `!`command`` | Pre-compute or use tool calls |
-| `${CLAUDE_SESSION_ID}` | Not available |
-| `permissionMode` in agents | Use OC permission config |
-| Hooks in frontmatter | Configure in OC hooks system |
-| `skills` preloading in agents | Load skills via tool calls |
+| CC Feature | Status |
+|------------|--------|
+| Dynamic injection `` !`command` `` | Not converted — pre-compute or use tool calls |
+| `${CLAUDE_SESSION_ID}` | Not available in OC — remove |
+| `user-invocable: false` | Passed through but not enforced by OC — use naming conventions |
+
+### Previously Unsupported, Now Mapped
+
+These features were previously stripped but are now automatically mapped by the converter:
+
+| CC Feature | Converter Action |
+|------------|-----------------|
+| `model` in skill/agent/command | Normalized with provider prefix (or removed if `inherit`) |
+| `disable-model-invocation` | Mapped to `hidden: true` |
+| `context: fork` | Mapped to `subtask: true` |
+| `permissionMode` in agents | Mapped to `permission` object |
+| `tools` array in agents | Mapped to tools permission map |
+| `disallowedTools` in agents | Merged into tools map as `false` entries |
+| `maxSteps`/`maxTurns` in agents | Renamed to `steps` |
 
 ---
 
@@ -403,9 +465,9 @@ Reference `.opencode/skills/` or use `systematic_skill` for bundled skills.
 ```
 
 **Changes made:**
-1. ✅ Removed `model: sonnet`
-2. ✅ Removed `allowed-tools`
-3. ✅ Enhanced `description` with trigger conditions
+1. ✅ `model: sonnet` normalized to `model: anthropic/sonnet` (or removed if `inherit`)
+2. ✅ `allowed-tools` passed through (not stripped)
+3. ✅ Enhanced `description` with trigger conditions (manual step)
 4. ✅ Changed `Task tool` → `delegate_task or @mention`
 5. ✅ Changed `.claude/skills/` → `.opencode/skills/` + systematic_skill reference
 
@@ -417,14 +479,16 @@ The Systematic plugin includes a converter at `src/lib/converter.ts`:
 
 ### Current Capabilities
 
+The converter uses a **map-and-preserve strategy** — known CC fields are transformed to OC equivalents, and unknown fields pass through untouched. No fields are silently dropped.
+
 | Capability | Details |
 |------------|---------|
-| **Agent frontmatter transformation** | Normalizes model, infers temperature, adds mode, removes `name` |
-| **Skill frontmatter transformation** | Removes CC-only fields (`model`, `allowed-tools`, `disable-model-invocation`, `user-invocable`, `context`, `agent`) |
-| **Command frontmatter transformation** | Normalizes model (adds provider prefix), removes `inherit` models, removes `argument-hint` |
+| **Agent frontmatter transformation** | Maps tools→map, maxSteps→steps, permissionMode→permission, disable-model-invocation→hidden; normalizes model; infers temperature; adds mode |
+| **Skill frontmatter transformation** | Normalizes model, maps context:fork→subtask, maps disable-model-invocation→hidden; unknown fields preserved |
+| **Command frontmatter transformation** | Normalizes model (adds provider prefix), removes `inherit` models |
 | **Body content transformation** | Tool name mappings, path replacements, prefix conversions |
 | **Model normalization** | Adds provider prefix (claude-*→ anthropic/claude-*) |
-| **Caching** | Avoids redundant processing via file mtime checks |
+| **Caching** | Avoids redundant processing via file mtime + converter version key (`CONVERTER_VERSION`) |
 
 ### Tool Name Transformations (Automated)
 
@@ -476,14 +540,20 @@ const convertedFrontmatterOnly = convertContent(content, 'skill', {
 
 ### Extending the Converter
 
-To add new transformations, modify the constants in `src/lib/converter.ts`:
+To add new transformations, modify the constants and mapping functions in `src/lib/converter.ts`:
 
 ```typescript
-// Add new tool mappings (regex pattern → replacement string)
+// Add new body tool mappings (regex pattern → replacement string)
 const TOOL_MAPPINGS: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bNewTool\b/g, 'new_tool'],
   // ...existing mappings
 ]
+
+// Add new frontmatter tool name mappings (for tools arrays)
+const TOOL_NAME_MAP: Record<string, string> = {
+  newtool: 'new_tool',
+  // ...existing mappings (must stay in sync with TOOL_MAPPINGS)
+}
 
 // Add new path replacements
 const PATH_REPLACEMENTS: ReadonlyArray<readonly [RegExp, string]> = [
@@ -491,12 +561,14 @@ const PATH_REPLACEMENTS: ReadonlyArray<readonly [RegExp, string]> = [
   // ...existing replacements
 ]
 
-// Add CC-only fields to strip from skills
-const CC_ONLY_SKILL_FIELDS = [
-  'new-cc-field',
-  // ...existing fields
-]
+// Add new permission mode mappings
+const PERMISSION_MODE_MAP: Record<string, PermissionConfig> = {
+  newmode: { edit: 'ask', bash: 'deny', webfetch: 'ask' },
+  // ...existing mappings
+}
 ```
+
+**Important:** After changing mapping logic, bump `CONVERTER_VERSION` to invalidate cached conversions.
 
 ---
 
@@ -510,11 +582,17 @@ After converting, verify:
 4. **Tool references work**: Referenced tools exist in environment
 5. **Directory references valid**: Paths point to correct locations
 6. **Body transformations applied**: Tool names and paths converted correctly
+7. **Frontmatter fields mapped**: tools→map, maxSteps→steps, permissionMode→permission
+8. **Idempotency**: Running the converter twice produces the same output
 
 Run the converter tests to validate:
 
 ```bash
+# Unit tests (86 tests including idempotency checks)
 bun test tests/unit/converter.test.ts
+
+# Integration tests (validates real bundled asset conversion)
+bun test tests/integration/converter-validation.test.ts
 ```
 
 ---
