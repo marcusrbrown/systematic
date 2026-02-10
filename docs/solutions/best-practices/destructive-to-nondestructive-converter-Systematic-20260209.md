@@ -136,3 +136,4 @@ const PERMISSION_MODE_MAP: Record<string, PermissionConfig> = {
 ## Related Issues
 
 - See also: [Structured Manual Override Tracking](./structured-manual-override-tracking-Systematic-20260210.md) — builds on the manifest infrastructure to track post-import customizations with provenance
+- See also: [Batch Importing CEP Agents to Systematic](../integration-issues/batch-import-cep-agents-to-systematic-20260210.md) — batch import of 24 agents that validated the converter pipeline at scale

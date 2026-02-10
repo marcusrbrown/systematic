@@ -1,5 +1,7 @@
 ---
-description: Create or update README.md with comprehensive project documentation covering plugin purpose, agents, commands, skills, and workflows
+name: write-readme
+description: Create or update README.md with accurate project documentation
+argument-hint: "[full|section-name]"
 ---
 
 # Generate README Documentation
@@ -11,7 +13,7 @@ Update the project's README.md with comprehensive, accurate documentation.
 <scope>$ARGUMENTS</scope>
 
 **If scope is empty or "full":** Complete README rewrite
-**If scope contains a section name:** Focus on updating that section only
+**If scope contains a section name:** Focus on updating that section only (e.g., "agents", "skills", "commands", "development")
 
 ## Pre-Injected Context
 
@@ -19,109 +21,103 @@ Update the project's README.md with comprehensive, accurate documentation.
 !`cat package.json`
 </package-info>
 
-<bundled-skills>
-!`find skills -name "SKILL.md" -exec sh -c 'echo "=== {} ===" && head -20 "{}"' \;`
-</bundled-skills>
+<current-readme>
+@README.md
+</current-readme>
 
-<bundled-agents>
-!`find agents -name "*.md" -exec sh -c 'echo "=== {} ===" && head -15 "{}"' \;`
-</bundled-agents>
+<asset-inventory>
+!`bun src/cli.ts list skills 2>/dev/null`
+!`bun src/cli.ts list agents 2>/dev/null`
+!`bun src/cli.ts list commands 2>/dev/null`
+</asset-inventory>
 
-<bundled-commands>
-!`find commands -name "*.md" -exec sh -c 'echo "=== {} ===" && head -10 "{}"' \;`
-</bundled-commands>
+<agent-categories>
+!`for dir in agents/*/; do echo "### $(basename "$dir")"; ls "$dir"*.md 2>/dev/null | while read f; do head -4 "$f" | grep -E "^(name|description):" ; echo "---"; done; echo; done`
+</agent-categories>
+
+<skill-frontmatter>
+!`for f in skills/*/SKILL.md; do head -6 "$f"; echo "---"; done`
+</skill-frontmatter>
+
+<command-frontmatter>
+!`for f in commands/*.md commands/workflows/*.md; do head -6 "$f" 2>/dev/null; echo "---"; done`
+</command-frontmatter>
 
 <recent-changes>
-!`git log --oneline -10`
+!`git log --oneline -15`
 </recent-changes>
 
 ## Execution Flow
 
-### Phase 1: Analyze Pre-Injected Context
+### Phase 1: Analyze Context
 
-Review the shell-injected context above:
+1. From `<current-readme>`: Understand the existing structure, style, and formatting conventions. **Preserve the evolved structure** — do not regress to a generic template.
+2. From `<package-info>`: Extract name, version, description, repository URL, author
+3. From `<asset-inventory>`: Get exact counts of skills, agents, and commands
+4. From `<agent-categories>`: Build agent tables grouped by directory (design, research, review, workflow)
+5. From `<skill-frontmatter>` and `<command-frontmatter>`: Extract names and descriptions for tables
+6. From `<recent-changes>`: Note version tags and recent features
 
-1. From `<package-info>`: Extract name, version, description, author, dependencies
-2. From `<bundled-skills>`: Parse frontmatter to build skills table (name, description)
-3. From `<bundled-agents>`: Parse frontmatter to build agents table (name, description, category)
-4. From `<bundled-commands>`: Parse frontmatter to build commands table (name, description)
-5. From `<recent-changes>`: Note version tag and recent features
-
-Use the `read` tool if you need complete file content beyond the injected excerpts:
-- Read `src/index.ts` to understand plugin hook registration
-- Read current `README.md` to preserve custom content when doing partial updates
+If scope specifies a single section, read the current README and only update that section.
 
 ### Phase 2: Content Mapping
 
-Map extracted data to README sections:
+Map extracted data to README sections. Every count and description must come from the injected context — never hardcode.
 
 | README Section | Data Source |
 |----------------|-------------|
-| Overview | `<package-info>` description field |
+| Header Block | `<current-readme>` — preserve `<picture>`, badge style, nav links |
+| Overview / Key Features | `<package-info>` description + asset counts from `<asset-inventory>` |
 | Quick Start | `<package-info>` name for install command |
-| Skills | `<bundled-skills>` frontmatter parsing |
-| Agents | `<bundled-agents>` frontmatter parsing |
-| Commands | `<bundled-commands>` frontmatter parsing |
-| Configuration | Use `read` on `src/lib/config.ts` if needed |
-| How It Works | Use `read` on `src/index.ts` for hook details |
-| Development | `<package-info>` scripts field |
+| Skills | `<skill-frontmatter>` — table with Name and Description |
+| Agents | `<agent-categories>` — tables grouped by category directory |
+| Commands | `<command-frontmatter>` — tables split by Workflows vs Utilities |
+| CLI | Preserve existing CLI section from `<current-readme>` |
+| Configuration | Read `src/lib/config.ts` if needed for config options |
+| Tools | Preserve existing Tools section |
+| How It Works | Preserve existing Mermaid diagram and hook explanations |
+| Development | `<package-info>` scripts + project structure from filesystem |
+| Converting from Claude Code | Preserve existing section |
+| References + License | `<package-info>` author, repository |
 
 ### Phase 3: README Generation
 
-#### Required Sections
+#### Formatting Rules
 
-1. **Header Block** (centered)
-   - Logo (`assets/banner.svg`)
-   - Title and tagline
-   - Badges (build status, npm version, license)
-   - Quick navigation links
+These rules are **non-negotiable** — they match the existing README style:
 
-2. **Overview**
-   - What the plugin does (1-2 sentences)
-   - Why it matters (pain point it solves)
-   - Key features (bullet list, 4-6 items)
+1. **Header block**: Use `<picture>` with `<source>` tags for dark/light mode, not bare `<img>`
+2. **Badges**: Use `style=flat-square` with `labelColor=1a1a2e` and the project's color scheme:
+   - Build: `color=4FD1C5`
+   - npm: `color=E91E8C`
+   - Docs: `color=4FD1C5`
+   - License: `color=F5A623`
+3. **Navigation**: Bold links separated by ` · ` (middle dot)
+4. **Agent tables**: One table per category directory (Design, Research, Review, Workflow), with `| Agent | Purpose |` headers
+5. **Skill table**: Single table with `| Skill | Description |` headers. Skill names in backticks.
+6. **Command tables**: Split into "Workflow Commands" and "Utility Commands". Workflow commands use `/workflows:` prefix. Utility commands use `/systematic:` prefix.
+7. **Counts**: The "Key Features" bullet mentioning bundled content must use the exact counts from `<asset-inventory>`. Format: "X skills, Y agents, and Z commands"
+8. **Project Structure tree**: Update file comments to match current counts (e.g., `# X bundled agents (4 categories)`)
+9. **Code blocks**: Use `bash` for shell, `json` for config, `markdown` for skill examples, `mermaid` for diagrams
 
-3. **Quick Start**
-   - Prerequisites
-   - Installation command
-   - Configuration snippet
-   - Verification step
+#### Section Order
 
-4. **Skills Table**
-   - Name | Description format
-   - Brief explanation of how skills work
+Maintain this exact section order (matches current README):
 
-5. **Agents Tables**
-   - Grouped by category (Review, Research, etc.)
-   - Name | Purpose format
-
-6. **Commands Tables**
-   - Grouped by type (Workflows, Utilities)
-   - Command | Description format
-
-7. **Configuration**
-   - Plugin config file location and format
-   - Disable options
-   - Project-specific content locations
-
-8. **Tools**
-   - Tools exposed to OpenCode
-   - Brief usage notes
-
-9. **How It Works**
-   - Mermaid diagram showing plugin hooks
-   - Explanation of each hook's role
-
-10. **Development**
-    - Prerequisites
-    - Setup commands
-    - Project structure tree
-    - Test commands
-    - Contributing reference
-
-11. **References**
-    - Links to related documentation
-    - License
+1. Header Block (centered div)
+2. Overview (with "Why Systematic?" and "Key Features")
+3. Quick Start (Prerequisites, Installation, Verify)
+4. Skills (table + "How Skills Work")
+5. Agents (4 category tables + "Using Agents")
+6. Commands (Workflow + Utility tables)
+7. CLI (command table + examples)
+8. Configuration (Plugin config, Project-specific content)
+9. Tools (table)
+10. How It Works (Mermaid diagram + explanations)
+11. Development (Prerequisites, Setup, Project Structure, Testing, Contributing)
+12. Converting from Claude Code
+13. References
+14. License
 
 ### Phase 4: Quality Verification
 
@@ -133,130 +129,25 @@ Before finalizing:
 - [ ] No sensitive file paths exposed
 - [ ] All example data is generic
 
-**Quality Checklist:**
-- [ ] All skill/agent/command counts match actual files
-- [ ] All frontmatter descriptions are current
-- [ ] Installation commands are correct
-- [ ] Badge URLs are valid
-- [ ] Mermaid diagram renders correctly
+**Accuracy Checklist:**
+- [ ] All skill/agent/command counts match `<asset-inventory>` output exactly
+- [ ] All agent descriptions match their frontmatter
+- [ ] All agents are listed under the correct category
+- [ ] Badge URLs are valid and use correct style
+- [ ] Mermaid diagram is preserved from current README
+- [ ] No phantom agents or skills listed (only those in `<asset-inventory>`)
 
 ### Phase 5: Write and Verify
 
 1. Use the `write` tool to save README.md
-2. Use `bash` to run `bun run lint` to check markdown formatting (if configured)
-3. Report completion with asset counts
-
-## Template Reference
-
-Use this structure as the base template:
-
-```markdown
-<div align="center">
-
-<img src="./assets/banner.svg" alt="Systematic" width="100%" />
-
-# Systematic
-
-> Structured engineering workflows for OpenCode
-
-[![Build Status](badge-url)](action-url) [![npm](npm-url)](npm-package) [![License](license-badge)](LICENSE)
-
-[Overview](#overview) · [Quick Start](#quick-start) · [Skills](#skills) · [Agents](#agents) · [Commands](#commands) · [Development](#development)
-
-</div>
-
----
-
-## Overview
-
-{Brief description from package.json}
-
-### Why Systematic?
-
-{Pain point and value proposition}
-
-### Key Features
-
-- **Feature 1** — Description
-- **Feature 2** — Description
-...
-
-## Quick Start
-
-### Prerequisites
-
-- OpenCode installed
-- Node.js 18+ or Bun
-
-### Installation
-
-\`\`\`bash
-npm install @fro.bot/systematic
-\`\`\`
-
-Add to config:
-
-\`\`\`json
-{
-  "plugins": ["@fro.bot/systematic"]
-}
-\`\`\`
-
-## Skills
-
-| Skill | Description |
-|-------|-------------|
-| `skill-name` | {from frontmatter} |
-...
-
-## Agents
-
-### Category Name
-
-| Agent | Purpose |
-|-------|---------|
-| `agent-name` | {from frontmatter} |
-...
-
-## Commands
-
-### Workflows
-
-| Command | Description |
-|---------|-------------|
-| `/command-name` | {from frontmatter} |
-...
-
-## Configuration
-
-{Config file locations and options}
-
-## Tools
-
-| Tool | Description |
-|------|-------------|
-| `tool-name` | {description} |
-
-## How It Works
-
-\`\`\`mermaid
-flowchart TB
-    A[Plugin Loaded] --> B[config hook]
-    ...
-\`\`\`
-
-## Development
-
-{Setup and build instructions}
-
-## License
-
-[MIT](LICENSE) © {author from package.json}
-```
+2. Report completion with:
+   - Sections updated
+   - Asset counts (skills: X, agents: Y, commands: Z)
+   - Any discrepancies found between old README and actual content
 
 ## Output
 
 When complete, report:
-- Sections updated
-- Asset counts (skills, agents, commands)
-- Any discrepancies found between README and actual content
+- Sections updated (or "all" for full rewrite)
+- Asset counts derived from live inventory
+- Changes from previous README (what was added, removed, or corrected)
