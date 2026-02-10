@@ -117,6 +117,111 @@ describe('manifest', () => {
         }),
       ).toBe(false)
     })
+
+    test('validates definition with structured manual_overrides', () => {
+      expect(
+        validateManifest({
+          sources: {},
+          definitions: {
+            'agents/review/test': {
+              source: 'cep',
+              upstream_path: 'agents/review/test.md',
+              upstream_commit: 'abc123',
+              synced_at: '2026-02-10T06:00:00Z',
+              notes: 'Test',
+              manual_overrides: [
+                {
+                  field: 'description',
+                  reason: 'Customized for local project',
+                  original: 'Original description text',
+                  overridden_at: '2026-02-10T06:30:00Z',
+                },
+              ],
+            },
+          },
+        }),
+      ).toBe(true)
+    })
+
+    test('validates definition with empty manual_overrides', () => {
+      expect(
+        validateManifest({
+          sources: {},
+          definitions: {
+            'agents/review/test': {
+              source: 'cep',
+              upstream_path: 'agents/review/test.md',
+              upstream_commit: 'abc123',
+              synced_at: '2026-02-10T06:00:00Z',
+              notes: 'Test',
+              manual_overrides: [],
+            },
+          },
+        }),
+      ).toBe(true)
+    })
+
+    test('rejects old-style string manual_overrides', () => {
+      expect(
+        validateManifest({
+          sources: {},
+          definitions: {
+            'agents/review/test': {
+              source: 'cep',
+              upstream_path: 'agents/review/test.md',
+              upstream_commit: 'abc123',
+              synced_at: '2026-02-10T06:00:00Z',
+              notes: 'Test',
+              manual_overrides: ['description'],
+            },
+          },
+        }),
+      ).toBe(false)
+    })
+
+    test('rejects manual_override missing required fields', () => {
+      expect(
+        validateManifest({
+          sources: {},
+          definitions: {
+            'agents/review/test': {
+              source: 'cep',
+              upstream_path: 'agents/review/test.md',
+              upstream_commit: 'abc123',
+              synced_at: '2026-02-10T06:00:00Z',
+              notes: 'Test',
+              manual_overrides: [
+                { field: 'description', reason: 'Missing overridden_at' },
+              ],
+            },
+          },
+        }),
+      ).toBe(false)
+    })
+
+    test('validates manual_override without optional original', () => {
+      expect(
+        validateManifest({
+          sources: {},
+          definitions: {
+            'agents/review/test': {
+              source: 'cep',
+              upstream_path: 'agents/review/test.md',
+              upstream_commit: 'abc123',
+              synced_at: '2026-02-10T06:00:00Z',
+              notes: 'Test',
+              manual_overrides: [
+                {
+                  field: 'body:section-name',
+                  reason: 'Custom section content',
+                  overridden_at: '2026-02-10T06:30:00Z',
+                },
+              ],
+            },
+          },
+        }),
+      ).toBe(true)
+    })
   })
 
   describe('writeManifest', () => {

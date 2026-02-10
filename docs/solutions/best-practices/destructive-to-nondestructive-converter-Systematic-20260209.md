@@ -135,4 +135,4 @@ const PERMISSION_MODE_MAP: Record<string, PermissionConfig> = {
 
 ## Related Issues
 
-No related issues documented yet.
+- See also: [Structured Manual Override Tracking](./structured-manual-override-tracking-Systematic-20260210.md) — builds on the manifest infrastructure to track post-import customizations with provenance

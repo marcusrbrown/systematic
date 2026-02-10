@@ -1,10 +1,10 @@
 # AGENTS.md - Coding Agent Guidelines for Systematic
 
-**Generated:** 2026-02-09 | **Commit:** b00201d | **Branch:** main
+**Generated:** 2026-02-10 | **Commit:** b58d17c | **Branch:** feat/import-cep-workflow-commands
 
 ## Overview
 
-OpenCode plugin providing structured engineering workflows. Converts Claude Code (CEP) agents, skills, and commands to OpenCode format.
+OpenCode plugin providing structured engineering workflows. Ported from the [Compound Engineering Plugin (CEP)](https://github.com/EveryInc/compound-engineering-plugin) for Claude Code, with improvements and OpenCode SDK integration. Converts CC-format agents, skills, and commands to OpenCode format. Tracks upstream provenance via `sync-manifest.json`.
 
 **Two distinct parts:**
 1. **TypeScript source** (`src/`) — Plugin logic, tools, config handling
@@ -17,7 +17,7 @@ bun install              # Install deps
 bun run build            # Build to dist/
 bun run typecheck        # Type check (strict)
 bun run lint             # Biome linter
-bun test tests/unit      # Unit tests (10 files)
+bun test tests/unit      # Unit tests (11 files)
 bun test tests/integration  # Integration tests (2 files)
 bun test                 # All tests
 bun test --filter "pattern"  # Filter tests
@@ -42,16 +42,20 @@ systematic/
 ├── src/
 │   ├── index.ts          # Plugin entry (SystematicPlugin)
 │   ├── cli.ts            # CLI entry (list/convert/config commands)
-│   └── lib/              # 12 core modules (see src/lib/AGENTS.md)
+│   └── lib/              # 13 core modules (see src/lib/AGENTS.md)
 ├── skills/               # 8 bundled skills (SKILL.md format)
 ├── agents/               # 11 bundled agents (4 categories: design/research/review/workflow)
-├── commands/             # 9 bundled commands (with workflows/ subdir)
+├── commands/             # 9 bundled commands (5 workflow + 4 utility)
+│   └── workflows/        # brainstorm, compound, plan, review, work
 ├── docs/                 # Starlight docs workspace (see docs/AGENTS.md)
 │   ├── scripts/          # Content generation from bundled assets
 │   └── src/content/      # Manual guides + generated reference
 ├── tests/
-│   ├── unit/             # 10 test files
+│   ├── unit/             # 11 test files
 │   └── integration/      # 2 test files
+├── .opencode/            # Project-specific OC config + skills
+│   └── skills/           # Project-only skills (convert-cc-defs)
+├── sync-manifest.json    # Upstream provenance tracking
 └── dist/                 # Build output
 ```
 
@@ -70,10 +74,12 @@ systematic/
 | Asset discovery | `src/lib/skills.ts`, `agents.ts`, `commands.ts` |
 | Directory walking | `src/lib/walk-dir.ts` |
 | Config loading (JSONC) | `src/lib/config.ts` |
+| Upstream sync manifest | `src/lib/manifest.ts`, `sync-manifest.json` |
 | CLI commands | `src/cli.ts` |
 | Add new skill | `skills/<name>/SKILL.md` |
 | Add new agent | `agents/<category>/<name>.md` |
 | Add new command | `commands/<name>.md` |
+| Import from CEP upstream | `.opencode/skills/convert-cc-defs/SKILL.md` |
 | Docs content generation | `docs/scripts/transform-content.ts` |
 | Docs site config | `docs/astro.config.mjs` |
 
@@ -82,11 +88,11 @@ systematic/
 | Symbol | Type | Location | Refs | Role |
 |--------|------|----------|------|------|
 | `SystematicPlugin` | export | src/index.ts:30 | 2 | Main plugin factory |
-| `createConfigHandler` | fn | src/lib/config-handler.ts:205 | 3 | Config hook — merges bundled assets |
+| `createConfigHandler` | fn | src/lib/config-handler.ts:207 | 3 | Config hook — merges bundled assets |
 | `createSkillTool` | fn | src/lib/skill-tool.ts:87 | 3 | systematic_skill tool factory |
 | `getBootstrapContent` | fn | src/lib/bootstrap.ts:32 | 3 | System prompt injection |
-| `convertContent` | fn | src/lib/converter.ts:234 | 4 | CEP→OpenCode body conversion |
-| `convertFileWithCache` | fn | src/lib/converter.ts:274 | 6 | Cached file conversion (mtime invalidation) |
+| `convertContent` | fn | src/lib/converter.ts:371 | 4 | CEP→OpenCode body conversion |
+| `convertFileWithCache` | fn | src/lib/converter.ts:411 | 6 | Cached file conversion (mtime invalidation) |
 | `findSkillsInDir` | fn | src/lib/skills.ts:90 | 6 | Skill discovery (highest centrality) |
 | `findAgentsInDir` | fn | src/lib/agents.ts:47 | 4 | Agent discovery (category from subdir) |
 | `findCommandsInDir` | fn | src/lib/commands.ts:27 | 4 | Command discovery |
@@ -94,6 +100,10 @@ systematic/
 | `parseFrontmatter` | fn | src/lib/frontmatter.ts:19 | 7 | YAML frontmatter extraction (regex-based) |
 | `walkDir` | fn | src/lib/walk-dir.ts:17 | 3 | Recursive dir walker (foundation layer) |
 | `loadSkill` | fn | src/lib/skill-loader.ts:31 | 2 | Skill content loading + XML wrapping |
+| `readManifest` | fn | src/lib/manifest.ts:116 | 1 | Read + validate sync-manifest.json |
+| `validateManifest` | fn | src/lib/manifest.ts:100 | 2 | Schema validation for manifest data |
+| `writeManifest` | fn | src/lib/manifest.ts:140 | 1 | Write manifest with sorted keys |
+| `findStaleEntries` | fn | src/lib/manifest.ts:145 | 1 | Detect definitions missing from filesystem |
 
 ## Conventions
 
@@ -134,6 +144,10 @@ Skills registered as commands with `systematic:` prefix (auto-prepended if no co
 
 All disabled lists merge (union), bootstrap config shallow-merges.
 
+## Upstream Sync
+
+CEP definitions are imported via the `convert-cc-defs` skill (`.opencode/skills/`). `sync-manifest.json` tracks provenance: upstream commit, content hash, rewrites applied, and manual overrides. Re-sync compares hashes for idempotency.
+
 ## Notes
 
 - Bootstrap injection is opt-out via `bootstrap.enabled: false`
@@ -141,3 +155,4 @@ All disabled lists merge (union), bootstrap config shallow-merges.
 - CLI commands: `list` (skills/agents/commands), `convert` (file conversion), `config show/path`
 - Experimental hook: `experimental.chat.system.transform`
 - `docs/` is a separate workspace — run `bun run docs:generate` to sync reference content from bundled assets
+- Use `bun src/cli.ts` for local dev instead of `bunx systematic` to avoid slow resolution

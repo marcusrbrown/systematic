@@ -1,7 +1,7 @@
 ---
 name: workflows:review
 description: Perform exhaustive code reviews using multi-agent analysis, ultra-thinking, and worktrees
-argument-hint: "[PR number, GitHub URL, branch name, or latest]"
+argument-hint: '[PR number, GitHub URL, branch name, or latest]'
 ---
 
 # Review Command
@@ -31,7 +31,7 @@ argument-hint: "[PR number, GitHub URL, branch name, or latest]"
 First, I need to determine the review target type and set up the code for analysis.
 </thinking>
 
-#### Immediate Actions:
+#### Immediate Actions
 
 <task_list>
 
@@ -48,29 +48,40 @@ Ensure that the code is ready for analysis (either in worktree or on current bra
 
 </task_list>
 
-#### Parallel Agents to review the PR:
+#### Protected Artifacts
+
+<protected_artifacts>
+The following paths are systematic pipeline artifacts and must never be flagged for deletion, removal, or gitignore by any review agent:
+
+- `docs/plans/*.md` — Plan files created by `/workflows:plan`. These are living documents that track implementation progress (checkboxes are checked off by `/workflows:work`).
+- `docs/solutions/*.md` — Solution documents created during the pipeline.
+
+If a review agent flags any file in these directories for cleanup or removal, discard that finding during synthesis. Do not create a todo for it.
+</protected_artifacts>
+
+#### Parallel Agents to review the PR
 
 <parallel_tasks>
 
 Run ALL or most of these agents at the same time:
 
-1. Task kieran-rails-reviewer(PR content)
-2. Task dhh-rails-reviewer(PR title)
-3. If turbo is used: Task rails-turbo-expert(PR content)
-4. Task git-history-analyzer(PR content)
-5. Task dependency-detective(PR content)
-6. Task pattern-recognition-specialist(PR content)
-7. Task architecture-strategist(PR content)
-8. Task code-philosopher(PR content)
-9. Task security-sentinel(PR content)
-10. Task performance-oracle(PR content)
-11. Task devops-harmony-analyst(PR content)
-12. Task data-integrity-guardian(PR content)
-13. Task agent-native-reviewer(PR content) - Verify new features are agent-accessible
+1. task kieran-rails-reviewer(PR content)
+2. task dhh-rails-reviewer(PR title)
+3. If turbo is used: task rails-turbo-expert(PR content)
+4. task git-history-analyzer(PR content)
+5. task dependency-detective(PR content)
+6. task pattern-recognition-specialist(PR content)
+7. task architecture-strategist(PR content)
+8. task code-philosopher(PR content)
+9. task security-sentinel(PR content)
+10. task performance-oracle(PR content)
+11. task devops-harmony-analyst(PR content)
+12. task data-integrity-guardian(PR content)
+13. task agent-native-reviewer(PR content) - Verify new features are agent-accessible
 
 </parallel_tasks>
 
-#### Conditional Agents (Run if applicable):
+#### Conditional Agents (Run if applicable)
 
 <conditional_agents>
 
@@ -78,8 +89,8 @@ These agents are run ONLY when the PR matches specific criteria. Check the PR fi
 
 **If PR contains database migrations (db/migrate/*.rb files) or data backfills:**
 
-14. Task data-migration-expert(PR content) - Validates ID mappings match production, checks for swapped values, verifies rollback safety
-15. Task deployment-verification-agent(PR content) - Creates Go/No-Go deployment checklist with SQL verification queries
+14. task data-migration-expert(PR content) - Validates ID mappings match production, checks for swapped values, verifies rollback safety
+15. task deployment-verification-agent(PR content) - Creates Go/No-Go deployment checklist with SQL verification queries
 
 **When to run migration agents:**
 - PR includes files matching `db/migrate/*.rb`
@@ -191,7 +202,7 @@ Complete system context map with component interactions
 
 ### 4. Simplification and Minimalism Review
 
-Run the Task code-simplicity-reviewer() to see if we can simplify the code.
+Run the task code-simplicity-reviewer() to see if we can simplify the code.
 
 ### 5. Findings Synthesis and Todo Creation Using file-todos Skill
 
@@ -207,6 +218,7 @@ Remove duplicates, prioritize by severity and impact.
 <synthesis_tasks>
 
 - [ ] Collect findings from all parallel agents
+- [ ] Discard any findings that recommend deleting or gitignoring files in `docs/plans/` or `docs/solutions/` (see Protected Artifacts above)
 - [ ] Categorize by type: security, performance, architecture, quality, etc.
 - [ ] Assign severity levels: 🔴 CRITICAL (P1), 🟡 IMPORTANT (P2), 🔵 NICE-TO-HAVE (P3)
 - [ ] Remove duplicate or overlapping findings
@@ -222,18 +234,18 @@ Remove duplicates, prioritize by severity and impact.
 
 **Option A: Direct File Creation (Fast)**
 
-- Create todo files directly using Write tool
+- Create todo files directly using write tool
 - All findings in parallel for speed
-- Use standard template from `.claude/skills/file-todos/assets/todo-template.md`
+- Use standard template from `.opencode/skills/file-todos/assets/todo-template.md`
 - Follow naming convention: `{issue_id}-pending-{priority}-{description}.md`
 
 **Option B: Sub-Agents in Parallel (Recommended for Scale)** For large PRs with 15+ findings, use sub-agents to create finding files in parallel:
 
 ```bash
 # Launch multiple finding-creator agents in parallel
-Task() - Create todos for first finding
-Task() - Create todos for second finding
-Task() - Create todos for third finding
+task() - Create todos for first finding
+task() - Create todos for second finding
+task() - Create todos for third finding
 etc. for each finding.
 ```
 
@@ -272,7 +284,7 @@ Sub-agents can:
 
    The skill provides:
 
-   - Template location: `.claude/skills/file-todos/assets/todo-template.md`
+   - Template location: `.opencode/skills/file-todos/assets/todo-template.md`
    - Naming convention: `{issue_id}-{status}-{priority}-{description}.md`
    - YAML frontmatter structure: status, priority, issue_id, tags, dependencies
    - All required sections: Problem Statement, Findings, Solutions, etc.
@@ -292,7 +304,7 @@ Sub-agents can:
    004-pending-p3-unused-parameter.md
    ```
 
-5. Follow template structure from file-todos skill: `.claude/skills/file-todos/assets/todo-template.md`
+5. Follow template structure from file-todos skill: `.opencode/skills/file-todos/assets/todo-template.md`
 
 **Todo File Structure (from template):**
 
@@ -400,7 +412,7 @@ After creating all todo files, present comprehensive summary:
    - Update Work Log as you work
    - Commit todos: `git add todos/ && git commit -m "refactor: add code review findings"`
 
-### Severity Breakdown:
+### Severity Breakdown
 
 **🔴 P1 (Critical - Blocks Merge):**
 
@@ -468,12 +480,12 @@ After presenting the Summary Report, offer appropriate testing based on project 
 
 </offer_testing>
 
-#### If User Accepts Web Testing:
+#### If User Accepts Web Testing
 
 Spawn a subagent to run browser tests (preserves main context):
 
 ```
-Task general-purpose("Run /test-browser for PR #[number]. Test all affected pages, check for console errors, handle failures by creating todos and fixing.")
+task general-purpose("Run /test-browser for PR #[number]. Test all affected pages, check for console errors, handle failures by creating todos and fixing.")
 ```
 
 The subagent will:
@@ -487,12 +499,12 @@ The subagent will:
 
 **Standalone:** `/test-browser [PR number]`
 
-#### If User Accepts iOS Testing:
+#### If User Accepts iOS Testing
 
 Spawn a subagent to run Xcode tests (preserves main context):
 
 ```
-Task general-purpose("Run /xcode-test for scheme [name]. Build for simulator, install, launch, take screenshots, check for crashes.")
+task general-purpose("Run /xcode-test for scheme [name]. Build for simulator, install, launch, take screenshots, check for crashes.")
 ```
 
 The subagent will:
@@ -512,3 +524,4 @@ The subagent will:
 
 Any **🔴 P1 (CRITICAL)** findings must be addressed before merging the PR. Present these prominently and ensure they're resolved before accepting the PR.
 ```
+

@@ -18,7 +18,7 @@
 | **Global agents** | N/A | `~/.config/opencode/agents/` |
 | **Config file** | `.claude/settings.json` | `opencode.json` or `opencode.jsonc` |
 | **Skill tool** | `Skill` | `skill` (native) or `systematic_skill` (bundled) |
-| **Task/subagent tool** | `Task` | `@mention` or `delegate_task` |
+| **Task/subagent tool** | `Task` | `@mention` or `task` |
 | **Todo tool** | `TodoWrite` | `todowrite` |
 | **Question tool** | `AskUserQuestion` | `question` |
 | **Command prefix** | `/compound-engineering:` | `/systematic:` |
@@ -83,7 +83,7 @@ description: This skill should be used before implementing features, building co
 
 # Brainstorming
 
-When brainstorming, use delegate_task to spawn research agents...
+When brainstorming, use task to spawn research agents...
 ```
 
 **Key changes:**
@@ -166,7 +166,7 @@ tools:
   edit: false
 ```
 
-Tool names are canonicalized using `TOOL_NAME_MAP` (e.g., `TodoWrite` → `todowrite`, `Task` → `delegate_task`).
+Tool names are canonicalized using `TOOL_NAME_MAP` (e.g., `TodoWrite` → `todowrite`, `Task` → `task`).
 
 #### Model Normalization Rules
 
@@ -244,7 +244,7 @@ Update references in markdown content:
 
 | CC Tool | OC Tool | Notes |
 |---------|---------|-------|
-| `Task` | `delegate_task` / `@mention` | Use delegate_task for programmatic, @agent for inline |
+| `Task` | `task` / `@mention` | Use task for programmatic, @agent for inline |
 | `Skill` | `skill` (native) or `systematic_skill` | Systematic bundled skills use `systematic_skill` |
 | `TodoWrite` | `todowrite` | Direct mapping |
 | `AskUserQuestion` | `question` | Direct mapping |
@@ -341,7 +341,7 @@ The `using-systematic` skill is injected into the system prompt and teaches the 
 - [x] `context: fork` mapped to `subtask: true`
 - [ ] `allowed-tools`, `user-invocable`, `agent` — pass through (used by skills-as-commands)
 - [ ] Enhance `description` with trigger conditions (manual — requires understanding of skill purpose)
-- [x] Tool references updated in content (Task → delegate_task, etc.)
+- [x] Tool references updated in content (Task → task, etc.)
 - [x] Directory references updated (.claude → .opencode)
 - [ ] Convert dynamic injection syntax if present (manual)
 - [ ] Add tool mapping instruction if skill references CC tools (manual)
@@ -411,7 +411,7 @@ When converting, consider using these OC-specific capabilities:
 
 ## Example: Full Skill Conversion
 
-### Original (CEP/Claude Code)
+### Original (CEP — Claude Code format)
 
 **File:** `compound-engineering/skills/brainstorming/SKILL.md`
 
@@ -453,7 +453,7 @@ description: This skill should be used before implementing features, building co
 This skill provides a systematic approach to brainstorming.
 
 ## Usage
-When invoked, use delegate_task or @mention to spawn research agents...
+When invoked, use task or @mention to spawn research agents...
 
 ## Process
 1. Understand requirements
@@ -467,7 +467,7 @@ Reference `.opencode/skills/` or use `systematic_skill` for bundled skills.
 1. ✅ `model: sonnet` normalized to `model: anthropic/sonnet` (or removed if `inherit`)
 2. ✅ `allowed-tools` passed through (not stripped)
 3. ✅ Enhanced `description` with trigger conditions (manual step)
-4. ✅ Changed `Task tool` → `delegate_task or @mention`
+4. ✅ Changed `Task tool` → `task or @mention`
 5. ✅ Changed `.claude/skills/` → `.opencode/skills/` + systematic_skill reference
 
 ---
@@ -493,7 +493,7 @@ The converter uses a **map-and-preserve strategy** — known CC fields are trans
 
 | CC Tool | OC Tool | Pattern |
 |---------|---------|---------|
-| `Task` | `delegate_task` | Context-aware (avoids "Task tool" false positives) |
+| `Task` | `task` | Context-aware (avoids "Task tool" false positives) |
 | `TodoWrite` | `todowrite` | Direct replacement |
 | `AskUserQuestion` | `question` | Direct replacement |
 | `WebSearch` | `google_search` | Direct replacement |

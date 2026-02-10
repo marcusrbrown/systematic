@@ -6,12 +6,28 @@ export interface ManifestSource {
   url: string
 }
 
+export interface ManifestRewrite {
+  field: string
+  reason: string
+  original?: string
+}
+
+export interface ManualOverride {
+  field: string
+  reason: string
+  original?: string
+  overridden_at: string
+}
+
 export interface ManifestDefinition {
   source: string
   upstream_path: string
   upstream_commit: string
   synced_at: string
   notes: string
+  upstream_content_hash?: string
+  rewrites?: ManifestRewrite[]
+  manual_overrides?: ManualOverride[]
 }
 
 export interface SyncManifest {
@@ -33,15 +49,52 @@ function isManifestSource(value: unknown): value is ManifestSource {
   )
 }
 
-function isManifestDefinition(value: unknown): value is ManifestDefinition {
+function isManifestRewrite(value: unknown): value is ManifestRewrite {
+  if (!isRecord(value)) return false
+  return typeof value.field === 'string' && typeof value.reason === 'string'
+}
+
+function isManualOverride(value: unknown): value is ManualOverride {
   if (!isRecord(value)) return false
   return (
+    typeof value.field === 'string' &&
+    typeof value.reason === 'string' &&
+    typeof value.overridden_at === 'string'
+  )
+}
+
+function isRewriteArray(value: unknown): value is ManifestRewrite[] {
+  return Array.isArray(value) && value.every(isManifestRewrite)
+}
+
+function isOverrideArray(value: unknown): value is ManualOverride[] {
+  return Array.isArray(value) && value.every(isManualOverride)
+}
+
+function isManifestDefinition(value: unknown): value is ManifestDefinition {
+  if (!isRecord(value)) return false
+  const hasRequired =
     typeof value.source === 'string' &&
     typeof value.upstream_path === 'string' &&
     typeof value.upstream_commit === 'string' &&
     typeof value.synced_at === 'string' &&
     typeof value.notes === 'string'
+  if (!hasRequired) return false
+
+  if (
+    value.upstream_content_hash !== undefined &&
+    typeof value.upstream_content_hash !== 'string'
   )
+    return false
+  if (value.rewrites !== undefined && !isRewriteArray(value.rewrites))
+    return false
+  if (
+    value.manual_overrides !== undefined &&
+    !isOverrideArray(value.manual_overrides)
+  )
+    return false
+
+  return true
 }
 
 export function validateManifest(data: unknown): data is SyncManifest {
