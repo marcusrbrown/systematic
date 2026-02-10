@@ -42,7 +42,7 @@ Most AI coding assistants respond to requests without structure or methodology. 
 - **Specialized Agents** — Purpose-built subagents for architecture, security, and performance
 - **Zero Configuration** — Works immediately after installation via config hooks
 - **Extensible** — Add project-specific skills and commands alongside bundled ones
-- **Batteries Included** — 8 skills, 11 agents, and 9 commands ship with the npm package
+- **Batteries Included** — 8 skills, 24 agents, and 9 commands ship with the npm package
 - **CLI Tooling** — Inspect, list, and convert assets from the command line
 
 ## Quick Start
@@ -119,6 +119,7 @@ Agents are specialized subagents with pre-configured prompts and expertise. They
 |-------|---------|
 | `design-implementation-reviewer` | Verify UI implementations match Figma design specifications |
 | `design-iterator` | Systematic UI/UX refinement through iterative screenshots and improvements |
+| `figma-design-sync` | Detect and fix visual differences between web implementation and Figma designs |
 
 ### Research Agents
 
@@ -126,13 +127,23 @@ Agents are specialized subagents with pre-configured prompts and expertise. They
 |-------|---------|
 | `best-practices-researcher` | Research external best practices, documentation, and examples for any technology |
 | `framework-docs-researcher` | Gather framework documentation and best practices |
+| `git-history-analyzer` | Archaeological analysis of git history to trace code evolution and understand patterns |
+| `learnings-researcher` | Search past solutions in docs/solutions/ to surface institutional knowledge |
+| `repo-research-analyst` | Research repository structure, documentation, conventions, and implementation patterns |
 
 ### Review Agents
 
 | Agent | Purpose |
 |-------|---------|
+| `agent-native-reviewer` | Ensure agent-native parity — any user action should also be available to agents |
 | `architecture-strategist` | Analyze code changes from an architectural perspective |
 | `code-simplicity-reviewer` | Final review pass for simplicity and YAGNI principles |
+| `data-integrity-guardian` | Review database migrations, data models, and persistent data code for safety |
+| `data-migration-expert` | Validate data migrations, backfills, and production data transformations |
+| `deployment-verification-agent` | Produce Go/No-Go deployment checklists with verification queries and rollback procedures |
+| `dhh-rails-reviewer` | Brutally honest Rails code review from DHH's perspective |
+| `kieran-rails-reviewer` | High quality bar Rails code review for conventions, clarity, and maintainability |
+| `kieran-typescript-reviewer` | High quality bar TypeScript review for type safety, modern patterns, and maintainability |
 | `pattern-recognition-specialist` | Detect design patterns, anti-patterns, and code smells |
 | `performance-oracle` | Performance analysis, bottleneck identification, scalability |
 | `security-sentinel` | Security audits, vulnerability assessment, OWASP compliance |
@@ -142,6 +153,8 @@ Agents are specialized subagents with pre-configured prompts and expertise. They
 | Agent | Purpose |
 |-------|---------|
 | `bug-reproduction-validator` | Systematically verify and reproduce reported bugs |
+| `lint` | Run linting and code quality checks on Ruby and ERB files |
+| `pr-comment-resolver` | Address PR review comments by implementing requested changes |
 | `spec-flow-analyzer` | Analyze specifications for user flow gaps and missing requirements |
 
 ### Using Agents
@@ -353,10 +366,11 @@ systematic/
 │       ├── agents.ts         # Agent discovery
 │       ├── commands.ts       # Command discovery
 │       ├── frontmatter.ts    # YAML frontmatter parsing
+│       ├── manifest.ts       # Upstream sync manifest tracking
 │       ├── validation.ts     # Agent config validation + type guards
 │       └── walk-dir.ts       # Recursive directory walker
 ├── skills/                   # 8 bundled skills (SKILL.md files)
-├── agents/                   # 11 bundled agents (4 categories)
+├── agents/                   # 24 bundled agents (4 categories)
 ├── commands/                 # 9 bundled commands (with workflows/ subdir)
 ├── docs/                     # Starlight documentation site
 ├── tests/
