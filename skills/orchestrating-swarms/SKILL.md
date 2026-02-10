@@ -182,7 +182,7 @@ A swarm consists of:
 Use Task for **short-lived, focused work** that returns a result:
 
 ```javascript
-Task({
+task({
   subagent_type: "Explore",
   description: "Find auth files",
   prompt: "Find all authentication-related files in this codebase",
@@ -205,7 +205,7 @@ Use Task with `team_name` and `name` to **spawn persistent teammates**:
 Teammate({ operation: "spawnTeam", team_name: "my-project" })
 
 // Then spawn a teammate into that team
-Task({
+task({
   team_name: "my-project",        // Required: which team to join
   name: "security-reviewer",      // Required: teammate's name
   subagent_type: "security-sentinel",
@@ -239,7 +239,7 @@ These are always available without plugins:
 
 ### Bash
 ```javascript
-Task({
+task({
   subagent_type: "Bash",
   description: "Run git commands",
   prompt: "Check git status and show recent commits"
@@ -251,7 +251,7 @@ Task({
 
 ### Explore
 ```javascript
-Task({
+task({
   subagent_type: "Explore",
   description: "Find API endpoints",
   prompt: "Find all API endpoints in this codebase. Be very thorough.",
@@ -265,7 +265,7 @@ Task({
 
 ### Plan
 ```javascript
-Task({
+task({
   subagent_type: "Plan",
   description: "Design auth system",
   prompt: "Create an implementation plan for adding OAuth2 authentication"
@@ -277,7 +277,7 @@ Task({
 
 ### general-purpose
 ```javascript
-Task({
+task({
   subagent_type: "general-purpose",
   description: "Research and implement",
   prompt: "Research React Query best practices and implement caching for the user API"
@@ -289,7 +289,7 @@ Task({
 
 ### claude-code-guide
 ```javascript
-Task({
+task({
   subagent_type: "claude-code-guide",
   description: "Help with OpenCode",
   prompt: "How do I configure MCP servers?"
@@ -300,7 +300,7 @@ Task({
 
 ### statusline-setup
 ```javascript
-Task({
+task({
   subagent_type: "statusline-setup",
   description: "Configure status line",
   prompt: "Set up a status line showing git branch and node version"
@@ -319,35 +319,35 @@ From the `compound-engineering` plugin (examples):
 ### Review Agents
 ```javascript
 // Security review
-Task({
+task({
   subagent_type: "systematic:review:security-sentinel",
   description: "Security audit",
   prompt: "Audit this PR for security vulnerabilities"
 })
 
 // Performance review
-Task({
+task({
   subagent_type: "systematic:review:performance-oracle",
   description: "Performance check",
   prompt: "Analyze this code for performance bottlenecks"
 })
 
 // Rails code review
-Task({
+task({
   subagent_type: "systematic:review:kieran-rails-reviewer",
   description: "Rails review",
   prompt: "Review this Rails code for best practices"
 })
 
 // Architecture review
-Task({
+task({
   subagent_type: "systematic:review:architecture-strategist",
   description: "Architecture review",
   prompt: "Review the system architecture of the authentication module"
 })
 
 // Code simplicity
-Task({
+task({
   subagent_type: "systematic:review:code-simplicity-reviewer",
   description: "Simplicity check",
   prompt: "Check if this implementation can be simplified"
@@ -373,21 +373,21 @@ Task({
 ### Research Agents
 ```javascript
 // Best practices research
-Task({
+task({
   subagent_type: "systematic:research:best-practices-researcher",
   description: "Research auth best practices",
   prompt: "Research current best practices for JWT authentication in Rails 2024-2026"
 })
 
 // Framework documentation
-Task({
+task({
   subagent_type: "systematic:research:framework-docs-researcher",
   description: "Research Active Storage",
   prompt: "Gather comprehensive documentation about Active Storage file uploads"
 })
 
 // Git history analysis
-Task({
+task({
   subagent_type: "systematic:research:git-history-analyzer",
   description: "Analyze auth history",
   prompt: "Analyze the git history of the authentication module to understand its evolution"
@@ -403,7 +403,7 @@ Task({
 
 ### Design Agents
 ```javascript
-Task({
+task({
   subagent_type: "systematic:design:figma-design-sync",
   description: "Sync with Figma",
   prompt: "Compare implementation with Figma design at [URL]"
@@ -412,7 +412,7 @@ Task({
 
 ### Workflow Agents
 ```javascript
-Task({
+task({
   subagent_type: "systematic:workflow:bug-reproduction-validator",
   description: "Validate bug",
   prompt: "Reproduce and validate this reported bug: [description]"
@@ -797,7 +797,7 @@ Multiple specialists review code simultaneously:
 Teammate({ operation: "spawnTeam", team_name: "code-review" })
 
 // 2. Spawn specialists in parallel (single message, multiple Task calls)
-Task({
+task({
   team_name: "code-review",
   name: "security",
   subagent_type: "systematic:review:security-sentinel",
@@ -805,7 +805,7 @@ Task({
   run_in_background: true
 })
 
-Task({
+task({
   team_name: "code-review",
   name: "performance",
   subagent_type: "systematic:review:performance-oracle",
@@ -813,7 +813,7 @@ Task({
   run_in_background: true
 })
 
-Task({
+task({
   team_name: "code-review",
   name: "simplicity",
   subagent_type: "systematic:review:code-simplicity-reviewer",
@@ -853,7 +853,7 @@ TaskUpdate({ taskId: "4", addBlockedBy: ["3"] })
 TaskUpdate({ taskId: "5", addBlockedBy: ["4"] })
 
 // 2. Spawn workers that claim and complete tasks
-Task({
+task({
   team_name: "feature-pipeline",
   name: "researcher",
   subagent_type: "systematic:research:best-practices-researcher",
@@ -861,7 +861,7 @@ Task({
   run_in_background: true
 })
 
-Task({
+task({
   team_name: "feature-pipeline",
   name: "implementer",
   subagent_type: "general-purpose",
@@ -890,7 +890,7 @@ for (const file of ["auth.rb", "user.rb", "api_controller.rb", "payment.rb"]) {
 }
 
 // 2. Spawn worker swarm
-Task({
+task({
   team_name: "file-review-swarm",
   name: "worker-1",
   subagent_type: "general-purpose",
@@ -907,7 +907,7 @@ Task({
   run_in_background: true
 })
 
-Task({
+task({
   team_name: "file-review-swarm",
   name: "worker-2",
   subagent_type: "general-purpose",
@@ -915,7 +915,7 @@ Task({
   run_in_background: true
 })
 
-Task({
+task({
   team_name: "file-review-swarm",
   name: "worker-3",
   subagent_type: "general-purpose",
@@ -932,14 +932,14 @@ Research first, then implement:
 
 ```javascript
 // 1. Research phase (synchronous, returns results)
-const research = await Task({
+const research = await task({
   subagent_type: "systematic:research:best-practices-researcher",
   description: "Research caching patterns",
   prompt: "Research best practices for implementing caching in Rails APIs. Include: cache invalidation strategies, Redis vs Memcached, cache key design."
 })
 
 // 2. Use research to guide implementation
-Task({
+task({
   subagent_type: "general-purpose",
   description: "Implement caching",
   prompt: `
@@ -961,7 +961,7 @@ Require plan approval before implementation:
 Teammate({ operation: "spawnTeam", team_name: "careful-work" })
 
 // 2. Spawn architect with plan_mode_required
-Task({
+task({
   team_name: "careful-work",
   name: "architect",
   subagent_type: "Plan",
@@ -1017,7 +1017,7 @@ TaskCreate({
 TaskUpdate({ taskId: "3", addBlockedBy: ["1", "2"] })
 
 // 3. Spawn workers for each task
-Task({
+task({
   team_name: "refactor-auth",
   name: "model-worker",
   subagent_type: "general-purpose",
@@ -1025,7 +1025,7 @@ Task({
   run_in_background: true
 })
 
-Task({
+task({
   team_name: "refactor-auth",
   name: "controller-worker",
   subagent_type: "general-purpose",
@@ -1033,7 +1033,7 @@ Task({
   run_in_background: true
 })
 
-Task({
+task({
   team_name: "refactor-auth",
   name: "spec-worker",
   subagent_type: "general-purpose",
@@ -1060,7 +1060,7 @@ CLAUDE_CODE_PARENT_SESSION_ID="session-xyz"
 
 **Using in prompts:**
 ```javascript
-Task({
+task({
   team_name: "my-project",
   name: "worker",
   subagent_type: "general-purpose",
@@ -1145,7 +1145,7 @@ Teammates run as async tasks within the same Node.js process.
 
 ```javascript
 // in-process is automatic when not in tmux
-Task({
+task({
   team_name: "my-project",
   name: "worker",
   subagent_type: "general-purpose",
@@ -1430,7 +1430,7 @@ Teammate({ operation: "spawnTeam", team_name: "pr-review-123", description: "Rev
 
 // === STEP 2: Spawn reviewers in parallel ===
 // (Send all these in a single message for parallel execution)
-Task({
+task({
   team_name: "pr-review-123",
   name: "security",
   subagent_type: "systematic:review:security-sentinel",
@@ -1447,7 +1447,7 @@ Task({
   run_in_background: true
 })
 
-Task({
+task({
   team_name: "pr-review-123",
   name: "perf",
   subagent_type: "systematic:review:performance-oracle",
@@ -1463,7 +1463,7 @@ Task({
   run_in_background: true
 })
 
-Task({
+task({
   team_name: "pr-review-123",
   name: "arch",
   subagent_type: "systematic:review:architecture-strategist",
@@ -1514,7 +1514,7 @@ TaskUpdate({ taskId: "4", addBlockedBy: ["3"] })
 TaskUpdate({ taskId: "5", addBlockedBy: ["4"] })
 
 // === SPAWN SPECIALIZED WORKERS ===
-Task({
+task({
   team_name: "feature-oauth",
   name: "researcher",
   subagent_type: "systematic:research:best-practices-researcher",
@@ -1522,7 +1522,7 @@ Task({
   run_in_background: true
 })
 
-Task({
+task({
   team_name: "feature-oauth",
   name: "planner",
   subagent_type: "Plan",
@@ -1530,7 +1530,7 @@ Task({
   run_in_background: true
 })
 
-Task({
+task({
   team_name: "feature-oauth",
   name: "implementer",
   subagent_type: "general-purpose",
@@ -1538,7 +1538,7 @@ Task({
   run_in_background: true
 })
 
-Task({
+task({
   team_name: "feature-oauth",
   name: "tester",
   subagent_type: "general-purpose",
@@ -1546,7 +1546,7 @@ Task({
   run_in_background: true
 })
 
-Task({
+task({
   team_name: "feature-oauth",
   name: "reviewer",
   subagent_type: "systematic:review:security-sentinel",
@@ -1609,9 +1609,9 @@ Replace YOUR_NAME with your actual agent name from $CLAUDE_CODE_AGENT_NAME.
 `
 
 // Spawn 3 workers
-Task({ team_name: "codebase-review", name: "worker-1", subagent_type: "general-purpose", prompt: swarmPrompt, run_in_background: true })
-Task({ team_name: "codebase-review", name: "worker-2", subagent_type: "general-purpose", prompt: swarmPrompt, run_in_background: true })
-Task({ team_name: "codebase-review", name: "worker-3", subagent_type: "general-purpose", prompt: swarmPrompt, run_in_background: true })
+task({ team_name: "codebase-review", name: "worker-1", subagent_type: "general-purpose", prompt: swarmPrompt, run_in_background: true })
+task({ team_name: "codebase-review", name: "worker-2", subagent_type: "general-purpose", prompt: swarmPrompt, run_in_background: true })
+task({ team_name: "codebase-review", name: "worker-3", subagent_type: "general-purpose", prompt: swarmPrompt, run_in_background: true })
 
 // Workers self-organize: race to claim tasks, naturally load-balance
 // Monitor progress with TaskList() or by reading inbox
@@ -1687,13 +1687,13 @@ cat ~/.opencode/teams/{team}/inboxes/team-lead.json | jq '.'
 
 ### Spawn Subagent (No Team)
 ```javascript
-Task({ subagent_type: "Explore", description: "Find files", prompt: "..." })
+task({ subagent_type: "Explore", description: "Find files", prompt: "..." })
 ```
 
 ### Spawn Teammate (With Team)
 ```javascript
 Teammate({ operation: "spawnTeam", team_name: "my-team" })
-Task({ team_name: "my-team", name: "worker", subagent_type: "general-purpose", prompt: "...", run_in_background: true })
+task({ team_name: "my-team", name: "worker", subagent_type: "general-purpose", prompt: "...", run_in_background: true })
 ```
 
 ### Message Teammate

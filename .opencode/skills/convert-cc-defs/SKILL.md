@@ -281,6 +281,8 @@ The mechanical converter intentionally skips content inside fenced code blocks t
 | Attribution badges/footers (`Compound Engineered`, `Claude Code` links) | → Systematic branding |
 | `AskUserQuestion` | → `question tool` |
 
+> **High-risk pattern:** Long skills with many code examples (e.g., orchestrating-swarms has 47 `Task({` calls across 1700+ lines). After mechanical conversion, run a targeted search for capitalized tool names inside code blocks: `grep -n "Task(\|TodoWrite\|AskUserQuestion" <file>`. Fix all occurrences — users copying broken examples will get runtime errors.
+
 ### 3e. CC-Specific Features
 
 Some CC features have no direct OC equivalent. For each, make a case-by-case decision:
