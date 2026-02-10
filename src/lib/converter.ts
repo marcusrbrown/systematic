@@ -40,15 +40,15 @@ const cache = new Map<string, CacheEntry>()
 const TOOL_MAPPINGS: ReadonlyArray<readonly [RegExp, string]> = [
   // Semantic tool renames (different names in OC)
   // Task tool explicit reference
-  [/\bTask\s+tool\b/gi, 'delegate_task tool'],
+  [/\bTask\s+tool\b/gi, 'task tool'],
   // Task followed by agent name + colon: Task agent-name: "prompt"
-  [/\bTask\s+([\w-]+)\s*:/g, 'delegate_task $1:'],
+  [/\bTask\s+([\w-]+)\s*:/g, 'task $1:'],
   // Task followed by agent name + parens: Task agent-name(args)
-  [/\bTask\s+([\w-]+)\s*\(/g, 'delegate_task $1('],
+  [/\bTask\s+([\w-]+)\s*\(/g, 'task $1('],
   // Task with immediate parens: Task(args) or Task (args)
-  [/\bTask\s*\(/g, 'delegate_task('],
+  [/\bTask\s*\(/g, 'task('],
   // Task followed by "to" verb pattern: use Task to spawn
-  [/\bTask\b(?=\s+to\s+\w)/g, 'delegate_task'],
+  [/\bTask\b(?=\s+to\s+\w)/g, 'task'],
   [/\bTodoWrite\b/g, 'todowrite'],
   [/\bAskUserQuestion\b/g, 'question'],
   [/\bWebSearch\b/g, 'google_search'],
@@ -81,7 +81,7 @@ const PATH_REPLACEMENTS: ReadonlyArray<readonly [RegExp, string]> = [
 // Must stay in sync with TOOL_MAPPINGS above. Not derived programmatically because
 // TOOL_MAPPINGS uses context-dependent regex patterns that can't be reliably parsed.
 const TOOL_NAME_MAP: Record<string, string> = {
-  task: 'delegate_task',
+  task: 'task',
   todowrite: 'todowrite',
   askuserquestion: 'question',
   websearch: 'google_search',

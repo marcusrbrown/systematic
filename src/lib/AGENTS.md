@@ -54,7 +54,7 @@ All discovery follows same pattern: `dir → walkDir() → find files → parseF
 
 ## Converter
 
-CEP→OpenCode: tool names (`TodoWrite`→`todowrite`, `Task`→`delegate_task`), Claude model normalization, body reference replacement (regex, outside code blocks), frontmatter field mapping. `convertFileWithCache` uses mtime for invalidation.
+CEP→OpenCode: tool names (`TodoWrite`→`todowrite`, `Task`→`task`), Claude model normalization, body reference replacement (regex, outside code blocks), frontmatter field mapping. `convertFileWithCache` uses mtime for invalidation.
 
 ## Patterns
 

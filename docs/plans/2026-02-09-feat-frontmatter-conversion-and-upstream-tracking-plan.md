@@ -55,12 +55,12 @@ Rationale: `extractAgentFrontmatter()` (`src/lib/agents.ts:69`) reads `name` fro
 
 **Decision: Reuse TOOL_MAPPINGS rename table for frontmatter `tools` mapping, not just lowercase.**
 
-The body transform already renames CC tool names to OC equivalents (`WebSearch→google_search`, `Task→delegate_task`, `TodoWrite→todowrite`, etc.) via `TOOL_MAPPINGS` (`src/lib/converter.ts:36-61`). Frontmatter `tools` arrays must use the same renames or tool permissions won't match actual OC tool IDs.
+The body transform already renames CC tool names to OC equivalents (`WebSearch→google_search`, `Task→task`, `TodoWrite→todowrite`, etc.) via `TOOL_MAPPINGS` (`src/lib/converter.ts:36-61`). Frontmatter `tools` arrays must use the same renames or tool permissions won't match actual OC tool IDs.
 
 ```typescript
 // Extract a tool-name-only mapping from TOOL_MAPPINGS for frontmatter use
 const TOOL_NAME_MAP: Record<string, string> = {
-  'task': 'delegate_task',
+  'task': 'task',
   'todowrite': 'todowrite',    // already lowercase
   'askuserquestion': 'question',
   'websearch': 'google_search',

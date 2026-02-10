@@ -1,5 +1,136 @@
 {
   "$schema": "./sync-manifest.schema.json",
-  "sources": {},
-  "definitions": {}
+  "sources": {
+    "cep": {
+      "repo": "EveryInc/compound-engineering-plugin",
+      "branch": "main",
+      "url": "https://github.com/EveryInc/compound-engineering-plugin"
+    }
+  },
+  "definitions": {
+    "commands/workflows/brainstorm": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/commands/workflows/brainstorm.md",
+      "upstream_commit": "04ee7e450653a3f6f8721a128d3c372867adfcc8",
+      "synced_at": "2026-02-10T06:01:25Z",
+      "notes": "Imported from CEP. Mechanical conversion applied (tool names, paths, prefixes). Intelligent rewrites: preserved references to not-yet-imported agents (repo-research-analyst, etc.) for future import.",
+      "upstream_content_hash": "6904d6b307ba2046b427d61a6c07752c34a4f696499779637d6175e20b2dc728",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled Task->task, TodoWrite->todowrite, AskUserQuestion->question tool mappings"
+        },
+        {
+          "field": "body:path-references",
+          "reason": "Converter handled .claude/->opencode/, CLAUDE.md->AGENTS.md path replacements"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "commands/workflows/compound": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/commands/workflows/compound.md",
+      "upstream_commit": "04ee7e450653a3f6f8721a128d3c372867adfcc8",
+      "synced_at": "2026-02-10T06:01:25Z",
+      "notes": "Imported from CEP. Updated to upstream's Two-Phase Orchestration structure (critical_requirement, parallel_tasks/sequential_tasks XML tags, Phase 1/2/3 layout). Added Common Mistakes to Avoid table.",
+      "upstream_content_hash": "ca9a35a2c45e17add9fe8183c6da45cad8153064c0971a6071d43d6bfdc56c15",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:path-references",
+          "reason": "Converter handled path replacements"
+        },
+        {
+          "field": "body:structure",
+          "reason": "Adopted upstream's updated Two-Phase Orchestration structure"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "commands/workflows/plan": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/commands/workflows/plan.md",
+      "upstream_commit": "04ee7e450653a3f6f8721a128d3c372867adfcc8",
+      "synced_at": "2026-02-10T06:01:25Z",
+      "notes": "Imported from CEP. Mechanical conversion + intelligent rewrites. Removed CC-specific 'remote' option (Claude Code web background execution has no OC equivalent).",
+      "upstream_content_hash": "d4ae85bedf42e85033ac8064c9701e3ab0335f8ecd488a07fe25c07532f95ef8",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:path-references",
+          "reason": "Converter handled path replacements"
+        },
+        {
+          "field": "body:cc-specific-features",
+          "reason": "Removed CC-specific 'remote' option — Start /workflows:work on remote (Claude Code web background execution) has no OC equivalent",
+          "original": "- **Start `/workflows:work` on remote** - Begin implementing in Claude Code on the web"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "commands/workflows/review": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/commands/workflows/review.md",
+      "upstream_commit": "04ee7e450653a3f6f8721a128d3c372867adfcc8",
+      "synced_at": "2026-02-10T06:01:25Z",
+      "notes": "Imported from CEP. Mechanical conversion + intelligent rewrites: .claude/skills/ paths in prose, compound-engineering pipeline artifacts branding, Task() inside code blocks.",
+      "upstream_content_hash": "8241caf4f47162fd45da65a70d208626084046dc81f6b39456de1339532b1bac",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:path-references",
+          "reason": "Converter handled path replacements; also manually fixed .claude/skills/file-todos/assets/ -> .opencode/skills/file-todos/assets/ (3 occurrences in prose)"
+        },
+        {
+          "field": "body:branding",
+          "reason": "compound-engineering pipeline artifacts -> systematic pipeline artifacts"
+        },
+        {
+          "field": "body:code-blocks",
+          "reason": "Task() inside code blocks -> task() (3 occurrences in finding-creator example)"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "commands/workflows/work": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/commands/workflows/work.md",
+      "upstream_commit": "04ee7e450653a3f6f8721a128d3c372867adfcc8",
+      "synced_at": "2026-02-10T06:01:25Z",
+      "notes": "Imported from CEP. Mechanical conversion + extensive intelligent rewrites: attribution badges/footers, TodoWrite in code blocks, Task() in code blocks, CLAUDE.md in code block comments. Swarm Mode section kept as aspirational reference with note about missing OC coordination primitives (Teammate API).",
+      "upstream_content_hash": "d5cc6569f17bd420f6c3120edc39949fb7b03a108da0db1381657497955d55ee",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:path-references",
+          "reason": "Converter handled path replacements"
+        },
+        {
+          "field": "body:code-blocks",
+          "reason": "TodoWrite -> todowrite inside code blocks (2 occurrences); Task() -> task() inside code blocks (2 occurrences); CLAUDE.md -> AGENTS.md inside code block comment"
+        },
+        {
+          "field": "body:branding",
+          "reason": "Attribution footer: Claude Code -> OpenCode, Co-Authored-By updated; PR badge: Compound Engineered -> Systematic; Quality checklist: Compound Engineered badge -> Systematic badge"
+        },
+        {
+          "field": "body:cc-specific-features",
+          "reason": "Swarm Mode section uses CC Teammate API (spawnTeam, requestShutdown, cleanup) with no OC equivalent — kept as aspirational reference with explanatory note"
+        }
+      ],
+      "manual_overrides": []
+    }
+  }
 }

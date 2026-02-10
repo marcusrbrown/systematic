@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://fro.bot/systematic/sync-manifest.schema.json",
   "title": "Systematic Sync Manifest",
-  "description": "Provenance manifest tracking upstream sources for bundled definitions",
+  "description": "Provenance manifest tracking upstream sources for bundled definitions, including intelligent rewrite tracking for repeatable conversions",
   "type": "object",
   "required": ["sources", "definitions"],
   "properties": {
@@ -35,7 +35,7 @@
     },
     "definitions": {
       "type": "object",
-      "description": "Bundled definitions mapped to their upstream provenance",
+      "description": "Bundled definitions mapped to their upstream provenance and conversion metadata",
       "additionalProperties": {
         "type": "object",
         "required": [
@@ -65,7 +65,41 @@
           },
           "notes": {
             "type": "string",
-            "description": "What was changed or adapted during import"
+            "description": "Human-readable summary of what was changed or adapted during import"
+          },
+          "upstream_content_hash": {
+            "type": "string",
+            "description": "SHA-256 hash of the upstream file content at time of sync, for detecting upstream changes"
+          },
+          "rewrites": {
+            "type": "array",
+            "description": "Structured log of intelligent rewrites applied beyond mechanical conversion. Each entry records what was changed and why, enabling repeatable re-application on future syncs.",
+            "items": {
+              "type": "object",
+              "required": ["field", "reason"],
+              "properties": {
+                "field": {
+                  "type": "string",
+                  "description": "Frontmatter field or content section that was rewritten (e.g., 'description', 'body:tool-references', 'body:branding')"
+                },
+                "reason": {
+                  "type": "string",
+                  "description": "Why this rewrite was needed (e.g., 'CC description lacks OC trigger conditions', 'branding reference to Claude Code')"
+                },
+                "original": {
+                  "type": "string",
+                  "description": "Original value or snippet before rewrite (optional, for diffing)"
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "manual_overrides": {
+            "type": "array",
+            "description": "Fields or sections that have been manually customized by a human contributor. These MUST be preserved on future re-imports — the skill will skip rewriting these fields.",
+            "items": {
+              "type": "string"
+            }
           }
         },
         "additionalProperties": false

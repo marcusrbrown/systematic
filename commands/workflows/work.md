@@ -1,7 +1,7 @@
 ---
 name: workflows:work
 description: Execute work plans efficiently while maintaining quality and finishing features
-argument-hint: "[plan file, specification, or todo file path]"
+argument-hint: '[plan file, specification, or todo file path]'
 ---
 
 # Work Plan Execution Command
@@ -73,7 +73,7 @@ This command takes a work document (plan, specification, or todo file) and execu
    - You plan to switch between branches frequently
 
 3. **Create Todo List**
-   - Use TodoWrite to break plan into actionable tasks
+   - Use todowrite to break plan into actionable tasks
    - Include dependencies between tasks
    - Prioritize based on what needs to be done first
    - Include testing and quality check tasks
@@ -87,18 +87,18 @@ This command takes a work document (plan, specification, or todo file) and execu
 
    ```
    while (tasks remain):
-     - Mark task as in_progress in TodoWrite
+      - Mark task as in_progress in todowrite
      - Read any referenced files from the plan
      - Look for similar patterns in codebase
      - Implement following existing conventions
      - Write tests for new functionality
      - Run tests after changes
-     - Mark task as completed in TodoWrite
+      - Mark task as completed in todowrite
      - Mark off the corresponding checkbox in the plan file ([ ] → [x])
      - Evaluate for incremental commit (see below)
    ```
 
-   **IMPORTANT**: Always update the original plan document by checking off completed items. Use the Edit tool to change `- [ ]` to `- [x]` for each task you finish. This keeps the plan as a living document showing progress and ensures no checkboxes are left unchecked.
+   **IMPORTANT**: Always update the original plan document by checking off completed items. Use the edit tool to change `- [ ]` to `- [x]` for each task you finish. This keeps the plan as a living document showing progress and ensures no checkboxes are left unchecked.
 
 2. **Incremental Commits**
 
@@ -134,7 +134,7 @@ This command takes a work document (plan, specification, or todo file) and execu
    - The plan should reference similar code - read those files first
    - Match naming conventions exactly
    - Reuse existing components where possible
-   - Follow project coding standards (see CLAUDE.md)
+    - Follow project coding standards (see AGENTS.md)
    - When in doubt, grep for similar implementations
 
 4. **Test Continuously**
@@ -154,7 +154,7 @@ This command takes a work document (plan, specification, or todo file) and execu
    - Repeat until implementation matches design
 
 6. **Track Progress**
-   - Keep TodoWrite updated as you complete tasks
+   - Keep todowrite updated as you complete tasks
    - Note any blockers or unexpected discoveries
    - Create new tasks if scope expands
    - Keep user informed of major milestones
@@ -169,7 +169,7 @@ This command takes a work document (plan, specification, or todo file) and execu
    # Run full test suite (use project's test command)
    # Examples: bin/rails test, npm test, pytest, go test, etc.
 
-   # Run linting (per CLAUDE.md)
+    # Run linting (per AGENTS.md)
    # Use linting-agent before pushing to origin
    ```
 
@@ -181,19 +181,19 @@ This command takes a work document (plan, specification, or todo file) and execu
    - **kieran-rails-reviewer**: Verify Rails conventions (Rails projects)
    - **performance-oracle**: Check for performance issues
    - **security-sentinel**: Scan for security vulnerabilities
-   - **cora-test-reviewer**: Review test quality (CORA projects)
+   - **cora-test-reviewer**: Review test quality (Rails projects with comprehensive test coverage)
 
-   Run reviewers in parallel with Task tool:
+   Run reviewers in parallel with task tool:
 
    ```
-   Task(code-simplicity-reviewer): "Review changes for simplicity"
-   Task(kieran-rails-reviewer): "Check Rails conventions"
+    task(code-simplicity-reviewer): "Review changes for simplicity"
+    task(kieran-rails-reviewer): "Check Rails conventions"
    ```
 
    Present findings to user and address critical issues.
 
 3. **Final Validation**
-   - All TodoWrite tasks marked completed
+   - All todowrite tasks marked completed
    - All tests pass
    - Linting passes
    - Code follows existing patterns
@@ -215,9 +215,9 @@ This command takes a work document (plan, specification, or todo file) and execu
 
    Brief explanation if needed.
 
-   🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    🤖 Generated with [OpenCode](https://opencode.ai)
 
-   Co-Authored-By: Claude <noreply@anthropic.com>
+    Co-Authored-By: OpenCode <noreply@opencode.ai>
    EOF
    )"
    ```
@@ -279,7 +279,7 @@ This command takes a work document (plan, specification, or todo file) and execu
 
    ---
 
-   [![Compound Engineered](https://img.shields.io/badge/Compound-Engineered-6366f1)](https://github.com/EveryInc/compound-engineering-plugin) 🤖 Generated with [Claude Code](https://claude.com/claude-code)
+    [![Systematic](https://img.shields.io/badge/Systematic-Engineered-6366f1)](https://github.com/marcusrbrown/systematic) 🤖 Generated with [OpenCode](https://opencode.ai)
    EOF
    )"
    ```
@@ -289,6 +289,78 @@ This command takes a work document (plan, specification, or todo file) and execu
    - Link to PR
    - Note any follow-up work needed
    - Suggest next steps if applicable
+
+---
+
+## Swarm Mode (Optional)
+
+> **Note:** Swarm mode coordination primitives (`Teammate` API — team creation, shutdown signals, cleanup) are not yet available in OpenCode. The concepts below are aspirational. For current parallel execution, use the `task` tool with multiple background subagents, or see the `dispatching-parallel-agents` skill.
+
+For complex plans with multiple independent workstreams, enable swarm mode for parallel execution with coordinated agents.
+
+### When to Use Swarm Mode
+
+| Use Swarm Mode when... | Use Standard Mode when... |
+|------------------------|---------------------------|
+| Plan has 5+ independent tasks | Plan is linear/sequential |
+| Multiple specialists needed (review + test + implement) | Single-focus work |
+| Want maximum parallelism | Simpler mental model preferred |
+| Large feature with clear phases | Small feature or bug fix |
+
+### Enabling Swarm Mode
+
+To trigger swarm execution, say:
+
+> "Make a Task list and launch an army of agent swarm subagents to build the plan"
+
+Or explicitly request: "Use swarm mode for this work"
+
+### Swarm Workflow
+
+When swarm mode is enabled, the workflow changes:
+
+1. **Create Team**
+   ```
+   Teammate({ operation: "spawnTeam", team_name: "work-{timestamp}" })
+   ```
+
+2. **Create Task List with Dependencies**
+   - Parse plan into TaskCreate items
+   - Set up blockedBy relationships for sequential dependencies
+   - Independent tasks have no blockers (can run in parallel)
+
+3. **Spawn Specialized Teammates**
+   ```
+   Task({
+     team_name: "work-{timestamp}",
+     name: "implementer",
+     subagent_type: "general-purpose",
+     prompt: "Claim implementation tasks, execute, mark complete",
+     run_in_background: true
+   })
+
+   Task({
+     team_name: "work-{timestamp}",
+     name: "tester",
+     subagent_type: "general-purpose",
+     prompt: "Claim testing tasks, run tests, mark complete",
+     run_in_background: true
+   })
+   ```
+
+4. **Coordinate and Monitor**
+   - Team lead monitors task completion
+   - Spawn additional workers as phases unblock
+   - Handle plan approval if required
+
+5. **Cleanup**
+   ```
+   Teammate({ operation: "requestShutdown", target_agent_id: "implementer" })
+   Teammate({ operation: "requestShutdown", target_agent_id: "tester" })
+   Teammate({ operation: "cleanup" })
+   ```
+
+See the `orchestrating-swarms` skill for detailed swarm patterns and best practices.
 
 ---
 
@@ -330,7 +402,7 @@ This command takes a work document (plan, specification, or todo file) and execu
 Before creating PR, verify:
 
 - [ ] All clarifying questions asked and answered
-- [ ] All TodoWrite tasks marked completed
+- [ ] All todowrite tasks marked completed
 - [ ] Tests pass (run project's test command)
 - [ ] Linting passes (use linting-agent)
 - [ ] Code follows existing patterns
@@ -338,7 +410,7 @@ Before creating PR, verify:
 - [ ] Before/after screenshots captured and uploaded (for UI changes)
 - [ ] Commit messages follow conventional format
 - [ ] PR description includes summary, testing notes, and screenshots
-- [ ] PR description includes Compound Engineered badge
+- [ ] PR description includes Systematic badge
 
 ## When to Use Reviewer Agents
 
@@ -358,6 +430,6 @@ For most features: tests + linting + following patterns is sufficient.
 - **Skipping clarifying questions** - Ask now, not after building wrong thing
 - **Ignoring plan references** - The plan has links for a reason
 - **Testing at the end** - Test continuously or suffer later
-- **Forgetting TodoWrite** - Track progress or lose track of what's done
+- **Forgetting todowrite** - Track progress or lose track of what's done
 - **80% done syndrome** - Finish the feature, don't move on early
 - **Over-reviewing simple changes** - Save reviewer agents for complex work

@@ -28,24 +28,23 @@ interface ValidationResult {
 function detectFalsePositives(_original: string, converted: string): string[] {
   const falsePositives: string[] = []
 
-  const taskAsNounPatterns = [
-    /complete the delegate_task/gi,
-    /the delegate_task is/gi,
-    /a delegate_task to/gi,
-    /this delegate_task/gi,
-    /each delegate_task/gi,
-    /your delegate_task/gi,
-    /delegate_task management/gi,
-    /delegate_task tracking/gi,
-    /delegate_task list/gi,
-    /Background delegate_task/gi,
+  // Since Task → task (same word, just lowercased), false-positive detection
+  // checks that uppercase "Task" used as a noun was NOT incorrectly lowercased.
+  // The converter's context-dependent regexes should only match tool invocation
+  // patterns, leaving noun usage with uppercase T untouched.
+  const taskNounLowercased = [
+    /complete the task\b/g,
+    /\beach task\b/g,
+    /\btask management\b/g,
+    /\btask tracking\b/g,
+    /\btask list\b(?! |$)/g,
   ]
 
-  for (const pattern of taskAsNounPatterns) {
+  for (const pattern of taskNounLowercased) {
     const matches = converted.match(pattern)
     if (matches) {
       falsePositives.push(
-        `False positive: "${matches[0]}" - "Task" as noun incorrectly replaced`,
+        `False positive: "${matches[0]}" - "Task" as noun incorrectly lowercased`,
       )
     }
   }
@@ -313,14 +312,14 @@ describe('Converter Validation Against Real CEP Content', () => {
         // Should convert
         {
           input: 'Task Explore: "Research..."',
-          expected: 'delegate_task Explore: "Research..."',
+          expected: 'task Explore: "Research..."',
         },
         {
           input: 'Task(agent="explore")',
-          expected: 'delegate_task(agent="explore")',
+          expected: 'task(agent="explore")',
         },
-        { input: 'use Task to spawn', expected: 'use delegate_task to spawn' },
-        { input: 'the Task tool for', expected: 'the delegate_task tool for' },
+        { input: 'use Task to spawn', expected: 'use task to spawn' },
+        { input: 'the Task tool for', expected: 'the task tool for' },
         // Should NOT convert (Task as noun)
         { input: 'complete the Task', expected: 'complete the Task' },
         { input: 'each Task', expected: 'each Task' },

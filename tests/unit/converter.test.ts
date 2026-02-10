@@ -361,7 +361,7 @@ Then use Task to spawn agents.
 Use AskUserQuestion when unclear.`
         const result = convertContent(input, 'skill')
         expect(result).toContain('todowrite')
-        expect(result).toContain('delegate_task')
+        expect(result).toContain('task to spawn')
         expect(result).toContain('question')
       })
 
@@ -442,7 +442,7 @@ description: Test
 Use TodoWrite to track. Task explorer(find files). Check .claude/skills/.`
         const result = convertContent(input, 'agent')
         expect(result).toContain('todowrite')
-        expect(result).toContain('delegate_task')
+        expect(result).toContain('task explorer(')
         expect(result).toContain('.opencode/skills/')
       })
     })
@@ -551,7 +551,7 @@ tools:
 Prompt`
           const result = convertContent(input, 'agent')
           expect(result).toContain('google_search: true')
-          expect(result).toContain('delegate_task: true')
+          expect(result).toContain('task: true')
           expect(result).toContain('question: true')
         })
 

@@ -146,7 +146,7 @@ Agents are specialized subagents with pre-configured prompts and expertise. They
 
 ### Using Agents
 
-Agents are invoked via OpenCode's `@mention` syntax or `delegate_task`:
+Agents are invoked via OpenCode's `@mention` syntax or `task`:
 
 ```
 @architecture-strategist Review the authentication refactoring in this PR
@@ -155,7 +155,7 @@ Agents are invoked via OpenCode's `@mention` syntax or `delegate_task`:
 Or programmatically in skills/commands:
 
 ```
-delegate_task(subagent_type="architecture-strategist", prompt="Review...")
+task(subagent_type="architecture-strategist", prompt="Review...")
 ```
 
 ## Commands
@@ -387,7 +387,7 @@ See [`AGENTS.md`](./AGENTS.md) for detailed development guidelines, code style c
 
 ## Converting from Claude Code
 
-Migrating skills, agents, or commands from Claude Code (CEP) to Systematic? See the [Conversion Guide](https://fro.bot/systematic/guides/conversion-guide/) for field mappings and examples. Also available as [local Markdown](./docs/CONVERSION-GUIDE.md).
+Migrating skills, agents, or commands from CEP or other Claude Code-format sources to Systematic? See the [Conversion Guide](https://fro.bot/systematic/guides/conversion-guide/) for field mappings and examples. Also available as [local Markdown](./docs/CONVERSION-GUIDE.md).
 
 ## References
 

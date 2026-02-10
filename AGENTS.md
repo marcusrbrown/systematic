@@ -4,7 +4,7 @@
 
 ## Overview
 
-OpenCode plugin providing structured engineering workflows. Converts Claude Code (CEP) agents, skills, and commands to OpenCode format.
+OpenCode plugin providing structured engineering workflows. Ported from the [Compound Engineering Plugin (CEP)](https://github.com/EveryInc/compound-engineering-plugin) for Claude Code, with improvements and OpenCode SDK integration. Converts CC-format agents, skills, and commands to OpenCode format.
 
 **Two distinct parts:**
 1. **TypeScript source** (`src/`) — Plugin logic, tools, config handling
