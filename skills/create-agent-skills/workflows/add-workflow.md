@@ -9,10 +9,10 @@
 <process>
 ## Step 1: Select the Skill
 
-**DO NOT use AskUserQuestion** - there may be many skills.
+**DO NOT use question tool** - there may be many skills.
 
 ```bash
-ls ~/.claude/skills/
+ls ~/.config/opencode/skills/
 ```
 
 Present numbered list, ask: "Which skill needs a new workflow?"
@@ -21,8 +21,8 @@ Present numbered list, ask: "Which skill needs a new workflow?"
 
 Read the skill:
 ```bash
-cat ~/.claude/skills/{skill-name}/SKILL.md
-ls ~/.claude/skills/{skill-name}/workflows/ 2>/dev/null
+cat ~/.config/opencode/skills/{skill-name}/SKILL.md
+ls ~/.config/opencode/skills/{skill-name}/workflows/ 2>/dev/null
 ```
 
 Determine:
@@ -34,7 +34,7 @@ Report current structure to user.
 
 ## Step 3: Gather Workflow Requirements
 
-Ask using AskUserQuestion or direct question:
+Ask using question tool or direct question:
 - What should this workflow do?
 - When would someone use it vs existing workflows?
 - What references would it need?

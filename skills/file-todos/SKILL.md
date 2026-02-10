@@ -1,6 +1,7 @@
 ---
 name: file-todos
 description: This skill should be used when managing the file-based todo tracking system in the todos/ directory. It provides workflows for creating todos, managing status and dependencies, conducting triage, and integrating with slash commands and code review processes.
+disable-model-invocation: true
 ---
 
 # File-Based Todo Tracking Skill
@@ -149,7 +150,7 @@ done
 ```markdown
 ### YYYY-MM-DD - Session Title
 
-**By:** Claude Code / Developer Name
+**By:** OpenCode / Developer Name
 
 **Actions:**
 - Specific changes made (include file:line references)
@@ -244,7 +245,7 @@ grep -r "payment" todos/
 - Active Record CRUD operations
 - Different from this file-based system
 
-**TodoWrite tool:**
+**todowrite tool:**
 - In-memory task tracking during agent sessions
 - Temporary tracking for single conversation
 - Not persisted to disk

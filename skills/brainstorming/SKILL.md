@@ -188,3 +188,4 @@ Planning answers **HOW** to build it:
 - Testing strategy and verification
 
 When brainstorm output exists, `/workflows:plan` should detect it and use it as input, skipping its own idea refinement phase.
+

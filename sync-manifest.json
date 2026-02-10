@@ -523,6 +523,256 @@
         }
       ],
       "manual_overrides": []
+    },
+    "skills/agent-browser": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/skills/agent-browser",
+      "upstream_commit": "e8f3bbcb3580862a2715575d609333306ed02ee3",
+      "synced_at": "2026-02-10T09:19:13Z",
+      "notes": "Imported from CEP. Converter applied to SKILL.md. Single-file skill.",
+      "upstream_content_hash": "fd63d41d4a9d923c43ee7e1128dafa32f9e26cd3eb6197534d21d5a4e6ba1f14",
+      "files": ["SKILL.md"],
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "skills/agent-native-architecture": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/skills/agent-native-architecture",
+      "upstream_commit": "e8f3bbcb3580862a2715575d609333306ed02ee3",
+      "synced_at": "2026-02-10T09:19:13Z",
+      "notes": "Imported from CEP. Converter applied to SKILL.md. 14 reference files copied with CC→OC text replacements (Claude Code→OpenCode, .claude/→.opencode/, CLAUDE.md→AGENTS.md).",
+      "upstream_content_hash": "7913515b9404d59b699d631d29a7e72b5bbd0e98f46e033a4566c8963024de29",
+      "files": [
+        "SKILL.md",
+        "references/action-parity-discipline.md",
+        "references/agent-execution-patterns.md",
+        "references/agent-native-testing.md",
+        "references/architecture-patterns.md",
+        "references/dynamic-context-injection.md",
+        "references/files-universal-interface.md",
+        "references/from-primitives-to-domain-tools.md",
+        "references/mcp-tool-design.md",
+        "references/mobile-patterns.md",
+        "references/product-implications.md",
+        "references/refactoring-to-prompt-native.md",
+        "references/self-modification.md",
+        "references/shared-workspace-architecture.md",
+        "references/system-prompt-design.md"
+      ],
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:branding",
+          "reason": "Claude Code→OpenCode, .claude/→.opencode/, CLAUDE.md→AGENTS.md in SKILL.md and reference files"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "skills/brainstorming": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/skills/brainstorming",
+      "upstream_commit": "e8f3bbcb3580862a2715575d609333306ed02ee3",
+      "synced_at": "2026-02-10T09:19:13Z",
+      "notes": "Imported from CEP. Converter applied to SKILL.md. Single-file skill.",
+      "upstream_content_hash": "38fbe289b7fc22f4407f4d16b3f80b32fad6b41d36e7f6665903892bb5c15741",
+      "files": ["SKILL.md"],
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "skills/compound-docs": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/skills/compound-docs",
+      "upstream_commit": "e8f3bbcb3580862a2715575d609333306ed02ee3",
+      "synced_at": "2026-02-10T09:19:13Z",
+      "notes": "Imported from CEP (upstream name: codify-docs). Converter applied to SKILL.md. Asset/reference files copied with CC→OC text replacements. Upstream already cleaned CORA references to generic.",
+      "upstream_content_hash": "06e3ae8cd78161a2d4e62f2679625481a7ae7fa53ecece7cfd4da1313270647e",
+      "files": [
+        "SKILL.md",
+        "schema.yaml",
+        "assets/critical-pattern-template.md",
+        "assets/resolution-template.md",
+        "references/yaml-schema.md"
+      ],
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:path-references",
+          "reason": ".claude/skills/codify-docs/→.opencode/skills/compound-docs/ in SKILL.md and reference files"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "skills/create-agent-skills": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/skills/create-agent-skills",
+      "upstream_commit": "e8f3bbcb3580862a2715575d609333306ed02ee3",
+      "synced_at": "2026-02-10T09:19:13Z",
+      "notes": "Imported from CEP. Converter applied to SKILL.md. Reference/template/workflow files copied with CC→OC text replacements. Source attribution URLs (code.claude.com, platform.claude.com) preserved as-is.",
+      "upstream_content_hash": "31bd9a91e7940512675dd2e55f7e12539f2e72215f7ed8ff21ba679c49a97724",
+      "files": [
+        "SKILL.md",
+        "references/api-security.md",
+        "references/be-clear-and-direct.md",
+        "references/best-practices.md",
+        "references/common-patterns.md",
+        "references/core-principles.md",
+        "references/executable-code.md",
+        "references/iteration-and-testing.md",
+        "references/official-spec.md",
+        "references/recommended-structure.md",
+        "references/skill-structure.md",
+        "references/using-scripts.md",
+        "references/using-templates.md",
+        "references/workflows-and-validation.md",
+        "templates/router-skill.md",
+        "templates/simple-skill.md",
+        "workflows/add-reference.md",
+        "workflows/add-script.md",
+        "workflows/add-template.md",
+        "workflows/add-workflow.md",
+        "workflows/audit-skill.md",
+        "workflows/create-domain-expertise-skill.md",
+        "workflows/create-new-skill.md",
+        "workflows/get-guidance.md",
+        "workflows/upgrade-to-router.md",
+        "workflows/verify-skill.md"
+      ],
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:path-references",
+          "reason": ".claude/→.opencode/, Claude Code→OpenCode in SKILL.md and supporting files"
+        },
+        {
+          "field": "body:preserved",
+          "reason": "Source attribution URLs (code.claude.com/docs/en/skills, platform.claude.com) kept as-is — these document the upstream CC API spec"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "skills/file-todos": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/skills/file-todos",
+      "upstream_commit": "e8f3bbcb3580862a2715575d609333306ed02ee3",
+      "synced_at": "2026-02-10T09:19:13Z",
+      "notes": "Imported from CEP. Converter applied to SKILL.md. Asset file (todo-template.md) copied with CC→OC text replacements.",
+      "upstream_content_hash": "35a2ab736863b3bc9e02eef0003d76237cafd2b5c7bd144cda2a811d7ae672fd",
+      "files": ["SKILL.md", "assets/todo-template.md"],
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:path-references",
+          "reason": ".claude/→.opencode/ in SKILL.md and asset file"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "skills/git-worktree": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/skills/git-worktree",
+      "upstream_commit": "e8f3bbcb3580862a2715575d609333306ed02ee3",
+      "synced_at": "2026-02-10T09:19:13Z",
+      "notes": "Imported from CEP. Converter applied to SKILL.md. Script file copied. CLAUDE_PLUGIN_ROOT paths simplified to relative paths (skills are bundled in plugin, no env var needed).",
+      "upstream_content_hash": "7c9136e5faac0329587d4eedc8d7d65b795c2e948e2ee6f6d1accbde11d91ca6",
+      "files": ["SKILL.md", "scripts/worktree-manager.sh"],
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:path-simplification",
+          "reason": "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh → scripts/worktree-manager.sh (relative paths — skills are bundled in plugin, no env var prefix needed)"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "skills/document-review": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/skills/document-review",
+      "upstream_commit": "e8f3bbcb3580862a2715575d609333306ed02ee3",
+      "synced_at": "2026-02-10T09:34:10Z",
+      "notes": "Imported from CEP. Single-file skill (SKILL.md only). Converter applied. Clean — no CC-specific patterns in body.",
+      "upstream_content_hash": "05df50a58f974a7a93c88024e4d8ef52b94a4b78556ad1cac0c6ab18259d5904",
+      "files": ["SKILL.md"],
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "skills/orchestrating-swarms": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/skills/orchestrating-swarms",
+      "upstream_commit": "e8f3bbcb3580862a2715575d609333306ed02ee3",
+      "synced_at": "2026-02-10T09:34:10Z",
+      "notes": "Imported from CEP. Heavy CC-specific content (TeammateTool, Swarm Mode, spawnTeam API). Converter applied. 121 CC patterns rewritten. Added aspirational note — Teammate API has no OC equivalent; use task tool with run_in_background for current parallel execution.",
+      "upstream_content_hash": "80a48a7187daa741abc3ff9e81331b6beb9cfd0d3de4503fb7dee47af490657f",
+      "files": ["SKILL.md"],
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:branding",
+          "reason": "121 Claude Code/CEP references rewritten to OpenCode/Systematic"
+        },
+        {
+          "field": "description",
+          "reason": "Removed TeammateTool reference from description — CC-specific API not available in OC",
+          "original": "This skill should be used when orchestrating multi-agent swarms using Claude Code's TeammateTool and Task system."
+        },
+        {
+          "field": "body:aspirational-note",
+          "reason": "Added aspirational note about Teammate API having no OC equivalent — patterns kept as design reference"
+        },
+        {
+          "field": "body:version-attribution",
+          "reason": "Removed upstream CC version attribution footer ('Based on Claude Code v2.1.19') — blind branding rewrite turned it into nonsensical 'Based on OpenCode v2.1.19'. CC version numbers are not applicable to Systematic."
+        }
+      ],
+      "manual_overrides": []
+    },
+    "skills/frontend-design": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/skills/frontend-design",
+      "upstream_commit": "e8f3bbcb3580862a2715575d609333306ed02ee3",
+      "synced_at": "2026-02-10T09:34:10Z",
+      "notes": "Imported from CEP. Single-file skill (SKILL.md only). Converter applied. Clean — no CC-specific patterns in body.",
+      "upstream_content_hash": "efb3a34b3db97d3f3a5abd7c6468f1d9b9839cdbab5354550cdab6158f49700e",
+      "files": ["SKILL.md"],
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        }
+      ],
+      "manual_overrides": []
     }
   }
 }
