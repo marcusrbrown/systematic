@@ -1,0 +1,6 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  // Standalone Systematic Profile
+  // Use only Systematic's structured workflows and agents
+  "plugins": ["@fro.bot/systematic@latest"]
+}
