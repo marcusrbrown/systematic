@@ -18,7 +18,7 @@ Import and convert agent, skill, and command definitions written in Claude Code 
 
 ## When NOT to Use
 
-- Writing new Systematic-native skills/agents/commands (use `creating-agent-skills` skill instead)
+- Writing new Systematic-native skills/agents/commands (use `create-agent-skills` skill instead)
 - Editing existing bundled content that has no upstream source
 - Converting definitions for a different project (use the CLI: `systematic convert`)
 
