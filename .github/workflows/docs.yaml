@@ -8,6 +8,8 @@ on:
       - 'skills/**'
       - 'agents/**'
       - 'commands/**'
+      - 'registry/**'
+      - 'scripts/build-registry.ts'
       - 'README.md'
   workflow_dispatch:
 
@@ -35,8 +37,14 @@ jobs:
       - name: Generate reference content
         run: bun run docs:generate
 
+      - name: Build registry
+        run: bun scripts/build-registry.ts --version $(jq -r .version package.json)
+
       - name: Build docs
         run: bun run --cwd docs build
+
+      - name: Copy registry to docs output
+        run: cp -r dist/registry docs/dist/registry
 
       - name: Create GitHub App token
         if: github.repository == 'marcusrbrown/systematic'
