@@ -42,7 +42,7 @@ Most AI coding assistants respond to requests without structure or methodology. 
 - **Specialized Agents** — Purpose-built subagents for architecture, security, and performance
 - **Zero Configuration** — Works immediately after installation via config hooks
 - **Extensible** — Add project-specific skills and commands alongside bundled ones
-- **Batteries Included** — 8 skills, 24 agents, and 9 commands ship with the npm package
+- **Batteries Included** — 11 skills, 24 agents, and 9 commands ship with the npm package
 - **CLI Tooling** — Inspect, list, and convert assets from the command line
 
 ## Quick Start
@@ -88,9 +88,12 @@ Skills are structured workflows that guide the AI through systematic engineering
 | `agent-browser` | Browser automation using Vercel's agent-browser CLI |
 | `agent-native-architecture` | Design systems where AI agents are first-class citizens |
 | `compound-docs` | Capture solved problems as categorized documentation |
-| `creating-agent-skills` | Expert guidance for writing and refining skills |
+| `create-agent-skills` | Expert guidance for writing and refining skills |
+| `document-review` | Refine brainstorm or plan documents before proceeding to the next workflow step |
 | `file-todos` | File-based todo tracking with status and dependency management |
+| `frontend-design` | Create distinctive, production-grade frontend interfaces with high design quality |
 | `git-worktree` | Manage git worktrees for isolated parallel development |
+| `orchestrating-swarms` | Coordinate multi-agent swarms, parallel reviews, and pipeline workflows |
 
 ### How Skills Work
 
@@ -369,7 +372,7 @@ systematic/
 │       ├── manifest.ts       # Upstream sync manifest tracking
 │       ├── validation.ts     # Agent config validation + type guards
 │       └── walk-dir.ts       # Recursive directory walker
-├── skills/                   # 8 bundled skills (SKILL.md files)
+├── skills/                   # 11 bundled skills (SKILL.md files)
 ├── agents/                   # 24 bundled agents (4 categories)
 ├── commands/                 # 9 bundled commands (with workflows/ subdir)
 ├── docs/                     # Starlight documentation site

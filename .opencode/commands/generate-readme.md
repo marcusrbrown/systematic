@@ -1,5 +1,5 @@
 ---
-name: write-readme
+name: generate-readme
 description: Create or update README.md with accurate project documentation
 argument-hint: "[full|section-name]"
 ---

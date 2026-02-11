@@ -43,8 +43,8 @@ systematic/
 │   ├── index.ts          # Plugin entry (SystematicPlugin)
 │   ├── cli.ts            # CLI entry (list/convert/config commands)
 │   └── lib/              # 13 core modules (see src/lib/AGENTS.md)
-├── skills/               # 8 bundled skills (SKILL.md format)
-├── agents/               # 11 bundled agents (4 categories: design/research/review/workflow)
+├── skills/               # 11 bundled skills (SKILL.md format)
+├── agents/               # 24 bundled agents (4 categories: design/research/review/workflow)
 ├── commands/             # 9 bundled commands (5 workflow + 4 utility)
 │   └── workflows/        # brainstorm, compound, plan, review, work
 ├── docs/                 # Starlight docs workspace (see docs/AGENTS.md)
