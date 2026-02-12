@@ -67,7 +67,7 @@ function toTitleCase(name: string): string {
 
 function transformFrontmatter(
   data: Frontmatter,
-  definitionType: DefinitionType,
+  _definitionType: DefinitionType,
   category?: string,
 ): Record<string, unknown> {
   const transformed: Record<string, unknown> = {}
