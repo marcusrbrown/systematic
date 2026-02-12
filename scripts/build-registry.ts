@@ -58,7 +58,6 @@ interface PackumentFile {
 interface PackumentVersion {
   name: string
   type: string
-  version: string
   description?: string
   files?: PackumentFile[]
   dependencies?: string[]
@@ -74,7 +73,6 @@ interface Packument {
 interface IndexComponent {
   name: string
   type: string
-  version: string
   description?: string
 }
 
@@ -82,6 +80,7 @@ interface RegistryIndex {
   name: string
   namespace: string
   version: string
+  author: string
   components: IndexComponent[]
 }
 
@@ -127,7 +126,14 @@ function resolveVersion(explicit: string | null): string {
       cwd: PROJECT_ROOT,
     }).trim()
     if (tag.length > 0) {
-      return tag
+      const normalized = tag.startsWith('v') ? tag.slice(1) : tag
+      if (SEMVER_REGEX.test(normalized)) {
+        return normalized
+      }
+      console.error(
+        `Error: Invalid git tag format "${tag}". Expected semver or v-prefixed semver (e.g., v1.2.3)`,
+      )
+      process.exit(1)
     }
   } catch {
     // git tag failed, fall through to package.json
@@ -190,6 +196,10 @@ function resolveComponentFilePath(
     return path.join(PROJECT_ROOT, file.path)
   }
 
+  if (type === 'ocx:profile') {
+    return path.join(PROJECT_ROOT, 'registry/files', file.path)
+  }
+
   return path.join(PROJECT_ROOT, 'registry/files', file.path)
 }
 
@@ -197,26 +207,34 @@ function validateRegistry(source: RegistrySource): string[] {
   const errors: string[] = []
   const componentNames = new Set<string>()
 
+  const validators: Record<
+    string,
+    (component: RegistryComponent, errors: string[]) => void
+  > = {
+    'ocx:skill': validateSkillComponent,
+    'ocx:agent': validateFileComponent,
+    'ocx:command': validateFileComponent,
+    'ocx:bundle': (component, currentErrors) =>
+      validateBundleComponent(component, source, currentErrors),
+    'ocx:profile': validateProfileComponent,
+    'ocx:plugin': () => undefined,
+  }
+
   for (const component of source.components) {
     if (componentNames.has(component.name)) {
       errors.push(`Duplicate component name: "${component.name}"`)
     }
     componentNames.add(component.name)
 
-    if (component.type === 'ocx:skill') {
-      validateSkillComponent(component, errors)
-    } else if (component.type === 'ocx:agent') {
-      validateFileComponent(component, errors)
-    } else if (component.type === 'ocx:command') {
-      validateFileComponent(component, errors)
-    } else if (component.type === 'ocx:bundle') {
-      validateBundleComponent(component, source, errors)
-    } else if (component.type === 'ocx:plugin') {
-    } else {
+    const validator = validators[component.type]
+    if (validator == null) {
       errors.push(
         `[${component.name}] Unknown component type: "${component.type}"`,
       )
+      continue
     }
+
+    validator(component, errors)
   }
 
   return errors
@@ -286,6 +304,27 @@ function validateFileComponent(
   }
 }
 
+function validateProfileComponent(
+  component: RegistryComponent,
+  errors: string[],
+): void {
+  const prefix = `[${component.name}]`
+
+  if (!Array.isArray(component.files) || component.files.length === 0) {
+    errors.push(`${prefix} Profile component must have at least one file`)
+    return
+  }
+
+  for (const file of component.files) {
+    const diskPath = resolveComponentFilePath(component, file)
+    if (!fs.existsSync(diskPath)) {
+      errors.push(
+        `${prefix} File not found: ${file.path} (expected at ${diskPath})`,
+      )
+    }
+  }
+}
+
 function validateBundleComponent(
   component: RegistryComponent,
   source: RegistrySource,
@@ -329,6 +368,21 @@ function walkFiles(dir: string): string[] {
   return results
 }
 
+/** OCX requires singular directory names for agent/command targets */
+const OCX_TARGET_REWRITES: ReadonlyArray<[RegExp, string]> = [
+  [/^\.opencode\/agents\//, '.opencode/agent/'],
+  [/^\.opencode\/commands\//, '.opencode/command/'],
+]
+
+function normalizeTargetPath(target: string): string {
+  for (const [pattern, replacement] of OCX_TARGET_REWRITES) {
+    if (pattern.test(target)) {
+      return target.replace(pattern, replacement)
+    }
+  }
+  return target
+}
+
 /** SHA-256 integrity: sha256-{base64(digest)} per OCX spec */
 function computeIntegrity(content: Buffer): string {
   const hash = createHash('sha256').update(content).digest('base64')
@@ -347,7 +401,6 @@ function buildRegistry(source: RegistrySource, version: string): void {
     const entry: IndexComponent = {
       name: component.name,
       type: component.type,
-      version,
     }
     if (component.description != null) {
       entry.description = component.description
@@ -367,6 +420,7 @@ function buildRegistry(source: RegistrySource, version: string): void {
     name: source.name,
     namespace: source.namespace,
     version,
+    author: resolveAuthor(source),
     components: indexComponents,
   }
 
@@ -392,7 +446,7 @@ function buildPackument(component: RegistryComponent, version: string): void {
 
     packumentFiles.push({
       path: file.path,
-      target: file.target,
+      target: normalizeTargetPath(file.target),
       integrity,
     })
 
@@ -409,7 +463,6 @@ function buildPackument(component: RegistryComponent, version: string): void {
   const versionData: PackumentVersion = {
     name: component.name,
     type: component.type,
-    version,
   }
   if (component.description != null) {
     versionData.description = component.description
@@ -428,6 +481,25 @@ function buildPackument(component: RegistryComponent, version: string): void {
   )
 }
 
+function resolveAuthor(source: RegistrySource): string {
+  if (source.author != null && source.author.trim().length > 0) {
+    return source.author
+  }
+
+  const pkgPath = path.join(PROJECT_ROOT, 'package.json')
+  try {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as {
+      author?: string
+    }
+    const author = pkg.author
+    if (typeof author === 'string' && author.trim().length > 0) {
+      return author
+    }
+  } catch {}
+
+  return ''
+}
+
 function buildBundlePackument(
   component: RegistryComponent,
   version: string,
@@ -435,11 +507,11 @@ function buildBundlePackument(
   const versionData: PackumentVersion = {
     name: component.name,
     type: component.type,
-    version,
   }
   if (component.description != null) {
     versionData.description = component.description
   }
+  versionData.files = []
   if (Array.isArray(component.dependencies)) {
     versionData.dependencies = component.dependencies
   }
@@ -463,11 +535,11 @@ function buildPluginPackument(
   const versionData: PackumentVersion = {
     name: component.name,
     type: component.type,
-    version,
   }
   if (component.description != null) {
     versionData.description = component.description
   }
+  versionData.files = []
   if (component.opencode != null) {
     versionData.opencode = component.opencode
   }

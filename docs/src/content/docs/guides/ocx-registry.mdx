@@ -18,7 +18,7 @@ To use the Systematic registry with OCX, first add the registry to your local co
 ocx registry add https://fro.bot/systematic --name systematic
 ```
 
-The registry discovery file is located at `https://fro.bot/systematic/.well-known/ocx.json`.
+OCX resolves the registry automatically from the URL.
 
 ## Installing Components
 
@@ -75,6 +75,14 @@ ocx add systematic/commands
 ## Using Profiles
 
 Profiles provide a complete, "opinionated" configuration for Systematic. They can be installed as standalone projects or merged into existing ones.
+
+:::caution
+Profile installation requires the registry to be configured **globally** (not just in the project). Add the `--global` flag when adding the registry:
+
+```bash
+ocx registry add https://fro.bot/systematic --name systematic --global
+```
+:::
 
 ### Standalone Profile
 The `standalone` profile provides a minimal Systematic setup with only the `@fro.bot/systematic` plugin and all bundled assets.
@@ -165,8 +173,10 @@ If you have the npm plugin installed AND have added OCX components, Systematic w
 
 ### Profile not working
 If a profile installation fails or doesn't seem to apply:
-1. Verify the profile exists: `ocx profile list`
-2. Check your `OCX_PROFILE` environment variable if you are using profile switching.
+1. Verify the registry is configured **globally**: `ocx registry list --global`
+2. If missing, add it: `ocx registry add https://fro.bot/systematic --name systematic --global`
+3. Check existing profiles: `ocx profile list`
+4. If the profile already exists, remove it first: `ocx profile rm <name>`
 
 ### Missing skills after OCX install
 Individual skills installed via OCX do not automatically get "bootstrap injection" (the automatic loading of `using-systematic`). To get this feature, you must have the `@fro.bot/systematic` plugin installed in your project or globally.
@@ -176,6 +186,5 @@ If `ocx diff` shows differences but `ocx update` says you are up to date, the re
 
 ## Technical Details
 
-- **Registry URL:** `https://fro.bot/systematic/registry/`
-- **Discovery Path:** `/.well-known/ocx.json`
+- **Registry URL:** `https://fro.bot/systematic`
 - **Compatibility:** Systematic components are compatible with OpenCode 0.12.0 and later.

@@ -84,7 +84,8 @@ ocx add systematic/skills     # All 11 skills
 ocx add systematic/agents     # All 24 agents
 ocx add systematic/commands   # All 9 commands
 
-# Or use a profile
+# Or use a profile (requires --global registry)
+ocx registry add https://fro.bot/systematic --name systematic --global
 ocx profile add sys --from systematic/standalone
 ```
 

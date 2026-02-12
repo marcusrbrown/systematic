@@ -46,7 +46,7 @@ jobs:
         run: bun run --cwd docs build
 
       - name: Copy registry to docs output
-        run: cp -r dist/registry docs/dist/registry
+        run: cp -r dist/registry/. docs/dist/
 
       - name: Create GitHub App token
         if: github.repository == 'marcusrbrown/systematic'

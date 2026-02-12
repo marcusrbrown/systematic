@@ -744,6 +744,48 @@
       "files": []
     },
     {
+      "name": "standalone",
+      "type": "ocx:profile",
+      "description": "Standalone Systematic profile — structured engineering workflows with zero extra configuration",
+      "files": [
+        {
+          "path": "profiles/standalone/opencode.jsonc",
+          "target": "opencode.jsonc"
+        },
+        {
+          "path": "profiles/standalone/ocx.jsonc",
+          "target": "ocx.jsonc"
+        },
+        {
+          "path": "profiles/standalone/AGENTS.md",
+          "target": "AGENTS.md"
+        }
+      ]
+    },
+    {
+      "name": "omo",
+      "type": "ocx:profile",
+      "description": "OhMyOpenCode (OMO) profile — Systematic with enhanced orchestration and delegation",
+      "files": [
+        {
+          "path": "profiles/omo/opencode.jsonc",
+          "target": "opencode.jsonc"
+        },
+        {
+          "path": "profiles/omo/ocx.jsonc",
+          "target": "ocx.jsonc"
+        },
+        {
+          "path": "profiles/omo/oh-my-opencode.jsonc",
+          "target": "oh-my-opencode.jsonc"
+        },
+        {
+          "path": "profiles/omo/AGENTS.md",
+          "target": "AGENTS.md"
+        }
+      ]
+    },
+    {
       "name": "plugin",
       "type": "ocx:plugin",
       "description": "Systematic OpenCode plugin — registers skills, agents, commands, and bootstrap prompt",
