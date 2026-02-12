@@ -7,7 +7,7 @@ on:
     inputs:
       version:
         description: Release version (optional, semver or v-prefixed)
-        required: true
+        required: false
         type: string
 
 concurrency:
@@ -21,6 +21,7 @@ jobs:
   build-and-deploy:
     name: Build and Deploy Docs
     runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'release' || !github.event.release.prerelease }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
