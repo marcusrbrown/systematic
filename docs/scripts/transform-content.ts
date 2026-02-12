@@ -64,13 +64,29 @@ function toTitleCase(name: string): string {
     .trim()
 }
 
-function transformFrontmatter(data: Frontmatter): Record<string, unknown> {
+function transformFrontmatter(
+  data: Frontmatter,
+  definitionType: DefinitionType,
+): Record<string, unknown> {
   const transformed: Record<string, unknown> = {}
   if (data.name) transformed.title = toTitleCase(data.name)
   if (data.description && typeof data.description === 'string')
     transformed.description = data.description
       .replace(/<[^>]+>/g, '')
       .replace(/\\\\n/g, '\n')
+
+  const badgeVariant: Record<DefinitionType, string> = {
+    skill: 'tip',
+    agent: 'note',
+    command: 'caution',
+  }
+  transformed.sidebar = {
+    badge: {
+      text: definitionType.charAt(0).toUpperCase() + definitionType.slice(1),
+      variant: badgeVariant[definitionType],
+    },
+  }
+
   return transformed
 }
 
@@ -83,9 +99,12 @@ function generatePage(
   return `---\n${fm}\n---\n\n${cleanedBody}`
 }
 
+type DefinitionType = 'skill' | 'agent' | 'command'
+
 function processDirectory(
   sourceDir: string,
   outputSubdir: string,
+  definitionType: DefinitionType,
   filePattern: RegExp = /\.md$/,
 ) {
   if (!fs.existsSync(sourceDir)) {
@@ -130,8 +149,15 @@ function processDirectory(
       const content = fs.readFileSync(file, 'utf8')
       const { data, body } = parseFrontmatter(content, file)
 
-      const name = data.name ?? path.basename(file, '.md')
-      const frontmatter = transformFrontmatter({ ...data, name })
+      const name =
+        data.name ??
+        (definitionType === 'skill'
+          ? path.basename(path.dirname(file))
+          : path.basename(file, '.md'))
+      const frontmatter = transformFrontmatter(
+        { ...data, name },
+        definitionType,
+      )
       const mdx = generatePage(frontmatter, body)
 
       const slug = name
@@ -169,15 +195,18 @@ console.log('Generating reference documentation...')
 const skillsCount = processDirectory(
   path.join(PROJECT_ROOT, 'skills'),
   'skills',
+  'skill',
   /SKILL\.md$/,
 )
 const agentsCount = processDirectory(
   path.join(PROJECT_ROOT, 'agents'),
   'agents',
+  'agent',
 )
 const commandsCount = processDirectory(
   path.join(PROJECT_ROOT, 'commands'),
   'commands',
+  'command',
 )
 
 console.log(
