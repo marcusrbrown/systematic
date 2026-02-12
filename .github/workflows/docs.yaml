@@ -8,6 +8,8 @@ on:
       - 'skills/**'
       - 'agents/**'
       - 'commands/**'
+      - 'registry/**'
+      - 'scripts/build-registry.ts'
       - 'README.md'
   workflow_dispatch:
 
@@ -25,6 +27,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-tags: true
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
@@ -35,8 +39,14 @@ jobs:
       - name: Generate reference content
         run: bun run docs:generate
 
+      - name: Build registry
+        run: bun scripts/build-registry.ts
+
       - name: Build docs
         run: bun run --cwd docs build
+
+      - name: Copy registry to docs output
+        run: cp -r dist/registry docs/dist/registry
 
       - name: Create GitHub App token
         if: github.repository == 'marcusrbrown/systematic'

@@ -1,0 +1,758 @@
+// OCX Registry Source for Systematic
+// https://ocx.kdco.dev
+//
+// Version is a placeholder (0.0.0) — injected by build script at publish time.
+// Component files reference bundled assets via registry/files/ symlinks.
+// .DS_Store files are excluded from component file lists.
+{
+  "$schema": "https://ocx.kdco.dev/schemas/registry.json",
+  "name": "Systematic",
+  "namespace": "systematic",
+  "version": "0.0.0",
+  "author": "Marcus R. Brown <human@fro.bot>",
+  "components": [
+    {
+      "name": "agent-browser",
+      "type": "ocx:skill",
+      "description": "Browser automation using Vercel's agent-browser CLI. Use when you need to interact with web pages, fill forms, take screenshots, or scrape data. Alternative to Playwright MCP - uses Bash commands with ref-based element selection. Triggers on \"browse website\", \"fill form\", \"click button\", \"take screenshot\", \"scrape page\", \"web automation\".",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/agent-browser/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "agent-native-architecture",
+      "type": "ocx:skill",
+      "description": "Build applications where agents are first-class citizens. Use this skill when designing autonomous agents, creating MCP tools, implementing self-modifying systems, or building apps where features are outcomes achieved by agents operating in a loop.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/agent-native-architecture/SKILL.md"
+        },
+        {
+          "path": "references/action-parity-discipline.md",
+          "target": ".opencode/skills/agent-native-architecture/references/action-parity-discipline.md"
+        },
+        {
+          "path": "references/agent-execution-patterns.md",
+          "target": ".opencode/skills/agent-native-architecture/references/agent-execution-patterns.md"
+        },
+        {
+          "path": "references/agent-native-testing.md",
+          "target": ".opencode/skills/agent-native-architecture/references/agent-native-testing.md"
+        },
+        {
+          "path": "references/architecture-patterns.md",
+          "target": ".opencode/skills/agent-native-architecture/references/architecture-patterns.md"
+        },
+        {
+          "path": "references/dynamic-context-injection.md",
+          "target": ".opencode/skills/agent-native-architecture/references/dynamic-context-injection.md"
+        },
+        {
+          "path": "references/files-universal-interface.md",
+          "target": ".opencode/skills/agent-native-architecture/references/files-universal-interface.md"
+        },
+        {
+          "path": "references/from-primitives-to-domain-tools.md",
+          "target": ".opencode/skills/agent-native-architecture/references/from-primitives-to-domain-tools.md"
+        },
+        {
+          "path": "references/mcp-tool-design.md",
+          "target": ".opencode/skills/agent-native-architecture/references/mcp-tool-design.md"
+        },
+        {
+          "path": "references/mobile-patterns.md",
+          "target": ".opencode/skills/agent-native-architecture/references/mobile-patterns.md"
+        },
+        {
+          "path": "references/product-implications.md",
+          "target": ".opencode/skills/agent-native-architecture/references/product-implications.md"
+        },
+        {
+          "path": "references/refactoring-to-prompt-native.md",
+          "target": ".opencode/skills/agent-native-architecture/references/refactoring-to-prompt-native.md"
+        },
+        {
+          "path": "references/self-modification.md",
+          "target": ".opencode/skills/agent-native-architecture/references/self-modification.md"
+        },
+        {
+          "path": "references/shared-workspace-architecture.md",
+          "target": ".opencode/skills/agent-native-architecture/references/shared-workspace-architecture.md"
+        },
+        {
+          "path": "references/system-prompt-design.md",
+          "target": ".opencode/skills/agent-native-architecture/references/system-prompt-design.md"
+        }
+      ]
+    },
+    {
+      "name": "brainstorming",
+      "type": "ocx:skill",
+      "description": "This skill should be used before implementing features, building components, or making changes. It guides exploring user intent, approaches, and design decisions before planning. Triggers on \"let's brainstorm\", \"help me think through\", \"what should we build\", \"explore approaches\", ambiguous feature requests, or when the user's request has multiple valid interpretations that need clarification.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/brainstorming/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "compound-docs",
+      "type": "ocx:skill",
+      "description": "Capture solved problems as categorized documentation with YAML frontmatter for fast lookup",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/compound-docs/SKILL.md"
+        },
+        {
+          "path": "assets/critical-pattern-template.md",
+          "target": ".opencode/skills/compound-docs/assets/critical-pattern-template.md"
+        },
+        {
+          "path": "assets/resolution-template.md",
+          "target": ".opencode/skills/compound-docs/assets/resolution-template.md"
+        },
+        {
+          "path": "references/yaml-schema.md",
+          "target": ".opencode/skills/compound-docs/references/yaml-schema.md"
+        },
+        {
+          "path": "schema.yaml",
+          "target": ".opencode/skills/compound-docs/schema.yaml"
+        }
+      ]
+    },
+    {
+      "name": "create-agent-skills",
+      "type": "ocx:skill",
+      "description": "Expert guidance for creating OpenCode skills and slash commands. Use when working with SKILL.md files, authoring new skills, improving existing skills, creating slash commands, or understanding skill structure and best practices.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/create-agent-skills/SKILL.md"
+        },
+        {
+          "path": "references/api-security.md",
+          "target": ".opencode/skills/create-agent-skills/references/api-security.md"
+        },
+        {
+          "path": "references/be-clear-and-direct.md",
+          "target": ".opencode/skills/create-agent-skills/references/be-clear-and-direct.md"
+        },
+        {
+          "path": "references/best-practices.md",
+          "target": ".opencode/skills/create-agent-skills/references/best-practices.md"
+        },
+        {
+          "path": "references/common-patterns.md",
+          "target": ".opencode/skills/create-agent-skills/references/common-patterns.md"
+        },
+        {
+          "path": "references/core-principles.md",
+          "target": ".opencode/skills/create-agent-skills/references/core-principles.md"
+        },
+        {
+          "path": "references/executable-code.md",
+          "target": ".opencode/skills/create-agent-skills/references/executable-code.md"
+        },
+        {
+          "path": "references/iteration-and-testing.md",
+          "target": ".opencode/skills/create-agent-skills/references/iteration-and-testing.md"
+        },
+        {
+          "path": "references/official-spec.md",
+          "target": ".opencode/skills/create-agent-skills/references/official-spec.md"
+        },
+        {
+          "path": "references/recommended-structure.md",
+          "target": ".opencode/skills/create-agent-skills/references/recommended-structure.md"
+        },
+        {
+          "path": "references/skill-structure.md",
+          "target": ".opencode/skills/create-agent-skills/references/skill-structure.md"
+        },
+        {
+          "path": "references/using-scripts.md",
+          "target": ".opencode/skills/create-agent-skills/references/using-scripts.md"
+        },
+        {
+          "path": "references/using-templates.md",
+          "target": ".opencode/skills/create-agent-skills/references/using-templates.md"
+        },
+        {
+          "path": "references/workflows-and-validation.md",
+          "target": ".opencode/skills/create-agent-skills/references/workflows-and-validation.md"
+        },
+        {
+          "path": "templates/router-skill.md",
+          "target": ".opencode/skills/create-agent-skills/templates/router-skill.md"
+        },
+        {
+          "path": "templates/simple-skill.md",
+          "target": ".opencode/skills/create-agent-skills/templates/simple-skill.md"
+        },
+        {
+          "path": "workflows/add-reference.md",
+          "target": ".opencode/skills/create-agent-skills/workflows/add-reference.md"
+        },
+        {
+          "path": "workflows/add-script.md",
+          "target": ".opencode/skills/create-agent-skills/workflows/add-script.md"
+        },
+        {
+          "path": "workflows/add-template.md",
+          "target": ".opencode/skills/create-agent-skills/workflows/add-template.md"
+        },
+        {
+          "path": "workflows/add-workflow.md",
+          "target": ".opencode/skills/create-agent-skills/workflows/add-workflow.md"
+        },
+        {
+          "path": "workflows/audit-skill.md",
+          "target": ".opencode/skills/create-agent-skills/workflows/audit-skill.md"
+        },
+        {
+          "path": "workflows/create-domain-expertise-skill.md",
+          "target": ".opencode/skills/create-agent-skills/workflows/create-domain-expertise-skill.md"
+        },
+        {
+          "path": "workflows/create-new-skill.md",
+          "target": ".opencode/skills/create-agent-skills/workflows/create-new-skill.md"
+        },
+        {
+          "path": "workflows/get-guidance.md",
+          "target": ".opencode/skills/create-agent-skills/workflows/get-guidance.md"
+        },
+        {
+          "path": "workflows/upgrade-to-router.md",
+          "target": ".opencode/skills/create-agent-skills/workflows/upgrade-to-router.md"
+        },
+        {
+          "path": "workflows/verify-skill.md",
+          "target": ".opencode/skills/create-agent-skills/workflows/verify-skill.md"
+        }
+      ]
+    },
+    {
+      "name": "document-review",
+      "type": "ocx:skill",
+      "description": "This skill should be used to refine brainstorm or plan documents before proceeding to the next workflow step. It applies when a brainstorm or plan document exists and the user wants to improve it.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/document-review/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "file-todos",
+      "type": "ocx:skill",
+      "description": "This skill should be used when managing the file-based todo tracking system in the todos/ directory. It provides workflows for creating todos, managing status and dependencies, conducting triage, and integrating with slash commands and code review processes.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/file-todos/SKILL.md"
+        },
+        {
+          "path": "assets/todo-template.md",
+          "target": ".opencode/skills/file-todos/assets/todo-template.md"
+        }
+      ]
+    },
+    {
+      "name": "frontend-design",
+      "type": "ocx:skill",
+      "description": "This skill should be used when creating distinctive, production-grade frontend interfaces with high design quality. It applies when the user asks to build web components, pages, or applications. Generates creative, polished code that avoids generic AI aesthetics.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/frontend-design/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "git-worktree",
+      "type": "ocx:skill",
+      "description": "This skill manages Git worktrees for isolated parallel development. It handles creating, listing, switching, and cleaning up worktrees with a simple interactive interface, following KISS principles.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/git-worktree/SKILL.md"
+        },
+        {
+          "path": "scripts/worktree-manager.sh",
+          "target": ".opencode/skills/git-worktree/scripts/worktree-manager.sh"
+        }
+      ]
+    },
+    {
+      "name": "orchestrating-swarms",
+      "type": "ocx:skill",
+      "description": "Use when orchestrating multi-agent swarms, coordinating parallel code reviews, creating pipeline workflows with dependencies, building self-organizing task queues, or any task benefiting from divide-and-conquer patterns.",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/orchestrating-swarms/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "using-systematic",
+      "type": "ocx:skill",
+      "description": "Use when starting any conversation - establishes how to find and use skills, requiring skill tool invocation before ANY response including clarifying questions",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/using-systematic/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "agent-design-implementation-reviewer",
+      "type": "ocx:agent",
+      "description": "Visually compares live UI implementation against Figma designs and provides detailed feedback on discrepancies. Use after writing or modifying HTML/CSS/React components to verify design fidelity.",
+      "files": [
+        {
+          "path": "agents/design/design-implementation-reviewer.md",
+          "target": ".opencode/agents/design-implementation-reviewer.md"
+        }
+      ]
+    },
+    {
+      "name": "agent-design-iterator",
+      "type": "ocx:agent",
+      "description": "Iteratively refines UI design through N screenshot-analyze-improve cycles. Use PROACTIVELY when design changes aren't coming together after 1-2 attempts, or when user requests iterative refinement.",
+      "files": [
+        {
+          "path": "agents/design/design-iterator.md",
+          "target": ".opencode/agents/design-iterator.md"
+        }
+      ]
+    },
+    {
+      "name": "agent-figma-design-sync",
+      "type": "ocx:agent",
+      "description": "Detects and fixes visual differences between a web implementation and its Figma design. Use iteratively when syncing implementation to match Figma specs.",
+      "files": [
+        {
+          "path": "agents/design/figma-design-sync.md",
+          "target": ".opencode/agents/figma-design-sync.md"
+        }
+      ]
+    },
+    {
+      "name": "agent-best-practices-researcher",
+      "type": "ocx:agent",
+      "description": "Researches and synthesizes external best practices, documentation, and examples for any technology or framework. Use when you need industry standards, community conventions, or implementation guidance.",
+      "files": [
+        {
+          "path": "agents/research/best-practices-researcher.md",
+          "target": ".opencode/agents/best-practices-researcher.md"
+        }
+      ]
+    },
+    {
+      "name": "agent-framework-docs-researcher",
+      "type": "ocx:agent",
+      "description": "Gathers comprehensive documentation and best practices for frameworks, libraries, or dependencies. Use when you need official docs, version-specific constraints, or implementation patterns.",
+      "files": [
+        {
+          "path": "agents/research/framework-docs-researcher.md",
+          "target": ".opencode/agents/framework-docs-researcher.md"
+        }
+      ]
+    },
+    {
+      "name": "agent-git-history-analyzer",
+      "type": "ocx:agent",
+      "description": "Performs archaeological analysis of git history to trace code evolution, identify contributors, and understand why code patterns exist. Use when you need historical context for code changes.",
+      "files": [
+        {
+          "path": "agents/research/git-history-analyzer.md",
+          "target": ".opencode/agents/git-history-analyzer.md"
+        }
+      ]
+    },
+    {
+      "name": "agent-learnings-researcher",
+      "type": "ocx:agent",
+      "description": "Searches docs/solutions/ for relevant past solutions by frontmatter metadata. Use before implementing features or fixing problems to surface institutional knowledge and prevent repeated mistakes.",
+      "files": [
+        {
+          "path": "agents/research/learnings-researcher.md",
+          "target": ".opencode/agents/learnings-researcher.md"
+        }
+      ]
+    },
+    {
+      "name": "agent-repo-research-analyst",
+      "type": "ocx:agent",
+      "description": "Conducts thorough research on repository structure, documentation, conventions, and implementation patterns. Use when onboarding to a new codebase or understanding project conventions.",
+      "files": [
+        {
+          "path": "agents/research/repo-research-analyst.md",
+          "target": ".opencode/agents/repo-research-analyst.md"
+        }
+      ]
+    },
+    {
+      "name": "agent-agent-native-reviewer",
+      "type": "ocx:agent",
+      "description": "Reviews code to ensure agent-native parity — any action a user can take, an agent can also take. Use after adding UI features, agent tools, or system prompts.",
+      "files": [
+        {
+          "path": "agents/review/agent-native-reviewer.md",
+          "target": ".opencode/agents/agent-native-reviewer.md"
+        }
+      ]
+    },
+    {
+      "name": "agent-architecture-strategist",
+      "type": "ocx:agent",
+      "description": "Analyzes code changes from an architectural perspective for pattern compliance and design integrity. Use when reviewing PRs, adding services, or evaluating structural refactors.",
+      "files": [
+        {
+          "path": "agents/review/architecture-strategist.md",
+          "target": ".opencode/agents/architecture-strategist.md"
+        }
+      ]
+    },
+    {
+      "name": "agent-code-simplicity-reviewer",
+      "type": "ocx:agent",
+      "description": "Final review pass to ensure code is as simple and minimal as possible. Use after implementation is complete to identify YAGNI violations and simplification opportunities.",
+      "files": [
+        {
+          "path": "agents/review/code-simplicity-reviewer.md",
+          "target": ".opencode/agents/code-simplicity-reviewer.md"
+        }
+      ]
+    },
+    {
+      "name": "agent-data-integrity-guardian",
+      "type": "ocx:agent",
+      "description": "Reviews database migrations, data models, and persistent data code for safety. Use when checking migration safety, data constraints, transaction boundaries, or privacy compliance.",
+      "files": [
+        {
+          "path": "agents/review/data-integrity-guardian.md",
+          "target": ".opencode/agents/data-integrity-guardian.md"
+        }
+      ]
+    },
+    {
+      "name": "agent-data-migration-expert",
+      "type": "ocx:agent",
+      "description": "Validates data migrations, backfills, and production data transformations against reality. Use when PRs involve ID mappings, column renames, enum conversions, or schema changes.",
+      "files": [
+        {
+          "path": "agents/review/data-migration-expert.md",
+          "target": ".opencode/agents/data-migration-expert.md"
+        }
+      ]
+    },
+    {
+      "name": "agent-deployment-verification-agent",
+      "type": "ocx:agent",
+      "description": "Produces Go/No-Go deployment checklists with SQL verification queries, rollback procedures, and monitoring plans. Use when PRs touch production data, migrations, or risky data changes.",
+      "files": [
+        {
+          "path": "agents/review/deployment-verification-agent.md",
+          "target": ".opencode/agents/deployment-verification-agent.md"
+        }
+      ]
+    },
+    {
+      "name": "agent-dhh-rails-reviewer",
+      "type": "ocx:agent",
+      "description": "Brutally honest Rails code review from DHH's perspective. Use when reviewing Rails code for anti-patterns, JS framework contamination, or violations of Rails conventions.",
+      "files": [
+        {
+          "path": "agents/review/dhh-rails-reviewer.md",
+          "target": ".opencode/agents/dhh-rails-reviewer.md"
+        }
+      ]
+    },
+    {
+      "name": "agent-kieran-rails-reviewer",
+      "type": "ocx:agent",
+      "description": "Reviews Rails code with an extremely high quality bar for conventions, clarity, and maintainability. Use after implementing features, modifying code, or creating new Rails components.",
+      "files": [
+        {
+          "path": "agents/review/kieran-rails-reviewer.md",
+          "target": ".opencode/agents/kieran-rails-reviewer.md"
+        }
+      ]
+    },
+    {
+      "name": "agent-kieran-typescript-reviewer",
+      "type": "ocx:agent",
+      "description": "Reviews TypeScript code with an extremely high quality bar for type safety, modern patterns, and maintainability. Use after implementing features, modifying code, or creating new TypeScript components.",
+      "files": [
+        {
+          "path": "agents/review/kieran-typescript-reviewer.md",
+          "target": ".opencode/agents/kieran-typescript-reviewer.md"
+        }
+      ]
+    },
+    {
+      "name": "agent-pattern-recognition-specialist",
+      "type": "ocx:agent",
+      "description": "Analyzes code for design patterns, anti-patterns, naming conventions, and duplication. Use when checking codebase consistency or verifying new code follows established patterns.",
+      "files": [
+        {
+          "path": "agents/review/pattern-recognition-specialist.md",
+          "target": ".opencode/agents/pattern-recognition-specialist.md"
+        }
+      ]
+    },
+    {
+      "name": "agent-performance-oracle",
+      "type": "ocx:agent",
+      "description": "Analyzes code for performance bottlenecks, algorithmic complexity, database queries, memory usage, and scalability. Use after implementing features or when performance concerns arise.",
+      "files": [
+        {
+          "path": "agents/review/performance-oracle.md",
+          "target": ".opencode/agents/performance-oracle.md"
+        }
+      ]
+    },
+    {
+      "name": "agent-security-sentinel",
+      "type": "ocx:agent",
+      "description": "Performs security audits for vulnerabilities, input validation, auth/authz, hardcoded secrets, and OWASP compliance. Use when reviewing code for security issues or before deployment.",
+      "files": [
+        {
+          "path": "agents/review/security-sentinel.md",
+          "target": ".opencode/agents/security-sentinel.md"
+        }
+      ]
+    },
+    {
+      "name": "agent-bug-reproduction-validator",
+      "type": "ocx:agent",
+      "description": "Systematically reproduces and validates bug reports to confirm whether reported behavior is an actual bug. Use when you receive a bug report or issue that needs verification.",
+      "files": [
+        {
+          "path": "agents/workflow/bug-reproduction-validator.md",
+          "target": ".opencode/agents/bug-reproduction-validator.md"
+        }
+      ]
+    },
+    {
+      "name": "agent-lint",
+      "type": "ocx:agent",
+      "description": "Use this agent when you need to run linting and code quality checks on Ruby and ERB files. Run before pushing to origin.",
+      "files": [
+        {
+          "path": "agents/workflow/lint.md",
+          "target": ".opencode/agents/lint.md"
+        }
+      ]
+    },
+    {
+      "name": "agent-pr-comment-resolver",
+      "type": "ocx:agent",
+      "description": "Addresses PR review comments by implementing requested changes and reporting resolutions. Use when code review feedback needs to be resolved with code changes.",
+      "files": [
+        {
+          "path": "agents/workflow/pr-comment-resolver.md",
+          "target": ".opencode/agents/pr-comment-resolver.md"
+        }
+      ]
+    },
+    {
+      "name": "agent-spec-flow-analyzer",
+      "type": "ocx:agent",
+      "description": "Analyzes specifications and feature descriptions for user flow completeness and gap identification. Use when a spec, plan, or feature description needs flow analysis, edge case discovery, or requirements validation.",
+      "files": [
+        {
+          "path": "agents/workflow/spec-flow-analyzer.md",
+          "target": ".opencode/agents/spec-flow-analyzer.md"
+        }
+      ]
+    },
+    {
+      "name": "cmd-agent-native-audit",
+      "type": "ocx:command",
+      "description": "Run comprehensive agent-native architecture review with scored principles",
+      "files": [
+        {
+          "path": "commands/agent-native-audit.md",
+          "target": ".opencode/commands/agent-native-audit.md"
+        }
+      ]
+    },
+    {
+      "name": "cmd-create-agent-skill",
+      "type": "ocx:command",
+      "description": "Create or edit Claude Code skills with expert guidance on structure and best practices",
+      "files": [
+        {
+          "path": "commands/create-agent-skill.md",
+          "target": ".opencode/commands/create-agent-skill.md"
+        }
+      ]
+    },
+    {
+      "name": "cmd-deepen-plan",
+      "type": "ocx:command",
+      "description": "Enhance a plan with parallel research agents for each section to add depth, best practices, and implementation details",
+      "files": [
+        {
+          "path": "commands/deepen-plan.md",
+          "target": ".opencode/commands/deepen-plan.md"
+        }
+      ]
+    },
+    {
+      "name": "cmd-lfg",
+      "type": "ocx:command",
+      "description": "Full autonomous engineering workflow",
+      "files": [
+        {
+          "path": "commands/lfg.md",
+          "target": ".opencode/commands/lfg.md"
+        }
+      ]
+    },
+    {
+      "name": "cmd-brainstorm",
+      "type": "ocx:command",
+      "description": "Explore requirements and approaches through collaborative dialogue before planning implementation",
+      "files": [
+        {
+          "path": "commands/workflows/brainstorm.md",
+          "target": ".opencode/commands/brainstorm.md"
+        }
+      ]
+    },
+    {
+      "name": "cmd-compound",
+      "type": "ocx:command",
+      "description": "Document a recently solved problem to compound your team's knowledge",
+      "files": [
+        {
+          "path": "commands/workflows/compound.md",
+          "target": ".opencode/commands/compound.md"
+        }
+      ]
+    },
+    {
+      "name": "cmd-plan",
+      "type": "ocx:command",
+      "description": "Transform feature descriptions into well-structured project plans following conventions",
+      "files": [
+        {
+          "path": "commands/workflows/plan.md",
+          "target": ".opencode/commands/plan.md"
+        }
+      ]
+    },
+    {
+      "name": "cmd-review",
+      "type": "ocx:command",
+      "description": "Perform exhaustive code reviews using multi-agent analysis, ultra-thinking, and worktrees",
+      "files": [
+        {
+          "path": "commands/workflows/review.md",
+          "target": ".opencode/commands/review.md"
+        }
+      ]
+    },
+    {
+      "name": "cmd-work",
+      "type": "ocx:command",
+      "description": "Execute work plans efficiently while maintaining quality and finishing features",
+      "files": [
+        {
+          "path": "commands/workflows/work.md",
+          "target": ".opencode/commands/work.md"
+        }
+      ]
+    },
+    {
+      "name": "skills",
+      "type": "ocx:bundle",
+      "description": "All Systematic skills",
+      "dependencies": [
+        "agent-browser",
+        "agent-native-architecture",
+        "brainstorming",
+        "compound-docs",
+        "create-agent-skills",
+        "document-review",
+        "file-todos",
+        "frontend-design",
+        "git-worktree",
+        "orchestrating-swarms",
+        "using-systematic"
+      ],
+      "files": []
+    },
+    {
+      "name": "agents",
+      "type": "ocx:bundle",
+      "description": "All Systematic agents",
+      "dependencies": [
+        "agent-design-implementation-reviewer",
+        "agent-design-iterator",
+        "agent-figma-design-sync",
+        "agent-best-practices-researcher",
+        "agent-framework-docs-researcher",
+        "agent-git-history-analyzer",
+        "agent-learnings-researcher",
+        "agent-repo-research-analyst",
+        "agent-agent-native-reviewer",
+        "agent-architecture-strategist",
+        "agent-code-simplicity-reviewer",
+        "agent-data-integrity-guardian",
+        "agent-data-migration-expert",
+        "agent-deployment-verification-agent",
+        "agent-dhh-rails-reviewer",
+        "agent-kieran-rails-reviewer",
+        "agent-kieran-typescript-reviewer",
+        "agent-pattern-recognition-specialist",
+        "agent-performance-oracle",
+        "agent-security-sentinel",
+        "agent-bug-reproduction-validator",
+        "agent-lint",
+        "agent-pr-comment-resolver",
+        "agent-spec-flow-analyzer"
+      ],
+      "files": []
+    },
+    {
+      "name": "commands",
+      "type": "ocx:bundle",
+      "description": "All Systematic commands",
+      "dependencies": [
+        "cmd-agent-native-audit",
+        "cmd-create-agent-skill",
+        "cmd-deepen-plan",
+        "cmd-lfg",
+        "cmd-brainstorm",
+        "cmd-compound",
+        "cmd-plan",
+        "cmd-review",
+        "cmd-work"
+      ],
+      "files": []
+    },
+    {
+      "name": "plugin",
+      "type": "ocx:plugin",
+      "description": "Systematic OpenCode plugin — registers skills, agents, commands, and bootstrap prompt",
+      "files": [],
+      "opencode": {
+        "plugins": {
+          "@fro.bot/systematic": {}
+        }
+      }
+    }
+  ]
+}

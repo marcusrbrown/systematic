@@ -67,6 +67,29 @@ That's it. Restart OpenCode and the plugin's skills, agents, and commands are av
 > [!NOTE]
 > Systematic uses OpenCode's `config` hook to automatically register all bundled content. No manual file copying required.
 
+### Alternative: Install via OCX
+
+[OCX](https://github.com/kdcokenny/ocx) provides component-level installation:
+
+```bash
+# Add the Systematic registry
+ocx registry add https://fro.bot/systematic --name systematic
+
+# Install individual components
+ocx add systematic/brainstorming
+ocx add systematic/agent-architecture-strategist
+
+# Or install bundles
+ocx add systematic/skills     # All 11 skills
+ocx add systematic/agents     # All 24 agents
+ocx add systematic/commands   # All 9 commands
+
+# Or use a profile
+ocx profile add sys --from systematic/standalone
+```
+
+See the [OCX Registry Guide](https://fro.bot/systematic/guides/ocx-registry/) for details.
+
 ### Verify Installation
 
 In any OpenCode conversation, type:

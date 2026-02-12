@@ -1,0 +1,23 @@
+{
+  // OMO + Systematic Profile Configuration
+  // Configures the systematic registry and visibility controls
+
+  // Define registries for profile-isolated access
+  "registries": {
+    "systematic": {
+      "url": "https://fro.bot/systematic"
+    }
+  },
+
+  // Visibility control: Include project AGENTS.md but exclude other project config
+  // This allows projects to customize OMO behavior while using this profile's Systematic setup
+  "exclude": [
+    "**/CLAUDE.md",
+    "**/CONTEXT.md",
+    "**/.opencode/**",
+    "**/opencode.jsonc",
+    "**/opencode.json"
+  ],
+
+  "include": ["**/AGENTS.md"]
+}

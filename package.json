@@ -37,6 +37,8 @@
     "docs:build": "bun run docs:generate && bun run --cwd docs build",
     "docs:preview": "bun run --cwd docs preview",
     "docs:generate": "bun docs/scripts/transform-content.ts",
+    "registry:build": "bun scripts/build-registry.ts",
+    "registry:validate": "bun scripts/build-registry.ts --validate-only",
     "prepublishOnly": "bun run build"
   },
   "keywords": [
@@ -46,7 +48,7 @@
     "workflow",
     "engineering"
   ],
-  "author": "Marcus R. Brown",
+  "author": "Marcus R. Brown <human@fro.bot>",
   "license": "MIT",
   "repository": {
     "type": "git",

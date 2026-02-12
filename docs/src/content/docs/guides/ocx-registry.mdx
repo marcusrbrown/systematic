@@ -1,0 +1,181 @@
+---
+title: OCX Registry Guide
+description: Comprehensive guide for installing Systematic components and profiles via OCX.
+sidebar:
+  order: 4
+---
+
+[OCX](https://github.com/kdcokenny/ocx) is a package manager and component registry for AI agents and developer tools. It allows you to install Systematic components—skills, agents, and commands—individually or as themed bundles, without needing the full npm plugin.
+
+While the npm plugin is the recommended way to get the full Systematic experience (including automatic bootstrap injection), OCX provides a lightweight alternative for users who want to cherry-pick specific workflows or use pre-configured profiles.
+
+## Quick Start
+
+To use the Systematic registry with OCX, first add the registry to your local configuration:
+
+```bash
+# Add the Systematic registry
+ocx registry add https://fro.bot/systematic --name systematic
+```
+
+The registry discovery file is located at `https://fro.bot/systematic/.well-known/ocx.json`.
+
+## Installing Components
+
+Once the registry is added, you can install individual components directly into your project's `.opencode/` directory.
+
+### Individual Skills
+Install specific workflows as needed:
+
+```bash
+# Install the brainstorming skill
+ocx add systematic/brainstorming
+
+# Install the frontend design skill
+ocx add systematic/frontend-design
+```
+
+### Individual Agents
+Add specialized subagents to your project:
+
+```bash
+# Add the architecture strategist
+ocx add systematic/agent-architecture-strategist
+
+# Add the security sentinel
+ocx add systematic/agent-security-sentinel
+```
+
+### Individual Commands
+Install slash-commands for your project:
+
+```bash
+# Add the brainstorming workflow command
+ocx add systematic/cmd-brainstorm
+
+# Add the plan workflow command
+ocx add systematic/cmd-plan
+```
+
+## Bundles
+
+Bundles allow you to install entire categories of Systematic assets in one command:
+
+```bash
+# Install all 11 Systematic skills
+ocx add systematic/skills
+
+# Install all 24 Systematic agents
+ocx add systematic/agents
+
+# Install all 9 Systematic commands
+ocx add systematic/commands
+```
+
+## Using Profiles
+
+Profiles provide a complete, "opinionated" configuration for Systematic. They can be installed as standalone projects or merged into existing ones.
+
+### Standalone Profile
+The `standalone` profile provides a minimal Systematic setup with only the `@fro.bot/systematic` plugin and all bundled assets.
+
+```bash
+ocx profile add sys --from systematic/standalone
+```
+
+### OMO Profile
+The `omo` profile harmonizes Systematic with [Oh My OpenCode (OMO)](https://github.com/marcusrbrown/oh-my-opencode). It configures both plugins to work together, disabling redundant OMO features in favor of Systematic's structured workflows.
+
+```bash
+ocx profile add omo-sys --from systematic/omo
+```
+
+## npm vs OCX Comparison
+
+| Feature | npm Plugin | OCX Components |
+|---------|------------|----------------|
+| **Installation** | Global/Project Plugin | Project-local Components |
+| **Updates** | `npm update` | `ocx update` |
+| **Discovery** | Automatic (via hooks) | Manual `ocx add` |
+| **Bootstrap** | Yes (automatic) | No (manual reference) |
+| **Footprint** | Full package | Cherry-picked files |
+
+## Dual Installation
+
+You can use both the npm plugin and OCX components in the same project. This is often useful if you want the global "Using Systematic" bootstrap injection (provided by the plugin) but want to customize or "pin" specific skills locally using OCX.
+
+OpenCode's resolution logic ensures that project-local files in `.opencode/` (installed via OCX) take precedence over bundled assets provided by the plugin.
+
+## Updating Components
+
+OCX makes it easy to keep your Systematic components up to date.
+
+### Checking for Updates
+To see if a local component differs from the registry version:
+
+```bash
+ocx diff systematic/brainstorming
+```
+
+### Updating a Single Component
+To update a specific component to the latest version:
+
+```bash
+ocx update systematic/brainstorming
+```
+
+### Updating All Components
+To update all Systematic components in your project:
+
+```bash
+# Update everything from all registries
+ocx update --all
+
+# Or update only components from the systematic registry
+ocx update --registry systematic
+```
+
+### Pinning Versions
+If you need a specific version of a component, you can update to a specific tag:
+
+```bash
+ocx update systematic/brainstorming@1.2.0
+```
+
+:::note
+Plugin updates (the core logic) are managed via `npm` or `bun`, while individual skills and agents are managed via `ocx update`.
+:::
+
+## Troubleshooting
+
+Common issues when using the Systematic registry with OCX.
+
+### Registry not found
+If OCX cannot find the Systematic registry, verify that it was added correctly:
+
+```bash
+ocx registry list
+```
+
+You should see `systematic` pointing to `https://fro.bot/systematic`. If not, re-add it:
+`ocx registry add https://fro.bot/systematic --name systematic`
+
+### Component conflicts
+If you have the npm plugin installed AND have added OCX components, Systematic will use the local files in `.opencode/` first. If you experience unexpected behavior, check for duplicate definitions.
+
+### Profile not working
+If a profile installation fails or doesn't seem to apply:
+1. Verify the profile exists: `ocx profile list`
+2. Check your `OCX_PROFILE` environment variable if you are using profile switching.
+
+### Missing skills after OCX install
+Individual skills installed via OCX do not automatically get "bootstrap injection" (the automatic loading of `using-systematic`). To get this feature, you must have the `@fro.bot/systematic` plugin installed in your project or globally.
+
+### Version mismatch
+If `ocx diff` shows differences but `ocx update` says you are up to date, the registry version might be slightly behind the latest npm release. Check the registry version in the output of `ocx diff`.
+
+## Technical Details
+
+- **Registry URL:** `https://fro.bot/systematic/registry/`
+- **Discovery Path:** `/.well-known/ocx.json`
+- **Compatibility:** Systematic components are compatible with OpenCode 0.12.0 and later.
