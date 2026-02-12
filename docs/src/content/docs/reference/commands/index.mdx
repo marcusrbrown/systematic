@@ -5,5 +5,25 @@ sidebar:
   order: 1
 ---
 
-This section documents the bundled slash commands that ship with Systematic.
-Use these references to learn each command's purpose and expected usage.
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+Slash commands ship with Systematic and trigger structured engineering workflows. Use these references to learn each command's purpose and expected usage.
+
+## Workflows
+
+<CardGrid>
+  <LinkCard title="Workflows: Brainstorm" description="Explore requirements through collaborative dialogue." href="/systematic/reference/commands/workflows-brainstorm/" />
+  <LinkCard title="Workflows: Compound" description="Full compound engineering workflow." href="/systematic/reference/commands/workflows-compound/" />
+  <LinkCard title="Workflows: Plan" description="Create implementation plans from feature descriptions." href="/systematic/reference/commands/workflows-plan/" />
+  <LinkCard title="Workflows: Review" description="Review code changes for quality and correctness." href="/systematic/reference/commands/workflows-review/" />
+  <LinkCard title="Workflows: Work" description="Execute a work plan with tracking and verification." href="/systematic/reference/commands/workflows-work/" />
+</CardGrid>
+
+## Utilities
+
+<CardGrid>
+  <LinkCard title="Agent Native Audit" description="Audit codebase for agent-native architecture patterns." href="/systematic/reference/commands/agent-native-audit/" />
+  <LinkCard title="Create Agent Skill" description="Create or edit skills with expert guidance." href="/systematic/reference/commands/create-agent-skill/" />
+  <LinkCard title="Deepen Plan" description="Enhance plan sections with parallel research agents." href="/systematic/reference/commands/deepen-plan/" />
+  <LinkCard title="LFG" description="Full autonomous engineering workflow." href="/systematic/reference/commands/lfg/" />
+</CardGrid>
