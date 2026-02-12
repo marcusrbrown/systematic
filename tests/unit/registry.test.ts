@@ -74,6 +74,65 @@ function walkFiles(dir: string): string[] {
   return results
 }
 
+function validateComponentFiles(
+  component: RegistryComponent,
+  requiredType: string,
+): string[] {
+  const errors: string[] = []
+
+  if (component.type === requiredType) {
+    if (!Array.isArray(component.files) || component.files.length === 0) {
+      errors.push(`[${component.name}] Must have at least one file`)
+    }
+
+    if (Array.isArray(component.files)) {
+      for (const file of component.files) {
+        if (!file.path.endsWith('.md')) {
+          errors.push(`[${component.name}] Non-.md file: ${file.path}`)
+        }
+      }
+    }
+  }
+
+  return errors
+}
+
+function collectDiskFiles(skillDir: string): Set<string> {
+  const diskFiles = walkFiles(skillDir)
+  const declaredSet = new Set<string>()
+
+  for (const diskFile of diskFiles) {
+    const rel = path.relative(skillDir, diskFile)
+    declaredSet.add(rel)
+  }
+
+  return declaredSet
+}
+
+function assertAllFilesExist(component: RegistryComponent): string[] {
+  const errors: string[] = []
+
+  if (Array.isArray(component.files)) {
+    for (const file of component.files) {
+      const diskPath = resolveComponentFilePath(component, file)
+      if (!fs.existsSync(diskPath)) {
+        errors.push(
+          `[${component.name}] File not found: ${file.path} (expected at ${diskPath})`,
+        )
+      }
+    }
+  }
+
+  return errors
+}
+
+function getComponentsByType(
+  components: RegistryComponent[],
+  type: string,
+): RegistryComponent[] {
+  return components.filter((c) => c.type === type)
+}
+
 describe('Registry Manifest', () => {
   it('should be valid JSONC', () => {
     const content = fs.readFileSync(REGISTRY_PATH, 'utf-8')
@@ -168,16 +227,7 @@ describe('File Existence', () => {
         continue
       }
 
-      if (Array.isArray(component.files)) {
-        for (const file of component.files) {
-          const diskPath = resolveComponentFilePath(component, file)
-          if (!fs.existsSync(diskPath)) {
-            errors.push(
-              `[${component.name}] File not found: ${file.path} (expected at ${diskPath})`,
-            )
-          }
-        }
-      }
+      errors.push(...assertAllFilesExist(component))
     }
 
     if (errors.length > 0) {
@@ -212,16 +262,7 @@ describe('File Existence', () => {
 
     for (const component of registry.components) {
       if (component.type === 'ocx:agent' || component.type === 'ocx:command') {
-        if (!Array.isArray(component.files) || component.files.length === 0) {
-          errors.push(`[${component.name}] Must have at least one file`)
-          continue
-        }
-
-        for (const file of component.files) {
-          if (!file.path.endsWith('.md')) {
-            errors.push(`[${component.name}] Non-.md file: ${file.path}`)
-          }
-        }
+        errors.push(...validateComponentFiles(component, component.type))
       }
     }
 
@@ -238,9 +279,10 @@ describe('Multi-file Completeness', () => {
     const registry = loadRegistry()
     const errors: string[] = []
 
-    for (const component of registry.components) {
-      if (component.type !== 'ocx:skill') continue
-
+    for (const component of getComponentsByType(
+      registry.components,
+      'ocx:skill',
+    )) {
       const skillDir = path.join(PROJECT_ROOT, 'skills', component.name)
       if (!fs.existsSync(skillDir)) {
         errors.push(
@@ -249,13 +291,12 @@ describe('Multi-file Completeness', () => {
         continue
       }
 
-      const diskFiles = walkFiles(skillDir)
       const declaredPaths = new Set(component.files?.map((f) => f.path) ?? [])
+      const diskFiles = collectDiskFiles(skillDir)
 
       for (const diskFile of diskFiles) {
-        const rel = path.relative(skillDir, diskFile)
-        if (!declaredPaths.has(rel)) {
-          errors.push(`[${component.name}] Unlisted file: ${rel}`)
+        if (!declaredPaths.has(diskFile)) {
+          errors.push(`[${component.name}] Unlisted file: ${diskFile}`)
         }
       }
     }
@@ -272,11 +313,11 @@ describe('Multi-file Completeness', () => {
     const errors: string[] = []
 
     for (const component of registry.components) {
-      if (Array.isArray(component.files)) {
-        for (const file of component.files) {
-          if (file.path.includes('.DS_Store')) {
-            errors.push(`[${component.name}] Contains .DS_Store: ${file.path}`)
-          }
+      if (!Array.isArray(component.files)) continue
+
+      for (const file of component.files) {
+        if (file.path.includes('.DS_Store')) {
+          errors.push(`[${component.name}] Contains .DS_Store: ${file.path}`)
         }
       }
     }
@@ -313,24 +354,25 @@ describe('Bundle Integrity', () => {
     const allComponentNames = new Set(registry.components.map((c) => c.name))
     const errors: string[] = []
 
-    for (const component of registry.components) {
-      if (component.type === 'ocx:bundle') {
-        if (
-          !Array.isArray(component.dependencies) ||
-          component.dependencies.length === 0
-        ) {
-          errors.push(
-            `[${component.name}] Bundle must have at least one dependency`,
-          )
-          continue
-        }
+    for (const component of getComponentsByType(
+      registry.components,
+      'ocx:bundle',
+    )) {
+      if (
+        !Array.isArray(component.dependencies) ||
+        component.dependencies.length === 0
+      ) {
+        errors.push(
+          `[${component.name}] Bundle must have at least one dependency`,
+        )
+        continue
+      }
 
-        for (const dep of component.dependencies) {
-          if (!allComponentNames.has(dep)) {
-            errors.push(
-              `[${component.name}] References unknown component: "${dep}"`,
-            )
-          }
+      for (const dep of component.dependencies) {
+        if (!allComponentNames.has(dep)) {
+          errors.push(
+            `[${component.name}] References unknown component: "${dep}"`,
+          )
         }
       }
     }
@@ -402,7 +444,7 @@ describe('No Duplicates', () => {
       namesByType[component.type].push(component.name)
     }
 
-    for (const [type, names] of Object.entries(namesByType)) {
+    for (const names of Object.values(namesByType)) {
       const uniqueNames = new Set(names)
       expect(names.length).toBe(uniqueNames.size)
     }
