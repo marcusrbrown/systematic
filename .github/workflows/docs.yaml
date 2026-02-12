@@ -1,17 +1,14 @@
 name: Docs
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'docs/**'
-      - 'skills/**'
-      - 'agents/**'
-      - 'commands/**'
-      - 'registry/**'
-      - 'scripts/build-registry.ts'
-      - 'README.md'
+  release:
+    types: [published]
   workflow_dispatch:
+    inputs:
+      version:
+        description: Release version (optional, semver or v-prefixed)
+        required: false
+        type: string
 
 concurrency:
   group: docs-deploy
@@ -24,6 +21,7 @@ jobs:
   build-and-deploy:
     name: Build and Deploy Docs
     runs-on: ubuntu-latest
+    if: ${{ github.event_name != 'release' || !github.event.release.prerelease }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -39,8 +37,36 @@ jobs:
       - name: Generate reference content
         run: bun run docs:generate
 
+      - name: Resolve registry version
+        id: registry-version
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          if [ "$EVENT_NAME" = "release" ]; then
+            version="$RELEASE_TAG"
+            version="${version#v}"
+            echo "version=${version}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ -n "$INPUT_VERSION" ]; then
+            version="$INPUT_VERSION"
+            version="${version#v}"
+            echo "version=${version}" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          echo "version=" >> "$GITHUB_OUTPUT"
+
       - name: Build registry
-        run: bun scripts/build-registry.ts
+        run: |
+          if [ -n "${{ steps.registry-version.outputs.version }}" ]; then
+            bun scripts/build-registry.ts --version "${{ steps.registry-version.outputs.version }}"
+          else
+            bun scripts/build-registry.ts
+          fi
 
       - name: Build docs
         run: bun run --cwd docs build
