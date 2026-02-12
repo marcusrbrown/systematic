@@ -34,9 +34,39 @@ function parseFrontmatter(
   }
 }
 
+const ACRONYMS = new Set([
+  'api',
+  'cd',
+  'ci',
+  'cli',
+  'css',
+  'dhh',
+  'html',
+  'json',
+  'mcp',
+  'pr',
+  'sdk',
+  'ui',
+  'ux',
+  'yaml',
+])
+
+function toTitleCase(name: string): string {
+  return name
+    .replace(/^workflows:/, 'Workflows: ')
+    .split(/[-\s]+/)
+    .map((word) =>
+      ACRONYMS.has(word.toLowerCase())
+        ? word.toUpperCase()
+        : word.charAt(0).toUpperCase() + word.slice(1),
+    )
+    .join(' ')
+    .trim()
+}
+
 function transformFrontmatter(data: Frontmatter): Record<string, unknown> {
   const transformed: Record<string, unknown> = {}
-  if (data.name) transformed.title = data.name
+  if (data.name) transformed.title = toTitleCase(data.name)
   if (data.description && typeof data.description === 'string')
     transformed.description = data.description
       .replace(/<[^>]+>/g, '')
