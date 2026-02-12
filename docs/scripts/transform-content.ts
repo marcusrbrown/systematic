@@ -8,6 +8,7 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const PROJECT_ROOT = path.resolve(__dirname, '../..')
 const OUTPUT_DIR = path.join(__dirname, '../src/content/docs/reference')
+const GITHUB_BASE = 'https://github.com/marcusrbrown/systematic/blob/main'
 
 interface Frontmatter {
   name?: string
@@ -93,10 +94,26 @@ function transformFrontmatter(
 function generatePage(
   frontmatter: Record<string, unknown>,
   body: string,
+  header: string,
 ): string {
   const fm = yaml.dump(frontmatter, { lineWidth: -1 }).trim()
   const cleanedBody = body.replace(/\n{3,}/g, '\n\n').trim()
-  return `---\n${fm}\n---\n\n${cleanedBody}`
+  return `---\n${fm}\n---\n\n${header}\n${cleanedBody}`
+}
+
+function generateDefinitionHeader(options: {
+  category?: string
+  sourcePath: string
+}): string {
+  const githubUrl = `${GITHUB_BASE}/${options.sourcePath}`
+  const parts: string[] = []
+
+  if (options.category != null) {
+    parts.push(`<span class="definition-category">${options.category}</span>`)
+  }
+  parts.push(`<a class="definition-source" href="${githubUrl}">View source</a>`)
+
+  return `<div class="definition-header not-content">\n${parts.map((p) => `  ${p}`).join('\n')}\n</div>\n`
 }
 
 type DefinitionType = 'skill' | 'agent' | 'command'
@@ -158,7 +175,17 @@ function processDirectory(
         { ...data, name },
         definitionType,
       )
-      const mdx = generatePage(frontmatter, body)
+      const sourcePath = path
+        .relative(PROJECT_ROOT, file)
+        .split(path.sep)
+        .join('/')
+      const category =
+        definitionType === 'agent'
+          ? path.basename(path.dirname(file)).charAt(0).toUpperCase() +
+            path.basename(path.dirname(file)).slice(1)
+          : undefined
+      const header = generateDefinitionHeader({ category, sourcePath })
+      const mdx = generatePage(frontmatter, body, header)
 
       const slug = name
         .toLowerCase()
