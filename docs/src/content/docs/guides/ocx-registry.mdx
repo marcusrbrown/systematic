@@ -106,6 +106,74 @@ You can use both the npm plugin and OCX components in the same project. This is 
 
 OpenCode's resolution logic ensures that project-local files in `.opencode/` (installed via OCX) take precedence over bundled assets provided by the plugin.
 
+## Updating Components
+
+OCX makes it easy to keep your Systematic components up to date.
+
+### Checking for Updates
+To see if a local component differs from the registry version:
+
+```bash
+ocx diff systematic/brainstorming
+```
+
+### Updating a Single Component
+To update a specific component to the latest version:
+
+```bash
+ocx update systematic/brainstorming
+```
+
+### Updating All Components
+To update all Systematic components in your project:
+
+```bash
+# Update everything from all registries
+ocx update --all
+
+# Or update only components from the systematic registry
+ocx update --registry systematic
+```
+
+### Pinning Versions
+If you need a specific version of a component, you can update to a specific tag:
+
+```bash
+ocx update systematic/brainstorming@1.2.0
+```
+
+:::note
+Plugin updates (the core logic) are managed via `npm` or `bun`, while individual skills and agents are managed via `ocx update`.
+:::
+
+## Troubleshooting
+
+Common issues when using the Systematic registry with OCX.
+
+### Registry not found
+If OCX cannot find the Systematic registry, verify that it was added correctly:
+
+```bash
+ocx registry list
+```
+
+You should see `systematic` pointing to `https://fro.bot/systematic`. If not, re-add it:
+`ocx registry add https://fro.bot/systematic --name systematic`
+
+### Component conflicts
+If you have the npm plugin installed AND have added OCX components, Systematic will use the local files in `.opencode/` first. If you experience unexpected behavior, check for duplicate definitions.
+
+### Profile not working
+If a profile installation fails or doesn't seem to apply:
+1. Verify the profile exists: `ocx profile list`
+2. Check your `OCX_PROFILE` environment variable if you are using profile switching.
+
+### Missing skills after OCX install
+Individual skills installed via OCX do not automatically get "bootstrap injection" (the automatic loading of `using-systematic`). To get this feature, you must have the `@fro.bot/systematic` plugin installed in your project or globally.
+
+### Version mismatch
+If `ocx diff` shows differences but `ocx update` says you are up to date, the registry version might be slightly behind the latest npm release. Check the registry version in the output of `ocx diff`.
+
 ## Technical Details
 
 - **Registry URL:** `https://fro.bot/systematic/registry/`
