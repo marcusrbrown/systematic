@@ -68,6 +68,7 @@ function toTitleCase(name: string): string {
 function transformFrontmatter(
   data: Frontmatter,
   definitionType: DefinitionType,
+  category?: string,
 ): Record<string, unknown> {
   const transformed: Record<string, unknown> = {}
   if (data.name) transformed.title = toTitleCase(data.name)
@@ -76,16 +77,19 @@ function transformFrontmatter(
       .replace(/<[^>]+>/g, '')
       .replace(/\\\\n/g, '\n')
 
-  const badgeVariant: Record<DefinitionType, string> = {
-    skill: 'tip',
-    agent: 'note',
-    command: 'caution',
-  }
-  transformed.sidebar = {
-    badge: {
-      text: definitionType.charAt(0).toUpperCase() + definitionType.slice(1),
-      variant: badgeVariant[definitionType],
-    },
+  if (category != null) {
+    const categoryVariant: Record<string, string> = {
+      review: 'note',
+      research: 'success',
+      design: 'tip',
+      workflow: 'caution',
+    }
+    transformed.sidebar = {
+      badge: {
+        text: category,
+        variant: categoryVariant[category.toLowerCase()] ?? 'default',
+      },
+    }
   }
 
   return transformed
@@ -187,15 +191,16 @@ function processDirectory(
       const { data, body } = parseFrontmatter(content, file)
 
       const name = deriveName(data, file, definitionType)
+      const category = deriveCategory(file, definitionType)
       const frontmatter = transformFrontmatter(
         { ...data, name },
         definitionType,
+        category,
       )
       const sourcePath = path
         .relative(PROJECT_ROOT, file)
         .split(path.sep)
         .join('/')
-      const category = deriveCategory(file, definitionType)
       const header = generateDefinitionHeader({ category, sourcePath })
       const mdx = generatePage(frontmatter, body, header)
 
