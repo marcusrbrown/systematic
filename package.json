@@ -48,7 +48,7 @@
     "workflow",
     "engineering"
   ],
-  "author": "Marcus R. Brown",
+  "author": "Marcus R. Brown <human@fro.bot>",
   "license": "MIT",
   "repository": {
     "type": "git",

@@ -9,12 +9,11 @@
   "name": "Systematic",
   "namespace": "systematic",
   "version": "0.0.0",
-  "author": "Marcus R. Brown <marcusrbrown@gmail.com>",
+  "author": "Marcus R. Brown <human@fro.bot>",
   "components": [
     {
       "name": "agent-browser",
       "type": "ocx:skill",
-      "version": "0.0.0",
       "description": "Browser automation using Vercel's agent-browser CLI. Use when you need to interact with web pages, fill forms, take screenshots, or scrape data. Alternative to Playwright MCP - uses Bash commands with ref-based element selection. Triggers on \"browse website\", \"fill form\", \"click button\", \"take screenshot\", \"scrape page\", \"web automation\".",
       "files": [
         {
@@ -26,7 +25,6 @@
     {
       "name": "agent-native-architecture",
       "type": "ocx:skill",
-      "version": "0.0.0",
       "description": "Build applications where agents are first-class citizens. Use this skill when designing autonomous agents, creating MCP tools, implementing self-modifying systems, or building apps where features are outcomes achieved by agents operating in a loop.",
       "files": [
         {
@@ -94,7 +92,6 @@
     {
       "name": "brainstorming",
       "type": "ocx:skill",
-      "version": "0.0.0",
       "description": "This skill should be used before implementing features, building components, or making changes. It guides exploring user intent, approaches, and design decisions before planning. Triggers on \"let's brainstorm\", \"help me think through\", \"what should we build\", \"explore approaches\", ambiguous feature requests, or when the user's request has multiple valid interpretations that need clarification.",
       "files": [
         {
@@ -106,7 +103,6 @@
     {
       "name": "compound-docs",
       "type": "ocx:skill",
-      "version": "0.0.0",
       "description": "Capture solved problems as categorized documentation with YAML frontmatter for fast lookup",
       "files": [
         {
@@ -134,7 +130,6 @@
     {
       "name": "create-agent-skills",
       "type": "ocx:skill",
-      "version": "0.0.0",
       "description": "Expert guidance for creating OpenCode skills and slash commands. Use when working with SKILL.md files, authoring new skills, improving existing skills, creating slash commands, or understanding skill structure and best practices.",
       "files": [
         {
@@ -246,7 +241,6 @@
     {
       "name": "document-review",
       "type": "ocx:skill",
-      "version": "0.0.0",
       "description": "This skill should be used to refine brainstorm or plan documents before proceeding to the next workflow step. It applies when a brainstorm or plan document exists and the user wants to improve it.",
       "files": [
         {
@@ -258,7 +252,6 @@
     {
       "name": "file-todos",
       "type": "ocx:skill",
-      "version": "0.0.0",
       "description": "This skill should be used when managing the file-based todo tracking system in the todos/ directory. It provides workflows for creating todos, managing status and dependencies, conducting triage, and integrating with slash commands and code review processes.",
       "files": [
         {
@@ -274,7 +267,6 @@
     {
       "name": "frontend-design",
       "type": "ocx:skill",
-      "version": "0.0.0",
       "description": "This skill should be used when creating distinctive, production-grade frontend interfaces with high design quality. It applies when the user asks to build web components, pages, or applications. Generates creative, polished code that avoids generic AI aesthetics.",
       "files": [
         {
@@ -286,7 +278,6 @@
     {
       "name": "git-worktree",
       "type": "ocx:skill",
-      "version": "0.0.0",
       "description": "This skill manages Git worktrees for isolated parallel development. It handles creating, listing, switching, and cleaning up worktrees with a simple interactive interface, following KISS principles.",
       "files": [
         {
@@ -302,7 +293,6 @@
     {
       "name": "orchestrating-swarms",
       "type": "ocx:skill",
-      "version": "0.0.0",
       "description": "Use when orchestrating multi-agent swarms, coordinating parallel code reviews, creating pipeline workflows with dependencies, building self-organizing task queues, or any task benefiting from divide-and-conquer patterns.",
       "files": [
         {
@@ -314,7 +304,6 @@
     {
       "name": "using-systematic",
       "type": "ocx:skill",
-      "version": "0.0.0",
       "description": "Use when starting any conversation - establishes how to find and use skills, requiring skill tool invocation before ANY response including clarifying questions",
       "files": [
         {
@@ -326,7 +315,6 @@
     {
       "name": "agent-design-implementation-reviewer",
       "type": "ocx:agent",
-      "version": "0.0.0",
       "description": "Visually compares live UI implementation against Figma designs and provides detailed feedback on discrepancies. Use after writing or modifying HTML/CSS/React components to verify design fidelity.",
       "files": [
         {
@@ -338,7 +326,6 @@
     {
       "name": "agent-design-iterator",
       "type": "ocx:agent",
-      "version": "0.0.0",
       "description": "Iteratively refines UI design through N screenshot-analyze-improve cycles. Use PROACTIVELY when design changes aren't coming together after 1-2 attempts, or when user requests iterative refinement.",
       "files": [
         {
@@ -350,7 +337,6 @@
     {
       "name": "agent-figma-design-sync",
       "type": "ocx:agent",
-      "version": "0.0.0",
       "description": "Detects and fixes visual differences between a web implementation and its Figma design. Use iteratively when syncing implementation to match Figma specs.",
       "files": [
         {
@@ -362,7 +348,6 @@
     {
       "name": "agent-best-practices-researcher",
       "type": "ocx:agent",
-      "version": "0.0.0",
       "description": "Researches and synthesizes external best practices, documentation, and examples for any technology or framework. Use when you need industry standards, community conventions, or implementation guidance.",
       "files": [
         {
@@ -374,7 +359,6 @@
     {
       "name": "agent-framework-docs-researcher",
       "type": "ocx:agent",
-      "version": "0.0.0",
       "description": "Gathers comprehensive documentation and best practices for frameworks, libraries, or dependencies. Use when you need official docs, version-specific constraints, or implementation patterns.",
       "files": [
         {
@@ -386,7 +370,6 @@
     {
       "name": "agent-git-history-analyzer",
       "type": "ocx:agent",
-      "version": "0.0.0",
       "description": "Performs archaeological analysis of git history to trace code evolution, identify contributors, and understand why code patterns exist. Use when you need historical context for code changes.",
       "files": [
         {
@@ -398,7 +381,6 @@
     {
       "name": "agent-learnings-researcher",
       "type": "ocx:agent",
-      "version": "0.0.0",
       "description": "Searches docs/solutions/ for relevant past solutions by frontmatter metadata. Use before implementing features or fixing problems to surface institutional knowledge and prevent repeated mistakes.",
       "files": [
         {
@@ -410,7 +392,6 @@
     {
       "name": "agent-repo-research-analyst",
       "type": "ocx:agent",
-      "version": "0.0.0",
       "description": "Conducts thorough research on repository structure, documentation, conventions, and implementation patterns. Use when onboarding to a new codebase or understanding project conventions.",
       "files": [
         {
@@ -422,7 +403,6 @@
     {
       "name": "agent-agent-native-reviewer",
       "type": "ocx:agent",
-      "version": "0.0.0",
       "description": "Reviews code to ensure agent-native parity — any action a user can take, an agent can also take. Use after adding UI features, agent tools, or system prompts.",
       "files": [
         {
@@ -434,7 +414,6 @@
     {
       "name": "agent-architecture-strategist",
       "type": "ocx:agent",
-      "version": "0.0.0",
       "description": "Analyzes code changes from an architectural perspective for pattern compliance and design integrity. Use when reviewing PRs, adding services, or evaluating structural refactors.",
       "files": [
         {
@@ -446,7 +425,6 @@
     {
       "name": "agent-code-simplicity-reviewer",
       "type": "ocx:agent",
-      "version": "0.0.0",
       "description": "Final review pass to ensure code is as simple and minimal as possible. Use after implementation is complete to identify YAGNI violations and simplification opportunities.",
       "files": [
         {
@@ -458,7 +436,6 @@
     {
       "name": "agent-data-integrity-guardian",
       "type": "ocx:agent",
-      "version": "0.0.0",
       "description": "Reviews database migrations, data models, and persistent data code for safety. Use when checking migration safety, data constraints, transaction boundaries, or privacy compliance.",
       "files": [
         {
@@ -470,7 +447,6 @@
     {
       "name": "agent-data-migration-expert",
       "type": "ocx:agent",
-      "version": "0.0.0",
       "description": "Validates data migrations, backfills, and production data transformations against reality. Use when PRs involve ID mappings, column renames, enum conversions, or schema changes.",
       "files": [
         {
@@ -482,7 +458,6 @@
     {
       "name": "agent-deployment-verification-agent",
       "type": "ocx:agent",
-      "version": "0.0.0",
       "description": "Produces Go/No-Go deployment checklists with SQL verification queries, rollback procedures, and monitoring plans. Use when PRs touch production data, migrations, or risky data changes.",
       "files": [
         {
@@ -494,7 +469,6 @@
     {
       "name": "agent-dhh-rails-reviewer",
       "type": "ocx:agent",
-      "version": "0.0.0",
       "description": "Brutally honest Rails code review from DHH's perspective. Use when reviewing Rails code for anti-patterns, JS framework contamination, or violations of Rails conventions.",
       "files": [
         {
@@ -506,7 +480,6 @@
     {
       "name": "agent-kieran-rails-reviewer",
       "type": "ocx:agent",
-      "version": "0.0.0",
       "description": "Reviews Rails code with an extremely high quality bar for conventions, clarity, and maintainability. Use after implementing features, modifying code, or creating new Rails components.",
       "files": [
         {
@@ -518,7 +491,6 @@
     {
       "name": "agent-kieran-typescript-reviewer",
       "type": "ocx:agent",
-      "version": "0.0.0",
       "description": "Reviews TypeScript code with an extremely high quality bar for type safety, modern patterns, and maintainability. Use after implementing features, modifying code, or creating new TypeScript components.",
       "files": [
         {
@@ -530,7 +502,6 @@
     {
       "name": "agent-pattern-recognition-specialist",
       "type": "ocx:agent",
-      "version": "0.0.0",
       "description": "Analyzes code for design patterns, anti-patterns, naming conventions, and duplication. Use when checking codebase consistency or verifying new code follows established patterns.",
       "files": [
         {
@@ -542,7 +513,6 @@
     {
       "name": "agent-performance-oracle",
       "type": "ocx:agent",
-      "version": "0.0.0",
       "description": "Analyzes code for performance bottlenecks, algorithmic complexity, database queries, memory usage, and scalability. Use after implementing features or when performance concerns arise.",
       "files": [
         {
@@ -554,7 +524,6 @@
     {
       "name": "agent-security-sentinel",
       "type": "ocx:agent",
-      "version": "0.0.0",
       "description": "Performs security audits for vulnerabilities, input validation, auth/authz, hardcoded secrets, and OWASP compliance. Use when reviewing code for security issues or before deployment.",
       "files": [
         {
@@ -566,7 +535,6 @@
     {
       "name": "agent-bug-reproduction-validator",
       "type": "ocx:agent",
-      "version": "0.0.0",
       "description": "Systematically reproduces and validates bug reports to confirm whether reported behavior is an actual bug. Use when you receive a bug report or issue that needs verification.",
       "files": [
         {
@@ -578,7 +546,6 @@
     {
       "name": "agent-lint",
       "type": "ocx:agent",
-      "version": "0.0.0",
       "description": "Use this agent when you need to run linting and code quality checks on Ruby and ERB files. Run before pushing to origin.",
       "files": [
         {
@@ -590,7 +557,6 @@
     {
       "name": "agent-pr-comment-resolver",
       "type": "ocx:agent",
-      "version": "0.0.0",
       "description": "Addresses PR review comments by implementing requested changes and reporting resolutions. Use when code review feedback needs to be resolved with code changes.",
       "files": [
         {
@@ -602,7 +568,6 @@
     {
       "name": "agent-spec-flow-analyzer",
       "type": "ocx:agent",
-      "version": "0.0.0",
       "description": "Analyzes specifications and feature descriptions for user flow completeness and gap identification. Use when a spec, plan, or feature description needs flow analysis, edge case discovery, or requirements validation.",
       "files": [
         {
@@ -614,7 +579,6 @@
     {
       "name": "cmd-agent-native-audit",
       "type": "ocx:command",
-      "version": "0.0.0",
       "description": "Run comprehensive agent-native architecture review with scored principles",
       "files": [
         {
@@ -626,7 +590,6 @@
     {
       "name": "cmd-create-agent-skill",
       "type": "ocx:command",
-      "version": "0.0.0",
       "description": "Create or edit Claude Code skills with expert guidance on structure and best practices",
       "files": [
         {
@@ -638,7 +601,6 @@
     {
       "name": "cmd-deepen-plan",
       "type": "ocx:command",
-      "version": "0.0.0",
       "description": "Enhance a plan with parallel research agents for each section to add depth, best practices, and implementation details",
       "files": [
         {
@@ -650,7 +612,6 @@
     {
       "name": "cmd-lfg",
       "type": "ocx:command",
-      "version": "0.0.0",
       "description": "Full autonomous engineering workflow",
       "files": [
         {
@@ -662,7 +623,6 @@
     {
       "name": "cmd-brainstorm",
       "type": "ocx:command",
-      "version": "0.0.0",
       "description": "Explore requirements and approaches through collaborative dialogue before planning implementation",
       "files": [
         {
@@ -674,7 +634,6 @@
     {
       "name": "cmd-compound",
       "type": "ocx:command",
-      "version": "0.0.0",
       "description": "Document a recently solved problem to compound your team's knowledge",
       "files": [
         {
@@ -686,7 +645,6 @@
     {
       "name": "cmd-plan",
       "type": "ocx:command",
-      "version": "0.0.0",
       "description": "Transform feature descriptions into well-structured project plans following conventions",
       "files": [
         {
@@ -698,7 +656,6 @@
     {
       "name": "cmd-review",
       "type": "ocx:command",
-      "version": "0.0.0",
       "description": "Perform exhaustive code reviews using multi-agent analysis, ultra-thinking, and worktrees",
       "files": [
         {
@@ -710,7 +667,6 @@
     {
       "name": "cmd-work",
       "type": "ocx:command",
-      "version": "0.0.0",
       "description": "Execute work plans efficiently while maintaining quality and finishing features",
       "files": [
         {
@@ -722,7 +678,6 @@
     {
       "name": "skills",
       "type": "ocx:bundle",
-      "version": "0.0.0",
       "description": "All Systematic skills",
       "dependencies": [
         "agent-browser",
@@ -736,12 +691,12 @@
         "git-worktree",
         "orchestrating-swarms",
         "using-systematic"
-      ]
+      ],
+      "files": []
     },
     {
       "name": "agents",
       "type": "ocx:bundle",
-      "version": "0.0.0",
       "description": "All Systematic agents",
       "dependencies": [
         "agent-design-implementation-reviewer",
@@ -768,12 +723,12 @@
         "agent-lint",
         "agent-pr-comment-resolver",
         "agent-spec-flow-analyzer"
-      ]
+      ],
+      "files": []
     },
     {
       "name": "commands",
       "type": "ocx:bundle",
-      "version": "0.0.0",
       "description": "All Systematic commands",
       "dependencies": [
         "cmd-agent-native-audit",
@@ -785,13 +740,14 @@
         "cmd-plan",
         "cmd-review",
         "cmd-work"
-      ]
+      ],
+      "files": []
     },
     {
       "name": "plugin",
       "type": "ocx:plugin",
-      "version": "0.0.0",
       "description": "Systematic OpenCode plugin — registers skills, agents, commands, and bootstrap prompt",
+      "files": [],
       "opencode": {
         "plugins": {
           "@fro.bot/systematic": {}
