@@ -5,5 +5,20 @@ sidebar:
   order: 1
 ---
 
-The pages in this section document the bundled Systematic skills and the conditions that trigger them.
-Use these references to understand when a skill should be invoked and how to customize behavior in your own projects.
+import { CardGrid, LinkCard } from '@astrojs/starlight/components';
+
+Skills provide specialized knowledge and step-by-step guidance for specific tasks. They are loaded on demand and inject detailed instructions into the conversation.
+
+<CardGrid>
+  <LinkCard title="Agent Browser" description="Browser automation using Vercel's agent-browser CLI." href="/systematic/reference/skills/agent-browser/" />
+  <LinkCard title="Agent Native Architecture" description="Build applications where agents are first-class citizens." href="/systematic/reference/skills/agent-native-architecture/" />
+  <LinkCard title="Brainstorming" description="Explore user intent, approaches, and design decisions before planning." href="/systematic/reference/skills/brainstorming/" />
+  <LinkCard title="Compound Docs" description="Compound documentation patterns and conventions." href="/systematic/reference/skills/compound-docs/" />
+  <LinkCard title="Create Agent Skills" description="Expert guidance for creating OpenCode skills and slash commands." href="/systematic/reference/skills/create-agent-skills/" />
+  <LinkCard title="Document Review" description="Refine brainstorm or plan documents before proceeding." href="/systematic/reference/skills/document-review/" />
+  <LinkCard title="File Todos" description="Track and manage file-level todo items." href="/systematic/reference/skills/file-todos/" />
+  <LinkCard title="Frontend Design" description="Create distinctive, production-grade frontend interfaces." href="/systematic/reference/skills/frontend-design/" />
+  <LinkCard title="Git Worktree" description="Manage Git worktrees for isolated parallel development." href="/systematic/reference/skills/git-worktree/" />
+  <LinkCard title="Orchestrating Swarms" description="Coordinate parallel agent execution patterns." href="/systematic/reference/skills/orchestrating-swarms/" />
+  <LinkCard title="Using Systematic" description="How to find and use skills before any response or action." href="/systematic/reference/skills/using-systematic/" />
+</CardGrid>
