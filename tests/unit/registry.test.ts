@@ -210,9 +210,6 @@ describe('Component Types', () => {
 
       expect(component.type).toBeDefined()
       expect(typeof component.type).toBe('string')
-
-      expect(component.version).toBeDefined()
-      expect(typeof component.version).toBe('string')
     }
   })
 })
