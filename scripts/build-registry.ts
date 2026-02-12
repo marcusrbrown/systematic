@@ -372,7 +372,7 @@ function buildRegistry(source: RegistrySource, version: string): void {
 
   fs.writeFileSync(
     path.join(OUTPUT_DIR, 'index.json'),
-    JSON.stringify(index, null, 2) + '\n',
+    `${JSON.stringify(index, null, 2)}\n`,
   )
 }
 
@@ -424,7 +424,7 @@ function buildPackument(component: RegistryComponent, version: string): void {
 
   fs.writeFileSync(
     path.join(OUTPUT_DIR, 'components', `${component.name}.json`),
-    JSON.stringify(packument, null, 2) + '\n',
+    `${JSON.stringify(packument, null, 2)}\n`,
   )
 }
 
@@ -452,7 +452,7 @@ function buildBundlePackument(
 
   fs.writeFileSync(
     path.join(OUTPUT_DIR, 'components', `${component.name}.json`),
-    JSON.stringify(packument, null, 2) + '\n',
+    `${JSON.stringify(packument, null, 2)}\n`,
   )
 }
 
@@ -480,7 +480,7 @@ function buildPluginPackument(
 
   fs.writeFileSync(
     path.join(OUTPUT_DIR, 'components', `${component.name}.json`),
-    JSON.stringify(packument, null, 2) + '\n',
+    `${JSON.stringify(packument, null, 2)}\n`,
   )
 }
 
