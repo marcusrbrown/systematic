@@ -124,7 +124,7 @@ Customize this profile by editing `ocx.jsonc`:
 {
   // Add or override registries
   "registries": {
-    "systematic": { "url": "https://registry.fro.bot/systematic" }
+    "systematic": { "url": "https://fro.bot/systematic" }
   },
 
   // Control which project files OpenCode sees

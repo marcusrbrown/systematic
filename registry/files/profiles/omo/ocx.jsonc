@@ -5,7 +5,7 @@
   // Define registries for profile-isolated access
   "registries": {
     "systematic": {
-      "url": "https://registry.fro.bot/systematic"
+      "url": "https://fro.bot/systematic"
     }
   },
 
