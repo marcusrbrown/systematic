@@ -1,4 +1,5 @@
 #!/usr/bin/env bun
+import { execSync } from 'node:child_process'
 /**
  * Build OCX Registry
  *
@@ -21,6 +22,8 @@ const __dirname = path.dirname(__filename)
 const PROJECT_ROOT = path.resolve(__dirname, '..')
 const REGISTRY_SOURCE = path.join(PROJECT_ROOT, 'registry/registry.jsonc')
 const OUTPUT_DIR = path.join(PROJECT_ROOT, 'dist/registry')
+
+const SEMVER_REGEX = /^\d+\.\d+\.\d+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$/
 
 interface RegistryFile {
   path: string
@@ -108,7 +111,27 @@ function parseArgs(): { version: string | null; validateOnly: boolean } {
 }
 
 function resolveVersion(explicit: string | null): string {
-  if (explicit != null) return explicit
+  if (explicit != null) {
+    if (!SEMVER_REGEX.test(explicit)) {
+      console.error(
+        `Error: Invalid version format "${explicit}". Must be valid semver (e.g., 1.2.3)`,
+      )
+      process.exit(1)
+    }
+    return explicit
+  }
+
+  try {
+    const tag = execSync('git describe --tags --abbrev=0', {
+      encoding: 'utf-8',
+      cwd: PROJECT_ROOT,
+    }).trim()
+    if (tag.length > 0) {
+      return tag
+    }
+  } catch {
+    // git tag failed, fall through to package.json
+  }
 
   const pkgPath = path.join(PROJECT_ROOT, 'package.json')
   try {
@@ -359,7 +382,12 @@ function buildPackument(component: RegistryComponent, version: string): void {
 
   for (const file of files) {
     const sourcePath = resolveComponentFilePath(component, file)
-    const content = fs.readFileSync(sourcePath)
+    let content: Buffer
+    try {
+      content = fs.readFileSync(sourcePath)
+    } catch {
+      continue
+    }
     const integrity = computeIntegrity(content)
 
     packumentFiles.push({
