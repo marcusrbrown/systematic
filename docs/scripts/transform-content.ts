@@ -118,6 +118,26 @@ function generateDefinitionHeader(options: {
 
 type DefinitionType = 'skill' | 'agent' | 'command'
 
+function deriveName(
+  data: Frontmatter,
+  file: string,
+  definitionType: DefinitionType,
+): string {
+  if (data.name) return data.name
+  return definitionType === 'skill'
+    ? path.basename(path.dirname(file))
+    : path.basename(file, '.md')
+}
+
+function deriveCategory(
+  file: string,
+  definitionType: DefinitionType,
+): string | undefined {
+  if (definitionType !== 'agent') return undefined
+  const dir = path.basename(path.dirname(file))
+  return dir.charAt(0).toUpperCase() + dir.slice(1)
+}
+
 function processDirectory(
   sourceDir: string,
   outputSubdir: string,
@@ -166,11 +186,7 @@ function processDirectory(
       const content = fs.readFileSync(file, 'utf8')
       const { data, body } = parseFrontmatter(content, file)
 
-      const name =
-        data.name ??
-        (definitionType === 'skill'
-          ? path.basename(path.dirname(file))
-          : path.basename(file, '.md'))
+      const name = deriveName(data, file, definitionType)
       const frontmatter = transformFrontmatter(
         { ...data, name },
         definitionType,
@@ -179,11 +195,7 @@ function processDirectory(
         .relative(PROJECT_ROOT, file)
         .split(path.sep)
         .join('/')
-      const category =
-        definitionType === 'agent'
-          ? path.basename(path.dirname(file)).charAt(0).toUpperCase() +
-            path.basename(path.dirname(file)).slice(1)
-          : undefined
+      const category = deriveCategory(file, definitionType)
       const header = generateDefinitionHeader({ category, sourcePath })
       const mdx = generatePage(frontmatter, body, header)
 
