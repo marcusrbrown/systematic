@@ -25,3 +25,35 @@
   --sl-color-gray-6: #eceef2;
   --sl-color-black: #ffffff;
 }
+
+/* Definition header for reference pages */
+.definition-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+  margin-bottom: 1rem;
+  border-bottom: 1px solid var(--sl-color-gray-5);
+  font-size: var(--sl-text-sm);
+}
+
+.definition-category {
+  font-size: var(--sl-text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: var(--sl-color-gray-5);
+  color: var(--sl-color-white);
+  padding: 0.125rem 0.5rem;
+  border-radius: 0.25rem;
+}
+
+.definition-source {
+  margin-left: auto;
+  color: var(--sl-color-gray-3);
+  text-decoration: none;
+  font-size: var(--sl-text-xs);
+}
+
+.definition-source:hover {
+  color: var(--sl-color-accent);
+}
