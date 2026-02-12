@@ -126,7 +126,14 @@ function resolveVersion(explicit: string | null): string {
       cwd: PROJECT_ROOT,
     }).trim()
     if (tag.length > 0) {
-      return tag.replace(/^v/, '')
+      const normalized = tag.startsWith('v') ? tag.slice(1) : tag
+      if (SEMVER_REGEX.test(normalized)) {
+        return normalized
+      }
+      console.error(
+        `Error: Invalid git tag format "${tag}". Expected semver or v-prefixed semver (e.g., v1.2.3)`,
+      )
+      process.exit(1)
     }
   } catch {
     // git tag failed, fall through to package.json
@@ -200,28 +207,34 @@ function validateRegistry(source: RegistrySource): string[] {
   const errors: string[] = []
   const componentNames = new Set<string>()
 
+  const validators: Record<
+    string,
+    (component: RegistryComponent, errors: string[]) => void
+  > = {
+    'ocx:skill': validateSkillComponent,
+    'ocx:agent': validateFileComponent,
+    'ocx:command': validateFileComponent,
+    'ocx:bundle': (component, currentErrors) =>
+      validateBundleComponent(component, source, currentErrors),
+    'ocx:profile': validateProfileComponent,
+    'ocx:plugin': () => undefined,
+  }
+
   for (const component of source.components) {
     if (componentNames.has(component.name)) {
       errors.push(`Duplicate component name: "${component.name}"`)
     }
     componentNames.add(component.name)
 
-    if (component.type === 'ocx:skill') {
-      validateSkillComponent(component, errors)
-    } else if (component.type === 'ocx:agent') {
-      validateFileComponent(component, errors)
-    } else if (component.type === 'ocx:command') {
-      validateFileComponent(component, errors)
-    } else if (component.type === 'ocx:bundle') {
-      validateBundleComponent(component, source, errors)
-    } else if (component.type === 'ocx:profile') {
-      validateProfileComponent(component, errors)
-    } else if (component.type === 'ocx:plugin') {
-    } else {
+    const validator = validators[component.type]
+    if (validator == null) {
       errors.push(
         `[${component.name}] Unknown component type: "${component.type}"`,
       )
+      continue
     }
+
+    validator(component, errors)
   }
 
   return errors
@@ -407,7 +420,7 @@ function buildRegistry(source: RegistrySource, version: string): void {
     name: source.name,
     namespace: source.namespace,
     version,
-    author: source.author ?? '',
+    author: resolveAuthor(source),
     components: indexComponents,
   }
 
@@ -466,6 +479,25 @@ function buildPackument(component: RegistryComponent, version: string): void {
     path.join(OUTPUT_DIR, 'components', `${component.name}.json`),
     `${JSON.stringify(packument, null, 2)}\n`,
   )
+}
+
+function resolveAuthor(source: RegistrySource): string {
+  if (source.author != null && source.author.trim().length > 0) {
+    return source.author
+  }
+
+  const pkgPath = path.join(PROJECT_ROOT, 'package.json')
+  try {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as {
+      author?: string
+    }
+    const author = pkg.author
+    if (typeof author === 'string' && author.trim().length > 0) {
+      return author
+    }
+  } catch {}
+
+  return ''
 }
 
 function buildBundlePackument(
