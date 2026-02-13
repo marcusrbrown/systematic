@@ -72,7 +72,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Run Fro Bot
-        uses: fro-bot/agent@aa439f29a3585d22a2cd5587f4e166748d577b0c
+        uses: fro-bot/agent@cddd9cd99fb1a6722cd750e5ffa48ceb3abcc681
         env:
           OPENCODE_PROMPT_ARTIFACT: 'true'
           PROMPT: ${{ (github.event_name == 'workflow_dispatch' && (github.event.inputs.prompt || env.DEFAULT_PROMPT)) || (github.event_name == 'schedule' && env.SCHEDULE_PROMPT) || '' }}
