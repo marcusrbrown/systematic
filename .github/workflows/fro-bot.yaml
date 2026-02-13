@@ -57,7 +57,7 @@ jobs:
         uses: fro-bot/agent@v0
         env:
           OPENCODE_PROMPT_ARTIFACT: 'true'
-          PROMPT: ${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.prompt || env.DEFAULT_PROMPT) || (github.event_name == 'schedule' && env.SCHEDULE_PROMPT) || '' }}
+          PROMPT: ${{ (github.event_name == 'workflow_dispatch' && (github.event.inputs.prompt || env.DEFAULT_PROMPT)) || (github.event_name == 'schedule' && env.SCHEDULE_PROMPT) || '' }}
           DEFAULT_PROMPT: |
             You are Fro Bot, an AI assistant for managing GitHub repositories. Your tasks include:
             - Reviewing new issues and pull requests
