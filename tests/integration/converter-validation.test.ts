@@ -5,12 +5,8 @@
 import { describe, expect, test } from 'bun:test'
 import { convertContent } from '../../src/lib/converter.js'
 
-function detectFalsePositives(_original: string, converted: string): string[] {
+function detectFalsePositives(original: string, converted: string): string[] {
   const falsePositives: string[] = []
-  // Since Task → task (same word, just lowercased), false-positive detection
-  // checks that uppercase "Task" used as a noun was NOT incorrectly lowercased.
-  // The converter's context-dependent regexes should only match tool invocation
-  // patterns, leaving noun usage with uppercase T untouched.
   const taskNounLowercased = [
     /complete the task\b/g,
     /\beach task\b/g,
@@ -19,11 +15,17 @@ function detectFalsePositives(_original: string, converted: string): string[] {
     /\btask list\b(?! |$)/g,
   ]
   for (const pattern of taskNounLowercased) {
-    const matches = converted.match(pattern)
-    if (matches) {
-      falsePositives.push(
-        `False positive: "${matches[0]}" - "Task" as noun incorrectly lowercased`,
-      )
+    pattern.lastIndex = 0
+    const inConverted = pattern.test(converted)
+    pattern.lastIndex = 0
+    const inOriginal = pattern.test(original)
+    if (inConverted && !inOriginal) {
+      const matches = converted.match(pattern)
+      if (matches) {
+        falsePositives.push(
+          `False positive: "${matches[0]}" - "Task" as noun incorrectly lowercased`,
+        )
+      }
     }
   }
   return falsePositives
