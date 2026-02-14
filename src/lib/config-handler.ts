@@ -103,8 +103,16 @@ function loadCommandAsConfig(commandInfo: {
 
     const baseDescription = description || `${name || cleanName} command`
 
+    const wrappedTemplate = `<command-instruction>
+${body.trim()}
+</command-instruction>
+
+<user-request>
+$ARGUMENTS
+</user-request>`
+
     const config: CommandConfig = {
-      template: body.trim(),
+      template: wrappedTemplate,
       description: `(Systematic) ${baseDescription}`,
     }
 
