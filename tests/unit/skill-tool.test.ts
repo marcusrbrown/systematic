@@ -144,6 +144,40 @@ description: Disabled
       expect(tool.description).toContain('systematic:enabled-skill')
       expect(tool.description).not.toContain('systematic:disabled-skill')
     })
+
+    test('excludes disableModelInvocation skills from description', () => {
+      const visibleDir = path.join(testDir, 'visible-skill')
+      const hiddenDir = path.join(testDir, 'hidden-skill')
+      fs.mkdirSync(visibleDir)
+      fs.mkdirSync(hiddenDir)
+
+      fs.writeFileSync(
+        path.join(visibleDir, 'SKILL.md'),
+        `---
+name: visible-skill
+description: Visible to model
+---
+# Content`,
+      )
+
+      fs.writeFileSync(
+        path.join(hiddenDir, 'SKILL.md'),
+        `---
+name: hidden-skill
+description: Hidden from model
+disable-model-invocation: true
+---
+# Content`,
+      )
+
+      const tool = createSkillTool({
+        bundledSkillsDir: testDir,
+        disabledSkills: [],
+      })
+
+      expect(tool.description).toContain('systematic:visible-skill')
+      expect(tool.description).not.toContain('systematic:hidden-skill')
+    })
   })
 
   describe('execute', () => {
@@ -350,6 +384,80 @@ description: Test file limit
       // Verify at least one of the first 10 files is present
       const hasLimitedFiles = /file[0-9]\.ts/.test(result)
       expect(hasLimitedFiles).toBe(true)
+    })
+
+    test('loads disableModelInvocation skill when explicitly requested', async () => {
+      const hiddenDir = path.join(testDir, 'hidden-skill')
+      fs.mkdirSync(hiddenDir)
+      fs.writeFileSync(
+        path.join(hiddenDir, 'SKILL.md'),
+        `---
+name: hidden-skill
+description: Hidden from model
+disable-model-invocation: true
+---
+# Hidden Skill Content
+
+This skill is only loadable by explicit request.`,
+      )
+
+      const tool = createSkillTool({
+        bundledSkillsDir: testDir,
+        disabledSkills: [],
+      })
+
+      expect(tool.description).not.toContain('hidden-skill')
+
+      const result = await tool.execute(
+        { name: 'systematic:hidden-skill' },
+        mockContext,
+      )
+
+      expect(result).toContain('systematic:hidden-skill')
+      expect(result).toContain('# Hidden Skill Content')
+      expect(result).toContain(
+        'This skill is only loadable by explicit request.',
+      )
+    })
+
+    test('does not list disableModelInvocation skills in error suggestions', async () => {
+      const visibleDir = path.join(testDir, 'visible-skill')
+      const hiddenDir = path.join(testDir, 'hidden-skill')
+      fs.mkdirSync(visibleDir)
+      fs.mkdirSync(hiddenDir)
+
+      fs.writeFileSync(
+        path.join(visibleDir, 'SKILL.md'),
+        `---
+name: visible-skill
+description: Visible to model
+---
+# Content`,
+      )
+
+      fs.writeFileSync(
+        path.join(hiddenDir, 'SKILL.md'),
+        `---
+name: hidden-skill
+description: Hidden from model
+disable-model-invocation: true
+---
+# Content`,
+      )
+
+      const tool = createSkillTool({
+        bundledSkillsDir: testDir,
+        disabledSkills: [],
+      })
+
+      try {
+        await tool.execute({ name: 'nonexistent' }, mockContext)
+        expect.unreachable('Should have thrown')
+      } catch (error) {
+        const message = (error as Error).message
+        expect(message).toContain('systematic:visible-skill')
+        expect(message).not.toContain('hidden-skill')
+      }
     })
   })
 })

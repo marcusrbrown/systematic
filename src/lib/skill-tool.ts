@@ -87,17 +87,20 @@ export function discoverSkillFiles(dir: string, limit = 10): string {
 export function createSkillTool(options: SkillToolOptions): ToolDefinition {
   const { bundledSkillsDir, disabledSkills } = options
 
-  const getSystematicSkills = (): LoadedSkill[] => {
+  const getAllSkills = (): LoadedSkill[] => {
     return findSkillsInDir(bundledSkillsDir)
       .filter((s) => !disabledSkills.includes(s.name))
       .map((skillInfo) => loadSkill(skillInfo))
       .filter((s): s is LoadedSkill => s !== null)
-      .filter((s) => s.disableModelInvocation !== true)
       .sort((a, b) => a.name.localeCompare(b.name))
   }
 
+  const getDiscoverableSkills = (): LoadedSkill[] => {
+    return getAllSkills().filter((s) => s.disableModelInvocation !== true)
+  }
+
   const buildDescription = (): string => {
-    const skills = getSystematicSkills()
+    const skills = getDiscoverableSkills()
 
     if (skills.length === 0) {
       return 'Load a skill to get detailed instructions for a specific task. No skills are currently available.'
@@ -128,7 +131,7 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
   }
 
   const buildParameterHint = (): string => {
-    const skills = getSystematicSkills()
+    const skills = getDiscoverableSkills()
     const examples = skills
       .slice(0, 3)
       .map((s) => `'systematic:${s.name}'`)
@@ -164,11 +167,13 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
         ? requestedName.slice('systematic:'.length)
         : requestedName
 
-      const skills = getSystematicSkills()
+      const skills = getAllSkills()
       const matchedSkill = skills.find((s) => s.name === normalizedName)
 
       if (!matchedSkill) {
-        const availableSystematic = skills.map((s) => s.prefixedName)
+        const availableSystematic = getDiscoverableSkills().map(
+          (s) => s.prefixedName,
+        )
         throw new Error(
           `Skill "${requestedName}" not found. Available systematic skills: ${availableSystematic.join(', ')}`,
         )
