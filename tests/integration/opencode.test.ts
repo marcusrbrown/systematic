@@ -13,6 +13,7 @@ const OPENCODE_AVAILABLE = (() => {
 const TIMEOUT_MS = 120_000
 const MAX_RETRIES = 2
 const RETRY_DELAY_MS = 3_000
+const OPENCODE_TEST_MODEL = 'opencode/big-pickle'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..')
 
@@ -61,14 +62,17 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
     }
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      const result = Bun.spawnSync(['opencode', 'run', prompt], {
-        cwd: testEnv.projectDir,
-        env: {
-          ...process.env,
-          OPENCODE_CONFIG_CONTENT: buildOpencodeConfig(),
+      const result = Bun.spawnSync(
+        ['opencode', 'run', '--model', OPENCODE_TEST_MODEL, prompt],
+        {
+          cwd: testEnv.projectDir,
+          env: {
+            ...process.env,
+            OPENCODE_CONFIG_CONTENT: buildOpencodeConfig(),
+          },
+          timeout: TIMEOUT_MS,
         },
-        timeout: TIMEOUT_MS,
-      })
+      )
 
       lastResult = {
         stdout: result.stdout.toString(),

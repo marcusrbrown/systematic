@@ -25,26 +25,30 @@ interface ValidationResult {
   }
 }
 
-function detectFalsePositives(_original: string, converted: string): string[] {
+function detectFalsePositives(original: string, converted: string): string[] {
   const falsePositives: string[] = []
 
   // Since Task → task (same word, just lowercased), false-positive detection
   // checks that uppercase "Task" used as a noun was NOT incorrectly lowercased.
   // The converter's context-dependent regexes should only match tool invocation
   // patterns, leaving noun usage with uppercase T untouched.
-  const taskNounLowercased = [
-    /complete the task\b/g,
-    /\beach task\b/g,
-    /\btask management\b/g,
-    /\btask tracking\b/g,
-    /\btask list\b(?! |$)/g,
+  const taskNounCasing = [
+    { original: /complete the Task\b/g, converted: /complete the task\b/g },
+    { original: /\beach Task\b/g, converted: /\beach task\b/g },
+    { original: /\bTask management\b/g, converted: /\btask management\b/g },
+    { original: /\bTask tracking\b/g, converted: /\btask tracking\b/g },
+    { original: /\bTask list\b(?! |$)/g, converted: /\btask list\b(?! |$)/g },
   ]
 
-  for (const pattern of taskNounLowercased) {
-    const matches = converted.match(pattern)
-    if (matches) {
+  for (const {
+    original: originalPattern,
+    converted: convertedPattern,
+  } of taskNounCasing) {
+    const originalMatch = original.match(originalPattern)
+    const convertedMatch = converted.match(convertedPattern)
+    if (originalMatch && convertedMatch) {
       falsePositives.push(
-        `False positive: "${matches[0]}" - "Task" as noun incorrectly lowercased`,
+        `False positive: "${convertedMatch[0]}" - "Task" as noun incorrectly lowercased`,
       )
     }
   }
@@ -364,6 +368,13 @@ describe('Converter Validation Against Real CEP Content', () => {
   })
 
   describe('Edge Cases', () => {
+    test('does not flag lowercase task nouns as false positives', () => {
+      const original = 'Use task tracking for ongoing work.'
+      const converted = convertContent(original, 'skill')
+
+      expect(detectFalsePositives(original, converted)).toEqual([])
+    })
+
     test('handles empty content', () => {
       const converted = convertContent('', 'skill')
       expect(converted).toBe('')
