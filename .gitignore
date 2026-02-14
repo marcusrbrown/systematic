@@ -33,6 +33,4 @@ tests/tmp/
 # Docs build artifacts
 docs/dist/
 docs/.astro/
-docs/src/content/docs/reference/**
-!docs/src/content/docs/reference/**/
-!docs/src/content/docs/reference/**/index.mdx
+docs/src/content/docs/reference/
