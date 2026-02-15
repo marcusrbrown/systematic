@@ -24,6 +24,9 @@ Use the `systematic_skill` tool for Systematic bundled skills. Use the native `s
 ```dot
 digraph skill_flow {
     "User message received" [shape=doublecircle];
+    "About to enter Plan mode?" [shape=doublecircle];
+    "Already brainstormed?" [shape=diamond];
+    "Invoke brainstorming skill" [shape=box];
     "Might any skill apply?" [shape=diamond];
     "Invoke `systematic_skill` tool" [shape=box];
     "Announce: 'Using [skill] to [purpose]'" [shape=box];
@@ -31,6 +34,11 @@ digraph skill_flow {
     "Create todo per item" [shape=box];
     "Follow skill exactly" [shape=box];
     "Respond (including clarifications)" [shape=doublecircle];
+
+    "About to enter Plan mode?" -> "Already brainstormed?";
+    "Already brainstormed?" -> "Invoke brainstorming skill" [label="no"];
+    "Already brainstormed?" -> "Might any skill apply?" [label="yes"];
+    "Invoke brainstorming skill" -> "Might any skill apply?";
 
     "User message received" -> "Might any skill apply?";
     "Might any skill apply?" -> "Invoke `systematic_skill` tool" [label="yes, even 1%"];
@@ -85,10 +93,5 @@ The skill itself tells you which.
 Instructions say WHAT, not HOW. "Add X" or "Fix Y" doesn't mean skip workflows.
 
 ## Skill Resolution
-
-Skills are resolved in priority order:
-1. **Project skills**: `.opencode/skills/` in current project
-2. **User skills**: `~/.config/opencode/skills/`
-3. **Bundled skills**: Provided by systematic plugin
 
 Systematic bundled skills are listed in the `systematic_skill` tool description. Use the native `skill` tool for skills outside the Systematic plugin.
