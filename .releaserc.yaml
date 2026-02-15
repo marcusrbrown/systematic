@@ -24,6 +24,21 @@ analyzeCommits:
     - type: docs
       release: patch
       scope: readme.md
+    - type: docs
+      release: patch
+      scope: skill
+    - type: docs
+      release: patch
+      scope: skills
+    - type: docs
+      release: patch
+      scope: agents
+    - type: docs
+      release: patch
+      scope: commands
+    - type: docs
+      release: patch
+      scope: readme.md
 
 preset: conventionalcommits
 
