@@ -38,7 +38,6 @@ interface RunOpencodeOptions {
   commandName?: string
 }
 
-
 interface RunSyncWorkflowParams {
   summary: PrecheckSummary
   exitCode: number
@@ -126,7 +125,6 @@ Pre-check summary (JSON, compact): ${JSON.stringify(summary)}`
 function shouldRunSync(exitCode: number): boolean {
   return exitCode === 1
 }
-
 
 async function runSyncWorkflow({
   summary,
@@ -347,7 +345,6 @@ describe('sync-cep workflow simulation', () => {
     },
     TIMEOUT_MS * MAX_RETRIES,
   )
-
 })
 
 describe('config handler integration', () => {
