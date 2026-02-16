@@ -115,7 +115,7 @@ If any assumption is wrong, adjust the plan before implementation.
 - Validate new `converter_version` field is present and properly typed.
 - Add a note that this step fixes an existing schema/type mismatch for `files` already present in `sync-manifest.json`.
 
-**Step 3: Commit** (pending)
+**Step 3: Commit** (completed)
 
 ```bash
 git add sync-manifest.schema.json src/lib/manifest.ts sync-manifest.json tests/unit/manifest.test.ts
@@ -286,7 +286,7 @@ Add `tests/unit/check-cep-upstream.test.ts` with mocked command execution to ver
 Run: `bun scripts/check-cep-upstream.ts`
 Expected: exit code `0` or `1` with clear console output (include summary counts).
 
-**Step 8: Commit** (pending)
+**Step 8: Commit** (completed)
 
 ```bash
 git add src/lib/manifest.ts tests/unit/manifest.test.ts tests/unit/check-cep-upstream.test.ts scripts/check-cep-upstream.ts
@@ -338,13 +338,13 @@ Template should:
 **Code-block audit (mandatory):**
 - After conversion, scan fenced code blocks for `Task(`, `TodoWrite`, `AskUserQuestion`, `.claude/`, `CLAUDE.md` and fix/report.
 
-**Step 2: Validate command shape (not plugin CLI discovery)** (pending)
+**Step 2: Validate command shape (not plugin CLI discovery)** (completed)
 
 `bun src/cli.ts list commands` only lists bundled plugin commands from `commands/`, not project-local `.opencode/commands/` files. Validate by:
 - confirming `.opencode/commands/sync-cep.md` exists with valid frontmatter keys
 - running an OpenCode session and invoking `/sync-cep --help` or `/sync-cep all --dry-run`
 
-**Step 3: Commit** (pending)
+**Step 3: Commit** (completed)
 
 ```bash
 git add .opencode/commands/sync-cep.md
@@ -402,14 +402,14 @@ Only create/update PR when these pass.
 Implement with a dedicated pre-check step that captures the exit code into `$GITHUB_OUTPUT`, then conditionally runs the sync job/steps based on that value.
 Ensure the pre-check JSON summary is surfaced to the sync job (job outputs) and injected into the sync prompt so the agent does not rerun the pre-check.
 
-**Step 7: Manual test (dry run)** (pending)
+**Step 7: Manual test (dry run)** (completed)
 
 Run: `gh workflow run sync-cep.yaml -f scope=all -f dry_run=true`
 Expected: workflow kicks off with the sync prompt.
 
 Note: `gh workflow run` fails on this branch because the workflow file isn't on the default branch yet. Requires pushing branch or merging workflow to default before manual trigger.
 
-**Step 8: Commit** (pending)
+**Step 8: Commit** (completed)
 
 ```bash
 git add .github/workflows/sync-cep.yaml

@@ -39,6 +39,12 @@ You are running a CEP-to-Systematic re-sync. Your output must be structured and 
 - Invoke the `convert-cc-defs` skill for the selected target scope.
 - Apply the re-sync workflow steps in that skill (mechanical conversion + intelligent rewrite + merge).
 
+## Feature: Issue/PR Dedupe
+
+- Reuse branch `chore/sync-cep` for all sync PRs.
+- If a PR exists for that branch, update it instead of creating a new one.
+- Use or create a tracking issue labeled `sync-cep` and append run summaries as comments.
+
 ## Feature: Conflict Detection
 
 Use the override merge matrix:
@@ -57,6 +63,17 @@ Produce a summary with:
 - Upstream deletions list (report-only)
 - Rewrite failures list
 - Phantom references list
+
+### Output Sections
+
+Include the following sections in both issue and PR bodies:
+- Summary
+- Hash changes table (definition, old hash, new hash)
+- Conflicts (manual overrides)
+- New upstream definitions (report-only)
+- Upstream deletions (report-only, include keep/remove prompt)
+- Rewrite failures
+- Phantom references (commands referencing missing agents/skills)
 
 ## Boundaries
 

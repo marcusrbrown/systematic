@@ -502,6 +502,22 @@ When pulling upstream changes for an already-imported definition:
 8. **Update manifest** — New commit SHA, hash, timestamp (`date -u +'%Y-%m-%dT%H:%M:%SZ'`). Update rewrites if they changed.
 9. **Verify** — Build, test, spot-check
 
+### Issue/PR Dedupe and Reporting
+
+When running automated syncs, always:
+- Reuse branch `chore/sync-cep` for all sync PRs.
+- If a PR exists for that branch, update it instead of creating a new one.
+- Use or create a tracking issue labeled `sync-cep` and append run summaries as comments.
+
+Include the following sections in both issue and PR bodies:
+- Summary
+- Hash changes table (definition, old hash, new hash)
+- Conflicts (manual overrides)
+- New upstream definitions (report-only)
+- Upstream deletions (report-only, include keep/remove prompt)
+- Rewrite failures
+- Phantom references (commands referencing missing agents/skills)
+
 ### Override Merge Matrix
 
 | Scenario | Detection | Agent Behavior |
