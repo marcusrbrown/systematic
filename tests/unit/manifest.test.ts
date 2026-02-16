@@ -4,6 +4,8 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   findStaleEntries,
+  getUpstreamHashes,
+  listDefinitionsBySource,
   readManifest,
   type SyncManifest,
   validateManifest,
@@ -23,6 +25,7 @@ describe('manifest', () => {
 
   const validManifest: SyncManifest = {
     $schema: './sync-manifest.schema.json',
+    converter_version: 2,
     sources: {
       cep: {
         repo: 'EveryInc/compound-engineering-plugin',
@@ -38,6 +41,7 @@ describe('manifest', () => {
         upstream_commit: 'abc123',
         synced_at: '2026-02-09T00:00:00Z',
         notes: 'Adapted tool names and paths',
+        files: ['SKILL.md'],
       },
     },
   }
@@ -83,7 +87,23 @@ describe('manifest', () => {
     })
 
     test('validates empty manifest', () => {
-      expect(validateManifest({ sources: {}, definitions: {} })).toBe(true)
+      expect(
+        validateManifest({
+          converter_version: 2,
+          sources: {},
+          definitions: {},
+        }),
+      ).toBe(true)
+    })
+
+    test('rejects non-number converter_version', () => {
+      expect(
+        validateManifest({
+          converter_version: '2',
+          sources: {},
+          definitions: {},
+        }),
+      ).toBe(false)
     })
 
     test('rejects non-object', () => {
@@ -93,16 +113,21 @@ describe('manifest', () => {
     })
 
     test('rejects missing sources', () => {
-      expect(validateManifest({ definitions: {} })).toBe(false)
+      expect(validateManifest({ converter_version: 2, definitions: {} })).toBe(
+        false,
+      )
     })
 
     test('rejects missing definitions', () => {
-      expect(validateManifest({ sources: {} })).toBe(false)
+      expect(validateManifest({ converter_version: 2, sources: {} })).toBe(
+        false,
+      )
     })
 
     test('rejects invalid source entry', () => {
       expect(
         validateManifest({
+          converter_version: 2,
           sources: { cep: { repo: 'test' } },
           definitions: {},
         }),
@@ -112,6 +137,7 @@ describe('manifest', () => {
     test('rejects invalid definition entry', () => {
       expect(
         validateManifest({
+          converter_version: 2,
           sources: {},
           definitions: { 'skills/test': { source: 'cep' } },
         }),
@@ -121,6 +147,7 @@ describe('manifest', () => {
     test('validates definition with structured manual_overrides', () => {
       expect(
         validateManifest({
+          converter_version: 2,
           sources: {},
           definitions: {
             'agents/review/test': {
@@ -129,6 +156,7 @@ describe('manifest', () => {
               upstream_commit: 'abc123',
               synced_at: '2026-02-10T06:00:00Z',
               notes: 'Test',
+              files: ['test.md'],
               manual_overrides: [
                 {
                   field: 'description',
@@ -146,6 +174,7 @@ describe('manifest', () => {
     test('validates definition with empty manual_overrides', () => {
       expect(
         validateManifest({
+          converter_version: 2,
           sources: {},
           definitions: {
             'agents/review/test': {
@@ -154,6 +183,7 @@ describe('manifest', () => {
               upstream_commit: 'abc123',
               synced_at: '2026-02-10T06:00:00Z',
               notes: 'Test',
+              files: [],
               manual_overrides: [],
             },
           },
@@ -164,6 +194,7 @@ describe('manifest', () => {
     test('rejects old-style string manual_overrides', () => {
       expect(
         validateManifest({
+          converter_version: 2,
           sources: {},
           definitions: {
             'agents/review/test': {
@@ -182,6 +213,7 @@ describe('manifest', () => {
     test('rejects manual_override missing required fields', () => {
       expect(
         validateManifest({
+          converter_version: 2,
           sources: {},
           definitions: {
             'agents/review/test': {
@@ -202,6 +234,52 @@ describe('manifest', () => {
     test('validates manual_override without optional original', () => {
       expect(
         validateManifest({
+          converter_version: 2,
+          sources: {},
+          definitions: {
+            'agents/review/test': {
+              source: 'cep',
+              upstream_path: 'agents/review/test.md',
+              upstream_commit: 'abc123',
+              synced_at: '2026-02-10T06:00:00Z',
+              notes: 'Test',
+              files: ['test.md'],
+              manual_overrides: [
+                {
+                  field: 'body:section-name',
+                  reason: 'Custom section content',
+                  overridden_at: '2026-02-10T06:30:00Z',
+                },
+              ],
+            },
+          },
+        }),
+      ).toBe(true)
+    })
+
+    test('rejects definition with invalid files array', () => {
+      expect(
+        validateManifest({
+          converter_version: 2,
+          sources: {},
+          definitions: {
+            'agents/review/test': {
+              source: 'cep',
+              upstream_path: 'agents/review/test.md',
+              upstream_commit: 'abc123',
+              synced_at: '2026-02-10T06:00:00Z',
+              notes: 'Test',
+              files: [123],
+            },
+          },
+        }),
+      ).toBe(false)
+    })
+
+    test('validates wildcard manual_override object', () => {
+      expect(
+        validateManifest({
+          converter_version: 2,
           sources: {},
           definitions: {
             'agents/review/test': {
@@ -212,8 +290,8 @@ describe('manifest', () => {
               notes: 'Test',
               manual_overrides: [
                 {
-                  field: 'body:section-name',
-                  reason: 'Custom section content',
+                  field: '*',
+                  reason: 'Local ownership',
                   overridden_at: '2026-02-10T06:30:00Z',
                 },
               ],
@@ -260,11 +338,101 @@ describe('manifest', () => {
 
     test('returns empty for empty manifest', () => {
       const empty: SyncManifest = {
+        converter_version: 2,
         sources: {},
         definitions: {},
       }
       const stale = findStaleEntries(empty, [])
       expect(stale).toEqual([])
+    })
+  })
+
+  describe('listDefinitionsBySource', () => {
+    test('lists definitions for a source in sorted order', () => {
+      const manifest: SyncManifest = {
+        converter_version: 2,
+        sources: {
+          cep: {
+            repo: 'EveryInc/compound-engineering-plugin',
+            branch: 'main',
+            url: 'https://github.com/EveryInc/compound-engineering-plugin',
+          },
+        },
+        definitions: {
+          'skills/brainstorming': {
+            source: 'cep',
+            upstream_path:
+              'plugins/compound-engineering/skills/brainstorming/SKILL.md',
+            upstream_commit: 'abc123',
+            synced_at: '2026-02-15T00:00:00Z',
+            notes: 'test',
+            upstream_content_hash: 'a',
+          },
+          'agents/review/security-sentinel': {
+            source: 'cep',
+            upstream_path:
+              'plugins/compound-engineering/agents/review/security-sentinel.md',
+            upstream_commit: 'abc123',
+            synced_at: '2026-02-15T00:00:00Z',
+            notes: 'test',
+            upstream_content_hash: 'b',
+          },
+          'commands/workflows/plan': {
+            source: 'other',
+            upstream_path:
+              'plugins/compound-engineering/commands/workflows/plan.md',
+            upstream_commit: 'abc123',
+            synced_at: '2026-02-15T00:00:00Z',
+            notes: 'test',
+            upstream_content_hash: 'c',
+          },
+        },
+      }
+
+      expect(listDefinitionsBySource(manifest, 'cep')).toEqual([
+        'agents/review/security-sentinel',
+        'skills/brainstorming',
+      ])
+    })
+  })
+
+  describe('getUpstreamHashes', () => {
+    test('returns map of upstream hashes for a source', () => {
+      const manifest: SyncManifest = {
+        converter_version: 2,
+        sources: {
+          cep: {
+            repo: 'EveryInc/compound-engineering-plugin',
+            branch: 'main',
+            url: 'https://github.com/EveryInc/compound-engineering-plugin',
+          },
+        },
+        definitions: {
+          'skills/brainstorming': {
+            source: 'cep',
+            upstream_path:
+              'plugins/compound-engineering/skills/brainstorming/SKILL.md',
+            upstream_commit: 'abc123',
+            synced_at: '2026-02-15T00:00:00Z',
+            notes: 'test',
+            upstream_content_hash: 'a',
+          },
+          'agents/review/security-sentinel': {
+            source: 'cep',
+            upstream_path:
+              'plugins/compound-engineering/agents/review/security-sentinel.md',
+            upstream_commit: 'abc123',
+            synced_at: '2026-02-15T00:00:00Z',
+            notes: 'test',
+            upstream_content_hash: 'b',
+          },
+        },
+      }
+
+      expect(getUpstreamHashes(manifest, 'cep')).toEqual({
+        'agents/review/security-sentinel': 'b',
+        'skills/brainstorming': 'a',
+      })
     })
   })
 })

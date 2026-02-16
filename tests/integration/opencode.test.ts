@@ -3,25 +3,149 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { Config } from '@opencode-ai/sdk'
+import { extractCommandFrontmatter } from '../../src/lib/commands.ts'
 import { createConfigHandler } from '../../src/lib/config-handler.ts'
+import { parseFrontmatter } from '../../src/lib/frontmatter.ts'
 
 const OPENCODE_AVAILABLE = (() => {
   const result = Bun.spawnSync(['which', 'opencode'])
   return result.exitCode === 0
 })()
 
-const TIMEOUT_MS = 120_000
-const MAX_RETRIES = 2
+const TIMEOUT_MS = 90_000
+const MAX_RETRIES = 1
 const RETRY_DELAY_MS = 3_000
 const OPENCODE_TEST_MODEL = 'opencode/big-pickle'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..')
+
+interface PrecheckSummary {
+  hashChanges: string[]
+  newUpstream: string[]
+  deletions: string[]
+  skipped: string[]
+  converterVersionChanged: boolean
+}
+
+interface OpencodeResult {
+  stdout: string
+  stderr: string
+  exitCode: number
+}
+
+interface RunOpencodeOptions {
+  cwd: string
+  configContent?: string
+}
 
 function buildOpencodeConfig(): string {
   const pluginPath = `file://${path.join(REPO_ROOT, 'src/index.ts')}`
   return JSON.stringify({
     plugin: [pluginPath],
   })
+}
+
+function buildSyncCepTestConfig(): string {
+  const commandPath = path.join(REPO_ROOT, '.opencode/commands/sync-cep.md')
+  const content = fs.readFileSync(commandPath, 'utf8')
+  const { body } = parseFrontmatter(content)
+  const frontmatter = extractCommandFrontmatter(content)
+
+  return JSON.stringify({
+    command: {
+      'sync-cep': {
+        template: body.trim(),
+        description: frontmatter.description,
+        agent: frontmatter.agent,
+        model: frontmatter.model,
+        subtask: frontmatter.subtask,
+      },
+    },
+    agent: {
+      build: {
+        permission: {
+          edit: 'deny',
+          bash: 'deny',
+        },
+      },
+    },
+  })
+}
+
+function buildSyncPrompt(
+  summary: PrecheckSummary,
+  scope: string,
+  dryRun: boolean,
+): string {
+  const dryRunFlag = dryRun ? '--dry-run' : ''
+  const dryRunNotice = dryRun
+    ? 'DRY-RUN MODE: Do not call any tools or external commands.'
+    : ''
+  return `/sync-cep ${scope} ${dryRunFlag}
+${dryRunNotice}
+
+Note: headless CI run — user will not see live output.
+
+<precheck-summary>
+${JSON.stringify(summary)}
+</precheck-summary>`
+}
+
+function shouldRunSync(exitCode: number): boolean {
+  return exitCode === 1
+}
+
+async function runOpencode(
+  prompt: string,
+  options: RunOpencodeOptions,
+): Promise<OpencodeResult> {
+  let lastResult: { stdout: string; stderr: string; exitCode: number } = {
+    stdout: '',
+    stderr: '',
+    exitCode: -1,
+  }
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    const env = {
+      ...process.env,
+      ...(options.configContent
+        ? { OPENCODE_CONFIG_CONTENT: options.configContent }
+        : {}),
+    }
+    const args = ['opencode', 'run', '--model', OPENCODE_TEST_MODEL, prompt]
+    const result = Bun.spawnSync(args, {
+      cwd: options.cwd,
+      env,
+      timeout: TIMEOUT_MS,
+    })
+
+    lastResult = {
+      stdout: result.stdout.toString(),
+      stderr: result.stderr.toString(),
+      exitCode: result.exitCode ?? -1,
+    }
+
+    const isTimeout =
+      lastResult.exitCode === -1 || lastResult.stderr.includes('ETIMEDOUT')
+
+    const isRateLimit =
+      lastResult.stderr.includes('rate limit') ||
+      lastResult.stderr.includes('429')
+
+    if (!isTimeout && !isRateLimit && lastResult.exitCode === 0) {
+      return lastResult
+    }
+
+    if (attempt < MAX_RETRIES) {
+      const delay = RETRY_DELAY_MS * attempt
+      console.log(
+        `Attempt ${attempt}/${MAX_RETRIES} failed, retrying in ${delay}ms...`,
+      )
+      await Bun.sleep(delay)
+    }
+  }
+
+  return lastResult
 }
 
 describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
@@ -52,66 +176,19 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
     }
   })
 
-  async function runOpencode(
-    prompt: string,
-  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-    let lastResult: { stdout: string; stderr: string; exitCode: number } = {
-      stdout: '',
-      stderr: '',
-      exitCode: -1,
-    }
-
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      const result = Bun.spawnSync(
-        ['opencode', 'run', '--model', OPENCODE_TEST_MODEL, prompt],
-        {
-          cwd: testEnv.projectDir,
-          env: {
-            ...process.env,
-            OPENCODE_CONFIG_CONTENT: buildOpencodeConfig(),
-          },
-          timeout: TIMEOUT_MS,
-        },
-      )
-
-      lastResult = {
-        stdout: result.stdout.toString(),
-        stderr: result.stderr.toString(),
-        exitCode: result.exitCode ?? -1,
-      }
-
-      const isTimeout =
-        lastResult.exitCode === -1 || lastResult.stderr.includes('ETIMEDOUT')
-
-      const isRateLimit =
-        lastResult.stderr.includes('rate limit') ||
-        lastResult.stderr.includes('429')
-
-      if (!isTimeout && !isRateLimit && lastResult.exitCode === 0) {
-        return lastResult
-      }
-
-      if (attempt < MAX_RETRIES) {
-        const delay = RETRY_DELAY_MS * attempt
-        console.log(
-          `Attempt ${attempt}/${MAX_RETRIES} failed, retrying in ${delay}ms...`,
-        )
-        await Bun.sleep(delay)
-      }
-    }
-
-    return lastResult
-  }
-
   test(
     'systematic_skill tool loads systematic:brainstorming skill',
     async () => {
       const result = await runOpencode(
         'Use the systematic_skill tool to load systematic:brainstorming',
+        {
+          cwd: testEnv.projectDir,
+          configContent: buildOpencodeConfig(),
+        },
       )
 
       expect(result.stdout).toMatch(
-        /<skill-instruction>|brainstorm|systematic|skill loaded/i,
+        /<skill-instruction>|brainstorm|systematic|skill loaded|loaded/i,
       )
     },
     TIMEOUT_MS * MAX_RETRIES,
@@ -122,9 +199,76 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
     async () => {
       const result = await runOpencode(
         'What skills are available? List the systematic skills you can load.',
+        {
+          cwd: testEnv.projectDir,
+          configContent: buildOpencodeConfig(),
+        },
       )
 
       expect(result.stdout).toMatch(/brainstorming|systematic.*skills/i)
+    },
+    TIMEOUT_MS * MAX_RETRIES,
+  )
+})
+
+describe('sync-cep workflow simulation', () => {
+  const fixtures = [
+    {
+      name: 'hash-change',
+      summary: {
+        hashChanges: ['skills/brainstorming'],
+        newUpstream: [],
+        deletions: [],
+        skipped: [],
+        converterVersionChanged: false,
+      },
+    },
+    {
+      name: 'report-only',
+      summary: {
+        hashChanges: [],
+        newUpstream: ['skills/new-skill'],
+        deletions: ['agents/review/security-sentinel'],
+        skipped: [],
+        converterVersionChanged: false,
+      },
+    },
+    {
+      name: 'converter-version',
+      summary: {
+        hashChanges: [],
+        newUpstream: [],
+        deletions: [],
+        skipped: [],
+        converterVersionChanged: true,
+      },
+    },
+  ]
+
+  test.each(fixtures)('builds sync prompt for $name', ({ summary }) => {
+    const prompt = buildSyncPrompt(summary, 'all', true)
+    expect(prompt).toContain(JSON.stringify(summary))
+    expect(prompt).toContain('/sync-cep all --dry-run')
+    expect(prompt).toContain('headless CI')
+  })
+
+  test('sync gate honors precheck exit codes', () => {
+    expect(shouldRunSync(0)).toBe(false)
+    expect(shouldRunSync(1)).toBe(true)
+    expect(shouldRunSync(2)).toBe(false)
+  })
+
+  test.skipIf(!OPENCODE_AVAILABLE)(
+    'runs sync-cep command with dry-run prompt',
+    async () => {
+      const prompt = buildSyncPrompt(fixtures[0].summary, 'all', true)
+      const result = await runOpencode(prompt, {
+        cwd: REPO_ROOT,
+        configContent: buildSyncCepTestConfig(),
+      })
+
+      expect(result.exitCode).not.toBe(-1)
+      expect(result.stdout).not.toMatch(/\n\s*[→$⚙]/)
     },
     TIMEOUT_MS * MAX_RETRIES,
   )

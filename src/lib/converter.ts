@@ -24,7 +24,7 @@ interface CacheEntry {
 }
 
 // Bump when mapping logic changes to invalidate cached conversions
-const CONVERTER_VERSION = 2
+export const CONVERTER_VERSION = 2
 
 const cache = new Map<string, CacheEntry>()
 

@@ -1,0 +1,143 @@
+---
+name: Sync CEP
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+    inputs:
+      scope:
+        description: What to sync
+        type: choice
+        options:
+          - all
+          - skills
+          - agents
+          - commands
+        default: all
+      dry_run:
+        description: Preview changes without creating PR
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sync-cep
+  cancel-in-progress: false
+
+jobs:
+  precheck:
+    name: CEP Pre-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      exit_code: ${{ steps.precheck.outputs.exit_code }}
+      summary: ${{ steps.precheck.outputs.summary }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.FRO_BOT_PAT }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run pre-check
+        id: precheck
+        run: |
+          set +e
+          bun scripts/check-cep-upstream.ts > precheck.json
+          exit_code=$?
+          summary='{}'
+          if [ -s precheck.json ]; then
+            summary=$(jq -c '.' < precheck.json 2>/dev/null || echo '{}')
+          fi
+          echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
+          echo "summary=$summary" >> "$GITHUB_OUTPUT"
+          jq -c '{hashChanges, newUpstream, deletions, skipped, converterVersionChanged, errors}' < precheck.json 2>/dev/null || cat precheck.json
+          if [ "$exit_code" -eq 2 ]; then
+            exit 2
+          fi
+        env:
+          GITHUB_TOKEN: ${{ secrets.FRO_BOT_PAT }}
+
+  sync:
+    name: CEP Sync
+    runs-on: ubuntu-latest
+    needs: precheck
+    if: needs.precheck.outputs.exit_code == '1'
+    permissions:
+      contents: read
+    env:
+      SYNC_PROMPT: |
+        /sync-cep ${{ inputs.scope || 'all' }} ${{ inputs.dry_run && '--dry-run' || '' }}
+
+        <precheck-summary>
+        ${{ needs.precheck.outputs.summary }}
+        </precheck-summary>
+
+        Note: headless CI run — user will not see live output.
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.FRO_BOT_PAT }}
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Run build checks
+        run: |
+          bun run build
+          bun run typecheck
+          bun run lint
+          bun test
+
+      - name: Run Sync Bot
+        uses: fro-bot/agent@c21289d8a8d2e792628debb75578cdbb2f3ace00
+        env:
+          OPENCODE_PROMPT_ARTIFACT: 'true'
+        with:
+          auth-json: '{}'
+          github-token: ${{ secrets.FRO_BOT_PAT }}
+          prompt: ${{ env.SYNC_PROMPT }}
+
+      - name: Report precheck errors
+        if: failure() && steps.precheck.outputs.exit_code == '2'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.FRO_BOT_PAT }}
+          script: |
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'sync-cep',
+              state: 'open'
+            });
+            let issue = issues[0];
+            if (!issue) {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: 'sync-cep: precheck errors',
+                labels: ['sync-cep'],
+                body: 'Precheck failed; see workflow logs for details.'
+              });
+              issue = created.data;
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              body: 'Precheck failed (exit code 2). Check workflow logs for diagnostics.'
+            });
