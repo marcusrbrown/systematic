@@ -3,8 +3,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { Config } from '@opencode-ai/sdk'
-import { createConfigHandler } from '../../src/lib/config-handler.ts'
 import { extractCommandFrontmatter } from '../../src/lib/commands.ts'
+import { createConfigHandler } from '../../src/lib/config-handler.ts'
 import { parseFrontmatter } from '../../src/lib/frontmatter.ts'
 
 const OPENCODE_AVAILABLE = (() => {
