@@ -35,14 +35,30 @@ You are running a CEP-to-Systematic re-sync. Your output must be structured and 
 
 ## Feature: Pre-check Gate
 
-- Use the pre-check JSON output (if available) to decide whether to proceed.
-- If no changes are detected, stop and report “no changes.”
-- The sync workflow passes the pre-check summary in the prompt. Do not rerun the pre-check.
+The sync workflow passes the pre-check summary and exit code in the prompt. Do not rerun the pre-check.
+
+### Pre-check Exit Codes
+
+| Exit Code | Meaning | Action |
+|-----------|---------|--------|
+| `0` | No changes detected | Stop and report "no changes." (Sync job should not run in this case.) |
+| `1` | Changes detected, no errors | Proceed with conversion run normally. |
+| `2` | Changes detected but with errors | Errors indicate missing upstream files (the manifest references files that no longer exist upstream). Proceed with conversion for definitions that are **not** affected by errors. Report errored definitions separately — do not attempt to convert them. Include the errors list from the pre-check summary in the output. |
+
+### Pre-check Error Handling
+
+When `<precheck-exit-code>` is `2`:
+- The `errors` array in the pre-check summary lists missing upstream content paths.
+- Extract the affected definition keys from the error paths (e.g., `Missing upstream content: plugins/compound-engineering/skills/foo/SKILL.md` → `skills/foo`).
+- Skip those definitions during conversion.
+- Include an **Errors** section in the output summary listing each error and the affected definitions.
+- The remaining `hashChanges`, `newUpstream`, and `deletions` are still valid and should be processed normally.
 
 ### Dry-Run Exit Condition (HARD STOP)
 
 If `--dry-run` is present in the user request:
 - Output the dry-run summary only.
+- If `<precheck-exit-code>` is `2`, the summary MUST include the errors and which definitions would be skipped.
 - Do **not** call tools or skills.
 - Do **not** proceed to live sync.
 - Do **not** say you will continue or proceed with live sync.

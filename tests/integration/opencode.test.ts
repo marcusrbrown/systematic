@@ -76,6 +76,7 @@ function buildSyncPrompt(
   summary: PrecheckSummary,
   scope: string,
   dryRun: boolean,
+  exitCode: number = 1,
 ): string {
   const dryRunFlag = dryRun ? '--dry-run' : ''
   const dryRunNotice = dryRun
@@ -84,15 +85,17 @@ function buildSyncPrompt(
   return `/sync-cep ${scope} ${dryRunFlag}
 ${dryRunNotice}
 
-Note: headless CI run — user will not see live output.
+<precheck-exit-code>${exitCode}</precheck-exit-code>
 
 <precheck-summary>
 ${JSON.stringify(summary)}
-</precheck-summary>`
+</precheck-summary>
+
+Note: headless CI run — user will not see live output.`
 }
 
 function shouldRunSync(exitCode: number): boolean {
-  return exitCode === 1
+  return exitCode !== 0 && exitCode !== -1
 }
 
 async function runOpencode(
@@ -249,13 +252,29 @@ describe('sync-cep workflow simulation', () => {
     const prompt = buildSyncPrompt(summary, 'all', true)
     expect(prompt).toContain(JSON.stringify(summary))
     expect(prompt).toContain('/sync-cep all --dry-run')
+    expect(prompt).toContain('<precheck-exit-code>1</precheck-exit-code>')
     expect(prompt).toContain('headless CI')
+  })
+
+  test('builds sync prompt with exit code 2 and errors', () => {
+    const summary: PrecheckSummary = {
+      hashChanges: ['skills/brainstorming'],
+      newUpstream: [],
+      deletions: [],
+      skipped: [],
+      converterVersionChanged: false,
+    }
+    const prompt = buildSyncPrompt(summary, 'all', true, 2)
+    expect(prompt).toContain('<precheck-exit-code>2</precheck-exit-code>')
+    expect(prompt).toContain(JSON.stringify(summary))
+    expect(prompt).toContain('/sync-cep all --dry-run')
   })
 
   test('sync gate honors precheck exit codes', () => {
     expect(shouldRunSync(0)).toBe(false)
     expect(shouldRunSync(1)).toBe(true)
-    expect(shouldRunSync(2)).toBe(false)
+    expect(shouldRunSync(2)).toBe(true)
+    expect(shouldRunSync(-1)).toBe(false)
   })
 
   test.skipIf(!OPENCODE_AVAILABLE)(
