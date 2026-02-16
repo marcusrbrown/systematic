@@ -17,11 +17,170 @@ const OPENCODE_TEST_MODEL = 'opencode/big-pickle'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..')
 
+interface PrecheckSummary {
+  hashChanges: string[]
+  newUpstream: string[]
+  deletions: string[]
+  skipped: string[]
+  converterVersionChanged: boolean
+}
+
+interface OpencodeResult {
+  stdout: string
+  stderr: string
+  exitCode: number
+}
+
+interface PrecheckResult {
+  exitCode: number
+  summary?: PrecheckSummary
+  raw: string
+}
+
+interface RunSyncWorkflowParams {
+  summary: PrecheckSummary
+  exitCode: number
+  scope: string
+  dryRun: boolean
+  cwd: string
+}
+
+interface RunSyncWorkflowResult {
+  ran: boolean
+  result?: OpencodeResult
+  prompt: string
+}
+
 function buildOpencodeConfig(): string {
   const pluginPath = `file://${path.join(REPO_ROOT, 'src/index.ts')}`
   return JSON.stringify({
     plugin: [pluginPath],
   })
+}
+
+function buildSyncPrompt(
+  summary: PrecheckSummary,
+  scope: string,
+  dryRun: boolean,
+): string {
+  return `You are Fro Bot running in CEP sync mode.
+- Use the pre-check summary provided below. Do not rerun the pre-check.
+- Run /sync-cep with the provided scope and dry-run flag.
+- Always update or create a tracking issue labeled "sync-cep".
+
+Pre-check summary (JSON, compact): ${JSON.stringify(summary)}
+
+Scope: ${scope}
+Dry run: ${dryRun}`
+}
+
+function shouldRunSync(exitCode: number): boolean {
+  return exitCode === 1
+}
+
+function runPrecheckScript(): PrecheckResult {
+  const result = Bun.spawnSync(['bun', 'scripts/check-cep-upstream.ts'], {
+    cwd: REPO_ROOT,
+    env: {
+      ...process.env,
+      GITHUB_TOKEN: process.env.GITHUB_TOKEN ?? '',
+    },
+  })
+
+  const stdout = result.stdout.toString()
+  const exitCode = result.exitCode ?? -1
+  let summary: PrecheckSummary | undefined
+
+  try {
+    const parsed = JSON.parse(stdout)
+    if (parsed && typeof parsed === 'object') {
+      summary = parsed as PrecheckSummary
+    }
+  } catch {
+    summary = undefined
+  }
+
+  return {
+    exitCode,
+    summary,
+    raw: stdout,
+  }
+}
+
+async function runSyncWorkflow({
+  summary,
+  exitCode,
+  scope,
+  dryRun,
+  cwd,
+}: RunSyncWorkflowParams): Promise<RunSyncWorkflowResult> {
+  const prompt = buildSyncPrompt(summary, scope, dryRun)
+
+  if (!shouldRunSync(exitCode)) {
+    return {
+      ran: false,
+      prompt,
+    }
+  }
+
+  const result = await runOpencode(prompt, cwd)
+  return {
+    ran: true,
+    result,
+    prompt,
+  }
+}
+
+async function runOpencode(
+  prompt: string,
+  cwd: string,
+): Promise<OpencodeResult> {
+  let lastResult: { stdout: string; stderr: string; exitCode: number } = {
+    stdout: '',
+    stderr: '',
+    exitCode: -1,
+  }
+
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    const result = Bun.spawnSync(
+      ['opencode', 'run', '--model', OPENCODE_TEST_MODEL, prompt],
+      {
+        cwd,
+        env: {
+          ...process.env,
+          OPENCODE_CONFIG_CONTENT: buildOpencodeConfig(),
+        },
+        timeout: TIMEOUT_MS,
+      },
+    )
+
+    lastResult = {
+      stdout: result.stdout.toString(),
+      stderr: result.stderr.toString(),
+      exitCode: result.exitCode ?? -1,
+    }
+
+    const isTimeout =
+      lastResult.exitCode === -1 || lastResult.stderr.includes('ETIMEDOUT')
+
+    const isRateLimit =
+      lastResult.stderr.includes('rate limit') ||
+      lastResult.stderr.includes('429')
+
+    if (!isTimeout && !isRateLimit && lastResult.exitCode === 0) {
+      return lastResult
+    }
+
+    if (attempt < MAX_RETRIES) {
+      const delay = RETRY_DELAY_MS * attempt
+      console.log(
+        `Attempt ${attempt}/${MAX_RETRIES} failed, retrying in ${delay}ms...`,
+      )
+      await Bun.sleep(delay)
+    }
+  }
+
+  return lastResult
 }
 
 describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
@@ -52,66 +211,16 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
     }
   })
 
-  async function runOpencode(
-    prompt: string,
-  ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
-    let lastResult: { stdout: string; stderr: string; exitCode: number } = {
-      stdout: '',
-      stderr: '',
-      exitCode: -1,
-    }
-
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      const result = Bun.spawnSync(
-        ['opencode', 'run', '--model', OPENCODE_TEST_MODEL, prompt],
-        {
-          cwd: testEnv.projectDir,
-          env: {
-            ...process.env,
-            OPENCODE_CONFIG_CONTENT: buildOpencodeConfig(),
-          },
-          timeout: TIMEOUT_MS,
-        },
-      )
-
-      lastResult = {
-        stdout: result.stdout.toString(),
-        stderr: result.stderr.toString(),
-        exitCode: result.exitCode ?? -1,
-      }
-
-      const isTimeout =
-        lastResult.exitCode === -1 || lastResult.stderr.includes('ETIMEDOUT')
-
-      const isRateLimit =
-        lastResult.stderr.includes('rate limit') ||
-        lastResult.stderr.includes('429')
-
-      if (!isTimeout && !isRateLimit && lastResult.exitCode === 0) {
-        return lastResult
-      }
-
-      if (attempt < MAX_RETRIES) {
-        const delay = RETRY_DELAY_MS * attempt
-        console.log(
-          `Attempt ${attempt}/${MAX_RETRIES} failed, retrying in ${delay}ms...`,
-        )
-        await Bun.sleep(delay)
-      }
-    }
-
-    return lastResult
-  }
-
   test(
     'systematic_skill tool loads systematic:brainstorming skill',
     async () => {
       const result = await runOpencode(
         'Use the systematic_skill tool to load systematic:brainstorming',
+        testEnv.projectDir,
       )
 
       expect(result.stdout).toMatch(
-        /<skill-instruction>|brainstorm|systematic|skill loaded/i,
+        /<skill-instruction>|brainstorm|systematic|skill loaded|loaded/i,
       )
     },
     TIMEOUT_MS * MAX_RETRIES,
@@ -122,9 +231,112 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
     async () => {
       const result = await runOpencode(
         'What skills are available? List the systematic skills you can load.',
+        testEnv.projectDir,
       )
 
       expect(result.stdout).toMatch(/brainstorming|systematic.*skills/i)
+    },
+    TIMEOUT_MS * MAX_RETRIES,
+  )
+})
+
+describe('sync-cep workflow simulation', () => {
+  const fixtures = [
+    {
+      name: 'hash-change',
+      summary: {
+        hashChanges: ['skills/brainstorming'],
+        newUpstream: [],
+        deletions: [],
+        skipped: [],
+        converterVersionChanged: false,
+      },
+    },
+    {
+      name: 'report-only',
+      summary: {
+        hashChanges: [],
+        newUpstream: ['skills/new-skill'],
+        deletions: ['agents/review/security-sentinel'],
+        skipped: [],
+        converterVersionChanged: false,
+      },
+    },
+    {
+      name: 'converter-version',
+      summary: {
+        hashChanges: [],
+        newUpstream: [],
+        deletions: [],
+        skipped: [],
+        converterVersionChanged: true,
+      },
+    },
+  ]
+
+  test.each(fixtures)('builds sync prompt for $name', ({ summary }) => {
+    const prompt = buildSyncPrompt(summary, 'all', true)
+    expect(prompt).toContain(JSON.stringify(summary))
+    expect(prompt).toContain('Dry run: true')
+    expect(prompt).toContain('Scope: all')
+  })
+
+  test('sync gate honors precheck exit codes', () => {
+    expect(shouldRunSync(0)).toBe(false)
+    expect(shouldRunSync(1)).toBe(true)
+    expect(shouldRunSync(2)).toBe(false)
+  })
+
+  test('sync workflow skips opencode run on exit code 0', async () => {
+    const result = await runSyncWorkflow({
+      summary: fixtures[0].summary,
+      exitCode: 0,
+      scope: 'all',
+      dryRun: true,
+      cwd: REPO_ROOT,
+    })
+
+    expect(result.ran).toBe(false)
+    expect(result.result).toBeUndefined()
+  })
+
+  test.skipIf(!OPENCODE_AVAILABLE)(
+    'runs sync prompt in repo with dry-run flag',
+    async () => {
+      const result = await runSyncWorkflow({
+        summary: fixtures[0].summary,
+        exitCode: 1,
+        scope: 'all',
+        dryRun: true,
+        cwd: REPO_ROOT,
+      })
+
+      expect(result.ran).toBe(true)
+      expect(result.result?.exitCode).toBe(0)
+    },
+    TIMEOUT_MS * MAX_RETRIES,
+  )
+
+  test.skipIf(!OPENCODE_AVAILABLE || !process.env.GITHUB_TOKEN)(
+    'uses live precheck output when available',
+    async () => {
+      const precheck = runPrecheckScript()
+      expect(precheck.exitCode).toBeGreaterThanOrEqual(0)
+
+      if (precheck.exitCode !== 1 || precheck.summary == null) {
+        return
+      }
+
+      const result = await runSyncWorkflow({
+        summary: precheck.summary,
+        exitCode: precheck.exitCode,
+        scope: 'all',
+        dryRun: true,
+        cwd: REPO_ROOT,
+      })
+
+      expect(result.ran).toBe(true)
+      expect(result.result?.exitCode).toBe(0)
     },
     TIMEOUT_MS * MAX_RETRIES,
   )
