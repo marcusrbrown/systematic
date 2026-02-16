@@ -24,7 +24,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: sync-cep-${{ github.ref }}
+  group: sync-cep
   cancel-in-progress: false
 
 jobs:
@@ -56,11 +56,11 @@ jobs:
           exit_code=$?
           summary='{}'
           if [ -s precheck.json ]; then
-            summary=$(python -c "import json,sys; print(json.dumps(json.load(sys.stdin)))" < precheck.json 2>/dev/null || printf '{}')
+            summary=$(jq -c '.' < precheck.json 2>/dev/null || echo '{}')
           fi
           echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
           echo "summary=$summary" >> "$GITHUB_OUTPUT"
-          cat precheck.json
+          jq -c '{hashChanges, newUpstream, deletions, skipped, converterVersionChanged, errors}' < precheck.json 2>/dev/null || cat precheck.json
           if [ "$exit_code" -eq 2 ]; then
             exit 2
           fi
@@ -111,3 +111,33 @@ jobs:
           auth-json: '{}'
           github-token: ${{ secrets.FRO_BOT_PAT }}
           prompt: ${{ env.SYNC_PROMPT }}
+
+      - name: Report precheck errors
+        if: failure() && steps.precheck.outputs.exit_code == '2'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.FRO_BOT_PAT }}
+          script: |
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'sync-cep',
+              state: 'open'
+            });
+            let issue = issues[0];
+            if (!issue) {
+              const created = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: 'sync-cep: precheck errors',
+                labels: ['sync-cep'],
+                body: 'Precheck failed; see workflow logs for details.'
+              });
+              issue = created.data;
+            }
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              body: 'Precheck failed (exit code 2). Check workflow logs for diagnostics.'
+            });
