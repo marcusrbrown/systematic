@@ -67,16 +67,69 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.FRO_BOT_PAT }}
 
+      - name: Report precheck errors
+        if: failure() && steps.precheck.outputs.exit_code == '2'
+        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
+        with:
+          github-token: ${{ secrets.FRO_BOT_PAT }}
+          script: |
+            const summary = JSON.parse(process.env.PRECHECK_SUMMARY || '{}');
+            const errors = summary.errors || [];
+            const errorList = errors.map(e => `- ${e}`).join('\n');
+            const runUrl = `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+            const body = [
+              '## Pre-check Errors',
+              '',
+              `Pre-check failed with exit code 2. Found ${errors.length} error(s).`,
+              '',
+              '### Errors',
+              errorList || '_None_',
+              '',
+              `**Hash changes:** ${(summary.hashChanges || []).length}`,
+              `**New upstream:** ${(summary.newUpstream || []).length}`,
+              `**Deletions:** ${(summary.deletions || []).length}`,
+              '',
+              `[Workflow run](${runUrl})`
+            ].join('\n');
+
+            const { data: issues } = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'sync-cep',
+              state: 'open'
+            });
+
+            if (issues[0]) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issues[0].number,
+                body
+              });
+            } else {
+              await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: 'sync-cep: precheck errors',
+                labels: ['sync-cep'],
+                body
+              });
+            }
+        env:
+          PRECHECK_SUMMARY: ${{ steps.precheck.outputs.summary }}
+
   sync:
     name: CEP Sync
     runs-on: ubuntu-latest
     needs: precheck
-    if: needs.precheck.outputs.exit_code == '1'
+    if: "!cancelled() && needs.precheck.outputs.exit_code != '' && needs.precheck.outputs.exit_code != '0'"
     permissions:
       contents: read
     env:
       SYNC_PROMPT: |
         /sync-cep ${{ inputs.scope || 'all' }} ${{ inputs.dry_run && '--dry-run' || '' }}
+
+        <precheck-exit-code>${{ needs.precheck.outputs.exit_code }}</precheck-exit-code>
 
         <precheck-summary>
         ${{ needs.precheck.outputs.summary }}
@@ -111,33 +164,3 @@ jobs:
           auth-json: '{}'
           github-token: ${{ secrets.FRO_BOT_PAT }}
           prompt: ${{ env.SYNC_PROMPT }}
-
-      - name: Report precheck errors
-        if: failure() && steps.precheck.outputs.exit_code == '2'
-        uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b # v7.1.0
-        with:
-          github-token: ${{ secrets.FRO_BOT_PAT }}
-          script: |
-            const { data: issues } = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              labels: 'sync-cep',
-              state: 'open'
-            });
-            let issue = issues[0];
-            if (!issue) {
-              const created = await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title: 'sync-cep: precheck errors',
-                labels: ['sync-cep'],
-                body: 'Precheck failed; see workflow logs for details.'
-              });
-              issue = created.data;
-            }
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issue.number,
-              body: 'Precheck failed (exit code 2). Check workflow logs for diagnostics.'
-            });
