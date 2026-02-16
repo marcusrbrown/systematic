@@ -101,6 +101,7 @@ describe('check-cep-upstream helpers', () => {
     })
 
     expect(hasChanges(summary)).toBe(false)
+    expect(summary.errors).toEqual([])
     expect(getExitCode(summary, false)).toBe(0)
   })
 
@@ -119,6 +120,7 @@ describe('check-cep-upstream helpers', () => {
     })
 
     expect(summary.hashChanges).toEqual(['agents/review/security-sentinel'])
+    expect(summary.errors).toEqual([])
     expect(hasChanges(summary)).toBe(true)
     expect(getExitCode(summary, false)).toBe(1)
   })
@@ -139,6 +141,7 @@ describe('check-cep-upstream helpers', () => {
     })
 
     expect(summary.converterVersionChanged).toBe(true)
+    expect(summary.errors).toEqual([])
     expect(hasChanges(summary)).toBe(true)
   })
 
@@ -158,6 +161,7 @@ describe('check-cep-upstream helpers', () => {
 
     expect(summary.newUpstream).toEqual(['skills/new-skill'])
     expect(summary.deletions).toEqual(['agents/review/security-sentinel'])
+    expect(summary.errors).toEqual([])
     expect(hasChanges(summary)).toBe(true)
   })
 
@@ -200,6 +204,7 @@ describe('check-cep-upstream helpers', () => {
     })
 
     expect(summary.hashChanges).toEqual(['skills/agent-native-architecture'])
+    expect(summary.errors).toEqual([])
   })
 
   it('skips definitions with wildcard manual_overrides', () => {
@@ -225,6 +230,7 @@ describe('check-cep-upstream helpers', () => {
     })
 
     expect(summary.skipped).toEqual(['agents/review/security-sentinel'])
+    expect(summary.errors).toEqual([])
     expect(summary.hashChanges).toEqual([])
   })
 
@@ -235,9 +241,52 @@ describe('check-cep-upstream helpers', () => {
       deletions: [],
       converterVersionChanged: false,
       skipped: [],
+      errors: [],
     }
 
     expect(getExitCode(summary, true)).toBe(2)
+  })
+
+  it('flags missing multi-file contents as errors', () => {
+    const manifest: SyncManifest = {
+      converter_version: 2,
+      sources: {
+        cep: {
+          repo: 'EveryInc/compound-engineering-plugin',
+          branch: 'main',
+          url: 'https://github.com/EveryInc/compound-engineering-plugin',
+        },
+      },
+      definitions: {
+        'skills/agent-native-architecture': {
+          source: 'cep',
+          upstream_path:
+            'plugins/compound-engineering/skills/agent-native-architecture',
+          upstream_commit: 'abc123',
+          synced_at: '2026-02-15T00:00:00Z',
+          notes: 'test',
+          files: ['SKILL.md', 'references/one.md'],
+          upstream_content_hash: hash('a' + 'b'),
+        },
+      },
+    }
+
+    const upstreamContents = {
+      'plugins/compound-engineering/skills/agent-native-architecture/SKILL.md':
+        'a',
+    }
+
+    const summary = computeCheckSummary({
+      manifest,
+      upstreamDefinitionKeys: ['skills/agent-native-architecture'],
+      upstreamContents,
+      converterVersion: 2,
+    })
+
+    expect(summary.errors).toEqual([
+      'Missing upstream content: plugins/compound-engineering/skills/agent-native-architecture/references/one.md',
+    ])
+    expect(getExitCode(summary, false)).toBe(2)
   })
 
   it('fetches upstream data using tree and content endpoints', async () => {
@@ -287,5 +336,123 @@ describe('check-cep-upstream helpers', () => {
       'plugins/compound-engineering/agents/review/security-sentinel.md':
         'agent',
     })
+  })
+
+  it('retries content fetch on 429 and succeeds', async () => {
+    const repo = 'EveryInc/compound-engineering-plugin'
+    const branch = 'main'
+    const contentPath =
+      'plugins/compound-engineering/agents/review/security-sentinel.md'
+    const responses = new Map<string, Response>()
+
+    responses.set(
+      `https://api.github.com/repos/${repo}/git/trees/${branch}?recursive=1`,
+      new Response(
+        JSON.stringify({
+          tree: [
+            {
+              path: contentPath,
+              type: 'blob',
+            },
+          ],
+        }),
+        { status: 200 },
+      ),
+    )
+
+    let contentCalls = 0
+    const fetchFn = async (url: string): Promise<Response> => {
+      if (url === `https://api.github.com/repos/${repo}/contents/${contentPath}?ref=${branch}`) {
+        contentCalls += 1
+        if (contentCalls < 2) {
+          return new Response('rate limited', { status: 429 })
+        }
+        return new Response(
+          JSON.stringify({ content: Buffer.from('agent').toString('base64') }),
+          { status: 200 },
+        )
+      }
+      return responses.get(url) ?? new Response('missing', { status: 404 })
+    }
+
+    const result = await fetchUpstreamData(
+      repo,
+      branch,
+      [contentPath],
+      fetchFn,
+    )
+
+    expect(contentCalls).toBe(2)
+    expect(result.hadError).toBe(false)
+    expect(result.contents[contentPath]).toBe('agent')
+  })
+
+  it('retries tree fetch on 403 and succeeds', async () => {
+    const repo = 'EveryInc/compound-engineering-plugin'
+    const branch = 'main'
+    const contentPath =
+      'plugins/compound-engineering/agents/review/security-sentinel.md'
+
+    let treeCalls = 0
+    const fetchFn = async (url: string): Promise<Response> => {
+      if (url === `https://api.github.com/repos/${repo}/git/trees/${branch}?recursive=1`) {
+        treeCalls += 1
+        if (treeCalls < 2) {
+          return new Response('forbidden', { status: 403 })
+        }
+        return new Response(
+          JSON.stringify({
+            tree: [
+              {
+                path: contentPath,
+                type: 'blob',
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      }
+      if (url === `https://api.github.com/repos/${repo}/contents/${contentPath}?ref=${branch}`) {
+        return new Response(
+          JSON.stringify({ content: Buffer.from('agent').toString('base64') }),
+          { status: 200 },
+        )
+      }
+      return new Response('missing', { status: 404 })
+    }
+
+    const result = await fetchUpstreamData(
+      repo,
+      branch,
+      [contentPath],
+      fetchFn,
+    )
+
+    expect(treeCalls).toBe(2)
+    expect(result.hadError).toBe(false)
+    expect(result.definitionKeys).toEqual(['agents/review/security-sentinel'])
+  })
+
+  it('returns hadError when retries are exhausted', async () => {
+    const repo = 'EveryInc/compound-engineering-plugin'
+    const branch = 'main'
+    const contentPath =
+      'plugins/compound-engineering/agents/review/security-sentinel.md'
+
+    const fetchFn = async (url: string): Promise<Response> => {
+      if (url === `https://api.github.com/repos/${repo}/git/trees/${branch}?recursive=1`) {
+        return new Response('rate limited', { status: 429 })
+      }
+      return new Response('missing', { status: 404 })
+    }
+
+    const result = await fetchUpstreamData(
+      repo,
+      branch,
+      [contentPath],
+      fetchFn,
+    )
+
+    expect(result.hadError).toBe(true)
   })
 })

@@ -9,6 +9,7 @@ export interface CheckSummary {
   deletions: string[]
   skipped: string[]
   converterVersionChanged: boolean
+  errors: string[]
 }
 
 export interface CheckInputs {
@@ -67,10 +68,19 @@ const computeSkillHash = (
   basePath: string,
   files: string[],
   upstreamContents: Record<string, string>,
+  errors: string[],
 ): string => {
   const ordered = [...files].sort()
   const combined = ordered
-    .map((file) => upstreamContents[joinUpstreamPath(basePath, file)] ?? '')
+    .map((file) => {
+      const path = joinUpstreamPath(basePath, file)
+      const content = upstreamContents[path]
+      if (content == null) {
+        errors.push(`Missing upstream content: ${path}`)
+        return ''
+      }
+      return content
+    })
     .join('')
   return hashContent(combined)
 }
@@ -124,6 +134,50 @@ const parseTreePaths = (raw: string): string[] => {
   return results
 }
 
+const MAX_RETRIES = 3
+const BASE_DELAY_MS = 1000
+const MAX_DELAY_MS = 10000
+
+const isRetryStatus = (status: number): boolean =>
+  status === 403 || status === 429
+
+const readRetryAfterSeconds = (response: Response): number | null => {
+  const value = response.headers.get('retry-after')
+  if (!value) return null
+  const parsed = Number.parseInt(value, 10)
+  return Number.isNaN(parsed) ? null : parsed
+}
+
+const computeDelayMs = (attempt: number, response?: Response): number => {
+  const retryAfter = response ? readRetryAfterSeconds(response) : null
+  if (retryAfter != null) {
+    return Math.min(retryAfter * 1000, MAX_DELAY_MS)
+  }
+  return Math.min(BASE_DELAY_MS * 2 ** (attempt - 1), MAX_DELAY_MS)
+}
+
+const sleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms))
+
+const fetchWithRetry = async (
+  url: string,
+  fetchFn: (url: string) => Promise<Response>,
+): Promise<{ response: Response | null; hadError: boolean }> => {
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt += 1) {
+    const response = await fetchFn(url)
+    if (response.ok) return { response, hadError: false }
+    if (!isRetryStatus(response.status)) {
+      return { response, hadError: true }
+    }
+    if (attempt === MAX_RETRIES) {
+      return { response, hadError: true }
+    }
+    await sleep(computeDelayMs(attempt, response))
+  }
+
+  return { response: null, hadError: true }
+}
+
 export const fetchUpstreamData = async (
   repo: string,
   branch: string,
@@ -135,11 +189,11 @@ export const fetchUpstreamData = async (
   const contents: Record<string, string> = {}
 
   const treeUrl = `https://api.github.com/repos/${repo}/git/trees/${branch}?recursive=1`
-  const treeResponse = await fetchFn(treeUrl)
-  if (!treeResponse.ok) {
+  const treeResult = await fetchWithRetry(treeUrl, fetchFn)
+  if (!treeResult.response || !treeResult.response.ok) {
     return { definitionKeys: [], contents: {}, hadError: true }
   }
-  const treeRaw = await treeResponse.text()
+  const treeRaw = await treeResult.response.text()
   const treePaths = parseTreePaths(treeRaw)
   for (const path of treePaths) {
     const key = toDefinitionKey(path)
@@ -148,12 +202,12 @@ export const fetchUpstreamData = async (
 
   for (const path of paths) {
     const contentUrl = `https://api.github.com/repos/${repo}/contents/${path}?ref=${branch}`
-    const response = await fetchFn(contentUrl)
-    if (!response.ok) {
+    const result = await fetchWithRetry(contentUrl, fetchFn)
+    if (!result.response || !result.response.ok) {
       hadError = true
       continue
     }
-    const payload: unknown = await response.json()
+    const payload: unknown = await result.response.json()
     if (!isObject(payload) || !isString(payload.content)) {
       hadError = true
       continue
@@ -179,6 +233,7 @@ export const computeCheckSummary = ({
   const newUpstream: string[] = []
   const deletions: string[] = []
   const skipped: string[] = []
+  const errors: string[] = []
 
   const manifestKeys = Object.keys(manifest.definitions)
   const upstreamSet = new Set(upstreamDefinitionKeys)
@@ -204,8 +259,15 @@ export const computeCheckSummary = ({
     const upstreamPath = entry.upstream_path
 
     const currentHash = entry.upstream_content_hash ?? ''
+    if (!entry.files?.length) {
+      if (!(upstreamPath in upstreamContents)) {
+        errors.push(`Missing upstream content: ${upstreamPath}`)
+        continue
+      }
+    }
+
     const nextHash = entry.files?.length
-      ? computeSkillHash(upstreamPath, entry.files, upstreamContents)
+      ? computeSkillHash(upstreamPath, entry.files, upstreamContents, errors)
       : hashContent(upstreamContents[upstreamPath] ?? '')
 
     if (nextHash !== currentHash) {
@@ -218,6 +280,7 @@ export const computeCheckSummary = ({
     newUpstream,
     deletions,
     skipped,
+    errors,
     converterVersionChanged:
       manifest.converter_version !== undefined &&
       manifest.converter_version !== converterVersion,
@@ -237,7 +300,7 @@ export const getExitCode = (
   summary: CheckSummary,
   hadError: boolean,
 ): number => {
-  if (hadError) return 2
+  if (hadError || summary.errors.length > 0) return 2
   return hasChanges(summary) ? 1 : 0
 }
 
