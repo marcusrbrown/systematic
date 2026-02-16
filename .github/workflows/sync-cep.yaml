@@ -37,13 +37,13 @@ jobs:
       summary: ${{ steps.precheck.outputs.summary }}
     steps:
       - name: Checkout repository
-        uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
           token: ${{ secrets.FRO_BOT_PAT }}
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@ab8cb4e8f89912a29b87e4abc4554f2301648a5c
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -138,13 +138,13 @@ jobs:
         Note: headless CI run — user will not see live output.
     steps:
       - name: Checkout repository
-        uses: actions/checkout@0c366fd6a839edf440554fa01a7085ccba70ac98
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
           token: ${{ secrets.FRO_BOT_PAT }}
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@ab8cb4e8f89912a29b87e4abc4554f2301648a5c
+        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -157,7 +157,7 @@ jobs:
           bun test
 
       - name: Run Sync Bot
-        uses: fro-bot/agent@d58b64bfc48f545369105a84648f774c0863b6af
+        uses: fro-bot/agent@7523b7246834817788b499f8e6c0b025356e8559 # v0.26.1
         env:
           OPENCODE_PROMPT_ARTIFACT: 'true'
         with:
