@@ -406,17 +406,7 @@ If `manual_overrides` contains entries, those fields/sections were customized af
 4. Merge overrides back in
 5. Update manifest `synced_at` and `upstream_commit` but keep `manual_overrides` intact
 
-**Override entries can be plain strings or structured objects:**
-
-**Plain string format** (for initial import or lightweight tracking):
-
-```json
-{
-  "manual_overrides": ["description", "frontmatter:mode->model"]
-}
-```
-
-**Structured object format** (for post-import customization with full provenance):
+**Override entries MUST be structured objects (string arrays are invalid):**
 
 ```json
 {
@@ -431,7 +421,7 @@ If `manual_overrides` contains entries, those fields/sections were customized af
 }
 ```
 
-When using structured entries, each has:
+Each entry has:
 - `field`: Same naming convention as `rewrites[].field` (e.g., `description`, `body:section-name`, `frontmatter:<field>`, `*` for full local ownership)
 - `reason`: Why the override exists — one sentence
 - `original`: Pre-override value (for conflict detection and rollback; truncate to 500 chars for large sections)
@@ -591,7 +581,7 @@ If an upstream file was deleted but the manifest still has an entry:
 2. Do NOT auto-remove the bundled definition — it may have been intentionally kept
 3. Flag to the user: "Upstream deleted `<path>`. Keep local copy or remove?"
 4. If removing: delete the bundled file AND the manifest entry
-5. If keeping: add `"manual_overrides": ["*"]` to indicate full local ownership
+5. If keeping: add `"manual_overrides": [{"field": "*", "reason": "Local ownership", "overridden_at": "<ISO timestamp>"}]` to indicate full local ownership
 
 ## Reference: Existing Bundled Content
 

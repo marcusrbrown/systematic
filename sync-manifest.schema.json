@@ -9,6 +9,10 @@
     "$schema": {
       "type": "string"
     },
+    "converter_version": {
+      "type": "number",
+      "description": "Converter version used for the last successful sync"
+    },
     "sources": {
       "type": "object",
       "description": "Named upstream source repositories",
@@ -66,6 +70,13 @@
           "notes": {
             "type": "string",
             "description": "Human-readable summary of what was changed or adapted during import"
+          },
+          "files": {
+            "type": "array",
+            "description": "Relative file paths for multi-file definitions (skills with references/templates). When present, hashes are computed over this ordered list.",
+            "items": {
+              "type": "string"
+            }
           },
           "upstream_content_hash": {
             "type": "string",

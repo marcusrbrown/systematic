@@ -25,6 +25,7 @@ export interface ManifestDefinition {
   upstream_commit: string
   synced_at: string
   notes: string
+  files?: string[]
   upstream_content_hash?: string
   rewrites?: ManifestRewrite[]
   manual_overrides?: ManualOverride[]
@@ -32,6 +33,7 @@ export interface ManifestDefinition {
 
 export interface SyncManifest {
   $schema?: string
+  converter_version?: number
   sources: Record<string, ManifestSource>
   definitions: Record<string, ManifestDefinition>
 }
@@ -86,6 +88,10 @@ function isManifestDefinition(value: unknown): value is ManifestDefinition {
     typeof value.upstream_content_hash !== 'string'
   )
     return false
+  if (value.files !== undefined) {
+    if (!Array.isArray(value.files)) return false
+    if (!value.files.every((file) => typeof file === 'string')) return false
+  }
   if (value.rewrites !== undefined && !isRewriteArray(value.rewrites))
     return false
   if (
@@ -99,6 +105,12 @@ function isManifestDefinition(value: unknown): value is ManifestDefinition {
 
 export function validateManifest(data: unknown): data is SyncManifest {
   if (!isRecord(data)) return false
+
+  if (
+    data.converter_version !== undefined &&
+    typeof data.converter_version !== 'number'
+  )
+    return false
 
   if (!isRecord(data.sources)) return false
   for (const source of Object.values(data.sources)) {
@@ -148,5 +160,27 @@ export function findStaleEntries(
 ): string[] {
   return Object.keys(manifest.definitions).filter(
     (key) => !existingPaths.includes(key),
+  )
+}
+
+export function listDefinitionsBySource(
+  manifest: SyncManifest,
+  source: string,
+): string[] {
+  return Object.keys(manifest.definitions)
+    .filter((key) => manifest.definitions[key]?.source === source)
+    .sort()
+}
+
+export function getUpstreamHashes(
+  manifest: SyncManifest,
+  source: string,
+): Record<string, string> {
+  const entries = listDefinitionsBySource(manifest, source)
+  return Object.fromEntries(
+    entries.map((key) => [
+      key,
+      manifest.definitions[key]?.upstream_content_hash ?? '',
+    ]),
   )
 }
