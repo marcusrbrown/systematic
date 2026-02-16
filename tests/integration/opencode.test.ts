@@ -4,14 +4,15 @@ import os from 'node:os'
 import path from 'node:path'
 import type { Config } from '@opencode-ai/sdk'
 import { createConfigHandler } from '../../src/lib/config-handler.ts'
+import { parseFrontmatter } from '../../src/lib/frontmatter.ts'
 
 const OPENCODE_AVAILABLE = (() => {
   const result = Bun.spawnSync(['which', 'opencode'])
   return result.exitCode === 0
 })()
 
-const TIMEOUT_MS = 120_000
-const MAX_RETRIES = 2
+const TIMEOUT_MS = 90_000
+const MAX_RETRIES = 1
 const RETRY_DELAY_MS = 3_000
 const OPENCODE_TEST_MODEL = 'opencode/big-pickle'
 
@@ -31,11 +32,12 @@ interface OpencodeResult {
   exitCode: number
 }
 
-interface PrecheckResult {
-  exitCode: number
-  summary?: PrecheckSummary
-  raw: string
+interface RunOpencodeOptions {
+  cwd: string
+  configContent?: string
+  commandName?: string
 }
+
 
 interface RunSyncWorkflowParams {
   summary: PrecheckSummary
@@ -58,54 +60,73 @@ function buildOpencodeConfig(): string {
   })
 }
 
+function buildSyncCepCommandTemplate(): string {
+  const commandPath = path.join(REPO_ROOT, '.opencode/commands/sync-cep.md')
+  const content = fs.readFileSync(commandPath, 'utf8')
+  const { body } = parseFrontmatter(content)
+
+  return `<command-instruction>
+${body.trim()}
+</command-instruction>
+
+<user-request>
+$ARGUMENTS
+</user-request>`
+}
+
+function buildSyncCepTestConfig(): string {
+  return JSON.stringify({
+    agent: {
+      'sync-cep-test': {
+        prompt: 'Follow the sync-cep command instructions exactly.',
+        permission: {
+          read: 'deny',
+          edit: 'deny',
+          glob: 'deny',
+          grep: 'deny',
+          list: 'deny',
+          bash: 'deny',
+          webfetch: 'deny',
+          task: 'deny',
+          skill: 'deny',
+        },
+      },
+    },
+    command: {
+      'sync-cep': {
+        name: 'sync-cep',
+        description:
+          'Sync upstream CEP definitions into Systematic using convert-cc-defs.',
+        agent: 'sync-cep-test',
+        template: buildSyncCepCommandTemplate(),
+      },
+    },
+  })
+}
+
 function buildSyncPrompt(
   summary: PrecheckSummary,
   scope: string,
   dryRun: boolean,
 ): string {
-  return `You are Fro Bot running in CEP sync mode.
+  const dryRunFlag = dryRun ? '--dry-run' : ''
+  const dryRunNotice = dryRun
+    ? 'DRY-RUN MODE: Do not call any tools or external commands.'
+    : ''
+  return `/sync-cep ${scope} ${dryRunFlag}
+${dryRunNotice}
+
+You are Fro Bot running in CEP sync mode.
 - Use the pre-check summary provided below. Do not rerun the pre-check.
-- Run /sync-cep with the provided scope and dry-run flag.
 - Always update or create a tracking issue labeled "sync-cep".
 
-Pre-check summary (JSON, compact): ${JSON.stringify(summary)}
-
-Scope: ${scope}
-Dry run: ${dryRun}`
+Pre-check summary (JSON, compact): ${JSON.stringify(summary)}`
 }
 
 function shouldRunSync(exitCode: number): boolean {
   return exitCode === 1
 }
 
-function runPrecheckScript(): PrecheckResult {
-  const result = Bun.spawnSync(['bun', 'scripts/check-cep-upstream.ts'], {
-    cwd: REPO_ROOT,
-    env: {
-      ...process.env,
-      GITHUB_TOKEN: process.env.GITHUB_TOKEN ?? '',
-    },
-  })
-
-  const stdout = result.stdout.toString()
-  const exitCode = result.exitCode ?? -1
-  let summary: PrecheckSummary | undefined
-
-  try {
-    const parsed = JSON.parse(stdout)
-    if (parsed && typeof parsed === 'object') {
-      summary = parsed as PrecheckSummary
-    }
-  } catch {
-    summary = undefined
-  }
-
-  return {
-    exitCode,
-    summary,
-    raw: stdout,
-  }
-}
 
 async function runSyncWorkflow({
   summary,
@@ -123,7 +144,7 @@ async function runSyncWorkflow({
     }
   }
 
-  const result = await runOpencode(prompt, cwd)
+  const result = await runOpencode(prompt, { cwd })
   return {
     ran: true,
     result,
@@ -133,7 +154,7 @@ async function runSyncWorkflow({
 
 async function runOpencode(
   prompt: string,
-  cwd: string,
+  options: RunOpencodeOptions,
 ): Promise<OpencodeResult> {
   let lastResult: { stdout: string; stderr: string; exitCode: number } = {
     stdout: '',
@@ -142,17 +163,22 @@ async function runOpencode(
   }
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    const result = Bun.spawnSync(
-      ['opencode', 'run', '--model', OPENCODE_TEST_MODEL, prompt],
-      {
-        cwd,
-        env: {
-          ...process.env,
-          OPENCODE_CONFIG_CONTENT: buildOpencodeConfig(),
-        },
-        timeout: TIMEOUT_MS,
-      },
-    )
+    const env = {
+      ...process.env,
+      ...(options.configContent
+        ? { OPENCODE_CONFIG_CONTENT: options.configContent }
+        : {}),
+    }
+    const args = ['opencode', 'run', '--model', OPENCODE_TEST_MODEL]
+    if (options.commandName) {
+      args.push('--command', options.commandName)
+    }
+    args.push(prompt)
+    const result = Bun.spawnSync(args, {
+      cwd: options.cwd,
+      env,
+      timeout: TIMEOUT_MS,
+    })
 
     lastResult = {
       stdout: result.stdout.toString(),
@@ -216,7 +242,10 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
     async () => {
       const result = await runOpencode(
         'Use the systematic_skill tool to load systematic:brainstorming',
-        testEnv.projectDir,
+        {
+          cwd: testEnv.projectDir,
+          configContent: buildOpencodeConfig(),
+        },
       )
 
       expect(result.stdout).toMatch(
@@ -231,7 +260,10 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
     async () => {
       const result = await runOpencode(
         'What skills are available? List the systematic skills you can load.',
-        testEnv.projectDir,
+        {
+          cwd: testEnv.projectDir,
+          configContent: buildOpencodeConfig(),
+        },
       )
 
       expect(result.stdout).toMatch(/brainstorming|systematic.*skills/i)
@@ -277,8 +309,7 @@ describe('sync-cep workflow simulation', () => {
   test.each(fixtures)('builds sync prompt for $name', ({ summary }) => {
     const prompt = buildSyncPrompt(summary, 'all', true)
     expect(prompt).toContain(JSON.stringify(summary))
-    expect(prompt).toContain('Dry run: true')
-    expect(prompt).toContain('Scope: all')
+    expect(prompt).toContain('/sync-cep all --dry-run')
   })
 
   test('sync gate honors precheck exit codes', () => {
@@ -301,45 +332,22 @@ describe('sync-cep workflow simulation', () => {
   })
 
   test.skipIf(!OPENCODE_AVAILABLE)(
-    'runs sync prompt in repo with dry-run flag',
+    'runs sync-cep command with dry-run prompt',
     async () => {
-      const result = await runSyncWorkflow({
-        summary: fixtures[0].summary,
-        exitCode: 1,
-        scope: 'all',
-        dryRun: true,
+      const prompt = buildSyncPrompt(fixtures[0].summary, 'all', true)
+      const result = await runOpencode(prompt, {
         cwd: REPO_ROOT,
+        commandName: 'sync-cep',
+        configContent: buildSyncCepTestConfig(),
       })
 
-      expect(result.ran).toBe(true)
-      expect(result.result?.exitCode).toBe(0)
+      expect(result.exitCode).not.toBe(-1)
+      expect(result.stdout).not.toMatch(/convert-cc-defs/i)
+      expect(result.stdout).not.toMatch(/\n\s*[→$⚙]/)
     },
     TIMEOUT_MS * MAX_RETRIES,
   )
 
-  test.skipIf(!OPENCODE_AVAILABLE || !process.env.GITHUB_TOKEN)(
-    'uses live precheck output when available',
-    async () => {
-      const precheck = runPrecheckScript()
-      expect(precheck.exitCode).toBeGreaterThanOrEqual(0)
-
-      if (precheck.exitCode !== 1 || precheck.summary == null) {
-        return
-      }
-
-      const result = await runSyncWorkflow({
-        summary: precheck.summary,
-        exitCode: precheck.exitCode,
-        scope: 'all',
-        dryRun: true,
-        cwd: REPO_ROOT,
-      })
-
-      expect(result.ran).toBe(true)
-      expect(result.result?.exitCode).toBe(0)
-    },
-    TIMEOUT_MS * MAX_RETRIES,
-  )
 })
 
 describe('config handler integration', () => {

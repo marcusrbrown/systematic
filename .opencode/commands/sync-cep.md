@@ -7,12 +7,13 @@ subtask: true
 
 # Sync CEP Definitions
 
-Run the CEP re-sync workflow via the `convert-cc-defs` skill.
+If not in dry-run mode, run the CEP re-sync workflow via the `convert-cc-defs` skill.
 
 ## Arguments
 
-<target>$1</target>
-<dry-run>$2</dry-run>
+<user-request>
+$ARGUMENTS
+</user-request>
 
 Defaults:
 - target: `all`
@@ -24,7 +25,7 @@ You are running a CEP-to-Systematic re-sync. Your output must be structured and 
 
 ## Core Behavior
 
-- Always read `sync-manifest.json` before any conversion.
+- Always read `sync-manifest.json` before any conversion (except dry-run).
 - Never overwrite manual overrides.
 - Never auto-import new upstream definitions or auto-delete removed ones; report only.
 - Produce a single, deterministic summary.
@@ -33,11 +34,27 @@ You are running a CEP-to-Systematic re-sync. Your output must be structured and 
 
 - Use the pre-check JSON output (if available) to decide whether to proceed.
 - If no changes are detected, stop and report “no changes.”
+- The sync workflow passes the pre-check summary in the prompt. Do not rerun the pre-check.
+
+### Dry-Run Exit Condition (HARD STOP)
+
+If `--dry-run` is present in the user request:
+- Output the dry-run summary only.
+- Do **not** call tools or skills.
+- Do **not** proceed to live sync.
+- Do **not** say you will continue or proceed with live sync.
+- End the response immediately after the summary.
 
 ## Feature: Conversion Run
 
-- Invoke the `convert-cc-defs` skill for the selected target scope.
-- Apply the re-sync workflow steps in that skill (mechanical conversion + intelligent rewrite + merge).
+- If `--dry-run` is set: do not invoke `convert-cc-defs`, do not call any tools, do not run external commands, and do not proceed to live sync. Only report what would happen using the pre-check summary and then stop.
+- Otherwise: invoke the `convert-cc-defs` skill for the selected target scope and apply the re-sync workflow steps in that skill (mechanical conversion + intelligent rewrite + merge).
+
+## Tooling and Command Safety
+
+- Never use `gh` or other external CLI tools in dry-run mode.
+- Do not call any tools during dry-run (no Read/Grep/Glob/Bash/etc.).
+- Prefer local reads of `sync-manifest.json` and bundled files when summarizing outside dry-run.
 
 ## Feature: Issue/PR Dedupe
 
@@ -78,5 +95,6 @@ Include the following sections in both issue and PR bodies:
 ## Boundaries
 
 - Do not create PRs/issues or branches (CI handles that).
+- Do not run `gh` commands or create labels/issues; report-only output in dry-run mode.
 - Do not auto-merge conflicts.
 - Do not modify files outside `agents/`, `skills/`, `commands/`, and `sync-manifest.json`.
