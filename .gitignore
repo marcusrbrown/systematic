@@ -34,3 +34,6 @@ tests/tmp/
 docs/dist/
 docs/.astro/
 docs/src/content/docs/reference/
+
+# Workflow artifacts
+docs/brainstorms/

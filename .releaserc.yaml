@@ -36,9 +36,6 @@ analyzeCommits:
     - type: docs
       release: patch
       scope: commands
-    - type: docs
-      release: patch
-      scope: readme.md
 
 preset: conventionalcommits
 
