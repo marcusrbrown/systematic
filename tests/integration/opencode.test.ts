@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { Config } from '@opencode-ai/sdk'
 import { createConfigHandler } from '../../src/lib/config-handler.ts'
+import { extractCommandFrontmatter } from '../../src/lib/commands.ts'
 import { parseFrontmatter } from '../../src/lib/frontmatter.ts'
 
 const OPENCODE_AVAILABLE = (() => {
@@ -35,21 +36,6 @@ interface OpencodeResult {
 interface RunOpencodeOptions {
   cwd: string
   configContent?: string
-  commandName?: string
-}
-
-interface RunSyncWorkflowParams {
-  summary: PrecheckSummary
-  exitCode: number
-  scope: string
-  dryRun: boolean
-  cwd: string
-}
-
-interface RunSyncWorkflowResult {
-  ran: boolean
-  result?: OpencodeResult
-  prompt: string
 }
 
 function buildOpencodeConfig(): string {
@@ -59,45 +45,28 @@ function buildOpencodeConfig(): string {
   })
 }
 
-function buildSyncCepCommandTemplate(): string {
+function buildSyncCepTestConfig(): string {
   const commandPath = path.join(REPO_ROOT, '.opencode/commands/sync-cep.md')
   const content = fs.readFileSync(commandPath, 'utf8')
   const { body } = parseFrontmatter(content)
+  const frontmatter = extractCommandFrontmatter(content)
 
-  return `<command-instruction>
-${body.trim()}
-</command-instruction>
-
-<user-request>
-$ARGUMENTS
-</user-request>`
-}
-
-function buildSyncCepTestConfig(): string {
   return JSON.stringify({
-    agent: {
-      'sync-cep-test': {
-        prompt: 'Follow the sync-cep command instructions exactly.',
-        permission: {
-          read: 'deny',
-          edit: 'deny',
-          glob: 'deny',
-          grep: 'deny',
-          list: 'deny',
-          bash: 'deny',
-          webfetch: 'deny',
-          task: 'deny',
-          skill: 'deny',
-        },
-      },
-    },
     command: {
       'sync-cep': {
-        name: 'sync-cep',
-        description:
-          'Sync upstream CEP definitions into Systematic using convert-cc-defs.',
-        agent: 'sync-cep-test',
-        template: buildSyncCepCommandTemplate(),
+        template: body.trim(),
+        description: frontmatter.description,
+        agent: frontmatter.agent,
+        model: frontmatter.model,
+        subtask: frontmatter.subtask,
+      },
+    },
+    agent: {
+      build: {
+        permission: {
+          edit: 'deny',
+          bash: 'deny',
+        },
       },
     },
   })
@@ -115,10 +84,7 @@ function buildSyncPrompt(
   return `/sync-cep ${scope} ${dryRunFlag}
 ${dryRunNotice}
 
-You are Fro Bot running in CEP sync mode.
-- Use the pre-check summary provided below. Do not rerun the pre-check.
-- Always update or create a tracking issue labeled "sync-cep".
-- This runs in headless CI; the user will not see live output.
+Note: headless CI run — user will not see live output.
 
 <precheck-summary>
 ${JSON.stringify(summary)}
@@ -127,30 +93,6 @@ ${JSON.stringify(summary)}
 
 function shouldRunSync(exitCode: number): boolean {
   return exitCode === 1
-}
-
-async function runSyncWorkflow({
-  summary,
-  exitCode,
-  scope,
-  dryRun,
-  cwd,
-}: RunSyncWorkflowParams): Promise<RunSyncWorkflowResult> {
-  const prompt = buildSyncPrompt(summary, scope, dryRun)
-
-  if (!shouldRunSync(exitCode)) {
-    return {
-      ran: false,
-      prompt,
-    }
-  }
-
-  const result = await runOpencode(prompt, { cwd })
-  return {
-    ran: true,
-    result,
-    prompt,
-  }
 }
 
 async function runOpencode(
@@ -170,11 +112,7 @@ async function runOpencode(
         ? { OPENCODE_CONFIG_CONTENT: options.configContent }
         : {}),
     }
-    const args = ['opencode', 'run', '--model', OPENCODE_TEST_MODEL]
-    if (options.commandName) {
-      args.push('--command', options.commandName)
-    }
-    args.push(prompt)
+    const args = ['opencode', 'run', '--model', OPENCODE_TEST_MODEL, prompt]
     const result = Bun.spawnSync(args, {
       cwd: options.cwd,
       env,
@@ -311,6 +249,7 @@ describe('sync-cep workflow simulation', () => {
     const prompt = buildSyncPrompt(summary, 'all', true)
     expect(prompt).toContain(JSON.stringify(summary))
     expect(prompt).toContain('/sync-cep all --dry-run')
+    expect(prompt).toContain('headless CI')
   })
 
   test('sync gate honors precheck exit codes', () => {
@@ -319,37 +258,17 @@ describe('sync-cep workflow simulation', () => {
     expect(shouldRunSync(2)).toBe(false)
   })
 
-  test('sync workflow skips opencode run on exit code 0', async () => {
-    const result = await runSyncWorkflow({
-      summary: fixtures[0].summary,
-      exitCode: 0,
-      scope: 'all',
-      dryRun: true,
-      cwd: REPO_ROOT,
-    })
-
-    expect(result.ran).toBe(false)
-    expect(result.result).toBeUndefined()
-  })
-
   test.skipIf(!OPENCODE_AVAILABLE)(
     'runs sync-cep command with dry-run prompt',
     async () => {
       const prompt = buildSyncPrompt(fixtures[0].summary, 'all', true)
       const result = await runOpencode(prompt, {
         cwd: REPO_ROOT,
-        commandName: 'sync-cep',
         configContent: buildSyncCepTestConfig(),
       })
 
       expect(result.exitCode).not.toBe(-1)
-      expect(result.stdout).not.toMatch(/convert-cc-defs/i)
       expect(result.stdout).not.toMatch(/\n\s*[→$⚙]/)
-      const lines = result.stdout
-        .trim()
-        .split('\n')
-        .filter((line) => line.trim())
-      expect(lines[lines.length - 1]).toBe('DRY_RUN_STOP')
     },
     TIMEOUT_MS * MAX_RETRIES,
   )

@@ -7,7 +7,10 @@ subtask: true
 
 # Sync CEP Definitions
 
-Dry-run takes priority. Determine dry-run **only** from the `<user-request>` arguments line (the `/sync-cep ...` invocation). Ignore any other mentions of `--dry-run` elsewhere in the prompt.
+Dry-run takes priority. Determine dry-run **only** from the `<user-request>` arguments line (the `/sync-cep ...` invocation or arguments passed to this command). Ignore any other mentions of `--dry-run` elsewhere in the prompt.
+
+When `--dry-run` is present, **ignore all other instructions** below and follow the Dry-Run Output Format exactly.
+Any additional text beyond the required dry-run format is a failure.
 
 ## Arguments
 
@@ -46,6 +49,26 @@ If `--dry-run` is present in the user request:
 - End the response immediately after the summary.
 - Final line MUST be exactly: `DRY_RUN_STOP`
 - Never ask follow-up questions in dry-run mode.
+- Do not include any text after `DRY_RUN_STOP`.
+- Do not mention `convert-cc-defs` or how to proceed with a live sync.
+
+### Dry-Run Output Format
+
+When in dry-run, output exactly and only the following structure. The word `Summary` must be a heading. Nothing else is allowed:
+
+```
+## Summary
+<summary content>
+
+DRY_RUN_STOP
+```
+
+Rules:
+- No tables, code blocks, or extra headings.
+- No follow-up questions.
+- The last non-empty line must be exactly `DRY_RUN_STOP`.
+
+The **only** acceptable dry-run output is the literal template above with `<summary content>` replaced by plain sentences. You must end immediately after `DRY_RUN_STOP`.
 
 ## Feature: Conversion Run
 

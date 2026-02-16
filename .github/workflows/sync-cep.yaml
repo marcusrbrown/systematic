@@ -78,15 +78,11 @@ jobs:
       SYNC_PROMPT: |
         /sync-cep ${{ inputs.scope || 'all' }} ${{ inputs.dry_run && '--dry-run' || '' }}
 
-        You are Fro Bot running in CEP sync mode.
-        - Use the pre-check summary provided below. Do not rerun the pre-check.
-        - Determine dry-run ONLY from the /sync-cep command line above.
-        - If dry-run, output summary only and end with DRY_RUN_STOP.
-        - This runs in headless CI; the user will not see live output.
-
         <precheck-summary>
         ${{ needs.precheck.outputs.summary }}
         </precheck-summary>
+
+        Note: headless CI run — user will not see live output.
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
