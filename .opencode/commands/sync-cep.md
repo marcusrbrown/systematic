@@ -7,7 +7,7 @@ subtask: true
 
 # Sync CEP Definitions
 
-If not in dry-run mode, run the CEP re-sync workflow via the `convert-cc-defs` skill.
+Dry-run takes priority. Determine dry-run **only** from the `<user-request>` arguments line (the `/sync-cep ...` invocation). Ignore any other mentions of `--dry-run` elsewhere in the prompt.
 
 ## Arguments
 
@@ -44,6 +44,8 @@ If `--dry-run` is present in the user request:
 - Do **not** proceed to live sync.
 - Do **not** say you will continue or proceed with live sync.
 - End the response immediately after the summary.
+- Final line MUST be exactly: `DRY_RUN_STOP`
+- Never ask follow-up questions in dry-run mode.
 
 ## Feature: Conversion Run
 

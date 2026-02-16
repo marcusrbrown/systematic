@@ -119,7 +119,9 @@ You are Fro Bot running in CEP sync mode.
 - Use the pre-check summary provided below. Do not rerun the pre-check.
 - Always update or create a tracking issue labeled "sync-cep".
 
-Pre-check summary (JSON, compact): ${JSON.stringify(summary)}`
+<precheck-summary>
+${JSON.stringify(summary)}
+</precheck-summary>`
 }
 
 function shouldRunSync(exitCode: number): boolean {
@@ -342,6 +344,7 @@ describe('sync-cep workflow simulation', () => {
       expect(result.exitCode).not.toBe(-1)
       expect(result.stdout).not.toMatch(/convert-cc-defs/i)
       expect(result.stdout).not.toMatch(/\n\s*[→$⚙]/)
+      expect(result.stdout).toMatch(/DRY_RUN_STOP/)
     },
     TIMEOUT_MS * MAX_RETRIES,
   )
