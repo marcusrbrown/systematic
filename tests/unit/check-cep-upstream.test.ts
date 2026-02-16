@@ -362,7 +362,10 @@ describe('check-cep-upstream helpers', () => {
 
     let contentCalls = 0
     const fetchFn = async (url: string): Promise<Response> => {
-      if (url === `https://api.github.com/repos/${repo}/contents/${contentPath}?ref=${branch}`) {
+      if (
+        url ===
+        `https://api.github.com/repos/${repo}/contents/${contentPath}?ref=${branch}`
+      ) {
         contentCalls += 1
         if (contentCalls < 2) {
           return new Response('rate limited', { status: 429 })
@@ -375,12 +378,7 @@ describe('check-cep-upstream helpers', () => {
       return responses.get(url) ?? new Response('missing', { status: 404 })
     }
 
-    const result = await fetchUpstreamData(
-      repo,
-      branch,
-      [contentPath],
-      fetchFn,
-    )
+    const result = await fetchUpstreamData(repo, branch, [contentPath], fetchFn)
 
     expect(contentCalls).toBe(2)
     expect(result.hadError).toBe(false)
@@ -395,7 +393,10 @@ describe('check-cep-upstream helpers', () => {
 
     let treeCalls = 0
     const fetchFn = async (url: string): Promise<Response> => {
-      if (url === `https://api.github.com/repos/${repo}/git/trees/${branch}?recursive=1`) {
+      if (
+        url ===
+        `https://api.github.com/repos/${repo}/git/trees/${branch}?recursive=1`
+      ) {
         treeCalls += 1
         if (treeCalls < 2) {
           return new Response('forbidden', { status: 403 })
@@ -412,7 +413,10 @@ describe('check-cep-upstream helpers', () => {
           { status: 200 },
         )
       }
-      if (url === `https://api.github.com/repos/${repo}/contents/${contentPath}?ref=${branch}`) {
+      if (
+        url ===
+        `https://api.github.com/repos/${repo}/contents/${contentPath}?ref=${branch}`
+      ) {
         return new Response(
           JSON.stringify({ content: Buffer.from('agent').toString('base64') }),
           { status: 200 },
@@ -421,12 +425,7 @@ describe('check-cep-upstream helpers', () => {
       return new Response('missing', { status: 404 })
     }
 
-    const result = await fetchUpstreamData(
-      repo,
-      branch,
-      [contentPath],
-      fetchFn,
-    )
+    const result = await fetchUpstreamData(repo, branch, [contentPath], fetchFn)
 
     expect(treeCalls).toBe(2)
     expect(result.hadError).toBe(false)
@@ -440,18 +439,16 @@ describe('check-cep-upstream helpers', () => {
       'plugins/compound-engineering/agents/review/security-sentinel.md'
 
     const fetchFn = async (url: string): Promise<Response> => {
-      if (url === `https://api.github.com/repos/${repo}/git/trees/${branch}?recursive=1`) {
+      if (
+        url ===
+        `https://api.github.com/repos/${repo}/git/trees/${branch}?recursive=1`
+      ) {
         return new Response('rate limited', { status: 429 })
       }
       return new Response('missing', { status: 404 })
     }
 
-    const result = await fetchUpstreamData(
-      repo,
-      branch,
-      [contentPath],
-      fetchFn,
-    )
+    const result = await fetchUpstreamData(repo, branch, [contentPath], fetchFn)
 
     expect(result.hadError).toBe(true)
   })
