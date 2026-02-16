@@ -85,6 +85,32 @@ const computeSkillHash = (
   return hashContent(combined)
 }
 
+const recordMissingContent = (
+  upstreamContents: Record<string, string>,
+  path: string,
+  errors: string[],
+): boolean => {
+  if (path in upstreamContents) return false
+  errors.push(`Missing upstream content: ${path}`)
+  return true
+}
+
+const computeEntryHash = (
+  entry: SyncManifest['definitions'][string],
+  upstreamContents: Record<string, string>,
+  errors: string[],
+): string | null => {
+  const upstreamPath = entry.upstream_path
+  if (!entry.files?.length) {
+    if (recordMissingContent(upstreamContents, upstreamPath, errors)) {
+      return null
+    }
+    return hashContent(upstreamContents[upstreamPath] ?? '')
+  }
+
+  return computeSkillHash(upstreamPath, entry.files, upstreamContents, errors)
+}
+
 export const getRequiredUpstreamContentPaths = ({
   manifest,
   upstreamDefinitionKeys,
@@ -256,19 +282,11 @@ export const computeCheckSummary = ({
     }
 
     const entry = manifest.definitions[key]
-    const upstreamPath = entry.upstream_path
-
     const currentHash = entry.upstream_content_hash ?? ''
-    if (!entry.files?.length) {
-      if (!(upstreamPath in upstreamContents)) {
-        errors.push(`Missing upstream content: ${upstreamPath}`)
-        continue
-      }
+    const nextHash = computeEntryHash(entry, upstreamContents, errors)
+    if (!nextHash) {
+      continue
     }
-
-    const nextHash = entry.files?.length
-      ? computeSkillHash(upstreamPath, entry.files, upstreamContents, errors)
-      : hashContent(upstreamContents[upstreamPath] ?? '')
 
     if (nextHash !== currentHash) {
       hashChanges.push(key)
