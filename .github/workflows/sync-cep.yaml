@@ -43,7 +43,7 @@ jobs:
           token: ${{ secrets.FRO_BOT_PAT }}
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3
+        uses: oven-sh/setup-bun@ab8cb4e8f89912a29b87e4abc4554f2301648a5c
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -91,7 +91,7 @@ jobs:
           token: ${{ secrets.FRO_BOT_PAT }}
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3
+        uses: oven-sh/setup-bun@ab8cb4e8f89912a29b87e4abc4554f2301648a5c
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
