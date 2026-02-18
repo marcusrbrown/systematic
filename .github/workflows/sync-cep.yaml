@@ -162,4 +162,5 @@ jobs:
         with:
           auth-json: '{}'
           github-token: ${{ secrets.FRO_BOT_PAT }}
+          model: ${{ vars.SYNC_CEP_MODEL }}
           prompt: ${{ env.SYNC_PROMPT }}
