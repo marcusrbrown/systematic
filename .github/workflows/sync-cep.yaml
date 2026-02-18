@@ -31,7 +31,6 @@ jobs:
   precheck:
     name: CEP Pre-check
     runs-on: ubuntu-latest
-    timeout-minutes: 10
     outputs:
       exit_code: ${{ steps.precheck.outputs.exit_code }}
       summary: ${{ steps.precheck.outputs.summary }}
