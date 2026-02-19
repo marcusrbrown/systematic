@@ -76,7 +76,9 @@ const computeSkillHash = (
       const path = joinUpstreamPath(basePath, file)
       const content = upstreamContents[path]
       if (content == null) {
-        errors.push(`Missing upstream content: ${path}`)
+        errors.push(
+          `Missing upstream content for sub-file (may be a transient fetch failure or the file was removed upstream): ${path}`,
+        )
         return ''
       }
       return content
@@ -91,7 +93,9 @@ const recordMissingContent = (
   errors: string[],
 ): boolean => {
   if (path in upstreamContents) return false
-  errors.push(`Missing upstream content: ${path}`)
+  errors.push(
+    `Missing upstream content for sub-file (may be a transient fetch failure or the file was removed upstream): ${path}`,
+  )
   return true
 }
 

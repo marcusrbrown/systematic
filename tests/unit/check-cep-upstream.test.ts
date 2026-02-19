@@ -284,7 +284,7 @@ describe('check-cep-upstream helpers', () => {
     })
 
     expect(summary.errors).toEqual([
-      'Missing upstream content: plugins/compound-engineering/skills/agent-native-architecture/references/one.md',
+      'Missing upstream content for sub-file (may be a transient fetch failure or the file was removed upstream): plugins/compound-engineering/skills/agent-native-architecture/references/one.md',
     ])
     expect(getExitCode(summary, false)).toBe(2)
   })

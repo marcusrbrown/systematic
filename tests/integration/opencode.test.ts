@@ -416,3 +416,43 @@ describe('opencode availability check', () => {
     expect(true).toBe(true)
   })
 })
+
+describe('convert-cc-defs skill discoverability', () => {
+  test('SKILL.md exists and is readable', () => {
+    const skillPath = path.join(
+      REPO_ROOT,
+      '.opencode/skills/convert-cc-defs/SKILL.md',
+    )
+    expect(fs.existsSync(skillPath)).toBe(true)
+
+    const content = fs.readFileSync(skillPath, 'utf8')
+    expect(content.length).toBeGreaterThan(0)
+  })
+
+  test('SKILL.md has valid frontmatter with name: convert-cc-defs', () => {
+    const skillPath = path.join(
+      REPO_ROOT,
+      '.opencode/skills/convert-cc-defs/SKILL.md',
+    )
+    const content = fs.readFileSync(skillPath, 'utf8')
+
+    const result = parseFrontmatter(content)
+    expect(result.hadFrontmatter).toBe(true)
+    expect(result.parseError).toBe(false)
+    expect((result.data as Record<string, unknown>).name).toBe(
+      'convert-cc-defs',
+    )
+  })
+
+  test('SKILL.md contains Phase 2, Phase 3, and Phase 4 section headings', () => {
+    const skillPath = path.join(
+      REPO_ROOT,
+      '.opencode/skills/convert-cc-defs/SKILL.md',
+    )
+    const content = fs.readFileSync(skillPath, 'utf8')
+
+    expect(content).toContain('## Phase 2: Mechanical Conversion')
+    expect(content).toContain('## Phase 3: Intelligent Rewrite')
+    expect(content).toContain('## Phase 4: Write and Register')
+  })
+})
