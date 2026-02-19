@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'bun:test'
 import { createHash } from 'node:crypto'
 import {
+  collectNewUpstreamFiles,
   computeCheckSummary,
   fetchUpstreamData,
   getExitCode,
@@ -97,6 +98,7 @@ describe('check-cep-upstream helpers', () => {
       manifest,
       upstreamDefinitionKeys: ['agents/review/security-sentinel'],
       upstreamContents,
+      treePaths: [],
       converterVersion: 2,
     })
 
@@ -116,6 +118,7 @@ describe('check-cep-upstream helpers', () => {
       manifest,
       upstreamDefinitionKeys: ['agents/review/security-sentinel'],
       upstreamContents,
+      treePaths: [],
       converterVersion: 2,
     })
 
@@ -137,6 +140,7 @@ describe('check-cep-upstream helpers', () => {
       manifest,
       upstreamDefinitionKeys: ['agents/review/security-sentinel'],
       upstreamContents,
+      treePaths: [],
       converterVersion: 2,
     })
 
@@ -156,10 +160,17 @@ describe('check-cep-upstream helpers', () => {
       manifest,
       upstreamDefinitionKeys: ['skills/new-skill'],
       upstreamContents,
+      treePaths: [
+        'plugins/compound-engineering/skills/new-skill/SKILL.md',
+        'plugins/compound-engineering/skills/new-skill/references/guide.md',
+      ],
       converterVersion: 2,
     })
 
     expect(summary.newUpstream).toEqual(['skills/new-skill'])
+    expect(summary.newUpstreamFiles).toEqual({
+      'skills/new-skill': ['SKILL.md', 'references/guide.md'],
+    })
     expect(summary.deletions).toEqual(['agents/review/security-sentinel'])
     expect(summary.errors).toEqual([])
     expect(hasChanges(summary)).toBe(true)
@@ -200,6 +211,7 @@ describe('check-cep-upstream helpers', () => {
       manifest,
       upstreamDefinitionKeys: ['skills/agent-native-architecture'],
       upstreamContents,
+      treePaths: [],
       converterVersion: 2,
     })
 
@@ -242,6 +254,7 @@ describe('check-cep-upstream helpers', () => {
       manifest,
       upstreamDefinitionKeys: ['skills/agent-native-architecture'],
       upstreamContents,
+      treePaths: [],
       converterVersion: 2,
     })
 
@@ -269,6 +282,7 @@ describe('check-cep-upstream helpers', () => {
       manifest,
       upstreamDefinitionKeys: ['agents/review/security-sentinel'],
       upstreamContents,
+      treePaths: [],
       converterVersion: 2,
     })
 
@@ -281,6 +295,7 @@ describe('check-cep-upstream helpers', () => {
     const summary = {
       hashChanges: [],
       newUpstream: [],
+      newUpstreamFiles: {},
       deletions: [],
       converterVersionChanged: false,
       skipped: [],
@@ -323,6 +338,7 @@ describe('check-cep-upstream helpers', () => {
       manifest,
       upstreamDefinitionKeys: ['skills/agent-native-architecture'],
       upstreamContents,
+      treePaths: [],
       converterVersion: 2,
     })
 
@@ -376,6 +392,9 @@ describe('check-cep-upstream helpers', () => {
 
     expect(result.hadError).toBe(false)
     expect(result.definitionKeys).toEqual(['agents/review/security-sentinel'])
+    expect(result.treePaths).toEqual([
+      'plugins/compound-engineering/agents/review/security-sentinel.md',
+    ])
     expect(result.contents).toEqual({
       'plugins/compound-engineering/agents/review/security-sentinel.md':
         'agent',
@@ -560,5 +579,139 @@ describe('check-cep-upstream helpers', () => {
 
     expect(result.hadError).toBe(true)
     expect(result.contents).toEqual({})
+  })
+
+  it('returns treePaths from fetchUpstreamData', async () => {
+    const repo = 'EveryInc/compound-engineering-plugin'
+    const branch = 'main'
+
+    const fetchFn = async (url: string): Promise<Response> => {
+      if (url.includes('/git/trees/')) {
+        return new Response(
+          JSON.stringify({
+            tree: [
+              {
+                path: 'plugins/compound-engineering/skills/my-skill/SKILL.md',
+                type: 'blob',
+              },
+              {
+                path: 'plugins/compound-engineering/skills/my-skill/references/guide.md',
+                type: 'blob',
+              },
+              {
+                path: 'plugins/compound-engineering/skills/my-skill/scripts',
+                type: 'tree',
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      }
+      return new Response('not found', { status: 404 })
+    }
+
+    const result = await fetchUpstreamData(repo, branch, [], fetchFn)
+
+    expect(result.treePaths).toEqual([
+      'plugins/compound-engineering/skills/my-skill/SKILL.md',
+      'plugins/compound-engineering/skills/my-skill/references/guide.md',
+    ])
+  })
+
+  it('collects files for new skill definitions from tree paths', () => {
+    const treePaths = [
+      'plugins/compound-engineering/skills/new-skill/SKILL.md',
+      'plugins/compound-engineering/skills/new-skill/references/guide.md',
+      'plugins/compound-engineering/skills/new-skill/scripts/setup.sh',
+      'plugins/compound-engineering/skills/existing-skill/SKILL.md',
+      'plugins/compound-engineering/agents/review/some-agent.md',
+    ]
+
+    const result = collectNewUpstreamFiles(treePaths, ['skills/new-skill'])
+
+    expect(result).toEqual({
+      'skills/new-skill': [
+        'SKILL.md',
+        'references/guide.md',
+        'scripts/setup.sh',
+      ],
+    })
+  })
+
+  it('collects single file for new agent definitions', () => {
+    const treePaths = [
+      'plugins/compound-engineering/agents/review/new-agent.md',
+      'plugins/compound-engineering/agents/review/other-agent.md',
+    ]
+
+    const result = collectNewUpstreamFiles(treePaths, [
+      'agents/review/new-agent',
+    ])
+
+    expect(result).toEqual({
+      'agents/review/new-agent': ['new-agent.md'],
+    })
+  })
+
+  it('returns empty files for keys not found in tree', () => {
+    const treePaths = ['plugins/compound-engineering/agents/review/existing.md']
+
+    const result = collectNewUpstreamFiles(treePaths, ['skills/ghost-skill'])
+
+    expect(result).toEqual({})
+  })
+
+  it('collects files for multiple new definitions at once', () => {
+    const treePaths = [
+      'plugins/compound-engineering/skills/skill-a/SKILL.md',
+      'plugins/compound-engineering/skills/skill-a/references/ref.md',
+      'plugins/compound-engineering/skills/skill-b/SKILL.md',
+      'plugins/compound-engineering/commands/workflows/new-cmd.md',
+    ]
+
+    const result = collectNewUpstreamFiles(treePaths, [
+      'skills/skill-a',
+      'skills/skill-b',
+      'commands/workflows/new-cmd',
+    ])
+
+    expect(result).toEqual({
+      'skills/skill-a': ['SKILL.md', 'references/ref.md'],
+      'skills/skill-b': ['SKILL.md'],
+      'commands/workflows/new-cmd': ['new-cmd.md'],
+    })
+  })
+
+  it('includes newUpstreamFiles in computeCheckSummary for new skills', () => {
+    const manifest = baseManifest()
+    const treePaths = [
+      'plugins/compound-engineering/skills/new-multi-skill/SKILL.md',
+      'plugins/compound-engineering/skills/new-multi-skill/references/api.md',
+      'plugins/compound-engineering/skills/new-multi-skill/scripts/init.sh',
+      'plugins/compound-engineering/agents/review/security-sentinel.md',
+    ]
+
+    const summary = computeCheckSummary({
+      manifest,
+      upstreamDefinitionKeys: [
+        'agents/review/security-sentinel',
+        'skills/new-multi-skill',
+      ],
+      upstreamContents: {
+        'plugins/compound-engineering/agents/review/security-sentinel.md':
+          'agent',
+      },
+      treePaths,
+      converterVersion: 2,
+    })
+
+    expect(summary.newUpstream).toEqual(['skills/new-multi-skill'])
+    expect(summary.newUpstreamFiles).toEqual({
+      'skills/new-multi-skill': [
+        'SKILL.md',
+        'references/api.md',
+        'scripts/init.sh',
+      ],
+    })
   })
 })

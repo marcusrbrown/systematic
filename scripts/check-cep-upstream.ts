@@ -6,6 +6,7 @@ import { readManifest, type SyncManifest } from '../src/lib/manifest.js'
 export interface CheckSummary {
   hashChanges: string[]
   newUpstream: string[]
+  newUpstreamFiles: Record<string, string[]>
   deletions: string[]
   skipped: string[]
   converterVersionChanged: boolean
@@ -16,12 +17,14 @@ export interface CheckInputs {
   manifest: SyncManifest
   upstreamDefinitionKeys: string[]
   upstreamContents: Record<string, string>
+  treePaths: string[]
   converterVersion: number
 }
 
 export interface FetchResult {
   definitionKeys: string[]
   contents: Record<string, string>
+  treePaths: string[]
   hadError: boolean
 }
 
@@ -33,8 +36,10 @@ const hashContent = (content: string): string =>
 const joinUpstreamPath = (base: string, file: string): string =>
   `${base.replace(/\/$/, '')}/${file}`
 
+const CEP_PREFIX = 'plugins/compound-engineering/'
+
 export const toDefinitionKey = (path: string): string | null => {
-  const prefix = 'plugins/compound-engineering/'
+  const prefix = CEP_PREFIX
   if (!path.startsWith(prefix)) return null
 
   const rest = path.slice(prefix.length)
@@ -57,6 +62,44 @@ export const toDefinitionKey = (path: string): string | null => {
   }
 
   return null
+}
+
+const collectSkillFiles = (treePaths: string[], key: string): string[] => {
+  const dirPrefix = `${CEP_PREFIX}${key}/`
+  const files: string[] = []
+  for (const path of treePaths) {
+    if (path.startsWith(dirPrefix)) {
+      files.push(path.slice(dirPrefix.length))
+    }
+  }
+  return files.sort()
+}
+
+/**
+ * Given the full tree paths and a set of new definition keys, collect all files
+ * belonging to each new definition. For skills this means all files under the
+ * skill directory; for agents/commands it's the single .md file.
+ */
+export const collectNewUpstreamFiles = (
+  treePaths: string[],
+  newKeys: string[],
+): Record<string, string[]> => {
+  const result: Record<string, string[]> = {}
+  const treeSet = new Set(treePaths)
+  for (const key of newKeys) {
+    if (key.startsWith('skills/')) {
+      const files = collectSkillFiles(treePaths, key)
+      if (files.length > 0) {
+        result[key] = files
+      }
+    } else {
+      const filePath = `${CEP_PREFIX}${key}.md`
+      if (treeSet.has(filePath)) {
+        result[key] = [`${key.split('/').pop()}.md`]
+      }
+    }
+  }
+  return result
 }
 
 const hasWildcardOverride = (manifest: SyncManifest, key: string): boolean => {
@@ -223,7 +266,7 @@ export const fetchUpstreamData = async (
   const treeUrl = `https://api.github.com/repos/${repo}/git/trees/${branch}?recursive=1`
   const treeResult = await fetchWithRetry(treeUrl, fetchFn)
   if (!treeResult.response || !treeResult.response.ok) {
-    return { definitionKeys: [], contents: {}, hadError: true }
+    return { definitionKeys: [], contents: {}, treePaths: [], hadError: true }
   }
   const treeRaw = await treeResult.response.text()
   const treePaths = parseTreePaths(treeRaw)
@@ -253,6 +296,7 @@ export const fetchUpstreamData = async (
   return {
     definitionKeys: Array.from(definitionKeys).sort(),
     contents,
+    treePaths,
     hadError,
   }
 }
@@ -261,6 +305,7 @@ export const computeCheckSummary = ({
   manifest,
   upstreamDefinitionKeys,
   upstreamContents,
+  treePaths,
   converterVersion,
 }: CheckInputs): CheckSummary => {
   const hashChanges: string[] = []
@@ -301,9 +346,12 @@ export const computeCheckSummary = ({
     }
   }
 
+  const newUpstreamFiles = collectNewUpstreamFiles(treePaths, newUpstream)
+
   return {
     hashChanges,
     newUpstream,
+    newUpstreamFiles,
     deletions,
     skipped,
     errors,
@@ -357,6 +405,7 @@ const main = (): void => {
       manifest,
       upstreamDefinitionKeys: fetchResult.definitionKeys,
       upstreamContents: fetchResult.contents,
+      treePaths: fetchResult.treePaths,
       converterVersion: CONVERTER_VERSION,
     })
 
