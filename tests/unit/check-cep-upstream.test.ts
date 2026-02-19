@@ -184,7 +184,7 @@ describe('check-cep-upstream helpers', () => {
           synced_at: '2026-02-15T00:00:00Z',
           notes: 'test',
           files: ['SKILL.md', 'references/one.md'],
-          upstream_content_hash: hash('a' + 'b'),
+          upstream_content_hash: hash(`a\0b`),
         },
       },
     }
@@ -205,6 +205,49 @@ describe('check-cep-upstream helpers', () => {
 
     expect(summary.hashChanges).toEqual(['skills/agent-native-architecture'])
     expect(summary.errors).toEqual([])
+  })
+
+  it('reports no change for multi-file skill with matching content', () => {
+    const manifest: SyncManifest = {
+      converter_version: 2,
+      sources: {
+        cep: {
+          repo: 'EveryInc/compound-engineering-plugin',
+          branch: 'main',
+          url: 'https://github.com/EveryInc/compound-engineering-plugin',
+        },
+      },
+      definitions: {
+        'skills/agent-native-architecture': {
+          source: 'cep',
+          upstream_path:
+            'plugins/compound-engineering/skills/agent-native-architecture',
+          upstream_commit: 'abc123',
+          synced_at: '2026-02-15T00:00:00Z',
+          notes: 'test',
+          files: ['SKILL.md', 'references/one.md'],
+          upstream_content_hash: hash(`a\0b`),
+        },
+      },
+    }
+
+    const upstreamContents = {
+      'plugins/compound-engineering/skills/agent-native-architecture/SKILL.md':
+        'a',
+      'plugins/compound-engineering/skills/agent-native-architecture/references/one.md':
+        'b',
+    }
+
+    const summary = computeCheckSummary({
+      manifest,
+      upstreamDefinitionKeys: ['skills/agent-native-architecture'],
+      upstreamContents,
+      converterVersion: 2,
+    })
+
+    expect(summary.hashChanges).toEqual([])
+    expect(summary.errors).toEqual([])
+    expect(hasChanges(summary)).toBe(false)
   })
 
   it('skips definitions with wildcard manual_overrides', () => {
@@ -283,6 +326,7 @@ describe('check-cep-upstream helpers', () => {
       converterVersion: 2,
     })
 
+    expect(summary.hashChanges).toEqual([])
     expect(summary.errors).toEqual([
       'Missing upstream content for sub-file (may be a transient fetch failure or the file was removed upstream): plugins/compound-engineering/skills/agent-native-architecture/references/one.md',
     ])
@@ -451,5 +495,70 @@ describe('check-cep-upstream helpers', () => {
     const result = await fetchUpstreamData(repo, branch, [contentPath], fetchFn)
 
     expect(result.hadError).toBe(true)
+  })
+
+  it('does not set hadError for 404 content responses', async () => {
+    const repo = 'EveryInc/compound-engineering-plugin'
+    const branch = 'main'
+    const contentPath =
+      'plugins/compound-engineering/agents/review/security-sentinel.md'
+
+    const fetchFn = async (url: string): Promise<Response> => {
+      if (
+        url ===
+        `https://api.github.com/repos/${repo}/git/trees/${branch}?recursive=1`
+      ) {
+        return new Response(
+          JSON.stringify({
+            tree: [
+              {
+                path: contentPath,
+                type: 'blob',
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      }
+      return new Response('not found', { status: 404 })
+    }
+
+    const result = await fetchUpstreamData(repo, branch, [contentPath], fetchFn)
+
+    expect(result.hadError).toBe(false)
+    expect(result.contents).toEqual({})
+    expect(result.definitionKeys).toEqual(['agents/review/security-sentinel'])
+  })
+
+  it('sets hadError for 500 content responses', async () => {
+    const repo = 'EveryInc/compound-engineering-plugin'
+    const branch = 'main'
+    const contentPath =
+      'plugins/compound-engineering/agents/review/security-sentinel.md'
+
+    const fetchFn = async (url: string): Promise<Response> => {
+      if (
+        url ===
+        `https://api.github.com/repos/${repo}/git/trees/${branch}?recursive=1`
+      ) {
+        return new Response(
+          JSON.stringify({
+            tree: [
+              {
+                path: contentPath,
+                type: 'blob',
+              },
+            ],
+          }),
+          { status: 200 },
+        )
+      }
+      return new Response('server error', { status: 500 })
+    }
+
+    const result = await fetchUpstreamData(repo, branch, [contentPath], fetchFn)
+
+    expect(result.hadError).toBe(true)
+    expect(result.contents).toEqual({})
   })
 })

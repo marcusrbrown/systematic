@@ -69,22 +69,24 @@ const computeSkillHash = (
   files: string[],
   upstreamContents: Record<string, string>,
   errors: string[],
-): string => {
+): string | null => {
   const ordered = [...files].sort()
-  const combined = ordered
-    .map((file) => {
-      const path = joinUpstreamPath(basePath, file)
-      const content = upstreamContents[path]
-      if (content == null) {
-        errors.push(
-          `Missing upstream content for sub-file (may be a transient fetch failure or the file was removed upstream): ${path}`,
-        )
-        return ''
-      }
-      return content
-    })
-    .join('')
-  return hashContent(combined)
+  let hasMissing = false
+  const parts: string[] = []
+  for (const file of ordered) {
+    const path = joinUpstreamPath(basePath, file)
+    const content = upstreamContents[path]
+    if (content == null) {
+      errors.push(
+        `Missing upstream content for sub-file (may be a transient fetch failure or the file was removed upstream): ${path}`,
+      )
+      hasMissing = true
+      continue
+    }
+    parts.push(content)
+  }
+  if (hasMissing) return null
+  return hashContent(parts.join('\0'))
 }
 
 const recordMissingContent = (
@@ -234,7 +236,9 @@ export const fetchUpstreamData = async (
     const contentUrl = `https://api.github.com/repos/${repo}/contents/${path}?ref=${branch}`
     const result = await fetchWithRetry(contentUrl, fetchFn)
     if (!result.response || !result.response.ok) {
-      hadError = true
+      if (!result.response || result.response.status !== 404) {
+        hadError = true
+      }
       continue
     }
     const payload: unknown = await result.response.json()
@@ -360,7 +364,8 @@ const main = (): void => {
     process.exit(getExitCode(summary, fetchResult.hadError))
   }
 
-  run().catch(() => {
+  run().catch((error: unknown) => {
+    console.error('check-cep-upstream failed:', error)
     process.exit(2)
   })
 }
