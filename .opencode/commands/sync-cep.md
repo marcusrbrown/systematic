@@ -33,7 +33,17 @@ You are running a CEP-to-Systematic re-sync. Your output must be structured and 
 - Never auto-import new upstream definitions or auto-delete removed ones; report only.
 - Produce a single, deterministic summary.
 
+## Skill: convert-cc-defs
+
+Before performing any conversion, use the `skill` tool to load `convert-cc-defs`. Do NOT use the `systematic_skill` tool — `convert-cc-defs` is a project-specific skill, not a bundled Systematic skill.
+
+After loading the skill, follow its workflow: Phase 2 (Mechanical Conversion) for each definition, then Phase 3 (Intelligent Rewrite) for context-aware adjustments, then Phase 4 (Write and Register) to update files and manifest.
+
+The precheck summary contains `hashChanges`, `newUpstream`, and `deletions` arrays. Each entry is a definition path like `skills/brainstorming` or `commands/workflows/review`. Process ALL definition types in the precheck's `hashChanges` array — agents, skills, AND commands. Do not skip a type.
+
 ## Feature: Pre-check Gate
+
+If the `<precheck-exit-code>` and `<precheck-summary>` XML tags are absent from the prompt, stop immediately and output: `ERROR: No precheck data found. This command requires precheck data injected by the sync-cep workflow. Run via the sync-cep workflow, not directly.`
 
 The sync workflow passes the pre-check summary and exit code in the prompt. Do not rerun the pre-check.
 
@@ -113,29 +123,45 @@ Use the override merge matrix:
 
 ## Feature: Output Formatting
 
-Produce a summary with:
-- Changed / unchanged / skipped counts
-- Per-definition hash table
-- Conflicts list
-- New upstream definitions list (report-only)
-- Upstream deletions list (report-only)
-- Rewrite failures list
-- Phantom references list
+Use this exact template for all output. Copy it and fill in the placeholders:
 
-### Output Sections
+```
+## Summary
+- **Scope**: [all|skills|agents|commands]
+- **Definitions processed**: N
+- **Hash changes applied**: N
+- **Conflicts detected**: N
+- **Errors (from precheck)**: N
 
-Include the following sections in both issue and PR bodies:
-- Summary
-- Hash changes table (definition, old hash, new hash)
-- Conflicts (manual overrides)
-- New upstream definitions (report-only)
-- Upstream deletions (report-only, include keep/remove prompt)
-- Rewrite failures
-- Phantom references (commands referencing missing agents/skills)
+### Hash Changes
+| Definition | Old Hash | New Hash | Status |
+|------------|----------|----------|--------|
+| path/to/def | abc123 | def456 | ✅ Applied |
+
+### Conflicts
+| Definition | Field | Override Value | Upstream Value | Action |
+|------------|-------|---------------|----------------|--------|
+(None detected / list conflicts)
+
+### New Upstream (report-only)
+- path/to/new-def
+
+### Upstream Deletions (report-only)
+- path/to/deleted-def
+
+### Errors
+- [error message from precheck] → Affected: [definition key]
+
+### Rewrite Failures
+- (None / list failures)
+
+### Phantom References
+- (None / list commands referencing missing agents/skills)
+```
 
 ## Boundaries
 
-- Do not create PRs/issues or branches (CI handles that).
-- Do not run `gh` commands or create labels/issues; report-only output in dry-run mode.
+- Do not use `gh` commands or call external CLI tools during dry-run mode.
 - Do not auto-merge conflicts.
 - Do not modify files outside `agents/`, `skills/`, `commands/`, and `sync-manifest.json`.
+- Use `gh` for PR creation and issue comments only (branch `chore/sync-cep`, label `sync-cep`).
