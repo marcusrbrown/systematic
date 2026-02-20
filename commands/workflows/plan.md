@@ -178,6 +178,7 @@ Select how comprehensive you want the issue to be, simpler is mostly better.
 ---
 title: [Issue Title]
 type: [feat|fix|refactor]
+status: active
 date: YYYY-MM-DD
 ---
 
@@ -230,6 +231,7 @@ end
 ---
 title: [Issue Title]
 type: [feat|fix|refactor]
+status: active
 date: YYYY-MM-DD
 ---
 
@@ -252,6 +254,14 @@ date: YYYY-MM-DD
 - Architecture impacts
 - Performance implications
 - Security considerations
+
+## System-Wide Impact
+
+- **Interaction graph**: [What callbacks/middleware/observers fire when this runs?]
+- **Error propagation**: [How do errors flow across layers? Do retry strategies align?]
+- **State lifecycle risks**: [Can partial failure leave orphaned/inconsistent state?]
+- **API surface parity**: [What other interfaces expose similar functionality and need the same change?]
+- **Integration test scenarios**: [Cross-layer scenarios that unit tests won't catch]
 
 ## Acceptance Criteria
 
@@ -294,6 +304,7 @@ date: YYYY-MM-DD
 ---
 title: [Issue Title]
 type: [feat|fix|refactor]
+status: active
 date: YYYY-MM-DD
 ---
 
@@ -340,6 +351,28 @@ date: YYYY-MM-DD
 ## Alternative Approaches Considered
 
 [Other solutions evaluated and why rejected]
+
+## System-Wide Impact
+
+### Interaction Graph
+
+[Map the chain reaction: what callbacks, middleware, observers, and event handlers fire when this code runs? Trace at least two levels deep. Document: "Action X triggers Y, which calls Z, which persists W."]
+
+### Error & Failure Propagation
+
+[Trace errors from lowest layer up. List specific error classes and where they're handled. Identify retry conflicts, unhandled error types, and silent failure swallowing.]
+
+### State Lifecycle Risks
+
+[Walk through each step that persists state. Can partial failure orphan rows, duplicate records, or leave caches stale? Document cleanup mechanisms or their absence.]
+
+### API Surface Parity
+
+[List all interfaces (classes, DSLs, endpoints) that expose equivalent functionality. Note which need updating and which share the code path.]
+
+### Integration Test Scenarios
+
+[3-5 cross-layer test scenarios that unit tests with mocks would never catch. Include expected behavior for each.]
 
 ## Acceptance Criteria
 
@@ -472,6 +505,20 @@ end
 - [ ] Add names of files in pseudo code examples and todo lists
 - [ ] Add an ERD mermaid diagram if applicable for new model changes
 
+## Write Plan File
+
+**REQUIRED: Write the plan file to disk before presenting any options.**
+
+```bash
+mkdir -p docs/plans/
+```
+
+Use the write tool to save the complete plan to `docs/plans/YYYY-MM-DD-<type>-<descriptive-name>-plan.md`. This step is mandatory and cannot be skipped — even when running as part of LFG/SLFG or other automated pipelines.
+
+Confirm: "Plan written to docs/plans/[filename]"
+
+**Pipeline mode:** If invoked from an automated workflow (LFG, SLFG, or any `disable-model-invocation` context), skip all question calls. Make decisions automatically and proceed to writing the plan without interactive prompts.
+
 ## Output Format
 
 **Filename:** Use the date and kebab-case filename from Step 2 Title & Categorization.
@@ -501,7 +548,7 @@ After writing the plan file, use the **question tool** to present these options:
 3. **Run `/technical_review`** - Technical feedback from code-focused reviewers (DHH, Kieran, Simplicity)
 4. **Review and refine** - Improve the document through structured self-review
 5. **Start `/workflows:work`** - Begin implementing this plan locally
-6. **Create Issue** - Create issue in project tracker (GitHub/Linear)
+7. **Create Issue** - Create issue in project tracker (GitHub/Linear)
 
 Based on selection:
 - **Open plan in editor** → Run `open docs/plans/<plan_filename>.md` to open the file in the user's default editor
@@ -509,6 +556,7 @@ Based on selection:
 - **`/technical_review`** → Call the /technical_review command with the plan file path
 - **Review and refine** → Load `document-review` skill.
 - **`/workflows:work`** → Call the /workflows:work command with the plan file path
+- **`/workflows:work` on remote** → Run `/workflows:work docs/plans/<plan_filename>.md &` to start work in background
 - **Create Issue** → See "Issue Creation" section below
 - **Other** (automatically provided) → Accept free text for rework or specific changes
 

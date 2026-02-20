@@ -1,7 +1,7 @@
 ---
 name: workflows:compound
 description: Document a recently solved problem to compound your team's knowledge
-argument-hint: "[optional: brief context about the fix]"
+argument-hint: '[optional: brief context about the fix]'
 ---
 
 # /compound
@@ -142,27 +142,29 @@ Based on problem type, optionally invoke specialized agents to review the docume
 
 ## Common Mistakes to Avoid
 
-| Wrong | Correct |
-|----------|-----------:|
+| ❌ Wrong | ✅ Correct |
+|----------|-----------|
 | Subagents write files like `context-analysis.md`, `solution-draft.md` | Subagents return text data; orchestrator writes one final file |
-| Research and assembly run in parallel | Research completes, then assembly runs |
+| Research and assembly run in parallel | Research completes → then assembly runs |
 | Multiple files created during workflow | Single file: `docs/solutions/[category]/[filename].md` |
 
 ## Success Output
 
 ```
+✓ Documentation complete
+
 Subagent Results:
-  Context Analyzer: Identified performance_issue in brief_system
-  Solution Extractor: 3 code fixes
-  Related Docs Finder: 2 related issues
-  Prevention Strategist: Prevention strategies, test suggestions
-  Category Classifier: `performance-issues`
+  ✓ Context Analyzer: Identified performance_issue in brief_system
+  ✓ Solution Extractor: 3 code fixes
+  ✓ Related Docs Finder: 2 related issues
+  ✓ Prevention Strategist: Prevention strategies, test suggestions
+  ✓ Category Classifier: `performance-issues`
 
 Specialized Agent Reviews (Auto-Triggered):
-  performance-oracle: Validated query optimization approach
-  kieran-rails-reviewer: Code examples meet Rails standards
-  code-simplicity-reviewer: Solution is appropriately minimal
-  every-style-editor: Documentation style verified
+  ✓ performance-oracle: Validated query optimization approach
+  ✓ kieran-rails-reviewer: Code examples meet Rails standards
+  ✓ code-simplicity-reviewer: Solution is appropriately minimal
+  ✓ every-style-editor: Documentation style verified
 
 File created:
 - docs/solutions/performance-issues/n-plus-one-brief-generation.md
@@ -230,6 +232,7 @@ Based on problem type, these agents can enhance documentation:
 ### When to Invoke
 - **Auto-triggered** (optional): Agents can run post-documentation for enhancement
 - **Manual trigger**: User can invoke agents after /workflows:compound completes for deeper review
+- **Customize agents**: Edit `systematic.local.md` or invoke the `setup` skill to configure which review agents are used across all workflows
 
 ## Related Commands
 

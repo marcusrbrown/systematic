@@ -1,7 +1,7 @@
 ---
 name: deepen-plan
 description: Enhance a plan with parallel research agents for each section to add depth, best practices, and implementation details
-argument-hint: "[path to plan file]"
+argument-hint: '[path to plan file]'
 ---
 
 # Deepen Plan - Power Enhancement Mode
@@ -67,14 +67,20 @@ Dynamically discover all available skills and match them to plan sections. Don't
 # 1. Project-local skills (highest priority - project-specific)
 ls .opencode/skills/
 
-# 2. User's global skills
-ls ~/.config/opencode/skills/
+# 2. User's global skills (~/.opencode/)
+ls ~/.opencode/skills/
 
-# 3. List bundled skills from systematic plugin
-systematic list skills
+# 3. Systematic plugin skills (auto-registered)
+# Use the systematic_skill tool to list/load; no filesystem traversal needed.
+
+# 4. ALL other installed plugins - check every plugin for skills
+find ~/.opencode/plugins/cache -type d -name "skills" 2>/dev/null
+
+# 5. Also check installed_plugins.json for all plugin locations
+cat ~/.opencode/plugins/installed_plugins.json
 ```
 
-**Important:** Check EVERY source. Use skills from ANY installed plugin that's relevant.
+**Important:** Check EVERY source. Don't assume systematic is the only plugin. Use skills from ANY installed plugin that's relevant.
 
 **Step 2: For each discovered skill, read its SKILL.md to understand what it does**
 
@@ -125,11 +131,13 @@ The skill tells you what to do - follow it. Execute the skill completely."
 
 **Example spawns:**
 ```
-task: "Load the systematic:agent-native-architecture skill and apply it to: [agent/tool sections of plan]"
+Task general-purpose: "Use the dhh-rails-style skill at ~/.opencode/plugins/.../dhh-rails-style. Read SKILL.md and apply it to: [Rails sections of plan]"
 
-task: "Load the systematic:brainstorming skill and apply it to: [sections needing design exploration]"
+Task general-purpose: "Use the frontend-design skill at ~/.opencode/plugins/.../frontend-design. Read SKILL.md and apply it to: [UI sections of plan]"
 
-task: "Load the systematic:compound-docs skill and search for relevant documented solutions for: [plan topic]"
+Task general-purpose: "Use the agent-native-architecture skill at ~/.opencode/plugins/.../agent-native-architecture. Read SKILL.md and apply it to: [agent/tool sections of plan]"
+
+Task general-purpose: "Use the security-patterns skill at ~/.opencode/skills/security-patterns. Read SKILL.md and apply it to: [full plan]"
 ```
 
 **No limit on skill sub-agents. Spawn one for every skill that could possibly be relevant.**
@@ -168,6 +176,7 @@ find docs/solutions -name "*.md" -type f 2>/dev/null
 
 # If docs/solutions doesn't exist, check alternate locations:
 find .opencode/docs -name "*.md" -type f 2>/dev/null
+find ~/.opencode/docs -name "*.md" -type f 2>/dev/null
 ```
 
 **Step 2: Read frontmatter of each learning to filter**
@@ -276,9 +285,13 @@ Return concrete, actionable recommendations."
 
 **Also use Context7 MCP for framework documentation:**
 
-For any technologies/frameworks mentioned in the plan, use Context7 (if available) to query library documentation for specific patterns and best practices.
+For any technologies/frameworks mentioned in the plan, query Context7:
+```
+context7__resolve-library-id: Find library ID for [framework]
+context7__query-docs: Query documentation for specific patterns
+```
 
-**Use WebSearch for current best practices:**
+**Use google_search for current best practices:**
 
 Search for recent (2024-2026) articles, blog posts, and documentation on topics in the plan.
 
@@ -294,17 +307,34 @@ Dynamically discover every available agent and run them ALL against the plan. Do
 # 1. Project-local agents (highest priority - project-specific)
 find .opencode/agents -name "*.md" 2>/dev/null
 
-# 2. User's global agents
-find ~/.config/opencode/agents -name "*.md" 2>/dev/null
+# 2. User's global agents (~/.opencode/)
+find ~/.opencode/agents -name "*.md" 2>/dev/null
 
-# 3. List bundled agents from systematic plugin
-systematic list agents
+# 3. Systematic plugin agents (auto-registered)
+# Agents are available by name; no filesystem traversal needed.
+
+# 4. ALL other installed plugins - check every plugin for agents
+find ~/.opencode/plugins/cache -path "*/agents/*.md" 2>/dev/null
+
+# 5. Check installed_plugins.json to find all plugin locations
+cat ~/.opencode/plugins/installed_plugins.json
+
+# 6. For local plugins (isLocal: true), check their source directories
+# Parse installed_plugins.json and find local plugin paths
 ```
 
 **Important:** Check EVERY source. Include agents from:
 - Project `.opencode/agents/`
-- User's `~/.config/opencode/agents/`
-- Systematic plugin bundled agents (review/, research/, design/ categories)
+- User's `~/.opencode/agents/`
+- Systematic plugin (but SKIP workflow/ agents - only use review/, research/, design/, docs/)
+- ALL other installed plugins (agent-sdk-dev, frontend-design, etc.)
+- Any local plugins
+
+**For Systematic plugin specifically:**
+- USE: `agents/review/*` (all reviewers)
+- USE: `agents/research/*` (all researchers)
+- USE: `agents/design/*` (design agents)
+- USE: `agents/docs/*` (documentation agents)
 - SKIP: `agents/workflow/*` (these are workflow orchestrators, not reviewers)
 
 **Step 2: For each discovered agent, read its description**
@@ -322,7 +352,7 @@ Task [agent-name]: "Review this plan using your expertise. Apply all your checks
 **CRITICAL RULES:**
 - Do NOT filter agents by "relevance" - run them ALL
 - Do NOT skip agents because they "might not apply" - let them decide
-- Launch ALL agents in a SINGLE message with multiple Task tool calls
+- Launch ALL agents in a SINGLE message with multiple task tool calls
 - 20, 30, 40 parallel agents is fine - use everything
 - Each agent may catch something others miss
 - The goal is MAXIMUM coverage, not efficiency
@@ -450,14 +480,14 @@ After writing the enhanced plan, use the **question tool** to present these opti
 
 **Options:**
 1. **View diff** - Show what was added/changed
-2. **Run `/plan_review`** - Get feedback from reviewers on enhanced plan
+2. **Run `/technical_review`** - Get feedback from reviewers on enhanced plan
 3. **Start `/workflows:work`** - Begin implementing this enhanced plan
 4. **Deepen further** - Run another round of research on specific sections
 5. **Revert** - Restore original plan (if backup exists)
 
 Based on selection:
 - **View diff** → Run `git diff [plan_path]` or show before/after
-- **`/plan_review`** → Call the /plan_review command with the plan file path
+- **`/technical_review`** → Call the /technical_review command with the plan file path
 - **`/workflows:work`** → Call the /workflows:work command with the plan file path
 - **Deepen further** → Ask which sections need more research, then re-run those agents
 - **Revert** → Restore from git or backup

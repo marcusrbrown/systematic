@@ -1,7 +1,8 @@
 ---
 name: agent-native-audit
 description: Run comprehensive agent-native architecture review with scored principles
-argument-hint: "[optional: specific principle to audit]"
+argument-hint: '[optional: specific principle to audit]'
+disable-model-invocation: true
 ---
 
 # Agent-Native Architecture Audit
@@ -33,7 +34,7 @@ Select option 7 (action parity) to load the full reference material.
 
 ### Step 2: Launch Parallel Sub-Agents
 
-Launch 8 parallel sub-agents using the Task tool with `subagent_type: Explore`, one for each principle. Each agent should:
+Launch 8 parallel sub-agents using the task tool with `subagent_type: Explore`, one for each principle. Each agent should:
 
 1. Enumerate ALL instances in the codebase (user actions, tools, contexts, data stores, etc.)
 2. Check compliance against the principle
@@ -275,3 +276,4 @@ Valid arguments:
 - `ui` or `integration` or `6`
 - `discovery` or `7`
 - `prompt` or `features` or `8`
+

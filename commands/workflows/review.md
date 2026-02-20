@@ -31,7 +31,7 @@ argument-hint: '[PR number, GitHub URL, branch name, or latest]'
 First, I need to determine the review target type and set up the code for analysis.
 </thinking>
 
-#### Immediate Actions
+#### Immediate Actions:
 
 <task_list>
 
@@ -59,45 +59,48 @@ The following paths are systematic pipeline artifacts and must never be flagged 
 If a review agent flags any file in these directories for cleanup or removal, discard that finding during synthesis. Do not create a todo for it.
 </protected_artifacts>
 
-#### Parallel Agents to review the PR
+#### Load Review Agents
+
+Read `systematic.local.md` in the project root. If found, use `review_agents` from YAML frontmatter. If the markdown body contains review context, pass it to each agent as additional instructions.
+
+If no settings file exists, invoke the `setup` skill to create one. Then read the newly created file and continue.
+
+#### Parallel Agents to review the PR:
 
 <parallel_tasks>
 
-Run ALL or most of these agents at the same time:
+Run all configured review agents in parallel using task tool. For each agent in the `review_agents` list:
 
-1. task kieran-rails-reviewer(PR content) - If Rails project
-2. task dhh-rails-reviewer(PR title) - If Rails project
-3. task kieran-typescript-reviewer(PR content) - If TypeScript project
-4. task git-history-analyzer(PR content)
-5. task pattern-recognition-specialist(PR content)
-6. task architecture-strategist(PR content)
-7. task security-sentinel(PR content)
-8. task performance-oracle(PR content)
-9. task data-integrity-guardian(PR content)
-10. task agent-native-reviewer(PR content) - Verify new features are agent-accessible
-11. task code-simplicity-reviewer(PR content)
+```
+Task {agent-name}(PR content + review context from settings body)
+```
+
+Additionally, always run these regardless of settings:
+- task agent-native-reviewer(PR content) - Verify new features are agent-accessible
+- task learnings-researcher(PR content) - Search docs/solutions/ for past issues related to this PR's modules and patterns
 
 </parallel_tasks>
 
-#### Conditional Agents (Run if applicable)
+#### Conditional Agents (Run if applicable):
 
 <conditional_agents>
 
 These agents are run ONLY when the PR matches specific criteria. Check the PR files list to determine if they apply:
 
-**If PR contains database migrations (db/migrate/*.rb files) or data backfills:**
+**MIGRATIONS: If PR contains database migrations, schema.rb, or data backfills:**
 
-14. task data-migration-expert(PR content) - Validates ID mappings match production, checks for swapped values, verifies rollback safety
-15. task deployment-verification-agent(PR content) - Creates Go/No-Go deployment checklist with SQL verification queries
+- task schema-drift-detector(PR content) - Detects unrelated schema.rb changes by cross-referencing against included migrations (run FIRST)
+- task data-migration-expert(PR content) - Validates ID mappings match production, checks for swapped values, verifies rollback safety
+- task deployment-verification-agent(PR content) - Creates Go/No-Go deployment checklist with SQL verification queries
 
-**When to run migration agents:**
-- PR includes files matching `db/migrate/*.rb`
+**When to run:**
+- PR includes files matching `db/migrate/*.rb` or `db/schema.rb`
 - PR modifies columns that store IDs, enums, or mappings
 - PR includes data backfill scripts or rake tasks
-- PR changes how data is read/written (e.g., changing from FK to string column)
 - PR title/body mentions: migration, backfill, data transformation, ID mapping
 
 **What these agents check:**
+- `schema-drift-detector`: Cross-references schema.rb changes against PR migrations to catch unrelated columns/indexes from local database state
 - `data-migration-expert`: Verifies hard-coded mappings match production reality (prevents swapped IDs), checks for orphaned associations, validates dual-write patterns
 - `deployment-verification-agent`: Produces executable pre/post-deploy checklists with SQL queries, rollback procedures, and monitoring plans
 
@@ -216,6 +219,7 @@ Remove duplicates, prioritize by severity and impact.
 <synthesis_tasks>
 
 - [ ] Collect findings from all parallel agents
+- [ ] Surface learnings-researcher results: if past solutions are relevant, flag them as "Known Pattern" with links to docs/solutions/ files
 - [ ] Discard any findings that recommend deleting or gitignoring files in `docs/plans/` or `docs/solutions/` (see Protected Artifacts above)
 - [ ] Categorize by type: security, performance, architecture, quality, etc.
 - [ ] Assign severity levels: 🔴 CRITICAL (P1), 🟡 IMPORTANT (P2), 🔵 NICE-TO-HAVE (P3)
@@ -410,7 +414,7 @@ After creating all todo files, present comprehensive summary:
    - Update Work Log as you work
    - Commit todos: `git add todos/ && git commit -m "refactor: add code review findings"`
 
-### Severity Breakdown
+### Severity Breakdown:
 
 **🔴 P1 (Critical - Blocks Merge):**
 
@@ -478,7 +482,7 @@ After presenting the Summary Report, offer appropriate testing based on project 
 
 </offer_testing>
 
-#### If User Accepts Web Testing
+#### If User Accepts Web Testing:
 
 Spawn a subagent to run browser tests (preserves main context):
 
@@ -497,7 +501,7 @@ The subagent will:
 
 **Standalone:** `/test-browser [PR number]`
 
-#### If User Accepts iOS Testing
+#### If User Accepts iOS Testing:
 
 Spawn a subagent to run Xcode tests (preserves main context):
 
