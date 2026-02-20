@@ -264,7 +264,14 @@
           "reason": "Adopted upstream's updated Two-Phase Orchestration structure"
         }
       ],
-      "manual_overrides": []
+      "manual_overrides": [
+        {
+          "field": "body:branding",
+          "reason": "compound-engineering.local.md -> systematic.local.md — local config filename in agent customization instructions",
+          "original": "Edit `compound-engineering.local.md` or invoke the `setup` skill",
+          "overridden_at": "2026-02-20T06:15:00Z"
+        }
+      ]
     },
     "commands/workflows/plan": {
       "source": "cep",
@@ -288,7 +295,14 @@
           "original": "- **Start `/workflows:work` on remote** - Begin implementing in Claude Code on the web"
         }
       ],
-      "manual_overrides": []
+      "manual_overrides": [
+        {
+          "field": "body:cc-specific-text",
+          "reason": "Removed 'for Claude Code web' from remote work option description — CC platform reference",
+          "original": "Run `/workflows:work docs/plans/<plan_filename>.md &` to start work in background for Claude Code web",
+          "overridden_at": "2026-02-20T06:15:00Z"
+        }
+      ]
     },
     "commands/workflows/review": {
       "source": "cep",
@@ -346,7 +360,14 @@
           "reason": "Swarm Mode section uses CC Teammate API (spawnTeam, requestShutdown, cleanup) with no OC equivalent \u2014 kept as aspirational reference with explanatory note"
         }
       ],
-      "manual_overrides": []
+      "manual_overrides": [
+        {
+          "field": "body:code-block-comment",
+          "reason": "Generalized 'per AGENTS.md' to 'per project conventions' in linting code block comment — removes OC-specific filename reference for downstream portability",
+          "original": "# Run linting (per AGENTS.md)",
+          "overridden_at": "2026-02-20T06:15:00Z"
+        }
+      ]
     },
     "agents/review/architecture-strategist": {
       "source": "cep",
@@ -948,7 +969,14 @@
           "reason": "Claude Code -> OpenCode, compound-engineering: -> systematic:"
         }
       ],
-      "manual_overrides": []
+      "manual_overrides": [
+        {
+          "field": "body:cc-specific-features",
+          "reason": "Rewrote CC-specific MCP tool names (mcp__plugin_compound-engineering_context7__*) to generic context7__* format; updated skill/agent discovery paths from CC plugin cache to .opencode/ and ~/.opencode/ conventions; added notes that systematic plugin skills/agents are auto-registered",
+          "original": "mcp__plugin_compound-engineering_context7__resolve-library-id / ~/.claude/plugins/cache paths / find-based plugin discovery",
+          "overridden_at": "2026-02-20T06:15:00Z"
+        }
+      ]
     },
     "commands/deploy-docs": {
       "source": "cep",
@@ -967,7 +995,14 @@
           "reason": "Claude Code -> OpenCode, compound-engineering: -> systematic:"
         }
       ],
-      "manual_overrides": []
+      "manual_overrides": [
+        {
+          "field": "body:full-rewrite",
+          "reason": "Complete rewrite for Systematic's Starlight/Astro docs workflow — replaced CEP validation (JSON schema, .claude-plugin checks) with bundled asset counting, CLI listings, bun run docs:build; replaced CEP deploy paths with docs/dist GitHub Pages workflow; updated deployment URL to fro.bot/systematic",
+          "original": "CEP-specific: .claude-plugin validation, JSON schema validation, CEP hosting platform deployment",
+          "overridden_at": "2026-02-20T06:15:00Z"
+        }
+      ]
     },
     "commands/feature-video": {
       "source": "cep",
@@ -1062,7 +1097,20 @@
           "reason": "Claude Code -> OpenCode, compound-engineering: -> systematic:"
         }
       ],
-      "manual_overrides": []
+      "manual_overrides": [
+        {
+          "field": "description",
+          "reason": "compound-engineering plugin -> systematic plugin",
+          "original": "Report a bug in the compound-engineering plugin",
+          "overridden_at": "2026-02-20T06:15:00Z"
+        },
+        {
+          "field": "body:branding",
+          "reason": "Full rewrite: title, description, repo (EveryInc/compound-engineering-plugin -> marcusrbrown/systematic), CLI (claude -> opencode), labels (compound-engineering -> systematic), issue URL, maintainer reference removed",
+          "original": "Report a Compounding Engineering Plugin Bug / EveryInc/compound-engineering-plugin / claude --version / Kieran Klaassen",
+          "overridden_at": "2026-02-20T06:15:00Z"
+        }
+      ]
     },
     "commands/reproduce-bug": {
       "source": "cep",
@@ -1081,7 +1129,14 @@
           "reason": "Claude Code -> OpenCode, compound-engineering: -> systematic:"
         }
       ],
-      "manual_overrides": []
+      "manual_overrides": [
+        {
+          "field": "body:cc-specific-features",
+          "reason": "Replaced CC-specific agents (rails-console-explorer, appsignal-log-investigator) with generic explore agent instructions; rewrote mcp__plugin_compound-engineering_pw__browser_* tool names to mcp__playwright__browser_* generic format",
+          "original": "task rails-console-explorer / task appsignal-log-investigator / mcp__plugin_compound-engineering_pw__browser_navigate|snapshot|take_screenshot|console_messages",
+          "overridden_at": "2026-02-20T06:15:00Z"
+        }
+      ]
     },
     "commands/resolve_parallel": {
       "source": "cep",
@@ -1119,7 +1174,14 @@
           "reason": "Claude Code -> OpenCode, compound-engineering: -> systematic:"
         }
       ],
-      "manual_overrides": []
+      "manual_overrides": [
+        {
+          "field": "body:branding",
+          "reason": "compound-engineering pipeline artifacts -> systematic pipeline artifacts — missed by converter (inside prose, not code block)",
+          "original": "compound-engineering pipeline artifacts",
+          "overridden_at": "2026-02-20T06:15:00Z"
+        }
+      ]
     },
     "commands/slfg": {
       "source": "cep",
@@ -1195,7 +1257,14 @@
           "reason": "Claude Code -> OpenCode, compound-engineering: -> systematic:"
         }
       ],
-      "manual_overrides": []
+      "manual_overrides": [
+        {
+          "field": "body:branding",
+          "reason": "Claude Triage System -> Systematic Triage System — CC-specific system name in work log template",
+          "original": "**By:** Claude Triage System",
+          "overridden_at": "2026-02-20T06:15:00Z"
+        }
+      ]
     },
     "skills/andrew-kane-gem-writer": {
       "source": "cep",
@@ -1372,7 +1441,14 @@
           "reason": "Claude Code -> OpenCode, .claude/ -> .opencode/, CLAUDE.md -> AGENTS.md"
         }
       ],
-      "manual_overrides": []
+      "manual_overrides": [
+        {
+          "field": "scripts:example-repo",
+          "reason": "EveryInc/cora -> owner/repo in get-pr-comments usage example — CEP-specific upstream repo reference",
+          "original": "echo \"Example: get-pr-comments 123 EveryInc/cora\"",
+          "overridden_at": "2026-02-20T06:15:00Z"
+        }
+      ]
     },
     "skills/setup": {
       "source": "cep",
@@ -1392,7 +1468,20 @@
           "reason": "Claude Code -> OpenCode, .claude/ -> .opencode/, CLAUDE.md -> AGENTS.md"
         }
       ],
-      "manual_overrides": []
+      "manual_overrides": [
+        {
+          "field": "description",
+          "reason": "compound-engineering.local.md -> systematic.local.md in frontmatter description",
+          "original": "Auto-detects stack and writes compound-engineering.local.md.",
+          "overridden_at": "2026-02-20T06:15:00Z"
+        },
+        {
+          "field": "body:branding",
+          "reason": "Full rewrite: title (Compound Engineering Setup -> Systematic Setup), 6x compound-engineering.local.md -> systematic.local.md across heading, step descriptions, file write instruction, and confirmation output",
+          "original": "Compound Engineering Setup / compound-engineering.local.md (6 occurrences)",
+          "overridden_at": "2026-02-20T06:15:00Z"
+        }
+      ]
     },
     "skills/skill-creator": {
       "source": "cep",

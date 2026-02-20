@@ -185,7 +185,7 @@ This command takes a work document (plan, specification, or todo file) and execu
    # Run full test suite (use project's test command)
    # Examples: bin/rails test, npm test, pytest, go test, etc.
 
-   # Run linting (per AGENTS.md)
+   # Run linting (per project conventions)
    # Use linting-agent before pushing to origin
    ```
 
@@ -468,4 +468,3 @@ For most features: tests + linting + following patterns is sufficient.
 - **Forgetting todowrite** - Track progress or lose track of what's done
 - **80% done syndrome** - Finish the feature, don't move on early
 - **Over-reviewing simple changes** - Save reviewer agents for complex work
-

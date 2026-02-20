@@ -1,41 +1,39 @@
 ---
 name: deploy-docs
-description: Validate and prepare documentation for GitHub Pages deployment
+description: Validate and prepare Systematic documentation for GitHub Pages deployment
 disable-model-invocation: true
 ---
 
 # Deploy Documentation Command
 
-Validate the documentation site and prepare it for GitHub Pages deployment.
+Validate the Systematic Starlight/Astro documentation site and prepare it for GitHub Pages deployment.
 
 ## Step 1: Validate Documentation
 
 Run these checks:
 
 ```bash
-# Count components
-echo "Agents: $(ls plugins/compound-engineering/agents/*.md | wc -l)"
-echo "Commands: $(ls plugins/compound-engineering/commands/*.md | wc -l)"
-echo "Skills: $(ls -d plugins/compound-engineering/skills/*/ 2>/dev/null | wc -l)"
+# Count bundled assets
+echo "Agents: $(ls agents/*/*.md | wc -l)"
+echo "Commands: $(ls commands/*.md commands/workflows/*.md | wc -l)"
+echo "Skills: $(ls -d skills/*/ 2>/dev/null | wc -l)"
 
-# Validate JSON
-cat .claude-plugin/marketplace.json | jq . > /dev/null && echo "✓ marketplace.json valid"
-cat plugins/compound-engineering/.claude-plugin/plugin.json | jq . > /dev/null && echo "✓ plugin.json valid"
+# Verify CLI listings (review output for expected entries)
+bun src/cli.ts list agents
+bun src/cli.ts list skills
+bun src/cli.ts list commands
 
-# Check all HTML files exist
-for page in index agents commands skills mcp-servers changelog getting-started; do
-  if [ -f "plugins/compound-engineering/docs/pages/${page}.html" ] || [ -f "plugins/compound-engineering/docs/${page}.html" ]; then
-    echo "✓ ${page}.html exists"
-  else
-    echo "✗ ${page}.html MISSING"
-  fi
-done
+# Build docs (runs docs:generate + Astro build)
+bun run docs:build
+
+# Check Astro output
+test -f docs/dist/index.html && echo "✓ docs/dist/index.html present"
 ```
 
 ## Step 2: Check for Uncommitted Changes
 
 ```bash
-git status --porcelain plugins/compound-engineering/docs/
+git status --porcelain docs/
 ```
 
 If there are uncommitted changes, warn the user to commit first.
@@ -67,7 +65,11 @@ on:
   push:
     branches: [main]
     paths:
-      - 'plugins/compound-engineering/docs/**'
+      - 'docs/**'
+      - 'docs/scripts/**'
+      - 'agents/**'
+      - 'skills/**'
+      - 'commands/**'
   workflow_dispatch:
 
 permissions:
@@ -87,10 +89,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.1.0'
+      - run: bun install
+      - run: bun run docs:build
       - uses: actions/configure-pages@v4
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: 'plugins/compound-engineering/docs'
+          path: 'docs/dist'
       - uses: actions/deploy-pages@v4
 ```
 
@@ -101,14 +108,13 @@ Provide a summary:
 ```
 ## Deployment Readiness
 
-✓ All HTML pages present
-✓ JSON files valid
-✓ Component counts match
+✓ Starlight/Astro build succeeded
+✓ Bundled asset counts match expectations
+✓ CLI listings verified
 
 ### Next Steps
 - [ ] Commit any pending changes
 - [ ] Push to main branch
 - [ ] Verify GitHub Pages workflow exists
-- [ ] Check deployment at https://everyinc.github.io/every-marketplace/
+- [ ] Check deployment at https://fro.bot/systematic (or your configured base URL)
 ```
-

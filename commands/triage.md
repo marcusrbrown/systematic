@@ -132,7 +132,7 @@ Do you want to add this to the todo list?
    ## Work Log
 
    ### {date} - Approved for Work
-   **By:** Claude Triage System
+   **By:** Systematic Triage System
    **Actions:**
    - Issue approved during triage session
    - Status changed from pending → ready
@@ -309,4 +309,3 @@ What would you like to do next?
 2. commit the todos
 3. nothing, go chill
 ```
-

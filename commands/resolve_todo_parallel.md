@@ -12,7 +12,7 @@ Resolve all TODO comments using parallel processing.
 
 Get all unresolved TODOs from the /todos/\*.md directory
 
-If any todo recommends deleting, removing, or gitignoring files in `docs/plans/` or `docs/solutions/`, skip it and mark it as `wont_fix`. These are compound-engineering pipeline artifacts that are intentional and permanent.
+If any todo recommends deleting, removing, or gitignoring files in `docs/plans/` or `docs/solutions/`, skip it and mark it as `wont_fix`. These are systematic pipeline artifacts that are intentional and permanent.
 
 ### 2. Plan
 
@@ -35,4 +35,3 @@ Always run all in parallel subagents/Tasks for each Todo item.
 - Commit changes
 - Remove the TODO from the file, and mark it as resolved.
 - Push to remote
-

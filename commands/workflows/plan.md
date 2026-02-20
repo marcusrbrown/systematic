@@ -556,7 +556,7 @@ Based on selection:
 - **`/technical_review`** → Call the /technical_review command with the plan file path
 - **Review and refine** → Load `document-review` skill.
 - **`/workflows:work`** → Call the /workflows:work command with the plan file path
-- **`/workflows:work` on remote** → Run `/workflows:work docs/plans/<plan_filename>.md &` to start work in background for Claude Code web
+- **`/workflows:work` on remote** → Run `/workflows:work docs/plans/<plan_filename>.md &` to start work in background
 - **Create Issue** → See "Issue Creation" section below
 - **Other** (automatically provided) → Accept free text for rework or specific changes
 
@@ -595,4 +595,3 @@ When user selects "Create Issue", detect their project tracker from AGENTS.md:
    - Ask if they want to proceed to `/workflows:work` or `/technical_review`
 
 NEVER CODE! Just research and write the plan.
-

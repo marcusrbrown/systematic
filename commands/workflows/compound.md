@@ -36,34 +36,34 @@ Phase 1 subagents return TEXT DATA to the orchestrator. They must NOT use Write,
 Launch these subagents IN PARALLEL. Each returns text data to the orchestrator.
 
 #### 1. **Context Analyzer**
-   - Extracts conversation history
-   - Identifies problem type, component, symptoms
-   - Validates against schema
-   - Returns: YAML frontmatter skeleton
+- Extracts conversation history
+- Identifies problem type, component, symptoms
+- Validates against schema
+- Returns: YAML frontmatter skeleton
 
 #### 2. **Solution Extractor**
-   - Analyzes all investigation steps
-   - Identifies root cause
-   - Extracts working solution with code examples
-   - Returns: Solution content block
+- Analyzes all investigation steps
+- Identifies root cause
+- Extracts working solution with code examples
+- Returns: Solution content block
 
 #### 3. **Related Docs Finder**
-   - Searches `docs/solutions/` for related documentation
-   - Identifies cross-references and links
-   - Finds related GitHub issues
-   - Returns: Links and relationships
+- Searches `docs/solutions/` for related documentation
+- Identifies cross-references and links
+- Finds related GitHub issues
+- Returns: Links and relationships
 
 #### 4. **Prevention Strategist**
-   - Develops prevention strategies
-   - Creates best practices guidance
-   - Generates test cases if applicable
-   - Returns: Prevention/testing content
+- Develops prevention strategies
+- Creates best practices guidance
+- Generates test cases if applicable
+- Returns: Prevention/testing content
 
 #### 5. **Category Classifier**
-   - Determines optimal `docs/solutions/` category
-   - Validates category against schema
-   - Suggests filename based on slug
-   - Returns: Final path and filename
+- Determines optimal `docs/solutions/` category
+- Validates category against schema
+- Suggests filename based on slug
+- Returns: Final path and filename
 
 </parallel_tasks>
 
@@ -232,10 +232,9 @@ Based on problem type, these agents can enhance documentation:
 ### When to Invoke
 - **Auto-triggered** (optional): Agents can run post-documentation for enhancement
 - **Manual trigger**: User can invoke agents after /workflows:compound completes for deeper review
-- **Customize agents**: Edit `compound-engineering.local.md` or invoke the `setup` skill to configure which review agents are used across all workflows
+- **Customize agents**: Edit `systematic.local.md` or invoke the `setup` skill to configure which review agents are used across all workflows
 
 ## Related Commands
 
 - `/research [topic]` - Deep investigation (searches docs/solutions/ for patterns)
 - `/workflows:plan` - Planning workflow (references documented solutions)
-

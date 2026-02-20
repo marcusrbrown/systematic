@@ -1,16 +1,16 @@
 ---
 name: setup
-description: Configure which review agents run for your project. Auto-detects stack and writes compound-engineering.local.md.
+description: Configure which review agents run for your project. Auto-detects stack and writes systematic.local.md.
 disable-model-invocation: true
 ---
 
-# Compound Engineering Setup
+# Systematic Setup
 
-Interactive setup for `compound-engineering.local.md` — configures which agents run during `/workflows:review` and `/workflows:work`.
+Interactive setup for `systematic.local.md` — configures which agents run during `/workflows:review` and `/workflows:work`.
 
 ## Step 1: Check Existing Config
 
-Read `compound-engineering.local.md` in the project root. If it exists, display current settings summary and use question:
+Read `systematic.local.md` in the project root. If it exists, display current settings summary and use question:
 
 ```
 question: "Settings file already exists. What would you like to do?"
@@ -53,7 +53,7 @@ options:
     description: "Choose stack, focus areas, and review depth."
 ```
 
-### If Auto-configure → Skip to Step 4 with defaults:
+### If Auto-configure → Skip to Step 4 with defaults
 
 - **Rails:** `[kieran-rails-reviewer, dhh-rails-reviewer, code-simplicity-reviewer, security-sentinel, performance-oracle]`
 - **Python:** `[kieran-python-reviewer, code-simplicity-reviewer, security-sentinel, performance-oracle]`
@@ -134,7 +134,7 @@ options:
 
 **Plan review agents:** stack-specific reviewer + `code-simplicity-reviewer`.
 
-Write `compound-engineering.local.md`:
+Write `systematic.local.md`:
 
 ```markdown
 ---
@@ -156,7 +156,7 @@ Examples:
 ## Step 5: Confirm
 
 ```
-Saved to compound-engineering.local.md
+Saved to systematic.local.md
 
 Stack:        {type}
 Review depth: {depth}
@@ -166,4 +166,3 @@ Agents:       {count} configured
 Tip: Edit the "Review Context" section to add project-specific instructions.
      Re-run this setup anytime to reconfigure.
 ```
-

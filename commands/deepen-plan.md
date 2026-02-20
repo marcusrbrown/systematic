@@ -70,8 +70,8 @@ ls .opencode/skills/
 # 2. User's global skills (~/.opencode/)
 ls ~/.opencode/skills/
 
-# 3. compound-engineering plugin skills
-ls ~/.opencode/plugins/cache/*/compound-engineering/*/skills/
+# 3. Systematic plugin skills (auto-registered)
+# Use the systematic_skill tool to list/load; no filesystem traversal needed.
 
 # 4. ALL other installed plugins - check every plugin for skills
 find ~/.opencode/plugins/cache -type d -name "skills" 2>/dev/null
@@ -80,7 +80,7 @@ find ~/.opencode/plugins/cache -type d -name "skills" 2>/dev/null
 cat ~/.opencode/plugins/installed_plugins.json
 ```
 
-**Important:** Check EVERY source. Don't assume compound-engineering is the only plugin. Use skills from ANY installed plugin that's relevant.
+**Important:** Check EVERY source. Don't assume systematic is the only plugin. Use skills from ANY installed plugin that's relevant.
 
 **Step 2: For each discovered skill, read its SKILL.md to understand what it does**
 
@@ -287,8 +287,8 @@ Return concrete, actionable recommendations."
 
 For any technologies/frameworks mentioned in the plan, query Context7:
 ```
-mcp__plugin_compound-engineering_context7__resolve-library-id: Find library ID for [framework]
-mcp__plugin_compound-engineering_context7__query-docs: Query documentation for specific patterns
+context7__resolve-library-id: Find library ID for [framework]
+context7__query-docs: Query documentation for specific patterns
 ```
 
 **Use google_search for current best practices:**
@@ -310,8 +310,8 @@ find .opencode/agents -name "*.md" 2>/dev/null
 # 2. User's global agents (~/.opencode/)
 find ~/.opencode/agents -name "*.md" 2>/dev/null
 
-# 3. compound-engineering plugin agents (all subdirectories)
-find ~/.opencode/plugins/cache/*/compound-engineering/*/agents -name "*.md" 2>/dev/null
+# 3. Systematic plugin agents (auto-registered)
+# Agents are available by name; no filesystem traversal needed.
 
 # 4. ALL other installed plugins - check every plugin for agents
 find ~/.opencode/plugins/cache -path "*/agents/*.md" 2>/dev/null
@@ -326,11 +326,11 @@ cat ~/.opencode/plugins/installed_plugins.json
 **Important:** Check EVERY source. Include agents from:
 - Project `.opencode/agents/`
 - User's `~/.opencode/agents/`
-- compound-engineering plugin (but SKIP workflow/ agents - only use review/, research/, design/, docs/)
+- Systematic plugin (but SKIP workflow/ agents - only use review/, research/, design/, docs/)
 - ALL other installed plugins (agent-sdk-dev, frontend-design, etc.)
 - Any local plugins
 
-**For compound-engineering plugin specifically:**
+**For Systematic plugin specifically:**
 - USE: `agents/review/*` (all reviewers)
 - USE: `agents/research/*` (all researchers)
 - USE: `agents/design/*` (design agents)
@@ -544,4 +544,3 @@ const queryClient = new QueryClient({
 ```
 
 NEVER CODE! Just research and enhance the plan.
-
