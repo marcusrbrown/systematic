@@ -29,7 +29,7 @@ Systematic is an [OpenCode](https://opencode.ai/) plugin that transforms your AI
 
 Most AI coding assistants respond to requests without structure or methodology. This leads to inconsistent outputs, missed requirements, and wasted iterations.
 
-**Systematic solves this with structured workflows.** The plugin injects proven engineering processes directly into your AI's system prompt, enabling it to:
+**Systematic solves this with structured workflows.** Installation is the first step to equipping your AI with high-leverage engineering habits. Once installed, the plugin injects proven processes directly into the system prompt, enabling it to:
 
 - **Brainstorm systematically** before jumping to implementation
 - **Plan with rigor** using multi-phase workflows
@@ -54,7 +54,7 @@ Most AI coding assistants respond to requests without structure or methodology. 
 
 ### Installation
 
-Add the plugin to your OpenCode configuration (`~/.config/opencode/opencode.json`):
+Install the plugin by adding it to your OpenCode configuration (`~/.config/opencode/opencode.json`):
 
 ```json
 {
@@ -62,7 +62,7 @@ Add the plugin to your OpenCode configuration (`~/.config/opencode/opencode.json
 }
 ```
 
-That's it. Restart OpenCode and the plugin's skills, agents, and commands are available immediately.
+Restart OpenCode to activate the plugin. All bundled skills, agents, and commands will be available immediately.
 
 > [!NOTE]
 > Systematic uses OpenCode's `config` hook to automatically register all bundled content. No manual file copying required.
@@ -100,6 +100,13 @@ In any OpenCode conversation, type:
 ```
 
 If the skill loads and displays usage instructions, the plugin is working correctly.
+
+#### Next Steps
+
+Once verified, explore these guides to master the Systematic workflow:
+- **[Philosophy](https://fro.bot/systematic/guides/philosophy/)** — Understand the Compound Engineering mindset and why it works
+- **[Main Loop](https://fro.bot/systematic/guides/main-loop/)** — Learn the Plan → Work → Review → Compound cycle
+- **[Agent Install Guide](https://fro.bot/systematic/guides/agent-install/)** — Step-by-step install guide for AI agents
 
 ## Skills
 
@@ -433,6 +440,9 @@ Migrating skills, agents, or commands from CEP or other Claude Code-format sourc
 ## References
 
 - [Systematic Documentation](https://fro.bot/systematic) — Full documentation site
+- [Philosophy Guide](https://fro.bot/systematic/guides/philosophy/) — Core engineering principles
+- [Main Loop Guide](https://fro.bot/systematic/guides/main-loop/) — The standard development cycle
+- [Agent Install Guide](https://fro.bot/systematic/guides/agent-install/) — Advanced subagent configuration
 - [OpenCode Documentation](https://opencode.ai/docs/) — Official OpenCode platform docs
 - [OpenCode Plugin API](https://opencode.ai/docs/plugins) — Plugin development reference
 - [Compound Engineering Plugin](https://github.com/EveryInc/compound-engineering-plugin) — Original Claude Code workflows

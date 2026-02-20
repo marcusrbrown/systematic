@@ -11,6 +11,10 @@
   "dependencies": {
     "@astrojs/starlight": "^0.37.6",
     "astro": "^5.17.1",
+    "rehype-mermaid": "^3.0.0",
     "sharp": "^0.34.0"
+  },
+  "devDependencies": {
+    "playwright": "^1.58.2"
   }
 }

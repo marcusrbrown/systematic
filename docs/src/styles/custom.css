@@ -57,3 +57,110 @@
 .definition-source:hover {
   color: var(--sl-color-accent);
 }
+
+/* Typography & Spacing Polish - OpenCode Aligned */
+:root {
+  /* Refined Typography */
+  --sl-font-system:
+    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  --sl-font-heading: var(--sl-font-system);
+  --sl-font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+
+  /* Spacing & Layout */
+  --sl-line-height: 1.75;
+  --sl-nav-gap: 0.75rem;
+}
+
+/* Heading Polish */
+.sl-markdown-content h1,
+.sl-markdown-content h2,
+.sl-markdown-content h3,
+.sl-markdown-content h4 {
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  margin-top: 2.5em;
+  margin-bottom: 0.75em;
+}
+
+.sl-markdown-content h1 {
+  font-size: 2.5rem;
+  line-height: 1.2;
+}
+
+.sl-markdown-content p {
+  margin-bottom: 1.5em;
+  line-height: 1.8;
+  color: var(--sl-color-gray-2);
+}
+
+/* Link Polish */
+.sl-markdown-content a:not(.not-content) {
+  text-decoration-thickness: 1px;
+  text-underline-offset: 4px;
+  transition:
+    color 0.2s ease,
+    text-decoration-color 0.2s ease;
+}
+
+.sl-markdown-content a:not(.not-content):hover {
+  text-decoration-color: var(--sl-color-accent);
+}
+
+/* Card Polish */
+.card,
+.link-card {
+  border: 1px solid var(--sl-color-gray-5);
+  background-color: var(--sl-color-gray-6);
+  transition:
+    transform 0.2s ease,
+    border-color 0.2s ease;
+}
+
+.card:hover,
+.link-card:hover {
+  border-color: var(--sl-color-accent);
+  transform: translateY(-2px);
+}
+
+/* Code Block Polish */
+.expressive-code .ec-line {
+  line-height: 1.6;
+}
+
+/* Blockquote Polish */
+.sl-markdown-content blockquote {
+  border-left-color: var(--sl-color-accent);
+  background-color: var(--sl-color-gray-6);
+  padding: 1rem 1.5rem;
+  border-radius: 0.25rem;
+}
+
+/* Table Polish */
+.sl-markdown-content table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+
+.sl-markdown-content th {
+  background-color: var(--sl-color-gray-6);
+  border-bottom: 1px solid var(--sl-color-gray-5);
+  padding: 0.75rem 1rem;
+  text-align: left;
+  font-weight: 600;
+}
+
+.sl-markdown-content td {
+  padding: 0.75rem 1rem;
+  border-bottom: 1px solid var(--sl-color-gray-5);
+}
+
+.sl-markdown-content tr:last-child td {
+  border-bottom: none;
+}
