@@ -39,7 +39,11 @@ Before performing any conversion, use the `skill` tool to load `convert-cc-defs`
 
 After loading the skill, follow its workflow: Phase 2 (Mechanical Conversion) for each definition, then Phase 3 (Intelligent Rewrite) for context-aware adjustments, then Phase 4 (Write and Register) to update files and manifest.
 
-The precheck summary contains `hashChanges`, `newUpstream`, and `deletions` arrays. Each entry is a definition path like `skills/brainstorming` or `commands/workflows/review`. Process ALL definition types in the precheck's `hashChanges` array — agents, skills, AND commands. Do not skip a type.
+The precheck summary contains `hashChanges`, `newUpstream`, `newUpstreamFiles`, and `deletions` arrays. Each entry is a definition path like `skills/brainstorming` or `commands/workflows/review`. Process ALL definition types in the precheck's `hashChanges` array — agents, skills, AND commands. Do not skip a type.
+
+### New Upstream File Lists
+
+The `newUpstreamFiles` field is a map from definition key to its file list (e.g., `{"skills/my-skill": ["SKILL.md", "references/guide.md"]}`). When importing new definitions listed in `newUpstream`, use the file list from `newUpstreamFiles` to fetch ALL files — not just the primary definition file. For skills, this means fetching SKILL.md AND every sub-file (references/, scripts/, assets/, etc.). **Importing only SKILL.md while ignoring sub-files renders most multi-file skills non-functional.**
 
 ## Feature: Pre-check Gate
 
@@ -144,7 +148,9 @@ Use this exact template for all output. Copy it and fill in the placeholders:
 (None detected / list conflicts)
 
 ### New Upstream (report-only)
-- path/to/new-def
+| Definition | Files |
+|------------|-------|
+| path/to/new-def | SKILL.md, references/guide.md |
 
 ### Upstream Deletions (report-only)
 - path/to/deleted-def

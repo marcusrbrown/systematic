@@ -111,6 +111,44 @@ gh api "repos/EveryInc/compound-engineering-plugin/git/trees/<COMMIT_SHA>?recurs
 3. Manually rewritten with CC→OC text replacements (`.claude/` → `.opencode/`, `CLAUDE.md` → `AGENTS.md`, `Claude Code` → `OpenCode`, `compound-engineering:` → `systematic:`, etc.)
 4. `${CLAUDE_PLUGIN_ROOT}/skills/<name>/...` paths simplified to relative paths (skills are bundled in the plugin — no env var prefix needed)
 
+### Discovering Sub-Files for New Skills
+
+When importing a **new** skill (not yet in the manifest), you must discover ALL files in the skill directory before fetching. There are two ways to get the file list:
+
+**Option A: Use precheck `newUpstreamFiles` (automated sync)** — When running via the sync-cep workflow, the precheck summary includes a `newUpstreamFiles` map that lists all files for each new definition:
+
+```json
+{
+  "newUpstreamFiles": {
+    "skills/every-style-editor": ["SKILL.md", "references/EVERY_WRITE_STYLE.md"],
+    "skills/gemini-imagegen": ["SKILL.md", "requirements.txt", "scripts/generate.py", "scripts/setup.sh"]
+  }
+}
+```
+
+Use this file list directly — it was collected from the upstream git tree and is authoritative.
+
+**Option B: Query the git tree API (manual import)** — When importing outside the sync-cep workflow, discover files yourself:
+
+```bash
+# Get the full tree and filter for the skill directory
+gh api "repos/EveryInc/compound-engineering-plugin/git/trees/main?recursive=1" \
+  --jq '.tree[] | select(.path | startswith("plugins/compound-engineering/skills/<name>/")) | select(.type == "blob") | .path' \
+  | sed 's|plugins/compound-engineering/skills/<name>/||'
+```
+
+**After discovering the file list**, fetch each file individually using the contents API:
+
+```bash
+for file in SKILL.md references/guide.md scripts/setup.sh; do
+  mkdir -p "/tmp/cep-upstream/<skill-name>/$(dirname "$file")"
+  gh api "repos/EveryInc/compound-engineering-plugin/contents/plugins/compound-engineering/skills/<skill-name>/${file}" \
+    --jq '.content' | base64 -d > "/tmp/cep-upstream/<skill-name>/${file}"
+done
+```
+
+**CRITICAL**: Failing to discover sub-files results in incomplete skill imports — only SKILL.md gets copied while references/, scripts/, assets/ etc. are silently dropped. This renders many skills non-functional.
+
 ### 1b. Check Existing Manifest
 
 Read `sync-manifest.json` to determine if this is a new import or an update:
@@ -368,6 +406,17 @@ Run this once at the start of a batch import and use the same timestamp for all 
 - Agents: `agents/<category>/<name>`
 - Skills: `skills/<name>`
 - Commands: `commands/<name>` or `commands/workflows/<name>`
+
+**Multi-file skills MUST include a `files` array** listing all files in the skill directory (relative to the skill's upstream path). This is how the precheck script knows which files to hash for change detection. Without it, sub-file changes go undetected:
+
+```json
+{
+  "skills/my-skill": {
+    "files": ["SKILL.md", "references/guide.md", "scripts/setup.sh"],
+    ...
+  }
+}
+```
 
 **Ensure `sources` has an entry for the upstream repo:**
 
