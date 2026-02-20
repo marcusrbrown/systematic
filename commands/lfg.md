@@ -1,15 +1,21 @@
 ---
 name: lfg
 description: Full autonomous engineering workflow
-argument-hint: "[feature description]"
+argument-hint: '[feature description]'
+disable-model-invocation: true
 ---
 
-Run these slash commands in order. Do not do anything else.
+Run these slash commands in order. Do not do anything else. Do not stop between steps — complete every step through to the end.
 
-1. `/workflows:plan $ARGUMENTS`
-2. `/systematic:deepen-plan`
-3. `/workflows:work`
-4. `/workflows:review`
-5. Output `<promise>DONE</promise>` when all review findings are resolved
+1. **Optional:** If the `ralph-wiggum` skill is available, run `/ralph-wiggum:ralph-loop "finish all slash commands" --completion-promise "DONE"`. If not available or it fails, skip and continue to step 2 immediately.
+2. `/workflows:plan $ARGUMENTS`
+3. `/systematic:deepen-plan`
+4. `/workflows:work`
+5. `/workflows:review`
+6. `/systematic:resolve_todo_parallel`
+7. `/systematic:test-browser`
+8. `/systematic:feature-video`
+9. Output `<promise>DONE</promise>` when video is in PR
 
-Start with step 1 now.
+Start with step 2 now (or step 1 if ralph-wiggum is available).
+

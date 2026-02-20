@@ -1,7 +1,7 @@
 ---
 name: workflows:compound
 description: Document a recently solved problem to compound your team's knowledge
-argument-hint: "[optional: brief context about the fix]"
+argument-hint: '[optional: brief context about the fix]'
 ---
 
 # /compound
@@ -36,34 +36,34 @@ Phase 1 subagents return TEXT DATA to the orchestrator. They must NOT use Write,
 Launch these subagents IN PARALLEL. Each returns text data to the orchestrator.
 
 #### 1. **Context Analyzer**
-- Extracts conversation history
-- Identifies problem type, component, symptoms
-- Validates against schema
-- Returns: YAML frontmatter skeleton
+   - Extracts conversation history
+   - Identifies problem type, component, symptoms
+   - Validates against schema
+   - Returns: YAML frontmatter skeleton
 
 #### 2. **Solution Extractor**
-- Analyzes all investigation steps
-- Identifies root cause
-- Extracts working solution with code examples
-- Returns: Solution content block
+   - Analyzes all investigation steps
+   - Identifies root cause
+   - Extracts working solution with code examples
+   - Returns: Solution content block
 
 #### 3. **Related Docs Finder**
-- Searches `docs/solutions/` for related documentation
-- Identifies cross-references and links
-- Finds related GitHub issues
-- Returns: Links and relationships
+   - Searches `docs/solutions/` for related documentation
+   - Identifies cross-references and links
+   - Finds related GitHub issues
+   - Returns: Links and relationships
 
 #### 4. **Prevention Strategist**
-- Develops prevention strategies
-- Creates best practices guidance
-- Generates test cases if applicable
-- Returns: Prevention/testing content
+   - Develops prevention strategies
+   - Creates best practices guidance
+   - Generates test cases if applicable
+   - Returns: Prevention/testing content
 
 #### 5. **Category Classifier**
-- Determines optimal `docs/solutions/` category
-- Validates category against schema
-- Suggests filename based on slug
-- Returns: Final path and filename
+   - Determines optimal `docs/solutions/` category
+   - Validates category against schema
+   - Suggests filename based on slug
+   - Returns: Final path and filename
 
 </parallel_tasks>
 
@@ -142,27 +142,29 @@ Based on problem type, optionally invoke specialized agents to review the docume
 
 ## Common Mistakes to Avoid
 
-| Wrong | Correct |
-|----------|-----------:|
+| ❌ Wrong | ✅ Correct |
+|----------|-----------|
 | Subagents write files like `context-analysis.md`, `solution-draft.md` | Subagents return text data; orchestrator writes one final file |
-| Research and assembly run in parallel | Research completes, then assembly runs |
+| Research and assembly run in parallel | Research completes → then assembly runs |
 | Multiple files created during workflow | Single file: `docs/solutions/[category]/[filename].md` |
 
 ## Success Output
 
 ```
+✓ Documentation complete
+
 Subagent Results:
-  Context Analyzer: Identified performance_issue in brief_system
-  Solution Extractor: 3 code fixes
-  Related Docs Finder: 2 related issues
-  Prevention Strategist: Prevention strategies, test suggestions
-  Category Classifier: `performance-issues`
+  ✓ Context Analyzer: Identified performance_issue in brief_system
+  ✓ Solution Extractor: 3 code fixes
+  ✓ Related Docs Finder: 2 related issues
+  ✓ Prevention Strategist: Prevention strategies, test suggestions
+  ✓ Category Classifier: `performance-issues`
 
 Specialized Agent Reviews (Auto-Triggered):
-  performance-oracle: Validated query optimization approach
-  kieran-rails-reviewer: Code examples meet Rails standards
-  code-simplicity-reviewer: Solution is appropriately minimal
-  every-style-editor: Documentation style verified
+  ✓ performance-oracle: Validated query optimization approach
+  ✓ kieran-rails-reviewer: Code examples meet Rails standards
+  ✓ code-simplicity-reviewer: Solution is appropriately minimal
+  ✓ every-style-editor: Documentation style verified
 
 File created:
 - docs/solutions/performance-issues/n-plus-one-brief-generation.md
@@ -230,8 +232,10 @@ Based on problem type, these agents can enhance documentation:
 ### When to Invoke
 - **Auto-triggered** (optional): Agents can run post-documentation for enhancement
 - **Manual trigger**: User can invoke agents after /workflows:compound completes for deeper review
+- **Customize agents**: Edit `compound-engineering.local.md` or invoke the `setup` skill to configure which review agents are used across all workflows
 
 ## Related Commands
 
 - `/research [topic]` - Deep investigation (searches docs/solutions/ for patterns)
 - `/workflows:plan` - Planning workflow (references documented solutions)
+
