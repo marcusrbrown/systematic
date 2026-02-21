@@ -378,6 +378,29 @@ export const getExitCode = (
   return hasChanges(summary) ? 1 : 0
 }
 
+/**
+ * Creates an authenticated fetch wrapper for GitHub API requests.
+ *
+ * Returns a fetch function that automatically includes GitHub authentication headers
+ * when provided a token. Falls back to unauthenticated fetch for empty/missing tokens.
+ * This increases API rate limits from 60 to 5000 requests/hour during CI runs.
+ *
+ * @param token - GitHub authentication token (PAT or fine-grained token)
+ * @returns A fetch function with authentication headers, or raw fetch if no token
+ */
+export const createAuthenticatedFetch = (
+  token: string | undefined,
+): ((url: string) => Promise<Response>) => {
+  if (!token) return fetch
+  return (url: string) =>
+    fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/vnd.github.v3+json',
+      },
+    })
+}
+
 const main = (): void => {
   const manifest = readManifest(MANIFEST_PATH)
   if (!manifest) {
@@ -394,11 +417,12 @@ const main = (): void => {
       manifest,
       upstreamDefinitionKeys: Object.keys(manifest.definitions),
     })
+    const fetchFn = createAuthenticatedFetch(process.env.GITHUB_TOKEN)
     const fetchResult = await fetchUpstreamData(
       source.repo,
       source.branch,
       requiredPaths,
-      fetch,
+      fetchFn,
     )
 
     const summary = computeCheckSummary({
