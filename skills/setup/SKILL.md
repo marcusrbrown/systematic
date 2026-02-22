@@ -4,7 +4,7 @@ description: Configure which review agents run for your project. Auto-detects st
 disable-model-invocation: true
 ---
 
-# Compound Engineering Setup
+# Systematic Setup
 
 Interactive setup for `systematic.local.md` — configures which agents run during `/workflows:review` and `/workflows:work`.
 

@@ -52,7 +52,7 @@ Get specific: "Python games" or "Python games with Pygame specifically"?
 
 Explain:
 ```
-Domain expertise skills go in: ~/.opencode/skills/expertise/{domain-name}/
+Domain expertise skills go in: ~/.config/opencode/skills/expertise/{domain-name}/
 
 These are comprehensive BUILD skills that:
 - Execute tasks (build, debug, optimize, ship)
@@ -61,7 +61,7 @@ These are comprehensive BUILD skills that:
 - Can be loaded by other skills for domain knowledge
 
 Name suggestion: {suggested-name}
-Location: ~/.opencode/skills/expertise/{suggested-name}/
+Location: ~/.config/opencode/skills/expertise/{suggested-name}/
 ```
 
 Confirm or adjust name.

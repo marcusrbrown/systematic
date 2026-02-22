@@ -9,7 +9,7 @@
 <process>
 ## Step 1: Select the Skill
 
-**DO NOT use AskUserQuestion** - there may be many skills.
+**DO NOT use question tool** - there may be many skills.
 
 ```bash
 ls ~/.config/opencode/skills/
