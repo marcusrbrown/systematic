@@ -10,7 +10,7 @@
 ## Step 1: Select the Skill
 
 ```bash
-ls ~/.config/opencode/skills/
+ls ~/.opencode/skills/
 ```
 
 Present numbered list, ask: "Which skill should be upgraded to the router pattern?"
@@ -19,8 +19,8 @@ Present numbered list, ask: "Which skill should be upgraded to the router patter
 
 Read the skill:
 ```bash
-cat ~/.config/opencode/skills/{skill-name}/SKILL.md
-ls ~/.config/opencode/skills/{skill-name}/
+cat ~/.opencode/skills/{skill-name}/SKILL.md
+ls ~/.opencode/skills/{skill-name}/
 ```
 
 **Already a router?** (has workflows/ and intake question)
@@ -65,8 +65,8 @@ Ask: "Does this breakdown look right? Any adjustments?"
 ## Step 4: Create Directory Structure
 
 ```bash
-mkdir -p ~/.config/opencode/skills/{skill-name}/workflows
-mkdir -p ~/.config/opencode/skills/{skill-name}/references
+mkdir -p ~/.opencode/skills/{skill-name}/workflows
+mkdir -p ~/.opencode/skills/{skill-name}/references
 ```
 
 ## Step 5: Extract Workflows

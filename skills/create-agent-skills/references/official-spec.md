@@ -61,7 +61,7 @@ Enterprise (highest priority) → Personal → Project → Plugin (lowest priori
 | Type | Path | Applies to |
 |------|------|-----------|
 | Enterprise | See managed settings | All users in organization |
-| Personal | `~/.config/opencode/skills/<name>/SKILL.md` | You, across all projects |
+| Personal | `~/.opencode/skills/<name>/SKILL.md` | You, across all projects |
 | Project | `.opencode/skills/<name>/SKILL.md` | Anyone working in repository |
 | Plugin | `<plugin>/skills/<name>/SKILL.md` | Where plugin is enabled |
 
@@ -80,7 +80,7 @@ Plugin skills use a `plugin-name:skill-name` namespace, so they cannot conflict 
 | `$ARGUMENTS` | All arguments passed when invoking |
 | `$ARGUMENTS[N]` | Specific argument by 0-based index |
 | `$N` | Shorthand for `$ARGUMENTS[N]` |
-| `${CLAUDE_SESSION_ID}` | Current session ID |
+| `N/A` | Current session ID |
 
 ## Dynamic Context Injection
 

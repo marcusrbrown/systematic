@@ -4,13 +4,13 @@ description: Configure which review agents run for your project. Auto-detects st
 disable-model-invocation: true
 ---
 
-# Systematic Setup
+# Compound Engineering Setup
 
 Interactive setup for `systematic.local.md` — configures which agents run during `/workflows:review` and `/workflows:work`.
 
 ## Step 1: Check Existing Config
 
-Read `systematic.local.md` in the project root. If it exists, display current settings summary and use question:
+Read `systematic.local.md` in the project root. If it exists, display current settings summary and use AskUserQuestion:
 
 ```
 question: "Settings file already exists. What would you like to do?"
@@ -41,7 +41,7 @@ test -f requirements.txt && echo "python" || \
 echo "general"
 ```
 
-Use question:
+Use AskUserQuestion:
 
 ```
 question: "Detected {type} project. How would you like to configure?"
@@ -53,7 +53,7 @@ options:
     description: "Choose stack, focus areas, and review depth."
 ```
 
-### If Auto-configure → Skip to Step 4 with defaults
+### If Auto-configure → Skip to Step 4 with defaults:
 
 - **Rails:** `[kieran-rails-reviewer, dhh-rails-reviewer, code-simplicity-reviewer, security-sentinel, performance-oracle]`
 - **Python:** `[kieran-python-reviewer, code-simplicity-reviewer, security-sentinel, performance-oracle]`

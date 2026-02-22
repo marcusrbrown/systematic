@@ -6,13 +6,13 @@ description: Build applications where agents are first-class citizens. Use this 
 <why_now>
 ## Why Now
 
-Software agents work reliably now. Modern coding agents like OpenCode have demonstrated that an LLM with access to bash and file tools, operating in a loop until an objective is achieved, can accomplish complex multi-step tasks autonomously.
+Software agents work reliably now. OpenCode demonstrated that an LLM with access to bash and file tools, operating in a loop until an objective is achieved, can accomplish complex multi-step tasks autonomously.
 
-The surprising discovery: **a really good coding agent is actually a really good general-purpose agent.** The same architecture that lets an agent refactor a codebase can let it organize your files, manage your reading list, or automate your workflows.
+The surprising discovery: **a really good coding agent is actually a really good general-purpose agent.** The same architecture that lets OpenCode refactor a codebase can let an agent organize your files, manage your reading list, or automate your workflows.
 
-Agent SDKs make this accessible. You can build applications where features aren't code you write—they're outcomes you describe, achieved by an agent with tools, operating in a loop until the outcome is reached.
+The OpenCode SDK makes this accessible. You can build applications where features aren't code you write—they're outcomes you describe, achieved by an agent with tools, operating in a loop until the outcome is reached.
 
-This opens up a new field: software that works the way modern coding agents work, applied to categories far beyond coding.
+This opens up a new field: software that works the way OpenCode works, applied to categories far beyond coding.
 </why_now>
 
 <core_principles>

@@ -1,7 +1,7 @@
 ---
 name: resolve_pr_parallel
 description: Resolve all PR comments using parallel processing. Use when addressing PR review feedback, resolving review threads, or batch-fixing PR comments.
-argument-hint: '[optional: PR number or current PR]'
+argument-hint: "[optional: PR number or current PR]"
 disable-model-invocation: true
 allowed-tools: Bash(gh *), Bash(git *), Read
 ---
@@ -24,7 +24,7 @@ OpenCode automatically detects git context:
 Fetch unresolved review threads using the GraphQL script:
 
 ```bash
-bash ${OPENCODE_PLUGIN_ROOT}/skills/resolve-pr-parallel/scripts/get-pr-comments PR_NUMBER
+bash skills/resolve-pr-parallel/scripts/get-pr-comments PR_NUMBER
 ```
 
 This returns only **unresolved, non-outdated** threads with file paths, line numbers, and comment bodies.
@@ -61,7 +61,7 @@ Always run all in parallel subagents/Tasks for each Todo item.
 - Resolve each thread programmatically:
 
 ```bash
-bash ${OPENCODE_PLUGIN_ROOT}/skills/resolve-pr-parallel/scripts/resolve-pr-thread THREAD_ID
+bash skills/resolve-pr-parallel/scripts/resolve-pr-thread THREAD_ID
 ```
 
 - Push to remote
@@ -71,7 +71,7 @@ bash ${OPENCODE_PLUGIN_ROOT}/skills/resolve-pr-parallel/scripts/resolve-pr-threa
 Re-fetch comments to confirm all threads are resolved:
 
 ```bash
-bash ${OPENCODE_PLUGIN_ROOT}/skills/resolve-pr-parallel/scripts/get-pr-comments PR_NUMBER
+bash skills/resolve-pr-parallel/scripts/get-pr-comments PR_NUMBER
 ```
 
 Should return an empty array `[]`. If threads remain, repeat from step 1.
@@ -87,4 +87,3 @@ Should return an empty array `[]`. If threads remain, repeat from step 1.
 - Changes committed and pushed
 - Threads resolved via GraphQL (marked as resolved on GitHub)
 - Empty result from get-pr-comments on verify
-

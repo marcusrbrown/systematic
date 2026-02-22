@@ -17,7 +17,7 @@ Ask the user:
 ## Step 2: Determine If a Skill Is Right
 
 **Create a skill when:**
-- Task is repeated across multiple sessions
+- task is repeated across multiple sessions
 - Domain knowledge doesn't change frequently
 - Complex enough to benefit from structure
 - Would save significant time if automated
