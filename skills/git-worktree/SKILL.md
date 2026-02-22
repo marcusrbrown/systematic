@@ -300,4 +300,3 @@ cd $(git rev-parse --show-toplevel)
 - No repository duplication
 - Shared git objects for efficiency
 - Much faster than cloning or stashing/switching
-

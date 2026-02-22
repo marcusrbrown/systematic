@@ -3,10 +3,10 @@ name: compound-docs
 description: Capture solved problems as categorized documentation with YAML frontmatter for fast lookup
 disable-model-invocation: true
 allowed-tools:
-  - Read
-  - Write
-  - Bash
-  - Grep
+  - Read # Parse conversation context
+  - Write # Create resolution docs
+  - Bash # Create directories
+  - Grep # Search existing docs
 preconditions:
   - Problem has been solved (not in-progress)
   - Solution has been verified working
@@ -327,7 +327,7 @@ User selects this when the solution represents the start of a new learning domai
 
 Action:
 1. Prompt: "What should the new skill be called? (e.g., stripe-billing, email-processing)"
-2. Run `python3 .opencode/skills/create-agent-skills/scripts/init_skill.py [skill-name]`
+2. Run `python3 .opencode/skills/skill-creator/scripts/init_skill.py [skill-name]`
 3. Create initial reference files with this solution as first example
 4. Confirm: "✓ Created new [skill-name] skill with this solution as first example"
 

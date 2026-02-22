@@ -53,7 +53,7 @@ options:
     description: "Choose stack, focus areas, and review depth."
 ```
 
-### If Auto-configure → Skip to Step 4 with defaults
+### If Auto-configure → Skip to Step 4 with defaults:
 
 - **Rails:** `[kieran-rails-reviewer, dhh-rails-reviewer, code-simplicity-reviewer, security-sentinel, performance-oracle]`
 - **Python:** `[kieran-python-reviewer, code-simplicity-reviewer, security-sentinel, performance-oracle]`

@@ -273,4 +273,3 @@ For detailed guidance, see:
 
 - [Extend Claude with skills - Official Docs](https://code.claude.com/docs/en/skills)
 - [GitHub - anthropics/skills](https://github.com/anthropics/skills)
-

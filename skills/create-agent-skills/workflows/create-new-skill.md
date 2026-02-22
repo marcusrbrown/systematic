@@ -18,7 +18,7 @@
 **If user just invoked skill without context:**
 → Ask what they want to build
 
-### Using question tool
+### Using question
 
 Ask 2-4 domain-specific questions based on actual gaps. Each question should:
 - Have specific options with descriptions
@@ -42,7 +42,7 @@ Options:
 
 ## Step 2: Research Trigger (If External API)
 
-**When external service detected**, ask using question tool:
+**When external service detected**, ask using question:
 "This involves [service name] API. Would you like me to research current endpoints and patterns before building?"
 
 Options:

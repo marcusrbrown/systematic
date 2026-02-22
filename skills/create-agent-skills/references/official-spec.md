@@ -80,7 +80,7 @@ Plugin skills use a `plugin-name:skill-name` namespace, so they cannot conflict 
 | `$ARGUMENTS` | All arguments passed when invoking |
 | `$ARGUMENTS[N]` | Specific argument by 0-based index |
 | `$N` | Shorthand for `$ARGUMENTS[N]` |
-| `${CLAUDE_SESSION_ID}` | Current session ID |
+| `N/A` | Current session ID |
 
 ## Dynamic Context Injection
 

@@ -1,6 +1,6 @@
 # YAML Frontmatter Schema
 
-**See `.opencode/skills/compound-docs/schema.yaml` for the complete schema specification.**
+**See `schema.yaml` for the complete schema specification.**
 
 ## Required Fields
 
