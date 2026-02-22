@@ -31,7 +31,18 @@ You are running a CEP-to-Systematic re-sync. Your output must be structured and 
 - Always read `sync-manifest.json` before any conversion (except dry-run).
 - Never overwrite manual overrides.
 - Never auto-import new upstream definitions or auto-delete removed ones; report only.
+- **Focus on CHANGED content only** — If upstream hasn't changed a section, preserve it exactly. Do not make gratuitous modifications.
 - Produce a single, deterministic summary.
+
+### Change Detection Critical Rules
+
+| Rule | Reason |
+|------|--------|
+| Only modify changed portions | Unchanged content should be preserved verbatim |
+| `~/.config/opencode/` is correct | Never change this to `~/.opencode/` |
+| `question` is the correct tool name | Never change this to `AskUserQuestion` |
+| Preserve formatting | Keep trailing newlines, don't strip EOL |
+| Report discrepancies | Flag unexpected patterns for human review |
 
 ## Skill: convert-cc-defs
 

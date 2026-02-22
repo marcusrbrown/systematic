@@ -10,7 +10,7 @@
 ## Step 1: Select the Skill
 
 ```bash
-ls ~/.opencode/skills/
+ls ~/.config/opencode/skills/
 ```
 
 Present numbered list, ask: "Which skill needs a new reference?"
@@ -18,8 +18,8 @@ Present numbered list, ask: "Which skill needs a new reference?"
 ## Step 2: Analyze Current Structure
 
 ```bash
-cat ~/.opencode/skills/{skill-name}/SKILL.md
-ls ~/.opencode/skills/{skill-name}/references/ 2>/dev/null
+cat ~/.config/opencode/skills/{skill-name}/SKILL.md
+ls ~/.config/opencode/skills/{skill-name}/references/ 2>/dev/null
 ```
 
 Determine:

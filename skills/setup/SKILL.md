@@ -10,7 +10,7 @@ Interactive setup for `systematic.local.md` — configures which agents run duri
 
 ## Step 1: Check Existing Config
 
-Read `systematic.local.md` in the project root. If it exists, display current settings summary and use AskUserQuestion:
+Read `systematic.local.md` in the project root. If it exists, display current settings summary and use question:
 
 ```
 question: "Settings file already exists. What would you like to do?"
@@ -41,7 +41,7 @@ test -f requirements.txt && echo "python" || \
 echo "general"
 ```
 
-Use AskUserQuestion:
+Use question:
 
 ```
 question: "Detected {type} project. How would you like to configure?"

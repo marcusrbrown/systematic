@@ -24,7 +24,7 @@ If not a good fit, suggest alternatives (inline code in workflow, reference exam
 ## Step 3: Create Scripts Directory
 
 ```bash
-mkdir -p ~/.opencode/skills/{skill-name}/scripts
+mkdir -p ~/.config/opencode/skills/{skill-name}/scripts
 ```
 
 ## Step 4: Design Script
@@ -58,7 +58,7 @@ set -euo pipefail
 ## Step 6: Make Executable (if bash)
 
 ```bash
-chmod +x ~/.opencode/skills/{skill-name}/scripts/{script-name}.sh
+chmod +x ~/.config/opencode/skills/{skill-name}/scripts/{script-name}.sh
 ```
 
 ## Step 7: Update Workflow to Use Script

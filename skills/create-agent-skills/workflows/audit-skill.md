@@ -14,7 +14,7 @@
 
 Enumerate skills in chat as numbered list:
 ```bash
-ls ~/.opencode/skills/
+ls ~/.config/opencode/skills/
 ```
 
 Present as:
@@ -33,12 +33,12 @@ Ask: "Which skill would you like to audit? (enter number or name)"
 After user selects, read the full skill structure:
 ```bash
 # Read main file
-cat ~/.opencode/skills/{skill-name}/SKILL.md
+cat ~/.config/opencode/skills/{skill-name}/SKILL.md
 
 # Check for workflows and references
-ls ~/.opencode/skills/{skill-name}/
-ls ~/.opencode/skills/{skill-name}/workflows/ 2>/dev/null
-ls ~/.opencode/skills/{skill-name}/references/ 2>/dev/null
+ls ~/.config/opencode/skills/{skill-name}/
+ls ~/.config/opencode/skills/{skill-name}/workflows/ 2>/dev/null
+ls ~/.config/opencode/skills/{skill-name}/references/ 2>/dev/null
 ```
 
 ## Step 3: Run Audit Checklist

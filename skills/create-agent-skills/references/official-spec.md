@@ -61,7 +61,7 @@ Enterprise (highest priority) → Personal → Project → Plugin (lowest priori
 | Type | Path | Applies to |
 |------|------|-----------|
 | Enterprise | See managed settings | All users in organization |
-| Personal | `~/.opencode/skills/<name>/SKILL.md` | You, across all projects |
+| Personal | `~/.config/opencode/skills/<name>/SKILL.md` | You, across all projects |
 | Project | `.opencode/skills/<name>/SKILL.md` | Anyone working in repository |
 | Plugin | `<plugin>/skills/<name>/SKILL.md` | Where plugin is enabled |
 
