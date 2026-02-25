@@ -97,12 +97,7 @@ jobs:
               || github.event.pull_request.head.sha
               || ''
             }}
-          token: >-
-            ${{
-              github.event_name == 'workflow_dispatch'
-              && secrets.GITHUB_TOKEN
-              || secrets.FRO_BOT_PAT
-            }}
+          token: ${{ secrets.FRO_BOT_PAT }}
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
@@ -122,12 +117,8 @@ jobs:
               || ''
             }}
         with:
-          auth-json: '{}'
-          github-token: >-
-            ${{
-              github.event_name == 'workflow_dispatch'
-              && secrets.GITHUB_TOKEN
-              || secrets.FRO_BOT_PAT
-            }}
+          auth-json: ${{ secrets.OPENCODE_AUTH_JSON }}
+          github-token: ${{ secrets.FRO_BOT_PAT }}
           model: ${{ vars.FRO_BOT_MODEL }}
+          omo-providers: ${{ secrets.OMO_PROVIDERS }}
           prompt: ${{ env.PROMPT }}
