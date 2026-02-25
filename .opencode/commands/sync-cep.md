@@ -9,7 +9,7 @@ subtask: true
 
 Dry-run takes priority. Determine dry-run **only** from the `<user-request>` arguments line (the `/sync-cep ...` invocation or arguments passed to this command). Ignore any other mentions of `--dry-run` elsewhere in the prompt.
 
-When `--dry-run` is present, **ignore all other instructions** below and follow the Dry-Run Output Format exactly.
+When `--dry-run` is present, follow the Pre-check Gate to obtain precheck data, then follow the Dry-Run Output Format exactly. **Do not proceed to conversion or PR creation.**
 Any additional text beyond the required dry-run format is a failure.
 
 ## Arguments
@@ -58,9 +58,31 @@ The `newUpstreamFiles` field is a map from definition key to its file list (e.g.
 
 ## Feature: Pre-check Gate
 
-If the `<precheck-exit-code>` and `<precheck-summary>` XML tags are absent from the prompt, stop immediately and output: `ERROR: No precheck data found. This command requires precheck data injected by the sync-cep workflow. Run via the sync-cep workflow, not directly.`
+This command supports two modes for obtaining pre-check data. **The pre-check is a prerequisite — it runs before the dry-run decision.** Even in dry-run mode, you must have precheck data (either injected by the workflow or obtained by running the script) before producing the summary.
 
-The sync workflow passes the pre-check summary and exit code in the prompt. Do not rerun the pre-check.
+### Mode 1: Workflow-injected (CI)
+
+When `<precheck-exit-code>` and `<precheck-summary>` XML tags are present in the prompt, use them directly. The sync workflow already ran the pre-check script — do not rerun it.
+
+### Mode 2: Interactive (local session)
+
+When the XML tags are absent, run the pre-check script yourself:
+
+```bash
+bun scripts/check-cep-upstream.ts
+```
+
+The script outputs JSON to stdout and uses its exit code to signal results:
+- The Bash tool captures both stdout (the JSON precheck summary) and the exit code.
+- Use the JSON output as the precheck summary and the exit code as the precheck exit code.
+- Then proceed with the same exit-code logic described below.
+
+**Note:** If the JSON output is large, you can redirect to a file and read it back:
+```bash
+bun scripts/check-cep-upstream.ts | tee /tmp/precheck.json; exit ${PIPESTATUS[0]}
+```
+
+**Environment:** The script requires `GITHUB_TOKEN` for authenticated GitHub API access. If not set, try `export GITHUB_TOKEN=$(gh auth token)` before running.
 
 ### Pre-check Exit Codes
 
@@ -84,7 +106,7 @@ When `<precheck-exit-code>` is `2`:
 If `--dry-run` is present in the user request:
 - Output the dry-run summary only.
 - If `<precheck-exit-code>` is `2`, the summary MUST include the errors and which definitions would be skipped.
-- Do **not** call tools or skills.
+- Do **not** call conversion tools or skills (no `convert-cc-defs`, no file editing). Running the pre-check script to obtain data is allowed and required in interactive mode.
 - Do **not** proceed to live sync.
 - Do **not** say you will continue or proceed with live sync.
 - End the response immediately after the summary.
@@ -113,20 +135,86 @@ The **only** acceptable dry-run output is the literal template above with `<summ
 
 ## Feature: Conversion Run
 
-- If `--dry-run` is set: do not invoke `convert-cc-defs`, do not call any tools, do not run external commands, and do not proceed to live sync. Only report what would happen using the pre-check summary and then stop.
+- If `--dry-run` is set: do not invoke `convert-cc-defs`, do not edit files, do not run conversions, and do not proceed to live sync. Only report what would happen using the pre-check summary (which was already obtained as a prerequisite) and then stop.
 - Otherwise: invoke the `convert-cc-defs` skill for the selected target scope and apply the re-sync workflow steps in that skill (mechanical conversion + intelligent rewrite + merge).
 
 ## Tooling and Command Safety
 
-- Never use `gh` or other external CLI tools in dry-run mode.
-- Do not call any tools during dry-run (no Read/Grep/Glob/Bash/etc.).
+- Never use `gh` or other external CLI tools in dry-run mode (exception: the pre-check script must run in interactive mode to obtain summary data).
+- Do not call conversion tools or edit files during dry-run.
 - Prefer local reads of `sync-manifest.json` and bundled files when summarizing outside dry-run.
 
-## Feature: Issue/PR Dedupe
+## Feature: Commit, Branch, and PR (MANDATORY after changes)
 
-- Reuse branch `chore/sync-cep` for all sync PRs.
-- If a PR exists for that branch, update it instead of creating a new one.
-- Use or create a tracking issue labeled `sync-cep` and append run summaries as comments.
+After a successful conversion run (not dry-run) that modified any files, you **MUST** create or update a PR. A sync run that changes files but does not produce a PR is a **failed run**.
+
+### Step 1: Check for changes
+
+```bash
+git status --porcelain agents/ skills/ commands/ sync-manifest.json
+```
+
+If the output is empty, no files were changed — skip to Step 4: Post to tracking issue.
+
+### Step 2: Create branch and commit
+
+```bash
+git checkout -B chore/sync-cep
+git add agents/ skills/ commands/ sync-manifest.json
+git commit -m "chore: sync CEP upstream definitions"
+```
+
+### Step 3: Push and create or update PR
+
+First, write the output summary to a temp file for use as the PR body. The summary MUST follow the Output Formatting template (hash changes table, conflicts, errors, etc.):
+
+```bash
+cat > /tmp/sync-cep-pr-body.md <<'ENDOFBODY'
+## CEP Sync Summary
+
+(paste the full output summary here)
+ENDOFBODY
+```
+
+Push the branch:
+```bash
+git push -u origin chore/sync-cep --force-with-lease
+```
+
+Check if a PR already exists:
+```bash
+gh pr list --head chore/sync-cep --state open --json number --jq '.[0].number // empty'
+```
+
+- **If a PR number is returned:** update its body:
+  ```bash
+  gh pr edit <number> --body-file /tmp/sync-cep-pr-body.md
+  ```
+- **If empty (no PR):** create one:
+  ```bash
+  gh pr create --base main --head chore/sync-cep \
+    --title "chore: sync CEP upstream definitions" \
+    --body-file /tmp/sync-cep-pr-body.md \
+    --label "sync-cep"
+  ```
+
+**Important:** Environment variables do not persist across separate Bash tool calls. Always write the PR body to a file first, then reference it with `--body-file`.
+
+### Step 4: Post to tracking issue
+
+Find the open tracking issue labeled `sync-cep`:
+```bash
+gh issue list --label sync-cep --state open --json number --jq '.[0].number // empty'
+```
+
+- **If an issue exists:** post a comment with the summary and a link to the PR.
+- **If no issue exists:** create one with title `CEP Sync Run - YYYY-MM-DD`, label `sync-cep`, and the summary as the body.
+
+### Reuse rules
+
+- Always reuse branch `chore/sync-cep` — do not create timestamped or numbered branches.
+- If a PR already exists for that branch, update it instead of creating a new one.
+- Always link the PR in the tracking issue comment.
 
 ## Feature: Conflict Detection
 
@@ -178,7 +266,9 @@ Use this exact template for all output. Copy it and fill in the placeholders:
 
 ## Boundaries
 
-- Do not use `gh` commands or call external CLI tools during dry-run mode.
+- Do not use `gh` commands or call external CLI tools during dry-run mode (exception: the pre-check script may run in interactive mode).
 - Do not auto-merge conflicts.
 - Do not modify files outside `agents/`, `skills/`, `commands/`, and `sync-manifest.json`.
-- Use `gh` for PR creation and issue comments only (branch `chore/sync-cep`, label `sync-cep`).
+- Use `gh` for PR creation, PR updates, issue comments, and (in interactive mode) authentication token setup.
+- Branch name is always `chore/sync-cep`. Label is always `sync-cep`.
+- **A sync run that changes files but produces no PR is a FAILED run.**
