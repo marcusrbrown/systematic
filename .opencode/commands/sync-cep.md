@@ -2,7 +2,6 @@
 name: sync-cep
 description: Sync upstream CEP definitions into Systematic using convert-cc-defs. Detects changes, converts files, reports override conflicts, and prepares issue/PR summaries.
 argument-hint: "[all|skills|agents|commands] [--dry-run]"
-subtask: true
 ---
 
 # Sync CEP Definitions
