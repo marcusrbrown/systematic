@@ -7,6 +7,12 @@ import { loadConfig } from './lib/config.js'
 import { createConfigHandler } from './lib/config-handler.js'
 import { createSkillTool } from './lib/skill-tool.js'
 
+const INTERNAL_AGENT_SIGNATURES = [
+  'You are a title generator',
+  'You are a helpful AI assistant tasked with summarizing conversations',
+  'Summarize what was done in this conversation',
+]
+
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
 const packageRoot = path.resolve(__dirname, '..')
@@ -74,17 +80,31 @@ export const SystematicPlugin: Plugin = async ({ client, directory }) => {
       // Skip for title generation requests
       const existingSystem = output.system.join('\n').toLowerCase()
       if (
-        existingSystem.includes('title generator') ||
-        existingSystem.includes('generate a title')
+        INTERNAL_AGENT_SIGNATURES.some((sig) =>
+          existingSystem.includes(sig.toLowerCase()),
+        )
       ) {
+        try {
+          await client.app.log({
+            body: {
+              service: 'systematic',
+              level: 'info',
+              message: 'Skipping bootstrap prompt injection for internal agent',
+            },
+          })
+        } catch {
+          // ignore logging failures to avoid blocking the hook
+        }
         return
       }
+
       const content = getBootstrapContent(config, { bundledSkillsDir })
       if (content) {
-        if (!output.system) {
-          output.system = []
+        if (output.system.length > 0) {
+          output.system[output.system.length - 1] += `\n\n${content}`
+        } else {
+          output.system.push(content)
         }
-        output.system.push(content)
       }
     },
   }
