@@ -3,10 +3,10 @@ name: compound-docs
 description: Capture solved problems as categorized documentation with YAML frontmatter for fast lookup
 disable-model-invocation: true
 allowed-tools:
-  - Read # Parse conversation context
-  - Write # Create resolution docs
-  - Bash # Create directories
-  - Grep # Search existing docs
+  - Read
+  - Write
+  - Bash
+  - Grep
 preconditions:
   - Problem has been solved (not in-progress)
   - Solution has been verified working
