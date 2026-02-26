@@ -84,13 +84,17 @@ export const SystematicPlugin: Plugin = async ({ client, directory }) => {
           existingSystem.includes(sig.toLowerCase()),
         )
       ) {
-        await client.app.log({
-          body: {
-            service: 'systematic',
-            level: 'info',
-            message: 'Skipping bootstrap prompt injection for internal agent',
-          },
-        })
+        try {
+          await client.app.log({
+            body: {
+              service: 'systematic',
+              level: 'info',
+              message: 'Skipping bootstrap prompt injection for internal agent',
+            },
+          })
+        } catch {
+          // ignore logging failures to avoid blocking the hook
+        }
         return
       }
 
