@@ -1,7 +1,7 @@
 ---
 name: workflows:brainstorm
 description: Explore requirements and approaches through collaborative dialogue before planning implementation
-argument-hint: "[feature idea or problem to explore]"
+argument-hint: '[feature idea or problem to explore]'
 ---
 
 # Brainstorm a Feature or Improvement
@@ -33,7 +33,7 @@ Evaluate whether brainstorming is needed based on the feature description.
 - Constrained, well-defined scope
 
 **If requirements are already clear:**
-Use the **question tool** to suggest: "Your requirements seem detailed enough to proceed directly to planning. Should I run `/workflows:plan` instead, or would you like to explore the idea further?"
+Use **question tool** to suggest: "Your requirements seem detailed enough to proceed directly to planning. Should I run `/workflows:plan` instead, or would you like to explore the idea further?"
 
 ### Phase 1: Understand the Idea
 
@@ -68,7 +68,7 @@ For each approach, provide:
 
 Lead with your recommendation and explain why. Apply YAGNI—prefer simpler solutions.
 
-Use the **question tool** to ask which approach the user prefers.
+Use **question tool** to ask which approach the user prefers.
 
 ### Phase 3: Capture the Design
 
@@ -82,17 +82,33 @@ Ensure `docs/brainstorms/` directory exists before writing.
 
 ### Phase 4: Handoff
 
-Use the **question tool** to present next steps:
+Use **question tool** to present next steps:
 
 **Question:** "Brainstorm captured. What would you like to do next?"
 
 **Options:**
 1. **Review and refine** - Improve the document through structured self-review
 2. **Proceed to planning** - Run `/workflows:plan` (will auto-detect this brainstorm)
-3. **Ask more questions** - I have more questions to clarify before moving on
-4. **Done for now** - Return later
+3. **Share to Proof** - Upload to Proof for collaborative review and sharing
+4. **Ask more questions** - I have more questions to clarify before moving on
+5. **Done for now** - Return later
 
-**If user selects "Ask more questions":** Return to Phase 1.2 (Collaborative Dialogue) and continue asking the USER questions one at a time to further refine the design. Probe deeper - ask about edge cases, constraints, preferences, or areas not yet explored. Continue until the user is satisfied, then return to Phase 4.
+**If user selects "Share to Proof":**
+
+```bash
+CONTENT=$(cat docs/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md)
+TITLE="Brainstorm: <topic title>"
+RESPONSE=$(curl -s -X POST https://www.proofeditor.ai/share/markdown \
+  -H "Content-Type: application/json" \
+  -d "$(jq -n --arg title "$TITLE" --arg markdown "$CONTENT" --arg by "ai:compound" '{title: $title, markdown: $markdown, by: $by}')")
+PROOF_URL=$(echo "$RESPONSE" | jq -r '.tokenUrl')
+```
+
+Display the URL prominently: `View & collaborate in Proof: <PROOF_URL>`
+
+If the curl fails, skip silently. Then return to the Phase 4 options.
+
+**If user selects "Ask more questions":** YOU (Claude) return to Phase 1.2 (Collaborative Dialogue) and continue asking the USER questions one at a time to further refine the design. The user wants YOU to probe deeper - ask about edge cases, constraints, preferences, or areas not yet explored. Continue until the user is satisfied, then return to Phase 4.
 
 **If user selects "Review and refine":**
 
