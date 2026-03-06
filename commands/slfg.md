@@ -30,4 +30,3 @@ Wait for both to complete before continuing.
 9. Output `<promise>DONE</promise>` when video is in PR
 
 Start with step 1 now.
-

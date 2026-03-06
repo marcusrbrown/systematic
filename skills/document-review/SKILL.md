@@ -85,4 +85,3 @@ Return control to the caller (workflow or user) after selection.
 - Do not add new sections or requirements the user didn't discuss
 - Do not over-engineer or add complexity
 - Do not create separate review files or add metadata sections
-
