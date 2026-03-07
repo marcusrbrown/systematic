@@ -467,9 +467,7 @@
       "synced_at": "2026-02-10T09:19:13Z",
       "notes": "Imported from CEP. Converter applied to SKILL.md. Single-file skill.",
       "upstream_content_hash": "fd63d41d4a9d923c43ee7e1128dafa32f9e26cd3eb6197534d21d5a4e6ba1f14",
-      "files": [
-        "SKILL.md"
-      ],
+      "files": ["SKILL.md"],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -525,9 +523,7 @@
       "synced_at": "2026-03-06T00:14:53Z",
       "notes": "Imported from CEP. Converter applied to SKILL.md. Single-file skill.",
       "upstream_content_hash": "bfaefce6fdc889bdf91939c36156e879775c402378628f6fe597a7f4e5808311",
-      "files": [
-        "SKILL.md"
-      ],
+      "files": ["SKILL.md"],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -633,10 +629,7 @@
       "synced_at": "2026-03-06T00:14:53Z",
       "notes": "Imported from CEP. Converter applied to SKILL.md. Asset file (todo-template.md) copied with CC→OC text replacements.",
       "upstream_content_hash": "139e84d36ee748680a5c9b4c7be6fa85d116bdcd018a7729a072170daf646b74",
-      "files": [
-        "SKILL.md",
-        "assets/todo-template.md"
-      ],
+      "files": ["SKILL.md", "assets/todo-template.md"],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -660,10 +653,7 @@
       "synced_at": "2026-03-06T00:14:53Z",
       "notes": "Imported from CEP. Converter applied to SKILL.md. Script file copied. CLAUDE_PLUGIN_ROOT paths simplified to relative paths (skills are bundled in plugin, no env var needed).",
       "upstream_content_hash": "644188574a09d0e4b34e7279f5ce00ef316418d0789e15b95e20da6fd369d57a",
-      "files": [
-        "SKILL.md",
-        "scripts/worktree-manager.sh"
-      ],
+      "files": ["SKILL.md", "scripts/worktree-manager.sh"],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -687,9 +677,7 @@
       "synced_at": "2026-03-06T00:14:53Z",
       "notes": "Imported from CEP. Single-file skill (SKILL.md only). Converter applied. Clean — no CC-specific patterns in body.",
       "upstream_content_hash": "c3510c76ee505817611ed60c3a495ab5999645f423a8d55df75b197f4eb1700f",
-      "files": [
-        "SKILL.md"
-      ],
+      "files": ["SKILL.md"],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -705,9 +693,7 @@
       "synced_at": "2026-02-10T09:34:10Z",
       "notes": "Imported from CEP. Heavy CC-specific content (TeammateTool, Swarm Mode, spawnTeam API). Converter applied. 121 CC patterns rewritten. Added aspirational note — Teammate API has no OC equivalent; use task tool with run_in_background for current parallel execution.",
       "upstream_content_hash": "80a48a7187daa741abc3ff9e81331b6beb9cfd0d3de4503fb7dee47af490657f",
-      "files": [
-        "SKILL.md"
-      ],
+      "files": ["SKILL.md"],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -744,9 +730,7 @@
       "synced_at": "2026-02-10T09:34:10Z",
       "notes": "Imported from CEP. Single-file skill (SKILL.md only). Converter applied. Clean — no CC-specific patterns in body.",
       "upstream_content_hash": "efb3a34b3db97d3f3a5abd7c6468f1d9b9839cdbab5354550cdab6158f49700e",
-      "files": [
-        "SKILL.md"
-      ],
+      "files": ["SKILL.md"],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1329,10 +1313,7 @@
       "synced_at": "2026-02-26T20:39:26Z",
       "notes": "Imported from CEP. Documentation style guide for EVERY project.",
       "upstream_content_hash": "e738e0917d232a72c1e0b8540d296470dca260c1b964ea5fa46f57dfe00d826d",
-      "files": [
-        "SKILL.md",
-        "references/EVERY_WRITE_STYLE.md"
-      ],
+      "files": ["SKILL.md", "references/EVERY_WRITE_STYLE.md"],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1388,10 +1369,7 @@
       "synced_at": "2026-02-26T20:39:26Z",
       "notes": "Imported from CEP. Cloud storage sync using rclone.",
       "upstream_content_hash": "debed2df4576b4e4a1fcc939ff6f288ff6d8256158653e7fc0e630a5acc771e0",
-      "files": [
-        "SKILL.md",
-        "scripts/check_setup.sh"
-      ],
+      "files": ["SKILL.md", "scripts/check_setup.sh"],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1450,9 +1428,7 @@
       "synced_at": "2026-03-07T21:00:00Z",
       "notes": "Imported from CEP. Setup and configuration skill for systematic workflows. Updated /workflows:* command references to /ce:*, added Interaction Method section with AskUserQuestion.",
       "upstream_content_hash": "fa132d95ebf9bcef3eaf8cae6c49143816ce4d9f30ee7477a08942efc139d067",
-      "files": [
-        "SKILL.md"
-      ],
+      "files": ["SKILL.md"],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1652,9 +1628,7 @@
       "synced_at": "2026-03-07T21:00:00Z",
       "notes": "Imported from CEP. Collaborative markdown editor skill. Create, edit, comment on, and share docs via Proof API.",
       "upstream_content_hash": "f4f5c4f93c92e370e6c1bc6dbb93cde55b4cae01",
-      "files": [
-        "SKILL.md"
-      ],
+      "files": ["SKILL.md"],
       "rewrites": [
         {
           "field": "body:branding",
