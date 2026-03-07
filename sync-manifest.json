@@ -246,132 +246,42 @@
     "commands/workflows/compound": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/commands/workflows/compound.md",
-      "upstream_commit": "174cd4cff49899f6a62e41a6d95090feb9e24770",
-      "synced_at": "2026-02-20T00:10:02Z",
-      "notes": "Imported from CEP. Updated to upstream's Two-Phase Orchestration structure (critical_requirement, parallel_tasks/sequential_tasks XML tags, Phase 1/2/3 layout). Added Common Mistakes to Avoid table.",
-      "upstream_content_hash": "f11cc78c47238c7af2a2f484818f87c225692f614b67c0e01c20b242f3814c94",
-      "rewrites": [
-        {
-          "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings"
-        },
-        {
-          "field": "body:path-references",
-          "reason": "Converter handled path replacements"
-        },
-        {
-          "field": "body:structure",
-          "reason": "Adopted upstream's updated Two-Phase Orchestration structure"
-        }
-      ],
-      "manual_overrides": [
-        {
-          "field": "body:branding",
-          "reason": "compound-engineering.local.md -> systematic.local.md — local config filename in agent customization instructions",
-          "original": "Edit `compound-engineering.local.md` or invoke the `setup` skill",
-          "overridden_at": "2026-02-20T06:15:00Z"
-        }
-      ]
+      "upstream_commit": "69f2a96e662b38d7df41f66d5fa064458ca72f10",
+      "synced_at": "2026-03-07T21:00:00Z",
+      "notes": "Deprecated stub. Use /ce:compound instead. Updated from CEP commit 69f2a96 where commands/workflows/* was replaced with stub redirects to commands/ce/*.",
+      "upstream_content_hash": "1c3f7446dee6db79724d1f79d9f152cabd656331b99851a8b5ce192ab12f6ff5",
+      "rewrites": [],
+      "manual_overrides": []
     },
     "commands/workflows/plan": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/commands/workflows/plan.md",
-      "upstream_commit": "63e76cf67f08aac6f0dccf275ce328e47deae541",
-      "synced_at": "2026-02-22T00:06:29Z",
-      "notes": "Imported from CEP. Mechanical conversion + intelligent rewrites. Removed CC-specific 'remote' option (Claude Code web background execution has no OC equivalent).",
-      "upstream_content_hash": "22366b777e480fd1776cf70059be1f643c188619d7081efea7c93592da59e556",
-      "rewrites": [
-        {
-          "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings"
-        },
-        {
-          "field": "body:path-references",
-          "reason": "Converter handled path replacements"
-        },
-        {
-          "field": "body:cc-specific-features",
-          "reason": "Removed CC-specific 'remote' option — Start /workflows:work on remote (Claude Code web background execution) has no OC equivalent",
-          "original": "- **Start `/workflows:work` on remote** - Begin implementing in Claude Code on the web"
-        },
-        {
-          "field": "body:sync",
-          "reason": "Synced from CEP commit 63e76cf"
-        }
-      ],
-      "manual_overrides": [
-        {
-          "field": "body:cc-specific-text",
-          "reason": "Removed 'for Claude Code web' from remote work option description — CC platform reference",
-          "original": "Run `/workflows:work docs/plans/<plan_filename>.md &` to start work in background for Claude Code web",
-          "overridden_at": "2026-02-20T06:15:00Z"
-        }
-      ]
+      "upstream_commit": "69f2a96e662b38d7df41f66d5fa064458ca72f10",
+      "synced_at": "2026-03-07T21:00:00Z",
+      "notes": "Deprecated stub. Use /ce:plan instead. Updated from CEP commit 69f2a96 where commands/workflows/* was replaced with stub redirects to commands/ce/*.",
+      "upstream_content_hash": "d00dd6a8c1c5bfbb8f588d002332e437f1e5a4e8e163d3d41db584f09976583a",
+      "rewrites": [],
+      "manual_overrides": []
     },
     "commands/workflows/review": {
       "source": "cep",
-      "upstream_path": "plugins/compound-engineering/commands/ce/review.md",
-      "upstream_commit": "ca57c67c1cb7df1ba348a3388f50969ff04dd974",
-      "synced_at": "2026-03-06T00:19:06Z",
-      "notes": "Imported from CEP. Mechanical conversion + intelligent rewrites: .claude/skills/ paths in prose, compound-engineering pipeline artifacts branding, Task() inside code blocks. Migrated upstream path from commands/workflows/* to commands/ce/* while preserving Systematic workflows namespace.",
-      "upstream_content_hash": "c85dc55ce431cb31a04281f7a633b3e2740df917a5713a94adee35d2731209c2",
-      "rewrites": [
-        {
-          "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings"
-        },
-        {
-          "field": "body:path-references",
-          "reason": "Converter handled path replacements; also manually fixed .claude/skills/file-todos/assets/ -> .opencode/skills/file-todos/assets/ (3 occurrences in prose)"
-        },
-        {
-          "field": "body:branding",
-          "reason": "compound-engineering pipeline artifacts -> systematic pipeline artifacts"
-        },
-        {
-          "field": "body:code-blocks",
-          "reason": "Task() inside code blocks -> task() (3 occurrences in finding-creator example)"
-        }
-      ],
+      "upstream_path": "plugins/compound-engineering/commands/workflows/review.md",
+      "upstream_commit": "69f2a96e662b38d7df41f66d5fa064458ca72f10",
+      "synced_at": "2026-03-07T21:00:00Z",
+      "notes": "Deprecated stub. Use /ce:review instead. Updated from CEP commit 69f2a96 where commands/workflows/review.md became a stub redirect to commands/ce/review.md.",
+      "upstream_content_hash": "7897e853bbb3f61d3ecdb6ffbccd7d285df48de1",
+      "rewrites": [],
       "manual_overrides": []
     },
     "commands/workflows/work": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/commands/workflows/work.md",
-      "upstream_commit": "174cd4cff49899f6a62e41a6d95090feb9e24770",
-      "synced_at": "2026-02-20T00:10:02Z",
-      "notes": "Imported from CEP. Mechanical conversion + extensive intelligent rewrites: attribution badges/footers, TodoWrite in code blocks, Task() in code blocks, CLAUDE.md in code block comments. Swarm Mode section kept as aspirational reference with note about missing OC coordination primitives (Teammate API).",
-      "upstream_content_hash": "a2ba5f4113e3a56020c6ced2ec06238cb16a8f3f892aec7536a05925f3126753",
-      "rewrites": [
-        {
-          "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings"
-        },
-        {
-          "field": "body:path-references",
-          "reason": "Converter handled path replacements"
-        },
-        {
-          "field": "body:code-blocks",
-          "reason": "TodoWrite -> todowrite inside code blocks (2 occurrences); Task() -> task() inside code blocks (2 occurrences); CLAUDE.md -> AGENTS.md inside code block comment"
-        },
-        {
-          "field": "body:branding",
-          "reason": "Attribution footer: Claude Code -> OpenCode, Co-Authored-By updated; PR badge: Compound Engineered -> Systematic; Quality checklist: Compound Engineered badge -> Systematic badge"
-        },
-        {
-          "field": "body:cc-specific-features",
-          "reason": "Swarm Mode section uses CC Teammate API (spawnTeam, requestShutdown, cleanup) with no OC equivalent — kept as aspirational reference with explanatory note"
-        }
-      ],
-      "manual_overrides": [
-        {
-          "field": "body:code-block-comment",
-          "reason": "Generalized 'per AGENTS.md' to 'per project conventions' in linting code block comment — removes OC-specific filename reference for downstream portability",
-          "original": "# Run linting (per AGENTS.md)",
-          "overridden_at": "2026-02-20T06:15:00Z"
-        }
-      ]
+      "upstream_commit": "69f2a96e662b38d7df41f66d5fa064458ca72f10",
+      "synced_at": "2026-03-07T21:00:00Z",
+      "notes": "Deprecated stub. Use /ce:work instead. Updated from CEP commit 69f2a96 where commands/workflows/* was replaced with stub redirects to commands/ce/*.",
+      "upstream_content_hash": "a2dc5e74c80655c9dd143d3954a4d3badfd504f73b762bd4c794f73f0e1f251a",
+      "rewrites": [],
+      "manual_overrides": []
     },
     "agents/review/architecture-strategist": {
       "source": "cep",
@@ -557,7 +467,9 @@
       "synced_at": "2026-02-10T09:19:13Z",
       "notes": "Imported from CEP. Converter applied to SKILL.md. Single-file skill.",
       "upstream_content_hash": "fd63d41d4a9d923c43ee7e1128dafa32f9e26cd3eb6197534d21d5a4e6ba1f14",
-      "files": ["SKILL.md"],
+      "files": [
+        "SKILL.md"
+      ],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -613,7 +525,9 @@
       "synced_at": "2026-03-06T00:14:53Z",
       "notes": "Imported from CEP. Converter applied to SKILL.md. Single-file skill.",
       "upstream_content_hash": "bfaefce6fdc889bdf91939c36156e879775c402378628f6fe597a7f4e5808311",
-      "files": ["SKILL.md"],
+      "files": [
+        "SKILL.md"
+      ],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -719,7 +633,10 @@
       "synced_at": "2026-03-06T00:14:53Z",
       "notes": "Imported from CEP. Converter applied to SKILL.md. Asset file (todo-template.md) copied with CC→OC text replacements.",
       "upstream_content_hash": "139e84d36ee748680a5c9b4c7be6fa85d116bdcd018a7729a072170daf646b74",
-      "files": ["SKILL.md", "assets/todo-template.md"],
+      "files": [
+        "SKILL.md",
+        "assets/todo-template.md"
+      ],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -743,7 +660,10 @@
       "synced_at": "2026-03-06T00:14:53Z",
       "notes": "Imported from CEP. Converter applied to SKILL.md. Script file copied. CLAUDE_PLUGIN_ROOT paths simplified to relative paths (skills are bundled in plugin, no env var needed).",
       "upstream_content_hash": "644188574a09d0e4b34e7279f5ce00ef316418d0789e15b95e20da6fd369d57a",
-      "files": ["SKILL.md", "scripts/worktree-manager.sh"],
+      "files": [
+        "SKILL.md",
+        "scripts/worktree-manager.sh"
+      ],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -767,7 +687,9 @@
       "synced_at": "2026-03-06T00:14:53Z",
       "notes": "Imported from CEP. Single-file skill (SKILL.md only). Converter applied. Clean — no CC-specific patterns in body.",
       "upstream_content_hash": "c3510c76ee505817611ed60c3a495ab5999645f423a8d55df75b197f4eb1700f",
-      "files": ["SKILL.md"],
+      "files": [
+        "SKILL.md"
+      ],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -783,7 +705,9 @@
       "synced_at": "2026-02-10T09:34:10Z",
       "notes": "Imported from CEP. Heavy CC-specific content (TeammateTool, Swarm Mode, spawnTeam API). Converter applied. 121 CC patterns rewritten. Added aspirational note — Teammate API has no OC equivalent; use task tool with run_in_background for current parallel execution.",
       "upstream_content_hash": "80a48a7187daa741abc3ff9e81331b6beb9cfd0d3de4503fb7dee47af490657f",
-      "files": ["SKILL.md"],
+      "files": [
+        "SKILL.md"
+      ],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -820,7 +744,9 @@
       "synced_at": "2026-02-10T09:34:10Z",
       "notes": "Imported from CEP. Single-file skill (SKILL.md only). Converter applied. Clean — no CC-specific patterns in body.",
       "upstream_content_hash": "efb3a34b3db97d3f3a5abd7c6468f1d9b9839cdbab5354550cdab6158f49700e",
-      "files": ["SKILL.md"],
+      "files": [
+        "SKILL.md"
+      ],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -984,10 +910,10 @@
     "commands/deepen-plan": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/commands/deepen-plan.md",
-      "upstream_commit": "174cd4cff49899f6a62e41a6d95090feb9e24770",
-      "synced_at": "2026-02-20T00:10:02Z",
-      "notes": "Imported from CEP. Enhance plans with parallel research agents.",
-      "upstream_content_hash": "0fe39343ec7574597b8dd401a5c32e506eac6f0bca15f76288c458c289bfcdde",
+      "upstream_commit": "69f2a96e662b38d7df41f66d5fa064458ca72f10",
+      "synced_at": "2026-03-07T21:00:00Z",
+      "notes": "Imported from CEP. Enhance plans with parallel research agents. Updated /workflows:* command references to /ce:* following upstream renaming.",
+      "upstream_content_hash": "82f4b952697185efad017b373c7d9b6f6173477ae4970f8491fba6d0012dca9c",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -996,6 +922,10 @@
         {
           "field": "body:branding",
           "reason": "Claude Code -> OpenCode, compound-engineering: -> systematic:"
+        },
+        {
+          "field": "body:command-references",
+          "reason": "Updated /workflows:* command references to /ce:* following upstream rename"
         }
       ],
       "manual_overrides": [
@@ -1010,10 +940,10 @@
     "commands/deploy-docs": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/commands/deploy-docs.md",
-      "upstream_commit": "174cd4cff49899f6a62e41a6d95090feb9e24770",
-      "synced_at": "2026-02-20T00:10:02Z",
+      "upstream_commit": "69f2a96e662b38d7df41f66d5fa064458ca72f10",
+      "synced_at": "2026-03-07T21:00:00Z",
       "notes": "Imported from CEP. Deploy documentation to hosting platform.",
-      "upstream_content_hash": "15af80995e8baba6af29dddcbac3294133c5ffae6ec18b3acc13c851e5159aed",
+      "upstream_content_hash": "a48aba0af9f504b890ba4f5f16a4a174e90f0532d307ef45c84cdbdeee422f13",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1399,7 +1329,10 @@
       "synced_at": "2026-02-26T20:39:26Z",
       "notes": "Imported from CEP. Documentation style guide for EVERY project.",
       "upstream_content_hash": "e738e0917d232a72c1e0b8540d296470dca260c1b964ea5fa46f57dfe00d826d",
-      "files": ["SKILL.md", "references/EVERY_WRITE_STYLE.md"],
+      "files": [
+        "SKILL.md",
+        "references/EVERY_WRITE_STYLE.md"
+      ],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1455,7 +1388,10 @@
       "synced_at": "2026-02-26T20:39:26Z",
       "notes": "Imported from CEP. Cloud storage sync using rclone.",
       "upstream_content_hash": "debed2df4576b4e4a1fcc939ff6f288ff6d8256158653e7fc0e630a5acc771e0",
-      "files": ["SKILL.md", "scripts/check_setup.sh"],
+      "files": [
+        "SKILL.md",
+        "scripts/check_setup.sh"
+      ],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1475,10 +1411,10 @@
     "skills/resolve-pr-parallel": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/resolve-pr-parallel",
-      "upstream_commit": "56b174a0563107b3084d780a1e6ae5a909ebeef3",
-      "synced_at": "2026-02-26T20:39:26Z",
+      "upstream_commit": "69f2a96e662b38d7df41f66d5fa064458ca72f10",
+      "synced_at": "2026-03-07T21:00:00Z",
       "notes": "Imported from CEP. Resolve PR comments in parallel with specialized agents.",
-      "upstream_content_hash": "301eed8837cf01566a21e61ce550c9bc04e9e0a2fd10ae7a48a75265449bd382",
+      "upstream_content_hash": "03bfe278a7087c6a14621623ab44fea5e03dbc258553aef04a667fb68db6a4f1",
       "files": [
         "SKILL.md",
         "scripts/get-pr-comments",
@@ -1510,11 +1446,13 @@
     "skills/setup": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/setup",
-      "upstream_commit": "63e76cf67f08aac6f0dccf275ce328e47deae541",
-      "synced_at": "2026-02-22T00:06:29Z",
-      "notes": "Imported from CEP. Setup and configuration skill for systematic workflows.",
-      "upstream_content_hash": "a9f344dd6def0b4a5c308016301496d408ea69d44e78bf2d37af366a5468119e",
-      "files": ["SKILL.md"],
+      "upstream_commit": "69f2a96e662b38d7df41f66d5fa064458ca72f10",
+      "synced_at": "2026-03-07T21:00:00Z",
+      "notes": "Imported from CEP. Setup and configuration skill for systematic workflows. Updated /workflows:* command references to /ce:*, added Interaction Method section with AskUserQuestion.",
+      "upstream_content_hash": "fa132d95ebf9bcef3eaf8cae6c49143816ce4d9f30ee7477a08942efc139d067",
+      "files": [
+        "SKILL.md"
+      ],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1525,8 +1463,12 @@
           "reason": "Claude Code -> OpenCode, .claude/ -> .opencode/, CLAUDE.md -> AGENTS.md"
         },
         {
+          "field": "body:command-references",
+          "reason": "Updated /workflows:review -> /ce:review, /workflows:work -> /ce:work following upstream rename"
+        },
+        {
           "field": "body:sync",
-          "reason": "Synced from CEP commit 63e76cf"
+          "reason": "Synced from CEP commit 69f2a96 — merged AskUserQuestion improvements"
         }
       ],
       "manual_overrides": [
@@ -1569,6 +1511,154 @@
         {
           "field": "body:sync",
           "reason": "Synced from CEP commit 56b174a"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "commands/ce/brainstorm": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/commands/ce/brainstorm.md",
+      "upstream_commit": "69f2a96e662b38d7df41f66d5fa064458ca72f10",
+      "synced_at": "2026-03-07T21:00:00Z",
+      "notes": "Imported from CEP. New ce: namespace command. Explore requirements and approaches through collaborative dialogue before planning. Converted from CEP format.",
+      "upstream_content_hash": "8527a4ed9fb094cd156181f7dad36af0212575ab",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:branding",
+          "reason": "CLAUDE.md -> AGENTS.md, ai:compound -> ai:systematic"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "commands/ce/compound": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/commands/ce/compound.md",
+      "upstream_commit": "69f2a96e662b38d7df41f66d5fa064458ca72f10",
+      "synced_at": "2026-03-07T21:00:00Z",
+      "notes": "Imported from CEP. New ce: namespace command. Document a recently solved problem to compound team knowledge. Converted from CEP format.",
+      "upstream_content_hash": "863795500042ef777ab66c6d10b32d822686f626",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:branding",
+          "reason": "compound-engineering.local.md -> systematic.local.md, ai:compound -> ai:systematic, Compound Engineered badge -> Systematic badge"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "commands/ce/plan": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/commands/ce/plan.md",
+      "upstream_commit": "69f2a96e662b38d7df41f66d5fa064458ca72f10",
+      "synced_at": "2026-03-07T21:00:00Z",
+      "notes": "Imported from CEP. New ce: namespace command. Transform feature descriptions into structured project plans. Converted from CEP format.",
+      "upstream_content_hash": "e4b02406c50826d316fdfb866fe00e50ce47261d",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:path-references",
+          "reason": "Converter handled path replacements"
+        },
+        {
+          "field": "body:branding",
+          "reason": "CLAUDE.md -> AGENTS.md, Claude Code -> OpenCode, ai:compound -> ai:systematic"
+        },
+        {
+          "field": "body:cc-specific-features",
+          "reason": "Removed 'for Claude Code web' from remote work option description — CC platform reference; updated option label from 'on remote' to 'in background'"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "commands/ce/review": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/commands/ce/review.md",
+      "upstream_commit": "69f2a96e662b38d7df41f66d5fa064458ca72f10",
+      "synced_at": "2026-03-07T21:00:00Z",
+      "notes": "Imported from CEP. New ce: namespace command (canonical review command). Perform exhaustive code reviews using multi-agent analysis. Converted from CEP format.",
+      "upstream_content_hash": "cf4a061409b4e8f98e3e36be425d5577437e8d3c",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:path-references",
+          "reason": "Converter handled path replacements; .opencode/skills/file-todos/assets/ paths"
+        },
+        {
+          "field": "body:branding",
+          "reason": "compound-engineering.local.md -> systematic.local.md; systematic pipeline artifacts branding"
+        },
+        {
+          "field": "body:code-blocks",
+          "reason": "Task() inside code blocks -> task() occurrences"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "commands/ce/work": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/commands/ce/work.md",
+      "upstream_commit": "69f2a96e662b38d7df41f66d5fa064458ca72f10",
+      "synced_at": "2026-03-07T21:00:00Z",
+      "notes": "Imported from CEP. New ce: namespace command. Execute work plans efficiently. Converted from CEP format. Swarm Mode section uses task() calls; CEP Teammate API has no OC equivalent — replaced with equivalent pattern.",
+      "upstream_content_hash": "3e09c435405b5caa77aa87dda02a1c9a4ab6127c",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:path-references",
+          "reason": "Converter handled path replacements"
+        },
+        {
+          "field": "body:branding",
+          "reason": "compound-engineering.local.md -> systematic.local.md, Claude Code -> OpenCode, Compound Engineered badge -> Systematic badge, CLAUDE.md -> AGENTS.md"
+        },
+        {
+          "field": "body:code-blocks",
+          "reason": "TodoWrite -> todowrite, Task() -> task() inside code blocks"
+        },
+        {
+          "field": "body:cc-specific-features",
+          "reason": "Swarm Mode: replaced Teammate API (spawnTeam, requestShutdown, cleanup) with task() parallel pattern — CC Teammate API has no OC equivalent"
+        }
+      ],
+      "manual_overrides": [
+        {
+          "field": "body:code-block-comment",
+          "reason": "Generalized 'per AGENTS.md' to 'per project conventions' in linting code block comment — removes OC-specific filename reference for downstream portability",
+          "original": "# Run linting (per AGENTS.md)",
+          "overridden_at": "2026-03-07T21:00:00Z"
+        }
+      ]
+    },
+    "skills/proof": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/skills/proof",
+      "upstream_commit": "69f2a96e662b38d7df41f66d5fa064458ca72f10",
+      "synced_at": "2026-03-07T21:00:00Z",
+      "notes": "Imported from CEP. Collaborative markdown editor skill. Create, edit, comment on, and share docs via Proof API.",
+      "upstream_content_hash": "f4f5c4f93c92e370e6c1bc6dbb93cde55b4cae01",
+      "files": [
+        "SKILL.md"
+      ],
+      "rewrites": [
+        {
+          "field": "body:branding",
+          "reason": "ai:compound -> ai:systematic in usage examples"
         }
       ],
       "manual_overrides": []
