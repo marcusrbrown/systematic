@@ -6,11 +6,17 @@ disable-model-invocation: true
 
 # Systematic Setup
 
-Interactive setup for `systematic.local.md` — configures which agents run during `/workflows:review` and `/workflows:work`.
+## Interaction Method
+
+If `AskUserQuestion` is available, use it for all prompts below.
+
+If not, present each question as a numbered list and wait for a reply before proceeding to the next step. For multiSelect questions, accept comma-separated numbers (e.g. `1, 3`). Never skip or auto-configure.
+
+Interactive setup for `systematic.local.md` — configures which agents run during `/ce:review` and `/ce:work`.
 
 ## Step 1: Check Existing Config
 
-Read `systematic.local.md` in the project root. If it exists, display current settings summary and use question:
+Read `systematic.local.md` in the project root. If it exists, display current settings summary and use AskUserQuestion:
 
 ```
 question: "Settings file already exists. What would you like to do?"
@@ -41,7 +47,7 @@ test -f requirements.txt && echo "python" || \
 echo "general"
 ```
 
-Use question:
+Use AskUserQuestion:
 
 ```
 question: "Detected {type} project. How would you like to configure?"
@@ -145,7 +151,7 @@ plan_review_agents: [{computed plan agent list}]
 # Review Context
 
 Add project-specific review instructions here.
-These notes are passed to all review agents during /workflows:review and /workflows:work.
+These notes are passed to all review agents during /ce:review and /ce:work.
 
 Examples:
 - "We use Turbo Frames heavily — check for frame-busting issues"
