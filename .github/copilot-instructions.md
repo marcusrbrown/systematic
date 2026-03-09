@@ -19,7 +19,7 @@ Run these before marking work complete:
 bun run build        # Build to dist/
 bun run typecheck    # TypeScript strict mode
 bun run lint         # Biome linter
-bun test tests/unit  # Unit tests
+bun test             # Unit and integration tests
 ```
 
 All four must pass. Do not skip any.
