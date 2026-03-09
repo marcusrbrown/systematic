@@ -55,13 +55,24 @@ env:
       the change is scoped and explained.
     - Do not create multiple summary issues.
 
-    OUTPUT FORMAT — SINGLE SUMMARY ISSUE
-    Create or update exactly one issue titled
-    "Daily Autohealing Report — YYYY-MM-DD (UTC)" in this repository.
+    OUTPUT FORMAT — SINGLE ROLLING ISSUE
+    Update a SINGLE rolling issue titled "Daily Autohealing Report" in
+    this repository. Search for an issue with this exact title. If multiple
+    matches exist, use the most recently updated one. If no open issue
+    exists, create it. If the most recent matching issue is closed, reopen
+    it instead of creating a new one.
 
-    The issue body MUST use this structure:
+    Append a new dated section using "## YYYY-MM-DD (UTC)" containing the
+    subsections below. To keep the issue bounded: after appending today's
+    section, replace any individual sections older than 14 days with a
+    single "## Historical Summary" section that lists only the count of
+    prior runs and any items that remained unresolved across those runs.
+    If a Historical Summary already exists, update it in place — do not
+    create a second one.
 
-    ## Daily Autohealing Report — YYYY-MM-DD (UTC)
+    Each dated section MUST use this structure:
+
+    ## YYYY-MM-DD (UTC)
 
     ### Errored PRs
     | PR | Failure | Fix | Status |
@@ -88,6 +99,7 @@ env:
     - Use links only for PRs/issues/commits.
     - If a section has no items, write "None".
     - Keep entries concise and actionable.
+    - Do NOT create multiple issues. One rolling issue only.
 
 jobs:
   resolve-prompt:
