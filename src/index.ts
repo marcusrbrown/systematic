@@ -22,6 +22,17 @@ const bundledCommandsDir = path.join(packageRoot, 'commands')
 const packageJsonPath = path.join(packageRoot, 'package.json')
 let hasLoggedInit = false
 
+const applyBootstrapContent = (
+  output: { system: string[] },
+  content: string,
+): void => {
+  if (output.system.length > 0) {
+    output.system[output.system.length - 1] += `\n\n${content}`
+  } else {
+    output.system.push(content)
+  }
+}
+
 const getPackageVersion = (): string => {
   try {
     if (!fs.existsSync(packageJsonPath)) return 'unknown'
@@ -100,11 +111,7 @@ export const SystematicPlugin: Plugin = async ({ client, directory }) => {
 
       const content = getBootstrapContent(config, { bundledSkillsDir })
       if (content) {
-        if (output.system.length > 0) {
-          output.system[output.system.length - 1] += `\n\n${content}`
-        } else {
-          output.system.push(content)
-        }
+        applyBootstrapContent(output, content)
       }
     },
   }
