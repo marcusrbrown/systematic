@@ -104,11 +104,6 @@ jobs:
     name: Fro Bot
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    permissions:
-      contents: write
-      discussions: write
-      issues: write
-      pull-requests: write
     if: >-
       (
         github.event.pull_request == null ||
