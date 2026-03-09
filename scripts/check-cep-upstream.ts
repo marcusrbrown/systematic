@@ -279,7 +279,7 @@ export const fetchUpstreamData = async (
     const contentUrl = `https://api.github.com/repos/${repo}/contents/${path}?ref=${branch}`
     const result = await fetchWithRetry(contentUrl, fetchFn)
     if (!result.response || !result.response.ok) {
-      if (!result.response || result.response.status !== 404) {
+      if (result.response?.status !== 404) {
         hadError = true
       }
       continue
