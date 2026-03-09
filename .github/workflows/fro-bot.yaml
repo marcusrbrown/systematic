@@ -12,7 +12,7 @@ on:
     types: [opened, edited]
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, review_requested]
   schedule:
     - cron: '0 9 * * 1'
   workflow_dispatch:
@@ -20,6 +20,12 @@ on:
       prompt:
         description: Custom prompt for the Fro Bot agent
         required: true
+  workflow_call:
+    inputs:
+      prompt:
+        description: Prompt for the Fro Bot agent
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -46,14 +52,52 @@ env:
     - Security implications for system prompt injection or skill loading
     Skip style nits — Biome handles formatting.
 
+    Do NOT push commits, modify code, or create branches. Review only.
+    Use inline comments for file-specific issues. Reserve the review body
+    for the structured summary below.
+
+    You MUST structure your review using exactly these headings:
+    ## Verdict: [PASS | CONDITIONAL | REJECT]
+    CONDITIONAL = can merge after addressing the listed blocking issues.
+    ### Blocking issues
+    ### Non-blocking concerns
+    ### Missing tests
+    ### Risk assessment (LOW/MED/HIGH) + rationale
+    Evaluate likelihood of regression, security exposure, or blast radius.
+    If a section has no items, write "None" under the heading.
+    Do not omit any heading.
+
   SCHEDULE_PROMPT: |
-    Perform weekly repository maintenance and create a SINGLE issue titled
-    "Weekly Maintenance Report — YYYY-MM-DD" containing:
-    - Open issues with no activity in 14+ days (list with links)
-    - Open PRs with no review activity in 7+ days (list with links)
-    - Issues labeled 'bug' without assignees (list with links)
-    - Recommended actions for each item
-    Do NOT comment on individual issues or PRs. Produce one summary issue only.
+    Perform weekly repository maintenance and update a SINGLE rolling issue titled
+    "Weekly Maintenance Report" in this repository.
+
+    Search for an issue with this exact title. If multiple matches exist,
+    use the most recently updated one. If no open issue exists, create it.
+    If the most recent matching issue is closed, reopen it instead of creating
+    a new one.
+
+    Append a new dated section for each run using "## YYYY-MM-DD (UTC)".
+    To keep the issue bounded: after appending today's section, replace any
+    individual sections older than 28 days with a single
+    "## Historical Summary" section that lists only the count of prior runs
+    and any items that remained unresolved across those runs. If a Historical
+    Summary already exists, update it in place — do not create a second one.
+
+    Include links only (no full content duplication). Keep it concise and actionable.
+    Flag items that appear in the stale list for the first time (not present in
+    the previous dated section) with a ★ marker.
+
+    Sections (in order):
+    - Summary metrics (issues opened since last run, currently open PRs, stale
+      issues/PRs count, main branch check status, security alerts if accessible)
+    - Stale issues (no activity >14 days; recommend next step)
+    - Stale PRs (no review activity >7 days)
+    - Unassigned bugs (label bug, no assignee)
+    - Recommended actions (bulleted checklist)
+    - Notes (use "data unavailable" for any inaccessible data source)
+
+    Do NOT comment on or modify individual issues/PRs. Do NOT apply labels.
+    Do NOT open PRs. This run must update ONE issue only.
 
 jobs:
   fro-bot:
@@ -68,20 +112,34 @@ jobs:
     if: >-
       (
         github.event.pull_request == null ||
-        !github.event.pull_request.head.repo.fork
+        (
+          !github.event.pull_request.head.repo.fork &&
+          !endsWith(github.event.pull_request.user.login || '', '[bot]')
+        )
       ) && (
         (
           github.event_name == 'issues' &&
-          !endsWith(github.event.issue.user.login || '', '[bot]')
+          !endsWith(github.event.issue.user.login || '', '[bot]') &&
+          (github.event.issue.user.login || '') != 'fro-bot'
+        ) ||
+        (
+          github.event_name == 'pull_request' &&
+          !endsWith(github.event.pull_request.user.login || '', '[bot]') &&
+          (github.event.pull_request.user.login || '') != 'fro-bot' &&
+          (
+            github.event.action != 'review_requested' ||
+            (github.event.requested_reviewer.login || '') == 'fro-bot'
+          )
         ) ||
         github.event_name == 'schedule' ||
         github.event_name == 'workflow_dispatch' ||
-        github.event_name == 'pull_request' ||
+        inputs.prompt != '' ||
         (
           (github.event_name == 'issue_comment' ||
            github.event_name == 'pull_request_review_comment' ||
            github.event_name == 'discussion_comment') &&
           contains(github.event.comment.body || '', '@fro-bot') &&
+          !endsWith(github.event.comment.user.login || '', '[bot]') &&
           (github.event.comment.user.login || '') != 'fro-bot' &&
           contains(fromJSON('["OWNER", "MEMBER", "COLLABORATOR"]'), github.event.comment.author_association || '')
         )
@@ -111,7 +169,7 @@ jobs:
           OPENCODE_PROMPT_ARTIFACT: 'true'
           PROMPT: >-
             ${{
-              (github.event_name == 'workflow_dispatch' && (github.event.inputs.prompt || ''))
+              inputs.prompt
               || (github.event_name == 'schedule' && env.SCHEDULE_PROMPT)
               || (github.event_name == 'pull_request' && env.PR_REVIEW_PROMPT)
               || ''
