@@ -1,0 +1,71 @@
+---
+title: Agent Install Guide
+description: A step-by-step, agent-readable installation guide for Systematic.
+sidebar:
+  order: 3
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+This guide is designed for AI agents and automated systems to install and verify the Systematic plugin for OpenCode. It uses clear, imperative language and explicit verification steps.
+
+## Prerequisites
+
+Before proceeding, ensure the following environment requirements are met:
+
+- **OpenCode** is installed and configured.
+- **Node.js 18+** or the **Bun** runtime is available in the path.
+
+## Installation Steps
+
+Follow these steps to enable Systematic in your environment:
+
+<Steps>
+1. **Add plugin to configuration**
+   Append `@fro.bot/systematic@latest` to the `plugins` array in `~/.config/opencode/opencode.json`.
+
+   ```json
+   {
+     "plugins": ["@fro.bot/systematic@latest"]
+   }
+   ```
+
+2. **Restart OpenCode**
+   Restart the OpenCode session to trigger the `config` hook, which automatically discovers and registers all bundled assets.
+
+3. **Verify bootstrap loading**
+   Run the following command to confirm the plugin is active and teaching your assistant:
+   ```bash
+   /systematic:using-systematic
+   ```
+</Steps>
+
+## Verification
+
+Execute these commands to confirm each component of the plugin is correctly registered and functional.
+
+### 1. Skill Verification
+Run the bootstrap skill. It should display the "Using Systematic" guide.
+```bash
+/systematic:using-systematic
+```
+
+### 2. Agent Verification
+Mention a specialized agent. The assistant should respond with the persona and expertise of the architecture strategist.
+```text
+@architecture-strategist what is the role of the config hook?
+```
+
+### 3. Workflow Verification
+Run a workflow command. It should initiate the planning phase.
+```bash
+/workflows:plan
+```
+
+## What to Do Next
+
+Once installation is verified, proceed with these next actions:
+
+- **Read the Philosophy Guide**: Understand the core principles of disciplined engineering at `/systematic/guides/philosophy/`.
+- **Try the Main Loop**: Learn how to use the full plan-work-review cycle at `/systematic/guides/main-loop/`.
+- **Explore Assets**: Browse the [available skills](/systematic/reference/skills/), [agents](/systematic/reference/agents/), and [commands](/systematic/reference/commands/).

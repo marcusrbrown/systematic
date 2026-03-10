@@ -2,7 +2,7 @@
 title: Architecture
 description: A deep dive into how the Systematic plugin integrates with OpenCode.
 sidebar:
-  order: 1
+  order: 4
 ---
 
 Systematic is designed as a lightweight yet powerful extension for OpenCode. It leverages native plugin hooks to inject structured workflows and specialized agents into your development environment.
@@ -18,7 +18,6 @@ The plugin is divided into two main parts:
 Systematic utilizes three primary OpenCode plugin hooks to integrate seamlessly:
 
 ```mermaid
-%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#1a1a2e', 'primaryTextColor': '#fff', 'primaryBorderColor': '#4FD1C5', 'lineColor': '#4FD1C5', 'secondaryColor': '#16213e', 'tertiaryColor': '#0f0f23'}}}%%
 flowchart TB
     A[Plugin Loaded] --> B[config hook]
     A --> C[tool hook]

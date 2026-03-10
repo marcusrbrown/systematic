@@ -2,7 +2,7 @@
 title: Conversion Guide
 description: How to migrate skills, agents, and commands from CEP or other Claude Code-format sources to OpenCode and Systematic.
 sidebar:
-  order: 2
+  order: 5
 ---
 
 This guide provides instructions for converting Claude Code (CC) definitions (skills, commands, agents) to OpenCode (OC) format for use in the Systematic plugin.
@@ -533,8 +533,8 @@ import { convertContent } from './lib/converter.js'
 const converted = convertContent(content, 'skill')
 
 // Skip body transformations (frontmatter only)
-const convertedFrontmatterOnly = convertContent(content, 'skill', { 
-  skipBodyTransform: true 
+const convertedFrontmatterOnly = convertContent(content, 'skill', {
+  skipBodyTransform: true
 })
 ```
 
@@ -600,7 +600,7 @@ bun test tests/integration/converter-validation.test.ts
 ## Related Resources
 
 - [CEP Source](https://github.com/EveryInc/compound-engineering-plugin)
-- [Oh My OpenCode Loader](https://github.com/code-yeongyu/oh-my-opencode)
+- [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent)
 - [Superpowers Plugin](https://github.com/obra/superpowers)
 - [OpenCode Docs - Skills](https://opencode.ai/docs/skills/)
 - [OpenCode Docs - Commands](https://opencode.ai/docs/commands/)

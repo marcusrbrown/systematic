@@ -67,6 +67,7 @@ Map extracted data to README sections. Every count and description must come fro
 | README Section | Data Source |
 |----------------|-------------|
 | Header Block | `<current-readme>` — preserve `<picture>`, badge style, nav links |
+| Quick Start CTA | README copy guidance — install-first imperative language + Next Steps links |
 | Overview / Key Features | `<package-info>` description + asset counts from `<asset-inventory>` |
 | Quick Start | `<package-info>` name for install command |
 | Skills | `<skill-frontmatter>` — table with Name and Description |
@@ -98,7 +99,8 @@ These rules are **non-negotiable** — they match the existing README style:
 6. **Command tables**: Split into "Workflow Commands" and "Utility Commands". Workflow commands use `/workflows:` prefix. Utility commands use `/systematic:` prefix.
 7. **Counts**: The "Key Features" bullet mentioning bundled content must use the exact counts from `<asset-inventory>`. Format: "X skills, Y agents, and Z commands"
 8. **Project Structure tree**: Update file comments to match current counts (e.g., `# X bundled agents (4 categories)`)
-9. **Code blocks**: Use `bash` for shell, `json` for config, `markdown` for skill examples, `mermaid` for diagrams
+9. **Quick Start CTA**: The primary action in Quick Start must emphasize installation. Use imperative language: "Install the plugin by adding it to your OpenCode configuration (`~/.config/opencode/opencode.json`)". The Verify Installation step should be followed by a "Next Steps" subsection linking to the Philosophy, Main Loop, and Agent Install guides at `https://fro.bot/systematic/guides/`.
+10. **Code blocks**: Use `bash` for shell, `json` for config, `markdown` for skill examples, `mermaid` for diagrams
 
 #### Section Order
 
