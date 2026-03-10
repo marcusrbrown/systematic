@@ -396,5 +396,5 @@ bun run test:all
 
 - [Compound Engineering Plugin (CEP)](https://github.com/EveryInc/compound-engineering-plugin)
 - [Superpowers](https://github.com/obra/superpowers)
-- [Oh My OpenCode (oMo)](https://github.com/code-yeongyu/oh-my-opencode)
+- [oh-my-openagent (oMo)](https://github.com/code-yeongyu/oh-my-openagent)
 - [Superpowers PR #228 — Bootstrap injection fix](https://github.com/obra/superpowers/pull/228)

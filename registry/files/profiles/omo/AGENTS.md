@@ -1,7 +1,7 @@
 # OMO + Systematic Combined Profile
 
 This profile provides a **powerful combined system** that brings together:
-- **Oh My OpenCode (OMO)** — Multi-agent orchestration, parallel research, and advanced tooling
+- **Oh My OpenAgent (OMO)** — Multi-agent orchestration, parallel research, and advanced tooling
 - **Systematic** — Structured engineering workflows for disciplined execution
 
 Best for engineers who want both raw agent power AND enforced process discipline.
@@ -13,7 +13,7 @@ Best for engineers who want both raw agent power AND enforced process discipline
 - **Specialized Agents** — Architecture, security, performance, design, data integrity experts
 - **Zero Configuration** — Works immediately; inject into your system prompt
 
-### Oh My OpenCode (Orchestrator + 9 agents)
+### Oh My OpenAgent (Orchestrator + 9 agents)
 - **Sisyphus** — Master orchestrator agent (Claude Opus 4.5)
 - **Explore** — Codebase search and analysis
 - **Librarian** — Repository research and documentation lookup
@@ -255,7 +255,7 @@ Add your own overrides:
 ## References
 
 - [Systematic Documentation](https://fro.bot/systematic)
-- [Oh My OpenCode Documentation](https://github.com/code-yeongyu/oh-my-opencode)
+- [oh-my-openagent Documentation](https://github.com/code-yeongyu/oh-my-openagent)
 - [OpenCode Documentation](https://opencode.ai/docs/)
 - [Compound Engineering Plugin](https://github.com/EveryInc/compound-engineering-plugin) — Original CEP
 
