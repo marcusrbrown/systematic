@@ -1,14 +1,14 @@
 ---
-name: workflows:brainstorm
+name: ce:brainstorm
 description: Explore requirements and approaches through collaborative dialogue before planning implementation
-argument-hint: '[feature idea or problem to explore]'
+argument-hint: "[feature idea or problem to explore]"
 ---
 
 # Brainstorm a Feature or Improvement
 
 **Note: The current year is 2026.** Use this when dating brainstorm documents.
 
-Brainstorming helps answer **WHAT** to build through collaborative dialogue. It precedes `/workflows:plan`, which answers **HOW** to build it.
+Brainstorming helps answer **WHAT** to build through collaborative dialogue. It precedes `/ce:plan`, which answers **HOW** to build it.
 
 **Process knowledge:** Load the `brainstorming` skill for detailed question techniques, approach exploration patterns, and YAGNI principles.
 
@@ -33,7 +33,7 @@ Evaluate whether brainstorming is needed based on the feature description.
 - Constrained, well-defined scope
 
 **If requirements are already clear:**
-Use **question tool** to suggest: "Your requirements seem detailed enough to proceed directly to planning. Should I run `/workflows:plan` instead, or would you like to explore the idea further?"
+Use **AskUserQuestion tool** to suggest: "Your requirements seem detailed enough to proceed directly to planning. Should I run `/ce:plan` instead, or would you like to explore the idea further?"
 
 ### Phase 1: Understand the Idea
 
@@ -47,7 +47,7 @@ Focus on: similar features, established patterns, AGENTS.md guidance.
 
 #### 1.2 Collaborative Dialogue
 
-Use the **question tool** to ask questions **one at a time**.
+Use the **AskUserQuestion tool** to ask questions **one at a time**.
 
 **Guidelines (see `brainstorming` skill for detailed techniques):**
 - Prefer multiple choice when natural options exist
@@ -68,7 +68,7 @@ For each approach, provide:
 
 Lead with your recommendation and explain why. Apply YAGNI—prefer simpler solutions.
 
-Use **question tool** to ask which approach the user prefers.
+Use **AskUserQuestion tool** to ask which approach the user prefers.
 
 ### Phase 3: Capture the Design
 
@@ -78,17 +78,17 @@ Write a brainstorm document to `docs/brainstorms/YYYY-MM-DD-<topic>-brainstorm.m
 
 Ensure `docs/brainstorms/` directory exists before writing.
 
-**IMPORTANT:** Before proceeding to Phase 4, check if there are any Open Questions listed in the brainstorm document. If there are open questions, YOU MUST ask the user about each one using question before offering to proceed to planning. Move resolved questions to a "Resolved Questions" section.
+**IMPORTANT:** Before proceeding to Phase 4, check if there are any Open Questions listed in the brainstorm document. If there are open questions, YOU MUST ask the user about each one using AskUserQuestion before offering to proceed to planning. Move resolved questions to a "Resolved Questions" section.
 
 ### Phase 4: Handoff
 
-Use **question tool** to present next steps:
+Use **AskUserQuestion tool** to present next steps:
 
 **Question:** "Brainstorm captured. What would you like to do next?"
 
 **Options:**
 1. **Review and refine** - Improve the document through structured self-review
-2. **Proceed to planning** - Run `/workflows:plan` (will auto-detect this brainstorm)
+2. **Proceed to planning** - Run `/ce:plan` (will auto-detect this brainstorm)
 3. **Share to Proof** - Upload to Proof for collaborative review and sharing
 4. **Ask more questions** - I have more questions to clarify before moving on
 5. **Done for now** - Return later
@@ -100,7 +100,7 @@ CONTENT=$(cat docs/brainstorms/YYYY-MM-DD-<topic>-brainstorm.md)
 TITLE="Brainstorm: <topic title>"
 RESPONSE=$(curl -s -X POST https://www.proofeditor.ai/share/markdown \
   -H "Content-Type: application/json" \
-  -d "$(jq -n --arg title "$TITLE" --arg markdown "$CONTENT" --arg by "ai:compound" '{title: $title, markdown: $markdown, by: $by}')")
+  -d "$(jq -n --arg title "$TITLE" --arg markdown "$CONTENT" --arg by "ai:systematic" '{title: $title, markdown: $markdown, by: $by}')")
 PROOF_URL=$(echo "$RESPONSE" | jq -r '.tokenUrl')
 ```
 
@@ -108,7 +108,7 @@ Display the URL prominently: `View & collaborate in Proof: <PROOF_URL>`
 
 If the curl fails, skip silently. Then return to the Phase 4 options.
 
-**If user selects "Ask more questions":** YOU (Claude) return to Phase 1.2 (Collaborative Dialogue) and continue asking the USER questions one at a time to further refine the design. The user wants YOU to probe deeper - ask about edge cases, constraints, preferences, or areas not yet explored. Continue until the user is satisfied, then return to Phase 4.
+**If user selects "Ask more questions":** YOU (the AI) return to Phase 1.2 (Collaborative Dialogue) and continue asking the USER questions one at a time to further refine the design. The user wants YOU to probe deeper - ask about edge cases, constraints, preferences, or areas not yet explored. Continue until the user is satisfied, then return to Phase 4.
 
 **If user selects "Review and refine":**
 
@@ -116,8 +116,8 @@ Load the `document-review` skill and apply it to the brainstorm document.
 
 When document-review returns "Review complete", present next steps:
 
-1. **Move to planning** - Continue to `/workflows:plan` with this document
-2. **Done for now** - Brainstorming complete. To start planning later: `/workflows:plan [document-path]`
+1. **Move to planning** - Continue to `/ce:plan` with this document
+2. **Done for now** - Brainstorming complete. To start planning later: `/ce:plan [document-path]`
 
 ## Output Summary
 
@@ -132,7 +132,7 @@ Key decisions:
 - [Decision 1]
 - [Decision 2]
 
-Next: Run `/workflows:plan` when ready to implement.
+Next: Run `/ce:plan` when ready to implement.
 ```
 
 ## Important Guidelines

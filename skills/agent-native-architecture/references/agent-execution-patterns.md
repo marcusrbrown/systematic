@@ -61,7 +61,7 @@ extension ToolResult {
     }
 
     static func complete(_ summary: String) -> ToolResult {
-        // Task done, stop the loop
+        // task done, stop the loop
         ToolResult(success: true, output: summary, shouldContinue: false)
     }
 }
@@ -165,7 +165,7 @@ Progress: 3/5 tasks complete (60%)
 - Resume continues from where it left off, not from beginning
 
 **Agent fails on one task:**
-- Task marked `.failed` with error in notes
+- task marked `.failed` with error in notes
 - Other tasks may continue (agent decides)
 - Orchestrator doesn't automatically abort entire session
 
@@ -183,7 +183,7 @@ struct AgentCheckpoint: Codable {
     let agentType: String
     let messages: [Message]          // Full conversation history
     let iterationCount: Int
-    let tasks: [AgentTask]           // Task state
+    let tasks: [AgentTask]           // task state
     let customState: [String: Any]   // Agent-specific state
     let timestamp: Date
 

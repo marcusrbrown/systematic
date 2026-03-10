@@ -68,7 +68,7 @@
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^24.0.0",
     "conventional-changelog-conventionalcommits": "^9.0.0",
-    "markdownlint-cli": "^0.47.0",
+    "markdownlint-cli": "^0.48.0",
     "rimraf": "^6.1.2",
     "semantic-release": "^25.0.0",
     "semantic-release-export-data": "^1.2.0",

@@ -183,4 +183,3 @@ Based on [The Unofficial 37signals/DHH Rails Style Guide](https://github.com/mar
 - Code examples from Fizzy are licensed under the O'Saasy License
 - Not affiliated with or endorsed by 37signals
 </credits>
-

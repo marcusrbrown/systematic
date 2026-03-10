@@ -203,6 +203,47 @@ If any criterion fails, document why and **do not proceed** unless the user expl
 
 **Consult `docs/CONVERSION-GUIDE.md` for the authoritative field mapping reference.** That document has the complete tables for frontmatter fields, tool names, paths, and edge cases.
 
+### 2a. Change Detection (CRITICAL)
+
+**The sync workflow MUST focus on converting CHANGED content only.** If upstream hasn't changed a section, do NOT modify it.
+
+1. **Compare content hashes** — Only process definitions whose `upstream_content_hash` differs from the current upstream.
+2. **Diff before converting** — Run `git diff` or text comparison to identify WHAT changed upstream.
+3. **Selective application** — Apply conversions ONLY to the changed portions. Preserve unchanged sections exactly as they are.
+
+**CRITICAL: Preserve Stable Content**
+
+| Content Type | Action |
+|--------------|--------|
+| `~/.config/opencode/` paths | **DO NOT CHANGE** — This is the correct OpenCode global config path |
+| `~/.opencode/` paths | **DO NOT CHANGE** — This is WRONG. If you see this, it was a mistake. The correct path is `~/.config/opencode/` |
+| `question` tool references | **DO NOT CHANGE** — This is the correct OpenCode tool name |
+| `AskUserQuestion` in existing bundled files | Change to `question` — this was a CC tool that must be converted |
+| Trailing newlines | **PRESERVE** — Do not strip EOL characters |
+
+**Path Conversion Rules (MEMORIZE):**
+
+| CC Path | OC Path | Notes |
+|---------|---------|-------|
+| `~/.claude/` | `~/.config/opencode/` | Global user config |
+| `.claude/` | `.opencode/` | Project-relative |
+| `~/.config/opencode/` | `~/.config/opencode/` | **ALREADY CORRECT — NEVER CHANGE** |
+| `~/.opencode/` | `~/.config/opencode/` | **WRONG PATH — FIX IF FOUND** |
+
+**Tool Name Conversion Rules (MEMORIZE):**
+
+| CC Tool | OC Tool | Direction |
+|---------|---------|-----------|
+| `AskUserQuestion` | `question` | CC → OC only |
+| `TodoWrite` | `todowrite` | CC → OC only |
+| `Task` | `task` | CC → OC only |
+| `question` | `question` | **ALREADY CORRECT — NEVER CHANGE** |
+| `todowrite` | `todowrite` | **ALREADY CORRECT — NEVER CHANGE** |
+
+> **Common mistake:** Converting `question` → `AskUserQuestion`. This is BACKWARDS. OpenCode uses lowercase tool names.
+
+### 2b. Apply Mechanical Converter
+
 Apply the existing converter pipeline. This handles:
 - Tool name mappings (`Task` -> `task`, `TodoWrite` -> `todowrite`, etc.)
 - Path replacements (`.claude/` -> `.opencode/`, `CLAUDE.md` -> `AGENTS.md`)
@@ -347,6 +388,30 @@ Before writing the file, verify:
 - [ ] Attribution badges/footers in heredoc code blocks updated to Systematic branding
 - [ ] CC-specific features with no OC equivalent handled (removed, adapted, or noted as aspirational)
 - [ ] Cross-referenced agents/skills/commands exist in Systematic (or are marked for future import)
+- [ ] **Path sanity check** — No `~/.opencode/` paths (should be `~/.config/opencode/`)
+- [ ] **Tool name sanity check** — No `AskUserQuestion` (should be `question`)
+- [ ] **Formatting preserved** — Trailing newlines maintained, no gratuitous whitespace changes
+- [ ] Content matches Systematic's style (structured phases, explicit deliverables)
+- [ ] Agent `mode` field is set (`subagent`, `primary`, or `all`)
+- [ ] Agent `temperature` is appropriate for the agent's purpose
+
+### 3g. Discrepancy Reporting
+
+If you encounter content that looks incorrect but wasn't changed by upstream:
+
+1. **DO NOT silently fix it** — You might break something
+2. **Report it as a discrepancy** — Include in the sync summary
+3. **Flag for human review** — "Found existing path `~/.opencode/` in line X — should this be `~/.config/opencode/`?"
+
+Example discrepancy report:
+```markdown
+### Discrepancies Found (not from upstream changes)
+
+| File | Line | Issue | Recommended Action |
+|------|------|-------|-------------------|
+| skills/foo/SKILL.md | 42 | Uses `~/.opencode/` path | Verify if intentional, fix to `~/.config/opencode/` if not |
+| commands/bar.md | 15 | Uses `AskUserQuestion` | Convert to `question` tool |
+```
 - [ ] Content matches Systematic's style (structured phases, explicit deliverables)
 - [ ] Agent `mode` field is set (`subagent`, `primary`, or `all`)
 - [ ] Agent `temperature` is appropriate for the agent's purpose

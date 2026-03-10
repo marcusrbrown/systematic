@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import {
   collectNewUpstreamFiles,
   computeCheckSummary,
+  createAuthenticatedFetch,
   fetchUpstreamData,
   getExitCode,
   getRequiredUpstreamContentPaths,
@@ -680,6 +681,41 @@ describe('check-cep-upstream helpers', () => {
       'skills/skill-b': ['SKILL.md'],
       'commands/workflows/new-cmd': ['new-cmd.md'],
     })
+  })
+
+  it('returns raw fetch when no token is provided', () => {
+    const fetchFn = createAuthenticatedFetch(undefined)
+    expect(fetchFn).toBe(fetch)
+  })
+
+  it('returns raw fetch when token is empty string', () => {
+    const fetchFn = createAuthenticatedFetch('')
+    expect(fetchFn).toBe(fetch)
+  })
+
+  it('returns authenticated fetch wrapper when token is provided', async () => {
+    const fetchFn = createAuthenticatedFetch('ghp_test123')
+    expect(fetchFn).not.toBe(fetch)
+
+    let capturedHeaders: Headers | undefined
+    const originalFetch = globalThis.fetch
+    const mockFetch = async (_input: RequestInfo | URL, init?: RequestInit) => {
+      capturedHeaders = new Headers(init?.headers)
+      return new Response('ok', { status: 200 })
+    }
+    globalThis.fetch = Object.assign(mockFetch, {
+      preconnect: originalFetch.preconnect,
+    }) as typeof fetch
+
+    try {
+      await fetchFn('https://api.github.com/test')
+      expect(capturedHeaders?.get('Authorization')).toBe('Bearer ghp_test123')
+      expect(capturedHeaders?.get('Accept')).toBe(
+        'application/vnd.github.v3+json',
+      )
+    } finally {
+      globalThis.fetch = originalFetch
+    }
   })
 
   it('includes newUpstreamFiles in computeCheckSummary for new skills', () => {

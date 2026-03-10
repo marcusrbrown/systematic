@@ -42,7 +42,7 @@ jobs:
           token: ${{ secrets.FRO_BOT_PAT }}
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        uses: oven-sh/setup-bun@ecf28ddc73e819eb6fa29df6b34ef8921c743461 # v2.1.3
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -60,14 +60,12 @@ jobs:
           echo "exit_code=$exit_code" >> "$GITHUB_OUTPUT"
           echo "summary=$summary" >> "$GITHUB_OUTPUT"
           jq -c '{hashChanges, newUpstream, deletions, skipped, converterVersionChanged, errors}' < precheck.json 2>/dev/null || cat precheck.json
-          if [ "$exit_code" -eq 2 ]; then
-            exit 2
-          fi
+
         env:
           GITHUB_TOKEN: ${{ secrets.FRO_BOT_PAT }}
 
       - name: Report precheck errors
-        if: failure() && steps.precheck.outputs.exit_code == '2'
+        if: steps.precheck.outputs.exit_code == '2'
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
         with:
           github-token: ${{ secrets.FRO_BOT_PAT }}
@@ -81,8 +79,12 @@ jobs:
               '',
               `Pre-check failed with exit code 2. Found ${errors.length} error(s).`,
               '',
-              '### Errors',
+              '<details>',
+              `<summary>Errors (${errors.length})</summary>`,
+              '',
               errorList || '_None_',
+              '',
+              '</details>',
               '',
               `**Hash changes:** ${(summary.hashChanges || []).length}`,
               `**New upstream:** ${(summary.newUpstream || []).length}`,
@@ -121,7 +123,7 @@ jobs:
     name: CEP Sync
     runs-on: ubuntu-latest
     needs: precheck
-    if: "!cancelled() && needs.precheck.outputs.exit_code != '' && needs.precheck.outputs.exit_code != '0'"
+    if: needs.precheck.outputs.exit_code != '' && needs.precheck.outputs.exit_code != '0'
     permissions:
       contents: read
     env:
@@ -139,11 +141,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          fetch-depth: 0
           token: ${{ secrets.FRO_BOT_PAT }}
 
       - name: Setup Bun
-        uses: oven-sh/setup-bun@3d267786b128fe76c2f16a390aa2448b815359f3 # v2.1.2
+        uses: oven-sh/setup-bun@ecf28ddc73e819eb6fa29df6b34ef8921c743461 # v2.1.3
 
       - name: Install dependencies
         run: bun install --frozen-lockfile
@@ -156,11 +157,12 @@ jobs:
           bun test
 
       - name: Run Sync Bot
-        uses: fro-bot/agent@dc55897722fe837333acad989dd5e42b377b3bae # v0.26.14
+        uses: fro-bot/agent@0d4b30098e1329d39cf72d24db85a2ad559817a1 # v0.30.3
         env:
           OPENCODE_PROMPT_ARTIFACT: 'true'
         with:
-          auth-json: '{}'
+          auth-json: ${{ secrets.OPENCODE_AUTH_JSON }}
           github-token: ${{ secrets.FRO_BOT_PAT }}
           model: ${{ vars.SYNC_CEP_MODEL }}
+          omo-providers: ${{ secrets.OMO_PROVIDERS }}
           prompt: ${{ env.SYNC_PROMPT }}

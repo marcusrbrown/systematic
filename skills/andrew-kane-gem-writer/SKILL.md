@@ -182,4 +182,3 @@ For deeper patterns, see:
 - **[references/database-adapters.md](references/database-adapters.md)** - Multi-database support patterns
 - **[references/testing-patterns.md](references/testing-patterns.md)** - Multi-version testing, CI setup
 - **[references/resources.md](references/resources.md)** - Links to Kane's repos and articles
-

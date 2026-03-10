@@ -18,4 +18,3 @@ Run these slash commands in order. Do not do anything else. Do not stop between 
 9. Output `<promise>DONE</promise>` when video is in PR
 
 Start with step 2 now (or step 1 if ralph-wiggum is available).
-

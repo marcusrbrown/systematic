@@ -32,7 +32,8 @@
       "!**/node_modules",
       "!**/*.md",
       "!**/.astro",
-      "!.sisyphus"
+      "!.sisyphus",
+      "!**/.worktrees"
     ]
   }
 }
