@@ -1,62 +1,83 @@
 ---
-title: Exemplary Plugin Checklist
-description: What makes an exemplary OpenCode plugin and how Systematic measures up.
+title: What Good Looks Like
+description: A walkthrough of how Systematic approaches plugin design — and where it still falls short.
 sidebar:
   order: 7
 ---
 
-Creating a high-quality OpenCode plugin goes beyond just functionality. It requires a commitment to developer experience, transparency, and seamless integration. This guide summarizes best practices derived from benchmark plugins and tracks Systematic's progress.
+What does a "good" OpenCode plugin look like? Instead of an abstract checklist, this guide walks through concrete design decisions in Systematic and explains why they exist.
 
-## Benchmarks
+## Installation Should Be One Line
 
-These projects represent the gold standard for OpenCode plugins and served as the inspiration for Systematic's design:
+Zero friction is the goal. You shouldn't need to download scripts or manually copy files to get started. Systematic achieves this by hooking directly into the OpenCode plugin system.
 
-- **[Oh My OpenCode](https://github.com/oh-my-opencode/oh-my-opencode)** — The pioneer of structured engineering workflows.
-- **[Superpowers](https://github.com/superpowers-ai/superpowers)** — Specialized skills for advanced reasoning and task execution.
-- **[Plannotator](https://github.com/plannotator/plannotator)** — Deep focus on planning and architectural oversight.
-- **[micode](https://github.com/micode-ai/micode)** — Lightweight, highly focused utility patterns.
+Adding a single line to your global configuration is all it takes:
 
-## Best Practices Checklist
+```json
+{
+  "plugins": ["@fro.bot/systematic@latest"]
+}
+```
 
-An exemplary plugin should strive to meet these criteria:
+This registers the plugin globally, making all bundled assets available in every project. For users who prefer granular control, the [OCX registry](/systematic/guides/ocx-registry/) provides an alternative for component-level installation.
 
-- [ ] **Agent-first installation documentation** — Instructions designed for AI agents to read and follow.
-- [ ] **Progressive disclosure** — Simple onboarding that naturally leads to advanced features.
-- [ ] **Trust-building through verification** — Explicit steps to verify installation and functionality.
-- [ ] **Flowcharts/diagrams** — Visual aids for complex internal workflows.
-- [ ] **Clear install-first CTA** — A prominent call-to-action for getting started quickly.
-- [ ] **Exemplary naming conventions** — Clear, predictable names for skills, agents, and commands.
-- [ ] **Bootstrap injection** — Zero-config onboarding via automated system prompt updates.
-- [ ] **Comprehensive reference** — Full documentation for every bundled asset.
-- [ ] **Changelog/release notes** — Transparency regarding updates and improvements.
-- [ ] **Contributing guide** — Clear path for community involvement.
+See the [Installation Guide](/systematic/getting-started/installation/) for details.
 
-## Systematic Status
+## Zero Configuration by Default
 
-How Systematic currently aligns with these best practices:
+A well-structured plugin works immediately. Systematic uses the `config` hook to auto-register all bundled skills, agents, and commands during the OpenCode startup sequence.
 
-| Practice | Status | Notes |
-|----------|--------|-------|
-| Agent-first install docs | ✅ Done | See [Installation Guide](/systematic/getting-started/installation/) |
-| Progressive disclosure | ✅ Done | Landing → Guides → Reference flow |
-| Verification steps | ✅ Done | Included in Installation Guide |
-| Flowcharts/diagrams | ✅ Done | Mermaid diagrams in Architecture guide |
-| Install-first CTA | ✅ Done | Prominent in README and Getting Started |
-| Naming conventions | ✅ Done | Consistent `systematic:` prefixing |
-| Bootstrap injection | ✅ Done | `using-systematic` skill auto-injected |
-| Comprehensive reference | ✅ Done | Generated docs for all assets |
-| Changelog/release notes | ❌ Gap | Not yet implemented in docs site |
-| Contributing guide | ❌ Gap | Needs to be ported to docs site |
+> Convention over configuration. Sensible defaults should satisfy 90% of use cases.
 
-## Known Gaps (Backlog)
+Manual file copying is an anti-pattern that leads to stale definitions. By bundling assets within the npm package and registering them programmatically, Systematic ensures you always have the latest workflows without touching your `.opencode` directory. If you do need to override something, project-level configuration always takes precedence.
 
-While Systematic provides a solid foundation, there are several areas identified for improvement to reach "exemplary" status:
+Read more about the [Architecture](/systematic/guides/architecture/).
 
-- **Changelog/Release Notes**: Implement a dedicated page for tracking plugin updates.
-- **Contributing Guide**: Add a guide for developers wishing to contribute new skills or agents.
-- **Visual Screenshots/Demos**: Add images and short videos demonstrating workflows in action.
-- **Interactive Playground**: A way to test skills without full installation.
-- **Community Links**: Official Discord or forum links for user support and discussion.
-- **Video Walkthrough**: A high-level video introduction to the Systematic philosophy.
+## Teach the Agent How to Use You
 
-By addressing these gaps, we continue to evolve Systematic into a benchmark plugin for the OpenCode ecosystem.
+The biggest challenge with AI plugins is discoverability. If the agent doesn't know a tool exists, it won't use it. Systematic solves this via "Bootstrap Injection" using the `system.transform` hook.
+
+Every conversation starts with the `using-systematic` skill injected into the system prompt. This teaches the AI:
+1. That Systematic is installed.
+2. What skills are available.
+3. How to use the `systematic_skill` tool to load them.
+
+This makes the plugin self-documenting for the AI. You don't have to remind the agent to use Systematic; the plugin teaches the agent how to be a better collaborator.
+
+## Make Everything Discoverable
+
+Structure should be predictable. Systematic uses consistent naming conventions and categories to help both humans and agents find what they need.
+
+- **Tools**: The `systematic_skill` tool description contains an XML list of all available skills.
+- **Namespacing**: All bundled skills use the `systematic:` prefix to avoid collisions with native or project-specific skills.
+- **Agents**: Categorized by function (Design, Research, Review, Workflow) for clear mental models.
+- **Commands**: Workflow commands use the `workflows:` prefix, while utility commands use `systematic:`.
+
+## Generate Docs from Source
+
+Documentation should never be out of sync with the code. Systematic treats Markdown assets (skills, agents, commands) as the source of truth for its documentation site.
+
+Reference pages are generated at build time using `transform-content.ts`. This script parses the YAML frontmatter and body of every bundled asset to produce the [Reference Section](/systematic/reference/skills/). When a developer adds a new skill to the repo, the documentation updates automatically.
+
+## Design for Extension
+
+Plugins should be additive, never destructive. Systematic follows a hierarchy that respects your project's specific needs:
+
+1. **Project Level**: `.opencode/skills/` and `.opencode/agents/`
+2. **User Level**: `~/.config/opencode/`
+3. **Plugin Level**: Bundled assets
+
+If you create a skill named `brainstorming` in your project, Systematic will step aside and let yours take priority. You can also disable any bundled asset via the `disabled_skills` or `disabled_agents` configuration options.
+
+## Current Gaps
+
+While Systematic aims to be a benchmark, it isn't finished. We're honest about where we're still falling short:
+
+- **Missing Changelog**: There is no automated release notes page in the documentation yet.
+- **Community Contributions**: We lack a formal contributing guide for authors who want to submit their own skills or agents.
+- **Interactive Demos**: The docs need more visual evidence, such as video walkthroughs or an interactive playground.
+- **Testing Coverage**: Integration tests don't yet cover the full plugin lifecycle within the actual OpenCode binary environment.
+
+---
+
+Understand the [Philosophy](/systematic/guides/philosophy/) behind these decisions or see the [Main Loop](/systematic/guides/main-loop/) in action.

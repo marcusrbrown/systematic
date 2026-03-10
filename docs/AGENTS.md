@@ -31,7 +31,7 @@ docs/
 │   └── content/docs/
 │       ├── index.mdx         # Landing page
 │       ├── getting-started/  # 2 manual pages (installation, configuration)
-│       ├── guides/           # 3 manual pages (architecture, conversion, creating-skills)
+│       ├── guides/           # 7 manual pages (philosophy, main-loop, agent-install, architecture, conversion-guide, ocx-registry, exemplary-checklist)
 │       └── reference/        # Generated — DO NOT EDIT
 │           ├── skills/       # 11 pages + index.mdx (all generated)
 │           ├── agents/       # 24 pages + index.mdx (all generated)
