@@ -463,10 +463,10 @@
     "skills/agent-browser": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/agent-browser",
-      "upstream_commit": "e8f3bbcb3580862a2715575d609333306ed02ee3",
-      "synced_at": "2026-02-10T09:19:13Z",
-      "notes": "Imported from CEP. Converter applied to SKILL.md. Single-file skill.",
-      "upstream_content_hash": "fd63d41d4a9d923c43ee7e1128dafa32f9e26cd3eb6197534d21d5a4e6ba1f14",
+      "upstream_commit": "1f50483030e8b5733e65cb74a06ccc85f8046490",
+      "synced_at": "2026-03-12T00:09:01Z",
+      "notes": "Imported from CEP. Converter applied to SKILL.md. Resynced with expanded inspection/debugging, network, storage, and recording command examples.",
+      "upstream_content_hash": "234e75ee3ca11d9834d6ab8fdd6517fb5429355877a0559eee76edf0f1f41ac2",
       "files": ["SKILL.md"],
       "rewrites": [
         {
@@ -1624,10 +1624,10 @@
     "skills/proof": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/proof",
-      "upstream_commit": "69f2a96e662b38d7df41f66d5fa064458ca72f10",
-      "synced_at": "2026-03-07T21:00:00Z",
-      "notes": "Imported from CEP. Collaborative markdown editor skill. Create, edit, comment on, and share docs via Proof API.",
-      "upstream_content_hash": "f4f5c4f93c92e370e6c1bc6dbb93cde55b4cae01",
+      "upstream_commit": "3b4e0ae11f8b92dc0f0e77b74767c17456210fe5",
+      "synced_at": "2026-03-12T00:09:01Z",
+      "notes": "Imported from CEP. Collaborative markdown editor skill. Resynced upstream content while preserving local branding rewrite for ai:systematic attribution in examples.",
+      "upstream_content_hash": "f673b65519826305017e8f9d62114f2ff26fec4a88658e6896699eaf6aa25934",
       "files": ["SKILL.md"],
       "rewrites": [
         {
