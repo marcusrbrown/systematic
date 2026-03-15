@@ -57,7 +57,7 @@ If the feature type is clear, narrow the search to relevant category directories
 
 ### Step 3: Grep Pre-Filter (Critical for Efficiency)
 
-**Use grep to find candidate files BEFORE reading any content.** Run multiple Grep calls in parallel:
+**Use Grep to find candidate files BEFORE reading any content.** Run multiple Grep calls in parallel:
 
 ```bash
 # Search for keyword matches in frontmatter fields (run in PARALLEL, case-insensitive)
@@ -230,7 +230,7 @@ Structure your findings as:
 ## Efficiency Guidelines
 
 **DO:**
-- Use grep to pre-filter files BEFORE reading any content (critical for 100+ files)
+- Use Grep to pre-filter files BEFORE reading any content (critical for 100+ files)
 - Run multiple Grep calls in PARALLEL for different keywords
 - Include `title:` in Grep patterns - often the most descriptive field
 - Use OR patterns for synonyms: `tags:.*(payment|billing|stripe)`
@@ -246,7 +246,7 @@ Structure your findings as:
 - Note when no relevant learnings exist (this is valuable information too)
 
 **DON'T:**
-- Read frontmatter of ALL files (use grep to pre-filter first)
+- Read frontmatter of ALL files (use Grep to pre-filter first)
 - Run Grep calls sequentially when they can be parallel
 - Use only exact keyword matches (include synonyms)
 - Skip the `title:` field in Grep patterns

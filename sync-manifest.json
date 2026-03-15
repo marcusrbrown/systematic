@@ -50,14 +50,30 @@
     "agents/research/learnings-researcher": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/research/learnings-researcher.md",
-      "upstream_commit": "ca57c67c1cb7df1ba348a3388f50969ff04dd974",
-      "synced_at": "2026-03-06T00:14:53Z",
-      "notes": "Imported from CEP. Mechanical conversion + intelligent rewrite: fixed relative path to compound-docs skill schema reference.",
-      "upstream_content_hash": "00d6a822f8374fcdce16123083151f162ef1997fad4cc0aeacd3cda827fc1edd",
+      "upstream_commit": "30852b72937091b0a85c22b7c8c45d513ab49fd1",
+      "synced_at": "2026-03-15T00:10:26Z",
+      "notes": "Resynced from CEP. Preserved intelligent rewrites: model=anthropic/haiku (cost-efficient), mode=subagent (OC requirement), temperature=0.2 (deterministic), /ce:plan → /workflows:plan (command namespace). Upstream changed 'use grep' → 'Use Grep' (tool name capitalization).",
+      "upstream_content_hash": "d4df67e06b136dd270e7ad4f71ae127826c934b5e9efea61dd59bd171aa5e281",
       "rewrites": [
+        {
+          "field": "frontmatter:model",
+          "reason": "Upstream 'inherit' → 'anthropic/haiku' for cost-efficient research tasks"
+        },
+        {
+          "field": "frontmatter:mode",
+          "reason": "Added 'subagent' — required for OpenCode agent invocation"
+        },
+        {
+          "field": "frontmatter:temperature",
+          "reason": "Added '0.2' for deterministic research output"
+        },
         {
           "field": "body:tool-references",
           "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:command-references",
+          "reason": "/ce:plan → /workflows:plan (Systematic command namespace)"
         },
         {
           "field": "body:path-references",
