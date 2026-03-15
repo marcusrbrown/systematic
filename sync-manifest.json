@@ -50,34 +50,30 @@
     "agents/research/learnings-researcher": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/research/learnings-researcher.md",
-      "upstream_commit": "30852b72937091b0a85c22b7c8c45d513ab49fd1",
-      "synced_at": "2026-03-15T00:10:26Z",
-      "notes": "Resynced from CEP. Preserved intelligent rewrites: model=anthropic/haiku (cost-efficient), mode=subagent (OC requirement), temperature=0.2 (deterministic), /ce:plan → /workflows:plan (command namespace). Upstream changed 'use grep' → 'Use Grep' (tool name capitalization).",
+      "upstream_commit": "9150a1ea541db0063f6577e44bcb44bc92ddbf8b",
+      "synced_at": "2026-03-14T00:07:40Z",
+      "notes": "Imported from CEP. Mechanical conversion + intelligent rewrites: examples converted to XML block format, model specification preserved (mode: subagent, temperature: 0.2), /workflows:plan reference updated to /ce:plan.",
       "upstream_content_hash": "d4df67e06b136dd270e7ad4f71ae127826c934b5e9efea61dd59bd171aa5e281",
       "rewrites": [
-        {
-          "field": "frontmatter:model",
-          "reason": "Upstream 'inherit' → 'anthropic/haiku' for cost-efficient research tasks"
-        },
-        {
-          "field": "frontmatter:mode",
-          "reason": "Added 'subagent' — required for OpenCode agent invocation"
-        },
-        {
-          "field": "frontmatter:temperature",
-          "reason": "Added '0.2' for deterministic research output"
-        },
         {
           "field": "body:tool-references",
           "reason": "Converter handled tool name mappings"
         },
         {
-          "field": "body:command-references",
-          "reason": "/ce:plan → /workflows:plan (Systematic command namespace)"
-        },
-        {
           "field": "body:path-references",
           "reason": "Fixed relative link to compound-docs skill yaml-schema.md — replaced with prose reference (relative path not valid from bundled agents directory)"
+        },
+        {
+          "field": "frontmatter:examples",
+          "reason": "Converted examples from inline prose to XML block format at frontmatter level"
+        },
+        {
+          "field": "frontmatter:model",
+          "reason": "Preserved Systematic-specific model settings (mode: subagent, temperature: 0.2) — upstream uses model: inherit"
+        },
+        {
+          "field": "body:integration-points",
+          "reason": "Updated /workflows:plan reference to /ce:plan following upstream rename"
         }
       ],
       "manual_overrides": []
