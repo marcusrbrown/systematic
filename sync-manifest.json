@@ -50,10 +50,10 @@
     "agents/research/learnings-researcher": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/research/learnings-researcher.md",
-      "upstream_commit": "ca57c67c1cb7df1ba348a3388f50969ff04dd974",
-      "synced_at": "2026-03-06T00:14:53Z",
-      "notes": "Imported from CEP. Mechanical conversion + intelligent rewrite: fixed relative path to compound-docs skill schema reference.",
-      "upstream_content_hash": "00d6a822f8374fcdce16123083151f162ef1997fad4cc0aeacd3cda827fc1edd",
+      "upstream_commit": "9150a1ea541db0063f6577e44bcb44bc92ddbf8b",
+      "synced_at": "2026-03-14T00:07:40Z",
+      "notes": "Imported from CEP. Mechanical conversion + intelligent rewrites: examples converted to XML block format, model specification preserved (mode: subagent, temperature: 0.2), /workflows:plan reference updated to /ce:plan.",
+      "upstream_content_hash": "d4df67e06b136dd270e7ad4f71ae127826c934b5e9efea61dd59bd171aa5e281",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -62,6 +62,18 @@
         {
           "field": "body:path-references",
           "reason": "Fixed relative link to compound-docs skill yaml-schema.md — replaced with prose reference (relative path not valid from bundled agents directory)"
+        },
+        {
+          "field": "frontmatter:examples",
+          "reason": "Converted examples from inline prose to XML block format at frontmatter level"
+        },
+        {
+          "field": "frontmatter:model",
+          "reason": "Preserved Systematic-specific model settings (mode: subagent, temperature: 0.2) — upstream uses model: inherit"
+        },
+        {
+          "field": "body:integration-points",
+          "reason": "Updated /workflows:plan reference to /ce:plan following upstream rename"
         }
       ],
       "manual_overrides": []
