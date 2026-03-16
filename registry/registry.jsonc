@@ -19,6 +19,46 @@
         {
           "path": "SKILL.md",
           "target": ".opencode/skills/agent-browser/SKILL.md"
+        },
+        {
+          "path": "references/authentication.md",
+          "target": ".opencode/skills/agent-browser/references/authentication.md"
+        },
+        {
+          "path": "references/commands.md",
+          "target": ".opencode/skills/agent-browser/references/commands.md"
+        },
+        {
+          "path": "references/profiling.md",
+          "target": ".opencode/skills/agent-browser/references/profiling.md"
+        },
+        {
+          "path": "references/proxy-support.md",
+          "target": ".opencode/skills/agent-browser/references/proxy-support.md"
+        },
+        {
+          "path": "references/session-management.md",
+          "target": ".opencode/skills/agent-browser/references/session-management.md"
+        },
+        {
+          "path": "references/snapshot-refs.md",
+          "target": ".opencode/skills/agent-browser/references/snapshot-refs.md"
+        },
+        {
+          "path": "references/video-recording.md",
+          "target": ".opencode/skills/agent-browser/references/video-recording.md"
+        },
+        {
+          "path": "templates/authenticated-session.sh",
+          "target": ".opencode/skills/agent-browser/templates/authenticated-session.sh"
+        },
+        {
+          "path": "templates/capture-workflow.sh",
+          "target": ".opencode/skills/agent-browser/templates/capture-workflow.sh"
+        },
+        {
+          "path": "templates/form-automation.sh",
+          "target": ".opencode/skills/agent-browser/templates/form-automation.sh"
         }
       ]
     },
