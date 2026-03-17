@@ -1,15 +1,15 @@
 ---
 name: create-agent-skills
-description: Expert guidance for creating OpenCode skills and slash commands. Use when working with SKILL.md files, authoring new skills, improving existing skills, creating slash commands, or understanding skill structure and best practices.
+description: Expert guidance for creating Claude Code skills and slash commands. Use when working with SKILL.md files, authoring new skills, improving existing skills, creating slash commands, or understanding skill structure and best practices.
 ---
 
 # Creating Skills & Commands
 
-This skill teaches how to create effective OpenCode skills following the official specification from [code.claude.com/docs/en/skills](https://code.claude.com/docs/en/skills).
+This skill teaches how to create effective Claude Code skills following the official specification from [code.claude.com/docs/en/skills](https://code.claude.com/docs/en/skills).
 
 ## Commands and Skills Are Now The Same Thing
 
-Custom slash commands have been merged into skills. A file at `.opencode/commands/review.md` and a skill at `.opencode/skills/review/SKILL.md` both create `/review` and work the same way. Existing `.opencode/commands/` files keep working. Skills add optional features: a directory for supporting files, frontmatter to control invocation, and automatic context loading.
+Custom slash commands have been merged into skills. A file at `.claude/commands/review.md` and a skill at `.claude/skills/review/SKILL.md` both create `/review` and work the same way. Existing `.claude/commands/` files keep working. Skills add optional features: a directory for supporting files, frontmatter to control invocation, and automatic context loading.
 
 **If a skill and a command share the same name, the skill takes precedence.**
 
@@ -97,22 +97,11 @@ Access individual args: `$ARGUMENTS[0]` or shorthand `$0`, `$1`, `$2`.
 
 ### Dynamic Context Injection
 
-The `` !`command` `` syntax runs shell commands before content is sent to Claude:
+Skills support dynamic context injection: prefix a backtick-wrapped shell command with an exclamation mark, and the preprocessor executes it at load time, replacing the directive with stdout. Write an exclamation mark immediately before the opening backtick of the command you want executed (for example, to inject the current git branch, write the exclamation mark followed by `git branch --show-current` wrapped in backticks).
 
-```yaml
----
-name: pr-summary
-description: Summarize changes in a pull request
-context: fork
-agent: Explore
----
+**Important:** The preprocessor scans the entire SKILL.md as plain text — it does not parse markdown. Directives inside fenced code blocks or inline code spans are still executed. If a skill documents this syntax with literal examples, the preprocessor will attempt to run them, causing load failures. To safely document this feature, describe it in prose (as done here) or place examples in a reference file, which is loaded on-demand by Claude and not preprocessed.
 
-## Context
-- PR diff: !`gh pr diff`
-- Changed files: !`gh pr diff --name-only`
-
-Summarize this pull request...
-```
+For a concrete example of dynamic context injection in a skill, see [official-spec.md](references/official-spec.md) § "Dynamic Context Injection".
 
 ### Running in a Subagent
 
@@ -273,3 +262,4 @@ For detailed guidance, see:
 
 - [Extend Claude with skills - Official Docs](https://code.claude.com/docs/en/skills)
 - [GitHub - anthropics/skills](https://github.com/anthropics/skills)
+

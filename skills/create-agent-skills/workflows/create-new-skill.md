@@ -2,7 +2,7 @@
 
 ## Interaction Method
 
-If `question tool` is available, use it for all prompts below.
+If `question` is available, use it for all prompts below.
 
 If not, present each question as a numbered list and wait for a reply before proceeding to the next step. For multiSelect questions, accept comma-separated numbers (e.g. `1, 3`). Never skip or auto-configure.
 
@@ -24,7 +24,7 @@ If not, present each question as a numbered list and wait for a reply before pro
 **If user just invoked skill without context:**
 → Ask what they want to build
 
-### Using question tool
+### Using question
 
 Ask 2-4 domain-specific questions based on actual gaps. Each question should:
 - Have specific options with descriptions
@@ -48,7 +48,7 @@ Options:
 
 ## Step 2: Research Trigger (If External API)
 
-**When external service detected**, ask using question tool:
+**When external service detected**, ask using question:
 "This involves [service name] API. Would you like me to research current endpoints and patterns before building?"
 
 Options:

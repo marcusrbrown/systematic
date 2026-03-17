@@ -541,7 +541,7 @@ For complex multi-step workflows, provide a checklist Claude can copy and track 
 Copy this checklist and check off items as you complete them:
 
 ```
-Task Progress:
+task Progress:
 - [ ] Step 1: Analyze the form (run analyze_form.py)
 - [ ] Step 2: Create field mapping (edit fields.json)
 - [ ] Step 3: Validate mapping (run validate_fields.py)

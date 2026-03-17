@@ -132,3 +132,4 @@ Based on Every's style guide, pay special attention to:
 - Word usage (fewer vs. less, they vs. them)
 - Company references (singular "it", teams as plural "they")
 - Job title capitalization
+

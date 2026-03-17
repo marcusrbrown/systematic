@@ -2,7 +2,7 @@
 
 ## Interaction Method
 
-If `question tool` is available, use it for all prompts below.
+If `question` is available, use it for all prompts below.
 
 If not, present each question as a numbered list and wait for a reply before proceeding to the next step. Never skip or auto-configure.
 
@@ -15,7 +15,7 @@ If not, present each question as a numbered list and wait for a reply before pro
 <process>
 ## Step 1: Select the Skill
 
-**DO NOT use question tool** - there may be many skills.
+**DO NOT use question** - there may be many skills.
 
 ```bash
 ls ~/.config/opencode/skills/
@@ -40,7 +40,7 @@ Report current structure to user.
 
 ## Step 3: Gather Workflow Requirements
 
-Ask using question tool or direct question:
+Ask using question or direct question:
 - What should this workflow do?
 - When would someone use it vs existing workflows?
 - What references would it need?
