@@ -1,13 +1,13 @@
 ---
 name: report-bug
-description: Report a bug in the Systematic plugin
+description: Report a bug in the compound-engineering plugin
 argument-hint: '[optional: brief description of the bug]'
 disable-model-invocation: true
 ---
 
-# Report a Systematic Plugin Bug
+# Report a Compounding Engineering Plugin Bug
 
-Report bugs encountered while using the Systematic plugin. This command gathers structured information and creates a GitHub issue for the maintainer.
+Report bugs encountered while using the compound-engineering plugin. This command gathers structured information and creates a GitHub issue for the maintainer.
 
 ## Step 1: Gather Bug Information
 
@@ -42,10 +42,10 @@ Use the question tool to collect the following information:
 Automatically gather:
 ```bash
 # Get plugin version
-cat ~/.config/opencode/plugins/installed_plugins.json 2>/dev/null | grep -A5 "systematic" | head -10 || echo "Plugin info not found"
+cat ~/.config/opencode/plugins/installed_plugins.json 2>/dev/null | grep -A5 "compound-engineering" | head -10 || echo "Plugin info not found"
 
 # Get OpenCode version
-opencode --version 2>/dev/null || echo "OpenCode CLI version unknown"
+claude --version 2>/dev/null || echo "Claude CLI version unknown"
 
 # Get OS info
 uname -a
@@ -64,7 +64,7 @@ Create a well-structured bug report with:
 ## Environment
 
 - **Plugin Version:** [from installed_plugins.json]
-- **OpenCode Version:** [from opencode --version]
+- **OpenCode Version:** [from claude --version]
 - **OS:** [from uname]
 
 ## What Happened
@@ -101,17 +101,17 @@ Use the GitHub CLI to create the issue:
 
 ```bash
 gh issue create \
-  --repo marcusrbrown/systematic \
-  --title "[systematic] Bug: [Brief description]" \
+  --repo EveryInc/compound-engineering-plugin \
+  --title "[compound-engineering] Bug: [Brief description]" \
   --body "[Formatted bug report from Step 3]" \
-  --label "bug,systematic"
+  --label "bug,compound-engineering"
 ```
 
 **Note:** If labels don't exist, create without labels:
 ```bash
 gh issue create \
-  --repo marcusrbrown/systematic \
-  --title "[systematic] Bug: [Brief description]" \
+  --repo EveryInc/compound-engineering-plugin \
+  --title "[compound-engineering] Bug: [Brief description]" \
   --body "[Formatted bug report]"
 ```
 
@@ -127,10 +127,10 @@ After the issue is created:
 ```
 ✅ Bug report submitted successfully!
 
-Issue: https://github.com/marcusrbrown/systematic/issues/[NUMBER]
-Title: [systematic] Bug: [description]
+Issue: https://github.com/EveryInc/compound-engineering-plugin/issues/[NUMBER]
+Title: [compound-engineering] Bug: [description]
 
-Thank you for helping improve the Systematic plugin!
+Thank you for helping improve the compound-engineering plugin!
 The maintainer will review your report and respond as soon as possible.
 ```
 
@@ -149,3 +149,4 @@ This command does NOT collect:
 - File paths beyond basic OS info
 
 Only technical information about the bug is included in the report.
+

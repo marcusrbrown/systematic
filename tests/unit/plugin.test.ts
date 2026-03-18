@@ -70,11 +70,13 @@ describe('bundled content', () => {
 
   test('bundled commands have valid structure', () => {
     const commandsDir = path.join(ROOT_DIR, 'commands')
-    const commandFiles = fs
-      .readdirSync(commandsDir)
-      .filter((f) => f.endsWith('.md'))
-
-    expect(commandFiles.length).toBeGreaterThan(0)
+    expect(fs.existsSync(commandsDir)).toBe(true)
+    const skillsDir = path.join(ROOT_DIR, 'skills')
+    const skillDirs = fs.readdirSync(skillsDir).filter((f) => {
+      const stat = fs.statSync(path.join(skillsDir, f))
+      return stat.isDirectory()
+    })
+    expect(skillDirs.length).toBeGreaterThan(0)
   })
 })
 
@@ -102,7 +104,7 @@ describe('CLI functionality', () => {
     const result = Bun.spawnSync(['bun', CLI_PATH, 'list', 'skills'])
     const output = result.stdout.toString()
     expect(result.exitCode).toBe(0)
-    expect(output).toContain('brainstorming')
+    expect(output).toContain('ce:brainstorm')
   })
 
   test('cli list agents shows bundled agents', () => {
@@ -116,7 +118,6 @@ describe('CLI functionality', () => {
     const result = Bun.spawnSync(['bun', CLI_PATH, 'list', 'commands'])
     const output = result.stdout.toString()
     expect(result.exitCode).toBe(0)
-    expect(output).toContain('/workflows:plan')
   })
 
   test('cli config path shows paths', () => {

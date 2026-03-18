@@ -22,7 +22,7 @@ Custom slash commands have been merged into skills. A file at `.opencode/command
 
 **Use a skill directory** (`skills/name/SKILL.md`) when:
 - Need supporting reference files, scripts, or templates
-- Background knowledge Claude should auto-load
+- Background knowledge OpenCode should auto-load
 - Complex enough to benefit from progressive disclosure
 
 Both use identical YAML frontmatter and markdown content format.
@@ -56,18 +56,18 @@ All fields are optional. Only `description` is recommended.
 | Field | Required | Description |
 |-------|----------|-------------|
 | `name` | No | Display name. Lowercase letters, numbers, hyphens (max 64 chars). Defaults to directory name. |
-| `description` | Recommended | What it does AND when to use it. Claude uses this for auto-discovery. Max 1024 chars. |
+| `description` | Recommended | What it does AND when to use it. OpenCode uses this for auto-discovery. Max 1024 chars. |
 | `argument-hint` | No | Hint shown during autocomplete. Example: `[issue-number]` |
-| `disable-model-invocation` | No | Set `true` to prevent Claude auto-loading. Use for manual workflows like `/deploy`, `/commit`. Default: `false`. |
+| `disable-model-invocation` | No | Set `true` to prevent OpenCode auto-loading. Use for manual workflows like `/deploy`, `/commit`. Default: `false`. |
 | `user-invocable` | No | Set `false` to hide from `/` menu. Use for background knowledge. Default: `true`. |
-| `allowed-tools` | No | Tools Claude can use without permission prompts. Example: `Read, Bash(git *)` |
+| `allowed-tools` | No | Tools OpenCode can use without permission prompts. Example: `Read, Bash(git *)` |
 | `model` | No | Model to use. Options: `haiku`, `sonnet`, `opus`. |
 | `context` | No | Set `fork` to run in isolated subagent context. |
 | `agent` | No | Subagent type when `context: fork`. Options: `Explore`, `Plan`, `general-purpose`, or custom agent name. |
 
 ### Invocation Control
 
-| Frontmatter | User can invoke | Claude can invoke | When loaded |
+| Frontmatter | User can invoke | OpenCode can invoke | When loaded |
 |-------------|----------------|-------------------|-------------|
 | (default) | Yes | Yes | Description always in context, full content loads when invoked |
 | `disable-model-invocation: true` | Yes | No | Description not in context, loads only when user invokes |
@@ -262,3 +262,4 @@ For detailed guidance, see:
 
 - [Extend Claude with skills - Official Docs](https://code.claude.com/docs/en/skills)
 - [GitHub - anthropics/skills](https://github.com/anthropics/skills)
+

@@ -1,5 +1,5 @@
 ---
-name: ce-review
+name: ce:review
 description: Perform exhaustive code reviews using multi-agent analysis, ultra-thinking, and worktrees
 argument-hint: '[PR number, GitHub URL, branch name, or latest] [--serial]'
 ---
@@ -53,7 +53,8 @@ Ensure that the code is ready for analysis (either in worktree or on current bra
 <protected_artifacts>
 The following paths are compound-engineering pipeline artifacts and must never be flagged for deletion, removal, or gitignore by any review agent:
 
-- `docs/plans/*.md` — Plan files created by `/ce:plan`. These are living documents that track implementation progress (checkboxes are checked off by `/ce:work`).
+- `docs/brainstorms/*-requirements.md` — Requirements documents created by `/systematic:ce-brainstorm`. These are the product-definition artifacts that planning depends on.
+- `docs/plans/*.md` — Plan files created by `/systematic:ce-plan`. These are living documents that track implementation progress (checkboxes are checked off by `/systematic:ce-work`).
 - `docs/solutions/*.md` — Solution documents created during the pipeline.
 
 If a review agent flags any file in these directories for cleanup or removal, discard that finding during synthesis. Do not create a todo for it.
@@ -253,7 +254,7 @@ Remove duplicates, prioritize by severity and impact.
 
 - [ ] Collect findings from all parallel agents
 - [ ] Surface learnings-researcher results: if past solutions are relevant, flag them as "Known Pattern" with links to docs/solutions/ files
-- [ ] Discard any findings that recommend deleting or gitignoring files in `docs/plans/` or `docs/solutions/` (see Protected Artifacts above)
+- [ ] Discard any findings that recommend deleting or gitignoring files in `docs/brainstorms/`, `docs/plans/`, or `docs/solutions/` (see Protected Artifacts above)
 - [ ] Categorize by type: security, performance, architecture, quality, etc.
 - [ ] Assign severity levels: 🔴 CRITICAL (P1), 🟡 IMPORTANT (P2), 🔵 NICE-TO-HAVE (P3)
 - [ ] Remove duplicate or overlapping findings
@@ -278,9 +279,9 @@ Remove duplicates, prioritize by severity and impact.
 
 ```bash
 # Launch multiple finding-creator agents in parallel
-task({) - Create todos for first finding
-task({) - Create todos for second finding
-task({) - Create todos for third finding
+Task() - Create todos for first finding
+Task() - Create todos for second finding
+Task() - Create todos for third finding
 etc. for each finding.
 ```
 

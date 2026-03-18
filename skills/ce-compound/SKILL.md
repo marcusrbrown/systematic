@@ -1,5 +1,5 @@
 ---
-name: ce-compound
+name: ce:compound
 description: Document a recently solved problem to compound your team's knowledge
 argument-hint: '[optional: brief context about the fix]'
 ---
@@ -17,45 +17,15 @@ Captures problem solutions while context is fresh, creating structured documenta
 ## Usage
 
 ```bash
-/ce:compound                    # Document the most recent fix
-/ce:compound [brief context]    # Provide additional context hint
+/systematic:ce-compound                    # Document the most recent fix
+/systematic:ce-compound [brief context]    # Provide additional context hint
 ```
 
-## Execution Strategy: Context-Aware Orchestration
+## Execution Strategy
 
-### Phase 0: Context Budget Check
+**Always run full mode by default.** Proceed directly to Phase 1 unless the user explicitly requests compact-safe mode (e.g., `/systematic:ce-compound --compact` or "use compact mode").
 
-<critical_requirement>
-**Run this check BEFORE launching any subagents.**
-
-The /compound command is token-heavy - it launches 5 parallel subagents that collectively consume ~10k tokens of context. Running near context limits risks compaction mid-compound, which degrades output quality significantly.
-</critical_requirement>
-
-Before proceeding, the orchestrator MUST:
-
-1. **Assess context usage**: Check how long the current conversation has been running. If there has been significant back-and-forth (many tool calls, large file reads, extensive debugging), context is likely constrained.
-
-2. **Warn the user**:
-   ```
-   ⚠️ Context Budget Check
-
-   /compound launches 5 parallel subagents (~10k tokens). Long conversations
-   risk compaction mid-compound, which degrades documentation quality.
-
-   Tip: For best results, run /compound early in a session - right after
-   verifying a fix, before continuing other work.
-   ```
-
-3. **Offer the user a choice**:
-   ```
-   How would you like to proceed?
-
-   1. Full compound (5 parallel subagents, ~10k tokens) - best quality
-   2. Compact-safe mode (single pass, ~2k tokens) - safe near context limits
-   ```
-
-4. **If the user picks option 1** (or confirms full mode): proceed to Phase 1 below.
-5. **If the user picks option 2** (or requests compact-safe): skip to the **Compact-Safe Mode** section below.
+Compact-safe mode exists as a lightweight alternative — see the **Compact-Safe Mode** section below. It's there if the user wants it, not something to push.
 
 ---
 
@@ -89,7 +59,8 @@ Launch these subagents IN PARALLEL. Each returns text data to the orchestrator.
    - Searches `docs/solutions/` for related documentation
    - Identifies cross-references and links
    - Finds related GitHub issues
-   - Returns: Links and relationships
+   - Flags any related learning or pattern docs that may now be stale, contradicted, or overly broad
+   - Returns: Links, relationships, and any refresh candidates
 
 #### 4. **Prevention Strategist**
    - Develops prevention strategies
@@ -120,6 +91,53 @@ The orchestrating agent (main conversation) performs these steps:
 5. Write the SINGLE final file: `docs/solutions/[category]/[filename].md`
 
 </sequential_tasks>
+
+### Phase 2.5: Selective Refresh Check
+
+After writing the new learning, decide whether this new solution is evidence that older docs should be refreshed.
+
+`ce:compound-refresh` is **not** a default follow-up. Use it selectively when the new learning suggests an older learning or pattern doc may now be inaccurate.
+
+It makes sense to invoke `ce:compound-refresh` when one or more of these are true:
+
+1. A related learning or pattern doc recommends an approach that the new fix now contradicts
+2. The new fix clearly supersedes an older documented solution
+3. The current work involved a refactor, migration, rename, or dependency upgrade that likely invalidated references in older docs
+4. A pattern doc now looks overly broad, outdated, or no longer supported by the refreshed reality
+5. The Related Docs Finder surfaced high-confidence refresh candidates in the same problem space
+
+It does **not** make sense to invoke `ce:compound-refresh` when:
+
+1. No related docs were found
+2. Related docs still appear consistent with the new learning
+3. The overlap is superficial and does not change prior guidance
+4. Refresh would require a broad historical review with weak evidence
+
+Use these rules:
+
+- If there is **one obvious stale candidate**, invoke `ce:compound-refresh` with a narrow scope hint after the new learning is written
+- If there are **multiple candidates in the same area**, ask the user whether to run a targeted refresh for that module, category, or pattern set
+- If context is already tight or you are in compact-safe mode, do not expand into a broad refresh automatically; instead recommend `ce:compound-refresh` as the next step with a scope hint
+
+When invoking or recommending `ce:compound-refresh`, be explicit about the argument to pass. Prefer the narrowest useful scope:
+
+- **Specific file** when one learning or pattern doc is the likely stale artifact
+- **Module or component name** when several related docs may need review
+- **Category name** when the drift is concentrated in one solutions area
+- **Pattern filename or pattern topic** when the stale guidance lives in `docs/solutions/patterns/`
+
+Examples:
+
+- `/systematic:ce-compound-refresh plugin-versioning-requirements`
+- `/systematic:ce-compound-refresh payments`
+- `/systematic:ce-compound-refresh performance-issues`
+- `/systematic:ce-compound-refresh critical-patterns`
+
+A single scope hint may still expand to multiple related docs when the change is cross-cutting within one domain, category, or pattern area.
+
+Do not invoke `ce:compound-refresh` without an argument unless the user explicitly wants a broad sweep.
+
+Always capture the new learning first. Refresh is a targeted maintenance follow-up, not a prerequisite for documentation.
 
 ### Phase 3: Optional Enhancement
 
@@ -172,6 +190,8 @@ re-run /compound in a fresh session.
 ```
 
 **No subagents are launched. No parallel tasks. One file written.**
+
+In compact-safe mode, only suggest `ce:compound-refresh` if there is an obvious narrow refresh target. Do not broaden into a large refresh sweep from a compact-safe session.
 
 ---
 
@@ -279,7 +299,7 @@ Build → Test → Find Issue → Research → Improve → Document → Validate
 
 <auto_invoke> <trigger_phrases> - "that worked" - "it's fixed" - "working now" - "problem solved" </trigger_phrases>
 
-<manual_override> Use /ce:compound [context] to document immediately without waiting for auto-detection. </manual_override> </auto_invoke>
+<manual_override> Use /systematic:ce-compound [context] to document immediately without waiting for auto-detection. </manual_override> </auto_invoke>
 
 ## Routes To
 
@@ -307,11 +327,11 @@ Based on problem type, these agents can enhance documentation:
 
 ### When to Invoke
 - **Auto-triggered** (optional): Agents can run post-documentation for enhancement
-- **Manual trigger**: User can invoke agents after /ce:compound completes for deeper review
+- **Manual trigger**: User can invoke agents after /systematic:ce-compound completes for deeper review
 - **Customize agents**: Edit `compound-engineering.local.md` or invoke the `setup` skill to configure which review agents are used across all workflows
 
 ## Related Commands
 
 - `/research [topic]` - Deep investigation (searches docs/solutions/ for patterns)
-- `/ce:plan` - Planning workflow (references documented solutions)
+- `/systematic:ce-plan` - Planning workflow (references documented solutions)
 
