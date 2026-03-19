@@ -68,13 +68,11 @@ describe('bundled content', () => {
     expect(agentFiles.length).toBeGreaterThan(0)
   })
 
-  test('bundled commands have valid structure', () => {
+  test('bundled commands directory exists (commands moved to skills)', () => {
+    // Upstream restructured: commands moved to skills (ce:*, workflows:*)
+    // Keep commands directory for any project-level commands
     const commandsDir = path.join(ROOT_DIR, 'commands')
-    const commandFiles = fs
-      .readdirSync(commandsDir)
-      .filter((f) => f.endsWith('.md'))
-
-    expect(commandFiles.length).toBeGreaterThan(0)
+    expect(fs.existsSync(commandsDir)).toBe(true)
   })
 })
 
@@ -102,7 +100,8 @@ describe('CLI functionality', () => {
     const result = Bun.spawnSync(['bun', CLI_PATH, 'list', 'skills'])
     const output = result.stdout.toString()
     expect(result.exitCode).toBe(0)
-    expect(output).toContain('brainstorming')
+    // Upstream restructured: brainstorming -> ce:brainstorm
+    expect(output).toContain('ce:brainstorm')
   })
 
   test('cli list agents shows bundled agents', () => {
@@ -112,11 +111,12 @@ describe('CLI functionality', () => {
     expect(output).toContain('architecture-strategist')
   })
 
-  test('cli list commands shows bundled commands', () => {
+  test('cli list commands shows no bundled commands (moved to skills)', () => {
+    // Upstream restructured: commands became skills (ce:*, workflows:*)
     const result = Bun.spawnSync(['bun', CLI_PATH, 'list', 'commands'])
     const output = result.stdout.toString()
     expect(result.exitCode).toBe(0)
-    expect(output).toContain('/workflows:plan')
+    expect(output).toContain('No commands found')
   })
 
   test('cli config path shows paths', () => {

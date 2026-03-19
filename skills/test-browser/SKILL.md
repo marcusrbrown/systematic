@@ -133,8 +133,9 @@ If the user passed a port number (e.g., `/test-browser 5000` or `/test-browser -
 
 **Priority 2: AGENTS.md / project instructions**
 ```bash
-# Check AGENTS.md for port references
+# Check AGENTS.md first for port references, then CLAUDE.md as compatibility fallback
 grep -Eio '(port\s*[:=]\s*|localhost:)([0-9]{4,5})' AGENTS.md 2>/dev/null | grep -Eo '[0-9]{4,5}' | head -1
+grep -Eio '(port\s*[:=]\s*|localhost:)([0-9]{4,5})' CLAUDE.md 2>/dev/null | grep -Eo '[0-9]{4,5}' | head -1
 ```
 
 **Priority 3: package.json scripts**
@@ -159,6 +160,9 @@ Store the result in a `PORT` variable for use in all subsequent steps.
 PORT="${EXPLICIT_PORT:-}"
 if [ -z "$PORT" ]; then
   PORT=$(grep -Eio '(port\s*[:=]\s*|localhost:)([0-9]{4,5})' AGENTS.md 2>/dev/null | grep -Eo '[0-9]{4,5}' | head -1)
+  if [ -z "$PORT" ]; then
+    PORT=$(grep -Eio '(port\s*[:=]\s*|localhost:)([0-9]{4,5})' CLAUDE.md 2>/dev/null | grep -Eo '[0-9]{4,5}' | head -1)
+  fi
 fi
 if [ -z "$PORT" ]; then
   PORT=$(grep -Eo '\-\-port[= ]+[0-9]{4,5}' package.json 2>/dev/null | grep -Eo '[0-9]{4,5}' | head -1)
