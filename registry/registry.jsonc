@@ -130,17 +130,6 @@
       ]
     },
     {
-      "name": "brainstorming",
-      "type": "ocx:skill",
-      "description": "This skill should be used before implementing features, building components, or making changes. It guides exploring user intent, approaches, and design decisions before planning. Triggers on \"let's brainstorm\", \"help me think through\", \"what should we build\", \"explore approaches\", ambiguous feature requests, or when the user's request has multiple valid interpretations that need clarification.",
-      "files": [
-        {
-          "path": "SKILL.md",
-          "target": ".opencode/skills/brainstorming/SKILL.md"
-        }
-      ]
-    },
-    {
       "name": "compound-docs",
       "type": "ocx:skill",
       "description": "Capture solved problems as categorized documentation with YAML frontmatter for fast lookup",
@@ -349,6 +338,359 @@
         {
           "path": "SKILL.md",
           "target": ".opencode/skills/using-systematic/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "agent-native-audit",
+      "type": "ocx:skill",
+      "description": "Comprehensive agent-native architecture review with scored principles for evaluating AI-first design patterns",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/agent-native-audit/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "ce-brainstorm",
+      "type": "ocx:skill",
+      "description": "Explore requirements and approaches through collaborative dialogue before writing a right-sized requirements document and planning implementation",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/ce-brainstorm/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "ce-compound",
+      "type": "ocx:skill",
+      "description": "Document a recently solved problem to compound your team's knowledge",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/ce-compound/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "ce-ideate",
+      "type": "ocx:skill",
+      "description": "Generate and critically evaluate grounded improvement ideas for the current project",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/ce-ideate/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "ce-plan",
+      "type": "ocx:skill",
+      "description": "Transform feature descriptions into well-structured project plans following conventions",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/ce-plan/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "ce-plan-beta",
+      "type": "ocx:skill",
+      "description": "[BETA] Transform feature descriptions or requirements into structured implementation plans grounded in repo patterns and research",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/ce-plan-beta/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "ce-review",
+      "type": "ocx:skill",
+      "description": "Perform exhaustive code reviews using multi-agent analysis, ultra-thinking, and worktrees",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/ce-review/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "ce-work",
+      "type": "ocx:skill",
+      "description": "Execute work plans efficiently while maintaining quality and finishing features",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/ce-work/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "changelog",
+      "type": "ocx:skill",
+      "description": "Create engaging changelogs for recent merges to main branch",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/changelog/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "claude-permissions-optimizer",
+      "type": "ocx:skill",
+      "description": "Optimize Claude Code permissions by finding safe Bash commands from session history and auto-applying them to settings.json",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/claude-permissions-optimizer/SKILL.md"
+        },
+        {
+          "path": "scripts/extract-commands.mjs",
+          "target": ".opencode/skills/claude-permissions-optimizer/scripts/extract-commands.mjs"
+        }
+      ]
+    },
+    {
+      "name": "create-agent-skill",
+      "type": "ocx:skill",
+      "description": "Create a new custom slash command following conventions and best practices",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/create-agent-skill/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "deepen-plan",
+      "type": "ocx:skill",
+      "description": "Enhance a plan with parallel research agents for each section to add depth, best practices, and implementation details",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/deepen-plan/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "deploy-docs",
+      "type": "ocx:skill",
+      "description": "Validate and prepare documentation for GitHub Pages deployment",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/deploy-docs/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "feature-video",
+      "type": "ocx:skill",
+      "description": "Record a video walkthrough of a feature and add it to the PR description",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/feature-video/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "generate_command",
+      "type": "ocx:skill",
+      "description": "Create a new custom slash command following conventions and best practices",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/generate_command/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "heal-skill",
+      "type": "ocx:skill",
+      "description": "Fix incorrect SKILL.md files when a skill has wrong instructions or outdated API references",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/heal-skill/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "lfg",
+      "type": "ocx:skill",
+      "description": "Full autonomous engineering workflow",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/lfg/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "report-bug",
+      "type": "ocx:skill",
+      "description": "Report a bug in the compound-engineering plugin",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/report-bug/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "reproduce-bug",
+      "type": "ocx:skill",
+      "description": "Reproduce and investigate a bug using logs, console inspection, and browser screenshots",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/reproduce-bug/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "resolve-pr-parallel",
+      "type": "ocx:skill",
+      "description": "Resolve all pending PR comments using parallel processing",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/resolve-pr-parallel/SKILL.md"
+        },
+        {
+          "path": "scripts/get-pr-comments",
+          "target": ".opencode/skills/resolve-pr-parallel/scripts/get-pr-comments"
+        },
+        {
+          "path": "scripts/resolve-pr-thread",
+          "target": ".opencode/skills/resolve-pr-parallel/scripts/resolve-pr-thread"
+        }
+      ]
+    },
+    {
+      "name": "resolve_parallel",
+      "type": "ocx:skill",
+      "description": "Resolve all TODO comments using parallel processing",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/resolve_parallel/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "resolve_todo_parallel",
+      "type": "ocx:skill",
+      "description": "Resolve all pending CLI todos using parallel processing",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/resolve_todo_parallel/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "slfg",
+      "type": "ocx:skill",
+      "description": "Full autonomous engineering workflow using swarm mode for parallel execution",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/slfg/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "test-browser",
+      "type": "ocx:skill",
+      "description": "Run browser tests on pages affected by current PR or branch",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/test-browser/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "test-xcode",
+      "type": "ocx:skill",
+      "description": "Build and test iOS apps on simulator using XcodeBuildMCP",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/test-xcode/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "triage",
+      "type": "ocx:skill",
+      "description": "Triage and categorize findings for the CLI todo system",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/triage/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "workflows-brainstorm",
+      "type": "ocx:skill",
+      "description": "[DEPRECATED] Use /ce:brainstorm instead — renamed for clarity",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/workflows-brainstorm/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "workflows-compound",
+      "type": "ocx:skill",
+      "description": "[DEPRECATED] Use /ce:compound instead — renamed for clarity",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/workflows-compound/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "workflows-plan",
+      "type": "ocx:skill",
+      "description": "[DEPRECATED] Use /ce:plan instead — renamed for clarity",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/workflows-plan/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "workflows-review",
+      "type": "ocx:skill",
+      "description": "[DEPRECATED] Use /ce:review instead — renamed for clarity",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/workflows-review/SKILL.md"
+        }
+      ]
+    },
+    {
+      "name": "workflows-work",
+      "type": "ocx:skill",
+      "description": "[DEPRECATED] Use /ce:work instead — renamed for clarity",
+      "files": [
+        {
+          "path": "SKILL.md",
+          "target": ".opencode/skills/workflows-work/SKILL.md"
         }
       ]
     },
@@ -617,120 +959,50 @@
       ]
     },
     {
-      "name": "cmd-agent-native-audit",
-      "type": "ocx:command",
-      "description": "Run comprehensive agent-native architecture review with scored principles",
-      "files": [
-        {
-          "path": "commands/agent-native-audit.md",
-          "target": ".opencode/commands/agent-native-audit.md"
-        }
-      ]
-    },
-    {
-      "name": "cmd-create-agent-skill",
-      "type": "ocx:command",
-      "description": "Create or edit Claude Code skills with expert guidance on structure and best practices",
-      "files": [
-        {
-          "path": "commands/create-agent-skill.md",
-          "target": ".opencode/commands/create-agent-skill.md"
-        }
-      ]
-    },
-    {
-      "name": "cmd-deepen-plan",
-      "type": "ocx:command",
-      "description": "Enhance a plan with parallel research agents for each section to add depth, best practices, and implementation details",
-      "files": [
-        {
-          "path": "commands/deepen-plan.md",
-          "target": ".opencode/commands/deepen-plan.md"
-        }
-      ]
-    },
-    {
-      "name": "cmd-lfg",
-      "type": "ocx:command",
-      "description": "Full autonomous engineering workflow",
-      "files": [
-        {
-          "path": "commands/lfg.md",
-          "target": ".opencode/commands/lfg.md"
-        }
-      ]
-    },
-    {
-      "name": "cmd-brainstorm",
-      "type": "ocx:command",
-      "description": "Explore requirements and approaches through collaborative dialogue before planning implementation",
-      "files": [
-        {
-          "path": "commands/workflows/brainstorm.md",
-          "target": ".opencode/commands/brainstorm.md"
-        }
-      ]
-    },
-    {
-      "name": "cmd-compound",
-      "type": "ocx:command",
-      "description": "Document a recently solved problem to compound your team's knowledge",
-      "files": [
-        {
-          "path": "commands/workflows/compound.md",
-          "target": ".opencode/commands/compound.md"
-        }
-      ]
-    },
-    {
-      "name": "cmd-plan",
-      "type": "ocx:command",
-      "description": "Transform feature descriptions into well-structured project plans following conventions",
-      "files": [
-        {
-          "path": "commands/workflows/plan.md",
-          "target": ".opencode/commands/plan.md"
-        }
-      ]
-    },
-    {
-      "name": "cmd-review",
-      "type": "ocx:command",
-      "description": "Perform exhaustive code reviews using multi-agent analysis, ultra-thinking, and worktrees",
-      "files": [
-        {
-          "path": "commands/workflows/review.md",
-          "target": ".opencode/commands/review.md"
-        }
-      ]
-    },
-    {
-      "name": "cmd-work",
-      "type": "ocx:command",
-      "description": "Execute work plans efficiently while maintaining quality and finishing features",
-      "files": [
-        {
-          "path": "commands/workflows/work.md",
-          "target": ".opencode/commands/work.md"
-        }
-      ]
-    },
-    {
       "name": "skills",
       "type": "ocx:bundle",
       "description": "All Systematic skills",
       "dependencies": [
         "agent-browser",
         "agent-native-architecture",
-        "brainstorming",
+        "agent-native-audit",
+        "ce-brainstorm",
+        "ce-compound",
+        "ce-ideate",
+        "ce-plan",
+        "ce-plan-beta",
+        "ce-review",
+        "ce-work",
+        "changelog",
+        "claude-permissions-optimizer",
         "compound-docs",
+        "create-agent-skill",
         "create-agent-skills",
+        "deepen-plan",
+        "deploy-docs",
         "document-review",
+        "feature-video",
         "file-todos",
         "frontend-design",
+        "generate_command",
         "git-worktree",
-        "orchestrating-swarms",
-        "using-systematic"
+        "heal-skill",
+        "lfg",
+        "report-bug",
+        "reproduce-bug",
+        "resolve-pr-parallel",
+        "resolve_parallel",
+        "resolve_todo_parallel",
+        "slfg",
+        "test-browser",
+        "test-xcode",
+        "triage",
+        "using-systematic",
+        "workflows-brainstorm",
+        "workflows-compound",
+        "workflows-plan",
+        "workflows-review",
+        "workflows-work"
       ],
       "files": []
     },
@@ -763,23 +1035,6 @@
         "agent-lint",
         "agent-pr-comment-resolver",
         "agent-spec-flow-analyzer"
-      ],
-      "files": []
-    },
-    {
-      "name": "commands",
-      "type": "ocx:bundle",
-      "description": "All Systematic commands",
-      "dependencies": [
-        "cmd-agent-native-audit",
-        "cmd-create-agent-skill",
-        "cmd-deepen-plan",
-        "cmd-lfg",
-        "cmd-brainstorm",
-        "cmd-compound",
-        "cmd-plan",
-        "cmd-review",
-        "cmd-work"
       ],
       "files": []
     },
