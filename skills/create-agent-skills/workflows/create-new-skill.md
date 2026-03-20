@@ -2,7 +2,7 @@
 
 ## Interaction Method
 
-If `question tool` is available, use it for all prompts below.
+If `AskUserQuestion` is available, use it for all prompts below.
 
 If not, present each question as a numbered list and wait for a reply before proceeding to the next step. For multiSelect questions, accept comma-separated numbers (e.g. `1, 3`). Never skip or auto-configure.
 
@@ -24,7 +24,7 @@ If not, present each question as a numbered list and wait for a reply before pro
 **If user just invoked skill without context:**
 → Ask what they want to build
 
-### Using question tool
+### Using AskUserQuestion
 
 Ask 2-4 domain-specific questions based on actual gaps. Each question should:
 - Have specific options with descriptions
@@ -48,7 +48,7 @@ Options:
 
 ## Step 2: Research Trigger (If External API)
 
-**When external service detected**, ask using question tool:
+**When external service detected**, ask using AskUserQuestion:
 "This involves [service name] API. Would you like me to research current endpoints and patterns before building?"
 
 Options:
@@ -96,13 +96,13 @@ See references/recommended-structure.md for templates.
 ## Step 4: Create Directory
 
 ```bash
-mkdir -p ~/.config/opencode/skills/{skill-name}
+mkdir -p ~/.opencode/skills/{skill-name}
 # If complex:
-mkdir -p ~/.config/opencode/skills/{skill-name}/workflows
-mkdir -p ~/.config/opencode/skills/{skill-name}/references
+mkdir -p ~/.opencode/skills/{skill-name}/workflows
+mkdir -p ~/.opencode/skills/{skill-name}/references
 # If needed:
-mkdir -p ~/.config/opencode/skills/{skill-name}/templates  # for output structures
-mkdir -p ~/.config/opencode/skills/{skill-name}/scripts    # for reusable code
+mkdir -p ~/.opencode/skills/{skill-name}/templates  # for output structures
+mkdir -p ~/.opencode/skills/{skill-name}/scripts    # for reusable code
 ```
 
 ## Step 5: Write SKILL.md
@@ -160,7 +160,7 @@ Check:
 ## Step 9: Create Slash Command
 
 ```bash
-cat > ~/.config/opencode/commands/{skill-name}.md << 'EOF'
+cat > ~/.opencode/commands/{skill-name}.md << 'EOF'
 ---
 description: {Brief description}
 argument-hint: [{argument hint}]

@@ -54,7 +54,7 @@ Please install the XcodeBuildMCP server first:
 claude mcp add XcodeBuildMCP -- npx xcodebuildmcp@latest
 \`\`\`
 
-Then restart OpenCode and run `/xcode-test` again.
+Then restart Claude Code and run `/xcode-test` again.
 ```
 
 **Do NOT proceed** until XcodeBuildMCP is confirmed working.

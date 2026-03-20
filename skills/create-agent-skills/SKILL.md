@@ -1,15 +1,15 @@
 ---
 name: create-agent-skills
-description: Expert guidance for creating OpenCode skills and slash commands. Use when working with SKILL.md files, authoring new skills, improving existing skills, creating slash commands, or understanding skill structure and best practices.
+description: Expert guidance for creating Claude Code skills and slash commands. Use when working with SKILL.md files, authoring new skills, improving existing skills, creating slash commands, or understanding skill structure and best practices.
 ---
 
 # Creating Skills & Commands
 
-This skill teaches how to create effective OpenCode skills following the official specification from [code.claude.com/docs/en/skills](https://code.claude.com/docs/en/skills).
+This skill teaches how to create effective Claude Code skills following the official specification from [code.claude.com/docs/en/skills](https://code.claude.com/docs/en/skills).
 
 ## Commands and Skills Are Now The Same Thing
 
-Custom slash commands have been merged into skills. A file at `.opencode/commands/review.md` and a skill at `.opencode/skills/review/SKILL.md` both create `/review` and work the same way. Existing `.opencode/commands/` files keep working. Skills add optional features: a directory for supporting files, frontmatter to control invocation, and automatic context loading.
+Custom slash commands have been merged into skills. A file at `.claude/commands/review.md` and a skill at `.claude/skills/review/SKILL.md` both create `/review` and work the same way. Existing `.claude/commands/` files keep working. Skills add optional features: a directory for supporting files, frontmatter to control invocation, and automatic context loading.
 
 **If a skill and a command share the same name, the skill takes precedence.**
 
@@ -262,3 +262,4 @@ For detailed guidance, see:
 
 - [Extend Claude with skills - Official Docs](https://code.claude.com/docs/en/skills)
 - [GitHub - anthropics/skills](https://github.com/anthropics/skills)
+

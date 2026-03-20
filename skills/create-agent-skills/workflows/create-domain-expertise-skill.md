@@ -52,7 +52,7 @@ Get specific: "Python games" or "Python games with Pygame specifically"?
 
 Explain:
 ```
-Domain expertise skills go in: ~/.config/opencode/skills/expertise/{domain-name}/
+Domain expertise skills go in: ~/.opencode/skills/expertise/{domain-name}/
 
 These are comprehensive BUILD skills that:
 - Execute tasks (build, debug, optimize, ship)
@@ -61,7 +61,7 @@ These are comprehensive BUILD skills that:
 - Can be loaded by other skills for domain knowledge
 
 Name suggestion: {suggested-name}
-Location: ~/.config/opencode/skills/expertise/{suggested-name}/
+Location: ~/.opencode/skills/expertise/{suggested-name}/
 ```
 
 Confirm or adjust name.
@@ -499,21 +499,21 @@ Test both use cases:
 
 ```bash
 # Create structure
-mkdir -p ~/.config/opencode/skills/expertise/{domain-name}
-mkdir -p ~/.config/opencode/skills/expertise/{domain-name}/workflows
-mkdir -p ~/.config/opencode/skills/expertise/{domain-name}/references
+mkdir -p ~/.opencode/skills/expertise/{domain-name}
+mkdir -p ~/.opencode/skills/expertise/{domain-name}/workflows
+mkdir -p ~/.opencode/skills/expertise/{domain-name}/references
 
 # Write SKILL.md
 # Write all workflow files
 # Write all reference files
 
 # Verify structure
-ls -R ~/.config/opencode/skills/expertise/{domain-name}
+ls -R ~/.opencode/skills/expertise/{domain-name}
 ```
 
 ## Step 11: Document in create-plans
 
-Update `~/.config/opencode/skills/create-plans/SKILL.md` to reference this new domain:
+Update `~/.opencode/skills/create-plans/SKILL.md` to reference this new domain:
 
 Add to the domain inference table:
 ```markdown
@@ -573,7 +573,7 @@ Domain expertise skill is complete when:
 - [ ] Anti-patterns documented throughout
 - [ ] Full lifecycle covered (build → debug → test → optimize → ship)
 - [ ] Platform-specific considerations included
-- [ ] Located in ~/.config/opencode/skills/expertise/{domain-name}/
+- [ ] Located in ~/.opencode/skills/expertise/{domain-name}/
 - [ ] Referenced in create-plans domain inference table
 - [ ] Passes dual-purpose test: Can be invoked directly AND loaded for knowledge
 - [ ] User can build something professional from scratch through shipping
