@@ -19,8 +19,12 @@ analyzeCommits:
   releaseRules:
     - type: build
       release: patch
-    - type: ci
+    - type: build
+      scope: dev
+      release: false
+    - type: docs
       release: patch
+      scope: readme
     - type: docs
       release: patch
       scope: readme.md
