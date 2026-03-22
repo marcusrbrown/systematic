@@ -133,8 +133,8 @@ agent-browser click @e1 --new-tab     # Click and open in new tab
 agent-browser fill @e2 "text"         # Clear and type text
 agent-browser type @e2 "text"         # Type without clearing
 agent-browser select @e1 "option"     # Select dropdown option
-agent-browser check @e1              # Check checkbox
-agent-browser press Enter            # Press key
+agent-browser check @e1               # Check checkbox
+agent-browser press Enter             # Press key
 agent-browser keyboard type "text"    # Type at current focus (no selector)
 agent-browser keyboard inserttext "text"  # Insert without key events
 agent-browser scroll down 500         # Scroll page
@@ -663,3 +663,4 @@ Use Playwright MCP when:
 - You need deep MCP tool integration
 - You want tool-based responses
 - You're building complex automation
+

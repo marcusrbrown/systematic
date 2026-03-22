@@ -129,17 +129,7 @@
         }
       ]
     },
-    {
-      "name": "brainstorming",
-      "type": "ocx:skill",
-      "description": "This skill should be used before implementing features, building components, or making changes. It guides exploring user intent, approaches, and design decisions before planning. Triggers on \"let's brainstorm\", \"help me think through\", \"what should we build\", \"explore approaches\", ambiguous feature requests, or when the user's request has multiple valid interpretations that need clarification.",
-      "files": [
-        {
-          "path": "SKILL.md",
-          "target": ".opencode/skills/brainstorming/SKILL.md"
-        }
-      ]
-    },
+
     {
       "name": "compound-docs",
       "type": "ocx:skill",
@@ -616,105 +606,7 @@
         }
       ]
     },
-    {
-      "name": "cmd-agent-native-audit",
-      "type": "ocx:command",
-      "description": "Run comprehensive agent-native architecture review with scored principles",
-      "files": [
-        {
-          "path": "commands/agent-native-audit.md",
-          "target": ".opencode/commands/agent-native-audit.md"
-        }
-      ]
-    },
-    {
-      "name": "cmd-create-agent-skill",
-      "type": "ocx:command",
-      "description": "Create or edit Claude Code skills with expert guidance on structure and best practices",
-      "files": [
-        {
-          "path": "commands/create-agent-skill.md",
-          "target": ".opencode/commands/create-agent-skill.md"
-        }
-      ]
-    },
-    {
-      "name": "cmd-deepen-plan",
-      "type": "ocx:command",
-      "description": "Enhance a plan with parallel research agents for each section to add depth, best practices, and implementation details",
-      "files": [
-        {
-          "path": "commands/deepen-plan.md",
-          "target": ".opencode/commands/deepen-plan.md"
-        }
-      ]
-    },
-    {
-      "name": "cmd-lfg",
-      "type": "ocx:command",
-      "description": "Full autonomous engineering workflow",
-      "files": [
-        {
-          "path": "commands/lfg.md",
-          "target": ".opencode/commands/lfg.md"
-        }
-      ]
-    },
-    {
-      "name": "cmd-brainstorm",
-      "type": "ocx:command",
-      "description": "Explore requirements and approaches through collaborative dialogue before planning implementation",
-      "files": [
-        {
-          "path": "commands/workflows/brainstorm.md",
-          "target": ".opencode/commands/brainstorm.md"
-        }
-      ]
-    },
-    {
-      "name": "cmd-compound",
-      "type": "ocx:command",
-      "description": "Document a recently solved problem to compound your team's knowledge",
-      "files": [
-        {
-          "path": "commands/workflows/compound.md",
-          "target": ".opencode/commands/compound.md"
-        }
-      ]
-    },
-    {
-      "name": "cmd-plan",
-      "type": "ocx:command",
-      "description": "Transform feature descriptions into well-structured project plans following conventions",
-      "files": [
-        {
-          "path": "commands/workflows/plan.md",
-          "target": ".opencode/commands/plan.md"
-        }
-      ]
-    },
-    {
-      "name": "cmd-review",
-      "type": "ocx:command",
-      "description": "Perform exhaustive code reviews using multi-agent analysis, ultra-thinking, and worktrees",
-      "files": [
-        {
-          "path": "commands/workflows/review.md",
-          "target": ".opencode/commands/review.md"
-        }
-      ]
-    },
-    {
-      "name": "cmd-work",
-      "type": "ocx:command",
-      "description": "Execute work plans efficiently while maintaining quality and finishing features",
-      "files": [
-        {
-          "path": "commands/workflows/work.md",
-          "target": ".opencode/commands/work.md"
-        }
-      ]
-    },
+
     {
       "name": "skills",
       "type": "ocx:bundle",
@@ -722,7 +614,6 @@
       "dependencies": [
         "agent-browser",
         "agent-native-architecture",
-        "brainstorming",
         "compound-docs",
         "create-agent-skills",
         "document-review",
@@ -763,23 +654,6 @@
         "agent-lint",
         "agent-pr-comment-resolver",
         "agent-spec-flow-analyzer"
-      ],
-      "files": []
-    },
-    {
-      "name": "commands",
-      "type": "ocx:bundle",
-      "description": "All Systematic commands",
-      "dependencies": [
-        "cmd-agent-native-audit",
-        "cmd-create-agent-skill",
-        "cmd-deepen-plan",
-        "cmd-lfg",
-        "cmd-brainstorm",
-        "cmd-compound",
-        "cmd-plan",
-        "cmd-review",
-        "cmd-work"
       ],
       "files": []
     },

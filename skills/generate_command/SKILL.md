@@ -22,7 +22,7 @@ Create a new skill in `.opencode/skills/` for the requested task.
 
 **Development:**
 - Bash - run commands (git, tests, linters)
-- task - launch specialized agents for complex tasks
+- Task - launch specialized agents for complex tasks
 - todowrite - track progress with todo lists
 
 **Web & APIs:**
@@ -114,7 +114,7 @@ Implement #$ARGUMENTS following these steps:
 3. Implement
    - Follow existing code patterns (reference specific files)
    - Write tests first if doing TDD
-   - Ensure code follows AGENTS.md conventions
+   - Ensure code follows CLAUDE.md conventions
 
 4. Verify
    - Run tests: `bin/rails test`
@@ -161,3 +161,4 @@ Details about what to do.
 - [ ] Expected outcome 1
 - [ ] Expected outcome 2
 ```
+
