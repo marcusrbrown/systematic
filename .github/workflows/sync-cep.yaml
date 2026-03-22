@@ -157,7 +157,7 @@ jobs:
           bun test
 
       - name: Run Sync Bot
-        uses: fro-bot/agent@09bb23973fd21506ce8ee98641addc76903610ac # v0.30.10
+        uses: fro-bot/agent@4c15c8f02a43dc7fe042da6f4b16b6c0eb0476f1 # v0.31.1
         env:
           OPENCODE_PROMPT_ARTIFACT: 'true'
         with:
