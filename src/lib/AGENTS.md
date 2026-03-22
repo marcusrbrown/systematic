@@ -37,7 +37,7 @@ All discovery follows same pattern: `dir → walkDir() → find files → parseF
 |--------|-------------|------|
 | `converter.ts` | `convertContent`, `convertFileWithCache`, `clearConverterCache` | CEP→OpenCode transforms (tool names, models, body refs) |
 | `skill-loader.ts` | `loadSkill`, `LoadedSkill`, `SKILL_PREFIX` | Loads + wraps skill content in XML template |
-| `validation.ts` | `isAgentMode`, `isPermissionSetting`, `buildPermissionObject`, `normalizePermission`, `extractString`, `extractBoolean` | Agent config extraction + type guards + safe value extraction |
+| `validation.ts` | `isAgentMode`, `isPermissionSetting`, `normalizePermission`, `extractString`, `extractBoolean` | Agent config extraction + type guards + safe value extraction |
 
 ### Config & Integration Layer
 
@@ -70,7 +70,8 @@ CEP→OpenCode: tool names (`TodoWrite`→`todowrite`, `Task`→`task`, `AskUser
 
 ## Notes
 
-- `parseFrontmatter` is most-imported function (7 references across codebase)
+- `parseFrontmatter` is most-imported function (16 references across codebase)
+- `walkDir` is the foundation layer (7 references — used by all three discovery modules)
 - `findSkillsInDir` is highest-centrality discovery function (6 references across 3 modules)
 - `SKILL_PREFIX` = `'systematic:'` — all skills registered with this prefix
 - `parseFrontmatter` is regex-based (not a YAML library for delimiter detection)

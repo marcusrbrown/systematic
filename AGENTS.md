@@ -1,14 +1,14 @@
 # AGENTS.md - Coding Agent Guidelines for Systematic
 
-**Generated:** 2026-02-10 | **Commit:** b58d17c | **Branch:** feat/import-cep-workflow-commands
+**Generated:** 2026-03-22 | **Commit:** 500b805 | **Branch:** main
 
 ## Overview
 
-OpenCode plugin providing structured engineering workflows. Ported from the [Compound Engineering Plugin (CEP)](https://github.com/EveryInc/compound-engineering-plugin) for Claude Code, with improvements and OpenCode SDK integration. Converts CC-format agents, skills, and commands to OpenCode format. Tracks upstream provenance via `sync-manifest.json`.
+OpenCode plugin providing structured engineering workflows. Ported from the [Compound Engineering Plugin (CEP)](https://github.com/EveryInc/compound-engineering-plugin) for Claude Code, with improvements and OpenCode SDK integration. Converts CC-format agents and skills to OpenCode format. Tracks upstream provenance via `sync-manifest.json`.
 
 **Two distinct parts:**
 1. **TypeScript source** (`src/`) — Plugin logic, tools, config handling
-2. **Bundled assets** (`skills/`, `agents/`, `commands/`) — Markdown content shipped with npm package
+2. **Bundled assets** (`skills/`, `agents/`) — Markdown content shipped with npm package
 
 ## Commands
 
@@ -17,12 +17,15 @@ bun install              # Install deps
 bun run build            # Build to dist/
 bun run typecheck        # Type check (strict)
 bun run lint             # Biome linter
-bun test tests/unit      # Unit tests (11 files)
+bun test tests/unit      # Unit tests (13 files)
 bun test tests/integration  # Integration tests (2 files)
 bun test                 # All tests
 bun test --filter "pattern"  # Filter tests
 bun run docs:dev         # Local docs site
 bun run docs:build       # Build docs (generates reference + builds Starlight)
+bun run docs:generate    # Sync reference content from bundled assets
+bun run registry:build   # Build OCX registry
+bun run registry:validate  # Validate registry without building
 ```
 
 ## Stack
@@ -43,18 +46,21 @@ systematic/
 │   ├── index.ts          # Plugin entry (SystematicPlugin)
 │   ├── cli.ts            # CLI entry (list/convert/config commands)
 │   └── lib/              # 13 core modules (see src/lib/AGENTS.md)
-├── skills/               # 11 bundled skills (SKILL.md format)
-├── agents/               # 24 bundled agents (4 categories: design/research/review/workflow)
-├── commands/             # 9 bundled commands (5 workflow + 4 utility)
-│   └── workflows/        # brainstorm, compound, plan, review, work
+├── skills/               # 50 bundled skills (SKILL.md format)
+├── agents/               # 29 bundled agents (5 categories: design/docs/research/review/workflow)
+├── commands/             # Empty (.gitkeep) — all commands converted to skills in CEP sync
 ├── docs/                 # Starlight docs workspace (see docs/AGENTS.md)
 │   ├── scripts/          # Content generation from bundled assets
 │   └── src/content/      # Manual guides + generated reference
+├── registry/             # OCX registry config + profiles (omo, standalone)
+├── scripts/              # Build scripts (build-registry.ts, check-cep-upstream.ts)
+├── assets/               # Static assets (banner SVG)
 ├── tests/
-│   ├── unit/             # 11 test files
+│   ├── unit/             # 13 test files
 │   └── integration/      # 2 test files
-├── .opencode/            # Project-specific OC config + skills
-│   └── skills/           # Project-only skills (convert-cc-defs)
+├── .opencode/            # Project-specific OC config + skills + commands
+│   ├── skills/           # Project-only skills (convert-cc-defs)
+│   └── commands/         # Project-only commands (generate-readme, sync-cep)
 ├── sync-manifest.json    # Upstream provenance tracking
 └── dist/                 # Build output
 ```
@@ -78,8 +84,9 @@ systematic/
 | CLI commands | `src/cli.ts` |
 | Add new skill | `skills/<name>/SKILL.md` |
 | Add new agent | `agents/<category>/<name>.md` |
-| Add new command | `commands/<name>.md` |
 | Import from CEP upstream | `.opencode/skills/convert-cc-defs/SKILL.md` |
+| OCX registry building | `scripts/build-registry.ts` |
+| Upstream sync checking | `scripts/check-cep-upstream.ts` |
 | Docs content generation | `docs/scripts/transform-content.ts` |
 | Docs site config | `docs/astro.config.mjs` |
 
@@ -87,23 +94,23 @@ systematic/
 
 | Symbol | Type | Location | Refs | Role |
 |--------|------|----------|------|------|
-| `SystematicPlugin` | export | src/index.ts:30 | 2 | Main plugin factory |
-| `createConfigHandler` | fn | src/lib/config-handler.ts:207 | 3 | Config hook — merges bundled assets |
+| `SystematicPlugin` | export | src/index.ts:47 | 2 | Main plugin factory |
+| `createConfigHandler` | fn | src/lib/config-handler.ts:215 | 3 | Config hook — merges bundled assets |
 | `createSkillTool` | fn | src/lib/skill-tool.ts:87 | 3 | systematic_skill tool factory |
 | `getBootstrapContent` | fn | src/lib/bootstrap.ts:32 | 3 | System prompt injection |
 | `convertContent` | fn | src/lib/converter.ts:371 | 4 | CEP→OpenCode body conversion |
 | `convertFileWithCache` | fn | src/lib/converter.ts:411 | 6 | Cached file conversion (mtime invalidation) |
 | `findSkillsInDir` | fn | src/lib/skills.ts:90 | 6 | Skill discovery (highest centrality) |
-| `findAgentsInDir` | fn | src/lib/agents.ts:47 | 4 | Agent discovery (category from subdir) |
+| `findAgentsInDir` | fn | src/lib/agents.ts:49 | 4 | Agent discovery (category from subdir) |
 | `findCommandsInDir` | fn | src/lib/commands.ts:27 | 4 | Command discovery |
 | `loadConfig` | fn | src/lib/config.ts:47 | 5 | JSONC config loading + 3-source merge |
-| `parseFrontmatter` | fn | src/lib/frontmatter.ts:19 | 7 | YAML frontmatter extraction (regex-based) |
-| `walkDir` | fn | src/lib/walk-dir.ts:17 | 3 | Recursive dir walker (foundation layer) |
-| `loadSkill` | fn | src/lib/skill-loader.ts:31 | 2 | Skill content loading + XML wrapping |
-| `readManifest` | fn | src/lib/manifest.ts:116 | 1 | Read + validate sync-manifest.json |
-| `validateManifest` | fn | src/lib/manifest.ts:100 | 2 | Schema validation for manifest data |
-| `writeManifest` | fn | src/lib/manifest.ts:140 | 1 | Write manifest with sorted keys |
-| `findStaleEntries` | fn | src/lib/manifest.ts:145 | 1 | Detect definitions missing from filesystem |
+| `parseFrontmatter` | fn | src/lib/frontmatter.ts:19 | 16 | YAML frontmatter extraction — most-imported function |
+| `walkDir` | fn | src/lib/walk-dir.ts:17 | 7 | Recursive dir walker (foundation layer) |
+| `loadSkill` | fn | src/lib/skill-loader.ts:63 | 2 | Skill content loading + XML wrapping |
+| `readManifest` | fn | src/lib/manifest.ts:128 | 1 | Read + validate sync-manifest.json |
+| `validateManifest` | fn | src/lib/manifest.ts:106 | 2 | Schema validation for manifest data |
+| `writeManifest` | fn | src/lib/manifest.ts:152 | 1 | Write manifest with sorted keys |
+| `findStaleEntries` | fn | src/lib/manifest.ts:157 | 1 | Detect definitions missing from filesystem |
 
 ## Conventions
 
@@ -148,6 +155,8 @@ All disabled lists merge (union), bootstrap config shallow-merges.
 
 CEP definitions are imported via the `convert-cc-defs` skill (`.opencode/skills/`). `sync-manifest.json` tracks provenance: upstream commit, content hash, rewrites applied, and manual overrides. Re-sync compares hashes for idempotency.
 
+The latest upstream sync (commit 74fb717) converted all commands to skills — `commands/` now contains only `.gitkeep`. Command code paths (`findCommandsInDir`, `loadCommandAsConfig`) remain for backward compatibility and project-specific commands.
+
 ## Notes
 
 - Bootstrap injection is opt-out via `bootstrap.enabled: false`
@@ -156,3 +165,7 @@ CEP definitions are imported via the `convert-cc-defs` skill (`.opencode/skills/
 - Experimental hook: `experimental.chat.system.transform`
 - `docs/` is a separate workspace — run `bun run docs:generate` to sync reference content from bundled assets
 - Use `bun src/cli.ts` for local dev instead of `bunx systematic` to avoid slow resolution
+- `commands/` dir retained (with `.gitkeep`) for backward compatibility — code paths still support commands
+- `registry/` provides OCX component-level installation with omo and standalone profiles
+- `scripts/check-cep-upstream.ts` detects new/changed upstream definitions for sync
+- `.opencode/commands/` has project-only commands: `generate-readme` (README generation), `sync-cep` (upstream sync)
