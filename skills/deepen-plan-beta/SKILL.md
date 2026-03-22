@@ -96,7 +96,8 @@ Map the plan into the current template. Look for these sections, or their neares
 - `Context & Research`
 - `Key Technical Decisions`
 - `Open Questions`
-- `Implementation Units`
+- `High-Level Technical Design` (optional overview — pseudo-code, DSL grammar, mermaid diagram, or data flow)
+- `Implementation Units` (may include per-unit `Technical design` subsections)
 - `System-Wide Impact`
 - `Risks & Dependencies`
 - `Documentation / Operational Notes`
@@ -166,6 +167,17 @@ Use these triggers.
 - Resolved questions have no clear basis in repo context, research, or origin decisions
 - Deferred items are too vague to be useful later
 
+**High-Level Technical Design (when present)**
+- The sketch uses the wrong medium for the work (e.g., pseudo-code where a sequence diagram would communicate better)
+- The sketch contains implementation code (imports, exact signatures, framework-specific syntax) rather than pseudo-code
+- The non-prescriptive framing is missing or weak
+- The sketch does not connect to the key technical decisions or implementation units
+
+**High-Level Technical Design (when absent)** *(Standard or Deep plans only)*
+- The work involves DSL design, API surface design, multi-component integration, complex data flow, or state-heavy lifecycle
+- Key technical decisions would be easier to validate with a visual or pseudo-code representation
+- The approach section of implementation units is thin and a higher-level technical design would provide context
+
 **Implementation Units**
 - Dependency order is unclear or likely wrong
 - File paths or test file paths are missing where they should be explicit
@@ -196,38 +208,43 @@ Use fully-qualified agent names inside Task calls.
 #### 3.1 Deterministic Section-to-Agent Mapping
 
 **Requirements Trace / Open Questions classification**
-- `compound-engineering:workflow:spec-flow-analyzer` for missing user flows, edge cases, and handoff gaps
-- `compound-engineering:research:repo-research-analyst` for repo-grounded patterns, conventions, and implementation reality checks
+- `systematic:workflow:spec-flow-analyzer` for missing user flows, edge cases, and handoff gaps
+- `systematic:research:repo-research-analyst` for repo-grounded patterns, conventions, and implementation reality checks
 
 **Context & Research / Sources & References gaps**
-- `compound-engineering:research:learnings-researcher` for institutional knowledge and past solved problems
-- `compound-engineering:research:framework-docs-researcher` for official framework or library behavior
-- `compound-engineering:research:best-practices-researcher` for current external patterns and industry guidance
-- Add `compound-engineering:research:git-history-analyzer` only when historical rationale or prior art is materially missing
+- `systematic:research:learnings-researcher` for institutional knowledge and past solved problems
+- `systematic:research:framework-docs-researcher` for official framework or library behavior
+- `systematic:research:best-practices-researcher` for current external patterns and industry guidance
+- Add `systematic:research:git-history-analyzer` only when historical rationale or prior art is materially missing
 
 **Key Technical Decisions**
-- `compound-engineering:review:architecture-strategist` for design integrity, boundaries, and architectural tradeoffs
-- Add `compound-engineering:research:framework-docs-researcher` or `compound-engineering:research:best-practices-researcher` when the decision needs external grounding beyond repo evidence
+- `systematic:review:architecture-strategist` for design integrity, boundaries, and architectural tradeoffs
+- Add `systematic:research:framework-docs-researcher` or `systematic:research:best-practices-researcher` when the decision needs external grounding beyond repo evidence
+
+**High-Level Technical Design**
+- `systematic:review:architecture-strategist` for validating that the technical design accurately represents the intended approach and identifying gaps
+- `systematic:research:repo-research-analyst` for grounding the technical design in existing repo patterns and conventions
+- Add `systematic:research:best-practices-researcher` when the technical design involves a DSL, API surface, or pattern that benefits from external validation
 
 **Implementation Units / Verification**
-- `compound-engineering:research:repo-research-analyst` for concrete file targets, patterns to follow, and repo-specific sequencing clues
-- `compound-engineering:review:pattern-recognition-specialist` for consistency, duplication risks, and alignment with existing patterns
-- Add `compound-engineering:workflow:spec-flow-analyzer` when sequencing depends on user flow or handoff completeness
+- `systematic:research:repo-research-analyst` for concrete file targets, patterns to follow, and repo-specific sequencing clues
+- `systematic:review:pattern-recognition-specialist` for consistency, duplication risks, and alignment with existing patterns
+- Add `systematic:workflow:spec-flow-analyzer` when sequencing depends on user flow or handoff completeness
 
 **System-Wide Impact**
-- `compound-engineering:review:architecture-strategist` for cross-boundary effects, interface surfaces, and architectural knock-on impact
+- `systematic:review:architecture-strategist` for cross-boundary effects, interface surfaces, and architectural knock-on impact
 - Add the specific specialist that matches the risk:
-  - `compound-engineering:review:performance-oracle` for scalability, latency, throughput, and resource-risk analysis
-  - `compound-engineering:review:security-sentinel` for auth, validation, exploit surfaces, and security boundary review
-  - `compound-engineering:review:data-integrity-guardian` for migrations, persistent state safety, consistency, and data lifecycle risks
+  - `systematic:review:performance-oracle` for scalability, latency, throughput, and resource-risk analysis
+  - `systematic:review:security-sentinel` for auth, validation, exploit surfaces, and security boundary review
+  - `systematic:review:data-integrity-guardian` for migrations, persistent state safety, consistency, and data lifecycle risks
 
 **Risks & Dependencies / Operational Notes**
 - Use the specialist that matches the actual risk:
-  - `compound-engineering:review:security-sentinel` for security, auth, privacy, and exploit risk
-  - `compound-engineering:review:data-integrity-guardian` for persistent data safety, constraints, and transaction boundaries
-  - `compound-engineering:review:data-migration-expert` for migration realism, backfills, and production data transformation risk
-  - `compound-engineering:review:deployment-verification-agent` for rollout checklists, rollback planning, and launch verification
-  - `compound-engineering:review:performance-oracle` for capacity, latency, and scaling concerns
+  - `systematic:review:security-sentinel` for security, auth, privacy, and exploit risk
+  - `systematic:review:data-integrity-guardian` for persistent data safety, constraints, and transaction boundaries
+  - `systematic:review:data-migration-expert` for migration realism, backfills, and production data transformation risk
+  - `systematic:review:deployment-verification-agent` for rollout checklists, rollback planning, and launch verification
+  - `systematic:review:performance-oracle` for capacity, latency, and scaling concerns
 
 #### 3.2 Agent Prompt Shape
 
@@ -268,11 +285,13 @@ Allowed changes:
 - Add missing pattern references, file/test paths, or verification outcomes
 - Expand system-wide impact, risks, or rollout treatment where justified
 - Reclassify open questions between `Resolved During Planning` and `Deferred to Implementation` when evidence supports the change
+- Strengthen, replace, or add a High-Level Technical Design section when the work warrants it and the current representation is weak, uses the wrong medium, or is absent where it would help. Preserve the non-prescriptive framing
+- Strengthen or add per-unit technical design fields where the unit's approach is non-obvious and the current approach notes are thin
 - Add an optional deep-plan section only when it materially improves execution quality
 - Add or update `deepened: YYYY-MM-DD` in frontmatter when the plan was substantively improved
 
 Do **not**:
-- Add fenced implementation code blocks unless the plan itself is about code shape as a design artifact
+- Add implementation code — no imports, exact method signatures, or framework-specific syntax. Pseudo-code sketches and DSL grammars are allowed in both the top-level High-Level Technical Design section and per-unit technical design fields
 - Add git commands, commit choreography, or exact test command recipes
 - Add generic `Research Insights` subsections everywhere
 - Rewrite the entire plan from scratch

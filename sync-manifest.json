@@ -184,10 +184,10 @@
     "agents/research/repo-research-analyst": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/research/repo-research-analyst.md",
-      "upstream_commit": "88c89bc204c928d2f36e2d1f117d16c998ecd096",
-      "synced_at": "2026-03-19T00:08:14Z",
-      "notes": "Imported from CEP. Mechanical conversion + intelligent rewrite: fixed **/CLAUDE.md glob example in search strategies.",
-      "upstream_content_hash": "e965e60985343e41f4a7716a4645d542cbc8406ada8c9e044b5bffcbeeb4fcf4",
+      "upstream_commit": "cfbfb6710a846419cc07ad17d9dbb5b5a065801c",
+      "synced_at": "2026-03-22T00:07:28Z",
+      "notes": "Imported from CEP. Mechanical conversion + intelligent rewrite: fixed **/CLAUDE.md glob example in search strategies. Updated with Phase 0 technology scan and monorepo detection.",
+      "upstream_content_hash": "811fe17a0d8b75fe772233213deadb575adb26ccb3168b2b5593444bcbe9ac58",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -719,10 +719,10 @@
     "skills/ce-plan-beta": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/ce-plan-beta",
-      "upstream_commit": "88c89bc204c928d2f36e2d1f117d16c998ecd096",
-      "synced_at": "2026-03-19T00:08:14Z",
+      "upstream_commit": "cfbfb6710a846419cc07ad17d9dbb5b5a065801c",
+      "synced_at": "2026-03-22T00:07:28Z",
       "notes": "Imported from CEP upstream restructure - commands moved to skills.",
-      "upstream_content_hash": "50ecb86807c85b3c63417c427d113aa96c9e3aedcef8d419870451909f37ac9b",
+      "upstream_content_hash": "52a51dcd228cc089b986f865455583bfd873b6a13bc72b8d2a5ddd762d76dab6",
       "files": ["SKILL.md"],
       "rewrites": [
         {
@@ -949,10 +949,10 @@
     "skills/deepen-plan-beta": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/deepen-plan-beta",
-      "upstream_commit": "88c89bc204c928d2f36e2d1f117d16c998ecd096",
-      "synced_at": "2026-03-19T00:08:14Z",
-      "notes": "Imported from CEP upstream restructure - commands moved to skills.",
-      "upstream_content_hash": "8dde0b978ba55a38f4dab78b56f35ed04f2b79427d9d52d82f370b4538991dc3",
+      "upstream_commit": "cfbfb6710a846419cc07ad17d9dbb5b5a065801c",
+      "synced_at": "2026-03-22T00:07:28Z",
+      "notes": "Imported from CEP upstream restructure - commands moved to skills. compound-engineering: prefix references converted to systematic:.",
+      "upstream_content_hash": "913f192721ac0273ffb81aa48c4a8478048b3c92867dfbcb7410ab484abec6a9",
       "files": ["SKILL.md"],
       "rewrites": [
         {
@@ -961,7 +961,7 @@
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code -> OpenCode, compound-engineering: -> systematic:"
+          "reason": "Claude Code -> OpenCode, compound-engineering: prefix -> systematic: prefix"
         }
       ],
       "manual_overrides": []
@@ -1207,10 +1207,10 @@
     "skills/git-worktree": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/git-worktree",
-      "upstream_commit": "ca57c67c1cb7df1ba348a3388f50969ff04dd974",
-      "synced_at": "2026-03-06T00:14:53Z",
-      "notes": "Imported from CEP. Converter applied to SKILL.md. Script file copied. CLAUDE_PLUGIN_ROOT paths simplified to relative paths (skills are bundled in plugin, no env var needed).",
-      "upstream_content_hash": "644188574a09d0e4b34e7279f5ce00ef316418d0789e15b95e20da6fd369d57a",
+      "upstream_commit": "cfbfb6710a846419cc07ad17d9dbb5b5a065801c",
+      "synced_at": "2026-03-22T00:07:28Z",
+      "notes": "Imported from CEP. Converter applied to SKILL.md. Script file copied. ${CLAUDE_PLUGIN_ROOT} paths in examples simplified to relative paths.",
+      "upstream_content_hash": "98552ca8b72166e7ba4e585723c84cf231a89c593e5921b6be38b0c07ffb8ad5",
       "files": ["SKILL.md", "scripts/worktree-manager.sh"],
       "rewrites": [
         {
@@ -1220,10 +1220,6 @@
         {
           "field": "body:path-simplification",
           "reason": "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh → scripts/worktree-manager.sh (relative paths — skills are bundled in plugin, no env var prefix needed)"
-        },
-        {
-          "field": "body:sync",
-          "reason": "Synced from CEP commit 56b174a"
         }
       ],
       "manual_overrides": []
@@ -1251,10 +1247,10 @@
     "skills/lfg": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/lfg",
-      "upstream_commit": "88c89bc204c928d2f36e2d1f117d16c998ecd096",
-      "synced_at": "2026-03-19T00:08:14Z",
-      "notes": "Imported from CEP upstream restructure - commands moved to skills.",
-      "upstream_content_hash": "ade755c300b1d93218567615f67640b4270239ad80212da5be4a7bcb1aca9a73",
+      "upstream_commit": "cfbfb6710a846419cc07ad17d9dbb5b5a065801c",
+      "synced_at": "2026-03-22T00:07:28Z",
+      "notes": "Imported from CEP upstream restructure - commands moved to skills. compound-engineering: prefix references converted to systematic:.",
+      "upstream_content_hash": "d11b742e2c78e1b198356aa08b19e55d5f4a3414cee29512fc49c3c5793a08d4",
       "files": ["SKILL.md"],
       "rewrites": [
         {
@@ -1504,10 +1500,10 @@
     "skills/slfg": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/slfg",
-      "upstream_commit": "88c89bc204c928d2f36e2d1f117d16c998ecd096",
-      "synced_at": "2026-03-19T00:08:14Z",
-      "notes": "Imported from CEP upstream restructure - commands moved to skills.",
-      "upstream_content_hash": "72b8e76eecd97a2350fcc0450d84ef825c84f5ea77cf7525685ba5ef9a9225b7",
+      "upstream_commit": "cfbfb6710a846419cc07ad17d9dbb5b5a065801c",
+      "synced_at": "2026-03-22T00:07:28Z",
+      "notes": "Imported from CEP upstream restructure - commands moved to skills. compound-engineering: prefix references converted to systematic:.",
+      "upstream_content_hash": "94ff370e46076ff21dffb365add80972de29b74a577b18470e6d0d559718e398",
       "files": ["SKILL.md"],
       "rewrites": [
         {
