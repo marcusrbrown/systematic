@@ -23,7 +23,7 @@ This skill does **not** turn plans into implementation scripts. It identifies we
 
 ## Interaction Method
 
-Use the platform's question tool when available. When asking the user a question, prefer the platform's blocking question tool if one exists (`AskUserQuestion` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini). Otherwise, present numbered options in chat and wait for the user's reply before proceeding.
+Use the platform's question tool when available. When asking the user a question, prefer the platform's blocking question tool if one exists (`question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini). Otherwise, present numbered options in chat and wait for the user's reply before proceeding.
 
 Ask one question at a time. Prefer a concise single-select choice when natural options exist.
 
@@ -83,7 +83,7 @@ Use this default:
 
 If the plan already appears sufficiently grounded:
 - Say so briefly
-- Recommend moving to `/systematic:ce-work` or the `document-review` skill
+- Recommend moving to `/ce:work` or the `document-review` skill
 - If the user explicitly asked to deepen anyway, continue with a light pass and deepen at most 1-2 sections
 
 ### Phase 1: Parse the Current `ce:plan-beta` Structure
@@ -317,7 +317,7 @@ Based on selection:
 
 If no substantive changes were warranted:
 - Say that the plan already appears sufficiently grounded
-- Offer the `document-review` skill or `/systematic:ce-work` as the next step instead
+- Offer the `document-review` skill or `/ce:work` as the next step instead
 
 NEVER CODE! Research, challenge, and strengthen the plan.
 

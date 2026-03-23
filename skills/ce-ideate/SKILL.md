@@ -18,7 +18,7 @@ This workflow produces a ranked ideation artifact in `docs/ideation/`. It does *
 
 ## Interaction Method
 
-Use the platform's blocking question tool when available (`AskUserQuestion` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini). Otherwise, present numbered options in chat and wait for the user's reply before proceeding.
+Use the platform's blocking question tool when available (`question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini). Otherwise, present numbered options in chat and wait for the user's reply before proceeding.
 
 Ask one question at a time. Prefer concise single-select choices when natural options exist.
 
@@ -29,7 +29,7 @@ Ask one question at a time. Prefer concise single-select choices when natural op
 Interpret any provided argument as optional context. It may be:
 
 - a concept such as `DX improvements`
-- a path such as `plugins/compound-engineering/skills/`
+- a path such as `plugins/systematic/skills/`
 - a constraint such as `low-complexity quick wins`
 - a volume hint such as `top 3`, `100 ideas`, or `raise the bar`
 
@@ -103,7 +103,7 @@ Run agents in parallel in the **foreground** (do not use background dispatch —
 
 1. **Quick context scan** — dispatch a general-purpose sub-agent with this prompt:
 
-   > Read the project's AGENTS.md (or AGENTS.md / README.md if AGENTS.md is absent), then discover the top-level directory layout using the native file-search/glob tool (e.g., `Glob` with pattern `*` or `*/*` in OpenCode). Return a concise summary (under 30 lines) covering:
+> Read the project's AGENTS.md (or README.md if AGENTS.md is absent), then discover the top-level directory layout using the native file-search/glob tool (e.g., `Glob` with pattern `*` or `*/*` in OpenCode). Return a concise summary (under 30 lines) covering:
    > - project shape (language, framework, top-level directory layout)
    > - notable patterns or conventions
    > - obvious pain points or gaps
@@ -368,4 +368,3 @@ Before finishing, check:
 - survivors are materially better than a naive "give me ideas" list
 - the artifact was written before any handoff, sharing, or session end
 - acting on an idea routes to `ce:brainstorm`, not directly to implementation
-

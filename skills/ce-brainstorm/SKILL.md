@@ -8,7 +8,7 @@ argument-hint: '[feature idea or problem to explore]'
 
 **Note: The current year is 2026.** Use this when dating requirements documents.
 
-Brainstorming helps answer **WHAT** to build through collaborative dialogue. It precedes `/systematic:ce-plan`, which answers **HOW** to build it.
+Brainstorming helps answer **WHAT** to build through collaborative dialogue. It precedes `/ce:plan`, which answers **HOW** to build it.
 
 The durable output of this workflow is a **requirements document**. In other workflows this might be called a lightweight PRD or feature brief. In compound engineering, keep the workflow name `brainstorm`, but make the written artifact strong enough that planning does not need to invent product behavior, scope boundaries, or success criteria.
 
@@ -28,7 +28,7 @@ This skill does not implement code. It explores, clarifies, and documents decisi
 1. **Ask one question at a time** - Do not batch several unrelated questions into one message.
 2. **Prefer single-select multiple choice** - Use single-select when choosing one direction, one priority, or one next step.
 3. **Use multi-select rarely and intentionally** - Use it only for compatible sets such as goals, constraints, non-goals, or success criteria that can all coexist. If prioritization matters, follow up by asking which selected item is primary.
-4. **Use the platform's question tool when available** - When asking the user a question, prefer the platform's blocking question tool if one exists (`AskUserQuestion` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini). Otherwise, present numbered options in chat and wait for the user's reply before proceeding.
+4. **Use the platform's question tool when available** - When asking the user a question, prefer the platform's blocking question tool if one exists (`question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini). Otherwise, present numbered options in chat and wait for the user's reply before proceeding.
 
 ## Output Guidance
 
@@ -83,7 +83,7 @@ Scan the repo before substantive brainstorming. Match depth to scope:
 
 **Standard and Deep** — Two passes:
 
-*Constraint Check* — Check project instruction files (`AGENTS.md`, `CLAUDE.md`) for workflow, product, or scope constraints that affect the brainstorm. If these add nothing, move on.
+*Constraint Check* — Check project instruction files (`AGENTS.md`) for workflow, product, or scope constraints that affect the brainstorm. If these add nothing, move on.
 
 *Topic Scan* — Search for relevant terms. Read the most relevant existing artifact if one exists (brainstorm, plan, spec, skill, feature doc). Skim adjacent examples covering similar behavior.
 
@@ -211,8 +211,8 @@ topic: <kebab-case-topic>
 - [Affects R2][Needs research] [Question that likely requires research during planning]
 
 ## Next Steps
-[If `Resolve Before Planning` is empty: `→ /systematic:ce-plan` for structured implementation planning]
-[If `Resolve Before Planning` is not empty: `→ Resume /systematic:ce-brainstorm` to resolve blocking questions before planning]
+[If `Resolve Before Planning` is empty: `→ /ce:plan` for structured implementation planning]
+[If `Resolve Before Planning` is not empty: `→ Resume /ce:brainstorm` to resolve blocking questions before planning]
 ```
 
 For **Standard** and **Deep** brainstorms, a requirements document is usually warranted.
@@ -260,7 +260,7 @@ If `Resolve Before Planning` contains any items:
 **Question when blocking questions remain and user wants to pause:** "Brainstorm paused. Planning is blocked until the remaining questions are resolved. What would you like to do next?"
 
 Present only the options that apply:
-- **Proceed to planning (Recommended)** - Run `/systematic:ce-plan` for structured implementation planning
+- **Proceed to planning (Recommended)** - Run `/ce:plan` for structured implementation planning
 - **Proceed directly to work** - Only offer this when scope is lightweight, success criteria are clear, scope boundaries are clear, and no meaningful technical or research questions remain
 - **Review and refine** - Offer this only when a requirements document exists and can be improved through structured review
 - **Ask more questions** - Continue clarifying scope, preferences, or edge cases
@@ -273,11 +273,11 @@ If the direct-to-work gate is not satisfied, omit that option entirely.
 
 **If user selects "Proceed to planning (Recommended)":**
 
-Immediately run `/systematic:ce-plan` in the current session. Pass the requirements document path when one exists; otherwise pass a concise summary of the finalized brainstorm decisions. Do not print the closing summary first.
+Immediately run `/ce:plan` in the current session. Pass the requirements document path when one exists; otherwise pass a concise summary of the finalized brainstorm decisions. Do not print the closing summary first.
 
 **If user selects "Proceed directly to work":**
 
-Immediately run `/systematic:ce-work` in the current session using the finalized brainstorm output as context. If a compact requirements document exists, pass its path. Do not print the closing summary first.
+Immediately run `/ce:work` in the current session using the finalized brainstorm output as context. If a compact requirements document exists, pass its path. Do not print the closing summary first.
 
 **If user selects "Share to Proof":**
 
@@ -317,7 +317,7 @@ Key decisions:
 - [Decision 1]
 - [Decision 2]
 
-Recommended next step: `/systematic:ce-plan`
+Recommended next step: `/ce:plan`
 ```
 
 If the user pauses with `Resolve Before Planning` still populated, display:
@@ -331,6 +331,5 @@ Planning is blocked by:
 - [Blocking question 1]
 - [Blocking question 2]
 
-Resume with `/systematic:ce-brainstorm` when ready to resolve these before planning.
+Resume with `/ce:brainstorm` when ready to resolve these before planning.
 ```
-

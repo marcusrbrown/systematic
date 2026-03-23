@@ -133,8 +133,8 @@ If the user passed a port number (e.g., `/test-browser 5000` or `/test-browser -
 
 **Priority 2: AGENTS.md / project instructions**
 ```bash
-# Check CLAUDE.md for port references
-grep -Eio '(port\s*[:=]\s*|localhost:)([0-9]{4,5})' CLAUDE.md 2>/dev/null | grep -Eo '[0-9]{4,5}' | head -1
+# Check AGENTS.md for port references
+grep -Eio '(port\s*[:=]\s*|localhost:)([0-9]{4,5})' AGENTS.md 2>/dev/null | grep -Eo '[0-9]{4,5}' | head -1
 ```
 
 **Priority 3: package.json scripts**
@@ -158,7 +158,7 @@ Store the result in a `PORT` variable for use in all subsequent steps.
 # Combined detection (run this)
 PORT="${EXPLICIT_PORT:-}"
 if [ -z "$PORT" ]; then
-  PORT=$(grep -Eio '(port\s*[:=]\s*|localhost:)([0-9]{4,5})' CLAUDE.md 2>/dev/null | grep -Eo '[0-9]{4,5}' | head -1)
+  PORT=$(grep -Eio '(port\s*[:=]\s*|localhost:)([0-9]{4,5})' AGENTS.md 2>/dev/null | grep -Eo '[0-9]{4,5}' | head -1)
 fi
 if [ -z "$PORT" ]; then
   PORT=$(grep -Eo '\-\-port[= ]+[0-9]{4,5}' package.json 2>/dev/null | grep -Eo '[0-9]{4,5}' | head -1)
@@ -391,4 +391,3 @@ agent-browser --headed click @e1       # Click in visible browser
 agent-browser wait @e1             # Wait for element
 agent-browser wait 2000            # Wait milliseconds
 ```
-

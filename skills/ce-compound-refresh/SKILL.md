@@ -33,7 +33,7 @@ Check if `$ARGUMENTS` contains `mode:autonomous`. If present, strip it from argu
 
 Follow the same interaction style as `ce:brainstorm`:
 
-- Ask questions **one at a time** — use the platform's blocking question tool when available (`AskUserQuestion` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini). Otherwise, present numbered options in plain text and wait for the user's reply before continuing
+- Ask questions **one at a time** — use the platform's blocking question tool when available (`question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini). Otherwise, present numbered options in plain text and wait for the user's reply before continuing
 - Prefer **multiple choice** when natural options exist
 - Start with **scope and intent**, then narrow only when needed
 - Do **not** ask the user to make decisions before you have evidence
@@ -309,7 +309,7 @@ Do **not** ask questions about whether code changes were intentional, whether th
 
 #### Question Style
 
-Always present choices using the platform's blocking question tool when available (`AskUserQuestion` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini). Otherwise, present numbered options in plain text and wait for the user's reply before proceeding.
+Always present choices using the platform's blocking question tool when available (`question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini). Otherwise, present numbered options in plain text and wait for the user's reply before proceeding.
 
 Question rules:
 

@@ -158,117 +158,6 @@
       ]
     },
     {
-      "name": "create-agent-skills",
-      "type": "ocx:skill",
-      "description": "Expert guidance for creating OpenCode skills and slash commands. Use when working with SKILL.md files, authoring new skills, improving existing skills, creating slash commands, or understanding skill structure and best practices.",
-      "files": [
-        {
-          "path": "SKILL.md",
-          "target": ".opencode/skills/create-agent-skills/SKILL.md"
-        },
-        {
-          "path": "references/api-security.md",
-          "target": ".opencode/skills/create-agent-skills/references/api-security.md"
-        },
-        {
-          "path": "references/be-clear-and-direct.md",
-          "target": ".opencode/skills/create-agent-skills/references/be-clear-and-direct.md"
-        },
-        {
-          "path": "references/best-practices.md",
-          "target": ".opencode/skills/create-agent-skills/references/best-practices.md"
-        },
-        {
-          "path": "references/common-patterns.md",
-          "target": ".opencode/skills/create-agent-skills/references/common-patterns.md"
-        },
-        {
-          "path": "references/core-principles.md",
-          "target": ".opencode/skills/create-agent-skills/references/core-principles.md"
-        },
-        {
-          "path": "references/executable-code.md",
-          "target": ".opencode/skills/create-agent-skills/references/executable-code.md"
-        },
-        {
-          "path": "references/iteration-and-testing.md",
-          "target": ".opencode/skills/create-agent-skills/references/iteration-and-testing.md"
-        },
-        {
-          "path": "references/official-spec.md",
-          "target": ".opencode/skills/create-agent-skills/references/official-spec.md"
-        },
-        {
-          "path": "references/recommended-structure.md",
-          "target": ".opencode/skills/create-agent-skills/references/recommended-structure.md"
-        },
-        {
-          "path": "references/skill-structure.md",
-          "target": ".opencode/skills/create-agent-skills/references/skill-structure.md"
-        },
-        {
-          "path": "references/using-scripts.md",
-          "target": ".opencode/skills/create-agent-skills/references/using-scripts.md"
-        },
-        {
-          "path": "references/using-templates.md",
-          "target": ".opencode/skills/create-agent-skills/references/using-templates.md"
-        },
-        {
-          "path": "references/workflows-and-validation.md",
-          "target": ".opencode/skills/create-agent-skills/references/workflows-and-validation.md"
-        },
-        {
-          "path": "templates/router-skill.md",
-          "target": ".opencode/skills/create-agent-skills/templates/router-skill.md"
-        },
-        {
-          "path": "templates/simple-skill.md",
-          "target": ".opencode/skills/create-agent-skills/templates/simple-skill.md"
-        },
-        {
-          "path": "workflows/add-reference.md",
-          "target": ".opencode/skills/create-agent-skills/workflows/add-reference.md"
-        },
-        {
-          "path": "workflows/add-script.md",
-          "target": ".opencode/skills/create-agent-skills/workflows/add-script.md"
-        },
-        {
-          "path": "workflows/add-template.md",
-          "target": ".opencode/skills/create-agent-skills/workflows/add-template.md"
-        },
-        {
-          "path": "workflows/add-workflow.md",
-          "target": ".opencode/skills/create-agent-skills/workflows/add-workflow.md"
-        },
-        {
-          "path": "workflows/audit-skill.md",
-          "target": ".opencode/skills/create-agent-skills/workflows/audit-skill.md"
-        },
-        {
-          "path": "workflows/create-domain-expertise-skill.md",
-          "target": ".opencode/skills/create-agent-skills/workflows/create-domain-expertise-skill.md"
-        },
-        {
-          "path": "workflows/create-new-skill.md",
-          "target": ".opencode/skills/create-agent-skills/workflows/create-new-skill.md"
-        },
-        {
-          "path": "workflows/get-guidance.md",
-          "target": ".opencode/skills/create-agent-skills/workflows/get-guidance.md"
-        },
-        {
-          "path": "workflows/upgrade-to-router.md",
-          "target": ".opencode/skills/create-agent-skills/workflows/upgrade-to-router.md"
-        },
-        {
-          "path": "workflows/verify-skill.md",
-          "target": ".opencode/skills/create-agent-skills/workflows/verify-skill.md"
-        }
-      ]
-    },
-    {
       "name": "document-review",
       "type": "ocx:skill",
       "description": "This skill should be used to refine brainstorm or plan documents before proceeding to the next workflow step. It applies when a brainstorm or plan document exists and the user wants to improve it.",
@@ -615,7 +504,6 @@
         "agent-browser",
         "agent-native-architecture",
         "compound-docs",
-        "create-agent-skills",
         "document-review",
         "file-todos",
         "frontend-design",

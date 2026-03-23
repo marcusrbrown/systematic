@@ -15,7 +15,7 @@ This workflow produces a durable implementation plan. It does **not** implement 
 
 ## Interaction Method
 
-Use the platform's question tool when available. When asking the user a question, prefer the platform's blocking question tool if one exists (`AskUserQuestion` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini). Otherwise, present numbered options in chat and wait for the user's reply before proceeding.
+Use the platform's question tool when available. When asking the user a question, prefer the platform's blocking question tool if one exists (`question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini). Otherwise, present numbered options in chat and wait for the user's reply before proceeding.
 
 Ask one question at a time. Prefer a concise single-select choice when natural options exist.
 
@@ -150,7 +150,7 @@ Run these agents in parallel:
 Collect:
 - Existing patterns and conventions to follow
 - Relevant files, modules, and tests
-- AGENTS.md or AGENTS.md guidance that materially affects the plan
+- AGENTS.md guidance that materially affects the plan
 - Institutional learnings from `docs/solutions/`
 
 #### 1.2 Decide on External Research
@@ -518,8 +518,8 @@ After writing the plan file, present the options using the platform's blocking q
 2. **Run `/deepen-plan-beta`** - Stress-test weak sections with targeted research when the plan needs more confidence
 3. **Run `document-review` skill** - Improve the plan through structured document review
 4. **Share to Proof** - Upload the plan for collaborative review and sharing
-5. **Start `/systematic:ce-work`** - Begin implementing this plan in the current environment
-6. **Start `/systematic:ce-work` in another session** - Begin implementing in a separate agent session when the current platform supports it
+5. **Start `/ce:work`** - Begin implementing this plan in the current environment
+6. **Start `/ce:work` in another session** - Begin implementing in a separate agent session when the current platform supports it
 7. **Create Issue** - Create an issue in the configured tracker
 
 Based on selection:
@@ -536,8 +536,8 @@ Based on selection:
   PROOF_URL=$(echo "$RESPONSE" | jq -r '.tokenUrl')
   ```
   Display `View & collaborate in Proof: <PROOF_URL>` if successful, then return to the options
-- **`/systematic:ce-work`** → Call `/systematic:ce-work` with the plan path
-- **`/systematic:ce-work` in another session** → If the current platform supports launching a separate agent session, start `/systematic:ce-work` with the plan path there. Otherwise, explain the limitation briefly and offer to run `/systematic:ce-work` in the current session instead.
+- **`/ce:work`** → Call `/ce:work` with the plan path
+- **`/ce:work` in another session** → If the current platform supports launching a separate agent session, start `/ce:work` with the plan path there. Otherwise, explain the limitation briefly and offer to run `/ce:work` in the current session instead.
 - **Create Issue** → Follow the Issue Creation section below
 - **Other** → Accept free text for revisions and loop back to options
 
@@ -545,7 +545,7 @@ If running with ultrathink enabled, or the platform's reasoning/effort level is 
 
 ## Issue Creation
 
-When the user selects "Create Issue", detect their project tracker from `CLAUDE.md` or `AGENTS.md`:
+When the user selects "Create Issue", detect their project tracker from `AGENTS.md`:
 
 1. Look for `project_tracker: github` or `project_tracker: linear`
 2. If GitHub:
@@ -562,11 +562,10 @@ When the user selects "Create Issue", detect their project tracker from `CLAUDE.
 
 4. If no tracker is configured:
    - Ask which tracker they use using the platform's blocking question tool when available (see Interaction Method)
-   - Suggest adding the tracker to `CLAUDE.md` or `AGENTS.md` for future runs
+   - Suggest adding the tracker to `AGENTS.md` for future runs
 
 After issue creation:
 - Display the issue URL
-- Ask whether to proceed to `/systematic:ce-work`
+- Ask whether to proceed to `/ce:work`
 
 NEVER CODE! Research, decide, and write the plan.
-
