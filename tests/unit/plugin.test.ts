@@ -39,15 +39,18 @@ describe('bundled content', () => {
     expect(fs.existsSync(path.join(ROOT_DIR, 'agents'))).toBe(true)
   })
 
-  test('commands directory exists at top level', () => {
-    expect(fs.existsSync(path.join(ROOT_DIR, 'commands'))).toBe(true)
+  test('commands directory removed (commands converted to skills)', () => {
+    expect(fs.existsSync(path.join(ROOT_DIR, 'commands'))).toBe(false)
   })
 
   test('bundled skills have valid structure', () => {
     const skillsDir = path.join(ROOT_DIR, 'skills')
     const skillDirs = fs.readdirSync(skillsDir).filter((f) => {
-      const stat = fs.statSync(path.join(skillsDir, f))
-      return stat.isDirectory()
+      const fullPath = path.join(skillsDir, f)
+      return (
+        fs.statSync(fullPath).isDirectory() &&
+        fs.existsSync(path.join(fullPath, 'SKILL.md'))
+      )
     })
 
     expect(skillDirs.length).toBeGreaterThan(0)
@@ -68,15 +71,18 @@ describe('bundled content', () => {
     expect(agentFiles.length).toBeGreaterThan(0)
   })
 
-  test('bundled commands have valid structure', () => {
-    const commandsDir = path.join(ROOT_DIR, 'commands')
-    expect(fs.existsSync(commandsDir)).toBe(true)
+  test('bundled skills cover former commands', () => {
     const skillsDir = path.join(ROOT_DIR, 'skills')
     const skillDirs = fs.readdirSync(skillsDir).filter((f) => {
       const stat = fs.statSync(path.join(skillsDir, f))
       return stat.isDirectory()
     })
     expect(skillDirs.length).toBeGreaterThan(0)
+    expect(skillDirs).toContain('ce-brainstorm')
+    expect(skillDirs).toContain('ce-plan')
+    expect(skillDirs).toContain('ce-review')
+    expect(skillDirs).toContain('ce-work')
+    expect(skillDirs).toContain('ce-compound')
   })
 })
 
@@ -114,10 +120,11 @@ describe('CLI functionality', () => {
     expect(output).toContain('architecture-strategist')
   })
 
-  test('cli list commands shows bundled commands', () => {
+  test('cli list commands exits successfully with empty result', () => {
     const result = Bun.spawnSync(['bun', CLI_PATH, 'list', 'commands'])
-    const _output = result.stdout.toString()
+    const output = result.stdout.toString()
     expect(result.exitCode).toBe(0)
+    expect(output).toContain('No commands found')
   })
 
   test('cli config path shows paths', () => {

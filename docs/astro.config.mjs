@@ -59,10 +59,6 @@ export default defineConfig({
               label: 'Agents',
               autogenerate: { directory: 'reference/agents' },
             },
-            {
-              label: 'Commands',
-              autogenerate: { directory: 'reference/commands' },
-            },
           ],
         },
       ],

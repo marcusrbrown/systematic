@@ -15,7 +15,7 @@
 
 <br>
 
-**[Overview](#overview)** · **[Quick Start](#quick-start)** · **[Skills](#skills)** · **[Agents](#agents)** · **[Commands](#commands)** · **[CLI](#cli)** · **[Configuration](#configuration)** · **[Development](#development)**
+**[Overview](#overview)** · **[Quick Start](#quick-start)** · **[Skills](#skills)** · **[Agents](#agents)** · **[CLI](#cli)** · **[Configuration](#configuration)** · **[Development](#development)**
 
 </div>
 
@@ -38,11 +38,11 @@ Most AI coding assistants respond to requests without structure or methodology. 
 
 ### Key Features
 
-- **Structured Skills** — Pre-built workflows for brainstorming, planning, and code review
-- **Specialized Agents** — Purpose-built subagents for architecture, security, and performance
+- **Structured Skills** — Pre-built workflows for brainstorming, planning, code review, and more
+- **Specialized Agents** — Purpose-built subagents for architecture, security, performance, and research
 - **Zero Configuration** — Works immediately after installation via config hooks
-- **Extensible** — Add project-specific skills and commands alongside bundled ones
-- **Batteries Included** — 11 skills, 24 agents, and 9 commands ship with the npm package
+- **Extensible** — Add project-specific skills and agents alongside bundled ones
+- **Batteries Included** — 48 skills and 29 agents ship with the npm package
 - **CLI Tooling** — Inspect, list, and convert assets from the command line
 
 ## Quick Start
@@ -62,7 +62,7 @@ Install the plugin by adding it to your OpenCode configuration (`~/.config/openc
 }
 ```
 
-Restart OpenCode to activate the plugin. All bundled skills, agents, and commands will be available immediately.
+Restart OpenCode to activate the plugin. All bundled skills and agents will be available immediately.
 
 > [!NOTE]
 > Systematic uses OpenCode's `config` hook to automatically register all bundled content. No manual file copying required.
@@ -80,9 +80,8 @@ ocx add systematic/brainstorming
 ocx add systematic/agent-architecture-strategist
 
 # Or install bundles
-ocx add systematic/skills     # All 11 skills
-ocx add systematic/agents     # All 24 agents
-ocx add systematic/commands   # All 9 commands
+ocx add systematic/skills     # All 48 skills
+ocx add systematic/agents     # All 29 agents
 
 # Or use a profile (requires --global registry)
 ocx registry add https://fro.bot/systematic --name systematic --global
@@ -110,21 +109,52 @@ Once verified, explore these guides to master the Systematic workflow:
 
 ## Skills
 
-Skills are structured workflows that guide the AI through systematic engineering processes. They're loaded via the `systematic_skill` tool.
+Skills are structured workflows that guide the AI through systematic engineering processes. They're loaded via the `systematic_skill` tool and invocable as slash commands (e.g., `/ce:brainstorm`).
+
+### Core Workflows
+
+The Compound Engineering loop — the heart of Systematic:
+
+| Skill | Description |
+|-------|-------------|
+| `ce:brainstorm` | Explore requirements through collaborative dialogue before planning |
+| `ce:plan` | Transform feature descriptions into structured implementation plans |
+| `ce:review` | Perform exhaustive code reviews using multi-agent analysis |
+| `ce:work` | Execute work plans efficiently while maintaining quality |
+| `ce:compound` | Document recently solved problems to compound team knowledge |
+| `ce:ideate` | Generate and critically evaluate grounded improvement ideas |
+| `ce:compound-refresh` | Refresh stale learnings and pattern docs against current codebase |
+
+### Development Tools
 
 | Skill | Description |
 |-------|-------------|
 | `using-systematic` | Bootstrap skill — teaches the AI how to discover and use other skills |
-| `brainstorming` | Collaborative design workflow for exploring ideas before planning |
 | `agent-browser` | Browser automation using Vercel's agent-browser CLI |
 | `agent-native-architecture` | Design systems where AI agents are first-class citizens |
+| `create-agent-skill` | Expert guidance for writing and refining OpenCode skills |
 | `compound-docs` | Capture solved problems as categorized documentation |
-| `create-agent-skills` | Expert guidance for writing and refining skills |
-| `document-review` | Refine brainstorm or plan documents before proceeding to the next workflow step |
+| `document-review` | Refine requirements or plan documents before proceeding |
+| `deepen-plan` | Enhance a plan with parallel research for each section |
 | `file-todos` | File-based todo tracking with status and dependency management |
-| `frontend-design` | Create distinctive, production-grade frontend interfaces with high design quality |
+| `frontend-design` | Create distinctive, production-grade frontend interfaces |
 | `git-worktree` | Manage git worktrees for isolated parallel development |
-| `orchestrating-swarms` | Coordinate multi-agent swarms, parallel reviews, and pipeline workflows |
+| `orchestrating-swarms` | Coordinate multi-agent swarms and pipeline workflows |
+| `lfg` | Full autonomous engineering workflow — plan, then execute |
+
+### Specialized Skills
+
+| Skill | Description |
+|-------|-------------|
+| `dhh-rails-style` | Write Ruby and Rails code in DHH's distinctive 37signals style |
+| `andrew-kane-gem-writer` | Write Ruby gems following Andrew Kane's proven patterns |
+| `dspy-ruby` | Build type-safe LLM applications with DSPy.rb |
+| `every-style-editor` | Review and edit copy for style guide compliance |
+| `gemini-imagegen` | Generate and edit images using the Gemini API |
+| `proof` | Create, edit, and share markdown documents via Proof |
+| `rclone` | Upload, sync, and manage files across cloud storage providers |
+
+> **[View all 48 skills →](https://fro.bot/systematic/reference/skills/)**
 
 ### How Skills Work
 
@@ -151,9 +181,15 @@ Agents are specialized subagents with pre-configured prompts and expertise. They
 
 | Agent | Purpose |
 |-------|---------|
-| `design-implementation-reviewer` | Verify UI implementations match Figma design specifications |
-| `design-iterator` | Systematic UI/UX refinement through iterative screenshots and improvements |
-| `figma-design-sync` | Detect and fix visual differences between web implementation and Figma designs |
+| `design-implementation-reviewer` | Visually compare live UI against Figma designs and report discrepancies |
+| `design-iterator` | Iteratively refine UI design through screenshot-analyze-improve cycles |
+| `figma-design-sync` | Detect and fix visual differences between web implementation and Figma |
+
+### Docs Agents
+
+| Agent | Purpose |
+|-------|---------|
+| `ankane-readme-writer` | Create or update README files following Ankane-style template for Ruby gems |
 
 ### Research Agents
 
@@ -161,7 +197,8 @@ Agents are specialized subagents with pre-configured prompts and expertise. They
 |-------|---------|
 | `best-practices-researcher` | Research external best practices, documentation, and examples for any technology |
 | `framework-docs-researcher` | Gather framework documentation and best practices |
-| `git-history-analyzer` | Archaeological analysis of git history to trace code evolution and understand patterns |
+| `git-history-analyzer` | Archaeological analysis of git history to trace code evolution and patterns |
+| `issue-intelligence-analyst` | Analyze GitHub issues to surface recurring themes, pain patterns, and severity trends |
 | `learnings-researcher` | Search past solutions in docs/solutions/ to surface institutional knowledge |
 | `repo-research-analyst` | Research repository structure, documentation, conventions, and implementation patterns |
 
@@ -176,10 +213,13 @@ Agents are specialized subagents with pre-configured prompts and expertise. They
 | `data-migration-expert` | Validate data migrations, backfills, and production data transformations |
 | `deployment-verification-agent` | Produce Go/No-Go deployment checklists with verification queries and rollback procedures |
 | `dhh-rails-reviewer` | Brutally honest Rails code review from DHH's perspective |
-| `kieran-rails-reviewer` | High quality bar Rails code review for conventions, clarity, and maintainability |
+| `julik-frontend-races-reviewer` | Review JavaScript and Stimulus code for race conditions and timing issues |
+| `kieran-python-reviewer` | High quality bar Python review for Pythonic patterns, type safety, and maintainability |
+| `kieran-rails-reviewer` | High quality bar Rails review for conventions, clarity, and maintainability |
 | `kieran-typescript-reviewer` | High quality bar TypeScript review for type safety, modern patterns, and maintainability |
 | `pattern-recognition-specialist` | Detect design patterns, anti-patterns, and code smells |
 | `performance-oracle` | Performance analysis, bottleneck identification, scalability |
+| `schema-drift-detector` | Detect unrelated schema.rb changes by cross-referencing against included migrations |
 | `security-sentinel` | Security audits, vulnerability assessment, OWASP compliance |
 
 ### Workflow Agents
@@ -199,34 +239,11 @@ Agents are invoked via OpenCode's `@mention` syntax or `task`:
 @architecture-strategist Review the authentication refactoring in this PR
 ```
 
-Or programmatically in skills/commands:
+Or programmatically in skills:
 
 ```
 task(subagent_type="architecture-strategist", prompt="Review...")
 ```
-
-## Commands
-
-Commands are slash-invokable shortcuts that trigger workflows or actions.
-
-### Workflow Commands
-
-| Command | Description |
-|---------|-------------|
-| `/workflows:brainstorm` | Explore requirements through collaborative dialogue |
-| `/workflows:plan` | Create detailed implementation plans |
-| `/workflows:review` | Run code review with specialized agents |
-| `/workflows:work` | Execute planned work systematically |
-| `/workflows:compound` | Document recently solved problems to build team knowledge |
-
-### Utility Commands
-
-| Command | Description |
-|---------|-------------|
-| `/systematic:lfg` | Full autonomous engineering workflow — plan, then execute |
-| `/systematic:create-agent-skill` | Create a new skill with expert guidance |
-| `/systematic:deepen-plan` | Enhance a plan with parallel research for each section |
-| `/systematic:agent-native-audit` | Audit code for agent-native architecture patterns |
 
 ## CLI
 
@@ -280,7 +297,6 @@ Configuration is loaded from multiple locations and merged (later sources overri
 {
   "disabled_skills": ["git-worktree"],
   "disabled_agents": [],
-  "disabled_commands": [],
   "bootstrap": {
     "enabled": true
   }
@@ -291,23 +307,20 @@ Configuration is loaded from multiple locations and merged (later sources overri
 |--------|------|---------|-------------|
 | `disabled_skills` | `string[]` | `[]` | Skills to exclude from registration |
 | `disabled_agents` | `string[]` | `[]` | Agents to exclude from registration |
-| `disabled_commands` | `string[]` | `[]` | Commands to exclude from registration |
 | `bootstrap.enabled` | `boolean` | `true` | Inject the `using-systematic` guide into system prompts |
 | `bootstrap.file` | `string` | — | Custom bootstrap file path (overrides default) |
 
 ### Project-Specific Content
 
-Add your own skills, agents, and commands alongside bundled ones:
+Add your own skills and agents alongside bundled ones:
 
 ```
 .opencode/
 ├── skills/
 │   └── my-skill/
 │       └── SKILL.md
-├── agents/
-│   └── my-agent.md
-└── commands/
-    └── my-command.md
+└── agents/
+    └── my-agent.md
 ```
 
 Project-level content takes precedence over bundled content with the same name.
@@ -333,7 +346,7 @@ flowchart TB
     A --> C[tool hook]
     A --> D[system.transform hook]
 
-    B --> E[Merge bundled agents/commands/skills into OpenCode config]
+    B --> E[Merge bundled agents and skills into OpenCode config]
     C --> F[Register systematic_skill tool]
     D --> G[Inject bootstrap prompt into every conversation]
 
@@ -346,11 +359,11 @@ flowchart TB
     style G fill:#0f0f23,stroke:#F5A623,color:#B2F5EA
 ```
 
-1. **`config` hook** — Discovers and merges bundled skills, agents, and commands into your OpenCode configuration. Existing config takes precedence over bundled content. Skills are registered as commands with the `systematic:` prefix.
+1. **`config` hook** — Discovers and merges bundled skills and agents into your OpenCode configuration. Existing config takes precedence over bundled content. Skills are registered as slash commands with the `systematic:` prefix.
 2. **`tool` hook** — Registers the `systematic_skill` tool, which lists available skills in its XML description and loads skill content on demand.
 3. **`system.transform` hook** — Injects the "Using Systematic" bootstrap guide into system prompts, teaching the AI how to discover and invoke skills.
 
-This architecture ensures skills, agents, and commands are available immediately without manual setup.
+This architecture ensures skills and agents are available immediately without manual setup.
 
 ## Development
 
@@ -398,18 +411,19 @@ systematic/
 │       ├── skill-loader.ts   # Skill content loading + formatting
 │       ├── skills.ts         # Skill discovery
 │       ├── agents.ts         # Agent discovery
-│       ├── commands.ts       # Command discovery
+│       ├── commands.ts       # Command discovery (backward compat)
 │       ├── frontmatter.ts    # YAML frontmatter parsing
 │       ├── manifest.ts       # Upstream sync manifest tracking
 │       ├── validation.ts     # Agent config validation + type guards
 │       └── walk-dir.ts       # Recursive directory walker
-├── skills/                   # 11 bundled skills (SKILL.md files)
-├── agents/                   # 24 bundled agents (4 categories)
-├── commands/                 # 9 bundled commands (with workflows/ subdir)
+├── skills/                   # 48 bundled skills (SKILL.md files)
+├── agents/                   # 29 bundled agents (5 categories)
 ├── docs/                     # Starlight documentation site
+├── registry/                 # OCX registry config + profiles
+├── scripts/                  # Build and utility scripts
 ├── tests/
-│   ├── unit/                 # Unit tests
-│   └── integration/          # Integration tests
+│   ├── unit/                 # 13 unit test files
+│   └── integration/          # 2 integration test files
 └── dist/                     # Build output
 ```
 
@@ -435,7 +449,7 @@ See [`AGENTS.md`](./AGENTS.md) for detailed development guidelines, code style c
 
 ## Converting from Claude Code
 
-Migrating skills, agents, or commands from CEP or other Claude Code-format sources to Systematic? See the [Conversion Guide](https://fro.bot/systematic/guides/conversion-guide/) for field mappings and examples. Also available as [local Markdown](./docs/CONVERSION-GUIDE.md).
+Migrating skills or agents from CEP or other Claude Code-format sources to Systematic? See the [Conversion Guide](https://fro.bot/systematic/guides/conversion-guide/) for field mappings and examples.
 
 ## References
 

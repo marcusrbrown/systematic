@@ -17,8 +17,7 @@
   "files": [
     "dist",
     "skills",
-    "agents",
-    "commands"
+    "agents"
   ],
   "workspaces": [
     "docs"

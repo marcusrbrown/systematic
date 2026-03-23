@@ -16,19 +16,18 @@ You can customize the plugin by creating a configuration file. Systematic looks 
 
 ### Disabling Bundled Content
 
-If you want to hide certain bundled skills, agents, or commands, you can list them in the `disabled_*` arrays:
+If you want to hide certain bundled skills or agents, you can list them in the `disabled_*` arrays:
 
 ```json
 {
   "disabled_skills": ["git-worktree"],
-  "disabled_agents": [],
-  "disabled_commands": []
+  "disabled_agents": []
 }
 ```
 
 ## Project-Specific Content
 
-One of Systematic's most powerful features is the ability to add your own skills, agents, and commands that live alongside (or override) the bundled ones.
+One of Systematic's most powerful features is the ability to add your own skills and agents that live alongside (or override) the bundled ones.
 
 Add your content to the `.opencode/` directory in your project:
 
@@ -39,9 +38,9 @@ Add your content to the `.opencode/` directory in your project:
 │       └── SKILL.md
 ├── agents/
 │   └── custom-reviewer.md
-└── commands/
-    └── deploy.md
 ```
+
+Project-level commands remain supported for backward compatibility under `.opencode/commands/` when you need local slash-command definitions.
 
 ### Overriding Bundled Content
 

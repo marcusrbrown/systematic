@@ -31,7 +31,7 @@ Systematic is distributed as an npm package and integrates directly into OpenCod
 
 2.  **Restart OpenCode**
 
-    Restart your OpenCode session to load the new plugin. Systematic uses OpenCode's `config` hook to automatically register all bundled skills, agents, and commands.
+    Restart your OpenCode session to load the new plugin. Systematic uses OpenCode's `config` hook to automatically register all bundled skills and agents.
 
 3.  **Verify Installation**
 
@@ -50,7 +50,7 @@ One of the key features of Systematic is that it requires zero manual file copyi
 
 - Discovers all bundled **skills** and makes them available via the `systematic_skill` tool.
 - Registers bundled **agents** so you can @mention them immediately.
-- Loads bundled **commands** (slash-invokable shortcuts) into your environment.
+- Exposes bundled skills as slash-invokable workflows (for example, `/ce:plan`).
 
 ## Next Steps
 

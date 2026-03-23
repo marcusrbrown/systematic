@@ -158,6 +158,12 @@ function collectAgents(
   return agents
 }
 
+/**
+ * Collect commands from a directory. The bundled commands/ directory was removed
+ * (all commands converted to skills), but this path is retained for backward
+ * compatibility with any future bundled commands or external tooling.
+ * walkDir returns an empty array when the directory does not exist.
+ */
 function collectCommands(
   dir: string,
   disabledCommands: string[],
