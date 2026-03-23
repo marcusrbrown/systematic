@@ -114,7 +114,7 @@ Implement #$ARGUMENTS following these steps:
 3. Implement
    - Follow existing code patterns (reference specific files)
    - Write tests first if doing TDD
-   - Ensure code follows CLAUDE.md conventions
+   - Ensure code follows AGENTS.md conventions
 
 4. Verify
    - Run tests: `bin/rails test`
