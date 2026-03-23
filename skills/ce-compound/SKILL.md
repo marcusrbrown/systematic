@@ -17,13 +17,13 @@ Captures problem solutions while context is fresh, creating structured documenta
 ## Usage
 
 ```bash
-/systematic:ce-compound                    # Document the most recent fix
-/systematic:ce-compound [brief context]    # Provide additional context hint
+/ce:compound                    # Document the most recent fix
+/ce:compound [brief context]    # Provide additional context hint
 ```
 
 ## Execution Strategy
 
-**Always run full mode by default.** Proceed directly to Phase 1 unless the user explicitly requests compact-safe mode (e.g., `/systematic:ce-compound --compact` or "use compact mode").
+**Always run full mode by default.** Proceed directly to Phase 1 unless the user explicitly requests compact-safe mode (e.g., `/ce:compound --compact` or "use compact mode").
 
 Compact-safe mode exists as a lightweight alternative — see the **Compact-Safe Mode** section below. It's there if the user wants it, not something to push.
 
@@ -128,10 +128,10 @@ When invoking or recommending `ce:compound-refresh`, be explicit about the argum
 
 Examples:
 
-- `/systematic:ce-compound-refresh plugin-versioning-requirements`
-- `/systematic:ce-compound-refresh payments`
-- `/systematic:ce-compound-refresh performance-issues`
-- `/systematic:ce-compound-refresh critical-patterns`
+- `/ce:compound-refresh plugin-versioning-requirements`
+- `/ce:compound-refresh payments`
+- `/ce:compound-refresh performance-issues`
+- `/ce:compound-refresh critical-patterns`
 
 A single scope hint may still expand to multiple related docs when the change is cross-cutting within one domain, category, or pattern area.
 
@@ -299,7 +299,7 @@ Build → Test → Find Issue → Research → Improve → Document → Validate
 
 <auto_invoke> <trigger_phrases> - "that worked" - "it's fixed" - "working now" - "problem solved" </trigger_phrases>
 
-<manual_override> Use /systematic:ce-compound [context] to document immediately without waiting for auto-detection. </manual_override> </auto_invoke>
+<manual_override> Use /ce:compound [context] to document immediately without waiting for auto-detection. </manual_override> </auto_invoke>
 
 ## Routes To
 
@@ -327,11 +327,11 @@ Based on problem type, these agents can enhance documentation:
 
 ### When to Invoke
 - **Auto-triggered** (optional): Agents can run post-documentation for enhancement
-- **Manual trigger**: User can invoke agents after /systematic:ce-compound completes for deeper review
-- **Customize agents**: Edit `compound-engineering.local.md` or invoke the `setup` skill to configure which review agents are used across all workflows
+- **Manual trigger**: User can invoke agents after /ce:compound completes for deeper review
+- **Customize agents**: Edit `systematic.local.md` or invoke the `setup` skill to configure which review agents are used across all workflows
 
 ## Related Commands
 
 - `/research [topic]` - Deep investigation (searches docs/solutions/ for patterns)
-- `/systematic:ce-plan` - Planning workflow (references documented solutions)
+- `/ce:plan` - Planning workflow (references documented solutions)
 

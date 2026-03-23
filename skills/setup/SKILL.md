@@ -8,7 +8,7 @@ disable-model-invocation: true
 
 ## Interaction Method
 
-If `AskUserQuestion` is available, use it for all prompts below.
+If `question` is available, use it for all prompts below.
 
 If not, present each question as a numbered list and wait for a reply before proceeding to the next step. For multiSelect questions, accept comma-separated numbers (e.g. `1, 3`). Never skip or auto-configure.
 
@@ -16,7 +16,7 @@ Interactive setup for `systematic.local.md` — configures which agents run duri
 
 ## Step 1: Check Existing Config
 
-Read `systematic.local.md` in the project root. If it exists, display current settings summary and use AskUserQuestion:
+Read `systematic.local.md` in the project root. If it exists, display current settings summary and use question:
 
 ```
 question: "Settings file already exists. What would you like to do?"
@@ -47,7 +47,7 @@ test -f requirements.txt && echo "python" || \
 echo "general"
 ```
 
-Use AskUserQuestion:
+Use question:
 
 ```
 question: "Detected {type} project. How would you like to configure?"

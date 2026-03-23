@@ -49,7 +49,7 @@ ls -la docs/brainstorms/*-requirements.md 2>/dev/null | head -10
 5. Use source document content as the **primary input** to research and planning phases
 6. **Critical: The source document is the origin document.** Throughout the plan, reference specific decisions with `(see origin: <source-path>)` when carrying forward conclusions. Do not paraphrase decisions in a way that loses their original context — link back to the source.
 7. **Do not omit source content** — if the source document discussed it, the plan must address it (even if briefly). Scan each section before finalizing the plan to verify nothing was dropped.
-8. **If `Resolve Before Planning` contains any items, stop.** Do not proceed with planning. Tell the user planning is blocked by unanswered brainstorm questions and direct them to resume `/systematic:ce-brainstorm` or answer those questions first.
+8. **If `Resolve Before Planning` contains any items, stop.** Do not proceed with planning. Tell the user planning is blocked by unanswered brainstorm questions and direct them to resume `/ce:brainstorm` or answer those questions first.
 
 **If multiple source documents could match:**
 Use **question tool** to ask which source document to use, or whether to proceed without one.
@@ -582,8 +582,8 @@ After writing the plan file, use the **question tool** to present these options:
 2. **Run `/deepen-plan`** - Enhance each section with parallel research agents (best practices, performance, UI)
 3. **Review and refine** - Improve the document through structured self-review
 4. **Share to Proof** - Upload to Proof for collaborative review and sharing
-5. **Start `/systematic:ce-work`** - Begin implementing this plan locally
-6. **Start `/systematic:ce-work` on remote** - Begin implementing in OpenCode on the web (use `&` to run in background)
+5. **Start `/ce:work`** - Begin implementing this plan locally
+6. **Start `/ce:work` on remote** - Begin implementing in OpenCode on the web (use `&` to run in background)
 7. **Create Issue** - Create issue in project tracker (GitHub/Linear)
 
 Based on selection:
@@ -600,14 +600,14 @@ Based on selection:
   PROOF_URL=$(echo "$RESPONSE" | jq -r '.tokenUrl')
   ```
   Display: `View & collaborate in Proof: <PROOF_URL>` — skip silently if curl fails. Then return to options.
-- **`/systematic:ce-work`** → Call the /systematic:ce-work command with the plan file path
-- **`/systematic:ce-work` on remote** → Run `/systematic:ce-work docs/plans/<plan_filename>.md &` to start work in background for OpenCode web
+- **`/ce:work`** → Call the /ce:work command with the plan file path
+- **`/ce:work` on remote** → Run `/ce:work docs/plans/<plan_filename>.md &` to start work in background for OpenCode web
 - **Create Issue** → See "Issue Creation" section below
 - **Other** (automatically provided) → Accept free text for rework or specific changes
 
-**Note:** If running `/systematic:ce-plan` with ultrathink enabled, automatically run `/deepen-plan` after plan creation for maximum depth and grounding.
+**Note:** If running `/ce:plan` with ultrathink enabled, automatically run `/deepen-plan` after plan creation for maximum depth and grounding.
 
-Loop back to options after Simplify or Other changes until user selects `/systematic:ce-work` or another action.
+Loop back to options after Simplify or Other changes until user selects `/ce:work` or another action.
 
 ## Issue Creation
 
@@ -637,7 +637,7 @@ When user selects "Create Issue", detect their project tracker from AGENTS.md:
 
 5. **After creation:**
    - Display the issue URL
-   - Ask if they want to proceed to `/systematic:ce-work`
+   - Ask if they want to proceed to `/ce:work`
 
 NEVER CODE! Just research and write the plan.
 

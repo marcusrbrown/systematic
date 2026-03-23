@@ -185,7 +185,7 @@ Work logs serve as:
 
 | Trigger | Flow | Tool |
 |---------|------|------|
-| Code review | `/workflows:review` → Findings → `/triage` → Todos | Review agent + skill |
+| Code review | `/ce:review` → Findings → `/triage` → Todos | Review agent + skill |
 | PR comments | `/resolve_pr_parallel` → Individual fixes → Todos | gh CLI + skill |
 | Code TODOs | `/resolve_todo_parallel` → Fixes + Complex todos | Agent + skill |
 | Planning | Brainstorm → Create todo → Work → Complete | Skill |
@@ -250,3 +250,4 @@ grep -r "payment" todos/
 - Temporary tracking for single conversation
 - Not persisted to disk
 - Different from both systems above
+

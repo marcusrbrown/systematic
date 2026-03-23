@@ -51,10 +51,10 @@ Ensure that the code is ready for analysis (either in worktree or on current bra
 #### Protected Artifacts
 
 <protected_artifacts>
-The following paths are compound-engineering pipeline artifacts and must never be flagged for deletion, removal, or gitignore by any review agent:
+The following paths are systematic pipeline artifacts and must never be flagged for deletion, removal, or gitignore by any review agent:
 
-- `docs/brainstorms/*-requirements.md` — Requirements documents created by `/systematic:ce-brainstorm`. These are the product-definition artifacts that planning depends on.
-- `docs/plans/*.md` — Plan files created by `/systematic:ce-plan`. These are living documents that track implementation progress (checkboxes are checked off by `/systematic:ce-work`).
+- `docs/brainstorms/*-requirements.md` — Requirements documents created by `/ce:brainstorm`. These are the product-definition artifacts that planning depends on.
+- `docs/plans/*.md` — Plan files created by `/ce:plan`. These are living documents that track implementation progress (checkboxes are checked off by `/ce:work`).
 - `docs/solutions/*.md` — Solution documents created during the pipeline.
 
 If a review agent flags any file in these directories for cleanup or removal, discard that finding during synthesis. Do not create a todo for it.
@@ -62,7 +62,7 @@ If a review agent flags any file in these directories for cleanup or removal, di
 
 #### Load Review Agents
 
-Read `compound-engineering.local.md` in the project root. If found, use `review_agents` from YAML frontmatter. If the markdown body contains review context, pass it to each agent as additional instructions.
+Read `systematic.local.md` in the project root. If found, use `review_agents` from YAML frontmatter. If the markdown body contains review context, pass it to each agent as additional instructions.
 
 If no settings file exists, invoke the `setup` skill to create one. Then read the newly created file and continue.
 
@@ -279,9 +279,9 @@ Remove duplicates, prioritize by severity and impact.
 
 ```bash
 # Launch multiple finding-creator agents in parallel
-Task() - Create todos for first finding
-Task() - Create todos for second finding
-Task() - Create todos for third finding
+task() - Create todos for first finding
+task() - Create todos for second finding
+task() - Create todos for third finding
 etc. for each finding.
 ```
 

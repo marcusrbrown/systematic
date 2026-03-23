@@ -1,7 +1,8 @@
 ---
-name: ce:work
-description: Execute work plans efficiently while maintaining quality and finishing features
+name: ce:work-beta
+description: 'Use this skill when executing a plan with the ce:work workflow but you also want optional external delegate execution for implementation-heavy tasks. Ideal for large tasks where token conservation matters and acceptance criteria are already clear.'
 argument-hint: '[plan file, specification, or todo file path]'
+disable-model-invocation: true
 ---
 
 # Work Plan Execution Command
@@ -25,9 +26,11 @@ This command takes a work document (plan, specification, or todo file) and execu
    - Read the work document completely
    - Treat the plan as a decision artifact, not an execution script
    - If the plan includes sections such as `Implementation Units`, `Work Breakdown`, `Requirements Trace`, `Files`, `Test Scenarios`, or `Verification`, use those as the primary source material for execution
+   - Check for `Execution note` on each implementation unit — these carry the plan's execution posture signal for that unit (for example, test-first or characterization-first). Note them when creating tasks.
    - Check for a `Deferred to Implementation` or `Implementation-Time Unknowns` section — these are questions the planner intentionally left for you to resolve during execution. Note them before starting so they inform your approach rather than surprising you mid-task
    - Check for a `Scope Boundaries` section — these are explicit non-goals. Refer back to them if implementation starts pulling you toward adjacent work
    - Review any references or links provided in the plan
+   - If the user explicitly asks for TDD, test-first, or characterization-first execution in this session, honor that request even if the plan has no `Execution note`
    - If anything is unclear or ambiguous, ask clarifying questions now
    - Get user approval to proceed
    - **Do not skip this** - better to ask questions now than build the wrong thing
@@ -79,6 +82,7 @@ This command takes a work document (plan, specification, or todo file) and execu
 3. **Create Todo List**
    - Use your available task tracking tool (e.g., todowrite, task lists) to break the plan into actionable tasks
    - Derive tasks from the plan's implementation units, dependencies, files, test targets, and verification criteria
+   - Carry each unit's `Execution note` into the task when present
    - For each unit, read the `Patterns to follow` field before implementing — these point to specific files or conventions to mirror
    - Use each unit's `Verification` field as the primary "done" signal for that task
    - Do not expect the plan to contain implementation code, micro-step TDD instructions, or exact shell commands
@@ -99,7 +103,7 @@ This command takes a work document (plan, specification, or todo file) and execu
 
    **Subagent dispatch** uses your available subagent or task spawning mechanism. For each unit, give the subagent:
    - The full plan file path (for overall context)
-   - The specific unit's Goal, Files, Approach, Patterns, Test scenarios, and Verification
+   - The specific unit's Goal, Files, Approach, Execution note, Patterns, Test scenarios, and Verification
    - Any resolved deferred questions relevant to that unit
 
    After each subagent completes, update the plan checkboxes and task list before dispatching the next dependent unit.
@@ -124,6 +128,14 @@ This command takes a work document (plan, specification, or todo file) and execu
      - Mark task as completed
      - Evaluate for incremental commit (see below)
    ```
+
+   When a unit carries an `Execution note`, honor it. For test-first units, write the failing test before implementation for that unit. For characterization-first units, capture existing behavior before changing it. For units without an `Execution note`, proceed pragmatically.
+
+   Guardrails for execution posture:
+   - Do not write the test and implementation in the same step when working test-first
+   - Do not skip verifying that a new test fails before implementing the fix or feature
+   - Do not over-implement beyond the current behavior slice when working test-first
+   - Skip test-first discipline for trivial renames, pure configuration, and pure styling work
 
    **System-Wide Test Check** — Before marking a task done, pause and ask:
 
@@ -176,7 +188,7 @@ This command takes a work document (plan, specification, or todo file) and execu
    - The plan should reference similar code - read those files first
    - Match naming conventions exactly
    - Reuse existing components where possible
-   - Follow project coding standards (see AGENTS.md)
+   - Follow project coding standards (see AGENTS.md; use AGENTS.md only if the repo still keeps a compatibility shim)
    - When in doubt, grep for similar implementations
 
 4. **Test Continuously**
@@ -226,7 +238,7 @@ This command takes a work document (plan, specification, or todo file) and execu
 
 2. **Consider Reviewer Agents** (Optional)
 
-   Use for complex, risky, or large changes. Read agents from `systematic.local.md` frontmatter (`review_agents`). If no settings file, invoke the `setup` skill to create one.
+   Use for complex, risky, or large changes. Read agents from your local workflow settings frontmatter (`review_agents`). If no settings file exists, invoke the `setup` skill to create one.
 
    Run configured agents in parallel with task tool. Present findings and address critical issues.
 
@@ -360,7 +372,7 @@ This command takes a work document (plan, specification, or todo file) and execu
 
    ---
 
-   [![Systematic v[VERSION]](https://img.shields.io/badge/Systematic-v[VERSION]-6366f1)](https://github.com/EveryInc/systematic)
+   [![Systematic v[VERSION]](https://img.shields.io/badge/Systematic-v[VERSION]-6366f1)](https://github.com/marcusrbrown/systematic)
    🤖 Generated with [MODEL] ([CONTEXT] context, [THINKING]) via [HARNESS](HARNESS_URL)
    EOF
    )"
@@ -405,6 +417,70 @@ Most plans should use subagent dispatch from standard mode. Agent teams add sign
 3. **Spawn teammates** — assign specialized roles (implementer, tester, reviewer) based on the plan's needs. Give each teammate the plan file path and their specific task assignments
 4. **Coordinate** — the lead monitors task completion, reassigns work if someone gets stuck, and spawns additional workers as phases unblock
 5. **Cleanup** — shut down all teammates, then clean up the team resources
+
+---
+
+## External Delegate Mode (Optional)
+
+For plans where token conservation matters, delegate code implementation to an external delegate (currently Codex CLI) while keeping planning, review, and git operations in the current agent.
+
+This mode integrates with the existing Phase 1 Step 4 strategy selection as a **task-level modifier** - the strategy (inline/serial/parallel) still applies, but the implementation step within each tagged task delegates to the external tool instead of executing directly.
+
+### When to Use External Delegation
+
+| External Delegation | Standard Mode |
+|---------------------|---------------|
+| Task is pure code implementation | Task requires research or exploration |
+| Plan has clear acceptance criteria | Task is ambiguous or needs iteration |
+| Token conservation matters (e.g., Max20 plan) | Unlimited plan or small task |
+| Files to change are well-scoped | Changes span many interconnected files |
+
+### Enabling External Delegation
+
+External delegation activates when any of these conditions are met:
+- The user says "use codex for this work", "delegate to codex", or "delegate mode"
+- A plan implementation unit contains `Execution target: external-delegate` in its Execution note (set by ce:plan-beta or ce:plan)
+
+The specific delegate tool is resolved at execution time. Currently the only supported delegate is Codex CLI. Future delegates can be added without changing plan files.
+
+### Environment Guard
+
+Before attempting delegation, check whether the current agent is already running inside a delegate's sandbox. Delegation from within a sandbox will fail silently or recurse.
+
+Check for known sandbox indicators:
+- `CODEX_SANDBOX` environment variable is set
+- `CODEX_SESSION_ID` environment variable is set
+- The filesystem is read-only at `.git/` (Codex sandbox blocks git writes)
+
+If any indicator is detected, print "Already running inside a delegate sandbox - using standard mode." and proceed with standard execution for that task.
+
+### External Delegation Workflow
+
+When external delegation is active, follow this workflow for each tagged task. Do not skip delegation because a task seems "small", "simple", or "faster inline". The user or plan explicitly requested delegation.
+
+1. **Check availability**
+
+   Verify the delegate CLI is installed. If not found, print "Delegate CLI not installed - continuing with standard mode." and proceed normally.
+
+2. **Build prompt** — For each task, assemble a prompt from the plan's implementation unit (Goal, Files, Approach, and project conventions). Include rules: no git commits, no PRs, run `git status` and `git diff --stat` when done. Never embed credentials or tokens in the prompt - pass auth through environment variables.
+
+3. **Write prompt to file** — Save the assembled prompt to a unique temporary file to avoid shell quoting issues and cross-task races. Use a unique filename per task.
+
+4. **Delegate** — Run the delegate CLI, piping the prompt file via stdin (not argv expansion, which hits `ARG_MAX` on large prompts). Omit the model flag to use the delegate's default model, which stays current without manual updates.
+
+5. **Review diff** — After the delegate finishes, verify the diff is non-empty and in-scope. Run the project's test/lint commands. If the diff is empty or out-of-scope, fall back to standard mode for that task.
+
+6. **Commit** — The current agent handles all git operations. The delegate's sandbox blocks `.git/index.lock` writes, so the delegate cannot commit. Stage changes and commit with a conventional message.
+
+7. **Error handling** — On any delegate failure (rate limit, error, empty diff), fall back to standard mode for that task. Track consecutive failures - after 3 consecutive failures, disable delegation for remaining tasks and print "Delegate disabled after 3 consecutive failures - completing remaining tasks in standard mode."
+
+### Mixed-Model Attribution
+
+When some tasks are executed by the delegate and others by the current agent, use the following attribution in Phase 4:
+
+- If all tasks used the delegate: attribute to the delegate model
+- If all tasks used standard mode: attribute to the current agent's model
+- If mixed: use `Generated with [CURRENT_MODEL] + [DELEGATE_MODEL] via [HARNESS]` and note which tasks were delegated in the PR description
 
 ---
 
@@ -478,4 +554,3 @@ For most features: tests + linting + following patterns is sufficient.
 - **Forgetting to track progress** - Update task status as you go or lose track of what's done
 - **80% done syndrome** - Finish the feature, don't move on early
 - **Over-reviewing simple changes** - Save reviewer agents for complex work
-

@@ -10,7 +10,7 @@ argument-hint: '[path to plan file]'
 
 **Note: The current year is 2026.** Use this when searching for recent documentation and best practices.
 
-This command takes an existing plan (from `/systematic:ce-plan`) and enhances each section with parallel research agents. Each major element gets its own dedicated research sub-agent to find:
+This command takes an existing plan (from `/ce:plan`) and enhances each section with parallel research agents. Each major element gets its own dedicated research sub-agent to find:
 - Best practices and industry patterns
 - Performance optimizations
 - UI/UX improvements (if applicable)
@@ -68,9 +68,9 @@ Dynamically discover all available skills and match them to plan sections. Don't
 ls .opencode/skills/
 
 # 2. User's global skills (~/.config/opencode/)
-ls ~/.opencode/skills/
+ls ~/.config/opencode/skills/
 
-# 3. compound-engineering plugin skills
+# 3. systematic plugin skills
 ls ~/.config/opencode/plugins/cache/*/compound-engineering/*/skills/
 
 # 4. ALL other installed plugins - check every plugin for skills
@@ -137,7 +137,7 @@ Task general-purpose: "Use the frontend-design skill at ~/.config/opencode/plugi
 
 Task general-purpose: "Use the agent-native-architecture skill at ~/.config/opencode/plugins/.../agent-native-architecture. Read SKILL.md and apply it to: [agent/tool sections of plan]"
 
-Task general-purpose: "Use the security-patterns skill at ~/.opencode/skills/security-patterns. Read SKILL.md and apply it to: [full plan]"
+Task general-purpose: "Use the security-patterns skill at ~/.config/opencode/skills/security-patterns. Read SKILL.md and apply it to: [full plan]"
 ```
 
 **No limit on skill sub-agents. Spawn one for every skill that could possibly be relevant.**
@@ -145,13 +145,13 @@ Task general-purpose: "Use the security-patterns skill at ~/.opencode/skills/sec
 ### 3. Discover and Apply Learnings/Solutions
 
 <thinking>
-Check for documented learnings from /systematic:ce-compound. These are solved problems stored as markdown files. Spawn a sub-agent for each learning to check if it's relevant.
+Check for documented learnings from /ce:compound. These are solved problems stored as markdown files. Spawn a sub-agent for each learning to check if it's relevant.
 </thinking>
 
 **LEARNINGS LOCATION - Check these exact folders:**
 
 ```
-docs/solutions/           <-- PRIMARY: Project-level learnings (created by /systematic:ce-compound)
+docs/solutions/           <-- PRIMARY: Project-level learnings (created by /ce:compound)
 ├── performance-issues/
 │   └── *.md
 ├── debugging-patterns/
@@ -175,7 +175,7 @@ Run these commands to get every learning file:
 find docs/solutions -name "*.md" -type f 2>/dev/null
 
 # If docs/solutions doesn't exist, check alternate locations:
-find .claude/docs -name "*.md" -type f 2>/dev/null
+find .opencode/docs -name "*.md" -type f 2>/dev/null
 find ~/.config/opencode/docs -name "*.md" -type f 2>/dev/null
 ```
 
@@ -305,12 +305,12 @@ Dynamically discover every available agent and run them ALL against the plan. Do
 
 ```bash
 # 1. Project-local agents (highest priority - project-specific)
-find .claude/agents -name "*.md" 2>/dev/null
+find .opencode/agents -name "*.md" 2>/dev/null
 
 # 2. User's global agents (~/.config/opencode/)
 find ~/.config/opencode/agents -name "*.md" 2>/dev/null
 
-# 3. compound-engineering plugin agents (all subdirectories)
+# 3. systematic plugin agents (all subdirectories)
 find ~/.config/opencode/plugins/cache/*/compound-engineering/*/agents -name "*.md" 2>/dev/null
 
 # 4. ALL other installed plugins - check every plugin for agents
@@ -324,13 +324,13 @@ cat ~/.config/opencode/plugins/installed_plugins.json
 ```
 
 **Important:** Check EVERY source. Include agents from:
-- Project `.claude/agents/`
+- Project `.opencode/agents/`
 - User's `~/.config/opencode/agents/`
-- compound-engineering plugin (but SKIP workflow/ agents - only use review/, research/, design/, docs/)
+- systematic plugin (but SKIP workflow/ agents - only use review/, research/, design/, docs/)
 - ALL other installed plugins (agent-sdk-dev, frontend-design, etc.)
 - Any local plugins
 
-**For compound-engineering plugin specifically:**
+**For systematic plugin specifically:**
 - USE: `agents/review/*` (all reviewers)
 - USE: `agents/research/*` (all researchers)
 - USE: `agents/design/*` (design agents)
@@ -370,7 +370,7 @@ Wait for ALL parallel agents to complete - skills, research agents, review agent
 **Collect outputs from ALL sources:**
 
 1. **Skill-based sub-agents** - Each skill's full output (code examples, patterns, recommendations)
-2. **Learnings/Solutions sub-agents** - Relevant documented learnings from /systematic:ce-compound
+2. **Learnings/Solutions sub-agents** - Relevant documented learnings from /ce:compound
 3. **Research agents** - Best practices, documentation, real-world examples
 4. **Review agents** - All feedback from every reviewer (architecture, security, performance, simplicity, etc.)
 5. **Context7 queries** - Framework documentation and patterns
@@ -480,13 +480,13 @@ After writing the enhanced plan, use the **question tool** to present these opti
 
 **Options:**
 1. **View diff** - Show what was added/changed
-2. **Start `/systematic:ce-work`** - Begin implementing this enhanced plan
+2. **Start `/ce:work`** - Begin implementing this enhanced plan
 3. **Deepen further** - Run another round of research on specific sections
 4. **Revert** - Restore original plan (if backup exists)
 
 Based on selection:
 - **View diff** → Run `git diff [plan_path]` or show before/after
-- **`/systematic:ce-work`** → Call the /systematic:ce-work command with the plan file path
+- **`/ce:work`** → Call the /ce:work command with the plan file path
 - **Deepen further** → Ask which sections need more research, then re-run those agents
 - **Revert** → Restore from git or backup
 
