@@ -25,6 +25,11 @@ describe('skill-loader', () => {
       )
     })
 
+    test('preserves names with a non-systematic colon prefix', () => {
+      expect(formatSkillCommandName('ce:plan')).toBe('ce:plan')
+      expect(formatSkillCommandName('ce:brainstorm')).toBe('ce:brainstorm')
+    })
+
     test('handles empty string', () => {
       expect(formatSkillCommandName('')).toBe('systematic:')
     })

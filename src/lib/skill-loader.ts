@@ -22,7 +22,7 @@ export interface LoadedSkill {
 }
 
 export function formatSkillCommandName(name: string): string {
-  if (name.startsWith(SKILL_PREFIX)) {
+  if (name.includes(':')) {
     return name
   }
   return `${SKILL_PREFIX}${name}`

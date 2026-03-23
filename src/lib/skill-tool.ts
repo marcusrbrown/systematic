@@ -5,6 +5,7 @@ import type { ToolDefinition } from '@opencode-ai/plugin'
 import { tool } from '@opencode-ai/plugin/tool'
 import {
   extractSkillBody,
+  formatSkillCommandName,
   type LoadedSkill,
   loadSkill,
 } from './skill-loader.js'
@@ -26,7 +27,7 @@ export function formatSkillsXml(skills: SkillInfo[]): string {
   // Uses space-delimited join with indented XML structure
   const skillLines = skills.flatMap((skill) => [
     '  <skill>',
-    `    <name>systematic:${skill.name}</name>`,
+    `    <name>${formatSkillCommandName(skill.name)}</name>`,
     `    <description>${skill.description}</description>`,
     `    <location>${pathToFileURL(skill.path).href}</location>`,
     '  </skill>',
@@ -134,7 +135,7 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
     const skills = getDiscoverableSkills()
     const examples = skills
       .slice(0, 3)
-      .map((s) => `'systematic:${s.name}'`)
+      .map((s) => `'${s.prefixedName}'`)
       .join(', ')
     const hint = examples.length > 0 ? ` (e.g., ${examples}, ...)` : ''
     return `The name of the skill from available_skills${hint}`

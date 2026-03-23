@@ -230,6 +230,37 @@ Command template for ${name}.`,
       )
     })
 
+    test('registers colon-prefixed skills without systematic: prefix', async () => {
+      const skillDir = path.join(bundledDir, 'skills', 'ce-plan')
+      fs.mkdirSync(skillDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(skillDir, 'SKILL.md'),
+        `---
+name: ce:plan
+description: Plan workflow skill
+---
+# CE Plan
+
+Skill content for ce:plan.`,
+      )
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.command?.['ce:plan']).toBeDefined()
+      expect(config.command?.['systematic:ce:plan']).toBeUndefined()
+      expect(config.command?.['ce:plan']?.description).toBe(
+        '(Systematic - Skill) Plan workflow skill',
+      )
+    })
+
     test('preserves existing config entries', async () => {
       createAgent(
         path.join(bundledDir, 'agents'),

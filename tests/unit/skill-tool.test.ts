@@ -88,6 +88,20 @@ describe('skill-tool', () => {
       expect(result).toContain('skill-one')
       expect(result).toContain('skill-two')
     })
+
+    test('preserves names that already include a colon prefix', () => {
+      const result = formatSkillsXml([
+        {
+          path: '/test/path',
+          skillFile: '/test/path/SKILL.md',
+          name: 'ce:plan',
+          description: 'Plan workflow skill',
+        },
+      ])
+
+      expect(result).toContain('<name>ce:plan</name>')
+      expect(result).not.toContain('<name>systematic:ce:plan</name>')
+    })
   })
 
   describe('createSkillTool', () => {
@@ -232,6 +246,30 @@ description: Test
 
       expect(result).toContain('systematic:no-prefix')
       expect(result).toContain('# No Prefix Content')
+    })
+
+    test('loads skill that uses a non-systematic colon prefix', async () => {
+      const skillDir = path.join(testDir, 'ce-plan')
+      fs.mkdirSync(skillDir)
+      fs.writeFileSync(
+        path.join(skillDir, 'SKILL.md'),
+        `---
+name: ce:plan
+description: Test CE skill
+---
+# CE Plan Content`,
+      )
+
+      const tool = createSkillTool({
+        bundledSkillsDir: testDir,
+        disabledSkills: [],
+      })
+
+      const result = await tool.execute({ name: 'ce:plan' }, mockContext)
+
+      expect(result).toContain('ce:plan')
+      expect(result).toContain('# CE Plan Content')
+      expect(result).not.toContain('systematic:ce:plan')
     })
 
     test('throws error when skill not found', async () => {
