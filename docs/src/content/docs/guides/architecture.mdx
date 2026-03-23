@@ -11,7 +11,7 @@ Systematic is designed as a lightweight yet powerful extension for OpenCode. It 
 
 The plugin is divided into two main parts:
 1.  **TypeScript Source (`src/`):** The core logic that handles plugin registration, asset discovery, and conversion.
-2.  **Bundled Assets (`skills/`, `agents/`, `commands/`):** Battle-tested engineering content that is automatically discovered and registered by the plugin.
+2.  **Bundled Assets (`skills/` and `agents/`):** Battle-tested engineering content that is automatically discovered and registered by the plugin.
 
 ## How It Works
 
@@ -23,7 +23,7 @@ flowchart TB
     A --> C[tool hook]
     A --> D[system.transform hook]
 
-    B --> E[Merge bundled agents/commands/skills into OpenCode config]
+    B --> E[Merge bundled agents and skills into OpenCode config]
     C --> F[Register systematic_skill tool]
     D --> G[Inject bootstrap prompt into every conversation]
 
@@ -37,7 +37,7 @@ flowchart TB
 ```
 
 ### 1. `config` Hook
-The `config` hook is responsible for discovery and merging. It recursively walks the bundled asset directories (`skills/`, `agents/`, `commands/`) and merges their definitions into your active OpenCode configuration. This ensures that agents like `@architecture-strategist` are available without manual setup.
+The `config` hook is responsible for discovery and merging. It recursively walks the bundled asset directories (`skills/` and `agents/`) and merges their definitions into your active OpenCode configuration. This ensures that agents like `@architecture-strategist` are available without manual setup.
 
 ### 2. `tool` Hook
 The plugin registers a custom tool called `systematic_skill`. This tool is used by the AI to load the full content of bundled skills on demand. While OpenCode has a native `skill` tool, `systematic_skill` provides optimized access to the plugin's bundled content.

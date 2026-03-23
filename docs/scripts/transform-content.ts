@@ -91,6 +91,7 @@ function transformFrontmatter(
       review: 'note',
       research: 'success',
       design: 'tip',
+      docs: 'default',
       workflow: 'caution',
     }
     transformed.sidebar = {
@@ -129,7 +130,7 @@ function generateDefinitionHeader(options: {
   return `<div class="definition-header not-content">\n${parts.map((p) => `  ${p}`).join('\n')}\n</div>\n`
 }
 
-type DefinitionType = 'skill' | 'agent' | 'command'
+type DefinitionType = 'skill' | 'agent'
 
 function deriveName(
   data: Frontmatter,
@@ -169,6 +170,7 @@ const AGENT_CATEGORY_ORDER = [
   'Review',
   'Research',
   'Design',
+  'Docs',
   'Workflow',
 ] as const
 
@@ -187,12 +189,6 @@ const INDEX_META: Record<
     description: 'Bundled Systematic agents and their review focus areas.',
     intro:
       'Agents are specialized for specific review, research, or workflow tasks. They can be invoked by @mention or via commands.',
-  },
-  command: {
-    title: 'Commands Reference',
-    description: 'Bundled Systematic commands and the workflows they trigger.',
-    intro:
-      "Slash commands ship with Systematic and trigger structured engineering workflows. Use these references to learn each command's purpose and expected usage.",
   },
 }
 
@@ -243,21 +239,6 @@ function generateIndexPage(
       lines.push(renderCardGrid(group, outputSubdir))
       lines.push('')
     }
-  } else if (definitionType === 'command') {
-    const workflows = entries.filter((e) => e.slug.startsWith('workflows-'))
-    const utilities = entries.filter((e) => !e.slug.startsWith('workflows-'))
-    if (workflows.length > 0) {
-      lines.push('## Workflows')
-      lines.push('')
-      lines.push(renderCardGrid(workflows, outputSubdir))
-      lines.push('')
-    }
-    if (utilities.length > 0) {
-      lines.push('## Utilities')
-      lines.push('')
-      lines.push(renderCardGrid(utilities, outputSubdir))
-      lines.push('')
-    }
   } else {
     lines.push(renderCardGrid(entries, outputSubdir))
     lines.push('')
@@ -273,11 +254,6 @@ function processDirectory(
   definitionType: DefinitionType,
   filePattern: RegExp = /\.md$/,
 ): { count: number; entries: DefinitionEntry[] } {
-  if (!fs.existsSync(sourceDir)) {
-    console.warn(`⚠️  Source directory not found: ${sourceDir}`)
-    return { count: 0, entries: [] }
-  }
-
   const outputDir = path.join(OUTPUT_DIR, outputSubdir)
   try {
     fs.mkdirSync(outputDir, { recursive: true })
@@ -290,6 +266,11 @@ function processDirectory(
   } catch (error) {
     console.error(`✗ Failed to create output directory: ${outputDir}`, error)
     process.exit(1)
+  }
+
+  if (!fs.existsSync(sourceDir)) {
+    console.warn(`⚠️  Source directory not found: ${sourceDir}`)
+    return { count: 0, entries: [] }
   }
 
   const files: string[] = []
@@ -380,12 +361,4 @@ const { count: agentsCount } = processDirectory(
   'agents',
   'agent',
 )
-const { count: commandsCount } = processDirectory(
-  path.join(PROJECT_ROOT, 'commands'),
-  'commands',
-  'command',
-)
-
-console.log(
-  `✓ Generated ${skillsCount} skills, ${agentsCount} agents, ${commandsCount} commands`,
-)
+console.log(`✓ Generated ${skillsCount} skills, ${agentsCount} agents`)

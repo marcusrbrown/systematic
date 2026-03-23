@@ -28,7 +28,7 @@ This loop transforms your AI assistant from a simple code generator into a disci
 
 The plan phase turns an idea into a blueprint. Before a single line of code is written, the AI researches your codebase, gathers framework documentation, and identifies potential edge cases.
 
-**Command:** [`/workflows:plan`](/systematic/reference/commands/plan/)
+**Skill:** [`/ce:plan`](/systematic/reference/skills/ce-plan/)
 
 ### What happens in Plan:
 1.  **Requirement Analysis:** The AI clarifies what you're building and why.
@@ -43,7 +43,7 @@ The plan phase turns an idea into a blueprint. Before a single line of code is w
 
 The work phase executes the approved plan. Instead of you typing, you monitor the AI as it implements the solution step-by-step in an isolated environment.
 
-**Command:** [`/workflows:work`](/systematic/reference/commands/work/)
+**Skill:** [`/ce:work`](/systematic/reference/skills/ce-work/)
 
 ### What happens in Work:
 1.  **Isolation:** The AI sets up a git worktree or branch to keep your main workspace clean.
@@ -57,7 +57,7 @@ The work phase executes the approved plan. Instead of you typing, you monitor th
 
 The review phase catches issues before they ship. Systematic launches multiple specialized agents in parallel to analyze your code from different perspectives.
 
-**Command:** [`/workflows:review`](/systematic/reference/commands/review/)
+**Skill:** [`/ce:review`](/systematic/reference/skills/ce-review/)
 
 ### What happens in Review:
 -   **Multi-Agent Audit:** Agents like [`@security-sentinel`](/systematic/reference/agents/security-sentinel/) and [`@architecture-strategist`](/systematic/reference/agents/architecture-strategist/) scan for vulnerabilities and design flaws.
@@ -71,7 +71,7 @@ The review phase catches issues before they ship. Systematic launches multiple s
 
 The compound phase turns today's solutions into tomorrow's advantages. By documenting solved problems, you build "institutional knowledge" that future AI agents can use.
 
-**Command:** [`/workflows:compound`](/systematic/reference/commands/compound/)
+**Skill:** [`/ce:compound`](/systematic/reference/skills/ce-compound/)
 
 ### What happens in Compound:
 1.  **Solution Capture:** The AI asks what you learned during the implementation.
@@ -83,12 +83,12 @@ The compound phase turns today's solutions into tomorrow's advantages. By docume
 
 ## Quick Reference
 
-| Phase | Command | Primary Agent/Skill |
+| Phase | Skill | Primary Agent/Skill |
 | :--- | :--- | :--- |
-| **Plan** | `/workflows:plan` | `@repo-research-analyst` |
-| **Work** | `/workflows:work` | `skill:git-worktree` |
-| **Review** | `/workflows:review` | `@architecture-strategist` |
-| **Compound** | `/workflows:compound` | `skill:compound-docs` |
+| **Plan** | `/ce:plan` | `@repo-research-analyst` |
+| **Work** | `/ce:work` | `skill:git-worktree` |
+| **Review** | `/ce:review` | `@architecture-strategist` |
+| **Compound** | `/ce:compound` | `skill:compound-docs` |
 | **Full Loop** | `/systematic:lfg` | All of the above (Autonomous) |
 
 ---

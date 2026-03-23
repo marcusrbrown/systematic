@@ -25,7 +25,7 @@ See the [Installation Guide](/systematic/getting-started/installation/) for deta
 
 ## Zero Configuration by Default
 
-A well-structured plugin works immediately. Systematic uses the `config` hook to auto-register all bundled skills, agents, and commands during the OpenCode startup sequence.
+A well-structured plugin works immediately. Systematic uses the `config` hook to auto-register all bundled skills and agents during the OpenCode startup sequence.
 
 > Convention over configuration. Sensible defaults should satisfy 90% of use cases.
 
@@ -51,11 +51,11 @@ Structure should be predictable. Systematic uses consistent naming conventions a
 - **Tools**: The `systematic_skill` tool description contains an XML list of all available skills.
 - **Namespacing**: All bundled skills use the `systematic:` prefix to avoid collisions with native or project-specific skills.
 - **Agents**: Categorized by function (Design, Research, Review, Workflow) for clear mental models.
-- **Commands**: Workflow commands use the `workflows:` prefix, while utility commands use `systematic:`.
+- **Slash Invocation**: Bundled skills are invocable directly as slash commands (for example, `/ce:plan`).
 
 ## Generate Docs from Source
 
-Documentation should never be out of sync with the code. Systematic treats Markdown assets (skills, agents, commands) as the source of truth for its documentation site.
+Documentation should never be out of sync with the code. Systematic treats Markdown assets (skills and agents) as the source of truth for its documentation site.
 
 Reference pages are generated at build time using `transform-content.ts`. This script parses the YAML frontmatter and body of every bundled asset to produce the [Reference Section](/systematic/reference/skills/). When a developer adds a new skill to the repo, the documentation updates automatically.
 

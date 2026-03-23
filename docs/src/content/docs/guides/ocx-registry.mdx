@@ -5,7 +5,7 @@ sidebar:
   order: 6
 ---
 
-[OCX](https://github.com/kdcokenny/ocx) is a package manager and component registry for AI agents and developer tools. It allows you to install Systematic components—skills, agents, and commands—individually or as themed bundles, without needing the full npm plugin.
+[OCX](https://github.com/kdcokenny/ocx) is a package manager and component registry for AI agents and developer tools. It allows you to install Systematic components—skills and agents—individually or as themed bundles, without needing the full npm plugin.
 
 While the npm plugin is the recommended way to get the full Systematic experience (including automatic bootstrap injection), OCX provides a lightweight alternative for users who want to cherry-pick specific workflows or use pre-configured profiles.
 
@@ -46,15 +46,15 @@ ocx add systematic/agent-architecture-strategist
 ocx add systematic/agent-security-sentinel
 ```
 
-### Individual Commands
-Install slash-commands for your project:
+### Skill Slash Commands
+Install skills that remain invocable as slash commands in OpenCode:
 
 ```bash
-# Add the brainstorming workflow command
-ocx add systematic/cmd-brainstorm
+# Add the brainstorming workflow skill
+ocx add systematic/brainstorming
 
-# Add the plan workflow command
-ocx add systematic/cmd-plan
+# Add the planning workflow skill
+ocx add systematic/ce-plan
 ```
 
 ## Bundles
@@ -62,14 +62,11 @@ ocx add systematic/cmd-plan
 Bundles allow you to install entire categories of Systematic assets in one command:
 
 ```bash
-# Install all 11 Systematic skills
+# Install all 50 Systematic skills
 ocx add systematic/skills
 
-# Install all 24 Systematic agents
+# Install all 29 Systematic agents
 ocx add systematic/agents
-
-# Install all 9 Systematic commands
-ocx add systematic/commands
 ```
 
 ## Using Profiles

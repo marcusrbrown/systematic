@@ -10,7 +10,9 @@ Update the project's README.md with comprehensive, accurate documentation.
 
 ## Arguments
 
-<scope>$ARGUMENTS</scope>
+<scope>
+$ARGUMENTS
+</scope>
 
 **If scope is empty or "full":** Complete README rewrite
 **If scope contains a section name:** Focus on updating that section only (e.g., "agents", "skills", "commands", "development")
