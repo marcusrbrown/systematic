@@ -116,7 +116,7 @@ describe('CLI functionality', () => {
 
   test('cli list commands shows bundled commands', () => {
     const result = Bun.spawnSync(['bun', CLI_PATH, 'list', 'commands'])
-    const output = result.stdout.toString()
+    const _output = result.stdout.toString()
     expect(result.exitCode).toBe(0)
   })
 
