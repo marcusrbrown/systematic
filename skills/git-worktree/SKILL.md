@@ -16,6 +16,7 @@ This skill provides a unified interface for managing Git worktrees across your d
 - **Interactive confirmations** at each step
 - **Automatic .gitignore management** for worktree directory
 - **Automatic .env file copying** from main repo to new worktrees
+- **Automatic dev tool trusting** for mise and direnv configs with review-safe guardrails
 
 ## CRITICAL: Always Use the Manager Script
 
@@ -23,12 +24,15 @@ This skill provides a unified interface for managing Git worktrees across your d
 
 The script handles critical setup that raw git commands don't:
 1. Copies `.env`, `.env.local`, `.env.test`, etc. from main repo
-2. Ensures `.worktrees` is in `.gitignore`
-3. Creates consistent directory structure
+2. Trusts dev tool configs with branch-aware safety rules:
+   - mise: auto-trust only when unchanged from a trusted baseline branch
+   - direnv: auto-allow only for trusted base branches; review worktrees stay manual
+3. Ensures `.worktrees` is in `.gitignore`
+4. Creates consistent directory structure
 
 ```bash
 # ✅ CORRECT - Always use the script
-bash scripts/worktree-manager.sh create feature-name
+bash ${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh create feature-name
 
 # ❌ WRONG - Never do this directly
 git worktree add .worktrees/feature-name -b feature-name main
@@ -38,8 +42,8 @@ git worktree add .worktrees/feature-name -b feature-name main
 
 Use this skill in these scenarios:
 
-1. **Code Review (`/workflows:review`)**: If NOT already on the target branch (PR branch or requested branch), offer worktree for isolated review
-2. **Feature Work (`/workflows:work`)**: Always ask if user wants parallel worktree or live branch work
+1. **Code Review (`/ce:review`)**: If NOT already on the target branch (PR branch or requested branch), offer worktree for isolated review
+2. **Feature Work (`/ce:work`)**: Always ask if user wants parallel worktree or live branch work
 3. **Parallel Development**: When working on multiple features simultaneously
 4. **Cleanup**: After completing work in a worktree
 
@@ -47,7 +51,7 @@ Use this skill in these scenarios:
 
 ### In OpenCode Workflows
 
-The skill is automatically called from `/workflows:review` and `/workflows:work` commands:
+The skill is automatically called from `/ce:review` and `/ce:work` commands:
 
 ```
 # For review: offers worktree if not on PR branch
@@ -60,19 +64,19 @@ You can also invoke the skill directly from bash:
 
 ```bash
 # Create a new worktree (copies .env files automatically)
-bash scripts/worktree-manager.sh create feature-login
+bash ${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh create feature-login
 
 # List all worktrees
-bash scripts/worktree-manager.sh list
+bash ${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh list
 
 # Switch to a worktree
-bash scripts/worktree-manager.sh switch feature-login
+bash ${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh switch feature-login
 
 # Copy .env files to an existing worktree (if they weren't copied)
-bash scripts/worktree-manager.sh copy-env feature-login
+bash ${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh copy-env feature-login
 
 # Clean up completed worktrees
-bash scripts/worktree-manager.sh cleanup
+bash ${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh cleanup
 ```
 
 ## Commands
@@ -87,7 +91,7 @@ Creates a new worktree with the given branch name.
 
 **Example:**
 ```bash
-bash scripts/worktree-manager.sh create feature-login
+bash ${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh create feature-login
 ```
 
 **What happens:**
@@ -95,7 +99,11 @@ bash scripts/worktree-manager.sh create feature-login
 2. Updates the base branch from remote
 3. Creates new worktree and branch
 4. **Copies all .env files from main repo** (.env, .env.local, .env.test, etc.)
-5. Shows path for cd-ing to the worktree
+5. **Trusts dev tool configs** with branch-aware safety rules:
+   - trusted bases (`main`, `develop`, `dev`, `trunk`, `staging`, `release/*`) compare against themselves
+   - other branches compare against the default branch
+   - direnv auto-allow is skipped on non-trusted bases because `.envrc` can source unchecked files
+6. Shows path for cd-ing to the worktree
 
 ### `list` or `ls`
 
@@ -103,7 +111,7 @@ Lists all available worktrees with their branches and current status.
 
 **Example:**
 ```bash
-bash scripts/worktree-manager.sh list
+bash ${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh list
 ```
 
 **Output shows:**
@@ -118,7 +126,7 @@ Switches to an existing worktree and cd's into it.
 
 **Example:**
 ```bash
-bash scripts/worktree-manager.sh switch feature-login
+bash ${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh switch feature-login
 ```
 
 **Optional:**
@@ -130,7 +138,7 @@ Interactively cleans up inactive worktrees with confirmation.
 
 **Example:**
 ```bash
-bash scripts/worktree-manager.sh cleanup
+bash ${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh cleanup
 ```
 
 **What happens:**
@@ -149,34 +157,34 @@ bash scripts/worktree-manager.sh cleanup
 
 # You respond: yes
 # Script runs (copies .env files automatically):
-bash scripts/worktree-manager.sh create pr-123-feature-name
+bash ${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh create pr-123-feature-name
 
 # You're now in isolated worktree for review with all env vars
 cd .worktrees/pr-123-feature-name
 
 # After review, return to main:
 cd ../..
-bash scripts/worktree-manager.sh cleanup
+bash ${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh cleanup
 ```
 
 ### Parallel Feature Development
 
 ```bash
 # For first feature (copies .env files):
-bash scripts/worktree-manager.sh create feature-login
+bash ${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh create feature-login
 
 # Later, start second feature (also copies .env files):
-bash scripts/worktree-manager.sh create feature-notifications
+bash ${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh create feature-notifications
 
 # List what you have:
-bash scripts/worktree-manager.sh list
+bash ${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh list
 
 # Switch between them as needed:
-bash scripts/worktree-manager.sh switch feature-login
+bash ${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh switch feature-login
 
 # Return to main and cleanup when done:
 cd .
-bash scripts/worktree-manager.sh cleanup
+bash ${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh cleanup
 ```
 
 ## Key Design Principles
@@ -204,7 +212,7 @@ bash scripts/worktree-manager.sh cleanup
 
 ## Integration with Workflows
 
-### `/workflows:review`
+### `/ce:review`
 
 Instead of always creating a worktree:
 
@@ -217,7 +225,7 @@ Instead of always creating a worktree:
    - no → proceed with PR diff on current branch
 ```
 
-### `/workflows:work`
+### `/ce:work`
 
 Always offer choice:
 
@@ -242,7 +250,7 @@ Switch out of the worktree first (to main repo), then cleanup:
 
 ```bash
 cd $(git rev-parse --show-toplevel)
-bash scripts/worktree-manager.sh cleanup
+bash ${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh cleanup
 ```
 
 ### Lost in a worktree?
@@ -250,7 +258,7 @@ bash scripts/worktree-manager.sh cleanup
 See where you are:
 
 ```bash
-bash scripts/worktree-manager.sh list
+bash ${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh list
 ```
 
 ### .env files missing in worktree?
@@ -258,7 +266,7 @@ bash scripts/worktree-manager.sh list
 If a worktree was created without .env files (e.g., via raw `git worktree add`), copy them:
 
 ```bash
-bash scripts/worktree-manager.sh copy-env feature-name
+bash ${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh copy-env feature-name
 ```
 
 Navigate back to main:
@@ -300,3 +308,4 @@ cd $(git rev-parse --show-toplevel)
 - No repository duplication
 - Shared git objects for efficiency
 - Much faster than cloning or stashing/switching
+

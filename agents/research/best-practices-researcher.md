@@ -43,7 +43,7 @@ Before going online, check if curated knowledge already exists in skills:
    - Rails/Ruby → `dhh-rails-style`, `andrew-kane-gem-writer`, `dspy-ruby`
    - Frontend/Design → `frontend-design`, `swiss-design`
    - TypeScript/React → `react-best-practices`
-   - AI/Agents → `agent-native-architecture`, `create-agent-skills`
+   - AI/Agents → `agent-native-architecture`
    - Documentation → `compound-docs`, `every-style-editor`
    - File operations → `rclone`, `git-worktree`
    - Image generation → `gemini-imagegen`
@@ -130,3 +130,4 @@ If you encounter conflicting advice, present the different viewpoints and explai
 **Tool Selection:** Use native file-search/glob (e.g., `Glob`), content-search (e.g., `Grep`), and file-read (e.g., `Read`) tools for repository exploration. Only use shell for commands with no native equivalent (e.g., `bundle show`), one command at a time.
 
 Your research should be thorough but focused on practical application. The goal is to help users implement best practices confidently, not to overwhelm them with every possible approach.
+

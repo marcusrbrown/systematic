@@ -83,11 +83,11 @@ First, I need to understand the project's conventions, existing patterns, and an
 
 Run these agents **in parallel** to gather local context:
 
-- task systematic:research:repo-research-analyst(feature_description)
+- task systematic:research:repo-research-analyst(Scope: technology, architecture, patterns. {feature_description})
 - task systematic:research:learnings-researcher(feature_description)
 
 **What to look for:**
-- **Repo research:** existing patterns, AGENTS.md guidance, technology familiarity, pattern consistency
+- **Repo research:** technology stack and versions (informs research decisions), architectural patterns, and implementation patterns relevant to the feature
 - **Learnings:** documented solutions in `docs/solutions/` that might apply (gotchas, patterns, lessons learned)
 
 These findings inform the next step.
@@ -98,7 +98,7 @@ Based on signals from Step 0 and findings from Step 1, decide on external resear
 
 **High-risk topics → always research.** Security, payments, external APIs, data privacy. The cost of missing something is too high. This takes precedence over speed signals.
 
-**Strong local context → skip external research.** Codebase has good patterns, AGENTS.md has guidance, user knows what they want. External research adds little value.
+**Strong local context -> skip external research.** Codebase has good patterns, AGENTS.md has guidance, user knows what they want. External research adds little value.
 
 **Uncertainty or unfamiliar territory → research.** User is exploring, codebase has no examples, new technology. External perspective is valuable.
 
@@ -613,7 +613,7 @@ Loop back to options after Simplify or Other changes until user selects `/ce:wor
 
 When user selects "Create Issue", detect their project tracker from AGENTS.md:
 
-1. **Check for tracker preference** in user's AGENTS.md (global or project):
+1. **Check for tracker preference** in the user's AGENTS.md (global or project). If AGENTS.md is absent, fall back to AGENTS.md:
    - Look for `project_tracker: github` or `project_tracker: linear`
    - Or look for mentions of "GitHub Issues" or "Linear" in their workflow section
 

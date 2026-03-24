@@ -1,6 +1,6 @@
 ---
 name: ce:work-beta
-description: 'Use this skill when executing a plan with the ce:work workflow but you also want optional external delegate execution for implementation-heavy tasks. Ideal for large tasks where token conservation matters and acceptance criteria are already clear.'
+description: '[BETA] Execute work plans with external delegate support. Same as ce:work but includes experimental Codex delegation mode for token-conserving code implementation.'
 argument-hint: '[plan file, specification, or todo file path]'
 disable-model-invocation: true
 ---
@@ -151,7 +151,6 @@ This command takes a work document (plan, specification, or todo file) and execu
 
    **When this matters most:** Any change that touches models with callbacks, error handling with fallback/retry, or functionality exposed through multiple interfaces.
 
-
 2. **Incremental Commits**
 
    After completing each task, evaluate whether to create an incremental commit:
@@ -216,7 +215,15 @@ This command takes a work document (plan, specification, or todo file) and execu
    - Fix visual differences identified
    - Repeat until implementation matches design
 
-6. **Track Progress**
+7. **Frontend Design Guidance** (if applicable)
+
+   For UI tasks without a Figma design -- where the implementation touches view, template, component, layout, or page files, creates user-visible routes, or the plan contains explicit UI/frontend/design language:
+
+   - Load the `frontend-design` skill before implementing
+   - Follow its detection, guidance, and verification flow
+   - If the skill produced a verification screenshot, it satisfies Phase 4's screenshot requirement -- no need to capture separately. If the skill fell back to mental review (no browser access), Phase 4's screenshot capture still applies
+
+8. **Track Progress**
    - Keep the task list updated as you complete tasks
    - Note any blockers or unexpected discoveries
    - Create new tasks if scope expands
@@ -238,7 +245,7 @@ This command takes a work document (plan, specification, or todo file) and execu
 
 2. **Consider Reviewer Agents** (Optional)
 
-   Use for complex, risky, or large changes. Read agents from your local workflow settings frontmatter (`review_agents`). If no settings file exists, invoke the `setup` skill to create one.
+   Use for complex, risky, or large changes. Read agents from `systematic.local.md` frontmatter (`review_agents`). If no settings file, invoke the `setup` skill to create one.
 
    Run configured agents in parallel with task tool. Present findings and address critical issues.
 
@@ -294,7 +301,7 @@ This command takes a work document (plan, specification, or todo file) and execu
    | `[CONTEXT]` | Context window (if known) | 200K, 1M |
    | `[THINKING]` | Thinking level (if known) | extended thinking |
    | `[HARNESS]` | Tool running you | OpenCode, Codex, Gemini CLI |
-   | `[HARNESS_URL]` | Link to that tool | `https://claude.com/claude-code` |
+   | `[HARNESS_URL]` | Link to that tool | `https://opencode.ai` |
    | `[VERSION]` | `plugin.json` → `version` | 2.40.0 |
 
    Subagents creating commits/PRs are equally responsible for accurate attribution.
@@ -372,7 +379,6 @@ This command takes a work document (plan, specification, or todo file) and execu
 
    ---
 
-   [![Systematic v[VERSION]](https://img.shields.io/badge/Systematic-v[VERSION]-6366f1)](https://github.com/marcusrbrown/systematic)
    🤖 Generated with [MODEL] ([CONTEXT] context, [THINKING]) via [HARNESS](HARNESS_URL)
    EOF
    )"
@@ -462,7 +468,7 @@ When external delegation is active, follow this workflow for each tagged task. D
 
    Verify the delegate CLI is installed. If not found, print "Delegate CLI not installed - continuing with standard mode." and proceed normally.
 
-2. **Build prompt** — For each task, assemble a prompt from the plan's implementation unit (Goal, Files, Approach, and project conventions). Include rules: no git commits, no PRs, run `git status` and `git diff --stat` when done. Never embed credentials or tokens in the prompt - pass auth through environment variables.
+2. **Build prompt** — For each task, assemble a prompt from the plan's implementation unit (Goal, Files, Approach, Conventions from `systematic.local.md`). Include rules: no git commits, no PRs, run `git status` and `git diff --stat` when done. Never embed credentials or tokens in the prompt - pass auth through environment variables.
 
 3. **Write prompt to file** — Save the assembled prompt to a unique temporary file to avoid shell quoting issues and cross-task races. Use a unique filename per task.
 

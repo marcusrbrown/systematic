@@ -103,7 +103,7 @@ Run agents in parallel in the **foreground** (do not use background dispatch —
 
 1. **Quick context scan** — dispatch a general-purpose sub-agent with this prompt:
 
-> Read the project's AGENTS.md (or README.md if AGENTS.md is absent), then discover the top-level directory layout using the native file-search/glob tool (e.g., `Glob` with pattern `*` or `*/*` in OpenCode). Return a concise summary (under 30 lines) covering:
+   > Read the project's AGENTS.md (or AGENTS.md only as compatibility fallback, then README.md if neither exists), then discover the top-level directory layout using the native file-search/glob tool (e.g., `Glob` with pattern `*` or `*/*` in OpenCode). Return a concise summary (under 30 lines) covering:
    > - project shape (language, framework, top-level directory layout)
    > - notable patterns or conventions
    > - obvious pain points or gaps
@@ -368,3 +368,4 @@ Before finishing, check:
 - survivors are materially better than a naive "give me ideas" list
 - the artifact was written before any handoff, sharing, or session end
 - acting on an idea routes to `ce:brainstorm`, not directly to implementation
+

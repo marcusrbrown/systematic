@@ -31,7 +31,7 @@ argument-hint: '[PR number, GitHub URL, branch name, or latest] [--serial]'
 First, I need to determine the review target type and set up the code for analysis.
 </thinking>
 
-#### Immediate Actions:
+#### Immediate Actions
 
 <task_list>
 
@@ -85,7 +85,7 @@ Run all agents simultaneously for speed. If you hit context limits, retry with `
 
 </execution_mode>
 
-#### Parallel Agents to review the PR:
+#### Parallel Agents to review the PR
 
 <parallel_tasks>
 
@@ -115,7 +115,7 @@ Always run these last regardless of mode:
 
 </parallel_tasks>
 
-#### Conditional Agents (Run if applicable):
+#### Conditional Agents (Run if applicable)
 
 <conditional_agents>
 
@@ -439,7 +439,7 @@ After creating all todo files, present comprehensive summary:
 3. **Work on Approved Todos**:
 
    ```bash
-   /resolve_todo_parallel  # Fix all approved items efficiently
+   /resolve-todo-parallel  # Fix all approved items efficiently
    ```
 
 4. **Track Progress**:
@@ -514,7 +514,7 @@ After presenting the Summary Report, offer appropriate testing based on project 
 
 </offer_testing>
 
-#### If User Accepts Web Testing:
+#### If User Accepts Web Testing
 
 Spawn a subagent to run browser tests (preserves main context):
 
@@ -533,7 +533,7 @@ The subagent will:
 
 **Standalone:** `/test-browser [PR number]`
 
-#### If User Accepts iOS Testing:
+#### If User Accepts iOS Testing
 
 Spawn a subagent to run Xcode tests (preserves main context):
 
@@ -557,4 +557,3 @@ The subagent will:
 ### Important: P1 Findings Block Merge
 
 Any **🔴 P1 (CRITICAL)** findings must be addressed before merging the PR. Present these prominently and ensure they're resolved before accepting the PR.
-
