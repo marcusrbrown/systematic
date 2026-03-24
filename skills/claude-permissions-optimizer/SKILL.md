@@ -1,11 +1,11 @@
 ---
 name: claude-permissions-optimizer
 context: fork
-description: Use this skill when you want to reduce OpenCode permission prompts by safely allowlisting frequently used Bash commands based on real session history. Best for permission fatigue and repetitive approvals without broadly weakening safety.
+description: Optimize Claude Code permissions by finding safe Bash commands from session history and auto-applying them to settings.json. Can run from any coding agent but targets Claude Code specifically. Use when experiencing permission fatigue, too many permission prompts, wanting to optimize permissions, or needing to set up allowlists. Triggers on "optimize permissions", "reduce permission prompts", "allowlist commands", "too many permission prompts", "permission fatigue", "permission setup", or complaints about clicking approve too often.
 subtask: true
 ---
 
-# OpenCode Permissions Optimizer
+# Claude Permissions Optimizer
 
 Find safe Bash commands that are causing unnecessary permission prompts and auto-allow them in `settings.json` -- evidence-based, not prescriptive.
 
@@ -13,19 +13,19 @@ This skill identifies commands safe to auto-allow based on actual session histor
 
 ## Pre-check: Confirm environment
 
-Determine whether you are currently running inside OpenCode or a different coding agent (Codex, Gemini CLI, Cursor, etc.).
+Determine whether you are currently running inside Claude Code or a different coding agent (Codex, Gemini CLI, Cursor, etc.).
 
-**If running inside OpenCode:** Proceed directly to Step 1.
+**If running inside Claude Code:** Proceed directly to Step 1.
 
 **If running in a different agent:** Inform the user before proceeding:
 
-> "This skill analyzes OpenCode session history and writes to OpenCode settings.json. You're currently in [agent name], but I can still optimize your OpenCode permissions from here -- the results will apply next time you use OpenCode."
+> "This skill analyzes Claude Code session history and writes to Claude Code's settings.json. You're currently in [agent name], but I can still optimize your Claude Code permissions from here -- the results will apply next time you use Claude Code."
 
-Then proceed to Step 1 normally. The skill works from any environment as long as `~/.config/opencode/` (or `$OPENCODE_CONFIG_DIR`) exists on the machine.
+Then proceed to Step 1 normally. The skill works from any environment as long as `~/.claude/` (or `$CLAUDE_CONFIG_DIR`) exists on the machine.
 
 ## Step 1: Choose Analysis Scope
 
-Ask the user how broadly to analyze using the platform's blocking question tool (`question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini). If no question tool is available, present the numbered options and wait for the user's reply.
+Ask the user how broadly to analyze using the platform's blocking question tool (`AskUserQuestion` in Claude Code, `request_user_input` in Codex, `ask_user` in Gemini). If no question tool is available, present the numbered options and wait for the user's reply.
 
 1. **All projects** (Recommended) -- sessions across every project
 2. **This project only** -- sessions for the current working directory
@@ -69,7 +69,7 @@ Show the work done using the script's `stats`. Reaffirm the scope. Keep it to 4-
 
 **Example:**
 ```
-## Analysis (systematic)
+## Analysis (compound-engineering-plugin)
 
 Scanned **24 sessions** for this project.
 Found **312 unique Bash commands** across those sessions.
@@ -123,8 +123,8 @@ Use `greenRawCount` (the number of unique raw commands the green patterns cover)
 
 The recommendations table is already displayed. Use the platform's blocking question tool to ask for the decision:
 
-1. **Apply all to user settings** (`~/.config/opencode/settings.json`)
-2. **Apply all to project settings** (`.opencode/settings.json`)
+1. **Apply all to user settings** (`~/.claude/settings.json`)
+2. **Apply all to project settings** (`.claude/settings.json`)
 3. **Skip**
 
 If the user wants to exclude specific items, they can reply in free text (e.g., "all except 3 and 7 to user settings"). The numbered table is already visible for reference -- no need to re-list items in the question tool.
@@ -146,16 +146,17 @@ For each target settings file:
 After successful verification:
 
 ```
-Applied N rules to ~/.config/opencode/settings.json
-Applied M rules to .opencode/settings.json
+Applied N rules to ~/.claude/settings.json
+Applied M rules to .claude/settings.json
 
 These commands will no longer trigger permission prompts.
 ```
 
-If `.opencode/settings.json` was modified and is tracked by git, mention that committing it would benefit teammates.
+If `.claude/settings.json` was modified and is tracked by git, mention that committing it would benefit teammates.
 
 ## Edge Cases
 
 - **No project context** (running outside a project): Only offer user-level settings as write target.
-- **Settings file doesn't exist**: Create it with `{ "permissions": { "allow": [] } }`. For `.opencode/settings.json`, also create the `.opencode/` directory if needed.
-- **Deny rules**: If a deny rule already blocks a command, warn rather than adding an allow rule (deny takes precedence in OpenCode).
+- **Settings file doesn't exist**: Create it with `{ "permissions": { "allow": [] } }`. For `.claude/settings.json`, also create the `.claude/` directory if needed.
+- **Deny rules**: If a deny rule already blocks a command, warn rather than adding an allow rule (deny takes precedence in Claude Code).
+

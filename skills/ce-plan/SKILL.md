@@ -83,11 +83,11 @@ First, I need to understand the project's conventions, existing patterns, and an
 
 Run these agents **in parallel** to gather local context:
 
-- task systematic:research:repo-research-analyst(feature_description)
+- task systematic:research:repo-research-analyst(Scope: technology, architecture, patterns. {feature_description})
 - task systematic:research:learnings-researcher(feature_description)
 
 **What to look for:**
-- **Repo research:** existing patterns, AGENTS.md guidance, technology familiarity, pattern consistency
+- **Repo research:** technology stack and versions (informs research decisions), architectural patterns, and implementation patterns relevant to the feature
 - **Learnings:** documented solutions in `docs/solutions/` that might apply (gotchas, patterns, lessons learned)
 
 These findings inform the next step.
@@ -98,7 +98,7 @@ Based on signals from Step 0 and findings from Step 1, decide on external resear
 
 **High-risk topics → always research.** Security, payments, external APIs, data privacy. The cost of missing something is too high. This takes precedence over speed signals.
 
-**Strong local context → skip external research.** Codebase has good patterns, AGENTS.md has guidance, user knows what they want. External research adds little value.
+**Strong local context -> skip external research.** Codebase has good patterns, AGENTS.md has guidance, user knows what they want. External research adds little value.
 
 **Uncertainty or unfamiliar territory → research.** User is exploring, codebase has no examples, new technology. External perspective is valuable.
 
@@ -583,7 +583,7 @@ After writing the plan file, use the **question tool** to present these options:
 3. **Review and refine** - Improve the document through structured self-review
 4. **Share to Proof** - Upload to Proof for collaborative review and sharing
 5. **Start `/ce:work`** - Begin implementing this plan locally
-6. **Start `/ce:work` on remote** - Begin implementing in OpenCode on the web (use `&` to run in background)
+6. **Start `/ce:work` on remote** - Begin implementing in Claude Code on the web (use `&` to run in background)
 7. **Create Issue** - Create issue in project tracker (GitHub/Linear)
 
 Based on selection:
@@ -601,7 +601,7 @@ Based on selection:
   ```
   Display: `View & collaborate in Proof: <PROOF_URL>` — skip silently if curl fails. Then return to options.
 - **`/ce:work`** → Call the /ce:work command with the plan file path
-- **`/ce:work` on remote** → Run `/ce:work docs/plans/<plan_filename>.md &` to start work in background for OpenCode web
+- **`/ce:work` on remote** → Run `/ce:work docs/plans/<plan_filename>.md &` to start work in background for Claude Code web
 - **Create Issue** → See "Issue Creation" section below
 - **Other** (automatically provided) → Accept free text for rework or specific changes
 
@@ -613,7 +613,7 @@ Loop back to options after Simplify or Other changes until user selects `/ce:wor
 
 When user selects "Create Issue", detect their project tracker from AGENTS.md:
 
-1. **Check for tracker preference** in user's AGENTS.md (global or project):
+1. **Check for tracker preference** in the user's AGENTS.md (global or project). If AGENTS.md is absent, fall back to AGENTS.md:
    - Look for `project_tracker: github` or `project_tracker: linear`
    - Or look for mentions of "GitHub Issues" or "Linear" in their workflow section
 
