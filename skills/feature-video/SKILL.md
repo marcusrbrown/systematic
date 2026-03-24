@@ -59,7 +59,7 @@ gh pr create --draft --title "[branch-name-humanized]" --body "Draft PR for vide
 
 If option 2: set `RECORD_ONLY=true`. Proceed through Steps 2-5 (record and encode), skip Steps 6-7 (upload and PR update), and report the local video path and `[RUN_ID]` at the end.
 
-**Upload-only resume:** To upload a previously recorded video, pass an existing video file path as the first argument (e.g., `/feature-video .context/compound-engineering/feature-video/1711234567/videos/feature-demo.mp4`). When the first argument is a path to an `.mp4` file, skip Steps 2-5 and proceed directly to Step 6 using that file for upload.
+**Upload-only resume:** To upload a previously recorded video, pass an existing video file path as the first argument (e.g., `/feature-video .context/systematic/feature-video/1711234567/videos/feature-demo.mp4`). When the first argument is a path to an `.mp4` file, skip Steps 2-5 and proceed directly to Step 6 using that file for upload.
 
 ### 1b. Verify Required Tools
 
@@ -149,8 +149,8 @@ date +%s
 Use the output as RUN_ID. Create the directories with the concrete value:
 
 ```bash
-mkdir -p .context/compound-engineering/feature-video/[RUN_ID]/screenshots
-mkdir -p .context/compound-engineering/feature-video/[RUN_ID]/videos
+mkdir -p .context/systematic/feature-video/[RUN_ID]/screenshots
+mkdir -p .context/systematic/feature-video/[RUN_ID]/videos
 ```
 
 Execute the planned flow, capturing each step with agent-browser. Number screenshots sequentially for correct frame ordering:
@@ -158,26 +158,26 @@ Execute the planned flow, capturing each step with agent-browser. Number screens
 ```bash
 agent-browser open "[base-url]/[start-route]"
 agent-browser wait 2000
-agent-browser screenshot .context/compound-engineering/feature-video/[RUN_ID]/screenshots/01-start.png
+agent-browser screenshot .context/systematic/feature-video/[RUN_ID]/screenshots/01-start.png
 ```
 
 ```bash
 agent-browser snapshot -i
 agent-browser click @e1
 agent-browser wait 1000
-agent-browser screenshot .context/compound-engineering/feature-video/[RUN_ID]/screenshots/02-navigate.png
+agent-browser screenshot .context/systematic/feature-video/[RUN_ID]/screenshots/02-navigate.png
 ```
 
 ```bash
 agent-browser snapshot -i
 agent-browser click @e2
 agent-browser wait 1000
-agent-browser screenshot .context/compound-engineering/feature-video/[RUN_ID]/screenshots/03-feature.png
+agent-browser screenshot .context/systematic/feature-video/[RUN_ID]/screenshots/03-feature.png
 ```
 
 ```bash
 agent-browser wait 2000
-agent-browser screenshot .context/compound-engineering/feature-video/[RUN_ID]/screenshots/04-result.png
+agent-browser screenshot .context/systematic/feature-video/[RUN_ID]/screenshots/04-result.png
 ```
 
 ### 5. Create Video
@@ -185,9 +185,9 @@ agent-browser screenshot .context/compound-engineering/feature-video/[RUN_ID]/sc
 Stitch screenshots into an MP4 using the same `[RUN_ID]` from Step 4:
 
 ```bash
-ffmpeg -y -framerate 0.5 -pattern_type glob -i ".context/compound-engineering/feature-video/[RUN_ID]/screenshots/*.png" \
+ffmpeg -y -framerate 0.5 -pattern_type glob -i ".context/systematic/feature-video/[RUN_ID]/screenshots/*.png" \
   -c:v libx264 -pix_fmt yuv420p -vf "scale=1280:-2" \
-  ".context/compound-engineering/feature-video/[RUN_ID]/videos/feature-demo.mp4"
+  ".context/systematic/feature-video/[RUN_ID]/videos/feature-demo.mp4"
 ```
 
 Notes:
@@ -265,7 +265,7 @@ agent-browser upload '#fc-new_comment_field' [VIDEO_FILE_PATH]
 
 Where `[VIDEO_FILE_PATH]` is either:
 - The `.mp4` path passed as the first argument (upload-only resume mode)
-- `.context/compound-engineering/feature-video/[RUN_ID]/videos/feature-demo.mp4` (normal recording flow)
+- `.context/systematic/feature-video/[RUN_ID]/videos/feature-demo.mp4` (normal recording flow)
 
 Wait for GitHub to process the upload (typically 3-5 seconds), then read the textarea value:
 
@@ -319,13 +319,13 @@ Ask the user before removing temporary files. If confirmed, clean up only the cu
 **If the video was successfully uploaded**, remove the entire run directory:
 
 ```bash
-rm -r .context/compound-engineering/feature-video/[RUN_ID]
+rm -r .context/systematic/feature-video/[RUN_ID]
 ```
 
 **If in record-only mode or upload failed**, remove only the screenshots but preserve the video so the user can upload later:
 
 ```bash
-rm -r .context/compound-engineering/feature-video/[RUN_ID]/screenshots
+rm -r .context/systematic/feature-video/[RUN_ID]/screenshots
 ```
 
 Present a completion summary:

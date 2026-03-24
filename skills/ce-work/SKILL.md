@@ -237,7 +237,7 @@ This command takes a work document (plan, specification, or todo file) and execu
 
 2. **Consider Reviewer Agents** (Optional)
 
-   Use for complex, risky, or large changes. Read agents from `compound-engineering.local.md` frontmatter (`review_agents`). If no settings file, invoke the `setup` skill to create one.
+   Use for complex, risky, or large changes. Read agents from `systematic.local.md` frontmatter (`review_agents`). If no settings file, invoke the `setup` skill to create one.
 
    Run configured agents in parallel with task tool. Present findings and address critical issues.
 

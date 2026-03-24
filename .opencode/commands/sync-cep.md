@@ -43,6 +43,30 @@ You are running a CEP-to-Systematic re-sync. Your output must be structured and 
 | Preserve formatting | Keep trailing newlines, don't strip EOL |
 | Report discrepancies | Flag unexpected patterns for human review |
 
+### Critical Path Validation (REQUIRED)
+
+After conversion, BEFORE committing, validate ALL changed files for these common sync issues:
+
+**1. Systematic Prefix Check:**
+- Search for `compound-engineering:` in changed skill/agent files → must be `systematic:`
+- Search for `.context/compound-engineering/` → must be `.context/systematic/`
+- Search for `compound-engineering.local.md` → must be `systematic.local.md`
+
+**2. OpenCode Path Check:**
+- Search for `~/.opencode/` → must be `~/.config/opencode/`
+- Search for `AskUserQuestion` → must be `question` tool
+- Search for `.claude/` → must be `.opencode/`
+
+**3. Skill Invocation Format:**
+- Systematic skill invocations must use `systematic:` prefix (e.g., `/systematic:deepen-plan`)
+- NOT `compound-engineering:` which is the upstream CEP format
+
+**4. Branding Check:**
+- Badge links to "Compound Engineering" repo are intentional (upstream attribution) — keep as-is
+- Badge text showing plugin version should say "Systematic" not "Compound Engineering"
+
+If any validation fails, FIX the issue before proceeding to commit.
+
 ## Skill: convert-cc-defs
 
 Before performing any conversion, use the `skill` tool to load `convert-cc-defs`. Do NOT use the `systematic_skill` tool — `convert-cc-defs` is a project-specific skill, not a bundled Systematic skill.

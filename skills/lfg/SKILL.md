@@ -13,7 +13,7 @@ CRITICAL: You MUST execute every step below IN ORDER. Do NOT skip any required s
 
    GATE: STOP. Verify that the `ce:plan` workflow produced a plan file in `docs/plans/`. If no plan file was created, run `/ce:plan $ARGUMENTS` again. Do NOT proceed to step 3 until a written plan exists.
 
-3. **Conditionally** run `/compound-engineering:deepen-plan`
+3. **Conditionally** run `/systematic:deepen-plan`
 
    Run the `deepen-plan` workflow only if the plan is `Standard` or `Deep`, touches a high-risk area (auth, security, payments, migrations, external APIs, significant rollout concerns), or still has obvious confidence gaps in decisions, sequencing, system-wide impact, risks, or verification.
 
@@ -25,11 +25,11 @@ CRITICAL: You MUST execute every step below IN ORDER. Do NOT skip any required s
 
 5. `/ce:review`
 
-6. `/compound-engineering:resolve-todo-parallel`
+6. `/systematic:resolve-todo-parallel`
 
-7. `/compound-engineering:test-browser`
+7. `/systematic:test-browser`
 
-8. `/compound-engineering:feature-video`
+8. `/systematic:feature-video`
 
 9. Output `<promise>DONE</promise>` when video is in PR
 

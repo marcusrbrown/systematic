@@ -45,7 +45,7 @@ Create a task list of all unresolved items grouped by type (e.g., `TaskCreate` i
 
 ### 3. Implement (PARALLEL)
 
-Spawn a `compound-engineering:workflow:pr-comment-resolver` agent for each unresolved item.
+Spawn a `systematic:workflow:pr-comment-resolver` agent for each unresolved item.
 
 If there are 3 comments, spawn 3 agents — one per comment. Prefer running all agents in parallel; if the platform does not support parallel dispatch, run them sequentially.
 
@@ -54,7 +54,7 @@ Keep parent-context pressure bounded:
 - If there are 5+ unresolved items, launch in batches of at most 4 agents at a time
 - Require each resolver agent to return a short status summary to the parent: comment/thread handled, files changed, tests run or skipped, any blocker that still needs human attention, and for question-only threads the substantive reply text so the parent can post or verify it
 
-If the PR is large enough that even batched short returns are likely to get noisy, use a per-run scratch directory such as `.context/compound-engineering/resolve-pr-parallel/<run-id>/`:
+If the PR is large enough that even batched short returns are likely to get noisy, use a per-run scratch directory such as `.context/systematic/resolve-pr-parallel/<run-id>/`:
 - Have each resolver write a compact artifact for its thread there
 - Return only a completion summary to the parent
 - Re-read only the artifacts that are needed to resolve threads, answer reviewer questions, or summarize the batch

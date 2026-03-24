@@ -209,43 +209,43 @@ Use fully-qualified agent names inside Task calls.
 #### 3.1 Deterministic Section-to-Agent Mapping
 
 **Requirements Trace / Open Questions classification**
-- `compound-engineering:workflow:spec-flow-analyzer` for missing user flows, edge cases, and handoff gaps
-- `compound-engineering:research:repo-research-analyst` (Scope: `architecture, patterns`) for repo-grounded patterns, conventions, and implementation reality checks
+- `systematic:workflow:spec-flow-analyzer` for missing user flows, edge cases, and handoff gaps
+- `systematic:research:repo-research-analyst` (Scope: `architecture, patterns`) for repo-grounded patterns, conventions, and implementation reality checks
 
 **Context & Research / Sources & References gaps**
-- `compound-engineering:research:learnings-researcher` for institutional knowledge and past solved problems
-- `compound-engineering:research:framework-docs-researcher` for official framework or library behavior
-- `compound-engineering:research:best-practices-researcher` for current external patterns and industry guidance
-- Add `compound-engineering:research:git-history-analyzer` only when historical rationale or prior art is materially missing
+- `systematic:research:learnings-researcher` for institutional knowledge and past solved problems
+- `systematic:research:framework-docs-researcher` for official framework or library behavior
+- `systematic:research:best-practices-researcher` for current external patterns and industry guidance
+- Add `systematic:research:git-history-analyzer` only when historical rationale or prior art is materially missing
 
 **Key Technical Decisions**
-- `compound-engineering:review:architecture-strategist` for design integrity, boundaries, and architectural tradeoffs
-- Add `compound-engineering:research:framework-docs-researcher` or `compound-engineering:research:best-practices-researcher` when the decision needs external grounding beyond repo evidence
+- `systematic:review:architecture-strategist` for design integrity, boundaries, and architectural tradeoffs
+- Add `systematic:research:framework-docs-researcher` or `systematic:research:best-practices-researcher` when the decision needs external grounding beyond repo evidence
 
 **High-Level Technical Design**
-- `compound-engineering:review:architecture-strategist` for validating that the technical design accurately represents the intended approach and identifying gaps
-- `compound-engineering:research:repo-research-analyst` (Scope: `architecture, patterns`) for grounding the technical design in existing repo patterns and conventions
-- Add `compound-engineering:research:best-practices-researcher` when the technical design involves a DSL, API surface, or pattern that benefits from external validation
+- `systematic:review:architecture-strategist` for validating that the technical design accurately represents the intended approach and identifying gaps
+- `systematic:research:repo-research-analyst` (Scope: `architecture, patterns`) for grounding the technical design in existing repo patterns and conventions
+- Add `systematic:research:best-practices-researcher` when the technical design involves a DSL, API surface, or pattern that benefits from external validation
 
 **Implementation Units / Verification**
-- `compound-engineering:research:repo-research-analyst` (Scope: `patterns`) for concrete file targets, patterns to follow, and repo-specific sequencing clues
-- `compound-engineering:review:pattern-recognition-specialist` for consistency, duplication risks, and alignment with existing patterns
-- Add `compound-engineering:workflow:spec-flow-analyzer` when sequencing depends on user flow or handoff completeness
+- `systematic:research:repo-research-analyst` (Scope: `patterns`) for concrete file targets, patterns to follow, and repo-specific sequencing clues
+- `systematic:review:pattern-recognition-specialist` for consistency, duplication risks, and alignment with existing patterns
+- Add `systematic:workflow:spec-flow-analyzer` when sequencing depends on user flow or handoff completeness
 
 **System-Wide Impact**
-- `compound-engineering:review:architecture-strategist` for cross-boundary effects, interface surfaces, and architectural knock-on impact
+- `systematic:review:architecture-strategist` for cross-boundary effects, interface surfaces, and architectural knock-on impact
 - Add the specific specialist that matches the risk:
-  - `compound-engineering:review:performance-oracle` for scalability, latency, throughput, and resource-risk analysis
-  - `compound-engineering:review:security-sentinel` for auth, validation, exploit surfaces, and security boundary review
-  - `compound-engineering:review:data-integrity-guardian` for migrations, persistent state safety, consistency, and data lifecycle risks
+  - `systematic:review:performance-oracle` for scalability, latency, throughput, and resource-risk analysis
+  - `systematic:review:security-sentinel` for auth, validation, exploit surfaces, and security boundary review
+  - `systematic:review:data-integrity-guardian` for migrations, persistent state safety, consistency, and data lifecycle risks
 
 **Risks & Dependencies / Operational Notes**
 - Use the specialist that matches the actual risk:
-  - `compound-engineering:review:security-sentinel` for security, auth, privacy, and exploit risk
-  - `compound-engineering:review:data-integrity-guardian` for persistent data safety, constraints, and transaction boundaries
-  - `compound-engineering:review:data-migration-expert` for migration realism, backfills, and production data transformation risk
-  - `compound-engineering:review:deployment-verification-agent` for rollout checklists, rollback planning, and launch verification
-  - `compound-engineering:review:performance-oracle` for capacity, latency, and scaling concerns
+  - `systematic:review:security-sentinel` for security, auth, privacy, and exploit risk
+  - `systematic:review:data-integrity-guardian` for persistent data safety, constraints, and transaction boundaries
+  - `systematic:review:data-migration-expert` for migration realism, backfills, and production data transformation risk
+  - `systematic:review:deployment-verification-agent` for rollout checklists, rollback planning, and launch verification
+  - `systematic:review:performance-oracle` for capacity, latency, and scaling concerns
 
 #### 3.2 Agent Prompt Shape
 
@@ -299,7 +299,7 @@ If a direct-mode agent starts producing bulky or repetitive output, stop and swi
 
 #### 4.2 Artifact-Backed Mode
 
-Use a per-run scratch directory under `.context/compound-engineering/deepen-plan-beta/`, for example `.context/compound-engineering/deepen-plan-beta/<run-id>/` or `.context/compound-engineering/deepen-plan-beta/<plan-filename-stem>/`.
+Use a per-run scratch directory under `.context/systematic/deepen-plan-beta/`, for example `.context/systematic/deepen-plan-beta/<run-id>/` or `.context/systematic/deepen-plan-beta/<plan-filename-stem>/`.
 
 Use the scratch directory only for the current deepening pass.
 

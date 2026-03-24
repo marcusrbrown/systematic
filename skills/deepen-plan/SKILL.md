@@ -71,7 +71,7 @@ ls .opencode/skills/
 ls ~/.config/opencode/skills/
 
 # 3. systematic plugin skills
-ls ~/.config/opencode/plugins/cache/*/compound-engineering/*/skills/
+ls ~/.config/opencode/plugins/cache/*/systematic/*/skills/
 
 # 4. ALL other installed plugins - check every plugin for skills
 find ~/.config/opencode/plugins/cache -type d -name "skills" 2>/dev/null
@@ -80,7 +80,7 @@ find ~/.config/opencode/plugins/cache -type d -name "skills" 2>/dev/null
 cat ~/.config/opencode/plugins/installed_plugins.json
 ```
 
-**Important:** Check EVERY source. Don't assume compound-engineering is the only plugin. Use skills from ANY installed plugin that's relevant.
+**Important:** Check EVERY source. Don't assume systematic is the only plugin. Use skills from ANY installed plugin that's relevant.
 
 **Step 2: For each discovered skill, read its SKILL.md to understand what it does**
 
@@ -287,8 +287,8 @@ Return concrete, actionable recommendations."
 
 For any technologies/frameworks mentioned in the plan, query Context7:
 ```
-mcp__plugin_compound-engineering_context7__resolve-library-id: Find library ID for [framework]
-mcp__plugin_compound-engineering_context7__query-docs: Query documentation for specific patterns
+context7_resolve-library-id: Find library ID for [framework]
+context7_query-docs: Query documentation for specific patterns
 ```
 
 **Use google_search for current best practices:**
@@ -311,7 +311,7 @@ find .opencode/agents -name "*.md" 2>/dev/null
 find ~/.config/opencode/agents -name "*.md" 2>/dev/null
 
 # 3. systematic plugin agents (all subdirectories)
-find ~/.config/opencode/plugins/cache/*/compound-engineering/*/agents -name "*.md" 2>/dev/null
+find ~/.config/opencode/plugins/cache/*/systematic/*/agents -name "*.md" 2>/dev/null
 
 # 4. ALL other installed plugins - check every plugin for agents
 find ~/.config/opencode/plugins/cache -path "*/agents/*.md" 2>/dev/null
