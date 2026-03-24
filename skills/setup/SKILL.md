@@ -1,20 +1,20 @@
 ---
 name: setup
-description: Configure which review agents run for your project. Auto-detects stack and writes compound-engineering.local.md.
+description: Configure which review agents run for your project. Auto-detects stack and writes systematic.local.md.
 disable-model-invocation: true
 ---
 
-# Compound Engineering Setup
+# Systematic Setup
 
 ## Interaction Method
 
-Ask the user each question below using the platform's blocking question tool (e.g., `AskUserQuestion` in Claude Code, `request_user_input` in Codex, `ask_user` in Gemini). If no structured question tool is available, present each question as a numbered list and wait for a reply before proceeding. For multiSelect questions, accept comma-separated numbers (e.g. `1, 3`). Never skip or auto-configure.
+Ask the user each question below using the platform's blocking question tool (e.g., `question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini). If no structured question tool is available, present each question as a numbered list and wait for a reply before proceeding. For multiSelect questions, accept comma-separated numbers (e.g. `1, 3`). Never skip or auto-configure.
 
-Interactive setup for `compound-engineering.local.md` — configures which agents run during `ce:review` and `ce:work`.
+Interactive setup for `systematic.local.md` — configures which agents run during `ce:review` and `ce:work`.
 
 ## Step 1: Check Existing Config
 
-Read `compound-engineering.local.md` in the project root. If it exists, display current settings and ask:
+Read `systematic.local.md` in the project root. If it exists, display current settings and ask:
 
 ```
 Settings file already exists. What would you like to do?
@@ -116,7 +116,7 @@ How thorough should reviews be?
 
 **Plan review agents:** stack-specific reviewer + `code-simplicity-reviewer`.
 
-Write `compound-engineering.local.md`:
+Write `systematic.local.md`:
 
 ```markdown
 ---
@@ -138,7 +138,7 @@ Examples:
 ## Step 5: Confirm
 
 ```
-Saved to compound-engineering.local.md
+Saved to systematic.local.md
 
 Stack:        {type}
 Review depth: {depth}

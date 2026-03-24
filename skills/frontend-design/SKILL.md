@@ -39,7 +39,7 @@ Before any design work, examine the codebase for existing design signals. This d
 - **Animation libraries**: Framer Motion, GSAP, anime.js, Motion One, Vue Transition imports
 - **Spacing / layout patterns**: Consistent spacing scale usage, grid systems, layout components
 
-Use the platform's native file-search and content-search tools (e.g., Glob/Grep in Claude Code) to scan for these signals. Do not use shell commands for routine file exploration.
+Use the platform's native file-search and content-search tools (e.g., Glob/Grep in OpenCode) to scan for these signals. Do not use shell commands for routine file exploration.
 
 ### Mode Classification
 
@@ -52,7 +52,7 @@ Based on detected signals, choose a mode:
 
 ### Asking the User
 
-When context is ambiguous, use the platform's blocking question tool (`AskUserQuestion` in Claude Code, `request_user_input` in Codex, `ask_user` in Gemini). If no question tool is available, assume "partial" mode and proceed conservatively.
+When context is ambiguous, use the platform's blocking question tool (`question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini). If no question tool is available, assume "partial" mode and proceed conservatively.
 
 Example question: "I found [detected signals]. Should I follow your existing design patterns or create something distinctive?"
 
@@ -243,7 +243,7 @@ Use the first available option:
 
 One iteration. Take a screenshot, assess against the litmus checks, fix any glaring issues, and move on. Include the screenshot in the deliverable (PR description, conversation output, etc.).
 
-For iterative refinement beyond a single pass (multiple rounds of screenshot-assess-fix), see the `compound-engineering:design:design-iterator` agent.
+For iterative refinement beyond a single pass (multiple rounds of screenshot-assess-fix), see the `systematic:design:design-iterator` agent.
 
 ---
 

@@ -5,9 +5,9 @@ argument-hint: '[command purpose and requirements]'
 disable-model-invocation: true
 ---
 
-# Create a Custom Claude Code Command
+# Create a Custom OpenCode Command
 
-Create a new skill in `.claude/skills/` for the requested task.
+Create a new skill in `.opencode/skills/` for the requested task.
 
 ## Goal
 
@@ -128,7 +128,7 @@ Implement #$ARGUMENTS following these steps:
 
 ## Creating the Command File
 
-1. **Create the directory** at `.claude/skills/[name]/SKILL.md`
+1. **Create the directory** at `.opencode/skills/[name]/SKILL.md`
 2. **Start with YAML frontmatter** (see section above)
 3. **Structure the skill** using the template above
 4. **Test the skill** by using it with appropriate arguments

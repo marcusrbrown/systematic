@@ -150,7 +150,6 @@ This command takes a work document (plan, specification, or todo file) and execu
 
    **When this matters most:** Any change that touches models with callbacks, error handling with fallback/retry, or functionality exposed through multiple interfaces.
 
-
 2. **Incremental Commits**
 
    After completing each task, evaluate whether to create an incremental commit:
@@ -237,7 +236,7 @@ This command takes a work document (plan, specification, or todo file) and execu
 
 2. **Consider Reviewer Agents** (Optional)
 
-   Use for complex, risky, or large changes. Read agents from `compound-engineering.local.md` frontmatter (`review_agents`). If no settings file, invoke the `setup` skill to create one.
+   Use for complex, risky, or large changes. Read agents from `systematic.local.md` frontmatter (`review_agents`). If no settings file, invoke the `setup` skill to create one.
 
    Run configured agents in parallel with task tool. Present findings and address critical issues.
 
@@ -276,7 +275,7 @@ This command takes a work document (plan, specification, or todo file) and execu
 
    Brief explanation if needed.
 
-   🤖 Generated with [MODEL] via [HARNESS](HARNESS_URL) + Compound Engineering v[VERSION]
+   🤖 Generated with [MODEL] via [HARNESS](HARNESS_URL) + Systematic v[VERSION]
 
    Co-Authored-By: [MODEL] ([CONTEXT] context, [THINKING]) <noreply@anthropic.com>
    EOF
@@ -292,8 +291,8 @@ This command takes a work document (plan, specification, or todo file) and execu
    | `[MODEL]` | Model name | Claude Opus 4.6, GPT-5.4 |
    | `[CONTEXT]` | Context window (if known) | 200K, 1M |
    | `[THINKING]` | Thinking level (if known) | extended thinking |
-   | `[HARNESS]` | Tool running you | Claude Code, Codex, Gemini CLI |
-   | `[HARNESS_URL]` | Link to that tool | `https://claude.com/claude-code` |
+   | `[HARNESS]` | Tool running you | OpenCode, Codex, Gemini CLI |
+   | `[HARNESS_URL]` | Link to that tool | `https://opencode.ai` |
    | `[VERSION]` | `plugin.json` → `version` | 2.40.0 |
 
    Subagents creating commits/PRs are equally responsible for accurate attribution.
@@ -371,7 +370,6 @@ This command takes a work document (plan, specification, or todo file) and execu
 
    ---
 
-   [![Compound Engineering v[VERSION]](https://img.shields.io/badge/Compound_Engineering-v[VERSION]-6366f1)](https://github.com/EveryInc/compound-engineering-plugin)
    🤖 Generated with [MODEL] ([CONTEXT] context, [THINKING]) via [HARNESS](HARNESS_URL)
    EOF
    )"
@@ -394,7 +392,7 @@ This command takes a work document (plan, specification, or todo file) and execu
 
 ## Swarm Mode with Agent Teams (Optional)
 
-For genuinely large plans where agents need to communicate with each other, challenge approaches, or coordinate across 10+ tasks with persistent specialized roles, use agent team capabilities if available (e.g., Agent Teams in Claude Code, multi-agent workflows in Codex).
+For genuinely large plans where agents need to communicate with each other, challenge approaches, or coordinate across 10+ tasks with persistent specialized roles, use agent team capabilities if available (e.g., Agent Teams in OpenCode, multi-agent workflows in Codex).
 
 **Agent teams are typically experimental and require opt-in.** Do not attempt to use agent teams unless the user explicitly requests swarm mode or agent teams, and the platform supports it.
 
@@ -489,4 +487,3 @@ For most features: tests + linting + following patterns is sufficient.
 - **Forgetting to track progress** - Update task status as you go or lose track of what's done
 - **80% done syndrome** - Finish the feature, don't move on early
 - **Over-reviewing simple changes** - Save reviewer agents for complex work
-

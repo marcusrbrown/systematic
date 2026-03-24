@@ -25,7 +25,7 @@ Then proceed to Step 1 normally. The skill works from any environment as long as
 
 ## Step 1: Choose Analysis Scope
 
-Ask the user how broadly to analyze using the platform's blocking question tool (`AskUserQuestion` in Claude Code, `request_user_input` in Codex, `ask_user` in Gemini). If no question tool is available, present the numbered options and wait for the user's reply.
+Ask the user how broadly to analyze using the platform's blocking question tool (`question` in Claude Code, `request_user_input` in Codex, `ask_user` in Gemini). If no question tool is available, present the numbered options and wait for the user's reply.
 
 1. **All projects** (Recommended) -- sessions across every project
 2. **This project only** -- sessions for the current working directory
@@ -69,7 +69,7 @@ Show the work done using the script's `stats`. Reaffirm the scope. Keep it to 4-
 
 **Example:**
 ```
-## Analysis (compound-engineering-plugin)
+## Analysis (systematic)
 
 Scanned **24 sessions** for this project.
 Found **312 unique Bash commands** across those sessions.

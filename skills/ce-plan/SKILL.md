@@ -583,7 +583,7 @@ After writing the plan file, use the **question tool** to present these options:
 3. **Review and refine** - Improve the document through structured self-review
 4. **Share to Proof** - Upload to Proof for collaborative review and sharing
 5. **Start `/ce:work`** - Begin implementing this plan locally
-6. **Start `/ce:work` on remote** - Begin implementing in Claude Code on the web (use `&` to run in background)
+6. **Start `/ce:work` on remote** - Begin implementing in OpenCode on the web (use `&` to run in background)
 7. **Create Issue** - Create issue in project tracker (GitHub/Linear)
 
 Based on selection:
@@ -601,7 +601,7 @@ Based on selection:
   ```
   Display: `View & collaborate in Proof: <PROOF_URL>` — skip silently if curl fails. Then return to options.
 - **`/ce:work`** → Call the /ce:work command with the plan file path
-- **`/ce:work` on remote** → Run `/ce:work docs/plans/<plan_filename>.md &` to start work in background for Claude Code web
+- **`/ce:work` on remote** → Run `/ce:work docs/plans/<plan_filename>.md &` to start work in background for OpenCode web
 - **Create Issue** → See "Issue Creation" section below
 - **Other** (automatically provided) → Accept free text for rework or specific changes
 
