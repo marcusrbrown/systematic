@@ -23,7 +23,7 @@ Build, install, and test iOS apps on the simulator using XcodeBuildMCP. Captures
 Check that the XcodeBuildMCP MCP server is connected by calling its `list_simulators` tool.
 
 MCP tool names vary by platform:
-- Claude Code: `mcp__xcodebuildmcp__list_simulators`
+- OpenCode: `mcp__xcodebuildmcp__list_simulators`
 - Other platforms: use the equivalent MCP tool call for the `XcodeBuildMCP` server's `list_simulators` method
 
 If the tool is not found or errors, inform the user they need to add the XcodeBuildMCP MCP server:
@@ -106,7 +106,7 @@ Pause for human input when testing touches flows that require device interaction
 | Camera/Photos | "Grant permissions and verify camera works" |
 | Location | "Allow location access and verify map updates" |
 
-Ask the user (using the platform's question tool — e.g., `AskUserQuestion` in Claude Code, `request_user_input` in Codex, `ask_user` in Gemini — or present numbered options and wait):
+Ask the user (using the platform's question tool — e.g., `question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini — or present numbered options and wait):
 
 ```
 Human Verification Needed

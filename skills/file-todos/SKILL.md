@@ -1,6 +1,6 @@
 ---
 name: file-todos
-description: This skill should be used when managing the file-based todo tracking system in the .context/compound-engineering/todos/ directory. It provides workflows for creating todos, managing status and dependencies, conducting triage, and integrating with code review processes.
+description: This skill should be used when managing the file-based todo tracking system in the .context/systematic/todos/ directory. It provides workflows for creating todos, managing status and dependencies, conducting triage, and integrating with code review processes.
 disable-model-invocation: true
 ---
 
@@ -8,9 +8,9 @@ disable-model-invocation: true
 
 ## Overview
 
-The `.context/compound-engineering/todos/` directory contains a file-based tracking system for managing code review feedback, technical debt, feature requests, and work items. Each todo is a markdown file with YAML frontmatter and structured sections.
+The `.context/systematic/todos/` directory contains a file-based tracking system for managing code review feedback, technical debt, feature requests, and work items. Each todo is a markdown file with YAML frontmatter and structured sections.
 
-> **Legacy support:** During the transition period, always check both `.context/compound-engineering/todos/` (canonical) and `todos/` (legacy) when reading or searching for todos. Write new todos only to the canonical path. Unlike per-run scratch directories, `.context/compound-engineering/todos/` has a multi-session lifecycle -- do not clean it up as part of post-run scratch cleanup.
+> **Legacy support:** During the transition period, always check both `.context/systematic/todos/` (canonical) and `todos/` (legacy) when reading or searching for todos. Write new todos only to the canonical path. Unlike per-run scratch directories, `.context/systematic/todos/` has a multi-session lifecycle -- do not clean it up as part of post-run scratch cleanup.
 
 This skill should be used when:
 - Creating new todos from findings or feedback
@@ -24,7 +24,7 @@ This skill should be used when:
 
 | Purpose | Path |
 |---------|------|
-| **Canonical (write here)** | `.context/compound-engineering/todos/` |
+| **Canonical (write here)** | `.context/systematic/todos/` |
 | **Legacy (read-only)** | `todos/` |
 
 When searching or listing todos, always search both paths. When creating new todos, always write to the canonical path.
@@ -78,13 +78,13 @@ dependencies: ["001"]     # Issue IDs this is blocked by
 
 ## Common Workflows
 
-> **Tool preference:** Use native file-search (e.g., Glob in Claude Code) and content-search (e.g., Grep in Claude Code) tools instead of shell commands for finding and reading todo files. This avoids unnecessary permission prompts in sub-agent workflows. Use shell only for operations that have no native equivalent (e.g., `mv` for renames, `mkdir -p` for directory creation).
+> **Tool preference:** Use native file-search (e.g., Glob in OpenCode) and content-search (e.g., Grep in OpenCode) tools instead of shell commands for finding and reading todo files. This avoids unnecessary permission prompts in sub-agent workflows. Use shell only for operations that have no native equivalent (e.g., `mv` for renames, `mkdir -p` for directory creation).
 
 ### Creating a New Todo
 
-1. Ensure directory exists: `mkdir -p .context/compound-engineering/todos/`
+1. Ensure directory exists: `mkdir -p .context/systematic/todos/`
 2. Determine next issue ID by searching both canonical and legacy paths for files matching `[0-9]*-*.md` using the native file-search/glob tool. Extract the numeric prefix from each filename, find the highest, and increment by one. Zero-pad to 3 digits (e.g., `007`).
-3. Read the template at [todo-template.md](./assets/todo-template.md), then write it to `.context/compound-engineering/todos/{NEXT_ID}-pending-{priority}-{description}.md` using the native file-write tool.
+3. Read the template at [todo-template.md](./assets/todo-template.md), then write it to `.context/systematic/todos/{NEXT_ID}-pending-{priority}-{description}.md` using the native file-write tool.
 4. Edit and fill required sections:
    - Problem Statement
    - Findings (if from investigation)
@@ -134,7 +134,7 @@ dependencies: ["002", "005"]  # This todo blocked by issues 002 and 005
 dependencies: []               # No blockers - can work immediately
 ```
 
-**To check what blocks a todo:** Use the native content-search tool (e.g., Grep in Claude Code) to search for `^dependencies:` in the todo file.
+**To check what blocks a todo:** Use the native content-search tool (e.g., Grep in OpenCode) to search for `^dependencies:` in the todo file.
 
 **To find what a todo blocks:** Search both directory paths for files containing `dependencies:.*"002"` using the native content-search tool.
 
@@ -189,7 +189,7 @@ Work logs serve as:
 
 ## Quick Reference Patterns
 
-Use the native file-search/glob tool (e.g., Glob in Claude Code) and content-search tool (e.g., Grep in Claude Code) for these operations. Search both canonical and legacy directory paths.
+Use the native file-search/glob tool (e.g., Glob in OpenCode) and content-search tool (e.g., Grep in OpenCode) for these operations. Search both canonical and legacy directory paths.
 
 **Finding work:**
 
@@ -218,12 +218,12 @@ Use the native file-search/glob tool (e.g., Glob in Claude Code) and content-sea
 ## Key Distinctions
 
 **File-todos system (this skill):**
-- Markdown files in `.context/compound-engineering/todos/` (legacy: `todos/`)
+- Markdown files in `.context/systematic/todos/` (legacy: `todos/`)
 - Development/project tracking across sessions and agents
 - Standalone markdown files with YAML frontmatter
 - Persisted to disk, cross-agent accessible
 
-**In-session task tracking (e.g., TaskCreate/TaskUpdate in Claude Code, update_plan in Codex):**
+**In-session task tracking (e.g., todowrite/TaskUpdate in OpenCode, update_plan in Codex):**
 - In-memory task tracking during agent sessions
 - Temporary tracking for single conversation
 - Not persisted to disk after session ends

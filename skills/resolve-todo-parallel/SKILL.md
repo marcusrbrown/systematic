@@ -10,19 +10,19 @@ Resolve all TODO comments using parallel processing, document lessons learned, t
 
 ### 1. Analyze
 
-Get all unresolved TODOs from `.context/compound-engineering/todos/*.md` and legacy `todos/*.md`
+Get all unresolved TODOs from `.context/systematic/todos/*.md` and legacy `todos/*.md`
 
 Residual actionable work may come from `ce:review-beta mode:autonomous` after its in-skill `safe_auto` pass. Treat those todos as normal unresolved work items; the review skill has already decided they should not be auto-fixed inline.
 
-If any todo recommends deleting, removing, or gitignoring files in `docs/brainstorms/`, `docs/plans/`, or `docs/solutions/`, skip it and mark it as `wont_fix`. These are compound-engineering pipeline artifacts that are intentional and permanent.
+If any todo recommends deleting, removing, or gitignoring files in `docs/brainstorms/`, `docs/plans/`, or `docs/solutions/`, skip it and mark it as `wont_fix`. These are systematic pipeline artifacts that are intentional and permanent.
 
 ### 2. Plan
 
-Create a task list of all unresolved items grouped by type (e.g., `TaskCreate` in Claude Code, `update_plan` in Codex). Analyze dependencies and prioritize items that others depend on. For example, if a rename is needed, it must complete before dependent items. Output a mermaid flow diagram showing execution order — what can run in parallel, and what must run first.
+Create a task list of all unresolved items grouped by type (e.g., `todowrite` in OpenCode, `update_plan` in Codex). Analyze dependencies and prioritize items that others depend on. For example, if a rename is needed, it must complete before dependent items. Output a mermaid flow diagram showing execution order — what can run in parallel, and what must run first.
 
 ### 3. Implement (PARALLEL)
 
-Spawn a `compound-engineering:workflow:pr-comment-resolver` agent for each unresolved item.
+Spawn a `systematic:workflow:pr-comment-resolver` agent for each unresolved item.
 
 If there are 3 items, spawn 3 agents — one per item. Prefer running all agents in parallel; if the platform does not support parallel dispatch, run them sequentially respecting the dependency order from step 2.
 
@@ -31,7 +31,7 @@ Keep parent-context pressure bounded:
 - If there are 5+ unresolved items, launch in batches of at most 4 agents at a time
 - Require each resolver agent to return only a short status summary to the parent: todo handled, files changed, tests run or skipped, and any blocker that still needs follow-up
 
-If the todo set is large enough that even batched short returns are likely to get noisy, use a per-run scratch directory such as `.context/compound-engineering/resolve-todo-parallel/<run-id>/`:
+If the todo set is large enough that even batched short returns are likely to get noisy, use a per-run scratch directory such as `.context/systematic/resolve-todo-parallel/<run-id>/`:
 - Have each resolver write a compact artifact for its todo there
 - Return only a completion summary to the parent
 - Re-read only the artifacts that are needed to summarize outcomes, document learnings, or decide whether a todo is truly resolved
@@ -54,9 +54,9 @@ GATE: STOP. Verify that the compound skill produced a solution document in `docs
 
 ### 6. Clean Up Completed Todos
 
-Search both `.context/compound-engineering/todos/` and legacy `todos/` for files with `done`, `resolved`, or `complete` status, then delete them to keep the todo list clean and actionable.
+Search both `.context/systematic/todos/` and legacy `todos/` for files with `done`, `resolved`, or `complete` status, then delete them to keep the todo list clean and actionable.
 
-If a per-run scratch directory was created at `.context/compound-engineering/resolve-todo-parallel/<run-id>/`, and the user did not ask to inspect it, delete that specific `<run-id>/` directory after todo cleanup succeeds. Do not delete any other `.context/` subdirectories.
+If a per-run scratch directory was created at `.context/systematic/resolve-todo-parallel/<run-id>/`, and the user did not ask to inspect it, delete that specific `<run-id>/` directory after todo cleanup succeeds. Do not delete any other `.context/` subdirectories.
 
 After cleanup, output a summary:
 

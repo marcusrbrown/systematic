@@ -31,7 +31,7 @@ argument-hint: '[PR number, GitHub URL, branch name, or latest] [--serial]'
 First, I need to determine the review target type and set up the code for analysis.
 </thinking>
 
-#### Immediate Actions:
+#### Immediate Actions
 
 <task_list>
 
@@ -51,7 +51,7 @@ Ensure that the code is ready for analysis (either in worktree or on current bra
 #### Protected Artifacts
 
 <protected_artifacts>
-The following paths are compound-engineering pipeline artifacts and must never be flagged for deletion, removal, or gitignore by any review agent:
+The following paths are systematic pipeline artifacts and must never be flagged for deletion, removal, or gitignore by any review agent:
 
 - `docs/brainstorms/*-requirements.md` — Requirements documents created by `/ce:brainstorm`. These are the product-definition artifacts that planning depends on.
 - `docs/plans/*.md` — Plan files created by `/ce:plan`. These are living documents that track implementation progress (checkboxes are checked off by `/ce:work`).
@@ -62,7 +62,7 @@ If a review agent flags any file in these directories for cleanup or removal, di
 
 #### Load Review Agents
 
-Read `compound-engineering.local.md` in the project root. If found, use `review_agents` from YAML frontmatter. If the markdown body contains review context, pass it to each agent as additional instructions.
+Read `systematic.local.md` in the project root. If found, use `review_agents` from YAML frontmatter. If the markdown body contains review context, pass it to each agent as additional instructions.
 
 If no settings file exists, invoke the `setup` skill to create one. Then read the newly created file and continue.
 
@@ -85,7 +85,7 @@ Run all agents simultaneously for speed. If you hit context limits, retry with `
 
 </execution_mode>
 
-#### Parallel Agents to review the PR:
+#### Parallel Agents to review the PR
 
 <parallel_tasks>
 
@@ -115,7 +115,7 @@ Always run these last regardless of mode:
 
 </parallel_tasks>
 
-#### Conditional Agents (Run if applicable):
+#### Conditional Agents (Run if applicable)
 
 <conditional_agents>
 
@@ -279,9 +279,9 @@ Remove duplicates, prioritize by severity and impact.
 
 ```bash
 # Launch multiple finding-creator agents in parallel
-Task() - Create todos for first finding
-Task() - Create todos for second finding
-Task() - Create todos for third finding
+task() - Create todos for first finding
+task() - Create todos for second finding
+task() - Create todos for third finding
 etc. for each finding.
 ```
 
@@ -432,7 +432,7 @@ After creating all todo files, present comprehensive summary:
 
 2. **Triage All Todos**:
    ```bash
-   ls .context/compound-engineering/todos/*-pending-*.md todos/*-pending-*.md 2>/dev/null  # View all pending todos
+   ls .context/systematic/todos/*-pending-*.md todos/*-pending-*.md 2>/dev/null  # View all pending todos
    /triage                  # Use slash command for interactive triage
    ```
 
@@ -514,7 +514,7 @@ After presenting the Summary Report, offer appropriate testing based on project 
 
 </offer_testing>
 
-#### If User Accepts Web Testing:
+#### If User Accepts Web Testing
 
 Spawn a subagent to run browser tests (preserves main context):
 
@@ -533,7 +533,7 @@ The subagent will:
 
 **Standalone:** `/test-browser [PR number]`
 
-#### If User Accepts iOS Testing:
+#### If User Accepts iOS Testing
 
 Spawn a subagent to run Xcode tests (preserves main context):
 
@@ -557,4 +557,3 @@ The subagent will:
 ### Important: P1 Findings Block Merge
 
 Any **🔴 P1 (CRITICAL)** findings must be addressed before merging the PR. Present these prominently and ensure they're resolved before accepting the PR.
-

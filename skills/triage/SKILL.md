@@ -6,7 +6,7 @@ disable-model-invocation: true
 ---
 
 - First set the /model to Haiku
-- Then read all pending todos from `.context/compound-engineering/todos/` and legacy `todos/` directories
+- Then read all pending todos from `.context/systematic/todos/` and legacy `todos/` directories
 
 Present all findings, decisions, or issues here one by one for triage. The goal is to go through each item and decide whether to add it to the CLI todo system.
 
@@ -197,7 +197,7 @@ During triage, the following status updates occurred:
 
 1. View approved todos ready for work:
    ```bash
-   ls .context/compound-engineering/todos/*-ready-*.md todos/*-ready-*.md 2>/dev/null
+   ls .context/systematic/todos/*-ready-*.md todos/*-ready-*.md 2>/dev/null
    ```
 ````
 

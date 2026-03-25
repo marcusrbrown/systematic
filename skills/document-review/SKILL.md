@@ -11,7 +11,7 @@ Review requirements or plan documents through multi-persona analysis. Dispatches
 
 **If a document path is provided:** Read it, then proceed.
 
-**If no document is specified:** Ask which document to review, or find the most recent in `docs/brainstorms/` or `docs/plans/` using a file-search/glob tool (e.g., Glob in Claude Code).
+**If no document is specified:** Ask which document to review, or find the most recent in `docs/brainstorms/` or `docs/plans/` using a file-search/glob tool (e.g., Glob in OpenCode).
 
 ### Classify Document Type
 
@@ -65,18 +65,18 @@ Reviewing with:
 ### Build Agent List
 
 Always include:
-- `compound-engineering:document-review:coherence-reviewer`
-- `compound-engineering:document-review:feasibility-reviewer`
+- `systematic:document-review:coherence-reviewer`
+- `systematic:document-review:feasibility-reviewer`
 
 Add activated conditional personas:
-- `compound-engineering:document-review:product-lens-reviewer`
-- `compound-engineering:document-review:design-lens-reviewer`
-- `compound-engineering:document-review:security-lens-reviewer`
-- `compound-engineering:document-review:scope-guardian-reviewer`
+- `systematic:document-review:product-lens-reviewer`
+- `systematic:document-review:design-lens-reviewer`
+- `systematic:document-review:security-lens-reviewer`
+- `systematic:document-review:scope-guardian-reviewer`
 
 ### Dispatch
 
-Dispatch all agents in **parallel** using the platform's task/agent tool (e.g., Agent tool in Claude Code, spawn in Codex). Each agent receives the prompt built from the [subagent template](./references/subagent-template.md) with these variables filled:
+Dispatch all agents in **parallel** using the platform's task/agent tool (e.g., Agent tool in OpenCode, spawn in Codex). Each agent receives the prompt built from the [subagent template](./references/subagent-template.md) with these variables filled:
 
 | Variable | Value |
 |----------|-------|
@@ -176,7 +176,7 @@ These are pipeline artifacts and must not be flagged for removal.
 
 ## Phase 5: Next Action
 
-Use the platform's blocking question tool when available (question in Claude Code, request_user_input in Codex, ask_user in Gemini). Otherwise present numbered options and wait for the user's reply.
+Use the platform's blocking question tool when available (question in OpenCode, request_user_input in Codex, ask_user in Gemini). Otherwise present numbered options and wait for the user's reply.
 
 Offer:
 

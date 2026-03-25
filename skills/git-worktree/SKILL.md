@@ -49,7 +49,7 @@ Use this skill in these scenarios:
 
 ## How to Use
 
-### In Claude Code Workflows
+### In OpenCode Workflows
 
 The skill is automatically called from `/ce:review` and `/ce:work` commands:
 
@@ -152,7 +152,7 @@ bash ${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh clean
 ### Code Review with Worktree
 
 ```bash
-# Claude Code recognizes you're not on the PR branch
+# OpenCode recognizes you're not on the PR branch
 # Offers: "Use worktree for isolated review? (y/n)"
 
 # You respond: yes
