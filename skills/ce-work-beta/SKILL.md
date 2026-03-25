@@ -445,7 +445,7 @@ This mode integrates with the existing Phase 1 Step 4 strategy selection as a **
 
 External delegation activates when any of these conditions are met:
 - The user says "use codex for this work", "delegate to codex", or "delegate mode"
-- A plan implementation unit contains `Execution target: external-delegate` in its Execution note (set by ce:plan-beta or ce:plan)
+- A plan implementation unit contains `Execution target: external-delegate` in its Execution note (set by ce:plan)
 
 The specific delegate tool is resolved at execution time. Currently the only supported delegate is Codex CLI. Future delegates can be added without changing plan files.
 

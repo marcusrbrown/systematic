@@ -139,12 +139,12 @@ When a test fails:
 
    How to proceed?
    1. Fix now - I'll help debug and fix
-   2. Create todo - Add to todos/ for later
+   2. Create todo - Add a todo for later (using the file-todos skill)
    3. Skip - Continue testing other screens
    ```
 
 3. **If "Fix now":** investigate, propose a fix, rebuild and retest
-4. **If "Create todo":** create `{id}-pending-p1-xcode-{description}.md`, continue
+4. **If "Create todo":** load the `file-todos` skill and create a todo with priority p1 and description `xcode-{description}`, continue
 5. **If "Skip":** log as skipped, continue
 
 ### 8. Test Summary

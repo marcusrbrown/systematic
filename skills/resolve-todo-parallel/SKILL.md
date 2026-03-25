@@ -1,6 +1,6 @@
 ---
 name: resolve-todo-parallel
-description: Use this skill when there are multiple unresolved CLI todo files and you want to resolve them in parallel, document learnings, and clean up completed entries in one disciplined pass.
+description: Resolve all pending CLI todos using parallel processing, compound on lessons learned, then clean up completed todos.
 argument-hint: '[optional: specific todo ID or pattern]'
 ---
 
@@ -10,9 +10,11 @@ Resolve all TODO comments using parallel processing, document lessons learned, t
 
 ### 1. Analyze
 
-Get all unresolved TODOs from the /todos/*.md directory
+Get all unresolved TODOs from `.context/systematic/todos/*.md` and legacy `todos/*.md`
 
-If any todo recommends deleting, removing, or gitignoring files in `docs/brainstorms/`, `docs/plans/`, or `docs/solutions/`, skip it and mark it as `wont_fix`. These are Systematic workflow artifacts that are intentional and permanent.
+Residual actionable work may come from `ce:review-beta mode:autonomous` after its in-skill `safe_auto` pass. Treat those todos as normal unresolved work items; the review skill has already decided they should not be auto-fixed inline.
+
+If any todo recommends deleting, removing, or gitignoring files in `docs/brainstorms/`, `docs/plans/`, or `docs/solutions/`, skip it and mark it as `wont_fix`. These are systematic pipeline artifacts that are intentional and permanent.
 
 ### 2. Plan
 
@@ -20,7 +22,7 @@ Create a task list of all unresolved items grouped by type (e.g., `todowrite` in
 
 ### 3. Implement (PARALLEL)
 
-Spawn a `pr-comment-resolver` agent for each unresolved item.
+Spawn a `systematic:workflow:pr-comment-resolver` agent for each unresolved item.
 
 If there are 3 items, spawn 3 agents — one per item. Prefer running all agents in parallel; if the platform does not support parallel dispatch, run them sequentially respecting the dependency order from step 2.
 
@@ -52,9 +54,9 @@ GATE: STOP. Verify that the compound skill produced a solution document in `docs
 
 ### 6. Clean Up Completed Todos
 
-List all todos and identify those with `done` or `resolved` status, then delete them to keep the todo list clean and actionable.
+Search both `.context/systematic/todos/` and legacy `todos/` for files with `done`, `resolved`, or `complete` status, then delete them to keep the todo list clean and actionable.
 
-If a scratch directory was used and the user did not ask to inspect it, clean it up after todo cleanup succeeds.
+If a per-run scratch directory was created at `.context/systematic/resolve-todo-parallel/<run-id>/`, and the user did not ask to inspect it, delete that specific `<run-id>/` directory after todo cleanup succeeds. Do not delete any other `.context/` subdirectories.
 
 After cleanup, output a summary:
 
@@ -63,3 +65,4 @@ Todos resolved: [count]
 Lessons documented: [path to solution doc, or "skipped"]
 Todos cleaned up: [count deleted]
 ```
+
