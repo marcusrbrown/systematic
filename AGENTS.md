@@ -4,7 +4,7 @@
 
 ## Overview
 
-OpenCode plugin providing structured engineering workflows. Ported from the [Compound Engineering Plugin (CEP)](https://github.com/EveryInc/compound-engineering-plugin) for Claude Code, with improvements and OpenCode SDK integration. Converts CC-format agents and skills to OpenCode format. Tracks upstream provenance via `sync-manifest.json`.
+OpenCode plugin providing structured engineering workflows for AI-powered development. Originally adapted from the [Compound Engineering Plugin (CEP)](https://github.com/EveryInc/compound-engineering-plugin) for Claude Code, Systematic now evolves independently with its own direction for advanced AI workflows. The CLI retains CC-format conversion capabilities for ad-hoc imports. Historical provenance is tracked in `sync-manifest.json`.
 
 **Two distinct parts:**
 1. **TypeScript source** (`src/`) — Plugin logic, tools, config handling
@@ -48,19 +48,19 @@ systematic/
 │   └── lib/              # 13 core modules (see src/lib/AGENTS.md)
 ├── skills/               # 48 bundled skills (SKILL.md format)
 ├── agents/               # 29 bundled agents (5 categories: design/docs/research/review/workflow)
-├── commands/             # Empty (.gitkeep) — all commands converted to skills in CEP sync
+├── commands/             # Empty (.gitkeep) — commands converted to skills; dir kept for backward compat
 ├── docs/                 # Starlight docs workspace (see docs/AGENTS.md)
 │   ├── scripts/          # Content generation from bundled assets
 │   └── src/content/      # Manual guides + generated reference
 ├── registry/             # OCX registry config + profiles (omo, standalone)
-├── scripts/              # Build scripts (build-registry.ts, check-cep-upstream.ts)
+├── scripts/              # Build scripts (build-registry.ts)
 ├── assets/               # Static assets (banner SVG)
 ├── tests/
 │   ├── unit/             # 13 test files
 │   └── integration/      # 2 test files
 ├── .opencode/            # Project-specific OC config + skills + commands
-│   ├── skills/           # Project-only skills (convert-cc-defs)
-│   └── commands/         # Project-only commands (generate-readme, sync-cep)
+│   ├── skills/           # Project-only skills
+│   └── commands/         # Project-only commands (generate-readme)
 ├── sync-manifest.json    # Upstream provenance tracking
 └── dist/                 # Build output
 ```
@@ -74,7 +74,7 @@ systematic/
 | Skill tool implementation | `src/lib/skill-tool.ts` |
 | Skill loading + formatting | `src/lib/skill-loader.ts` |
 | Bootstrap injection | `src/lib/bootstrap.ts` |
-| CEP→OpenCode conversion | `src/lib/converter.ts` |
+| CC→OpenCode conversion (CLI) | `src/lib/converter.ts` |
 | YAML frontmatter parsing | `src/lib/frontmatter.ts` |
 | Agent config validation + type guards | `src/lib/validation.ts` |
 | Asset discovery | `src/lib/skills.ts`, `agents.ts`, `commands.ts` |
@@ -84,9 +84,7 @@ systematic/
 | CLI commands | `src/cli.ts` |
 | Add new skill | `skills/<name>/SKILL.md` |
 | Add new agent | `agents/<category>/<name>.md` |
-| Import from CEP upstream | `.opencode/skills/convert-cc-defs/SKILL.md` |
 | OCX registry building | `scripts/build-registry.ts` |
-| Upstream sync checking | `scripts/check-cep-upstream.ts` |
 | Docs content generation | `docs/scripts/transform-content.ts` |
 | Docs site config | `docs/astro.config.mjs` |
 
@@ -98,7 +96,7 @@ systematic/
 | `createConfigHandler` | fn | src/lib/config-handler.ts:215 | 3 | Config hook — merges bundled assets |
 | `createSkillTool` | fn | src/lib/skill-tool.ts:87 | 3 | systematic_skill tool factory |
 | `getBootstrapContent` | fn | src/lib/bootstrap.ts:32 | 3 | System prompt injection |
-| `convertContent` | fn | src/lib/converter.ts:371 | 4 | CEP→OpenCode body conversion |
+| `convertContent` | fn | src/lib/converter.ts:371 | 4 | CC→OpenCode body conversion |
 | `convertFileWithCache` | fn | src/lib/converter.ts:411 | 6 | Cached file conversion (mtime invalidation) |
 | `findSkillsInDir` | fn | src/lib/skills.ts:90 | 6 | Skill discovery (highest centrality) |
 | `findAgentsInDir` | fn | src/lib/agents.ts:49 | 4 | Agent discovery (category from subdir) |
@@ -153,7 +151,7 @@ All disabled lists merge (union), bootstrap config shallow-merges.
 
 ## Upstream Sync
 
-CEP definitions are imported via the `convert-cc-defs` skill (`.opencode/skills/`). `sync-manifest.json` tracks provenance: upstream commit, content hash, rewrites applied, and manual overrides. Re-sync compares hashes for idempotency.
+CEP definitions were historically imported via the `convert-cc-defs` skill. `sync-manifest.json` tracks provenance: upstream commit, content hash, rewrites applied, and manual overrides. **Automated sync is now disabled** — Systematic evolves independently. The CLI `convert` command remains available for ad-hoc CC→OpenCode conversions.
 
 The latest upstream sync (commit 74fb717) converted all commands to skills — `commands/` now contains only `.gitkeep`. Command code paths (`findCommandsInDir`, `loadCommandAsConfig`) remain for backward compatibility and project-specific commands.
 
@@ -167,5 +165,5 @@ The latest upstream sync (commit 74fb717) converted all commands to skills — `
 - Use `bun src/cli.ts` for local dev instead of `bunx systematic` to avoid slow resolution
 - `commands/` dir retained (with `.gitkeep`) for backward compatibility — code paths still support commands
 - `registry/` provides OCX component-level installation with omo and standalone profiles
-- `scripts/check-cep-upstream.ts` detects new/changed upstream definitions for sync
-- `.opencode/commands/` has project-only commands: `generate-readme` (README generation), `sync-cep` (upstream sync)
+- `.opencode/commands/` has project-only commands: `generate-readme` (README generation)
+- `sync-manifest.json` is historical provenance data — no longer actively synced
