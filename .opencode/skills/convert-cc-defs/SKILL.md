@@ -281,6 +281,86 @@ const converted = convertContent(upstreamContent, 'agent')
 - **CC-specific exclusion rules** — some agents reference `compound-engineering pipeline artifacts` or other CC-specific content (e.g., `docs/plans/*.md` exclusions) that should be removed as they're not applicable to Systematic
 - **Frontmatter quoting normalization** — the converter may change double quotes to single quotes in `argument-hint` and other frontmatter string values. This is cosmetic but verify quoting consistency after conversion.
 
+### 2c. Mandatory Post-Conversion Fixup (Batch sed)
+
+**LLMs consistently fail at simple string replacement.** The mechanical converter catches some patterns, but many remain — particularly inside code blocks, multi-platform tool lists, and contextual references. After every conversion (both mechanical converter AND LLM rewrite), run these deterministic sed replacements as a mandatory safety net.
+
+**Replacement order matters.** Apply more-specific patterns before general ones to avoid double-conversion. Run all phases in sequence on each file:
+
+```bash
+# Target: all converted .md files EXCEPT exclusions (see below)
+# PHASE A: compound-engineering → systematic (most specific first)
+sed -i '' \
+  -e 's/compound-engineering\.local\.md/systematic.local.md/g' \
+  -e 's/compound-engineering-plugin/systematic/g' \
+  -e 's/compound-engineering pipeline artifacts/systematic pipeline artifacts/g' \
+  -e 's|\.context/compound-engineering/|.context/systematic/|g' \
+  -e 's|plugins/compound-engineering/|plugins/systematic/|g' \
+  -e 's/compound-engineering:/systematic:/g' \
+  -e 's/Compound_Engineering/Systematic/g' \
+  -e 's/Compound Engineering/Systematic/g' \
+  -e 's/compound-engineering/systematic/g' \
+  "$FILE"
+
+# PHASE B: Path conversions (most specific first)
+sed -i '' \
+  -e 's|~/\.claude/skills/|~/.config/opencode/skills/|g' \
+  -e 's|~/\.claude/settings\.json|~/.config/opencode/settings.json|g' \
+  -e 's|~/\.claude/|~/.config/opencode/|g' \
+  -e 's|`\.claude/skills/|`.opencode/skills/|g' \
+  -e 's|`\.claude/settings\.json|`.opencode/settings.json|g' \
+  -e 's| \.claude/skills/| .opencode/skills/|g' \
+  -e 's| \.claude/settings\.json| .opencode/settings.json|g' \
+  -e 's|(\.claude/|(\.opencode/|g' \
+  -e 's|`\.claude/|`.opencode/|g' \
+  -e 's| \.claude/| .opencode/|g' \
+  -e 's|"\.claude/|".opencode/|g' \
+  -e 's|CLAUDE\.md|AGENTS.md|g' \
+  "$FILE"
+
+# PHASE C: Branding and tool names
+sed -i '' \
+  -e 's/Claude Code/OpenCode/g' \
+  -e 's/claude-code/opencode/g' \
+  -e 's/AskUserQuestion/question/g' \
+  -e 's/TaskCreate/todowrite/g' \
+  "$FILE"
+```
+
+#### File Exclusions
+
+| File/Pattern | Reason | What to convert instead |
+|---|---|---|
+| `sync-manifest.json` | Upstream paths (`plugins/compound-engineering/...`) are correct source references | Never run sed on manifest upstream paths |
+| `claude-permissions-optimizer/SKILL.md` | Skill targets Claude Code settings files — CC refs and `.claude/` paths are intentional | Only convert: prefix (`compound-engineering:` → `systematic:`), tool names (`AskUserQuestion` → `question`), product name (`Compound Engineering` → `Systematic`) |
+
+#### Edge Cases Requiring Manual Review After sed
+
+These patterns recur across every sync and need manual attention:
+
+| Pattern | Problem | Fix |
+|---|---|---|
+| `EveryInc/systematic` in URLs | Over-conversion of `EveryInc/compound-engineering-plugin` | Use generic example (`acme/my-app`) or remove entirely |
+| `claude.com/opencode` | `Claude Code` → `OpenCode` mangles URLs like `claude.com/claude-code` | Replace with `opencode.ai` |
+| CEP version attribution badges | `[![Compound Engineering v[VERSION]]...]` becomes `[![Systematic v[VERSION]]...]` with dead URL | Remove the entire badge line |
+| `Task()` in code blocks | Uppercase `Task()` in code examples not caught by branding sed | Manually fix to `task()` |
+| `https://github.com/EveryInc/systematic` | Non-existent URL from catch-all sed | Context-dependent: remove, genericize, or update to actual Systematic repo URL |
+| Multi-platform tool lists | `(question in OpenCode, ...)` after conversion — verify the list is coherent | Should read naturally with OpenCode as the primary platform |
+
+#### Post-Fixup Verification (MANDATORY)
+
+After running the batch sed fixup, verify with grep. Both checks MUST pass:
+
+```bash
+# CHECK 1: Remaining CC/CEP refs (should be zero for non-exception files)
+grep -rnE 'Claude Code|claude-code|\.claude/|CLAUDE\.md|~/\.claude|AskUserQuestion|TaskCreate|compound-engineering|Compound Engineering|Compound_Engineering|EveryInc/systematic|claude\.com/opencode' <files>
+
+# CHECK 2: Over-conversions (should ALWAYS be zero across ALL files)
+grep -rnE '\.opencode/\.opencode/|config/opencode/\.config/|systematic\.systematic|systematic:systematic:|opencode\.ai/opencode' <files>
+```
+
+If CHECK 1 returns hits on non-exception files, fix them. If CHECK 2 returns any hits, you have a double-conversion bug — investigate immediately.
+
 ## Phase 3: Intelligent Rewrite
 
 This is the critical step that distinguishes a good import from a broken one. Every converted definition MUST go through intelligent rewrite.
@@ -394,6 +474,9 @@ Before writing the file, verify:
 - [ ] Content matches Systematic's style (structured phases, explicit deliverables)
 - [ ] Agent `mode` field is set (`subagent`, `primary`, or `all`)
 - [ ] Agent `temperature` is appropriate for the agent's purpose
+- [ ] **Batch sed fixup ran** — Phase 2c sed commands executed on all converted files
+- [ ] **Grep verification passed** — Phase 2c CHECK 1 (remaining refs) and CHECK 2 (over-conversions) both clean
+- [ ] **Edge cases reviewed** — Checked for mangled URLs, dead badge links, uppercase `Task()` in code blocks (see Phase 2c edge cases table)
 
 ### 3g. Discrepancy Reporting
 
@@ -412,9 +495,6 @@ Example discrepancy report:
 | skills/foo/SKILL.md | 42 | Uses `~/.opencode/` path | Verify if intentional, fix to `~/.config/opencode/` if not |
 | commands/bar.md | 15 | Uses `AskUserQuestion` | Convert to `question` tool |
 ```
-- [ ] Content matches Systematic's style (structured phases, explicit deliverables)
-- [ ] Agent `mode` field is set (`subagent`, `primary`, or `all`)
-- [ ] Agent `temperature` is appropriate for the agent's purpose
 
 ## Phase 4: Write and Register
 
