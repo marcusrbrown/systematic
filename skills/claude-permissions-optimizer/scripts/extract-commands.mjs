@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-// Extracts, normalizes, and pre-classifies Bash commands from OpenCode sessions.
+// Extracts, normalizes, and pre-classifies Bash commands from Claude Code sessions.
 // Filters against the current allowlist, groups by normalized pattern, and classifies
 // each pattern as green/yellow/red so the model can review rather than classify from scratch.
 //
@@ -15,6 +15,7 @@
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { normalize } from './normalize.mjs'
 
 const args = process.argv.slice(2)
 
@@ -42,9 +43,8 @@ const maxSessions = parseInt(flag('max-sessions', '500'), 10)
 const minCount = parseInt(flag('min-count', '5'), 10)
 const projectSlugFilter = flag('project-slug', null)
 const settingsPaths = flagAll('settings')
-const opencodeDir =
-  process.env.OPENCODE_CONFIG_DIR || join(homedir(), '.config', 'opencode')
-const projectsDir = join(opencodeDir, 'projects')
+const claudeDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude')
+const projectsDir = join(claudeDir, 'projects')
 const cutoff = Date.now() - days * 24 * 60 * 60 * 1000
 
 // ── Allowlist loading ──────────────────────────────────────────────────────
@@ -70,9 +70,9 @@ async function loadAllowlist(filePath) {
 }
 
 if (settingsPaths.length === 0) {
-  settingsPaths.push(join(opencodeDir, 'settings.json'))
-  settingsPaths.push(join(process.cwd(), '.opencode', 'settings.json'))
-  settingsPaths.push(join(process.cwd(), '.opencode', 'settings.local.json'))
+  settingsPaths.push(join(claudeDir, 'settings.json'))
+  settingsPaths.push(join(process.cwd(), '.claude', 'settings.json'))
+  settingsPaths.push(join(process.cwd(), '.claude', 'settings.local.json'))
 }
 
 for (const p of settingsPaths) {
@@ -320,7 +320,7 @@ const GREEN_COMPOUND = [
   /\b--dry-run\b/,
   /^git\s+clean\s+.*(-[a-z]*n|--dry-run)\b/, // git clean dry run
   // NOTE: find is intentionally NOT green. Bash(find *) would also match
-  // find -delete and find -exec rm in OpenCode's allowlist glob matching.
+  // find -delete and find -exec rm in Claude Code's allowlist glob matching.
   // Commands with mode-switching flags: only green when the normalized pattern
   // is narrow enough that the allowlist glob can't match the destructive form.
   // Bash(sed -n *) is safe; Bash(sed *) would also match sed -i.
@@ -410,156 +410,7 @@ function classify(command) {
   return { tier: 'unknown' }
 }
 
-// ── Normalization ──────────────────────────────────────────────────────────
-
-// Risk-modifying flags that must NOT be collapsed into wildcards.
-// Global flags are always preserved; context-specific flags only matter
-// for certain base commands.
-const GLOBAL_RISK_FLAGS = new Set([
-  '--force',
-  '--hard',
-  '-rf',
-  '--privileged',
-  '--no-verify',
-  '--system',
-  '--force-with-lease',
-  '-D',
-  '--force-if-includes',
-  '--volumes',
-  '--rmi',
-  '--rewrite',
-  '--delete',
-])
-
-// Flags that are only risky for specific base commands.
-// -f means force-push in git, force-remove in docker, but pattern-file in grep.
-// -v means remove-volumes in docker-compose, but verbose everywhere else.
-const CONTEXTUAL_RISK_FLAGS = {
-  '-f': new Set(['git', 'docker', 'rm']),
-  '-v': new Set(['docker', 'docker-compose']),
-}
-
-function isRiskFlag(token, base) {
-  if (GLOBAL_RISK_FLAGS.has(token)) return true
-  // Check context-specific flags
-  const contexts = CONTEXTUAL_RISK_FLAGS[token]
-  if (contexts && base && contexts.has(base)) return true
-  // Combined short flags containing risk chars: -rf, -fr, -fR, etc.
-  if (/^-[a-zA-Z]*[rf][a-zA-Z]*$/.test(token) && token.length <= 4) return true
-  return false
-}
-
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: command normalization intentionally centralizes risk checks and pattern shaping.
-function normalize(command) {
-  // Don't normalize shell injection patterns
-  if (/\|\s*(sh|bash|zsh)\b/.test(command)) return command
-  // Don't normalize sudo -- keep as-is
-  if (/^sudo\s/.test(command)) return 'sudo *'
-
-  // Handle pnpm --filter <pkg> <subcommand> specially
-  const pnpmFilter = command.match(/^pnpm\s+--filter\s+\S+\s+(\S+)/)
-  if (pnpmFilter) return `pnpm --filter * ${pnpmFilter[1]} *`
-
-  // Handle sed specially -- preserve the mode flag to keep safe patterns narrow.
-  // sed -i (in-place) is destructive; sed -n, sed -e, bare sed are read-only.
-  if (/^sed\s/.test(command)) {
-    if (/\s-i\b/.test(command)) return 'sed -i *'
-    const sedFlag = command.match(/^sed\s+(-[a-zA-Z])\s/)
-    return sedFlag ? `sed ${sedFlag[1]} *` : 'sed *'
-  }
-
-  // Handle ast-grep specially -- preserve --rewrite flag.
-  if (/^(ast-grep|sg)\s/.test(command)) {
-    const base = command.startsWith('sg') ? 'sg' : 'ast-grep'
-    return /\s--rewrite\b/.test(command) ? `${base} --rewrite *` : `${base} *`
-  }
-
-  // Handle find specially -- preserve key action flags.
-  // find -delete and find -exec rm are destructive; find -name/-type are safe.
-  if (/^find\s/.test(command)) {
-    if (/\s-delete\b/.test(command)) return 'find -delete *'
-    if (/\s-exec\s/.test(command)) return 'find -exec *'
-    // Extract the first predicate flag for a narrower safe pattern
-    const findFlag = command.match(/\s(-(?:name|type|path|iname))\s/)
-    return findFlag ? `find ${findFlag[1]} *` : 'find *'
-  }
-
-  // Handle git -C <dir> <subcommand> -- strip the -C <dir> and normalize the git subcommand
-  const gitC = command.match(/^git\s+-C\s+\S+\s+(.+)$/)
-  if (gitC) return normalize(`git ${gitC[1]}`)
-
-  // Split on compound operators -- normalize the first command only
-  const compoundMatch = command.match(/^(.+?)\s*(&&|\|\||;)\s*(.+)$/)
-  if (compoundMatch) {
-    return normalize(compoundMatch[1].trim())
-  }
-
-  // Strip trailing pipe chains for normalization (e.g., `cmd | tail -5`)
-  // but preserve pipe-to-shell (already handled by shell injection check above)
-  const pipeMatch = command.match(/^(.+?)\s*\|\s*(.+)$/)
-  if (pipeMatch) {
-    return normalize(pipeMatch[1].trim())
-  }
-
-  // Strip trailing redirections (2>&1, > file, >> file)
-  const cleaned = command
-    .replace(/\s*[12]?>>?\s*\S+\s*$/, '')
-    .replace(/\s*2>&1\s*$/, '')
-    .trim()
-
-  const parts = cleaned.split(/\s+/)
-  if (parts.length === 0) return command
-
-  const base = parts[0]
-
-  // For git/docker/gh/npm etc, include the subcommand
-  const multiWordBases = [
-    'git',
-    'docker',
-    'docker-compose',
-    'gh',
-    'npm',
-    'bun',
-    'pnpm',
-    'yarn',
-    'cargo',
-    'pip',
-    'pip3',
-    'bundle',
-    'systemctl',
-    'kubectl',
-  ]
-
-  let prefix = base
-  let argStart = 1
-
-  if (multiWordBases.includes(base) && parts.length > 1) {
-    prefix = `${base} ${parts[1]}`
-    argStart = 2
-  }
-
-  // Preserve risk-modifying flags in the remaining args
-  const preservedFlags = []
-  for (let i = argStart; i < parts.length; i++) {
-    if (isRiskFlag(parts[i], base)) {
-      preservedFlags.push(parts[i])
-    }
-  }
-
-  // Build the normalized pattern
-  if (parts.length <= argStart && preservedFlags.length === 0) {
-    return prefix // no args, no flags: e.g., "git status"
-  }
-
-  const flagStr =
-    preservedFlags.length > 0 ? ` ${preservedFlags.join(' ')}` : ''
-  const hasVaryingArgs = parts.length > argStart + preservedFlags.length
-
-  if (hasVaryingArgs) {
-    return `${prefix + flagStr} *`
-  }
-  return prefix + flagStr
-}
+// ── Normalization (see ./normalize.mjs) ────────────────────────────────────
 
 // ── Session file scanning ──────────────────────────────────────────────────
 
@@ -587,7 +438,6 @@ async function listJsonlFiles(dir) {
   }
 }
 
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: transcript parsing requires defensive guards for heterogeneous session data.
 async function processFile(filePath, sessionId) {
   try {
     filesScanned++

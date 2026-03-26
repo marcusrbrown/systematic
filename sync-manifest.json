@@ -140,15 +140,15 @@
       "rewrites": [
         {
           "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
+          "reason": "Converter handled tool name mappings (Task\u2192task, TodoWrite\u2192todowrite, AskUserQuestion\u2192question)"
         },
         {
           "field": "body:branding",
-          "reason": "Glob/Grep in Claude Code → Glob/Grep in OpenCode"
+          "reason": "Glob/Grep in Claude Code \u2192 Glob/Grep in OpenCode"
         },
         {
           "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/"
+          "reason": ".claude/commands/\u2192.opencode/commands/, .claude/skills/\u2192.opencode/skills/, ~/.claude/\u2192~/.config/opencode/"
         }
       ],
       "manual_overrides": []
@@ -156,10 +156,10 @@
     "agents/research/learnings-researcher": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/research/learnings-researcher.md",
-      "upstream_commit": "9150a1ea541db0063f6577e44bcb44bc92ddbf8b",
-      "synced_at": "2026-03-14T00:07:40Z",
+      "upstream_commit": "fed9fd68db283c64ec11293f88a8ad7a6373e2fe",
+      "synced_at": "2026-03-26T02:48:37Z",
       "notes": "Imported from CEP. Mechanical conversion + intelligent rewrites: examples converted to XML block format, model specification preserved (mode: subagent, temperature: 0.2), /workflows:plan reference updated to /ce:plan.",
-      "upstream_content_hash": "d4df67e06b136dd270e7ad4f71ae127826c934b5e9efea61dd59bd171aa5e281",
+      "upstream_content_hash": "415dda44d2b20b83f8f21bf0247c0ab14f0aacac819a5219643cf0b85dc065ad",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -167,7 +167,7 @@
         },
         {
           "field": "body:path-references",
-          "reason": "Fixed relative link to compound-docs skill yaml-schema.md — replaced with prose reference (relative path not valid from bundled agents directory)"
+          "reason": "Fixed relative link to compound-docs skill yaml-schema.md \u2014 replaced with prose reference (relative path not valid from bundled agents directory)"
         },
         {
           "field": "frontmatter:examples",
@@ -175,7 +175,7 @@
         },
         {
           "field": "frontmatter:model",
-          "reason": "Preserved Systematic-specific model settings (mode: subagent, temperature: 0.2) — upstream uses model: inherit"
+          "reason": "Preserved Systematic-specific model settings (mode: subagent, temperature: 0.2) \u2014 upstream uses model: inherit"
         },
         {
           "field": "body:integration-points",
@@ -247,7 +247,7 @@
         },
         {
           "field": "body:cc-specific-content",
-          "reason": "Removed line: 'Never flag docs/plans/*.md or docs/solutions/*.md for removal — these are compound-engineering pipeline artifacts' (CC-specific exclusion rule not applicable to Systematic)"
+          "reason": "Removed line: 'Never flag docs/plans/*.md or docs/solutions/*.md for removal \u2014 these are compound-engineering pipeline artifacts' (CC-specific exclusion rule not applicable to Systematic)"
         }
       ],
       "manual_overrides": []
@@ -300,10 +300,10 @@
     "agents/review/dhh-rails-reviewer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/review/dhh-rails-reviewer.md",
-      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
-      "synced_at": "2026-02-10T20:00:00Z",
+      "upstream_commit": "fed9fd68db283c64ec11293f88a8ad7a6373e2fe",
+      "synced_at": "2026-03-26T02:48:37Z",
       "notes": "Imported from CEP. Mechanical conversion applied. Rails-specific reviewer.",
-      "upstream_content_hash": "d081cada84dca1815871a127f415bbae42b6debf4d79c29f5fd7f62177c0e675",
+      "upstream_content_hash": "b822176a0663e8d450f262533edf46098e6724fb829e2c90e6f3b2950d44ac0b",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -315,10 +315,10 @@
     "agents/review/julik-frontend-races-reviewer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/review/julik-frontend-races-reviewer.md",
-      "upstream_commit": "174cd4cff49899f6a62e41a6d95090feb9e24770",
-      "synced_at": "2026-02-20T00:10:02Z",
+      "upstream_commit": "fed9fd68db283c64ec11293f88a8ad7a6373e2fe",
+      "synced_at": "2026-03-26T02:48:37Z",
       "notes": "Imported from CEP. Frontend race condition specialist reviewer.",
-      "upstream_content_hash": "bdc1a1abaa59ab8ed94a887c5fe2c828ce17c2b94729665674b082dc5e0f9072",
+      "upstream_content_hash": "455a9a24c51adb7581773ecbc894c166c08de58da91d6ecf846494c893e73132",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -334,10 +334,10 @@
     "agents/review/kieran-python-reviewer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/review/kieran-python-reviewer.md",
-      "upstream_commit": "174cd4cff49899f6a62e41a6d95090feb9e24770",
-      "synced_at": "2026-02-20T00:10:02Z",
+      "upstream_commit": "fed9fd68db283c64ec11293f88a8ad7a6373e2fe",
+      "synced_at": "2026-03-26T02:48:37Z",
       "notes": "Imported from CEP. High quality bar Python reviewer.",
-      "upstream_content_hash": "653cbbee6bfeaa4a0257dba9952aa1a7877cd5d7c495ddf2478d1955819aa976",
+      "upstream_content_hash": "323d50a5d85dd3d2ff95dfed6db4a82f073dd74333efd8692838e534e2feed13",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -353,10 +353,10 @@
     "agents/review/kieran-rails-reviewer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/review/kieran-rails-reviewer.md",
-      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
-      "synced_at": "2026-02-10T20:00:00Z",
-      "notes": "Imported from CEP. Mechanical conversion applied. Rails-specific reviewer — referenced 3x across workflow commands.",
-      "upstream_content_hash": "f9a8e73aeea0412969aaddfcf43d8729619a9d3b10fe9040c7c47f8b7eca8c77",
+      "upstream_commit": "fed9fd68db283c64ec11293f88a8ad7a6373e2fe",
+      "synced_at": "2026-03-26T02:48:37Z",
+      "notes": "Imported from CEP. Mechanical conversion applied. Rails-specific reviewer \u2014 referenced 3x across workflow commands.",
+      "upstream_content_hash": "eb419e31bd8d6b1ba1934cf5cc6d00fe0ccd9e209a4720794644f1bf38e9b56d",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -368,10 +368,10 @@
     "agents/review/kieran-typescript-reviewer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/review/kieran-typescript-reviewer.md",
-      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
-      "synced_at": "2026-02-10T20:00:00Z",
+      "upstream_commit": "fed9fd68db283c64ec11293f88a8ad7a6373e2fe",
+      "synced_at": "2026-03-26T02:48:37Z",
       "notes": "Imported from CEP. Mechanical conversion applied. General-purpose TypeScript reviewer.",
-      "upstream_content_hash": "6ba8978c5bea5ebd03d9556564e1ece4f073d79e7a84e2133c1c69135cacdcaa",
+      "upstream_content_hash": "2b959a2763c04b2951cd5d62a900c375e032566ff069e25771c6f0d9389999df",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -481,10 +481,10 @@
     "agents/workflow/pr-comment-resolver": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/workflow/pr-comment-resolver.md",
-      "upstream_commit": "0fdc25a36cabea4ce9e2ae47ff69c1a9a2de8f0b",
-      "synced_at": "2026-03-24T00:07:42Z",
+      "upstream_commit": "fed9fd68db283c64ec11293f88a8ad7a6373e2fe",
+      "synced_at": "2026-03-26T02:48:37Z",
       "notes": "Imported from CEP. Mechanical conversion + CLAUDE.md->AGENTS.md handled by converter.",
-      "upstream_content_hash": "3a1935bdfd0769774f32dcb673546d6df7cbbe8b99a27be1271207aaaa9c865e",
+      "upstream_content_hash": "09a8c72687163aff5764332e7949def0adb6ac14fce0088c3770f9a50b9ba3b3",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -533,7 +533,7 @@
       "upstream_path": "plugins/compound-engineering/skills/agent-native-architecture",
       "upstream_commit": "56b174a0563107b3084d780a1e6ae5a909ebeef3",
       "synced_at": "2026-02-26T20:39:26Z",
-      "notes": "Imported from CEP. Converter applied to SKILL.md. 14 reference files copied with CC→OC text replacements (Claude Code→OpenCode, .claude/→.opencode/, CLAUDE.md→AGENTS.md).",
+      "notes": "Imported from CEP. Converter applied to SKILL.md. 14 reference files copied with CC\u2192OC text replacements (Claude Code\u2192OpenCode, .claude/\u2192.opencode/, CLAUDE.md\u2192AGENTS.md).",
       "upstream_content_hash": "a965e0a24769c6b12128b6566fe66d8cd66e1c047d26eb8501ea8174c2f04ebe",
       "files": [
         "SKILL.md",
@@ -559,7 +559,7 @@
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, CLAUDE.md→AGENTS.md in SKILL.md and reference files"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/, CLAUDE.md\u2192AGENTS.md in SKILL.md and reference files"
         },
         {
           "field": "body:sync",
@@ -578,15 +578,15 @@
       "rewrites": [
         {
           "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
+          "reason": "Converter handled tool name mappings (Task\u2192task, TodoWrite\u2192todowrite, AskUserQuestion\u2192question)"
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, compound-engineering:→systematic:"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/, compound-engineering:\u2192systematic:"
         },
         {
           "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/"
+          "reason": ".claude/commands/\u2192.opencode/commands/, .claude/skills/\u2192.opencode/skills/, ~/.claude/\u2192~/.config/opencode/"
         }
       ],
       "manual_overrides": [],
@@ -633,15 +633,15 @@
       "rewrites": [
         {
           "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
+          "reason": "Converter handled tool name mappings (Task\u2192task, TodoWrite\u2192todowrite, AskUserQuestion\u2192question)"
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, compound-engineering:→systematic:"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/, compound-engineering:\u2192systematic:"
         },
         {
           "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/"
+          "reason": ".claude/commands/\u2192.opencode/commands/, .claude/skills/\u2192.opencode/skills/, ~/.claude/\u2192~/.config/opencode/"
         }
       ],
       "manual_overrides": [],
@@ -650,22 +650,22 @@
     "skills/ce-compound": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/ce-compound",
-      "upstream_commit": "0fdc25a36cabea4ce9e2ae47ff69c1a9a2de8f0b",
-      "synced_at": "2026-03-24T00:07:42Z",
+      "upstream_commit": "fed9fd68db283c64ec11293f88a8ad7a6373e2fe",
+      "synced_at": "2026-03-26T02:48:37Z",
       "notes": "Imported from CEP. Document solved problems.",
-      "upstream_content_hash": "07cf7e7a413204854f898e8b85d8a733dde0b6b4b05463a043bae444a17debc7",
+      "upstream_content_hash": "5944612129ec2ae02a428e098302363b4deec2a7d2f391901541a8ee4aa3b07f",
       "rewrites": [
         {
           "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
+          "reason": "Converter handled tool name mappings (Task\u2192task, TodoWrite\u2192todowrite, AskUserQuestion\u2192question)"
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, compound-engineering:→systematic:"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/, compound-engineering:\u2192systematic:"
         },
         {
           "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/"
+          "reason": ".claude/commands/\u2192.opencode/commands/, .claude/skills/\u2192.opencode/skills/, ~/.claude/\u2192~/.config/opencode/"
         }
       ],
       "manual_overrides": [],
@@ -674,22 +674,22 @@
     "skills/ce-compound-refresh": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/ce-compound-refresh",
-      "upstream_commit": "0fdc25a36cabea4ce9e2ae47ff69c1a9a2de8f0b",
-      "synced_at": "2026-03-24T00:07:42Z",
+      "upstream_commit": "fed9fd68db283c64ec11293f88a8ad7a6373e2fe",
+      "synced_at": "2026-03-26T02:48:37Z",
       "notes": "Imported from CEP. Refresh compound docs.",
-      "upstream_content_hash": "c82c8a993e64e5b8db9fe66a4cff13a30078917db5b165757d5b694b50feb2a6",
+      "upstream_content_hash": "4706986cde0c2129d46787651d7c16e80e5ff45f7056d136edd0b61ac2fbad43",
       "rewrites": [
         {
           "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
+          "reason": "Converter handled tool name mappings (Task\u2192task, TodoWrite\u2192todowrite, AskUserQuestion\u2192question)"
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, compound-engineering:→systematic:"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/, compound-engineering:\u2192systematic:"
         },
         {
           "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/"
+          "reason": ".claude/commands/\u2192.opencode/commands/, .claude/skills/\u2192.opencode/skills/, ~/.claude/\u2192~/.config/opencode/"
         }
       ],
       "manual_overrides": [],
@@ -705,15 +705,15 @@
       "rewrites": [
         {
           "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
+          "reason": "Converter handled tool name mappings (Task\u2192task, TodoWrite\u2192todowrite, AskUserQuestion\u2192question)"
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, compound-engineering:→systematic:"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/, compound-engineering:\u2192systematic:"
         },
         {
           "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/"
+          "reason": ".claude/commands/\u2192.opencode/commands/, .claude/skills/\u2192.opencode/skills/, ~/.claude/\u2192~/.config/opencode/"
         }
       ],
       "manual_overrides": [],
@@ -729,15 +729,15 @@
       "rewrites": [
         {
           "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
+          "reason": "Converter handled tool name mappings (Task\u2192task, TodoWrite\u2192todowrite, AskUserQuestion\u2192question)"
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, compound-engineering:→systematic:"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/, compound-engineering:\u2192systematic:"
         },
         {
           "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/"
+          "reason": ".claude/commands/\u2192.opencode/commands/, .claude/skills/\u2192.opencode/skills/, ~/.claude/\u2192~/.config/opencode/"
         }
       ],
       "manual_overrides": [],
@@ -746,22 +746,22 @@
     "skills/ce-review": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/ce-review",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
+      "upstream_commit": "fed9fd68db283c64ec11293f88a8ad7a6373e2fe",
+      "synced_at": "2026-03-26T02:48:37Z",
       "notes": "Imported from CEP. Code review workflow.",
-      "upstream_content_hash": "6f0aa887d427e16a06c01b66d7a7eff985d515d992572726de89df20f58d1b01",
+      "upstream_content_hash": "0b8e7c9e5f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c",
       "rewrites": [
         {
           "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
+          "reason": "Converter handled tool name mappings (Task\u2192task, TodoWrite\u2192todowrite, AskUserQuestion\u2192question)"
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, compound-engineering:→systematic:"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/, compound-engineering:\u2192systematic:"
         },
         {
           "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/"
+          "reason": ".claude/commands/\u2192.opencode/commands/, .claude/skills/\u2192.opencode/skills/, ~/.claude/\u2192~/.config/opencode/"
         }
       ],
       "manual_overrides": [],
@@ -770,22 +770,22 @@
     "skills/ce-work": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/ce-work",
-      "upstream_commit": "0fdc25a36cabea4ce9e2ae47ff69c1a9a2de8f0b",
-      "synced_at": "2026-03-24T00:07:42Z",
+      "upstream_commit": "fed9fd68db283c64ec11293f88a8ad7a6373e2fe",
+      "synced_at": "2026-03-26T02:48:37Z",
       "notes": "Imported from CEP. Work execution workflow.",
-      "upstream_content_hash": "05f40fff5ec2b9be07508f3824c61e0cfda0ffb6a5858051e0f05b0384dbe84d",
+      "upstream_content_hash": "1b80682041c318209f9a3ea5a7e2dfe7fdc6df9c2e5850f18e5b776cff765500",
       "rewrites": [
         {
           "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
+          "reason": "Converter handled tool name mappings (Task\u2192task, TodoWrite\u2192todowrite, AskUserQuestion\u2192question)"
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, compound-engineering:→systematic:"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/, compound-engineering:\u2192systematic:"
         },
         {
           "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/"
+          "reason": ".claude/commands/\u2192.opencode/commands/, .claude/skills/\u2192.opencode/skills/, ~/.claude/\u2192~/.config/opencode/"
         }
       ],
       "manual_overrides": [],
@@ -801,15 +801,15 @@
       "rewrites": [
         {
           "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
+          "reason": "Converter handled tool name mappings (Task\u2192task, TodoWrite\u2192todowrite, AskUserQuestion\u2192question)"
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, compound-engineering:→systematic:"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/, compound-engineering:\u2192systematic:"
         },
         {
           "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/"
+          "reason": ".claude/commands/\u2192.opencode/commands/, .claude/skills/\u2192.opencode/skills/, ~/.claude/\u2192~/.config/opencode/"
         }
       ],
       "manual_overrides": [],
@@ -820,7 +820,7 @@
       "upstream_path": "plugins/compound-engineering/skills/compound-docs",
       "upstream_commit": "56b174a0563107b3084d780a1e6ae5a909ebeef3",
       "synced_at": "2026-02-26T20:39:26Z",
-      "notes": "Imported from CEP (upstream name: codify-docs). Converter applied to SKILL.md. Asset/reference files copied with CC→OC text replacements. Upstream removed inline tool comments in frontmatter.",
+      "notes": "Imported from CEP (upstream name: codify-docs). Converter applied to SKILL.md. Asset/reference files copied with CC\u2192OC text replacements. Upstream removed inline tool comments in frontmatter.",
       "upstream_content_hash": "13837d91ef734051d08db3a8fda220f413add0256f0db2561453bca6c62c7dca",
       "files": [
         "SKILL.md",
@@ -836,7 +836,7 @@
         },
         {
           "field": "body:path-references",
-          "reason": ".claude/skills/codify-docs/→.opencode/skills/compound-docs/ in SKILL.md and reference files"
+          "reason": ".claude/skills/codify-docs/\u2192.opencode/skills/compound-docs/ in SKILL.md and reference files"
         },
         {
           "field": "body:sync",
@@ -844,7 +844,7 @@
         },
         {
           "field": "frontmatter:allowed-tools",
-          "reason": "Upstream removed inline comments from tools list (Read # Parse... → Read)",
+          "reason": "Upstream removed inline comments from tools list (Read # Parse... \u2192 Read)",
           "original": "  - Read # Parse conversation context\n  - Write # Create resolution docs\n  - Bash # Create directories\n  - Grep # Search existing docs"
         }
       ],
@@ -860,15 +860,15 @@
       "rewrites": [
         {
           "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
+          "reason": "Converter handled tool name mappings (Task\u2192task, TodoWrite\u2192todowrite, AskUserQuestion\u2192question)"
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, compound-engineering:→systematic:"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/, compound-engineering:\u2192systematic:"
         },
         {
           "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/"
+          "reason": ".claude/commands/\u2192.opencode/commands/, .claude/skills/\u2192.opencode/skills/, ~/.claude/\u2192~/.config/opencode/"
         }
       ],
       "manual_overrides": [],
@@ -884,15 +884,15 @@
       "rewrites": [
         {
           "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
+          "reason": "Converter handled tool name mappings (Task\u2192task, TodoWrite\u2192todowrite, AskUserQuestion\u2192question)"
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, compound-engineering:→systematic:"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/, compound-engineering:\u2192systematic:"
         },
         {
           "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/"
+          "reason": ".claude/commands/\u2192.opencode/commands/, .claude/skills/\u2192.opencode/skills/, ~/.claude/\u2192~/.config/opencode/"
         }
       ],
       "manual_overrides": [],
@@ -935,7 +935,7 @@
       "upstream_path": "plugins/compound-engineering/skills/document-review",
       "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
       "synced_at": "2026-03-25T00:08:07Z",
-      "notes": "Imported from CEP. Single-file skill (SKILL.md only). Converter applied. Clean — no CC-specific patterns in body.",
+      "notes": "Imported from CEP. Single-file skill (SKILL.md only). Converter applied. Clean \u2014 no CC-specific patterns in body.",
       "upstream_content_hash": "c4c034702aff8811dd30524887d6d4263dcfd6be29f0579852f8e9758891dc39",
       "files": ["SKILL.md"],
       "rewrites": [
@@ -1014,15 +1014,15 @@
       "rewrites": [
         {
           "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
+          "reason": "Converter handled tool name mappings (Task\u2192task, TodoWrite\u2192todowrite, AskUserQuestion\u2192question)"
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, compound-engineering:→systematic:"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/, compound-engineering:\u2192systematic:"
         },
         {
           "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/"
+          "reason": ".claude/commands/\u2192.opencode/commands/, .claude/skills/\u2192.opencode/skills/, ~/.claude/\u2192~/.config/opencode/"
         }
       ],
       "manual_overrides": [],
@@ -1033,7 +1033,7 @@
       "upstream_path": "plugins/compound-engineering/skills/file-todos",
       "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
       "synced_at": "2026-03-25T00:08:07Z",
-      "notes": "Imported from CEP. Converter applied to SKILL.md. Asset file (todo-template.md) copied with CC→OC text replacements.",
+      "notes": "Imported from CEP. Converter applied to SKILL.md. Asset file (todo-template.md) copied with CC\u2192OC text replacements.",
       "upstream_content_hash": "ccd973bc8fbab74634837ab29e3e25abe71bcd606e6d44642eff6446c03e8245",
       "files": ["SKILL.md", "assets/todo-template.md"],
       "rewrites": [
@@ -1043,7 +1043,7 @@
         },
         {
           "field": "body:path-references",
-          "reason": ".claude/→.opencode/ in SKILL.md and asset file"
+          "reason": ".claude/\u2192.opencode/ in SKILL.md and asset file"
         },
         {
           "field": "body:sync",
@@ -1057,7 +1057,7 @@
       "upstream_path": "plugins/compound-engineering/skills/frontend-design",
       "upstream_commit": "0fdc25a36cabea4ce9e2ae47ff69c1a9a2de8f0b",
       "synced_at": "2026-03-24T00:07:42Z",
-      "notes": "Imported from CEP. Single-file skill (SKILL.md only). Converter applied. Clean — no CC-specific patterns in body.",
+      "notes": "Imported from CEP. Single-file skill (SKILL.md only). Converter applied. Clean \u2014 no CC-specific patterns in body.",
       "upstream_content_hash": "1df370e2e98ebd110b02bc9bd69359907a5500f50259ef2b199079e1008b4cd3",
       "files": ["SKILL.md"],
       "rewrites": [
@@ -1110,15 +1110,15 @@
       "rewrites": [
         {
           "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
+          "reason": "Converter handled tool name mappings (Task\u2192task, TodoWrite\u2192todowrite, AskUserQuestion\u2192question)"
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, compound-engineering:→systematic:"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/, compound-engineering:\u2192systematic:"
         },
         {
           "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/"
+          "reason": ".claude/commands/\u2192.opencode/commands/, .claude/skills/\u2192.opencode/skills/, ~/.claude/\u2192~/.config/opencode/"
         }
       ],
       "manual_overrides": [],
@@ -1127,8 +1127,8 @@
     "skills/git-worktree": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/git-worktree",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
+      "upstream_commit": "fed9fd68db283c64ec11293f88a8ad7a6373e2fe",
+      "synced_at": "2026-03-26T02:48:37Z",
       "notes": "Imported from CEP. Converter applied to SKILL.md. Script file copied. CLAUDE_PLUGIN_ROOT paths simplified to relative paths (skills are bundled in plugin, no env var needed).",
       "upstream_content_hash": "98552ca8b72166e7ba4e585723c84cf231a89c593e5921b6be38b0c07ffb8ad5",
       "files": ["SKILL.md", "scripts/worktree-manager.sh"],
@@ -1139,7 +1139,7 @@
         },
         {
           "field": "body:path-simplification",
-          "reason": "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh → scripts/worktree-manager.sh (relative paths — skills are bundled in plugin, no env var prefix needed)"
+          "reason": "${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/worktree-manager.sh \u2192 scripts/worktree-manager.sh (relative paths \u2014 skills are bundled in plugin, no env var prefix needed)"
         },
         {
           "field": "body:sync",
@@ -1151,22 +1151,22 @@
     "skills/lfg": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/lfg",
-      "upstream_commit": "0fdc25a36cabea4ce9e2ae47ff69c1a9a2de8f0b",
-      "synced_at": "2026-03-24T00:07:42Z",
+      "upstream_commit": "fed9fd68db283c64ec11293f88a8ad7a6373e2fe",
+      "synced_at": "2026-03-26T02:48:37Z",
       "notes": "Imported from CEP. Full autonomous engineering workflow.",
-      "upstream_content_hash": "d11b742e2c78e1b198356aa08b19e55d5f4a3414cee29512fc49c3c5793a08d4",
+      "upstream_content_hash": "812469bb26d695dc07383d95aef67df1dbfa4acc2bdf404e683555bd045d0777",
       "rewrites": [
         {
           "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
+          "reason": "Converter handled tool name mappings (Task\u2192task, TodoWrite\u2192todowrite, AskUserQuestion\u2192question)"
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, compound-engineering:→systematic:"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/, compound-engineering:\u2192systematic:"
         },
         {
           "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/"
+          "reason": ".claude/commands/\u2192.opencode/commands/, .claude/skills/\u2192.opencode/skills/, ~/.claude/\u2192~/.config/opencode/"
         }
       ],
       "manual_overrides": [],
@@ -1177,7 +1177,7 @@
       "upstream_path": "plugins/compound-engineering/skills/orchestrating-swarms",
       "upstream_commit": "e8f3bbcb3580862a2715575d609333306ed02ee3",
       "synced_at": "2026-02-10T09:34:10Z",
-      "notes": "Imported from CEP. Heavy CC-specific content (TeammateTool, Swarm Mode, spawnTeam API). Converter applied. 121 CC patterns rewritten. Added aspirational note — Teammate API has no OC equivalent; use task tool with run_in_background for current parallel execution.",
+      "notes": "Imported from CEP. Heavy CC-specific content (TeammateTool, Swarm Mode, spawnTeam API). Converter applied. 121 CC patterns rewritten. Added aspirational note \u2014 Teammate API has no OC equivalent; use task tool with run_in_background for current parallel execution.",
       "upstream_content_hash": "80a48a7187daa741abc3ff9e81331b6beb9cfd0d3de4503fb7dee47af490657f",
       "files": ["SKILL.md"],
       "rewrites": [
@@ -1191,20 +1191,20 @@
         },
         {
           "field": "description",
-          "reason": "Removed TeammateTool reference from description — CC-specific API not available in OC",
+          "reason": "Removed TeammateTool reference from description \u2014 CC-specific API not available in OC",
           "original": "This skill should be used when orchestrating multi-agent swarms using Claude Code's TeammateTool and Task system."
         },
         {
           "field": "body:aspirational-note",
-          "reason": "Added aspirational note about Teammate API having no OC equivalent — patterns kept as design reference"
+          "reason": "Added aspirational note about Teammate API having no OC equivalent \u2014 patterns kept as design reference"
         },
         {
           "field": "body:version-attribution",
-          "reason": "Removed upstream CC version attribution footer ('Based on Claude Code v2.1.19') — blind branding rewrite turned it into nonsensical 'Based on OpenCode v2.1.19'. CC version numbers are not applicable to Systematic."
+          "reason": "Removed upstream CC version attribution footer ('Based on Claude Code v2.1.19') \u2014 blind branding rewrite turned it into nonsensical 'Based on OpenCode v2.1.19'. CC version numbers are not applicable to Systematic."
         },
         {
           "field": "body:code-block-tool-names",
-          "reason": "Fixed 47 instances of Task({ → task({ in code examples. Converter skips code blocks by design; these were missed during initial manual code block audit."
+          "reason": "Fixed 47 instances of Task({ \u2192 task({ in code examples. Converter skips code blocks by design; these were missed during initial manual code block audit."
         }
       ],
       "manual_overrides": []
@@ -1259,15 +1259,15 @@
       "rewrites": [
         {
           "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
+          "reason": "Converter handled tool name mappings (Task\u2192task, TodoWrite\u2192todowrite, AskUserQuestion\u2192question)"
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, compound-engineering:→systematic:"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/, compound-engineering:\u2192systematic:"
         },
         {
           "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/"
+          "reason": ".claude/commands/\u2192.opencode/commands/, .claude/skills/\u2192.opencode/skills/, ~/.claude/\u2192~/.config/opencode/"
         }
       ],
       "manual_overrides": [],
@@ -1302,7 +1302,7 @@
       "manual_overrides": [
         {
           "field": "scripts:example-repo",
-          "reason": "EveryInc/cora -> owner/repo in get-pr-comments usage example — CEP-specific upstream repo reference",
+          "reason": "EveryInc/cora -> owner/repo in get-pr-comments usage example \u2014 CEP-specific upstream repo reference",
           "original": "echo \"Example: get-pr-comments 123 EveryInc/cora\"",
           "overridden_at": "2026-02-20T06:15:00Z"
         }
@@ -1311,10 +1311,10 @@
     "skills/setup": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/setup",
-      "upstream_commit": "0fdc25a36cabea4ce9e2ae47ff69c1a9a2de8f0b",
-      "synced_at": "2026-03-24T00:07:42Z",
+      "upstream_commit": "fed9fd68db283c64ec11293f88a8ad7a6373e2fe",
+      "synced_at": "2026-03-26T02:48:37Z",
       "notes": "Imported from CEP. Setup and configuration skill for systematic workflows. Updated /workflows:* command references to /ce:*, added Interaction Method section with AskUserQuestion.",
-      "upstream_content_hash": "52cb103ae5ebe1109fed77a42da1646ac32e89bfb885f21e712e0cf9ce7531fa",
+      "upstream_content_hash": "fe856feb729b1a7c3040023d1b52f7555b7e2f0b679c335e539bb3b371f4755a",
       "files": ["SKILL.md"],
       "rewrites": [
         {
@@ -1323,7 +1323,7 @@
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code -> OpenCode, .claude/ -> .opencode/, CLAUDE.md -> AGENTS.md; AskUserQuestion → question"
+          "reason": "Claude Code -> OpenCode, .claude/ -> .opencode/, CLAUDE.md -> AGENTS.md; AskUserQuestion \u2192 question"
         },
         {
           "field": "body:command-references",
@@ -1331,7 +1331,7 @@
         },
         {
           "field": "body:sync",
-          "reason": "Synced from CEP commit 341c379 — merged AskUserQuestion improvements"
+          "reason": "Synced from CEP commit 341c379 \u2014 merged AskUserQuestion improvements"
         }
       ],
       "manual_overrides": [
@@ -1352,22 +1352,22 @@
     "skills/slfg": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/slfg",
-      "upstream_commit": "0fdc25a36cabea4ce9e2ae47ff69c1a9a2de8f0b",
-      "synced_at": "2026-03-24T00:07:42Z",
+      "upstream_commit": "fed9fd68db283c64ec11293f88a8ad7a6373e2fe",
+      "synced_at": "2026-03-26T02:48:37Z",
       "notes": "Imported from CEP. Ship and let go workflow.",
-      "upstream_content_hash": "94ff370e46076ff21dffb365add80972de29b74a577b18470e6d0d559718e398",
+      "upstream_content_hash": "6e8c92ebad12b8bdd937c1d118f022739bf5234a6a1e9ecbe8e9b210a66369c4",
       "rewrites": [
         {
           "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
+          "reason": "Converter handled tool name mappings (Task\u2192task, TodoWrite\u2192todowrite, AskUserQuestion\u2192question)"
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, compound-engineering:→systematic:"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/, compound-engineering:\u2192systematic:"
         },
         {
           "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/"
+          "reason": ".claude/commands/\u2192.opencode/commands/, .claude/skills/\u2192.opencode/skills/, ~/.claude/\u2192~/.config/opencode/"
         }
       ],
       "manual_overrides": [],
@@ -1376,22 +1376,22 @@
     "skills/test-browser": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/test-browser",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
-      "notes": "Imported from CEP. Browser testing workflow. Resynced with CLAUDE.md → AGENTS.md in code blocks.",
-      "upstream_content_hash": "b8849aa6a87b40a546ca0e971dc783b898f3586cb17e20578d19fb373a80dea8",
+      "upstream_commit": "fed9fd68db283c64ec11293f88a8ad7a6373e2fe",
+      "synced_at": "2026-03-26T02:48:37Z",
+      "notes": "Imported from CEP. Browser testing workflow. Resynced with CLAUDE.md \u2192 AGENTS.md in code blocks.",
+      "upstream_content_hash": "292f16327520199182aecf6798ca1d5b716f903014445345b896c043f38e5da4",
       "rewrites": [
         {
           "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
+          "reason": "Converter handled tool name mappings (Task\u2192task, TodoWrite\u2192todowrite, AskUserQuestion\u2192question)"
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, compound-engineering:→systematic:"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/, compound-engineering:\u2192systematic:"
         },
         {
           "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/; CLAUDE.md → AGENTS.md in code blocks"
+          "reason": ".claude/commands/\u2192.opencode/commands/, .claude/skills/\u2192.opencode/skills/, ~/.claude/\u2192~/.config/opencode/; CLAUDE.md \u2192 AGENTS.md in code blocks"
         }
       ],
       "manual_overrides": [],
@@ -1400,22 +1400,22 @@
     "skills/test-xcode": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/test-xcode",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
+      "upstream_commit": "fed9fd68db283c64ec11293f88a8ad7a6373e2fe",
+      "synced_at": "2026-03-26T02:48:37Z",
       "notes": "Imported from CEP. Xcode testing workflow.",
-      "upstream_content_hash": "1f56bc3f803d55a953d2879ca788f6894c65940f7491197729d4cbba0b2893e9",
+      "upstream_content_hash": "0d4aded42ade5ee1f91346d6b33cb9b1457caa19ef128e483e9b5c8aa3578af0",
       "rewrites": [
         {
           "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
+          "reason": "Converter handled tool name mappings (Task\u2192task, TodoWrite\u2192todowrite, AskUserQuestion\u2192question)"
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, compound-engineering:→systematic:"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/, compound-engineering:\u2192systematic:"
         },
         {
           "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/"
+          "reason": ".claude/commands/\u2192.opencode/commands/, .claude/skills/\u2192.opencode/skills/, ~/.claude/\u2192~/.config/opencode/"
         }
       ],
       "manual_overrides": [],
@@ -1431,15 +1431,15 @@
       "rewrites": [
         {
           "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
+          "reason": "Converter handled tool name mappings (Task\u2192task, TodoWrite\u2192todowrite, AskUserQuestion\u2192question)"
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, compound-engineering:→systematic:"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/, compound-engineering:\u2192systematic:"
         },
         {
           "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/"
+          "reason": ".claude/commands/\u2192.opencode/commands/, .claude/skills/\u2192.opencode/skills/, ~/.claude/\u2192~/.config/opencode/"
         }
       ],
       "manual_overrides": [],
@@ -1448,23 +1448,23 @@
     "skills/ce-work-beta": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/ce-work-beta",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
+      "upstream_commit": "fed9fd68db283c64ec11293f88a8ad7a6373e2fe",
+      "synced_at": "2026-03-26T02:48:37Z",
       "notes": "[BETA] Execute work plans with experimental Codex delegation support.",
-      "upstream_content_hash": "de4890ed5a7d6b586c1564f3950943a79b60a5424d5c250759a4052ff6618c07",
+      "upstream_content_hash": "5ad693ca068cc00f5dcf3e8ecc5ff5a10052f0ab2088999a550368122d845137",
       "files": ["SKILL.md"],
       "rewrites": [
         {
           "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
+          "reason": "Converter handled tool name mappings (Task\u2192task, TodoWrite\u2192todowrite, AskUserQuestion\u2192question)"
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, compound-engineering:→systematic:"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/, compound-engineering:\u2192systematic:"
         },
         {
           "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/"
+          "reason": ".claude/commands/\u2192.opencode/commands/, .claude/skills/\u2192.opencode/skills/, ~/.claude/\u2192~/.config/opencode/"
         }
       ],
       "manual_overrides": []
@@ -1472,11 +1472,15 @@
     "skills/claude-permissions-optimizer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/claude-permissions-optimizer",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
+      "upstream_commit": "fed9fd68db283c64ec11293f88a8ad7a6373e2fe",
+      "synced_at": "2026-03-26T02:48:37Z",
       "notes": "Claude Code permissions optimization skill.",
       "upstream_content_hash": "04cc007b510b4e2e32647bfff065a07808a5b491ab795e69852891dcf8b1e5a6",
-      "files": ["SKILL.md", "scripts/extract-commands.mjs"],
+      "files": [
+        "SKILL.md",
+        "scripts/extract-commands.mjs",
+        "scripts/normalize.mjs"
+      ],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1484,7 +1488,7 @@
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code → OpenCode"
+          "reason": "Claude Code \u2192 OpenCode"
         }
       ],
       "manual_overrides": []
@@ -1500,15 +1504,15 @@
       "rewrites": [
         {
           "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
+          "reason": "Converter handled tool name mappings (Task\u2192task, TodoWrite\u2192todowrite, AskUserQuestion\u2192question)"
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, compound-engineering:→systematic:"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/, compound-engineering:\u2192systematic:"
         },
         {
           "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/"
+          "reason": ".claude/commands/\u2192.opencode/commands/, .claude/skills/\u2192.opencode/skills/, ~/.claude/\u2192~/.config/opencode/"
         }
       ],
       "manual_overrides": []
@@ -1524,15 +1528,15 @@
       "rewrites": [
         {
           "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
+          "reason": "Converter handled tool name mappings (Task\u2192task, TodoWrite\u2192todowrite, AskUserQuestion\u2192question)"
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, compound-engineering:→systematic:"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/, compound-engineering:\u2192systematic:"
         },
         {
           "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/"
+          "reason": ".claude/commands/\u2192.opencode/commands/, .claude/skills/\u2192.opencode/skills/, ~/.claude/\u2192~/.config/opencode/"
         }
       ],
       "manual_overrides": []
@@ -1551,7 +1555,7 @@
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/"
         }
       ],
       "manual_overrides": []
@@ -1570,7 +1574,7 @@
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/"
         }
       ],
       "manual_overrides": []
@@ -1589,7 +1593,7 @@
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/"
         }
       ],
       "manual_overrides": []
@@ -1608,7 +1612,7 @@
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/"
         }
       ],
       "manual_overrides": []
@@ -1627,7 +1631,7 @@
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/"
         }
       ],
       "manual_overrides": []
@@ -1646,7 +1650,7 @@
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/"
         }
       ],
       "manual_overrides": []
@@ -1654,10 +1658,10 @@
     "agents/review/api-contract-reviewer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/review/api-contract-reviewer.md",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
+      "upstream_commit": "fed9fd68db283c64ec11293f88a8ad7a6373e2fe",
+      "synced_at": "2026-03-26T02:48:37Z",
       "notes": "Imported from CEP. API contract compliance reviewer.",
-      "upstream_content_hash": "690245563571887d50530d43c36139a64e51be17599afeabe1a96a49096b60f4",
+      "upstream_content_hash": "10a3497f81de7219583a65f640968d0ce42ab77b76de2fa11b268ccee7ada54a",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1665,7 +1669,7 @@
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/"
         }
       ],
       "manual_overrides": []
@@ -1673,10 +1677,10 @@
     "agents/review/correctness-reviewer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/review/correctness-reviewer.md",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
+      "upstream_commit": "fed9fd68db283c64ec11293f88a8ad7a6373e2fe",
+      "synced_at": "2026-03-26T02:48:37Z",
       "notes": "Imported from CEP. Code correctness reviewer.",
-      "upstream_content_hash": "4680e4c36c6ec47d2b1106b6a6becb04ae1e47e3b6911e1c819ba28b999c3fef",
+      "upstream_content_hash": "fdc70b83acc4350ca48239fbcb628750f107d020d16b81e7a712dec91357da83",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1684,7 +1688,7 @@
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/"
         }
       ],
       "manual_overrides": []
@@ -1692,10 +1696,10 @@
     "agents/review/data-migrations-reviewer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/review/data-migrations-reviewer.md",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
+      "upstream_commit": "fed9fd68db283c64ec11293f88a8ad7a6373e2fe",
+      "synced_at": "2026-03-26T02:48:37Z",
       "notes": "Imported from CEP. Data migration safety reviewer.",
-      "upstream_content_hash": "6e26e63f6fca2cdb567fd8e77cc4e0f28e3c13bf2ef205f7a1ab9e0962c588d5",
+      "upstream_content_hash": "893bf5e0b2fa05b589858c2707dd45f99a22d722a09c2f2ac9341be61aaeb975",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1703,7 +1707,7 @@
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/"
         }
       ],
       "manual_overrides": []
@@ -1711,10 +1715,10 @@
     "agents/review/maintainability-reviewer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/review/maintainability-reviewer.md",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
+      "upstream_commit": "fed9fd68db283c64ec11293f88a8ad7a6373e2fe",
+      "synced_at": "2026-03-26T02:48:37Z",
       "notes": "Imported from CEP. Code maintainability reviewer.",
-      "upstream_content_hash": "1e17f66be9a80e5ffe039bd710c2564708d8f7cdcb00468bab5b5a131402b9d1",
+      "upstream_content_hash": "8549045dc40d68aab2b1804fc60116221561918902e8b4133008cbf46434a2aa",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1722,7 +1726,7 @@
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/"
         }
       ],
       "manual_overrides": []
@@ -1730,10 +1734,10 @@
     "agents/review/performance-reviewer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/review/performance-reviewer.md",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
+      "upstream_commit": "fed9fd68db283c64ec11293f88a8ad7a6373e2fe",
+      "synced_at": "2026-03-26T02:48:37Z",
       "notes": "Imported from CEP. Performance impact reviewer.",
-      "upstream_content_hash": "3cf2a6c1df6c46413f539cb43e0e3559f22a3f0eaa2c5bd76548e8a8aae170d4",
+      "upstream_content_hash": "34f4f09928874be60b1070c11daae406356c3acc4d86b4a98ee94f02750124b6",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1741,7 +1745,7 @@
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/"
         }
       ],
       "manual_overrides": []
@@ -1749,10 +1753,10 @@
     "agents/review/reliability-reviewer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/review/reliability-reviewer.md",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
+      "upstream_commit": "fed9fd68db283c64ec11293f88a8ad7a6373e2fe",
+      "synced_at": "2026-03-26T02:48:37Z",
       "notes": "Imported from CEP. System reliability reviewer.",
-      "upstream_content_hash": "aa7ff49b78069f1adc6a2eb59e28026c004e1cb2628c2b96b7a10e6981209210",
+      "upstream_content_hash": "232c1a66fd8ba1d80cf4274a49be02b876fbfff7ca412417fdda4005a5d321c2",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1760,7 +1764,7 @@
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/"
         }
       ],
       "manual_overrides": []
@@ -1768,10 +1772,10 @@
     "agents/review/security-reviewer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/review/security-reviewer.md",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
+      "upstream_commit": "fed9fd68db283c64ec11293f88a8ad7a6373e2fe",
+      "synced_at": "2026-03-26T02:48:37Z",
       "notes": "Imported from CEP. Security vulnerability reviewer.",
-      "upstream_content_hash": "da209adf7236028af3bd76fcf838b0763812f59eec50b4bdfcb025d3fd3a1942",
+      "upstream_content_hash": "4ecdde7b3caaaaef2719bb115ebd2e1f93746ad6226c69c126e69aa44c57ad9b",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1779,7 +1783,7 @@
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/"
         }
       ],
       "manual_overrides": []
@@ -1787,10 +1791,10 @@
     "agents/review/testing-reviewer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/review/testing-reviewer.md",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
+      "upstream_commit": "fed9fd68db283c64ec11293f88a8ad7a6373e2fe",
+      "synced_at": "2026-03-26T02:48:37Z",
       "notes": "Imported from CEP. Test coverage and quality reviewer.",
-      "upstream_content_hash": "0bf2e2ebbc39c95fb92fcda1c5283bc39fb6fe41fba7e1a0639f337849541074",
+      "upstream_content_hash": "3cecab5b9715e03b7c45cc3474cbe33c6ea9e95014c167db259469424cfef206",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1798,7 +1802,7 @@
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/"
         }
       ],
       "manual_overrides": []
@@ -1825,7 +1829,7 @@
         },
         {
           "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
+          "reason": "Claude Code\u2192OpenCode, .claude/\u2192.opencode/"
         }
       ],
       "manual_overrides": []
