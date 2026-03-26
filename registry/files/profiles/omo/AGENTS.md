@@ -137,7 +137,7 @@ Results documented in compound-docs
 | `brainstorming` | `/systematic:brainstorming` | Explore features, requirements |
 | `git-worktree` | `/systematic:git-worktree` | Isolated parallel development |
 | `frontend-design` | `/systematic:frontend-design` | Production-grade UI implementation |
-| `create-agent-skills` | `/systematic:create-agent-skill` | Author new skills |
+| `create-agent-skill` | `/systematic:create-agent-skill` | Author new skills |
 
 ## Key Commands
 
