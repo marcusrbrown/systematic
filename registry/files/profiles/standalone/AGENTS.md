@@ -88,7 +88,7 @@ Full workflow from plan to execution:
 | `git-worktree` | Isolated parallel development with git |
 | `frontend-design` | Production-grade UI implementation |
 | `agent-native-architecture` | Design systems where agents are first-class |
-| `create-agent-skills` | Author new skills for your workflow |
+| `create-agent-skill` | Author new skills for your workflow |
 
 ## Specialized Agents
 
