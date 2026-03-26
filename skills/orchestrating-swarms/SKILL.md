@@ -314,7 +314,7 @@ task({
 
 ## Plugin Agent Types
 
-From the `compound-engineering` plugin (examples):
+From the Systematic plugin (examples):
 
 ### Review Agents
 ```javascript
