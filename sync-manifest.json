@@ -519,9 +519,7 @@
       "synced_at": "2026-03-24T00:07:42Z",
       "notes": "Imported from CEP. Converter applied to SKILL.md. Resynced with expanded inspection/debugging, network, storage, and recording command examples.",
       "upstream_content_hash": "25aacfdbee524b626418925bd083473151a617f67e4eeacec1cdd6bd1f240f58",
-      "files": [
-        "SKILL.md"
-      ],
+      "files": ["SKILL.md"],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -592,9 +590,7 @@
         }
       ],
       "manual_overrides": [],
-      "files": [
-        "SKILL.md"
-      ]
+      "files": ["SKILL.md"]
     },
     "skills/andrew-kane-gem-writer": {
       "source": "cep",
@@ -649,9 +645,7 @@
         }
       ],
       "manual_overrides": [],
-      "files": [
-        "SKILL.md"
-      ]
+      "files": ["SKILL.md"]
     },
     "skills/ce-compound": {
       "source": "cep",
@@ -675,9 +669,7 @@
         }
       ],
       "manual_overrides": [],
-      "files": [
-        "SKILL.md"
-      ]
+      "files": ["SKILL.md"]
     },
     "skills/ce-compound-refresh": {
       "source": "cep",
@@ -701,9 +693,7 @@
         }
       ],
       "manual_overrides": [],
-      "files": [
-        "SKILL.md"
-      ]
+      "files": ["SKILL.md"]
     },
     "skills/ce-ideate": {
       "source": "cep",
@@ -727,9 +717,7 @@
         }
       ],
       "manual_overrides": [],
-      "files": [
-        "SKILL.md"
-      ]
+      "files": ["SKILL.md"]
     },
     "skills/ce-plan": {
       "source": "cep",
@@ -753,9 +741,7 @@
         }
       ],
       "manual_overrides": [],
-      "files": [
-        "SKILL.md"
-      ]
+      "files": ["SKILL.md"]
     },
     "skills/ce-review": {
       "source": "cep",
@@ -779,9 +765,7 @@
         }
       ],
       "manual_overrides": [],
-      "files": [
-        "SKILL.md"
-      ]
+      "files": ["SKILL.md"]
     },
     "skills/ce-work": {
       "source": "cep",
@@ -805,9 +789,7 @@
         }
       ],
       "manual_overrides": [],
-      "files": [
-        "SKILL.md"
-      ]
+      "files": ["SKILL.md"]
     },
     "skills/changelog": {
       "source": "cep",
@@ -831,9 +813,7 @@
         }
       ],
       "manual_overrides": [],
-      "files": [
-        "SKILL.md"
-      ]
+      "files": ["SKILL.md"]
     },
     "skills/compound-docs": {
       "source": "cep",
@@ -892,9 +872,7 @@
         }
       ],
       "manual_overrides": [],
-      "files": [
-        "SKILL.md"
-      ]
+      "files": ["SKILL.md"]
     },
     "skills/deploy-docs": {
       "source": "cep",
@@ -918,9 +896,7 @@
         }
       ],
       "manual_overrides": [],
-      "files": [
-        "SKILL.md"
-      ]
+      "files": ["SKILL.md"]
     },
     "skills/dhh-rails-style": {
       "source": "cep",
@@ -961,9 +937,7 @@
       "synced_at": "2026-03-25T00:08:07Z",
       "notes": "Imported from CEP. Single-file skill (SKILL.md only). Converter applied. Clean \u2014 no CC-specific patterns in body.",
       "upstream_content_hash": "c4c034702aff8811dd30524887d6d4263dcfd6be29f0579852f8e9758891dc39",
-      "files": [
-        "SKILL.md"
-      ],
+      "files": ["SKILL.md"],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1013,10 +987,7 @@
       "synced_at": "2026-02-26T20:39:26Z",
       "notes": "Imported from CEP. Documentation style guide for EVERY project.",
       "upstream_content_hash": "e738e0917d232a72c1e0b8540d296470dca260c1b964ea5fa46f57dfe00d826d",
-      "files": [
-        "SKILL.md",
-        "references/EVERY_WRITE_STYLE.md"
-      ],
+      "files": ["SKILL.md", "references/EVERY_WRITE_STYLE.md"],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1055,9 +1026,7 @@
         }
       ],
       "manual_overrides": [],
-      "files": [
-        "SKILL.md"
-      ]
+      "files": ["SKILL.md"]
     },
     "skills/file-todos": {
       "source": "cep",
@@ -1066,10 +1035,7 @@
       "synced_at": "2026-03-25T00:08:07Z",
       "notes": "Imported from CEP. Converter applied to SKILL.md. Asset file (todo-template.md) copied with CC\u2192OC text replacements.",
       "upstream_content_hash": "ccd973bc8fbab74634837ab29e3e25abe71bcd606e6d44642eff6446c03e8245",
-      "files": [
-        "SKILL.md",
-        "assets/todo-template.md"
-      ],
+      "files": ["SKILL.md", "assets/todo-template.md"],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1093,9 +1059,7 @@
       "synced_at": "2026-03-24T00:07:42Z",
       "notes": "Imported from CEP. Single-file skill (SKILL.md only). Converter applied. Clean \u2014 no CC-specific patterns in body.",
       "upstream_content_hash": "1df370e2e98ebd110b02bc9bd69359907a5500f50259ef2b199079e1008b4cd3",
-      "files": [
-        "SKILL.md"
-      ],
+      "files": ["SKILL.md"],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1158,9 +1122,7 @@
         }
       ],
       "manual_overrides": [],
-      "files": [
-        "SKILL.md"
-      ]
+      "files": ["SKILL.md"]
     },
     "skills/git-worktree": {
       "source": "cep",
@@ -1169,10 +1131,7 @@
       "synced_at": "2026-03-26T02:48:37Z",
       "notes": "Imported from CEP. Converter applied to SKILL.md. Script file copied. CLAUDE_PLUGIN_ROOT paths simplified to relative paths (skills are bundled in plugin, no env var needed).",
       "upstream_content_hash": "98552ca8b72166e7ba4e585723c84cf231a89c593e5921b6be38b0c07ffb8ad5",
-      "files": [
-        "SKILL.md",
-        "scripts/worktree-manager.sh"
-      ],
+      "files": ["SKILL.md", "scripts/worktree-manager.sh"],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1211,9 +1170,7 @@
         }
       ],
       "manual_overrides": [],
-      "files": [
-        "SKILL.md"
-      ]
+      "files": ["SKILL.md"]
     },
     "skills/orchestrating-swarms": {
       "source": "cep",
@@ -1222,9 +1179,7 @@
       "synced_at": "2026-02-10T09:34:10Z",
       "notes": "Imported from CEP. Heavy CC-specific content (TeammateTool, Swarm Mode, spawnTeam API). Converter applied. 121 CC patterns rewritten. Added aspirational note \u2014 Teammate API has no OC equivalent; use task tool with run_in_background for current parallel execution.",
       "upstream_content_hash": "80a48a7187daa741abc3ff9e81331b6beb9cfd0d3de4503fb7dee47af490657f",
-      "files": [
-        "SKILL.md"
-      ],
+      "files": ["SKILL.md"],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1261,9 +1216,7 @@
       "synced_at": "2026-03-12T00:09:01Z",
       "notes": "Imported from CEP. Collaborative markdown editor skill. Resynced upstream content while preserving local branding rewrite for ai:systematic attribution in examples.",
       "upstream_content_hash": "f673b65519826305017e8f9d62114f2ff26fec4a88658e6896699eaf6aa25934",
-      "files": [
-        "SKILL.md"
-      ],
+      "files": ["SKILL.md"],
       "rewrites": [
         {
           "field": "body:branding",
@@ -1279,10 +1232,7 @@
       "synced_at": "2026-02-26T20:39:26Z",
       "notes": "Imported from CEP. Cloud storage sync using rclone.",
       "upstream_content_hash": "debed2df4576b4e4a1fcc939ff6f288ff6d8256158653e7fc0e630a5acc771e0",
-      "files": [
-        "SKILL.md",
-        "scripts/check_setup.sh"
-      ],
+      "files": ["SKILL.md", "scripts/check_setup.sh"],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1321,9 +1271,7 @@
         }
       ],
       "manual_overrides": [],
-      "files": [
-        "SKILL.md"
-      ]
+      "files": ["SKILL.md"]
     },
     "skills/resolve-pr-parallel": {
       "source": "cep",
@@ -1367,9 +1315,7 @@
       "synced_at": "2026-03-26T02:48:37Z",
       "notes": "Imported from CEP. Setup and configuration skill for systematic workflows. Updated /workflows:* command references to /ce:*, added Interaction Method section with AskUserQuestion.",
       "upstream_content_hash": "fe856feb729b1a7c3040023d1b52f7555b7e2f0b679c335e539bb3b371f4755a",
-      "files": [
-        "SKILL.md"
-      ],
+      "files": ["SKILL.md"],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1425,9 +1371,7 @@
         }
       ],
       "manual_overrides": [],
-      "files": [
-        "SKILL.md"
-      ]
+      "files": ["SKILL.md"]
     },
     "skills/test-browser": {
       "source": "cep",
@@ -1451,9 +1395,7 @@
         }
       ],
       "manual_overrides": [],
-      "files": [
-        "SKILL.md"
-      ]
+      "files": ["SKILL.md"]
     },
     "skills/test-xcode": {
       "source": "cep",
@@ -1477,9 +1419,7 @@
         }
       ],
       "manual_overrides": [],
-      "files": [
-        "SKILL.md"
-      ]
+      "files": ["SKILL.md"]
     },
     "skills/triage": {
       "source": "cep",
@@ -1503,9 +1443,7 @@
         }
       ],
       "manual_overrides": [],
-      "files": [
-        "SKILL.md"
-      ]
+      "files": ["SKILL.md"]
     },
     "skills/ce-work-beta": {
       "source": "cep",
@@ -1514,9 +1452,7 @@
       "synced_at": "2026-03-26T02:48:37Z",
       "notes": "[BETA] Execute work plans with experimental Codex delegation support.",
       "upstream_content_hash": "5ad693ca068cc00f5dcf3e8ecc5ff5a10052f0ab2088999a550368122d845137",
-      "files": [
-        "SKILL.md"
-      ],
+      "files": ["SKILL.md"],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1564,9 +1500,7 @@
       "synced_at": "2026-03-23T00:09:08Z",
       "notes": "Report a bug for Compound Engineering/Systematic workflows.",
       "upstream_content_hash": "6880ebf8bb6ba49c29cba7e2fb5e96332d87eb53440d0520b1319baf55e143ec",
-      "files": [
-        "SKILL.md"
-      ],
+      "files": ["SKILL.md"],
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1590,9 +1524,7 @@
       "synced_at": "2026-03-25T00:08:07Z",
       "notes": "Resolve todos in parallel for parallel processing.",
       "upstream_content_hash": "431c537a13ca0406918e50d2d6ae1dd33544b1ea47e9dcb06b23b49c087d8b6b",
-      "files": [
-        "SKILL.md"
-      ],
+      "files": ["SKILL.md"],
       "rewrites": [
         {
           "field": "body:tool-references",

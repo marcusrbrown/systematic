@@ -35,5 +35,17 @@
       "!.sisyphus",
       "!**/.worktrees"
     ]
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["skills/**/*.mjs"],
+      "linter": {
+        "rules": {
+          "complexity": {
+            "noExcessiveCognitiveComplexity": "off"
+          }
+        }
+      }
+    }
+  ]
 }
