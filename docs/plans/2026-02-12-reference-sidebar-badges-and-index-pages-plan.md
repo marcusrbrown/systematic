@@ -144,7 +144,7 @@ Skills provide specialized knowledge and step-by-step guidance for specific task
   <LinkCard title="Agent Native Architecture" description="Build applications where agents are first-class citizens." href="/systematic/reference/skills/agent-native-architecture/" />
   <LinkCard title="Brainstorming" description="Explore user intent, approaches, and design decisions before planning." href="/systematic/reference/skills/brainstorming/" />
   <LinkCard title="Compound Docs" description="Compound documentation patterns and conventions." href="/systematic/reference/skills/compound-docs/" />
-  <LinkCard title="Create Agent Skills" description="Expert guidance for creating OpenCode skills and slash commands." href="/systematic/reference/skills/create-agent-skills/" />
+  <LinkCard title="Create Agent Skill" description="Expert guidance for creating OpenCode skills and slash commands." href="/systematic/reference/skills/create-agent-skill/" />
   <LinkCard title="Document Review" description="Refine brainstorm or plan documents before proceeding." href="/systematic/reference/skills/document-review/" />
   <LinkCard title="File Todos" description="Track and manage file-level todo items." href="/systematic/reference/skills/file-todos/" />
   <LinkCard title="Frontend Design" description="Create distinctive, production-grade frontend interfaces." href="/systematic/reference/skills/frontend-design/" />
