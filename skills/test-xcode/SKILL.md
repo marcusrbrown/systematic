@@ -23,7 +23,7 @@ Build, install, and test iOS apps on the simulator using XcodeBuildMCP. Captures
 Check that the XcodeBuildMCP MCP server is connected by calling its `list_simulators` tool.
 
 MCP tool names vary by platform:
-- OpenCode: `mcp__xcodebuildmcp__list_simulators`
+- Claude Code: `mcp__xcodebuildmcp__list_simulators`
 - Other platforms: use the equivalent MCP tool call for the `XcodeBuildMCP` server's `list_simulators` method
 
 If the tool is not found or errors, inform the user they need to add the XcodeBuildMCP MCP server:
@@ -106,7 +106,7 @@ Pause for human input when testing touches flows that require device interaction
 | Camera/Photos | "Grant permissions and verify camera works" |
 | Location | "Allow location access and verify map updates" |
 
-Ask the user (using the platform's question tool — e.g., `question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini — or present numbered options and wait):
+Ask the user (using the platform's question tool — e.g., `AskUserQuestion` in Claude Code, `request_user_input` in Codex, `ask_user` in Gemini — or present numbered options and wait):
 
 ```
 Human Verification Needed
@@ -139,12 +139,12 @@ When a test fails:
 
    How to proceed?
    1. Fix now - I'll help debug and fix
-   2. Create todo - Add a todo for later (using the file-todos skill)
+   2. Create todo - Add a todo for later (using the todo-create skill)
    3. Skip - Continue testing other screens
    ```
 
 3. **If "Fix now":** investigate, propose a fix, rebuild and retest
-4. **If "Create todo":** load the `file-todos` skill and create a todo with priority p1 and description `xcode-{description}`, continue
+4. **If "Create todo":** load the `todo-create` skill and create a todo with priority p1 and description `xcode-{description}`, continue
 5. **If "Skip":** log as skipped, continue
 
 ### 8. Test Summary

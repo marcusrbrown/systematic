@@ -156,10 +156,10 @@
     "agents/research/learnings-researcher": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/research/learnings-researcher.md",
-      "upstream_commit": "9150a1ea541db0063f6577e44bcb44bc92ddbf8b",
-      "synced_at": "2026-03-14T00:07:40Z",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
       "notes": "Imported from CEP. Mechanical conversion + intelligent rewrites: examples converted to XML block format, model specification preserved (mode: subagent, temperature: 0.2), /workflows:plan reference updated to /ce:plan.",
-      "upstream_content_hash": "d4df67e06b136dd270e7ad4f71ae127826c934b5e9efea61dd59bd171aa5e281",
+      "upstream_content_hash": "415dda44d2b20b83f8f21bf0247c0ab14f0aacac819a5219643cf0b85dc065ad",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -300,10 +300,10 @@
     "agents/review/dhh-rails-reviewer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/review/dhh-rails-reviewer.md",
-      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
-      "synced_at": "2026-02-10T20:00:00Z",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
       "notes": "Imported from CEP. Mechanical conversion applied. Rails-specific reviewer.",
-      "upstream_content_hash": "d081cada84dca1815871a127f415bbae42b6debf4d79c29f5fd7f62177c0e675",
+      "upstream_content_hash": "b822176a0663e8d450f262533edf46098e6724fb829e2c90e6f3b2950d44ac0b",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -315,10 +315,10 @@
     "agents/review/julik-frontend-races-reviewer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/review/julik-frontend-races-reviewer.md",
-      "upstream_commit": "174cd4cff49899f6a62e41a6d95090feb9e24770",
-      "synced_at": "2026-02-20T00:10:02Z",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
       "notes": "Imported from CEP. Frontend race condition specialist reviewer.",
-      "upstream_content_hash": "bdc1a1abaa59ab8ed94a887c5fe2c828ce17c2b94729665674b082dc5e0f9072",
+      "upstream_content_hash": "455a9a24c51adb7581773ecbc894c166c08de58da91d6ecf846494c893e73132",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -334,10 +334,10 @@
     "agents/review/kieran-python-reviewer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/review/kieran-python-reviewer.md",
-      "upstream_commit": "174cd4cff49899f6a62e41a6d95090feb9e24770",
-      "synced_at": "2026-02-20T00:10:02Z",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
       "notes": "Imported from CEP. High quality bar Python reviewer.",
-      "upstream_content_hash": "653cbbee6bfeaa4a0257dba9952aa1a7877cd5d7c495ddf2478d1955819aa976",
+      "upstream_content_hash": "323d50a5d85dd3d2ff95dfed6db4a82f073dd74333efd8692838e534e2feed13",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -353,10 +353,10 @@
     "agents/review/kieran-rails-reviewer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/review/kieran-rails-reviewer.md",
-      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
-      "synced_at": "2026-02-10T20:00:00Z",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
       "notes": "Imported from CEP. Mechanical conversion applied. Rails-specific reviewer — referenced 3x across workflow commands.",
-      "upstream_content_hash": "f9a8e73aeea0412969aaddfcf43d8729619a9d3b10fe9040c7c47f8b7eca8c77",
+      "upstream_content_hash": "eb419e31bd8d6b1ba1934cf5cc6d00fe0ccd9e209a4720794644f1bf38e9b56d",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -368,10 +368,10 @@
     "agents/review/kieran-typescript-reviewer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/review/kieran-typescript-reviewer.md",
-      "upstream_commit": "f744b797efca368c986e4c8595e09a4f75e57a11",
-      "synced_at": "2026-02-10T20:00:00Z",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
       "notes": "Imported from CEP. Mechanical conversion applied. General-purpose TypeScript reviewer.",
-      "upstream_content_hash": "6ba8978c5bea5ebd03d9556564e1ece4f073d79e7a84e2133c1c69135cacdcaa",
+      "upstream_content_hash": "2b959a2763c04b2951cd5d62a900c375e032566ff069e25771c6f0d9389999df",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -481,10 +481,10 @@
     "agents/workflow/pr-comment-resolver": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/workflow/pr-comment-resolver.md",
-      "upstream_commit": "0fdc25a36cabea4ce9e2ae47ff69c1a9a2de8f0b",
-      "synced_at": "2026-03-24T00:07:42Z",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
       "notes": "Imported from CEP. Mechanical conversion + CLAUDE.md->AGENTS.md handled by converter.",
-      "upstream_content_hash": "3a1935bdfd0769774f32dcb673546d6df7cbbe8b99a27be1271207aaaa9c865e",
+      "upstream_content_hash": "09a8c72687163aff5764332e7949def0adb6ac14fce0088c3770f9a50b9ba3b3",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -650,10 +650,10 @@
     "skills/ce-compound": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/ce-compound",
-      "upstream_commit": "0fdc25a36cabea4ce9e2ae47ff69c1a9a2de8f0b",
-      "synced_at": "2026-03-24T00:07:42Z",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
       "notes": "Imported from CEP. Document solved problems.",
-      "upstream_content_hash": "07cf7e7a413204854f898e8b85d8a733dde0b6b4b05463a043bae444a17debc7",
+      "upstream_content_hash": "80f0fbe5f374e9456822de5cc510b2c2236bf4acbf0e3656395817eba71d16c0",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -674,10 +674,10 @@
     "skills/ce-compound-refresh": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/ce-compound-refresh",
-      "upstream_commit": "0fdc25a36cabea4ce9e2ae47ff69c1a9a2de8f0b",
-      "synced_at": "2026-03-24T00:07:42Z",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
       "notes": "Imported from CEP. Refresh compound docs.",
-      "upstream_content_hash": "c82c8a993e64e5b8db9fe66a4cff13a30078917db5b165757d5b694b50feb2a6",
+      "upstream_content_hash": "4706986cde0c2129d46787651d7c16e80e5ff45f7056d136edd0b61ac2fbad43",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -746,10 +746,10 @@
     "skills/ce-review": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/ce-review",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
       "notes": "Imported from CEP. Code review workflow.",
-      "upstream_content_hash": "6f0aa887d427e16a06c01b66d7a7eff985d515d992572726de89df20f58d1b01",
+      "upstream_content_hash": "2d65fad606f4a1a5eba0b1d18d6fa5a4847e1f4f62d04660557996be60a68366",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1028,30 +1028,6 @@
       "manual_overrides": [],
       "files": ["SKILL.md"]
     },
-    "skills/file-todos": {
-      "source": "cep",
-      "upstream_path": "plugins/compound-engineering/skills/file-todos",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
-      "notes": "Imported from CEP. Converter applied to SKILL.md. Asset file (todo-template.md) copied with CC→OC text replacements.",
-      "upstream_content_hash": "ccd973bc8fbab74634837ab29e3e25abe71bcd606e6d44642eff6446c03e8245",
-      "files": ["SKILL.md", "assets/todo-template.md"],
-      "rewrites": [
-        {
-          "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings"
-        },
-        {
-          "field": "body:path-references",
-          "reason": ".claude/→.opencode/ in SKILL.md and asset file"
-        },
-        {
-          "field": "body:sync",
-          "reason": "Synced from CEP commit 56b174a"
-        }
-      ],
-      "manual_overrides": []
-    },
     "skills/frontend-design": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/frontend-design",
@@ -1100,35 +1076,11 @@
       ],
       "manual_overrides": []
     },
-    "skills/generate_command": {
-      "source": "cep",
-      "upstream_path": "plugins/compound-engineering/skills/generate_command",
-      "upstream_commit": "0fdc25a36cabea4ce9e2ae47ff69c1a9a2de8f0b",
-      "synced_at": "2026-03-24T00:07:42Z",
-      "notes": "Imported from CEP. Generate command scaffold.",
-      "upstream_content_hash": "c02cab0a2b21c71ad088d1ae7e082fdda54b5f667b5bacb5846660ff2490f43d",
-      "rewrites": [
-        {
-          "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
-        },
-        {
-          "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, compound-engineering:→systematic:"
-        },
-        {
-          "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/"
-        }
-      ],
-      "manual_overrides": [],
-      "files": ["SKILL.md"]
-    },
     "skills/git-worktree": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/git-worktree",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
       "notes": "Imported from CEP. Converter applied to SKILL.md. Script file copied. CLAUDE_PLUGIN_ROOT paths simplified to relative paths (skills are bundled in plugin, no env var needed).",
       "upstream_content_hash": "98552ca8b72166e7ba4e585723c84cf231a89c593e5921b6be38b0c07ffb8ad5",
       "files": ["SKILL.md", "scripts/worktree-manager.sh"],
@@ -1151,10 +1103,10 @@
     "skills/lfg": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/lfg",
-      "upstream_commit": "0fdc25a36cabea4ce9e2ae47ff69c1a9a2de8f0b",
-      "synced_at": "2026-03-24T00:07:42Z",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
       "notes": "Imported from CEP. Full autonomous engineering workflow.",
-      "upstream_content_hash": "d11b742e2c78e1b198356aa08b19e55d5f4a3414cee29512fc49c3c5793a08d4",
+      "upstream_content_hash": "812469bb26d695dc07383d95aef67df1dbfa4acc2bdf404e683555bd045d0777",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1273,41 +1225,6 @@
       "manual_overrides": [],
       "files": ["SKILL.md"]
     },
-    "skills/resolve-pr-parallel": {
-      "source": "cep",
-      "upstream_path": "plugins/compound-engineering/skills/resolve-pr-parallel",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
-      "notes": "Imported from CEP. Resolve PR comments in parallel with specialized agents.",
-      "upstream_content_hash": "d4198ff84f811b01aaf7c776553b0bc01569fea1291670df4f16148ca1c89440",
-      "files": [
-        "SKILL.md",
-        "scripts/get-pr-comments",
-        "scripts/resolve-pr-thread"
-      ],
-      "rewrites": [
-        {
-          "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings"
-        },
-        {
-          "field": "body:branding",
-          "reason": "Claude Code -> OpenCode, .claude/ -> .opencode/, CLAUDE.md -> AGENTS.md"
-        },
-        {
-          "field": "body:sync",
-          "reason": "Synced from CEP commit 56b174a"
-        }
-      ],
-      "manual_overrides": [
-        {
-          "field": "scripts:example-repo",
-          "reason": "EveryInc/cora -> owner/repo in get-pr-comments usage example — CEP-specific upstream repo reference",
-          "original": "echo \"Example: get-pr-comments 123 EveryInc/cora\"",
-          "overridden_at": "2026-02-20T06:15:00Z"
-        }
-      ]
-    },
     "skills/setup": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/setup",
@@ -1352,10 +1269,10 @@
     "skills/slfg": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/slfg",
-      "upstream_commit": "0fdc25a36cabea4ce9e2ae47ff69c1a9a2de8f0b",
-      "synced_at": "2026-03-24T00:07:42Z",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
       "notes": "Imported from CEP. Ship and let go workflow.",
-      "upstream_content_hash": "94ff370e46076ff21dffb365add80972de29b74a577b18470e6d0d559718e398",
+      "upstream_content_hash": "6e8c92ebad12b8bdd937c1d118f022739bf5234a6a1e9ecbe8e9b210a66369c4",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1376,10 +1293,10 @@
     "skills/test-browser": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/test-browser",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
       "notes": "Imported from CEP. Browser testing workflow. Resynced with CLAUDE.md → AGENTS.md in code blocks.",
-      "upstream_content_hash": "b8849aa6a87b40a546ca0e971dc783b898f3586cb17e20578d19fb373a80dea8",
+      "upstream_content_hash": "292f16327520199182aecf6798ca1d5b716f903014445345b896c043f38e5da4",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1400,34 +1317,10 @@
     "skills/test-xcode": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/test-xcode",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
       "notes": "Imported from CEP. Xcode testing workflow.",
-      "upstream_content_hash": "1f56bc3f803d55a953d2879ca788f6894c65940f7491197729d4cbba0b2893e9",
-      "rewrites": [
-        {
-          "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
-        },
-        {
-          "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, compound-engineering:→systematic:"
-        },
-        {
-          "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/"
-        }
-      ],
-      "manual_overrides": [],
-      "files": ["SKILL.md"]
-    },
-    "skills/triage": {
-      "source": "cep",
-      "upstream_path": "plugins/compound-engineering/skills/triage",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
-      "notes": "Imported from CEP. Issue triage workflow.",
-      "upstream_content_hash": "53b10d4c0e577c2cbfd49b20cb0646e19306bf5fbec8ea58b1ccfbec3603ccc8",
+      "upstream_content_hash": "0d4aded42ade5ee1f91346d6b33cb9b1457caa19ef128e483e9b5c8aa3578af0",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1472,8 +1365,8 @@
     "skills/claude-permissions-optimizer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/claude-permissions-optimizer",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
       "notes": "Claude Code permissions optimization skill.",
       "upstream_content_hash": "04cc007b510b4e2e32647bfff065a07808a5b491ab795e69852891dcf8b1e5a6",
       "files": ["SKILL.md", "scripts/extract-commands.mjs"],
@@ -1496,30 +1389,6 @@
       "synced_at": "2026-03-23T00:09:08Z",
       "notes": "Report a bug for Compound Engineering/Systematic workflows.",
       "upstream_content_hash": "6880ebf8bb6ba49c29cba7e2fb5e96332d87eb53440d0520b1319baf55e143ec",
-      "files": ["SKILL.md"],
-      "rewrites": [
-        {
-          "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
-        },
-        {
-          "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, compound-engineering:→systematic:"
-        },
-        {
-          "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/"
-        }
-      ],
-      "manual_overrides": []
-    },
-    "skills/resolve-todo-parallel": {
-      "source": "cep",
-      "upstream_path": "plugins/compound-engineering/skills/resolve-todo-parallel",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
-      "notes": "Resolve todos in parallel for parallel processing.",
-      "upstream_content_hash": "431c537a13ca0406918e50d2d6ae1dd33544b1ea47e9dcb06b23b49c087d8b6b",
       "files": ["SKILL.md"],
       "rewrites": [
         {
@@ -1654,10 +1523,10 @@
     "agents/review/api-contract-reviewer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/review/api-contract-reviewer.md",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
       "notes": "Imported from CEP. API contract compliance reviewer.",
-      "upstream_content_hash": "690245563571887d50530d43c36139a64e51be17599afeabe1a96a49096b60f4",
+      "upstream_content_hash": "10a3497f81de7219583a65f640968d0ce42ab77b76de2fa11b268ccee7ada54a",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1673,10 +1542,10 @@
     "agents/review/correctness-reviewer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/review/correctness-reviewer.md",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
       "notes": "Imported from CEP. Code correctness reviewer.",
-      "upstream_content_hash": "4680e4c36c6ec47d2b1106b6a6becb04ae1e47e3b6911e1c819ba28b999c3fef",
+      "upstream_content_hash": "fdc70b83acc4350ca48239fbcb628750f107d020d16b81e7a712dec91357da83",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1692,10 +1561,10 @@
     "agents/review/data-migrations-reviewer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/review/data-migrations-reviewer.md",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
       "notes": "Imported from CEP. Data migration safety reviewer.",
-      "upstream_content_hash": "6e26e63f6fca2cdb567fd8e77cc4e0f28e3c13bf2ef205f7a1ab9e0962c588d5",
+      "upstream_content_hash": "893bf5e0b2fa05b589858c2707dd45f99a22d722a09c2f2ac9341be61aaeb975",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1711,10 +1580,10 @@
     "agents/review/maintainability-reviewer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/review/maintainability-reviewer.md",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
       "notes": "Imported from CEP. Code maintainability reviewer.",
-      "upstream_content_hash": "1e17f66be9a80e5ffe039bd710c2564708d8f7cdcb00468bab5b5a131402b9d1",
+      "upstream_content_hash": "8549045dc40d68aab2b1804fc60116221561918902e8b4133008cbf46434a2aa",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1730,10 +1599,10 @@
     "agents/review/performance-reviewer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/review/performance-reviewer.md",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
       "notes": "Imported from CEP. Performance impact reviewer.",
-      "upstream_content_hash": "3cf2a6c1df6c46413f539cb43e0e3559f22a3f0eaa2c5bd76548e8a8aae170d4",
+      "upstream_content_hash": "34f4f09928874be60b1070c11daae406356c3acc4d86b4a98ee94f02750124b6",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1749,10 +1618,10 @@
     "agents/review/reliability-reviewer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/review/reliability-reviewer.md",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
       "notes": "Imported from CEP. System reliability reviewer.",
-      "upstream_content_hash": "aa7ff49b78069f1adc6a2eb59e28026c004e1cb2628c2b96b7a10e6981209210",
+      "upstream_content_hash": "232c1a66fd8ba1d80cf4274a49be02b876fbfff7ca412417fdda4005a5d321c2",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1768,10 +1637,10 @@
     "agents/review/security-reviewer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/review/security-reviewer.md",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
       "notes": "Imported from CEP. Security vulnerability reviewer.",
-      "upstream_content_hash": "da209adf7236028af3bd76fcf838b0763812f59eec50b4bdfcb025d3fd3a1942",
+      "upstream_content_hash": "4ecdde7b3caaaaef2719bb115ebd2e1f93746ad6226c69c126e69aa44c57ad9b",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1787,10 +1656,10 @@
     "agents/review/testing-reviewer": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/agents/review/testing-reviewer.md",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
       "notes": "Imported from CEP. Test coverage and quality reviewer.",
-      "upstream_content_hash": "0bf2e2ebbc39c95fb92fcda1c5283bc39fb6fe41fba7e1a0639f337849541074",
+      "upstream_content_hash": "3cecab5b9715e03b7c45cc3474cbe33c6ea9e95014c167db259469424cfef206",
       "rewrites": [
         {
           "field": "body:tool-references",
@@ -1803,21 +1672,140 @@
       ],
       "manual_overrides": []
     },
-    "skills/ce-review-beta": {
+    "skills/git-clean-gone-branches": {
       "source": "cep",
-      "upstream_path": "plugins/compound-engineering/skills/ce-review-beta",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
-      "notes": "Imported from CEP. Beta review workflow with multi-agent analysis.",
-      "upstream_content_hash": "8308a1adb0f4a2f29456596a34d9a89a0c9e4bdd2864660e43f3945555fc0502",
+      "upstream_path": "plugins/compound-engineering/skills/git-clean-gone-branches",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
+      "notes": "Imported from CEP. Clean up gone branches.",
+      "upstream_content_hash": "49bd4302243281da03ee1461b2ee89b57f63b866339568e28a7911f5187f28c3",
+      "files": ["SKILL.md", "scripts/clean-gone"],
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:branding",
+          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "skills/git-commit": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/skills/git-commit",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
+      "notes": "Imported from CEP. Conventional commit workflow.",
+      "upstream_content_hash": "7ddec4316a1f627ebaaa631208e2ea6929cc3d0be866bd03f181fb43464030c4",
+      "files": ["SKILL.md"],
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:branding",
+          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "skills/git-commit-push-pr": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/skills/git-commit-push-pr",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
+      "notes": "Imported from CEP. Commit, push, and create PR.",
+      "upstream_content_hash": "bb21ed6ecbf4ac40c1feec59b91559fda8a1cb58d464a3c08efab187a0ba9069",
+      "files": ["SKILL.md"],
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:branding",
+          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "skills/resolve-pr-feedback": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/skills/resolve-pr-feedback",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
+      "notes": "Imported from CEP. Resolve PR feedback systematically.",
+      "upstream_content_hash": "3bd0907e381cfcc5072fc10df2106bb356d91b80168929463faeac11693e5002",
       "files": [
         "SKILL.md",
-        "references/diff-scope.md",
-        "references/findings-schema.json",
-        "references/persona-catalog.md",
-        "references/review-output-template.md",
-        "references/subagent-template.md"
+        "scripts/get-pr-comments",
+        "scripts/get-thread-for-comment",
+        "scripts/reply-to-pr-thread",
+        "scripts/resolve-pr-thread"
       ],
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:branding",
+          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "skills/todo-create": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/skills/todo-create",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
+      "notes": "Imported from CEP. Create todo items.",
+      "upstream_content_hash": "b58ac1017e085f38070b1fa077e86a93f7fa21dd6eac737728a42c643d2343ff",
+      "files": ["SKILL.md", "assets/todo-template.md"],
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:branding",
+          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "skills/todo-resolve": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/skills/todo-resolve",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
+      "notes": "Imported from CEP. Resolve todo items.",
+      "upstream_content_hash": "a03a353fa6683a9a3ae2ea7d2433fd6e6c4bc088c33da54685d38d4c0faf5e94",
+      "files": ["SKILL.md"],
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:branding",
+          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "skills/todo-triage": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/skills/todo-triage",
+      "upstream_commit": "6b27b38b0f88c1cdd43340e7682d2e1828fa8ece",
+      "synced_at": "2026-03-26T00:10:12Z",
+      "notes": "Imported from CEP. Triage todo items.",
+      "upstream_content_hash": "184ab981c78eeba5c68c1ca0511ab95a4363c8726421b350326e344c42032238",
+      "files": ["SKILL.md"],
       "rewrites": [
         {
           "field": "body:tool-references",

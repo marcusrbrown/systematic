@@ -15,7 +15,7 @@ This workflow uses the `agent-browser` CLI exclusively. Do not use any alternati
 Use `agent-browser` for: opening pages, clicking elements, filling forms, taking screenshots, and scraping rendered content.
 
 Platform-specific hints:
-- In OpenCode, do not use Chrome MCP tools (`mcp__claude-in-chrome__*`).
+- In Claude Code, do not use Chrome MCP tools (`mcp__claude-in-chrome__*`).
 - In Codex, do not substitute unrelated browsing tools.
 
 ## Prerequisites
@@ -52,7 +52,7 @@ If installation fails, inform the user and stop.
 
 ### 2. Ask Browser Mode
 
-Ask the user whether to run headed or headless (using the platform's question tool — e.g., `question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini — or present options and wait for a reply):
+Ask the user whether to run headed or headless (using the platform's question tool — e.g., `AskUserQuestion` in Claude Code, `request_user_input` in Codex, `ask_user` in Gemini — or present options and wait for a reply):
 
 ```
 Do you want to watch the browser tests run?
@@ -103,7 +103,7 @@ Build a list of URLs to test based on the mapping.
 Determine the dev server port using this priority:
 
 1. **Explicit argument** — if the user passed `--port 5000`, use that directly
-2. **Project instructions** — check `AGENTS.md`, `AGENTS.md`, or other instruction files for port references
+2. **Project instructions** — check `AGENTS.md`, `CLAUDE.md`, or other instruction files for port references
 3. **package.json** — check dev/start scripts for `--port` flags
 4. **Environment files** — check `.env`, `.env.local`, `.env.development` for `PORT=`
 5. **Default** — fall back to `3000`
@@ -113,7 +113,7 @@ PORT="${EXPLICIT_PORT:-}"
 if [ -z "$PORT" ]; then
   PORT=$(grep -Eio '(port\s*[:=]\s*|localhost:)([0-9]{4,5})' AGENTS.md 2>/dev/null | grep -Eo '[0-9]{4,5}' | head -1)
   if [ -z "$PORT" ]; then
-    PORT=$(grep -Eio '(port\s*[:=]\s*|localhost:)([0-9]{4,5})' AGENTS.md 2>/dev/null | grep -Eo '[0-9]{4,5}' | head -1)
+    PORT=$(grep -Eio '(port\s*[:=]\s*|localhost:)([0-9]{4,5})' CLAUDE.md 2>/dev/null | grep -Eo '[0-9]{4,5}' | head -1)
   fi
 fi
 if [ -z "$PORT" ]; then
@@ -225,12 +225,12 @@ When a test fails:
 
    How to proceed?
    1. Fix now - I'll help debug and fix
-   2. Create todo - Add a todo for later (using the file-todos skill)
+   2. Create todo - Add a todo for later (using the todo-create skill)
    3. Skip - Continue testing other pages
    ```
 
 3. **If "Fix now":** investigate, propose a fix, apply, re-run the failing test
-4. **If "Create todo":** load the `file-todos` skill and create a todo with priority p1 and description `browser-test-{description}`, continue
+4. **If "Create todo":** load the `todo-create` skill and create a todo with priority p1 and description `browser-test-{description}`, continue
 5. **If "Skip":** log as skipped, continue
 
 ### 10. Test Summary
