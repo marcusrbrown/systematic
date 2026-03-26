@@ -151,6 +151,7 @@ This command takes a work document (plan, specification, or todo file) and execu
 
    **When this matters most:** Any change that touches models with callbacks, error handling with fallback/retry, or functionality exposed through multiple interfaces.
 
+
 2. **Incremental Commits**
 
    After completing each task, evaluate whether to create an incremental commit:
@@ -243,11 +244,9 @@ This command takes a work document (plan, specification, or todo file) and execu
    # Use linting-agent before pushing to origin
    ```
 
-2. **Consider Reviewer Agents** (Optional)
+2. **Consider Code Review** (Optional)
 
-   Use for complex, risky, or large changes. Read agents from `systematic.local.md` frontmatter (`review_agents`). If no settings file, invoke the `setup` skill to create one.
-
-   Run configured agents in parallel with task tool. Present findings and address critical issues.
+   Use for complex, risky, or large changes. Load the `ce:review` skill with `mode:autofix` to fix safe issues and flag the rest before shipping.
 
 3. **Final Validation**
    - All tasks marked completed
@@ -379,6 +378,7 @@ This command takes a work document (plan, specification, or todo file) and execu
 
    ---
 
+   [![Systematic v[VERSION]](https://img.shields.io/badge/Systematic-v[VERSION]-6366f1)](https://github.com/marcusrbrown/systematic)
    🤖 Generated with [MODEL] ([CONTEXT] context, [THINKING]) via [HARNESS](HARNESS_URL)
    EOF
    )"
@@ -468,7 +468,7 @@ When external delegation is active, follow this workflow for each tagged task. D
 
    Verify the delegate CLI is installed. If not found, print "Delegate CLI not installed - continuing with standard mode." and proceed normally.
 
-2. **Build prompt** — For each task, assemble a prompt from the plan's implementation unit (Goal, Files, Approach, Conventions from `systematic.local.md`). Include rules: no git commits, no PRs, run `git status` and `git diff --stat` when done. Never embed credentials or tokens in the prompt - pass auth through environment variables.
+2. **Build prompt** — For each task, assemble a prompt from the plan's implementation unit (Goal, Files, Approach, Conventions from project AGENTS.md/AGENTS.md). Include rules: no git commits, no PRs, run `git status` and `git diff --stat` when done. Never embed credentials or tokens in the prompt - pass auth through environment variables.
 
 3. **Write prompt to file** — Save the assembled prompt to a unique temporary file to avoid shell quoting issues and cross-task races. Use a unique filename per task.
 
@@ -560,3 +560,4 @@ For most features: tests + linting + following patterns is sufficient.
 - **Forgetting to track progress** - Update task status as you go or lose track of what's done
 - **80% done syndrome** - Finish the feature, don't move on early
 - **Over-reviewing simple changes** - Save reviewer agents for complex work
+

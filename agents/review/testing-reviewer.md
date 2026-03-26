@@ -1,6 +1,6 @@
 ---
 name: testing-reviewer
-description: Always-on code-review persona. Reviews code for test coverage gaps, weak assertions, brittle implementation-coupled tests, and missing edge case coverage. Spawned by the ce:review-beta skill as part of a reviewer ensemble.
+description: Always-on code-review persona. Reviews code for test coverage gaps, weak assertions, brittle implementation-coupled tests, and missing edge case coverage.
 tools: Read, Grep, Glob, Bash
 color: blue
 mode: subagent

@@ -150,6 +150,7 @@ This command takes a work document (plan, specification, or todo file) and execu
 
    **When this matters most:** Any change that touches models with callbacks, error handling with fallback/retry, or functionality exposed through multiple interfaces.
 
+
 2. **Incremental Commits**
 
    After completing each task, evaluate whether to create an incremental commit:
@@ -234,11 +235,9 @@ This command takes a work document (plan, specification, or todo file) and execu
    # Use linting-agent before pushing to origin
    ```
 
-2. **Consider Reviewer Agents** (Optional)
+2. **Consider Code Review** (Optional)
 
-   Use for complex, risky, or large changes. Read agents from `systematic.local.md` frontmatter (`review_agents`). If no settings file, invoke the `setup` skill to create one.
-
-   Run configured agents in parallel with task tool. Present findings and address critical issues.
+   Use for complex, risky, or large changes. Load the `ce:review` skill with `mode:autofix` to fix safe issues and flag the rest before shipping.
 
 3. **Final Validation**
    - All tasks marked completed
@@ -370,6 +369,7 @@ This command takes a work document (plan, specification, or todo file) and execu
 
    ---
 
+   [![Systematic v[VERSION]](https://img.shields.io/badge/Systematic-v[VERSION]-6366f1)](https://github.com/marcusrbrown/systematic)
    🤖 Generated with [MODEL] ([CONTEXT] context, [THINKING]) via [HARNESS](HARNESS_URL)
    EOF
    )"
@@ -487,3 +487,4 @@ For most features: tests + linting + following patterns is sufficient.
 - **Forgetting to track progress** - Update task status as you go or lose track of what's done
 - **80% done syndrome** - Finish the feature, don't move on early
 - **Over-reviewing simple changes** - Save reviewer agents for complex work
+
