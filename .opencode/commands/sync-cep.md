@@ -137,6 +137,80 @@ The **only** acceptable dry-run output is the literal template above with `<summ
 - If `--dry-run` is set: do not invoke `convert-cc-defs`, do not edit files, do not run conversions, and do not proceed to live sync. Only report what would happen using the pre-check summary (which was already obtained as a prerequisite) and then stop.
 - Otherwise: invoke the `convert-cc-defs` skill for the selected target scope and apply the re-sync workflow steps in that skill (mechanical conversion + intelligent rewrite + merge).
 
+## Feature: Mandatory Post-Conversion Fixup
+
+**This step is NON-NEGOTIABLE.** After every conversion run (mechanical converter + LLM rewrite), run the batch sed fixup defined in `convert-cc-defs` Phase 2c. LLMs consistently fail at simple string replacement — the sed pass is the only reliable way to catch all remaining CC/CEP references.
+
+### Why This Exists
+
+In every sync run to date, the LLM rewrite pass has left behind:
+- `compound-engineering:` prefixes that should be `systematic:`
+- `.claude/` paths that should be `.opencode/`
+- `Claude Code` product references that should be `OpenCode`
+- `AskUserQuestion` tool names that should be `question`
+- `CLAUDE.md` references that should be `AGENTS.md`
+
+These are simple string replacements. The LLM does not need to do them — and repeatedly fails to. The batch sed catches them deterministically.
+
+### Execution Steps
+
+1. **Run the ordered sed** from `convert-cc-defs` Phase 2c on all converted `.md` files
+2. **Exclude** `sync-manifest.json` (upstream paths are correct) and `claude-permissions-optimizer/SKILL.md` (CC refs are intentional — only convert prefix and tool names)
+3. **Fix edge cases manually**: badge URLs, `EveryInc/systematic`, `claude.com/opencode`, `Task()` → `task()` (see Phase 2c edge cases table)
+4. **Run verification grep** (both CHECK 1 and CHECK 2 from Phase 2c) — zero hits required on non-exception files
+5. **Fail the run** if CHECK 2 (over-conversions) returns any hits — this means a double-conversion bug
+
+### File Loop Pattern
+
+```bash
+{
+  git diff --name-only HEAD -- '*.md'
+  git ls-files --others --exclude-standard -- '*.md'
+} | sort -u | grep -v '^skills/claude-permissions-optimizer/SKILL\.md$' | while IFS= read -r f; do
+  if [ -f "$f" ]; then
+    sed -i '' \
+      -e 's/compound-engineering\.local\.md/systematic.local.md/g' \
+      -e 's/compound-engineering-plugin/systematic/g' \
+      -e 's/compound-engineering pipeline artifacts/systematic pipeline artifacts/g' \
+      -e 's|\.context/compound-engineering/|.context/systematic/|g' \
+      -e 's|plugins/compound-engineering/|plugins/systematic/|g' \
+      -e 's/compound-engineering:/systematic:/g' \
+      -e 's/Compound_Engineering/Systematic/g' \
+      -e 's/Compound Engineering/Systematic/g' \
+      -e 's/compound-engineering/systematic/g' \
+      -e 's|~/\.claude/skills/|~/.config/opencode/skills/|g' \
+      -e 's|~/\.claude/settings\.json|~/.config/opencode/settings.json|g' \
+      -e 's|~/\.claude/|~/.config/opencode/|g' \
+      -e 's|`\.claude/skills/|`.opencode/skills/|g' \
+      -e 's|`\.claude/settings\.json|`.opencode/settings.json|g' \
+      -e 's| \.claude/skills/| .opencode/skills/|g' \
+      -e 's| \.claude/settings\.json| .opencode/settings.json|g' \
+      -e 's|(\.claude/|(\.opencode/|g' \
+      -e 's|`\.claude/|`.opencode/|g' \
+      -e 's| \.claude/| .opencode/|g' \
+      -e 's|"\.claude/|".opencode/|g' \
+      -e 's|CLAUDE\.md|AGENTS.md|g' \
+      -e 's/Claude Code/OpenCode/g' \
+      -e 's/claude-code/opencode/g' \
+      -e 's/AskUserQuestion/question/g' \
+      -e 's/TaskCreate/todowrite/g' \
+      "$f"
+  fi
+done
+```
+
+Then apply targeted fixes to `claude-permissions-optimizer/SKILL.md`:
+
+```bash
+sed -i '' \
+  -e 's/compound-engineering-plugin/systematic/g' \
+  -e 's/compound-engineering:/systematic:/g' \
+  -e 's/compound-engineering/systematic/g' \
+  -e 's/Compound Engineering/Systematic/g' \
+  -e 's/AskUserQuestion/question/g' \
+  skills/claude-permissions-optimizer/SKILL.md
+```
+
 ## Tooling and Command Safety
 
 - Never use `gh` or other external CLI tools in dry-run mode (exception: the pre-check script must run in interactive mode to obtain summary data).
