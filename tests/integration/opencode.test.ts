@@ -263,6 +263,60 @@ Integration test content.`,
       'description: A skill for integration testing',
     )
   })
+
+  test('registers bundled skills dir in config.skills.paths', async () => {
+    const skillsDir = path.join(testEnv.bundledDir, 'skills')
+    const handler = createConfigHandler({
+      directory: testEnv.projectDir,
+      bundledSkillsDir: skillsDir,
+      bundledAgentsDir: path.join(testEnv.bundledDir, 'agents'),
+      bundledCommandsDir: path.join(testEnv.bundledDir, 'commands'),
+    })
+
+    const config: Config = {}
+    await handler(config)
+
+    const extended = config as Config & { skills?: { paths?: string[] } }
+    expect(extended.skills?.paths).toContain(skillsDir)
+  })
+
+  test('preserves existing skills.paths entries', async () => {
+    const skillsDir = path.join(testEnv.bundledDir, 'skills')
+    const handler = createConfigHandler({
+      directory: testEnv.projectDir,
+      bundledSkillsDir: skillsDir,
+      bundledAgentsDir: path.join(testEnv.bundledDir, 'agents'),
+      bundledCommandsDir: path.join(testEnv.bundledDir, 'commands'),
+    })
+
+    const existingPath = '/some/other/skills'
+    const config = { skills: { paths: [existingPath] } } as Config & {
+      skills?: { paths?: string[] }
+    }
+    await handler(config as Config)
+
+    const extended = config as Config & { skills?: { paths?: string[] } }
+    expect(extended.skills?.paths).toContain(existingPath)
+    expect(extended.skills?.paths).toContain(skillsDir)
+  })
+
+  test('does not duplicate skills.paths on repeated calls', async () => {
+    const skillsDir = path.join(testEnv.bundledDir, 'skills')
+    const handler = createConfigHandler({
+      directory: testEnv.projectDir,
+      bundledSkillsDir: skillsDir,
+      bundledAgentsDir: path.join(testEnv.bundledDir, 'agents'),
+      bundledCommandsDir: path.join(testEnv.bundledDir, 'commands'),
+    })
+
+    const config: Config = {}
+    await handler(config)
+    await handler(config)
+
+    const extended = config as Config & { skills?: { paths?: string[] } }
+    const count = extended.skills?.paths?.filter((p) => p === skillsDir).length
+    expect(count).toBe(1)
+  })
 })
 
 describe('opencode availability check', () => {

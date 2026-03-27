@@ -252,5 +252,23 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
       ...bundledSkills,
       ...existingCommands,
     }
+
+    // skills.paths exists at runtime (v2 SDK types) but not in our v1 import
+    registerSkillsPaths(config, bundledSkillsDir)
+  }
+}
+
+// Config.skills exists in v2 SDK types but not v1 — bridge until import upgrade
+type ConfigWithSkills = Config & {
+  skills?: { paths?: string[] }
+}
+
+/** Register a directory for OpenCode's native skill discovery (`skill` tool). */
+export function registerSkillsPaths(config: Config, skillsDir: string): void {
+  const extended = config as ConfigWithSkills
+  extended.skills ??= {}
+  extended.skills.paths ??= []
+  if (!extended.skills.paths.includes(skillsDir)) {
+    extended.skills.paths.push(skillsDir)
   }
 }
