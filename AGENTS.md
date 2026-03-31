@@ -53,14 +53,14 @@ systematic/
 │   ├── scripts/          # Content generation from bundled assets
 │   └── src/content/      # Manual guides + generated reference
 ├── registry/             # OCX registry config + profiles (omo, standalone)
-├── scripts/              # Build scripts (build-registry.ts)
+├── scripts/              # Build scripts (build-registry.ts, check-cep-upstream.ts)
 ├── assets/               # Static assets (banner SVG)
 ├── tests/
 │   ├── unit/             # 13 test files
 │   └── integration/      # 2 test files
 ├── .opencode/            # Project-specific OC config + skills + commands
-│   ├── skills/           # Project-only skills
-│   └── commands/         # Project-only commands (generate-readme)
+│   ├── skills/           # Project-only skills (convert-cc-defs)
+│   └── commands/         # Project-only commands (generate-readme, sync-cep)
 ├── sync-manifest.json    # Upstream provenance tracking
 └── dist/                 # Build output
 ```
@@ -85,6 +85,7 @@ systematic/
 | Add new skill | `skills/<name>/SKILL.md` |
 | Add new agent | `agents/<category>/<name>.md` |
 | OCX registry building | `scripts/build-registry.ts` |
+| Upstream sync checking | `scripts/check-cep-upstream.ts` |
 | Docs content generation | `docs/scripts/transform-content.ts` |
 | Docs site config | `docs/astro.config.mjs` |
 
@@ -151,7 +152,7 @@ All disabled lists merge (union), bootstrap config shallow-merges.
 
 ## Upstream Sync
 
-CEP definitions were historically imported via the `convert-cc-defs` skill. `sync-manifest.json` tracks provenance: upstream commit, content hash, rewrites applied, and manual overrides. **Automated sync is now disabled** — Systematic evolves independently. The CLI `convert` command remains available for ad-hoc CC→OpenCode conversions.
+CEP definitions were historically imported via the `convert-cc-defs` skill (`.opencode/skills/`). `sync-manifest.json` tracks provenance: upstream commit, content hash, rewrites applied, and manual overrides. **Automated sync is now disabled** — Systematic evolves independently. The interactive `/sync-cep` command remains available for on-demand upstream syncs. The CLI `convert` command remains available for ad-hoc CC→OpenCode conversions.
 
 The latest upstream sync (commit 74fb717) converted all commands to skills — `commands/` now contains only `.gitkeep`. Command code paths (`findCommandsInDir`, `loadCommandAsConfig`) remain for backward compatibility and project-specific commands.
 
