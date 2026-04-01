@@ -150,6 +150,7 @@ jobs:
               || github.event.pull_request.head.sha
               || ''
             }}
+          persist-credentials: false
           token: ${{ secrets.FRO_BOT_PAT }}
 
       - name: Setup Bun
