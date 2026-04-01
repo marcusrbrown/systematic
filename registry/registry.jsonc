@@ -165,6 +165,18 @@
         {
           "path": "SKILL.md",
           "target": ".opencode/skills/document-review/SKILL.md"
+        },
+        {
+          "path": "references/findings-schema.json",
+          "target": ".opencode/skills/document-review/references/findings-schema.json"
+        },
+        {
+          "path": "references/review-output-template.md",
+          "target": ".opencode/skills/document-review/references/review-output-template.md"
+        },
+        {
+          "path": "references/subagent-template.md",
+          "target": ".opencode/skills/document-review/references/subagent-template.md"
         }
       ]
     },
