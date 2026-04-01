@@ -1829,33 +1829,6 @@
         }
       ],
       "manual_overrides": []
-    },
-    "skills/ce-review-beta": {
-      "source": "cep",
-      "upstream_path": "plugins/compound-engineering/skills/ce-review-beta",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
-      "notes": "Imported from CEP. Beta review workflow with multi-agent analysis.",
-      "upstream_content_hash": "8308a1adb0f4a2f29456596a34d9a89a0c9e4bdd2864660e43f3945555fc0502",
-      "files": [
-        "SKILL.md",
-        "references/diff-scope.md",
-        "references/findings-schema.json",
-        "references/persona-catalog.md",
-        "references/review-output-template.md",
-        "references/subagent-template.md"
-      ],
-      "rewrites": [
-        {
-          "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings"
-        },
-        {
-          "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
-        }
-      ],
-      "manual_overrides": []
     }
   }
 }
