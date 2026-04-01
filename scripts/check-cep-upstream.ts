@@ -253,17 +253,40 @@ const fetchWithRetry = async (
   return { response: null, hadError: true }
 }
 
+const GITHUB_REPO_PATTERN = /^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/
+const GITHUB_REF_PATTERN = /^[a-zA-Z0-9._/-]+$/
+
+function validateGitHubRepo(repo: string): string {
+  if (!GITHUB_REPO_PATTERN.test(repo)) {
+    throw new Error(
+      `Invalid GitHub repository format: ${repo} (expected "owner/name")`,
+    )
+  }
+  return repo
+}
+
+function validateGitHubRef(ref: string): string {
+  if (!GITHUB_REF_PATTERN.test(ref)) {
+    throw new Error(
+      `Invalid GitHub ref format: ${ref} (expected branch/tag name)`,
+    )
+  }
+  return ref
+}
+
 export const fetchUpstreamData = async (
   repo: string,
   branch: string,
   paths: string[],
   fetchFn: (url: string) => Promise<Response>,
 ): Promise<FetchResult> => {
+  const safeRepo = validateGitHubRepo(repo)
+  const safeBranch = validateGitHubRef(branch)
   let hadError = false
   const definitionKeys = new Set<string>()
   const contents: Record<string, string> = {}
 
-  const treeUrl = `https://api.github.com/repos/${repo}/git/trees/${branch}?recursive=1`
+  const treeUrl = `https://api.github.com/repos/${safeRepo}/git/trees/${safeBranch}?recursive=1`
   const treeResult = await fetchWithRetry(treeUrl, fetchFn)
   if (!treeResult.response || !treeResult.response.ok) {
     return { definitionKeys: [], contents: {}, treePaths: [], hadError: true }
@@ -276,7 +299,7 @@ export const fetchUpstreamData = async (
   }
 
   for (const path of paths) {
-    const contentUrl = `https://api.github.com/repos/${repo}/contents/${path}?ref=${branch}`
+    const contentUrl = `https://api.github.com/repos/${safeRepo}/contents/${path}?ref=${safeBranch}`
     const result = await fetchWithRetry(contentUrl, fetchFn)
     if (!result.response || !result.response.ok) {
       if (result.response?.status !== 404) {
