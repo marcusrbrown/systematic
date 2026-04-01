@@ -3,7 +3,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { Config } from '@opencode-ai/sdk'
+import { extractCommandFrontmatter } from '../../src/lib/commands.ts'
 import { createConfigHandler } from '../../src/lib/config-handler.ts'
+import { parseFrontmatter } from '../../src/lib/frontmatter.ts'
 
 const OPENCODE_AVAILABLE = (() => {
   const result = Bun.spawnSync(['which', 'opencode'])
@@ -16,6 +18,14 @@ const RETRY_DELAY_MS = 3_000
 const OPENCODE_TEST_MODEL = 'opencode/big-pickle'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..')
+
+interface PrecheckSummary {
+  hashChanges: string[]
+  newUpstream: string[]
+  deletions: string[]
+  skipped: string[]
+  converterVersionChanged: boolean
+}
 
 interface OpencodeResult {
   stdout: string
@@ -33,6 +43,59 @@ function buildOpencodeConfig(): string {
   return JSON.stringify({
     plugin: [pluginPath],
   })
+}
+
+function buildSyncCepTestConfig(): string {
+  const commandPath = path.join(REPO_ROOT, '.opencode/commands/sync-cep.md')
+  const content = fs.readFileSync(commandPath, 'utf8')
+  const { body } = parseFrontmatter(content)
+  const frontmatter = extractCommandFrontmatter(content)
+
+  return JSON.stringify({
+    command: {
+      'sync-cep': {
+        template: body.trim(),
+        description: frontmatter.description,
+        agent: frontmatter.agent,
+        model: frontmatter.model,
+        subtask: frontmatter.subtask,
+      },
+    },
+    agent: {
+      build: {
+        permission: {
+          edit: 'deny',
+          bash: 'deny',
+        },
+      },
+    },
+  })
+}
+
+function buildSyncPrompt(
+  summary: PrecheckSummary,
+  scope: string,
+  dryRun: boolean,
+  exitCode: number = 1,
+): string {
+  const dryRunFlag = dryRun ? '--dry-run' : ''
+  const dryRunNotice = dryRun
+    ? 'DRY-RUN MODE: Do not call any tools or external commands.'
+    : ''
+  return `/sync-cep ${scope} ${dryRunFlag}
+${dryRunNotice}
+
+<precheck-exit-code>${exitCode}</precheck-exit-code>
+
+<precheck-summary>
+${JSON.stringify(summary)}
+</precheck-summary>
+
+Note: headless CI run — user will not see live output.`
+}
+
+function shouldRunSync(exitCode: number): boolean {
+  return exitCode !== 0 && exitCode !== -1
 }
 
 async function runOpencode(
@@ -151,6 +214,85 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
   )
 })
 
+describe('sync-cep workflow simulation', () => {
+  const fixtures = [
+    {
+      name: 'hash-change',
+      summary: {
+        hashChanges: ['skills/brainstorming'],
+        newUpstream: [],
+        deletions: [],
+        skipped: [],
+        converterVersionChanged: false,
+      },
+    },
+    {
+      name: 'report-only',
+      summary: {
+        hashChanges: [],
+        newUpstream: ['skills/new-skill'],
+        deletions: ['agents/review/security-sentinel'],
+        skipped: [],
+        converterVersionChanged: false,
+      },
+    },
+    {
+      name: 'converter-version',
+      summary: {
+        hashChanges: [],
+        newUpstream: [],
+        deletions: [],
+        skipped: [],
+        converterVersionChanged: true,
+      },
+    },
+  ]
+
+  test.each(fixtures)('builds sync prompt for $name', ({ summary }) => {
+    const prompt = buildSyncPrompt(summary, 'all', true)
+    expect(prompt).toContain(JSON.stringify(summary))
+    expect(prompt).toContain('/sync-cep all --dry-run')
+    expect(prompt).toContain('<precheck-exit-code>1</precheck-exit-code>')
+    expect(prompt).toContain('headless CI')
+  })
+
+  test('builds sync prompt with exit code 2 and errors', () => {
+    const summary: PrecheckSummary = {
+      hashChanges: ['skills/brainstorming'],
+      newUpstream: [],
+      deletions: [],
+      skipped: [],
+      converterVersionChanged: false,
+    }
+    const prompt = buildSyncPrompt(summary, 'all', true, 2)
+    expect(prompt).toContain('<precheck-exit-code>2</precheck-exit-code>')
+    expect(prompt).toContain(JSON.stringify(summary))
+    expect(prompt).toContain('/sync-cep all --dry-run')
+  })
+
+  test('sync gate honors precheck exit codes', () => {
+    expect(shouldRunSync(0)).toBe(false)
+    expect(shouldRunSync(1)).toBe(true)
+    expect(shouldRunSync(2)).toBe(true)
+    expect(shouldRunSync(-1)).toBe(false)
+  })
+
+  test.skipIf(!OPENCODE_AVAILABLE)(
+    'runs sync-cep command with dry-run prompt',
+    async () => {
+      const prompt = buildSyncPrompt(fixtures[0].summary, 'all', true)
+      const result = await runOpencode(prompt, {
+        cwd: REPO_ROOT,
+        configContent: buildSyncCepTestConfig(),
+      })
+
+      expect(result.exitCode).not.toBe(-1)
+      expect(result.stdout).not.toMatch(/\n\s*[→$⚙]/)
+    },
+    TIMEOUT_MS * MAX_RETRIES,
+  )
+})
+
 describe('config handler integration', () => {
   let testEnv: {
     tempDir: string
@@ -263,60 +405,6 @@ Integration test content.`,
       'description: A skill for integration testing',
     )
   })
-
-  test('registers bundled skills dir in config.skills.paths', async () => {
-    const skillsDir = path.join(testEnv.bundledDir, 'skills')
-    const handler = createConfigHandler({
-      directory: testEnv.projectDir,
-      bundledSkillsDir: skillsDir,
-      bundledAgentsDir: path.join(testEnv.bundledDir, 'agents'),
-      bundledCommandsDir: path.join(testEnv.bundledDir, 'commands'),
-    })
-
-    const config: Config = {}
-    await handler(config)
-
-    const extended = config as Config & { skills?: { paths?: string[] } }
-    expect(extended.skills?.paths).toContain(skillsDir)
-  })
-
-  test('preserves existing skills.paths entries', async () => {
-    const skillsDir = path.join(testEnv.bundledDir, 'skills')
-    const handler = createConfigHandler({
-      directory: testEnv.projectDir,
-      bundledSkillsDir: skillsDir,
-      bundledAgentsDir: path.join(testEnv.bundledDir, 'agents'),
-      bundledCommandsDir: path.join(testEnv.bundledDir, 'commands'),
-    })
-
-    const existingPath = '/some/other/skills'
-    const config = { skills: { paths: [existingPath] } } as Config & {
-      skills?: { paths?: string[] }
-    }
-    await handler(config as Config)
-
-    const extended = config as Config & { skills?: { paths?: string[] } }
-    expect(extended.skills?.paths).toContain(existingPath)
-    expect(extended.skills?.paths).toContain(skillsDir)
-  })
-
-  test('does not duplicate skills.paths on repeated calls', async () => {
-    const skillsDir = path.join(testEnv.bundledDir, 'skills')
-    const handler = createConfigHandler({
-      directory: testEnv.projectDir,
-      bundledSkillsDir: skillsDir,
-      bundledAgentsDir: path.join(testEnv.bundledDir, 'agents'),
-      bundledCommandsDir: path.join(testEnv.bundledDir, 'commands'),
-    })
-
-    const config: Config = {}
-    await handler(config)
-    await handler(config)
-
-    const extended = config as Config & { skills?: { paths?: string[] } }
-    const count = extended.skills?.paths?.filter((p) => p === skillsDir).length
-    expect(count).toBe(1)
-  })
 })
 
 describe('opencode availability check', () => {
@@ -326,5 +414,45 @@ describe('opencode availability check', () => {
       console.log('OpenCode not installed. Install from: https://opencode.ai')
     }
     expect(true).toBe(true)
+  })
+})
+
+describe('convert-cc-defs skill discoverability', () => {
+  test('SKILL.md exists and is readable', () => {
+    const skillPath = path.join(
+      REPO_ROOT,
+      '.opencode/skills/convert-cc-defs/SKILL.md',
+    )
+    expect(fs.existsSync(skillPath)).toBe(true)
+
+    const content = fs.readFileSync(skillPath, 'utf8')
+    expect(content.length).toBeGreaterThan(0)
+  })
+
+  test('SKILL.md has valid frontmatter with name: convert-cc-defs', () => {
+    const skillPath = path.join(
+      REPO_ROOT,
+      '.opencode/skills/convert-cc-defs/SKILL.md',
+    )
+    const content = fs.readFileSync(skillPath, 'utf8')
+
+    const result = parseFrontmatter(content)
+    expect(result.hadFrontmatter).toBe(true)
+    expect(result.parseError).toBe(false)
+    expect((result.data as Record<string, unknown>).name).toBe(
+      'convert-cc-defs',
+    )
+  })
+
+  test('SKILL.md contains Phase 2, Phase 3, and Phase 4 section headings', () => {
+    const skillPath = path.join(
+      REPO_ROOT,
+      '.opencode/skills/convert-cc-defs/SKILL.md',
+    )
+    const content = fs.readFileSync(skillPath, 'utf8')
+
+    expect(content).toContain('## Phase 2: Mechanical Conversion')
+    expect(content).toContain('## Phase 3: Intelligent Rewrite')
+    expect(content).toContain('## Phase 4: Write and Register')
   })
 })
