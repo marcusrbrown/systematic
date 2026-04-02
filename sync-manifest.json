@@ -1051,30 +1051,6 @@
       "manual_overrides": [],
       "files": ["SKILL.md"]
     },
-    "skills/file-todos": {
-      "source": "cep",
-      "upstream_path": "plugins/compound-engineering/skills/file-todos",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
-      "notes": "Imported from CEP. Converter applied to SKILL.md. Asset file (todo-template.md) copied with CC→OC text replacements.",
-      "upstream_content_hash": "ccd973bc8fbab74634837ab29e3e25abe71bcd606e6d44642eff6446c03e8245",
-      "files": ["SKILL.md", "assets/todo-template.md"],
-      "rewrites": [
-        {
-          "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings"
-        },
-        {
-          "field": "body:path-references",
-          "reason": ".claude/→.opencode/ in SKILL.md and asset file"
-        },
-        {
-          "field": "body:sync",
-          "reason": "Synced from CEP commit 56b174a"
-        }
-      ],
-      "manual_overrides": []
-    },
     "skills/frontend-design": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/frontend-design",
@@ -1296,41 +1272,6 @@
       "manual_overrides": [],
       "files": ["SKILL.md"]
     },
-    "skills/resolve-pr-parallel": {
-      "source": "cep",
-      "upstream_path": "plugins/compound-engineering/skills/resolve-pr-parallel",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
-      "notes": "Imported from CEP. Resolve PR comments in parallel with specialized agents.",
-      "upstream_content_hash": "d4198ff84f811b01aaf7c776553b0bc01569fea1291670df4f16148ca1c89440",
-      "files": [
-        "SKILL.md",
-        "scripts/get-pr-comments",
-        "scripts/resolve-pr-thread"
-      ],
-      "rewrites": [
-        {
-          "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings"
-        },
-        {
-          "field": "body:branding",
-          "reason": "Claude Code -> OpenCode, .claude/ -> .opencode/, CLAUDE.md -> AGENTS.md"
-        },
-        {
-          "field": "body:sync",
-          "reason": "Synced from CEP commit 56b174a"
-        }
-      ],
-      "manual_overrides": [
-        {
-          "field": "scripts:example-repo",
-          "reason": "EveryInc/cora -> owner/repo in get-pr-comments usage example — CEP-specific upstream repo reference",
-          "original": "echo \"Example: get-pr-comments 123 EveryInc/cora\"",
-          "overridden_at": "2026-02-20T06:15:00Z"
-        }
-      ]
-    },
     "skills/setup": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/setup",
@@ -1444,30 +1385,6 @@
       "manual_overrides": [],
       "files": ["SKILL.md"]
     },
-    "skills/triage": {
-      "source": "cep",
-      "upstream_path": "plugins/compound-engineering/skills/triage",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
-      "notes": "Imported from CEP. Issue triage workflow.",
-      "upstream_content_hash": "53b10d4c0e577c2cbfd49b20cb0646e19306bf5fbec8ea58b1ccfbec3603ccc8",
-      "rewrites": [
-        {
-          "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
-        },
-        {
-          "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, compound-engineering:→systematic:"
-        },
-        {
-          "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/"
-        }
-      ],
-      "manual_overrides": [],
-      "files": ["SKILL.md"]
-    },
     "skills/ce-work-beta": {
       "source": "cep",
       "upstream_path": "plugins/compound-engineering/skills/ce-work-beta",
@@ -1523,30 +1440,6 @@
       "synced_at": "2026-03-23T00:09:08Z",
       "notes": "Report a bug for Compound Engineering/Systematic workflows.",
       "upstream_content_hash": "6880ebf8bb6ba49c29cba7e2fb5e96332d87eb53440d0520b1319baf55e143ec",
-      "files": ["SKILL.md"],
-      "rewrites": [
-        {
-          "field": "body:tool-references",
-          "reason": "Converter handled tool name mappings (Task→task, TodoWrite→todowrite, AskUserQuestion→question)"
-        },
-        {
-          "field": "body:branding",
-          "reason": "Claude Code→OpenCode, .claude/→.opencode/, compound-engineering:→systematic:"
-        },
-        {
-          "field": "body:path-references",
-          "reason": ".claude/commands/→.opencode/commands/, .claude/skills/→.opencode/skills/, ~/.claude/→~/.config/opencode/"
-        }
-      ],
-      "manual_overrides": []
-    },
-    "skills/resolve-todo-parallel": {
-      "source": "cep",
-      "upstream_path": "plugins/compound-engineering/skills/resolve-todo-parallel",
-      "upstream_commit": "54bea268f2b5b9056607a75dd7ffccab8903ae77",
-      "synced_at": "2026-03-25T00:08:07Z",
-      "notes": "Resolve todos in parallel for parallel processing.",
-      "upstream_content_hash": "431c537a13ca0406918e50d2d6ae1dd33544b1ea47e9dcb06b23b49c087d8b6b",
       "files": ["SKILL.md"],
       "rewrites": [
         {
@@ -1818,6 +1711,258 @@
       "synced_at": "2026-03-26T02:48:37Z",
       "notes": "Imported from CEP. Test coverage and quality reviewer.",
       "upstream_content_hash": "3cecab5b9715e03b7c45cc3474cbe33c6ea9e95014c167db259469424cfef206",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:branding",
+          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "skills/git-clean-gone-branches": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/skills/git-clean-gone-branches",
+      "upstream_commit": "bbd4f6de56963fc3cdb3131773d7e29d523ce549",
+      "synced_at": "2026-04-02T06:14:39Z",
+      "notes": "Imported from CEP HEAD. Multi-file skill with clean-gone script.",
+      "upstream_content_hash": "",
+      "files": ["SKILL.md", "scripts/clean-gone"],
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "skills/git-commit": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/skills/git-commit",
+      "upstream_commit": "bbd4f6de56963fc3cdb3131773d7e29d523ce549",
+      "synced_at": "2026-04-02T06:14:39Z",
+      "notes": "Imported from CEP HEAD. Structured git commit workflow.",
+      "upstream_content_hash": "",
+      "files": ["SKILL.md"],
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "skills/git-commit-push-pr": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/skills/git-commit-push-pr",
+      "upstream_commit": "bbd4f6de56963fc3cdb3131773d7e29d523ce549",
+      "synced_at": "2026-04-02T06:14:39Z",
+      "notes": "Imported from CEP HEAD. Commit, push, and PR creation workflow. Fixed EveryInc URL and claude.com edge cases.",
+      "upstream_content_hash": "",
+      "files": ["SKILL.md"],
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:branding",
+          "reason": "EveryInc/systematic→marcusrbrown/systematic, claude.com/opencode→opencode.ai"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "skills/onboarding": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/skills/onboarding",
+      "upstream_commit": "bbd4f6de56963fc3cdb3131773d7e29d523ce549",
+      "synced_at": "2026-04-02T06:14:39Z",
+      "notes": "Imported from CEP HEAD. Multi-file skill with inventory script.",
+      "upstream_content_hash": "",
+      "files": ["SKILL.md", "scripts/inventory.mjs"],
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "skills/resolve-pr-feedback": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/skills/resolve-pr-feedback",
+      "upstream_commit": "bbd4f6de56963fc3cdb3131773d7e29d523ce549",
+      "synced_at": "2026-04-02T06:14:39Z",
+      "notes": "Imported from CEP HEAD. Replaces resolve-pr-parallel. Multi-file skill with 4 PR scripts.",
+      "upstream_content_hash": "",
+      "files": [
+        "SKILL.md",
+        "scripts/get-pr-comments",
+        "scripts/get-thread-for-comment",
+        "scripts/reply-to-pr-thread",
+        "scripts/resolve-pr-thread"
+      ],
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "skills/todo-create": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/skills/todo-create",
+      "upstream_commit": "bbd4f6de56963fc3cdb3131773d7e29d523ce549",
+      "synced_at": "2026-04-02T06:14:39Z",
+      "notes": "Imported from CEP HEAD. Replaces file-todos. Multi-file skill with template.",
+      "upstream_content_hash": "",
+      "files": ["SKILL.md", "assets/todo-template.md"],
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "skills/todo-resolve": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/skills/todo-resolve",
+      "upstream_commit": "bbd4f6de56963fc3cdb3131773d7e29d523ce549",
+      "synced_at": "2026-04-02T06:14:39Z",
+      "notes": "Imported from CEP HEAD. Replaces resolve-todo-parallel.",
+      "upstream_content_hash": "",
+      "files": ["SKILL.md"],
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "skills/todo-triage": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/skills/todo-triage",
+      "upstream_commit": "bbd4f6de56963fc3cdb3131773d7e29d523ce549",
+      "synced_at": "2026-04-02T06:14:39Z",
+      "notes": "Imported from CEP HEAD. Replaces triage.",
+      "upstream_content_hash": "",
+      "files": ["SKILL.md"],
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/document-review/adversarial-document-reviewer": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/document-review/adversarial-document-reviewer.md",
+      "upstream_commit": "bbd4f6de56963fc3cdb3131773d7e29d523ce549",
+      "synced_at": "2026-04-02T06:14:39Z",
+      "notes": "Imported from CEP HEAD. Adversarial document stress-tester.",
+      "upstream_content_hash": "",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:branding",
+          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/review/adversarial-reviewer": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/review/adversarial-reviewer.md",
+      "upstream_commit": "bbd4f6de56963fc3cdb3131773d7e29d523ce549",
+      "synced_at": "2026-04-02T06:14:39Z",
+      "notes": "Imported from CEP HEAD. Adversarial code review agent.",
+      "upstream_content_hash": "",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:branding",
+          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/review/cli-agent-readiness-reviewer": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/review/cli-agent-readiness-reviewer.md",
+      "upstream_commit": "bbd4f6de56963fc3cdb3131773d7e29d523ce549",
+      "synced_at": "2026-04-02T06:14:39Z",
+      "notes": "Imported from CEP HEAD. CLI agent readiness assessment.",
+      "upstream_content_hash": "",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:branding",
+          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/review/cli-readiness-reviewer": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/review/cli-readiness-reviewer.md",
+      "upstream_commit": "bbd4f6de56963fc3cdb3131773d7e29d523ce549",
+      "synced_at": "2026-04-02T06:14:39Z",
+      "notes": "Imported from CEP HEAD. CLI readiness assessment.",
+      "upstream_content_hash": "",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:branding",
+          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/review/previous-comments-reviewer": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/review/previous-comments-reviewer.md",
+      "upstream_commit": "bbd4f6de56963fc3cdb3131773d7e29d523ce549",
+      "synced_at": "2026-04-02T06:14:39Z",
+      "notes": "Imported from CEP HEAD. Reviews against prior PR feedback.",
+      "upstream_content_hash": "",
+      "rewrites": [
+        {
+          "field": "body:tool-references",
+          "reason": "Converter handled tool name mappings"
+        },
+        {
+          "field": "body:branding",
+          "reason": "Claude Code→OpenCode, .claude/→.opencode/"
+        }
+      ],
+      "manual_overrides": []
+    },
+    "agents/review/project-standards-reviewer": {
+      "source": "cep",
+      "upstream_path": "plugins/compound-engineering/agents/review/project-standards-reviewer.md",
+      "upstream_commit": "bbd4f6de56963fc3cdb3131773d7e29d523ce549",
+      "synced_at": "2026-04-02T06:14:39Z",
+      "notes": "Imported from CEP HEAD. Project standards compliance.",
+      "upstream_content_hash": "",
       "rewrites": [
         {
           "field": "body:tool-references",

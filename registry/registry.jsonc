@@ -180,21 +180,7 @@
         }
       ]
     },
-    {
-      "name": "file-todos",
-      "type": "ocx:skill",
-      "description": "This skill should be used when managing the file-based todo tracking system in the todos/ directory. It provides workflows for creating todos, managing status and dependencies, conducting triage, and integrating with slash commands and code review processes.",
-      "files": [
-        {
-          "path": "SKILL.md",
-          "target": ".opencode/skills/file-todos/SKILL.md"
-        },
-        {
-          "path": "assets/todo-template.md",
-          "target": ".opencode/skills/file-todos/assets/todo-template.md"
-        }
-      ]
-    },
+
     {
       "name": "frontend-design",
       "type": "ocx:skill",
@@ -517,7 +503,6 @@
         "agent-native-architecture",
         "compound-docs",
         "document-review",
-        "file-todos",
         "frontend-design",
         "git-worktree",
         "orchestrating-swarms",
