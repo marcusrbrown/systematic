@@ -15,7 +15,7 @@
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { isRiskFlag, normalize } from './normalize.mjs'
+import { normalize } from './normalize.mjs'
 
 const args = process.argv.slice(2)
 
