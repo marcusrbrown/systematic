@@ -39,7 +39,7 @@ jobs:
     secrets:
       APPLICATION_ID: ${{ secrets.APPLICATION_ID }}
       APPLICATION_PRIVATE_KEY: ${{ secrets.APPLICATION_PRIVATE_KEY }}
-    uses: bfra-me/.github/.github/workflows/renovate.yaml@c4cade281dd6d6e4c40af0f2d642afe6fb150e2e # v4.14.5
+    uses: bfra-me/.github/.github/workflows/renovate.yaml@969b04c4bf2f4ed610e1618dcd19eb95ecdfd497 # v4.14.6
     with:
       log-level: ${{ inputs.log-level || (github.event_name == 'pull_request' || github.ref_name != github.event.repository.default_branch) && 'debug' || 'info' }}
       print-config: ${{ inputs.print-config || false }}
