@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import jsonc from 'jsonc-parser'
+import { parse as parseJsonc } from 'jsonc-parser'
 
 export interface BootstrapConfig {
   enabled: boolean
@@ -28,7 +28,7 @@ function loadJsoncFile<T>(filePath: string): T | null {
   try {
     if (!fs.existsSync(filePath)) return null
     const content = fs.readFileSync(filePath, 'utf-8')
-    return jsonc.parse(content) as T
+    return parseJsonc(content) as T
   } catch {
     return null
   }
