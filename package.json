@@ -24,7 +24,7 @@
   ],
   "scripts": {
     "clean": "rimraf dist",
-    "build": "bun run clean && bun build src/index.ts src/cli.ts --outdir dist --target bun --splitting --packages external && tsc --emitDeclarationOnly",
+    "build": "bun run clean && bun build src/index.ts src/cli.ts --outdir dist --target bun --splitting --external @opencode-ai/plugin --external js-yaml && tsc --emitDeclarationOnly",
     "dev": "bun --watch src/index.ts",
     "test": "bun test tests/unit",
     "test:integration": "bun test tests/integration",

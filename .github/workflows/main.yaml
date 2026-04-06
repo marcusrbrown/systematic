@@ -38,6 +38,27 @@ jobs:
       - name: Build
         run: bun run build
 
+      - name: Setup Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: 24
+
+      - name: Verify plugin loads in Node.js
+        run: |
+          node --input-type=module -e "
+            const m = await import('./dist/index.js');
+            const plugin = await m.SystematicPlugin({
+              client: { app: { log: async () => {} } },
+              directory: process.cwd()
+            });
+            const config = { agent: {}, command: {}, skill: {} };
+            await plugin.config(config);
+            const agents = Object.keys(config.agent).length;
+            const commands = Object.keys(config.command).length;
+            if (agents === 0 || commands === 0) throw new Error('No assets loaded: ' + agents + ' agents, ' + commands + ' commands');
+            console.log('Plugin loaded: ' + agents + ' agents, ' + commands + ' commands, tool: ' + (typeof plugin.tool.systematic_skill.execute));
+          "
+
   typecheck:
     name: Typecheck
     runs-on: ubuntu-latest
