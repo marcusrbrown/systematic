@@ -1,37 +1,30 @@
 ---
 name: lfg
 description: Full autonomous engineering workflow
-argument-hint: '[feature description]'
+argument-hint: "[feature description]"
 disable-model-invocation: true
 ---
 
-CRITICAL: You MUST execute every step below IN ORDER. Do NOT skip any required step. Do NOT jump ahead to coding or implementation. The plan phase (step 2, and step 3 when warranted) MUST be completed and verified BEFORE any work begins. Violating this order produces bad output.
+CRITICAL: You MUST execute every step below IN ORDER. Do NOT skip any required step. Do NOT jump ahead to coding or implementation. The plan phase (step 2) MUST be completed and verified BEFORE any work begins. Violating this order produces bad output.
 
 1. **Optional:** If the `ralph-loop` skill is available, run `/ralph-loop:ralph-loop "finish all slash commands" --completion-promise "DONE"`. If not available or it fails, skip and continue to step 2 immediately.
 
 2. `/ce:plan $ARGUMENTS`
 
-   GATE: STOP. Verify that the `ce:plan` workflow produced a plan file in `docs/plans/`. If no plan file was created, run `/ce:plan $ARGUMENTS` again. Do NOT proceed to step 3 until a written plan exists.
+   GATE: STOP. If ce:plan reported the task is non-software and cannot be processed in pipeline mode, stop the pipeline and inform the user that LFG requires software tasks. Otherwise, verify that the `ce:plan` workflow produced a plan file in `docs/plans/`. If no plan file was created, run `/ce:plan $ARGUMENTS` again. Do NOT proceed to step 3 until a written plan exists. **Record the plan file path** — it will be passed to ce:review in step 4.
 
-3. **Conditionally** run `/systematic:deepen-plan`
+3. `/ce:work`
 
-   Run the `deepen-plan` workflow only if the plan is `Standard` or `Deep`, touches a high-risk area (auth, security, payments, migrations, external APIs, significant rollout concerns), or still has obvious confidence gaps in decisions, sequencing, system-wide impact, risks, or verification.
+   GATE: STOP. Verify that implementation work was performed - files were created or modified beyond the plan. Do NOT proceed to step 4 if no code changes were made.
 
-   GATE: STOP. If you ran the `deepen-plan` workflow, confirm the plan was deepened or explicitly judged sufficiently grounded. If you skipped it, briefly note why and proceed to step 4.
+4. `/ce:review mode:autofix plan:<plan-path-from-step-2>`
 
-4. `/ce:work`
+   Pass the plan file path from step 2 so ce:review can verify requirements completeness.
 
-   GATE: STOP. Verify that implementation work was performed - files were created or modified beyond the plan. Do NOT proceed to step 5 if no code changes were made.
+5. `/compound-engineering:todo-resolve`
 
-5. `/ce:review mode:autofix`
+6. `/compound-engineering:test-browser`
 
-6. `/systematic:todo-resolve`
-
-7. `/systematic:test-browser`
-
-8. `/systematic:feature-video`
-
-9. Output `<promise>DONE</promise>` when video is in PR
+7. Output `<promise>DONE</promise>` when complete
 
 Start with step 2 now (or step 1 if ralph-loop is available). Remember: plan FIRST, then work. Never skip the plan.
-

@@ -42,7 +42,7 @@ Most AI coding assistants respond to requests without structure or methodology. 
 - **Specialized Agents** — Purpose-built subagents for architecture, security, performance, and research
 - **Zero Configuration** — Works immediately after installation via config hooks
 - **Extensible** — Add project-specific skills and agents alongside bundled ones
-- **Batteries Included** — 48 skills and 29 agents ship with the npm package
+- **Batteries Included** — a curated catalog of skills and agents ships with the npm package
 - **CLI Tooling** — Inspect, list, and convert assets from the command line
 
 ## Quick Start
@@ -76,12 +76,12 @@ Restart OpenCode to activate the plugin. All bundled skills and agents will be a
 ocx registry add https://fro.bot/systematic --name systematic
 
 # Install individual components
-ocx add systematic/brainstorming
+ocx add systematic/using-systematic
 ocx add systematic/agent-architecture-strategist
 
 # Or install bundles
-ocx add systematic/skills     # All 48 skills
-ocx add systematic/agents     # All 29 agents
+ocx add systematic/skills     # All bundled skills
+ocx add systematic/agents     # All bundled agents
 
 # Or use a profile (requires --global registry)
 ocx registry add https://fro.bot/systematic --name systematic --global
@@ -132,15 +132,15 @@ The Compound Engineering loop — the heart of Systematic:
 | `using-systematic` | Bootstrap skill — teaches the AI how to discover and use other skills |
 | `agent-browser` | Browser automation using Vercel's agent-browser CLI |
 | `agent-native-architecture` | Design systems where AI agents are first-class citizens |
-| `create-agent-skill` | Expert guidance for writing and refining OpenCode skills |
 | `compound-docs` | Capture solved problems as categorized documentation |
 | `document-review` | Refine requirements or plan documents before proceeding |
 | `deepen-plan` | Enhance a plan with parallel research for each section |
-| `file-todos` | File-based todo tracking with status and dependency management |
+| `todo-create` · `todo-resolve` · `todo-triage` | Durable file-based todo tracking, triage, and batch resolution |
 | `frontend-design` | Create distinctive, production-grade frontend interfaces |
 | `git-worktree` | Manage git worktrees for isolated parallel development |
+| `generate_command` | Create a new custom slash command following conventions |
 | `orchestrating-swarms` | Coordinate multi-agent swarms and pipeline workflows |
-| `lfg` | Full autonomous engineering workflow — plan, then execute |
+| `lfg` · `slfg` | Full autonomous engineering workflow (single-agent / swarm) |
 
 ### Specialized Skills
 
@@ -154,7 +154,7 @@ The Compound Engineering loop — the heart of Systematic:
 | `proof` | Create, edit, and share markdown documents via Proof |
 | `rclone` | Upload, sync, and manage files across cloud storage providers |
 
-> **[View all 48 skills →](https://fro.bot/systematic/reference/skills/)**
+> **[View all skills →](https://fro.bot/systematic/reference/skills/)**
 
 ### How Skills Work
 
@@ -413,17 +413,16 @@ systematic/
 │       ├── agents.ts         # Agent discovery
 │       ├── commands.ts       # Command discovery (backward compat)
 │       ├── frontmatter.ts    # YAML frontmatter parsing
-│       ├── manifest.ts       # Upstream sync manifest tracking
 │       ├── validation.ts     # Agent config validation + type guards
 │       └── walk-dir.ts       # Recursive directory walker
-├── skills/                   # 48 bundled skills (SKILL.md files)
-├── agents/                   # 29 bundled agents (5 categories)
+├── skills/                   # Bundled skills (SKILL.md files)
+├── agents/                   # Bundled agents (6 categories)
 ├── docs/                     # Starlight documentation site
 ├── registry/                 # OCX registry config + profiles
 ├── scripts/                  # Build and utility scripts
 ├── tests/
-│   ├── unit/                 # 13 unit test files
-│   └── integration/          # 2 integration test files
+│   ├── unit/                 # Unit test files
+│   └── integration/          # Integration test files
 └── dist/                     # Build output
 ```
 

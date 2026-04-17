@@ -386,14 +386,14 @@ async function detectLanguagesAndFrameworks() {
   if (languages.has('Go')) {
     const gomod = await readText(join(root, 'go.mod'))
     if (gomod) {
-      if (gomod.includes('github.com/gin-gonic/gin')) frameworks.push('Gin')
-      if (gomod.includes('github.com/labstack/echo')) frameworks.push('Echo')
-      if (gomod.includes('github.com/gofiber/fiber')) frameworks.push('Fiber')
-      if (gomod.includes('github.com/gorilla/mux'))
+      if (/github\.com\/gin-gonic\/gin/.test(gomod)) frameworks.push('Gin')
+      if (/github\.com\/labstack\/echo/.test(gomod)) frameworks.push('Echo')
+      if (/github\.com\/gofiber\/fiber/.test(gomod)) frameworks.push('Fiber')
+      if (/github\.com\/gorilla\/mux/.test(gomod))
         frameworks.push('Gorilla Mux')
-      if (gomod.includes('github.com/go-chi/chi')) frameworks.push('Chi')
-      if (gomod.includes('google.golang.org/grpc')) frameworks.push('gRPC')
-      if (gomod.includes('github.com/bufbuild/connect-go'))
+      if (/github\.com\/go-chi\/chi/.test(gomod)) frameworks.push('Chi')
+      if (/google\.golang\.org\/grpc/.test(gomod)) frameworks.push('gRPC')
+      if (/github\.com\/bufbuild\/connect-go/.test(gomod))
         frameworks.push('Connect')
     }
     testFramework = testFramework || 'go test'

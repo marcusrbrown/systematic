@@ -1,7 +1,7 @@
 ---
 name: test-browser
 description: Run browser tests on pages affected by current PR or branch
-argument-hint: '[PR number, branch name, ''current'', or --port PORT]'
+argument-hint: "[PR number, branch name, 'current', or --port PORT]"
 ---
 
 # Browser Test Skill
@@ -15,7 +15,7 @@ This workflow uses the `agent-browser` CLI exclusively. Do not use any alternati
 Use `agent-browser` for: opening pages, clicking elements, filling forms, taking screenshots, and scraping rendered content.
 
 Platform-specific hints:
-- In OpenCode, do not use Chrome MCP tools (`mcp__claude-in-chrome__*`).
+- In Claude Code, do not use Chrome MCP tools (`mcp__claude-in-chrome__*`).
 - In Codex, do not substitute unrelated browsing tools.
 
 ## Prerequisites
@@ -26,17 +26,13 @@ Platform-specific hints:
 
 ## Setup
 
+Check whether `agent-browser` is installed:
+
 ```bash
 command -v agent-browser >/dev/null 2>&1 && echo "Installed" || echo "NOT INSTALLED"
 ```
 
-Install if needed:
-```bash
-npm install -g agent-browser
-agent-browser install
-```
-
-See the `agent-browser` skill for detailed usage.
+If not installed, inform the user: "`agent-browser` is not installed. Run `/ce-setup` to install required dependencies." Then stop — this skill cannot function without agent-browser.
 
 ## Workflow
 
@@ -45,14 +41,14 @@ See the `agent-browser` skill for detailed usage.
 Before starting, verify `agent-browser` is available:
 
 ```bash
-command -v agent-browser >/dev/null 2>&1 && echo "Ready" || (echo "Installing..." && npm install -g agent-browser && agent-browser install)
+command -v agent-browser >/dev/null 2>&1 && echo "Ready" || echo "NOT INSTALLED"
 ```
 
-If installation fails, inform the user and stop.
+If not installed, inform the user: "`agent-browser` is not installed. Run `/ce-setup` to install required dependencies." Then stop.
 
 ### 2. Ask Browser Mode
 
-Ask the user whether to run headed or headless (using the platform's question tool — e.g., `question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini — or present options and wait for a reply):
+Ask the user whether to run headed or headless (using the platform's question tool — e.g., `AskUserQuestion` in Claude Code, `request_user_input` in Codex, `ask_user` in Gemini — or present options and wait for a reply):
 
 ```
 Do you want to watch the browser tests run?
@@ -103,7 +99,7 @@ Build a list of URLs to test based on the mapping.
 Determine the dev server port using this priority:
 
 1. **Explicit argument** — if the user passed `--port 5000`, use that directly
-2. **Project instructions** — check `AGENTS.md`, `AGENTS.md`, or other instruction files for port references
+2. **Project instructions** — check `AGENTS.md`, `CLAUDE.md`, or other instruction files for port references
 3. **package.json** — check dev/start scripts for `--port` flags
 4. **Environment files** — check `.env`, `.env.local`, `.env.development` for `PORT=`
 5. **Default** — fall back to `3000`
@@ -113,7 +109,7 @@ PORT="${EXPLICIT_PORT:-}"
 if [ -z "$PORT" ]; then
   PORT=$(grep -Eio '(port\s*[:=]\s*|localhost:)([0-9]{4,5})' AGENTS.md 2>/dev/null | grep -Eo '[0-9]{4,5}' | head -1)
   if [ -z "$PORT" ]; then
-    PORT=$(grep -Eio '(port\s*[:=]\s*|localhost:)([0-9]{4,5})' AGENTS.md 2>/dev/null | grep -Eo '[0-9]{4,5}' | head -1)
+    PORT=$(grep -Eio '(port\s*[:=]\s*|localhost:)([0-9]{4,5})' CLAUDE.md 2>/dev/null | grep -Eo '[0-9]{4,5}' | head -1)
   fi
 fi
 if [ -z "$PORT" ]; then
@@ -286,6 +282,10 @@ After all tests complete, present a summary:
 
 ## agent-browser CLI Reference
 
+Run `agent-browser --help` for all commands.
+
+Key commands:
+
 ```bash
 # Navigation
 agent-browser open <url>           # Navigate to URL
@@ -314,4 +314,3 @@ agent-browser --headed click @e1       # Click in visible browser
 agent-browser wait @e1             # Wait for element
 agent-browser wait 2000            # Wait milliseconds
 ```
-

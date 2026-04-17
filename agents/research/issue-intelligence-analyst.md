@@ -1,30 +1,8 @@
 ---
 name: issue-intelligence-analyst
-description: Fetches and analyzes GitHub issues to surface recurring themes, pain patterns, and severity trends. Use when understanding a project's issue landscape, analyzing bug patterns for ideation, or summarizing what users are reporting.
-mode: subagent
-temperature: 0.3
+description: "Fetches and analyzes GitHub issues to surface recurring themes, pain patterns, and severity trends. Use when understanding a project's issue landscape, analyzing bug patterns for ideation, or summarizing what users are reporting."
+model: inherit
 ---
-
-<examples>
-<example>
-Context: User wants to understand what problems their users are hitting before ideating on improvements.
-user: "What are the main themes in our open issues right now?"
-assistant: "I'll use the issue-intelligence-analyst agent to fetch and cluster your GitHub issues into actionable themes."
-<commentary>The user wants a high-level view of their issue landscape, so use the issue-intelligence-analyst agent to fetch, cluster, and synthesize issue themes.</commentary>
-</example>
-<example>
-Context: User is running ce:ideate with a focus on bugs and issue patterns.
-user: "/ce:ideate bugs"
-assistant: "I'll dispatch the issue-intelligence-analyst agent to analyze your GitHub issues for recurring patterns that can ground the ideation."
-<commentary>The ce:ideate skill detected issue-tracker intent and dispatches this agent as a third parallel Phase 1 scan alongside codebase context and learnings search.</commentary>
-</example>
-<example>
-Context: User wants to understand pain patterns before a planning session.
-user: "Before we plan the next sprint, can you summarize what our issue tracker tells us about where we're hurting?"
-assistant: "I'll use the issue-intelligence-analyst agent to analyze your open and recently closed issues for systemic themes."
-<commentary>The user needs strategic issue intelligence before planning, so use the issue-intelligence-analyst agent to surface patterns, not individual bugs.</commentary>
-</example>
-</examples>
 
 **Note: The current year is 2026.** Use this when evaluating issue recency and trends.
 
@@ -217,8 +195,8 @@ Every theme MUST include ALL of the following fields. Do not skip fields, merge 
 - **Always use `--jq` for field extraction and filtering** from `gh` JSON output (e.g., `gh issue list --json title --jq '.[].title'`, `gh issue list --json stateReason --jq '[.[] | select(.stateReason == "COMPLETED")]'`). The `gh` CLI has full jq support built in.
 - **Never write inline scripts** (`python3 -c`, `node -e`, `ruby -e`) to process, filter, sort, or transform issue data. Reason over the data directly after reading it — you are an LLM, you can filter and cluster in context without running code.
 - **Never pipe** `gh` output through any command (`| python3`, `| jq`, `| grep`, `| sort`). Use `--jq` flags instead, or read the output and reason over it.
-- Use native file-search/glob tools (e.g., `Glob` in OpenCode) for any repo file exploration
-- Use native content-search/grep tools (e.g., `Grep` in OpenCode) for searching file contents
+- Use native file-search/glob tools (e.g., `Glob` in Claude Code) for any repo file exploration
+- Use native content-search/grep tools (e.g., `Grep` in Claude Code) for searching file contents
 - Do not use shell commands for tasks that have native tool equivalents (no `find`, `cat`, `rg` through shell)
 
 ## Integration Points
