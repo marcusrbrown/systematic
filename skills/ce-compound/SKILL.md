@@ -47,16 +47,6 @@ Present the user with two options before proceeding, using the platform's blocki
 
 Do NOT pre-select a mode. Do NOT skip this prompt. Wait for the user's choice before proceeding.
 
-**If the user chooses Full**, ask one follow-up question before proceeding. Detect which harness is running (OpenCode, Codex, or Cursor) and ask:
-
-```
-Would you also like to search your [harness name] session history
-for relevant knowledge to help the Compound process? This adds
-time and token usage.
-```
-
-If the user says yes, dispatch the Session Historian in Phase 1. If no, skip it. Do not ask this in lightweight mode.
-
 ---
 
 ### Full Mode
@@ -92,10 +82,7 @@ If no relevant entries are found, proceed to Phase 1 without passing memory cont
 
 Launch research subagents. Each returns text data to the orchestrator.
 
-**Dispatch order:**
-- Launch `Context Analyzer`, `Solution Extractor`, and `Related Docs Finder` in parallel (background)
-- Then dispatch `session-historian` in foreground — it reads session files outside the working directory that background agents may not have access to
-- The foreground dispatch runs while the background agents work, adding no wall-clock time
+**Dispatch order:** launch `Context Analyzer`, `Solution Extractor`, and `Related Docs Finder` in parallel (background).
 
 <parallel_tasks>
 
@@ -166,29 +153,6 @@ Launch research subagents. Each returns text data to the orchestrator.
 
 </parallel_tasks>
 
-#### 4. **Session Historian** (foreground, after launching the above — only if the user opted in)
-   - **Skip entirely** if the user declined session history in the follow-up question
-   - Dispatched as `systematic:research:session-historian`
-   - Dispatch in **foreground** — this agent reads session files outside the working directory (`~/.config/opencode/projects/`, `~/.codex/sessions/`, `~/.cursor/projects/`) which background agents may not have access to
-   - Searches prior OpenCode, Codex, and Cursor sessions for the same project to find related investigation context
-   - Correlates sessions by repo name across all platforms (matches sessions from main checkouts, worktrees, and Conductor workspaces)
-   - In the dispatch prompt, pass:
-     - A specific description of the problem being documented — not a generic topic, but the concrete issue (error messages, module names, what broke and how it was fixed). This is what the agent filters its findings against.
-     - The current git branch and working directory
-     - The instruction: "Only surface findings from prior sessions that are directly relevant to this specific problem. Ignore unrelated work from the same sessions or branches."
-     - The output format:
-
-       ```
-       Structure your response with these sections (omit any with no findings):
-       - What was tried before: prior approaches to this specific problem
-       - What didn't work: failed attempts at this problem from prior sessions
-       - Key decisions: choices made about this problem and their rationale
-       - Related context: anything else from prior sessions that directly informs this problem's documentation
-       ```
-   - Omit the `mode` parameter so the user's configured permission settings apply
-   - Dispatch on the mid-tier model (e.g., `model: "sonnet"` in OpenCode) — the synthesis feeds into compound assembly and doesn't need frontier reasoning
-   - Returns: structured digest of findings from prior sessions, or "no relevant prior sessions" if none found
-
 ### Phase 2: Assembly & Write
 
 <sequential_tasks>
@@ -210,15 +174,10 @@ The orchestrating agent (main conversation) performs these steps:
 
    When updating an existing doc, preserve its file path and frontmatter structure. Update the solution, code examples, prevention tips, and any stale references. Add a `last_updated: YYYY-MM-DD` field to the frontmatter. Do not change the title unless the problem framing has materially shifted.
 
-3. **Incorporate session history findings** (if available). When the Session History Researcher returned relevant prior-session context:
-   - Fold investigation dead ends and failed approaches into the **What Didn't Work** section (bug track) or **Context** section (knowledge track)
-   - Use cross-session patterns to enrich the **Prevention** or **Why This Matters** sections
-   - Tag session-sourced content with "(session history)" so its origin is clear to future readers
-   - If findings are thin or "no relevant prior sessions," proceed without session context
-4. Assemble complete markdown file from the collected pieces, reading `assets/resolution-template.md` for the section structure of new docs
-5. Validate YAML frontmatter against `references/schema.yaml`
-6. Create directory if needed: `mkdir -p docs/solutions/[category]/`
-7. Write the file: either the updated existing doc or the new `docs/solutions/[category]/[filename].md`
+3. Assemble complete markdown file from the collected pieces, reading `assets/resolution-template.md` for the section structure of new docs
+4. Validate YAML frontmatter against `references/schema.yaml`
+5. Create directory if needed: `mkdir -p docs/solutions/[category]/`
+6. Write the file: either the updated existing doc or the new `docs/solutions/[category]/[filename].md`
 
 When creating a new doc, preserve the section order from `assets/resolution-template.md` unless the user explicitly asks for a different structure.
 
