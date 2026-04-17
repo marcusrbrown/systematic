@@ -1,4 +1,7 @@
 ---
+status: archived
+archived_date: 2026-04-17
+archived_reason: "CEP sync infrastructure removed in the April 17, 2026 truth-reset cycle. The `sync-manifest.json`, `convert-cc-defs` skill, `/sync-cep` command, and `check-cep-upstream.ts` script this doc describes no longer exist. Systematic evolves independently from CEP; the CLI `convert` command remains for ad-hoc conversions but does not use manifest-based override tracking. See `docs/solutions/workflow-issues/reconciliation-sync-reference-integrity-20260417.md` for the surviving sync-related lesson."
 module: Systematic
 date: 2026-02-10
 problem_type: best_practice
