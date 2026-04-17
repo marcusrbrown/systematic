@@ -281,7 +281,7 @@ class AgentSession: ObservableObject {
 }
 ```
 
-### Background Task Extension (iOS)
+### Background task Extension(iOS)
 
 Request extra time when backgrounded during critical operations:
 

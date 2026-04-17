@@ -1,4 +1,7 @@
 ---
+status: partially-archived
+archived_date: 2026-04-17
+archived_reason: "The `/sync-cep` workflow this doc describes was deleted in the April 17, 2026 truth-reset cycle. The CEP-specific remediation steps (re-run sync, update manifest `files[]` arrays) no longer apply. However, the underlying pattern — 'silent sub-file drops in batch operations' — generalizes to other batch-conversion workflows. See also `docs/solutions/integration-issues/zsh-for-loop-word-splitting-silent-failure-20260417.md` for a different instance of the same failure class (batch sed silently skipping files)."
 module: Sync CEP Workflow
 date: 2026-02-19
 problem_type: workflow_issue

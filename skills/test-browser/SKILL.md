@@ -1,7 +1,7 @@
 ---
 name: test-browser
 description: Run browser tests on pages affected by current PR or branch
-argument-hint: '[PR number, branch name, ''current'', or --port PORT]'
+argument-hint: "[PR number, branch name, 'current', or --port PORT]"
 ---
 
 # Browser Test Skill
@@ -26,17 +26,13 @@ Platform-specific hints:
 
 ## Setup
 
+Check whether `agent-browser` is installed:
+
 ```bash
 command -v agent-browser >/dev/null 2>&1 && echo "Installed" || echo "NOT INSTALLED"
 ```
 
-Install if needed:
-```bash
-npm install -g agent-browser
-agent-browser install
-```
-
-See the `agent-browser` skill for detailed usage.
+If not installed, inform the user: "`agent-browser` is not installed. Run `/ce-setup` to install required dependencies." Then stop — this skill cannot function without agent-browser.
 
 ## Workflow
 
@@ -45,10 +41,10 @@ See the `agent-browser` skill for detailed usage.
 Before starting, verify `agent-browser` is available:
 
 ```bash
-command -v agent-browser >/dev/null 2>&1 && echo "Ready" || (echo "Installing..." && npm install -g agent-browser && agent-browser install)
+command -v agent-browser >/dev/null 2>&1 && echo "Ready" || echo "NOT INSTALLED"
 ```
 
-If installation fails, inform the user and stop.
+If not installed, inform the user: "`agent-browser` is not installed. Run `/ce-setup` to install required dependencies." Then stop.
 
 ### 2. Ask Browser Mode
 
@@ -286,6 +282,10 @@ After all tests complete, present a summary:
 
 ## agent-browser CLI Reference
 
+Run `agent-browser --help` for all commands.
+
+Key commands:
+
 ```bash
 # Navigation
 agent-browser open <url>           # Navigate to URL
@@ -314,4 +314,3 @@ agent-browser --headed click @e1       # Click in visible browser
 agent-browser wait @e1             # Wait for element
 agent-browser wait 2000            # Wait milliseconds
 ```
-

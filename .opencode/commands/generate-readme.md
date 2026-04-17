@@ -80,7 +80,7 @@ Map extracted data to README sections. Every count and description must come fro
 | Tools | Preserve existing Tools section |
 | How It Works | Preserve existing Mermaid diagram and hook explanations |
 | Development | `<package-info>` scripts + project structure from filesystem |
-| Converting from Claude Code | Preserve existing section |
+| Converting from OpenCode | Preserve existing section |
 | References + License | `<package-info>` author, repository |
 
 ### Phase 3: README Generation
@@ -119,7 +119,7 @@ Maintain this exact section order (matches current README):
 9. Tools (table)
 10. How It Works (Mermaid diagram + explanations)
 11. Development (Prerequisites, Setup, Project Structure, Testing, Contributing)
-12. Converting from Claude Code
+12. Converting from OpenCode
 13. References
 14. License
 

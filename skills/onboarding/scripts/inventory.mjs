@@ -82,6 +82,28 @@ async function readText(p) {
   }
 }
 
+// Checks whether a go.mod requires an exact module path.
+// Scans lines, strips line comments, splits on whitespace, and matches the
+// module path as a standalone token. Handles both single-line require
+// (`require github.com/gin-gonic/gin v1.2.3`) and block form
+// (`github.com/gin-gonic/gin v1.2.3` inside `require (...)`).
+// Unlike an unanchored regex, this rejects substrings like
+// `fake-github.com/gin-gonic/gin-imposter` or
+// `example.com/mirror/github.com/gin-gonic/gin`.
+function hasGoModule(gomod, modulePath) {
+  if (!gomod || !modulePath) return false
+  const lines = gomod.split('\n')
+  for (const raw of lines) {
+    const line = raw.replace(/\/\/.*$/, '').trim()
+    if (!line) continue
+    const tokens = line.split(/\s+/)
+    for (const tok of tokens) {
+      if (tok === modulePath) return true
+    }
+  }
+  return false
+}
+
 async function listDir(dir, { includeDotfiles = false } = {}) {
   try {
     const entries = await readdir(dir, { withFileTypes: true })
@@ -386,14 +408,16 @@ async function detectLanguagesAndFrameworks() {
   if (languages.has('Go')) {
     const gomod = await readText(join(root, 'go.mod'))
     if (gomod) {
-      if (gomod.includes('github.com/gin-gonic/gin')) frameworks.push('Gin')
-      if (gomod.includes('github.com/labstack/echo')) frameworks.push('Echo')
-      if (gomod.includes('github.com/gofiber/fiber')) frameworks.push('Fiber')
-      if (gomod.includes('github.com/gorilla/mux'))
+      if (hasGoModule(gomod, 'github.com/gin-gonic/gin')) frameworks.push('Gin')
+      if (hasGoModule(gomod, 'github.com/labstack/echo'))
+        frameworks.push('Echo')
+      if (hasGoModule(gomod, 'github.com/gofiber/fiber'))
+        frameworks.push('Fiber')
+      if (hasGoModule(gomod, 'github.com/gorilla/mux'))
         frameworks.push('Gorilla Mux')
-      if (gomod.includes('github.com/go-chi/chi')) frameworks.push('Chi')
-      if (gomod.includes('google.golang.org/grpc')) frameworks.push('gRPC')
-      if (gomod.includes('github.com/bufbuild/connect-go'))
+      if (hasGoModule(gomod, 'github.com/go-chi/chi')) frameworks.push('Chi')
+      if (hasGoModule(gomod, 'google.golang.org/grpc')) frameworks.push('gRPC')
+      if (hasGoModule(gomod, 'github.com/bufbuild/connect-go'))
         frameworks.push('Connect')
     }
     testFramework = testFramework || 'go test'

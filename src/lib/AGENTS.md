@@ -1,12 +1,10 @@
 # src/lib — Core Implementation
 
-13 modules implementing plugin logic: discovery, conversion, config, manifest tracking, and tool registration.
+12 modules implementing plugin logic: discovery, conversion, config, and tool registration.
 
 ## Data Flow
 
 ```
-readManifest() → validateManifest() → SyncManifest (upstream provenance tracking)
-
 loadConfig() → createConfigHandler() → {
   findSkillsInDir()  → loadSkillAsCommand()  → OpenCode config
   findAgentsInDir()  → loadAgentAsConfig()   → OpenCode config
@@ -47,14 +45,12 @@ All discovery follows same pattern: `dir → walkDir() → find files → parseF
 | `config-handler.ts` | `createConfigHandler`, `ConfigHandlerDeps`, `formatAgentDescription`, `toTitleCase` | OpenCode config hook (collects + converts all assets) |
 | `skill-tool.ts` | `createSkillTool`, `SkillToolOptions` | `systematic_skill` tool (XML description, skill execution) |
 | `bootstrap.ts` | `getBootstrapContent`, `BootstrapDeps` | System prompt injection (using-systematic skill) |
-| `manifest.ts` | `readManifest`, `writeManifest`, `validateManifest`, `findStaleEntries`, `SyncManifest`, `ManifestDefinition`, `ManifestRewrite` | Upstream sync provenance tracking (read/write/validate `sync-manifest.json`) |
 
 ## Key Types
 
 - **Discovery:** `SkillInfo`, `AgentInfo`, `CommandInfo`, `WalkEntry` — all have `name` + path/file fields
 - **Config:** `SystematicConfig` (disabled lists + bootstrap), `ConfigHandlerDeps` (directory paths)
 - **Conversion:** `ContentType` = `'skill' | 'agent' | 'command'`, `ConvertOptions` (source, agentMode, skipBodyTransform)
-- **Manifest:** `SyncManifest` (top-level), `ManifestDefinition` (per-definition provenance), `ManifestRewrite` (rewrite log entry), `ManifestSource` (upstream repo info)
 
 ## Converter
 
@@ -77,4 +73,3 @@ CEP→OpenCode: tool names (`TodoWrite`→`todowrite`, `Task`→`task`, `AskUser
 - `parseFrontmatter` is regex-based (not a YAML library for delimiter detection)
 - `formatFrontmatter` uses `js-yaml` dump with `noRefs` and core schema
 - `config-handler.ts` contains internal `loadAgentAsConfig`/`loadCommandAsConfig`/`loadSkillAsCommand` — the glue between discovery and OpenCode config output
-- `manifest.ts` uses type guards (`isManifestDefinition`, `isManifestSource`, etc.) for safe `unknown` → typed validation — no runtime schema library

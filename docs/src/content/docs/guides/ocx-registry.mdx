@@ -28,8 +28,8 @@ Once the registry is added, you can install individual components directly into 
 Install specific workflows as needed:
 
 ```bash
-# Install the brainstorming skill
-ocx add systematic/brainstorming
+# Install the bootstrap skill
+ocx add systematic/using-systematic
 
 # Install the frontend design skill
 ocx add systematic/frontend-design
@@ -50,11 +50,11 @@ ocx add systematic/agent-security-sentinel
 Install skills that remain invocable as slash commands in OpenCode:
 
 ```bash
-# Add the brainstorming workflow skill
-ocx add systematic/brainstorming
+# Add the document review skill
+ocx add systematic/document-review
 
-# Add the planning workflow skill
-ocx add systematic/ce-plan
+# Add the orchestration skill
+ocx add systematic/orchestrating-swarms
 ```
 
 ## Bundles
@@ -62,10 +62,10 @@ ocx add systematic/ce-plan
 Bundles allow you to install entire categories of Systematic assets in one command:
 
 ```bash
-# Install all 50 Systematic skills
+# Install all bundled Systematic skills
 ocx add systematic/skills
 
-# Install all 29 Systematic agents
+# Install all bundled Systematic agents
 ocx add systematic/agents
 ```
 
@@ -119,14 +119,14 @@ OCX makes it easy to keep your Systematic components up to date.
 To see if a local component differs from the registry version:
 
 ```bash
-ocx diff systematic/brainstorming
+ocx diff systematic/frontend-design
 ```
 
 ### Updating a Single Component
 To update a specific component to the latest version:
 
 ```bash
-ocx update systematic/brainstorming
+ocx update systematic/frontend-design
 ```
 
 ### Updating All Components
@@ -144,7 +144,7 @@ ocx update --registry systematic
 If you need a specific version of a component, you can update to a specific tag:
 
 ```bash
-ocx update systematic/brainstorming@1.2.0
+ocx update systematic/frontend-design@1.2.0
 ```
 
 :::note

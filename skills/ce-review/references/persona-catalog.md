@@ -13,7 +13,7 @@ Spawned on every review regardless of diff content.
 | `correctness` | `systematic:review:correctness-reviewer` | Logic errors, edge cases, state bugs, error propagation, intent compliance |
 | `testing` | `systematic:review:testing-reviewer` | Coverage gaps, weak assertions, brittle tests, missing edge case tests |
 | `maintainability` | `systematic:review:maintainability-reviewer` | Coupling, complexity, naming, dead code, premature abstraction |
-| `project-standards` | `systematic:review:project-standards-reviewer` | AGENTS.md and AGENTS.md compliance -- frontmatter, references, naming, cross-platform portability, tool selection |
+| `project-standards` | `systematic:review:project-standards-reviewer` | AGENTS.md compliance -- frontmatter, references, naming, cross-platform portability, tool selection |
 
 **CE agents (unstructured output, synthesized separately):**
 
@@ -33,7 +33,7 @@ Spawned when the orchestrator identifies relevant patterns in the diff. The orch
 | `api-contract` | `systematic:review:api-contract-reviewer` | Route definitions, serializer/interface changes, event schemas, exported type signatures, API versioning |
 | `data-migrations` | `systematic:review:data-migrations-reviewer` | Migration files, schema changes, backfill scripts, data transformations |
 | `reliability` | `systematic:review:reliability-reviewer` | Error handling, retry logic, circuit breakers, timeouts, background jobs, async handlers, health checks |
-| `adversarial` | `systematic:review:adversarial-reviewer` | Diff has >=50 changed non-test, non-generated, non-lockfile lines, OR touches auth, payments, data mutations, external API integrations, or other high-risk domains |
+| `adversarial` | `systematic:review:adversarial-reviewer` | Diff has >=50 changed lines of executable code (not prose/instruction Markdown, JSON schemas, or config), OR touches auth, payments, data mutations, external API integrations, or other high-risk domains regardless of file type |
 | `cli-readiness` | `systematic:review:cli-readiness-reviewer` | CLI command definitions, argument parsing, CLI framework usage, command handler implementations |
 | `previous-comments` | `systematic:review:previous-comments-reviewer` | **PR-only.** Reviewing a PR that has existing review comments or review threads from prior review rounds. Skip entirely when no PR metadata was gathered in Stage 1. |
 

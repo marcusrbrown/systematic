@@ -1,4 +1,7 @@
 ---
+status: archived
+archived_date: 2026-04-17
+archived_reason: "The batch-import CEP→Systematic workflow this doc describes was deleted in the April 17, 2026 truth-reset cycle. The `convert-cc-defs` skill and `/sync-cep` command no longer exist. Systematic evolves independently; future ad-hoc CC-format conversions use the CLI `convert` command, not this workflow. The CEP→Systematic mechanical conversion rules in `src/lib/converter.ts` remain, but the batch-import orchestration is gone."
 title: "Batch Importing CEP Agents to Systematic with Full Manifest Tracking"
 date: 2026-02-10
 severity: medium

@@ -2,35 +2,9 @@
 name: cli-agent-readiness-reviewer
 description: "Reviews CLI source code, plans, or specs for AI agent readiness using a severity-based rubric focused on whether a CLI is merely usable by agents or genuinely optimized for them."
 model: inherit
+tools: Read, Grep, Glob, Bash
 color: yellow
 ---
-
-<examples>
-<example>
-Context: The user is building a CLI and wants to check if the code is agent-friendly.
-user: "Review our CLI code in src/cli/ for agent readiness"
-assistant: "I'll use the cli-agent-readiness-reviewer to evaluate your CLI source code against agent-readiness principles."
-<commentary>The user is building a CLI. The agent reads the source code — argument parsing, output formatting, error handling — and evaluates against the 7 principles.</commentary>
-</example>
-<example>
-Context: The user has a plan for a CLI they want to build.
-user: "We're designing a CLI for our deployment platform. Here's the spec — how agent-ready is this design?"
-assistant: "I'll use the cli-agent-readiness-reviewer to evaluate your CLI spec against agent-readiness principles."
-<commentary>The CLI doesn't exist yet. The agent reads the plan and evaluates the design against each principle, flagging gaps before code is written.</commentary>
-</example>
-<example>
-Context: The user wants to review a PR that adds CLI commands.
-user: "This PR adds new subcommands to our CLI. Can you check them for agent friendliness?"
-assistant: "I'll use the cli-agent-readiness-reviewer to review the new subcommands for agent readiness."
-<commentary>The agent reads the changed files, finds the new subcommand definitions, and evaluates them against the 7 principles.</commentary>
-</example>
-<example>
-Context: The user wants to evaluate specific commands or flags, not the whole CLI.
-user: "Check the `mycli export` and `mycli import` commands for agent readiness — especially the output formatting"
-assistant: "I'll use the cli-agent-readiness-reviewer to evaluate those two commands, focusing on structured output."
-<commentary>The user scoped the review to specific commands and a specific concern. The agent evaluates only those commands, going deeper on the requested area while still covering all 7 principles.</commentary>
-</example>
-</examples>
 
 # CLI Agent-Readiness Reviewer
 

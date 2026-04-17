@@ -87,7 +87,7 @@ describe('Agent Capability Tests', () => {
 });
 ```
 
-### The "Write to Location" Test
+### The "write to Location" Test
 
 A key litmus test: can the agent create content in specific app locations?
 

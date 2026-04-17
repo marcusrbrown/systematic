@@ -1,7 +1,7 @@
 ---
 name: test-xcode
-description: Build and test iOS apps on simulator using XcodeBuildMCP
-argument-hint: '[scheme name or ''current'' to use default]'
+description: "Build and test iOS apps on simulator using XcodeBuildMCP. Use after making iOS code changes, before creating a PR, or when verifying app behavior and checking for crashes on simulator."
+argument-hint: "[scheme name or 'current' to use default]"
 disable-model-invocation: true
 ---
 
@@ -94,6 +94,9 @@ Call `get_sim_logs` with the simulator UUID. Look for:
 - Error-level log messages
 - Failed network requests
 
+**Known automation limitation — SwiftUI Text links:**
+Simulated taps (via XcodeBuildMCP or any simulator automation tool) do not trigger gesture recognizers on SwiftUI `Text` views with inline `AttributedString` links. Taps report success but have no effect. This is a platform limitation — inline links are not exposed as separate elements in the accessibility tree. When a tap on a Text link has no visible effect, prompt the user to tap manually in the simulator. If the target URL is known, `xcrun simctl openurl <device> <URL>` can open it directly as a fallback.
+
 ### 6. Human Verification (When Required)
 
 Pause for human input when testing touches flows that require device interaction.
@@ -105,6 +108,7 @@ Pause for human input when testing touches flows that require device interaction
 | In-app purchases | "Complete a sandbox purchase" |
 | Camera/Photos | "Grant permissions and verify camera works" |
 | Location | "Allow location access and verify map updates" |
+| SwiftUI Text links | "Please tap on [element description] manually — automated taps cannot trigger inline text links" |
 
 Ask the user (using the platform's question tool — e.g., `question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini — or present numbered options and wait):
 
@@ -208,4 +212,3 @@ After testing:
 ## Integration with ce:review
 
 When reviewing PRs that touch iOS code, the `ce:review` workflow can spawn an agent to run this skill, build on the simulator, test key screens, and check for crashes.
-
