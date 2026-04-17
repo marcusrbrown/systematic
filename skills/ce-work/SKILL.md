@@ -112,7 +112,7 @@ Determine how to proceed based on what was provided in `<input_document>`.
    - You plan to switch between branches frequently
 
 3. **Create Todo List** _(skip if Phase 0 already built one, or if Phase 0 routed as Trivial)_
-   - Use your available task tracking tool (e.g., TodoWrite, task lists) to break the plan into actionable tasks
+   - Use your available task tracking tool (e.g., todowrite, task lists) to break the plan into actionable tasks
    - Derive tasks from the plan's implementation units, dependencies, files, test targets, and verification criteria
    - Carry each unit's `Execution note` into the task when present
    - For each unit, read the `Patterns to follow` field before implementing — these point to specific files or conventions to mirror
@@ -261,7 +261,7 @@ Determine how to proceed based on what was provided in `<input_document>`.
    - The plan should reference similar code - read those files first
    - Match naming conventions exactly
    - Reuse existing components where possible
-   - Follow project coding standards (see AGENTS.md; use CLAUDE.md only if the repo still keeps a compatibility shim)
+   - Follow project coding standards (see AGENTS.md; use AGENTS.md only if the repo still keeps a compatibility shim)
    - When in doubt, grep for similar implementations
 
 4. **Test Continuously**

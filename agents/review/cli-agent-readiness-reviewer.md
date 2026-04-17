@@ -108,7 +108,7 @@ Commands that return data should expose a stable machine-readable representation
 - **Friction**: structured output is available via explicit flags, but the default output in non-interactive contexts (piped stdout, agent tool capture) is human-formatted — agents must remember to pass the right flag on every invocation, and forgetting means parsing formatted tables or prose
 - **Optimization**: structured output exists, but fields, identifiers, or format consistency could be improved
 
-A CLI that defaults to machine-readable output when not connected to a terminal is meaningfully better for agents than one that always requires an explicit flag. Agent tools (Claude Code's Bash, Codex, CI scripts) typically capture stdout as a pipe, so the CLI can detect this and choose the right format automatically. However, do not require a specific detection mechanism — TTY checks, environment variables, or `--format=auto` are all valid approaches. The issue is whether agents get structured output by default, not how the CLI detects the context.
+A CLI that defaults to machine-readable output when not connected to a terminal is meaningfully better for agents than one that always requires an explicit flag. Agent tools (OpenCode's Bash, Codex, CI scripts) typically capture stdout as a pipe, so the CLI can detect this and choose the right format automatically. However, do not require a specific detection mechanism — TTY checks, environment variables, or `--format=auto` are all valid approaches. The issue is whether agents get structured output by default, not how the CLI detects the context.
 
 Do not require `--json` literally if the CLI has another well-documented stable machine format. The issue is machine readability, not one flag spelling.
 

@@ -7,7 +7,7 @@ description: Commit, push, and open a PR with an adaptive, value-first descripti
 
 Go from working changes to an open pull request, or rewrite an existing PR description.
 
-**Asking the user:** When this skill says "ask the user", use the platform's blocking question tool (`AskUserQuestion` in Claude Code, `request_user_input` in Codex, `ask_user` in Gemini). If unavailable, present the question and wait for a reply.
+**Asking the user:** When this skill says "ask the user", use the platform's blocking question tool (`question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini). If unavailable, present the question and wait for a reply.
 
 ## Mode detection
 
@@ -17,9 +17,9 @@ For description-only updates, follow the Description Update workflow below. Othe
 
 ## Context
 
-**If you are not Claude Code**, skip to the "Context fallback" section below and run the command there to gather context.
+**If you are not OpenCode**, skip to the "Context fallback" section below and run the command there to gather context.
 
-**If you are Claude Code**, the six labeled sections below contain pre-populated data. Use them directly -- do not re-run these commands.
+**If you are OpenCode**, the six labeled sections below contain pre-populated data. Use them directly -- do not re-run these commands.
 
 **Git status:**
 !`git status`
@@ -41,7 +41,7 @@ For description-only updates, follow the Description Update workflow below. Othe
 
 ### Context fallback
 
-**If you are Claude Code, skip this section — the data above is already available.**
+**If you are OpenCode, skip this section — the data above is already available.**
 
 Run this single command to gather all context:
 
@@ -202,7 +202,7 @@ When evidence is not possible (docs-only, markdown-only, changelog-only, release
 - **For a new PR** (no existing PR found in Step 3): invoke with `base:<base-remote>/<base-branch>` using the already-resolved base from earlier in this step, so `ce-pr-description` describes the correct commit range even when the branch targets a non-default base (e.g., `develop`, `release/*`). Append any captured-evidence context or user focus as free-text steering (e.g., "include the captured demo: <URL> as a `## Demo` section").
 - **For an existing PR** (found in Step 3): invoke with the full PR URL from the Step 3 context (e.g., `https://github.com/owner/repo/pull/123`). The URL preserves repo/PR identity even when invoked from a worktree or subdirectory; the skill reads the PR's own `baseRefName` so no `base:` override is needed. Append any focus steering as free text after the URL.
 
-`ce-pr-description` returns a `{title, body_file}` block (body in an OS temp file). It applies the value-first writing principles, commit classification, sizing, narrative framing, writing voice, visual communication, numbering rules, and the Compound Engineering badge footer internally. Use the returned values verbatim in Step 7; do not layer manual edits onto them unless a focused adjustment is required (e.g., splicing an evidence block captured in this step that was not passed as steering text — in that case, edit the body file directly before applying).
+`ce-pr-description` returns a `{title, body_file}` block (body in an OS temp file). It applies the value-first writing principles, commit classification, sizing, narrative framing, writing voice, visual communication, numbering rules, and the Systematic badge footer internally. Use the returned values verbatim in Step 7; do not layer manual edits onto them unless a focused adjustment is required (e.g., splicing an evidence block captured in this step that was not passed as steering text — in that case, edit the body file directly before applying).
 
 If `ce-pr-description` returns a graceful-exit message instead of `{title, body_file}` (e.g., closed PR, no commits to describe, base ref unresolved), report the message and stop — do not create or edit the PR.
 

@@ -32,7 +32,7 @@ When spawning subagents, pass the relevant file contents into the task prompt so
 
 ## Execution Strategy
 
-Present the user with two options before proceeding, using the platform's blocking question tool (`AskUserQuestion` in Claude Code, `request_user_input` in Codex, `ask_user` in Gemini). If no question tool is available, present the options and wait for the user's reply.
+Present the user with two options before proceeding, using the platform's blocking question tool (`question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini). If no question tool is available, present the options and wait for the user's reply.
 
 ```
 1. Full (recommended) — the complete compound workflow. Researches,
@@ -47,7 +47,7 @@ Present the user with two options before proceeding, using the platform's blocki
 
 Do NOT pre-select a mode. Do NOT skip this prompt. Wait for the user's choice before proceeding.
 
-**If the user chooses Full**, ask one follow-up question before proceeding. Detect which harness is running (Claude Code, Codex, or Cursor) and ask:
+**If the user chooses Full**, ask one follow-up question before proceeding. Detect which harness is running (OpenCode, Codex, or Cursor) and ask:
 
 ```
 Would you also like to search your [harness name] session history
@@ -64,14 +64,14 @@ If the user says yes, dispatch the Session Historian in Phase 1. If no, skip it.
 <critical_requirement>
 **The primary output is ONE file - the final documentation.**
 
-Phase 1 subagents return TEXT DATA to the orchestrator. They must NOT use Write, Edit, or create any files. Only the orchestrator writes files: the solution doc in Phase 2, and — if the Discoverability Check finds a gap — a small edit to a project instruction file (AGENTS.md or CLAUDE.md). The instruction-file edit is maintenance, not a second deliverable; it ensures future agents can discover the knowledge store.
+Phase 1 subagents return TEXT DATA to the orchestrator. They must NOT use Write, Edit, or create any files. Only the orchestrator writes files: the solution doc in Phase 2, and — if the Discoverability Check finds a gap — a small edit to a project instruction file (AGENTS.md). The instruction-file edit is maintenance, not a second deliverable; it ensures future agents can discover the knowledge store.
 </critical_requirement>
 
 ### Phase 0.5: Auto Memory Scan
 
 Before launching Phase 1 subagents, check the auto-memory block injected into your system prompt for notes relevant to the problem being documented.
 
-1. Look for a block labeled "user's auto-memory" (Claude Code only) already present in your system prompt context — MEMORY.md's entries are inlined there
+1. Look for a block labeled "user's auto-memory" (OpenCode only) already present in your system prompt context — MEMORY.md's entries are inlined there
 2. If the block is absent, empty, or this is a non-Claude-Code platform, skip this step and proceed to Phase 1 unchanged
 3. Scan the entries for anything related to the problem being documented -- use semantic judgment, not keyword matching
 4. If relevant entries are found, prepare a labeled excerpt block:
@@ -150,7 +150,7 @@ Launch research subagents. Each returns text data to the orchestrator.
 
    1. Extract keywords from the problem context: module names, technical terms, error messages, component types
    2. If the problem category is clear, narrow search to the matching `docs/solutions/<category>/` directory
-   3. Use the native content-search tool (e.g., Grep in Claude Code) to pre-filter candidate files BEFORE reading any content. Run multiple searches in parallel, case-insensitive, targeting frontmatter fields. These are template patterns -- substitute actual keywords:
+   3. Use the native content-search tool (e.g., Grep in OpenCode) to pre-filter candidate files BEFORE reading any content. Run multiple searches in parallel, case-insensitive, targeting frontmatter fields. These are template patterns -- substitute actual keywords:
       - `title:.*<keyword>`
       - `tags:.*(<keyword1>|<keyword2>)`
       - `module:.*<module name>`
@@ -168,9 +168,9 @@ Launch research subagents. Each returns text data to the orchestrator.
 
 #### 4. **Session Historian** (foreground, after launching the above — only if the user opted in)
    - **Skip entirely** if the user declined session history in the follow-up question
-   - Dispatched as `compound-engineering:research:session-historian`
-   - Dispatch in **foreground** — this agent reads session files outside the working directory (`~/.claude/projects/`, `~/.codex/sessions/`, `~/.cursor/projects/`) which background agents may not have access to
-   - Searches prior Claude Code, Codex, and Cursor sessions for the same project to find related investigation context
+   - Dispatched as `systematic:research:session-historian`
+   - Dispatch in **foreground** — this agent reads session files outside the working directory (`~/.config/opencode/projects/`, `~/.codex/sessions/`, `~/.cursor/projects/`) which background agents may not have access to
+   - Searches prior OpenCode, Codex, and Cursor sessions for the same project to find related investigation context
    - Correlates sessions by repo name across all platforms (matches sessions from main checkouts, worktrees, and Conductor workspaces)
    - In the dispatch prompt, pass:
      - A specific description of the problem being documented — not a generic topic, but the concrete issue (error messages, module names, what broke and how it was fixed). This is what the agent filters its findings against.
@@ -186,7 +186,7 @@ Launch research subagents. Each returns text data to the orchestrator.
        - Related context: anything else from prior sessions that directly informs this problem's documentation
        ```
    - Omit the `mode` parameter so the user's configured permission settings apply
-   - Dispatch on the mid-tier model (e.g., `model: "sonnet"` in Claude Code) — the synthesis feeds into compound assembly and doesn't need frontier reasoning
+   - Dispatch on the mid-tier model (e.g., `model: "sonnet"` in OpenCode) — the synthesis feeds into compound assembly and doesn't need frontier reasoning
    - Returns: structured digest of findings from prior sessions, or "no relevant prior sessions" if none found
 
 ### Phase 2: Assembly & Write
@@ -276,7 +276,7 @@ Always capture the new learning first. Refresh is a targeted maintenance follow-
 
 After the learning is written and the refresh decision is made, check whether the project's instruction files would lead an agent to discover and search `docs/solutions/` before starting work in a documented area. This runs every time — the knowledge store only compounds value when agents can find it.
 
-1. Identify which root-level instruction files exist (AGENTS.md, CLAUDE.md, or both). Read the file(s) and determine which holds the substantive content — one file may just be a shim that `@`-includes the other (e.g., `CLAUDE.md` containing only `@AGENTS.md`, or vice versa). The substantive file is the assessment and edit target; ignore shims. If neither file exists, skip this check entirely.
+1. Identify whether a root-level `AGENTS.md` exists. Read it to determine whether it holds substantive content or is just a shim that `@`-includes another file; treat the substantive file as the assessment and edit target and ignore shims. If no `AGENTS.md` exists, skip this check entirely.
 2. Assess whether an agent reading the instruction files would learn three things:
    - That a searchable knowledge store of documented solutions exists
    - Enough about its structure to search effectively (category organization, YAML frontmatter fields like `module`, `tags`, `problem_type`)
@@ -304,7 +304,7 @@ After the learning is written and the refresh decision is made, check whether th
 
       `docs/solutions/` — documented solutions to past problems (bugs, best practices, workflow patterns), organized by category with YAML frontmatter (`module`, `tags`, `problem_type`). Relevant when implementing or debugging in documented areas.
       ```
-   c. In full mode, explain to the user why this matters — agents working in this repo (including fresh sessions, other tools, or collaborators without the plugin) won't know to check `docs/solutions/` unless the instruction file surfaces it. Show the proposed change and where it would go, then use the platform's blocking question tool (`AskUserQuestion` in Claude Code, `request_user_input` in Codex, `ask_user` in Gemini) to get consent before making the edit. If no question tool is available, present the proposal and wait for the user's reply. In lightweight mode, output a one-liner note and move on
+   c. In full mode, explain to the user why this matters — agents working in this repo (including fresh sessions, other tools, or collaborators without the plugin) won't know to check `docs/solutions/` unless the instruction file surfaces it. Show the proposed change and where it would go, then use the platform's blocking question tool (`question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini) to get consent before making the edit. If no question tool is available, present the proposal and wait for the user's reply. In lightweight mode, output a one-liner note and move on
 
 ### Phase 3: Optional Enhancement
 
@@ -314,13 +314,13 @@ After the learning is written and the refresh decision is made, check whether th
 
 Based on problem type, optionally invoke specialized agents to review the documentation:
 
-- **performance_issue** → `compound-engineering:review:performance-oracle`
-- **security_issue** → `compound-engineering:review:security-sentinel`
-- **database_issue** → `compound-engineering:review:data-integrity-guardian`
-- Any code-heavy issue → always run `compound-engineering:review:code-simplicity-reviewer`, and additionally run the kieran reviewer that matches the repo's primary stack:
-  - Ruby/Rails → also run `compound-engineering:review:kieran-rails-reviewer`
-  - Python → also run `compound-engineering:review:kieran-python-reviewer`
-  - TypeScript/JavaScript → also run `compound-engineering:review:kieran-typescript-reviewer`
+- **performance_issue** → `systematic:review:performance-oracle`
+- **security_issue** → `systematic:review:security-sentinel`
+- **database_issue** → `systematic:review:data-integrity-guardian`
+- Any code-heavy issue → always run `systematic:review:code-simplicity-reviewer`, and additionally run the kieran reviewer that matches the repo's primary stack:
+  - Ruby/Rails → also run `systematic:review:kieran-rails-reviewer`
+  - Python → also run `systematic:review:kieran-python-reviewer`
+  - TypeScript/JavaScript → also run `systematic:review:kieran-typescript-reviewer`
   - Other stacks → no kieran reviewer needed
 
 </parallel_tasks>
@@ -337,7 +337,7 @@ This mode skips parallel subagents entirely. The orchestrator performs all work 
 
 The orchestrator (main conversation) performs ALL of the following in one sequential pass:
 
-1. **Extract from conversation**: Identify the problem and solution from conversation history. Also scan the "user's auto-memory" block injected into your system prompt, if present (Claude Code only) -- use any relevant notes as supplementary context alongside conversation history. Tag any memory-sourced content incorporated into the final doc with "(auto memory [claude])"
+1. **Extract from conversation**: Identify the problem and solution from conversation history. Also scan the "user's auto-memory" block injected into your system prompt, if present (OpenCode only) -- use any relevant notes as supplementary context alongside conversation history. Tag any memory-sourced content incorporated into the final doc with "(auto memory [claude])"
 2. **Classify**: Read `references/schema.yaml` and `references/yaml-schema.md`, then determine track (bug vs knowledge), category, and filename
 3. **Write minimal doc**: Create `docs/solutions/[category]/[filename].md` using the appropriate track template from `assets/resolution-template.md`, with:
    - YAML frontmatter with track-appropriate fields
@@ -353,7 +353,7 @@ File created:
 - docs/solutions/[category]/[filename].md
 
 [If discoverability check found instruction files don't surface the knowledge store:]
-Tip: Your AGENTS.md/CLAUDE.md doesn't surface docs/solutions/ to agents —
+Tip: Your AGENTS.md doesn't surface docs/solutions/ to agents —
 a brief mention helps all agents discover these learnings.
 
 Note: This was created in lightweight mode. For richer documentation
@@ -456,7 +456,7 @@ What's next?
 5. Other
 ```
 
-**After displaying the success output, present the "What's next?" options using the platform's blocking question tool** (`AskUserQuestion` in Claude Code, `request_user_input` in Codex, `ask_user` in Gemini). If no question tool is available, present the numbered options and wait for the user's reply before proceeding. Do not continue the workflow or end the turn without the user's selection.
+**After displaying the success output, present the "What's next?" options using the platform's blocking question tool** (`question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini). If no question tool is available, present the numbered options and wait for the user's reply before proceeding. Do not continue the workflow or end the turn without the user's selection.
 
 **Alternate output (when updating an existing doc due to high overlap):**
 
@@ -505,20 +505,20 @@ Writes the final learning directly into `docs/solutions/`.
 Based on problem type, these agents can enhance documentation:
 
 ### Code Quality & Review
-- **compound-engineering:review:kieran-rails-reviewer**: Reviews code examples for Rails best practices
-- **compound-engineering:review:kieran-python-reviewer**: Reviews code examples for Python best practices
-- **compound-engineering:review:kieran-typescript-reviewer**: Reviews code examples for TypeScript best practices
-- **compound-engineering:review:code-simplicity-reviewer**: Ensures solution code is minimal and clear
-- **compound-engineering:review:pattern-recognition-specialist**: Identifies anti-patterns or repeating issues
+- **systematic:review:kieran-rails-reviewer**: Reviews code examples for Rails best practices
+- **systematic:review:kieran-python-reviewer**: Reviews code examples for Python best practices
+- **systematic:review:kieran-typescript-reviewer**: Reviews code examples for TypeScript best practices
+- **systematic:review:code-simplicity-reviewer**: Ensures solution code is minimal and clear
+- **systematic:review:pattern-recognition-specialist**: Identifies anti-patterns or repeating issues
 
 ### Specific Domain Experts
-- **compound-engineering:review:performance-oracle**: Analyzes performance_issue category solutions
-- **compound-engineering:review:security-sentinel**: Reviews security_issue solutions for vulnerabilities
-- **compound-engineering:review:data-integrity-guardian**: Reviews database_issue migrations and queries
+- **systematic:review:performance-oracle**: Analyzes performance_issue category solutions
+- **systematic:review:security-sentinel**: Reviews security_issue solutions for vulnerabilities
+- **systematic:review:data-integrity-guardian**: Reviews database_issue migrations and queries
 
 ### Enhancement & Research
-- **compound-engineering:research:best-practices-researcher**: Enriches solution with industry best practices
-- **compound-engineering:research:framework-docs-researcher**: Links to framework/library documentation references
+- **systematic:research:best-practices-researcher**: Enriches solution with industry best practices
+- **systematic:research:framework-docs-researcher**: Links to framework/library documentation references
 
 ### When to Invoke
 - **Auto-triggered** (optional): Agents can run post-documentation for enhancement

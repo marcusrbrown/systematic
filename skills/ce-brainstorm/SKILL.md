@@ -30,7 +30,7 @@ This skill does not implement code. It explores, clarifies, and documents decisi
 1. **Ask one question at a time** - Do not batch several unrelated questions into one message.
 2. **Prefer single-select multiple choice** - Use single-select when choosing one direction, one priority, or one next step.
 3. **Use multi-select rarely and intentionally** - Use it only for compatible sets such as goals, constraints, non-goals, or success criteria that can all coexist. If prioritization matters, follow up by asking which selected item is primary.
-4. **Use the platform's question tool when available** - When asking the user a question, prefer the platform's blocking question tool if one exists (`AskUserQuestion` in Claude Code, `request_user_input` in Codex, `ask_user` in Gemini). Otherwise, present numbered options in chat and wait for the user's reply before proceeding.
+4. **Use the platform's question tool when available** - When asking the user a question, prefer the platform's blocking question tool if one exists (`question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini). Otherwise, present numbered options in chat and wait for the user's reply before proceeding.
 
 ## Output Guidance
 
@@ -100,7 +100,7 @@ Scan the repo before substantive brainstorming. Match depth to scope:
 
 **Standard and Deep** — Two passes:
 
-*Constraint Check* — Check project instruction files (`AGENTS.md`, and `CLAUDE.md` only if retained as compatibility context) for workflow, product, or scope constraints that affect the brainstorm. If these add nothing, move on.
+*Constraint Check* — Check project instruction files (`AGENTS.md`, and `AGENTS.md` only if retained as compatibility context) for workflow, product, or scope constraints that affect the brainstorm. If these add nothing, move on.
 
 *Topic Scan* — Search for relevant terms. Read the most relevant existing artifact if one exists (brainstorm, plan, spec, skill, feature doc). Skim adjacent examples covering similar behavior.
 
@@ -112,7 +112,7 @@ If nothing obvious appears after a short scan, say so and continue. Two rules go
 
 **Slack context** (opt-in, Standard and Deep only) — never auto-dispatch. Route by condition:
 
-- **Tools available + user asked**: Dispatch `compound-engineering:research:slack-researcher` with a brief summary of the brainstorm topic alongside Phase 1.1 work. Incorporate findings into constraint and context awareness.
+- **Tools available + user asked**: Dispatch `systematic:research:slack-researcher` with a brief summary of the brainstorm topic alongside Phase 1.1 work. Incorporate findings into constraint and context awareness.
 - **Tools available + user didn't ask**: Note in output: "Slack tools detected. Ask me to search Slack for organizational context at any point, or include it in your next prompt."
 - **No tools + user asked**: Note in output: "Slack context was requested but no Slack tools are available. Install and authenticate the Slack plugin to enable organizational context search."
 

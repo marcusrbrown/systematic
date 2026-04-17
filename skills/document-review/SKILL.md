@@ -16,14 +16,14 @@ If `mode:headless` is present, set **headless mode** for the rest of the workflo
 
 **Headless mode** changes the interaction model, not the classification boundaries. Document-review still applies the same judgment about what has one clear correct fix vs. what needs user judgment. The only difference is how non-auto findings are delivered:
 - `auto` fixes are applied silently (same as interactive)
-- `present` findings are returned as structured text for the caller to handle -- no AskUserQuestion prompts, no interactive approval
+- `present` findings are returned as structured text for the caller to handle -- no question prompts, no interactive approval
 - Phase 5 returns immediately with "Review complete" (no refine/complete question)
 
 The caller receives findings with their original classifications intact and decides what to do with them.
 
 Callers invoke headless mode by including `mode:headless` in the skill arguments, e.g.:
 ```
-Skill("compound-engineering:document-review", "mode:headless docs/plans/my-plan.md")
+Skill("systematic:document-review", "mode:headless docs/plans/my-plan.md")
 ```
 
 
@@ -33,9 +33,9 @@ If `mode:headless` is not present, the skill runs in its default interactive mod
 
 **If a document path is provided:** Read it, then proceed.
 
-**If no document is specified (interactive mode):** Ask which document to review, or find the most recent in `docs/brainstorms/` or `docs/plans/` using a file-search/glob tool (e.g., Glob in Claude Code).
+**If no document is specified (interactive mode):** Ask which document to review, or find the most recent in `docs/brainstorms/` or `docs/plans/` using a file-search/glob tool (e.g., Glob in OpenCode).
 
-**If no document is specified (headless mode):** Output "Review failed: headless mode requires a document path. Re-invoke with: Skill(\"compound-engineering:document-review\", \"mode:headless <path>\")" without dispatching agents.
+**If no document is specified (headless mode):** Output "Review failed: headless mode requires a document path. Re-invoke with: Skill(\"systematic:document-review\", \"mode:headless <path>\")" without dispatching agents.
 
 ### Classify Document Type
 
@@ -103,19 +103,19 @@ Reviewing with:
 ### Build Agent List
 
 Always include:
-- `compound-engineering:document-review:coherence-reviewer`
-- `compound-engineering:document-review:feasibility-reviewer`
+- `systematic:document-review:coherence-reviewer`
+- `systematic:document-review:feasibility-reviewer`
 
 Add activated conditional personas:
-- `compound-engineering:document-review:product-lens-reviewer`
-- `compound-engineering:document-review:design-lens-reviewer`
-- `compound-engineering:document-review:security-lens-reviewer`
-- `compound-engineering:document-review:scope-guardian-reviewer`
-- `compound-engineering:document-review:adversarial-document-reviewer`
+- `systematic:document-review:product-lens-reviewer`
+- `systematic:document-review:design-lens-reviewer`
+- `systematic:document-review:security-lens-reviewer`
+- `systematic:document-review:scope-guardian-reviewer`
+- `systematic:document-review:adversarial-document-reviewer`
 
 ### Dispatch
 
-Dispatch all agents in **parallel** using the platform's task/agent tool (e.g., Agent tool in Claude Code, spawn in Codex). Omit the `mode` parameter so the user's configured permission settings apply. Each agent receives the prompt built from the subagent template included below with these variables filled:
+Dispatch all agents in **parallel** using the platform's task/agent tool (e.g., Agent tool in OpenCode, spawn in Codex). Omit the `mode` parameter so the user's configured permission settings apply. Each agent receives the prompt built from the subagent template included below with these variables filled:
 
 | Variable | Value |
 |----------|-------|

@@ -45,25 +45,25 @@ All tokens are optional. Each one present means one less thing to infer. When ab
 
 - **Skip all user questions.** Never pause for approval or clarification once scope has been established.
 - **Apply only `safe_auto -> review-fixer` findings.** Leave `gated_auto`, `manual`, `human`, and `release` work unresolved.
-- **Write a run artifact** under `.context/compound-engineering/ce-review/<run-id>/` summarizing findings, applied fixes, residual actionable work, and advisory outputs.
+- **Write a run artifact** under `.context/systematic/ce-review/<run-id>/` summarizing findings, applied fixes, residual actionable work, and advisory outputs.
 - **Create durable todo files only for unresolved actionable findings** whose final owner is `downstream-resolver`. Load the `todo-create` skill for the canonical directory path and naming convention.
 - **Never commit, push, or create a PR** from autofix mode. Parent workflows own those decisions.
 
 ### Report-only mode rules
 
 - **Skip all user questions.** Infer intent conservatively if the diff metadata is thin.
-- **Never edit files or externalize work.** Do not write `.context/compound-engineering/ce-review/<run-id>/`, do not create todo files, and do not commit, push, or create a PR.
+- **Never edit files or externalize work.** Do not write `.context/systematic/ce-review/<run-id>/`, do not create todo files, and do not commit, push, or create a PR.
 - **Safe for parallel read-only verification.** `mode:report-only` is the only mode that is safe to run concurrently with browser testing on the same checkout.
 - **Do not switch the shared checkout.** If the caller passes an explicit PR or branch target, `mode:report-only` must run in an isolated checkout/worktree or stop instead of running `gh pr checkout` / `git checkout`.
 - **Do not overlap mutating review with browser testing on the same checkout.** If a future orchestrator wants fixes, run the mutating review phase after browser testing or in an isolated checkout/worktree.
 
 ### Headless mode rules
 
-- **Skip all user questions.** Never use the platform question tool (`AskUserQuestion` in Claude Code, `request_user_input` in Codex, `ask_user` in Gemini) or other interactive prompts. Infer intent conservatively if the diff metadata is thin.
+- **Skip all user questions.** Never use the platform question tool (`question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini) or other interactive prompts. Infer intent conservatively if the diff metadata is thin.
 - **Require a determinable diff scope.** If headless mode cannot determine a diff scope (no branch, PR, or `base:` ref determinable without user interaction), emit `Review failed (headless mode). Reason: no diff scope detected. Re-invoke with a branch name, PR number, or base:<ref>.` and stop without dispatching agents.
 - **Apply only `safe_auto -> review-fixer` findings in a single pass.** No bounded re-review rounds. Leave `gated_auto`, `manual`, `human`, and `release` work unresolved and return them in the structured output.
 - **Return all non-auto findings as structured text output.** Use the headless output envelope format (see Stage 6 below) preserving severity, autofix_class, owner, requires_verification, confidence, pre_existing, and suggested_fix per finding. Enrich with detail-tier fields (why_it_matters, evidence[]) from the per-agent artifact files on disk (see Detail enrichment in Stage 6).
-- **Write a run artifact** under `.context/compound-engineering/ce-review/<run-id>/` summarizing findings, applied fixes, and advisory outputs. Include the artifact path in the structured output.
+- **Write a run artifact** under `.context/systematic/ce-review/<run-id>/` summarizing findings, applied fixes, and advisory outputs. Include the artifact path in the structured output.
 - **Do not create todo files.** The caller receives structured findings and routes downstream work itself.
 - **Do not switch the shared checkout.** If the caller passes an explicit PR or branch target, `mode:headless` must run in an isolated checkout/worktree or stop instead of running `gh pr checkout` / `git checkout`. When stopping, emit `Review failed (headless mode). Reason: cannot switch shared checkout. Re-invoke with base:<ref> to review the current checkout, or run from an isolated worktree.`
 - **Not safe for concurrent use on a shared checkout.** Unlike `mode:report-only`, headless mutates files (applies `safe_auto` fixes). Callers must not run headless concurrently with other mutating operations on the same checkout.
@@ -107,42 +107,42 @@ Routing rules:
 
 | Agent | Focus |
 |-------|-------|
-| `compound-engineering:review:correctness-reviewer` | Logic errors, edge cases, state bugs, error propagation |
-| `compound-engineering:review:testing-reviewer` | Coverage gaps, weak assertions, brittle tests |
-| `compound-engineering:review:maintainability-reviewer` | Coupling, complexity, naming, dead code, abstraction debt |
-| `compound-engineering:review:project-standards-reviewer` | CLAUDE.md and AGENTS.md compliance -- frontmatter, references, naming, portability |
-| `compound-engineering:review:agent-native-reviewer` | Verify new features are agent-accessible |
-| `compound-engineering:research:learnings-researcher` | Search docs/solutions/ for past issues related to this PR |
+| `systematic:review:correctness-reviewer` | Logic errors, edge cases, state bugs, error propagation |
+| `systematic:review:testing-reviewer` | Coverage gaps, weak assertions, brittle tests |
+| `systematic:review:maintainability-reviewer` | Coupling, complexity, naming, dead code, abstraction debt |
+| `systematic:review:project-standards-reviewer` | AGENTS.md compliance -- frontmatter, references, naming, portability |
+| `systematic:review:agent-native-reviewer` | Verify new features are agent-accessible |
+| `systematic:research:learnings-researcher` | Search docs/solutions/ for past issues related to this PR |
 
 **Cross-cutting conditional (selected per diff):**
 
 | Agent | Select when diff touches... |
 |-------|---------------------------|
-| `compound-engineering:review:security-reviewer` | Auth, public endpoints, user input, permissions |
-| `compound-engineering:review:performance-reviewer` | DB queries, data transforms, caching, async |
-| `compound-engineering:review:api-contract-reviewer` | Routes, serializers, type signatures, versioning |
-| `compound-engineering:review:data-migrations-reviewer` | Migrations, schema changes, backfills |
-| `compound-engineering:review:reliability-reviewer` | Error handling, retries, timeouts, background jobs |
-| `compound-engineering:review:adversarial-reviewer` | Diff >=50 changed non-test/non-generated/non-lockfile lines, or auth, payments, data mutations, external APIs |
-| `compound-engineering:review:cli-readiness-reviewer` | CLI command definitions, argument parsing, CLI framework usage, command handler implementations |
-| `compound-engineering:review:previous-comments-reviewer` | Reviewing a PR that has existing review comments or threads |
+| `systematic:review:security-reviewer` | Auth, public endpoints, user input, permissions |
+| `systematic:review:performance-reviewer` | DB queries, data transforms, caching, async |
+| `systematic:review:api-contract-reviewer` | Routes, serializers, type signatures, versioning |
+| `systematic:review:data-migrations-reviewer` | Migrations, schema changes, backfills |
+| `systematic:review:reliability-reviewer` | Error handling, retries, timeouts, background jobs |
+| `systematic:review:adversarial-reviewer` | Diff >=50 changed non-test/non-generated/non-lockfile lines, or auth, payments, data mutations, external APIs |
+| `systematic:review:cli-readiness-reviewer` | CLI command definitions, argument parsing, CLI framework usage, command handler implementations |
+| `systematic:review:previous-comments-reviewer` | Reviewing a PR that has existing review comments or threads |
 
 **Stack-specific conditional (selected per diff):**
 
 | Agent | Select when diff touches... |
 |-------|---------------------------|
-| `compound-engineering:review:dhh-rails-reviewer` | Rails architecture, service objects, session/auth choices, or Hotwire-vs-SPA boundaries |
-| `compound-engineering:review:kieran-rails-reviewer` | Rails application code where conventions, naming, and maintainability are in play |
-| `compound-engineering:review:kieran-python-reviewer` | Python modules, endpoints, scripts, or services |
-| `compound-engineering:review:kieran-typescript-reviewer` | TypeScript components, services, hooks, utilities, or shared types |
-| `compound-engineering:review:julik-frontend-races-reviewer` | Stimulus/Turbo controllers, DOM events, timers, animations, or async UI flows |
+| `systematic:review:dhh-rails-reviewer` | Rails architecture, service objects, session/auth choices, or Hotwire-vs-SPA boundaries |
+| `systematic:review:kieran-rails-reviewer` | Rails application code where conventions, naming, and maintainability are in play |
+| `systematic:review:kieran-python-reviewer` | Python modules, endpoints, scripts, or services |
+| `systematic:review:kieran-typescript-reviewer` | TypeScript components, services, hooks, utilities, or shared types |
+| `systematic:review:julik-frontend-races-reviewer` | Stimulus/Turbo controllers, DOM events, timers, animations, or async UI flows |
 
 **CE conditional (migration-specific):**
 
 | Agent | Select when diff includes migration files |
 |-------|------------------------------------------|
-| `compound-engineering:review:schema-drift-detector` | Cross-references schema.rb against included migrations |
-| `compound-engineering:review:deployment-verification-agent` | Produces deployment checklist with SQL verification queries |
+| `systematic:review:schema-drift-detector` | Cross-references schema.rb against included migrations |
+| `systematic:review:deployment-verification-agent` | Produces deployment checklist with SQL verification queries |
 
 ## Review Scope
 
@@ -150,7 +150,7 @@ Every review spawns all 4 always-on personas plus the 2 CE always-on agents, the
 
 ## Protected Artifacts
 
-The following paths are compound-engineering pipeline artifacts and must never be flagged for deletion, removal, or gitignore by any reviewer:
+The following paths are systematic pipeline artifacts and must never be flagged for deletion, removal, or gitignore by any reviewer:
 
 - `docs/brainstorms/*` -- requirements documents created by ce:brainstorm
 - `docs/plans/*.md` -- plan files created by ce:plan (living documents with progress checkboxes)
@@ -205,7 +205,7 @@ Then fetch PR metadata. Capture the base branch name and the PR base repository 
 gh pr view <number-or-url> --json title,body,baseRefName,headRefName,url
 ```
 
-Use the repository portion of the returned PR URL as `<base-repo>` (for example, `EveryInc/compound-engineering-plugin` from `https://github.com/EveryInc/compound-engineering-plugin/pull/348`).
+Use the repository portion of the returned PR URL as `<base-repo>` (for example, `marcusrbrown/systematic` from `https://github.com/marcusrbrown/systematic/pull/348`).
 
 Then compute a local diff against the PR's base branch so re-reviews also include local fix commits and uncommitted edits. Substitute the PR base branch from metadata (shown here as `<base>`) and the PR base repository identity derived from the PR URL (shown here as `<base-repo>`). Resolve the base ref from the PR's actual base repository, not by assuming `origin` points at that repo:
 
@@ -316,7 +316,7 @@ Pass this to every reviewer in their spawn prompt. Intent shapes *how hard each 
 
 **When intent is ambiguous:**
 
-- **Interactive mode:** Ask one question using the platform's interactive question tool (AskUserQuestion in Claude Code, request_user_input in Codex): "What is the primary goal of these changes?" Do not spawn reviewers until intent is established.
+- **Interactive mode:** Ask one question using the platform's interactive question tool (question in OpenCode, request_user_input in Codex): "What is the primary goal of these changes?" Do not spawn reviewers until intent is established.
 - **Autofix/report-only/headless modes:** Infer intent conservatively from the branch name, diff, PR metadata, and caller context. Note the uncertainty in Coverage or Verdict reasoning instead of blocking.
 
 ### Stage 2b: Plan discovery (requirements verification)
@@ -370,8 +370,8 @@ This is progress reporting, not a blocking confirmation.
 
 Before spawning sub-agents, find the file paths (not contents) of all relevant standards files for the `project-standards` persona. Use the native file-search/glob tool to locate:
 
-1. Use the native file-search tool (e.g., Glob in Claude Code) to find all `**/CLAUDE.md` and `**/AGENTS.md` in the repo.
-2. Filter to those whose directory is an ancestor of at least one changed file. A standards file governs all files below it (e.g., `plugins/compound-engineering/AGENTS.md` applies to everything under `plugins/compound-engineering/`).
+1. Use the native file-search tool (e.g., Glob in OpenCode) to find all `**/AGENTS.md` and `**/AGENTS.md` in the repo.
+2. Filter to those whose directory is an ancestor of at least one changed file. A standards file governs all files below it (e.g., `plugins/systematic/AGENTS.md` applies to everything under `plugins/systematic/`).
 
 Pass the resulting path list to the `project-standards` persona inside a `<standards-paths>` block in its review context (see Stage 4). The persona reads the files itself, targeting only the sections relevant to the changed file types. This keeps the orchestrator's work cheap (path discovery only) and avoids bloating the subagent prompt with content the reviewer may not fully need.
 
@@ -381,7 +381,7 @@ Pass the resulting path list to the `project-standards` persona inside a `<stand
 
 Persona sub-agents do focused, scoped work and should use a fast mid-tier model to reduce cost and latency without sacrificing review quality. The orchestrator itself stays on the default (most capable) model.
 
-Use the platform's mid-tier model for all persona and CE sub-agents. In Claude Code, pass `model: "sonnet"` in the Agent tool call. On other platforms, use the equivalent mid-tier (e.g., `gpt-4o` in Codex). If the platform has no model override mechanism or the available model names are unknown, omit the model parameter and let agents inherit the default -- a working review on the parent model is better than a broken dispatch from an unrecognized model name.
+Use the platform's mid-tier model for all persona and CE sub-agents. In OpenCode, pass `model: "sonnet"` in the Agent tool call. On other platforms, use the equivalent mid-tier (e.g., `gpt-4o` in Codex). If the platform has no model override mechanism or the available model names are unknown, omit the model parameter and let agents inherit the default -- a working review on the parent model is better than a broken dispatch from an unrecognized model name.
 
 CE always-on agents (agent-native-reviewer, learnings-researcher) and CE conditional agents (schema-drift-detector, deployment-verification-agent) also use the mid-tier model since they perform scoped, focused work.
 
@@ -393,10 +393,10 @@ Generate a unique run identifier before dispatching any agents. This ID scopes a
 
 ```bash
 RUN_ID=$(date +%Y%m%d-%H%M%S)-$(head -c4 /dev/urandom | od -An -tx1 | tr -d ' ')
-mkdir -p ".context/compound-engineering/ce-review/$RUN_ID"
+mkdir -p ".context/systematic/ce-review/$RUN_ID"
 ```
 
-Pass `{run_id}` to every persona sub-agent so they can write their full analysis to `.context/compound-engineering/ce-review/{run_id}/{reviewer_name}.json`.
+Pass `{run_id}` to every persona sub-agent so they can write their full analysis to `.context/systematic/ce-review/{run_id}/{reviewer_name}.json`.
 
 **Report-only mode:** Skip run-id generation and directory creation. Do not pass `{run_id}` to agents. Agents return compact JSON only with no file write, consistent with report-only's no-write contract.
 
@@ -418,7 +418,7 @@ Persona sub-agents are **read-only** with respect to the project: they review an
 
 Read-only here means **non-mutating**, not "no shell access." Reviewer sub-agents may use non-mutating inspection commands when needed to gather evidence or verify scope, including read-oriented `git` / `gh` usage such as `git diff`, `git show`, `git blame`, `git log`, and `gh pr view`. They must not edit project files, change branches, commit, push, create PRs, or otherwise mutate the checkout or repository state.
 
-Each persona sub-agent writes full JSON (all schema fields) to `.context/compound-engineering/ce-review/{run_id}/{reviewer_name}.json` and returns compact JSON with merge-tier fields only:
+Each persona sub-agent writes full JSON (all schema fields) to `.context/systematic/ce-review/{run_id}/{reviewer_name}.json` and returns compact JSON with merge-tier fields only:
 
 ```json
 {
@@ -512,7 +512,7 @@ Scope: <scope-line>
 Intent: <intent-summary>
 Reviewers: <reviewer-list with conditional justifications>
 Verdict: <Ready to merge | Ready with fixes | Not ready>
-Artifact: .context/compound-engineering/ce-review/<run-id>/
+Artifact: .context/systematic/ce-review/<run-id>/
 
 Applied N safe_auto fixes.
 
@@ -565,7 +565,7 @@ Coverage:
 Review complete
 ```
 
-**Detail enrichment (headless only):** The headless envelope includes `Why:`, `Evidence:`, and `Suggested fix:` lines. After merge (Stage 5), read the per-agent artifact files from `.context/compound-engineering/ce-review/{run_id}/` for only the findings that survived dedup and confidence gating.
+**Detail enrichment (headless only):** The headless envelope includes `Why:`, `Evidence:`, and `Suggested fix:` lines. After merge (Stage 5), read the per-agent artifact files from `.context/systematic/ce-review/{run_id}/` for only the findings that survived dedup and confidence gating.
    - **Field tiers:** `Why:` and `Evidence:` are detail-tier -- load from per-agent artifact files. `Suggested fix:` is merge-tier -- use it directly from the compact return without artifact lookup.
    - **Artifact matching:** For each surviving finding, look up its detail-tier fields in the artifact files of the contributing reviewers. Match on `file + line_bucket(line, +/-3)` (the same tolerance used in Stage 5 dedup) within each contributing reviewer's artifact. When multiple artifact entries fall within the line bucket, apply `normalize(title)` to both the merged finding's title and each candidate entry's title as a tie-breaker.
    - **Reviewer order:** Try contributing reviewers in the order they appear in the merged finding's reviewer list; use the first match.
@@ -617,7 +617,7 @@ After presenting findings and verdict (Stage 6), route the next steps by mode. R
 **Interactive mode**
 
 - Apply `safe_auto -> review-fixer` findings automatically without asking. These are safe by definition.
-- Ask a policy question **using the platform's blocking question tool** (`AskUserQuestion` in Claude Code, `request_user_input` in Codex, `ask_user` in Gemini) only when `gated_auto` or `manual` findings remain after safe fixes. Do not replace with a conversational open-ended question. Adapt the options to match what actually remains:
+- Ask a policy question **using the platform's blocking question tool** (`question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini) only when `gated_auto` or `manual` findings remain after safe fixes. Do not replace with a conversational open-ended question. Adapt the options to match what actually remains:
 
   **When `gated_auto` findings are present** (with or without `manual`):
   ```
@@ -672,7 +672,7 @@ After presenting findings and verdict (Stage 6), route the next steps by mode. R
 
 #### Step 4: Emit artifacts and downstream handoff
 
-- In interactive, autofix, and headless modes, write a per-run artifact under `.context/compound-engineering/ce-review/<run-id>/` containing:
+- In interactive, autofix, and headless modes, write a per-run artifact under `.context/systematic/ce-review/<run-id>/` containing:
   - synthesized findings (merged output from Stage 5)
   - applied fixes
   - residual actionable work

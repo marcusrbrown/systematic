@@ -8,15 +8,15 @@ disable-model-invocation: true
 
 ## Overview
 
-The `.context/compound-engineering/todos/` directory is a file-based tracking system for code review feedback, technical debt, feature requests, and work items. Each todo is a markdown file with YAML frontmatter.
+The `.context/systematic/todos/` directory is a file-based tracking system for code review feedback, technical debt, feature requests, and work items. Each todo is a markdown file with YAML frontmatter.
 
-> **Legacy support:** Always check both `.context/compound-engineering/todos/` (canonical) and `todos/` (legacy) when reading. Write new todos only to the canonical path. This directory has a multi-session lifecycle -- do not clean it up as scratch.
+> **Legacy support:** Always check both `.context/systematic/todos/` (canonical) and `todos/` (legacy) when reading. Write new todos only to the canonical path. This directory has a multi-session lifecycle -- do not clean it up as scratch.
 
 ## Directory Paths
 
 | Purpose | Path |
 |---------|------|
-| **Canonical (write here)** | `.context/compound-engineering/todos/` |
+| **Canonical (write here)** | `.context/systematic/todos/` |
 | **Legacy (read-only)** | `todos/` |
 
 ## File Naming Convention
@@ -56,7 +56,7 @@ dependencies: ["001"]     # Issue IDs this is blocked by
 
 ### Creating a New Todo
 
-1. `mkdir -p .context/compound-engineering/todos/`
+1. `mkdir -p .context/systematic/todos/`
 2. Search both paths for `[0-9]*-*.md`, find the highest numeric prefix, increment, zero-pad to 3 digits.
 3. Use the todo template included below, write to canonical path as `{NEXT_ID}-pending-{priority}-{description}.md`.
 4. Fill Problem Statement, Findings, Proposed Solutions, Acceptance Criteria, and initial Work Log entry.
@@ -100,7 +100,7 @@ To check blockers: search for `{dep_id}-complete-*.md` in both paths. Missing ma
 
 ## Key Distinction
 
-This skill manages **durable, cross-session work items** persisted as markdown files. For temporary in-session step tracking, use platform task tools (`TaskCreate`/`TaskUpdate` in Claude Code, `update_plan` in Codex) instead.
+This skill manages **durable, cross-session work items** persisted as markdown files. For temporary in-session step tracking, use platform task tools (`todowrite`/`TaskUpdate` in OpenCode, `update_plan` in Codex) instead.
 
 ---
 

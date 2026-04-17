@@ -43,11 +43,11 @@ After extracting tokens from arguments, resolve the delegation state using this 
 3. **Hard default** -- `false` (delegation off)
 
 **Config (pre-resolved):**
-!`cat "$(git rev-parse --show-toplevel 2>/dev/null)/.compound-engineering/config.local.yaml" 2>/dev/null || cat "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)")/.compound-engineering/config.local.yaml" 2>/dev/null || echo '__NO_CONFIG__'`
+!`cat "$(git rev-parse --show-toplevel 2>/dev/null)/.systematic/config.local.yaml" 2>/dev/null || cat "$(dirname "$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)")/.systematic/config.local.yaml" 2>/dev/null || echo '__NO_CONFIG__'`
 
 If the block above contains YAML key-value pairs, extract values for the keys listed below.
 If it shows `__NO_CONFIG__`, the file does not exist — all settings fall through to defaults.
-If it shows an unresolved command string, read `.compound-engineering/config.local.yaml` from the repo root using the native file-read tool (e.g., Read in Claude Code, read_file in Codex). If the file does not exist, all settings fall through to defaults.
+If it shows an unresolved command string, read `.systematic/config.local.yaml` from the repo root using the native file-read tool (e.g., Read in OpenCode, read_file in Codex). If the file does not exist, all settings fall through to defaults.
 
 If any setting has an unrecognized value, fall through to the hard default for that setting.
 
@@ -165,7 +165,7 @@ Determine how to proceed based on what was provided in `<input_document>`.
    - You plan to switch between branches frequently
 
 3. **Create Todo List** _(skip if Phase 0 already built one, or if Phase 0 routed as Trivial)_
-   - Use your available task tracking tool (e.g., TodoWrite, task lists) to break the plan into actionable tasks
+   - Use your available task tracking tool (e.g., todowrite, task lists) to break the plan into actionable tasks
    - Derive tasks from the plan's implementation units, dependencies, files, test targets, and verification criteria
    - Carry each unit's `Execution note` into the task when present
    - For each unit, read the `Patterns to follow` field before implementing — these point to specific files or conventions to mirror
@@ -318,7 +318,7 @@ Determine how to proceed based on what was provided in `<input_document>`.
    - The plan should reference similar code - read those files first
    - Match naming conventions exactly
    - Reuse existing components where possible
-   - Follow project coding standards (see AGENTS.md; use CLAUDE.md only if the repo still keeps a compatibility shim)
+   - Follow project coding standards (see AGENTS.md; use AGENTS.md only if the repo still keeps a compatibility shim)
    - When in doubt, grep for similar implementations
 
 4. **Test Continuously**

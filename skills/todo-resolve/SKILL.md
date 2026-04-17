@@ -12,7 +12,7 @@ Only `ready` todos are resolved. `pending` todos are skipped — they haven't be
 
 ### 1. Analyze
 
-Scan `.context/compound-engineering/todos/*.md` and legacy `todos/*.md`. Partition by status:
+Scan `.context/systematic/todos/*.md` and legacy `todos/*.md`. Partition by status:
 
 - **`ready`** (status field or `-ready-` in filename): resolve these.
 - **`pending`**: skip. Report them at the end.
@@ -26,15 +26,15 @@ Skip any todo that recommends deleting, removing, or gitignoring files in `docs/
 
 ### 2. Plan
 
-Create a task list grouped by type (e.g., `TaskCreate` in Claude Code, `update_plan` in Codex). Analyze dependencies -- items that others depend on run first. Output a mermaid diagram showing execution order and parallelism.
+Create a task list grouped by type (e.g., `todowrite` in OpenCode, `update_plan` in Codex). Analyze dependencies -- items that others depend on run first. Output a mermaid diagram showing execution order and parallelism.
 
 ### 3. Implement (PARALLEL)
 
-Spawn a `compound-engineering:workflow:pr-comment-resolver` agent per item. Prefer parallel; fall back to sequential respecting dependency order.
+Spawn a `systematic:workflow:pr-comment-resolver` agent per item. Prefer parallel; fall back to sequential respecting dependency order.
 
 **Batching:** 1-4 items: direct parallel returns. 5+ items: batches of 4, each returning only a short status summary (todo handled, files changed, tests run/skipped, blockers).
 
-For large sets, use a scratch directory at `.context/compound-engineering/todo-resolve/<run-id>/` for per-resolver artifacts. Return only completion summaries to parent.
+For large sets, use a scratch directory at `.context/systematic/todo-resolve/<run-id>/` for per-resolver artifacts. Return only completion summaries to parent.
 
 ### 4. Commit & Resolve
 
@@ -50,7 +50,7 @@ GATE: STOP. Verify the compound skill produced a solution document in `docs/solu
 
 ### 6. Clean Up
 
-Delete completed/resolved todo files from both paths. If a scratch directory was created at `.context/compound-engineering/todo-resolve/<run-id>/`, delete it (unless user asked to inspect).
+Delete completed/resolved todo files from both paths. If a scratch directory was created at `.context/systematic/todo-resolve/<run-id>/`, delete it (unless user asked to inspect).
 
 ```
 Todos resolved: [count]
