@@ -1,10 +1,14 @@
 ---
 title: Truth Reset (Initiative 1 of 3)
 type: refactor
-status: active
+status: executed-pending-pr
 date: 2026-04-17
 origin: docs/brainstorms/2026-04-17-credibility-reset-requirements.md
 supersedes_plan: docs/plans/2026-04-17-001-refactor-credibility-reset-plan.md
+branch: feat/truth-reset
+commits:
+  - 2ed916d feat(trust): truth reset and final CEP divorce
+  - 38d658f fix(sync): complete missed CEP→Systematic conversions in 41 files
 ---
 
 # Truth Reset — Close the Gap Between Public Claims and Repo Reality
@@ -111,7 +115,7 @@ None. All work is internal cleanup against established patterns.
 
 ## Implementation Units
 
-- [ ] **Unit 1: Execute final reconciliation CEP sync (all 27 hashes + 5 missing sub-file sets)**
+- [x] **Unit 1: Execute final reconciliation CEP sync (all 27 hashes + 5 missing sub-file sets)** — executed with scope expansion (see Execution Notes)
 
 **Goal:** Pull 27 hash updates plus missing sub-files for 5 skills. Manifest updated one final time before Unit 3 deletes it.
 
@@ -146,7 +150,7 @@ None. All work is internal cleanup against established patterns.
 
 ---
 
-- [ ] **Unit 2: Delete CEP sync infrastructure**
+- [x] **Unit 2: Delete CEP sync infrastructure**
 
 **Goal:** Remove the `/sync-cep` command, `convert-cc-defs` skill, `check-cep-upstream.ts` script, and its unit test.
 
@@ -174,7 +178,7 @@ None. All work is internal cleanup against established patterns.
 
 ---
 
-- [ ] **Unit 3: Delete sync-manifest.json and manifest module**
+- [x] **Unit 3: Delete sync-manifest.json and manifest module**
 
 **Goal:** Remove `sync-manifest.json`, `src/lib/manifest.ts`, `tests/unit/manifest.test.ts`. Confirmed clean removal — manifest module has zero imports from plugin code.
 
@@ -203,7 +207,7 @@ None. All work is internal cleanup against established patterns.
 
 ---
 
-- [ ] **Unit 4: Update AGENTS.md for independence narrative**
+- [x] **Unit 4: Update AGENTS.md for independence narrative**
 
 **Goal:** Reframe AGENTS.md to reflect fully independent project. Remove all CEP-sync language. Keep CLI `convert` command documentation.
 
@@ -234,7 +238,7 @@ None. All work is internal cleanup against established patterns.
 
 ---
 
-- [ ] **Unit 5: Delete sync-cep and convert-cc-defs integration test blocks**
+- [x] **Unit 5: Delete sync-cep and convert-cc-defs integration test blocks**
 
 **Goal:** Remove `describe('sync-cep workflow simulation')` and `describe('convert-cc-defs skill discoverability')` blocks from integration tests. They reference infrastructure deleted in Units 2-3.
 
@@ -258,7 +262,7 @@ None. All work is internal cleanup against established patterns.
 
 ---
 
-- [ ] **Unit 6: README + docs/ truth reset**
+- [x] **Unit 6: README + docs/ truth reset**
 
 **Goal:** README contains no false counts and no nonexistent skill/agent names. Every `ocx add systematic/<name>` example resolves to a real registered component. AGENTS.md and docs match.
 
@@ -295,7 +299,7 @@ None. All work is internal cleanup against established patterns.
 
 ---
 
-- [ ] **Unit 7: Close stale GitHub issues**
+- [ ] **Unit 7: Close stale GitHub issues** — deferred to post-PR-merge (depends on PR number to reference in close comment)
 
 **Goal:** Issues #227, #231, #239 (CEP sync runs from March 24-26) closed with comment referencing the reset PR.
 
@@ -314,6 +318,65 @@ None. All work is internal cleanup against established patterns.
 
 **Verification:**
 - `gh issue list --state open` no longer shows the three issues
+
+## Execution Notes (April 17, 2026)
+
+Executed via `ce:work` on branch `feat/truth-reset`. Two commits produced:
+
+| Commit    | Purpose                                              | Files    | Diff            |
+| --------- | ---------------------------------------------------- | -------- | --------------- |
+| `2ed916d` | Truth reset and CEP divorce (Units 1-6 initial pass) | 87       | +3468 / −8017   |
+| `38d658f` | Fix missed CEP→Systematic conversions (see below)    | 42       | +262 / −262     |
+
+### Unit 1 — scope expanded 2.3× from plan
+
+Precheck against CEP HEAD at execution time showed **63 hash changes** — not the 27 the plan anticipated. Tolerance was ±5 (plan said pause if outside). User approved **Option A (full sync)** rather than subset/skip.
+
+All 63 definitions converted cleanly. No failures. 120 files written through the converter. Verification of the 5 multi-file skills revealed all sub-file trees already existed on disk — the plan's "CREATE" work was vacuously satisfied (prior memory was stale).
+
+### Silent failure → fix commit
+
+The Unit 1 batch-sed post-sync cleanup at commit `2ed916d` **failed silently** due to a zsh word-splitting bug: `for f in $FILES; do ... done` with unquoted `$FILES` iterates ONCE in zsh with `$f` being the entire multi-line string (unlike bash). `[ -f "$f" ] || continue` returned false, the loop body never ran, and the downstream verification grep had the same bug — producing empty output that falsely signaled "clean". Both the conversion AND the safety net failed together.
+
+Discovery: user reported residual `Claude Code` refs in SKILL.md files. Oracle independent audit + self-grep converged on 41 affected files, ~200+ unconverted lines across:
+- `Claude Code` branding in multi-platform comparison prose
+- `AskUserQuestion`, `TaskCreate`, `TodoWrite` tool names inside backticks (converter skips code blocks by design; batch sed was supposed to catch these)
+- `compound-engineering:{review,research,workflow,design,docs,document-review}:*` plugin prefixes
+- `.context/compound-engineering/` runtime paths (`ce-review`, `todo-*`, `ce-work-beta`)
+- `plugins/compound-engineering/` path examples
+- `ai:compound-engineering` / `Compound Engineering` identity strings (`proof` skill had 32 hits alone)
+- `${CLAUDE_PLUGIN_ROOT}/skills/git-worktree/scripts/` CC-specific env var paths
+- `.compound-engineering/config.local.yaml` local config path
+- `CLAUDE.md` → `AGENTS.md` rewrites (plus downstream surgical cleanup of `AGENTS.md and AGENTS.md` redundancies created by the blanket replacement in `ce-compound-refresh` and `ce-compound`)
+
+Fix (commit `38d658f`): drove all conversions through `find ... | while IFS= read -r f` instead of the broken zsh for-loop. Same Phase A→G ordering as before. Added two surgical edits to simplify the now-logically-inverted shim-comparison sentences. Verified zero residual patterns, zero over-conversions. Memory #677 saved to prevent recurrence.
+
+### Plan-vs-reality deviations
+
+| Plan assumption                                | Reality                                                                 |
+| ---------------------------------------------- | ----------------------------------------------------------------------- |
+| 27 hash changes                                | 63 hash changes (2.3×); user approved full sync                         |
+| 5 skills need sub-file CREATE                  | All sub-files already on disk; only content updated                     |
+| Single commit via batch sed                    | Required follow-up fix commit due to zsh bug                            |
+| Unit 4 test counts: 13 unit, 2 integration     | Accurate after deletions (down from 15 unit)                            |
+| `sync-manifest.json` would get one final update | Deleted entirely in Unit 3 as planned                                   |
+
+### Exceptions preserved (verified)
+
+- `skills/claude-permissions-optimizer/` — 15 CC refs intentional (targets CC settings); 0 `compound-engineering` refs
+- `skills/orchestrating-swarms/` — 29+ pre-existing patterns untouched (Initiative #2 scope)
+- `AGENTS.md` — CEP historical attribution kept in Overview
+- `src/lib/converter.ts` + `tests/unit/converter.test.ts` — rule documentation
+- `docs/src/content/docs/guides/conversion-guide.mdx` — migration guide (legitimately describes CC)
+- Multi-platform comparison clauses — semantically correct after tool-name rewrites: `` `question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini``
+
+### Quality gate (final state)
+
+- Build ✅ | Typecheck ✅ | Lint ✅ (0 errors, 1 warning from pre-existing upstream source)
+- Unit tests: 279/279 across 11 files (down from 331/13 after deleting manifest + check-cep-upstream tests)
+- Integration tests: 14/14 across 2 files (down from 28 after deleting sync-cep + convert-cc-defs describe blocks)
+- Zero CC/CEP refs remaining in actionable source files
+- Zero over-conversions
 
 ## System-Wide Impact
 
