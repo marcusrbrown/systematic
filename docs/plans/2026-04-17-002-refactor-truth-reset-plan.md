@@ -1,14 +1,26 @@
 ---
 title: Truth Reset (Initiative 1 of 3)
 type: refactor
-status: executed-pending-pr
+status: completed
 date: 2026-04-17
+completed_at: 2026-04-17
 origin: docs/brainstorms/2026-04-17-credibility-reset-requirements.md
 supersedes_plan: docs/plans/2026-04-17-001-refactor-credibility-reset-plan.md
 branch: feat/truth-reset
+pr: https://github.com/marcusrbrown/systematic/pull/290
+release: https://github.com/marcusrbrown/systematic/releases/tag/v2.4.0
+merge_commit: 349596e
 commits:
   - 2ed916d feat(trust): truth reset and final CEP divorce
   - 38d658f fix(sync): complete missed CEP→Systematic conversions in 41 files
+  - 53e78a8 docs(plan): mark Units 1-6 executed, add execution notes
+  - 5185374 fix(review): resolve P1/P2 findings from ce:review mode:report-only
+  - fd80469 docs(solutions): capture 3 learnings from truth-reset cycle, archive 3 obsolete docs
+  - f8f99fa fix(review): address Fro Bot + CodeQL findings on PR #290
+closed_issues:
+  - 'marcusrbrown/systematic#227 (CEP Sync Run 2026-03-24) — closed 2026-04-17'
+  - 'marcusrbrown/systematic#231 (CEP Sync Run 2026-03-25) — closed 2026-04-17'
+  - 'marcusrbrown/systematic#239 (CEP Sync Run 2026-03-26) — closed 2026-04-17'
 ---
 
 # Truth Reset — Close the Gap Between Public Claims and Repo Reality
