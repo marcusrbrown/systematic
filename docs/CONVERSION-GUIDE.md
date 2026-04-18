@@ -36,7 +36,7 @@
 |----------|----------|-------------------|
 | `name` | `name` | **Keep** - lowercase, hyphens, max 64 chars |
 | `description` | `description` | **Keep** - critical for trigger matching |
-| `model` | `model` | **Normalize** - adds provider prefix (e.g., `sonnet` → `anthropic/sonnet`), removes `inherit` |
+| `model` | `model` | **Normalize** - prefer `model: inherit`; if pinning, use a current canonical model ID |
 | `allowed-tools` | — | **Pass through** - stored but not enforced by OC |
 | `argument-hint` | `argument-hint` | **Keep** (used for autocomplete hints) |
 | `disable-model-invocation` | `hidden` | **Map** - `true` → `hidden: true` |
@@ -464,7 +464,7 @@ Reference `.opencode/skills/` or use `systematic_skill` for bundled skills.
 ```
 
 **Changes made:**
-1. ✅ `model: sonnet` normalized to `model: anthropic/sonnet` (or removed if `inherit`)
+1. ✅ `model: sonnet` converted to `model: inherit` (recommended for bundled agents)
 2. ✅ `allowed-tools` passed through (not stripped)
 3. ✅ Enhanced `description` with trigger conditions (manual step)
 4. ✅ Changed `Task tool` → `task or @mention`
