@@ -1,5 +1,10 @@
 import { describe, expect, test } from 'bun:test'
-import { extractAgentFrontmatter } from '../../src/lib/agents.js'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
+import {
+  extractAgentFrontmatter,
+  findAgentsInDir,
+} from '../../src/lib/agents.js'
 
 describe('extractAgentFrontmatter', () => {
   test('extracts name from frontmatter', () => {
@@ -181,5 +186,27 @@ Prompt`
       const result = extractAgentFrontmatter(content)
       expect(result.permission).toEqual({ edit: 'allow' })
     })
+  })
+})
+
+describe('bundled agents', () => {
+  test('do not use deprecated Anthropic model aliases', () => {
+    const deprecatedModels = new Set([
+      'sonnet',
+      'haiku',
+      'anthropic/sonnet',
+      'anthropic/haiku',
+    ])
+    const agentsDir = resolve(import.meta.dirname, '../../agents')
+    const offenders = findAgentsInDir(agentsDir).flatMap((agent) => {
+      const content = readFileSync(agent.file, 'utf8')
+      const { model } = extractAgentFrontmatter(content)
+      if (!model || !deprecatedModels.has(model)) {
+        return []
+      }
+      return [`${agent.file}: ${model}`]
+    })
+
+    expect(offenders).toEqual([])
   })
 })
