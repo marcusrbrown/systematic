@@ -173,5 +173,6 @@ jobs:
           github-token: ${{ secrets.FRO_BOT_PAT }}
           model: ${{ vars.FRO_BOT_MODEL }}
           omo-providers: ${{ secrets.OMO_PROVIDERS }}
+          opencode-config: ${{ secrets.OPENCODE_CONFIG }}
           prompt: ${{ env.PROMPT }}
           timeout: 0
