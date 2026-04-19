@@ -7,7 +7,9 @@ import { loadConfig } from './lib/config.js'
 import { createConfigHandler } from './lib/config-handler.js'
 import { createSkillTool } from './lib/skill-tool.js'
 
-const INTERNAL_AGENT_SIGNATURES = [
+// Exported so tests can reconstruct the skip predicate without duplicating
+// the signatures. Consumers outside tests should not depend on this.
+export const INTERNAL_AGENT_SIGNATURES = [
   'You are a title generator',
   'You are a helpful AI assistant tasked with summarizing conversations',
   'Summarize what was done in this conversation',

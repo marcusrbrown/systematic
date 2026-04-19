@@ -37,7 +37,7 @@ import { fileURLToPath } from 'node:url'
 import { walkDir } from '../src/lib/walk-dir.js'
 
 // ---------------------------------------------------------------------------
-// Banned-pattern list (R2)
+// Banned-pattern list
 // ---------------------------------------------------------------------------
 
 /**
@@ -69,7 +69,7 @@ function isBannedPattern(value: unknown): value is BannedPattern {
 }
 
 // ---------------------------------------------------------------------------
-// Allowlist types (R4, R5)
+// Allowlist types
 // ---------------------------------------------------------------------------
 
 export interface AllowlistEntry {
@@ -129,7 +129,7 @@ export interface CheckResult {
 }
 
 // ---------------------------------------------------------------------------
-// Allowlist loader (R4, R5)
+// Allowlist loader
 // ---------------------------------------------------------------------------
 
 const ALLOWLIST_RELATIVE_PATH = 'scripts/.drift-allowlist.json'
@@ -325,7 +325,7 @@ function isBroadPathGlob(pathGlob: string): boolean {
 }
 
 // ---------------------------------------------------------------------------
-// Category discovery (R1)
+// Category discovery
 // ---------------------------------------------------------------------------
 
 /**
@@ -344,7 +344,7 @@ export function discoverCategories(rootDir: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// Scan-target collection (R6)
+// Scan-target collection
 // ---------------------------------------------------------------------------
 
 export interface ScanTargets {
@@ -389,7 +389,7 @@ export function collectScanTargets(rootDir: string): ScanTargets {
 }
 
 // ---------------------------------------------------------------------------
-// Reference-integrity check (R1)
+// Reference-integrity check
 // ---------------------------------------------------------------------------
 
 /**
@@ -450,7 +450,7 @@ export function checkReferenceIntegrity(
 }
 
 // ---------------------------------------------------------------------------
-// Banned-pattern check (R2, R6)
+// Banned-pattern check
 // ---------------------------------------------------------------------------
 
 export function checkBannedPatterns(
