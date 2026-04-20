@@ -80,7 +80,9 @@ const PATH_REPLACEMENTS: ReadonlyArray<readonly [RegExp, string]> = [
 // Maps CC tool names (lowercased) to OC tool IDs for frontmatter `tools` arrays.
 // Must stay in sync with TOOL_MAPPINGS above. Not derived programmatically because
 // TOOL_MAPPINGS uses context-dependent regex patterns that can't be reliably parsed.
-const TOOL_NAME_MAP: Record<string, string> = {
+// Exported so the bootstrap tool-mapping template (src/lib/bootstrap.ts) can be
+// cross-checked for consistency with the converter's canonical mapping.
+export const TOOL_NAME_MAP: Record<string, string> = {
   task: 'task',
   todowrite: 'todowrite',
   askuserquestion: 'question',
