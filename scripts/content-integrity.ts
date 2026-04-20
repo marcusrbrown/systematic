@@ -271,7 +271,7 @@ function containsUnsupportedGlobChars(value: string): boolean {
 export function matchesPathGlob(filePath: string, pathGlob: string): boolean {
   if (pathGlob.endsWith('/**')) {
     const prefix = pathGlob.slice(0, -3)
-    return filePath === prefix || filePath.startsWith(`${prefix}/`)
+    return filePath.startsWith(`${prefix}/`)
   }
   return filePath === pathGlob
 }

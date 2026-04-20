@@ -261,28 +261,49 @@ describe('INTERNAL_AGENT_SIGNATURES skip heuristic', () => {
 
 describe('TOOL_NAME_MAP / bootstrap template consistency', () => {
   /**
-   * Render the tool-mapping template and extract every `` `X` → `y` ``
-   * markdown-list mapping. Returns the CC (left) and OC (right) tool names
-   * as they appear in the template.
+   * Extract all CC tool names from the left side of `→` arrows in the
+   * "Tool Mapping for OpenCode" section of the bootstrap template.
+   *
+   * Handles all three bullet forms found in the template:
+   *   - `X` → `y`              (simple 1:1, backtick-delimited OC name)
+   *   - `X` tool with … → prose  (prose RHS; extracts X only)
+   *   - `A`, `B`, `C` → prose  (multi-name LHS; extracts A, B, C)
+   *
+   * Note: this is an overlap-subset check, not a full-map consistency check.
+   * The bootstrap prose and the converter map only partially overlap by design —
+   * the bootstrap is instructional text, not a serialised TOOL_NAME_MAP.
    */
-  function extractToolMappings(template: string): { cc: string; oc: string }[] {
-    const mappings: { cc: string; oc: string }[] = []
-    const lineRe = /^- `([^`]+)` → `([^`]+)`/gm
-    for (const match of template.matchAll(lineRe)) {
-      mappings.push({ cc: match[1] ?? '', oc: match[2] ?? '' })
-    }
-    return mappings
+  function extractCCToolNames(template: string): string[] {
+    // Isolate the "Tool Mapping for OpenCode:" section to avoid false-positive
+    // matches on unrelated `→` arrows elsewhere in the bootstrap content.
+    const sectionStart = template.indexOf('**Tool Mapping for OpenCode:**')
+    if (sectionStart === -1) return []
+    const rest = template.slice(sectionStart)
+    // Section ends at the next bold heading that is NOT "Tool Mapping"
+    const nextHeading = rest.search(/\n\*\*(?!Tool Mapping)/)
+    const section = nextHeading >= 0 ? rest.slice(0, nextHeading) : rest
+
+    // For each bullet line, extract backtick-quoted tokens from the LHS of `→`.
+    // Uses flatMap to avoid nested loops that inflate cognitive complexity.
+    return section
+      .split('\n')
+      .filter((line) => line.startsWith('- '))
+      .flatMap((line) => {
+        const arrowIdx = line.indexOf(' → ')
+        const lhs = arrowIdx >= 0 ? line.slice(0, arrowIdx) : line
+        return [...lhs.matchAll(/`([^`]+)`/g)].map((m) => m[1] ?? '')
+      })
+      .filter(Boolean)
   }
 
   /**
-   * Names that appear on the left of `X → y` mappings but are intentionally
-   * Systematic-specific rather than imported from CC. These do not need to
-   * appear in TOOL_NAME_MAP (which is the CEP→Systematic converter's mapping,
-   * not a registry of every tool mentioned in prose).
+   * Names that appear in the template mapping section but are intentionally
+   * Systematic-specific rather than imported from CC. These do not need a
+   * TOOL_NAME_MAP entry (the map covers CC→Systematic converter renames only).
    */
   const SYSTEMATIC_ONLY_TOOLS = new Set(['systematicskill'])
 
-  test('rendered template contains at least one mapping', () => {
+  test('rendered template contains at least one CC tool reference', () => {
     const content = getBootstrapContent(
       {
         bootstrap: { enabled: true, file: undefined },
@@ -293,10 +314,10 @@ describe('TOOL_NAME_MAP / bootstrap template consistency', () => {
       { bundledSkillsDir: createTempBundledSkillsDir() },
     )
     expect(content).not.toBeNull()
-    expect(extractToolMappings(content ?? '').length).toBeGreaterThan(0)
+    expect(extractCCToolNames(content ?? '').length).toBeGreaterThan(0)
   })
 
-  test('every CC tool name in the template is a key in TOOL_NAME_MAP', () => {
+  test('every CC tool name in the template mapping section is a key in TOOL_NAME_MAP', () => {
     const content = getBootstrapContent(
       {
         bootstrap: { enabled: true, file: undefined },
@@ -306,13 +327,17 @@ describe('TOOL_NAME_MAP / bootstrap template consistency', () => {
       },
       { bundledSkillsDir: createTempBundledSkillsDir() },
     )
-    const mappings = extractToolMappings(content ?? '')
+    const ccNames = extractCCToolNames(content ?? '')
+    // Guard against section-parse regressions
+    expect(ccNames.length).toBeGreaterThan(0)
 
-    for (const { cc, oc } of mappings) {
-      const ccLower = cc.toLowerCase()
-      if (SYSTEMATIC_ONLY_TOOLS.has(ccLower)) continue
-      expect(TOOL_NAME_MAP).toHaveProperty(ccLower)
-      expect(TOOL_NAME_MAP[ccLower]).toBe(oc)
+    for (const cc of ccNames) {
+      const normalized = cc.toLowerCase()
+      if (SYSTEMATIC_ONLY_TOOLS.has(normalized)) continue
+      expect(
+        TOOL_NAME_MAP,
+        `Bootstrap template references "${cc}" but TOOL_NAME_MAP has no key "${normalized}"`,
+      ).toHaveProperty(normalized)
     }
   })
 

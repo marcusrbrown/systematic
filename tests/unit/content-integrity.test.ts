@@ -94,8 +94,19 @@ describe('matchesPathGlob', () => {
     ).toBe(true)
   })
 
-  test('treats the exact prefix as inside its /** scope', () => {
-    expect(matchesPathGlob('skills/foo', 'skills/foo/**')).toBe(true)
+  test('does not match the bare prefix itself (/** requires a child path)', () => {
+    // `skills/foo/**` means "any file under skills/foo/" — not the directory
+    // itself. The old behavior (true for the prefix) was semantically wrong
+    // and never occurs in practice (scanned files are always file paths).
+    expect(matchesPathGlob('skills/foo', 'skills/foo/**')).toBe(false)
+  })
+
+  test('bare segment glob (no /**) matches only exact paths', () => {
+    // A pathGlob without /** is an exact-path match; it does not act as
+    // a directory prefix.
+    expect(matchesPathGlob('src', 'src')).toBe(true)
+    expect(matchesPathGlob('src/lib/x.ts', 'src')).toBe(false)
+    expect(matchesPathGlob('src/lib/x.ts', 'src/lib/x.ts')).toBe(true)
   })
 
   test('does not match sibling directories with a similar prefix', () => {
@@ -520,6 +531,33 @@ describe('checkBannedPatterns', () => {
     }
   })
 
+  test('BLIND SPOT: banned pattern split across two lines is not detected (line-by-line scan)', () => {
+    // The gate scans each line independently. A banned pattern whose characters
+    // span a line break will NOT be detected. This is a known limitation — the
+    // patterns are short ASCII strings and in practice are never intentionally
+    // split across lines in skill/agent content.
+    //
+    // This test pins the current behavior. If the implementation moves to a
+    // whole-file scan (e.g., content.includes(pattern) before splitting into
+    // lines), this test must be updated intentionally.
+    const root = makeFixtureRepo()
+    try {
+      // "Claude Code" split across a line: "Claude\nCode" — neither line
+      // contains the full banned string, so the gate returns zero hits.
+      writeSkill(root, 'foo', 'Claude\nCode\n')
+      const targets = collectScanTargets(root)
+      const { hits } = checkBannedPatterns(
+        root,
+        [...targets.markdown, ...targets.typescript],
+        { exemptions: [] },
+      )
+      // KNOWN LIMITATION: split pattern is not detected.
+      expect(hits).toHaveLength(0)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   test('only exempts patterns listed in the matching allowlist entry', () => {
     const root = makeFixtureRepo()
     try {
@@ -710,6 +748,24 @@ describe('CLI', () => {
         'Banned patterns outside allowlist',
       )
       expect(result.stderr.toString()).toContain('TaskCreate')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('exits 1 when the allowlist file contains malformed JSON', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, 'scripts/.drift-allowlist.json', '{ invalid json }')
+
+      const result = Bun.spawnSync(['bun', SCRIPT_PATH, root], {
+        cwd: REPO_ROOT,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr.toString()).toContain('content-integrity:')
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
