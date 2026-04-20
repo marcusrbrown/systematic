@@ -1,4 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import {
+  afterAll,
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -260,6 +267,13 @@ describe('INTERNAL_AGENT_SIGNATURES skip heuristic', () => {
 // ---------------------------------------------------------------------------
 
 describe('TOOL_NAME_MAP / bootstrap template consistency', () => {
+  // Track temp dirs created by createTempBundledSkillsDir for cleanup.
+  const tempDirs: string[] = []
+  afterAll(() => {
+    for (const dir of tempDirs) {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
   /**
    * Extract all CC tool names from the left side of `→` arrows in the
    * "Tool Mapping for OpenCode" section of the bootstrap template.
@@ -345,6 +359,7 @@ describe('TOOL_NAME_MAP / bootstrap template consistency', () => {
     const dir = fs.mkdtempSync(
       path.join(os.tmpdir(), 'systematic-bootstrap-consistency-'),
     )
+    tempDirs.push(dir)
     fs.mkdirSync(path.join(dir, 'skills', 'using-systematic'), {
       recursive: true,
     })

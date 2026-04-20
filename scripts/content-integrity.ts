@@ -318,9 +318,9 @@ function buildAllowlistWarnings(
 function isBroadPathGlob(pathGlob: string): boolean {
   if (!pathGlob.endsWith('/**')) return false
   const prefix = pathGlob.slice(0, -3)
-  // A prefix is "specific" when it has at least one non-empty path segment
-  // (e.g., `skills/foo` is specific; `skills` alone is too broad because it
-  // exempts every skill).
+  // A prefix needs ≥ 2 non-empty path segments to be "specific".
+  // `skills/foo/**` (2 segments) is specific; `skills/**` (1 segment) is broad
+  // because it exempts every skill with a single entry.
   return prefix.split('/').filter((s) => s.length > 0).length < 2
 }
 

@@ -370,6 +370,37 @@ describe('loadAllowlist', () => {
       fs.rmSync(root, { recursive: true, force: true })
     }
   })
+
+  test('isBroadPathGlob: agents/** (1 segment) is broad; agents/research/** (2 segments) is not', () => {
+    // Pins the ≥2-segment threshold so a comment/code mismatch is caught immediately.
+    const root = makeFixtureRepo()
+    try {
+      writeAllowlist(root, [
+        {
+          pathGlob: 'agents/**',
+          patterns: ['Claude Code'],
+          reason:
+            'Broad glob covering all agents, intentionally broad for test.',
+        },
+        {
+          pathGlob: 'agents/research/**',
+          patterns: ['Claude Code'],
+          reason: 'Narrow glob covering only research agents for this test.',
+        },
+      ])
+      const scanned = ['agents/research/real-agent.md']
+      const { warnings } = loadAllowlist(root, scanned)
+      const broadWarnings = warnings.filter((w) => w.kind === 'broad-pathglob')
+      // agents/** → 1 segment → broad
+      expect(broadWarnings.some((w) => w.pathGlob === 'agents/**')).toBe(true)
+      // agents/research/** → 2 segments → specific
+      expect(
+        broadWarnings.some((w) => w.pathGlob === 'agents/research/**'),
+      ).toBe(false)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('checkReferenceIntegrity', () => {
