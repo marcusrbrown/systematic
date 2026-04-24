@@ -181,6 +181,21 @@ describe('normalizePermission', () => {
     expect(normalizePermission({ task: {} })).toBeUndefined()
   })
 
+  test('returns undefined when a field is explicitly set to undefined', () => {
+    // FRAGILITY: `{ edit: undefined }` has 'edit' in the object (the `in`
+    // operator returns true), so extractSimplePermission does NOT take the
+    // "key absent" path. Instead it evaluates `isPermissionSetting(undefined)`
+    // → false → returns null → normalizePermission returns undefined for the
+    // entire config. An explicitly-undefined field poisons the whole config
+    // rather than being ignored. Same silent-undefined chain as the tests
+    // above. Changing this (e.g., treating explicit undefined as "absent")
+    // must update this test intentionally.
+    expect(normalizePermission({ edit: undefined })).toBeUndefined()
+    expect(
+      normalizePermission({ edit: 'ask', webfetch: undefined }),
+    ).toBeUndefined()
+  })
+
   test('mixes simple fields and bash map in one config', () => {
     expect(
       normalizePermission({
