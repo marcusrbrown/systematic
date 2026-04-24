@@ -4,6 +4,17 @@ import path from 'node:path'
 import type { SystematicConfig } from './config.js'
 import { parseFrontmatter } from './frontmatter.js'
 
+// Signatures used to identify OpenCode internal agents (title generator,
+// summarizer, etc.) so bootstrap injection can be skipped. Exported for
+// test access — must NOT be re-exported from the plugin entry point
+// (src/index.ts) because OpenCode's plugin loader expects a single function
+// export; additional named exports break loading.
+export const INTERNAL_AGENT_SIGNATURES = [
+  'You are a title generator',
+  'You are a helpful AI assistant tasked with summarizing conversations',
+  'Summarize what was done in this conversation',
+]
+
 export interface BootstrapDeps {
   bundledSkillsDir: string
 }

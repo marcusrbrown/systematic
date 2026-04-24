@@ -9,8 +9,10 @@ import {
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { INTERNAL_AGENT_SIGNATURES } from '../../src/index.ts'
-import { getBootstrapContent } from '../../src/lib/bootstrap.ts'
+import {
+  getBootstrapContent,
+  INTERNAL_AGENT_SIGNATURES,
+} from '../../src/lib/bootstrap.ts'
 import { TOOL_NAME_MAP } from '../../src/lib/converter.ts'
 
 /**

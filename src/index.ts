@@ -2,18 +2,13 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Plugin } from '@opencode-ai/plugin'
-import { getBootstrapContent } from './lib/bootstrap.js'
+import {
+  getBootstrapContent,
+  INTERNAL_AGENT_SIGNATURES,
+} from './lib/bootstrap.js'
 import { loadConfig } from './lib/config.js'
 import { createConfigHandler } from './lib/config-handler.js'
 import { createSkillTool } from './lib/skill-tool.js'
-
-// Exported so tests can reconstruct the skip predicate without duplicating
-// the signatures. Consumers outside tests should not depend on this.
-export const INTERNAL_AGENT_SIGNATURES = [
-  'You are a title generator',
-  'You are a helpful AI assistant tasked with summarizing conversations',
-  'Summarize what was done in this conversation',
-]
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
