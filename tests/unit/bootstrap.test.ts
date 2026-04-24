@@ -289,14 +289,26 @@ describe('TOOL_NAME_MAP / bootstrap template consistency', () => {
    * The bootstrap prose and the converter map only partially overlap by design —
    * the bootstrap is instructional text, not a serialised TOOL_NAME_MAP.
    */
+  // Section heading used to locate the tool-mapping block in the bootstrap
+  // template. Must match the literal heading in src/lib/bootstrap.ts's
+  // getToolMappingTemplate(). If that heading changes, this must be updated.
+  const TOOL_MAPPING_HEADING = '**Tool Mapping for OpenCode:**'
+
+  // Matches the start of the NEXT bold markdown heading after the tool-mapping
+  // section. The negative lookahead (?!Tool Mapping) prevents matching the
+  // section's own heading if it appears in a self-referential context.
+  // A new bold heading starting with "Tool" (but not "Tool Mapping") will
+  // correctly terminate the section — the lookahead only exempts the exact
+  // phrase "Tool Mapping".
+  const NEXT_BOLD_HEADING_RE = /\n\*\*(?!Tool Mapping)/
+
   function extractCCToolNames(template: string): string[] {
-    // Isolate the "Tool Mapping for OpenCode:" section to avoid false-positive
-    // matches on unrelated `→` arrows elsewhere in the bootstrap content.
-    const sectionStart = template.indexOf('**Tool Mapping for OpenCode:**')
+    // Isolate the tool-mapping section to avoid false-positive matches on
+    // unrelated `→` arrows elsewhere in the bootstrap content.
+    const sectionStart = template.indexOf(TOOL_MAPPING_HEADING)
     if (sectionStart === -1) return []
     const rest = template.slice(sectionStart)
-    // Section ends at the next bold heading that is NOT "Tool Mapping"
-    const nextHeading = rest.search(/\n\*\*(?!Tool Mapping)/)
+    const nextHeading = rest.search(NEXT_BOLD_HEADING_RE)
     const section = nextHeading >= 0 ? rest.slice(0, nextHeading) : rest
 
     // For each bullet line, extract backtick-quoted tokens from the LHS of `→`.
