@@ -21,7 +21,7 @@
  *
  * Usage:
  *   bun scripts/generate-registry.ts             # Regenerate registry.jsonc in place
- *   bun scripts/generate-registry.ts --check     # Exit non-zero if registry would change (Unit 4)
+ *   bun scripts/generate-registry.ts --check     # Exit non-zero if registry would change
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -34,17 +34,22 @@ import { walkDir } from '../src/lib/walk-dir.js'
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const PROJECT_ROOT = path.resolve(__dirname, '..')
-const REGISTRY_PATH = path.join(PROJECT_ROOT, 'registry/registry.jsonc')
-const SKILLS_DIR = path.join(PROJECT_ROOT, 'skills')
-const AGENTS_DIR = path.join(PROJECT_ROOT, 'agents')
 
-const SCHEMA_URL = 'https://ocx.kdco.dev/schemas/v2/registry.json'
+export const SCHEMA_URL = 'https://ocx.kdco.dev/schemas/v2/registry.json'
 
-const EXCLUDED_FILE_NAMES = new Set(['.DS_Store', '.gitkeep', 'AGENTS.md'])
+export const EXCLUDED_FILE_NAMES: ReadonlySet<string> = new Set([
+  '.DS_Store',
+  '.gitkeep',
+  'AGENTS.md',
+])
 
-const EXCLUDED_FILE_PATTERNS: ReadonlyArray<RegExp> = [/\.bak$/, /\.tmp$/, /~$/]
+export const EXCLUDED_FILE_PATTERNS: ReadonlyArray<RegExp> = [
+  /\.bak$/,
+  /\.tmp$/,
+  /~$/,
+]
 
-const EXCLUDED_DIR_NAMES = new Set([
+export const EXCLUDED_DIR_NAMES: ReadonlySet<string> = new Set([
   '__pycache__',
   '.pytest_cache',
   'node_modules',
@@ -54,7 +59,7 @@ const CURATED_TYPES = new Set(['bundle', 'profile', 'plugin'])
 
 type FileEntry = string | { path: string; target: string }
 
-interface ComponentEntry {
+export interface ComponentEntry {
   name: string
   type: string
   description?: string
@@ -73,7 +78,7 @@ interface RegistrySource {
   components?: ComponentEntry[]
 }
 
-interface RegistryOutput {
+export interface RegistryOutput {
   $schema: string
   name: string
   namespace: string
@@ -83,11 +88,11 @@ interface RegistryOutput {
 }
 
 /** V2 schema requires `^[a-z0-9]+(-[a-z0-9]+)*$` — replace underscores with hyphens. */
-function sanitizeComponentName(name: string): string {
+export function sanitizeComponentName(name: string): string {
   return name.replace(/_/g, '-')
 }
 
-function isExcludedFile(filePath: string): boolean {
+export function isExcludedFile(filePath: string): boolean {
   const basename = path.basename(filePath)
   if (EXCLUDED_FILE_NAMES.has(basename)) return true
   if (EXCLUDED_FILE_PATTERNS.some((pattern) => pattern.test(basename))) {
@@ -97,17 +102,21 @@ function isExcludedFile(filePath: string): boolean {
   return segments.some((segment) => EXCLUDED_DIR_NAMES.has(segment))
 }
 
+class GenerationError extends Error {}
+
 function requireDescription(componentName: string, description: string): void {
   if (description.trim().length === 0) {
-    console.error(
-      `Error: Component "${componentName}" has empty description. V2 schema requires a non-empty description.`,
+    throw new GenerationError(
+      `Component "${componentName}" has empty description. V2 schema requires a non-empty description.`,
     )
-    process.exit(1)
   }
 }
 
-function generateSkillComponents(): ComponentEntry[] {
-  const skills = findSkillsInDir(SKILLS_DIR)
+function generateSkillComponents(rootDir: string): ComponentEntry[] {
+  const skillsDir = path.join(rootDir, 'skills')
+  if (!fs.existsSync(skillsDir)) return []
+
+  const skills = findSkillsInDir(skillsDir)
   const components: ComponentEntry[] = []
 
   for (const skill of skills) {
@@ -117,9 +126,7 @@ function generateSkillComponents(): ComponentEntry[] {
       filter: (e) => !e.isDirectory && !isExcludedFile(e.path),
     })
 
-    const files = fileEntries
-      .map((e) => path.relative(PROJECT_ROOT, e.path))
-      .sort()
+    const files = fileEntries.map((e) => path.relative(rootDir, e.path)).sort()
 
     if (files.length === 0) {
       console.warn(
@@ -141,8 +148,11 @@ function generateSkillComponents(): ComponentEntry[] {
   return components
 }
 
-function generateAgentComponents(): ComponentEntry[] {
-  const agents = findAgentsInDir(AGENTS_DIR)
+function generateAgentComponents(rootDir: string): ComponentEntry[] {
+  const agentsDir = path.join(rootDir, 'agents')
+  if (!fs.existsSync(agentsDir)) return []
+
+  const agents = findAgentsInDir(agentsDir)
   const components: ComponentEntry[] = []
 
   for (const agent of agents) {
@@ -158,7 +168,7 @@ function generateAgentComponents(): ComponentEntry[] {
       name: componentName,
       type: 'agent',
       description: frontmatter.description,
-      files: [path.relative(PROJECT_ROOT, agent.file)],
+      files: [path.relative(rootDir, agent.file)],
     })
   }
 
@@ -172,15 +182,15 @@ function migrateCuratedType(component: ComponentEntry): ComponentEntry {
   return component
 }
 
-function loadCuratedComponents(): {
+function loadCuratedComponents(registryPath: string): {
   curated: ComponentEntry[]
   source: RegistrySource
 } {
-  if (!fs.existsSync(REGISTRY_PATH)) {
+  if (!fs.existsSync(registryPath)) {
     return { curated: [], source: {} }
   }
 
-  const raw = fs.readFileSync(REGISTRY_PATH, 'utf8')
+  const raw = fs.readFileSync(registryPath, 'utf8')
   const parsed = parseJsonc(raw) as RegistrySource | undefined
 
   if (parsed == null || !Array.isArray(parsed.components)) {
@@ -237,14 +247,34 @@ function buildRegistryOutput(
   }
 }
 
-export function generateRegistryContent(): string {
-  const skillComponents = generateSkillComponents()
-  const agentComponents = generateAgentComponents()
+/**
+ * Inline single-element string arrays to match Biome's JSON formatter output.
+ * `JSON.stringify(_, null, 2)` always uses multi-line arrays; Biome inlines
+ * arrays with one short string element. This keeps the generator's output stable
+ * under `bun run lint` (which auto-formats the registry) so the drift check
+ * doesn't false-positive on whitespace differences.
+ */
+function inlineSingleStringArrays(content: string): string {
+  return content.replace(
+    /\[\s*\n\s+"([^"\n]+)"\s*\n\s+\]/g,
+    (_match, value: string) => `["${value}"]`,
+  )
+}
+
+/**
+ * Generate the registry.jsonc file content for the given repo root. Pure function:
+ * reads from `<rootDir>/skills/`, `<rootDir>/agents/`, and `<rootDir>/registry/registry.jsonc`,
+ * but does not write anything. Throws GenerationError on any component with empty description.
+ */
+export function generateRegistryContent(rootDir: string): string {
+  const registryPath = path.join(rootDir, 'registry/registry.jsonc')
+  const skillComponents = generateSkillComponents(rootDir)
+  const agentComponents = generateAgentComponents(rootDir)
   const generated = [...skillComponents, ...agentComponents].sort((a, b) =>
     a.name.localeCompare(b.name),
   )
 
-  const { curated, source } = loadCuratedComponents()
+  const { curated, source } = loadCuratedComponents(registryPath)
   const skillNames = skillComponents.map((c) => c.name)
   const agentNames = agentComponents.map((c) => c.name)
   const updatedCurated = autoPopulateBundleDependencies(
@@ -254,12 +284,17 @@ export function generateRegistryContent(): string {
   )
 
   const registry = buildRegistryOutput(source, generated, updatedCurated)
-  return `${HEADER_COMMENT}\n${JSON.stringify(registry, null, 2)}\n`
+  const json = JSON.stringify(registry, null, 2)
+  return `${HEADER_COMMENT}\n${inlineSingleStringArrays(json)}\n`
 }
 
-function countComponents(content: string): number {
+export function countComponents(content: string): number {
   const parsed = parseJsonc(content) as RegistrySource | undefined
   return parsed?.components?.length ?? 0
+}
+
+export function normalizeForCompare(content: string): string {
+  return content.replace(/\s+$/, '')
 }
 
 function parseArgs(argv: string[]): { check: boolean } {
@@ -267,22 +302,29 @@ function parseArgs(argv: string[]): { check: boolean } {
   return { check: args.includes('--check') }
 }
 
-function normalizeForCompare(content: string): string {
-  return content.replace(/\s+$/, '')
-}
+function checkRegistry(rootDir: string): void {
+  const registryPath = path.join(rootDir, 'registry/registry.jsonc')
+  const relPath = path.relative(rootDir, registryPath)
 
-function checkRegistry(): void {
-  const generated = generateRegistryContent()
-  const relPath = path.relative(PROJECT_ROOT, REGISTRY_PATH)
+  let generated: string
+  try {
+    generated = generateRegistryContent(rootDir)
+  } catch (err) {
+    if (err instanceof GenerationError) {
+      console.error(`Error: ${err.message}`)
+      process.exit(1)
+    }
+    throw err
+  }
 
-  if (!fs.existsSync(REGISTRY_PATH)) {
+  if (!fs.existsSync(registryPath)) {
     console.error(
       `Error: ${relPath} does not exist. Run \`bun scripts/generate-registry.ts\` to create it.`,
     )
     process.exit(1)
   }
 
-  const existing = fs.readFileSync(REGISTRY_PATH, 'utf8')
+  const existing = fs.readFileSync(registryPath, 'utf8')
   if (normalizeForCompare(existing) === normalizeForCompare(generated)) {
     console.log(
       `${relPath} is up to date (${countComponents(generated)} components)`,
@@ -296,18 +338,33 @@ function checkRegistry(): void {
   process.exit(1)
 }
 
-function main(): void {
+function main(rootDir: string): void {
   const { check } = parseArgs(process.argv)
 
   if (check) {
-    checkRegistry()
+    checkRegistry(rootDir)
+    return
   }
 
-  const content = generateRegistryContent()
-  fs.writeFileSync(REGISTRY_PATH, content)
+  let content: string
+  try {
+    content = generateRegistryContent(rootDir)
+  } catch (err) {
+    if (err instanceof GenerationError) {
+      console.error(`Error: ${err.message}`)
+      process.exit(1)
+    }
+    throw err
+  }
+
+  const registryPath = path.join(rootDir, 'registry/registry.jsonc')
+  fs.writeFileSync(registryPath, content)
   console.log(
-    `Generated ${path.relative(PROJECT_ROOT, REGISTRY_PATH)} (${countComponents(content)} components)`,
+    `Generated ${path.relative(rootDir, registryPath)} (${countComponents(content)} components)`,
   )
 }
 
-main()
+// Only run main() when this file is invoked directly (not when imported by tests).
+if (import.meta.main) {
+  main(PROJECT_ROOT)
+}
