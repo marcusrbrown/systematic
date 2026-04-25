@@ -40,7 +40,8 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Install Playwright Chromium
-        run: bun --cwd docs x playwright install --with-deps chromium
+        run: bun playwright install --with-deps chromium
+        working-directory: docs
 
       - name: Generate reference content
         run: bun run docs:generate
