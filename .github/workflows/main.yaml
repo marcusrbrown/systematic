@@ -62,6 +62,9 @@ jobs:
       - name: Content integrity gate
         run: bun scripts/content-integrity.ts
 
+      - name: Registry drift check
+        run: bun scripts/generate-registry.ts --check
+
   typecheck:
     name: Typecheck
     runs-on: ubuntu-latest

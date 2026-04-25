@@ -257,17 +257,57 @@ export function generateRegistryContent(): string {
   return `${HEADER_COMMENT}\n${JSON.stringify(registry, null, 2)}\n`
 }
 
+function countComponents(content: string): number {
+  const parsed = parseJsonc(content) as RegistrySource | undefined
+  return parsed?.components?.length ?? 0
+}
+
+function parseArgs(argv: string[]): { check: boolean } {
+  const args = argv.slice(2)
+  return { check: args.includes('--check') }
+}
+
+function normalizeForCompare(content: string): string {
+  return content.replace(/\s+$/, '')
+}
+
+function checkRegistry(): void {
+  const generated = generateRegistryContent()
+  const relPath = path.relative(PROJECT_ROOT, REGISTRY_PATH)
+
+  if (!fs.existsSync(REGISTRY_PATH)) {
+    console.error(
+      `Error: ${relPath} does not exist. Run \`bun scripts/generate-registry.ts\` to create it.`,
+    )
+    process.exit(1)
+  }
+
+  const existing = fs.readFileSync(REGISTRY_PATH, 'utf8')
+  if (normalizeForCompare(existing) === normalizeForCompare(generated)) {
+    console.log(
+      `${relPath} is up to date (${countComponents(generated)} components)`,
+    )
+    process.exit(0)
+  }
+
+  console.error(
+    `Error: ${relPath} is out of date. Run \`bun scripts/generate-registry.ts\` to update it.`,
+  )
+  process.exit(1)
+}
+
 function main(): void {
+  const { check } = parseArgs(process.argv)
+
+  if (check) {
+    checkRegistry()
+  }
+
   const content = generateRegistryContent()
   fs.writeFileSync(REGISTRY_PATH, content)
   console.log(
     `Generated ${path.relative(PROJECT_ROOT, REGISTRY_PATH)} (${countComponents(content)} components)`,
   )
-}
-
-function countComponents(content: string): number {
-  const parsed = parseJsonc(content) as RegistrySource | undefined
-  return parsed?.components?.length ?? 0
 }
 
 main()
