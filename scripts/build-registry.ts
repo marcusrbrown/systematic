@@ -4,7 +4,14 @@ import { execSync } from 'node:child_process'
  * Build OCX Registry
  *
  * Reads registry/registry.jsonc, validates all referenced files exist,
- * and produces dist/registry/ output following OCX Registry Protocol v1.
+ * and produces dist/registry/ output following OCX Registry Protocol v2.
+ *
+ * V2 schema differences from V1:
+ *   - Component types are unprefixed (`skill`, `agent`, `bundle`, `profile`, `plugin`) — no `ocx:` prefix
+ *   - File entries are repo-root-relative paths
+ *   - File entries support string shorthand (path === target) in addition to {path, target} objects
+ *   - No `.opencode/` prefix on targets — OCX CLI auto-resolves install location by component type
+ *   - No singularization rewrites (V2 accepts plural target prefixes like `agents/`, `skills/`)
  *
  * Usage:
  *   bun scripts/build-registry.ts                    # Full build
@@ -30,14 +37,28 @@ interface RegistryFile {
   target: string
 }
 
+/**
+ * V2 file entries can be either:
+ *   - A {path, target} object when source and target paths differ (e.g., profiles)
+ *   - A string shorthand when source path equals target path (e.g., generated skills/agents)
+ */
+type RegistryFileEntry = RegistryFile | string
+
 interface RegistryComponent {
   name: string
   type: string
   version: string
   description?: string
-  files?: RegistryFile[]
+  files?: RegistryFileEntry[]
   dependencies?: string[]
   opencode?: Record<string, unknown>
+}
+
+function normalizeFileEntry(entry: RegistryFileEntry): RegistryFile {
+  if (typeof entry === 'string') {
+    return { path: entry, target: entry }
+  }
+  return entry
 }
 
 interface RegistrySource {
@@ -175,32 +196,14 @@ function loadRegistrySource(): RegistrySource {
 }
 
 /**
- * Maps a component's file entry to its actual disk location.
- * Skills use paths relative to skills/{name}/, agents/commands use project-root-relative paths.
+ * Resolves a V2 file entry to its actual disk location.
+ * V2 file paths are always repo-root-relative regardless of component type.
  */
 function resolveComponentFilePath(
-  component: RegistryComponent,
+  _component: RegistryComponent,
   file: RegistryFile,
 ): string {
-  const type = component.type
-
-  if (type === 'ocx:skill') {
-    return path.join(PROJECT_ROOT, 'skills', component.name, file.path)
-  }
-
-  if (type === 'ocx:agent') {
-    return path.join(PROJECT_ROOT, file.path)
-  }
-
-  if (type === 'ocx:command') {
-    return path.join(PROJECT_ROOT, file.path)
-  }
-
-  if (type === 'ocx:profile') {
-    return path.join(PROJECT_ROOT, 'registry/files', file.path)
-  }
-
-  return path.join(PROJECT_ROOT, 'registry/files', file.path)
+  return path.join(PROJECT_ROOT, file.path)
 }
 
 function validateRegistry(source: RegistrySource): string[] {
@@ -211,13 +214,13 @@ function validateRegistry(source: RegistrySource): string[] {
     string,
     (component: RegistryComponent, errors: string[]) => void
   > = {
-    'ocx:skill': validateSkillComponent,
-    'ocx:agent': validateFileComponent,
-    'ocx:command': validateFileComponent,
-    'ocx:bundle': (component, currentErrors) =>
+    skill: validateSkillComponent,
+    agent: validateFileComponent,
+    command: validateFileComponent,
+    bundle: (component, currentErrors) =>
       validateBundleComponent(component, source, currentErrors),
-    'ocx:profile': validateProfileComponent,
-    'ocx:plugin': () => undefined,
+    profile: validateProfileComponent,
+    plugin: () => undefined,
   }
 
   for (const component of source.components) {
@@ -251,12 +254,15 @@ function validateSkillComponent(
     return
   }
 
-  const hasSkillMd = component.files.some((f) => f.path === 'SKILL.md')
-  if (!hasSkillMd) {
+  const normalizedFiles = component.files.map(normalizeFileEntry)
+  const skillMdFile = normalizedFiles.find(
+    (f) => f.path === 'SKILL.md' || f.path.endsWith('/SKILL.md'),
+  )
+  if (skillMdFile == null) {
     errors.push(`${prefix} Skill component missing SKILL.md`)
   }
 
-  for (const file of component.files) {
+  for (const file of normalizedFiles) {
     const diskPath = resolveComponentFilePath(component, file)
     if (!fs.existsSync(diskPath)) {
       errors.push(
@@ -265,15 +271,21 @@ function validateSkillComponent(
     }
   }
 
-  const skillDir = path.join(PROJECT_ROOT, 'skills', component.name)
+  // Derive the skill directory from the SKILL.md location so unlisted-file checks
+  // work regardless of any directory-name → component-name sanitization (e.g.,
+  // skills/generate_command/ → component name "generate-command").
+  if (skillMdFile == null) return
+  const skillDir = path.join(PROJECT_ROOT, path.dirname(skillMdFile.path))
   if (fs.existsSync(skillDir)) {
     const diskFiles = walkFiles(skillDir)
-    const declaredPaths = new Set(component.files.map((f) => f.path))
+    const declaredPaths = new Set(normalizedFiles.map((f) => f.path))
 
     for (const diskFile of diskFiles) {
-      const rel = path.relative(skillDir, diskFile)
-      if (!declaredPaths.has(rel)) {
-        errors.push(`${prefix} Unlisted file in skill directory: ${rel}`)
+      const repoRelative = path.relative(PROJECT_ROOT, diskFile)
+      if (!declaredPaths.has(repoRelative)) {
+        errors.push(
+          `${prefix} Unlisted file in skill directory: ${repoRelative}`,
+        )
       }
     }
   }
@@ -290,7 +302,8 @@ function validateFileComponent(
     return
   }
 
-  for (const file of component.files) {
+  const normalizedFiles = component.files.map(normalizeFileEntry)
+  for (const file of normalizedFiles) {
     if (!file.path.endsWith('.md')) {
       errors.push(`${prefix} File should be .md: ${file.path}`)
     }
@@ -315,7 +328,8 @@ function validateProfileComponent(
     return
   }
 
-  for (const file of component.files) {
+  const normalizedFiles = component.files.map(normalizeFileEntry)
+  for (const file of normalizedFiles) {
     const diskPath = resolveComponentFilePath(component, file)
     if (!fs.existsSync(diskPath)) {
       errors.push(
@@ -368,21 +382,6 @@ function walkFiles(dir: string): string[] {
   return results
 }
 
-/** OCX requires singular directory names for agent/command targets */
-const OCX_TARGET_REWRITES: ReadonlyArray<[RegExp, string]> = [
-  [/^\.opencode\/agents\//, '.opencode/agent/'],
-  [/^\.opencode\/commands\//, '.opencode/command/'],
-]
-
-function normalizeTargetPath(target: string): string {
-  for (const [pattern, replacement] of OCX_TARGET_REWRITES) {
-    if (pattern.test(target)) {
-      return target.replace(pattern, replacement)
-    }
-  }
-  return target
-}
-
 /** SHA-256 integrity: sha256-{base64(digest)} per OCX spec */
 function computeIntegrity(content: Buffer): string {
   const hash = createHash('sha256').update(content).digest('base64')
@@ -409,9 +408,9 @@ function buildRegistry(source: RegistrySource, version: string): void {
 
     if (Array.isArray(component.files) && component.files.length > 0) {
       buildPackument(component, version)
-    } else if (component.type === 'ocx:bundle') {
+    } else if (component.type === 'bundle') {
       buildBundlePackument(component, version)
-    } else if (component.type === 'ocx:plugin') {
+    } else if (component.type === 'plugin') {
       buildPluginPackument(component, version)
     }
   }
@@ -434,7 +433,8 @@ function buildPackument(component: RegistryComponent, version: string): void {
   const files = component.files ?? []
   const packumentFiles: PackumentFile[] = []
 
-  for (const file of files) {
+  for (const entry of files) {
+    const file = normalizeFileEntry(entry)
     const sourcePath = resolveComponentFilePath(component, file)
     let content: Buffer
     try {
@@ -446,7 +446,7 @@ function buildPackument(component: RegistryComponent, version: string): void {
 
     packumentFiles.push({
       path: file.path,
-      target: normalizeTargetPath(file.target),
+      target: file.target,
       integrity,
     })
 
