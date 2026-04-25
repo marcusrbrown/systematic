@@ -255,10 +255,11 @@ function validateSkillComponent(
   }
 
   const normalizedFiles = component.files.map(normalizeFileEntry)
-  const expectedSkillPath = `skills/${component.name}/SKILL.md`
-  const hasSkillMd = normalizedFiles.some((f) => f.path === expectedSkillPath)
-  if (!hasSkillMd) {
-    errors.push(`${prefix} Skill component missing ${expectedSkillPath}`)
+  const skillMdFile = normalizedFiles.find(
+    (f) => f.path === 'SKILL.md' || f.path.endsWith('/SKILL.md'),
+  )
+  if (skillMdFile == null) {
+    errors.push(`${prefix} Skill component missing SKILL.md`)
   }
 
   for (const file of normalizedFiles) {
@@ -270,7 +271,11 @@ function validateSkillComponent(
     }
   }
 
-  const skillDir = path.join(PROJECT_ROOT, 'skills', component.name)
+  // Derive the skill directory from the SKILL.md location so unlisted-file checks
+  // work regardless of any directory-name → component-name sanitization (e.g.,
+  // skills/generate_command/ → component name "generate-command").
+  if (skillMdFile == null) return
+  const skillDir = path.join(PROJECT_ROOT, path.dirname(skillMdFile.path))
   if (fs.existsSync(skillDir)) {
     const diskFiles = walkFiles(skillDir)
     const declaredPaths = new Set(normalizedFiles.map((f) => f.path))
