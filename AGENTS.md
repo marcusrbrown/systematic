@@ -1,6 +1,6 @@
 # AGENTS.md - Coding Agent Guidelines for Systematic
 
-**Generated:** 2026-03-22 | **Commit:** 500b805 | **Branch:** main
+**Generated:** 2026-04-25 | **Commit:** 7a64113 | **Branch:** main
 
 ## Overview
 
@@ -17,7 +17,7 @@ bun install              # Install deps
 bun run build            # Build to dist/
 bun run typecheck        # Type check (strict)
 bun run lint             # Biome linter
-bun test tests/unit      # Unit tests (11 files)
+bun test tests/unit      # Unit tests (14 files)
 bun test tests/integration  # Integration tests (2 files)
 bun test                 # All tests
 bun test --filter "pattern"  # Filter tests
@@ -31,7 +31,7 @@ bun run registry:validate  # Validate registry without building
 ## Stack
 
 - **Runtime:** Bun (Node.js API compatible)
-- **Language:** TypeScript 5.7+ strict mode
+- **Language:** TypeScript 6.x strict mode
 - **Modules:** ESM (`"type": "module"`)
 - **Linter:** Biome (not ESLint/Prettier)
 - **Tests:** `bun:test`
@@ -53,10 +53,10 @@ systematic/
 │   ├── scripts/          # Content generation from bundled assets
 │   └── src/content/      # Manual guides + generated reference
 ├── registry/             # OCX registry config + profiles (omo, standalone)
-├── scripts/              # Build scripts (build-registry.ts)
+├── scripts/              # Build + integrity scripts
 ├── assets/               # Static assets (banner SVG)
 ├── tests/
-│   ├── unit/             # 11 test files
+│   ├── unit/             # 14 test files
 │   └── integration/      # 2 test files
 ├── .opencode/            # Project-specific OC config + commands
 │   └── commands/         # Project-only commands (generate-readme)
@@ -82,6 +82,7 @@ systematic/
 | Add new skill | `skills/<name>/SKILL.md` |
 | Add new agent | `agents/<category>/<name>.md` |
 | OCX registry building | `scripts/build-registry.ts` |
+| Content integrity gate | `scripts/content-integrity.ts` |
 | Docs content generation | `docs/scripts/transform-content.ts` |
 | Docs site config | `docs/astro.config.mjs` |
 
@@ -89,12 +90,14 @@ systematic/
 
 | Symbol | Type | Location | Refs | Role |
 |--------|------|----------|------|------|
-| `SystematicPlugin` | export | src/index.ts:47 | 2 | Main plugin factory |
-| `createConfigHandler` | fn | src/lib/config-handler.ts:215 | 3 | Config hook — merges bundled assets |
-| `createSkillTool` | fn | src/lib/skill-tool.ts:87 | 3 | systematic_skill tool factory |
-| `getBootstrapContent` | fn | src/lib/bootstrap.ts:32 | 3 | System prompt injection |
-| `convertContent` | fn | src/lib/converter.ts:371 | 4 | CC→OpenCode body conversion |
-| `convertFileWithCache` | fn | src/lib/converter.ts:411 | 6 | Cached file conversion (mtime invalidation) |
+| `SystematicPlugin` | export | src/index.ts:44 | 2 | Main plugin factory |
+| `createConfigHandler` | fn | src/lib/config-handler.ts:221 | 3 | Config hook — merges bundled assets |
+| `createSkillTool` | fn | src/lib/skill-tool.ts:88 | 3 | systematic_skill tool factory |
+| `getBootstrapContent` | fn | src/lib/bootstrap.ts:43 | 3 | System prompt injection |
+| `INTERNAL_AGENT_SIGNATURES` | const | src/lib/bootstrap.ts:12 | 2 | Skip heuristic for internal agents |
+| `convertContent` | fn | src/lib/converter.ts:373 | 4 | CC→OpenCode body conversion |
+| `convertFileWithCache` | fn | src/lib/converter.ts:413 | 6 | Cached file conversion (mtime invalidation) |
+| `TOOL_NAME_MAP` | const | src/lib/converter.ts:85 | 2 | CC→OC tool name lookup |
 | `findSkillsInDir` | fn | src/lib/skills.ts:90 | 6 | Skill discovery (highest centrality) |
 | `findAgentsInDir` | fn | src/lib/agents.ts:49 | 4 | Agent discovery (category from subdir) |
 | `findCommandsInDir` | fn | src/lib/commands.ts:27 | 4 | Command discovery |
@@ -151,6 +154,7 @@ The `commands/` directory contains only `.gitkeep` (all commands converted to sk
 
 ## Notes
 
+- Content-integrity gate runs in CI (build job) — catches phantom `systematic:*` refs and banned CC/CEP patterns
 - Bootstrap injection is opt-out via `bootstrap.enabled: false`
 - Converter caches results using file mtime
 - CLI commands: `list` (skills/agents/commands), `convert` (file conversion), `config show/path`

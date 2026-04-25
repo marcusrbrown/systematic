@@ -33,7 +33,7 @@ All discovery follows same pattern: `dir → walkDir() → find files → parseF
 
 | Module | Key Exports | Role |
 |--------|-------------|------|
-| `converter.ts` | `convertContent`, `convertFileWithCache`, `clearConverterCache` | CEP→OpenCode transforms (tool names, models, body refs) |
+| `converter.ts` | `convertContent`, `convertFileWithCache`, `clearConverterCache`, `TOOL_NAME_MAP` | CEP→OpenCode transforms (tool names, models, body refs) |
 | `skill-loader.ts` | `loadSkill`, `LoadedSkill`, `SKILL_PREFIX` | Loads + wraps skill content in XML template |
 | `validation.ts` | `isAgentMode`, `isPermissionSetting`, `normalizePermission`, `extractString`, `extractBoolean` | Agent config extraction + type guards + safe value extraction |
 
@@ -44,7 +44,7 @@ All discovery follows same pattern: `dir → walkDir() → find files → parseF
 | `config.ts` | `loadConfig`, `getConfigPaths`, `SystematicConfig`, `DEFAULT_CONFIG` | JSONC config loading + merging |
 | `config-handler.ts` | `createConfigHandler`, `ConfigHandlerDeps`, `formatAgentDescription`, `toTitleCase` | OpenCode config hook (collects + converts all assets) |
 | `skill-tool.ts` | `createSkillTool`, `SkillToolOptions` | `systematic_skill` tool (XML description, skill execution) |
-| `bootstrap.ts` | `getBootstrapContent`, `BootstrapDeps` | System prompt injection (using-systematic skill) |
+| `bootstrap.ts` | `getBootstrapContent`, `INTERNAL_AGENT_SIGNATURES`, `BootstrapDeps` | System prompt injection (using-systematic skill) |
 
 ## Key Types
 
