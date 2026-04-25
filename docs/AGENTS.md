@@ -33,8 +33,8 @@ docs/
 │       ├── getting-started/  # 2 manual pages (installation, configuration)
 │       ├── guides/           # 7 manual pages (philosophy, main-loop, agent-install, architecture, conversion-guide, ocx-registry, exemplary-checklist)
 │       └── reference/        # Generated — DO NOT EDIT
-│           ├── skills/       # 48 pages + index.mdx (generated from skills/)
-│           └── agents/       # 29 pages + index.mdx (generated from agents/)
+│           ├── skills/       # 45 pages + index.mdx (generated from skills/)
+│           └── agents/       # 50 pages + index.mdx (generated from agents/)
 └── package.json
 ```
 
@@ -49,9 +49,9 @@ docs/
 
 Pipeline: `read file → parseFrontmatter → transformFrontmatter (name→title, agent category→badge) → generatePage → write`
 
-Each run cleans output dirs before regenerating. Index pages (`index.mdx`) are dynamically generated from the same enumerated entries using Starlight `CardGrid`/`LinkCard` components. Agents are grouped by category (design/docs/research/review/workflow). Slug collisions abort with error.
+Each run cleans output dirs before regenerating. Index pages (`index.mdx`) are dynamically generated from the same enumerated entries using Starlight `CardGrid`/`LinkCard` components. Agents are grouped by category (design/docs/document-review/research/review/workflow). Slug collisions abort with error.
 
-NOTE: `commands/` is empty (all commands converted to skills in upstream CEP sync). The generation script may still have command handling code but produces no command pages from current source.
+NOTE: `commands/` is empty (all commands converted to skills). The generation script may still have command handling code but produces no command pages from current source.
 
 ## Where to Look
 
