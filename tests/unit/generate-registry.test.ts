@@ -284,6 +284,39 @@ describe('generateRegistryContent — output shape', () => {
     }
   })
 
+  test('output round-trips through Biome formatter unchanged (no drift after lint)', () => {
+    // Regression guard: the generator passes JSON through Biome so its output
+    // matches what `bun run lint` would auto-format. If Biome's formatting rules
+    // change in a way the generator does not reflect, this test fails before the
+    // CI drift check ever sees it.
+    const root = makeFixtureRepo()
+    writeSkill(root, 'single-file-skill', 'Single file.') // exercises 1-element files array
+    writeSkill(root, 'multi-file-skill', 'Multi file.', {
+      'references/a.md': 'A',
+      'references/b.md': 'B',
+    })
+    writeAgent(root, 'review', 'one', 'Agent one.')
+    writeSeedRegistry(root, [
+      {
+        name: 'skills',
+        type: 'bundle',
+        description: 'All skills',
+        dependencies: [],
+        files: [],
+      },
+    ])
+
+    const generated = generateRegistryContent(root)
+
+    // Re-format through Biome explicitly; output must be byte-identical.
+    const reformatted = Bun.spawnSync(
+      ['bunx', 'biome', 'format', '--stdin-file-path=registry.jsonc'],
+      { stdin: new TextEncoder().encode(generated), stdout: 'pipe' },
+    ).stdout.toString()
+
+    expect(reformatted).toBe(generated)
+  })
+
   test('sorts generated components alphabetically with curated entries after', () => {
     const root = makeFixtureRepo()
     writeSkill(root, 'zebra', 'Zebra.')

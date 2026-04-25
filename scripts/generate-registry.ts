@@ -23,6 +23,7 @@
  *   bun scripts/generate-registry.ts             # Regenerate registry.jsonc in place
  *   bun scripts/generate-registry.ts --check     # Exit non-zero if registry would change
  */
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -102,11 +103,28 @@ export function isExcludedFile(filePath: string): boolean {
   return segments.some((segment) => EXCLUDED_DIR_NAMES.has(segment))
 }
 
-class GenerationError extends Error {}
+/**
+ * Tagged error for generator-detected validation failures (e.g. empty description).
+ * Plain Error + tag keeps the codebase class-free; callers detect via `code` field.
+ */
+type GenerationError = Error & { code: 'GENERATION_ERROR' }
+
+function generationError(message: string): GenerationError {
+  return Object.assign(new Error(message), {
+    code: 'GENERATION_ERROR' as const,
+  })
+}
+
+function isGenerationError(err: unknown): err is GenerationError {
+  return (
+    err instanceof Error &&
+    (err as { code?: string }).code === 'GENERATION_ERROR'
+  )
+}
 
 function requireDescription(componentName: string, description: string): void {
   if (description.trim().length === 0) {
-    throw new GenerationError(
+    throw generationError(
       `Component "${componentName}" has empty description. V2 schema requires a non-empty description.`,
     )
   }
@@ -248,17 +266,26 @@ function buildRegistryOutput(
 }
 
 /**
- * Inline single-element string arrays to match Biome's JSON formatter output.
- * `JSON.stringify(_, null, 2)` always uses multi-line arrays; Biome inlines
- * arrays with one short string element. This keeps the generator's output stable
- * under `bun run lint` (which auto-formats the registry) so the drift check
- * doesn't false-positive on whitespace differences.
+ * Run Biome's formatter over JSONC content via stdin. The generator does this
+ * to keep its output stable under `bun run lint` — `JSON.stringify` always uses
+ * multi-line arrays, while Biome inlines short single-element arrays, so without
+ * this step the drift check would false-positive after every lint run.
+ *
+ * Using Biome directly (instead of replicating its inlining rules) means the
+ * generator inherits any future Biome formatting changes for free.
  */
-function inlineSingleStringArrays(content: string): string {
-  return content.replace(
-    /\[\s*\n\s+"([^"\n]+)"\s*\n\s+\]/g,
-    (_match, value: string) => `["${value}"]`,
+function formatWithBiome(content: string, fileName: string): string {
+  const result = spawnSync(
+    'bunx',
+    ['biome', 'format', `--stdin-file-path=${fileName}`],
+    { input: content, encoding: 'utf8' },
   )
+  if (result.status !== 0) {
+    throw new Error(
+      `biome format failed (exit ${result.status}): ${result.stderr || result.stdout}`,
+    )
+  }
+  return result.stdout
 }
 
 /**
@@ -284,8 +311,8 @@ export function generateRegistryContent(rootDir: string): string {
   )
 
   const registry = buildRegistryOutput(source, generated, updatedCurated)
-  const json = JSON.stringify(registry, null, 2)
-  return `${HEADER_COMMENT}\n${inlineSingleStringArrays(json)}\n`
+  const raw = `${HEADER_COMMENT}\n${JSON.stringify(registry, null, 2)}\n`
+  return formatWithBiome(raw, 'registry.jsonc')
 }
 
 export function countComponents(content: string): number {
@@ -294,7 +321,8 @@ export function countComponents(content: string): number {
 }
 
 export function normalizeForCompare(content: string): string {
-  return content.replace(/\s+$/, '')
+  // Normalize CRLF -> LF first (Windows / git autocrlf) then strip trailing whitespace.
+  return content.replace(/\r\n/g, '\n').replace(/\s+$/, '')
 }
 
 function parseArgs(argv: string[]): { check: boolean } {
@@ -310,7 +338,7 @@ function checkRegistry(rootDir: string): void {
   try {
     generated = generateRegistryContent(rootDir)
   } catch (err) {
-    if (err instanceof GenerationError) {
+    if (isGenerationError(err)) {
       console.error(`Error: ${err.message}`)
       process.exit(1)
     }
@@ -350,7 +378,7 @@ function main(rootDir: string): void {
   try {
     content = generateRegistryContent(rootDir)
   } catch (err) {
-    if (err instanceof GenerationError) {
+    if (isGenerationError(err)) {
       console.error(`Error: ${err.message}`)
       process.exit(1)
     }
