@@ -59,6 +59,9 @@ jobs:
             console.log('Plugin loaded: ' + agents + ' agents, ' + commands + ' commands, tool: ' + (typeof plugin.tool.systematic_skill.execute));
           "
 
+      - name: Content integrity gate
+        run: bun scripts/content-integrity.ts
+
   typecheck:
     name: Typecheck
     runs-on: ubuntu-latest
