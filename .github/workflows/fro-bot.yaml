@@ -158,7 +158,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Run Fro Bot
-        uses: fro-bot/agent@28bcadbf44a59f8d6d2544b5db0d9735d7ad2aca # v0.41.4
+        uses: fro-bot/agent@6c45d8ce66b0b69f1b80b23f283ed455deb59517 # v0.42.1
         env:
           OPENCODE_PROMPT_ARTIFACT: 'true'
           PROMPT: >-
