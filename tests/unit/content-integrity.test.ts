@@ -9,10 +9,12 @@ import {
   checkBannedPatterns,
   checkContentIntegrity,
   checkReferenceIntegrity,
+  checkSubfileReferences,
   collectScanTargets,
   discoverCategories,
   loadAllowlist,
   matchesPathGlob,
+  SUBFILE_DIRECTORY_NAMES,
 } from '../../scripts/content-integrity.ts'
 
 const __filename = fileURLToPath(import.meta.url)
@@ -688,6 +690,226 @@ describe('checkContentIntegrity (top-level)', () => {
 // one that actually fails CI when content drifts.
 // ---------------------------------------------------------------------------
 
+describe('SUBFILE_DIRECTORY_NAMES', () => {
+  test('covers the five conventional skill sub-directories', () => {
+    expect(SUBFILE_DIRECTORY_NAMES).toEqual([
+      'references',
+      'scripts',
+      'templates',
+      'assets',
+      'workflows',
+    ])
+  })
+})
+
+describe('checkSubfileReferences', () => {
+  test('returns empty when no SKILL.md files exist', () => {
+    const root = makeFixtureRepo()
+    try {
+      const broken = checkSubfileReferences(root, [])
+      expect(broken).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('returns empty when every referenced sub-file resolves', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'foo',
+        '# foo\n\nRead `references/handoff.md` and follow its loop.\n',
+      )
+      writeFile(root, 'skills/foo/references/handoff.md', '# handoff')
+      const targets = collectScanTargets(root)
+      const broken = checkSubfileReferences(root, targets.markdown)
+      expect(broken).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags references inside backticks, markdown links, and bare prose', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'foo',
+        [
+          '# foo',
+          '',
+          'Read `references/missing-backtick.md` first.',
+          'See [the doc](./references/missing-link.md) for context.',
+          'Read references/missing-bare.md before continuing.',
+        ].join('\n'),
+      )
+      const targets = collectScanTargets(root)
+      const broken = checkSubfileReferences(root, targets.markdown)
+      const refs = broken.map((b) => b.reference).sort()
+      expect(refs).toEqual([
+        'references/missing-backtick.md',
+        'references/missing-bare.md',
+        'references/missing-link.md',
+      ])
+      const lines = broken
+        .map((b) => `${b.file}:${b.line}`)
+        .every((s) => s.startsWith('skills/foo/SKILL.md:'))
+      expect(lines).toBe(true)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('does not flag prefixed paths from other skills (false-positive shield)', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'compound-docs',
+        [
+          '# compound-docs',
+          '',
+          // Documentation example — refers to a hypothetical OTHER skill.
+          // Should NOT be flagged because the boundary preceding `references/`',
+          // is `-` (part of the skill name), not whitespace/paren/backtick.
+          'Add to `hotwire-native/references/examples.md` with a link.',
+        ].join('\n'),
+      )
+      const targets = collectScanTargets(root)
+      const broken = checkSubfileReferences(root, targets.markdown)
+      expect(broken).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('does not flag .github/workflows/ paths (Github Actions, not skill sub-files)', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'deploy-docs',
+        '# deploy-docs\n\nCreate `.github/workflows/deploy-docs.yml` with the workflow.\n',
+      )
+      const targets = collectScanTargets(root)
+      const broken = checkSubfileReferences(root, targets.markdown)
+      expect(broken).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('does not flag bare filenames without a sub-directory prefix', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'foo',
+        '# foo\n\nDetermine which file (resources.md, patterns.md, or examples.md) to edit.\n',
+      )
+      const targets = collectScanTargets(root)
+      const broken = checkSubfileReferences(root, targets.markdown)
+      expect(broken).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('only scans skills/<name>/SKILL.md, not nested reference files', () => {
+    const root = makeFixtureRepo()
+    try {
+      // SKILL.md is clean. The nested reference contains a fake path that
+      // would be flagged if the gate scanned non-entry files.
+      writeSkill(root, 'foo', '# foo\n')
+      writeFile(
+        root,
+        'skills/foo/references/notes.md',
+        'Internal notes mention `references/another-missing.md` as an example.\n',
+      )
+      const targets = collectScanTargets(root)
+      const broken = checkSubfileReferences(root, targets.markdown)
+      expect(broken).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('handles all five conventional sub-directories', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'foo',
+        [
+          '# foo',
+          '',
+          'Read `references/missing.md`.',
+          'Run `scripts/missing.sh`.',
+          'Use `templates/missing.md`.',
+          'Reference `assets/missing.md`.',
+          'Workflow at `workflows/missing.yml`.',
+        ].join('\n'),
+      )
+      const targets = collectScanTargets(root)
+      const broken = checkSubfileReferences(root, targets.markdown)
+      const refs = broken.map((b) => b.reference).sort()
+      expect(refs).toEqual([
+        'assets/missing.md',
+        'references/missing.md',
+        'scripts/missing.sh',
+        'templates/missing.md',
+        'workflows/missing.yml',
+      ])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('reports resolvedPath relative to rootDir for actionable error messages', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(root, 'foo', '# foo\n\nRead `references/missing.md`.\n')
+      const targets = collectScanTargets(root)
+      const broken = checkSubfileReferences(root, targets.markdown)
+      expect(broken).toHaveLength(1)
+      expect(broken[0]?.resolvedPath).toBe('skills/foo/references/missing.md')
+      expect(broken[0]?.reference).toBe('references/missing.md')
+      expect(broken[0]?.file).toBe('skills/foo/SKILL.md')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('checkContentIntegrity (sub-file refs)', () => {
+  test('top-level result exposes brokenSubfileRefs alongside other checks', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(root, 'foo', '# foo\n\nRead `references/ghost.md`.\n')
+      const result = checkContentIntegrity(root)
+      expect(result.brokenSubfileRefs).toHaveLength(1)
+      expect(result.brokenSubfileRefs[0]?.reference).toBe('references/ghost.md')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('CLI exits 1 when a broken sub-file ref is present', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(root, 'foo', '# foo\n\nRead `references/ghost.md`.\n')
+      const proc = Bun.spawnSync(['bun', SCRIPT_PATH, root])
+      expect(proc.exitCode).toBe(1)
+      const stderr = proc.stderr.toString()
+      expect(stderr).toContain('Broken sub-file references (1)')
+      expect(stderr).toContain('references/ghost.md')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('integration: real repo', () => {
   test('content-integrity gate passes against current HEAD', () => {
     const result = checkContentIntegrity(REPO_ROOT)
@@ -710,7 +932,15 @@ describe('integration: real repo', () => {
       throw new Error(`Banned patterns outside allowlist:\n  ${details}`)
     }
 
+    if (result.brokenSubfileRefs.length > 0) {
+      const details = result.brokenSubfileRefs
+        .map((r) => `${r.file}:${r.line}  ${r.reference}  → ${r.resolvedPath}`)
+        .join('\n  ')
+      throw new Error(`Broken sub-file references in repo:\n  ${details}`)
+    }
+
     expect(result.phantomRefs).toEqual([])
+    expect(result.brokenSubfileRefs).toEqual([])
     expect(result.bannedPatterns).toEqual([])
     expect(result.allowlistWarnings).toEqual([])
     expect(result.scanStats.markdownFiles).toBeGreaterThan(0)
