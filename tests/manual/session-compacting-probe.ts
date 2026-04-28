@@ -1,5 +1,5 @@
 /**
- * Phase 0 OQ-1 validation probe for the experimental.session.compacting hook.
+ * Phase 0 validation probe for the experimental.session.compacting hook.
  *
  * Goal: determine whether content appended to `output.context` actually survives
  * OpenCode's compactor LLM. The probe injects a marker string and triggers a
@@ -8,8 +8,26 @@
  *
  * Run: bun tests/manual/session-compacting-probe.ts
  *
- * Requires: opencode CLI on PATH, `bun run build` already executed,
- * SYSTEMATIC_PROBE_LOG file path will be set automatically.
+ * Requires:
+ *   - opencode CLI on PATH (recent enough to support `serve --print-logs`;
+ *     older versions silently ignore the flag and the probe times out without
+ *     a useful error).
+ *   - `bun run build` already executed.
+ *
+ * External instrumentation dependency:
+ *   The hookFired / HOOK_FIRED logic below counts occurrences of the literal
+ *   string `HOOK_FIRED` in the SYSTEMATIC_PROBE_LOG file. Nothing in the
+ *   shipped plugin emits that token — when this probe was originally run, a
+ *   temporary stub was added to `src/index.ts` that implemented the
+ *   `experimental.session.compacting` hook and called
+ *   `fs.appendFileSync(process.env.SYSTEMATIC_PROBE_LOG, 'HOOK_FIRED\n')`
+ *   inside the hook. That stub was reverted before commit. Future probe
+ *   authors who need the hookFired signal must reintroduce equivalent
+ *   instrumentation (either in `src/index.ts` for the duration of the run
+ *   or in a probe-side stub plugin loaded via OPENCODE_CONFIG_CONTENT).
+ *   Without that instrumentation, hookFired is always false and the verdict
+ *   logic routes all marker-absent failures through the "HOOK DID NOT FIRE"
+ *   branch.
  */
 
 import { spawn } from 'node:child_process'
@@ -156,8 +174,11 @@ async function runProbe(): Promise<ProbeResult> {
     // end of the stream. Scan ALL messages for our marker.
     const allText = messages
       .flatMap((m) => m.parts ?? [])
-      .filter((p) => p.type === 'text' && typeof p.text === 'string')
-      .map((p) => p.text as string)
+      .filter(
+        (p): p is { type: 'text'; text: string } =>
+          p.type === 'text' && typeof p.text === 'string',
+      )
+      .map((p) => p.text)
       .join('\n---\n')
 
     summaryText = allText
@@ -181,8 +202,10 @@ async function runProbe(): Promise<ProbeResult> {
       `probe error: ${err instanceof Error ? err.message : String(err)}`,
     )
   } finally {
-    server.kill('SIGTERM')
-    await new Promise((r) => setTimeout(r, 500))
+    await new Promise<void>((resolve) => {
+      server.once('close', () => resolve())
+      server.kill('SIGTERM')
+    })
   }
 
   // Inspect the probe log.

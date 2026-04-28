@@ -26,10 +26,10 @@ function logCall(name: string, args: unknown): void {
     session_label: sessionLabel,
     args: JSON.stringify(args).slice(0, 400),
   })
-  fs.appendFileSync(logFile, line + '\n')
+  fs.appendFileSync(logFile, `${line}\n`)
 }
 
-const ProbeCompanionTools: Plugin = async () => {
+export const probeCompanionTools: Plugin = async () => {
   return {
     tool: {
       ctx_memory: tool({
@@ -86,4 +86,4 @@ const ProbeCompanionTools: Plugin = async () => {
   }
 }
 
-export default ProbeCompanionTools
+export default probeCompanionTools

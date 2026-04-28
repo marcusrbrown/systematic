@@ -15,7 +15,9 @@
  *
  * Run: bun tests/manual/companion-aware-probe.ts
  *
- * Requires: opencode CLI on PATH.
+ * Requires: opencode CLI on PATH (recent enough to support `serve
+ * --print-logs`; older versions silently ignore the flag and the probe times
+ * out without a useful error).
  */
 
 import { type ChildProcess, spawn } from 'node:child_process'
@@ -159,19 +161,17 @@ async function runOneSession(args: {
     errored: false,
   }
 
-  const linesBefore = fs.existsSync(logFile)
-    ? fs.readFileSync(logFile, 'utf8').split('\n').filter(Boolean).length
-    : 0
-
   try {
     const created = await client.session.create({
       body: { title: `probe-${condition}-${sessionLabel}` },
     })
-    const sessionID = (created.data as { id?: string } | undefined)?.id ?? ''
-    if (!sessionID)
+    const createdData = created.data as { id?: string } | undefined
+    if (!createdData?.id) {
       throw new Error(
         `session.create returned no id: ${JSON.stringify(created)}`,
       )
+    }
+    const sessionID = createdData.id
 
     // First message: deliver the skill body as standing instructions.
     await client.session.prompt({
@@ -200,12 +200,15 @@ async function runOneSession(args: {
     result.error = err instanceof Error ? err.message : String(err)
   }
 
-  // Count tool invocations attributed to this session via the log.
-  const linesAfter = fs.existsSync(logFile)
+  // Count tool invocations attributed to this session via the log. The
+  // per-entry condition + session_label filter below is the sole correctness
+  // mechanism; we do not slice on log offset because (a) the filter already
+  // ignores entries from other sessions, and (b) any offset snapshot is
+  // racy against asynchronous appendFileSync calls from prior sessions.
+  const allLines = fs.existsSync(logFile)
     ? fs.readFileSync(logFile, 'utf8').split('\n').filter(Boolean)
     : []
-  const newLines = linesAfter.slice(linesBefore)
-  for (const line of newLines) {
+  for (const line of allLines) {
     try {
       const entry = JSON.parse(line) as {
         tool: string
@@ -266,8 +269,10 @@ async function runCondition(args: {
         `[probe ${condition}/${sessionLabel}] ctx_memory=${result.ctxMemoryCalls} ctx_search=${result.ctxSearchCalls} ctx_note=${result.ctxNoteCalls}${result.errored ? ` err=${result.error}` : ''}`,
       )
     } finally {
-      server.kill('SIGTERM')
-      await new Promise((r) => setTimeout(r, 400))
+      await new Promise<void>((resolve) => {
+        server.once('close', () => resolve())
+        server.kill('SIGTERM')
+      })
     }
   }
 
