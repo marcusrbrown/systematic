@@ -2,14 +2,20 @@
 /**
  * Content-Integrity Gate
  *
- * Enforces two content invariants across Systematic's shipped assets:
+ * Enforces three content invariants across Systematic's shipped assets:
  *
- * 1. **Reference integrity** — every `systematic:<category>:<name>` reference
- *    in bundled skills and agents resolves to an actual `agents/<category>/<name>.md`
- *    file. Catches phantom dispatch directives left over from sync operations or
- *    sub-agent bulk edits.
+ * 1. **Cross-skill reference integrity** — every `systematic:<category>:<name>`
+ *    reference in bundled skills and agents resolves to an actual
+ *    `agents/<category>/<name>.md` file. Catches phantom dispatch directives left
+ *    over from sync operations or sub-agent bulk edits.
  *
- * 2. **Banned-pattern scan** — a fixed list of CC/CEP strings (branding, tool
+ * 2. **Sub-file reference integrity** — every `references/foo.md`, `scripts/foo.sh`,
+ *    `templates/foo.md`, `assets/foo.md`, or `workflows/foo.yml` mentioned in a
+ *    `skills/<name>/SKILL.md` resolves to a real file in that skill's directory.
+ *    Catches drift from CEP syncs that imported the SKILL.md but missed the
+ *    referenced sub-files (the failure mode that motivated this PR).
+ *
+ * 3. **Banned-pattern scan** — a fixed list of CC/CEP strings (branding, tool
  *    names, plugin prefix, paths, env vars) appears only inside documented
  *    allowlist entries. Catches accidental reintroduction of Claude Code or
  *    Compound Engineering refs after the v2.4.0 divorce.
@@ -101,6 +107,13 @@ export interface PhantomRef {
   name: string
 }
 
+export interface BrokenSubfileRef {
+  file: string
+  line: number
+  reference: string
+  resolvedPath: string
+}
+
 export interface BannedPatternHit {
   file: string
   line: number
@@ -120,6 +133,7 @@ export interface CheckResult {
   categories: string[]
   allowlistWarnings: AllowlistWarning[]
   phantomRefs: PhantomRef[]
+  brokenSubfileRefs: BrokenSubfileRef[]
   bannedPatterns: BannedPatternHit[]
   exemptHits: ExemptHit[]
   scanStats: {
@@ -450,6 +464,107 @@ export function checkReferenceIntegrity(
 }
 
 // ---------------------------------------------------------------------------
+// Sub-file reference-integrity check
+// ---------------------------------------------------------------------------
+
+/**
+ * Subdirectories whose paths, when mentioned inside a SKILL.md, denote
+ * sub-files of that skill. Adding a new convention here also requires updating
+ * the regex below.
+ */
+export const SUBFILE_DIRECTORY_NAMES = [
+  'references',
+  'scripts',
+  'templates',
+  'assets',
+  'workflows',
+] as const
+
+/**
+ * Match relative paths under a skill's sub-directory:
+ *
+ *   `references/foo.md`, `scripts/foo.sh`, `templates/foo.md`,
+ *   `assets/foo.md`, `workflows/foo.yml`, `./references/foo.md`, etc.
+ *
+ * The match boundary on the left side requires start-of-line, whitespace,
+ * an opening parenthesis, or a backtick. This avoids false positives like
+ * `hotwire-native/references/foo.md` (different skill, prefixed path) and
+ * `.github/workflows/foo.yml` (Github Actions workflow, not a skill sub-file).
+ *
+ * The path body is restricted to characters typical for filenames + slashes,
+ * and must end in a known file extension. The regex deliberately uses a
+ * conservative character set so a stray space or quote in the surrounding
+ * prose terminates the match cleanly.
+ */
+const SUBFILE_PATH_REGEX = new RegExp(
+  `(?:^|[\\s\\(\`])(\\.\\/)?` +
+    `((?:${SUBFILE_DIRECTORY_NAMES.join('|')})\\/[\\w./-]+\\.(?:md|json|ya?ml|sh|ts|js|mjs|txt|py))`,
+  'g',
+)
+
+/**
+ * Verify every sub-file path mentioned in a `skills/<name>/SKILL.md` resolves
+ * to an actual file in that skill directory.
+ *
+ * Only `skills/*\/SKILL.md` files are scanned; nested reference files (e.g.,
+ * `skills/foo/references/bar.md`) are skipped because their internal paths are
+ * either documentation examples or relative to a different working directory.
+ */
+export function checkSubfileReferences(
+  rootDir: string,
+  markdownFiles: readonly string[],
+): BrokenSubfileRef[] {
+  const broken: BrokenSubfileRef[] = []
+
+  for (const relPath of markdownFiles) {
+    if (!isSkillEntryFile(relPath)) continue
+    const absPath = path.join(rootDir, relPath)
+    const content = readFileSafe(absPath)
+    if (content === null) continue
+    scanSkillForBrokenSubfiles(rootDir, relPath, absPath, content, broken)
+  }
+
+  return broken
+}
+
+function scanSkillForBrokenSubfiles(
+  rootDir: string,
+  relPath: string,
+  absPath: string,
+  content: string,
+  broken: BrokenSubfileRef[],
+): void {
+  const skillDir = path.dirname(absPath)
+  const lines = content.split('\n')
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i] ?? ''
+    for (const match of line.matchAll(SUBFILE_PATH_REGEX)) {
+      const reference = (match[2] ?? '').trim()
+      if (reference.length === 0) continue
+      const resolvedAbs = path.join(skillDir, reference)
+      if (fs.existsSync(resolvedAbs)) continue
+      broken.push({
+        file: relPath,
+        line: i + 1,
+        reference,
+        resolvedPath: path.relative(rootDir, resolvedAbs),
+      })
+    }
+  }
+}
+
+function isSkillEntryFile(relPath: string): boolean {
+  // Match `skills/<name>/SKILL.md` exactly; skip nested files.
+  const parts = relPath.split('/')
+  return (
+    parts.length === 3 &&
+    parts[0] === 'skills' &&
+    parts[2] === 'SKILL.md' &&
+    (parts[1]?.length ?? 0) > 0
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Banned-pattern check
 // ---------------------------------------------------------------------------
 
@@ -539,6 +654,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     targets.markdown,
     categories,
   )
+  const brokenSubfileRefs = checkSubfileReferences(rootDir, targets.markdown)
   const { hits: bannedPatterns, exempt: exemptHits } = checkBannedPatterns(
     rootDir,
     allScannedFiles,
@@ -550,6 +666,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     categories,
     allowlistWarnings,
     phantomRefs,
+    brokenSubfileRefs,
     bannedPatterns,
     exemptHits,
     scanStats: {
@@ -585,29 +702,11 @@ function printResult(result: CheckResult, verbose: boolean): void {
     process.stderr.write(`drift-allowlist warning: ${w.message}\n`)
   }
 
-  if (result.phantomRefs.length > 0) {
-    process.stderr.write(
-      `\nPhantom references (${result.phantomRefs.length}):\n`,
-    )
-    for (const p of result.phantomRefs) {
-      process.stderr.write(
-        `  ${p.file}:${p.line}  ${p.reference}  (no such agent: agents/${p.category}/${p.name}.md)\n`,
-      )
-    }
-  }
+  printPhantomRefs(result.phantomRefs)
+  printBrokenSubfileRefs(result.brokenSubfileRefs)
+  printBannedPatterns(result.bannedPatterns)
 
-  if (result.bannedPatterns.length > 0) {
-    process.stderr.write(
-      `\nBanned patterns outside allowlist (${result.bannedPatterns.length}):\n`,
-    )
-    for (const h of result.bannedPatterns) {
-      process.stderr.write(
-        `  ${h.file}:${h.line}  ${JSON.stringify(h.pattern)}  ${h.lineContent}\n`,
-      )
-    }
-  }
-
-  if (result.phantomRefs.length === 0 && result.bannedPatterns.length === 0) {
+  if (totalViolations(result) === 0) {
     process.stdout.write(
       `content-integrity: clean (${result.scanStats.markdownFiles} md + ` +
         `${result.scanStats.typescriptFiles} ts scanned, ` +
@@ -623,6 +722,46 @@ function printResult(result: CheckResult, verbose: boolean): void {
         `exemptHits: ${result.exemptHits.length}\n`,
     )
   }
+}
+
+function printPhantomRefs(phantomRefs: readonly PhantomRef[]): void {
+  if (phantomRefs.length === 0) return
+  process.stderr.write(`\nPhantom references (${phantomRefs.length}):\n`)
+  for (const p of phantomRefs) {
+    process.stderr.write(
+      `  ${p.file}:${p.line}  ${p.reference}  (no such agent: agents/${p.category}/${p.name}.md)\n`,
+    )
+  }
+}
+
+function printBrokenSubfileRefs(refs: readonly BrokenSubfileRef[]): void {
+  if (refs.length === 0) return
+  process.stderr.write(`\nBroken sub-file references (${refs.length}):\n`)
+  for (const r of refs) {
+    process.stderr.write(
+      `  ${r.file}:${r.line}  ${r.reference}  (no such file: ${r.resolvedPath})\n`,
+    )
+  }
+}
+
+function printBannedPatterns(hits: readonly BannedPatternHit[]): void {
+  if (hits.length === 0) return
+  process.stderr.write(
+    `\nBanned patterns outside allowlist (${hits.length}):\n`,
+  )
+  for (const h of hits) {
+    process.stderr.write(
+      `  ${h.file}:${h.line}  ${JSON.stringify(h.pattern)}  ${h.lineContent}\n`,
+    )
+  }
+}
+
+function totalViolations(result: CheckResult): number {
+  return (
+    result.phantomRefs.length +
+    result.brokenSubfileRefs.length +
+    result.bannedPatterns.length
+  )
 }
 
 function main(): number {
@@ -643,7 +782,9 @@ function main(): number {
   printResult(result, verbose)
 
   const violationCount =
-    result.phantomRefs.length + result.bannedPatterns.length
+    result.phantomRefs.length +
+    result.brokenSubfileRefs.length +
+    result.bannedPatterns.length
   return violationCount > 0 ? 1 : 0
 }
 
