@@ -1,6 +1,7 @@
 ---
 name: correctness-reviewer
 description: Always-on code-review persona. Reviews code for logic errors, edge cases, state management bugs, error propagation failures, and intent-vs-implementation mismatches.
+model: inherit
 tools: Read, Grep, Glob, Bash
 color: blue
 mode: subagent
@@ -46,4 +47,3 @@ Return your findings as JSON matching the findings schema. No prose outside the 
   "testing_gaps": []
 }
 ```
-

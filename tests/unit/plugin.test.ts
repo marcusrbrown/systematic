@@ -20,7 +20,8 @@ describe('plugin loading', () => {
   test('plugin module loads', async () => {
     const pluginPath = path.join(SRC_DIR, 'index.ts')
     const pluginModule = await import(pathToFileURL(pluginPath).href)
-    expect(pluginModule.SystematicPlugin).toBeDefined()
+    expect(pluginModule.default).toBeDefined()
+    expect(pluginModule.SystematicPlugin).toBeUndefined()
   })
 
   test('cli runs under Bun', async () => {

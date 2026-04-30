@@ -170,6 +170,7 @@ const AGENT_CATEGORY_ORDER = [
   'Review',
   'Research',
   'Design',
+  'Document-review',
   'Docs',
   'Workflow',
 ] as const

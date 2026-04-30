@@ -2,7 +2,7 @@
 /**
  * Content-Integrity Gate
  *
- * Enforces three content invariants across Systematic's shipped assets:
+ * Enforces five content invariants across Systematic's shipped assets:
  *
  * 1. **Cross-skill reference integrity** — every `systematic:<category>:<name>`
  *    reference in bundled skills and agents resolves to an actual
@@ -10,7 +10,7 @@
  *    over from sync operations or sub-agent bulk edits.
  *
  * 2. **Sub-file reference integrity** — every `references/foo.md`, `scripts/foo.sh`,
- *    `templates/foo.md`, `assets/foo.md`, or `workflows/foo.yml` mentioned in a
+ *    `templates/foo.md`, or `assets/foo.md` mentioned in a
  *    `skills/<name>/SKILL.md` resolves to a real file in that skill's directory.
  *    Catches drift from CEP syncs that imported the SKILL.md but missed the
  *    referenced sub-files (the failure mode that motivated this PR).
@@ -19,6 +19,12 @@
  *    names, plugin prefix, paths, env vars) appears only inside documented
  *    allowlist entries. Catches accidental reintroduction of Claude Code or
  *    Compound Engineering refs after the v2.4.0 divorce.
+ *
+ * 4. **Skill frontmatter integrity** — bundled skills declare required fields
+ *    and use only frontmatter keys recognized by the runtime loader.
+ *
+ * 5. **Agent model portability** — bundled agents inherit the user's configured
+ *    model instead of hardcoding provider-specific model IDs.
  *
  * Scope is narrow by design: `skills/**\/*.md`, `agents/**\/*.md`, and
  * `src/**\/*.ts`. The gate does not scan `docs/`, `.opencode/`, `.github/`,
@@ -40,6 +46,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { parseFrontmatter } from '../src/lib/frontmatter.js'
+import { SKILL_FRONTMATTER_FIELDS } from '../src/lib/skills.js'
 import { walkDir } from '../src/lib/walk-dir.js'
 
 // ---------------------------------------------------------------------------
@@ -128,6 +136,25 @@ export interface ExemptHit {
   reason: string
 }
 
+export interface FrontmatterViolation {
+  file: string
+  rule:
+    | 'banned-field'
+    | 'unknown-field'
+    | 'missing-required-field'
+    | 'empty-required-field'
+    | 'malformed-frontmatter'
+    | 'missing-frontmatter'
+  field?: string
+  message: string
+  remediation: string
+}
+
+export interface AgentModelViolation {
+  file: string
+  message: string
+}
+
 export interface CheckResult {
   rootDir: string
   categories: string[]
@@ -135,12 +162,22 @@ export interface CheckResult {
   phantomRefs: PhantomRef[]
   brokenSubfileRefs: BrokenSubfileRef[]
   bannedPatterns: BannedPatternHit[]
+  frontmatterViolations: FrontmatterViolation[]
+  agentModelViolations: AgentModelViolation[]
   exemptHits: ExemptHit[]
   scanStats: {
     markdownFiles: number
     typescriptFiles: number
   }
 }
+
+const ALLOWED_SKILL_FRONTMATTER_FIELDS: ReadonlySet<string> = new Set(
+  SKILL_FRONTMATTER_FIELDS,
+)
+
+const BANNED_SKILL_FRONTMATTER_FIELDS = new Set(['preconditions'])
+const FRONTMATTER_REMEDIATION =
+  'Update frontmatter to match systematic:writing-systematic-skills.'
 
 // ---------------------------------------------------------------------------
 // Allowlist loader
@@ -477,14 +514,13 @@ export const SUBFILE_DIRECTORY_NAMES = [
   'scripts',
   'templates',
   'assets',
-  'workflows',
 ] as const
 
 /**
  * Match relative paths under a skill's sub-directory:
  *
  *   `references/foo.md`, `scripts/foo.sh`, `templates/foo.md`,
- *   `assets/foo.md`, `workflows/foo.yml`, `./references/foo.md`, etc.
+ *   `assets/foo.md`, `./references/foo.md`, etc.
  *
  * The match boundary on the left side requires start-of-line, whitespace,
  * an opening parenthesis, or a backtick. This avoids false positives like
@@ -551,6 +587,147 @@ function scanSkillForBrokenSubfiles(
       })
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Frontmatter checks
+// ---------------------------------------------------------------------------
+
+export function checkFrontmatter(
+  rootDir: string,
+  markdownFiles: readonly string[],
+): FrontmatterViolation[] {
+  const violations: FrontmatterViolation[] = []
+
+  for (const relPath of markdownFiles) {
+    if (!isSkillEntryFile(relPath)) continue
+    const content = readFileSafe(path.join(rootDir, relPath))
+    if (content === null) continue
+    scanSkillFrontmatter(relPath, content, violations)
+  }
+
+  return violations
+}
+
+function scanSkillFrontmatter(
+  relPath: string,
+  content: string,
+  violations: FrontmatterViolation[],
+): void {
+  const parsed = parseFrontmatter(content)
+
+  if (parsed.parseError) {
+    violations.push({
+      file: relPath,
+      rule: 'malformed-frontmatter',
+      message: 'Skill frontmatter is malformed YAML.',
+      remediation: FRONTMATTER_REMEDIATION,
+    })
+    return
+  }
+
+  if (!parsed.hadFrontmatter) {
+    violations.push({
+      file: relPath,
+      rule: 'missing-frontmatter',
+      message: 'Skill is missing YAML frontmatter.',
+      remediation: FRONTMATTER_REMEDIATION,
+    })
+    return
+  }
+
+  checkRequiredSkillField(relPath, parsed.data, 'name', violations)
+  checkRequiredSkillField(relPath, parsed.data, 'description', violations)
+  checkSkillFrontmatterFields(relPath, parsed.data, violations)
+}
+
+function checkRequiredSkillField(
+  relPath: string,
+  data: Record<string, unknown>,
+  field: 'name' | 'description',
+  violations: FrontmatterViolation[],
+): void {
+  if (!Object.hasOwn(data, field) || data[field] === null) {
+    violations.push({
+      file: relPath,
+      rule: 'missing-required-field',
+      field,
+      message: `Skill frontmatter is missing required ${field} field.`,
+      remediation: FRONTMATTER_REMEDIATION,
+    })
+    return
+  }
+
+  if (typeof data[field] === 'string' && data[field].trim() === '') {
+    violations.push({
+      file: relPath,
+      rule: 'empty-required-field',
+      field,
+      message: `Skill frontmatter ${field} field must not be empty.`,
+      remediation: FRONTMATTER_REMEDIATION,
+    })
+  }
+}
+
+function checkSkillFrontmatterFields(
+  relPath: string,
+  data: Record<string, unknown>,
+  violations: FrontmatterViolation[],
+): void {
+  for (const field of Object.keys(data)) {
+    if (BANNED_SKILL_FRONTMATTER_FIELDS.has(field)) {
+      violations.push({
+        file: relPath,
+        rule: 'banned-field',
+        field,
+        message: `Skill frontmatter field ${field} is banned.`,
+        remediation: FRONTMATTER_REMEDIATION,
+      })
+      continue
+    }
+
+    if (!ALLOWED_SKILL_FRONTMATTER_FIELDS.has(field)) {
+      violations.push({
+        file: relPath,
+        rule: 'unknown-field',
+        field,
+        message: `Skill frontmatter field ${field} is not recognized by the runtime loader.`,
+        remediation: FRONTMATTER_REMEDIATION,
+      })
+    }
+  }
+}
+
+export function checkAgentModel(
+  rootDir: string,
+  markdownFiles: readonly string[],
+): AgentModelViolation[] {
+  const violations: AgentModelViolation[] = []
+
+  for (const relPath of markdownFiles) {
+    if (!isAgentFile(relPath)) continue
+    const content = readFileSafe(path.join(rootDir, relPath))
+    if (content === null) continue
+    const parsed = parseFrontmatter(content)
+    if (parsed.data.model !== 'inherit') {
+      violations.push({
+        file: relPath,
+        message: 'Bundled agents must declare model: inherit.',
+      })
+    }
+  }
+
+  return violations
+}
+
+function isAgentFile(relPath: string): boolean {
+  const parts = relPath.split('/')
+  return (
+    parts.length === 3 &&
+    parts[0] === 'agents' &&
+    parts[2]?.endsWith('.md') === true &&
+    (parts[1]?.length ?? 0) > 0
+  )
 }
 
 function isSkillEntryFile(relPath: string): boolean {
@@ -655,6 +832,8 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     categories,
   )
   const brokenSubfileRefs = checkSubfileReferences(rootDir, targets.markdown)
+  const frontmatterViolations = checkFrontmatter(rootDir, targets.markdown)
+  const agentModelViolations = checkAgentModel(rootDir, targets.markdown)
   const { hits: bannedPatterns, exempt: exemptHits } = checkBannedPatterns(
     rootDir,
     allScannedFiles,
@@ -668,6 +847,8 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     phantomRefs,
     brokenSubfileRefs,
     bannedPatterns,
+    frontmatterViolations,
+    agentModelViolations,
     exemptHits,
     scanStats: {
       markdownFiles: targets.markdown.length,
@@ -705,6 +886,8 @@ function printResult(result: CheckResult, verbose: boolean): void {
   printPhantomRefs(result.phantomRefs)
   printBrokenSubfileRefs(result.brokenSubfileRefs)
   printBannedPatterns(result.bannedPatterns)
+  printFrontmatterViolations(result.frontmatterViolations)
+  printAgentModelViolations(result.agentModelViolations)
 
   if (totalViolations(result) === 0) {
     process.stdout.write(
@@ -719,6 +902,8 @@ function printResult(result: CheckResult, verbose: boolean): void {
     process.stdout.write(
       `\ncategories: ${result.categories.join(', ')}\n` +
         `scanStats: ${result.scanStats.markdownFiles} md + ${result.scanStats.typescriptFiles} ts\n` +
+        `frontmatterViolations: ${result.frontmatterViolations.length}\n` +
+        `agentModelViolations: ${result.agentModelViolations.length}\n` +
         `exemptHits: ${result.exemptHits.length}\n`,
     )
   }
@@ -756,11 +941,35 @@ function printBannedPatterns(hits: readonly BannedPatternHit[]): void {
   }
 }
 
+function printFrontmatterViolations(
+  violations: readonly FrontmatterViolation[],
+): void {
+  if (violations.length === 0) return
+  process.stderr.write(`\nFrontmatter violations (${violations.length}):\n`)
+  for (const v of violations) {
+    const field = v.field ? ` (${v.field})` : ''
+    process.stderr.write(`  ${v.file}  ${v.rule}${field}: ${v.message}\n`)
+    process.stderr.write(`    fix: ${v.remediation}\n`)
+  }
+}
+
+function printAgentModelViolations(
+  violations: readonly AgentModelViolation[],
+): void {
+  if (violations.length === 0) return
+  process.stderr.write(`\nAgent model violations (${violations.length}):\n`)
+  for (const v of violations) {
+    process.stderr.write(`  ${v.file}  ${v.message}\n`)
+  }
+}
+
 function totalViolations(result: CheckResult): number {
   return (
     result.phantomRefs.length +
     result.brokenSubfileRefs.length +
-    result.bannedPatterns.length
+    result.bannedPatterns.length +
+    result.frontmatterViolations.length +
+    result.agentModelViolations.length
   )
 }
 
@@ -781,10 +990,7 @@ function main(): number {
 
   printResult(result, verbose)
 
-  const violationCount =
-    result.phantomRefs.length +
-    result.brokenSubfileRefs.length +
-    result.bannedPatterns.length
+  const violationCount = totalViolations(result)
   return violationCount > 0 ? 1 : 0
 }
 

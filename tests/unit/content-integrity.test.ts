@@ -6,8 +6,10 @@ import { fileURLToPath } from 'node:url'
 import {
   type AllowlistEntry,
   BANNED_PATTERNS,
+  checkAgentModel,
   checkBannedPatterns,
   checkContentIntegrity,
+  checkFrontmatter,
   checkReferenceIntegrity,
   checkSubfileReferences,
   collectScanTargets,
@@ -53,12 +55,20 @@ function writeAgent(root: string, category: string, name: string): void {
   writeFile(
     root,
     `agents/${category}/${name}.md`,
-    `---\nname: ${name}\n---\nagent body`,
+    `---\nname: ${name}\nmodel: inherit\n---\nagent body`,
   )
 }
 
 function writeSkill(root: string, name: string, body: string): void {
   writeFile(root, `skills/${name}/SKILL.md`, body)
+}
+
+function writeCompliantSkill(root: string, name: string, body: string): void {
+  writeSkill(
+    root,
+    name,
+    `---\nname: ${name}\ndescription: Test skill\n---\n${body}`,
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -622,17 +632,295 @@ describe('checkBannedPatterns', () => {
   })
 })
 
+describe('checkFrontmatter', () => {
+  test('allows minimal skill frontmatter with name and description', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeCompliantSkill(root, 'foo', 'body')
+      const targets = collectScanTargets(root)
+      expect(checkFrontmatter(root, targets.markdown)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('allows every runtime-recognized skill frontmatter field', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'foo',
+        [
+          '---',
+          'name: foo',
+          'description: Test skill',
+          'argument-hint: "[topic]"',
+          'disable-model-invocation: true',
+          'allowed-tools: read, grep',
+          'license: MIT',
+          'compatibility: opencode',
+          'metadata:',
+          '  owner: systematic',
+          'user-invocable: true',
+          'agent: general',
+          'model: inherit',
+          'context: fork',
+          'subtask: true',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const targets = collectScanTargets(root)
+      expect(checkFrontmatter(root, targets.markdown)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags banned preconditions field but allows context and subtask', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'foo',
+        [
+          '---',
+          'name: foo',
+          'description: Test skill',
+          'preconditions: must run first',
+          'context: fork',
+          'subtask: true',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const targets = collectScanTargets(root)
+      const violations = checkFrontmatter(root, targets.markdown)
+      expect(violations).toHaveLength(1)
+      expect(violations[0]).toMatchObject({
+        file: 'skills/foo/SKILL.md',
+        rule: 'banned-field',
+        field: 'preconditions',
+      })
+      expect(violations[0]?.message).toContain('preconditions')
+      expect(violations[0]?.remediation).toContain(
+        'systematic:writing-systematic-skills',
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags unknown fields one violation per field', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'foo',
+        [
+          '---',
+          'name: foo',
+          'description: Test skill',
+          'experimental: true',
+          'owner: platform',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const targets = collectScanTargets(root)
+      const violations = checkFrontmatter(root, targets.markdown)
+      expect(violations.map((v) => v.field).sort()).toEqual([
+        'experimental',
+        'owner',
+      ])
+      expect(violations.every((v) => v.rule === 'unknown-field')).toBe(true)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags missing, null, and empty required fields distinctly', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'missing-name',
+        '---\ndescription: Test skill\n---\nbody',
+      )
+      writeSkill(
+        root,
+        'bare-name',
+        '---\nname:\ndescription: Test skill\n---\nbody',
+      )
+      writeSkill(
+        root,
+        'null-name',
+        '---\nname: ~\ndescription: Test skill\n---\nbody',
+      )
+      writeSkill(
+        root,
+        'empty-name',
+        '---\nname: ""\ndescription: Test skill\n---\nbody',
+      )
+      writeSkill(
+        root,
+        'blank-name',
+        '---\nname: "   "\ndescription: Test skill\n---\nbody',
+      )
+      writeSkill(
+        root,
+        'blank-description',
+        '---\nname: blank-description\ndescription: "   "\n---\nbody',
+      )
+      writeSkill(
+        root,
+        'missing-description',
+        '---\nname: missing-description\n---\nbody',
+      )
+
+      const targets = collectScanTargets(root)
+      const violations = checkFrontmatter(root, targets.markdown)
+      expect(
+        violations.map((v) => `${v.file}:${v.field}:${v.rule}`).sort(),
+      ).toEqual([
+        'skills/bare-name/SKILL.md:name:missing-required-field',
+        'skills/blank-description/SKILL.md:description:empty-required-field',
+        'skills/blank-name/SKILL.md:name:empty-required-field',
+        'skills/empty-name/SKILL.md:name:empty-required-field',
+        'skills/missing-description/SKILL.md:description:missing-required-field',
+        'skills/missing-name/SKILL.md:name:missing-required-field',
+        'skills/null-name/SKILL.md:name:missing-required-field',
+      ])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('short-circuits parse edge cases without cascading field violations', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(root, 'missing-frontmatter', '# no frontmatter\n')
+      writeSkill(
+        root,
+        'malformed-frontmatter',
+        '---\nname: [unterminated\ndescription: Test skill\n---\nbody',
+      )
+
+      const targets = collectScanTargets(root)
+      const violations = checkFrontmatter(root, targets.markdown)
+      expect(violations).toHaveLength(2)
+      expect(
+        violations.map((v) => `${v.file}:${v.rule}:${v.field ?? ''}`).sort(),
+      ).toEqual([
+        'skills/malformed-frontmatter/SKILL.md:malformed-frontmatter:',
+        'skills/missing-frontmatter/SKILL.md:missing-frontmatter:',
+      ])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('scans only skill entry files', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'agents/research/a.md',
+        '---\nname: a\nexperimental: true\n---\nagent',
+      )
+      writeFile(
+        root,
+        'skills/foo/references/ref.md',
+        '---\nexperimental: true\n---\nreference',
+      )
+      writeCompliantSkill(root, 'foo', 'body')
+      const targets = collectScanTargets(root)
+      expect(checkFrontmatter(root, targets.markdown)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('checkAgentModel', () => {
+  test('allows agents with model inherit', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeAgent(root, 'research', 'a')
+      const targets = collectScanTargets(root)
+      expect(checkAgentModel(root, targets.markdown)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags missing, non-inherit, empty, and null model values', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'agents/research/missing.md',
+        '---\nname: missing\n---\nbody',
+      )
+      writeFile(
+        root,
+        'agents/research/hardcoded.md',
+        '---\nname: hardcoded\nmodel: anthropic/claude-haiku-4-5\n---\nbody',
+      )
+      writeFile(
+        root,
+        'agents/research/empty.md',
+        '---\nname: empty\nmodel: ""\n---\nbody',
+      )
+      writeFile(
+        root,
+        'agents/research/null.md',
+        '---\nname: null\nmodel: ~\n---\nbody',
+      )
+      const targets = collectScanTargets(root)
+      const violations = checkAgentModel(root, targets.markdown)
+      expect(violations.map((v) => v.file).sort()).toEqual([
+        'agents/research/empty.md',
+        'agents/research/hardcoded.md',
+        'agents/research/missing.md',
+        'agents/research/null.md',
+      ])
+      expect(
+        violations.every((v) => v.message.includes('model: inherit')),
+      ).toBe(true)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('scans only agent markdown files', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeCompliantSkill(root, 'foo', 'model: anthropic/claude-haiku-4-5\n')
+      writeFile(root, 'skills/foo/references/ref.md', 'model: anthropic/x\n')
+      writeAgent(root, 'research', 'a')
+      const targets = collectScanTargets(root)
+      expect(checkAgentModel(root, targets.markdown)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('checkContentIntegrity (top-level)', () => {
   test('clean repo with no violations returns empty arrays', () => {
     const root = makeFixtureRepo()
     try {
       writeAgent(root, 'research', 'a')
-      writeSkill(root, 'foo', 'See systematic:research:a.\n')
+      writeCompliantSkill(root, 'foo', 'See systematic:research:a.\n')
       writeFile(root, 'src/lib/foo.ts', '// clean\nexport const x = 1\n')
 
       const result = checkContentIntegrity(root)
       expect(result.phantomRefs).toEqual([])
+      expect(result.brokenSubfileRefs).toEqual([])
       expect(result.bannedPatterns).toEqual([])
+      expect(result.frontmatterViolations).toEqual([])
+      expect(result.agentModelViolations).toEqual([])
       expect(result.scanStats.markdownFiles).toBe(2) // SKILL.md + agent a.md
       expect(result.scanStats.typescriptFiles).toBe(1)
       expect(result.categories).toEqual(['research'])
@@ -682,6 +970,26 @@ describe('checkContentIntegrity (top-level)', () => {
       fs.rmSync(root, { recursive: true, force: true })
     }
   })
+
+  test('exposes frontmatter and agent-model violations in one pass', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'foo',
+        '---\nname: foo\ndescription: Test skill\npreconditions: before use\n---\nbody',
+      )
+      writeFile(root, 'agents/research/a.md', '---\nname: a\n---\nagent')
+
+      const result = checkContentIntegrity(root)
+      expect(result.frontmatterViolations).toHaveLength(1)
+      expect(result.frontmatterViolations[0]?.rule).toBe('banned-field')
+      expect(result.agentModelViolations).toHaveLength(1)
+      expect(result.agentModelViolations[0]?.file).toBe('agents/research/a.md')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
 })
 
 // ---------------------------------------------------------------------------
@@ -691,13 +999,12 @@ describe('checkContentIntegrity (top-level)', () => {
 // ---------------------------------------------------------------------------
 
 describe('SUBFILE_DIRECTORY_NAMES', () => {
-  test('covers the five conventional skill sub-directories', () => {
+  test('covers the four conventional skill sub-directories', () => {
     expect(SUBFILE_DIRECTORY_NAMES).toEqual([
       'references',
       'scripts',
       'templates',
       'assets',
-      'workflows',
     ])
   })
 })
@@ -835,7 +1142,7 @@ describe('checkSubfileReferences', () => {
     }
   })
 
-  test('handles all five conventional sub-directories', () => {
+  test('handles all four conventional sub-directories', () => {
     const root = makeFixtureRepo()
     try {
       writeSkill(
@@ -848,7 +1155,6 @@ describe('checkSubfileReferences', () => {
           'Run `scripts/missing.sh`.',
           'Use `templates/missing.md`.',
           'Reference `assets/missing.md`.',
-          'Workflow at `workflows/missing.yml`.',
         ].join('\n'),
       )
       const targets = collectScanTargets(root)
@@ -859,8 +1165,18 @@ describe('checkSubfileReferences', () => {
         'references/missing.md',
         'scripts/missing.sh',
         'templates/missing.md',
-        'workflows/missing.yml',
       ])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('does not flag workflows paths after removing workflows as a skill sub-directory', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(root, 'foo', '# foo\n\nWorkflow at `workflows/missing.yml`.\n')
+      const targets = collectScanTargets(root)
+      expect(checkSubfileReferences(root, targets.markdown)).toEqual([])
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
@@ -939,9 +1255,25 @@ describe('integration: real repo', () => {
       throw new Error(`Broken sub-file references in repo:\n  ${details}`)
     }
 
+    if (result.frontmatterViolations.length > 0) {
+      const details = result.frontmatterViolations
+        .map((v) => `${v.file}  ${v.rule}  ${v.field ?? ''}`)
+        .join('\n  ')
+      throw new Error(`Frontmatter violations in repo:\n  ${details}`)
+    }
+
+    if (result.agentModelViolations.length > 0) {
+      const details = result.agentModelViolations
+        .map((v) => `${v.file}  ${v.message}`)
+        .join('\n  ')
+      throw new Error(`Agent model violations in repo:\n  ${details}`)
+    }
+
     expect(result.phantomRefs).toEqual([])
     expect(result.brokenSubfileRefs).toEqual([])
     expect(result.bannedPatterns).toEqual([])
+    expect(result.frontmatterViolations).toEqual([])
+    expect(result.agentModelViolations).toEqual([])
     expect(result.allowlistWarnings).toEqual([])
     expect(result.scanStats.markdownFiles).toBeGreaterThan(0)
     expect(result.scanStats.typescriptFiles).toBeGreaterThan(0)
@@ -957,7 +1289,7 @@ describe('CLI', () => {
     const root = makeFixtureRepo()
     try {
       writeAgent(root, 'research', 'a')
-      writeSkill(root, 'foo', 'Clean skill. systematic:research:a\n')
+      writeCompliantSkill(root, 'foo', 'Clean skill. systematic:research:a\n')
 
       const result = Bun.spawnSync(['bun', SCRIPT_PATH, root], {
         cwd: REPO_ROOT,
@@ -977,7 +1309,7 @@ describe('CLI', () => {
     try {
       // At least one agents/ category must exist for the reference regex to build.
       fs.mkdirSync(path.join(root, 'agents', 'research'), { recursive: true })
-      writeSkill(root, 'foo', 'systematic:research:ghost\n')
+      writeCompliantSkill(root, 'foo', 'systematic:research:ghost\n')
 
       const result = Bun.spawnSync(['bun', SCRIPT_PATH, root], {
         cwd: REPO_ROOT,
@@ -996,7 +1328,11 @@ describe('CLI', () => {
   test('exits 1 when banned patterns are outside the allowlist', () => {
     const root = makeFixtureRepo()
     try {
-      writeSkill(root, 'foo', 'Reintroduced TaskCreate accidentally.\n')
+      writeCompliantSkill(
+        root,
+        'foo',
+        'Reintroduced TaskCreate accidentally.\n',
+      )
 
       const result = Bun.spawnSync(['bun', SCRIPT_PATH, root], {
         cwd: REPO_ROOT,
@@ -1027,6 +1363,36 @@ describe('CLI', () => {
 
       expect(result.exitCode).toBe(1)
       expect(result.stderr.toString()).toContain('content-integrity:')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('exits 1 when enforced frontmatter and agent-model violations exist', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'foo',
+        '---\nname: foo\ndescription: Test skill\npreconditions: before use\n---\nbody',
+      )
+      writeFile(root, 'agents/research/a.md', '---\nname: a\n---\nagent')
+
+      const result = Bun.spawnSync(['bun', SCRIPT_PATH, root], {
+        cwd: REPO_ROOT,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+
+      expect(result.exitCode).toBe(1)
+      const stderr = result.stderr.toString()
+      expect(stderr).toContain('Frontmatter violations (1)')
+      expect(stderr).toContain('Agent model violations (1)')
+      expect(stderr).toContain('preconditions')
+      expect(stderr).toContain(
+        'fix: Update frontmatter to match systematic:writing-systematic-skills.',
+      )
+      expect(stderr).toContain('agents/research/a.md')
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }

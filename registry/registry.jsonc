@@ -727,6 +727,15 @@
       "files": ["skills/using-systematic/SKILL.md"]
     },
     {
+      "name": "writing-systematic-skills",
+      "type": "skill",
+      "description": "Use when creating, editing, auditing, or fixing bundled Systematic skills, especially when authoring SKILL.md files, adding skill reference files, resolving content-integrity frontmatter failures, or deciding which Systematic conventions apply beyond the general writing-skills guidance.",
+      "files": [
+        "skills/writing-systematic-skills/SKILL.md",
+        "skills/writing-systematic-skills/references/foundation-conventions.md"
+      ]
+    },
+    {
       "name": "skills",
       "type": "bundle",
       "description": "All Systematic skills",
@@ -775,7 +784,8 @@
         "todo-create",
         "todo-resolve",
         "todo-triage",
-        "using-systematic"
+        "using-systematic",
+        "writing-systematic-skills"
       ],
       "files": []
     },

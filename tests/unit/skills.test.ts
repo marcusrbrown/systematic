@@ -132,6 +132,36 @@ context: fork
       expect(result.subtask).toBe(true)
     })
 
+    test('extracts explicit subtask boolean', () => {
+      const filePath = path.join(testDir, 'test.md')
+      fs.writeFileSync(
+        filePath,
+        `---
+name: test-skill
+description: A test skill
+subtask: true
+---
+# Skill Content`,
+      )
+      const result = skills.extractFrontmatter(filePath)
+      expect(result.subtask).toBe(true)
+    })
+
+    test('preserves explicit subtask false when context is not fork', () => {
+      const filePath = path.join(testDir, 'test.md')
+      fs.writeFileSync(
+        filePath,
+        `---
+name: test-skill
+description: A test skill
+subtask: false
+---
+# Skill Content`,
+      )
+      const result = skills.extractFrontmatter(filePath)
+      expect(result.subtask).toBe(false)
+    })
+
     test('subtask is undefined when context is not fork', () => {
       const filePath = path.join(testDir, 'test.md')
       fs.writeFileSync(

@@ -1,6 +1,7 @@
 ---
 name: bug-reproduction-validator
 description: Systematically reproduces and validates bug reports to confirm whether reported behavior is an actual bug. Use when you receive a bug report or issue that needs verification.
+model: inherit
 mode: subagent
 temperature: 0.1
 ---
@@ -81,4 +82,3 @@ Key Principles:
 - If you cannot reproduce after reasonable attempts, clearly state what you tried
 
 When you cannot access certain resources or need additional information, explicitly state what would help validate the bug further. Your goal is to provide definitive validation of whether the reported issue is a genuine bug requiring a fix.
-
