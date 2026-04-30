@@ -893,6 +893,27 @@ describe('checkAgentModel', () => {
     }
   })
 
+  test('flags non-object frontmatter as a missing model', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'agents/research/list.md',
+        '---\n- model: inherit\n---\nbody',
+      )
+
+      const targets = collectScanTargets(root)
+      expect(checkAgentModel(root, targets.markdown)).toEqual([
+        {
+          file: 'agents/research/list.md',
+          message: 'Bundled agents must declare model: inherit.',
+        },
+      ])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   test('scans only agent markdown files', () => {
     const root = makeFixtureRepo()
     try {

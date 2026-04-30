@@ -709,7 +709,8 @@ export function checkAgentModel(
     const content = readFileSafe(path.join(rootDir, relPath))
     if (content === null) continue
     const parsed = parseFrontmatter(content)
-    if (parsed.data.model !== 'inherit') {
+    const model = isRecord(parsed.data) ? parsed.data.model : undefined
+    if (model !== 'inherit') {
       violations.push({
         file: relPath,
         message: 'Bundled agents must declare model: inherit.',

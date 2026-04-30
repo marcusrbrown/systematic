@@ -24,6 +24,15 @@ describe('plugin loading', () => {
     expect(pluginModule.SystematicPlugin).toBeUndefined()
   })
 
+  test('CI smoke test loads the default plugin export', () => {
+    const workflowPath = path.join(ROOT_DIR, '.github/workflows/main.yaml')
+    const workflow = fs.readFileSync(workflowPath, 'utf8')
+
+    expect(workflow).toContain('const pluginFactory = m.default;')
+    expect(workflow).toContain('await pluginFactory({')
+    expect(workflow).not.toContain('m.SystematicPlugin')
+  })
+
   test('cli runs under Bun', async () => {
     const cliPath = path.join(SRC_DIR, 'cli.ts')
     const result = Bun.spawnSync(['bun', cliPath, '--help'])
