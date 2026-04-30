@@ -20,7 +20,17 @@ describe('plugin loading', () => {
   test('plugin module loads', async () => {
     const pluginPath = path.join(SRC_DIR, 'index.ts')
     const pluginModule = await import(pathToFileURL(pluginPath).href)
-    expect(pluginModule.SystematicPlugin).toBeDefined()
+    expect(pluginModule.default).toBeDefined()
+    expect(pluginModule.SystematicPlugin).toBeUndefined()
+  })
+
+  test('CI smoke test loads the default plugin export', () => {
+    const workflowPath = path.join(ROOT_DIR, '.github/workflows/main.yaml')
+    const workflow = fs.readFileSync(workflowPath, 'utf8')
+
+    expect(workflow).toContain('const pluginFactory = m.default;')
+    expect(workflow).toContain('await pluginFactory({')
+    expect(workflow).not.toContain('m.SystematicPlugin')
   })
 
   test('cli runs under Bun', async () => {

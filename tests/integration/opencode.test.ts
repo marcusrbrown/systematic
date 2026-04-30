@@ -115,10 +115,10 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
   })
 
   test(
-    'systematic_skill tool loads systematic:brainstorming skill',
+    'systematic_skill tool loads systematic skill with prefix',
     async () => {
       const result = await runOpencode(
-        'Use the systematic_skill tool to load systematic:brainstorming',
+        'Use the systematic_skill tool to load systematic:setup',
         {
           cwd: testEnv.projectDir,
           configContent: buildOpencodeConfig(),
@@ -126,24 +126,26 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
       )
 
       expect(result.stdout).toMatch(
-        /<skill-instruction>|brainstorm|systematic|skill loaded|loaded/i,
+        /Review agent configuration is no longer needed/i,
       )
     },
     TIMEOUT_MS * MAX_RETRIES,
   )
 
   test(
-    'systematic_skill tool lists systematic skills in description',
+    'systematic_skill tool loads systematic skill without prefix',
     async () => {
       const result = await runOpencode(
-        'What skills are available? List the systematic skills you can load.',
+        'Use the systematic_skill tool to load setup',
         {
           cwd: testEnv.projectDir,
           configContent: buildOpencodeConfig(),
         },
       )
 
-      expect(result.stdout).toMatch(/brainstorming|systematic.*skills/i)
+      expect(result.stdout).toMatch(
+        /Review agent configuration is no longer needed/i,
+      )
     },
     TIMEOUT_MS * MAX_RETRIES,
   )

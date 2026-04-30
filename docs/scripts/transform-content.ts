@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import yaml from 'js-yaml'
+import { parseFrontmatter } from '../../src/lib/frontmatter.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -22,25 +23,6 @@ interface DefinitionEntry {
   description: string
   slug: string
   category?: string
-}
-
-function parseFrontmatter(
-  content: string,
-  sourcePath: string,
-): {
-  data: Frontmatter
-  body: string
-} {
-  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n?---\r?\n([\s\S]*)$/)
-  if (!match) return { data: {}, body: content }
-
-  try {
-    const parsed = yaml.load(match[1], { schema: yaml.JSON_SCHEMA })
-    return { data: (parsed ?? {}) as Frontmatter, body: match[2] }
-  } catch (error) {
-    console.warn(`⚠️  Failed to parse frontmatter in: ${sourcePath}`, error)
-    return { data: {}, body: match[2] }
-  }
 }
 
 const ACRONYMS = new Set([
@@ -170,6 +152,7 @@ const AGENT_CATEGORY_ORDER = [
   'Review',
   'Research',
   'Design',
+  'Document-review',
   'Docs',
   'Workflow',
 ] as const
@@ -294,7 +277,11 @@ function processDirectory(
   for (const file of files) {
     try {
       const content = fs.readFileSync(file, 'utf8')
-      const { data, body } = parseFrontmatter(content, file)
+      const parsed = parseFrontmatter<Frontmatter>(content)
+      if (parsed.parseError) {
+        console.warn(`⚠️  Failed to parse frontmatter in: ${file}`)
+      }
+      const { data, body } = parsed
 
       const name = deriveName(data, file, definitionType)
       const category = deriveCategory(file, definitionType)

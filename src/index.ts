@@ -41,7 +41,7 @@ const getPackageVersion = (): string => {
   }
 }
 
-export const SystematicPlugin: Plugin = async ({ client, directory }) => {
+const SystematicPlugin: Plugin = async ({ client, directory }) => {
   const config = loadConfig(directory)
 
   const configHandler = createConfigHandler({

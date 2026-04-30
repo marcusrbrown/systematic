@@ -7,9 +7,6 @@ allowed-tools:
   - Write
   - Bash
   - Grep
-preconditions:
-  - Problem has been solved (not in-progress)
-  - Solution has been verified working
 ---
 
 # compound-docs Skill
@@ -21,6 +18,8 @@ preconditions:
 This skill captures problem solutions immediately after confirmation, creating structured documentation that serves as a searchable knowledge base for future sessions.
 
 **Organization:** Single-file architecture - each problem documented as one markdown file in its symptom category directory (e.g., `docs/solutions/performance-issues/n-plus-one-briefs.md`). Files use YAML frontmatter for metadata and searchability.
+
+**Prerequisites:** The problem has been solved and the solution has been verified working. Do not document in-progress investigations as finalized solutions.
 
 ---
 

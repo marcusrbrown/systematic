@@ -46,7 +46,7 @@ systematic/
 │   ├── index.ts          # Plugin entry (SystematicPlugin)
 │   ├── cli.ts            # CLI entry (list/convert/config commands)
 │   └── lib/              # 12 core modules (see src/lib/AGENTS.md)
-├── skills/               # 45 bundled skills (SKILL.md format)
+├── skills/               # 46 bundled skills (SKILL.md format)
 ├── agents/               # 50 bundled agents (6 categories: design/docs/document-review/research/review/workflow)
 ├── commands/             # Empty (.gitkeep) — commands converted to skills; dir kept for backward compat
 ├── docs/                 # Starlight docs workspace (see docs/AGENTS.md)
@@ -164,4 +164,3 @@ The `commands/` directory contains only `.gitkeep` (all commands converted to sk
 - `commands/` dir retained (with `.gitkeep`) for backward compatibility — code paths still support commands
 - `registry/` provides OCX component-level installation with omo and standalone profiles
 - `.opencode/commands/` has project-only commands: `generate-readme` (README generation)
-

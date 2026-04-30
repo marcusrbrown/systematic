@@ -19,7 +19,7 @@ export interface SkillFrontmatter {
   // Claude Code converted fields
   disableModelInvocation?: boolean // from YAML key: disable-model-invocation
   userInvocable?: boolean // from YAML key: user-invocable
-  subtask?: boolean // derived from context: "fork"
+  subtask?: boolean // from YAML key: subtask, or derived from context: "fork"
   agent?: string // from YAML key: agent
   model?: string // from YAML key: model
   argumentHint?: string // from YAML key: argument-hint
@@ -44,6 +44,22 @@ export interface SkillInfo {
   argumentHint?: string
   allowedTools?: string
 }
+
+export const SKILL_FRONTMATTER_FIELDS = [
+  'name',
+  'description',
+  'argument-hint',
+  'disable-model-invocation',
+  'allowed-tools',
+  'license',
+  'compatibility',
+  'metadata',
+  'user-invocable',
+  'agent',
+  'model',
+  'context',
+  'subtask',
+] as const
 
 export function extractFrontmatter(filePath: string): SkillFrontmatter {
   try {
@@ -76,7 +92,10 @@ export function extractFrontmatter(filePath: string): SkillFrontmatter {
       metadata,
       disableModelInvocation: extractBoolean(data, 'disable-model-invocation'),
       userInvocable: extractBoolean(data, 'user-invocable'),
-      subtask: data.context === 'fork' ? true : undefined,
+      subtask:
+        data.context === 'fork'
+          ? true
+          : (extractBoolean(data, 'subtask') ?? undefined),
       agent: extractNonEmptyString(data, 'agent'),
       model: extractNonEmptyString(data, 'model'),
       argumentHint: argumentHint !== '' ? argumentHint : undefined,

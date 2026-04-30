@@ -47,7 +47,8 @@ jobs:
         run: |
           node --input-type=module -e "
             const m = await import('./dist/index.js');
-            const plugin = await m.SystematicPlugin({
+            const pluginFactory = m.default;
+            const plugin = await pluginFactory({
               client: { app: { log: async () => {} } },
               directory: process.cwd()
             });
