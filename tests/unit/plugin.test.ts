@@ -31,6 +31,23 @@ describe('plugin loading', () => {
     expect(workflow).toContain('const pluginFactory = m.default;')
     expect(workflow).toContain('await pluginFactory({')
     expect(workflow).not.toContain('m.SystematicPlugin')
+    expect(workflow).toContain('bun run registry:drift')
+  })
+
+  test('package exposes distinct registry validation and drift commands', () => {
+    const packageJsonPath = path.join(ROOT_DIR, 'package.json')
+    const packageJson = JSON.parse(
+      fs.readFileSync(packageJsonPath, 'utf8'),
+    ) as {
+      scripts?: Record<string, string>
+    }
+
+    expect(packageJson.scripts?.['registry:validate']).toBe(
+      'bun scripts/build-registry.ts --validate-only',
+    )
+    expect(packageJson.scripts?.['registry:drift']).toBe(
+      'bun scripts/generate-registry.ts --check',
+    )
   })
 
   test('cli runs under Bun', async () => {
