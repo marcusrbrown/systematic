@@ -37,6 +37,7 @@
     "docs:preview": "bun run --cwd docs preview",
     "docs:generate": "bun docs/scripts/transform-content.ts",
     "registry:build": "bun scripts/build-registry.ts",
+    "registry:drift": "bun scripts/generate-registry.ts --check",
     "registry:validate": "bun scripts/build-registry.ts --validate-only",
     "prepublishOnly": "bun run build"
   },

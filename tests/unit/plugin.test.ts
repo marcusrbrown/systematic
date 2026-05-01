@@ -24,13 +24,30 @@ describe('plugin loading', () => {
     expect(pluginModule.SystematicPlugin).toBeUndefined()
   })
 
-  test('CI smoke test loads the default plugin export', () => {
+  test('CI smoke test validates the workflow plugin export and registry drift contract', () => {
     const workflowPath = path.join(ROOT_DIR, '.github/workflows/main.yaml')
     const workflow = fs.readFileSync(workflowPath, 'utf8')
 
     expect(workflow).toContain('const pluginFactory = m.default;')
     expect(workflow).toContain('await pluginFactory({')
     expect(workflow).not.toContain('m.SystematicPlugin')
+    expect(workflow).toContain('bun run registry:drift')
+  })
+
+  test('package exposes distinct registry validation and drift commands', () => {
+    const packageJsonPath = path.join(ROOT_DIR, 'package.json')
+    const packageJson = JSON.parse(
+      fs.readFileSync(packageJsonPath, 'utf8'),
+    ) as {
+      scripts?: Record<string, string>
+    }
+
+    expect(packageJson.scripts?.['registry:validate']).toBe(
+      'bun scripts/build-registry.ts --validate-only',
+    )
+    expect(packageJson.scripts?.['registry:drift']).toBe(
+      'bun scripts/generate-registry.ts --check',
+    )
   })
 
   test('cli runs under Bun', async () => {

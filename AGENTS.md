@@ -1,6 +1,6 @@
 # AGENTS.md - Coding Agent Guidelines for Systematic
 
-**Generated:** 2026-04-25 | **Commit:** 7a64113 | **Branch:** main
+**Generated:** 2026-05-01 | **Commit:** 2e9453a | **Branch:** main
 
 ## Overview
 
@@ -17,7 +17,7 @@ bun install              # Install deps
 bun run build            # Build to dist/
 bun run typecheck        # Type check (strict)
 bun run lint             # Biome linter
-bun test tests/unit      # Unit tests (14 files)
+bun test tests/unit      # Unit tests (15 files)
 bun test tests/integration  # Integration tests (2 files)
 bun test                 # All tests
 bun test --filter "pattern"  # Filter tests
@@ -25,6 +25,7 @@ bun run docs:dev         # Local docs site
 bun run docs:build       # Build docs (generates reference + builds Starlight)
 bun run docs:generate    # Sync reference content from bundled assets
 bun run registry:build   # Build OCX registry
+bun run registry:drift   # Check registry source drift vs generated assets
 bun run registry:validate  # Validate registry without building
 ```
 
@@ -43,12 +44,11 @@ bun run registry:validate  # Validate registry without building
 ```
 systematic/
 ├── src/
-│   ├── index.ts          # Plugin entry (SystematicPlugin)
+│   ├── index.ts          # Plugin entry (default export)
 │   ├── cli.ts            # CLI entry (list/convert/config commands)
 │   └── lib/              # 12 core modules (see src/lib/AGENTS.md)
 ├── skills/               # 46 bundled skills (SKILL.md format)
 ├── agents/               # 50 bundled agents (6 categories: design/docs/document-review/research/review/workflow)
-├── commands/             # Empty (.gitkeep) — commands converted to skills; dir kept for backward compat
 ├── docs/                 # Starlight docs workspace (see docs/AGENTS.md)
 │   ├── scripts/          # Content generation from bundled assets
 │   └── src/content/      # Manual guides + generated reference
@@ -56,7 +56,7 @@ systematic/
 ├── scripts/              # Build + integrity scripts
 ├── assets/               # Static assets (banner SVG)
 ├── tests/
-│   ├── unit/             # 14 test files
+│   ├── unit/             # 15 test files
 │   └── integration/      # 2 test files
 ├── .opencode/            # Project-specific OC config + commands
 │   └── commands/         # Project-only commands (generate-readme)
@@ -67,7 +67,7 @@ systematic/
 
 | Task | Location |
 |------|----------|
-| Plugin hooks (config, tool, system.transform) | `src/index.ts` |
+| Plugin hooks (config, tool, experimental.chat.system.transform) | `src/index.ts` |
 | Config merging logic | `src/lib/config-handler.ts` |
 | Skill tool implementation | `src/lib/skill-tool.ts` |
 | Skill loading + formatting | `src/lib/skill-loader.ts` |
@@ -90,7 +90,7 @@ systematic/
 
 | Symbol | Type | Location | Refs | Role |
 |--------|------|----------|------|------|
-| `SystematicPlugin` | export | src/index.ts:44 | 2 | Main plugin factory |
+| `SystematicPlugin` | const | src/index.ts:44 | 1 | Main plugin factory (default export) |
 | `createConfigHandler` | fn | src/lib/config-handler.ts:221 | 3 | Config hook — merges bundled assets |
 | `createSkillTool` | fn | src/lib/skill-tool.ts:88 | 3 | systematic_skill tool factory |
 | `getBootstrapContent` | fn | src/lib/bootstrap.ts:43 | 3 | System prompt injection |
@@ -100,9 +100,10 @@ systematic/
 | `TOOL_NAME_MAP` | const | src/lib/converter.ts:85 | 2 | CC→OC tool name lookup |
 | `findSkillsInDir` | fn | src/lib/skills.ts:90 | 6 | Skill discovery (highest centrality) |
 | `findAgentsInDir` | fn | src/lib/agents.ts:49 | 4 | Agent discovery (category from subdir) |
-| `findCommandsInDir` | fn | src/lib/commands.ts:27 | 4 | Command discovery |
+| `findCommandsInDir` | fn | src/lib/commands.ts:27 | 4 | Backward-compat command discovery |
 | `loadConfig` | fn | src/lib/config.ts:47 | 5 | JSONC config loading + 3-source merge |
 | `parseFrontmatter` | fn | src/lib/frontmatter.ts:19 | 16 | YAML frontmatter extraction — most-imported function |
+| `SKILL_FRONTMATTER_FIELDS` | const | src/lib/skills.ts:48 | 1 | Runtime skill frontmatter allow-list |
 | `walkDir` | fn | src/lib/walk-dir.ts:17 | 7 | Recursive dir walker (foundation layer) |
 | `loadSkill` | fn | src/lib/skill-loader.ts:63 | 2 | Skill content loading + XML wrapping |
 
@@ -127,7 +128,7 @@ systematic/
 
 ## Plugin Architecture
 
-Three hooks: `config` (merges bundled assets, existing config wins), `tool` (registers `systematic_skill`), `system.transform` (injects bootstrap prompt, skips title generation).
+Three hooks: `config` (merges bundled assets, existing config wins), `tool` (registers `systematic_skill`), `experimental.chat.system.transform` (injects bootstrap prompt, skips title generation).
 
 ## Skill Format
 
@@ -150,17 +151,17 @@ All disabled lists merge (union), bootstrap config shallow-merges.
 
 Systematic evolves fully independently. No upstream sync path exists — the automated sync workflow, `/sync-cep` command, `convert-cc-defs` skill, and `sync-manifest.json` have all been removed. The CLI `convert` command remains available for ad-hoc CC → OpenCode format conversions.
 
-The `commands/` directory contains only `.gitkeep` (all commands converted to skills in a past cycle). Command code paths (`findCommandsInDir`, `loadCommandAsConfig`) remain for backward compatibility and project-specific commands under `.opencode/commands/`.
+The top-level `commands/` directory has been removed (all bundled commands were converted to skills). Command code paths (`findCommandsInDir`, `loadCommandAsConfig`) remain for backward compatibility and for project-specific commands under `.opencode/commands/`.
 
 ## Notes
 
-- Content-integrity gate runs in CI (build job) — catches phantom `systematic:*` refs and banned CC/CEP patterns
+- Content-integrity gate runs in CI (build job) — catches phantom `systematic:*` refs, frontmatter/model contract violations, and banned CC/CEP patterns
 - Bootstrap injection is opt-out via `bootstrap.enabled: false`
 - Converter caches results using file mtime
 - CLI commands: `list` (skills/agents/commands), `convert` (file conversion), `config show/path`
 - Experimental hook: `experimental.chat.system.transform`
 - `docs/` is a separate workspace — run `bun run docs:generate` to sync reference content from bundled assets
 - Use `bun src/cli.ts` for local dev instead of `bunx systematic` to avoid slow resolution
-- `commands/` dir retained (with `.gitkeep`) for backward compatibility — code paths still support commands
+- No bundled `commands/` dir ships anymore — backward-compatible command code paths remain for `.opencode/commands/`
 - `registry/` provides OCX component-level installation with omo and standalone profiles
 - `.opencode/commands/` has project-only commands: `generate-readme` (README generation)
