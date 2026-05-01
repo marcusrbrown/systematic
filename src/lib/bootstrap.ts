@@ -19,7 +19,7 @@ export interface BootstrapDeps {
   bundledSkillsDir: string
 }
 
-function getToolMappingTemplate(bundledSkillsDir: string): string {
+function getToolMappingTemplate(): string {
   return `**Tool Mapping for OpenCode:**
 When skills reference tools you don't have, substitute OpenCode equivalents:
 - \`TodoWrite\` → \`todowrite\`
@@ -37,7 +37,7 @@ When skills reference tools you don't have, substitute OpenCode equivalents:
 - Use the native \`skill\` tool for non-Systematic skills
 
 **Skills location:**
-Bundled skills are in \`${bundledSkillsDir}/\``
+Bundled skills ship with the Systematic plugin and are discoverable via \`systematic_skill\`.`
 }
 
 export function getBootstrapContent(
@@ -66,7 +66,7 @@ export function getBootstrapContent(
   const fullContent = fs.readFileSync(usingSystematicPath, 'utf8')
   const { body } = parseFrontmatter(fullContent)
   const content = body.trim()
-  const toolMapping = getToolMappingTemplate(bundledSkillsDir)
+  const toolMapping = getToolMappingTemplate()
 
   return `<SYSTEMATIC_WORKFLOWS>
 You have access to structured engineering workflows via the systematic plugin.

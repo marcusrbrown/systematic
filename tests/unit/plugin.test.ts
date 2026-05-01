@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -22,6 +23,61 @@ describe('plugin loading', () => {
     const pluginModule = await import(pathToFileURL(pluginPath).href)
     expect(pluginModule.default).toBeDefined()
     expect(pluginModule.SystematicPlugin).toBeUndefined()
+  })
+
+  test('plugin snapshots bootstrap content at init instead of re-reading files per transform', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-plugin-'))
+    const opencodeDir = path.join(tempDir, '.opencode')
+    const bootstrapPath = path.join(tempDir, 'bootstrap.md')
+    const configPath = path.join(opencodeDir, 'systematic.json')
+
+    fs.mkdirSync(opencodeDir, { recursive: true })
+    fs.writeFileSync(bootstrapPath, 'INITIAL bootstrap content')
+    fs.writeFileSync(
+      configPath,
+      JSON.stringify({
+        bootstrap: {
+          enabled: true,
+          file: bootstrapPath,
+        },
+      }),
+    )
+
+    try {
+      const pluginPath = path.join(SRC_DIR, 'index.ts')
+      const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
+        default: (args: {
+          client: { app: { log: (entry: unknown) => Promise<void> } }
+          directory: string
+        }) => Promise<{
+          'experimental.chat.system.transform': (
+            input: unknown,
+            output: { system: string[] },
+          ) => Promise<void>
+        }>
+      }
+
+      const plugin = await pluginModule.default({
+        client: {
+          app: {
+            log: async () => {},
+          },
+        },
+        directory: tempDir,
+      })
+
+      fs.writeFileSync(bootstrapPath, 'UPDATED bootstrap content')
+
+      const output = { system: ['Existing system prompt'] }
+      await plugin['experimental.chat.system.transform']({}, output)
+
+      expect(output.system).toEqual([
+        'Existing system prompt\n\nINITIAL bootstrap content',
+      ])
+      expect(output.system[0]).not.toContain('UPDATED bootstrap content')
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
   })
 
   test('CI smoke test validates the workflow plugin export and registry drift contract', () => {
