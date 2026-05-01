@@ -24,7 +24,7 @@ describe('plugin loading', () => {
     expect(pluginModule.SystematicPlugin).toBeUndefined()
   })
 
-  test('CI smoke test loads the default plugin export', () => {
+  test('CI smoke test validates the workflow plugin export and registry drift contract', () => {
     const workflowPath = path.join(ROOT_DIR, '.github/workflows/main.yaml')
     const workflow = fs.readFileSync(workflowPath, 'utf8')
 
