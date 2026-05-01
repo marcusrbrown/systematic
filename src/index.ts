@@ -43,6 +43,9 @@ const getPackageVersion = (): string => {
 
 const SystematicPlugin: Plugin = async ({ client, directory }) => {
   const config = loadConfig(directory)
+  // Snapshot bootstrap once per plugin init so the cached system prefix stays
+  // stable across requests. Custom bootstrap file edits take effect on restart.
+  const bootstrapContent = getBootstrapContent(config, { bundledSkillsDir })
 
   const configHandler = createConfigHandler({
     directory,
@@ -106,9 +109,8 @@ const SystematicPlugin: Plugin = async ({ client, directory }) => {
         return
       }
 
-      const content = getBootstrapContent(config, { bundledSkillsDir })
-      if (content) {
-        applyBootstrapContent(output, content)
+      if (bootstrapContent) {
+        applyBootstrapContent(output, bootstrapContent)
       }
     },
   }

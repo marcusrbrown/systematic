@@ -194,7 +194,10 @@ describe('getBootstrapContent', () => {
     const content = getBootstrapContent(config, { bundledSkillsDir })
 
     expect(content).not.toBeNull()
-    expect(content).toContain(bundledSkillsDir)
+    expect(content).not.toContain(bundledSkillsDir)
+    expect(content).toContain(
+      'Bundled skills ship with the Systematic plugin and are discoverable via `systematic_skill`.',
+    )
   })
 })
 
