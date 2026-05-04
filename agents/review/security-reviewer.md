@@ -1,7 +1,6 @@
 ---
 name: security-reviewer
 description: Conditional code-review persona, selected when the diff touches auth middleware, public endpoints, user input handling, or permission checks. Reviews code for exploitable vulnerabilities.
-model: inherit
 tools: Read, Grep, Glob, Bash
 color: blue
 mode: subagent

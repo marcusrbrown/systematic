@@ -52,10 +52,12 @@ function writeAllowlist(root: string, exemptions: AllowlistEntry[]): void {
 }
 
 function writeAgent(root: string, category: string, name: string): void {
+  // Bundled agents must omit the `model` field per content-integrity gate;
+  // OpenCode subagents inherit the invoking primary agent's model when unset.
   writeFile(
     root,
     `agents/${category}/${name}.md`,
-    `---\nname: ${name}\nmodel: inherit\n---\nagent body`,
+    `---\nname: ${name}\n---\nagent body`,
   )
 }
 
@@ -663,7 +665,7 @@ describe('checkFrontmatter', () => {
           '  owner: systematic',
           'user-invocable: true',
           'agent: general',
-          'model: inherit',
+          'model: anthropic/claude-haiku-4-5',
           'context: fork',
           'subtask: true',
           '---',
@@ -843,7 +845,7 @@ describe('checkFrontmatter', () => {
 })
 
 describe('checkAgentModel', () => {
-  test('allows agents with model inherit', () => {
+  test('allows agents with model field omitted', () => {
     const root = makeFixtureRepo()
     try {
       writeAgent(root, 'research', 'a')
@@ -854,13 +856,13 @@ describe('checkAgentModel', () => {
     }
   })
 
-  test('flags missing, non-inherit, empty, and null model values', () => {
+  test('flags any present model value (including inherit, hardcoded, empty, null)', () => {
     const root = makeFixtureRepo()
     try {
       writeFile(
         root,
-        'agents/research/missing.md',
-        '---\nname: missing\n---\nbody',
+        'agents/research/inherit.md',
+        '---\nname: inherit\nmodel: inherit\n---\nbody',
       )
       writeFile(
         root,
@@ -882,18 +884,20 @@ describe('checkAgentModel', () => {
       expect(violations.map((v) => v.file).sort()).toEqual([
         'agents/research/empty.md',
         'agents/research/hardcoded.md',
-        'agents/research/missing.md',
+        'agents/research/inherit.md',
         'agents/research/null.md',
       ])
       expect(
-        violations.every((v) => v.message.includes('model: inherit')),
+        violations.every((v) =>
+          v.message.includes('Bundled agents must omit the `model` field'),
+        ),
       ).toBe(true)
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
   })
 
-  test('flags non-object frontmatter as a missing model', () => {
+  test('ignores non-object frontmatter (no model key to flag)', () => {
     const root = makeFixtureRepo()
     try {
       writeFile(
@@ -903,12 +907,7 @@ describe('checkAgentModel', () => {
       )
 
       const targets = collectScanTargets(root)
-      expect(checkAgentModel(root, targets.markdown)).toEqual([
-        {
-          file: 'agents/research/list.md',
-          message: 'Bundled agents must declare model: inherit.',
-        },
-      ])
+      expect(checkAgentModel(root, targets.markdown)).toEqual([])
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
@@ -1000,7 +999,11 @@ describe('checkContentIntegrity (top-level)', () => {
         'foo',
         '---\nname: foo\ndescription: Test skill\npreconditions: before use\n---\nbody',
       )
-      writeFile(root, 'agents/research/a.md', '---\nname: a\n---\nagent')
+      writeFile(
+        root,
+        'agents/research/a.md',
+        '---\nname: a\nmodel: inherit\n---\nagent',
+      )
 
       const result = checkContentIntegrity(root)
       expect(result.frontmatterViolations).toHaveLength(1)
@@ -1397,7 +1400,11 @@ describe('CLI', () => {
         'foo',
         '---\nname: foo\ndescription: Test skill\npreconditions: before use\n---\nbody',
       )
-      writeFile(root, 'agents/research/a.md', '---\nname: a\n---\nagent')
+      writeFile(
+        root,
+        'agents/research/a.md',
+        '---\nname: a\nmodel: inherit\n---\nagent',
+      )
 
       const result = Bun.spawnSync(['bun', SCRIPT_PATH, root], {
         cwd: REPO_ROOT,

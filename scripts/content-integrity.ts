@@ -709,11 +709,12 @@ export function checkAgentModel(
     const content = readFileSafe(path.join(rootDir, relPath))
     if (content === null) continue
     const parsed = parseFrontmatter(content)
-    const model = isRecord(parsed.data) ? parsed.data.model : undefined
-    if (model !== 'inherit') {
+    if (!isRecord(parsed.data)) continue
+    if (Object.hasOwn(parsed.data, 'model')) {
       violations.push({
         file: relPath,
-        message: 'Bundled agents must declare model: inherit.',
+        message:
+          "Bundled agents must omit the `model` field. OpenCode subagents inherit the invoking primary agent's model when `model` is unset (per https://opencode.ai/docs/agents/). The literal `model: inherit` was undocumented and produced ProviderModelNotFoundError on OpenCode older than ~v1.13.x (pre sst/opencode#17888).",
       })
     }
   }

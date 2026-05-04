@@ -1,7 +1,6 @@
 ---
 name: dhh-rails-reviewer
 description: Conditional code-review persona, selected when Rails diffs introduce architectural choices, abstractions, or frontend patterns that may fight the framework. Reviews code from an opinionated DHH perspective.
-model: inherit
 tools: Read, Grep, Glob, Bash
 color: blue
 mode: subagent
