@@ -51,7 +51,8 @@ systematic/
 ├── agents/               # 50 bundled agents (6 categories: design/docs/document-review/research/review/workflow)
 ├── docs/                 # Starlight docs workspace (see docs/AGENTS.md)
 │   ├── scripts/          # Content generation from bundled assets
-│   └── src/content/      # Manual guides + generated reference
+│   ├── src/content/      # Manual guides + generated reference
+│   └── solutions/        # Documented solutions to past problems (bugs, best practices, workflow patterns), organized by category with YAML frontmatter (module, tags, problem_type)
 ├── registry/             # OCX registry config + profiles (omo, standalone)
 ├── scripts/              # Build + integrity scripts
 ├── assets/               # Static assets (banner SVG)
