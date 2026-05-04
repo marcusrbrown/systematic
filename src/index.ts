@@ -1,13 +1,14 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { Plugin } from '@opencode-ai/plugin'
+import type { Plugin, PluginInput } from '@opencode-ai/plugin'
 import {
   getBootstrapContent,
   INTERNAL_AGENT_SIGNATURES,
 } from './lib/bootstrap.js'
 import { loadConfig } from './lib/config.js'
 import { createConfigHandler } from './lib/config-handler.js'
+import { plugInOnce } from './lib/plugin-singleton.js'
 import { createSkillTool } from './lib/skill-tool.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -41,7 +42,15 @@ const getPackageVersion = (): string => {
   }
 }
 
-const SystematicPlugin: Plugin = async ({ client, directory }) => {
+/**
+ * Build the plugin hook surface for a single OpenCode plugin invocation.
+ *
+ * Extracted into a named initializer so the default export can wrap it through
+ * `plugInOnce(...)`, making duplicate factory calls in the same process
+ * converge on the same hooks promise. See `src/lib/plugin-singleton.ts` for
+ * the duplicate-load justification.
+ */
+const initializePlugin = async ({ client, directory }: PluginInput) => {
   const config = loadConfig(directory)
   // Snapshot bootstrap once per plugin init so the cached system prefix stays
   // stable across requests. Custom bootstrap file edits take effect on restart.
@@ -64,7 +73,10 @@ const SystematicPlugin: Plugin = async ({ client, directory }) => {
       }),
     },
 
-    'experimental.chat.system.transform': async (_input, output) => {
+    'experimental.chat.system.transform': async (
+      _input: unknown,
+      output: { system: string[] },
+    ) => {
       if (!hasLoggedInit) {
         hasLoggedInit = true
         const packageVersion = getPackageVersion()
@@ -114,6 +126,30 @@ const SystematicPlugin: Plugin = async ({ client, directory }) => {
       }
     },
   }
+}
+
+const SystematicPlugin: Plugin = async (input) => {
+  const { hooks } = await plugInOnce({
+    doInit: () => initializePlugin(input),
+    onDuplicate: (pid) => {
+      const message = `[systematic] duplicate factory invocation in same process (pid=${pid}); skipping duplicate registration. Multiple opencode.json sources may list this plugin.`
+      console.warn(message)
+      // Fire-and-forget so the log call never blocks plugin init.
+      input.client.app
+        .log({
+          body: {
+            service: 'systematic',
+            level: 'warn',
+            message,
+          },
+        })
+        .catch(() => {})
+    },
+  })
+  // hooks is the real plugin hook surface on the first invocation in a
+  // process and an empty object on every duplicate invocation; returning it
+  // unconditionally is what prevents host-side double registration.
+  return hooks
 }
 
 export default SystematicPlugin
