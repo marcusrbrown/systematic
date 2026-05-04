@@ -1,13 +1,20 @@
-import { describe, expect, test } from 'bun:test'
+import { beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { _resetPluginSingleton } from '../../src/lib/plugin-singleton.js'
 
 const SRC_DIR = path.resolve(import.meta.dirname, '../../src')
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
 
 describe('plugin loading', () => {
+  // Reset singleton between cases so factory invocations across tests do not
+  // share cached hooks. `globalThis` state otherwise leaks across the file.
+  beforeEach(() => {
+    _resetPluginSingleton()
+  })
+
   test('plugin file exists at src/index.ts', () => {
     const pluginPath = path.join(SRC_DIR, 'index.ts')
     expect(fs.existsSync(pluginPath)).toBe(true)
@@ -110,6 +117,64 @@ describe('plugin loading', () => {
     const cliPath = path.join(SRC_DIR, 'cli.ts')
     const result = Bun.spawnSync(['bun', cliPath, '--help'])
     expect(result.exitCode).toBe(0)
+  })
+
+  test('duplicate factory invocations return empty hooks (no double registration) and emit the duplicate warning exactly once', async () => {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-singleton-'),
+    )
+    const opencodeDir = path.join(tempDir, '.opencode')
+    fs.mkdirSync(opencodeDir, { recursive: true })
+
+    const warnings: string[] = []
+    const originalWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.map((a) => String(a)).join(' '))
+    }
+
+    try {
+      const pluginPath = path.join(SRC_DIR, 'index.ts')
+      const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
+        default: (args: {
+          client: { app: { log: (entry: unknown) => Promise<void> } }
+          directory: string
+        }) => Promise<Record<string, unknown>>
+      }
+
+      const input = {
+        client: {
+          app: {
+            log: async () => {},
+          },
+        },
+        directory: tempDir,
+      }
+
+      const hooks1 = await pluginModule.default(input)
+      const hooks2 = await pluginModule.default(input)
+      const hooks3 = await pluginModule.default(input)
+
+      // First invocation gets the real hook surface (config + tool + transform).
+      expect(hooks1.tool).toBeDefined()
+      expect(hooks1.config).toBeDefined()
+      expect(hooks1['experimental.chat.system.transform']).toBeDefined()
+
+      // Duplicates get an empty object so the OpenCode loader does not
+      // re-register `systematic_skill`, the `config` hook, or the
+      // `experimental.chat.system.transform` hook for each duplicate
+      // config source. This is the LLM-visible-tool-catalog dedupe fix.
+      expect(hooks2).toEqual({})
+      expect(hooks3).toEqual({})
+
+      // Duplicate warning fires at most once across multiple duplicates.
+      const duplicateWarnings = warnings.filter((w) =>
+        w.includes('duplicate factory invocation'),
+      )
+      expect(duplicateWarnings.length).toBe(1)
+    } finally {
+      console.warn = originalWarn
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
   })
 })
 
