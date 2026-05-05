@@ -1,10 +1,16 @@
 ---
 title: Content-integrity gate and validation/bootstrap test coverage
 type: feat
-status: active
+status: completed
 date: 2026-04-18
+completed_at: 2026-04-24
 origin: docs/brainstorms/2026-04-18-infra-improvements-requirements.md
+pr: https://github.com/marcusrbrown/systematic/pull/301
 ---
+
+## Post-merge note
+
+Shipped in two PRs: PR #301 (initial gate + tests, v2.5.0) and PR #306 (Fro Bot follow-up). Gate later wired into CI in PR #313, and extended with sub-file resolution check in PR #319. Now enforces: runtime-aligned skill frontmatter fields, banned `preconditions`, required non-empty `name`/`description`, bundled agents must omit the `model` field (per PR #336 reversal), and all internally-referenced sub-files must resolve on disk.
 
 # Content-integrity gate and validation/bootstrap test coverage
 

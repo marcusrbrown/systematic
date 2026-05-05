@@ -1,6 +1,16 @@
+---
+title: 'Automated Re-sync Workflow Implementation Plan'
+type: feat
+status: superseded
+date: 2026-02-15
+superseded_at: 2026-04-17
+superseded_by: docs/plans/2026-04-17-002-refactor-truth-reset-plan.md
+superseded_reason: "Final CEP divorce removed all sync infrastructure (PR #243 deleted the workflow + skill + manifest; PR #290 completed the truth reset). The CLI `convert` command remains for one-off CC\u2192OpenCode conversion, but no automated upstream tracking exists \u2014 Systematic evolves independently."
+---
+
 # Automated Re-sync Workflow Implementation Plan
 
-> **For OpenCode:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **Status: superseded.** This plan never shipped \u2014 the underlying sync workflow was deleted before the resync infrastructure was built. See PR #243 (sync deletion) and PR #290 (final truth reset).
 
 **Goal:** Add a command-first automated re-sync workflow that detects upstream CEP changes, runs convert-cc-defs, and creates an issue + PR only when changes exist.
 

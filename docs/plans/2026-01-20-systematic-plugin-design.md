@@ -1,3 +1,11 @@
+---
+title: '@fro.bot/systematic — OpenCode Plugin Design'
+type: design
+status: completed
+date: 2026-01-20
+completed_at: 2026-01-21
+---
+
 # @fro.bot/systematic — OpenCode Plugin Design
 
 **Date:** 2026-01-20

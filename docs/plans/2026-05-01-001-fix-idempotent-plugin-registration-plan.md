@@ -1,9 +1,17 @@
 ---
 title: 'fix: make plugin registration idempotent across duplicate config sources'
 type: fix
-status: active
+status: completed
 date: 2026-05-01
+completed_at: 2026-05-04
+pr: https://github.com/marcusrbrown/systematic/pull/335
 ---
+
+## Post-merge note (2026-05-05)
+
+Shipped via PR #335. The Phase 0 probe confirmed the duplicate-factory pattern (same PID, two `count=1` invocations of distinct module instances, equivalent fingerprints). Whole-hooks reuse (Option-1, the `opencode-copilot-delegate` precedent) was empirically insufficient \u2014 doctor verification showed `systematic_skill` still appearing twice in the LLM-visible tool catalog because OpenCode iterates per-source and registers tools per-source even when references match. Final shipped design is Option-2: empty hooks `{}` returned to duplicate callers, init runs exactly once per process.
+
+A solution doc captures the lesson: `docs/solutions/integration-issues/opencode-plugin-factory-duplicate-registration-2026-05-04.md`.
 
 # fix: make plugin registration idempotent across duplicate config sources
 
