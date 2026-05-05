@@ -117,6 +117,7 @@ systematic/
 - **Error handling:** Return null/empty for non-critical, throw with context for critical, early return guards
 - **Naming:** Files: kebab-case | Functions: camelCase | Types: PascalCase | Tests: `*.test.ts`
 - **Testing:** `bun:test` with `describe`/`it`. Real temp dirs for FS isolation, no mocking libraries. Integration tests skip if deps unavailable
+- **Bundled agents:** MUST omit the `model` field in frontmatter. OpenCode subagents inherit the invoking primary agent's model when `model` is unset (see https://opencode.ai/docs/agents/). The literal value `model: inherit` is NOT supported — it crashed subagent dispatch on OpenCode versions prior to [sst/opencode#17888](https://github.com/sst/opencode/pull/17888) (March 2026), and is undocumented in OpenCode. The content-integrity gate enforces this.
 
 ## Anti-Patterns
 

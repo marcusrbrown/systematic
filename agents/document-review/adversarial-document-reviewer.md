@@ -1,7 +1,6 @@
 ---
 name: adversarial-document-reviewer
 description: "Conditional document-review persona, selected when the document has >5 requirements or implementation units, makes significant architectural decisions, covers high-stakes domains, or proposes new abstractions. Challenges premises, surfaces unstated assumptions, and stress-tests decisions rather than evaluating document quality."
-model: inherit
 tools: Read, Grep, Glob, Bash
 ---
 

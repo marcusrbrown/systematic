@@ -18,7 +18,7 @@ Systematic skill frontmatter mirrors what the runtime loader actually reads. Do 
 | `metadata` | No | String-only metadata map. Keep it boring. | `metadata: { owner: systematic }` |
 | `user-invocable` | No | Direct user invocation should be explicitly advertised or suppressed. | `user-invocable: false` |
 | `agent` | No | A loader-supported companion agent is required. | `agent: general` |
-| `model` | No | A skill-level model choice is justified. Prefer inheritance elsewhere. | `model: inherit` |
+| `model` | No | A skill-level model choice is justified for *skill execution* (not bundled agents — see below). | `model: anthropic/claude-haiku-4-5` |
 | `context` | No | Forked execution is required. `fork` derives subtask behavior at runtime. | `context: fork` |
 | `subtask` | No | Explicit forked-subtask dispatch marker. | `subtask: true` |
 
@@ -106,15 +106,21 @@ Avoid ambiguous references such as "the conventions doc". They are harder for ag
 
 ### Bundled Agent Model
 
-Bundled agents must use:
+Bundled agents must omit the `model` field entirely:
 
 ```yaml
-model: inherit
+---
+name: example-agent
+description: ...
+# no `model:` line
+---
 ```
 
-This keeps Systematic provider-portable. Hardcoded provider IDs make an agent unusable for users on other providers and are almost never worth the lock-in.
+Per [OpenCode's agent docs](https://opencode.ai/docs/agents/): **"If you don't specify a model, primary agents use the model globally configured while subagents will use the model of the primary agent that invoked the subagent."** All bundled Systematic agents are subagents, so omitting `model` gives the desired portable inheritance behavior.
 
-If a future agent truly depends on a specific provider, document the constraint in the plan and get explicit review before adding the hardcoded model.
+Do **not** declare `model: inherit`. That literal value is undocumented and was treated as a real provider/model string by `Provider.parseModel()` until [sst/opencode#17888](https://github.com/sst/opencode/pull/17888) landed in mid-March 2026 — producing `ProviderModelNotFoundError` on every subagent invocation for anyone on an older OpenCode. Omitting the field works on every OpenCode version and is what the docs canonically describe.
+
+Hardcoded provider IDs (`anthropic/claude-...`, `openai/gpt-...`, etc.) are also banned because they make an agent unusable for users on other providers. If a future agent truly depends on a specific provider, document the constraint in the plan and get explicit review before adding the hardcoded model.
 
 ### Machine ID
 

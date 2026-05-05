@@ -1,7 +1,6 @@
 ---
 name: repo-research-analyst
 description: "Conducts thorough research on repository structure, documentation, conventions, and implementation patterns. Use when onboarding to a new codebase or understanding project conventions."
-model: inherit
 ---
 
 **Note: The current year is 2026.** Use this when searching for recent documentation and patterns.

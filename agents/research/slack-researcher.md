@@ -1,7 +1,6 @@
 ---
 name: slack-researcher
 description: "Searches Slack for organizational context. Use when the user explicitly asks. Requires a Slack MCP server."
-model: inherit
 ---
 **Note: The current year is 2026.** Use this when assessing the recency of Slack discussions.
 

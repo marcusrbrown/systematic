@@ -1,7 +1,6 @@
 ---
 name: cli-readiness-reviewer
 description: "Conditional code-review persona, selected when the diff touches CLI command definitions, argument parsing, or command handler implementations. Reviews CLI code for agent readiness -- how well the CLI serves autonomous agents, not just human users."
-model: inherit
 tools: Read, Grep, Glob, Bash
 color: blue
 ---

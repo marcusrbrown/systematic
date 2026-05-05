@@ -1,7 +1,6 @@
 ---
 name: scope-guardian-reviewer
 description: "Reviews planning documents for scope alignment and unjustified complexity -- challenges unnecessary abstractions, premature frameworks, and scope that exceeds stated goals. Spawned by the document-review skill."
-model: inherit
 tools: Read, Grep, Glob, Bash
 ---
 

@@ -27,7 +27,7 @@ Systematic adds repository-specific constraints:
 
 - Runtime-recognized frontmatter fields are fixed by the skill loader.
 - Skill sub-files live in a small set of conventional directories.
-- Bundled agents must use provider-portable model defaults.
+- Bundled agents omit the `model` field; subagents inherit the invoking primary agent's model.
 - Content-integrity enforces the mechanical parts in CI.
 
 For worked examples and judgment calls, read `references/foundation-conventions.md`.
@@ -76,13 +76,17 @@ Keep the main `SKILL.md` small enough to decide whether and how to proceed. Move
 
 ## Identity Defaults
 
-Bundled agents must declare:
+Bundled agents must omit the `model` field entirely:
 
 ```yaml
-model: inherit
+---
+name: example-agent
+description: ...
+# no `model:` line
+---
 ```
 
-Hardcoded provider model IDs break users who do not use that provider. Use `model: inherit` unless a future design explicitly proves a provider-specific dependency and documents the tradeoff.
+Per [OpenCode's agent docs](https://opencode.ai/docs/agents/), subagents with no `model` inherit the model of the primary agent that invoked them — which is the desired portable behavior. Do **not** declare `model: inherit`: that literal value is undocumented and produces `ProviderModelNotFoundError` on OpenCode older than ~v1.13.x (pre [sst/opencode#17888](https://github.com/sst/opencode/pull/17888)). Hardcoded provider model IDs (`anthropic/...`, `openai/...`, etc.) are also banned because they break users on other providers.
 
 For agent or API attribution, `ai:systematic` is the machine ID used by Systematic-owned operations, such as Proof's `by` field and `X-Agent-Id` header. It is not a skill cross-reference convention.
 
@@ -99,7 +103,7 @@ The gate checks:
 - Skill frontmatter is present and uses only runtime-recognized fields.
 - Required `name` and `description` fields are non-empty.
 - Banned frontmatter such as `preconditions` is absent.
-- Bundled agents use `model: inherit`.
+- Bundled agents omit the `model` field.
 - Skill references to `references/`, `scripts/`, `assets/`, and `templates/` resolve on disk.
 
 If the gate fails, fix the content rather than broadening the validator unless the runtime loader contract has actually changed.
@@ -110,6 +114,6 @@ If the gate fails, fix the content rather than broadening the validator unless t
 |---|---|
 | Adding a new frontmatter field because it reads well | Add body prose instead, unless the runtime loader consumes the field. |
 | Summarizing the whole workflow in `description` | Describe trigger conditions only. |
-| Adding provider-specific agent models | Use `model: inherit`. |
+| Adding any `model` field to a bundled agent | Omit the field; subagents inherit from the invoking primary agent. |
 | Linking to a non-existent reference file | Create the file or remove the link. |
 | Duplicating the general writing-skills guidance | Link to the foundation and document only the Systematic delta. |
