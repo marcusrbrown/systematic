@@ -1,8 +1,14 @@
 ---
 title: "feat: Frontmatter Conversion Improvements & Upstream Tracking"
 type: feat
+status: superseded
 date: 2026-02-09
+superseded_at: 2026-04-17
+superseded_by: docs/plans/2026-04-17-002-refactor-truth-reset-plan.md
+superseded_reason: "Final CEP divorce removed the upstream sync infrastructure entirely. `sync-manifest.json` and `src/lib/manifest.ts` were deleted; the `/sync-cep` slash command was removed; `convert-cc-defs` was removed. The CLI `convert` command remains for ad-hoc CC\u2192OpenCode format conversion, but upstream tracking and resync workflows are gone permanently. See PR #243 (sync infrastructure deletion) and PR #290 (truth reset)."
 ---
+
+> **Status: superseded.** This plan targeted upstream CEP tracking and frontmatter conversion improvements that no longer apply \u2014 Systematic broke the CEP tether in PR #243 (March 2026) and the final CEP divorce in PR #290 (v2.4.0) removed all sync infrastructure. The CLI converter remains for one-off CC\u2192OpenCode conversions.
 
 # Frontmatter Conversion Improvements & Upstream Tracking
 

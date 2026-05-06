@@ -1,6 +1,14 @@
+---
+title: '@fro.bot/systematic Implementation Plan'
+type: feat
+status: completed
+date: 2026-01-20
+completed_at: 2026-01-21
+---
+
 # @fro.bot/systematic Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **Status: completed.** This plan delivered the initial `@fro.bot/systematic` npm package and OpenCode plugin scaffolding. Subsequent versions (v2.0+) evolved the project independently. See `AGENTS.md` for current state.
 
 **Goal:** Build and publish `@fro.bot/systematic`, an OpenCode plugin providing structured engineering workflows ported from CEP and Superpowers.
 

@@ -1,6 +1,14 @@
+---
+title: 'Reference Section Refresh — Implementation Plan'
+type: feat
+status: completed
+date: 2026-02-12
+completed_at: 2026-02-13
+---
+
 # Reference Section Refresh — Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **Status: completed.** `docs/scripts/transform-content.ts` now produces enriched frontmatter with sidebar metadata (category badges for agents) and the docs site renders styled reference pages. Custom CSS in `docs/src/styles/custom.css` ships the badge styling.
 
 **Goal:** Upgrade generated reference pages with human-readable titles, sidebar type badges, structured metadata headers (category for agents, source link), and consistent styling.
 

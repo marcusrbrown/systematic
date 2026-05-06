@@ -1,6 +1,14 @@
+---
+title: 'Docs Next Steps Implementation Plan'
+type: feat
+status: completed
+date: 2026-02-08
+completed_at: 2026-02-12
+---
+
 # Docs Next Steps Implementation Plan
 
-> **For Claude:** REQUIRED SUB-SKILL: Use superpowers:executing-plans to implement this plan task-by-task.
+> **Status: completed.** Reference pages now exist at `docs/src/content/docs/reference/{skills,agents}/`; `docs/scripts/transform-content.ts` has shipped with sidebar metadata, deterministic ordering, and content generation. Subsequent reference-section refresh and sidebar-badges plans (2026-02-12) extended this work.
 
 **Goal:** Tighten docs generation, harden docs deployment, add docs CI checks, and polish reference navigation.
 

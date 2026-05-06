@@ -3,8 +3,19 @@ title: 'feat: Add writing-systematic-skills authoring spec + foundation validato
 type: feat
 status: completed
 date: 2026-04-30
+completed_at: 2026-05-04
 origin: docs/brainstorms/2026-04-28-writing-systematic-skills-requirements.md
+pr: https://github.com/marcusrbrown/systematic/pull/325
 ---
+
+## Post-merge reconciliation (2026-05-05)
+
+All 7 units shipped — see PR #325. One direction was inverted post-merge:
+
+- **Unit 2 — empirical-audit cleanup**: the original prescription was to add `model: inherit` to 13 agents that were missing it. This was inverted by PR #336 (https://github.com/marcusrbrown/systematic/pull/336), which removed `model: inherit` from all 50 bundled agents. The replacement convention is to omit the field entirely (per OpenCode's documented contract: subagents inherit the invoking primary agent's model when `model:` is unset). The content-integrity gate now flags any present `model:` value, including the literal `inherit`. Outcome (clean catalog enforced by gate) is preserved; direction is reversed.
+- **Unit 6 — registry/AGENTS.md count**: shipped at 46 skills as planned.
+
+V2 candidates from this plan's Documentation/Operational Notes that remain open: (1) `ce:*` workflow conventions, (2) `name:` namespace migration for the 37 bare-name skills, (3) authoring-time enforcement, (4) `argument-hint` slot-typing.
 
 # feat: Add writing-systematic-skills authoring spec + foundation validators
 
@@ -129,7 +140,7 @@ The implementer may split `foundation-conventions.md` if a section grows past ~2
 
 The ordering below is the empirical audit pattern: validators land FIRST in dry-run mode, their output drives cleanup scope, and the validator flips to enforcing mode last. This avoids the failure mode where Unit 4 surfaces a violation Unit 1 missed in a single-PR shipment.
 
-- [ ] **Unit 1: Validator implementation (dry-run by default, no CLI flag)**
+- [x] **Unit 1: Validator implementation (dry-run by default, no CLI flag)**
 
   **Goal:** Add `checkFrontmatter` and `checkAgentModel` to the content-integrity gate. Wire them into the result type. Have them run automatically as part of `checkContentIntegrity()`. **Do not yet flip the gate's exit code to count their violations.** This unit ships a validator that prints violations to stderr but exits 0; Unit 5 flips it to enforcing mode.
 
@@ -255,7 +266,7 @@ The ordering below is the empirical audit pattern: validators land FIRST in dry-
   - `bun scripts/content-integrity.ts --verbose` includes counts of `frontmatterViolations` and `agentModelViolations` in its summary.
   - `SUBFILE_DIRECTORY_NAMES` no longer contains `workflows`; doc comments updated.
 
-- [ ] **Unit 2: Cleanup of empirically-surfaced violations**
+- [x] **Unit 2: Cleanup of empirically-surfaced violations** *(direction inverted post-merge — see Post-merge reconciliation above)*
 
   **Goal:** Drive the catalog to zero foundation-rule violations using Unit 1's empirical output as the source of truth.
 
@@ -303,7 +314,7 @@ The ordering below is the empirical audit pattern: validators land FIRST in dry-
   - `bun scripts/content-integrity.ts` reports zero `frontmatterViolations` and zero `agentModelViolations` (still exits 0 because flag is off; Unit 5 flips it).
   - `bun test tests/unit` still passing.
 
-- [ ] **Unit 3: Author skills/writing-systematic-skills/SKILL.md (bedrock spec)**
+- [x] **Unit 3: Author skills/writing-systematic-skills/SKILL.md (bedrock spec)**
 
   **Goal:** Ship the foundation-spec skill body — concise, scannable, layered on writing-skills.
 
@@ -340,7 +351,7 @@ The ordering below is the empirical audit pattern: validators land FIRST in dry-
   - Frontmatter contains only `name` and `description` (the new spec skill does not need any optional standardized fields, though R5 permits them).
   - Manual readthrough confirms the skill does not duplicate writing-skills content.
 
-- [ ] **Unit 4: Author references/foundation-conventions.md**
+- [x] **Unit 4: Author references/foundation-conventions.md**
 
   **Goal:** Ship judgment-call guidance and worked examples in a single reference file.
 
@@ -371,7 +382,7 @@ The ordering below is the empirical audit pattern: validators land FIRST in dry-
   - `bun scripts/content-integrity.ts` passes with the reference file present.
   - Total reference content roughly ≤ 600 lines (informational target; not a hard rule).
 
-- [ ] **Unit 5: Flip the validator to enforcing mode**
+- [x] **Unit 5: Flip the validator to enforcing mode**
 
   **Goal:** Activate the foundation-rule violations as gate-blocking errors. After this unit, any future PR introducing a banned field, missing required field, or missing `model: inherit` will fail CI.
 
@@ -400,7 +411,7 @@ The ordering below is the empirical audit pattern: validators land FIRST in dry-
   - `bun scripts/content-integrity.ts` exits 0 on the live catalog.
   - Local test: introduce a synthetic violation (e.g., add `preconditions:` to a test fixture skill), run the gate, assert exit 1, revert.
 
-- [ ] **Unit 6: Register the new skill in registry + update AGENTS.md**
+- [x] **Unit 6: Register the new skill in registry + update AGENTS.md**
 
   **Goal:** Ship the skill in the OCX registry so it's installable and update the documented skill count.
 
@@ -432,7 +443,7 @@ The ordering below is the empirical audit pattern: validators land FIRST in dry-
   - `bun test` still passing.
   - Both AGENTS.md files show skill count 46.
 
-- [ ] **Unit 7: Final quality gate + plan-taxonomy verification**
+- [x] **Unit 7: Final quality gate + plan-taxonomy verification**
 
   **Goal:** Confirm the PR is ready for review. Catalog-wide compliance, all gates green, no plan-taxonomy leakage.
 

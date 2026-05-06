@@ -1,10 +1,16 @@
 ---
 title: "feat: Auto-generate OCX registry from filesystem with V2 migration"
 type: feat
-status: active
+status: completed
 date: 2026-04-25
+completed_at: 2026-04-25
 origin: docs/brainstorms/2026-04-25-registry-automation-requirements.md
+pr: https://github.com/marcusrbrown/systematic/pull/315
 ---
+
+## Post-merge note
+
+Shipped via PR #315 (v2.6.0). Registry now contains 100 components (45 skills + 50 agents + 5 curated entries: 1 plugin + 4 bundles/profiles), all auto-generated from filesystem via `scripts/generate-registry.ts` and validated against the OCX V2 schema. CI runs `bun run registry:drift` on every build.
 
 # feat: Auto-generate OCX registry from filesystem with V2 migration
 
@@ -73,7 +79,7 @@ Replace the hand-maintained OCX registry with an auto-generated one. A new gener
 
 ## Implementation Units
 
-- [ ] **Unit 1: V2 migration of build-registry.ts**
+- [x] **Unit 1: V2 migration of build-registry.ts**
 
 **Goal:** Update the build script to consume V2 format — type literals, path handling, string file entries. This is a prerequisite for everything else since the generator produces V2 output.
 
@@ -113,7 +119,7 @@ Replace the hand-maintained OCX registry with an auto-generated one. A new gener
 
 ---
 
-- [ ] **Unit 2: Generator script**
+- [x] **Unit 2: Generator script**
 
 **Goal:** Create `scripts/generate-registry.ts` that auto-generates V2 registry components from filesystem + frontmatter, preserves hand-curated entries, auto-populates bundle dependencies, and writes output with JSONC comment preservation.
 
@@ -156,7 +162,7 @@ Replace the hand-maintained OCX registry with an auto-generated one. A new gener
 
 ---
 
-- [ ] **Unit 3: Symlink removal**
+- [x] **Unit 3: Symlink removal**
 
 **Goal:** Delete the `registry/files/skills` and `registry/files/agents` symlinks. Keep `registry/files/profiles/` (real files).
 
@@ -182,7 +188,7 @@ Replace the hand-maintained OCX registry with an auto-generated one. A new gener
 
 ---
 
-- [ ] **Unit 4: Generator --check mode and CI integration**
+- [x] **Unit 4: Generator --check mode and CI integration**
 
 **Goal:** Add drift detection to the generator and wire it into CI so registry staleness blocks the build.
 
@@ -214,7 +220,7 @@ Replace the hand-maintained OCX registry with an auto-generated one. A new gener
 
 ---
 
-- [ ] **Unit 5: Generator tests**
+- [x] **Unit 5: Generator tests**
 
 **Goal:** Comprehensive test coverage for the generator script — discovery, frontmatter parsing, curated entry preservation, bundle dependency auto-population, and V2 format correctness.
 
