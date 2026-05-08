@@ -48,7 +48,7 @@ systematic/
 │   ├── cli.ts            # CLI entry (list/convert/config commands)
 │   └── lib/              # 12 core modules (see src/lib/AGENTS.md)
 ├── skills/               # 45 bundled skills (SKILL.md format)
-├── agents/               # 50 bundled agents (6 categories: design/docs/document-review/research/review/workflow)
+├── agents/               # 51 bundled agents (6 categories: design/docs/document-review/research/review/workflow)
 ├── docs/                 # Starlight docs workspace (see docs/AGENTS.md)
 │   ├── scripts/          # Content generation from bundled assets
 │   ├── src/content/      # Manual guides + generated reference

@@ -34,7 +34,7 @@ docs/
 │       ├── guides/           # 7 manual pages (philosophy, main-loop, agent-install, architecture, conversion-guide, ocx-registry, exemplary-checklist)
 │       └── reference/        # Generated — DO NOT EDIT
 │           ├── skills/       # 45 pages + index.mdx (generated from skills/)
-│           └── agents/       # 50 pages + index.mdx (generated from agents/)
+│           └── agents/       # 51 pages + index.mdx (generated from agents/)
 └── package.json
 ```
 
