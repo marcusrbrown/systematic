@@ -125,9 +125,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
         },
       )
 
-      expect(result.stdout).toMatch(
-        /Review agent configuration is no longer needed/i,
-      )
+      expect(result.stdout).toMatch(/ce:review/i)
     },
     TIMEOUT_MS * MAX_RETRIES,
   )
@@ -143,9 +141,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
         },
       )
 
-      expect(result.stdout).toMatch(
-        /Review agent configuration is no longer needed/i,
-      )
+      expect(result.stdout).toMatch(/ce:review/i)
     },
     TIMEOUT_MS * MAX_RETRIES,
   )
