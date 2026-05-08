@@ -450,16 +450,6 @@
       ]
     },
     {
-      "name": "ce-work-beta",
-      "type": "skill",
-      "description": "[BETA] Execute work with external delegate support. Same as ce:work but includes experimental Codex delegation mode for token-conserving code implementation.",
-      "files": [
-        "skills/ce-work-beta/SKILL.md",
-        "skills/ce-work-beta/references/codex-delegation-workflow.md",
-        "skills/ce-work-beta/references/shipping-workflow.md"
-      ]
-    },
-    {
       "name": "changelog",
       "type": "skill",
       "description": "Create engaging changelogs for recent merges to main branch",
@@ -751,7 +741,6 @@
         "ce-plan",
         "ce-review",
         "ce-work",
-        "ce-work-beta",
         "changelog",
         "claude-permissions-optimizer",
         "compound-docs",
