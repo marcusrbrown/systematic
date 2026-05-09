@@ -5,6 +5,7 @@ import path from 'node:path'
 import {
   type BundledAgentInventory,
   buildBundledAgentInventory,
+  inferBuiltInTemperature,
   validateAgentOverlays,
 } from '../../src/lib/agent-overlays.js'
 import type { SourcedOverlayConfig } from '../../src/lib/config.js'
@@ -183,6 +184,21 @@ describe('validateAgentOverlays', () => {
     ).toThrow(/categories\.unknown.*Valid categories: review, workflow/)
   })
 
+  test('category overlays accept hidden', () => {
+    expect(() =>
+      validateAgentOverlays({
+        inventory: createInventory(),
+        overlays: {
+          agents: {},
+          categories: {
+            review: source('categories', 'review', { hidden: true }),
+          },
+        },
+        nativeAgents: {},
+      }),
+    ).not.toThrow()
+  })
+
   test('rejects unknown and unsupported fields with key path', () => {
     for (const field of [
       'unknown',
@@ -278,6 +294,23 @@ describe('validateAgentOverlays', () => {
         ),
       )
     }
+  })
+
+  test.each(['', ' cyan', '12345'])('rejects invalid color %p', (color) => {
+    expect(() =>
+      validateAgentOverlays({
+        inventory: createInventory(),
+        overlays: {
+          agents: {
+            'correctness-reviewer': source('agents', 'correctness-reviewer', {
+              color,
+            }),
+          },
+          categories: {},
+        },
+        nativeAgents: {},
+      }),
+    ).toThrow(/agents\.correctness-reviewer\.color/)
   })
 
   test('native replacement conflicts with exact unqualified and qualified overlays', () => {
@@ -456,5 +489,21 @@ describe('validateAgentOverlays', () => {
         nativeAgents: {},
       }),
     ).not.toThrow()
+  })
+})
+
+describe('inferBuiltInTemperature', () => {
+  test.each([
+    ['correctness-reviewer', 'Reviews code', 0.1],
+    ['security-sentinel', 'Audits risk', 0.1],
+    ['architecture-strategist', 'Plans architecture', 0.2],
+    ['repo-research-analyst', 'Researches repositories', 0.2],
+    ['readme-writer', 'Writes docs', 0.3],
+    ['changelog-editor', 'Edits release notes', 0.3],
+    ['design-iterator', 'Creates visual concepts', 0.6],
+    ['creative-ideator', 'Brainstorms product ideas', 0.6],
+    ['general-helper', 'Handles miscellaneous work', 0.3],
+  ])('returns %p temperature for %s', (name, description, expected) => {
+    expect(inferBuiltInTemperature(name, description)).toBe(expected)
   })
 })

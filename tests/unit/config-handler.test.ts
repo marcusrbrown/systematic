@@ -733,7 +733,7 @@ model: gpt-4
         name: 'other-reviewer',
         description: 'Other reviewer',
       })
-      writeSystematicConfig({
+      writeCustomSystematicConfig({
         agents: {
           'correctness-reviewer': {
             model: 'openrouter/anthropic/claude-sonnet-4',

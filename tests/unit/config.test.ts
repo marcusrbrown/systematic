@@ -474,7 +474,7 @@ describe('config', () => {
             path.join(projectConfigDir, 'systematic.json'),
             JSON.stringify({
               agents: {
-                'correctness-reviewer': { model: 'anthropic/claude-sonnet-4' },
+                'correctness-reviewer': { temperature: 0.4 },
               },
             }),
           )
@@ -485,7 +485,7 @@ describe('config', () => {
             review: { temperature: 0.2 },
           })
           expect(result.config.agents).toEqual({
-            'correctness-reviewer': { model: 'anthropic/claude-sonnet-4' },
+            'correctness-reviewer': { temperature: 0.4 },
           })
         } finally {
           if (userConfigBackup !== null) {
@@ -496,7 +496,7 @@ describe('config', () => {
         }
       })
 
-      test('project agent overlay replaces user same-key overlay wholesale', () => {
+      test('project same-key overlays cannot erase user model policy', () => {
         const userConfigDir = path.join(os.homedir(), '.config/opencode')
         const userConfigPath = path.join(userConfigDir, 'systematic.json')
         const userConfigBackup = tryReadFile(userConfigPath)
@@ -525,7 +525,7 @@ describe('config', () => {
             projectConfigPath,
             JSON.stringify({
               agents: {
-                'correctness-reviewer': { model: 'anthropic/claude-sonnet-4' },
+                'correctness-reviewer': { temperature: 0.4 },
               },
             }),
           )
@@ -533,7 +533,7 @@ describe('config', () => {
           const result = loadConfigWithSources(testDir)
 
           expect(result.config.agents).toEqual({
-            'correctness-reviewer': { model: 'anthropic/claude-sonnet-4' },
+            'correctness-reviewer': { temperature: 0.4, model: 'openai/gpt-5' },
           })
           expect(
             result.overlays.agents['correctness-reviewer']?.sourcePath,
@@ -547,12 +547,18 @@ describe('config', () => {
         }
       })
 
-      test('project overlays cannot configure permission or managed skills', () => {
+      test('project overlays cannot configure model, permission, or managed skills', () => {
         const projectConfigDir = path.join(testDir, '.opencode')
         fs.mkdirSync(projectConfigDir)
         const projectConfigPath = path.join(projectConfigDir, 'systematic.json')
 
         for (const config of [
+          {
+            agents: {
+              'correctness-reviewer': { model: 'openai/gpt-5' },
+            },
+          },
+          { categories: { review: { model: 'openai/gpt-5' } } },
           {
             agents: {
               'correctness-reviewer': { permission: { bash: 'allow' } },
@@ -590,6 +596,7 @@ describe('config', () => {
               },
               agents: {
                 'correctness-reviewer': {
+                  model: 'openai/gpt-5',
                   permission: { read: 'deny' },
                   temperature: 0.1,
                 },
@@ -603,7 +610,7 @@ describe('config', () => {
             path.join(projectConfigDir, 'systematic.json'),
             JSON.stringify({
               categories: { review: { temperature: 0.4 } },
-              agents: { 'correctness-reviewer': { model: 'openai/gpt-5' } },
+              agents: { 'correctness-reviewer': { hidden: true } },
             }),
           )
 
@@ -615,8 +622,9 @@ describe('config', () => {
             skills: ['ce:review'],
           })
           expect(result.config.agents?.['correctness-reviewer']).toEqual({
-            model: 'openai/gpt-5',
+            hidden: true,
             permission: { read: 'deny' },
+            model: 'openai/gpt-5',
           })
         } finally {
           if (userConfigBackup !== null) {
@@ -640,7 +648,7 @@ describe('config', () => {
             path.join(projectConfigDir, 'systematic.json'),
             JSON.stringify({
               categories: {
-                review: { model: 'openai/gpt-5', temperature: 0.1 },
+                review: { steps: 8, temperature: 0.1 },
               },
             }),
           )

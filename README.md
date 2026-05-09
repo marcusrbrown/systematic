@@ -305,7 +305,7 @@ Configuration is loaded from multiple locations and merged (later sources overri
   },
   "agents": {
     "security-sentinel": {
-      "model": "anthropic/claude-sonnet-4-5"
+      "variant": "thinking"
     },
     "workflow/systematic-implementer": {
       "steps": 20
@@ -326,11 +326,11 @@ Configuration is loaded from multiple locations and merged (later sources overri
 | `bootstrap.enabled` | `boolean` | `true` | Inject the `using-systematic` guide into system prompts |
 | `bootstrap.file` | `string` | — | Custom bootstrap file path (overrides default) |
 
-Agent overlays support `model`, `variant`, `temperature`, `top_p`, `permission`, `mode`, `color`, `steps`, `hidden`, exact-agent-only `disable`, and managed `skills`. `skills` uses bundled skill frontmatter names like `ce:review`; it is a shortcut that writes OpenCode `permission.skill` rules, not a native OpenCode agent field. Because `permission` and `skills` control tool access, they are only accepted from user config or `$OPENCODE_CONFIG_DIR/systematic.json`; project config may tune behavior but cannot loosen a user's permission policy.
+Agent overlays support `model`, `variant`, `temperature`, `top_p`, `permission`, `mode`, `color`, `steps`, `hidden`, exact-agent-only `disable`, and managed `skills`. `color` accepts `#RGB`, `#RRGGBB`, or OpenCode named color tokens matching `[a-zA-Z][a-zA-Z0-9-]*`; whitespace/freeform numeric strings are rejected. `skills` uses bundled skill frontmatter names like `ce:review`; it is a shortcut that writes OpenCode `permission.skill` rules, not a native OpenCode agent field. Because `model` controls provider routing/cost/privacy and `permission`/`skills` control tool access, those fields are only accepted from user config or `$OPENCODE_CONFIG_DIR/systematic.json`. Project config may tune non-sensitive presentation and runtime fields such as `variant`, `temperature`, `top_p`, `mode`, `color`, `steps`, `hidden`, or exact-agent `disable`, but it cannot choose model/provider routing or loosen permission/capability policy.
 
-Systematic separates config-source precedence from overlay precedence. Config files merge in this order: user config, project config, then `$OPENCODE_CONFIG_DIR/systematic.json` if set. Higher-priority `agents.<key>` and `categories.<id>` entries replace lower-priority entries wholesale, while unrelated keys survive. Project overlays are the exception for security fields: same-key project overlays preserve user-level `permission` and `skills` fields instead of erasing them. After the effective config is built, exact `agents` overlays beat category overlays, which beat built-in policy defaults, bundled markdown defaults, and OpenCode inherited defaults.
+Systematic separates config-source precedence from overlay precedence. Config files merge in this order: user config, project config, then `$OPENCODE_CONFIG_DIR/systematic.json` if set. Higher-priority `agents.<key>` and `categories.<id>` entries replace lower-priority entries wholesale, while unrelated keys survive. Project overlays are the exception for trust-sensitive fields: same-key project overlays preserve user-level `model`, `permission`, and `skills` fields instead of erasing them. After the effective config is built, exact `agents` overlays beat category overlays, which beat built-in policy defaults, bundled markdown defaults, and OpenCode inherited defaults.
 
-Bundled agents omit `model` by default so OpenCode model inheritance keeps working. Systematic emits a `model` only when you configure one explicitly; provider-specific zero-config model defaults are intentionally deferred.
+Bundled agents omit `model` by default so OpenCode model inheritance keeps working. Systematic emits a `model` only when you configure one explicitly in user or custom config; provider-specific zero-config model defaults are intentionally deferred.
 
 Native OpenCode agents with the same emitted key are full replacements. An exact Systematic overlay for that key conflicts, while category overlays skip native replacements and continue applying to other bundled agents. Use one canonical agent key form across config sources (`security-sentinel` or `review/security-sentinel`) because alias collisions fail duplicate-target validation.
 

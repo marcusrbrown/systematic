@@ -317,6 +317,9 @@ function setPermissionRule(
   setting: PermissionSetting,
 ): void {
   const rules = accumulator.get(tool) ?? new Map<string, PermissionSetting>()
+  // OpenCode permission evaluation uses the last matching rule. Map insertion
+  // order is therefore intentional here: delete before set moves same-pattern
+  // overrides to the end so stronger exact overlays beat weaker category rules.
   if (rules.has(pattern)) rules.delete(pattern)
   rules.set(pattern, setting)
   accumulator.set(tool, rules)
