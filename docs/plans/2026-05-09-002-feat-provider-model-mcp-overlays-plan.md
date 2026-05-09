@@ -103,7 +103,7 @@ These are source-configured defaults for the next PR. They should live in one au
 | `review` | `anthropic/claude-opus-4.7` | `openai/gpt-5.5`, `opencode-go/deepseek-v4-pro`, `google/gemini-3.1-pro` | Code/security review and adversarial reasoning favor highest signal, with OpenCode Go coding-model fallback. |
 | `workflow` | `openai/gpt-5.4-mini` | `opencode-go/deepseek-v4-flash`, `opencode/gpt-5-nano`, `google/gemini-3-flash` | Orchestration should start cheap/fast and tolerate transient outages with fast OpenCode/OpenCode Go fallbacks. |
 
-### Fro Bot PR #343 Non-Blocking Concerns
+### Prior PR Non-Blocking Concerns
 
 - `isOpenCodeColor` accepts any alphabetic-starting string and may accept invalid-looking values.
 - `validatePositiveInteger` has an unnecessary cast.
@@ -148,7 +148,7 @@ These are source-configured defaults for the next PR. They should live in one au
 
 ### PR 1: Overlay hardening
 
-Addresses Fro Bot NBCs and trust-boundary tightening with minimal product surface change.
+Addresses prior non-blocking review concerns and trust-boundary tightening with minimal product surface change.
 
 ### PR 2: Source category model defaults with fallbacks
 
@@ -205,7 +205,7 @@ Implements restrictive `mcps` allowlists using concrete MCP tool keys and collis
 - Maintenance path: permission ordering test still proves stronger rules win.
 
 **Verification:**
-- Overlay unit tests cover Fro Bot's missing-test list.
+- Overlay unit tests cover the prior missing-test list.
 - Project config cannot steer model/provider routing.
 - Bundled agent `model:` content-integrity ban remains intact.
 
@@ -456,7 +456,6 @@ Implements restrictive `mcps` allowlists using concrete MCP tool keys and collis
 
 - Origin plan: `docs/plans/2026-05-09-001-feat-agent-model-configuration-plan.md`
 - Merged PR: https://github.com/marcusrbrown/systematic/pull/343
-- Fro Bot review: https://github.com/marcusrbrown/systematic/pull/343#pullrequestreview-4257599753
 - Related code: `src/lib/agent-overlays.ts`
 - Related code: `src/lib/config-handler.ts`
 - Related code: `src/lib/config.ts`
