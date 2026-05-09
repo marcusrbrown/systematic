@@ -2,6 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import type { Config, PluginInput } from '@opencode-ai/plugin'
+import SystematicPlugin from '../../src/index.ts'
+import { _resetPluginSingleton } from '../../src/lib/plugin-singleton.ts'
 
 const OPENCODE_AVAILABLE = (() => {
   const result = Bun.spawnSync(['which', 'opencode'])
@@ -14,6 +17,12 @@ const RETRY_DELAY_MS = 3_000
 const OPENCODE_TEST_MODEL = 'opencode/big-pickle'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..')
+
+type AgentConfig = NonNullable<Config['agent']>[string]
+
+function skillPermission(agent: AgentConfig | undefined): unknown {
+  return (agent?.permission as { skill?: unknown } | undefined)?.skill
+}
 
 interface OpencodeResult {
   stdout: string
@@ -92,6 +101,189 @@ function expectSetupSkillLoaded(result: OpencodeResult): void {
   expect(result.stderr).toMatch(/setup/)
   expect(result.stdout).toMatch(/ce:review/i)
 }
+
+describe('SystematicPlugin config hook integration', () => {
+  let tempDir: string
+  let projectDir: string
+
+  beforeEach(() => {
+    _resetPluginSingleton()
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-plugin-'))
+    projectDir = path.join(tempDir, 'project')
+    fs.mkdirSync(projectDir, { recursive: true })
+  })
+
+  afterEach(() => {
+    _resetPluginSingleton()
+    fs.rmSync(tempDir, { recursive: true, force: true })
+  })
+
+  function writeSystematicConfig(config: Record<string, unknown>): void {
+    fs.mkdirSync(path.join(projectDir, '.opencode'), { recursive: true })
+    fs.writeFileSync(
+      path.join(projectDir, '.opencode/systematic.json'),
+      JSON.stringify(config),
+    )
+  }
+
+  async function runConfigHook(config: Config): Promise<void> {
+    const hooks = await SystematicPlugin({
+      directory: projectDir,
+      client: {
+        app: {
+          log: async () => {},
+        },
+      },
+    } as unknown as PluginInput)
+
+    expect(hooks.config).toBeDefined()
+    await hooks.config?.(config)
+  }
+
+  test('exact overlay emits a tuned bundled agent', async () => {
+    writeSystematicConfig({
+      agents: {
+        'correctness-reviewer': {
+          model: 'openrouter/anthropic/claude-sonnet-4',
+          temperature: 0.33,
+          top_p: 0.8,
+          mode: 'subagent',
+        },
+      },
+    })
+
+    const config: Config = {}
+    await runConfigHook(config)
+
+    expect(config.agent?.['correctness-reviewer']).toMatchObject({
+      model: 'openrouter/anthropic/claude-sonnet-4',
+      temperature: 0.33,
+      top_p: 0.8,
+      mode: 'subagent',
+    })
+    expect(config.agent?.['correctness-reviewer']?.description).toContain(
+      '(Correctness-Reviewer - Systematic)',
+    )
+  })
+
+  test('category overlay tunes category members and skips native replacements', async () => {
+    writeSystematicConfig({
+      categories: {
+        review: {
+          temperature: 0.21,
+          skills: ['ce:review'],
+        },
+      },
+    })
+
+    const config: Config = {
+      agent: {
+        'security-reviewer': {
+          description: 'Native security reviewer',
+          prompt: 'Native prompt',
+        },
+      },
+    }
+    await runConfigHook(config)
+
+    expect(config.agent?.['correctness-reviewer']?.temperature).toBe(0.21)
+    expect(skillPermission(config.agent?.['correctness-reviewer'])).toEqual({
+      '*': 'deny',
+      'ce:review': 'allow',
+    })
+    expect(config.agent?.['security-reviewer']).toEqual({
+      description: 'Native security reviewer',
+      prompt: 'Native prompt',
+    })
+  })
+
+  test('native-replaced category member is partitioned out before overlay application', async () => {
+    writeSystematicConfig({
+      categories: {
+        review: {
+          temperature: 0.44,
+          color: '#123abc',
+          skills: ['ce:review'],
+        },
+      },
+    })
+
+    const nativeSecurityReviewer = {
+      description: 'Native owns this key',
+      prompt: 'Native prompt',
+    }
+    const config: Config = {
+      agent: {
+        'security-reviewer': nativeSecurityReviewer,
+      },
+    }
+    await runConfigHook(config)
+
+    expect(config.agent?.['security-reviewer']).toBe(nativeSecurityReviewer)
+    expect(config.agent?.['security-reviewer']?.temperature).toBeUndefined()
+    expect(config.agent?.['security-reviewer']?.color).toBeUndefined()
+    expect(config.agent?.['security-reviewer']?.permission).toBeUndefined()
+    expect(config.agent?.['security-reviewer']?.description).not.toContain(
+      'Systematic',
+    )
+  })
+
+  test('exact overlay plus native same-name agent fails before partial mutation', async () => {
+    writeSystematicConfig({
+      agents: {
+        'correctness-reviewer': { temperature: 0.11 },
+      },
+    })
+
+    const config: Config = {
+      agent: {
+        'correctness-reviewer': {
+          description: 'Native correctness reviewer',
+          prompt: 'Native prompt',
+        },
+      },
+      command: {
+        native: {
+          description: 'Native command',
+          template: 'Native template',
+        },
+      },
+    }
+    const before = structuredClone(config)
+
+    await expect(runConfigHook(config)).rejects.toThrow(/native/i)
+    expect(config).toEqual(before)
+  })
+
+  test('no user model config leaves emitted bundled agents without default models', async () => {
+    const config: Config = {}
+    await runConfigHook(config)
+
+    const modeledAgents = Object.entries(config.agent ?? {}).filter(
+      ([, agent]) => agent?.model !== undefined,
+    )
+
+    expect(modeledAgents).toEqual([])
+    expect(config.agent?.['correctness-reviewer']?.temperature).toBeDefined()
+  })
+
+  test('well-shaped nonexistent explicit model passes validation and emits unchanged', async () => {
+    writeSystematicConfig({
+      agents: {
+        'correctness-reviewer': {
+          model: 'nonexistent-provider/nonexistent-model',
+        },
+      },
+    })
+
+    const config: Config = {}
+    await runConfigHook(config)
+
+    expect(config.agent?.['correctness-reviewer']?.model).toBe(
+      'nonexistent-provider/nonexistent-model',
+    )
+  })
+})
 
 describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
   let testEnv: {
