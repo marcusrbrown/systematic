@@ -284,6 +284,18 @@ describe('generateRegistryContent — output shape', () => {
     }
   })
 
+  test('adds dependencies required by generated skill components', () => {
+    const root = makeFixtureRepo()
+    writeSkill(root, 'ce-work', 'Execute work.')
+    writeAgent(root, 'workflow', 'systematic-implementer', 'Implement work.')
+    writeSeedRegistry(root, [])
+
+    const output = parseRegistry(generateRegistryContent(root))
+    const skill = output.components.find((c) => c.name === 'ce-work')
+
+    expect(skill?.dependencies).toEqual(['agent-systematic-implementer'])
+  })
+
   test('output round-trips through Biome formatter unchanged (no drift after lint)', () => {
     // Regression guard: the generator passes JSON through Biome so its output
     // matches what `bun run lint` would auto-format. If Biome's formatting rules

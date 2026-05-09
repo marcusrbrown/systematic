@@ -468,6 +468,9 @@ function buildPackument(component: RegistryComponent, version: string): void {
     versionData.description = component.description
   }
   versionData.files = packumentFiles
+  if (Array.isArray(component.dependencies)) {
+    versionData.dependencies = component.dependencies
+  }
 
   const packument: Packument = {
     name: component.name,

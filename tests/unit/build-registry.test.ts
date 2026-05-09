@@ -17,6 +17,7 @@ interface PackumentFile {
 
 interface PackumentVersion {
   files?: PackumentFile[]
+  dependencies?: string[]
 }
 
 interface Packument {
@@ -119,5 +120,16 @@ describe('build-registry script', () => {
       'registry/files/profiles/standalone/opencode.jsonc',
     )
     expect(opencodeJsonc.target).toBe('opencode.jsonc')
+  })
+
+  it('preserves generated skill dependencies in packuments', () => {
+    const result = runRegistryScript(['--version', '1.2.3'])
+
+    expect(result.exitCode).toBe(0)
+
+    const packument = readPackument('ce-work')
+    const version = packument.versions['1.2.3']
+
+    expect(version?.dependencies).toEqual(['agent-systematic-implementer'])
   })
 })

@@ -354,6 +354,12 @@
       "files": ["agents/workflow/spec-flow-analyzer.md"]
     },
     {
+      "name": "agent-systematic-implementer",
+      "type": "agent",
+      "description": "Implements one plan unit in a fresh subagent context and reports bounded changes back to the orchestrator.",
+      "files": ["agents/workflow/systematic-implementer.md"]
+    },
+    {
       "name": "agent-testing-reviewer",
       "type": "agent",
       "description": "Always-on code-review persona. Reviews code for test coverage gaps, weak assertions, brittle implementation-coupled tests, and missing edge case coverage.",
@@ -444,19 +450,10 @@
       "name": "ce-work",
       "type": "skill",
       "description": "Execute work efficiently while maintaining quality and finishing features",
+      "dependencies": ["agent-systematic-implementer"],
       "files": [
         "skills/ce-work/SKILL.md",
         "skills/ce-work/references/shipping-workflow.md"
-      ]
-    },
-    {
-      "name": "ce-work-beta",
-      "type": "skill",
-      "description": "[BETA] Execute work with external delegate support. Same as ce:work but includes experimental Codex delegation mode for token-conserving code implementation.",
-      "files": [
-        "skills/ce-work-beta/SKILL.md",
-        "skills/ce-work-beta/references/codex-delegation-workflow.md",
-        "skills/ce-work-beta/references/shipping-workflow.md"
       ]
     },
     {
@@ -751,7 +748,6 @@
         "ce-plan",
         "ce-review",
         "ce-work",
-        "ce-work-beta",
         "changelog",
         "claude-permissions-optimizer",
         "compound-docs",
@@ -843,6 +839,7 @@
         "agent-security-sentinel",
         "agent-slack-researcher",
         "agent-spec-flow-analyzer",
+        "agent-systematic-implementer",
         "agent-testing-reviewer"
       ],
       "files": []

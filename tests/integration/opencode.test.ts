@@ -86,6 +86,13 @@ async function runOpencode(
   return lastResult
 }
 
+function expectSetupSkillLoaded(result: OpencodeResult): void {
+  expect(result.exitCode).toBe(0)
+  expect(result.stderr).toMatch(/systematic_skill/)
+  expect(result.stderr).toMatch(/setup/)
+  expect(result.stdout).toMatch(/ce:review/i)
+}
+
 describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
   let testEnv: {
     tempDir: string
@@ -125,9 +132,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
         },
       )
 
-      expect(result.stdout).toMatch(
-        /Review agent configuration is no longer needed/i,
-      )
+      expectSetupSkillLoaded(result)
     },
     TIMEOUT_MS * MAX_RETRIES,
   )
@@ -143,9 +148,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
         },
       )
 
-      expect(result.stdout).toMatch(
-        /Review agent configuration is no longer needed/i,
-      )
+      expectSetupSkillLoaded(result)
     },
     TIMEOUT_MS * MAX_RETRIES,
   )
