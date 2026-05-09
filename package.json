@@ -61,18 +61,18 @@
     "@opencode-ai/plugin": "^1.1.30"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.0.0",
-    "@opencode-ai/plugin": "^1.1.30",
-    "@opencode-ai/sdk": "^1.1.30",
+    "@biomejs/biome": "2.4.14",
+    "@opencode-ai/plugin": "1.14.41",
+    "@opencode-ai/sdk": "1.14.41",
     "@types/bun": "latest",
-    "@types/js-yaml": "^4.0.9",
-    "@types/node": "^24.0.0",
-    "conventional-changelog-conventionalcommits": "^9.0.0",
-    "markdownlint-cli": "^0.48.0",
-    "rimraf": "^6.1.2",
-    "semantic-release": "^25.0.0",
-    "semantic-release-export-data": "^1.2.0",
-    "typescript": "^6.0.0"
+    "@types/js-yaml": "4.0.9",
+    "@types/node": "24.12.3",
+    "conventional-changelog-conventionalcommits": "9.3.1",
+    "markdownlint-cli": "0.48.0",
+    "rimraf": "6.1.3",
+    "semantic-release": "25.0.3",
+    "semantic-release-export-data": "1.2.0",
+    "typescript": "6.0.3"
   },
   "dependencies": {
     "js-yaml": "^4.1.1",

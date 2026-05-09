@@ -1,4 +1,5 @@
-import type { AgentConfig, Config } from '@opencode-ai/sdk'
+import type { Config } from '@opencode-ai/plugin'
+import type { AgentConfig } from '@opencode-ai/sdk'
 import { extractAgentFrontmatter, findAgentsInDir } from './agents.js'
 import { extractCommandFrontmatter, findCommandsInDir } from './commands.js'
 import { loadConfig } from './config.js'
