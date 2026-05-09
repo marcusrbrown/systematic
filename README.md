@@ -297,6 +297,20 @@ Configuration is loaded from multiple locations and merged (later sources overri
 {
   "disabled_skills": ["git-worktree"],
   "disabled_agents": [],
+  "categories": {
+    "review": {
+      "temperature": 0.1,
+      "skills": ["ce:review"]
+    }
+  },
+  "agents": {
+    "security-sentinel": {
+      "model": "anthropic/claude-sonnet-4-5"
+    },
+    "workflow/systematic-implementer": {
+      "steps": 20
+    }
+  },
   "bootstrap": {
     "enabled": true
   }
@@ -307,8 +321,20 @@ Configuration is loaded from multiple locations and merged (later sources overri
 |--------|------|---------|-------------|
 | `disabled_skills` | `string[]` | `[]` | Skills to exclude from registration |
 | `disabled_agents` | `string[]` | `[]` | Agents to exclude from registration |
+| `categories` | `object` | `{}` | Overlay bundled agents by category (`design`, `docs`, `document-review`, `research`, `review`, `workflow`) |
+| `agents` | `object` | `{}` | Overlay exact bundled agents by unique stem or `<category>/<stem>` key |
 | `bootstrap.enabled` | `boolean` | `true` | Inject the `using-systematic` guide into system prompts |
 | `bootstrap.file` | `string` | — | Custom bootstrap file path (overrides default) |
+
+Agent overlays support `model`, `variant`, `temperature`, `top_p`, `permission`, `mode`, `color`, `steps`, `hidden`, exact-agent-only `disable`, and managed `skills`. `skills` is a shortcut that writes OpenCode `permission.skill` rules; it is not a native OpenCode agent field.
+
+Systematic separates config-source precedence from overlay precedence. Config files merge in this order: user config, project config, then `$OPENCODE_CONFIG_DIR/systematic.json` if set. Higher-priority `agents.<key>` and `categories.<id>` entries replace lower-priority entries wholesale, while unrelated keys survive. After the effective config is built, exact `agents` overlays beat category overlays, which beat built-in policy defaults, bundled markdown defaults, and OpenCode inherited defaults.
+
+Bundled agents omit `model` by default so OpenCode model inheritance keeps working. Systematic emits a `model` only when you configure one explicitly; provider-specific zero-config model defaults are intentionally deferred.
+
+Native OpenCode agents with the same emitted key are full replacements. An exact Systematic overlay for that key conflicts, while category overlays skip native replacements and continue applying to other bundled agents. Use one canonical agent key form across config sources (`security-sentinel` or `review/security-sentinel`) because alias collisions fail duplicate-target validation.
+
+Category IDs are V1 public API because broad policy overlays are a core use case; future agent reorganizations must preserve aliases or provide migration warnings. Category overlays also apply to future bundled agents added to that category. V1 does not include an MCP allowlist shortcut.
 
 ### Project-Specific Content
 

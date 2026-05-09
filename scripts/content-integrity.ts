@@ -155,6 +155,12 @@ export interface AgentModelViolation {
   message: string
 }
 
+export interface AgentStemViolation {
+  stem: string
+  files: string[]
+  message: string
+}
+
 export interface CheckResult {
   rootDir: string
   categories: string[]
@@ -164,6 +170,7 @@ export interface CheckResult {
   bannedPatterns: BannedPatternHit[]
   frontmatterViolations: FrontmatterViolation[]
   agentModelViolations: AgentModelViolation[]
+  agentStemViolations: AgentStemViolation[]
   exemptHits: ExemptHit[]
   scanStats: {
     markdownFiles: number
@@ -722,6 +729,34 @@ export function checkAgentModel(
   return violations
 }
 
+export function checkAgentStemUniqueness(
+  rootDir: string,
+  markdownFiles: readonly string[],
+): AgentStemViolation[] {
+  const filesByStem = new Map<string, string[]>()
+
+  for (const relPath of markdownFiles) {
+    if (!isAgentFile(relPath)) continue
+    if (!fs.existsSync(path.join(rootDir, relPath))) continue
+
+    const stem = path.basename(relPath, '.md')
+    const files = filesByStem.get(stem) ?? []
+    files.push(relPath)
+    filesByStem.set(stem, files)
+  }
+
+  return [...filesByStem.entries()]
+    .filter(([, files]) => files.length > 1)
+    .map(([stem, files]) => ({
+      stem,
+      files: [...files].sort(),
+      message:
+        `Duplicate bundled agent stem \`${stem}\` found in ${files.length} files. ` +
+        'V1 emits stem-only OpenCode agent keys, so bundled agent filenames must be globally unique across categories.',
+    }))
+    .sort((a, b) => a.stem.localeCompare(b.stem))
+}
+
 function isAgentFile(relPath: string): boolean {
   const parts = relPath.split('/')
   return (
@@ -836,6 +871,10 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
   const brokenSubfileRefs = checkSubfileReferences(rootDir, targets.markdown)
   const frontmatterViolations = checkFrontmatter(rootDir, targets.markdown)
   const agentModelViolations = checkAgentModel(rootDir, targets.markdown)
+  const agentStemViolations = checkAgentStemUniqueness(
+    rootDir,
+    targets.markdown,
+  )
   const { hits: bannedPatterns, exempt: exemptHits } = checkBannedPatterns(
     rootDir,
     allScannedFiles,
@@ -851,6 +890,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     bannedPatterns,
     frontmatterViolations,
     agentModelViolations,
+    agentStemViolations,
     exemptHits,
     scanStats: {
       markdownFiles: targets.markdown.length,
@@ -890,6 +930,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
   printBannedPatterns(result.bannedPatterns)
   printFrontmatterViolations(result.frontmatterViolations)
   printAgentModelViolations(result.agentModelViolations)
+  printAgentStemViolations(result.agentStemViolations)
 
   if (totalViolations(result) === 0) {
     process.stdout.write(
@@ -906,6 +947,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
         `scanStats: ${result.scanStats.markdownFiles} md + ${result.scanStats.typescriptFiles} ts\n` +
         `frontmatterViolations: ${result.frontmatterViolations.length}\n` +
         `agentModelViolations: ${result.agentModelViolations.length}\n` +
+        `agentStemViolations: ${result.agentStemViolations.length}\n` +
         `exemptHits: ${result.exemptHits.length}\n`,
     )
   }
@@ -965,13 +1007,29 @@ function printAgentModelViolations(
   }
 }
 
+function printAgentStemViolations(
+  violations: readonly AgentStemViolation[],
+): void {
+  if (violations.length === 0) return
+  process.stderr.write(
+    `\nDuplicate bundled agent stems (${violations.length}):\n`,
+  )
+  for (const v of violations) {
+    process.stderr.write(`  ${v.stem}  ${v.message}\n`)
+    for (const file of v.files) {
+      process.stderr.write(`    ${file}\n`)
+    }
+  }
+}
+
 function totalViolations(result: CheckResult): number {
   return (
     result.phantomRefs.length +
     result.brokenSubfileRefs.length +
     result.bannedPatterns.length +
     result.frontmatterViolations.length +
-    result.agentModelViolations.length
+    result.agentModelViolations.length +
+    result.agentStemViolations.length
   )
 }
 

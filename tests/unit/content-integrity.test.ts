@@ -7,6 +7,7 @@ import {
   type AllowlistEntry,
   BANNED_PATTERNS,
   checkAgentModel,
+  checkAgentStemUniqueness,
   checkBannedPatterns,
   checkContentIntegrity,
   checkFrontmatter,
@@ -927,6 +928,42 @@ describe('checkAgentModel', () => {
   })
 })
 
+describe('checkAgentStemUniqueness', () => {
+  test('flags duplicate bundled agent stems across categories with both paths', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeAgent(root, 'research', 'duplicate-reviewer')
+      writeAgent(root, 'review', 'duplicate-reviewer')
+
+      const targets = collectScanTargets(root)
+      const violations = checkAgentStemUniqueness(root, targets.markdown)
+
+      expect(violations).toHaveLength(1)
+      expect(violations[0]?.stem).toBe('duplicate-reviewer')
+      expect(violations[0]?.files.sort()).toEqual([
+        'agents/research/duplicate-reviewer.md',
+        'agents/review/duplicate-reviewer.md',
+      ])
+      expect(violations[0]?.message).toContain('stem-only OpenCode agent keys')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('allows unique bundled agent stems across categories', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeAgent(root, 'research', 'repo-research-analyst')
+      writeAgent(root, 'review', 'security-sentinel')
+
+      const targets = collectScanTargets(root)
+      expect(checkAgentStemUniqueness(root, targets.markdown)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('checkContentIntegrity (top-level)', () => {
   test('clean repo with no violations returns empty arrays', () => {
     const root = makeFixtureRepo()
@@ -941,6 +978,7 @@ describe('checkContentIntegrity (top-level)', () => {
       expect(result.bannedPatterns).toEqual([])
       expect(result.frontmatterViolations).toEqual([])
       expect(result.agentModelViolations).toEqual([])
+      expect(result.agentStemViolations).toEqual([])
       expect(result.scanStats.markdownFiles).toBe(2) // SKILL.md + agent a.md
       expect(result.scanStats.typescriptFiles).toBe(1)
       expect(result.categories).toEqual(['research'])
@@ -1010,6 +1048,24 @@ describe('checkContentIntegrity (top-level)', () => {
       expect(result.frontmatterViolations[0]?.rule).toBe('banned-field')
       expect(result.agentModelViolations).toHaveLength(1)
       expect(result.agentModelViolations[0]?.file).toBe('agents/research/a.md')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('exposes duplicate bundled agent stem violations in one pass', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeAgent(root, 'research', 'same-stem')
+      writeAgent(root, 'review', 'same-stem')
+
+      const result = checkContentIntegrity(root)
+
+      expect(result.agentStemViolations).toHaveLength(1)
+      expect(result.agentStemViolations[0]?.files.sort()).toEqual([
+        'agents/research/same-stem.md',
+        'agents/review/same-stem.md',
+      ])
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
@@ -1293,11 +1349,19 @@ describe('integration: real repo', () => {
       throw new Error(`Agent model violations in repo:\n  ${details}`)
     }
 
+    if (result.agentStemViolations.length > 0) {
+      const details = result.agentStemViolations
+        .map((v) => `${v.stem}  ${v.files.join(', ')}`)
+        .join('\n  ')
+      throw new Error(`Duplicate bundled agent stems in repo:\n  ${details}`)
+    }
+
     expect(result.phantomRefs).toEqual([])
     expect(result.brokenSubfileRefs).toEqual([])
     expect(result.bannedPatterns).toEqual([])
     expect(result.frontmatterViolations).toEqual([])
     expect(result.agentModelViolations).toEqual([])
+    expect(result.agentStemViolations).toEqual([])
     expect(result.allowlistWarnings).toEqual([])
     expect(result.scanStats.markdownFiles).toBeGreaterThan(0)
     expect(result.scanStats.typescriptFiles).toBeGreaterThan(0)
