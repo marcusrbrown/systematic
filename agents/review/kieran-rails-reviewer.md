@@ -2,7 +2,7 @@
 name: kieran-rails-reviewer
 description: Conditional code-review persona, selected when the diff touches Rails application code. Reviews Rails changes with Kieran's strict bar for clarity, conventions, and maintainability.
 tools: Read, Grep, Glob, Bash
-color: blue
+color: info
 mode: subagent
 temperature: 0.1
 ---

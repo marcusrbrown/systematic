@@ -2,7 +2,7 @@
 name: reliability-reviewer
 description: Conditional code-review persona, selected when the diff touches error handling, retries, circuit breakers, timeouts, health checks, background jobs, or async handlers. Reviews code for production reliability and failure modes.
 tools: Read, Grep, Glob, Bash
-color: blue
+color: info
 mode: subagent
 temperature: 0.1
 ---

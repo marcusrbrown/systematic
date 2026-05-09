@@ -119,7 +119,7 @@ describe('plugin loading', () => {
     expect(result.exitCode).toBe(0)
   })
 
-  test('duplicate factory invocations return empty hooks (no double registration) and emit the duplicate warning exactly once', async () => {
+  test('duplicate factory invocations return real hooks without warnings', async () => {
     const tempDir = fs.mkdtempSync(
       path.join(os.tmpdir(), 'systematic-singleton-'),
     )
@@ -154,23 +154,21 @@ describe('plugin loading', () => {
       const hooks2 = await pluginModule.default(input)
       const hooks3 = await pluginModule.default(input)
 
-      // First invocation gets the real hook surface (config + tool + transform).
-      expect(hooks1.tool).toBeDefined()
-      expect(hooks1.config).toBeDefined()
-      expect(hooks1['experimental.chat.system.transform']).toBeDefined()
+      // All invocations — including duplicates — get the real hook surface
+      // (config + tool + transform). The singleton returns cached real hooks
+      // instead of an empty object, so the OpenCode host never sees a stale
+      // registration surface from duplicate config sources.
+      for (const hooks of [hooks1, hooks2, hooks3]) {
+        expect(hooks.tool).toBeDefined()
+        expect(hooks.config).toBeDefined()
+        expect(hooks['experimental.chat.system.transform']).toBeDefined()
+      }
 
-      // Duplicates get an empty object so the OpenCode loader does not
-      // re-register `systematic_skill`, the `config` hook, or the
-      // `experimental.chat.system.transform` hook for each duplicate
-      // config source. This is the LLM-visible-tool-catalog dedupe fix.
-      expect(hooks2).toEqual({})
-      expect(hooks3).toEqual({})
-
-      // Duplicate warning fires at most once across multiple duplicates.
+      // No duplicate warnings are emitted.
       const duplicateWarnings = warnings.filter((w) =>
         w.includes('duplicate factory invocation'),
       )
-      expect(duplicateWarnings.length).toBe(1)
+      expect(duplicateWarnings.length).toBe(0)
     } finally {
       console.warn = originalWarn
       fs.rmSync(tempDir, { recursive: true, force: true })

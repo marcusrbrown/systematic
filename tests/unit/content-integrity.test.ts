@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url'
 import {
   type AllowlistEntry,
   BANNED_PATTERNS,
+  checkAgentColors,
   checkAgentModel,
   checkAgentStemUniqueness,
   checkBannedPatterns,
@@ -839,6 +840,82 @@ describe('checkFrontmatter', () => {
       writeCompliantSkill(root, 'foo', 'body')
       const targets = collectScanTargets(root)
       expect(checkFrontmatter(root, targets.markdown)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('checkAgentColors', () => {
+  test('allows OpenCode theme tokens and hex colors', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'agents/research/info.md',
+        '---\nname: info\ncolor: info\n---\nbody',
+      )
+      writeFile(
+        root,
+        'agents/research/accent.md',
+        '---\nname: accent\ncolor: accent\n---\nbody',
+      )
+      writeFile(
+        root,
+        'agents/research/hex.md',
+        '---\nname: hex\ncolor: "#abcdef"\n---\nbody',
+      )
+      writeFile(
+        root,
+        'agents/research/no-color.md',
+        '---\nname: no-color\n---\nbody',
+      )
+      const targets = collectScanTargets(root)
+      expect(checkAgentColors(root, targets.markdown)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags ad-hoc color names rejected by OpenCode schema', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'agents/research/purple.md',
+        '---\nname: purple\ncolor: purple\n---\nbody',
+      )
+      writeFile(
+        root,
+        'agents/research/blue.md',
+        '---\nname: blue\ncolor: blue\n---\nbody',
+      )
+      writeFile(
+        root,
+        'agents/research/short-hex.md',
+        '---\nname: short-hex\ncolor: "#abc"\n---\nbody',
+      )
+      const targets = collectScanTargets(root)
+      const violations = checkAgentColors(root, targets.markdown)
+      expect(violations.map((v) => v.file).sort()).toEqual([
+        'agents/research/blue.md',
+        'agents/research/purple.md',
+        'agents/research/short-hex.md',
+      ])
+      expect(violations.every((v) => v.message.includes('OpenCode'))).toBe(true)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('scans only agent markdown files', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeCompliantSkill(root, 'foo', 'color: purple\n')
+      writeFile(root, 'skills/foo/references/ref.md', 'color: purple\n')
+      writeAgent(root, 'research', 'a')
+      const targets = collectScanTargets(root)
+      expect(checkAgentColors(root, targets.markdown)).toEqual([])
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }

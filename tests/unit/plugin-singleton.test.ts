@@ -21,7 +21,7 @@ describe('plugInOnce', () => {
     expect(calls).toBe(1)
   })
 
-  it('returns empty hooks (isFirst=false) on subsequent calls in the same PID and never re-runs doInit', async () => {
+  it('returns cached real hooks on subsequent calls in the same PID and never re-runs doInit', async () => {
     let calls = 0
     const realHooks = { tool: 'cached' }
     const doInit = async () => {
@@ -34,12 +34,11 @@ describe('plugInOnce', () => {
     // First invocation gets the real hooks reference.
     expect(r1.isFirst).toBe(true)
     expect(r1.hooks).toBe(realHooks)
-    // Duplicates get an empty hooks envelope so the host registers nothing.
+    // Duplicates also get the real hooks reference (not {}).
     expect(r2.isFirst).toBe(false)
-    expect(r2.hooks).toEqual({})
-    expect(r2.hooks).not.toBe(realHooks)
+    expect(r2.hooks).toBe(realHooks)
     expect(r3.isFirst).toBe(false)
-    expect(r3.hooks).toEqual({})
+    expect(r3.hooks).toBe(realHooks)
     // doInit only ever ran once.
     expect(calls).toBe(1)
   })
@@ -65,52 +64,12 @@ describe('plugInOnce', () => {
     expect(calls).toBe(2)
   })
 
-  it('fires onDuplicate exactly once on first duplicate invocation', async () => {
-    let duplicateCalls = 0
-    const doInit = async () => ({})
-    const onDuplicate = () => {
-      duplicateCalls += 1
-    }
-    await plugInOnce({ doInit, onDuplicate, pid: 1 })
-    await plugInOnce({ doInit, onDuplicate, pid: 1 })
-    await plugInOnce({ doInit, onDuplicate, pid: 1 })
-    await plugInOnce({ doInit, onDuplicate, pid: 1 })
-    expect(duplicateCalls).toBe(1)
-  })
-
-  it('does not fire onDuplicate on the first invocation', async () => {
-    let duplicateCalls = 0
-    await plugInOnce({
-      doInit: async () => ({}),
-      onDuplicate: () => {
-        duplicateCalls += 1
-      },
-      pid: 1,
-    })
-    expect(duplicateCalls).toBe(0)
-  })
-
-  it('passes the resolved pid to onDuplicate (test override flows through)', async () => {
-    // The `pid` parameter makes the singleton testable in a single-process
-    // Bun run by simulating different OS PIDs. The duplicate warning
-    // emitted by callers includes the PID for diagnostics, so the value
-    // passed to `onDuplicate` must match the one the guard used — not the
-    // live `process.pid` — so test overrides surface faithfully.
-    let receivedPid: number | undefined
-    const onDuplicate = (pid: number) => {
-      receivedPid = pid
-    }
-    await plugInOnce({ doInit: async () => ({}), onDuplicate, pid: 9001 })
-    await plugInOnce({ doInit: async () => ({}), onDuplicate, pid: 9001 })
-    expect(receivedPid).toBe(9001)
-  })
-
   it('caches a rejected doInit promise and propagates the same rejection to duplicate callers', async () => {
     // Documents the sticky-rejection limitation: when `doInit()` rejects,
     // the rejected promise is cached. The first caller sees the rejection.
     // Duplicate callers ALSO see the same rejection (because the helper
-    // awaits the cached promise before returning empty hooks) so failures
-    // are not silently masked. Recovery requires a process restart.
+    // awaits the cached promise before returning the cached rejected promise)
+    // so failures are not silently masked. Recovery requires a process restart.
     const error = new Error('init failed')
     let calls = 0
     const doInit = async () => {
@@ -143,7 +102,7 @@ describe('plugInOnce', () => {
       plugInOnce({ doInit, pid: 1 }),
       plugInOnce({ doInit, pid: 1 }),
     ])
-    // Exactly one invocation gets isFirst=true; the others get empty hooks.
+    // Exactly one invocation gets isFirst=true; all get the same real hooks.
     const firsts = [r1, r2, r3].filter((r) => r.isFirst)
     const duplicates = [r1, r2, r3].filter((r) => !r.isFirst)
     expect(firsts.length).toBe(1)
@@ -152,40 +111,8 @@ describe('plugInOnce', () => {
     if (!firstResult) throw new Error('expected exactly one isFirst result')
     expect(firstResult.hooks).toEqual({ tool: 'concurrent' })
     for (const dup of duplicates) {
-      expect(dup.hooks).toEqual({})
+      expect(dup.hooks).toEqual({ tool: 'concurrent' })
     }
     expect(started).toBe(1)
-  })
-
-  it('swallows onDuplicate exceptions and still returns empty hooks', async () => {
-    let initCalls = 0
-    let duplicateCalls = 0
-    const doInit = async () => {
-      initCalls += 1
-      return { ok: true }
-    }
-    const onDuplicate = () => {
-      duplicateCalls += 1
-      throw new Error('boom')
-    }
-    await plugInOnce({ doInit, onDuplicate, pid: 1 })
-    // The throwing onDuplicate must not propagate to plugin init.
-    const result = await plugInOnce({ doInit, onDuplicate, pid: 1 })
-    expect(result.isFirst).toBe(false)
-    expect(result.hooks).toEqual({})
-    expect(duplicateCalls).toBe(1)
-    expect(initCalls).toBe(1)
-  })
-
-  it('does not fire onDuplicate again after the first time, even if onDuplicate threw', async () => {
-    let duplicateCalls = 0
-    const onDuplicate = () => {
-      duplicateCalls += 1
-      throw new Error('boom')
-    }
-    await plugInOnce({ doInit: async () => ({}), onDuplicate, pid: 1 })
-    await plugInOnce({ doInit: async () => ({}), onDuplicate, pid: 1 })
-    await plugInOnce({ doInit: async () => ({}), onDuplicate, pid: 1 })
-    expect(duplicateCalls).toBe(1)
   })
 })
