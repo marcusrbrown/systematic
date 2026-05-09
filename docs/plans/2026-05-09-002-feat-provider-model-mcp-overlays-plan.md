@@ -1,55 +1,55 @@
 ---
-title: feat: Add Provider Model Defaults and MCP Overlays
+title: feat: Add Source Model Defaults and MCP Overlays
 type: feat
 status: active
 date: 2026-05-09
 origin: docs/plans/2026-05-09-001-feat-agent-model-configuration-plan.md
 ---
 
-# feat: Add Provider Model Defaults and MCP Overlays
+# feat: Add Source Model Defaults and MCP Overlays
 
 ## Overview
 
 Build the deferred second layer on top of merged agent configuration overlays through separate, safer follow-up PRs:
 
 1. harden the overlay foundation from PR #343 review findings,
-2. add explicit opt-in provider-aware model defaults,
+2. add source-configured category model defaults with `fallback_models`,
 3. spike MCP tool inventory access before implementing any MCP allowlist shortcut,
 4. implement MCP overlays only if the spike proves final OpenCode MCP tool keys are mechanically available.
 
-The first overlay PR intentionally shipped without provider-specific zero-config model defaults or `mcps` shortcuts because the safe OpenCode mapping was not proven at planning time. Follow-up research against OpenCode source clarifies some constraints: plugin `config(cfg)` runs after provider hooks/config assembly, permission rules are evaluated with last-match semantics, and MCP executable tool keys come from `mcp.tools()` as sanitized `<server>_<tool>` keys. It does **not** prove that Systematic's config hook can access final MCP tool inventory; that remains a blocking spike before any MCP permission emission.
+The first overlay PR intentionally shipped without provider-specific zero-config model defaults or `mcps` shortcuts because the safe OpenCode mapping was not proven at planning time. The required follow-up is now explicit: Systematic should ship source-configured default `model` plus ordered `fallback_models` per bundled agent category, applied when users have not provided exact/category model overrides. OpenCode core docs/schema do not document native `fallback_models`, while oh-my-opencode-slim and Magic Context demonstrate plugin-managed fallback chains; Systematic must therefore implement or verify a real fallback mechanism rather than emitting inert fields. Follow-up research against OpenCode source also clarifies MCP constraints: plugin `config(cfg)` runs after provider hooks/config assembly, permission rules are evaluated with last-match semantics, and MCP executable tool keys come from `mcp.tools()` as sanitized `<server>_<tool>` keys. It does **not** prove that Systematic's config hook can access final MCP tool inventory; that remains a blocking spike before any MCP permission emission.
 
 ## Problem Frame
 
 Systematic users can now tune bundled agents through top-level `agents` and `categories` overlays, but two high-value knobs remain deferred:
 
-- Provider-specific model defaults can specialize agents, but silently emitting model choices because a provider exists would surprise users and may change cost, privacy, latency, and data-routing behavior.
+- Source-configured provider/model defaults can specialize agents immediately after install, but must include explicit fallback chains and remain overrideable by user/custom config because they affect cost, privacy, latency, and data-routing behavior.
 - MCP allowlists can narrow agent capabilities, but they must map to real OpenCode permission keys rather than inert metadata or guessed server-prefix patterns.
 
-The follow-up should add these only where user intent is explicit and the runtime contract is mechanical and testable. It should also fold in the approved non-blocking concerns from PR #343 while the overlay code is still fresh.
+The follow-up should add source-owned category defaults intentionally, not by opportunistic provider detection, and only ship fallback behavior when the runtime contract is mechanical and testable. It should also fold in the approved non-blocking concerns from PR #343 while the overlay code is still fresh.
 
 ## Requirements Trace
 
 - R1. Preserve bundled agent markdown portability: no `model:` frontmatter in bundled agent files.
 - R2. Treat model selection as trust-sensitive because it affects cost, privacy, data routing, and provider choice.
-- R3. Project `.opencode/systematic.json` must not be able to set or erase higher-trust `model`, `permission`, `skills`, `mcps`, or provider-default policy fields.
-- R4. Provider-specific built-in model defaults must be explicit opt-in through a Systematic config surface; configured OpenCode providers alone are not consent.
-- R5. Provider defaults may emit model values only when the selected provider is configured in OpenCode config and has a known Systematic model-default table.
-- R6. Ambiguous provider situations must fail closed: when more than one candidate provider is configured and no explicit Systematic provider-default selection exists, omit built-in model defaults and inherit.
-- R7. Explicit user/custom `agents.<key>.model` and `categories.<id>.model` remain structurally validated but not availability-validated; OpenCode owns runtime behavior for explicit user choices.
+- R3. Project `.opencode/systematic.json` must not be able to set or erase higher-trust `model`, `permission`, `skills`, `mcps`, or model-default policy fields.
+- R4. Systematic must ship source-configured default `model` plus ordered `fallback_models` for each bundled agent category: `design`, `docs`, `document-review`, `research`, `review`, and `workflow`.
+- R5. Source-configured category defaults apply automatically when there is no stronger exact/category user/custom model override; bundled markdown remains model-free.
+- R6. `fallback_models` must be real runtime behavior through a verified OpenCode-compatible config field or a separately planned runtime interception architecture. The next implementation PR must not emit inert fallback metadata; if native support is not proven, stop after the spike and update the plan instead of building an unbounded fallback manager.
+- R7. Explicit user/custom `agents.<key>.model`, `categories.<id>.model`, and future explicit `fallback_models` overrides remain structurally validated but not availability-validated; user/custom config owns those choices. A stronger explicit `model` without same-layer `fallback_models` suppresses weaker source fallback chains so source defaults cannot route fallback traffic after a user-selected primary model.
 - R8. Add `mcps` as a Systematic-managed capability shortcut only if implementation can access or derive final OpenCode MCP tool keys mechanically before emitting config.
 - R9. If final MCP tool keys are unavailable during config handling, defer MCP overlays rather than emitting wildcard or guessed prefix rules.
 - R10. `mcps` semantics, if shipped, are restrictive allowlists: omitted means inherit weaker behavior, `mcps: []` means deny configured MCP tools, and `mcps: ["server"]` means only the listed servers' tools are allowed from that layer.
 - R11. MCP overlays, if shipped, must be security-sensitive like `permission` and `skills`; project config must not loosen or erase higher-trust MCP policy.
 - R12. Preserve permission rule ordering: weaker layers first, stronger layers later, because OpenCode permission evaluation uses last matching rule.
 - R13. Validate unknown MCP server names, disabled MCP servers, sanitized key collisions, malformed overlay values, and cross-layer permission conflicts before mutating OpenCode config.
-- R14. Keep docs explicit that provider defaults and MCP overlays are configuration-time conveniences, not bundled frontmatter, runtime fallback chains, or native `agent.mcps` fields.
+- R14. Keep docs explicit that source model defaults and MCP overlays are configuration-time conveniences, not bundled frontmatter or native `agent.mcps` fields. For `fallback_models`, docs must state whether Systematic implements fallback behavior itself or delegates to a verified OpenCode field.
 - R15. Address PR #343 non-blocking hardening where cheap: color validation/docs, temperature default tests, permission-ordering comments, and category `hidden` coverage.
 
 ## Scope Boundaries
 
-- No runtime fallback manager, retry chain, or provider failover orchestration.
-- No provider default emitted solely from provider detection; explicit Systematic opt-in is required.
+- No provider default emitted solely from provider detection; defaults come from a reviewed source table, not from opportunistic local provider discovery.
+- No inert `fallback_models` metadata. If OpenCode does not support the field, a Systematic-owned fallback mechanism is required before the feature ships.
 - No MCP server installation or bundling. Users still configure MCP servers in OpenCode.
 - No MCP overlay implementation unless final MCP tool keys are mechanically available during config handling or through a stable OpenCode API.
 - No wildcard/prefix MCP permission grants unless a proof test shows OpenCode permission semantics make them safe against key collisions and future-tool privilege expansion.
@@ -59,7 +59,6 @@ The follow-up should add these only where user intent is explicit and the runtim
 
 ### Deferred to Separate Tasks
 
-- Runtime model fallback chains: separate design if OpenCode exposes a first-class fallback config surface.
 - MCP tool-level allowlists: this plan only considers whole-server allowlists after final tool-key inventory is available.
 - MCP overlays themselves are deferred if the spike cannot prove safe inventory access.
 
@@ -80,13 +79,29 @@ The follow-up should add these only where user intent is explicit and the runtim
 - Prompt-only capability policy is insufficient. Permission-affecting behavior needs explicit OpenCode permission rules and tests.
 - MCP references must resolve to configured capabilities rather than markdown references or assumed servers.
 
-### OpenCode Source Findings
+### OpenCode / Plugin Model Findings
 
+- OpenCode core docs and `https://opencode.ai/config.json` document `agent.<name>.model` but do not document native `agent.<name>.fallback_models`; treat fallback chains as plugin-managed unless implementation proves current OpenCode honors a concrete field.
+- Magic Context supports per-agent `model` plus `fallback_models: string | string[]` for internal agents, demonstrating the desired user-facing shape. Current defaults include `github-copilot/claude-sonnet-4-6`, `anthropic/claude-sonnet-4-6`, `opencode-go/minimax-m2.7`, `openai/gpt-5.4`, `openai/gpt-5.4-mini`, `google/gemini-3.1-pro`, `google/gemini-3-flash`, and `opencode/gpt-5-nano`.
+- oh-my-opencode-slim uses preset/default model maps plus plugin-managed fallback chains, demonstrating category/agent role defaults and ordered fallback behavior. Current examples include `openai/gpt-5.5`, `openai/gpt-5.4-mini`, `opencode-go/glm-5.1`, `opencode-go/deepseek-v4-pro`, `opencode-go/minimax-m2.7`, `opencode-go/kimi-k2.6`, and `opencode-go/deepseek-v4-flash`.
 - Plugin config hooks run after provider hooks/config assembly, so `cfg.provider` can be inspected during `config(cfg)`. This is not consent to select a model provider.
 - OpenCode agent config supports `model` and `permission`; runtime agent models are provider/model pairs.
 - Permission config normalizes shorthand into rules; runtime evaluation uses wildcard matching and `findLast`, so later rules override earlier rules.
 - OpenCode MCP tool execution uses the final `mcp.tools()` key map. Exposed keys are sanitized as `<server>_<tool>` with non-alphanumeric, non-underscore, non-hyphen characters converted to `_`.
 - OpenCode source also has an internal MCP cache path using `server:tool`; permission mapping should target the final `mcp.tools()` key only if Systematic can access that final map or reproduce it with proven inputs.
+
+### Recommended Source Model Defaults
+
+These are source-configured defaults for the next PR. They should live in one audited table and be applied by bundled agent category when no stronger user/custom exact/category model override exists. Model IDs must get a final compatibility check against currently supported provider catalogs before implementation. IDs below are source-backed where they appear in OMO Slim or Magic Context; `anthropic/claude-opus-4.7` is included because the user explicitly requested current Opus-class coverage and should be verified before shipping.
+
+| Category | Default `model` | Ordered `fallback_models` | Rationale |
+|----------|-----------------|---------------------------|-----------|
+| `design` | `openai/gpt-5.5` | `anthropic/claude-opus-4.7`, `google/gemini-3.1-pro`, `opencode-go/kimi-k2.6` | High-judgment UX/product/design reasoning first, with strong cross-provider and OpenCode Go fallback. |
+| `docs` | `openai/gpt-5.4-mini` | `opencode-go/minimax-m2.7`, `google/gemini-3-flash`, `openai/gpt-5.3-codex-spark` | Cost/speed-efficient docs work first, then writing/summarization fallbacks used in current adjacent defaults. |
+| `document-review` | `anthropic/claude-opus-4.7` | `openai/gpt-5.5`, `google/gemini-3.1-pro`, `opencode-go/deepseek-v4-pro` | Nuanced critique and consistency review favor strongest reasoning, with OpenAI/Google/OpenCode Go coverage. |
+| `research` | `openai/gpt-5.5` | `anthropic/claude-opus-4.7`, `google/gemini-3.1-pro`, `opencode-go/minimax-m2.7` | Tool-heavy synthesis and citation quality first, with broad provider resilience. |
+| `review` | `anthropic/claude-opus-4.7` | `openai/gpt-5.5`, `opencode-go/deepseek-v4-pro`, `google/gemini-3.1-pro` | Code/security review and adversarial reasoning favor highest signal, with OpenCode Go coding-model fallback. |
+| `workflow` | `openai/gpt-5.4-mini` | `opencode-go/deepseek-v4-flash`, `opencode/gpt-5-nano`, `google/gemini-3-flash` | Orchestration should start cheap/fast and tolerate transient outages with fast OpenCode/OpenCode Go fallbacks. |
 
 ### Fro Bot PR #343 Non-Blocking Concerns
 
@@ -99,10 +114,11 @@ The follow-up should add these only where user intent is explicit and the runtim
 
 ## Key Technical Decisions
 
-- **Split delivery into separate PRs.** Hardening, provider defaults, MCP spike, and MCP implementation have different risk profiles and should not block each other.
-- **Model routing is trust-sensitive.** Add `model` and provider-default policy fields to the protected overlay field set so project config cannot steer provider/model choices without user/custom config consent.
-- **Provider defaults are explicit opt-in.** Add a small Systematic config surface such as `agent_defaults.model_provider: "openai"` to select a provider for built-in agent model defaults. Exact final naming can change during implementation, but the config must be top-level, source-aware, and protected from project config.
-- **No automatic provider choice from detection alone.** Provider detection only validates that an explicitly selected provider appears configured. Multiple configured providers are not resolved by preference order unless the user/custom config selects one.
+- **Split delivery into separate PRs.** Hardening, source model defaults, MCP spike, and MCP implementation have different risk profiles and should not block each other.
+- **Model routing is trust-sensitive.** Add `model` now and `fallback_models` when introduced to the protected overlay field set so project config cannot steer provider/model choices without user/custom config consent.
+- **Source defaults are intentional defaults, not provider detection.** Ship an audited source table keyed by bundled category with `model` plus ordered `fallback_models`; apply it when no stronger user/custom exact/category model override exists.
+- **Fallback behavior must be real.** OpenCode core does not document native `fallback_models`; PR 2 must first empirically verify a supported field in the installed OpenCode version. If no native field exists, stop and produce a separate runtime fallback architecture plan instead of attempting an unbounded fallback manager inside config-only overlay code.
+- **Project config cannot steer model routing.** Source defaults may route models, and user/custom config may override them, but project config remains blocked from setting or erasing `model`/`fallback_models`. Model/fallback precedence is field-aware: a stronger explicit `model` resets fallback routing unless the same stronger layer also sets `fallback_models`; a stronger `fallback_models` without `model` intentionally replaces only the fallback chain for the resolved model.
 - **Explicit model overlays remain pass-through.** User/custom model overlays are structurally validated and emitted unchanged; Systematic does not ping provider APIs or rewrite explicit values.
 - **MCP overlays require a spike gate.** Do not implement `mcps` until a spike proves access to final MCP tool keys or a stable equivalent during config handling.
 - **No wildcard MCP grants by default.** Prefix/wildcard rules can expand privileges via future tools or sanitized key collisions. Prefer enumerated concrete keys; if enumeration is impossible, defer.
@@ -113,17 +129,20 @@ The follow-up should add these only where user intent is explicit and the runtim
 
 ### Resolved During Planning
 
-- **Can provider configuration be inspected in the plugin config hook?** Yes, OpenCode source shows provider hooks/config are applied before plugin `config(cfg)`, so configured provider IDs can be inspected. This does not justify implicit model defaults.
+- **Should source-configured category model defaults ship?** Yes. The feature requires default provider/model combinations per category plus fallback chains. These defaults live outside bundled markdown and apply only when no stronger user/custom override exists.
+- **Does OpenCode natively support `fallback_models`?** Current public docs/schema do not document it. oh-my-opencode-slim and Magic Context demonstrate plugin-managed fallback chains, so Systematic must verify or implement real fallback semantics before shipping docs that promise fallback behavior.
+- **Can provider configuration be inspected in the plugin config hook?** Yes, OpenCode source shows provider hooks/config are applied before plugin `config(cfg)`, so configured provider IDs can be inspected. This may support availability checks, but the default table itself is source-configured rather than inferred from detection.
 - **Which MCP key shape should permissions target?** Target the final `mcp.tools()` output key, sanitized as `<server>_<tool>`, but only if final keys are actually available or derivable with collision checks.
 - **Do permission rules support override ordering?** Yes, runtime evaluation uses last matching rule.
-- **Should provider defaults and MCP overlays ship together?** No. They are independent and should be split to avoid coupling lower-risk model-default work to security-sensitive MCP work.
+- **Should source model defaults and MCP overlays ship together?** No. They are independent and should be split to avoid coupling lower-risk model-default work to security-sensitive MCP work.
 
 ### Deferred to Implementation
 
 - **Exact OpenCode `cfg.provider` object shape:** Confirm against installed types/source during implementation and keep model-default inference conservative.
-- **Exact protected config field shape:** Choose final field names for provider-default opt-in while preserving the policy in this plan.
+- **Exact `fallback_models` implementation hook:** Verify whether current OpenCode honors a native field. If not, defer fallback implementation to a separate runtime architecture plan; do not build a wrapper opportunistically in PR 2.
+- **Exact protected config field shape:** Choose final field names for explicit user/custom fallback overrides while preserving the policy in this plan.
 - **MCP inventory feasibility:** Prove whether final `mcp.tools()` keys are accessible or mechanically derivable during config handling. If not, stop before implementing `mcps`.
-- **Default model table:** Define a small provider/model table during provider-default implementation, with tests and docs. Keep the first table conservative.
+- **Default model table compatibility:** Before implementation, verify the recommended source table model IDs against the current provider catalogs or replace them with currently valid equivalents while preserving category intent.
 
 ## Phased Delivery
 
@@ -131,9 +150,9 @@ The follow-up should add these only where user intent is explicit and the runtim
 
 Addresses Fro Bot NBCs and trust-boundary tightening with minimal product surface change.
 
-### PR 2: Explicit provider model defaults
+### PR 2: Source category model defaults with fallbacks
 
-Adds opt-in provider-default policy and built-in model table without MCP changes.
+Adds audited category-level `model` defaults and verifies `fallback_models` support before shipping fallback behavior, without MCP changes. Docs for this behavior ship in the same PR if implementation proceeds.
 
 ### PR 3: MCP inventory spike
 
@@ -190,9 +209,9 @@ Implements restrictive `mcps` allowlists using concrete MCP tool keys and collis
 - Project config cannot steer model/provider routing.
 - Bundled agent `model:` content-integrity ban remains intact.
 
-- [ ] **Unit 2: Add explicit provider-default opt-in**
+- [ ] **Unit 2: Add source category model defaults with fallbacks**
 
-**Goal:** Add provider-aware built-in model defaults without silent zero-config provider selection.
+**Goal:** Add source-configured category `model` plus ordered `fallback_models` defaults, applied when no explicit user/custom exact/category model override exists.
 
 **Requirements:** R1, R2, R3, R4, R5, R6, R7, R14
 
@@ -207,12 +226,14 @@ Implements restrictive `mcps` allowlists using concrete MCP tool keys and collis
 - Test: `tests/unit/config.test.ts`
 
 **Approach:**
-- Add a source-aware Systematic provider-default config surface, tentatively `agent_defaults.model_provider`.
-- Protect the provider-default field from project config, same as `model`, `permission`, `skills`, and later `mcps`.
-- Add a provider-default resolver beside `inferBuiltInTemperature`, but keep it separate so temperature defaults remain provider-independent.
-- Emit built-in model defaults only when user/custom config explicitly selects a provider and OpenCode config contains that provider.
-- Preserve precedence: explicit exact overlay model > explicit category overlay model > safe opt-in provider default > markdown/inheritance.
-- Omit model defaults when the selected provider is absent, when provider config shape is unknown, or when no provider-default policy is set.
+- Add an audited source default table keyed by bundled category with `model` and ordered `fallback_models`, using the Recommended Source Model Defaults section as the starting point after final provider-catalog compatibility checks.
+- Keep bundled agent markdown model-free; apply source defaults in the default-resolution layer between built-in temperature defaults and inherited OpenCode defaults.
+- Protect user/custom `fallback_models` overrides like `model`, `permission`, and `skills`; project config cannot set or erase model routing policy.
+- Define precedence: exact user/custom `model`/`fallback_models` > category user/custom `model`/`fallback_models` > source category defaults > inheritance.
+- First add an empirical compatibility check for native fallback support in the installed OpenCode version. If no supported field exists, stop this unit after documenting the failed spike result; do not emit `fallback_models` and do not implement a runtime fallback manager in this PR.
+- If native fallback support is verified, emit the exact supported field shape and add regression coverage proving OpenCode consumes it as intended.
+- Apply model/fallback precedence field-aware: a stronger explicit `model` suppresses weaker source `fallback_models` unless the same stronger layer also provides `fallback_models`; a stronger `fallback_models` without `model` intentionally replaces only the fallback chain for the resolved model.
+- Do not infer a category default from locally configured providers. Source defaults are intentional; provider detection may only be used to skip unavailable fallback candidates or produce clear diagnostics if the chosen mechanism supports that safely.
 - Do not rewrite explicit user model values and do not probe remote provider APIs.
 
 **Patterns to follow:**
@@ -220,24 +241,25 @@ Implements restrictive `mcps` allowlists using concrete MCP tool keys and collis
 - Source-aware overlay merge logic in `src/lib/config.ts`.
 
 **Test scenarios:**
-- Happy path: user/custom config selects provider `openai`, OpenCode config contains `provider.openai`, and an agent with no explicit model receives a known built-in model default.
-- Happy path: exact agent `model` overrides category and provider defaults.
-- Happy path: category `model` overrides provider defaults.
-- Edge case: no provider-default policy leaves `model` omitted even when OpenCode has configured providers.
-- Edge case: selected provider missing from OpenCode config leaves `model` omitted or fails with a clear validation error; choose one behavior and document it before implementation.
-- Edge case: multiple providers configured without explicit provider-default policy leaves `model` omitted.
-- Security path: project config cannot set or erase provider-default policy.
-- Error path: malformed explicit model still fails structural validation.
-- Integration: emitted agent config never comes from bundled agent frontmatter.
+- Happy path: no user/custom model override applies the category source default `model` and ordered `fallback_models` for each bundled category.
+- Happy path: exact user/custom `model` and same-layer `fallback_models` override category and source defaults.
+- Happy path: category user/custom `model` and same-layer `fallback_models` override source defaults for every bundled agent in that category.
+- Edge case: exact/category user-custom `model` without same-layer `fallback_models` emits the explicit model and suppresses source fallback chains.
+- Edge case: exact/category user-custom `fallback_models` without `model` replaces only the fallback chain for the resolved model.
+- Edge case: bundled markdown still omits `model` and `fallback_models`; emitted values come only from the source/default-resolution layer or user/custom config.
+- Edge case: unavailable fallback candidates are handled according to the verified mechanism without changing explicit user choices.
+- Security path: project config cannot set or erase `model` or `fallback_models` policy.
+- Error path: malformed explicit `model` or `fallback_models` fails structural validation.
+- Integration: native fallback behavior is empirically verified or the unit stops before shipping inert metadata.
 
 **Verification:**
-- Zero-config environments still inherit models.
-- Provider defaults require explicit user/custom opt-in.
+- Zero-config environments receive source category defaults while bundled markdown remains model-free.
+- Fallback behavior is real and tested through native OpenCode support; otherwise fallback remains unshipped and the plan records the blocker.
 - Bundled agent `model:` content-integrity ban remains intact.
 
-- [ ] **Unit 3: Document provider model defaults**
+- [ ] **Unit 3: Document source model defaults and fallback chains**
 
-**Goal:** Update docs for explicit provider-default behavior before starting MCP work.
+**Goal:** Update docs for source-configured category defaults and fallback behavior before starting MCP work.
 
 **Requirements:** R1, R2, R3, R4, R5, R6, R7, R14
 
@@ -248,10 +270,10 @@ Implements restrictive `mcps` allowlists using concrete MCP tool keys and collis
 - Modify: `docs/src/content/docs/getting-started/configuration.mdx`
 
 **Approach:**
-- Document provider-aware model defaults as opt-in and conservative.
-- Document that configured OpenCode providers alone do not change model inheritance.
+- Document the shipped category default `model` plus `fallback_models` table and the precedence rules.
+- Document whether fallback behavior is native OpenCode config or Systematic-managed, based on Unit 2's verified implementation path.
 - Document that explicit user/custom model overlays are passed through structurally and may still fail at OpenCode runtime if the provider/model is unavailable.
-- Document project-config restrictions for `model`, provider defaults, `permission`, and `skills`.
+- Document project-config restrictions for `model`, `fallback_models`, `permission`, and `skills`.
 
 **Patterns to follow:**
 - Existing agent overlay docs added by PR #343.
@@ -260,7 +282,7 @@ Implements restrictive `mcps` allowlists using concrete MCP tool keys and collis
 - Test expectation: none -- documentation-only changes. Existing docs build verifies syntax and generated site integrity.
 
 **Verification:**
-- Docs clearly distinguish inherited models, opt-in provider defaults, and explicit user overrides.
+- Docs clearly distinguish source defaults, fallback chains, inherited models, and explicit user overrides.
 
 - [ ] **Unit 4: Spike MCP tool-key inventory and permission safety**
 
@@ -268,7 +290,7 @@ Implements restrictive `mcps` allowlists using concrete MCP tool keys and collis
 
 **Requirements:** R8, R9, R10, R11, R12, R13, R14
 
-**Dependencies:** Unit 1
+**Dependencies:** Unit 3
 
 **Files:**
 - Create: `tests/manual/mcp-permission-key-probe.ts` *(or equivalent manual probe artifact if automated tests are impractical)*
@@ -402,10 +424,10 @@ Implements restrictive `mcps` allowlists using concrete MCP tool keys and collis
 
 ## System-Wide Impact
 
-- **Interaction graph:** Systematic config loading feeds overlay validation, bundled agent emission, and OpenCode permission evaluation. Provider defaults depend on source-aware Systematic config plus incoming OpenCode provider config. MCP overlay behavior depends on final MCP tool inventory if available.
-- **Error propagation:** Invalid overlay config should fail fast during plugin config handling with source-path and key-path context. Explicit user model availability remains an OpenCode runtime concern.
+- **Interaction graph:** Systematic config loading feeds overlay validation, bundled agent emission, and OpenCode permission evaluation. Source model defaults depend on audited Systematic default tables plus the verified fallback mechanism. MCP overlay behavior depends on final MCP tool inventory if available.
+- **Error propagation:** Invalid overlay config should fail fast during plugin config handling with source-path and key-path context. Explicit user model availability remains an OpenCode runtime concern unless the verified fallback mechanism safely preflights candidates.
 - **State lifecycle risks:** Config mutation must remain atomic; invalid provider/MCP overlays must not partially mutate `config.agent`, `config.command`, `config.skills`, or `config.mcp`.
-- **API surface parity:** Exact agent overlays and category overlays need matching behavior for `model` and `mcps`, except exact-only fields such as `disable` remain exact-only.
+- **API surface parity:** Exact agent overlays and category overlays need matching behavior for `model`, `fallback_models`, and `mcps`, except exact-only fields such as `disable` remain exact-only.
 - **Integration coverage:** Unit tests should cover validation, but config-handler tests must prove emitted OpenCode config shape and permission ordering. MCP needs a spike/probe before unit tests can safely assert emitted permissions.
 - **Unchanged invariants:** Bundled agents remain model-free; project config remains lower trust for provider/model and permission-affecting fields; registry generation should not change unless docs/assets inputs change.
 
@@ -413,10 +435,10 @@ Implements restrictive `mcps` allowlists using concrete MCP tool keys and collis
 
 | Risk | Mitigation |
 |------|------------|
-| Provider defaults surprise users by changing model inheritance | Require explicit user/custom provider-default opt-in; configured providers alone do not select models. |
-| Project config routes prompts to a different provider | Treat `model` and provider-default policy as protected fields. |
-| Provider config shape differs across OpenCode versions | Keep resolver conservative and covered by tests; unknown shapes produce no default. |
-| Multiple configured providers create arbitrary selection | Omit model defaults unless user/custom config chooses a provider. |
+| Source defaults surprise users by changing model inheritance | Document the zero-config default model table prominently; keep bundled markdown model-free and allow user/custom overrides. |
+| Project config routes prompts to a different provider | Treat `model` and `fallback_models` as protected fields. |
+| `fallback_models` is not native OpenCode config | Verify a supported field; if absent, stop and plan runtime fallback architecture separately. Do not ship inert metadata. |
+| Provider model IDs churn | Centralize defaults in one table and validate/update before release. |
 | MCP key mapping is unavailable in config hook | Spike first; if final keys are unavailable, keep `mcps` deferred. |
 | Wildcard MCP grants expand privileges through future tools | Prefer enumerated concrete keys; do not ship guessed prefix grants. |
 | Sanitized MCP key collisions cross server boundaries | Detect collisions before emitting rules. |
@@ -426,9 +448,9 @@ Implements restrictive `mcps` allowlists using concrete MCP tool keys and collis
 ## Documentation / Operational Notes
 
 - This is a developer-facing config feature with no persistent production service.
-- Provider-default PR notes should emphasize explicit opt-in and project-config restrictions.
+- Source-model-default PR notes should emphasize the category default table, fallback behavior, project-config restrictions, and user/custom override path.
 - MCP PR notes should emphasize restrictive allowlist semantics and that MCP servers must already be configured in OpenCode.
-- PR descriptions should include post-merge validation notes to watch plugin load failures, overlay config issues, provider routing surprises, and MCP permission reports in GitHub issues/PR comments.
+- PR descriptions should include post-merge validation notes to watch plugin load failures, overlay config issues, provider routing/fallback surprises, and MCP permission reports in GitHub issues/PR comments.
 
 ## Sources & References
 
@@ -441,3 +463,12 @@ Implements restrictive `mcps` allowlists using concrete MCP tool keys and collis
 - Related tests: `tests/unit/agent-overlays.test.ts`
 - Related tests: `tests/unit/config-handler.test.ts`
 - Related tests: `tests/unit/config.test.ts`
+- OMO Slim README/presets: https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/master/README.md
+- OMO Slim author preset: https://raw.githubusercontent.com/alvinunreal/oh-my-opencode-slim/master/docs/authors-preset.md
+- Magic Context configuration docs: https://raw.githubusercontent.com/cortexkit/opencode-magic-context/master/CONFIGURATION.md
+- OpenCode agents docs: https://opencode.ai/docs/agents/
+- OpenCode config schema: https://opencode.ai/config.json
+- OpenCode agents docs: https://opencode.ai/docs/agents/
+- OpenCode config schema: https://opencode.ai/config.json
+- Magic Context configuration docs: https://github.com/cortexkit/opencode-magic-context/blob/master/CONFIGURATION.md
+- oh-my-opencode-slim configuration docs: https://github.com/alvinunreal/oh-my-opencode-slim/blob/master/docs/configuration.md
