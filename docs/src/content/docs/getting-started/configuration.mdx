@@ -43,6 +43,7 @@ Use top-level `agents` and `categories` maps to tune bundled Systematic agents w
   "agents": {
     // Unqualified unique stem form.
     "security-sentinel": {
+      // User or custom config only; project config cannot choose model/provider routing.
       "model": "anthropic/claude-sonnet-4-5",
       "variant": "thinking",
       "steps": 20
@@ -61,11 +62,11 @@ Valid category IDs are `design`, `docs`, `document-review`, `research`, `review`
 
 Exact agent overlays accept the unique file stem (`security-sentinel`) or the qualified key (`review/security-sentinel`). Pick one canonical form across all config sources. Systematic merges config sources before resolving aliases, so cross-source alias collisions like user `agents.security-sentinel` plus project `agents.review/security-sentinel` fail duplicate-target validation instead of silently overriding.
 
-Supported overlay fields are `model`, `variant`, `temperature`, `top_p`, `permission`, `mode`, `color`, `steps`, `hidden`, exact-agent-only `disable`, and `skills`.
+Supported overlay fields are `model`, `variant`, `temperature`, `top_p`, `permission`, `mode`, `color`, `steps`, `hidden`, exact-agent-only `disable`, and `skills`. `color` accepts `#RGB`, `#RRGGBB`, or OpenCode named color tokens matching `[a-zA-Z][a-zA-Z0-9-]*`; whitespace/freeform numeric strings are rejected.
 
-`skills` is a Systematic-managed shortcut that writes OpenCode `permission.skill` rules using bundled skill frontmatter names such as `ce:review`. It is not a native OpenCode agent field. Because `permission` and `skills` control tool access, they are accepted only from user config or `$OPENCODE_CONFIG_DIR/systematic.json`; project config may tune agent behavior but cannot loosen a user's permission policy. Systematic does not expose an `mcps` shortcut in V1; MCP-specific permission mapping is out of scope for this config surface.
+`skills` is a Systematic-managed shortcut that writes OpenCode `permission.skill` rules using bundled skill frontmatter names such as `ce:review`. It is not a native OpenCode agent field. Because `model` controls provider routing/cost/privacy and `permission`/`skills` control tool access, those fields are accepted only from user config or `$OPENCODE_CONFIG_DIR/systematic.json`. Project config may tune non-sensitive presentation and runtime fields such as `variant`, `temperature`, `top_p`, `mode`, `color`, `steps`, `hidden`, or exact-agent `disable`, but it cannot choose model/provider routing or loosen permission/capability policy. Systematic does not expose an `mcps` shortcut in V1; MCP-specific permission mapping is out of scope for this config surface.
 
-Bundled agent markdown intentionally omits `model`. By default, emitted bundled agents also omit `model` so OpenCode inheritance keeps working. Systematic only emits a model when you configure `agents.<key>.model`; provider-specific zero-config model defaults are intentionally deferred.
+Bundled agent markdown intentionally omits `model`. By default, emitted bundled agents also omit `model` so OpenCode inheritance keeps working. Systematic only emits a model when you configure `agents.<key>.model` in user or custom config; provider-specific zero-config model defaults are intentionally deferred.
 
 Overlay application precedence for a Systematic-owned bundled agent is strongest first:
 
@@ -109,7 +110,7 @@ Systematic resolves configuration and content in the following order (highest pr
 5.  **User-level config:** `~/.config/opencode/systematic.json`
 6.  **Bundled assets:** Content shipped with the plugin package
 
-Config-source merge precedence is separate from overlay application precedence. Across Systematic config files, `disabled_*` arrays are union-merged, `bootstrap` is shallow-merged, and top-level `agents`/`categories` maps merge by key. A higher-priority source replaces the whole object for the same `agents.<key>` or `categories.<id>` entry; unrelated keys survive. Project overlays are the exception for security fields: they cannot define `permission` or `skills`, and same-key project overlays preserve user-level `permission`/`skills` fields instead of erasing them. After that effective config is built, Systematic applies category and exact overlays to bundled agents using the overlay precedence above.
+Config-source merge precedence is separate from overlay application precedence. Across Systematic config files, `disabled_*` arrays are union-merged, `bootstrap` is shallow-merged, and top-level `agents`/`categories` maps merge by key. A higher-priority source replaces the whole object for the same `agents.<key>` or `categories.<id>` entry; unrelated keys survive. Project overlays are the exception for trust-sensitive fields: they cannot define `model`, `permission`, or `skills`, and same-key project overlays preserve user-level `model`/`permission`/`skills` fields instead of erasing them. After that effective config is built, Systematic applies category and exact overlays to bundled agents using the overlay precedence above.
 
 ## Advanced Configuration
 
@@ -130,6 +131,7 @@ The Systematic configuration file is parsed as JSONC, meaning you can include co
   },
   "agents": {
     "repo-research-analyst": {
+      // User or custom config only; project config cannot choose model/provider routing.
       "model": "anthropic/claude-sonnet-4-5"
     }
   }

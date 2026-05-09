@@ -414,7 +414,7 @@ function validatePositiveInteger(
   keyPath: string,
   value: unknown,
 ): void {
-  if (!Number.isInteger(value) || (value as number) < 1) {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
     throwConfigError(sourcePath, keyPath, 'must be a positive integer')
   }
 }

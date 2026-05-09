@@ -152,7 +152,7 @@ describe('SystematicPlugin config hook integration', () => {
   }
 
   test('exact overlay emits a tuned bundled agent', async () => {
-    writeSystematicConfig({
+    writeCustomSystematicConfig({
       agents: {
         'correctness-reviewer': {
           model: 'openrouter/anthropic/claude-sonnet-4',
@@ -279,7 +279,7 @@ describe('SystematicPlugin config hook integration', () => {
   })
 
   test('well-shaped nonexistent explicit model passes validation and emits unchanged', async () => {
-    writeSystematicConfig({
+    writeCustomSystematicConfig({
       agents: {
         'correctness-reviewer': {
           model: 'nonexistent-provider/nonexistent-model',

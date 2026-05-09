@@ -64,7 +64,7 @@ interface ConfigSource {
   trust: 'user' | 'project' | 'custom'
 }
 
-const SECURITY_OVERLAY_FIELDS = new Set(['permission', 'skills'])
+const SECURITY_OVERLAY_FIELDS = new Set(['model', 'permission', 'skills'])
 
 function isErrorWithCode(error: unknown): error is Error & { code?: unknown } {
   return error instanceof Error && 'code' in error
