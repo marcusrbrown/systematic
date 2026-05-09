@@ -8,11 +8,33 @@ export interface BootstrapConfig {
   file?: string
 }
 
+export type OverlayConfig = Record<string, unknown>
+
+export type OverlayConfigMap = Record<string, OverlayConfig>
+
+export interface SourcedOverlayConfig {
+  value: OverlayConfig
+  sourcePath: string
+  keyPath: string
+}
+
+export interface SourcedOverlayConfigMap {
+  agents: Record<string, SourcedOverlayConfig>
+  categories: Record<string, SourcedOverlayConfig>
+}
+
+export interface SourceAwareConfigResult {
+  config: SystematicConfig
+  overlays: SourcedOverlayConfigMap
+}
+
 export interface SystematicConfig {
   disabled_skills: string[]
   disabled_agents: string[]
   disabled_commands: string[]
   bootstrap: BootstrapConfig
+  agents?: OverlayConfigMap
+  categories?: OverlayConfigMap
 }
 
 export const DEFAULT_CONFIG: SystematicConfig = {
@@ -22,16 +44,42 @@ export const DEFAULT_CONFIG: SystematicConfig = {
   bootstrap: {
     enabled: true,
   },
+  agents: {},
+  categories: {},
 }
 
-function loadJsoncFile<T>(filePath: string): T | null {
+interface RawSystematicConfig
+  extends Omit<Partial<SystematicConfig>, 'agents' | 'categories'> {
+  agents?: unknown
+  categories?: unknown
+}
+
+interface ConfigSource {
+  path: string
+  config: RawSystematicConfig
+}
+
+function loadJsoncFile(filePath: string): RawSystematicConfig | null {
   try {
     if (!fs.existsSync(filePath)) return null
     const content = fs.readFileSync(filePath, 'utf-8')
-    return parseJsonc(content) as T
+    const parsed = parseJsonc(content) as unknown
+    if (!isRecord(parsed)) return null
+    return parsed as RawSystematicConfig
   } catch {
     return null
   }
+}
+
+function loadConfigSource(filePath: string): ConfigSource | null {
+  const config = loadJsoncFile(filePath)
+  if (!config) return null
+
+  return { path: filePath, config }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function mergeArraysUnique<T>(
@@ -45,15 +93,27 @@ function mergeArraysUnique<T>(
 }
 
 export function loadConfig(projectDir: string): SystematicConfig {
+  return loadConfigWithSources(projectDir).config
+}
+
+export function loadConfigWithSources(
+  projectDir: string,
+): SourceAwareConfigResult {
   const paths = getConfigPaths(projectDir)
 
-  const userConfig = loadJsoncFile<Partial<SystematicConfig>>(paths.userConfig)
-  const projectConfig = loadJsoncFile<Partial<SystematicConfig>>(
-    paths.projectConfig,
-  )
-  const customConfig = paths.customConfig
-    ? loadJsoncFile<Partial<SystematicConfig>>(paths.customConfig)
+  const userSource = loadConfigSource(paths.userConfig)
+  const projectSource = loadConfigSource(paths.projectConfig)
+  const customSource = paths.customConfig
+    ? loadConfigSource(paths.customConfig)
     : null
+  const sources = [userSource, projectSource, customSource].filter(
+    (source): source is ConfigSource => source !== null,
+  )
+
+  const overlays = mergeOverlaySources(sources)
+  const userConfig = userSource?.config
+  const projectConfig = projectSource?.config
+  const customConfig = customSource?.config
 
   const result: SystematicConfig = {
     disabled_skills: mergeArraysUnique(
@@ -92,9 +152,69 @@ export function loadConfig(projectDir: string): SystematicConfig {
       ...projectConfig?.bootstrap,
       ...customConfig?.bootstrap,
     },
+    agents: overlayValues(overlays.agents),
+    categories: overlayValues(overlays.categories),
+  }
+
+  return { config: result, overlays }
+}
+
+function mergeOverlaySources(sources: ConfigSource[]): SourcedOverlayConfigMap {
+  const result: SourcedOverlayConfigMap = {
+    agents: {},
+    categories: {},
+  }
+
+  for (const source of sources) {
+    mergeOverlayMap(result.agents, source, 'agents')
+    mergeOverlayMap(result.categories, source, 'categories')
   }
 
   return result
+}
+
+function mergeOverlayMap(
+  target: Record<string, SourcedOverlayConfig>,
+  source: ConfigSource,
+  mapKey: 'agents' | 'categories',
+): void {
+  const overlayMap = source.config[mapKey]
+  if (overlayMap === undefined) return
+
+  if (!isRecord(overlayMap)) {
+    throwInvalidOverlay(source.path, mapKey)
+  }
+
+  for (const [key, value] of Object.entries(overlayMap)) {
+    const keyPath = `${mapKey}.${key}`
+    if (!isRecord(value)) {
+      throwInvalidOverlay(source.path, keyPath)
+    }
+
+    target[key] = {
+      value,
+      sourcePath: source.path,
+      keyPath,
+    }
+  }
+}
+
+function overlayValues(
+  overlays: Record<string, SourcedOverlayConfig>,
+): OverlayConfigMap {
+  const result: OverlayConfigMap = {}
+
+  for (const [key, overlay] of Object.entries(overlays)) {
+    result[key] = overlay.value
+  }
+
+  return result
+}
+
+function throwInvalidOverlay(sourcePath: string, keyPath: string): never {
+  throw new Error(
+    `Invalid Systematic config in ${sourcePath}: ${keyPath} must be an object`,
+  )
 }
 
 export function getConfigPaths(projectDir: string) {

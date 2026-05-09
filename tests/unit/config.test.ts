@@ -6,6 +6,7 @@ import {
   DEFAULT_CONFIG,
   getConfigPaths,
   loadConfig,
+  loadConfigWithSources,
 } from '../../src/lib/config.ts'
 
 // Avoid TOCTOU (time-of-check-time-of-use) race conditions
@@ -418,6 +419,249 @@ describe('config', () => {
       test('ignores project config if it does not exist', () => {
         const result = loadConfig(testDir)
         expect(result).toEqual(DEFAULT_CONFIG)
+      })
+    })
+
+    describe('agent and category overlays', () => {
+      test('loads a user agent overlay with source and key provenance', () => {
+        const userConfigDir = path.join(os.homedir(), '.config/opencode')
+        const userConfigPath = path.join(userConfigDir, 'systematic.json')
+        const userConfigBackup = tryReadFile(userConfigPath)
+
+        try {
+          fs.mkdirSync(userConfigDir, { recursive: true })
+          fs.writeFileSync(
+            userConfigPath,
+            JSON.stringify({
+              agents: {
+                'correctness-reviewer': { model: 'openai/gpt-5' },
+              },
+            }),
+          )
+
+          const result = loadConfigWithSources(testDir)
+
+          expect(result.config.agents).toEqual({
+            'correctness-reviewer': { model: 'openai/gpt-5' },
+          })
+          expect(result.overlays.agents['correctness-reviewer']).toEqual({
+            value: { model: 'openai/gpt-5' },
+            sourcePath: userConfigPath,
+            keyPath: 'agents.correctness-reviewer',
+          })
+        } finally {
+          if (userConfigBackup !== null) {
+            fs.writeFileSync(userConfigPath, userConfigBackup)
+          } else {
+            tryUnlink(userConfigPath)
+          }
+        }
+      })
+
+      test('preserves unrelated user category and project agent overlays', () => {
+        const userConfigDir = path.join(os.homedir(), '.config/opencode')
+        const userConfigPath = path.join(userConfigDir, 'systematic.json')
+        const userConfigBackup = tryReadFile(userConfigPath)
+
+        try {
+          fs.mkdirSync(userConfigDir, { recursive: true })
+          fs.writeFileSync(
+            userConfigPath,
+            JSON.stringify({ categories: { review: { temperature: 0.2 } } }),
+          )
+
+          const projectConfigDir = path.join(testDir, '.opencode')
+          fs.mkdirSync(projectConfigDir)
+          fs.writeFileSync(
+            path.join(projectConfigDir, 'systematic.json'),
+            JSON.stringify({
+              agents: {
+                'correctness-reviewer': { model: 'anthropic/claude-sonnet-4' },
+              },
+            }),
+          )
+
+          const result = loadConfigWithSources(testDir)
+
+          expect(result.config.categories).toEqual({
+            review: { temperature: 0.2 },
+          })
+          expect(result.config.agents).toEqual({
+            'correctness-reviewer': { model: 'anthropic/claude-sonnet-4' },
+          })
+        } finally {
+          if (userConfigBackup !== null) {
+            fs.writeFileSync(userConfigPath, userConfigBackup)
+          } else {
+            tryUnlink(userConfigPath)
+          }
+        }
+      })
+
+      test('project agent overlay replaces user same-key overlay wholesale', () => {
+        const userConfigDir = path.join(os.homedir(), '.config/opencode')
+        const userConfigPath = path.join(userConfigDir, 'systematic.json')
+        const userConfigBackup = tryReadFile(userConfigPath)
+
+        try {
+          fs.mkdirSync(userConfigDir, { recursive: true })
+          fs.writeFileSync(
+            userConfigPath,
+            JSON.stringify({
+              agents: {
+                'correctness-reviewer': {
+                  model: 'openai/gpt-5',
+                  temperature: 0.1,
+                },
+              },
+            }),
+          )
+
+          const projectConfigDir = path.join(testDir, '.opencode')
+          fs.mkdirSync(projectConfigDir)
+          const projectConfigPath = path.join(
+            projectConfigDir,
+            'systematic.json',
+          )
+          fs.writeFileSync(
+            projectConfigPath,
+            JSON.stringify({
+              agents: {
+                'correctness-reviewer': { model: 'anthropic/claude-sonnet-4' },
+              },
+            }),
+          )
+
+          const result = loadConfigWithSources(testDir)
+
+          expect(result.config.agents).toEqual({
+            'correctness-reviewer': { model: 'anthropic/claude-sonnet-4' },
+          })
+          expect(
+            result.overlays.agents['correctness-reviewer']?.sourcePath,
+          ).toBe(projectConfigPath)
+        } finally {
+          if (userConfigBackup !== null) {
+            fs.writeFileSync(userConfigPath, userConfigBackup)
+          } else {
+            tryUnlink(userConfigPath)
+          }
+        }
+      })
+
+      test('custom config category overlay replaces project same-key overlay', () => {
+        const customDir = fs.mkdtempSync(
+          path.join(os.tmpdir(), 'systematic-custom-'),
+        )
+        process.env.OPENCODE_CONFIG_DIR = customDir
+
+        try {
+          const projectConfigDir = path.join(testDir, '.opencode')
+          fs.mkdirSync(projectConfigDir)
+          fs.writeFileSync(
+            path.join(projectConfigDir, 'systematic.json'),
+            JSON.stringify({
+              categories: {
+                review: { model: 'openai/gpt-5', temperature: 0.1 },
+              },
+            }),
+          )
+
+          const customConfigPath = path.join(customDir, 'systematic.json')
+          fs.writeFileSync(
+            customConfigPath,
+            JSON.stringify({ categories: { review: { temperature: 0.7 } } }),
+          )
+
+          const result = loadConfigWithSources(testDir)
+
+          expect(result.config.categories).toEqual({
+            review: { temperature: 0.7 },
+          })
+          expect(result.overlays.categories.review?.sourcePath).toBe(
+            customConfigPath,
+          )
+        } finally {
+          delete process.env.OPENCODE_CONFIG_DIR
+          fs.rmSync(customDir, { recursive: true, force: true })
+        }
+      })
+
+      test('absent and empty overlay maps are valid no-ops', () => {
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir)
+        fs.writeFileSync(
+          path.join(projectConfigDir, 'systematic.json'),
+          JSON.stringify({ agents: {}, categories: {} }),
+        )
+
+        const result = loadConfigWithSources(testDir)
+
+        expect(result.config.agents).toEqual({})
+        expect(result.config.categories).toEqual({})
+        expect(result.overlays.agents).toEqual({})
+        expect(result.overlays.categories).toEqual({})
+      })
+
+      test.each([
+        ['agents container', { agents: null }, 'agents'],
+        ['categories container', { categories: [] }, 'categories'],
+        [
+          'agent entry',
+          { agents: { 'correctness-reviewer': 'openai/gpt-5' } },
+          'agents.correctness-reviewer',
+        ],
+        [
+          'category entry',
+          { categories: { review: null } },
+          'categories.review',
+        ],
+      ])('rejects invalid %s overlay values', (_name, config, keyPath) => {
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir)
+        const projectConfigPath = path.join(projectConfigDir, 'systematic.json')
+        fs.writeFileSync(projectConfigPath, JSON.stringify(config))
+
+        expect(() => loadConfigWithSources(testDir)).toThrow(projectConfigPath)
+        expect(() => loadConfigWithSources(testDir)).toThrow(keyPath)
+      })
+
+      test('preserves unqualified and qualified alias keys across source priorities', () => {
+        const userConfigDir = path.join(os.homedir(), '.config/opencode')
+        const userConfigPath = path.join(userConfigDir, 'systematic.json')
+        const userConfigBackup = tryReadFile(userConfigPath)
+
+        try {
+          fs.mkdirSync(userConfigDir, { recursive: true })
+          fs.writeFileSync(
+            userConfigPath,
+            JSON.stringify({
+              agents: { 'correctness-reviewer': { temperature: 0.1 } },
+            }),
+          )
+
+          const projectConfigDir = path.join(testDir, '.opencode')
+          fs.mkdirSync(projectConfigDir)
+          fs.writeFileSync(
+            path.join(projectConfigDir, 'systematic.json'),
+            JSON.stringify({
+              agents: { 'review/correctness-reviewer': { temperature: 0.2 } },
+            }),
+          )
+
+          const result = loadConfigWithSources(testDir)
+
+          expect(result.config.agents).toEqual({
+            'correctness-reviewer': { temperature: 0.1 },
+            'review/correctness-reviewer': { temperature: 0.2 },
+          })
+        } finally {
+          if (userConfigBackup !== null) {
+            fs.writeFileSync(userConfigPath, userConfigBackup)
+          } else {
+            tryUnlink(userConfigPath)
+          }
+        }
       })
     })
   })
