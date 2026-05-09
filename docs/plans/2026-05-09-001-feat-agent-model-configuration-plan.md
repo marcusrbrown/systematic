@@ -1,7 +1,7 @@
 ---
 title: feat: Add Agent Configuration Overlays
 type: feat
-status: active
+status: completed
 date: 2026-05-09
 origin: docs/brainstorms/2026-05-09-agent-model-configuration-requirements.md
 ---
