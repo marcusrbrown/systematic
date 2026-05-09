@@ -351,6 +351,41 @@ describe('SystematicPlugin config hook integration', () => {
     )
   })
 
+  test('every emitted bundled-agent color matches OpenCode `/config` schema', async () => {
+    // Regression for v2.7.x crash: invalid colors (purple, blue, etc.) on
+    // bundled agents made OpenCode `/config` HttpApi validation reject the
+    // body, returning HTTP 400 and crashing TUI launch with empty error body.
+    // OpenCode accepts hex `#RRGGBB` or one of the seven theme tokens.
+    const VALID_TOKENS = new Set([
+      'primary',
+      'secondary',
+      'accent',
+      'success',
+      'warning',
+      'error',
+      'info',
+    ])
+    const HEX_REGEX = /^#[0-9a-fA-F]{6}$/
+
+    const config: Config = {}
+    await runConfigHook(config)
+
+    const offenders: { name: string; color: string }[] = []
+    for (const [name, agent] of Object.entries(config.agent ?? {})) {
+      const color = agent?.color
+      if (color === undefined) continue
+      if (typeof color !== 'string') {
+        offenders.push({ name, color: String(color) })
+        continue
+      }
+      if (HEX_REGEX.test(color)) continue
+      if (VALID_TOKENS.has(color)) continue
+      offenders.push({ name, color })
+    }
+
+    expect(offenders).toEqual([])
+  })
+
   test('well-shaped nonexistent explicit model passes validation and emits unchanged', async () => {
     writeCustomSystematicConfig({
       agents: {

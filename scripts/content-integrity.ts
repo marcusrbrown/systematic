@@ -150,6 +150,12 @@ export interface FrontmatterViolation {
   remediation: string
 }
 
+export interface AgentColorViolation {
+  file: string
+  value: string
+  message: string
+}
+
 export interface AgentModelViolation {
   file: string
   message: string
@@ -170,6 +176,7 @@ export interface CheckResult {
   bannedPatterns: BannedPatternHit[]
   frontmatterViolations: FrontmatterViolation[]
   agentModelViolations: AgentModelViolation[]
+  agentColorViolations: AgentColorViolation[]
   agentStemViolations: AgentStemViolation[]
   exemptHits: ExemptHit[]
   scanStats: {
@@ -705,6 +712,55 @@ function checkSkillFrontmatterFields(
   }
 }
 
+/**
+ * OpenCode `/config` response schema accepts agent colors as either a hex
+ * `#RRGGBB` literal or one of these named theme tokens. Any other value is
+ * rejected by HttpApi validation (see anomalyco/opencode commits 2793502db /
+ * 96a534d8c) and surfaces to the user as `400: (empty response body)` on TUI
+ * launch.
+ */
+export const OPENCODE_AGENT_COLOR_TOKENS = [
+  'primary',
+  'secondary',
+  'accent',
+  'success',
+  'warning',
+  'error',
+  'info',
+] as const
+
+const HEX_COLOR_REGEX = /^#[0-9a-fA-F]{6}$/
+
+function isValidAgentColor(value: string): boolean {
+  if (HEX_COLOR_REGEX.test(value)) return true
+  return (OPENCODE_AGENT_COLOR_TOKENS as readonly string[]).includes(value)
+}
+
+export function checkAgentColors(
+  rootDir: string,
+  markdownFiles: readonly string[],
+): AgentColorViolation[] {
+  const violations: AgentColorViolation[] = []
+
+  for (const relPath of markdownFiles) {
+    if (!isAgentFile(relPath)) continue
+    const content = readFileSafe(path.join(rootDir, relPath))
+    if (content === null) continue
+    const parsed = parseFrontmatter(content)
+    if (!isRecord(parsed.data)) continue
+    if (!Object.hasOwn(parsed.data, 'color')) continue
+    const value = parsed.data.color
+    if (typeof value !== 'string' || isValidAgentColor(value)) continue
+    violations.push({
+      file: relPath,
+      value,
+      message: `Agent color \`${value}\` is rejected by OpenCode's \`/config\` response schema. Allowed values: hex \`#RRGGBB\` or one of ${OPENCODE_AGENT_COLOR_TOKENS.join(', ')}. Crashes TUI launch with HttpApiSchemaError.`,
+    })
+  }
+
+  return violations
+}
+
 export function checkAgentModel(
   rootDir: string,
   markdownFiles: readonly string[],
@@ -871,6 +927,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
   const brokenSubfileRefs = checkSubfileReferences(rootDir, targets.markdown)
   const frontmatterViolations = checkFrontmatter(rootDir, targets.markdown)
   const agentModelViolations = checkAgentModel(rootDir, targets.markdown)
+  const agentColorViolations = checkAgentColors(rootDir, targets.markdown)
   const agentStemViolations = checkAgentStemUniqueness(
     rootDir,
     targets.markdown,
@@ -890,6 +947,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     bannedPatterns,
     frontmatterViolations,
     agentModelViolations,
+    agentColorViolations,
     agentStemViolations,
     exemptHits,
     scanStats: {
@@ -930,6 +988,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
   printBannedPatterns(result.bannedPatterns)
   printFrontmatterViolations(result.frontmatterViolations)
   printAgentModelViolations(result.agentModelViolations)
+  printAgentColorViolations(result.agentColorViolations)
   printAgentStemViolations(result.agentStemViolations)
 
   if (totalViolations(result) === 0) {
@@ -947,6 +1006,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
         `scanStats: ${result.scanStats.markdownFiles} md + ${result.scanStats.typescriptFiles} ts\n` +
         `frontmatterViolations: ${result.frontmatterViolations.length}\n` +
         `agentModelViolations: ${result.agentModelViolations.length}\n` +
+        `agentColorViolations: ${result.agentColorViolations.length}\n` +
         `agentStemViolations: ${result.agentStemViolations.length}\n` +
         `exemptHits: ${result.exemptHits.length}\n`,
     )
@@ -1007,6 +1067,16 @@ function printAgentModelViolations(
   }
 }
 
+function printAgentColorViolations(
+  violations: readonly AgentColorViolation[],
+): void {
+  if (violations.length === 0) return
+  process.stderr.write(`\nAgent color violations (${violations.length}):\n`)
+  for (const v of violations) {
+    process.stderr.write(`  ${v.file}  ${v.message}\n`)
+  }
+}
+
 function printAgentStemViolations(
   violations: readonly AgentStemViolation[],
 ): void {
@@ -1029,6 +1099,7 @@ function totalViolations(result: CheckResult): number {
     result.bannedPatterns.length +
     result.frontmatterViolations.length +
     result.agentModelViolations.length +
+    result.agentColorViolations.length +
     result.agentStemViolations.length
   )
 }

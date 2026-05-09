@@ -2,7 +2,7 @@
 name: maintainability-reviewer
 description: Always-on code-review persona. Reviews code for premature abstraction, unnecessary indirection, dead code, coupling between unrelated modules, and naming that obscures intent.
 tools: Read, Grep, Glob, Bash
-color: blue
+color: info
 mode: subagent
 temperature: 0.1
 ---

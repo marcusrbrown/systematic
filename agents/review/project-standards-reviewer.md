@@ -2,7 +2,7 @@
 name: project-standards-reviewer
 description: Always-on code-review persona. Audits changes against the project's own AGENTS.md standards -- frontmatter rules, reference inclusion, naming conventions, cross-platform portability, and tool selection policies.
 tools: Read, Grep, Glob, Bash
-color: blue
+color: info
 
 ---
 

@@ -1,7 +1,7 @@
 ---
 name: lint
 description: Use this agent when you need to run linting and code quality checks on Ruby and ERB files. Run before pushing to origin.
-color: yellow
+color: warning
 mode: subagent
 temperature: 0.1
 ---
