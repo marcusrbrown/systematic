@@ -9,10 +9,11 @@ Systematic works out of the box with sensible defaults, but it provides several 
 
 ## Plugin Configuration
 
-You can customize the plugin by creating a configuration file. Systematic looks for configuration in two places:
+You can customize the plugin by creating a configuration file. Systematic looks for configuration in three places:
 
 1.  **Global:** `~/.config/opencode/systematic.json`
-2.  **Project-specific:** `.opencode/systematic.json` (takes precedence)
+2.  **Project-specific:** `.opencode/systematic.json`
+3.  **Custom config directory:** `$OPENCODE_CONFIG_DIR/systematic.json`
 
 ### Disabling Bundled Content
 
@@ -24,6 +25,57 @@ If you want to hide certain bundled skills or agents, you can list them in the `
   "disabled_agents": []
 }
 ```
+
+### Bundled Agent Overlays
+
+Use top-level `agents` and `categories` maps to tune bundled Systematic agents without copying their markdown files into native OpenCode agent definitions.
+
+```jsonc
+{
+  "categories": {
+    // Applies to bundled agents in agents/review/*.md unless that agent has
+    // been replaced by a native OpenCode agent with the same emitted key.
+    "review": {
+      "temperature": 0.1,
+      "steps": 12
+    }
+  },
+  "agents": {
+    // Unqualified unique stem form.
+    "security-sentinel": {
+      "model": "anthropic/claude-sonnet-4-5",
+      "variant": "thinking",
+      "steps": 20
+    },
+
+    // Qualified form for the same inventory model: <category>/<agent-stem>.
+    "workflow/systematic-implementer": {
+      "mode": "subagent",
+      "color": "cyan"
+    }
+  }
+}
+```
+
+Valid category IDs are `design`, `docs`, `document-review`, `research`, `review`, and `workflow`. These IDs are V1 public API because broad policy overlays are a primary use case; future reorganizations must preserve aliases or ship migration warnings. Category overlays also apply to future bundled agents added to that category, so use them for policies you want to inherit broadly.
+
+Exact agent overlays accept the unique file stem (`security-sentinel`) or the qualified key (`review/security-sentinel`). Pick one canonical form across all config sources. Systematic merges config sources before resolving aliases, so cross-source alias collisions like user `agents.security-sentinel` plus project `agents.review/security-sentinel` fail duplicate-target validation instead of silently overriding.
+
+Supported overlay fields are `model`, `variant`, `temperature`, `top_p`, `permission`, `mode`, `color`, `steps`, `hidden`, exact-agent-only `disable`, and `skills`.
+
+`skills` is a Systematic-managed shortcut that writes OpenCode `permission.skill` rules using bundled skill frontmatter names such as `ce:review`. It is not a native OpenCode agent field. Because `permission` and `skills` control tool access, they are accepted only from user config or `$OPENCODE_CONFIG_DIR/systematic.json`; project config may tune agent behavior but cannot loosen a user's permission policy. Systematic does not expose an `mcps` shortcut in V1; MCP-specific permission mapping is out of scope for this config surface.
+
+Bundled agent markdown intentionally omits `model`. By default, emitted bundled agents also omit `model` so OpenCode inheritance keeps working. Systematic only emits a model when you configure `agents.<key>.model`; provider-specific zero-config model defaults are intentionally deferred.
+
+Overlay application precedence for a Systematic-owned bundled agent is strongest first:
+
+1. Exact `agents.<key>` overlay
+2. `categories.<category-id>` overlay
+3. Built-in Systematic policy defaults, such as temperature defaults
+4. Bundled markdown/frontmatter defaults
+5. OpenCode inherited defaults
+
+Native OpenCode agents with the same emitted key are full replacements. If `config.agent.security-sentinel` already exists in OpenCode config, `agents.security-sentinel` or `agents.review/security-sentinel` conflicts because ownership would be ambiguous. Category overlays skip native replacements and continue applying to the remaining Systematic-owned bundled agents in that category.
 
 ## Project-Specific Content
 
@@ -50,11 +102,14 @@ If you create a project-specific asset with the same name as a bundled one, your
 
 Systematic resolves configuration and content in the following order (highest priority first):
 
-1.  **Project-level assets:** Files in `.opencode/`
-2.  **Project-level config:** `.opencode/systematic.json`
-3.  **User-level assets:** Files in `~/.config/opencode/`
-4.  **User-level config:** `~/.config/opencode/systematic.json`
-5.  **Bundled assets:** Content shipped with the plugin package
+1.  **Custom config directory:** `$OPENCODE_CONFIG_DIR/systematic.json` and assets under `$OPENCODE_CONFIG_DIR/systematic/`
+2.  **Project-level assets:** Files in `.opencode/`
+3.  **Project-level config:** `.opencode/systematic.json`
+4.  **User-level assets:** Files in `~/.config/opencode/`
+5.  **User-level config:** `~/.config/opencode/systematic.json`
+6.  **Bundled assets:** Content shipped with the plugin package
+
+Config-source merge precedence is separate from overlay application precedence. Across Systematic config files, `disabled_*` arrays are union-merged, `bootstrap` is shallow-merged, and top-level `agents`/`categories` maps merge by key. A higher-priority source replaces the whole object for the same `agents.<key>` or `categories.<id>` entry; unrelated keys survive. Project overlays are the exception for security fields: they cannot define `permission` or `skills`, and same-key project overlays preserve user-level `permission`/`skills` fields instead of erasing them. After that effective config is built, Systematic applies category and exact overlays to bundled agents using the overlay precedence above.
 
 ## Advanced Configuration
 
@@ -64,8 +119,19 @@ The Systematic configuration file is parsed as JSONC, meaning you can include co
 {
   // Disable git-worktree as we use a different branching model
   "disabled_skills": ["git-worktree"],
-  
-  // Custom agents are added in .opencode/agents/
-  "disabled_agents": []
+
+  // Custom agents are added in .opencode/agents/; bundled agents can also be
+  // tuned with overlays instead of copied.
+  "disabled_agents": [],
+  "categories": {
+    "research": {
+      "temperature": 0.2
+    }
+  },
+  "agents": {
+    "repo-research-analyst": {
+      "model": "anthropic/claude-sonnet-4-5"
+    }
+  }
 }
 ```
