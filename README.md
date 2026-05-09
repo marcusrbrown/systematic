@@ -300,7 +300,7 @@ Configuration is loaded from multiple locations and merged (later sources overri
   "categories": {
     "review": {
       "temperature": 0.1,
-      "skills": ["ce:review"]
+      "steps": 12
     }
   },
   "agents": {
@@ -326,9 +326,9 @@ Configuration is loaded from multiple locations and merged (later sources overri
 | `bootstrap.enabled` | `boolean` | `true` | Inject the `using-systematic` guide into system prompts |
 | `bootstrap.file` | `string` | — | Custom bootstrap file path (overrides default) |
 
-Agent overlays support `model`, `variant`, `temperature`, `top_p`, `permission`, `mode`, `color`, `steps`, `hidden`, exact-agent-only `disable`, and managed `skills`. `skills` is a shortcut that writes OpenCode `permission.skill` rules; it is not a native OpenCode agent field.
+Agent overlays support `model`, `variant`, `temperature`, `top_p`, `permission`, `mode`, `color`, `steps`, `hidden`, exact-agent-only `disable`, and managed `skills`. `skills` uses bundled skill frontmatter names like `ce:review`; it is a shortcut that writes OpenCode `permission.skill` rules, not a native OpenCode agent field. Because `permission` and `skills` control tool access, they are only accepted from user config or `$OPENCODE_CONFIG_DIR/systematic.json`; project config may tune behavior but cannot loosen a user's permission policy.
 
-Systematic separates config-source precedence from overlay precedence. Config files merge in this order: user config, project config, then `$OPENCODE_CONFIG_DIR/systematic.json` if set. Higher-priority `agents.<key>` and `categories.<id>` entries replace lower-priority entries wholesale, while unrelated keys survive. After the effective config is built, exact `agents` overlays beat category overlays, which beat built-in policy defaults, bundled markdown defaults, and OpenCode inherited defaults.
+Systematic separates config-source precedence from overlay precedence. Config files merge in this order: user config, project config, then `$OPENCODE_CONFIG_DIR/systematic.json` if set. Higher-priority `agents.<key>` and `categories.<id>` entries replace lower-priority entries wholesale, while unrelated keys survive. Project overlays are the exception for security fields: same-key project overlays preserve user-level `permission` and `skills` fields instead of erasing them. After the effective config is built, exact `agents` overlays beat category overlays, which beat built-in policy defaults, bundled markdown defaults, and OpenCode inherited defaults.
 
 Bundled agents omit `model` by default so OpenCode model inheritance keeps working. Systematic emits a `model` only when you configure one explicitly; provider-specific zero-config model defaults are intentionally deferred.
 

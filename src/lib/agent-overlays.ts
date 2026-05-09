@@ -324,8 +324,10 @@ function validateOverlayFieldValue(
       validateNonEmptyString(sourcePath, keyPath, value)
       return
     case 'temperature':
+      validateTemperature(sourcePath, keyPath, value)
+      return
     case 'top_p':
-      validateFiniteNumber(sourcePath, keyPath, value)
+      validateTopP(sourcePath, keyPath, value)
       return
     case 'permission':
       validatePermission(sourcePath, keyPath, value)
@@ -358,9 +360,12 @@ function validateModel(
     throwConfigError(sourcePath, keyPath, 'must be a provider/model string')
   }
 
-  const trimmed = value.trim()
-  const slashIndex = trimmed.indexOf('/')
-  if (trimmed === '' || slashIndex <= 0 || slashIndex === trimmed.length - 1) {
+  if (value !== value.trim() || /\s/.test(value)) {
+    throwConfigError(sourcePath, keyPath, 'must be a provider/model string')
+  }
+
+  const slashIndex = value.indexOf('/')
+  if (value === '' || slashIndex <= 0 || slashIndex === value.length - 1) {
     throwConfigError(sourcePath, keyPath, 'must be a provider/model string')
   }
 }
@@ -370,18 +375,37 @@ function validateNonEmptyString(
   keyPath: string,
   value: unknown,
 ): void {
-  if (typeof value !== 'string' || value.trim() === '') {
+  if (typeof value !== 'string' || value === '' || value !== value.trim()) {
     throwConfigError(sourcePath, keyPath, 'must be a non-empty string')
   }
 }
 
-function validateFiniteNumber(
+function validateTemperature(
   sourcePath: string,
   keyPath: string,
   value: unknown,
 ): void {
-  if (typeof value !== 'number' || !Number.isFinite(value)) {
-    throwConfigError(sourcePath, keyPath, 'must be a finite number')
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    throwConfigError(
+      sourcePath,
+      keyPath,
+      'must be a non-negative finite number',
+    )
+  }
+}
+
+function validateTopP(
+  sourcePath: string,
+  keyPath: string,
+  value: unknown,
+): void {
+  if (
+    typeof value !== 'number' ||
+    !Number.isFinite(value) ||
+    value < 0 ||
+    value > 1
+  ) {
+    throwConfigError(sourcePath, keyPath, 'must be a number from 0 to 1')
   }
 }
 
@@ -424,7 +448,11 @@ function validateColor(
   keyPath: string,
   value: unknown,
 ): void {
-  if (typeof value !== 'string' || !isOpenCodeColor(value.trim())) {
+  if (
+    typeof value !== 'string' ||
+    value !== value.trim() ||
+    !isOpenCodeColor(value)
+  ) {
     throwConfigError(
       sourcePath,
       keyPath,
@@ -447,7 +475,10 @@ function validateSkills(
 ): void {
   if (
     !Array.isArray(value) ||
-    !value.every((skill) => typeof skill === 'string' && skill.trim() !== '')
+    !value.every(
+      (skill) =>
+        typeof skill === 'string' && skill !== '' && skill === skill.trim(),
+    )
   ) {
     throwConfigError(
       sourcePath,

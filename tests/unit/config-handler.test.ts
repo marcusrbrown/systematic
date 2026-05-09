@@ -35,6 +35,7 @@ describe('config-handler', () => {
   })
 
   afterEach(() => {
+    delete process.env.OPENCODE_CONFIG_DIR
     fs.rmSync(testDir, { recursive: true, force: true })
   })
 
@@ -83,6 +84,16 @@ Skill content for ${name}.`,
     fs.mkdirSync(path.join(projectDir, '.opencode'), { recursive: true })
     fs.writeFileSync(
       path.join(projectDir, '.opencode/systematic.json'),
+      JSON.stringify(value),
+    )
+  }
+
+  function writeCustomSystematicConfig(value: Record<string, unknown>): void {
+    const customDir = path.join(testDir, 'custom-config')
+    process.env.OPENCODE_CONFIG_DIR = customDir
+    fs.mkdirSync(customDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(customDir, 'systematic.json'),
       JSON.stringify(value),
     )
   }
@@ -786,7 +797,7 @@ model: gpt-4
         name: 'correctness-reviewer',
         description: 'Reviews correctness',
       })
-      writeSystematicConfig({
+      writeCustomSystematicConfig({
         agents: { 'correctness-reviewer': { skills: ['ce:review'] } },
       })
 
@@ -818,7 +829,7 @@ model: gpt-4
         name: 'security-reviewer',
         description: 'Security reviewer',
       })
-      writeSystematicConfig({
+      writeCustomSystematicConfig({
         categories: { review: { skills: ['ce:review'] } },
         agents: { 'correctness-reviewer': { skills: [] } },
       })
@@ -852,7 +863,7 @@ model: gpt-4
         name: 'correctness-reviewer',
         description: 'Reviews correctness',
       })
-      writeSystematicConfig({
+      writeCustomSystematicConfig({
         categories: {
           review: { skills: ['skill-a', 'skill-b'] },
         },
@@ -888,7 +899,7 @@ model: gpt-4
         name: 'managed-exact',
         description: 'Managed exact',
       })
-      writeSystematicConfig({
+      writeCustomSystematicConfig({
         categories: {
           review: {
             skills: ['skill-a'],
@@ -932,7 +943,7 @@ model: gpt-4
         name: 'managed-exact',
         description: 'Managed exact',
       })
-      writeSystematicConfig({
+      writeCustomSystematicConfig({
         categories: {
           review: {
             permission: { skill: { 'skill-a': 'deny' } },
@@ -1013,7 +1024,7 @@ model: gpt-4
         name: 'correctness-reviewer',
         description: 'Reviews correctness',
       })
-      writeSystematicConfig({
+      writeCustomSystematicConfig({
         agents: { 'correctness-reviewer': { skills: ['missing-skill'] } },
       })
 

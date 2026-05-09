@@ -393,8 +393,9 @@ function collectEnabledSkillNames(
  * This follows the pattern used by oh-my-opencode to inject bundled agents,
  * skills (as commands), and commands into OpenCode's configuration.
  *
- * Only bundled content is loaded. User/project overrides are not supported.
- * Existing OpenCode config is preserved and takes precedence.
+ * Bundled content is loaded and then tuned with Systematic agent overlays.
+ * Existing native OpenCode agents with the same emitted key are preserved as
+ * replacements for bundled agents.
  */
 export function createConfigHandler(deps: ConfigHandlerDeps) {
   const { directory, bundledSkillsDir, bundledAgentsDir, bundledCommandsDir } =

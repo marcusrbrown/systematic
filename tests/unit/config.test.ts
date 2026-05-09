@@ -404,16 +404,14 @@ describe('config', () => {
     })
 
     describe('malformed configs', () => {
-      test('ignores project config if it has invalid JSON', () => {
+      test('fails fast when project config has invalid JSONC', () => {
         const projectConfigDir = path.join(testDir, '.opencode')
         fs.mkdirSync(projectConfigDir)
-        fs.writeFileSync(
-          path.join(projectConfigDir, 'systematic.json'),
-          '{invalid json',
-        )
+        const projectConfigPath = path.join(projectConfigDir, 'systematic.json')
+        fs.writeFileSync(projectConfigPath, '{invalid json')
 
-        const result = loadConfig(testDir)
-        expect(result).toEqual(DEFAULT_CONFIG)
+        expect(() => loadConfig(testDir)).toThrow(projectConfigPath)
+        expect(() => loadConfig(testDir)).toThrow(/parse error/i)
       })
 
       test('ignores project config if it does not exist', () => {
@@ -540,6 +538,86 @@ describe('config', () => {
           expect(
             result.overlays.agents['correctness-reviewer']?.sourcePath,
           ).toBe(projectConfigPath)
+        } finally {
+          if (userConfigBackup !== null) {
+            fs.writeFileSync(userConfigPath, userConfigBackup)
+          } else {
+            tryUnlink(userConfigPath)
+          }
+        }
+      })
+
+      test('project overlays cannot configure permission or managed skills', () => {
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir)
+        const projectConfigPath = path.join(projectConfigDir, 'systematic.json')
+
+        for (const config of [
+          {
+            agents: {
+              'correctness-reviewer': { permission: { bash: 'allow' } },
+            },
+          },
+          { categories: { review: { skills: ['ce:review'] } } },
+        ]) {
+          fs.writeFileSync(projectConfigPath, JSON.stringify(config))
+
+          expect(() => loadConfigWithSources(testDir)).toThrow(
+            projectConfigPath,
+          )
+          expect(() => loadConfigWithSources(testDir)).toThrow(
+            /only valid in user config or OPENCODE_CONFIG_DIR config/,
+          )
+        }
+      })
+
+      test('project same-key overlays preserve user permission policy fields', () => {
+        const userConfigDir = path.join(os.homedir(), '.config/opencode')
+        const userConfigPath = path.join(userConfigDir, 'systematic.json')
+        const userConfigBackup = tryReadFile(userConfigPath)
+
+        try {
+          fs.mkdirSync(userConfigDir, { recursive: true })
+          fs.writeFileSync(
+            userConfigPath,
+            JSON.stringify({
+              categories: {
+                review: {
+                  permission: { bash: 'deny' },
+                  skills: ['ce:review'],
+                  temperature: 0.1,
+                },
+              },
+              agents: {
+                'correctness-reviewer': {
+                  permission: { read: 'deny' },
+                  temperature: 0.1,
+                },
+              },
+            }),
+          )
+
+          const projectConfigDir = path.join(testDir, '.opencode')
+          fs.mkdirSync(projectConfigDir)
+          fs.writeFileSync(
+            path.join(projectConfigDir, 'systematic.json'),
+            JSON.stringify({
+              categories: { review: { temperature: 0.4 } },
+              agents: { 'correctness-reviewer': { model: 'openai/gpt-5' } },
+            }),
+          )
+
+          const result = loadConfigWithSources(testDir)
+
+          expect(result.config.categories?.review).toEqual({
+            temperature: 0.4,
+            permission: { bash: 'deny' },
+            skills: ['ce:review'],
+          })
+          expect(result.config.agents?.['correctness-reviewer']).toEqual({
+            model: 'openai/gpt-5',
+            permission: { read: 'deny' },
+          })
         } finally {
           if (userConfigBackup !== null) {
             fs.writeFileSync(userConfigPath, userConfigBackup)

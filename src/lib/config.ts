@@ -1,7 +1,11 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { parse as parseJsonc } from 'jsonc-parser'
+import {
+  type ParseError,
+  parse as parseJsonc,
+  printParseErrorCode,
+} from 'jsonc-parser'
 
 export interface BootstrapConfig {
   enabled: boolean
@@ -57,25 +61,56 @@ interface RawSystematicConfig
 interface ConfigSource {
   path: string
   config: RawSystematicConfig
+  trust: 'user' | 'project' | 'custom'
+}
+
+const SECURITY_OVERLAY_FIELDS = new Set(['permission', 'skills'])
+
+function isErrorWithCode(error: unknown): error is Error & { code?: unknown } {
+  return error instanceof Error && 'code' in error
 }
 
 function loadJsoncFile(filePath: string): RawSystematicConfig | null {
+  let content: string
   try {
-    if (!fs.existsSync(filePath)) return null
-    const content = fs.readFileSync(filePath, 'utf-8')
-    const parsed = parseJsonc(content) as unknown
-    if (!isRecord(parsed)) return null
-    return parsed as RawSystematicConfig
-  } catch {
-    return null
+    content = fs.readFileSync(filePath, 'utf-8')
+  } catch (error) {
+    if (isErrorWithCode(error) && error.code === 'ENOENT') return null
+    throw new Error(
+      `Invalid Systematic config in ${filePath}: unable to read file`,
+      { cause: error },
+    )
   }
+
+  const errors: ParseError[] = []
+  const parsed = parseJsonc(content, errors) as unknown
+  if (errors.length > 0) {
+    const error = errors[0]
+    const message = error
+      ? `${printParseErrorCode(error.error)} at offset ${error.offset}`
+      : 'unknown parse error'
+    throw new Error(
+      `Invalid Systematic config in ${filePath}: JSONC parse error: ${message}`,
+    )
+  }
+
+  if (!isRecord(parsed)) {
+    throw new Error(
+      `Invalid Systematic config in ${filePath}: root must be an object`,
+    )
+  }
+
+  return parsed as RawSystematicConfig
 }
 
-function loadConfigSource(filePath: string): ConfigSource | null {
+function loadConfigSource(
+  filePath: string,
+  trust: ConfigSource['trust'],
+): ConfigSource | null {
   const config = loadJsoncFile(filePath)
   if (!config) return null
 
-  return { path: filePath, config }
+  return { path: filePath, config, trust }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -101,10 +136,10 @@ export function loadConfigWithSources(
 ): SourceAwareConfigResult {
   const paths = getConfigPaths(projectDir)
 
-  const userSource = loadConfigSource(paths.userConfig)
-  const projectSource = loadConfigSource(paths.projectConfig)
+  const userSource = loadConfigSource(paths.userConfig, 'user')
+  const projectSource = loadConfigSource(paths.projectConfig, 'project')
   const customSource = paths.customConfig
-    ? loadConfigSource(paths.customConfig)
+    ? loadConfigSource(paths.customConfig, 'custom')
     : null
   const sources = [userSource, projectSource, customSource].filter(
     (source): source is ConfigSource => source !== null,
@@ -191,12 +226,49 @@ function mergeOverlayMap(
       throwInvalidOverlay(source.path, keyPath)
     }
 
+    if (source.trust === 'project') {
+      rejectProjectSecurityOverlay(source.path, keyPath, value)
+    }
+
+    const previous = target[key]
+    const nextValue =
+      source.trust === 'project' && previous
+        ? preserveSecurityFields(previous.value, value)
+        : value
+
     target[key] = {
-      value,
+      value: nextValue,
       sourcePath: source.path,
       keyPath,
     }
   }
+}
+
+function rejectProjectSecurityOverlay(
+  sourcePath: string,
+  keyPath: string,
+  value: Record<string, unknown>,
+): void {
+  for (const field of SECURITY_OVERLAY_FIELDS) {
+    if (Object.hasOwn(value, field)) {
+      throw new Error(
+        `Invalid Systematic config in ${sourcePath}: ${keyPath}.${field} is only valid in user config or OPENCODE_CONFIG_DIR config`,
+      )
+    }
+  }
+}
+
+function preserveSecurityFields(
+  previous: OverlayConfig,
+  next: OverlayConfig,
+): OverlayConfig {
+  const result: OverlayConfig = { ...next }
+  for (const field of SECURITY_OVERLAY_FIELDS) {
+    if (Object.hasOwn(previous, field)) {
+      result[field] = previous[field]
+    }
+  }
+  return result
 }
 
 function overlayValues(

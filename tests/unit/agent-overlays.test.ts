@@ -243,12 +243,17 @@ describe('validateAgentOverlays', () => {
     const invalidCases: Array<[string, unknown]> = [
       ['model', 'gpt-4'],
       ['model', 'inherit'],
+      ['model', ' openai/gpt-4'],
       ['variant', ''],
+      ['variant', ' small'],
       ['temperature', Number.NaN],
+      ['temperature', -0.1],
       ['top_p', Number.POSITIVE_INFINITY],
+      ['top_p', 1.1],
       ['mode', 'background'],
       ['steps', 0],
       ['hidden', 'true'],
+      ['color', ' cyan'],
       ['color', 'not a color'],
       ['permission', { read: 'maybe' }],
     ]
@@ -386,6 +391,22 @@ describe('validateAgentOverlays', () => {
     ).toThrow(
       /agents\.correctness-reviewer\.skills.*unknown or disabled skill "missing-skill"/,
     )
+
+    expect(() =>
+      validateAgentOverlays({
+        inventory: createInventory(),
+        overlays: {
+          agents: {
+            'correctness-reviewer': source('agents', 'correctness-reviewer', {
+              skills: [' ce:review'],
+            }),
+          },
+          categories: {},
+        },
+        nativeAgents: {},
+        enabledSkills: ['ce:review'],
+      }),
+    ).toThrow(/agents\.correctness-reviewer\.skills/)
   })
 
   test('model requires provider/model and does not normalize shorthand', () => {

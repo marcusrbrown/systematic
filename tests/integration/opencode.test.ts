@@ -115,6 +115,7 @@ describe('SystematicPlugin config hook integration', () => {
 
   afterEach(() => {
     _resetPluginSingleton()
+    delete process.env.OPENCODE_CONFIG_DIR
     fs.rmSync(tempDir, { recursive: true, force: true })
   })
 
@@ -122,6 +123,16 @@ describe('SystematicPlugin config hook integration', () => {
     fs.mkdirSync(path.join(projectDir, '.opencode'), { recursive: true })
     fs.writeFileSync(
       path.join(projectDir, '.opencode/systematic.json'),
+      JSON.stringify(config),
+    )
+  }
+
+  function writeCustomSystematicConfig(config: Record<string, unknown>): void {
+    const customDir = path.join(tempDir, 'custom-config')
+    process.env.OPENCODE_CONFIG_DIR = customDir
+    fs.mkdirSync(customDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(customDir, 'systematic.json'),
       JSON.stringify(config),
     )
   }
@@ -167,7 +178,7 @@ describe('SystematicPlugin config hook integration', () => {
   })
 
   test('category overlay tunes category members and skips native replacements', async () => {
-    writeSystematicConfig({
+    writeCustomSystematicConfig({
       categories: {
         review: {
           temperature: 0.21,
@@ -198,7 +209,7 @@ describe('SystematicPlugin config hook integration', () => {
   })
 
   test('native-replaced category member is partitioned out before overlay application', async () => {
-    writeSystematicConfig({
+    writeCustomSystematicConfig({
       categories: {
         review: {
           temperature: 0.44,
