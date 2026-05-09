@@ -58,8 +58,6 @@ const SOURCE_CATEGORY_MODEL_DEFAULTS = {
   workflow: 'openai/gpt-5.4-mini',
 } as const satisfies Record<string, string>
 
-const SOURCE_MODEL_INTENTIONAL_INHERIT_CATEGORIES = new Set<string>()
-
 const ALLOWED_OVERLAY_FIELDS = new Set([
   'model',
   'variant',
@@ -184,19 +182,16 @@ export function getSourceCategoryModel(
   category: string | undefined,
 ): string | undefined {
   if (!category) return undefined
-
-  validateSourceCategoryModelDefaults()
-  const defaults: Record<string, string> = SOURCE_CATEGORY_MODEL_DEFAULTS
-  return defaults[category]
+  return (SOURCE_CATEGORY_MODEL_DEFAULTS as Record<string, string | undefined>)[
+    category
+  ]
 }
 
 export function assertSourceCategoryModelCoverage(categories: string[]): void {
   validateSourceCategoryModelDefaults()
 
   const missingCategories = categories.filter(
-    (category) =>
-      !Object.hasOwn(SOURCE_CATEGORY_MODEL_DEFAULTS, category) &&
-      !SOURCE_MODEL_INTENTIONAL_INHERIT_CATEGORIES.has(category),
+    (category) => !Object.hasOwn(SOURCE_CATEGORY_MODEL_DEFAULTS, category),
   )
 
   if (missingCategories.length > 0) {
@@ -367,6 +362,7 @@ function validateOverlayFieldValue(
 ): void {
   switch (field) {
     case 'model':
+      if (value === null) return // null opt-out: inherit parent model
       validateModel(sourcePath, keyPath, value)
       return
     case 'variant':

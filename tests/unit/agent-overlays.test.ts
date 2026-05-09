@@ -479,6 +479,38 @@ describe('validateAgentOverlays', () => {
     ).toThrow(/agents\.correctness-reviewer\.skills/)
   })
 
+  test('accepts null model as high-trust inheritance opt-out', () => {
+    expect(() =>
+      validateAgentOverlays({
+        inventory: createInventory(),
+        overlays: {
+          agents: {
+            'correctness-reviewer': source('agents', 'correctness-reviewer', {
+              model: null,
+            }),
+          },
+          categories: {},
+        },
+        nativeAgents: {},
+      }),
+    ).not.toThrow()
+  })
+
+  test('accepts null model in category overlays', () => {
+    expect(() =>
+      validateAgentOverlays({
+        inventory: createInventory(),
+        overlays: {
+          agents: {},
+          categories: {
+            review: source('categories', 'review', { model: null }),
+          },
+        },
+        nativeAgents: {},
+      }),
+    ).not.toThrow()
+  })
+
   test('model requires provider/model and does not normalize shorthand', () => {
     for (const model of ['gpt-4', 'inherit']) {
       expect(() =>

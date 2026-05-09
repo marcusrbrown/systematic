@@ -338,6 +338,8 @@ Systematic separates config-source precedence from overlay precedence. Config fi
 
 Source category model defaults are primary model choices only — they are not fallback chains. Systematic does not support `fallback_models`, inherited retry semantics, runtime fallback behavior, or fallback to the parent model when a source model is unavailable. Explicit and source model IDs are structurally validated and may still fail at OpenCode runtime if the provider or model is unavailable.
 
+If you want to restore OpenCode parent-model inheritance for a bundled agent or category (opting out of the source default), set `"model": null` in high-trust user or `$OPENCODE_CONFIG_DIR/systematic.json` config. Project config cannot use `model: null` — project config cannot set, erase, or shadow `model` at any value.
+
 The source defaults are:
 
 | Category | Default `model` | Rationale |
@@ -354,6 +356,22 @@ These defaults are owned by Systematic code and emitted for bundled agents in ea
 Bundled agent markdown still intentionally omits `model` — the field belongs in source code defaults, not portable markdown files. Authors must not add `model:` frontmatter to bundled agent files.
 
 Systematic emits a source model as the default; you can override it per-agent or per-category in user or `$OPENCODE_CONFIG_DIR/systematic.json` config. Project config cannot set, erase, or shadow `model` policy.
+
+> **Migration: Restoring parent-model inheritance.** If you previously relied on bundled agents inheriting the parent OpenCode model (no source defaults), set `"model": null` in your high-trust config to opt out of the source default per agent or per category. For example:
+>
+> ```jsonc
+> // ~/.config/opencode/systematic.json or $OPENCODE_CONFIG_DIR/systematic.json
+> {
+>   "categories": {
+>     "review": { "model": null }     // All review agents inherit parent model
+>   },
+>   "agents": {
+>     "security-sentinel": { "model": null }  // Single agent inherits parent model
+>   }
+> }
+> ```
+>
+> This only works from high-trust config (user or `$OPENCODE_CONFIG_DIR/systematic.json`). Project `.opencode/systematic.json` cannot set `model: null` or any `model` value.
 
 Native OpenCode agents with the same emitted key are full replacements. An exact Systematic overlay for that key conflicts, while category overlays skip native replacements and continue applying to other bundled agents. Use one canonical agent key form across config sources (`security-sentinel` or `review/security-sentinel`) because alias collisions fail duplicate-target validation.
 

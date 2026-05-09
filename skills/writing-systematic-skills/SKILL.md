@@ -86,7 +86,7 @@ description: ...
 ---
 ```
 
-Per [OpenCode's agent docs](https://opencode.ai/docs/agents/), subagents with no `model` inherit the model of the primary agent that invoked them — which is the desired portable behavior. Do **not** declare `model: inherit`: that literal value is undocumented and produces `ProviderModelNotFoundError` on OpenCode older than ~v1.13.x (pre [sst/opencode#17888](https://github.com/sst/opencode/pull/17888)). Hardcoded provider model IDs (`anthropic/...`, `openai/...`, etc.) are also banned because they break users on other providers.
+Per [OpenCode's agent docs](https://opencode.ai/docs/agents/), subagents with no `model` inherit the model of the primary agent that invoked them — which is the desired portable behavior. Do **not** declare `model: inherit`: that literal value is undocumented and produces `ProviderModelNotFoundError` on OpenCode older than ~v1.13.x (pre [sst/opencode#17888](https://github.com/sst/opencode/pull/17888)). Hardcoded provider model IDs (`anthropic/...`, `openai/...`, etc.) are also banned from **bundled agent markdown/frontmatter** because they break users on other providers. Source-owned category model defaults in TypeScript code are a separate mechanism — they are audited, centrally maintained, and do not violate this markdown rule.
 
 For agent or API attribution, `ai:systematic` is the machine ID used by Systematic-owned operations, such as Proof's `by` field and `X-Agent-Id` header. It is not a skill cross-reference convention.
 

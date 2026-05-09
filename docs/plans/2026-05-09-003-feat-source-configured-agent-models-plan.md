@@ -36,6 +36,8 @@ PR #343 added top-level `agents` and `categories` overlays but intentionally lef
 - R8. Validate every source default model string through the same structural `provider/model` rules as explicit overlays before emission.
 - R9. Do not emit, document as supported, or silently accept `fallback_models` in this feature.
 - R10. Update public docs to explain the source model table, override precedence, project-config restriction, and no-fallback scope.
+- R11. Support `model: null` in high-trust user/config-dir config as an inheritance opt-out that restores OpenCode parent-model routing for a bundled agent or category.
+- R12. Add migration guidance: users who relied on inherited parent-model routing for categorized bundled agents can set high-trust `categories.<id>.model: null` or exact `agents.<key>.model: null`; project config cannot do this.
 
 ## Scope Boundaries
 
@@ -242,9 +244,9 @@ Implementation shape:
 
 - [ ] **Unit 4: Update docs for source model defaults**
 
-**Goal:** Document the source model table, precedence, override paths, and no-fallback scope.
+**Goal:** Document the source model table, precedence, override paths, `model: null` inheritance opt-out, migration guidance, and no-fallback scope.
 
-**Requirements:** R1, R2, R3, R4, R5, R9, R10
+**Requirements:** R1, R2, R3, R4, R5, R9, R10, R11, R12
 
 **Dependencies:** Unit 2
 

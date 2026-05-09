@@ -110,13 +110,13 @@ describe('SystematicPlugin config hook integration', () => {
 
   beforeEach(() => {
     _resetPluginSingleton()
+    originalHomedir = os.homedir
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-plugin-'))
 
     // Isolate from real user config (~/.config/opencode/systematic.json)
     // by mocking os.homedir to point at an empty temp directory.
     homeDir = path.join(tempDir, 'fake-home')
     fs.mkdirSync(homeDir, { recursive: true })
-    originalHomedir = os.homedir
     os.homedir = () => homeDir
 
     projectDir = path.join(tempDir, 'project')
