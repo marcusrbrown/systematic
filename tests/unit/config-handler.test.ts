@@ -14,9 +14,18 @@ describe('config-handler', () => {
   let testDir: string
   let bundledDir: string
   let projectDir: string
+  let homeDir: string
+  let originalHomedir: typeof os.homedir
 
   beforeEach(() => {
     testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-config-test-'))
+
+    // Isolate from real user config (~/.config/opencode/systematic.json).
+    homeDir = path.join(testDir, 'fake-home')
+    fs.mkdirSync(homeDir, { recursive: true })
+    originalHomedir = os.homedir
+    os.homedir = () => homeDir
+
     bundledDir = path.join(testDir, 'bundled')
     projectDir = path.join(testDir, 'project')
 
@@ -35,6 +44,7 @@ describe('config-handler', () => {
   })
 
   afterEach(() => {
+    os.homedir = originalHomedir
     delete process.env.OPENCODE_CONFIG_DIR
     fs.rmSync(testDir, { recursive: true, force: true })
   })

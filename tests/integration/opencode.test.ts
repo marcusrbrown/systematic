@@ -105,15 +105,27 @@ function expectSetupSkillLoaded(result: OpencodeResult): void {
 describe('SystematicPlugin config hook integration', () => {
   let tempDir: string
   let projectDir: string
+  let homeDir: string
+  let originalHomedir: typeof os.homedir
 
   beforeEach(() => {
     _resetPluginSingleton()
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-plugin-'))
+
+    // Isolate from real user config (~/.config/opencode/systematic.json)
+    // by mocking os.homedir to point at an empty temp directory.
+    homeDir = path.join(tempDir, 'fake-home')
+    fs.mkdirSync(homeDir, { recursive: true })
+    originalHomedir = os.homedir
+    os.homedir = () => homeDir
+
     projectDir = path.join(tempDir, 'project')
     fs.mkdirSync(projectDir, { recursive: true })
   })
 
   afterEach(() => {
+    // Restore os.homedir before cleanup so nothing snags on a deleted dir.
+    os.homedir = originalHomedir
     _resetPluginSingleton()
     delete process.env.OPENCODE_CONFIG_DIR
     fs.rmSync(tempDir, { recursive: true, force: true })
@@ -138,15 +150,22 @@ describe('SystematicPlugin config hook integration', () => {
   }
 
   async function runConfigHook(config: Config): Promise<void> {
-    const hooks = await SystematicPlugin({
+    const input = {
       directory: projectDir,
       client: {
         app: {
           log: async () => {},
         },
       },
-    } as unknown as PluginInput)
+    } as unknown as PluginInput
 
+    // Exercise the duplicate plugin-factory path that happens when multiple
+    // OpenCode config sources reference Systematic in the same process. Both
+    // invocations must expose the real config hook surface.
+    const firstHooks = await SystematicPlugin(input)
+    const hooks = await SystematicPlugin(input)
+
+    expect(firstHooks.config).toBeDefined()
     expect(hooks.config).toBeDefined()
     await hooks.config?.(config)
   }
@@ -276,6 +295,60 @@ describe('SystematicPlugin config hook integration', () => {
 
     expect(modeledAgents).toEqual([])
     expect(config.agent?.['correctness-reviewer']?.temperature).toBeDefined()
+  })
+
+  test('loads with category model overlays and exact agent overlay without throwing', async () => {
+    writeCustomSystematicConfig({
+      categories: {
+        design: { model: 'openai/gpt-4' },
+        docs: { model: 'openai/gpt-4' },
+        'document-review': { model: 'openai/gpt-4' },
+        research: { model: 'openai/gpt-4' },
+        review: { model: 'openai/gpt-4' },
+      },
+      agents: {
+        'systematic-implementer': {
+          model: 'anthropic/claude-sonnet-4',
+          variant: 'full',
+        },
+      },
+    })
+
+    const config: Config = {}
+    await runConfigHook(config)
+
+    // Category model overlays are applied to bundled agents from each category.
+    expect(config.agent).toBeDefined()
+    expect(Object.keys(config.agent!).length).toBeGreaterThan(0)
+    expect(config.agent?.['design-iterator']?.model).toBe('openai/gpt-4')
+    expect(config.agent?.['ankane-readme-writer']?.model).toBe('openai/gpt-4')
+    expect(config.agent?.['adversarial-document-reviewer']?.model).toBe(
+      'openai/gpt-4',
+    )
+    expect(config.agent?.['best-practices-researcher']?.model).toBe(
+      'openai/gpt-4',
+    )
+    expect(config.agent?.['adversarial-reviewer']?.model).toBe('openai/gpt-4')
+
+    // Exact agent overlay is applied with model and variant.
+    expect(config.agent?.['systematic-implementer']).toMatchObject({
+      model: 'anthropic/claude-sonnet-4',
+      variant: 'full',
+    })
+
+    // Skills registered as commands.
+    expect(config.command).toBeDefined()
+    expect(Object.keys(config.command!).length).toBeGreaterThan(0)
+
+    // Skills paths registered.
+    const configWithSkills = config as Config & {
+      skills?: { paths?: string[] }
+    }
+    expect(configWithSkills.skills?.paths).toBeDefined()
+    expect(configWithSkills.skills?.paths?.length ?? 0).toBeGreaterThan(0)
+    expect(configWithSkills.skills?.paths).toContain(
+      path.resolve(REPO_ROOT, 'skills'),
+    )
   })
 
   test('well-shaped nonexistent explicit model passes validation and emits unchanged', async () => {

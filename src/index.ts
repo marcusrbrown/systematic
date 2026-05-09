@@ -131,24 +131,10 @@ const initializePlugin = async ({ client, directory }: PluginInput) => {
 const SystematicPlugin: Plugin = async (input) => {
   const { hooks } = await plugInOnce({
     doInit: () => initializePlugin(input),
-    onDuplicate: (pid) => {
-      const message = `[systematic] duplicate factory invocation in same process (pid=${pid}); skipping duplicate registration. Multiple opencode.json sources may list this plugin.`
-      console.warn(message)
-      // Fire-and-forget so the log call never blocks plugin init.
-      input.client.app
-        .log({
-          body: {
-            service: 'systematic',
-            level: 'warn',
-            message,
-          },
-        })
-        .catch(() => {})
-    },
   })
-  // hooks is the real plugin hook surface on the first invocation in a
-  // process and an empty object on every duplicate invocation; returning it
-  // unconditionally is what prevents host-side double registration.
+  // hooks is the real plugin hook surface on every invocation — first and
+  // duplicate alike. Returning it unconditionally keeps every configured
+  // plugin source functional instead of suppressing duplicates with `{}`.
   return hooks
 }
 
