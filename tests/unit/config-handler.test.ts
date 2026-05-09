@@ -14,20 +14,14 @@ describe('config-handler', () => {
   let testDir: string
   let bundledDir: string
   let projectDir: string
-  let homeDir: string
-  let originalHomedir: typeof os.homedir
+  let originalOsHomedir: (() => string) | undefined
 
   beforeEach(() => {
     testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-config-test-'))
-
-    // Isolate from real user config (~/.config/opencode/systematic.json).
-    homeDir = path.join(testDir, 'fake-home')
-    fs.mkdirSync(homeDir, { recursive: true })
-    originalHomedir = os.homedir
-    os.homedir = () => homeDir
-
     bundledDir = path.join(testDir, 'bundled')
     projectDir = path.join(testDir, 'project')
+    originalOsHomedir = os.homedir
+    os.homedir = () => path.join(testDir, 'home')
 
     fs.mkdirSync(path.join(bundledDir, 'skills'), { recursive: true })
     fs.mkdirSync(path.join(bundledDir, 'agents'), { recursive: true })
@@ -44,7 +38,7 @@ describe('config-handler', () => {
   })
 
   afterEach(() => {
-    os.homedir = originalHomedir
+    if (originalOsHomedir) os.homedir = originalOsHomedir
     delete process.env.OPENCODE_CONFIG_DIR
     fs.rmSync(testDir, { recursive: true, force: true })
   })
@@ -684,7 +678,7 @@ model: gpt-4
       expect(config.command?.['systematic:routed-skill']?.model).toBe('gpt-4')
     })
 
-    test('applies built-in temperature defaults without emitting default model', async () => {
+    test('applies built-in temperature and source model defaults for categorized agents', async () => {
       createCategorizedAgent('review', 'correctness-reviewer', {
         name: 'correctness-reviewer',
         description: 'Reviews correctness',
@@ -701,7 +695,353 @@ model: gpt-4
       await handler(config)
 
       expect(config.agent?.['correctness-reviewer']?.temperature).toBe(0.1)
+      expect(config.agent?.['correctness-reviewer']?.model).toBe(
+        'anthropic/claude-opus-4.7',
+      )
+    })
+
+    test('uncategorized bundled agent receives no source model default', async () => {
+      createAgent(path.join(bundledDir, 'agents'), 'uncategorized', {
+        name: 'uncategorized',
+        description: 'No category agent',
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.uncategorized?.temperature).toBeDefined()
+      expect(config.agent?.uncategorized?.model).toBeUndefined()
+    })
+
+    test('zero config emits source model defaults for all categorized agents', async () => {
+      createCategorizedAgent('design', 'design-agent', {
+        name: 'design-agent',
+        description: 'Design agent',
+      })
+      createCategorizedAgent('docs', 'docs-agent', {
+        name: 'docs-agent',
+        description: 'Docs agent',
+      })
+      createCategorizedAgent('document-review', 'doc-review-agent', {
+        name: 'doc-review-agent',
+        description: 'Document review agent',
+      })
+      createCategorizedAgent('research', 'research-agent', {
+        name: 'research-agent',
+        description: 'Research agent',
+      })
+      createCategorizedAgent('review', 'review-agent', {
+        name: 'review-agent',
+        description: 'Review agent',
+      })
+      createCategorizedAgent('workflow', 'workflow-agent', {
+        name: 'workflow-agent',
+        description: 'Workflow agent',
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.['design-agent']?.model).toBe('openai/gpt-5.5')
+      expect(config.agent?.['docs-agent']?.model).toBe('openai/gpt-5.4-mini')
+      expect(config.agent?.['doc-review-agent']?.model).toBe(
+        'anthropic/claude-opus-4.7',
+      )
+      expect(config.agent?.['research-agent']?.model).toBe('openai/gpt-5.5')
+      expect(config.agent?.['review-agent']?.model).toBe(
+        'anthropic/claude-opus-4.7',
+      )
+      expect(config.agent?.['workflow-agent']?.model).toBe(
+        'openai/gpt-5.4-mini',
+      )
+
+      // No fallback_models key leaks into any emitted agent
+      for (const [, agent] of Object.entries(config.agent ?? {})) {
+        expect(agent).not.toHaveProperty('fallback_models')
+      }
+    })
+
+    test('source defaults replace bundled markdown model for categorized agents', async () => {
+      createCategorizedAgent('review', 'correctness-reviewer', {
+        name: 'correctness-reviewer',
+        description: 'Reviews correctness',
+        model: 'openai/gpt-3.5-turbo',
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      // Source default wins over bundled markdown model
+      expect(config.agent?.['correctness-reviewer']?.model).toBe(
+        'anthropic/claude-opus-4.7',
+      )
+    })
+
+    test('source defaults do not emit for uncategorized agents even with markdown model', async () => {
+      createAgent(path.join(bundledDir, 'agents'), 'standalone', {
+        name: 'standalone',
+        description: 'No category agent',
+        model: 'openai/gpt-4',
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      // Uncategorized agents keep their markdown model since no source default applies
+      expect(config.agent?.standalone?.model).toBe('openai/gpt-4')
+    })
+
+    test('project config overlay with non-sensitive fields preserves source model', async () => {
+      createCategorizedAgent('review', 'correctness-reviewer', {
+        name: 'correctness-reviewer',
+        description: 'Reviews correctness',
+      })
+      writeSystematicConfig({
+        categories: { review: { temperature: 0.55 } },
+        agents: { 'correctness-reviewer': { hidden: true } },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      // Source model preserved even when project config sets non-sensitive fields
+      expect(config.agent?.['correctness-reviewer']?.model).toBe(
+        'anthropic/claude-opus-4.7',
+      )
+      expect(config.agent?.['correctness-reviewer']?.temperature).toBe(0.55)
+      expect(config.agent?.['correctness-reviewer']?.hidden).toBe(true)
+    })
+
+    test('high-trust exact model: null opt-out removes source default', async () => {
+      createCategorizedAgent('review', 'correctness-reviewer', {
+        name: 'correctness-reviewer',
+        description: 'Reviews correctness',
+      })
+      writeCustomSystematicConfig({
+        agents: {
+          'correctness-reviewer': { model: null },
+        },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      // model: null removes source default — agent inherits parent model
       expect(config.agent?.['correctness-reviewer']?.model).toBeUndefined()
+    })
+
+    test('high-trust category model: null opt-out removes source default for category members', async () => {
+      createCategorizedAgent('review', 'first-reviewer', {
+        name: 'first-reviewer',
+        description: 'First reviewer',
+      })
+      createCategorizedAgent('review', 'second-reviewer', {
+        name: 'second-reviewer',
+        description: 'Second reviewer',
+      })
+      writeCustomSystematicConfig({
+        categories: {
+          review: { model: null },
+        },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.['first-reviewer']?.model).toBeUndefined()
+      expect(config.agent?.['second-reviewer']?.model).toBeUndefined()
+    })
+
+    test('exact model string overrides category model: null opt-out', async () => {
+      createCategorizedAgent('review', 'correctness-reviewer', {
+        name: 'correctness-reviewer',
+        description: 'Reviews correctness',
+      })
+      writeCustomSystematicConfig({
+        categories: { review: { model: null } },
+        agents: {
+          'correctness-reviewer': {
+            model: 'openrouter/anthropic/claude-sonnet-4',
+          },
+        },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      // Exact overlay string model beats category null opt-out
+      expect(config.agent?.['correctness-reviewer']?.model).toBe(
+        'openrouter/anthropic/claude-sonnet-4',
+      )
+    })
+
+    test('high-trust exact model overrides source default', async () => {
+      createCategorizedAgent('review', 'correctness-reviewer', {
+        name: 'correctness-reviewer',
+        description: 'Reviews correctness',
+      })
+      writeCustomSystematicConfig({
+        agents: {
+          'correctness-reviewer': {
+            model: 'openrouter/anthropic/claude-sonnet-4',
+          },
+        },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.['correctness-reviewer']?.model).toBe(
+        'openrouter/anthropic/claude-sonnet-4',
+      )
+    })
+
+    test('high-trust category model overrides source defaults for every agent in that category', async () => {
+      createCategorizedAgent('review', 'first-reviewer', {
+        name: 'first-reviewer',
+        description: 'First reviewer',
+      })
+      createCategorizedAgent('review', 'second-reviewer', {
+        name: 'second-reviewer',
+        description: 'Second reviewer',
+      })
+      writeCustomSystematicConfig({
+        categories: {
+          review: { model: 'openai/gpt-4o' },
+        },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.['first-reviewer']?.model).toBe('openai/gpt-4o')
+      expect(config.agent?.['second-reviewer']?.model).toBe('openai/gpt-4o')
+    })
+
+    test('category overlay with non-model fields preserves source model', async () => {
+      createCategorizedAgent('review', 'correctness-reviewer', {
+        name: 'correctness-reviewer',
+        description: 'Reviews correctness',
+      })
+      writeCustomSystematicConfig({
+        categories: {
+          review: { temperature: 0.55 },
+        },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.['correctness-reviewer']?.model).toBe(
+        'anthropic/claude-opus-4.7',
+      )
+      expect(config.agent?.['correctness-reviewer']?.temperature).toBe(0.55)
+    })
+
+    test('native same-name replacement receives no Systematic source model default', async () => {
+      createCategorizedAgent('review', 'native-replaced', {
+        name: 'native-replaced',
+        description: 'Bundled description',
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {
+        agent: {
+          'native-replaced': {
+            description: 'Native owns this key',
+            prompt: 'Native prompt',
+          },
+        },
+      }
+      await handler(config)
+
+      expect(config.agent?.['native-replaced']?.model).toBeUndefined()
+      expect(config.agent?.['native-replaced']?.description).toBe(
+        'Native owns this key',
+      )
     })
 
     test('built-in temperature overrides bundled markdown unless category or exact overlay is stronger', async () => {
@@ -775,7 +1115,10 @@ model: gpt-4
       expect(agent?.color).toBe('#123abc')
       expect(agent?.steps).toBe(12)
       expect(agent?.hidden).toBe(true)
-      expect(config.agent?.['other-reviewer']?.model).toBeUndefined()
+      // other-reviewer (review category) gets source model default
+      expect(config.agent?.['other-reviewer']?.model).toBe(
+        'anthropic/claude-opus-4.7',
+      )
     })
 
     test('accepts and emits variant without model', async () => {
@@ -783,7 +1126,7 @@ model: gpt-4
         name: 'correctness-reviewer',
         description: 'Reviews correctness',
       })
-      writeSystematicConfig({
+      writeCustomSystematicConfig({
         agents: { 'correctness-reviewer': { variant: 'small' } },
       })
 
@@ -798,7 +1141,10 @@ model: gpt-4
       await handler(config)
 
       expect(config.agent?.['correctness-reviewer']?.variant).toBe('small')
-      expect(config.agent?.['correctness-reviewer']?.model).toBeUndefined()
+      // review-category agent still gets source model default even when variant is set via high-trust config
+      expect(config.agent?.['correctness-reviewer']?.model).toBe(
+        'anthropic/claude-opus-4.7',
+      )
     })
 
     test('managed skills shortcut emits ordered deny-all then allow-selected rules', async () => {
@@ -1027,6 +1373,24 @@ model: gpt-4
       await handler(config)
 
       expect(config.agent?.helper).toBeUndefined()
+    })
+
+    test('assertSourceCategoryModelCoverage fires on missing category', async () => {
+      // Create a categorized agent in a category not covered by source defaults
+      // The existing bundled agents dir has 6 covered categories (design, docs,
+      // document-review, research, review, workflow). An uncovered category would
+      // cause a throw inside createConfigHandler, but we can't create an actual
+      // uncovered directory in bundled agents. Instead, test that when the
+      // assertion is called with an uncovered category, it fails.
+      const { assertSourceCategoryModelCoverage: assertCoverage } =
+        await import('../../src/lib/agent-overlays.js')
+
+      expect(() => assertCoverage(['review', 'unknown-category'])).toThrow(
+        /Source category model defaults missing intentional coverage for/,
+      )
+      expect(() => assertCoverage(['review', 'unknown-category'])).toThrow(
+        /unknown-category/,
+      )
     })
 
     test('invalid overlay leaves config surfaces unmodified', async () => {

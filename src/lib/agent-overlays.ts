@@ -49,6 +49,15 @@ export interface ResolvedAgentOverlaySet {
   categoriesByKey: Map<string, ValidatedCategoryOverlay>
 }
 
+const SOURCE_CATEGORY_MODEL_DEFAULTS = {
+  design: 'openai/gpt-5.5',
+  docs: 'openai/gpt-5.4-mini',
+  'document-review': 'anthropic/claude-opus-4.7',
+  research: 'openai/gpt-5.5',
+  review: 'anthropic/claude-opus-4.7',
+  workflow: 'openai/gpt-5.4-mini',
+} as const satisfies Record<string, string>
+
 const ALLOWED_OVERLAY_FIELDS = new Set([
   'model',
   'variant',
@@ -167,6 +176,41 @@ export function inferBuiltInTemperature(
     return 0.6
   }
   return 0.3
+}
+
+export function getSourceCategoryModel(
+  category: string | undefined,
+): string | undefined {
+  if (!category) return undefined
+  return (SOURCE_CATEGORY_MODEL_DEFAULTS as Record<string, string | undefined>)[
+    category
+  ]
+}
+
+export function assertSourceCategoryModelCoverage(categories: string[]): void {
+  validateSourceCategoryModelDefaults()
+
+  const missingCategories = categories.filter(
+    (category) => !Object.hasOwn(SOURCE_CATEGORY_MODEL_DEFAULTS, category),
+  )
+
+  if (missingCategories.length > 0) {
+    throw new Error(
+      `Source category model defaults missing intentional coverage for: ${missingCategories.join(', ')}`,
+    )
+  }
+}
+
+export function validateSourceCategoryModelDefaults(
+  defaults: Record<string, unknown> = SOURCE_CATEGORY_MODEL_DEFAULTS,
+): void {
+  for (const [category, model] of Object.entries(defaults)) {
+    validateModel(
+      'source category model defaults',
+      `source category model defaults.${category}`,
+      model,
+    )
+  }
 }
 
 function validateExactAgentOverlays(
@@ -318,6 +362,7 @@ function validateOverlayFieldValue(
 ): void {
   switch (field) {
     case 'model':
+      if (value === null) return // null opt-out: inherit parent model
       validateModel(sourcePath, keyPath, value)
       return
     case 'variant':

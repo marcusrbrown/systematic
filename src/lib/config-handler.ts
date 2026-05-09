@@ -1,7 +1,9 @@
 import type { Config } from '@opencode-ai/plugin'
 import type { AgentConfig } from '@opencode-ai/sdk'
 import {
+  assertSourceCategoryModelCoverage,
   buildBundledAgentInventory,
+  getSourceCategoryModel,
   inferBuiltInTemperature,
   type ResolvedAgentOverlaySet,
   resolveAgentOverlaySet,
@@ -206,6 +208,17 @@ function applyAgentOverlays(
     result.description,
   )
 
+  // Apply source category model default for categorized bundled agents.
+  // Source defaults defensively replace any bundled markdown model before
+  // high-trust overlays apply. Precedence: exact overlay > category overlay
+  // > source model default > markdown / inheritance.
+  if (agentInfo.category) {
+    const sourceModel = getSourceCategoryModel(agentInfo.category)
+    if (sourceModel) {
+      result.model = sourceModel
+    }
+  }
+
   if (categoryOverlay) {
     applyOverlayObject(result, categoryOverlay.value, permissionRules)
   }
@@ -252,7 +265,12 @@ function applyOverlayObject(
 ): void {
   for (const field of OVERLAY_ASSIGN_FIELDS) {
     if (Object.hasOwn(overlay, field)) {
-      ;(target as Record<string, unknown>)[field] = overlay[field]
+      // model: null means "restore inheritance" — delete any source default
+      if (field === 'model' && overlay[field] === null) {
+        delete target[field]
+      } else {
+        ;(target as Record<string, unknown>)[field] = overlay[field]
+      }
     }
   }
 
@@ -422,6 +440,7 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
       bundledAgentsDir,
       systematicConfig.disabled_agents,
     )
+    assertSourceCategoryModelCoverage(inventory.categories)
     const validatedOverlays = validateAgentOverlays({
       inventory,
       overlays,

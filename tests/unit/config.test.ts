@@ -11,21 +11,29 @@ import {
 
 describe('config', () => {
   let testDir: string
-  let homeDir: string
-  let originalHomedir: typeof os.homedir
+  let originalOsHomedir: (() => string) | undefined
 
   beforeEach(() => {
     testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-test-'))
-    homeDir = path.join(testDir, 'fake-home')
-    fs.mkdirSync(homeDir, { recursive: true })
-    originalHomedir = os.homedir
-    os.homedir = () => homeDir
+    originalOsHomedir = os.homedir
+    os.homedir = () => path.join(testDir, 'home')
   })
 
   afterEach(() => {
-    os.homedir = originalHomedir
+    if (originalOsHomedir) os.homedir = originalOsHomedir
     fs.rmSync(testDir, { recursive: true, force: true })
   })
+
+  function userConfigPath(): string {
+    return path.join(os.homedir(), '.config', 'opencode', 'systematic.json')
+  }
+
+  function writeUserConfig(config: Record<string, unknown>): string {
+    const filePath = userConfigPath()
+    fs.mkdirSync(path.dirname(filePath), { recursive: true })
+    fs.writeFileSync(filePath, JSON.stringify(config))
+    return filePath
+  }
 
   describe('loadConfig', () => {
     describe('no config files', () => {
@@ -100,14 +108,7 @@ describe('config', () => {
 
     describe('user config only', () => {
       test('merges user config with defaults', () => {
-        const userConfigDir = path.join(os.homedir(), '.config/opencode')
-        fs.mkdirSync(userConfigDir, { recursive: true })
-        fs.writeFileSync(
-          path.join(userConfigDir, 'systematic.json'),
-          JSON.stringify({
-            disabled_agents: ['agent-1'],
-          }),
-        )
+        writeUserConfig({ disabled_agents: ['agent-1'] })
 
         const result = loadConfig(testDir)
         expect(result.disabled_agents).toContain('agent-1')
@@ -118,14 +119,7 @@ describe('config', () => {
 
     describe('both configs', () => {
       test('project config overrides user config', () => {
-        const userConfigDir = path.join(os.homedir(), '.config/opencode')
-        fs.mkdirSync(userConfigDir, { recursive: true })
-        fs.writeFileSync(
-          path.join(userConfigDir, 'systematic.json'),
-          JSON.stringify({
-            disabled_skills: ['user-skill'],
-          }),
-        )
+        writeUserConfig({ disabled_skills: ['user-skill'] })
 
         const projectConfigDir = path.join(testDir, '.opencode')
         fs.mkdirSync(projectConfigDir)
@@ -142,16 +136,7 @@ describe('config', () => {
       })
 
       test('project bootstrap overrides user bootstrap', () => {
-        const userConfigDir = path.join(os.homedir(), '.config/opencode')
-        fs.mkdirSync(userConfigDir, { recursive: true })
-        fs.writeFileSync(
-          path.join(userConfigDir, 'systematic.json'),
-          JSON.stringify({
-            bootstrap: {
-              enabled: true,
-            },
-          }),
-        )
+        writeUserConfig({ bootstrap: { enabled: true } })
 
         const projectConfigDir = path.join(testDir, '.opencode')
         fs.mkdirSync(projectConfigDir)
@@ -186,14 +171,7 @@ describe('config', () => {
       })
 
       test('combines user and project disabled_skills arrays', () => {
-        const userConfigDir = path.join(os.homedir(), '.config/opencode')
-        fs.mkdirSync(userConfigDir, { recursive: true })
-        fs.writeFileSync(
-          path.join(userConfigDir, 'systematic.json'),
-          JSON.stringify({
-            disabled_skills: ['skill-a'],
-          }),
-        )
+        writeUserConfig({ disabled_skills: ['skill-a'] })
 
         const projectConfigDir = path.join(testDir, '.opencode')
         fs.mkdirSync(projectConfigDir)
@@ -210,14 +188,7 @@ describe('config', () => {
       })
 
       test('combines user and project disabled_agents arrays', () => {
-        const userConfigDir = path.join(os.homedir(), '.config/opencode')
-        fs.mkdirSync(userConfigDir, { recursive: true })
-        fs.writeFileSync(
-          path.join(userConfigDir, 'systematic.json'),
-          JSON.stringify({
-            disabled_agents: ['agent-a'],
-          }),
-        )
+        writeUserConfig({ disabled_agents: ['agent-a'] })
 
         const projectConfigDir = path.join(testDir, '.opencode')
         fs.mkdirSync(projectConfigDir)
@@ -234,14 +205,7 @@ describe('config', () => {
       })
 
       test('combines user and project disabled_commands arrays', () => {
-        const userConfigDir = path.join(os.homedir(), '.config/opencode')
-        fs.mkdirSync(userConfigDir, { recursive: true })
-        fs.writeFileSync(
-          path.join(userConfigDir, 'systematic.json'),
-          JSON.stringify({
-            disabled_commands: ['cmd-a'],
-          }),
-        )
+        writeUserConfig({ disabled_commands: ['cmd-a'] })
 
         const projectConfigDir = path.join(testDir, '.opencode')
         fs.mkdirSync(projectConfigDir)
@@ -260,16 +224,7 @@ describe('config', () => {
 
     describe('object merging (bootstrap)', () => {
       test('spreads bootstrap properties from user config', () => {
-        const userConfigDir = path.join(os.homedir(), '.config/opencode')
-        fs.mkdirSync(userConfigDir, { recursive: true })
-        fs.writeFileSync(
-          path.join(userConfigDir, 'systematic.json'),
-          JSON.stringify({
-            bootstrap: {
-              file: 'user-bootstrap.md',
-            },
-          }),
-        )
+        writeUserConfig({ bootstrap: { file: 'user-bootstrap.md' } })
 
         const result = loadConfig(testDir)
         expect(result.bootstrap.file).toBe('user-bootstrap.md')
@@ -277,26 +232,16 @@ describe('config', () => {
       })
 
       test('project bootstrap fields override user bootstrap fields via spread merge', () => {
-        const userConfigDir = path.join(os.homedir(), '.config/opencode')
-        fs.mkdirSync(userConfigDir, { recursive: true })
-        fs.writeFileSync(
-          path.join(userConfigDir, 'systematic.json'),
-          JSON.stringify({
-            bootstrap: {
-              enabled: true,
-              file: 'user-bootstrap.md',
-            },
-          }),
-        )
+        writeUserConfig({
+          bootstrap: { enabled: true, file: 'user-bootstrap.md' },
+        })
 
         const projectConfigDir = path.join(testDir, '.opencode')
         fs.mkdirSync(projectConfigDir)
         fs.writeFileSync(
           path.join(projectConfigDir, 'systematic.json'),
           JSON.stringify({
-            bootstrap: {
-              enabled: false,
-            },
+            bootstrap: { enabled: false },
           }),
         )
 
@@ -325,16 +270,9 @@ describe('config', () => {
 
     describe('agent and category overlays', () => {
       test('loads a user agent overlay with source and key provenance', () => {
-        const userConfigDir = path.join(os.homedir(), '.config/opencode')
-        fs.mkdirSync(userConfigDir, { recursive: true })
-        fs.writeFileSync(
-          path.join(userConfigDir, 'systematic.json'),
-          JSON.stringify({
-            agents: {
-              'correctness-reviewer': { model: 'openai/gpt-5' },
-            },
-          }),
-        )
+        const userConfigPath = writeUserConfig({
+          agents: { 'correctness-reviewer': { model: 'openai/gpt-5' } },
+        })
 
         const result = loadConfigWithSources(testDir)
 
@@ -343,27 +281,22 @@ describe('config', () => {
         })
         expect(result.overlays.agents['correctness-reviewer']).toEqual({
           value: { model: 'openai/gpt-5' },
-          sourcePath: path.join(userConfigDir, 'systematic.json'),
+          sourcePath: userConfigPath,
           keyPath: 'agents.correctness-reviewer',
         })
       })
 
       test('preserves unrelated user category and project agent overlays', () => {
-        const userConfigDir = path.join(os.homedir(), '.config/opencode')
-        fs.mkdirSync(userConfigDir, { recursive: true })
-        fs.writeFileSync(
-          path.join(userConfigDir, 'systematic.json'),
-          JSON.stringify({ categories: { review: { temperature: 0.2 } } }),
-        )
+        writeUserConfig({
+          categories: { review: { temperature: 0.2 } },
+        })
 
         const projectConfigDir = path.join(testDir, '.opencode')
         fs.mkdirSync(projectConfigDir)
         fs.writeFileSync(
           path.join(projectConfigDir, 'systematic.json'),
           JSON.stringify({
-            agents: {
-              'correctness-reviewer': { temperature: 0.4 },
-            },
+            agents: { 'correctness-reviewer': { temperature: 0.4 } },
           }),
         )
 
@@ -378,19 +311,14 @@ describe('config', () => {
       })
 
       test('project same-key overlays cannot erase user model policy', () => {
-        const userConfigDir = path.join(os.homedir(), '.config/opencode')
-        fs.mkdirSync(userConfigDir, { recursive: true })
-        fs.writeFileSync(
-          path.join(userConfigDir, 'systematic.json'),
-          JSON.stringify({
-            agents: {
-              'correctness-reviewer': {
-                model: 'openai/gpt-5',
-                temperature: 0.1,
-              },
+        writeUserConfig({
+          agents: {
+            'correctness-reviewer': {
+              model: 'openai/gpt-5',
+              temperature: 0.1,
             },
-          }),
-        )
+          },
+        })
 
         const projectConfigDir = path.join(testDir, '.opencode')
         fs.mkdirSync(projectConfigDir)
@@ -444,28 +372,55 @@ describe('config', () => {
         }
       })
 
+      test('project overlays reject model: null as security field violation', () => {
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir)
+        const projectConfigPath = path.join(projectConfigDir, 'systematic.json')
+
+        for (const config of [
+          {
+            agents: { 'correctness-reviewer': { model: null } },
+          },
+          { categories: { review: { model: null } } },
+        ]) {
+          fs.writeFileSync(projectConfigPath, JSON.stringify(config))
+
+          expect(() => loadConfigWithSources(testDir)).toThrow(
+            projectConfigPath,
+          )
+          expect(() => loadConfigWithSources(testDir)).toThrow(
+            /only valid in user config or OPENCODE_CONFIG_DIR config/,
+          )
+        }
+      })
+
+      test('user config model: null passes config loading', () => {
+        writeUserConfig({
+          agents: { 'correctness-reviewer': { model: null } },
+        })
+
+        const result = loadConfigWithSources(testDir)
+
+        expect(result.config.agents?.['correctness-reviewer']?.model).toBeNull()
+      })
+
       test('project same-key overlays preserve user permission policy fields', () => {
-        const userConfigDir = path.join(os.homedir(), '.config/opencode')
-        fs.mkdirSync(userConfigDir, { recursive: true })
-        fs.writeFileSync(
-          path.join(userConfigDir, 'systematic.json'),
-          JSON.stringify({
-            categories: {
-              review: {
-                permission: { bash: 'deny' },
-                skills: ['ce:review'],
-                temperature: 0.1,
-              },
+        writeUserConfig({
+          categories: {
+            review: {
+              permission: { bash: 'deny' },
+              skills: ['ce:review'],
+              temperature: 0.1,
             },
-            agents: {
-              'correctness-reviewer': {
-                model: 'openai/gpt-5',
-                permission: { read: 'deny' },
-                temperature: 0.1,
-              },
+          },
+          agents: {
+            'correctness-reviewer': {
+              model: 'openai/gpt-5',
+              permission: { read: 'deny' },
+              temperature: 0.1,
             },
-          }),
-        )
+          },
+        })
 
         const projectConfigDir = path.join(testDir, '.opencode')
         fs.mkdirSync(projectConfigDir)
@@ -488,6 +443,70 @@ describe('config', () => {
           hidden: true,
           permission: { read: 'deny' },
           model: 'openai/gpt-5',
+        })
+      })
+
+      test('project overlays cannot configure variant in agents or categories', () => {
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir)
+        const projectConfigPath = path.join(projectConfigDir, 'systematic.json')
+
+        for (const config of [
+          {
+            agents: {
+              'correctness-reviewer': { variant: 'large-context' },
+            },
+          },
+          { categories: { review: { variant: 'small' } } },
+        ]) {
+          fs.writeFileSync(projectConfigPath, JSON.stringify(config))
+
+          expect(() => loadConfigWithSources(testDir)).toThrow(
+            projectConfigPath,
+          )
+          expect(() => loadConfigWithSources(testDir)).toThrow(
+            /only valid in user config or OPENCODE_CONFIG_DIR config/,
+          )
+        }
+      })
+
+      test('project same-key overlay preserves variant from higher-trust config', () => {
+        writeUserConfig({
+          agents: {
+            'correctness-reviewer': {
+              variant: 'large-context',
+              model: 'openai/gpt-5',
+              temperature: 0.1,
+            },
+          },
+          categories: {
+            review: {
+              variant: 'small',
+              temperature: 0.2,
+            },
+          },
+        })
+
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir)
+        fs.writeFileSync(
+          path.join(projectConfigDir, 'systematic.json'),
+          JSON.stringify({
+            agents: { 'correctness-reviewer': { hidden: true } },
+            categories: { review: { temperature: 0.5 } },
+          }),
+        )
+
+        const result = loadConfigWithSources(testDir)
+
+        expect(result.config.agents?.['correctness-reviewer']).toEqual({
+          hidden: true,
+          variant: 'large-context',
+          model: 'openai/gpt-5',
+        })
+        expect(result.config.categories?.review).toEqual({
+          temperature: 0.5,
+          variant: 'small',
         })
       })
 
@@ -569,14 +588,9 @@ describe('config', () => {
       })
 
       test('preserves unqualified and qualified alias keys across source priorities', () => {
-        const userConfigDir = path.join(os.homedir(), '.config/opencode')
-        fs.mkdirSync(userConfigDir, { recursive: true })
-        fs.writeFileSync(
-          path.join(userConfigDir, 'systematic.json'),
-          JSON.stringify({
-            agents: { 'correctness-reviewer': { temperature: 0.1 } },
-          }),
-        )
+        writeUserConfig({
+          agents: { 'correctness-reviewer': { temperature: 0.1 } },
+        })
 
         const projectConfigDir = path.join(testDir, '.opencode')
         fs.mkdirSync(projectConfigDir)
@@ -760,12 +774,7 @@ describe('config', () => {
     })
 
     test('custom disabled_skills merges with project and user config', () => {
-      const userConfigDir = path.join(os.homedir(), '.config/opencode')
-      fs.mkdirSync(userConfigDir, { recursive: true })
-      fs.writeFileSync(
-        path.join(userConfigDir, 'systematic.json'),
-        JSON.stringify({ disabled_skills: ['user-skill'] }),
-      )
+      writeUserConfig({ disabled_skills: ['user-skill'] })
 
       const customDir = fs.mkdtempSync(
         path.join(os.tmpdir(), 'systematic-custom-'),

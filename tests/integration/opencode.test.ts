@@ -110,13 +110,13 @@ describe('SystematicPlugin config hook integration', () => {
 
   beforeEach(() => {
     _resetPluginSingleton()
+    originalHomedir = os.homedir
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-plugin-'))
 
     // Isolate from real user config (~/.config/opencode/systematic.json)
     // by mocking os.homedir to point at an empty temp directory.
     homeDir = path.join(tempDir, 'fake-home')
     fs.mkdirSync(homeDir, { recursive: true })
-    originalHomedir = os.homedir
     os.homedir = () => homeDir
 
     projectDir = path.join(tempDir, 'project')
@@ -285,16 +285,41 @@ describe('SystematicPlugin config hook integration', () => {
     expect(config).toEqual(before)
   })
 
-  test('no user model config leaves emitted bundled agents without default models', async () => {
+  test('zero config emits source model defaults for categorized agents and no fallback_models', async () => {
     const config: Config = {}
     await runConfigHook(config)
 
-    const modeledAgents = Object.entries(config.agent ?? {}).filter(
-      ([, agent]) => agent?.model !== undefined,
+    // Assert correct source model per category for at least one real bundled agent
+    expect(config.agent?.['correctness-reviewer']?.model).toBe(
+      'anthropic/claude-opus-4.7',
+    )
+    expect(config.agent?.['correctness-reviewer']?.temperature).toBeDefined()
+
+    // design category
+    expect(config.agent?.['design-implementation-reviewer']?.model).toBe(
+      'openai/gpt-5.5',
+    )
+    // docs category
+    expect(config.agent?.['ankane-readme-writer']?.model).toBe(
+      'openai/gpt-5.4-mini',
+    )
+    // document-review category
+    expect(config.agent?.['adversarial-document-reviewer']?.model).toBe(
+      'anthropic/claude-opus-4.7',
+    )
+    // research category
+    expect(config.agent?.['best-practices-researcher']?.model).toBe(
+      'openai/gpt-5.5',
+    )
+    // workflow category
+    expect(config.agent?.['bug-reproduction-validator']?.model).toBe(
+      'openai/gpt-5.4-mini',
     )
 
-    expect(modeledAgents).toEqual([])
-    expect(config.agent?.['correctness-reviewer']?.temperature).toBeDefined()
+    // Verify no fallback_models leak into any emitted agent
+    for (const [, agent] of Object.entries(config.agent ?? {})) {
+      expect(agent).not.toHaveProperty('fallback_models')
+    }
   })
 
   test('loads with category model overlays and exact agent overlay without throwing', async () => {

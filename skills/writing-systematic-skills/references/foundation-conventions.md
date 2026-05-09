@@ -120,7 +120,9 @@ Per [OpenCode's agent docs](https://opencode.ai/docs/agents/): **"If you don't s
 
 Do **not** declare `model: inherit`. That literal value is undocumented and was treated as a real provider/model string by `Provider.parseModel()` until [sst/opencode#17888](https://github.com/sst/opencode/pull/17888) landed in mid-March 2026 — producing `ProviderModelNotFoundError` on every subagent invocation for anyone on an older OpenCode. Omitting the field works on every OpenCode version and is what the docs canonically describe.
 
-Hardcoded provider IDs (`anthropic/claude-...`, `openai/gpt-...`, etc.) are also banned because they make an agent unusable for users on other providers. If a future agent truly depends on a specific provider, document the constraint in the plan and get explicit review before adding the hardcoded model.
+Hardcoded provider IDs (`anthropic/claude-...`, `openai/gpt-...`, etc.) are also banned from **bundled agent markdown/frontmatter** because they make an agent unusable for users on other providers. This ban does not apply to source-owned category model defaults in TypeScript code, which are centrally maintained, structurally validated, and emitted at the built-in/default layer during config handling. If a future agent truly depends on a specific provider in its markdown, document the constraint in the plan and get explicit review before adding the hardcoded model.
+
+Systematic provides source-owned category model defaults in TypeScript code for all six bundled agent categories (`design`, `docs`, `document-review`, `research`, `review`, `workflow`). These code-level defaults are emitted during config handling and do not change the markdown contract: bundled agent files must still omit `model` frontmatter. The content-integrity gate continues to enforce the markdown-level ban independently of what source code defaults provide.
 
 ### Machine ID
 

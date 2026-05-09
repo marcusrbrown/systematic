@@ -339,7 +339,7 @@ async function detectLanguagesAndFrameworks() {
       if (allDeps[dep]) {
         // Check exclusion rules before adding
         const exclusions = NODE_FRAMEWORK_EXCLUSIONS[fw]
-        if (exclusions && exclusions.some((ex) => allDeps[ex])) continue
+        if (exclusions?.some((ex) => allDeps[ex])) continue
 
         const ver = allDeps[dep].replace(/[\^~>=<]/g, '').split(' ')[0]
         frameworks.push(ver ? `${fw} ${ver}` : fw)
@@ -821,7 +821,7 @@ async function findTestInfra() {
     'src/__tests__',
   ]
   for (const dir of testDirs) {
-    if (await exists(join(root, dir))) dirs.push(dir + '/')
+    if (await exists(join(root, dir))) dirs.push(`${dir}/`)
   }
 
   // Test config files
@@ -1042,13 +1042,13 @@ async function main() {
     infrastructure,
   }
 
-  process.stdout.write(JSON.stringify(inventory) + '\n')
+  process.stdout.write(`${JSON.stringify(inventory)}\n`)
 }
 
 main().catch((err) => {
   // Always exit 0 with valid JSON, even on error
   process.stdout.write(
-    JSON.stringify({
+    `${JSON.stringify({
       error: err.message,
       name: basename(root),
       languages: [],
@@ -1062,6 +1062,6 @@ main().catch((err) => {
       docs: [],
       testInfra: { dirs: [], config: [] },
       infrastructure: { envFiles: [], configFiles: [], services: [] },
-    }) + '\n',
+    })}\n`,
   )
 })

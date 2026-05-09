@@ -119,6 +119,8 @@ systematic/
 - **Testing:** `bun:test` with `describe`/`it`. Real temp dirs for FS isolation, no mocking libraries. Integration tests skip if deps unavailable
 - **Bundled agents:** MUST omit the `model` field in frontmatter. OpenCode subagents inherit the invoking primary agent's model when `model` is unset (see https://opencode.ai/docs/agents/). The literal value `model: inherit` is NOT supported — it crashed subagent dispatch on OpenCode versions prior to [sst/opencode#17888](https://github.com/sst/opencode/pull/17888) (March 2026), and is undocumented in OpenCode. The content-integrity gate enforces this.
 
+  This rule applies to **bundled agent markdown/frontmatter only**. The runtime config emitted for categorized bundled agents may include source-owned `model` defaults from TypeScript code (see Configuration section). These are two separate layers: portable markdown stays model-free, while TypeScript code owns opinionated defaults that are emitted during config handling.
+
 ## Anti-Patterns
 
 - `require()` — use ESM imports
