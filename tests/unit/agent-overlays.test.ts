@@ -347,6 +347,47 @@ describe('validateAgentOverlays', () => {
     ).not.toThrow()
   })
 
+  test('rejects same overlay object with managed skills and explicit permission.skill', () => {
+    expect(() =>
+      validateAgentOverlays({
+        inventory: createInventory(),
+        overlays: {
+          agents: {
+            'correctness-reviewer': source('agents', 'correctness-reviewer', {
+              skills: ['ce:review'],
+              permission: { skill: { '*': 'deny' } },
+            }),
+          },
+          categories: {},
+        },
+        nativeAgents: {},
+        enabledSkills: ['ce:review'],
+      }),
+    ).toThrow(
+      /agents\.correctness-reviewer.*cannot set both skills and permission\.skill/,
+    )
+  })
+
+  test('rejects unknown or disabled managed skill names', () => {
+    expect(() =>
+      validateAgentOverlays({
+        inventory: createInventory(),
+        overlays: {
+          agents: {
+            'correctness-reviewer': source('agents', 'correctness-reviewer', {
+              skills: ['missing-skill'],
+            }),
+          },
+          categories: {},
+        },
+        nativeAgents: {},
+        enabledSkills: ['ce:review'],
+      }),
+    ).toThrow(
+      /agents\.correctness-reviewer\.skills.*unknown or disabled skill "missing-skill"/,
+    )
+  })
+
   test('model requires provider/model and does not normalize shorthand', () => {
     for (const model of ['gpt-4', 'inherit']) {
       expect(() =>

@@ -41,6 +41,12 @@ export interface ValidateAgentOverlaysOptions {
   inventory: BundledAgentInventory
   overlays: SourcedOverlayConfigMap
   nativeAgents?: Record<string, unknown>
+  enabledSkills?: string[]
+}
+
+export interface ResolvedAgentOverlaySet {
+  agentsByTargetId: Map<string, ValidatedAgentOverlay>
+  categoriesByKey: Map<string, ValidatedCategoryOverlay>
 }
 
 const ALLOWED_OVERLAY_FIELDS = new Set([
@@ -110,17 +116,64 @@ export function validateAgentOverlays({
   inventory,
   overlays,
   nativeAgents = {},
+  enabledSkills,
 }: ValidateAgentOverlaysOptions): ValidatedAgentOverlays {
-  const agents = validateExactAgentOverlays(inventory, overlays, nativeAgents)
-  const categories = validateCategoryOverlays(inventory, overlays)
+  const skillSet = enabledSkills ? new Set(enabledSkills) : undefined
+  const agents = validateExactAgentOverlays(
+    inventory,
+    overlays,
+    nativeAgents,
+    skillSet,
+  )
+  const categories = validateCategoryOverlays(inventory, overlays, skillSet)
 
   return { agents, categories }
+}
+
+export function resolveAgentOverlaySet(
+  overlays: ValidatedAgentOverlays,
+): ResolvedAgentOverlaySet {
+  return {
+    agentsByTargetId: new Map(
+      overlays.agents.map((overlay) => [overlay.target.id, overlay]),
+    ),
+    categoriesByKey: new Map(
+      overlays.categories.map((overlay) => [overlay.key, overlay]),
+    ),
+  }
+}
+
+export function inferBuiltInTemperature(
+  name: string,
+  description?: string,
+): number {
+  const sample = `${name} ${description ?? ''}`.toLowerCase()
+  if (
+    /(review|audit|security|sentinel|oracle|lint|verification|guardian)/.test(
+      sample,
+    )
+  ) {
+    return 0.1
+  }
+  if (
+    /(plan|planning|architecture|strategist|analysis|research)/.test(sample)
+  ) {
+    return 0.2
+  }
+  if (/(doc|readme|changelog|editor|writer)/.test(sample)) {
+    return 0.3
+  }
+  if (/(brainstorm|creative|ideate|design|concept)/.test(sample)) {
+    return 0.6
+  }
+  return 0.3
 }
 
 function validateExactAgentOverlays(
   inventory: BundledAgentInventory,
   overlays: SourcedOverlayConfigMap,
   nativeAgents: Record<string, unknown>,
+  enabledSkills: Set<string> | undefined,
 ): ValidatedAgentOverlay[] {
   const result: ValidatedAgentOverlay[] = []
   const seenTargets = new Map<string, string>()
@@ -162,7 +215,7 @@ function validateExactAgentOverlays(
       )
     }
 
-    validateOverlayFields(overlay, 'agent')
+    validateOverlayFields(overlay, 'agent', enabledSkills)
     result.push({
       key,
       target,
@@ -178,6 +231,7 @@ function validateExactAgentOverlays(
 function validateCategoryOverlays(
   inventory: BundledAgentInventory,
   overlays: SourcedOverlayConfigMap,
+  enabledSkills: Set<string> | undefined,
 ): ValidatedCategoryOverlay[] {
   const categories = new Set(inventory.categories)
   const result: ValidatedCategoryOverlay[] = []
@@ -191,7 +245,7 @@ function validateCategoryOverlays(
       )
     }
 
-    validateOverlayFields(overlay, 'category')
+    validateOverlayFields(overlay, 'category', enabledSkills)
     result.push({
       key,
       value: overlay.value,
@@ -210,7 +264,19 @@ function validateOverlayFields(
     keyPath: string
   },
   targetType: 'agent' | 'category',
+  enabledSkills: Set<string> | undefined,
 ): void {
+  if (
+    Object.hasOwn(overlay.value, 'skills') &&
+    hasPermissionSkill(overlay.value.permission)
+  ) {
+    throwConfigError(
+      overlay.sourcePath,
+      overlay.keyPath,
+      'cannot set both skills and permission.skill in the same overlay object',
+    )
+  }
+
   for (const [field, value] of Object.entries(overlay.value)) {
     const keyPath = `${overlay.keyPath}.${field}`
     if (!ALLOWED_OVERLAY_FIELDS.has(field)) {
@@ -229,8 +295,18 @@ function validateOverlayFields(
       )
     }
 
-    validateOverlayFieldValue(overlay.sourcePath, keyPath, field, value)
+    validateOverlayFieldValue(
+      overlay.sourcePath,
+      keyPath,
+      field,
+      value,
+      enabledSkills,
+    )
   }
+}
+
+function hasPermissionSkill(permission: unknown): boolean {
+  return isRecord(permission) && Object.hasOwn(permission, 'skill')
 }
 
 function validateOverlayFieldValue(
@@ -238,6 +314,7 @@ function validateOverlayFieldValue(
   keyPath: string,
   field: string,
   value: unknown,
+  enabledSkills: Set<string> | undefined,
 ): void {
   switch (field) {
     case 'model':
@@ -267,7 +344,7 @@ function validateOverlayFieldValue(
       validateBoolean(sourcePath, keyPath, value)
       return
     case 'skills':
-      validateSkills(sourcePath, keyPath, value)
+      validateSkills(sourcePath, keyPath, value, enabledSkills)
       return
   }
 }
@@ -366,6 +443,7 @@ function validateSkills(
   sourcePath: string,
   keyPath: string,
   value: unknown,
+  enabledSkills: Set<string> | undefined,
 ): void {
   if (
     !Array.isArray(value) ||
@@ -376,6 +454,18 @@ function validateSkills(
       keyPath,
       'must be an array of non-empty strings',
     )
+  }
+
+  if (!enabledSkills) return
+
+  for (const skill of value) {
+    if (!enabledSkills.has(skill)) {
+      throwConfigError(
+        sourcePath,
+        keyPath,
+        `unknown or disabled skill "${skill}"`,
+      )
+    }
   }
 }
 

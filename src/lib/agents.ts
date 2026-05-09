@@ -20,6 +20,8 @@ export interface AgentFrontmatter {
   prompt: string
   /** Model to use (provider/model format) */
   model?: string
+  /** Model variant to use */
+  variant?: string
   /** Temperature for generation */
   temperature?: number
   /** Top-p sampling */
@@ -72,6 +74,7 @@ export function extractAgentFrontmatter(content: string): AgentFrontmatter {
     description: extractString(data, 'description'),
     prompt: body.trim(),
     model: extractNonEmptyString(data, 'model'),
+    variant: extractNonEmptyString(data, 'variant'),
     temperature: extractNumber(data, 'temperature'),
     top_p: extractNumber(data, 'top_p'),
     tools: isToolsMap(data.tools) ? data.tools : undefined,

@@ -69,6 +69,24 @@ Skill content for ${name}.`,
     )
   }
 
+  function createCategorizedAgent(
+    category: string,
+    name: string,
+    frontmatterOrDescription: string | Record<string, unknown>,
+  ): void {
+    const categoryDir = path.join(bundledDir, 'agents', category)
+    fs.mkdirSync(categoryDir, { recursive: true })
+    createAgent(categoryDir, name, frontmatterOrDescription)
+  }
+
+  function writeSystematicConfig(value: Record<string, unknown>): void {
+    fs.mkdirSync(path.join(projectDir, '.opencode'), { recursive: true })
+    fs.writeFileSync(
+      path.join(projectDir, '.opencode/systematic.json'),
+      JSON.stringify(value),
+    )
+  }
+
   function createCommand(dir: string, name: string, description: string): void {
     fs.writeFileSync(
       path.join(dir, `${name}.md`),
@@ -452,7 +470,7 @@ Skill content for ce:plan.`,
       expect(agent).toBeDefined()
       expect(agent?.description).toBe('A full agent (Full-Agent - Systematic)')
       expect(agent?.model).toBe('openai/gpt-4')
-      expect(agent?.temperature).toBe(0.7)
+      expect(agent?.temperature).toBe(0.3)
       expect(agent?.top_p).toBe(1)
       expect(agent?.steps).toBe(10)
       expect(agent?.color).toBe('#ff0000')
@@ -643,6 +661,380 @@ model: gpt-4
 
       expect(config.command?.['systematic:routed-skill']?.agent).toBe('oracle')
       expect(config.command?.['systematic:routed-skill']?.model).toBe('gpt-4')
+    })
+
+    test('applies built-in temperature defaults without emitting default model', async () => {
+      createCategorizedAgent('review', 'correctness-reviewer', {
+        name: 'correctness-reviewer',
+        description: 'Reviews correctness',
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.['correctness-reviewer']?.temperature).toBe(0.1)
+      expect(config.agent?.['correctness-reviewer']?.model).toBeUndefined()
+    })
+
+    test('built-in temperature overrides bundled markdown unless category or exact overlay is stronger', async () => {
+      createCategorizedAgent('review', 'correctness-reviewer', {
+        name: 'correctness-reviewer',
+        description: 'Reviews correctness',
+        temperature: 0.9,
+      })
+      createCategorizedAgent('review', 'security-reviewer', {
+        name: 'security-reviewer',
+        description: 'Security reviewer',
+        temperature: 0.9,
+      })
+      writeSystematicConfig({
+        categories: { review: { temperature: 0.25 } },
+        agents: { 'correctness-reviewer': { temperature: 0.05 } },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.['correctness-reviewer']?.temperature).toBe(0.05)
+      expect(config.agent?.['security-reviewer']?.temperature).toBe(0.25)
+    })
+
+    test('emits exact configured model and supported overlay fields including variant', async () => {
+      createCategorizedAgent('review', 'correctness-reviewer', {
+        name: 'correctness-reviewer',
+        description: 'Reviews correctness',
+      })
+      createCategorizedAgent('review', 'other-reviewer', {
+        name: 'other-reviewer',
+        description: 'Other reviewer',
+      })
+      writeSystematicConfig({
+        agents: {
+          'correctness-reviewer': {
+            model: 'openrouter/anthropic/claude-sonnet-4',
+            variant: 'large-context',
+            top_p: 0.8,
+            mode: 'subagent',
+            color: '#123abc',
+            steps: 12,
+            hidden: true,
+          },
+        },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      const agent = config.agent?.['correctness-reviewer']
+      expect(agent?.model).toBe('openrouter/anthropic/claude-sonnet-4')
+      expect(agent?.variant).toBe('large-context')
+      expect(agent?.top_p).toBe(0.8)
+      expect(agent?.mode).toBe('subagent')
+      expect(agent?.color).toBe('#123abc')
+      expect(agent?.steps).toBe(12)
+      expect(agent?.hidden).toBe(true)
+      expect(config.agent?.['other-reviewer']?.model).toBeUndefined()
+    })
+
+    test('accepts and emits variant without model', async () => {
+      createCategorizedAgent('review', 'correctness-reviewer', {
+        name: 'correctness-reviewer',
+        description: 'Reviews correctness',
+      })
+      writeSystematicConfig({
+        agents: { 'correctness-reviewer': { variant: 'small' } },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.['correctness-reviewer']?.variant).toBe('small')
+      expect(config.agent?.['correctness-reviewer']?.model).toBeUndefined()
+    })
+
+    test('managed skills shortcut emits ordered deny-all then allow-selected rules', async () => {
+      createSkill(path.join(bundledDir, 'skills'), 'ce:review', 'Review skill')
+      createCategorizedAgent('review', 'correctness-reviewer', {
+        name: 'correctness-reviewer',
+        description: 'Reviews correctness',
+      })
+      writeSystematicConfig({
+        agents: { 'correctness-reviewer': { skills: ['ce:review'] } },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.['correctness-reviewer']?.permission?.skill).toEqual(
+        {
+          '*': 'deny',
+          'ce:review': 'allow',
+        },
+      )
+    })
+
+    test('managed empty skills emits deny-all and omitted skills inherit weaker behavior', async () => {
+      createSkill(path.join(bundledDir, 'skills'), 'ce:review', 'Review skill')
+      createCategorizedAgent('review', 'correctness-reviewer', {
+        name: 'correctness-reviewer',
+        description: 'Reviews correctness',
+      })
+      createCategorizedAgent('review', 'security-reviewer', {
+        name: 'security-reviewer',
+        description: 'Security reviewer',
+      })
+      writeSystematicConfig({
+        categories: { review: { skills: ['ce:review'] } },
+        agents: { 'correctness-reviewer': { skills: [] } },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.['correctness-reviewer']?.permission?.skill).toEqual(
+        {
+          'ce:review': 'allow',
+          '*': 'deny',
+        },
+      )
+      expect(config.agent?.['security-reviewer']?.permission?.skill).toEqual({
+        '*': 'deny',
+        'ce:review': 'allow',
+      })
+    })
+
+    test('permission rules concatenate weakest to strongest so exact skills override category skills', async () => {
+      createSkill(path.join(bundledDir, 'skills'), 'skill-a', 'Skill A')
+      createSkill(path.join(bundledDir, 'skills'), 'skill-b', 'Skill B')
+      createCategorizedAgent('review', 'correctness-reviewer', {
+        name: 'correctness-reviewer',
+        description: 'Reviews correctness',
+      })
+      writeSystematicConfig({
+        categories: {
+          review: { skills: ['skill-a', 'skill-b'] },
+        },
+        agents: { 'correctness-reviewer': { skills: ['skill-a'] } },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.['correctness-reviewer']?.permission?.skill).toEqual(
+        {
+          'skill-b': 'allow',
+          '*': 'deny',
+          'skill-a': 'allow',
+        },
+      )
+    })
+
+    test('exact permission.skill can override category skills and exact skills can override category permission.skill', async () => {
+      createSkill(path.join(bundledDir, 'skills'), 'skill-a', 'Skill A')
+      createCategorizedAgent('review', 'explicit-exact', {
+        name: 'explicit-exact',
+        description: 'Explicit exact',
+      })
+      createCategorizedAgent('review', 'managed-exact', {
+        name: 'managed-exact',
+        description: 'Managed exact',
+      })
+      writeSystematicConfig({
+        categories: {
+          review: {
+            skills: ['skill-a'],
+            permission: { bash: 'deny' },
+          },
+        },
+        agents: {
+          'explicit-exact': {
+            permission: { skill: { 'skill-a': 'deny' } },
+          },
+          'managed-exact': { skills: ['skill-a'] },
+        },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.['explicit-exact']?.permission?.skill).toEqual({
+        '*': 'deny',
+        'skill-a': 'deny',
+      })
+      expect(config.agent?.['explicit-exact']?.permission?.bash).toEqual({
+        '*': 'deny',
+      })
+      expect(config.agent?.['managed-exact']?.permission?.skill).toEqual({
+        '*': 'deny',
+        'skill-a': 'allow',
+      })
+    })
+
+    test('exact managed skills override category permission.skill denial through last-match order', async () => {
+      createSkill(path.join(bundledDir, 'skills'), 'skill-a', 'Skill A')
+      createCategorizedAgent('review', 'managed-exact', {
+        name: 'managed-exact',
+        description: 'Managed exact',
+      })
+      writeSystematicConfig({
+        categories: {
+          review: {
+            permission: { skill: { 'skill-a': 'deny' } },
+          },
+        },
+        agents: {
+          'managed-exact': { skills: ['skill-a'] },
+        },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.['managed-exact']?.permission?.skill).toEqual({
+        '*': 'deny',
+        'skill-a': 'allow',
+      })
+    })
+
+    test('category overlay skips native replacement and applies to other bundled agents', async () => {
+      createCategorizedAgent('review', 'native-replacement', {
+        name: 'native-replacement',
+        description: 'Native replacement',
+      })
+      createCategorizedAgent('review', 'other-reviewer', {
+        name: 'other-reviewer',
+        description: 'Other reviewer',
+      })
+      writeSystematicConfig({ categories: { review: { temperature: 0.22 } } })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {
+        agent: {
+          'native-replacement': { description: 'Native', prompt: 'Native' },
+        },
+      }
+      await handler(config)
+
+      expect(config.agent?.['native-replacement']?.description).toBe('Native')
+      expect(config.agent?.['other-reviewer']?.temperature).toBe(0.22)
+    })
+
+    test('disabled exact overlay has no emitted config', async () => {
+      createCategorizedAgent('workflow', 'helper', {
+        name: 'helper',
+        description: 'Helper',
+      })
+      writeSystematicConfig({ agents: { helper: { disable: true } } })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.helper).toBeUndefined()
+    })
+
+    test('invalid overlay leaves config surfaces unmodified', async () => {
+      createCategorizedAgent('review', 'correctness-reviewer', {
+        name: 'correctness-reviewer',
+        description: 'Reviews correctness',
+      })
+      writeSystematicConfig({
+        agents: { 'correctness-reviewer': { skills: ['missing-skill'] } },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config = {
+        agent: { native: { description: 'Native', prompt: 'Native' } },
+        command: { native: { description: 'Native', template: 'Native' } },
+        skills: { paths: ['/existing/skills'] },
+        mcp: { local: { type: 'local', command: ['echo'] } },
+      } as unknown as Config
+      const before = structuredClone(config)
+
+      await expect(handler(config)).rejects.toThrow(/missing-skill/)
+
+      expect(config).toEqual(before)
     })
   })
 })

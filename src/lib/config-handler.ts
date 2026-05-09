@@ -1,12 +1,20 @@
 import type { Config } from '@opencode-ai/plugin'
 import type { AgentConfig } from '@opencode-ai/sdk'
+import {
+  buildBundledAgentInventory,
+  inferBuiltInTemperature,
+  type ResolvedAgentOverlaySet,
+  resolveAgentOverlaySet,
+  validateAgentOverlays,
+} from './agent-overlays.js'
 import { extractAgentFrontmatter, findAgentsInDir } from './agents.js'
 import { extractCommandFrontmatter, findCommandsInDir } from './commands.js'
-import { loadConfig } from './config.js'
+import { loadConfigWithSources } from './config.js'
 import { convertFileWithCache } from './converter.js'
 import { parseFrontmatter } from './frontmatter.js'
 import { type LoadedSkill, loadSkill } from './skill-loader.js'
 import { findSkillsInDir } from './skills.js'
+import { isRecord, type PermissionSetting } from './validation.js'
 
 export interface ConfigHandlerDeps {
   directory: string
@@ -54,6 +62,7 @@ function loadAgentAsConfig(agentInfo: {
       description,
       prompt,
       model,
+      variant,
       temperature,
       top_p,
       tools,
@@ -71,6 +80,7 @@ function loadAgentAsConfig(agentInfo: {
     }
 
     if (model !== undefined) config.model = model
+    if (variant !== undefined) config.variant = variant
     if (temperature !== undefined) config.temperature = temperature
     if (top_p !== undefined) config.top_p = top_p
     if (tools !== undefined) config.tools = tools
@@ -143,20 +153,177 @@ function loadSkillAsCommand(loaded: LoadedSkill): CommandConfig {
 function collectAgents(
   dir: string,
   disabledAgents: string[],
+  nativeAgents: Record<string, unknown>,
+  overlays: ResolvedAgentOverlaySet,
 ): NonNullable<Config['agent']> {
   const agents: NonNullable<Config['agent']> = {}
   const agentList = findAgentsInDir(dir)
+  const disabledSet = new Set(disabledAgents)
 
   for (const agentInfo of agentList) {
-    if (disabledAgents.includes(agentInfo.name)) continue
+    const id = agentInfo.category
+      ? `${agentInfo.category}/${agentInfo.name}`
+      : agentInfo.name
+    if (disabledSet.has(agentInfo.name) || disabledSet.has(id)) continue
+    if (Object.hasOwn(nativeAgents, agentInfo.name)) continue
+
+    const exactOverlay = overlays.agentsByTargetId.get(id)
+    if (exactOverlay?.value.disable === true) continue
 
     const config = loadAgentAsConfig(agentInfo)
     if (config) {
-      agents[agentInfo.name] = config
+      agents[agentInfo.name] = applyAgentOverlays(config, agentInfo, overlays)
     }
   }
 
   return agents
+}
+
+function applyAgentOverlays(
+  config: AgentConfig,
+  agentInfo: { name: string; category?: string },
+  overlays: ResolvedAgentOverlaySet,
+): AgentConfig {
+  const id = agentInfo.category
+    ? `${agentInfo.category}/${agentInfo.name}`
+    : agentInfo.name
+  const categoryOverlay = agentInfo.category
+    ? overlays.categoriesByKey.get(agentInfo.category)
+    : undefined
+  const exactOverlay = overlays.agentsByTargetId.get(id)
+  const result: AgentConfig = { ...config }
+  const permissionRules = createPermissionRuleAccumulator()
+  const hasPermissionOverlay =
+    overlayControlsPermission(categoryOverlay?.value) ||
+    overlayControlsPermission(exactOverlay?.value)
+
+  if (hasPermissionOverlay && isRecord(config.permission)) {
+    addPermissionRules(permissionRules, config.permission)
+  }
+
+  result.temperature = inferBuiltInTemperature(
+    agentInfo.name,
+    result.description,
+  )
+
+  if (categoryOverlay) {
+    applyOverlayObject(result, categoryOverlay.value, permissionRules)
+  }
+  if (exactOverlay) {
+    applyOverlayObject(result, exactOverlay.value, permissionRules)
+  }
+
+  if (hasPermissionOverlay) {
+    const permission = permissionFromRules(permissionRules)
+    if (permission) {
+      result.permission = permission as AgentConfig['permission']
+    } else {
+      delete result.permission
+    }
+  }
+
+  return result
+}
+
+function overlayControlsPermission(
+  overlay: Record<string, unknown> | undefined,
+): boolean {
+  return (
+    overlay !== undefined &&
+    (Object.hasOwn(overlay, 'permission') || Object.hasOwn(overlay, 'skills'))
+  )
+}
+
+const OVERLAY_ASSIGN_FIELDS = [
+  'model',
+  'variant',
+  'temperature',
+  'top_p',
+  'mode',
+  'color',
+  'steps',
+  'hidden',
+] as const
+
+function applyOverlayObject(
+  target: AgentConfig,
+  overlay: Record<string, unknown>,
+  permissionRules: PermissionRuleAccumulator,
+): void {
+  for (const field of OVERLAY_ASSIGN_FIELDS) {
+    if (Object.hasOwn(overlay, field)) {
+      ;(target as Record<string, unknown>)[field] = overlay[field]
+    }
+  }
+
+  if (isRecord(overlay.permission)) {
+    addPermissionRules(permissionRules, overlay.permission)
+  }
+  if (Array.isArray(overlay.skills)) {
+    addManagedSkillRules(permissionRules, overlay.skills)
+  }
+}
+
+type PermissionRuleAccumulator = Map<string, Map<string, PermissionSetting>>
+
+function createPermissionRuleAccumulator(): PermissionRuleAccumulator {
+  return new Map<string, Map<string, PermissionSetting>>()
+}
+
+function addPermissionRules(
+  accumulator: PermissionRuleAccumulator,
+  permission: Record<string, unknown>,
+): void {
+  for (const [tool, rule] of Object.entries(permission)) {
+    if (isPermissionSettingValue(rule)) {
+      setPermissionRule(accumulator, tool, '*', rule)
+      continue
+    }
+    if (!isRecord(rule)) continue
+    for (const [pattern, setting] of Object.entries(rule)) {
+      if (isPermissionSettingValue(setting)) {
+        setPermissionRule(accumulator, tool, pattern, setting)
+      }
+    }
+  }
+}
+
+function addManagedSkillRules(
+  accumulator: PermissionRuleAccumulator,
+  skills: unknown[],
+): void {
+  setPermissionRule(accumulator, 'skill', '*', 'deny')
+  for (const skill of skills) {
+    if (typeof skill === 'string') {
+      setPermissionRule(accumulator, 'skill', skill, 'allow')
+    }
+  }
+}
+
+function permissionFromRules(
+  accumulator: PermissionRuleAccumulator,
+): Record<string, Record<string, PermissionSetting>> | undefined {
+  const permission: Record<string, Record<string, PermissionSetting>> = {}
+  for (const [tool, rules] of accumulator) {
+    permission[tool] = Object.fromEntries(rules)
+  }
+  return Object.keys(permission).length > 0 ? permission : undefined
+}
+
+function setPermissionRule(
+  accumulator: PermissionRuleAccumulator,
+  tool: string,
+  pattern: string,
+  setting: PermissionSetting,
+): void {
+  const rules = accumulator.get(tool) ?? new Map<string, PermissionSetting>()
+  if (rules.has(pattern)) rules.delete(pattern)
+  rules.set(pattern, setting)
+  accumulator.set(tool, rules)
+}
+
+function isPermissionSettingValue(value: unknown): value is PermissionSetting {
+  return value === 'ask' || value === 'allow' || value === 'deny'
 }
 
 /**
@@ -210,6 +377,16 @@ function collectSkillsAsCommands(
   return commands
 }
 
+function collectEnabledSkillNames(
+  dir: string,
+  disabledSkills: string[],
+): string[] {
+  const disabledSet = new Set(disabledSkills)
+  return findSkillsInDir(dir)
+    .filter((skillInfo) => !disabledSet.has(skillInfo.name))
+    .map((skillInfo) => skillInfo.name)
+}
+
 /**
  * Create the config hook handler for the Systematic plugin.
  *
@@ -224,11 +401,36 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
     deps
 
   return async (config: Config): Promise<void> => {
-    const systematicConfig = loadConfig(directory)
+    const { config: systematicConfig, overlays } =
+      loadConfigWithSources(directory)
+    const existingAgents = { ...(config.agent ?? {}) }
+    const existingCommands = { ...(config.command ?? {}) }
+
+    const bundledSkills = collectSkillsAsCommands(
+      bundledSkillsDir,
+      systematicConfig.disabled_skills,
+    )
+    const enabledSkillNames = collectEnabledSkillNames(
+      bundledSkillsDir,
+      systematicConfig.disabled_skills,
+    )
+    const inventory = buildBundledAgentInventory(
+      bundledAgentsDir,
+      systematicConfig.disabled_agents,
+    )
+    const validatedOverlays = validateAgentOverlays({
+      inventory,
+      overlays,
+      nativeAgents: existingAgents,
+      enabledSkills: enabledSkillNames,
+    })
+    const resolvedOverlays = resolveAgentOverlaySet(validatedOverlays)
 
     const bundledAgents = collectAgents(
       bundledAgentsDir,
       systematicConfig.disabled_agents,
+      existingAgents,
+      resolvedOverlays,
     )
 
     const bundledCommands = collectCommands(
@@ -236,18 +438,11 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
       systematicConfig.disabled_commands,
     )
 
-    const bundledSkills = collectSkillsAsCommands(
-      bundledSkillsDir,
-      systematicConfig.disabled_skills,
-    )
-
-    const existingAgents = config.agent ?? {}
     config.agent = {
       ...bundledAgents,
       ...existingAgents,
     }
 
-    const existingCommands = config.command ?? {}
     config.command = {
       ...bundledCommands,
       ...bundledSkills,
@@ -267,9 +462,12 @@ type ConfigWithSkills = Config & {
 /** Register a directory for OpenCode's native skill discovery (`skill` tool). */
 export function registerSkillsPaths(config: Config, skillsDir: string): void {
   const extended = config as ConfigWithSkills
-  extended.skills ??= {}
-  extended.skills.paths ??= []
-  if (!extended.skills.paths.includes(skillsDir)) {
-    extended.skills.paths.push(skillsDir)
+  const paths = extended.skills?.paths ?? []
+  const nextPaths = paths.includes(skillsDir)
+    ? [...paths]
+    : [...paths, skillsDir]
+  extended.skills = {
+    ...extended.skills,
+    paths: nextPaths,
   }
 }
