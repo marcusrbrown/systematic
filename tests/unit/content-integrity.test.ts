@@ -1426,3 +1426,30 @@ describe('CLI', () => {
     }
   })
 })
+
+// ---------------------------------------------------------------------------
+// ce-work -> systematic-implementer dispatch contract
+// ---------------------------------------------------------------------------
+
+describe('ce-work -> systematic-implementer dispatch contract', () => {
+  test('skills/ce-work/SKILL.md dispatches to systematic-implementer subagent', () => {
+    const skillPath = path.join(REPO_ROOT, 'skills/ce-work/SKILL.md')
+    const content = fs.readFileSync(skillPath, 'utf8')
+    expect(content).toContain('subagent_type: "systematic-implementer"')
+  })
+
+  test('agents/workflow/systematic-implementer.md has matching frontmatter', () => {
+    const agentPath = path.join(
+      REPO_ROOT,
+      'agents/workflow/systematic-implementer.md',
+    )
+    const content = fs.readFileSync(agentPath, 'utf8')
+    // Split on --- to extract frontmatter between first two fences
+    const [, frontmatter] = content.split('---')
+    expect(frontmatter).toBeDefined()
+
+    expect(frontmatter).toMatch(/^name:\s*"?systematic-implementer"?$/m)
+    expect(frontmatter).toMatch(/^mode:\s*"?subagent"?$/m)
+    expect(frontmatter).not.toMatch(/^model:/m)
+  })
+})

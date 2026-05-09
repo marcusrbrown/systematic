@@ -58,6 +58,12 @@ export const EXCLUDED_DIR_NAMES: ReadonlySet<string> = new Set([
 
 const CURATED_TYPES = new Set(['bundle', 'profile', 'plugin'])
 
+export const GENERATED_COMPONENT_DEPENDENCIES: Readonly<
+  Record<string, readonly string[]>
+> = {
+  'ce-work': ['agent-systematic-implementer'],
+}
+
 type FileEntry = string | { path: string; target: string }
 
 export interface ComponentEntry {
@@ -155,10 +161,13 @@ function generateSkillComponents(rootDir: string): ComponentEntry[] {
 
     requireDescription(componentName, skill.description)
 
+    const dependencies = GENERATED_COMPONENT_DEPENDENCIES[componentName]
+
     components.push({
       name: componentName,
       type: 'skill',
       description: skill.description,
+      ...(dependencies ? { dependencies: [...dependencies] } : {}),
       files,
     })
   }

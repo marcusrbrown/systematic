@@ -450,6 +450,7 @@
       "name": "ce-work",
       "type": "skill",
       "description": "Execute work efficiently while maintaining quality and finishing features",
+      "dependencies": ["agent-systematic-implementer"],
       "files": [
         "skills/ce-work/SKILL.md",
         "skills/ce-work/references/shipping-workflow.md"
