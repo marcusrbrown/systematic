@@ -1,10 +1,15 @@
 ---
 title: feat: Add Source Model Defaults and MCP Overlays
 type: feat
-status: active
+status: superseded
 date: 2026-05-09
 origin: docs/plans/2026-05-09-001-feat-agent-model-configuration-plan.md
+superseded_at: 2026-05-09
+superseded_by: docs/plans/2026-05-09-003-feat-source-configured-agent-models-plan.md
+superseded_reason: "Source-configured primary model defaults are replanned separately from fallback_models and MCP overlays. The successor plan keeps fallback behavior out of scope so primary model defaults can ship independently."
 ---
+
+> **Status: superseded.** The overlay hardening portion shipped in PR #344. The source-configured primary model work is superseded by `docs/plans/2026-05-09-003-feat-source-configured-agent-models-plan.md`, which explicitly excludes `fallback_models` and MCP overlays so primary model defaults can ship independently.
 
 # feat: Add Source Model Defaults and MCP Overlays
 
