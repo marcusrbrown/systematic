@@ -326,11 +326,34 @@ Configuration is loaded from multiple locations and merged (later sources overri
 | `bootstrap.enabled` | `boolean` | `true` | Inject the `using-systematic` guide into system prompts |
 | `bootstrap.file` | `string` | — | Custom bootstrap file path (overrides default) |
 
-Agent overlays support `model`, `variant`, `temperature`, `top_p`, `permission`, `mode`, `color`, `steps`, `hidden`, exact-agent-only `disable`, and managed `skills`. `color` accepts `#RGB`, `#RRGGBB`, or OpenCode named color tokens matching `[a-zA-Z][a-zA-Z0-9-]*`; whitespace/freeform numeric strings are rejected. `skills` uses bundled skill frontmatter names like `ce:review`; it is a shortcut that writes OpenCode `permission.skill` rules, not a native OpenCode agent field. Because `model` controls provider routing/cost/privacy and `permission`/`skills` control tool access, those fields are only accepted from user config or `$OPENCODE_CONFIG_DIR/systematic.json`. Project config may tune non-sensitive presentation and runtime fields such as `variant`, `temperature`, `top_p`, `mode`, `color`, `steps`, `hidden`, or exact-agent `disable`, but it cannot choose model/provider routing or loosen permission/capability policy.
+Agent overlays support `model`, `variant`, `temperature`, `top_p`, `permission`, `mode`, `color`, `steps`, `hidden`, exact-agent-only `disable`, and managed `skills`. `color` accepts `#RGB`, `#RRGGBB`, or OpenCode named color tokens matching `[a-zA-Z][a-zA-Z0-9-]*`; whitespace/freeform numeric strings are rejected. `skills` uses bundled skill frontmatter names like `ce:review`; it is a shortcut that writes OpenCode `permission.skill` rules, not a native OpenCode agent field. Because `model` and `variant` control provider routing/cost/privacy and `permission`/`skills` control tool access, those fields are only accepted from user config or `$OPENCODE_CONFIG_DIR/systematic.json`. Project config may tune non-sensitive presentation and runtime fields such as `temperature`, `top_p`, `mode`, `color`, `steps`, `hidden`, or exact-agent `disable`, but it cannot choose model/provider routing, tune `variant`, or loosen permission/capability policy.
 
-Systematic separates config-source precedence from overlay precedence. Config files merge in this order: user config, project config, then `$OPENCODE_CONFIG_DIR/systematic.json` if set. Higher-priority `agents.<key>` and `categories.<id>` entries replace lower-priority entries wholesale, while unrelated keys survive. Project overlays are the exception for trust-sensitive fields: same-key project overlays preserve user-level `model`, `permission`, and `skills` fields instead of erasing them. After the effective config is built, exact `agents` overlays beat category overlays, which beat built-in policy defaults, bundled markdown defaults, and OpenCode inherited defaults.
+Systematic separates config-source precedence from overlay precedence. Config files merge in this order: user config, project config, then `$OPENCODE_CONFIG_DIR/systematic.json` if set. Higher-priority `agents.<key>` and `categories.<id>` entries replace lower-priority entries wholesale, while unrelated keys survive. Project overlays are the exception for trust-sensitive fields: same-key project overlays preserve user-level `model`, `variant`, `permission`, and `skills` fields instead of erasing them. After the effective config is built, Systematic applies agent overlay precedence for bundled agents:
 
-Bundled agents omit `model` by default so OpenCode model inheritance keeps working. Systematic emits a `model` only when you configure one explicitly in user or custom config; provider-specific zero-config model defaults are intentionally deferred.
+1. Exact `agents.<key>` overlay (high-trust `model` wins)
+2. `categories.<category-id>` overlay (high-trust `model` wins)
+3. Source category model default (built-in, code-owned)
+4. Bundled markdown/frontmatter defaults
+5. OpenCode inherited defaults
+
+Source category model defaults are primary model choices only — they are not fallback chains. Systematic does not support `fallback_models`, inherited retry semantics, runtime fallback behavior, or fallback to the parent model when a source model is unavailable. Explicit and source model IDs are structurally validated and may still fail at OpenCode runtime if the provider or model is unavailable.
+
+The source defaults are:
+
+| Category | Default `model` | Rationale |
+|----------|-----------------|-----------|
+| `design` | `openai/gpt-5.5` | High-judgment UX/product/design work benefits from a strong general reasoning model. |
+| `docs` | `openai/gpt-5.4-mini` | Documentation and summarization should start cheaper/faster. |
+| `document-review` | `anthropic/claude-opus-4.7` | Requirements and plan critique benefit from strongest nuanced reasoning. |
+| `research` | `openai/gpt-5.5` | Tool-heavy synthesis and source evaluation benefit from a strong general reasoning model. |
+| `review` | `anthropic/claude-opus-4.7` | Code/security/adversarial review benefits from strongest reasoning. |
+| `workflow` | `openai/gpt-5.4-mini` | Orchestration and bounded implementation should default cheaper/faster. |
+
+These defaults are owned by Systematic code and emitted for bundled agents in each category when no stronger high-trust exact or category `model` override exists. Uncategorized bundled agents receive no source default and continue inheriting the parent OpenCode model. Native OpenCode agents with the same emitted key are full replacements and receive no Systematic source model default.
+
+Bundled agent markdown still intentionally omits `model` — the field belongs in source code defaults, not portable markdown files. Authors must not add `model:` frontmatter to bundled agent files.
+
+Systematic emits a source model as the default; you can override it per-agent or per-category in user or `$OPENCODE_CONFIG_DIR/systematic.json` config. Project config cannot set, erase, or shadow `model` policy.
 
 Native OpenCode agents with the same emitted key are full replacements. An exact Systematic overlay for that key conflicts, while category overlays skip native replacements and continue applying to other bundled agents. Use one canonical agent key form across config sources (`security-sentinel` or `review/security-sentinel`) because alias collisions fail duplicate-target validation.
 

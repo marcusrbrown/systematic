@@ -491,6 +491,86 @@ describe('config', () => {
         })
       })
 
+      test('project overlays cannot configure variant in agents or categories', () => {
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir)
+        const projectConfigPath = path.join(projectConfigDir, 'systematic.json')
+
+        for (const config of [
+          {
+            agents: {
+              'correctness-reviewer': { variant: 'large-context' },
+            },
+          },
+          { categories: { review: { variant: 'small' } } },
+        ]) {
+          fs.writeFileSync(projectConfigPath, JSON.stringify(config))
+
+          expect(() => loadConfigWithSources(testDir)).toThrow(
+            projectConfigPath,
+          )
+          expect(() => loadConfigWithSources(testDir)).toThrow(
+            /only valid in user config or OPENCODE_CONFIG_DIR config/,
+          )
+        }
+      })
+
+      test('project same-key overlay preserves variant from higher-trust config', () => {
+        const userConfigDir = path.join(os.homedir(), '.config/opencode')
+        const userConfigPath = path.join(userConfigDir, 'systematic.json')
+        const userConfigBackup = tryReadFile(userConfigPath)
+
+        try {
+          fs.mkdirSync(userConfigDir, { recursive: true })
+          fs.writeFileSync(
+            userConfigPath,
+            JSON.stringify({
+              agents: {
+                'correctness-reviewer': {
+                  variant: 'large-context',
+                  model: 'openai/gpt-5',
+                  temperature: 0.1,
+                },
+              },
+              categories: {
+                review: {
+                  variant: 'small',
+                  temperature: 0.2,
+                },
+              },
+            }),
+          )
+
+          const projectConfigDir = path.join(testDir, '.opencode')
+          fs.mkdirSync(projectConfigDir)
+          fs.writeFileSync(
+            path.join(projectConfigDir, 'systematic.json'),
+            JSON.stringify({
+              agents: { 'correctness-reviewer': { hidden: true } },
+              categories: { review: { temperature: 0.5 } },
+            }),
+          )
+
+          const result = loadConfigWithSources(testDir)
+
+          expect(result.config.agents?.['correctness-reviewer']).toEqual({
+            hidden: true,
+            variant: 'large-context',
+            model: 'openai/gpt-5',
+          })
+          expect(result.config.categories?.review).toEqual({
+            temperature: 0.5,
+            variant: 'small',
+          })
+        } finally {
+          if (userConfigBackup !== null) {
+            fs.writeFileSync(userConfigPath, userConfigBackup)
+          } else {
+            tryUnlink(userConfigPath)
+          }
+        }
+      })
+
       test('custom config category overlay replaces project same-key overlay', () => {
         const customDir = fs.mkdtempSync(
           path.join(os.tmpdir(), 'systematic-custom-'),

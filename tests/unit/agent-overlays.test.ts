@@ -3,10 +3,13 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  assertSourceCategoryModelCoverage,
   type BundledAgentInventory,
   buildBundledAgentInventory,
+  getSourceCategoryModel,
   inferBuiltInTemperature,
   validateAgentOverlays,
+  validateSourceCategoryModelDefaults,
 } from '../../src/lib/agent-overlays.js'
 import type { SourcedOverlayConfig } from '../../src/lib/config.js'
 
@@ -223,6 +226,40 @@ describe('validateAgentOverlays', () => {
         }),
       ).toThrow(new RegExp(`agents\\.correctness-reviewer\\.${field}`))
     }
+  })
+
+  test('rejects fallback_models in exact agent overlays', () => {
+    expect(() =>
+      validateAgentOverlays({
+        inventory: createInventory(),
+        overlays: {
+          agents: {
+            'correctness-reviewer': source('agents', 'correctness-reviewer', {
+              fallback_models: ['openai/gpt-4'],
+            }),
+          },
+          categories: {},
+        },
+        nativeAgents: {},
+      }),
+    ).toThrow(/agents\.correctness-reviewer\.fallback_models.*unsupported/)
+  })
+
+  test('rejects fallback_models in category overlays', () => {
+    expect(() =>
+      validateAgentOverlays({
+        inventory: createInventory(),
+        overlays: {
+          agents: {},
+          categories: {
+            review: source('categories', 'review', {
+              fallback_models: ['openai/gpt-4'],
+            }),
+          },
+        },
+        nativeAgents: {},
+      }),
+    ).toThrow(/categories\.review\.fallback_models.*unsupported/)
   })
 
   test('rejects category disable but accepts exact disable', () => {
@@ -505,5 +542,40 @@ describe('inferBuiltInTemperature', () => {
     ['general-helper', 'Handles miscellaneous work', 0.3],
   ])('returns %p temperature for %s', (name, description, expected) => {
     expect(inferBuiltInTemperature(name, description)).toBe(expected)
+  })
+})
+
+describe('source category model defaults', () => {
+  test.each([
+    ['design', 'openai/gpt-5.5'],
+    ['docs', 'openai/gpt-5.4-mini'],
+    ['document-review', 'anthropic/claude-opus-4.7'],
+    ['research', 'openai/gpt-5.5'],
+    ['review', 'anthropic/claude-opus-4.7'],
+    ['workflow', 'openai/gpt-5.4-mini'],
+  ])('returns source model %p for category %s', (category, expected) => {
+    expect(getSourceCategoryModel(category)).toBe(expected)
+  })
+
+  test('returns no source model for unknown and uncategorized agents', () => {
+    expect(getSourceCategoryModel('unknown')).toBeUndefined()
+    expect(getSourceCategoryModel(undefined)).toBeUndefined()
+  })
+
+  test('covers every discovered bundled category intentionally', () => {
+    const inventory = buildBundledAgentInventory(
+      path.join(process.cwd(), 'agents'),
+      [],
+    )
+
+    expect(() =>
+      assertSourceCategoryModelCoverage(inventory.categories),
+    ).not.toThrow()
+  })
+
+  test('rejects malformed source model defaults through the shared model validator', () => {
+    expect(() =>
+      validateSourceCategoryModelDefaults({ review: 'gpt-5' }),
+    ).toThrow(/source category model defaults\.review.*provider\/model/)
   })
 })
