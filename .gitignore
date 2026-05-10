@@ -40,3 +40,6 @@ docs/public/schemas/latest/
 # Workflow artifacts
 docs/brainstorms/
 cep-guide.md
+
+# Systematic
+.context/

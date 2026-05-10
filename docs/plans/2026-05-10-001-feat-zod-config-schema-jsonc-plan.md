@@ -1,9 +1,12 @@
 ---
 title: "feat: Zod-backed user config + published JSON schema + first-class JSONC"
 type: feat
-status: completed
+status: active
 date: 2026-05-10
+revised: 2026-05-10
 origin: docs/brainstorms/2026-05-10-zod-config-schema-jsonc-requirements.md
+review_run: .context/systematic/ce-review/20260510-025753-c8196bd1/
+target_release: 2.12.0
 ---
 
 # feat: Zod-backed user config + published JSON schema + first-class JSONC
@@ -92,7 +95,7 @@ Two compounding friction points motivate this work (see origin doc Problem Frame
 - **JSON Schema draft target?** Draft-07. Not Zod 4's native default (2020-12) — VSCode/Zed JSON language servers have weaker 2020-12 support. Set via `z.toJSONSchema(schema, { target: 'draft-7' })` — verified supported per Zod 4 docs.
 - **Does `.default(value)` round-trip into JSON Schema `default`?** No. Per Zod 4 docs, the native exporter preserves `description`, `title`, and `examples` from `.meta()` — NOT `.default()`. The schema must use `.meta({ default: value })` for documented defaults; runtime parsing defaults still apply via `.default()` separately. Documented in `config-schema.ts` header during U1.
 - **Does Zod 4 support `target: 'draft-7'` in `toJSONSchema`?** Yes. Per Zod 4 docs, `target` accepts `"draft-04" | "draft-4" | "draft-07" | "draft-7" | "draft-2020-12" | "openapi-3.0"`. Use `'draft-7'` directly; no post-process step needed.
-- **Should the plugin offer an opt-in `$schema` injection (e.g., `systematic config init`)?** Out of scope for v1 (deferred per origin doc). Re-evaluate as a separate small follow-up after observing v3.0.0 adoption.
+- **Should the plugin offer an opt-in `$schema` injection (e.g., `systematic config init`)?** Out of scope for v1 (deferred per origin doc). Re-evaluate as a separate small follow-up after observing v2.12.0 adoption.
 
 ### Deferred to Implementation
 
@@ -211,14 +214,14 @@ Two compounding friction points motivate this work (see origin doc Problem Frame
 - The version-resolution helper pattern from `scripts/build-registry.ts` (git tag → `package.json` → dev fallback), or trivially write the same logic inline.
 
 **Test scenarios:**
-- Happy path: generator runs against a synthetic temp dir with a stub `package.json` (version `3.0.0`) — produces three files: `docs/public/schemas/v3/systematic-config.schema.json`, `docs/public/schemas/latest/systematic-config.schema.json`, `dist/schemas/systematic-config.schema.json`. All three byte-identical; each copy embeds the same major-versioned `$id`.
+- Happy path: generator runs against a synthetic temp dir with a stub `package.json` (version `2.12.0`) — produces three files: `docs/public/schemas/v2/systematic-config.schema.json`, `docs/public/schemas/latest/systematic-config.schema.json`, `dist/schemas/systematic-config.schema.json`. All three byte-identical; each copy embeds the same major-versioned `$id` (`v2/`).
 - Happy path: `$id` field reads `https://fro.bot/systematic/schemas/v3/systematic-config.schema.json` (NOT the `/latest/` URL). Covers AE4.
 - Happy path: schema includes `$schema` pointing to draft-07 (`http://json-schema.org/draft-07/schema#`).
 - Edge case: generator runs twice in a row — second run is a no-op (no file writes; `--check` would pass).
 - Edge case: a hand-edit to one of the three files is detected — `--check` exits 1 with a diff-style message naming the file.
-- Edge case: bumping major from `2.11.0` to `3.0.0` writes to `v3/` and updates `latest/`; `v2/` stays intact (assert it's still on disk).
+- Edge case (future): bumping major from v2.x to v3.0.0 writes to `v3/` and updates `latest/`; `v2/` stays intact (assert it's still on disk). Not exercised in v2.12.0 ship; covered by U7's version-resolution refactor.
 - Edge case: dev tree where `package.json.version` is `0.0.0-semantic-release` AND no git tags exist — generator exits 1 with a clear "no resolvable version" error rather than writing to `v0/`. (Real release CI has both git tags and a real version after `semantic-release` runs; only fresh-clone dev branches without tags should hit this.)
-- Edge case: explicit `--version 3.0.0-rc.1` flag overrides the resolver — generator writes to `v3/` and `latest/` regardless of git tag or `package.json` state.
+- Edge case: explicit `--version 2.12.0-rc.1` flag overrides the resolver — generator writes to `v2/` and `latest/` regardless of git tag or `package.json` state. (For future major bumps, the same flag with `3.0.0-rc.1` writes to `v3/`.)
 - Error path: invalid `package.json` version (e.g., missing) — generator exits 1 with a clear error.
 - Regression: a small representative agent overlay validates successfully against the generated schema with `ajv` (or equivalent) — proves the published schema accepts the same configs the runtime does.
 
@@ -316,9 +319,179 @@ Two compounding friction points motivate this work (see origin doc Problem Frame
 - The `configuration.mdx` page renders correctly in local docs dev.
 - No hardcoded-`.json` references remain in the modified test files.
 
+## Post-Review Reset (2026-05-10)
+
+ce:review (run `20260510-025753-c8196bd1`, 9 reviewers including correctness, adversarial, kieran-typescript, api-contract) flagged 4 P1 blockers and 16 P2s on the integrated state of U1–U5. The most consequential finding: three reviewers independently observed that **the Zod schema is built but never invoked at top-level config load** — `loadJsoncFile`/`loadConfigSource` in `src/lib/config.ts:115` cast parsed JSONC as `RawSystematicConfig` instead of running it through `SystematicConfigSchema`. The headline promise of this refactor ("single source of truth that actually validates user configs") is unfulfilled at the top level.
+
+Marcus reframed the release from v3.0.0 → **v2.12.0** because: "it was a bug to not have a schema to validate the config; this feature can ship as v2.12.0." The published schema URL `/v2/...` is correct for the package major. Two original P1 findings became moot or demoted under v2.12.0:
+- Original P1#4 ("v3 release publishes a schema whose URL still says v2") — moot for v2.12.0; future v3 work captures the version-resolution refactor.
+- Original P1#6 (zod range erasing protected-field metadata) — demoted to P2 (still real, no longer release-mechanics blocker).
+
+Units 6–9 below address the surviving 4 P1s plus closely-related P2s in a single fix-up cycle. Plan status flips back to `active`. Run artifact: `.context/systematic/ce-review/20260510-025753-c8196bd1/`.
+
+- [ ] **Unit 6: Wire SystematicConfigSchema into top-level config loader (THE bug fix)**
+
+**Goal:** Validate every loaded config source against `SystematicConfigSchema` immediately after JSONC parsing, before merging. This is the bug Marcus named — "it was a bug to not have a schema to validate the config." Without this unit, the v2.12.0 release ships a schema that only validates nested overlays, not top-level fields.
+
+**Requirements:** R1, R2, R3 (closes the gap between "schema defined" and "schema invoked")
+
+**Dependencies:** U1 (schema must exist; it does)
+
+**Files:**
+- Modify: `src/lib/config.ts` (loader path: `loadJsoncFile`, `loadConfigSource`, `loadConfigWithSources`)
+- Test: `tests/unit/config.test.ts`, `tests/unit/config-handler.test.ts` (extend with rejection cases)
+
+**Approach:**
+- After `parse(jsonText)` returns, run `SystematicConfigSchema.safeParse(parsed)` (NOT a cast).
+- On parse error: throw a `SystematicConfigError` with `{ source: 'user' | 'project' | 'env-override', path: string, issues: ZodIssue[] }`. Error message includes the offending field path AND the source-file path so users know which file to fix.
+- On parse success: use `result.data` (the parsed value, not the raw input) for downstream merging. This activates Zod's defaults and any `.transform()` steps, AND ensures `agent-overlays.ts` consumers receive parsed shape.
+- Keep `RawSystematicConfig` type alias only for the pre-validation shape inside `loadJsoncFile`. After validation, the type is `z.infer<typeof SystematicConfigSchema>`.
+- Surface the error path through `config-handler.ts` so the existing OpenCode `config(cfg)` hook reports the same structured error to the user.
+
+**Execution note:** Test-first. Write the rejection cases (invalid `disabled_skills`, invalid top-level field name, malformed `agents.<key>`) before changing the loader.
+
+**Patterns to follow:**
+- Existing throw shape in `src/lib/agent-overlays.ts` `validateOverlayFields` (now post-refactor) for the error-path field naming.
+- The `safeParse` + structured-error pattern is already used in `validateAgentOverlays` (overlay path); mirror it at top level.
+
+**Test scenarios:**
+- Happy path: a valid `systematic.json` loads identically to current behavior — same merged output, same source-priority resolution. Regression test loads each existing fixture from `tests/unit/config.test.ts` and asserts byte-identical merged output before/after this unit.
+- Error path: top-level `disabled_skills: "not-an-array"` rejected with error message naming `disabled_skills` and the source path.
+- Error path: top-level unknown field (e.g., `agnts: {}` typo) rejected by strict mode with error message naming the unknown field.
+- Error path: malformed `agents.<key>.model` (object instead of string/array) rejected with error path `agents.<key>.model`.
+- Error path: malformed `bootstrap.enabled: "yes"` (string instead of boolean) rejected with field path.
+- Edge case: empty config `{}` loads with all Zod defaults applied (this is the test that catches whether `result.data` defaults round-trip correctly).
+- Edge case: a user config that passed the OLD hand-rolled validators but fails Zod strict mode — capture the diff and document the breaking change in CHANGELOG (this is the bug-fix-shaped behavior change).
+- Integration: `tests/integration/opencode.test.ts` — load a malformed `systematic.json` via the plugin and verify OpenCode surfaces the structured error.
+
+**Verification:**
+- Top-level config validation runs on every load (loader-trace assertion in tests).
+- Error messages include source-file path AND field path for every rejection case.
+- All existing `tests/unit/config.test.ts` and `tests/unit/config-handler.test.ts` cases still pass (no regression on happy path).
+
+- [ ] **Unit 7: Reconcile generated JSON Schema with runtime contract**
+
+**Goal:** The published JSON Schema must accept exactly what the runtime accepts and reject exactly what the runtime rejects. Today, three reviewers identified divergence in both directions: (a) `required: [...]` is emitted for fields with Zod `.default()` so IDEs redline valid minimal configs; (b) representable refinements (provider/model regex, color hex pattern, variant whitespace pattern) are dropped from JSON Schema so the published schema accepts what runtime rejects.
+
+**Requirements:** R5, R6, R7 (the published schema must be a faithful contract, not a partial export)
+
+**Dependencies:** U1, U6 (schema must exist and be runtime-invoked first)
+
+**Files:**
+- Modify: `scripts/generate-config-schema.ts` (post-process `z.toJSONSchema()` output)
+- Modify: `src/lib/config-schema.ts` (add representable refinements where missing — provider/model regex, color enum/pattern, variant whitespace via `.regex()` not `.refine()`)
+- Test: `tests/unit/generate-config-schema.test.ts` (extend with parity tests via AJV)
+- Regenerate: `docs/public/schemas/v2/systematic-config.schema.json`, `dist/schemas/systematic-config.schema.json`
+
+**Approach:**
+- For every Zod field with `.default()`, post-process the generated JSON Schema to remove that field from the parent object's `required` array (since runtime-default makes it optional from the user's perspective).
+- Where Zod uses `.refine()` for patterns expressible in JSON Schema (regex, enum), convert to `.regex()` / `.enum()` so they emit into the JSON Schema. For genuinely non-representable refinements (e.g., cross-field validation), document the gap in the schema's `description` field.
+- Add an AJV parity test suite: for each fixture, validate it against BOTH the runtime Zod schema AND the generated JSON Schema; assert agreement on accept/reject for every fixture.
+- Coverage: minimal `{}`, partial `{ disabled_skills: [] }`, valid full config, invalid (provider/model bad format), invalid (color non-token non-hex), invalid (variant with whitespace), invalid (unknown top-level field).
+
+**Execution note:** Test-first. Write the AJV parity tests, run them against current (broken) generated schema to capture divergence count, then fix the generator. Regression target: zero parity divergences.
+
+**Patterns to follow:**
+- `scripts/build-registry.ts:130-180` (`resolveVersion` chain) for the version-resolution structure if needed.
+- Existing `--check` mode in `scripts/generate-registry.ts` for the drift-check semantics.
+
+**Test scenarios:**
+- Parity (happy): valid full config accepted by both Zod and AJV.
+- Parity (defaults): minimal `{}` accepted by both.
+- Parity (rejection): `model: "not-a-provider-format"` rejected by both.
+- Parity (rejection): `color: "blue"` (non-token, non-hex) rejected by both.
+- Parity (rejection): `variant: "foo bar"` (whitespace) rejected by both.
+- Edge case: `bootstrap: {}` (no `enabled` key) accepted by both because `enabled` has a default.
+- Edge case: `disabled_skills: []` accepted by both.
+- Generator unit test: AJV-validate the generated JSON Schema itself against draft-07 meta-schema.
+
+**Verification:**
+- AJV parity test suite has zero divergences across all fixtures.
+- The generated JSON Schema's `required` array contains only fields without runtime defaults.
+- Provider/model, color, and variant patterns appear as JSON Schema `pattern` or `enum` constraints.
+
+- [ ] **Unit 8: Fix CI drift cascade + escaped `$schema` in docs codegen**
+
+**Goal:** Two mechanical bugs that block CI and break the docs $schema example. P1#3 (drift cascade): `bun run build` cleans `dist/`, then CI's `schema:drift` checks `dist/schemas/` and fails. P1#5 (escape bug): `docs/scripts/generate-config-reference.ts:350` emits `"\$schema"` in the rendered example block instead of `"$schema"`, so users copying the docs example get a literal backslash.
+
+**Requirements:** R5, R6, R9, R14 (CI gate must work; docs example must paste-correctly)
+
+**Dependencies:** U7 (regenerated schema files land in same commit)
+
+**Files:**
+- Modify: `.github/workflows/main.yaml` (CI ordering: `schema:generate` before `schema:drift`, OR drop `dist/schemas/` from drift check)
+- Modify: `docs/scripts/generate-config-reference.ts` (line 350 area — fix the escape)
+- Test: `tests/unit/generate-config-reference.test.ts` (assert generated MDX contains literal `$schema` not `\$schema`)
+
+**Approach:**
+- For the cascade: prefer dropping `dist/schemas/` from `schema:drift` (it's a publish-only artifact regenerated by `prepublishOnly`). The drift check stays focused on committed `docs/public/schemas/v<MAJOR>/` output. Update `scripts/generate-config-schema.ts:--check` mode accordingly.
+- For the escape: track down whether the bug is in template-literal interpolation, JSON.stringify-pass, or a misplaced backslash. Fix at source; assert in test that the generated MDX contains literal `"$schema":` (no backslash).
+
+**Execution note:** Test-first. Write the assertion that the generated MDX contains `"$schema":` (no backslash) before fixing the generator.
+
+**Patterns to follow:**
+- `tests/unit/generate-registry.test.ts` byte-identical-output assertion pattern.
+
+**Test scenarios:**
+- Generator output contains literal `"$schema":` substring (regression assertion).
+- Generator output contains `https://fro.bot/systematic/schemas/v2/systematic-config.schema.json` (URL still correct).
+- `bun scripts/generate-config-schema.ts --check` exits 0 on a fresh checkout after `bun run build && bun scripts/generate-config-schema.ts` runs.
+- CI workflow file: assert the `schema:drift` step does NOT depend on `dist/schemas/` being present.
+
+**Verification:**
+- CI `schema:drift` step passes after a clean `bun run build` (no `schema:generate` between them).
+- Docs reference page renders a copy-pasteable `$schema` line.
+- `bun run docs:generate && grep -c '"\\\\\$schema"' docs/src/content/docs/reference/systematic-config.mdx` returns 0.
+
+- [ ] **Unit 9: Documentation parity sweep + zod version pinning + docs generator schema-derivation**
+
+**Goal:** Close the remaining P2 cluster: pin zod to an exact version (was P1#6, demoted), derive the docs reference page from the schema instead of a hard-coded field map (P2#10), unify the color validator (P2#9 — single regex/helper between `config-schema.ts` and `agent-colors.ts`), simplify `getSecurityOverlayFields()` to not reflect through Zod private internals (P2#14), and update three `AGENTS.md` files to reflect the new modules (P2#15-17).
+
+**Requirements:** R2, R4, R8, R12 (closes the documentation and trust-boundary parity gaps)
+
+**Dependencies:** U6, U7 (schema content stable before docs derive from it)
+
+**Files:**
+- Modify: `package.json` (pin `zod` to exact version, remove caret)
+- Modify: `src/lib/config-schema.ts` (use `isValidAgentColor` from `agent-colors.ts`, replace `_def`/`globalRegistry` reflection in `getSecurityOverlayFields()` with explicit field list co-located with the schema)
+- Modify: `docs/scripts/generate-config-reference.ts` (derive description/examples from `jsonSchema.properties`, keep only an ordering map)
+- Modify: `AGENTS.md` (Where to Look table: add `config-schema.ts`, `agent-colors.ts`, `generate-config-schema.ts`, `generate-config-reference.ts`; Code Map table: add `SystematicConfigSchema`, `validateConfig`, `extractAgentColors`, `isValidAgentColor`)
+- Modify: `src/lib/AGENTS.md` (module count 12→14, add new modules to module table)
+- Modify: `docs/AGENTS.md` (document the new docs-generation pipeline)
+- Test: `tests/unit/generate-config-reference.test.ts` (regression: every schema field with a description appears in the generated MDX), `tests/unit/agent-overlays.test.ts` (color parity test: schema accepts/rejects same set as `isValidAgentColor`).
+
+**Approach:**
+- zod pin: change `^4.4.3` → `4.4.3` in `package.json`. Add a renovate/dependabot allow-list entry if applicable so future bumps are deliberate.
+- Color unification: replace the inline regex in `config-schema.ts` color field with `.refine(isValidAgentColor)`, delete the duplicate regex.
+- Security field list: replace the `Object.entries(globalRegistry...)` reflection with an explicit `const SECURITY_OVERLAY_FIELDS = ['model', 'permission', ...] as const` co-located with the schema. Add a regression test that asserts every `SECURITY_OVERLAY_FIELDS` entry corresponds to a schema field with `.meta({ trust: 'project-or-higher' })`.
+- Docs derivation: rewrite `generate-config-reference.ts` to walk `jsonSchema.properties` in a stable order; render description/type/default/examples for each. Remove the hard-coded field-description map. Add a regression test that fails if any schema-described field is missing from the generated MDX.
+- AGENTS.md sweep: 3 files, table updates only. Mechanical.
+
+**Execution note:** Test-first for the color parity, security field list, and schema-derived docs regressions.
+
+**Patterns to follow:**
+- `scripts/generate-registry.ts` walk-and-render pattern for the docs derivation rewrite.
+- Existing `Object.freeze`/`as const` patterns in `agent-colors.ts` for the security field list.
+
+**Test scenarios:**
+- Color parity: `isValidAgentColor('#fff')` and Zod `color` field validation agree (both reject or both accept).
+- Color parity: `isValidAgentColor('blue')` and Zod color validation agree (both reject).
+- Security fields: every entry in `SECURITY_OVERLAY_FIELDS` exists as a schema field with the `trust` meta tag.
+- Docs parity: every field in `SystematicConfigSchema` with a `.meta({ description })` appears in the generated MDX with that description.
+- Docs parity: adding a new schema field with `.meta({ description: 'foo' })` produces a new section in the regenerated MDX.
+- AGENTS.md: root and `src/lib/` have updated counts and module references.
+- `package.json`: `zod` is pinned to a single exact version (no caret/tilde).
+
+**Verification:**
+- `package.json` `zod` field has no semver-range prefix.
+- `getSecurityOverlayFields()` does not reference `_def` or `globalRegistry`.
+- Color validation lives in one place (`agent-colors.ts`), referenced from the schema.
+- `bun run docs:generate` produces a reference page where every schema field with a description appears.
+- `AGENTS.md`, `src/lib/AGENTS.md`, `docs/AGENTS.md` all reference the new modules in their tables.
+
 ## System-Wide Impact
 
-- **Interaction graph:** The Zod schema becomes the single source of truth consumed by (a) runtime validation in `loadConfigWithSources`, (b) `validateAgentOverlays` and friends in `agent-overlays.ts`, (c) the JSON-schema codegen in `scripts/generate-config-schema.ts`, (d) the docs-page generator in `docs/scripts/generate-config-reference.ts`, (e) the source-default constant assertion. Five consumers, one schema.
+- **Interaction graph:** The Zod schema becomes the single source of truth consumed by (a) runtime validation in `loadConfigWithSources` **(actually wired in U6 — was missing in U1–U5)**, (b) `validateAgentOverlays` and friends in `agent-overlays.ts`, (c) the JSON-schema codegen in `scripts/generate-config-schema.ts` **(reconciled with runtime in U7)**, (d) the docs-page generator in `docs/scripts/generate-config-reference.ts` **(rewritten to derive from schema in U9)**, (e) the source-default constant assertion. Five consumers, one schema.
 - **Error propagation:** Validation errors from Zod surface to the same callers that consume hand-rolled errors today. The error shape changes (Zod's default formatter has structured `issues[]`), so any caller that pattern-matched on the old error string format needs updating. U2 names the audit targets explicitly (CLI error handlers in `src/cli.ts`, test assertions on validator error messages, `config-handler.ts` and `src/index.ts` propagation paths). The acceptance bar remains "field path + human-readable reason" — no custom formatter for v1.
 - **State lifecycle risks:** None — the work is replacement, not state-bearing. Source defaults and user overlays continue to flow through the same merge paths.
 - **API surface parity:** Public exports from `agent-overlays.ts` keep their signatures; only the internal validators are removed. No breaking change for any downstream caller that imports from `src/lib/`.
@@ -337,7 +510,7 @@ Two compounding friction points motivate this work (see origin doc Problem Frame
 ## Documentation / Operational Notes
 
 - The new `docs/src/content/docs/reference/systematic-config.mdx` is generated, not hand-written. Documenters add new fields by editing the Zod schema's `.meta()` annotations, not the .mdx file. Add a comment at the top of `docs/src/content/docs/reference/systematic-config.mdx` (in the generator output) explaining this so contributors don't waste time editing the generated file.
-- v3.0.0 release notes (when this work ships) should call out: (a) the new `$schema` URL users can add for IDE autocomplete, (b) the JSONC precedence change (silent — no behavior shift for users with only `.json`), (c) the bundled npm schema fallback for offline IDEs.
+- v2.12.0 release notes (when this work ships) should call out: (a) the new `$schema` URL users can add for IDE autocomplete, (b) the JSONC precedence change (silent — no behavior shift for users with only `.json`), (c) the bundled npm schema fallback for offline IDEs, (d) **bug fix:** runtime config-load now validates each source through the Zod schema before merging (previously, the schema existed only as a type and was not invoked on top-level loads — see U6).
 - A future small follow-up (deferred per origin doc) could add `systematic config init` CLI subcommand to write the `$schema` line into an existing config. Not in scope for this PR.
 
 ## Sources & References
