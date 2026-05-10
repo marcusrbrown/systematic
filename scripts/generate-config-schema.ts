@@ -15,12 +15,36 @@
  *   bun scripts/generate-config-schema.ts --check                 # Exit 1 if generated output differs from disk
  *   bun scripts/generate-config-schema.ts --version 3.0.0         # Explicit version override
  */
-import { execSync } from 'node:child_process'
+import { execSync, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import { SystematicConfigSchema } from '../src/lib/config-schema.js'
+
+/**
+ * Run Biome's formatter over JSON content via stdin. Used to keep the
+ * generated schema files in lockstep with the repo's lint rules (Biome
+ * prefers short arrays on a single line, multi-line for longer ones).
+ * Without this pass the generator's plain `JSON.stringify(..., null, 2)`
+ * output drifts from `bun run lint` expectations and the lint job fails
+ * on otherwise-correct generated artifacts.
+ *
+ * Mirrors the pattern used in `scripts/generate-registry.ts`.
+ */
+function formatJsonWithBiome(content: string, fileName: string): string {
+  const result = spawnSync(
+    'bun',
+    ['biome', 'format', `--stdin-file-path=${fileName}`],
+    { input: content, encoding: 'utf8' },
+  )
+  if (result.status !== 0) {
+    throw new Error(
+      `biome format failed (exit ${result.status}): ${result.stderr || result.stdout}`,
+    )
+  }
+  return result.stdout
+}
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -216,7 +240,8 @@ export function generateSchemaContent(version: string): string {
     SystematicConfigSchema,
   )
 
-  return `${JSON.stringify(clean, null, 2)}\n`
+  const raw = `${JSON.stringify(clean, null, 2)}\n`
+  return formatJsonWithBiome(raw, 'systematic-config.schema.json')
 }
 
 /**

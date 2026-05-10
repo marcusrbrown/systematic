@@ -40,10 +40,7 @@
               }
             ],
             "description": "Model identifier in provider/model format, or null to inherit parent model",
-            "examples": [
-              "anthropic/claude-sonnet-4",
-              null
-            ],
+            "examples": ["anthropic/claude-sonnet-4", null],
             "trust": "project-or-higher"
           },
           "variant": {
@@ -51,21 +48,14 @@
             "minLength": 1,
             "pattern": "^\\S+$",
             "description": "Model variant identifier",
-            "examples": [
-              "v2",
-              "extended"
-            ],
+            "examples": ["v2", "extended"],
             "trust": "project-or-higher"
           },
           "temperature": {
             "type": "number",
             "minimum": 0,
             "description": "Sampling temperature (≥0; 0 = deterministic)",
-            "examples": [
-              0.1,
-              0.7,
-              0
-            ],
+            "examples": [0.1, 0.7, 0],
             "trust": "any"
           },
           "top_p": {
@@ -73,26 +63,14 @@
             "minimum": 0,
             "maximum": 1,
             "description": "Nucleus sampling parameter (0 to 1)",
-            "examples": [
-              0.9,
-              0.1,
-              1
-            ],
+            "examples": [0.9, 0.1, 1],
             "trust": "any"
           },
           "mode": {
             "type": "string",
-            "enum": [
-              "subagent",
-              "primary",
-              "all"
-            ],
+            "enum": ["subagent", "primary", "all"],
             "description": "Agent execution mode",
-            "examples": [
-              "subagent",
-              "primary",
-              "all"
-            ]
+            "examples": ["subagent", "primary", "all"]
           },
           "color": {
             "anyOf": [
@@ -114,36 +92,24 @@
               }
             ],
             "description": "Agent color — named token from OpenCode or 6-digit hex color (#RRGGBB)",
-            "examples": [
-              "primary",
-              "#ff6600"
-            ]
+            "examples": ["primary", "#ff6600"]
           },
           "steps": {
             "type": "integer",
             "exclusiveMinimum": 0,
             "maximum": 9007199254740991,
             "description": "Maximum execution steps (positive integer)",
-            "examples": [
-              10,
-              50
-            ]
+            "examples": [10, 50]
           },
           "hidden": {
             "type": "boolean",
             "description": "Hide agent from UI",
-            "examples": [
-              true,
-              false
-            ]
+            "examples": [true, false]
           },
           "disable": {
             "type": "boolean",
             "description": "Disable this agent overlay",
-            "examples": [
-              true,
-              false
-            ]
+            "examples": [true, false]
           },
           "skills": {
             "type": "array",
@@ -152,12 +118,7 @@
               "minLength": 1
             },
             "description": "Skills enabled for this agent",
-            "examples": [
-              [
-                "ce:plan",
-                "ce:review"
-              ]
-            ],
+            "examples": [["ce:plan", "ce:review"]],
             "trust": "project-or-higher"
           },
           "permission": {
@@ -169,11 +130,7 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "enum": [
-                    "ask",
-                    "allow",
-                    "deny"
-                  ]
+                  "enum": ["ask", "allow", "deny"]
                 },
                 {
                   "type": "object",
@@ -182,11 +139,7 @@
                   },
                   "additionalProperties": {
                     "type": "string",
-                    "enum": [
-                      "ask",
-                      "allow",
-                      "deny"
-                    ]
+                    "enum": ["ask", "allow", "deny"]
                   }
                 }
               ]
@@ -245,10 +198,7 @@
               }
             ],
             "description": "Model identifier in provider/model format, or null to inherit parent model",
-            "examples": [
-              "anthropic/claude-sonnet-4",
-              null
-            ],
+            "examples": ["anthropic/claude-sonnet-4", null],
             "trust": "project-or-higher"
           },
           "variant": {
@@ -256,21 +206,14 @@
             "minLength": 1,
             "pattern": "^\\S+$",
             "description": "Model variant identifier",
-            "examples": [
-              "v2",
-              "extended"
-            ],
+            "examples": ["v2", "extended"],
             "trust": "project-or-higher"
           },
           "temperature": {
             "type": "number",
             "minimum": 0,
             "description": "Sampling temperature (≥0; 0 = deterministic)",
-            "examples": [
-              0.1,
-              0.7,
-              0
-            ],
+            "examples": [0.1, 0.7, 0],
             "trust": "any"
           },
           "top_p": {
@@ -278,26 +221,14 @@
             "minimum": 0,
             "maximum": 1,
             "description": "Nucleus sampling parameter (0 to 1)",
-            "examples": [
-              0.9,
-              0.1,
-              1
-            ],
+            "examples": [0.9, 0.1, 1],
             "trust": "any"
           },
           "mode": {
             "type": "string",
-            "enum": [
-              "subagent",
-              "primary",
-              "all"
-            ],
+            "enum": ["subagent", "primary", "all"],
             "description": "Agent execution mode",
-            "examples": [
-              "subagent",
-              "primary",
-              "all"
-            ]
+            "examples": ["subagent", "primary", "all"]
           },
           "color": {
             "anyOf": [
@@ -319,28 +250,19 @@
               }
             ],
             "description": "Agent color — named token from OpenCode or 6-digit hex color (#RRGGBB)",
-            "examples": [
-              "primary",
-              "#ff6600"
-            ]
+            "examples": ["primary", "#ff6600"]
           },
           "steps": {
             "type": "integer",
             "exclusiveMinimum": 0,
             "maximum": 9007199254740991,
             "description": "Maximum execution steps (positive integer)",
-            "examples": [
-              10,
-              50
-            ]
+            "examples": [10, 50]
           },
           "hidden": {
             "type": "boolean",
             "description": "Hide agent from UI",
-            "examples": [
-              true,
-              false
-            ]
+            "examples": [true, false]
           },
           "skills": {
             "type": "array",
@@ -349,12 +271,7 @@
               "minLength": 1
             },
             "description": "Skills enabled for this agent",
-            "examples": [
-              [
-                "ce:plan",
-                "ce:review"
-              ]
-            ],
+            "examples": [["ce:plan", "ce:review"]],
             "trust": "project-or-higher"
           },
           "permission": {
@@ -366,11 +283,7 @@
               "anyOf": [
                 {
                   "type": "string",
-                  "enum": [
-                    "ask",
-                    "allow",
-                    "deny"
-                  ]
+                  "enum": ["ask", "allow", "deny"]
                 },
                 {
                   "type": "object",
@@ -379,11 +292,7 @@
                   },
                   "additionalProperties": {
                     "type": "string",
-                    "enum": [
-                      "ask",
-                      "allow",
-                      "deny"
-                    ]
+                    "enum": ["ask", "allow", "deny"]
                   }
                 }
               ]
@@ -414,12 +323,7 @@
     "disabled_skills": {
       "default": [],
       "description": "Array of skill names to disable globally",
-      "examples": [
-        [
-          "ce:plan",
-          "ce:review"
-        ]
-      ],
+      "examples": [["ce:plan", "ce:review"]],
       "type": "array",
       "items": {
         "type": "string"
@@ -428,12 +332,7 @@
     "disabled_agents": {
       "default": [],
       "description": "Array of agent names to disable globally",
-      "examples": [
-        [
-          "previous-comments-reviewer",
-          "cli-readiness-reviewer"
-        ]
-      ],
+      "examples": [["previous-comments-reviewer", "cli-readiness-reviewer"]],
       "type": "array",
       "items": {
         "type": "string"
@@ -442,11 +341,7 @@
     "disabled_commands": {
       "default": [],
       "description": "Array of command names to disable globally",
-      "examples": [
-        [
-          "deprecated-migration-helper"
-        ]
-      ],
+      "examples": [["deprecated-migration-helper"]],
       "type": "array",
       "items": {
         "type": "string"
@@ -471,17 +366,12 @@
         "enabled": {
           "default": true,
           "description": "Enable bootstrap prompt injection into every conversation",
-          "examples": [
-            true,
-            false
-          ],
+          "examples": [true, false],
           "type": "boolean"
         },
         "file": {
           "description": "Path to a custom bootstrap prompt file",
-          "examples": [
-            "~/.config/opencode/bootstrap.md"
-          ],
+          "examples": ["~/.config/opencode/bootstrap.md"],
           "type": "string"
         }
       },
@@ -492,9 +382,7 @@
   "description": "Systematic user configuration file (systematic.json / systematic.jsonc)",
   "examples": [
     {
-      "disabled_skills": [
-        "ce:plan"
-      ],
+      "disabled_skills": ["ce:plan"],
       "bootstrap": {
         "enabled": false
       }
