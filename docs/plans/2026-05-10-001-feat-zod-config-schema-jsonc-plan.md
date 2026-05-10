@@ -18,7 +18,7 @@ Two compounding friction points motivate this work (see origin doc Problem Frame
 
 ## Requirements Trace
 
-- R1. (see origin) Define a single Zod schema for the user-facing `systematic.json` shape.
+- R1. (see origin) Define a single Zod schema for the user-facing `systematic.json` shape, covering all top-level keys: `agents`, `categories`, `disabled_skills`, `disabled_agents`, `disabled_commands`, `bootstrap`.
 - R2. (see origin) Replace hand-rolled validation in `src/lib/config.ts` and `src/lib/agent-overlays.ts` (overlay paths only).
 - R3. (see origin) Validation errors include the offending field path and a human-readable reason.
 - R4. (see origin) Source-default constants migrate to Zod-backed assertions.
@@ -109,12 +109,12 @@ Two compounding friction points motivate this work (see origin doc Problem Frame
 **Dependencies:** None
 
 **Files:**
-- Create: `src/lib/config-schema.ts` — exports `SystematicConfigSchema` (top-level Zod object), `AgentOverlaySchema`, `CategoryOverlaySchema`, `BootstrapSchema`, `validateConfig(input): ValidationResult`, `assertSourceCategoryModelDefaults()` (Zod-backed replacement for the existing assertion).
+- Create: `src/lib/config-schema.ts` — exports `SystematicConfigSchema` (top-level Zod object covering `agents`, `categories`, `disabled_skills`, `disabled_agents`, `disabled_commands`, `bootstrap`), `AgentOverlaySchema`, `CategoryOverlaySchema`, `BootstrapSchema`, `validateConfig(input): ValidationResult`, `assertSourceCategoryModelDefaults()` (Zod-backed replacement for the existing assertion).
 - Modify: `package.json` — add `"zod": "^4.4.3"` to `dependencies`.
 - Test: `tests/unit/config-schema.test.ts`
 
 **Approach:**
-- Mirror the user-config field set from `src/lib/config.ts:26-52`: top-level `agents`, `categories`, `disabled_skills`, `disabled_agents`, `bootstrap`. Per-agent / per-category overlays mirror the field set in `src/lib/agent-overlays.ts` validators (model, variant, temperature, top_p, tools, disable, mode, color, steps, hidden, permission, etc.).
+- Mirror the user-config field set from `src/lib/config.ts:35-52`: top-level `agents`, `categories`, `disabled_skills`, `disabled_agents`, `disabled_commands`, `bootstrap`. **All six** top-level fields must be covered — omitting `disabled_commands` would reject existing user configs and violate R12. Per-agent / per-category overlays mirror the field set in `src/lib/agent-overlays.ts` validators (model, variant, temperature, top_p, tools, disable, mode, color, steps, hidden, permission, etc.).
 - Annotate every leaf field with `.meta({ description, examples })`. Use `.describe()` only where a single-line description suffices.
 - Color enum reuses `OPENCODE_AGENT_COLOR_TOKENS` from `scripts/content-integrity.ts:722-730`. Re-export the constant from a shared location if needed (or duplicate as a Zod enum and add a regression test that they stay in sync).
 - Trust-sensitivity tagging: each overlay field carries `.meta({ trust: 'project-or-higher' | 'any' })` so the layered-trust-boundary contract from PR #344 is structural in the schema. The validation layer reads this metadata when applicable.
@@ -123,11 +123,11 @@ Two compounding friction points motivate this work (see origin doc Problem Frame
 **Patterns to follow:**
 - `src/lib/agent-overlays.ts` — existing validation surface and error-message style. Reuse field semantics and constraint shapes (e.g., temperature ≥ 0, top_p ≤ 1, color enum).
 - `OPENCODE_AGENT_COLOR_TOKENS` from `scripts/content-integrity.ts:722-730` for color enum values.
-- Zod 4 idioms: `z.object().strict()` for closed objects (rejects unknown keys at the top level), `.passthrough()` for open objects (accepts unknown keys for forward-compat at the per-agent/per-category overlay level).
+- Zod 4 idioms: `z.object().strict()` for closed objects (rejects unknown keys at the top level AND at the per-agent / per-category overlay level). The plan uses strict mode at every layer so unknown overlay fields fail loudly with a path-named error — mirrors the existing `ALLOWED_OVERLAY_FIELDS` behavior at `src/lib/agent-overlays.ts:65,417` which produces clear `unsupported agent overlay field "..."` messages today. Forward-compatibility for genuinely-new fields belongs to schema versioning (major-bump → new schema version), not to per-call permissiveness.
 
 **Test scenarios:**
 - Happy path: parse a complete valid `systematic.json` (all fields populated) — succeeds, returns typed object.
-- Happy path: parse an empty `{}` — succeeds, returns object with default values applied (`disabled_skills: []`, `disabled_agents: []`, `bootstrap.enabled: true`, `agents: {}`, `categories: {}` per `src/lib/config.ts:42-52`). Defaults are emitted via `.meta({ default: value })` because `.default()` does NOT round-trip into JSON Schema `default` per Zod 4 docs (verified in Phase 1.2).
+- Happy path: parse an empty `{}` — succeeds, returns object with default values applied (`disabled_skills: []`, `disabled_agents: []`, `disabled_commands: []`, `bootstrap.enabled: true`, `agents: {}`, `categories: {}` per `src/lib/config.ts:44-52`). Defaults are emitted via `.meta({ default: value })` because `.default()` does NOT round-trip into JSON Schema `default` per Zod 4 docs.
 - Edge case: parse a config with unknown top-level keys — strict mode rejects with named field path; document this in the error.
 - Error path: `agents.explorer.temperature: "high"` (string instead of number) — error names `agents.explorer.temperature` and indicates expected number type. Covers AE5.
 - Error path: `agents.explorer.top_p: 1.5` (out of range) — error names the path and indicates the `0 ≤ top_p ≤ 1` constraint.
@@ -137,7 +137,7 @@ Two compounding friction points motivate this work (see origin doc Problem Frame
 - Error path: `agents.explorer.hidden: "yes"` (string instead of boolean) — error names the path with expected boolean type.
 - Error path: `agents.explorer.permission: "open"` (invalid permission rule shape) — error names the path and indicates the expected rule structure.
 - Error path: `categories.review.model: ""` (empty string) — error names the path and indicates non-empty constraint.
-- Edge case: per-agent overlay with extra unknown field (`agents.explorer.foo: "bar"`) — passthrough mode accepts the extra field; schema doesn't break forward-compat.
+- Error path: per-agent overlay with extra unknown field (`agents.explorer.foo: "bar"`) — strict mode rejects with a path-named error matching the existing `unsupported agent overlay field "foo"` shape from `validateOverlayFields` at `src/lib/agent-overlays.ts:417`. Preserves current strict-validation behavior.
 - Integration: `assertSourceCategoryModelDefaults()` against the actual `SOURCE_CATEGORY_MODEL_DEFAULTS` and `SOURCE_AGENT_MODEL_DEFAULTS` constants — passes for current shipped values; intentionally-bad mock fails with a path-named error.
 - Regression: trust-tagged fields enumerate exactly the protected set from the existing `SECURITY_OVERLAY_FIELDS` constant in `src/lib/config.ts`.
 
@@ -164,6 +164,7 @@ Two compounding friction points motivate this work (see origin doc Problem Frame
 - Source-default constants assertion (`assertSourceCategoryModelDefaults`) becomes a `parse` call against the schema's `SOURCE_CATEGORY_MODEL_DEFAULTS` shape — the schema knows its own contract.
 - Trust-sensitivity check: the existing `SECURITY_OVERLAY_FIELDS` set in `src/lib/config.ts` becomes a derived constant computed from the Zod schema's `.meta({ trust: 'project-or-higher' })` annotations. One source of truth.
 - Error messages MUST include the field path (e.g., `agents.explorer.temperature`). Zod's default formatter does this; validate explicitly in a test.
+- **Error-shape audit (mandatory)**: before completing U2, grep for callers that pattern-match on the OLD validator error strings. Specifically check: (a) `src/cli.ts` for any `error.message.includes(...)` paths around config-load failures, (b) any `tests/unit/*.test.ts` test that asserts on a literal validator error message string (use grep for `unsupported agent overlay field` and `expects` on `.message` / `.toThrow` patterns), (c) `src/lib/config-handler.ts` for any error-string-matching on validation failures from `loadConfigWithSources`, (d) `src/index.ts` for the same. Update each caller to either accept Zod's structured `issues[]` shape or pattern-match on the new flattened error string. The audit is implementation work — the plan names the targets, the implementer performs the grep and updates.
 
 **Patterns to follow:**
 - Existing public validator signatures in `agent-overlays.ts` (`validateAgentOverlays({ agents, source }) → ValidationResult`).
@@ -193,12 +194,12 @@ Two compounding friction points motivate this work (see origin doc Problem Frame
 
 **Files:**
 - Create: `scripts/generate-config-schema.ts` — reads `src/lib/config-schema.ts`, calls `z.toJSONSchema(SystematicConfigSchema, { target: 'draft-7', override: { $id: ... } })`, writes to three target paths. Supports `--check` mode (exits 1 if generated output differs from disk) for CI drift detection.
-- Modify: `package.json` `scripts` — add `schema:generate: "bun scripts/generate-config-schema.ts"` and `schema:drift: "bun scripts/generate-config-schema.ts --check"`. Wire `schema:generate` into `docs:generate` (runs after `transform-content.ts`) and make sure `prepublishOnly` runs it after `build` (so the bundled copy survives `dist/`'s clean step).
+- Modify: `package.json` `scripts` — add `schema:generate: "bun scripts/generate-config-schema.ts"` and `schema:drift: "bun scripts/generate-config-schema.ts --check"`. Wire `schema:generate` into `docs:generate` (runs after `transform-content.ts`) and make sure `prepublishOnly` runs it after `build` (so the bundled copy survives `dist/`'s clean step). The generator also accepts `--version <semver>` for explicit override, mirroring `scripts/build-registry.ts`'s flag.
 - Modify: `.github/workflows/main.yaml` — add `bun run schema:drift` step in the build job (mirrors registry drift check).
 - Test: `tests/unit/generate-config-schema.test.ts`
 
 **Approach:**
-- Generator computes the major version from `package.json` `version` field — `2.11.0` → `v2`. The generator does not consult git tags. This is intentional: `docs:generate` and `prepublishOnly` both run after `package.json` is bumped to the next version (`semantic-release` writes `package.json` before publish), so `package.json.version` is always the source of truth at the moment the generator runs. Dev branches between releases continue to write to the current published major, which is correct (the published schema URL still points at the user-facing major). Bumping the major triggers writing to the new `vN/` directory; the previous `vN-1/` directory continues to exist (no automatic deletion — older majors stay published).
+- Generator resolves the major version using the same fallback pattern as `scripts/build-registry.ts:resolveVersion` at `scripts/build-registry.ts:130-180`: explicit `--version` flag input → `git describe --tags --abbrev=0` → `package.json` (rejecting the `0.0.0-semantic-release` placeholder that lives in the unreleased tree) → hard-fail with a clear error if none yield a valid semver. This avoids writing to `v0/` from dev branches and CI, where `package.json.version` is the placeholder `0.0.0-semantic-release` and the actual published major is in the most-recent git tag. Bumping the major (next git tag) triggers writing to the new `vN/` directory; the previous `vN-1/` directory continues to exist (no automatic deletion — older majors stay published).
 - `latest/` directory is rewritten on every run to match the current major.
 - Bundled npm copy at `dist/schemas/systematic-config.schema.json` has the same content as the major-versioned docs copy; `$id` matches the docs URL.
 - All three writes happen in the same pass so divergence is impossible.
@@ -216,6 +217,8 @@ Two compounding friction points motivate this work (see origin doc Problem Frame
 - Edge case: generator runs twice in a row — second run is a no-op (no file writes; `--check` would pass).
 - Edge case: a hand-edit to one of the three files is detected — `--check` exits 1 with a diff-style message naming the file.
 - Edge case: bumping major from `2.11.0` to `3.0.0` writes to `v3/` and updates `latest/`; `v2/` stays intact (assert it's still on disk).
+- Edge case: dev tree where `package.json.version` is `0.0.0-semantic-release` AND no git tags exist — generator exits 1 with a clear "no resolvable version" error rather than writing to `v0/`. (Real release CI has both git tags and a real version after `semantic-release` runs; only fresh-clone dev branches without tags should hit this.)
+- Edge case: explicit `--version 3.0.0-rc.1` flag overrides the resolver — generator writes to `v3/` and `latest/` regardless of git tag or `package.json` state.
 - Error path: invalid `package.json` version (e.g., missing) — generator exits 1 with a clear error.
 - Regression: a small representative agent overlay validates successfully against the generated schema with `ajv` (or equivalent) — proves the published schema accepts the same configs the runtime does.
 
@@ -237,6 +240,7 @@ Two compounding friction points motivate this work (see origin doc Problem Frame
 **Files:**
 - Create: `docs/scripts/generate-config-reference.ts` — reads `SystematicConfigSchema`, walks the schema tree, emits a Starlight-compatible `.mdx` page. Each field becomes a section with description, type, default (if any), enum (if any), and at least one example. Page header includes the copy-paste `$schema` line.
 - Modify: `docs/astro.config.mjs` — add an explicit sidebar entry under the Reference section pointing at `reference/systematic-config`. (Sidebar autogenerate covers `reference/skills` and `reference/agents` only.)
+- Modify: the generated `systematic-config.mdx` page header includes a brief note about offline IDE behavior — the schema's `$id` is the canonical online URL, so IDEs that prefer fetching the canonical schema may attempt to reach the docs site even when the bundled npm copy is also on disk. Users needing strict offline behavior should configure their editor to associate `systematic.{json,jsonc}` with `node_modules/@fro.bot/systematic/dist/schemas/systematic-config.schema.json` directly.
 - Modify: `package.json` `scripts` — wire `docs/scripts/generate-config-reference.ts` into `docs:generate` after `scripts/generate-config-schema.ts` (so the page can reference the published schema URL).
 - Test: `tests/unit/generate-config-reference.test.ts`
 
@@ -252,7 +256,7 @@ Two compounding friction points motivate this work (see origin doc Problem Frame
 - `docs/astro.config.mjs:56-61` — existing sidebar entry shapes (Reference > Skills, Reference > Agents).
 
 **Test scenarios:**
-- Happy path: generator runs against a synthetic temp dir — produces `systematic-config.mdx` with frontmatter, copy-paste `$schema` block, one section per top-level config key (`agents`, `categories`, `disabled_skills`, `disabled_agents`, `bootstrap`), at least one example per field.
+- Happy path: generator runs against a synthetic temp dir — produces `systematic-config.mdx` with frontmatter, copy-paste `$schema` block, one section per top-level config key (`agents`, `categories`, `disabled_skills`, `disabled_agents`, `disabled_commands`, `bootstrap`), at least one example per field.
 - Happy path: every leaf field in the schema has a non-empty description in the generated page (catches an undocumented field at build time).
 - Error path: a field with no `.meta({ examples })` causes the generator to exit 1 with an error naming the field path. R8 requires every field to have at least one example, so the contract is enforced at build time, not at runtime. (If a field is genuinely example-free — e.g., a `Record<string, unknown>` passthrough — the schema can supply a placeholder example or the field is annotated as `example-exempt` via metadata.)
 - Edge case: enum fields render as a list of valid values.
@@ -315,7 +319,7 @@ Two compounding friction points motivate this work (see origin doc Problem Frame
 ## System-Wide Impact
 
 - **Interaction graph:** The Zod schema becomes the single source of truth consumed by (a) runtime validation in `loadConfigWithSources`, (b) `validateAgentOverlays` and friends in `agent-overlays.ts`, (c) the JSON-schema codegen in `scripts/generate-config-schema.ts`, (d) the docs-page generator in `docs/scripts/generate-config-reference.ts`, (e) the source-default constant assertion. Five consumers, one schema.
-- **Error propagation:** Validation errors from Zod surface to the same callers that consume hand-rolled errors today. The error shape changes (Zod's default formatter has structured `issues[]`), so any caller that pattern-matched on the old error string format needs updating. Audit during U2.
+- **Error propagation:** Validation errors from Zod surface to the same callers that consume hand-rolled errors today. The error shape changes (Zod's default formatter has structured `issues[]`), so any caller that pattern-matched on the old error string format needs updating. U2 names the audit targets explicitly (CLI error handlers in `src/cli.ts`, test assertions on validator error messages, `config-handler.ts` and `src/index.ts` propagation paths). The acceptance bar remains "field path + human-readable reason" — no custom formatter for v1.
 - **State lifecycle risks:** None — the work is replacement, not state-bearing. Source defaults and user overlays continue to flow through the same merge paths.
 - **API surface parity:** Public exports from `agent-overlays.ts` keep their signatures; only the internal validators are removed. No breaking change for any downstream caller that imports from `src/lib/`.
 - **Integration coverage:** U3's generator round-trips a representative config through `ajv` (or an equivalent) to prove the published JSON schema accepts the same shapes the runtime does. U5's integration test extends `homeDir` fixtures to cover JSONC precedence end-to-end.
