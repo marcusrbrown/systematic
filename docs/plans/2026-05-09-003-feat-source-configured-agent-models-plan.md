@@ -1,7 +1,7 @@
 ---
 title: "feat: Add Source-Configured Agent Models"
 type: feat
-status: active
+status: superseded
 date: 2026-05-09
 origin: docs/plans/2026-05-09-002-feat-provider-model-mcp-overlays-plan.md
 ---
