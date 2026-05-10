@@ -34,6 +34,8 @@ tests/tmp/
 docs/dist/
 docs/.astro/
 docs/src/content/docs/reference/
+# Latest schema mirror is regenerated at docs:generate time (derivative of v<MAJOR>/)
+docs/public/schemas/latest/
 
 # Workflow artifacts
 docs/brainstorms/

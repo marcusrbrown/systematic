@@ -20,7 +20,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
-import { SystematicConfigSchema } from '../src/lib/config-schema.ts'
+import { SystematicConfigSchema } from '../src/lib/config-schema.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -34,8 +34,6 @@ const SEMVER_REGEX = /^\d+\.\d+\.\d+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$/
  */
 export const SCHEMA_ID_TEMPLATE =
   'https://fro.bot/systematic/schemas/v%MAJOR%/systematic-config.schema.json'
-
-// ── Version Resolution ──────────────────────────────────────────
 
 /**
  * Resolve the version to use for schema generation.
@@ -115,8 +113,6 @@ export function getMajorVersion(version: string): string {
   return parts[0]
 }
 
-// ── Schema Generation ───────────────────────────────────────────
-
 /**
  * Generate the JSON Schema content string for the given version.
  *
@@ -150,8 +146,6 @@ export function generateSchemaContent(version: string): string {
 
   return `${JSON.stringify(clean, null, 2)}\n`
 }
-
-// ── File Writing ────────────────────────────────────────────────
 
 /**
  * Write schema content to all three target locations.
@@ -211,8 +205,6 @@ export function generateAndWrite(
   return written
 }
 
-// ── Compare / Drift Detection ───────────────────────────────────
-
 /**
  * Normalize content for byte-by-byte comparison.
  * Strips trailing whitespace and normalizes CRLF → LF.
@@ -237,21 +229,22 @@ export function checkSchemaFiles(
   const expected = generateSchemaContent(version)
   const major = getMajorVersion(version)
 
-  const checkPaths = [
-    path.join(
-      rootDir,
-      'docs/public/schemas',
-      `v${major}`,
-      'systematic-config.schema.json',
-    ),
-    path.join(
-      rootDir,
-      'docs/public/schemas',
-      'latest',
-      'systematic-config.schema.json',
-    ),
-    path.join(rootDir, 'dist/schemas', 'systematic-config.schema.json'),
-  ]
+  const majorPath = path.join(
+    rootDir,
+    'docs/public/schemas',
+    `v${major}`,
+    'systematic-config.schema.json',
+  )
+  const distPath = path.join(
+    rootDir,
+    'dist/schemas',
+    'systematic-config.schema.json',
+  )
+
+  // The v<MAJOR>/ file is the canonical committed version — MUST match.
+  // dist/schemas/ is the bundled npm copy (checked for prepublishOnly safety).
+  // latest/ is regenerated at docs:generate time and is gitignored — not checked.
+  const checkPaths: string[] = [majorPath, distPath]
 
   let allOk = true
   let firstFailure = ''
@@ -285,8 +278,6 @@ export function checkSchemaFiles(
 
   return { ok: false, message: firstFailure }
 }
-
-// ── CLI ─────────────────────────────────────────────────────────
 
 function parseArgs(argv: string[]): {
   check: boolean

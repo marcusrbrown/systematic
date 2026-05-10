@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
+import { OPENCODE_AGENT_COLOR_TOKENS } from '../../src/lib/agent-colors.js'
 import {
-  OPENCODE_AGENT_COLOR_TOKENS,
   AgentOverlaySchema,
   BootstrapSchema,
   CategoryOverlaySchema,
@@ -8,11 +8,9 @@ import {
   assertSourceCategoryModelDefaults,
   getSecurityOverlayFields,
   validateConfig,
-} from '../../src/lib/config-schema.ts'
+} from '../../src/lib/config-schema.js'
 
-// Re-import the source tokens for the sync regression test.
-// Both copies must stay in sync to prevent drift.
-const SOURCE_COLOR_TOKENS: readonly string[] = [
+const EXPECTED_COLOR_TOKENS: readonly string[] = [
   'primary',
   'secondary',
   'accent',
@@ -23,7 +21,6 @@ const SOURCE_COLOR_TOKENS: readonly string[] = [
 ]
 
 describe('SystematicConfigSchema', () => {
-  // ── Happy Paths ──────────────────────────────────────────────
 
   test('parses a complete valid config with all fields populated', () => {
     const input = {
@@ -95,7 +92,6 @@ describe('SystematicConfigSchema', () => {
     }
   })
 
-  // ── Edge Cases ───────────────────────────────────────────────
 
   test('rejects unknown top-level keys with a path-named error', () => {
     const result = SystematicConfigSchema.safeParse({ foo: 'bar' })
@@ -113,7 +109,6 @@ describe('SystematicConfigSchema', () => {
     }
   })
 
-  // ── Error Paths: Agent Overlays ──────────────────────────────
 
   test('rejects temperature as string (expected number)', () => {
     const result = SystematicConfigSchema.safeParse({
@@ -215,7 +210,6 @@ describe('SystematicConfigSchema', () => {
     }
   })
 
-  // ── Error Paths: Category Overlays ───────────────────────────
 
   test('rejects empty model string in category overlay', () => {
     const result = SystematicConfigSchema.safeParse({
@@ -229,7 +223,6 @@ describe('SystematicConfigSchema', () => {
     }
   })
 
-  // ── Error Paths: Strict Mode (Unknown Fields) ────────────────
 
   test('rejects unknown field in agent overlay with path-named error', () => {
     const result = SystematicConfigSchema.safeParse({
@@ -250,7 +243,6 @@ describe('SystematicConfigSchema', () => {
   })
 })
 
-// ── Integration: Source Category Model Defaults ────────────────
 
 describe('assertSourceCategoryModelDefaults', () => {
   test('passes for the actual SOURCE_CATEGORY_MODEL_DEFAULTS constant', () => {
@@ -309,7 +301,6 @@ describe('assertSourceCategoryModelDefaults', () => {
   })
 })
 
-// ── Regression: Trust-Tagged Fields ────────────────────────────
 
 describe('getSecurityOverlayFields', () => {
   test('matches the hand-coded SECURITY_OVERLAY_FIELDS constant', () => {
@@ -333,18 +324,14 @@ describe('getSecurityOverlayFields', () => {
   })
 })
 
-// ── Regression: Color Token Sync ───────────────────────────────
 
 describe('OPENCODE_AGENT_COLOR_TOKENS', () => {
-  test('matches the source constant in scripts/content-integrity.ts', () => {
-    // Both sets of tokens must stay identical. If this test fails, sync
-    // the duplicated array in src/lib/config-schema.ts with the source in
-    // scripts/content-integrity.ts:722-730.
-    expect(OPENCODE_AGENT_COLOR_TOKENS).toEqual(SOURCE_COLOR_TOKENS)
+  test('contains all seven expected theme tokens', () => {
+    // Single source of truth (src/lib/agent-colors.ts). No duplication to drift.
+    expect(OPENCODE_AGENT_COLOR_TOKENS).toEqual(EXPECTED_COLOR_TOKENS)
   })
 })
 
-// ── Syntax Edge Cases ──────────────────────────────────────────
 
 describe('validateConfig wrapper', () => {
   test('returns success with data for valid input', () => {
@@ -366,7 +353,6 @@ describe('validateConfig wrapper', () => {
   })
 })
 
-// ── Agent Overlay Schema (standalone) ──────────────────────────
 
 describe('AgentOverlaySchema', () => {
   test('parses a minimal valid overlay', () => {
@@ -397,7 +383,6 @@ describe('AgentOverlaySchema', () => {
   })
 })
 
-// ── Category Overlay Schema (standalone) ───────────────────────
 
 describe('CategoryOverlaySchema', () => {
   test('parses a minimal valid category overlay', () => {
@@ -422,7 +407,6 @@ describe('CategoryOverlaySchema', () => {
   })
 })
 
-// ── Bootstrap Schema (standalone) ──────────────────────────────
 
 describe('BootstrapSchema', () => {
   test('defaults enabled to true', () => {

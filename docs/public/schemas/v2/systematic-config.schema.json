@@ -7,8 +7,8 @@
       "description": "Per-agent configuration overlays keyed by agent name",
       "examples": [
         {
-          "explorer": {
-            "temperature": 0.3
+          "correctness-reviewer": {
+            "temperature": 0.1
           }
         },
         {}
@@ -127,8 +127,8 @@
             "description": "Skills enabled for this agent",
             "examples": [
               [
-                "systematic:ce-plan",
-                "systematic:ce-review"
+                "ce:plan",
+                "ce:review"
               ]
             ],
             "trust": "project-or-higher"
@@ -181,8 +181,8 @@
         "description": "Per-agent configuration overlay",
         "examples": [
           {
-            "model": "gpt-4",
-            "temperature": 0.3,
+            "model": "anthropic/claude-opus-4.7",
+            "temperature": 0.1,
             "mode": "subagent"
           }
         ]
@@ -194,7 +194,7 @@
       "examples": [
         {
           "review": {
-            "model": "gpt-4"
+            "model": "anthropic/claude-opus-4.7"
           }
         },
         {}
@@ -305,8 +305,8 @@
             "description": "Skills enabled for this agent",
             "examples": [
               [
-                "systematic:ce-plan",
-                "systematic:ce-review"
+                "ce:plan",
+                "ce:review"
               ]
             ],
             "trust": "project-or-higher"
@@ -359,8 +359,8 @@
         "description": "Per-category configuration overlay (same fields as agent minus disable)",
         "examples": [
           {
-            "model": "gpt-4",
-            "temperature": 0.3
+            "model": "anthropic/claude-opus-4.7",
+            "temperature": 0.1
           }
         ]
       }
@@ -384,8 +384,8 @@
       "description": "Array of agent names to disable globally",
       "examples": [
         [
-          "architect-agent",
-          "redundant-reviewer"
+          "previous-comments-reviewer",
+          "cli-readiness-reviewer"
         ]
       ],
       "type": "array",
@@ -398,7 +398,7 @@
       "description": "Array of command names to disable globally",
       "examples": [
         [
-          "outdated-command"
+          "deprecated-migration-helper"
         ]
       ],
       "type": "array",
@@ -417,7 +417,7 @@
         },
         {
           "enabled": false,
-          "file": "/path/to/custom.md"
+          "file": ".opencode/custom-prompt.md"
         }
       ],
       "type": "object",
@@ -434,7 +434,7 @@
         "file": {
           "description": "Path to a custom bootstrap prompt file",
           "examples": [
-            "/home/user/.opencode/bootstrap.md"
+            "~/.config/opencode/bootstrap.md"
           ],
           "type": "string"
         }

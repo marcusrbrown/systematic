@@ -8,8 +8,6 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const REPO_ROOT = path.resolve(__dirname, '../..')
 
-// ── Fixture helpers ─────────────────────────────────────────────
-
 const TEMP_ROOTS: string[] = []
 
 function makeTempRepo(): string {
@@ -32,8 +30,6 @@ function writeSchemaFile(root: string, relPath: string, content: string): void {
   writeFile(root, relPath, content)
 }
 
-// ── Assertion helpers ───────────────────────────────────────────
-
 function parseSchema(content: string): Record<string, unknown> {
   return JSON.parse(content) as Record<string, unknown>
 }
@@ -52,7 +48,7 @@ describe('module resolution', () => {
   test('imports from the generator script', async () => {
     // This test verifies the module can be resolved.
     // It should fail with "module not found" until the generator exists.
-    const mod = await import('../../scripts/generate-config-schema.ts')
+    const mod = await import('../../scripts/generate-config-schema.js')
     expect(mod).toBeDefined()
     expect(typeof mod.generateSchemaContent).toBe('function')
     expect(typeof mod.resolveVersion).toBe('function')
@@ -73,7 +69,7 @@ describe('resolveVersion', () => {
   let resolveVersionFn: (explicit: string | null, rootDir?: string) => string
 
   beforeAll(async () => {
-    const mod = await import('../../scripts/generate-config-schema.ts')
+    const mod = await import('../../scripts/generate-config-schema.js')
     resolveVersionFn = mod.resolveVersion
   })
 
@@ -145,7 +141,7 @@ describe('generateSchemaContent', () => {
   let generateSchemaContentFn: (version: string) => string
 
   beforeAll(async () => {
-    const mod = await import('../../scripts/generate-config-schema.ts')
+    const mod = await import('../../scripts/generate-config-schema.js')
     generateSchemaContentFn = mod.generateSchemaContent
   })
 
@@ -223,7 +219,7 @@ describe('generateAndWrite — three-file output', () => {
   ) => string[]
 
   beforeAll(async () => {
-    const mod = await import('../../scripts/generate-config-schema.ts')
+    const mod = await import('../../scripts/generate-config-schema.js')
     generateAndWriteFn = mod.generateAndWrite
   })
 
@@ -356,7 +352,7 @@ describe('normalizeForCompare', () => {
   let normalizeForCompareFn: (content: string) => string
 
   beforeAll(async () => {
-    const mod = await import('../../scripts/generate-config-schema.ts')
+    const mod = await import('../../scripts/generate-config-schema.js')
     normalizeForCompareFn = mod.normalizeForCompare
   })
 
@@ -391,7 +387,7 @@ describe('checkSchemaFiles — drift detection', () => {
   ) => { ok: boolean; message: string }
 
   beforeAll(async () => {
-    const mod = await import('../../scripts/generate-config-schema.ts')
+    const mod = await import('../../scripts/generate-config-schema.js')
     generateAndWriteFn = mod.generateAndWrite
     generateSchemaContentFn = mod.generateSchemaContent
     checkSchemaFilesFn = mod.checkSchemaFiles
@@ -439,6 +435,27 @@ describe('checkSchemaFiles — drift detection', () => {
     expect(result.ok).toBe(false)
     expect(result.message).toMatch(/not found|does not exist/i)
   })
+
+  test('exits 0 when latest/ is missing but v3/ and dist/ are present', () => {
+    const tmp = makeTempRepo()
+    writePackageJson(tmp, '3.0.0')
+
+    // Generate and write all three (v3/, latest/, dist/)
+    const content = generateSchemaContentFn('3.0.0')
+    generateAndWriteFn(content, '3.0.0', tmp)
+
+    // Delete latest/ to simulate gitignored-clean-checkout scenario
+    const latestPath = path.join(
+      tmp,
+      'docs/public/schemas/latest/systematic-config.schema.json',
+    )
+    fs.rmSync(latestPath)
+
+    // checkSchemaFiles should still pass (latest/ is derivative, not canonical)
+    const result = checkSchemaFilesFn(tmp, '3.0.0')
+    expect(result.ok).toBe(true)
+    expect(result.message).toContain('up to date')
+  })
 })
 
 // ═════════════════════════════════════════════════════════════════
@@ -451,7 +468,7 @@ describe('ajv regression: generated schema validates representative config', () 
   let addFormats: typeof import('ajv-formats').default | null
 
   beforeAll(async () => {
-    const mod = await import('../../scripts/generate-config-schema.ts')
+    const mod = await import('../../scripts/generate-config-schema.js')
     generateSchemaContentFn = mod.generateSchemaContent
 
     try {

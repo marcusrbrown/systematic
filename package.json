@@ -35,7 +35,7 @@
     "docs:dev": "bun run --cwd docs dev",
     "docs:build": "bun run docs:generate && bun run --cwd docs build",
     "docs:preview": "bun run --cwd docs preview",
-    "docs:generate": "bun docs/scripts/transform-content.ts && bun scripts/generate-config-schema.ts",
+    "docs:generate": "bun docs/scripts/transform-content.ts && bun scripts/generate-config-schema.ts && bun docs/scripts/generate-config-reference.ts",
     "schema:generate": "bun scripts/generate-config-schema.ts",
     "schema:drift": "bun scripts/generate-config-schema.ts --check",
     "registry:build": "bun scripts/build-registry.ts",

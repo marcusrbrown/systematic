@@ -184,7 +184,7 @@ Two compounding friction points motivate this work (see origin doc Problem Frame
 - The full test suite passes with no new failures.
 - `agent-overlays.ts` line count drops by ~250-300 LOC (the 15 private helpers removed).
 
-- [ ] **Unit 3: Build-time codegen for published JSON schema + bundled npm copy**
+- [x] **Unit 3: Build-time codegen for published JSON schema + bundled npm copy**
 
 **Goal:** Generate `systematic-config.schema.json` from the Zod source, write it to both the docs site (`docs/public/schemas/v<MAJOR>/` + `latest/`) and the bundled npm location (`dist/schemas/`).
 
@@ -229,7 +229,7 @@ Two compounding friction points motivate this work (see origin doc Problem Frame
 - The published schema's `$id` matches the docs URL pattern exactly.
 - IDE smoke test (manual, documented in PR): adding `"$schema": "https://fro.bot/systematic/schemas/v2/systematic-config.schema.json"` to a real `systematic.json` triggers VSCode/Zed autocomplete on at least one nested field. (Manual; not automated in tests.)
 
-- [ ] **Unit 4: Auto-generated reference docs page + sidebar entry**
+- [x] **Unit 4: Auto-generated reference docs page + sidebar entry**
 
 **Goal:** Generate `docs/src/content/docs/reference/systematic-config.mdx` from the Zod schema's `.meta({ description, examples })` annotations. Add an explicit sidebar entry so the page is reachable.
 

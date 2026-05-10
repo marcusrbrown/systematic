@@ -17,23 +17,8 @@
  */
 
 import { z } from 'zod'
+import { OPENCODE_AGENT_COLOR_TOKENS } from './agent-colors.js'
 
-// ── Color Tokens ───────────────────────────────────────────────
-// Mirrors OPENCODE_AGENT_COLOR_TOKENS from scripts/content-integrity.ts.
-// Duplicated here to avoid cross-directory imports (rootDir: src).
-// A regression test in config-schema.test.ts asserts they stay in sync.
-
-export const OPENCODE_AGENT_COLOR_TOKENS = [
-  'primary',
-  'secondary',
-  'accent',
-  'success',
-  'warning',
-  'error',
-  'info',
-] as const
-
-// ── Shared Primitives ──────────────────────────────────────────
 
 const permissionSettingSchema = z.enum(['ask', 'allow', 'deny'] as const)
 
@@ -47,7 +32,6 @@ const permissionSchema = z.record(z.string(), permissionRuleSchema).meta({
   examples: [{ edit: 'allow', bash: { curl: 'allow', rm: 'deny' } }],
 })
 
-// ── Model Format Helpers ────────────────────────────────────────
 
 const MODEL_FORMAT_MESSAGE =
   'must be in provider/model format (e.g., "anthropic/claude-sonnet-4")'
@@ -147,10 +131,9 @@ const disableSchema = z.boolean().meta({
 
 const skillsSchema = z.array(z.string().min(1)).meta({
   description: 'Skills enabled for this agent',
-  examples: [['systematic:ce-plan', 'systematic:ce-review']],
+  examples: [['ce:plan', 'ce:review']],
 })
 
-// ── Trust Metadata Helpers ─────────────────────────────────────
 
 /**
  * Tag an overlay field as "any trust level" — settable by any config source.
@@ -168,7 +151,6 @@ function trustProtected<T extends z.ZodType>(schema: T): T {
   return schema.meta({ trust: 'project-or-higher' }) as T
 }
 
-// ── Agent Overlay Schema ───────────────────────────────────────
 
 export const AgentOverlaySchema = z
   .object({
@@ -187,10 +169,15 @@ export const AgentOverlaySchema = z
   .strict()
   .meta({
     description: 'Per-agent configuration overlay',
-    examples: [{ model: 'gpt-4', temperature: 0.3, mode: 'subagent' }],
+    examples: [
+      {
+        model: 'anthropic/claude-opus-4.7',
+        temperature: 0.1,
+        mode: 'subagent',
+      },
+    ],
   })
 
-// ── Category Overlay Schema ────────────────────────────────────
 
 export const CategoryOverlaySchema = z
   .object({
@@ -209,10 +196,9 @@ export const CategoryOverlaySchema = z
   .meta({
     description:
       'Per-category configuration overlay (same fields as agent minus disable)',
-    examples: [{ model: 'gpt-4', temperature: 0.3 }],
+    examples: [{ model: 'anthropic/claude-opus-4.7', temperature: 0.1 }],
   })
 
-// ── Bootstrap Schema ───────────────────────────────────────────
 
 export const BootstrapSchema = z
   .object({
@@ -229,7 +215,7 @@ export const BootstrapSchema = z
       .optional()
       .meta({
         description: 'Path to a custom bootstrap prompt file',
-        examples: ['/home/user/.opencode/bootstrap.md'],
+        examples: ['~/.config/opencode/bootstrap.md'],
       }),
   })
   .strict()
@@ -238,7 +224,6 @@ export const BootstrapSchema = z
     examples: [{ enabled: true }, { enabled: false }],
   })
 
-// ── Top-Level Config Schema ────────────────────────────────────
 
 export const SystematicConfigSchema = z
   .object({
@@ -247,7 +232,7 @@ export const SystematicConfigSchema = z
       .default({})
       .meta({
         description: 'Per-agent configuration overlays keyed by agent name',
-        examples: [{ explorer: { temperature: 0.3 } }, {}],
+        examples: [{ 'correctness-reviewer': { temperature: 0.1 } }, {}],
       }),
     categories: z
       .record(z.string(), CategoryOverlaySchema)
@@ -255,7 +240,7 @@ export const SystematicConfigSchema = z
       .meta({
         description:
           'Per-category configuration overlays keyed by category name',
-        examples: [{ review: { model: 'gpt-4' } }, {}],
+        examples: [{ review: { model: 'anthropic/claude-opus-4.7' } }, {}],
       }),
     disabled_skills: z
       .array(z.string())
@@ -269,20 +254,20 @@ export const SystematicConfigSchema = z
       .default([])
       .meta({
         description: 'Array of agent names to disable globally',
-        examples: [['architect-agent', 'redundant-reviewer']],
+        examples: [['previous-comments-reviewer', 'cli-readiness-reviewer']],
       }),
     disabled_commands: z
       .array(z.string())
       .default([])
       .meta({
         description: 'Array of command names to disable globally',
-        examples: [['outdated-command']],
+        examples: [['deprecated-migration-helper']],
       }),
     bootstrap: BootstrapSchema.default({ enabled: true }).meta({
       description: 'Bootstrap prompt configuration',
       examples: [
         { enabled: true },
-        { enabled: false, file: '/path/to/custom.md' },
+        { enabled: false, file: '.opencode/custom-prompt.md' },
       ],
     }),
   })
@@ -293,7 +278,6 @@ export const SystematicConfigSchema = z
     examples: [{ disabled_skills: ['ce:plan'], bootstrap: { enabled: false } }],
   })
 
-// ── Validation Helpers ─────────────────────────────────────────
 
 export interface ValidationResult {
   success: boolean
@@ -309,7 +293,6 @@ export function validateConfig(input: unknown): ValidationResult {
   return { success: false, errors: result.error.issues }
 }
 
-// ── Source Category Model Defaults Assertion ────────────────────
 
 const SourceCategoryModelDefaultsSchema = z
   .record(
@@ -325,7 +308,7 @@ const SourceCategoryModelDefaultsSchema = z
   )
   .meta({
     description: 'Validates source category model defaults shape',
-    examples: [{ design: ['openai/gpt-4', 'anthropic/claude-3'] }],
+    examples: [{ design: ['openai/gpt-5.5', 'anthropic/claude-opus-4.7'] }],
   })
 
 export function assertSourceCategoryModelDefaults(
@@ -334,7 +317,6 @@ export function assertSourceCategoryModelDefaults(
   SourceCategoryModelDefaultsSchema.parse(defaults)
 }
 
-// ── Trust-Field Extraction ─────────────────────────────────────
 
 /**
  * Unwrap ZodOptional / ZodDefault wrappers to reach the base schema.

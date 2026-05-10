@@ -12,7 +12,7 @@ import {
   validateAgentOverlays,
   validateSourceCategoryModelDefaults,
 } from '../../src/lib/agent-overlays.js'
-import { getSecurityOverlayFields } from '../../src/lib/config-schema.ts'
+import { getSecurityOverlayFields } from '../../src/lib/config-schema.js'
 import type { SourcedOverlayConfig } from '../../src/lib/config.js'
 
 function withTempDir(run: (dir: string) => void): void {
@@ -954,7 +954,6 @@ describe('getAuthenticatedProviders XDG_DATA_HOME resolution', () => {
   })
 })
 
-// ── Regression: U2 — Zod-backed validation ────────────────────
 
 describe('U2 regression: Zod-backed validation', () => {
   test('SECURITY_OVERLAY_FIELDS derived from schema matches the hand-coded set', () => {
