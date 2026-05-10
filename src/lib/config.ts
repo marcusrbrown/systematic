@@ -6,7 +6,11 @@ import {
   parse as parseJsonc,
   printParseErrorCode,
 } from 'jsonc-parser'
-import { getSecurityOverlayFields } from './config-schema.js'
+import type { z } from 'zod'
+import {
+  getSecurityOverlayFields,
+  SystematicConfigSchema,
+} from './config-schema.js'
 
 export interface BootstrapConfig {
   enabled: boolean
@@ -115,14 +119,74 @@ function loadJsoncFile(filePath: string): RawSystematicConfig | null {
   return parsed as RawSystematicConfig
 }
 
+/**
+ * Throw a schema validation error for a top-level config source.
+ *
+ * Mirrors the error-message format used by `throwConfigError` in
+ * `agent-overlays.ts` and `throwOverlaySchemaError` for overlay fields,
+ * so every config error includes the source file path and the offending
+ * field path. The thrown error carries `_tag`, `filePath`, and `issues`
+ * properties for programmatic inspection.
+ */
+function throwTopLevelConfigSchemaError(
+  filePath: string,
+  trust: ConfigSource['trust'],
+  issues: readonly z.core.$ZodIssue[],
+): never {
+  const issue = issues[0]
+  if (!issue) {
+    throw Object.assign(
+      new Error(
+        `Invalid Systematic config in ${filePath}: schema validation failed`,
+      ),
+      { _tag: 'ConfigSchemaError' as const, filePath, trust, issues },
+    )
+  }
+  const fieldPath =
+    issue.code === 'unrecognized_keys'
+      ? (issue.message.match(/"([^"]+)"/)?.[1] ?? issue.path.join('.'))
+      : issue.path.join('.')
+  const message = fieldPath
+    ? `Invalid Systematic config in ${filePath}: ${fieldPath} ${issue.message}`
+    : `Invalid Systematic config in ${filePath}: ${issue.message}`
+  throw Object.assign(new Error(message), {
+    _tag: 'ConfigSchemaError' as const,
+    filePath,
+    trust,
+    issues,
+  })
+}
+
+/**
+ * Type guard for errors thrown by the top-level config schema validator.
+ * Use this to distinguish schema validation failures from JSONC parse errors
+ * or file read errors.
+ */
+export function isConfigSchemaError(err: unknown): err is Error & {
+  _tag: 'ConfigSchemaError'
+  filePath: string
+  trust: ConfigSource['trust']
+  issues: readonly z.core.$ZodIssue[]
+} {
+  return (
+    err instanceof Error &&
+    (err as unknown as { _tag: unknown })._tag === 'ConfigSchemaError'
+  )
+}
+
 function loadConfigSource(
   filePath: string,
   trust: ConfigSource['trust'],
 ): ConfigSource | null {
-  const config = loadJsoncFile(filePath)
-  if (!config) return null
+  const rawConfig = loadJsoncFile(filePath)
+  if (!rawConfig) return null
 
-  return { path: filePath, config, trust }
+  const result = SystematicConfigSchema.safeParse(rawConfig)
+  if (!result.success) {
+    throwTopLevelConfigSchemaError(filePath, trust, result.error.issues)
+  }
+
+  return { path: filePath, config: result.data, trust }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

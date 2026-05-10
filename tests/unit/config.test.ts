@@ -819,6 +819,83 @@ describe('config', () => {
     })
   })
 
+  describe('schema validation', () => {
+    function writeProjectConfig(config: Record<string, unknown>): string {
+      const projectConfigDir = path.join(testDir, '.opencode')
+      fs.mkdirSync(projectConfigDir, { recursive: true })
+      const projectConfigPath = path.join(projectConfigDir, 'systematic.json')
+      fs.writeFileSync(projectConfigPath, JSON.stringify(config))
+      return projectConfigPath
+    }
+
+    test('valid config loads identically — happy path regression', () => {
+      writeProjectConfig({
+        disabled_skills: ['skill-a'],
+        disabled_agents: ['agent-b'],
+        bootstrap: { enabled: false },
+      })
+      const result = loadConfig(testDir)
+      expect(result.disabled_skills).toContain('skill-a')
+      expect(result.disabled_agents).toContain('agent-b')
+      expect(result.bootstrap.enabled).toBe(false)
+    })
+
+    test('disabled_skills as string is rejected with field name and source path in error', () => {
+      const configPath = writeProjectConfig({ disabled_skills: 'not-an-array' })
+      expect(() => loadConfig(testDir)).toThrow(configPath)
+      expect(() => loadConfig(testDir)).toThrow('disabled_skills')
+    })
+
+    test('unknown top-level field is rejected by strict-mode schema with field name in error', () => {
+      const configPath = writeProjectConfig({ agnts: {} })
+      expect(() => loadConfig(testDir)).toThrow(configPath)
+      expect(() => loadConfig(testDir)).toThrow('agnts')
+    })
+
+    test('malformed agents.<key>.model is rejected with nested field path in error', () => {
+      const configPath = writeProjectConfig({
+        agents: { explorer: { model: {} } },
+      })
+      expect(() => loadConfig(testDir)).toThrow(configPath)
+      expect(() => loadConfig(testDir)).toThrow('agents.explorer.model')
+    })
+
+    test('bootstrap.enabled as string is rejected with field path in error', () => {
+      const configPath = writeProjectConfig({ bootstrap: { enabled: 'yes' } })
+      expect(() => loadConfig(testDir)).toThrow(configPath)
+      expect(() => loadConfig(testDir)).toThrow('bootstrap.enabled')
+    })
+
+    test('empty config loads with all Zod defaults applied', () => {
+      writeProjectConfig({})
+      const result = loadConfig(testDir)
+      expect(result.disabled_skills).toEqual([])
+      expect(result.disabled_agents).toEqual([])
+      expect(result.disabled_commands).toEqual([])
+      expect(result.bootstrap.enabled).toBe(true)
+    })
+
+    test('configs accepted by old hand-rolled validators now reject unknown top-level fields', () => {
+      // Before schema validation was wired into the loader, any JSON object was
+      // accepted without field-level checking. Unknown top-level fields silently
+      // became no-ops. This test captures the expected behavior change: strict Zod
+      // validation now runs on every loaded config source, making unknown fields
+      // a hard error rather than a silent no-op.
+      const configPath = writeProjectConfig({
+        disabled_skills: [],
+        unknownField: true,
+      })
+      expect(() => loadConfig(testDir)).toThrow(configPath)
+      expect(() => loadConfig(testDir)).toThrow('unknownField')
+    })
+
+    test('user config schema validation failure names the user config file in error', () => {
+      const userConfigFilePath = writeUserConfig({ disabled_skills: 'wrong' })
+      expect(() => loadConfig(testDir)).toThrow(userConfigFilePath)
+      expect(() => loadConfig(testDir)).toThrow('disabled_skills')
+    })
+  })
+
   describe('JSONC precedence', () => {
     test('AE3: only systematic.json exists — loads it (backward compat)', () => {
       writeUserConfig({ disabled_skills: ['skill-a'] })

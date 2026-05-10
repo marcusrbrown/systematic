@@ -1605,5 +1605,24 @@ model: gpt-4
 
       expect(config.agent?.['correctness-reviewer']?.temperature).toBe(0.33)
     })
+
+    test('malformed systematic.json surfaces schema validation error from config loader', async () => {
+      writeSystematicConfig({ disabled_skills: 'not-an-array' })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      const expectedConfigPath = path.join(
+        projectDir,
+        '.opencode/systematic.json',
+      )
+      await expect(handler(config)).rejects.toThrow(expectedConfigPath)
+      await expect(handler(config)).rejects.toThrow('disabled_skills')
+    })
   })
 })
