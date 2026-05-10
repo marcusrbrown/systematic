@@ -1,7 +1,7 @@
 ---
 title: OpenCode /config HttpApi rejects ad-hoc bundled agent color names, crashing TUI launch
 date: 2026-05-09
-category: docs/solutions/integration-issues/
+category: integration-issues
 module: agent-bundle
 problem_type: integration_issue
 component: tooling

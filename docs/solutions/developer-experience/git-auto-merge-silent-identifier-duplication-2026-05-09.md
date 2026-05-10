@@ -1,7 +1,7 @@
 ---
 title: Git auto-merge silently duplicates test setup/teardown identifiers
 date: 2026-05-09
-category: docs/solutions/developer-experience/
+category: developer-experience
 module: testing-infrastructure
 problem_type: developer_experience
 component: testing_framework
