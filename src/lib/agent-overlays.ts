@@ -186,8 +186,9 @@ export function inferBuiltInTemperature(
  * Read which providers are authenticated from OpenCode's auth.json.
  *
  * Reads only top-level keys (provider IDs). Nested values are NEVER
- * inspected, logged, persisted, or transmitted. This is a hard contract
- * (R9a).
+ * inspected, logged, persisted, or transmitted. This is a hard contract:
+ * the auth file holds API keys and OAuth tokens, and Systematic must
+ * never expose them via stderr, telemetry, or any other channel.
  *
  * Intended for one invocation per plugin config(cfg) cycle. Repeated
  * calls trigger repeated file reads and, on malformed input, repeated
