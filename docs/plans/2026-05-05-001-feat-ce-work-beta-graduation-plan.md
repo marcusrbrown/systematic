@@ -1,7 +1,7 @@
 ---
 title: "Graduate ce-work-beta into ce-work via native task() dispatch"
 type: feat
-status: active
+status: completed
 date: 2026-05-05
 origin: docs/brainstorms/2026-05-05-ce-work-beta-graduation-requirements.md
 ---
