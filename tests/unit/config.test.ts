@@ -1012,5 +1012,24 @@ describe('config', () => {
       expect(() => loadConfig(testDir)).toThrow(filePath)
       expect(() => loadConfig(testDir)).toThrow(/parse error/i)
     })
+
+    test('accepts $schema field in JSONC config without raising configSchemaError', () => {
+      const filePath = userConfigPath().replace(/\.json$/, '.jsonc')
+      fs.mkdirSync(path.dirname(filePath), { recursive: true })
+      fs.writeFileSync(
+        filePath,
+        [
+          '// Top-level user config',
+          '{',
+          '  "$schema": "https://fro.bot/systematic/schemas/v2/systematic-config.schema.json",',
+          '  "disabled_skills": []',
+          '}',
+        ].join('\n'),
+      )
+
+      expect(() => loadConfig(testDir)).not.toThrow()
+      const result = loadConfig(testDir)
+      expect(result.disabled_skills).toEqual([])
+    })
   })
 })

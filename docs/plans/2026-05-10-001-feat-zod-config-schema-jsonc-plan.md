@@ -445,6 +445,42 @@ Units 6–9 below address the surviving 4 P1s plus closely-related P2s in a sing
 
 - [x] **Unit 9: Documentation parity sweep + zod version pinning + docs generator schema-derivation**
 
+- [x] **Unit 10: Whitelist `$schema` as optional top-level field**
+
+  **Context:** GPT-agent review identified that `SystematicConfigSchema.strict()` rejects unknown top-level keys, including `$schema` — but the docs page at `docs/src/content/docs/reference/systematic-config.mdx:23-29` explicitly instructs users to add `"$schema": "https://fro.bot/systematic/schemas/v2/systematic-config.schema.json"` to their config. The branch's own advertised IDE-autocomplete pattern breaks user configs at load time. Oracle confirmed validity (P1 release-blocker) and recommended Option A: whitelist `$schema` in the schema rather than loader-strip it. Reproduced empirically:
+
+  ```
+  {"$schema": "...", "disabled_skills": []} → safeParse: success: false → unrecognized_keys: ["$schema"]
+  ```
+
+  **Approach:** Add `'$schema': z.string().url().optional().meta({...})` to the top-level `SystematicConfigSchema` in `src/lib/config-schema.ts`. Include `description` AND `examples` in `.meta()` (the docs generator's parity test asserts every described field has examples). Keep `.strict()` so other unknown keys still reject. The loader naturally ignores `$schema` because the merge code only reads known runtime fields.
+
+  **Files to modify:**
+  - `src/lib/config-schema.ts` — add `$schema` field to `SystematicConfigSchema`
+  - `tests/unit/config-schema.test.ts` — schema-level acceptance/rejection tests
+  - `tests/unit/config.test.ts` — loader-level regression test (JSONC variant)
+  - `tests/unit/generate-config-schema.test.ts` — AJV parity test for `$schema`
+  - `docs/public/schemas/v2/systematic-config.schema.json` — regenerated
+  - `docs/src/content/docs/reference/systematic-config.mdx` — regenerated (gitignored, but emit cleanly)
+
+  **Test scenarios:**
+  1. `$schema` with valid URL accepted by `SystematicConfigSchema.safeParse`
+  2. `$schema` with invalid URL string rejected
+  3. Unknown key like `foo` still rejected while `$schema` accepted (parity-of-strictness)
+  4. Loader: `.jsonc` file with comment + `$schema` + a valid field (e.g., `disabled_skills: []`) loads cleanly without raising the topLevelConfigSchemaError
+  5. AJV parity: valid `$schema` URL accepted by both Zod runtime AND generated JSON Schema; invalid URL rejected by both
+
+  **Out of scope:** Validating the URL points at a reachable schema (loader is offline-friendly); fetching the schema; agent-overlay-level `$schema`; the git-tag-error-swallowing follow-up Oracle flagged (separate bug, file as smart note).
+
+  **Verification:**
+  - Reproduction config now loads:
+    ```
+    bun -e "import { SystematicConfigSchema } from './src/lib/config-schema.ts'; console.log(SystematicConfigSchema.safeParse({'\\$schema': 'https://fro.bot/systematic/schemas/v2/systematic-config.schema.json', disabled_skills: []}).success)"
+    → true
+    ```
+  - Full quality gate green.
+  - Schema drift / registry drift clean.
+
 **Goal:** Close the remaining P2 cluster: pin zod to an exact version (was P1#6, demoted), derive the docs reference page from the schema instead of a hard-coded field map (P2#10), unify the color validator (P2#9 — single regex/helper between `config-schema.ts` and `agent-colors.ts`), simplify `getSecurityOverlayFields()` to not reflect through Zod private internals (P2#14), and update three `AGENTS.md` files to reflect the new modules (P2#15-17).
 
 **Requirements:** R2, R4, R8, R12 (closes the documentation and trust-boundary parity gaps)

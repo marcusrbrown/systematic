@@ -219,6 +219,17 @@ export const BootstrapSchema = z
 
 export const SystematicConfigSchema = z
   .object({
+    $schema: z
+      .string()
+      .url()
+      .optional()
+      .meta({
+        description:
+          'JSON Schema URL for IDE autocomplete. The value is informational only — the loader does not fetch or validate against it. Add this to enable IDE schema activation and field-level autocomplete in editors that support JSON Schema (VSCode, Zed, IntelliJ).',
+        examples: [
+          'https://fro.bot/systematic/schemas/v2/systematic-config.schema.json',
+        ],
+      }),
     agents: z
       .record(z.string(), AgentOverlaySchema)
       .default({})

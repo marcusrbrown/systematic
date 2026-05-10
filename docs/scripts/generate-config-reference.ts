@@ -35,6 +35,7 @@ const OUTPUT_PATH = path.join(
 
 /** Top-level config keys in display order for the reference page. */
 const TOP_LEVEL_KEYS = [
+  '$schema',
   'agents',
   'categories',
   'disabled_skills',
@@ -212,16 +213,27 @@ function getNestedSchema(
 /**
  * Render a top-level config field section (## section) with its description,
  * type, default, examples, and any sub-fields or cross-references.
+ *
+ * @param key         JSON Schema property key
+ * @param properties  Top-level properties map from the generated JSON Schema
+ * @param schemaUrl   Versioned schema URL used in the $schema example code block
  */
 function renderTopLevelSection(
   key: string,
   properties: Record<string, unknown>,
+  schemaUrl: string,
 ): string {
   const propSchema = properties[key] as Record<string, unknown> | undefined
   if (!propSchema) return ''
 
   const desc = getDescription(propSchema)
   const defaultStr = renderDefault(propSchema)
+
+  // $schema: replace the generic examples block with a pasteable copy-paste snippet
+  if (key === '$schema') {
+    const pasteableLine = `"$schema": "${schemaUrl}"`
+    return `## $schema\n\n${desc ? `${desc}\n\n` : ''}**Type:** ${formatType(propSchema)}\n\n**Examples:**\n\n\`\`\`json\n${pasteableLine}\n\`\`\``
+  }
 
   // Top-level examples
   let examplesBlock = ''
@@ -315,7 +327,7 @@ ${renderOverlayFields(agentProps, OVERLAY_FIELD_KEYS, 3)}`
     : ''
 
   const sections = TOP_LEVEL_KEYS.map((key) =>
-    renderTopLevelSection(key, properties),
+    renderTopLevelSection(key, properties, schemaUrl),
   )
     .filter(Boolean)
     .join('\n\n')
@@ -341,14 +353,6 @@ The configuration file can be placed in one of three locations (searched in orde
 3. \`~/.config/opencode/systematic.json\` (or \`.jsonc\`)
 
 When both \`.jsonc\` and \`.json\` exist in the same directory, \`.jsonc\` takes precedence.
-
-## Using $schema
-
-Add the following line to the top of your config file to enable IDE autocomplete and inline documentation:
-
-\`\`\`json
-"$schema": "${schemaUrl}"
-\`\`\`
 
 ${overlaySection}
 ${sections}

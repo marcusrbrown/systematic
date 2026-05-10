@@ -487,6 +487,46 @@ describe('color validation parity (9b)', () => {
   })
 })
 
+describe('$schema top-level field', () => {
+  test('accepts $schema with a valid URL', () => {
+    const input = {
+      $schema:
+        'https://fro.bot/systematic/schemas/v2/systematic-config.schema.json',
+    }
+    const result = SystematicConfigSchema.safeParse(input)
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.$schema).toBe(input.$schema)
+    }
+  })
+
+  test('rejects $schema with an invalid URL', () => {
+    const result = SystematicConfigSchema.safeParse({ $schema: 'not-a-url' })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const paths = result.error.issues.map((i) => i.path.join('.'))
+      expect(paths.some((p) => p === '$schema')).toBe(true)
+    }
+  })
+
+  test('$schema accepted but other unknown keys still rejected by strict mode', () => {
+    const result = SystematicConfigSchema.safeParse({
+      $schema: 'https://example.com/x.json',
+      foo: 'bar',
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const issue = result.error.issues[0] as {
+        code: string
+        keys?: string[]
+      }
+      expect(issue.code).toBe('unrecognized_keys')
+      expect(issue.keys).not.toContain('$schema')
+      expect(issue.keys).toContain('foo')
+    }
+  })
+})
+
 describe('SECURITY_OVERLAY_FIELDS parity (9c)', () => {
   test('SECURITY_OVERLAY_FIELDS matches schema trust-tagged fields (forward check)', () => {
     // Every entry in SECURITY_OVERLAY_FIELDS must be a field in AgentOverlaySchema

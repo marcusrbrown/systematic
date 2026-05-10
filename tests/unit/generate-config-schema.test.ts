@@ -562,6 +562,19 @@ describe('AJV parity: Zod runtime contract vs generated JSON Schema', () => {
       value: { agnts: {} },
       accepted: false,
     },
+    {
+      name: '$schema valid URL accepted by both',
+      value: {
+        $schema:
+          'https://fro.bot/systematic/schemas/v2/systematic-config.schema.json',
+      },
+      accepted: true,
+    },
+    {
+      name: '$schema invalid non-URL rejected by both',
+      value: { $schema: 'not-a-url' },
+      accepted: false,
+    },
   ]
 
   // Shared state initialized in beforeAll
