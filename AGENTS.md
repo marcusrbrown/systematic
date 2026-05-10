@@ -17,7 +17,7 @@ bun install              # Install deps
 bun run build            # Build to dist/
 bun run typecheck        # Type check (strict)
 bun run lint             # Biome linter
-bun test tests/unit      # Unit tests (15 files)
+bun test tests/unit      # Unit tests (20 files)
 bun test tests/integration  # Integration tests (2 files)
 bun test                 # All tests
 bun test --filter "pattern"  # Filter tests
@@ -46,7 +46,7 @@ systematic/
 ├── src/
 │   ├── index.ts          # Plugin entry (default export)
 │   ├── cli.ts            # CLI entry (list/convert/config commands)
-│   └── lib/              # 12 core modules (see src/lib/AGENTS.md)
+│   └── lib/              # 16 core modules (see src/lib/AGENTS.md)
 ├── skills/               # 45 bundled skills (SKILL.md format)
 ├── agents/               # 51 bundled agents (6 categories: design/docs/document-review/research/review/workflow)
 ├── docs/                 # Starlight docs workspace (see docs/AGENTS.md)
@@ -57,7 +57,7 @@ systematic/
 ├── scripts/              # Build + integrity scripts
 ├── assets/               # Static assets (banner SVG)
 ├── tests/
-│   ├── unit/             # 15 test files
+│   ├── unit/             # 20 test files
 │   └── integration/      # 2 test files
 ├── .opencode/            # Project-specific OC config + commands
 │   └── commands/         # Project-only commands (generate-readme)

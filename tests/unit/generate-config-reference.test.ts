@@ -167,7 +167,7 @@ describe('generateConfigReference', () => {
 
   test('$schema URL for v2 is correct for existing published schema', () => {
     const content = generateFn('2.11.0')
-    // Must match the URL that U3 publishes
+    // Must match the URL that the schema generator publishes
     expect(content).toContain(
       'https://fro.bot/systematic/schemas/v2/systematic-config.schema.json',
     )

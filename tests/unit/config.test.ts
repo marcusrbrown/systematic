@@ -896,6 +896,86 @@ describe('config', () => {
     })
   })
 
+  describe('merge precedence after schema validation', () => {
+    function writeProjectConfig(config: Record<string, unknown>): void {
+      const projectConfigDir = path.join(testDir, '.opencode')
+      fs.mkdirSync(projectConfigDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(projectConfigDir, 'systematic.json'),
+        JSON.stringify(config),
+      )
+    }
+
+    test('user bootstrap.enabled:false is preserved when project config is empty', () => {
+      // Regression: when result.data (Zod-hydrated) is propagated to
+      // ConfigSource.config, Zod's default for bootstrap.enabled is true, so an
+      // empty project config {} produces { bootstrap: { enabled: true } }. The
+      // spread `...projectConfig?.bootstrap (= { enabled: true })` then clobbers
+      // the user's explicit enabled: false. The loader must propagate the raw
+      // parsed JSONC instead so the merge sees `undefined` for unset fields.
+      writeUserConfig({ bootstrap: { enabled: false } })
+      writeProjectConfig({})
+
+      const result = loadConfig(testDir)
+      expect(result.bootstrap.enabled).toBe(false)
+    })
+
+    test('user disabled_skills are preserved when project config is empty', () => {
+      // disabled_skills has a Zod default of []. An empty project config
+      // produces result.data.disabled_skills = [] which then gets merged
+      // into the union set — that is safe because mergeArraysUnique([], [])
+      // stays empty. But the user's value was already in the merge chain,
+      // so this test double-checks the array path remains correct.
+      writeUserConfig({ disabled_skills: ['user-skill-x'] })
+      writeProjectConfig({})
+
+      const result = loadConfig(testDir)
+      expect(result.disabled_skills).toContain('user-skill-x')
+    })
+
+    test('3-source: user bootstrap.enabled:false preserved through project {} and custom {}', () => {
+      const customDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'systematic-custom-'),
+      )
+      process.env.OPENCODE_CONFIG_DIR = customDir
+
+      try {
+        writeUserConfig({ bootstrap: { enabled: false } })
+        writeProjectConfig({})
+        fs.writeFileSync(
+          path.join(customDir, 'systematic.json'),
+          JSON.stringify({}),
+        )
+
+        const result = loadConfig(testDir)
+        expect(result.bootstrap.enabled).toBe(false)
+      } finally {
+        delete process.env.OPENCODE_CONFIG_DIR
+        fs.rmSync(customDir, { recursive: true, force: true })
+      }
+    })
+
+    test('high-priority explicit project override still wins over user setting', () => {
+      // The fix must NOT over-correct: if the project explicitly sets
+      // bootstrap.enabled:true, that should still override user's false.
+      writeUserConfig({ bootstrap: { enabled: false } })
+      writeProjectConfig({ bootstrap: { enabled: true } })
+
+      const result = loadConfig(testDir)
+      expect(result.bootstrap.enabled).toBe(true)
+    })
+
+    test('invalid user config type is rejected by schema validation', () => {
+      // Schema validation must still run even though we propagate rawConfig.
+      const userConfigFilePath = writeUserConfig({
+        disabled_skills: 'not-an-array',
+      })
+
+      expect(() => loadConfig(testDir)).toThrow(userConfigFilePath)
+      expect(() => loadConfig(testDir)).toThrow('disabled_skills')
+    })
+  })
+
   describe('JSONC precedence', () => {
     test('AE3: only systematic.json exists — loads it (backward compat)', () => {
       writeUserConfig({ disabled_skills: ['skill-a'] })

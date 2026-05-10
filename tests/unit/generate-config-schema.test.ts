@@ -590,10 +590,20 @@ describe('AJV parity: Zod runtime contract vs generated JSON Schema', () => {
     const schemaMod = await import('../../src/lib/config-schema.js')
     zodParse = (data) => schemaMod.SystematicConfigSchema.safeParse(data)
 
+    // Narrow try/catch to ONLY the ajv import — genuinely optional dep.
+    // Everything else (generateSchemaContent, JSON.parse, ajv.compile) must
+    // fail loud so errors are caught as test failures, not silently skipped.
+    let AjvCtor: typeof import('ajv').default | null = null
     try {
       const ajvMod = await import('ajv')
-      const AjvClass = ajvMod.default
-      const ajv = new AjvClass({ strict: false, allowUnionTypes: true })
+      AjvCtor = ajvMod.default
+    } catch {
+      // ajv is not installed — skip the parity suite
+      console.warn('SKIP AJV parity tests: ajv not installed.')
+    }
+
+    if (AjvCtor) {
+      const ajv = new AjvCtor({ strict: false, allowUnionTypes: true })
 
       try {
         const afMod = await import('ajv-formats')
@@ -602,6 +612,7 @@ describe('AJV parity: Zod runtime contract vs generated JSON Schema', () => {
         // ajv-formats not installed — proceed without format validation
       }
 
+      // These MUST NOT be in a try/catch: errors here are real test failures.
       const genMod = await import('../../scripts/generate-config-schema.js')
       const schemaContent = genMod.generateSchemaContent('2.12.0')
       const schema = JSON.parse(schemaContent) as Record<string, unknown>
@@ -612,11 +623,6 @@ describe('AJV parity: Zod runtime contract vs generated JSON Schema', () => {
         return result === true
       }
       ajvAvailable = true
-    } catch (err) {
-      console.warn(
-        'SKIP AJV parity tests: ajv not available.',
-        err instanceof Error ? err.message : String(err),
-      )
     }
   })
 

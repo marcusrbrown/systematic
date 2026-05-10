@@ -330,11 +330,3 @@ export const SECURITY_OVERLAY_FIELDS: readonly string[] = [
   'skills',
   'permission',
 ] as const
-
-/**
- * Returns the list of overlay fields that require a project-or-higher trust
- * source. Exported for callers that need a mutable array copy.
- */
-export function getSecurityOverlayFields(): string[] {
-  return Array.from(SECURITY_OVERLAY_FIELDS)
-}

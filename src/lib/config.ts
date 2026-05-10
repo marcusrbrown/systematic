@@ -8,7 +8,7 @@ import {
 } from 'jsonc-parser'
 import type { z } from 'zod'
 import {
-  getSecurityOverlayFields,
+  SECURITY_OVERLAY_FIELDS as SCHEMA_SECURITY_OVERLAY_FIELDS,
   SystematicConfigSchema,
 } from './config-schema.js'
 
@@ -69,7 +69,7 @@ interface ConfigSource {
   trust: 'user' | 'project' | 'custom'
 }
 
-const SECURITY_OVERLAY_FIELDS = new Set(getSecurityOverlayFields())
+const SECURITY_OVERLAY_FIELDS = new Set(SCHEMA_SECURITY_OVERLAY_FIELDS)
 
 /**
  * Resolve a config file path by checking `.jsonc` first, then `.json`.
@@ -186,7 +186,12 @@ function loadConfigSource(
     throwTopLevelConfigSchemaError(filePath, trust, result.error.issues)
   }
 
-  return { path: filePath, config: result.data, trust }
+  // Validation succeeded; propagate raw parsed JSONC so the merge layer
+  // sees undefined for unset fields (preserves merge semantics where a
+  // higher-priority empty config does NOT override a lower-priority explicit
+  // setting). The schema's defaults are applied by the merge layer via
+  // DEFAULT_CONFIG at the top of the spread chain.
+  return { path: filePath, config: rawConfig, trust }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

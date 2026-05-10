@@ -9,7 +9,6 @@ import {
   assertSourceCategoryModelDefaults,
   BootstrapSchema,
   CategoryOverlaySchema,
-  getSecurityOverlayFields,
   SECURITY_OVERLAY_FIELDS,
   SystematicConfigSchema,
   validateConfig,
@@ -301,28 +300,6 @@ describe('assertSourceCategoryModelDefaults', () => {
   })
 })
 
-describe('getSecurityOverlayFields', () => {
-  test('matches the hand-coded SECURITY_OVERLAY_FIELDS constant', () => {
-    // This mirrors src/lib/config.ts:67-72
-    const EXPECTED_SECURITY_FIELDS = new Set([
-      'model',
-      'variant',
-      'permission',
-      'skills',
-    ])
-
-    const derived = getSecurityOverlayFields()
-    expect(new Set(derived)).toEqual(EXPECTED_SECURITY_FIELDS)
-    expect(derived.sort()).toEqual(Array.from(EXPECTED_SECURITY_FIELDS).sort())
-  })
-
-  test('returns consistent results across repeated calls (cached)', () => {
-    const first = getSecurityOverlayFields()
-    const second = getSecurityOverlayFields()
-    expect(first).toEqual(second)
-  })
-})
-
 describe('OPENCODE_AGENT_COLOR_TOKENS', () => {
   test('contains all seven expected theme tokens', () => {
     // Single source of truth (src/lib/agent-colors.ts). No duplication to drift.
@@ -558,11 +535,5 @@ describe('SECURITY_OVERLAY_FIELDS parity (9c)', () => {
         expect(securitySet.has(key)).toBe(true)
       }
     }
-  })
-
-  test('SECURITY_OVERLAY_FIELDS and getSecurityOverlayFields return identical sets', () => {
-    const fromConst = new Set<string>(SECURITY_OVERLAY_FIELDS)
-    const fromFn = new Set<string>(getSecurityOverlayFields())
-    expect(fromConst).toEqual(fromFn)
   })
 })

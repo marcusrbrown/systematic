@@ -447,6 +447,65 @@ Units 6–9 below address the surviving 4 P1s plus closely-related P2s in a sing
 
 - [x] **Unit 10: Whitelist `$schema` as optional top-level field**
 
+- [x] **Unit 11: Round-2 P1 regression fix + P2#2 + P3 safe_auto cluster**
+
+  **Context:** `ce:review` round 2 (`20260510-r2-145548-c9fcec5`) surfaced a NEW P1 regression introduced by U6: `loadConfigSource` returns `result.data` (Zod-hydrated defaults) instead of raw parsed JSONC. The merge logic at `src/lib/config.ts:260-264` spreads `projectConfig?.bootstrap`, which is now `{enabled: true}` instead of `undefined` — silently overriding a user's explicit `bootstrap.enabled: false`. Generalizes to every defaulted top-level field (`disabled_skills`, `disabled_agents`, `disabled_commands`, `agents`, `categories`). Empirically reproduced end-to-end.
+
+  Plus three follow-ups:
+  - **P2#2** — AJV parity tests have broad `try/catch` that silently skips on setup failure (`tests/unit/generate-config-schema.test.ts:615`)
+  - **P3#7** — `getSecurityOverlayFields()` is a 1-line wrapper over an already-exported const (`src/lib/config-schema.ts:338`)
+  - **P3#8** — Root `AGENTS.md:49` says `12 core modules` (actual: 16) and `15 test files` (actual: 20) — U9 updated `src/lib/AGENTS.md` but missed the root hierarchy diagram
+
+  **Approach:**
+
+  **P1 fix (most surgical):** in `loadConfigSource`, validate via `SystematicConfigSchema.safeParse()` AS BEFORE (preserves the U6 validation contract), but propagate the **raw parsed JSONC** (not `result.data`) to `ConfigSource.config`. The merge layer was designed for `undefined`-aware spread; U6 invalidated that contract. The schema is still the source of truth for validation; we just don't let its defaults leak into the merge.
+
+  Specifically, change:
+  ```typescript
+  return { path: filePath, config: result.data, trust }
+  ```
+  to:
+  ```typescript
+  return { path: filePath, config: rawConfig, trust }
+  ```
+  where `rawConfig` is the value returned by `loadJsoncFile` BEFORE validation.
+
+  **P2#2 fix:** narrow the AJV parity test's try/catch to only catch the ajv-import skip path (ajv unavailable) — let schema-generation, JSON.parse, and ajv.compile errors propagate as test failures.
+
+  **P3#7 fix:** delete `getSecurityOverlayFields()` from `src/lib/config-schema.ts`. Update `src/lib/config.ts` to import `SECURITY_OVERLAY_FIELDS` directly. Update the parity test to assert against the const directly. The function is unused beyond the single config.ts callsite.
+
+  **P3#8 fix:** update root `AGENTS.md` hierarchy diagram lines 49, 60-61 to reflect actual counts (16 modules, 20 unit tests, 2 integration tests). Also update line 20-21 (`bun test tests/unit # Unit tests (X files)`).
+
+  **Files to modify:**
+  - `src/lib/config.ts` (P1: ~3 LOC change in `loadConfigSource`; P3#7: import path update)
+  - `src/lib/config-schema.ts` (P3#7: remove `getSecurityOverlayFields`)
+  - `tests/unit/config.test.ts` (P1: regression test — user-explicit-false + project-empty + custom-empty → final still false)
+  - `tests/unit/config-schema.test.ts` (P3#7: parity test asserts against const)
+  - `tests/unit/generate-config-schema.test.ts` (P2#2: narrow try/catch scope)
+  - `AGENTS.md` (P3#8: hierarchy diagram + test counts)
+
+  **Out of scope (deferred):**
+  - P2#3 `ValidationResult` discriminated union (quality polish, not regression)
+  - P2#4 Zod private internals adapter (acceptable today, pinned to 4.4.3)
+  - P2#5 `$schema` URL allowlist (trust-boundary discussion)
+  - P3#6 `isConfigSchemaError` (consumer-driven cleanup)
+  - P3#9 docs version validation (small adversarial edge)
+
+  **Test scenarios (TDD test-first):**
+  1. **Loader P1 regression:** user config sets `bootstrap.enabled: false`, project config is `{}`, custom config absent → final `bootstrap.enabled` is `false`
+  2. **Loader P1 regression (broader):** same setup but with `disabled_skills: ['x']` in user config, project `{}` → final `disabled_skills` includes `'x'`
+  3. **Loader P1 regression (3-source):** user sets enabled=false, project sets enabled=undefined (omitted), custom sets enabled=undefined → final still false
+  4. **AJV parity tests fail-closed:** introduce a deliberately bad fixture (e.g., remove `ajv` dep) and assert the parity tests fail loud rather than skipping
+  5. **P3#7 regression:** schema and const both export the same readonly array reference shape
+
+  **Verification:**
+  - Reproduction config now preserves user setting:
+    ```
+    HOME=/tmp/sysrepro4 XDG_CONFIG_HOME=/tmp/sysrepro4/.config bun -e "..." → false
+    ```
+  - All existing tests still pass (724 → ~728 with new regression tests).
+  - Quality gate full sweep clean.
+
   **Context:** GPT-agent review identified that `SystematicConfigSchema.strict()` rejects unknown top-level keys, including `$schema` — but the docs page at `docs/src/content/docs/reference/systematic-config.mdx:23-29` explicitly instructs users to add `"$schema": "https://fro.bot/systematic/schemas/v2/systematic-config.schema.json"` to their config. The branch's own advertised IDE-autocomplete pattern breaks user configs at load time. Oracle confirmed validity (P1 release-blocker) and recommended Option A: whitelist `$schema` in the schema rather than loader-strip it. Reproduced empirically:
 
   ```
