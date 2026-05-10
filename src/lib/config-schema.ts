@@ -47,9 +47,25 @@ const permissionSchema = z.record(z.string(), permissionRuleSchema).meta({
   examples: [{ edit: 'allow', bash: { curl: 'allow', rm: 'deny' } }],
 })
 
+// ── Model Format Helpers ────────────────────────────────────────
+
+const MODEL_FORMAT_MESSAGE =
+  'must be in provider/model format (e.g., "anthropic/claude-sonnet-4")'
+
+/**
+ * Validate that a string is in provider/model format.
+ */
+function isValidModelFormat(val: string): boolean {
+  const trimmed = val.trim()
+  if (val !== trimmed || /\s/.test(val)) return false
+  const slashIndex = val.indexOf('/')
+  return slashIndex > 0 && slashIndex < val.length - 1
+}
+
 const modelSchema = z
   .string()
   .min(1)
+  .refine(isValidModelFormat, { message: MODEL_FORMAT_MESSAGE })
   .nullable()
   .meta({
     description:
@@ -60,6 +76,9 @@ const modelSchema = z
 const variantSchema = z
   .string()
   .min(1)
+  .refine((val) => val === val.trim() && !/\s/.test(val), {
+    message: 'must be a non-empty string without leading/trailing whitespace',
+  })
   .meta({
     description: 'Model variant identifier',
     examples: ['v2', 'extended'],
@@ -293,10 +312,20 @@ export function validateConfig(input: unknown): ValidationResult {
 // ── Source Category Model Defaults Assertion ────────────────────
 
 const SourceCategoryModelDefaultsSchema = z
-  .record(z.string(), z.array(z.string().min(1)).min(1))
+  .record(
+    z.string(),
+    z
+      .array(
+        z
+          .string()
+          .min(1)
+          .refine(isValidModelFormat, { message: MODEL_FORMAT_MESSAGE }),
+      )
+      .min(1),
+  )
   .meta({
     description: 'Validates source category model defaults shape',
-    examples: [{ design: ['gpt-4', 'claude-3'] }],
+    examples: [{ design: ['openai/gpt-4', 'anthropic/claude-3'] }],
   })
 
 export function assertSourceCategoryModelDefaults(

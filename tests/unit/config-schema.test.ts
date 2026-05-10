@@ -29,7 +29,7 @@ describe('SystematicConfigSchema', () => {
     const input = {
       agents: {
         explorer: {
-          model: 'gpt-4',
+          model: 'openai/gpt-4',
           variant: 'v2',
           temperature: 0.3,
           top_p: 0.9,
@@ -44,7 +44,7 @@ describe('SystematicConfigSchema', () => {
       },
       categories: {
         review: {
-          model: 'claude-3',
+          model: 'anthropic/claude-3',
           temperature: 0.1,
         },
       },
@@ -60,11 +60,11 @@ describe('SystematicConfigSchema', () => {
     const result = SystematicConfigSchema.safeParse(input)
     expect(result.success).toBe(true)
     if (result.success) {
-      expect(result.data.agents.explorer.model).toBe('gpt-4')
+      expect(result.data.agents.explorer.model).toBe('openai/gpt-4')
       expect(result.data.agents.explorer.temperature).toBe(0.3)
       expect(result.data.agents.explorer.mode).toBe('subagent')
       expect(result.data.agents.explorer.color).toBe('primary')
-      expect(result.data.categories.review.model).toBe('claude-3')
+      expect(result.data.categories.review.model).toBe('anthropic/claude-3')
       expect(result.data.disabled_skills).toEqual(['skill-1'])
       expect(result.data.disabled_agents).toEqual(['agent-1'])
       expect(result.data.disabled_commands).toEqual(['cmd-1'])
@@ -272,7 +272,7 @@ describe('assertSourceCategoryModelDefaults', () => {
     // A record with invalid values (numbers instead of string arrays)
     const badMock = {
       design: 42,
-      research: ['valid-model'],
+      research: ['openai/valid-model'],
     }
 
     expect(() => assertSourceCategoryModelDefaults(badMock)).toThrow()
@@ -370,7 +370,7 @@ describe('validateConfig wrapper', () => {
 
 describe('AgentOverlaySchema', () => {
   test('parses a minimal valid overlay', () => {
-    const result = AgentOverlaySchema.safeParse({ model: 'gpt-4' })
+    const result = AgentOverlaySchema.safeParse({ model: 'openai/gpt-4' })
     expect(result.success).toBe(true)
   })
 
@@ -381,7 +381,7 @@ describe('AgentOverlaySchema', () => {
 
   test('rejects unknown fields via strict mode', () => {
     const result = AgentOverlaySchema.safeParse({
-      model: 'gpt-4',
+      model: 'openai/gpt-4',
       nonexistent: true,
     })
     expect(result.success).toBe(false)
@@ -401,7 +401,9 @@ describe('AgentOverlaySchema', () => {
 
 describe('CategoryOverlaySchema', () => {
   test('parses a minimal valid category overlay', () => {
-    const result = CategoryOverlaySchema.safeParse({ model: 'gpt-4' })
+    const result = CategoryOverlaySchema.safeParse({
+      model: 'anthropic/claude-3',
+    })
     expect(result.success).toBe(true)
   })
 

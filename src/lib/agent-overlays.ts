@@ -2,7 +2,9 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { SourcedOverlayConfigMap } from './config.js'
-import { isAgentMode, isPermissionSetting, isRecord } from './validation.js'
+import { isRecord } from './validation.js'
+import { AgentOverlaySchema, CategoryOverlaySchema } from './config-schema.js'
+import { assertSourceCategoryModelDefaults } from './config-schema.js'
 
 export interface BundledAgentInventoryEntry {
   id: string
@@ -61,20 +63,6 @@ const SOURCE_CATEGORY_MODEL_DEFAULTS = {
   review: ['anthropic/claude-opus-4.7', 'openai/gpt-5.5'],
   workflow: ['openai/gpt-5.4-mini', 'anthropic/claude-haiku-4-5'],
 } as const satisfies Record<string, readonly string[]>
-
-const ALLOWED_OVERLAY_FIELDS = new Set([
-  'model',
-  'variant',
-  'temperature',
-  'top_p',
-  'permission',
-  'mode',
-  'color',
-  'steps',
-  'hidden',
-  'disable',
-  'skills',
-])
 
 export function buildBundledAgentInventory(
   agentsDir: string,
@@ -283,25 +271,7 @@ export function assertSourceCategoryModelCoverage(categories: string[]): void {
 export function validateSourceCategoryModelDefaults(
   defaults: Record<string, unknown> = SOURCE_CATEGORY_MODEL_DEFAULTS,
 ): void {
-  for (const [category, value] of Object.entries(defaults)) {
-    if (!Array.isArray(value)) {
-      throw new Error(
-        `Source category model defaults: ${category} must be a non-empty array of provider/model strings`,
-      )
-    }
-    if (value.length === 0) {
-      throw new Error(
-        `Source category model defaults: ${category} must be a non-empty array of provider/model strings`,
-      )
-    }
-    for (const [index, model] of value.entries()) {
-      validateModel(
-        'source category model defaults',
-        `source category model defaults.${category}[${index}]`,
-        model,
-      )
-    }
-  }
+  assertSourceCategoryModelDefaults(defaults)
 }
 
 function validateExactAgentOverlays(
@@ -392,6 +362,10 @@ function validateCategoryOverlays(
   return result
 }
 
+function hasPermissionSkill(permission: unknown): boolean {
+  return isRecord(permission) && Object.hasOwn(permission, 'skill')
+}
+
 function validateOverlayFields(
   overlay: {
     value: Record<string, unknown>
@@ -412,281 +386,34 @@ function validateOverlayFields(
     )
   }
 
-  for (const [field, value] of Object.entries(overlay.value)) {
-    const keyPath = `${overlay.keyPath}.${field}`
-    if (!ALLOWED_OVERLAY_FIELDS.has(field)) {
-      throwConfigError(
-        overlay.sourcePath,
-        keyPath,
-        `unsupported agent overlay field "${field}"`,
-      )
+  const schema =
+    targetType === 'agent' ? AgentOverlaySchema : CategoryOverlaySchema
+  const result = schema.safeParse(overlay.value)
+
+  if (!result.success) {
+    const issue = result.error.issues[0]
+    let zodPath = issue.path.join('.')
+
+    // For unrecognized_keys, use the key name from the message as the path
+    if (issue.code === 'unrecognized_keys') {
+      const match = issue.message.match(/"([^"]+)"/)
+      zodPath = match ? match[1] : zodPath
     }
 
-    if (targetType === 'category' && field === 'disable') {
-      throwConfigError(
-        overlay.sourcePath,
-        keyPath,
-        'disable is only valid for exact agent overlays',
-      )
-    }
-
-    validateOverlayFieldValue(
-      overlay.sourcePath,
-      keyPath,
-      field,
-      value,
-      enabledSkills,
-    )
-  }
-}
-
-function hasPermissionSkill(permission: unknown): boolean {
-  return isRecord(permission) && Object.hasOwn(permission, 'skill')
-}
-
-function validateOverlayFieldValue(
-  sourcePath: string,
-  keyPath: string,
-  field: string,
-  value: unknown,
-  enabledSkills: Set<string> | undefined,
-): void {
-  switch (field) {
-    case 'model':
-      if (value === null) return // null opt-out: inherit parent model
-      validateModel(sourcePath, keyPath, value)
-      return
-    case 'variant':
-      validateNonEmptyString(sourcePath, keyPath, value)
-      return
-    case 'temperature':
-      validateTemperature(sourcePath, keyPath, value)
-      return
-    case 'top_p':
-      validateTopP(sourcePath, keyPath, value)
-      return
-    case 'permission':
-      validatePermission(sourcePath, keyPath, value)
-      return
-    case 'mode':
-      validateMode(sourcePath, keyPath, value)
-      return
-    case 'color':
-      validateColor(sourcePath, keyPath, value)
-      return
-    case 'steps':
-      validatePositiveInteger(sourcePath, keyPath, value)
-      return
-    case 'hidden':
-    case 'disable':
-      validateBoolean(sourcePath, keyPath, value)
-      return
-    case 'skills':
-      validateSkills(sourcePath, keyPath, value, enabledSkills)
-      return
-  }
-}
-
-function validateModel(
-  sourcePath: string,
-  keyPath: string,
-  value: unknown,
-): void {
-  if (typeof value !== 'string') {
-    throwConfigError(sourcePath, keyPath, 'must be a provider/model string')
+    const fullPath = zodPath ? `${overlay.keyPath}.${zodPath}` : overlay.keyPath
+    throwConfigError(overlay.sourcePath, fullPath, issue.message)
   }
 
-  if (value !== value.trim() || /\s/.test(value)) {
-    throwConfigError(sourcePath, keyPath, 'must be a provider/model string')
-  }
-
-  const slashIndex = value.indexOf('/')
-  if (value === '' || slashIndex <= 0 || slashIndex === value.length - 1) {
-    throwConfigError(sourcePath, keyPath, 'must be a provider/model string')
-  }
-}
-
-function validateNonEmptyString(
-  sourcePath: string,
-  keyPath: string,
-  value: unknown,
-): void {
-  if (typeof value !== 'string' || value === '' || value !== value.trim()) {
-    throwConfigError(sourcePath, keyPath, 'must be a non-empty string')
-  }
-}
-
-function validateTemperature(
-  sourcePath: string,
-  keyPath: string,
-  value: unknown,
-): void {
-  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
-    throwConfigError(
-      sourcePath,
-      keyPath,
-      'must be a non-negative finite number',
-    )
-  }
-}
-
-function validateTopP(
-  sourcePath: string,
-  keyPath: string,
-  value: unknown,
-): void {
-  if (
-    typeof value !== 'number' ||
-    !Number.isFinite(value) ||
-    value < 0 ||
-    value > 1
-  ) {
-    throwConfigError(sourcePath, keyPath, 'must be a number from 0 to 1')
-  }
-}
-
-function validatePositiveInteger(
-  sourcePath: string,
-  keyPath: string,
-  value: unknown,
-): void {
-  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1) {
-    throwConfigError(sourcePath, keyPath, 'must be a positive integer')
-  }
-}
-
-function validateBoolean(
-  sourcePath: string,
-  keyPath: string,
-  value: unknown,
-): void {
-  if (typeof value !== 'boolean') {
-    throwConfigError(sourcePath, keyPath, 'must be a boolean')
-  }
-}
-
-function validateMode(
-  sourcePath: string,
-  keyPath: string,
-  value: unknown,
-): void {
-  if (!isAgentMode(value)) {
-    throwConfigError(
-      sourcePath,
-      keyPath,
-      'must be one of: subagent, primary, all',
-    )
-  }
-}
-
-function validateColor(
-  sourcePath: string,
-  keyPath: string,
-  value: unknown,
-): void {
-  if (
-    typeof value !== 'string' ||
-    value !== value.trim() ||
-    !isOpenCodeColor(value)
-  ) {
-    throwConfigError(
-      sourcePath,
-      keyPath,
-      'must be an OpenCode-compatible color string',
-    )
-  }
-}
-
-function isOpenCodeColor(value: string): boolean {
-  if (value === '') return false
-  if (/^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(value)) return true
-  return /^[a-zA-Z][a-zA-Z0-9-]*$/.test(value)
-}
-
-function validateSkills(
-  sourcePath: string,
-  keyPath: string,
-  value: unknown,
-  enabledSkills: Set<string> | undefined,
-): void {
-  if (
-    !Array.isArray(value) ||
-    !value.every(
-      (skill) =>
-        typeof skill === 'string' && skill !== '' && skill === skill.trim(),
-    )
-  ) {
-    throwConfigError(
-      sourcePath,
-      keyPath,
-      'must be an array of non-empty strings',
-    )
-  }
-
-  if (!enabledSkills) return
-
-  for (const skill of value) {
-    if (!enabledSkills.has(skill)) {
-      throwConfigError(
-        sourcePath,
-        keyPath,
-        `unknown or disabled skill "${skill}"`,
-      )
-    }
-  }
-}
-
-function validatePermission(
-  sourcePath: string,
-  keyPath: string,
-  value: unknown,
-): void {
-  if (!isRecord(value)) {
-    throwConfigError(sourcePath, keyPath, 'must be an object')
-  }
-
-  for (const [toolKey, rule] of Object.entries(value)) {
-    if (toolKey.trim() === '') {
-      throwConfigError(
-        sourcePath,
-        `${keyPath}.${toolKey}`,
-        'must use a non-empty tool key',
-      )
-    }
-
-    validatePermissionRule(sourcePath, `${keyPath}.${toolKey}`, rule)
-  }
-}
-
-function validatePermissionRule(
-  sourcePath: string,
-  keyPath: string,
-  value: unknown,
-): void {
-  if (isPermissionSetting(value)) return
-
-  if (!isRecord(value)) {
-    throwConfigError(
-      sourcePath,
-      keyPath,
-      'must be ask, allow, deny, or an object of pattern rules',
-    )
-  }
-
-  for (const [pattern, setting] of Object.entries(value)) {
-    if (pattern.trim() === '') {
-      throwConfigError(
-        sourcePath,
-        `${keyPath}.${pattern}`,
-        'must use a non-empty permission pattern',
-      )
-    }
-    if (!isPermissionSetting(setting)) {
-      throwConfigError(
-        sourcePath,
-        `${keyPath}.${pattern}`,
-        'must be ask, allow, or deny',
-      )
+  // After Zod validation, check enabledSkills for the skills field
+  if (enabledSkills && result.data.skills) {
+    for (const skill of result.data.skills) {
+      if (!enabledSkills.has(skill)) {
+        throwConfigError(
+          overlay.sourcePath,
+          `${overlay.keyPath}.skills`,
+          `unknown or disabled skill "${skill}"`,
+        )
+      }
     }
   }
 }

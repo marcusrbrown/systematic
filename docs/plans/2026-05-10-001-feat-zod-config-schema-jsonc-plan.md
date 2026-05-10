@@ -100,7 +100,7 @@ Two compounding friction points motivate this work (see origin doc Problem Frame
 
 ## Implementation Units
 
-- [ ] **Unit 1: Zod schema for `systematic.json`**
+- [x] **Unit 1: Zod schema for `systematic.json`**
 
 **Goal:** Define the canonical Zod schema for the user-facing config surface and verify the JSON-Schema codegen API contract.
 
@@ -146,7 +146,7 @@ Two compounding friction points motivate this work (see origin doc Problem Frame
 - The schema can be imported and called from `src/lib/config.ts` and `src/lib/agent-overlays.ts` without circular-import issues.
 - A standalone scratch script that calls `z.toJSONSchema(SystematicConfigSchema, { target: 'draft-7' })` produces output and the comment in `config-schema.ts` documents whether draft-07 was supported and whether `.default()` round-tripped.
 
-- [ ] **Unit 2: Replace overlay validators with Zod-delegating wrappers**
+- [x] **Unit 2: Replace overlay validators with Zod-delegating wrappers**
 
 **Goal:** Migrate the hand-rolled validation paths in `src/lib/config.ts` and `src/lib/agent-overlays.ts` to delegate to the Zod schema, preserving all existing public function signatures.
 
