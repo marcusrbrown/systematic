@@ -1,5 +1,4 @@
 import { describe, expect, spyOn, test } from 'bun:test'
-import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -794,14 +793,20 @@ describe('getSourceCategoryModel with auth', () => {
     expect(result).toBe('anthropic/claude-opus-4.7')
   })
 
-  test('correctly extracts provider from nested-form entries', () => {
-    const nested = 'openrouter/anthropic/claude-sonnet-4'
-    const slashIndex = nested.indexOf('/')
-    const providerId = slashIndex > 0 ? nested.slice(0, slashIndex) : nested
-    expect(providerId).toBe('openrouter')
+  test('treats only the substring before the first slash as the provider id', () => {
+    // The resolver's slash-prefix extraction means an authedProviders entry like
+    // 'openai/gpt-5.5' (a full provider/model rather than a provider id) does not
+    // match the array entry 'openai/gpt-5.5' because the entry's provider id is
+    // 'openai', not 'openai/gpt-5.5'. The resolver falls back to array[0].
+    expect(getSourceCategoryModel('review', new Set(['openai/gpt-5.5']))).toBe(
+      'anthropic/claude-opus-4.7',
+    )
 
-    const result = getSourceCategoryModel('review', new Set(['openai']))
-    expect(result).toBe('openai/gpt-5.5')
+    // And the inverse: an authedProviders entry of 'openai' (a real provider id)
+    // does match an array entry whose prefix-before-slash is 'openai'.
+    expect(getSourceCategoryModel('review', new Set(['openai']))).toBe(
+      'openai/gpt-5.5',
+    )
   })
 })
 
@@ -846,27 +851,104 @@ describe('getAuthenticatedProviders integration', () => {
       const authDir = path.join(dir, 'opencode')
       const authPath = path.join(authDir, 'auth.json')
       fs.mkdirSync(authDir, { recursive: true })
-      const content = JSON.stringify({ openai: { type: 'api', key: 'x' } })
-      fs.writeFileSync(authPath, content, 'utf8')
+      const initialContent = JSON.stringify({
+        openai: { type: 'api', key: 'x' },
+      })
+      fs.writeFileSync(authPath, initialContent, 'utf8')
 
       const beforeStat = fs.statSync(authPath)
-      const beforeMtime = beforeStat.mtimeMs
-      const beforeHash = crypto
-        .createHash('sha256')
-        .update(content)
-        .digest('hex')
 
       getAuthenticatedProviders(dir)
 
-      const afterContent = fs.readFileSync(authPath, 'utf8')
       const afterStat = fs.statSync(authPath)
-      const afterHash = crypto
-        .createHash('sha256')
-        .update(afterContent)
-        .digest('hex')
+      expect(afterStat.mtimeMs).toBe(beforeStat.mtimeMs)
+      expect(afterStat.size).toBe(beforeStat.size)
+    })
+  })
+})
 
-      expect(afterHash).toBe(beforeHash)
-      expect(afterStat.mtimeMs).toBe(beforeMtime)
+describe('getAuthenticatedProviders XDG_DATA_HOME resolution', () => {
+  test('uses XDG_DATA_HOME when set to an absolute path', () => {
+    withTempDir((dir) => {
+      const xdgDataHome = path.join(dir, 'xdg-data')
+      const authDir = path.join(xdgDataHome, 'opencode')
+      fs.mkdirSync(authDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(authDir, 'auth.json'),
+        JSON.stringify({ 'github-copilot': { type: 'oauth' } }),
+        'utf8',
+      )
+
+      const previousXdg = process.env.XDG_DATA_HOME
+      process.env.XDG_DATA_HOME = xdgDataHome
+      try {
+        const result = getAuthenticatedProviders()
+        expect(result.has('github-copilot')).toBe(true)
+      } finally {
+        if (previousXdg === undefined) {
+          delete process.env.XDG_DATA_HOME
+        } else {
+          process.env.XDG_DATA_HOME = previousXdg
+        }
+      }
+    })
+  })
+
+  test('falls back to os.homedir() when XDG_DATA_HOME is empty', () => {
+    withTempDir((dir) => {
+      const fakeHome = path.join(dir, 'fake-home')
+      const authDir = path.join(fakeHome, '.local/share/opencode')
+      fs.mkdirSync(authDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(authDir, 'auth.json'),
+        JSON.stringify({ openai: { type: 'api', key: 'x' } }),
+        'utf8',
+      )
+
+      const previousXdg = process.env.XDG_DATA_HOME
+      const previousHomedir = os.homedir
+      process.env.XDG_DATA_HOME = ''
+      os.homedir = () => fakeHome
+      try {
+        const result = getAuthenticatedProviders()
+        expect(result.has('openai')).toBe(true)
+      } finally {
+        os.homedir = previousHomedir
+        if (previousXdg === undefined) {
+          delete process.env.XDG_DATA_HOME
+        } else {
+          process.env.XDG_DATA_HOME = previousXdg
+        }
+      }
+    })
+  })
+
+  test('falls back to os.homedir() when XDG_DATA_HOME is non-absolute', () => {
+    withTempDir((dir) => {
+      const fakeHome = path.join(dir, 'fake-home')
+      const authDir = path.join(fakeHome, '.local/share/opencode')
+      fs.mkdirSync(authDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(authDir, 'auth.json'),
+        JSON.stringify({ anthropic: { type: 'api', key: 'x' } }),
+        'utf8',
+      )
+
+      const previousXdg = process.env.XDG_DATA_HOME
+      const previousHomedir = os.homedir
+      process.env.XDG_DATA_HOME = 'relative/path'
+      os.homedir = () => fakeHome
+      try {
+        const result = getAuthenticatedProviders()
+        expect(result.has('anthropic')).toBe(true)
+      } finally {
+        os.homedir = previousHomedir
+        if (previousXdg === undefined) {
+          delete process.env.XDG_DATA_HOME
+        } else {
+          process.env.XDG_DATA_HOME = previousXdg
+        }
+      }
     })
   })
 })

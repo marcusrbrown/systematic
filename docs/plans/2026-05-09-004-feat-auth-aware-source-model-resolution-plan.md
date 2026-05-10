@@ -1,7 +1,7 @@
 ---
 title: "feat: Auth-aware source model resolution"
 type: feat
-status: active
+status: completed
 date: 2026-05-09
 origin: docs/brainstorms/2026-05-09-auth-aware-source-model-resolution-requirements.md
 ---
@@ -139,7 +139,7 @@ The auth set is built once and threaded through the existing per-agent loop. No 
 
 ## Implementation Units
 
-- [ ] **Unit 1: Expand source-default shape and update validators**
+- [x] **Unit 1: Expand source-default shape and update validators**
 
 **Goal:** Change `SOURCE_CATEGORY_MODEL_DEFAULTS` from `Record<CategoryId, string>` to `Record<CategoryId, readonly string[]>`, ensure all existing source coverage validators handle the array shape, and prove no regressions in current behavior.
 
@@ -181,7 +181,7 @@ The auth set is built once and threaded through the existing per-agent loop. No 
 - `bun run typecheck` passes — the type signature change for `SOURCE_CATEGORY_MODEL_DEFAULTS` propagates cleanly.
 - `bun scripts/content-integrity.ts` passes — no bundled-asset surface area is touched.
 
-- [ ] **Unit 2: Add auth-file reader and auth-aware resolver**
+- [x] **Unit 2: Add auth-file reader and auth-aware resolver**
 
 **Goal:** Add `getAuthenticatedProviders(rootDirOverride?)` that reads `auth.json` synchronously and returns the top-level-key set, and extend `getSourceCategoryModel` to accept an optional authenticated-provider set and return the first array entry whose provider ID matches.
 
@@ -236,7 +236,7 @@ The auth set is built once and threaded through the existing per-agent loop. No 
 - The diagnostic-on-malformed test asserts exactly one stderr line and that it contains the path + failure-category words.
 - No leak: a regex like `/[A-Za-z0-9-_]{30,}/` (token-shape) does not appear in captured stderr/stdout for any happy-path test.
 
-- [ ] **Unit 3: Wire the auth-aware resolver into the config hook**
+- [x] **Unit 3: Wire the auth-aware resolver into the config hook**
 
 **Goal:** Read auth state once at the top of the `config(cfg)` hook in `config-handler.ts`, pass the resulting set through to per-agent processing, and use it when calling `getSourceCategoryModel`.
 
@@ -276,7 +276,7 @@ The auth set is built once and threaded through the existing per-agent loop. No 
 - The new integration scenarios in `tests/integration/opencode.test.ts` pass.
 - `bun run typecheck`, `bun run lint`, and `bun run registry:drift` all pass.
 
-- [ ] **Unit 4: Document the new behavior**
+- [x] **Unit 4: Document the new behavior**
 
 **Goal:** Update user-facing documentation to describe the array shape, the auth-aware resolution behavior, the documented limitations (autoload providers, race window), and confirm that user overlays remain scalar.
 
