@@ -1,4 +1,5 @@
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
 import type { SourcedOverlayConfigMap } from './config.js'
 import { isAgentMode, isPermissionSetting, isRecord } from './validation.js'
@@ -181,8 +182,66 @@ export function inferBuiltInTemperature(
   return 0.3
 }
 
+/**
+ * Read which providers are authenticated from OpenCode's auth.json.
+ *
+ * Reads only top-level keys (provider IDs). Nested values are NEVER
+ * inspected, logged, persisted, or transmitted. This is a hard contract
+ * (R9a).
+ *
+ * Intended for one invocation per plugin config(cfg) cycle. Repeated
+ * calls trigger repeated file reads and, on malformed input, repeated
+ * stderr diagnostics.
+ *
+ * @param rootDirOverride - Optional path override for tests. When
+ *   non-empty, the auth file is resolved as
+ *   `path.join(rootDirOverride, 'opencode', 'auth.json')`. When
+ *   omitted, resolution follows XDG_DATA_HOME -> ~/.local/share
+ *   convention.
+ * @returns A readonly set of authenticated provider IDs (empty set on
+ *   any failure).
+ */
+export function getAuthenticatedProviders(
+  rootDirOverride?: string,
+): ReadonlySet<string> {
+  const xdgDataHome = process.env.XDG_DATA_HOME?.trim()
+  const rootDir =
+    rootDirOverride ||
+    (xdgDataHome && path.isAbsolute(xdgDataHome)
+      ? xdgDataHome
+      : path.join(os.homedir(), '.local/share'))
+  const authPath = path.join(rootDir, 'opencode', 'auth.json')
+
+  let raw: string
+  try {
+    raw = fs.readFileSync(authPath, 'utf8')
+  } catch (err: unknown) {
+    if (isSystemError(err) && err.code === 'ENOENT') {
+      return new Set()
+    }
+    console.warn(`[systematic] auth.json unreadable at ${authPath}; ignoring`)
+    return new Set()
+  }
+
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    console.warn(`[systematic] auth.json malformed at ${authPath}; ignoring`)
+    return new Set()
+  }
+
+  if (!isRecord(parsed)) {
+    console.warn(`[systematic] auth.json malformed at ${authPath}; ignoring`)
+    return new Set()
+  }
+
+  return new Set(Object.keys(parsed))
+}
+
 export function getSourceCategoryModel(
   category: string | undefined,
+  authedProviders?: ReadonlySet<string>,
 ): string | undefined {
   if (!category) return undefined
   const candidates = (
@@ -192,6 +251,17 @@ export function getSourceCategoryModel(
     >
   )[category]
   if (!candidates || candidates.length === 0) return undefined
+  if (!authedProviders || authedProviders.size === 0) return candidates[0]
+
+  for (const entry of candidates) {
+    const slashIndex = entry.indexOf('/')
+    if (slashIndex <= 0) continue
+    const providerId = entry.slice(0, slashIndex)
+    if (authedProviders.has(providerId)) {
+      return entry
+    }
+  }
+
   return candidates[0]
 }
 
@@ -655,5 +725,14 @@ function throwConfigError(
 ): never {
   throw new Error(
     `Invalid Systematic config in ${sourcePath}: ${keyPath} ${message}`,
+  )
+}
+
+function isSystemError(err: unknown): err is { code: string } {
+  return (
+    typeof err === 'object' &&
+    err !== null &&
+    'code' in err &&
+    typeof (err as Record<string, unknown>).code === 'string'
   )
 }

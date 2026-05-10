@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
+import crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -6,6 +7,7 @@ import {
   assertSourceCategoryModelCoverage,
   type BundledAgentInventory,
   buildBundledAgentInventory,
+  getAuthenticatedProviders,
   getSourceCategoryModel,
   inferBuiltInTemperature,
   validateAgentOverlays,
@@ -633,5 +635,238 @@ describe('source category model defaults', () => {
         review: ['openai/gpt-5.5', 'anthropic/claude-opus-4.7'],
       }),
     ).not.toThrow()
+  })
+})
+
+describe('getAuthenticatedProviders', () => {
+  test('returns set with single provider from auth.json', () => {
+    withTempDir((dir) => {
+      const authDir = path.join(dir, 'opencode')
+      fs.mkdirSync(authDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(authDir, 'auth.json'),
+        JSON.stringify({ openai: { type: 'api', key: 'x' } }),
+      )
+      const result = getAuthenticatedProviders(dir)
+      expect(result).toEqual(new Set(['openai']))
+    })
+  })
+
+  test('returns set with multiple providers from auth.json', () => {
+    withTempDir((dir) => {
+      const authDir = path.join(dir, 'opencode')
+      fs.mkdirSync(authDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(authDir, 'auth.json'),
+        JSON.stringify({ 'github-copilot': {}, anthropic: {} }),
+      )
+      const result = getAuthenticatedProviders(dir)
+      expect(result).toEqual(new Set(['github-copilot', 'anthropic']))
+    })
+  })
+
+  test('returns empty set silently when auth.json is missing', () => {
+    withTempDir((dir) => {
+      const warnSpy = spyOn(console, 'warn')
+      try {
+        const result = getAuthenticatedProviders(dir)
+        expect(result).toEqual(new Set())
+        expect(warnSpy).not.toHaveBeenCalled()
+      } finally {
+        warnSpy.mockRestore()
+      }
+    })
+  })
+
+  test('returns empty set and warns when auth.json is unreadable', () => {
+    withTempDir((dir) => {
+      const authDir = path.join(dir, 'opencode')
+      const authPath = path.join(authDir, 'auth.json')
+      fs.mkdirSync(authDir, { recursive: true })
+      fs.writeFileSync(authPath, JSON.stringify({ openai: {} }))
+      fs.chmodSync(authPath, 0o000)
+
+      const warnSpy = spyOn(console, 'warn')
+      try {
+        const result = getAuthenticatedProviders(dir)
+        expect(result).toEqual(new Set())
+        expect(warnSpy).toHaveBeenCalledTimes(1)
+        const msg = warnSpy.mock.calls[0][0]
+        expect(msg).toContain('[systematic]')
+        expect(msg).toContain('auth.json')
+        expect(msg).toContain('unreadable')
+        expect(msg).toContain(authPath)
+      } finally {
+        warnSpy.mockRestore()
+        fs.chmodSync(authPath, 0o644)
+      }
+    })
+  })
+
+  test('returns empty set and warns when auth.json contains malformed JSON', () => {
+    withTempDir((dir) => {
+      const authDir = path.join(dir, 'opencode')
+      const authPath = path.join(authDir, 'auth.json')
+      fs.mkdirSync(authDir, { recursive: true })
+      fs.writeFileSync(authPath, '{not valid', 'utf8')
+
+      const warnSpy = spyOn(console, 'warn')
+      try {
+        const result = getAuthenticatedProviders(dir)
+        expect(result).toEqual(new Set())
+        expect(warnSpy).toHaveBeenCalledTimes(1)
+        const msg = warnSpy.mock.calls[0][0]
+        expect(msg).toContain('[systematic]')
+        expect(msg).toContain('auth.json')
+        expect(msg).toContain('malformed')
+        expect(msg).toContain(authPath)
+      } finally {
+        warnSpy.mockRestore()
+      }
+    })
+  })
+
+  test('returns empty set when auth.json parses to a non-object', () => {
+    withTempDir((dir) => {
+      const authDir = path.join(dir, 'opencode')
+      const authPath = path.join(authDir, 'auth.json')
+      fs.mkdirSync(authDir, { recursive: true })
+      fs.writeFileSync(
+        authPath,
+        JSON.stringify(['array', 'not', 'object']),
+        'utf8',
+      )
+
+      const warnSpy = spyOn(console, 'warn')
+      try {
+        const result = getAuthenticatedProviders(dir)
+        expect(result).toEqual(new Set())
+        expect(warnSpy).toHaveBeenCalledTimes(1)
+        const msg = warnSpy.mock.calls[0][0]
+        expect(msg).toContain('malformed')
+      } finally {
+        warnSpy.mockRestore()
+      }
+    })
+  })
+
+  test('returns keys only without inspecting nested values', () => {
+    withTempDir((dir) => {
+      const authDir = path.join(dir, 'opencode')
+      fs.mkdirSync(authDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(authDir, 'auth.json'),
+        JSON.stringify({ openai: { type: 'api', key: 'sk-secret' } }),
+      )
+      const result = getAuthenticatedProviders(dir)
+      expect(result).toEqual(new Set(['openai']))
+      expect([...result]).toEqual(['openai'])
+    })
+  })
+})
+
+describe('getSourceCategoryModel with auth', () => {
+  test('returns first array entry whose provider is authenticated', () => {
+    const result = getSourceCategoryModel('review', new Set(['openai']))
+    expect(result).toBe('openai/gpt-5.5')
+  })
+
+  test('returns first matching entry when multiple providers are authenticated', () => {
+    const result = getSourceCategoryModel(
+      'review',
+      new Set(['anthropic', 'openai']),
+    )
+    expect(result).toBe('anthropic/claude-opus-4.7')
+  })
+
+  test('returns first entry when authenticated set is empty', () => {
+    const result = getSourceCategoryModel('review', new Set())
+    expect(result).toBe('anthropic/claude-opus-4.7')
+  })
+
+  test('returns first entry when authedProviders is undefined', () => {
+    const result = getSourceCategoryModel('review')
+    expect(result).toBe('anthropic/claude-opus-4.7')
+  })
+
+  test('returns first entry when no providers match', () => {
+    const result = getSourceCategoryModel('review', new Set(['openrouter']))
+    expect(result).toBe('anthropic/claude-opus-4.7')
+  })
+
+  test('correctly extracts provider from nested-form entries', () => {
+    const nested = 'openrouter/anthropic/claude-sonnet-4'
+    const slashIndex = nested.indexOf('/')
+    const providerId = slashIndex > 0 ? nested.slice(0, slashIndex) : nested
+    expect(providerId).toBe('openrouter')
+
+    const result = getSourceCategoryModel('review', new Set(['openai']))
+    expect(result).toBe('openai/gpt-5.5')
+  })
+})
+
+describe('getAuthenticatedProviders integration', () => {
+  test('does not leak auth.json nested values in output', () => {
+    withTempDir((dir) => {
+      const authDir = path.join(dir, 'opencode')
+      fs.mkdirSync(authDir, { recursive: true })
+      const secretKey = 'sk-test-do-not-leak-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
+      fs.writeFileSync(
+        path.join(authDir, 'auth.json'),
+        JSON.stringify({ openai: { type: 'api', key: secretKey } }),
+      )
+
+      const warnSpy = spyOn(console, 'warn')
+      const logSpy = spyOn(console, 'log')
+      try {
+        const result = getAuthenticatedProviders(dir)
+        expect(result).toEqual(new Set(['openai']))
+
+        const allOutputs = [
+          ...warnSpy.mock.calls.map((c) => String(c[0])),
+          ...logSpy.mock.calls.map((c) => String(c[0])),
+        ]
+        const joined = allOutputs.join(' ')
+
+        // The literal secret must not appear in any output
+        expect(joined).not.toContain(secretKey)
+
+        // No token-like strings (30+ alphanumeric/underscore/hyphen characters)
+        const tokenPattern = /[A-Za-z0-9_-]{30,}/
+        expect(joined).not.toMatch(tokenPattern)
+      } finally {
+        warnSpy.mockRestore()
+        logSpy.mockRestore()
+      }
+    })
+  })
+
+  test('does not modify auth.json file', () => {
+    withTempDir((dir) => {
+      const authDir = path.join(dir, 'opencode')
+      const authPath = path.join(authDir, 'auth.json')
+      fs.mkdirSync(authDir, { recursive: true })
+      const content = JSON.stringify({ openai: { type: 'api', key: 'x' } })
+      fs.writeFileSync(authPath, content, 'utf8')
+
+      const beforeStat = fs.statSync(authPath)
+      const beforeMtime = beforeStat.mtimeMs
+      const beforeHash = crypto
+        .createHash('sha256')
+        .update(content)
+        .digest('hex')
+
+      getAuthenticatedProviders(dir)
+
+      const afterContent = fs.readFileSync(authPath, 'utf8')
+      const afterStat = fs.statSync(authPath)
+      const afterHash = crypto
+        .createHash('sha256')
+        .update(afterContent)
+        .digest('hex')
+
+      expect(afterHash).toBe(beforeHash)
+      expect(afterStat.mtimeMs).toBe(beforeMtime)
+    })
   })
 })
