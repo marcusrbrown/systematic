@@ -35,11 +35,13 @@
     "docs:dev": "bun run --cwd docs dev",
     "docs:build": "bun run docs:generate && bun run --cwd docs build",
     "docs:preview": "bun run --cwd docs preview",
-    "docs:generate": "bun docs/scripts/transform-content.ts",
+    "docs:generate": "bun docs/scripts/transform-content.ts && bun scripts/generate-config-schema.ts",
+    "schema:generate": "bun scripts/generate-config-schema.ts",
+    "schema:drift": "bun scripts/generate-config-schema.ts --check",
     "registry:build": "bun scripts/build-registry.ts",
     "registry:drift": "bun scripts/generate-registry.ts --check",
     "registry:validate": "bun scripts/build-registry.ts --validate-only",
-    "prepublishOnly": "bun run build"
+    "prepublishOnly": "bun run build && bun run schema:generate"
   },
   "keywords": [
     "opencode",
@@ -67,6 +69,8 @@
     "@types/bun": "latest",
     "@types/js-yaml": "4.0.9",
     "@types/node": "24.12.3",
+    "ajv": "^8.20.0",
+    "ajv-formats": "^3.0.1",
     "conventional-changelog-conventionalcommits": "9.3.1",
     "markdownlint-cli": "0.48.0",
     "rimraf": "6.1.3",
