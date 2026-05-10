@@ -347,7 +347,7 @@ When both \`.jsonc\` and \`.json\` exist in the same directory, \`.jsonc\` takes
 Add the following line to the top of your config file to enable IDE autocomplete and inline documentation:
 
 \`\`\`json
-"\\$schema": "${schemaUrl}"
+"$schema": "${schemaUrl}"
 \`\`\`
 
 ${overlaySection}

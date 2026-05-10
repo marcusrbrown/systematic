@@ -172,6 +172,22 @@ describe('generateConfigReference', () => {
       'https://fro.bot/systematic/schemas/v2/systematic-config.schema.json',
     )
   })
+
+  test('regression: generated MDX contains literal "$schema": without backslash', () => {
+    const content = generateFn('2.11.0')
+    // The copy-paste example must be "$schema": not "\$schema":
+    expect(content).toContain('"$schema":')
+    // The bug emitted a backslash-escaped dollar sign — assert it is gone
+    expect(content).not.toContain('\\$schema')
+  })
+
+  test('regression: $schema line in code block is user-pasteable', () => {
+    const content = generateFn('2.11.0')
+    // The code block must contain the exact text a user would paste
+    const schemaLine =
+      '"$schema": "https://fro.bot/systematic/schemas/v2/systematic-config.schema.json"'
+    expect(content).toContain(schemaLine)
+  })
 })
 
 // ═════════════════════════════════════════════════════════════════
