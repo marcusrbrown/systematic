@@ -3,6 +3,7 @@ import type { AgentConfig } from '@opencode-ai/sdk'
 import {
   assertSourceCategoryModelCoverage,
   buildBundledAgentInventory,
+  getAuthenticatedProviders,
   getSourceCategoryModel,
   inferBuiltInTemperature,
   type ResolvedAgentOverlaySet,
@@ -23,6 +24,8 @@ export interface ConfigHandlerDeps {
   bundledSkillsDir: string
   bundledAgentsDir: string
   bundledCommandsDir: string
+  /** Override for authenticated provider reader; for testing. */
+  getAuthenticatedProviders?: (rootDirOverride?: string) => ReadonlySet<string>
 }
 
 type CommandConfig = NonNullable<Config['command']>[string]
@@ -157,6 +160,7 @@ function collectAgents(
   disabledAgents: string[],
   nativeAgents: Record<string, unknown>,
   overlays: ResolvedAgentOverlaySet,
+  authedProviders: ReadonlySet<string>,
 ): NonNullable<Config['agent']> {
   const agents: NonNullable<Config['agent']> = {}
   const agentList = findAgentsInDir(dir)
@@ -174,7 +178,12 @@ function collectAgents(
 
     const config = loadAgentAsConfig(agentInfo)
     if (config) {
-      agents[agentInfo.name] = applyAgentOverlays(config, agentInfo, overlays)
+      agents[agentInfo.name] = applyAgentOverlays(
+        config,
+        agentInfo,
+        overlays,
+        authedProviders,
+      )
     }
   }
 
@@ -185,6 +194,7 @@ function applyAgentOverlays(
   config: AgentConfig,
   agentInfo: { name: string; category?: string },
   overlays: ResolvedAgentOverlaySet,
+  authedProviders: ReadonlySet<string>,
 ): AgentConfig {
   const id = agentInfo.category
     ? `${agentInfo.category}/${agentInfo.name}`
@@ -213,7 +223,10 @@ function applyAgentOverlays(
   // high-trust overlays apply. Precedence: exact overlay > category overlay
   // > source model default > markdown / inheritance.
   if (agentInfo.category) {
-    const sourceModel = getSourceCategoryModel(agentInfo.category)
+    const sourceModel = getSourceCategoryModel(
+      agentInfo.category,
+      authedProviders,
+    )
     if (sourceModel) {
       result.model = sourceModel
     }
@@ -421,6 +434,8 @@ function collectEnabledSkillNames(
 export function createConfigHandler(deps: ConfigHandlerDeps) {
   const { directory, bundledSkillsDir, bundledAgentsDir, bundledCommandsDir } =
     deps
+  const readAuthProviders =
+    deps.getAuthenticatedProviders ?? getAuthenticatedProviders
 
   return async (config: Config): Promise<void> => {
     const { config: systematicConfig, overlays } =
@@ -449,11 +464,13 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
     })
     const resolvedOverlays = resolveAgentOverlaySet(validatedOverlays)
 
+    const authedProviders = readAuthProviders()
     const bundledAgents = collectAgents(
       bundledAgentsDir,
       systematicConfig.disabled_agents,
       existingAgents,
       resolvedOverlays,
+      authedProviders,
     )
 
     const bundledCommands = collectCommands(

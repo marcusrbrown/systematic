@@ -1175,6 +1175,163 @@ model: gpt-4
       )
     })
 
+    describe('auth-aware source model resolution', () => {
+      test('no auth.json emits array[0] for review category', async () => {
+        createCategorizedAgent('review', 'correctness-reviewer', {
+          name: 'correctness-reviewer',
+          description: 'Reviews correctness',
+        })
+
+        const handler = createConfigHandler({
+          directory: projectDir,
+          bundledSkillsDir: path.join(bundledDir, 'skills'),
+          bundledAgentsDir: path.join(bundledDir, 'agents'),
+          bundledCommandsDir: path.join(bundledDir, 'commands'),
+        })
+
+        const config: Config = {}
+        await handler(config)
+
+        expect(config.agent?.['correctness-reviewer']?.model).toBe(
+          'anthropic/claude-opus-4.7',
+        )
+      })
+
+      test('openai auth selects openai/gpt-5.5 for review category', async () => {
+        createCategorizedAgent('review', 'correctness-reviewer', {
+          name: 'correctness-reviewer',
+          description: 'Reviews correctness',
+        })
+
+        const handler = createConfigHandler({
+          directory: projectDir,
+          bundledSkillsDir: path.join(bundledDir, 'skills'),
+          bundledAgentsDir: path.join(bundledDir, 'agents'),
+          bundledCommandsDir: path.join(bundledDir, 'commands'),
+          getAuthenticatedProviders: () => new Set(['openai']),
+        })
+
+        const config: Config = {}
+        await handler(config)
+
+        expect(config.agent?.['correctness-reviewer']?.model).toBe(
+          'openai/gpt-5.5',
+        )
+      })
+
+      test('first-match wins with multiple providers', async () => {
+        createCategorizedAgent('review', 'correctness-reviewer', {
+          name: 'correctness-reviewer',
+          description: 'Reviews correctness',
+        })
+
+        const handler = createConfigHandler({
+          directory: projectDir,
+          bundledSkillsDir: path.join(bundledDir, 'skills'),
+          bundledAgentsDir: path.join(bundledDir, 'agents'),
+          bundledCommandsDir: path.join(bundledDir, 'commands'),
+          getAuthenticatedProviders: () =>
+            new Set(['github-copilot', 'anthropic']),
+        })
+
+        const config: Config = {}
+        await handler(config)
+
+        // anthropic is first matching provider in review array
+        expect(config.agent?.['correctness-reviewer']?.model).toBe(
+          'anthropic/claude-opus-4.7',
+        )
+      })
+
+      test('user category model override still wins with auth', async () => {
+        createCategorizedAgent('review', 'correctness-reviewer', {
+          name: 'correctness-reviewer',
+          description: 'Reviews correctness',
+        })
+        writeCustomSystematicConfig({
+          categories: { review: { model: 'openai/gpt-4o' } },
+        })
+
+        const handler = createConfigHandler({
+          directory: projectDir,
+          bundledSkillsDir: path.join(bundledDir, 'skills'),
+          bundledAgentsDir: path.join(bundledDir, 'agents'),
+          bundledCommandsDir: path.join(bundledDir, 'commands'),
+          getAuthenticatedProviders: () => new Set(['openai']),
+        })
+
+        const config: Config = {}
+        await handler(config)
+
+        expect(config.agent?.['correctness-reviewer']?.model).toBe(
+          'openai/gpt-4o',
+        )
+      })
+
+      test('user exact model override wins over auth-aware resolution', async () => {
+        createCategorizedAgent('review', 'correctness-reviewer', {
+          name: 'correctness-reviewer',
+          description: 'Reviews correctness',
+        })
+        writeCustomSystematicConfig({
+          agents: {
+            'correctness-reviewer': {
+              model: 'openrouter/anthropic/claude-sonnet-4',
+            },
+          },
+        })
+
+        const handler = createConfigHandler({
+          directory: projectDir,
+          bundledSkillsDir: path.join(bundledDir, 'skills'),
+          bundledAgentsDir: path.join(bundledDir, 'agents'),
+          bundledCommandsDir: path.join(bundledDir, 'commands'),
+          getAuthenticatedProviders: () => new Set(['openai']),
+        })
+
+        const config: Config = {}
+        await handler(config)
+
+        expect(config.agent?.['correctness-reviewer']?.model).toBe(
+          'openrouter/anthropic/claude-sonnet-4',
+        )
+      })
+
+      test('getAuthenticatedProviders invoked exactly once per config', async () => {
+        let callCount = 0
+        const spyGetAuthProviders = () => {
+          callCount++
+          return new Set<string>()
+        }
+
+        createCategorizedAgent('review', 'agent-one', {
+          name: 'agent-one',
+          description: 'First agent',
+        })
+        createCategorizedAgent('review', 'agent-two', {
+          name: 'agent-two',
+          description: 'Second agent',
+        })
+        createCategorizedAgent('design', 'agent-three', {
+          name: 'agent-three',
+          description: 'Third agent',
+        })
+
+        const handler = createConfigHandler({
+          directory: projectDir,
+          bundledSkillsDir: path.join(bundledDir, 'skills'),
+          bundledAgentsDir: path.join(bundledDir, 'agents'),
+          bundledCommandsDir: path.join(bundledDir, 'commands'),
+          getAuthenticatedProviders: spyGetAuthProviders,
+        })
+
+        const config: Config = {}
+        await handler(config)
+
+        expect(callCount).toBe(1)
+      })
+    })
+
     test('managed empty skills emits deny-all and omitted skills inherit weaker behavior', async () => {
       createSkill(path.join(bundledDir, 'skills'), 'ce:review', 'Review skill')
       createCategorizedAgent('review', 'correctness-reviewer', {
