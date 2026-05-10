@@ -19,7 +19,6 @@
 import { z } from 'zod'
 import { OPENCODE_AGENT_COLOR_TOKENS } from './agent-colors.js'
 
-
 const permissionSettingSchema = z.enum(['ask', 'allow', 'deny'] as const)
 
 const permissionRuleSchema = z.union([
@@ -31,7 +30,6 @@ const permissionSchema = z.record(z.string(), permissionRuleSchema).meta({
   description: 'Permission overrides per tool',
   examples: [{ edit: 'allow', bash: { curl: 'allow', rm: 'deny' } }],
 })
-
 
 const MODEL_FORMAT_MESSAGE =
   'must be in provider/model format (e.g., "anthropic/claude-sonnet-4")'
@@ -134,7 +132,6 @@ const skillsSchema = z.array(z.string().min(1)).meta({
   examples: [['ce:plan', 'ce:review']],
 })
 
-
 /**
  * Tag an overlay field as "any trust level" — settable by any config source.
  */
@@ -150,7 +147,6 @@ function trustAny<T extends z.ZodType>(schema: T): T {
 function trustProtected<T extends z.ZodType>(schema: T): T {
   return schema.meta({ trust: 'project-or-higher' }) as T
 }
-
 
 export const AgentOverlaySchema = z
   .object({
@@ -178,7 +174,6 @@ export const AgentOverlaySchema = z
     ],
   })
 
-
 export const CategoryOverlaySchema = z
   .object({
     model: trustProtected(modelSchema).optional(),
@@ -198,7 +193,6 @@ export const CategoryOverlaySchema = z
       'Per-category configuration overlay (same fields as agent minus disable)',
     examples: [{ model: 'anthropic/claude-opus-4.7', temperature: 0.1 }],
   })
-
 
 export const BootstrapSchema = z
   .object({
@@ -223,7 +217,6 @@ export const BootstrapSchema = z
     description: 'Bootstrap prompt configuration',
     examples: [{ enabled: true }, { enabled: false }],
   })
-
 
 export const SystematicConfigSchema = z
   .object({
@@ -278,7 +271,6 @@ export const SystematicConfigSchema = z
     examples: [{ disabled_skills: ['ce:plan'], bootstrap: { enabled: false } }],
   })
 
-
 export interface ValidationResult {
   success: boolean
   data?: z.infer<typeof SystematicConfigSchema>
@@ -292,7 +284,6 @@ export function validateConfig(input: unknown): ValidationResult {
   }
   return { success: false, errors: result.error.issues }
 }
-
 
 const SourceCategoryModelDefaultsSchema = z
   .record(
@@ -316,7 +307,6 @@ export function assertSourceCategoryModelDefaults(
 ): void {
   SourceCategoryModelDefaultsSchema.parse(defaults)
 }
-
 
 /**
  * Unwrap ZodOptional / ZodDefault wrappers to reach the base schema.

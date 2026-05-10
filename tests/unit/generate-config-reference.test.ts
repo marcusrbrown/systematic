@@ -1,19 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
-import os from 'node:os'
-import path from 'node:path'
-import { fileURLToPath } from 'node:url'
-
-const __filename = fileURLToPath(import.meta.url)
-const __dirname = path.dirname(__filename)
 
 const TEMP_ROOTS: string[] = []
-
-function makeTempDir(): string {
-  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gen-config-ref-'))
-  TEMP_ROOTS.push(tmp)
-  return tmp
-}
 
 afterAll(() => {
   for (const root of TEMP_ROOTS) {
@@ -336,7 +324,7 @@ describe('output structure', () => {
     // The $schema copy-paste should be in a ```json block
     const jsonBlocks = content.match(/```json\n([^`]+)```/g)
     expect(jsonBlocks).not.toBeNull()
-    const hasSchemaBlock = jsonBlocks!.some((block) =>
+    const hasSchemaBlock = (jsonBlocks ?? []).some((block) =>
       block.includes('$schema'),
     )
     expect(hasSchemaBlock).toBe(true)

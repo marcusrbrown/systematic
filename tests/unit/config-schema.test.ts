@@ -2,11 +2,11 @@ import { describe, expect, test } from 'bun:test'
 import { OPENCODE_AGENT_COLOR_TOKENS } from '../../src/lib/agent-colors.js'
 import {
   AgentOverlaySchema,
+  assertSourceCategoryModelDefaults,
   BootstrapSchema,
   CategoryOverlaySchema,
-  SystematicConfigSchema,
-  assertSourceCategoryModelDefaults,
   getSecurityOverlayFields,
+  SystematicConfigSchema,
   validateConfig,
 } from '../../src/lib/config-schema.js'
 
@@ -21,7 +21,6 @@ const EXPECTED_COLOR_TOKENS: readonly string[] = [
 ]
 
 describe('SystematicConfigSchema', () => {
-
   test('parses a complete valid config with all fields populated', () => {
     const input = {
       agents: {
@@ -92,7 +91,6 @@ describe('SystematicConfigSchema', () => {
     }
   })
 
-
   test('rejects unknown top-level keys with a path-named error', () => {
     const result = SystematicConfigSchema.safeParse({ foo: 'bar' })
     expect(result.success).toBe(false)
@@ -108,7 +106,6 @@ describe('SystematicConfigSchema', () => {
       expect(issue.message).toContain('foo')
     }
   })
-
 
   test('rejects temperature as string (expected number)', () => {
     const result = SystematicConfigSchema.safeParse({
@@ -210,7 +207,6 @@ describe('SystematicConfigSchema', () => {
     }
   })
 
-
   test('rejects empty model string in category overlay', () => {
     const result = SystematicConfigSchema.safeParse({
       categories: { review: { model: '' } },
@@ -222,7 +218,6 @@ describe('SystematicConfigSchema', () => {
       expect(issue.message).toMatch(/1|empty|min/i)
     }
   })
-
 
   test('rejects unknown field in agent overlay with path-named error', () => {
     const result = SystematicConfigSchema.safeParse({
@@ -242,7 +237,6 @@ describe('SystematicConfigSchema', () => {
     }
   })
 })
-
 
 describe('assertSourceCategoryModelDefaults', () => {
   test('passes for the actual SOURCE_CATEGORY_MODEL_DEFAULTS constant', () => {
@@ -301,7 +295,6 @@ describe('assertSourceCategoryModelDefaults', () => {
   })
 })
 
-
 describe('getSecurityOverlayFields', () => {
   test('matches the hand-coded SECURITY_OVERLAY_FIELDS constant', () => {
     // This mirrors src/lib/config.ts:67-72
@@ -324,7 +317,6 @@ describe('getSecurityOverlayFields', () => {
   })
 })
 
-
 describe('OPENCODE_AGENT_COLOR_TOKENS', () => {
   test('contains all seven expected theme tokens', () => {
     // Single source of truth (src/lib/agent-colors.ts). No duplication to drift.
@@ -332,14 +324,13 @@ describe('OPENCODE_AGENT_COLOR_TOKENS', () => {
   })
 })
 
-
 describe('validateConfig wrapper', () => {
   test('returns success with data for valid input', () => {
     const result = validateConfig({})
     expect(result.success).toBe(true)
     if (result.success) {
       expect(result.data).toBeDefined()
-      expect(result.data!.bootstrap.enabled).toBe(true)
+      expect(result.data?.bootstrap.enabled).toBe(true)
     }
   })
 
@@ -348,11 +339,10 @@ describe('validateConfig wrapper', () => {
     expect(result.success).toBe(false)
     if (!result.success) {
       expect(result.errors).toBeDefined()
-      expect(result.errors!.length).toBeGreaterThan(0)
+      expect(result.errors?.length ?? 0).toBeGreaterThan(0)
     }
   })
 })
-
 
 describe('AgentOverlaySchema', () => {
   test('parses a minimal valid overlay', () => {
@@ -383,7 +373,6 @@ describe('AgentOverlaySchema', () => {
   })
 })
 
-
 describe('CategoryOverlaySchema', () => {
   test('parses a minimal valid category overlay', () => {
     const result = CategoryOverlaySchema.safeParse({
@@ -406,7 +395,6 @@ describe('CategoryOverlaySchema', () => {
     }
   })
 })
-
 
 describe('BootstrapSchema', () => {
   test('defaults enabled to true', () => {

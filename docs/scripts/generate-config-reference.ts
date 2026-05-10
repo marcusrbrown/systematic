@@ -18,12 +18,12 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
-import { SystematicConfigSchema } from '../../src/lib/config-schema.js'
 import {
   getMajorVersion,
   resolveVersion,
   SCHEMA_ID_TEMPLATE,
 } from '../../scripts/generate-config-schema.js'
+import { SystematicConfigSchema } from '../../src/lib/config-schema.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)

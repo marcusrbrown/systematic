@@ -3,8 +3,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { Config, PluginInput } from '@opencode-ai/plugin'
-import SystematicPlugin from '../../src/index.ts'
-import { _resetPluginSingleton } from '../../src/lib/plugin-singleton.ts'
+import SystematicPlugin from '../../src/index.js'
+import { _resetPluginSingleton } from '../../src/lib/plugin-singleton.js'
 
 const OPENCODE_AVAILABLE = (() => {
   const result = Bun.spawnSync(['which', 'opencode'])
@@ -470,6 +470,19 @@ describe('SystematicPlugin config hook integration', () => {
     expect(config.agent?.['ankane-readme-writer']?.model).toBe(
       'anthropic/claude-haiku-4-5',
     )
+  })
+
+  test('loads project config from systematic.jsonc with comments', async () => {
+    fs.mkdirSync(path.join(projectDir, '.opencode'), { recursive: true })
+    fs.writeFileSync(
+      path.join(projectDir, '.opencode/systematic.jsonc'),
+      '{\n  // JSONC config with comment\n  "agents": {\n    "correctness-reviewer": { "temperature": 0.44 }\n  }\n}\n',
+    )
+
+    const config: Config = {}
+    await runConfigHook(config)
+
+    expect(config.agent?.['correctness-reviewer']?.temperature).toBe(0.44)
   })
 })
 

@@ -47,8 +47,8 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
-  OPENCODE_AGENT_COLOR_TOKENS,
   isValidAgentColor,
+  OPENCODE_AGENT_COLOR_TOKENS,
 } from '../src/lib/agent-colors.js'
 import { parseFrontmatter } from '../src/lib/frontmatter.js'
 import { SKILL_FRONTMATTER_FIELDS } from '../src/lib/skills.js'

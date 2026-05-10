@@ -7,7 +7,7 @@ import {
   getConfigPaths,
   loadConfig,
   loadConfigWithSources,
-} from '../../src/lib/config.ts'
+} from '../../src/lib/config.js'
 
 describe('config', () => {
   let testDir: string
@@ -816,6 +816,124 @@ describe('config', () => {
       expect(paths.customDir).toBe(customDirContents)
 
       fs.rmSync(customDir, { recursive: true, force: true })
+    })
+  })
+
+  describe('JSONC precedence', () => {
+    test('AE3: only systematic.json exists — loads it (backward compat)', () => {
+      writeUserConfig({ disabled_skills: ['skill-a'] })
+
+      const result = loadConfig(testDir)
+      expect(result.disabled_skills).toContain('skill-a')
+      expect(result.disabled_skills).toEqual(['skill-a'])
+    })
+
+    test('AE2: only systematic.jsonc exists — loads it correctly', () => {
+      const filePath = userConfigPath().replace(/\.json$/, '.jsonc')
+      fs.mkdirSync(path.dirname(filePath), { recursive: true })
+      fs.writeFileSync(
+        filePath,
+        '{\n  // This is a comment\n  "disabled_skills": ["skill-b"]\n}\n',
+      )
+
+      const result = loadConfig(testDir)
+      expect(result.disabled_skills).toContain('skill-b')
+    })
+
+    test('AE2: JSONC with comments and standard JSON structure parses correctly', () => {
+      const filePath = userConfigPath().replace(/\.json$/, '.jsonc')
+      fs.mkdirSync(path.dirname(filePath), { recursive: true })
+      fs.writeFileSync(
+        filePath,
+        '{\n  // Comment explaining why this skill is disabled\n  "disabled_skills": ["skill-a"]\n}\n',
+      )
+
+      const result = loadConfig(testDir)
+      expect(result.disabled_skills).toEqual(['skill-a'])
+    })
+
+    test('AE1: both jsonc and json exist — .jsonc is loaded, .json is ignored', () => {
+      const jsoncPath = userConfigPath().replace(/\.json$/, '.jsonc')
+      const jsonPath = userConfigPath()
+      fs.mkdirSync(path.dirname(jsoncPath), { recursive: true })
+
+      fs.writeFileSync(
+        jsonPath,
+        JSON.stringify({ disabled_skills: ['from-json'] }),
+      )
+      fs.writeFileSync(jsoncPath, '{\n  "disabled_skills": ["from-jsonc"]\n}\n')
+
+      const result = loadConfig(testDir)
+      expect(result.disabled_skills).toEqual(['from-jsonc'])
+    })
+
+    test('project jsonc takes precedence over project json', () => {
+      const projectConfigDir = path.join(testDir, '.opencode')
+      fs.mkdirSync(projectConfigDir, { recursive: true })
+
+      fs.writeFileSync(
+        path.join(projectConfigDir, 'systematic.json'),
+        JSON.stringify({ disabled_skills: ['from-json'] }),
+      )
+      fs.writeFileSync(
+        path.join(projectConfigDir, 'systematic.jsonc'),
+        JSON.stringify({ disabled_skills: ['from-jsonc'] }),
+      )
+
+      const result = loadConfig(testDir)
+      expect(result.disabled_skills).toEqual(['from-jsonc'])
+    })
+
+    test('custom config jsonc takes precedence over custom config json', () => {
+      const customDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'systematic-custom-'),
+      )
+      process.env.OPENCODE_CONFIG_DIR = customDir
+
+      try {
+        fs.writeFileSync(
+          path.join(customDir, 'systematic.json'),
+          JSON.stringify({ disabled_skills: ['from-json'] }),
+        )
+        fs.writeFileSync(
+          path.join(customDir, 'systematic.jsonc'),
+          JSON.stringify({ disabled_skills: ['from-jsonc'] }),
+        )
+
+        const result = loadConfig(testDir)
+        expect(result.disabled_skills).toEqual(['from-jsonc'])
+      } finally {
+        delete process.env.OPENCODE_CONFIG_DIR
+        fs.rmSync(customDir, { recursive: true, force: true })
+      }
+    })
+
+    test('getConfigPaths returns .jsonc path when .jsonc exists', () => {
+      const jsoncPath = path.join(
+        os.homedir(),
+        '.config/opencode/systematic.jsonc',
+      )
+      fs.mkdirSync(path.dirname(jsoncPath), { recursive: true })
+      fs.writeFileSync(jsoncPath, '{}')
+
+      const paths = getConfigPaths(testDir)
+      expect(paths.userConfig).toBe(jsoncPath)
+    })
+
+    test('getConfigPaths returns .json fallback when neither exists', () => {
+      const paths = getConfigPaths(testDir)
+      expect(paths.userConfig).toBe(
+        path.join(os.homedir(), '.config/opencode/systematic.json'),
+      )
+    })
+
+    test('malformed jsonc throws parse error with file path', () => {
+      const filePath = userConfigPath().replace(/\.json$/, '.jsonc')
+      fs.mkdirSync(path.dirname(filePath), { recursive: true })
+      fs.writeFileSync(filePath, '{invalid jsonc')
+
+      expect(() => loadConfig(testDir)).toThrow(filePath)
+      expect(() => loadConfig(testDir)).toThrow(/parse error/i)
     })
   })
 })

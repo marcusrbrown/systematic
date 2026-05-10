@@ -1,10 +1,14 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import type { z } from 'zod'
 import type { SourcedOverlayConfigMap } from './config.js'
+import {
+  AgentOverlaySchema,
+  assertSourceCategoryModelDefaults,
+  CategoryOverlaySchema,
+} from './config-schema.js'
 import { isRecord } from './validation.js'
-import { AgentOverlaySchema, CategoryOverlaySchema } from './config-schema.js'
-import { assertSourceCategoryModelDefaults } from './config-schema.js'
 
 export interface BundledAgentInventoryEntry {
   id: string
@@ -386,34 +390,55 @@ function validateOverlayFields(
     )
   }
 
+  const result = parseOverlayShape(overlay, targetType)
+  validateOverlaySkills(overlay, result.skills, enabledSkills)
+}
+
+function parseOverlayShape(
+  overlay: {
+    value: Record<string, unknown>
+    sourcePath: string
+    keyPath: string
+  },
+  targetType: 'agent' | 'category',
+): { skills: string[] | undefined } {
   const schema =
     targetType === 'agent' ? AgentOverlaySchema : CategoryOverlaySchema
   const result = schema.safeParse(overlay.value)
 
   if (!result.success) {
-    const issue = result.error.issues[0]
-    let zodPath = issue.path.join('.')
-
-    // For unrecognized_keys, use the key name from the message as the path
-    if (issue.code === 'unrecognized_keys') {
-      const match = issue.message.match(/"([^"]+)"/)
-      zodPath = match ? match[1] : zodPath
-    }
-
-    const fullPath = zodPath ? `${overlay.keyPath}.${zodPath}` : overlay.keyPath
-    throwConfigError(overlay.sourcePath, fullPath, issue.message)
+    throwOverlaySchemaError(overlay, result.error.issues[0])
   }
 
-  // After Zod validation, check enabledSkills for the skills field
-  if (enabledSkills && result.data.skills) {
-    for (const skill of result.data.skills) {
-      if (!enabledSkills.has(skill)) {
-        throwConfigError(
-          overlay.sourcePath,
-          `${overlay.keyPath}.skills`,
-          `unknown or disabled skill "${skill}"`,
-        )
-      }
+  return { skills: result.data.skills }
+}
+
+function throwOverlaySchemaError(
+  overlay: { sourcePath: string; keyPath: string },
+  issue: z.core.$ZodIssue,
+): never {
+  const zodPath =
+    issue.code === 'unrecognized_keys'
+      ? (issue.message.match(/"([^"]+)"/)?.[1] ?? issue.path.join('.'))
+      : issue.path.join('.')
+  const fullPath = zodPath ? `${overlay.keyPath}.${zodPath}` : overlay.keyPath
+  throwConfigError(overlay.sourcePath, fullPath, issue.message)
+}
+
+function validateOverlaySkills(
+  overlay: { sourcePath: string; keyPath: string },
+  skills: string[] | undefined,
+  enabledSkills: Set<string> | undefined,
+): void {
+  if (!enabledSkills || !skills) return
+
+  for (const skill of skills) {
+    if (!enabledSkills.has(skill)) {
+      throwConfigError(
+        overlay.sourcePath,
+        `${overlay.keyPath}.skills`,
+        `unknown or disabled skill "${skill}"`,
+      )
     }
   }
 }

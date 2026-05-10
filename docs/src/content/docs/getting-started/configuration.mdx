@@ -11,9 +11,11 @@ Systematic works out of the box with sensible defaults, but it provides several 
 
 You can customize the plugin by creating a configuration file. Systematic looks for configuration in three places:
 
-1.  **Global:** `~/.config/opencode/systematic.json`
-2.  **Project-specific:** `.opencode/systematic.json`
-3.  **Custom config directory:** `$OPENCODE_CONFIG_DIR/systematic.json`
+1.  **Global:** `~/.config/opencode/systematic.{json,jsonc}`
+2.  **Project-specific:** `.opencode/systematic.{json,jsonc}`
+3.  **Custom config directory:** `$OPENCODE_CONFIG_DIR/systematic.{json,jsonc}`
+
+When both `.jsonc` and `.json` exist in the same directory, `.jsonc` takes precedence and `.json` is silently ignored. This lets you add comments to your config without renaming or deleting the existing file.
 
 ### Disabling Bundled Content
 
@@ -178,11 +180,11 @@ If you create a project-specific asset with the same name as a bundled one, your
 
 Systematic resolves configuration and content in the following order (highest priority first):
 
-1.  **Custom config directory:** `$OPENCODE_CONFIG_DIR/systematic.json` and assets under `$OPENCODE_CONFIG_DIR/systematic/`
+1.  **Custom config directory:** `$OPENCODE_CONFIG_DIR/systematic.{json,jsonc}` and assets under `$OPENCODE_CONFIG_DIR/systematic/`
 2.  **Project-level assets:** Files in `.opencode/`
-3.  **Project-level config:** `.opencode/systematic.json`
+3.  **Project-level config:** `.opencode/systematic.{json,jsonc}`
 4.  **User-level assets:** Files in `~/.config/opencode/`
-5.  **User-level config:** `~/.config/opencode/systematic.json`
+5.  **User-level config:** `~/.config/opencode/systematic.{json,jsonc}`
 6.  **Bundled assets:** Content shipped with the plugin package
 
 Config-source merge precedence is separate from overlay application precedence. Across Systematic config files, `disabled_*` arrays are union-merged, `bootstrap` is shallow-merged, and top-level `agents`/`categories` maps merge by key. A higher-priority source replaces the whole object for the same `agents.<key>` or `categories.<id>` entry; unrelated keys survive. Project overlays are the exception for trust-sensitive fields: they cannot define `model`, `variant`, `permission`, or `skills`, and same-key project overlays preserve user-level `model`/`variant`/`permission`/`skills` fields instead of erasing them. After that effective config is built, Systematic applies category and exact overlays to bundled agents using the overlay precedence above.

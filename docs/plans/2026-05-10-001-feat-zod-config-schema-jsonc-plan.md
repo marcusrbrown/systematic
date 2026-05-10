@@ -1,7 +1,7 @@
 ---
 title: "feat: Zod-backed user config + published JSON schema + first-class JSONC"
 type: feat
-status: active
+status: completed
 date: 2026-05-10
 origin: docs/brainstorms/2026-05-10-zod-config-schema-jsonc-requirements.md
 ---
@@ -269,7 +269,7 @@ Two compounding friction points motivate this work (see origin doc Problem Frame
 - The new page renders in the local dev server (`bun run docs:dev`) under the Reference section.
 - The page's copy-paste `$schema` URL matches what U3 publishes.
 
-- [ ] **Unit 5: JSONC precedence in loader + blast-radius cleanup**
+- [x] **Unit 5: JSONC precedence in loader + blast-radius cleanup**
 
 **Goal:** Add `.jsonc` as a first-class config extension that takes precedence over `.json` at every config-search location. Update hardcoded `.json` references in tests, docs, and CLI output.
 

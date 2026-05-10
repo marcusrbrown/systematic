@@ -67,6 +67,17 @@ interface ConfigSource {
 
 const SECURITY_OVERLAY_FIELDS = new Set(getSecurityOverlayFields())
 
+/**
+ * Resolve a config file path by checking `.jsonc` first, then `.json`.
+ * Returns the first existing file, or the `.json` path as fallback so
+ * callers that `fs.existsSync` the result still work.
+ */
+function resolveConfigPath(dir: string, basename: string): string {
+  const jsoncPath = path.join(dir, `${basename}.jsonc`)
+  if (fs.existsSync(jsoncPath)) return jsoncPath
+  return path.join(dir, `${basename}.json`)
+}
+
 function isErrorWithCode(error: unknown): error is Error & { code?: unknown } {
   return error instanceof Error && 'code' in error
 }
@@ -295,12 +306,18 @@ export function getConfigPaths(projectDir: string) {
   const customConfigDir = process.env.OPENCODE_CONFIG_DIR?.trim()
 
   const result = {
-    userConfig: path.join(homeDir, '.config/opencode/systematic.json'),
-    projectConfig: path.join(projectDir, '.opencode/systematic.json'),
+    userConfig: resolveConfigPath(
+      path.join(homeDir, '.config/opencode'),
+      'systematic',
+    ),
+    projectConfig: resolveConfigPath(
+      path.join(projectDir, '.opencode'),
+      'systematic',
+    ),
     userDir: path.join(homeDir, '.config/opencode/systematic'),
     projectDir: path.join(projectDir, '.opencode/systematic'),
     ...(customConfigDir && {
-      customConfig: path.join(customConfigDir, 'systematic.json'),
+      customConfig: resolveConfigPath(customConfigDir, 'systematic'),
       customDir: path.join(customConfigDir, 'systematic'),
     }),
   }

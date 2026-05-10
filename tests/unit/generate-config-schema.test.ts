@@ -265,9 +265,12 @@ describe('generateAndWrite — three-file output', () => {
     expect(latestPath).toBeDefined()
     expect(distPath).toBeDefined()
 
-    const v3Content = fs.readFileSync(path.join(tmp, v3Path!), 'utf-8')
-    const latestContent = fs.readFileSync(path.join(tmp, latestPath!), 'utf-8')
-    const distContent = fs.readFileSync(path.join(tmp, distPath!), 'utf-8')
+    if (!v3Path || !latestPath || !distPath) {
+      throw new Error('Expected three schema target paths to be defined')
+    }
+    const v3Content = fs.readFileSync(path.join(tmp, v3Path), 'utf-8')
+    const latestContent = fs.readFileSync(path.join(tmp, latestPath), 'utf-8')
+    const distContent = fs.readFileSync(path.join(tmp, distPath), 'utf-8')
 
     expect(v3Content).toBe(latestContent)
     expect(latestContent).toBe(distContent)
