@@ -114,6 +114,69 @@ export function getMajorVersion(version: string): string {
 }
 
 /**
+ * Walk a JSON Schema object tree and remove fields from `required` arrays
+ * when the corresponding Zod shape field has a `.default()` wrapper.
+ *
+ * A field with a runtime default is optional from the user's perspective:
+ * Zod fills it in if absent. Leaving it in `required` causes IDEs to
+ * redline valid minimal configs that the runtime accepts fine.
+ *
+ * Handles both the top-level object and nested objects (e.g., `bootstrap`).
+ *
+ * @param jsonNode  The JSON Schema object node to process (mutated in-place)
+ * @param zodNode   The corresponding Zod schema node (used to detect defaults)
+ */
+function removeDefaultFieldsFromRequired(
+  jsonNode: Record<string, unknown>,
+  zodNode: z.ZodType,
+): void {
+  // Unwrap ZodDefault / ZodOptional wrappers to reach the inner ZodObject.
+  let inner: z.ZodType = zodNode
+  for (;;) {
+    const def = inner._def as { type?: string; innerType?: z.ZodType }
+    if (def.type === 'default' || def.type === 'optional') {
+      inner = def.innerType as z.ZodType
+    } else {
+      break
+    }
+  }
+
+  // Only ZodObject has ._def.shape; skip everything else (ZodRecord, ZodArray, …)
+  // In this Zod 4 build, shape is a plain object (not a lazy function).
+  const innerDef = inner._def as { shape?: Record<string, z.ZodType> }
+  const shape = innerDef.shape
+  if (shape == null) return
+
+  // Remove keys from `required` when the Zod shape field is ZodDefault
+  if (Array.isArray(jsonNode.required)) {
+    const filtered = (jsonNode.required as string[]).filter((key) => {
+      const field = shape[key]
+      if (field == null) return true
+      const fieldDef = field._def as { type?: string }
+      return fieldDef.type !== 'default'
+    })
+    if (filtered.length === 0) {
+      delete jsonNode.required
+    } else {
+      jsonNode.required = filtered
+    }
+  }
+
+  // Recurse into `properties` to catch nested object schemas (e.g., `bootstrap`)
+  const props = jsonNode.properties as
+    | Record<string, Record<string, unknown>>
+    | undefined
+  if (props == null) return
+
+  for (const [key, field] of Object.entries(shape)) {
+    const propNode = props[key]
+    if (propNode != null) {
+      removeDefaultFieldsFromRequired(propNode, field)
+    }
+  }
+}
+
+/**
  * Generate the JSON Schema content string for the given version.
  *
  * The schema's $id is set to the major-versioned docs URL
@@ -143,6 +206,15 @@ export function generateSchemaContent(version: string): string {
     unknown
   > &
     typeof result
+
+  // Post-process: remove fields with runtime defaults from `required` arrays.
+  // Zod emits `required:[all fields]` for every object, including fields with
+  // `.default()`. From the user's perspective those fields are optional — the
+  // runtime fills them in. Without this step, IDEs redline valid minimal configs.
+  removeDefaultFieldsFromRequired(
+    clean as Record<string, unknown>,
+    SystematicConfigSchema,
+  )
 
   return `${JSON.stringify(clean, null, 2)}\n`
 }

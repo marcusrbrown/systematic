@@ -24,7 +24,8 @@
             "anyOf": [
               {
                 "type": "string",
-                "minLength": 1
+                "minLength": 1,
+                "pattern": "^[^\\s/]+\\/\\S+$"
               },
               {
                 "type": "null"
@@ -40,6 +41,7 @@
           "variant": {
             "type": "string",
             "minLength": 1,
+            "pattern": "^\\S+$",
             "description": "Model variant identifier",
             "examples": [
               "v2",
@@ -85,8 +87,25 @@
             ]
           },
           "color": {
-            "type": "string",
-            "description": "Agent color — named token from OpenCode or hex color (#RGB / #RRGGBB)",
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "primary",
+                  "secondary",
+                  "accent",
+                  "success",
+                  "warning",
+                  "error",
+                  "info"
+                ]
+              },
+              {
+                "type": "string",
+                "pattern": "^#[0-9a-fA-F]{6}$"
+              }
+            ],
+            "description": "Agent color — named token from OpenCode or 6-digit hex color (#RRGGBB)",
             "examples": [
               "primary",
               "#ff6600"
@@ -210,7 +229,8 @@
             "anyOf": [
               {
                 "type": "string",
-                "minLength": 1
+                "minLength": 1,
+                "pattern": "^[^\\s/]+\\/\\S+$"
               },
               {
                 "type": "null"
@@ -226,6 +246,7 @@
           "variant": {
             "type": "string",
             "minLength": 1,
+            "pattern": "^\\S+$",
             "description": "Model variant identifier",
             "examples": [
               "v2",
@@ -271,8 +292,25 @@
             ]
           },
           "color": {
-            "type": "string",
-            "description": "Agent color — named token from OpenCode or hex color (#RGB / #RRGGBB)",
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "primary",
+                  "secondary",
+                  "accent",
+                  "success",
+                  "warning",
+                  "error",
+                  "info"
+                ]
+              },
+              {
+                "type": "string",
+                "pattern": "^#[0-9a-fA-F]{6}$"
+              }
+            ],
+            "description": "Agent color — named token from OpenCode or 6-digit hex color (#RRGGBB)",
             "examples": [
               "primary",
               "#ff6600"
@@ -439,20 +477,9 @@
           "type": "string"
         }
       },
-      "required": [
-        "enabled"
-      ],
       "additionalProperties": false
     }
   },
-  "required": [
-    "agents",
-    "categories",
-    "disabled_skills",
-    "disabled_agents",
-    "disabled_commands",
-    "bootstrap"
-  ],
   "additionalProperties": false,
   "description": "Systematic user configuration file (systematic.json / systematic.jsonc)",
   "examples": [

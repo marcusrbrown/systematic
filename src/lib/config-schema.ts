@@ -35,19 +35,22 @@ const MODEL_FORMAT_MESSAGE =
   'must be in provider/model format (e.g., "anthropic/claude-sonnet-4")'
 
 /**
- * Validate that a string is in provider/model format.
+ * Pattern for provider/model format.
+ * Provider: one or more non-whitespace, non-slash chars (e.g., "anthropic", "openai").
+ * Model: one or more non-whitespace chars — may contain slashes for multi-segment
+ *        paths such as "openrouter/anthropic/claude-sonnet-4".
+ *
+ * This is an exact regex translation of the original isValidModelFormat check:
+ * "no whitespace anywhere, at least one char before the first slash, at least one
+ * char after it." Using .regex() instead of .refine() so the constraint round-trips
+ * into JSON Schema as a `pattern` field and IDEs can validate model strings.
  */
-function isValidModelFormat(val: string): boolean {
-  const trimmed = val.trim()
-  if (val !== trimmed || /\s/.test(val)) return false
-  const slashIndex = val.indexOf('/')
-  return slashIndex > 0 && slashIndex < val.length - 1
-}
+const MODEL_FORMAT_REGEX = /^[^\s/]+\/\S+$/
 
 const modelSchema = z
   .string()
   .min(1)
-  .refine(isValidModelFormat, { message: MODEL_FORMAT_MESSAGE })
+  .regex(MODEL_FORMAT_REGEX, MODEL_FORMAT_MESSAGE)
   .nullable()
   .meta({
     description:
@@ -58,9 +61,7 @@ const modelSchema = z
 const variantSchema = z
   .string()
   .min(1)
-  .refine((val) => val === val.trim() && !/\s/.test(val), {
-    message: 'must be a non-empty string without leading/trailing whitespace',
-  })
+  .regex(/^\S+$/, 'must be a non-empty string without whitespace')
   .meta({
     description: 'Model variant identifier',
     examples: ['v2', 'extended'],
@@ -88,23 +89,23 @@ const modeSchema = z.enum(['subagent', 'primary', 'all'] as const).meta({
   examples: ['subagent', 'primary', 'all'],
 })
 
-const hexColorRegex = /^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/
-
-const colorTokensList = OPENCODE_AGENT_COLOR_TOKENS.join(', ')
-
+/**
+ * Color schema as a union of named tokens and hex literals.
+ * Using z.union() + z.enum() + .regex() instead of .refine() so both branches
+ * round-trip into JSON Schema as anyOf:[{enum:[...]},{pattern:"..."}].
+ * This lets IDEs validate color values against the published schema.
+ * Only 6-digit hex is accepted (#RRGGBB) — matches isValidAgentColor in agent-colors.ts.
+ */
 const colorSchema = z
-  .string()
-  .refine(
-    (val) =>
-      hexColorRegex.test(val) ||
-      (OPENCODE_AGENT_COLOR_TOKENS as readonly string[]).includes(val),
-    {
-      message: `Must be a hex color (#RGB or #RRGGBB) or one of: ${colorTokensList}`,
-    },
-  )
+  .union([
+    z.enum(OPENCODE_AGENT_COLOR_TOKENS),
+    z
+      .string()
+      .regex(/^#[0-9a-fA-F]{6}$/, 'must be a 6-digit hex color (#RRGGBB)'),
+  ])
   .meta({
     description:
-      'Agent color — named token from OpenCode or hex color (#RGB / #RRGGBB)',
+      'Agent color — named token from OpenCode or 6-digit hex color (#RRGGBB)',
     examples: ['primary', '#ff6600'],
   })
 
@@ -289,12 +290,7 @@ const SourceCategoryModelDefaultsSchema = z
   .record(
     z.string(),
     z
-      .array(
-        z
-          .string()
-          .min(1)
-          .refine(isValidModelFormat, { message: MODEL_FORMAT_MESSAGE }),
-      )
+      .array(z.string().min(1).regex(MODEL_FORMAT_REGEX, MODEL_FORMAT_MESSAGE))
       .min(1),
   )
   .meta({

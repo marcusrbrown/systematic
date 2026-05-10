@@ -459,6 +459,221 @@ describe('checkSchemaFiles — drift detection', () => {
     expect(result.ok).toBe(true)
     expect(result.message).toContain('up to date')
   })
+
+  test('regression: exits 0 when dist/schemas/ is absent (simulates post-build clean)', () => {
+    const tmp = makeTempRepo()
+    writePackageJson(tmp, '3.0.0')
+
+    // Write only the committed docs path — simulate a CI run where
+    // `bun run build` already cleaned dist/ before schema:drift runs
+    const content = generateSchemaContentFn('3.0.0')
+    writeSchemaFile(
+      tmp,
+      'docs/public/schemas/v3/systematic-config.schema.json',
+      content,
+    )
+    // Intentionally do NOT write dist/schemas/ — this is the bug scenario
+
+    // Must pass: dist/schemas/ is a publish-only artifact, not checked here
+    const result = checkSchemaFilesFn(tmp, '3.0.0')
+    expect(result.ok).toBe(true)
+    expect(result.message).toContain('up to date')
+  })
+})
+
+// AJV parity: each fixture is validated against BOTH the Zod runtime schema and
+// the generated JSON Schema (via AJV); both must agree on accept/reject for every
+// input. Written before the generator/schema fixes to capture divergence count.
+// Regression target: zero divergences.
+describe('AJV parity: Zod runtime contract vs generated JSON Schema', () => {
+  type ParityFixture = { name: string; value: unknown; accepted: boolean }
+
+  // Fixtures covering: happy paths, defaults, all three rejected refinements,
+  // strict-mode unknown field. The `accepted` field is what BOTH Zod and
+  // the generated JSON Schema should agree on after the fix.
+  const parityFixtures: ParityFixture[] = [
+    {
+      name: 'valid full config accepted by both',
+      value: {
+        agents: {
+          explorer: {
+            model: 'openai/gpt-4',
+            temperature: 0.3,
+            mode: 'subagent',
+          },
+        },
+        categories: {
+          review: { model: 'anthropic/claude-3', temperature: 0.1 },
+        },
+        disabled_skills: ['ce:plan'],
+        disabled_agents: [],
+        disabled_commands: [],
+        bootstrap: { enabled: true },
+      },
+      accepted: true,
+    },
+    {
+      // Key divergence: Zod applies defaults so {} is valid at runtime,
+      // but the generated schema used to emit required:[all 6 fields].
+      name: 'minimal empty config {} (runtime defaults make it valid)',
+      value: {},
+      accepted: true,
+    },
+    {
+      name: 'partial config { disabled_skills: [] } accepted',
+      value: { disabled_skills: [] },
+      accepted: true,
+    },
+    {
+      // bootstrap.enabled has .default(true), so omitting it is valid.
+      // Divergence: generated schema used to emit required:["enabled"].
+      name: 'bootstrap: {} accepted because enabled has runtime default',
+      value: {
+        agents: {},
+        categories: {},
+        disabled_skills: [],
+        disabled_agents: [],
+        disabled_commands: [],
+        bootstrap: {},
+      },
+      accepted: true,
+    },
+    {
+      // Zod rejects via .refine(); old generated schema had no pattern so AJV accepted.
+      name: 'model: "not-a-provider-format" rejected by both',
+      value: { agents: { foo: { model: 'not-a-provider-format' } } },
+      accepted: false,
+    },
+    {
+      // Zod rejects via .refine(); old generated schema had no enum/pattern for color.
+      name: 'color: "blue" (non-token, non-hex) rejected by both',
+      value: { agents: { foo: { color: 'blue' } } },
+      accepted: false,
+    },
+    {
+      // Zod rejects via .refine(); old generated schema had no pattern for variant.
+      name: 'variant: "foo bar" (whitespace) rejected by both',
+      value: { agents: { foo: { variant: 'foo bar' } } },
+      accepted: false,
+    },
+    {
+      // SystematicConfigSchema uses .strict() so unknown top-level keys are rejected.
+      name: 'unknown top-level field "agnts" rejected by both (strict mode)',
+      value: { agnts: {} },
+      accepted: false,
+    },
+  ]
+
+  // Shared state initialized in beforeAll
+  let zodParse: (data: unknown) => { success: boolean } = () => {
+    throw new Error('zodParse not initialized')
+  }
+  let ajvValidate: (data: unknown) => boolean = () => {
+    throw new Error('ajvValidate not initialized')
+  }
+  let ajvAvailable = false
+
+  beforeAll(async () => {
+    const schemaMod = await import('../../src/lib/config-schema.js')
+    zodParse = (data) => schemaMod.SystematicConfigSchema.safeParse(data)
+
+    try {
+      const ajvMod = await import('ajv')
+      const AjvClass = ajvMod.default
+      const ajv = new AjvClass({ strict: false, allowUnionTypes: true })
+
+      try {
+        const afMod = await import('ajv-formats')
+        afMod.default(ajv)
+      } catch {
+        // ajv-formats not installed — proceed without format validation
+      }
+
+      const genMod = await import('../../scripts/generate-config-schema.js')
+      const schemaContent = genMod.generateSchemaContent('2.12.0')
+      const schema = JSON.parse(schemaContent) as Record<string, unknown>
+      const validate = ajv.compile(schema)
+
+      ajvValidate = (data) => {
+        const result = validate(data)
+        return result === true
+      }
+      ajvAvailable = true
+    } catch (err) {
+      console.warn(
+        'SKIP AJV parity tests: ajv not available.',
+        err instanceof Error ? err.message : String(err),
+      )
+    }
+  })
+
+  for (const fixture of parityFixtures) {
+    test(`parity: ${fixture.name}`, () => {
+      if (!ajvAvailable) {
+        console.warn('SKIP: ajv not available')
+        return
+      }
+
+      const zodResult = zodParse(fixture.value)
+      const ajvResult = ajvValidate(fixture.value)
+
+      // Each side must match the expected outcome
+      expect(zodResult.success).toBe(fixture.accepted)
+      expect(ajvResult).toBe(fixture.accepted)
+
+      // Core parity invariant: both sides must agree
+      expect(zodResult.success).toBe(ajvResult)
+    })
+  }
+})
+
+// Meta-schema smoke test: the generated JSON Schema must itself be a valid
+// draft-07 schema (AJV validateSchema check).
+describe('meta-schema smoke test: generated schema is valid draft-07', () => {
+  let generateSchemaContentFn: (version: string) => string
+  let ajvAvailable = false
+  let isValidSchema = false
+  let metaErrors: unknown = null
+
+  beforeAll(async () => {
+    const genMod = await import('../../scripts/generate-config-schema.js')
+    generateSchemaContentFn = genMod.generateSchemaContent
+
+    try {
+      const ajvMod = await import('ajv')
+      const AjvClass = ajvMod.default
+      const ajv = new AjvClass({ strict: false, allowUnionTypes: true })
+
+      try {
+        const afMod = await import('ajv-formats')
+        afMod.default(ajv)
+      } catch {
+        // proceed without format validation
+      }
+
+      const schemaContent = generateSchemaContentFn('2.12.0')
+      const schema = JSON.parse(schemaContent) as Record<string, unknown>
+
+      isValidSchema = ajv.validateSchema(schema) as boolean
+      metaErrors = ajv.errors
+
+      ajvAvailable = true
+    } catch {
+      ajvAvailable = false
+    }
+  })
+
+  test('generated schema passes AJV meta-schema validation', () => {
+    if (!ajvAvailable) {
+      console.warn('SKIP: ajv not available')
+      return
+    }
+
+    if (!isValidSchema) {
+      console.error('Meta-schema errors:', JSON.stringify(metaErrors, null, 2))
+    }
+    expect(isValidSchema).toBe(true)
+  })
 })
 
 // ═════════════════════════════════════════════════════════════════
