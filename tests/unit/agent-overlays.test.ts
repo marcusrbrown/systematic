@@ -608,6 +608,30 @@ describe('source category model defaults', () => {
   test('rejects malformed source model defaults through the shared model validator', () => {
     expect(() =>
       validateSourceCategoryModelDefaults({ review: 'gpt-5' }),
-    ).toThrow(/source category model defaults\.review.*provider\/model/)
+    ).toThrow(/Source category model defaults: review.*non-empty array/)
+  })
+
+  test('returns the first entry from a multi-entry array', () => {
+    expect(getSourceCategoryModel('design')).toBe('openai/gpt-5.5')
+  })
+
+  test('rejects empty array in source category model defaults', () => {
+    expect(() => validateSourceCategoryModelDefaults({ review: [] })).toThrow(
+      /Source category model defaults: review.*non-empty array/,
+    )
+  })
+
+  test('rejects array with malformed model entry through shared model validator', () => {
+    expect(() =>
+      validateSourceCategoryModelDefaults({ review: ['malformed-no-slash'] }),
+    ).toThrow(/source category model defaults\.review\[0\].*provider\/model/)
+  })
+
+  test('accepts multi-entry valid array in source category model defaults', () => {
+    expect(() =>
+      validateSourceCategoryModelDefaults({
+        review: ['openai/gpt-5.5', 'anthropic/claude-opus-4.7'],
+      }),
+    ).not.toThrow()
   })
 })
