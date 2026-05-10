@@ -25,7 +25,8 @@ bun run docs:preview    # Preview production build
 docs/
 ├── astro.config.mjs          # Site config (sidebar, social, base path)
 ├── scripts/
-│   └── transform-content.ts  # Content generator
+│   ├── transform-content.ts       # Skills/agents content generator
+│   └── generate-config-reference.ts  # Config reference MDX generator
 ├── src/
 │   ├── styles/custom.css     # Theme overrides
 │   └── content/docs/
@@ -34,13 +35,18 @@ docs/
 │       ├── guides/           # 7 manual pages (philosophy, main-loop, agent-install, architecture, conversion-guide, ocx-registry, exemplary-checklist)
 │       └── reference/        # Generated — DO NOT EDIT
 │           ├── skills/       # 45 pages + index.mdx (generated from skills/)
-│           └── agents/       # 51 pages + index.mdx (generated from agents/)
+│           ├── agents/       # 51 pages + index.mdx (generated from agents/)
+│           └── systematic-config.mdx  # Config field reference (generated from schema)
 └── package.json
 ```
 
 ## Content Generation
 
-`scripts/transform-content.ts` reads bundled assets from project root:
+`docs:generate` runs two generators in sequence:
+
+### 1. `scripts/transform-content.ts` — skills/agents pages
+
+Reads bundled assets from project root:
 
 | Source | Pattern | Output |
 |--------|---------|--------|
@@ -51,6 +57,18 @@ Pipeline: `read file → parseFrontmatter (shared from src/lib/frontmatter.ts) �
 
 Each run cleans output dirs before regenerating. Index pages (`index.mdx`) are dynamically generated from the same enumerated entries using Starlight `CardGrid`/`LinkCard` components. Agents are grouped by category (design/docs/document-review/research/review/workflow). Slug collisions abort with error.
 
+### 2. `scripts/generate-config-reference.ts` — config field reference
+
+Derives the config reference page by walking `SystematicConfigSchema`'s JSON Schema output. For each top-level field it renders a `## <field>` section with:
+- Description (from `.meta({ description })` in the schema)
+- Type/accepted shape (from `type`/`enum`/`anyOf`/`pattern`)
+- Default value (from JSON Schema `default`)
+- Examples (from `.meta({ examples })`)
+
+Output: `src/content/docs/reference/systematic-config.mdx`
+
+Adding a new top-level field to `SystematicConfigSchema` with `.meta({ description })` automatically produces a new MDX section on the next `docs:generate` run — no manual template update required.
+
 NOTE: The top-level `commands/` directory has been removed (all commands converted to skills). The generation script may still have backward-compat command handling code but produces no command pages from current source.
 
 ## Where to Look
@@ -58,7 +76,8 @@ NOTE: The top-level `commands/` directory has been removed (all commands convert
 | Task | Location |
 |------|----------|
 | Site config (sidebar, base path) | `astro.config.mjs` |
-| Content generation script | `scripts/transform-content.ts` |
+| Skills/agents content generator | `scripts/transform-content.ts` |
+| Config reference MDX generator | `scripts/generate-config-reference.ts` |
 | Manual guides | `src/content/docs/guides/*.mdx` |
 | Landing page | `src/content/docs/index.mdx` |
 | Theme customization | `src/styles/custom.css` |

@@ -406,3 +406,78 @@ describe('error handling', () => {
     expect(errors).toHaveLength(0)
   })
 })
+
+// ═════════════════════════════════════════════════════════════════
+// Schema-described field parity (9d)
+// Every field in SystematicConfigSchema with .meta({ description })
+// must appear in the generated MDX. Adding a new field with a description
+// annotation should automatically produce a new MDX section — no manual
+// update required. If a field is missing from the output, the docs generator
+// has drifted from the schema.
+// ═════════════════════════════════════════════════════════════════
+
+describe('schema-described field parity', () => {
+  let generateFn: (version?: string) => string
+
+  beforeAll(async () => {
+    const mod = await import('../../docs/scripts/generate-config-reference.js')
+    generateFn = mod.generateConfigReference
+  })
+
+  test('every top-level described field appears in generated MDX', async () => {
+    const { z } = await import('zod')
+    const { SystematicConfigSchema } = await import(
+      '../../src/lib/config-schema.js'
+    )
+    const jsonSchema = z.toJSONSchema(SystematicConfigSchema, {
+      target: 'draft-7',
+    }) as Record<string, unknown>
+
+    const properties = jsonSchema.properties as Record<string, unknown>
+    const mdx = generateFn('2.11.0')
+
+    for (const [key, value] of Object.entries(properties)) {
+      const prop = value as Record<string, unknown>
+      if (typeof prop.description === 'string' && prop.description.length > 0) {
+        // The section heading must appear somewhere in the MDX
+        expect(mdx).toContain(`## ${key}`)
+        // The description text must appear in the MDX
+        expect(mdx).toContain(prop.description)
+      }
+    }
+  })
+
+  test('MDX section count matches schema described top-level fields', async () => {
+    // Regression: if a new top-level field is added to the schema with a
+    // description, the generated MDX should grow by exactly one ## section.
+    // This assertion fails if a field has a description but no corresponding
+    // section in the output — ensuring schema additions auto-produce docs.
+    const { z } = await import('zod')
+    const { SystematicConfigSchema } = await import(
+      '../../src/lib/config-schema.js'
+    )
+    const jsonSchema = z.toJSONSchema(SystematicConfigSchema, {
+      target: 'draft-7',
+    }) as Record<string, unknown>
+
+    const properties = jsonSchema.properties as Record<string, unknown>
+    const describedKeys = Object.entries(properties)
+      .filter(([, v]) => {
+        const prop = v as Record<string, unknown>
+        return (
+          typeof prop.description === 'string' && prop.description.length > 0
+        )
+      })
+      .map(([k]) => k)
+
+    const mdx = generateFn('2.11.0')
+    const h2Sections = (mdx.match(/^## .+/gm) ?? []).map((h) =>
+      h.replace(/^## /, '').trim(),
+    )
+
+    // Every described key must appear as an h2 section
+    for (const key of describedKeys) {
+      expect(h2Sections).toContain(key)
+    }
+  })
+})

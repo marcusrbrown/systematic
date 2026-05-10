@@ -1,11 +1,16 @@
 import { describe, expect, test } from 'bun:test'
-import { OPENCODE_AGENT_COLOR_TOKENS } from '../../src/lib/agent-colors.js'
+import { z } from 'zod'
+import {
+  isValidAgentColor,
+  OPENCODE_AGENT_COLOR_TOKENS,
+} from '../../src/lib/agent-colors.js'
 import {
   AgentOverlaySchema,
   assertSourceCategoryModelDefaults,
   BootstrapSchema,
   CategoryOverlaySchema,
   getSecurityOverlayFields,
+  SECURITY_OVERLAY_FIELDS,
   SystematicConfigSchema,
   validateConfig,
 } from '../../src/lib/config-schema.js'
@@ -414,5 +419,110 @@ describe('BootstrapSchema', () => {
     })
     expect(result.enabled).toBe(true)
     expect(result.file).toBe('/home/user/.opencode/bootstrap.md')
+  })
+})
+
+/**
+ * Helper: unwrap ZodOptional/ZodDefault to reach the base schema so we can
+ * inspect its metadata from z.globalRegistry. Used only in parity tests.
+ */
+function unwrapForMeta(schema: z.ZodType): z.ZodType {
+  const def = schema._def as { type?: string; innerType?: z.ZodType }
+  if (def.type === 'optional' || def.type === 'default') {
+    const inner = def.innerType
+    if (inner) return inner
+  }
+  return schema
+}
+
+describe('color validation parity (9b)', () => {
+  test('rejects 3-digit hex: both isValidAgentColor and schema agree', () => {
+    const value = '#fff'
+    expect(isValidAgentColor(value)).toBe(false)
+    const result = AgentOverlaySchema.safeParse({ color: value })
+    expect(result.success).toBe(false)
+  })
+
+  test('accepts 6-digit hex: both isValidAgentColor and schema agree', () => {
+    const value = '#FFFFFF'
+    expect(isValidAgentColor(value)).toBe(true)
+    const result = AgentOverlaySchema.safeParse({ color: value })
+    expect(result.success).toBe(true)
+  })
+
+  test('rejects non-token named color: both isValidAgentColor and schema agree', () => {
+    const value = 'blue'
+    expect(isValidAgentColor(value)).toBe(false)
+    const result = AgentOverlaySchema.safeParse({ color: value })
+    expect(result.success).toBe(false)
+  })
+
+  test('accepts valid token "primary": both isValidAgentColor and schema agree', () => {
+    const value = 'primary'
+    expect(isValidAgentColor(value)).toBe(true)
+    const result = AgentOverlaySchema.safeParse({ color: value })
+    expect(result.success).toBe(true)
+  })
+
+  test('all OPENCODE_AGENT_COLOR_TOKENS are accepted by both isValidAgentColor and schema', () => {
+    for (const token of OPENCODE_AGENT_COLOR_TOKENS) {
+      expect(isValidAgentColor(token)).toBe(true)
+      const result = AgentOverlaySchema.safeParse({ color: token })
+      expect(result.success).toBe(true)
+    }
+  })
+
+  test('lowercase hex is accepted by both: #aabbcc', () => {
+    const value = '#aabbcc'
+    expect(isValidAgentColor(value)).toBe(true)
+    const result = AgentOverlaySchema.safeParse({ color: value })
+    expect(result.success).toBe(true)
+  })
+
+  test('7-digit hex is rejected by both', () => {
+    const value = '#aabbccd'
+    expect(isValidAgentColor(value)).toBe(false)
+    const result = AgentOverlaySchema.safeParse({ color: value })
+    expect(result.success).toBe(false)
+  })
+})
+
+describe('SECURITY_OVERLAY_FIELDS parity (9c)', () => {
+  test('SECURITY_OVERLAY_FIELDS matches schema trust-tagged fields (forward check)', () => {
+    // Every entry in SECURITY_OVERLAY_FIELDS must be a field in AgentOverlaySchema
+    // that carries .meta({ trust: 'project-or-higher' }).
+    const shape = AgentOverlaySchema._def.shape as Record<string, z.ZodType>
+    for (const field of SECURITY_OVERLAY_FIELDS) {
+      expect(field in shape).toBe(true)
+      const base = unwrapForMeta(shape[field] as z.ZodType)
+      const meta = z.globalRegistry.get(base) as
+        | Record<string, unknown>
+        | undefined
+      expect(meta?.trust).toBe('project-or-higher')
+    }
+  })
+
+  test('schema trust-tagged fields match SECURITY_OVERLAY_FIELDS (reverse check)', () => {
+    // Every field in AgentOverlaySchema with trust:'project-or-higher' must be
+    // in SECURITY_OVERLAY_FIELDS. Prevents silent omission when a new protected
+    // field is added to the schema without updating the constant.
+    const shape = AgentOverlaySchema._def.shape as Record<string, z.ZodType>
+    const securitySet = new Set<string>(SECURITY_OVERLAY_FIELDS)
+
+    for (const [key, field] of Object.entries(shape)) {
+      const base = unwrapForMeta(field)
+      const meta = z.globalRegistry.get(base) as
+        | Record<string, unknown>
+        | undefined
+      if (meta?.trust === 'project-or-higher') {
+        expect(securitySet.has(key)).toBe(true)
+      }
+    }
+  })
+
+  test('SECURITY_OVERLAY_FIELDS and getSecurityOverlayFields return identical sets', () => {
+    const fromConst = new Set<string>(SECURITY_OVERLAY_FIELDS)
+    const fromFn = new Set<string>(getSecurityOverlayFields())
+    expect(fromConst).toEqual(fromFn)
   })
 })

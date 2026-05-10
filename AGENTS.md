@@ -79,12 +79,16 @@ systematic/
 | Asset discovery | `src/lib/skills.ts`, `agents.ts`, `commands.ts` |
 | Directory walking | `src/lib/walk-dir.ts` |
 | Config loading (JSONC) | `src/lib/config.ts` |
+| Canonical Zod schema for user config | `src/lib/config-schema.ts` |
+| Color validator + OpenCode color tokens | `src/lib/agent-colors.ts` |
 | CLI commands | `src/cli.ts` |
 | Add new skill | `skills/<name>/SKILL.md` |
 | Add new agent | `agents/<category>/<name>.md` |
 | OCX registry building | `scripts/build-registry.ts` |
 | Content integrity gate | `scripts/content-integrity.ts` |
-| Docs content generation | `docs/scripts/transform-content.ts` |
+| Build-time JSON Schema codegen + drift check | `scripts/generate-config-schema.ts` |
+| Docs content generation (skills/agents) | `docs/scripts/transform-content.ts` |
+| Docs config reference page codegen | `docs/scripts/generate-config-reference.ts` |
 | Docs site config | `docs/astro.config.mjs` |
 
 ## Code Map
@@ -103,6 +107,13 @@ systematic/
 | `findAgentsInDir` | fn | src/lib/agents.ts:49 | 4 | Agent discovery (category from subdir) |
 | `findCommandsInDir` | fn | src/lib/commands.ts:27 | 4 | Backward-compat command discovery |
 | `loadConfig` | fn | src/lib/config.ts:47 | 5 | JSONC config loading + 3-source merge |
+| `SystematicConfigSchema` | const | src/lib/config-schema.ts | 6 | Canonical Zod schema for user config |
+| `validateConfig` | fn | src/lib/config-schema.ts | 4 | Safe parse wrapper returning ValidationResult |
+| `isConfigSchemaError` | fn | src/lib/config.ts | 2 | Type guard for config validation errors |
+| `SECURITY_OVERLAY_FIELDS` | const | src/lib/config-schema.ts | 3 | Trust-protected overlay field names |
+| `isValidAgentColor` | fn | src/lib/agent-colors.ts | 3 | Color validator (hex or token) |
+| `OPENCODE_AGENT_COLOR_TOKENS` | const | src/lib/agent-colors.ts | 4 | Accepted OpenCode color token enum |
+| `MODEL_FORMAT_REGEX` | const | src/lib/config-schema.ts | 2 | Provider/model format pattern |
 | `parseFrontmatter` | fn | src/lib/frontmatter.ts:19 | 16 | YAML frontmatter extraction — most-imported function |
 | `SKILL_FRONTMATTER_FIELDS` | const | src/lib/skills.ts:48 | 1 | Runtime skill frontmatter allow-list |
 | `walkDir` | fn | src/lib/walk-dir.ts:17 | 7 | Recursive dir walker (foundation layer) |

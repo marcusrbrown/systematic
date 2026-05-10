@@ -7,8 +7,6 @@
  * - `.default(value)` DOES round-trip into JSON Schema `default`.
  * - `.meta({ description, examples })` attaches documentation metadata visible in
  *   JSON Schema output and via `schema.description`.
- * - Metadata is stored in `z.globalRegistry` (a `Map<ZodType, object>`), accessible
- *   via `z.globalRegistry.get(schema)`.
  * - `z.object().strict()` rejects unknown keys with `unrecognized_keys` issues that
  *   include the offending key names and the path to the containing object.
  * - `z.record(keySchema, valueSchema)` is the canonical 2-arg form (Zod 4 types
@@ -305,52 +303,27 @@ export function assertSourceCategoryModelDefaults(
 }
 
 /**
- * Unwrap ZodOptional / ZodDefault wrappers to reach the base schema.
- * In Zod 4, optional wrappers have `_def.type === 'optional'` and
- * default wrappers have `_def.type === 'default'`.
+ * Overlay fields that require a project-or-higher trust source.
+ *
+ * This list is co-located with the schema definitions above so that any
+ * future field additions that need trust protection are added here at the
+ * same time. The regression tests in tests/unit/config-schema.test.ts
+ * assert that this list agrees with every field tagged `.meta({ trust:
+ * 'project-or-higher' })` in AgentOverlaySchema — preventing silent drift.
+ *
+ * Matches the hand-coded `SECURITY_OVERLAY_FIELDS` set in `src/lib/config.ts`.
  */
-function unwrapMeta(schema: z.ZodType): z.ZodType {
-  let inner: z.ZodType = schema
-  const def = inner._def as { type?: string; innerType?: z.ZodType }
-  if (def.type === 'optional' || def.type === 'default') {
-    inner = def.innerType as z.ZodType
-  }
-  return inner
-}
+export const SECURITY_OVERLAY_FIELDS: readonly string[] = [
+  'model',
+  'variant',
+  'skills',
+  'permission',
+] as const
 
 /**
- * Collect overlay field names tagged with a specific trust level by
- * inspecting per-field metadata from `z.globalRegistry`.
- */
-function collectTrustTaggedFields(
-  schema: z.ZodObject<z.ZodRawShape>,
-  trust: 'project-or-higher' | 'any',
-): string[] {
-  const fields: string[] = []
-  const shape = schema._def.shape as Record<string, z.ZodType>
-
-  for (const [key, field] of Object.entries(shape)) {
-    const base = unwrapMeta(field)
-    const meta = z.globalRegistry.get(base)
-    if (meta && (meta as Record<string, unknown>).trust === trust) {
-      fields.push(key)
-    }
-  }
-
-  return fields
-}
-
-let _cachedSecurityFields: string[] | null = null
-
-/**
- * Returns overlay fields that require a project-or-higher trust source.
- * Mirrors the hand-coded `SECURITY_OVERLAY_FIELDS` set in `src/lib/config.ts`.
+ * Returns the list of overlay fields that require a project-or-higher trust
+ * source. Exported for callers that need a mutable array copy.
  */
 export function getSecurityOverlayFields(): string[] {
-  if (_cachedSecurityFields) return _cachedSecurityFields
-  _cachedSecurityFields = collectTrustTaggedFields(
-    AgentOverlaySchema,
-    'project-or-higher',
-  )
-  return _cachedSecurityFields
+  return Array.from(SECURITY_OVERLAY_FIELDS)
 }

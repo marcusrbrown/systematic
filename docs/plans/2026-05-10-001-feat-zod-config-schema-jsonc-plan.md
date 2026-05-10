@@ -329,7 +329,7 @@ Marcus reframed the release from v3.0.0 → **v2.12.0** because: "it was a bug t
 
 Units 6–9 below address the surviving 4 P1s plus closely-related P2s in a single fix-up cycle. Plan status flips back to `active`. Run artifact: `.context/systematic/ce-review/20260510-025753-c8196bd1/`.
 
-- [ ] **Unit 6: Wire SystematicConfigSchema into top-level config loader (THE bug fix)**
+- [x] **Unit 6: Wire SystematicConfigSchema into top-level config loader (THE bug fix)**
 
 **Goal:** Validate every loaded config source against `SystematicConfigSchema` immediately after JSONC parsing, before merging. This is the bug Marcus named — "it was a bug to not have a schema to validate the config." Without this unit, the v2.12.0 release ships a schema that only validates nested overlays, not top-level fields.
 
@@ -369,7 +369,7 @@ Units 6–9 below address the surviving 4 P1s plus closely-related P2s in a sing
 - Error messages include source-file path AND field path for every rejection case.
 - All existing `tests/unit/config.test.ts` and `tests/unit/config-handler.test.ts` cases still pass (no regression on happy path).
 
-- [ ] **Unit 7: Reconcile generated JSON Schema with runtime contract**
+- [x] **Unit 7: Reconcile generated JSON Schema with runtime contract**
 
 **Goal:** The published JSON Schema must accept exactly what the runtime accepts and reject exactly what the runtime rejects. Today, three reviewers identified divergence in both directions: (a) `required: [...]` is emitted for fields with Zod `.default()` so IDEs redline valid minimal configs; (b) representable refinements (provider/model regex, color hex pattern, variant whitespace pattern) are dropped from JSON Schema so the published schema accepts what runtime rejects.
 
@@ -410,7 +410,7 @@ Units 6–9 below address the surviving 4 P1s plus closely-related P2s in a sing
 - The generated JSON Schema's `required` array contains only fields without runtime defaults.
 - Provider/model, color, and variant patterns appear as JSON Schema `pattern` or `enum` constraints.
 
-- [ ] **Unit 8: Fix CI drift cascade + escaped `$schema` in docs codegen**
+- [x] **Unit 8: Fix CI drift cascade + escaped `$schema` in docs codegen**
 
 **Goal:** Two mechanical bugs that block CI and break the docs $schema example. P1#3 (drift cascade): `bun run build` cleans `dist/`, then CI's `schema:drift` checks `dist/schemas/` and fails. P1#5 (escape bug): `docs/scripts/generate-config-reference.ts:350` emits `"\$schema"` in the rendered example block instead of `"$schema"`, so users copying the docs example get a literal backslash.
 
@@ -443,7 +443,7 @@ Units 6–9 below address the surviving 4 P1s plus closely-related P2s in a sing
 - Docs reference page renders a copy-pasteable `$schema` line.
 - `bun run docs:generate && grep -c '"\\\\\$schema"' docs/src/content/docs/reference/systematic-config.mdx` returns 0.
 
-- [ ] **Unit 9: Documentation parity sweep + zod version pinning + docs generator schema-derivation**
+- [x] **Unit 9: Documentation parity sweep + zod version pinning + docs generator schema-derivation**
 
 **Goal:** Close the remaining P2 cluster: pin zod to an exact version (was P1#6, demoted), derive the docs reference page from the schema instead of a hard-coded field map (P2#10), unify the color validator (P2#9 — single regex/helper between `config-schema.ts` and `agent-colors.ts`), simplify `getSecurityOverlayFields()` to not reflect through Zod private internals (P2#14), and update three `AGENTS.md` files to reflect the new modules (P2#15-17).
 

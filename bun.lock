@@ -7,7 +7,7 @@
       "dependencies": {
         "js-yaml": "^4.1.1",
         "jsonc-parser": "^3.3.0",
-        "zod": "^4.4.3",
+        "zod": "4.4.3",
       },
       "devDependencies": {
         "@biomejs/biome": "2.4.14",
