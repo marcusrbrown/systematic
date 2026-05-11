@@ -142,3 +142,9 @@ const SystematicPlugin: Plugin = async (input) => {
 - Plan document: `docs/plans/2026-05-01-001-fix-idempotent-plugin-registration-plan.md`
 - Adjacent upstream pattern (idempotence under cache-busting hook injection): <https://github.com/alvinunreal/oh-my-opencode-slim/issues/415>
 - Precedent that initially appeared transferable but used the insufficient whole-hooks pattern: `opencode-copilot-delegate/src/runtime/plugin-singleton.ts`
+
+## 2026-05-10 follow-up: singleton removed
+
+The `plugInOnce` singleton introduced in PR #335 was reverted in a later PR. The duplicate-tool-entry concern that motivated the singleton turned out to be a non-issue — OpenCode registers tools per-source regardless of whether the hooks reference is shared, so the singleton's deduplication of the init work had no visible effect on the TUI tool catalog. What it DID do in dev setups with multiple plugin sources was collapse all loads onto whichever ran first, silently shadowing later sources.
+
+The real correctness contract is now marker-based idempotency in `applyBootstrapContent`: each registration applies its bootstrap content by walking `output.system` for any prior `<SYSTEMATIC_WORKFLOWS>...</SYSTEMATIC_WORKFLOWS>` block and replacing it in-place. Under OpenCode's FIFO hook iteration, the last transform to run owns the final block — most-recently-registered plugin wins. The architectural rationale is captured in `docs/brainstorms/2026-05-10-multi-load-plugin-registration-requirements.md` and the implementation plan at `docs/plans/2026-05-10-002-refactor-multi-load-plugin-registration-plan.md`.

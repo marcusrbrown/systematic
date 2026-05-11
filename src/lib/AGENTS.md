@@ -1,6 +1,6 @@
 # src/lib — Core Implementation
 
-14 modules implementing plugin logic: discovery, conversion, config, schema validation, and tool registration.
+15 modules implementing plugin logic: discovery, conversion, config, schema validation, and tool registration.
 
 ## Data Flow
 
