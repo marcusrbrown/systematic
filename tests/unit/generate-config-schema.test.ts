@@ -1,4 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { execSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -6,8 +7,6 @@ import { fileURLToPath } from 'node:url'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
-const REPO_ROOT = path.resolve(__dirname, '../..')
-
 const TEMP_ROOTS: string[] = []
 
 function makeTempRepo(): string {
@@ -126,10 +125,50 @@ describe('resolveVersion', () => {
     expect(() => resolveVersionFn(null, tmp)).toThrow(/no resolvable version/i)
   })
 
-  test('resolves from git tag in a real git repo', () => {
-    // Use the real repo — we know git tag v2.11.0 exists
-    const result = resolveVersionFn(null, REPO_ROOT)
-    expect(result).toBe('2.11.0')
+  test('resolves from git tag when one exists', () => {
+    // Build a temp git repo with a known tag so the test is independent
+    // of CI checkout depth and of the real repo's tag state.
+    const tmp = makeTempRepo()
+    writePackageJson(tmp, '0.0.0-semantic-release') // would otherwise be rejected
+    const gitOpts = { cwd: tmp, stdio: 'ignore' } as const
+    execSync('git init -q', gitOpts)
+    execSync('git config user.email t@t.test', gitOpts)
+    execSync('git config user.name test', gitOpts)
+    execSync('git config commit.gpgsign false', gitOpts)
+    execSync('git config tag.gpgsign false', gitOpts)
+    execSync('git add package.json', gitOpts)
+    execSync('git commit -q -m init --no-verify', gitOpts)
+    execSync('git tag v1.2.3', gitOpts)
+
+    const result = resolveVersionFn(null, tmp)
+    expect(result).toBe('1.2.3')
+  })
+
+  test('resolves from git tag -l when describe fails (PR merge commit case)', () => {
+    // Simulates the CI failure mode where the synthetic PR merge commit
+    // is not an ancestor of any tag — `git describe --tags --abbrev=0`
+    // fails with "No tags can describe", and we must fall through to
+    // `git tag -l --sort=-v:refname` to find the most-recent semver tag.
+    const tmp = makeTempRepo()
+    writePackageJson(tmp, '0.0.0-semantic-release') // would otherwise be rejected
+    const gitOpts = { cwd: tmp, stdio: 'ignore' } as const
+    execSync('git init -q', gitOpts)
+    execSync('git config user.email t@t.test', gitOpts)
+    execSync('git config user.name test', gitOpts)
+    execSync('git config commit.gpgsign false', gitOpts)
+    execSync('git config tag.gpgsign false', gitOpts)
+    execSync('git add package.json', gitOpts)
+    execSync('git commit -q -m init --no-verify', gitOpts)
+    execSync('git tag v2.5.0', gitOpts)
+    execSync('git tag v2.12.0', gitOpts)
+    // Create an orphan commit so it isn't an ancestor of either tag.
+    execSync('git checkout -q --orphan unrelated', gitOpts)
+    execSync('git reset -q', gitOpts)
+    execSync('git commit -q --allow-empty -m unrelated --no-verify', gitOpts)
+
+    // git describe will fail here; the fallback must pick v2.12.0 (newest).
+    const result = resolveVersionFn(null, tmp)
+    expect(result).toBe('2.12.0')
   })
 })
 

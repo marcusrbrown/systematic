@@ -86,13 +86,19 @@ export function resolveVersion(
     return explicit
   }
 
-  // Try git tag
-  try {
-    const tag = execSync('git describe --tags --abbrev=0', {
-      encoding: 'utf-8',
-      cwd: rootDir,
-    }).trim()
-    if (tag.length > 0) {
+  // Try git: prefer describe (locates a tag in the commit's ancestry),
+  // fall back to listing all semver-shaped tags sorted by version. The
+  // fallback covers two real CI cases that `git describe` cannot:
+  //   - shallow checkout where the tagged commit isn't in local history
+  //   - PR synthetic merge commits that aren't ancestors of any tag
+  for (const cmd of [
+    'git describe --tags --abbrev=0',
+    'git tag -l "v*.*.*" --sort=-v:refname',
+  ]) {
+    try {
+      const out = execSync(cmd, { encoding: 'utf-8', cwd: rootDir }).trim()
+      const tag = out.split('\n')[0]?.trim() ?? ''
+      if (tag.length === 0) continue
       const normalized = tag.startsWith('v') ? tag.slice(1) : tag
       if (SEMVER_REGEX.test(normalized)) {
         return normalized
@@ -100,9 +106,9 @@ export function resolveVersion(
       throw new Error(
         `Error: Invalid git tag format "${tag}". Expected semver or v-prefixed semver (e.g., v1.2.3)`,
       )
+    } catch {
+      // try next strategy
     }
-  } catch {
-    // git tag failed, fall through to package.json
   }
 
   // Try package.json
