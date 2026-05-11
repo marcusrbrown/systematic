@@ -575,4 +575,24 @@ describe('applyBootstrapContent marker-based idempotency', () => {
     expect(joined).toContain('SECOND REGISTRATION')
     expect(joined).not.toContain('FIRST REGISTRATION')
   })
+
+  test('completes in linear time on malicious input with many opening markers and no closing tag', () => {
+    // Regression: the prior regex implementation was vulnerable to ReDoS on
+    // inputs starting with the opening marker repeated and missing a closing
+    // tag. The linear-scan helper is provably immune; this pins the failure
+    // mode without relying on benchmarking.
+    const malicious = `${MARKER_OPEN.repeat(10000)} trailing content with no close`
+    const output = { system: [malicious] }
+    const startedAt = Date.now()
+    applyBootstrapContent(output, wrap('NEW CONTENT'))
+    const elapsedMs = Date.now() - startedAt
+    // No marker block matched (no closing tag), so content is appended.
+    expect(output.system).toHaveLength(1)
+    expect(output.system[0]).toContain('NEW CONTENT')
+    expect(output.system[0]).toContain(MARKER_OPEN.repeat(10000))
+    // Loose upper bound — linear scan finishes in well under 100ms even on
+    // slow CI runners. A polynomial-backtracking regex would take seconds or
+    // longer on this input shape.
+    expect(elapsedMs).toBeLessThan(1000)
+  })
 })

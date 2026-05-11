@@ -18,8 +18,21 @@ const bundledAgentsDir = path.join(packageRoot, 'agents')
 const bundledCommandsDir = path.join(packageRoot, 'commands')
 const packageJsonPath = path.join(packageRoot, 'package.json')
 
-const BOOTSTRAP_MARKER_PATTERN =
-  /<SYSTEMATIC_WORKFLOWS>[\s\S]*?<\/SYSTEMATIC_WORKFLOWS>/
+const BOOTSTRAP_MARKER_OPEN = '<SYSTEMATIC_WORKFLOWS>'
+const BOOTSTRAP_MARKER_CLOSE = '</SYSTEMATIC_WORKFLOWS>'
+
+const findBootstrapMarkerBlock = (
+  entry: string,
+): { start: number; end: number } | null => {
+  const start = entry.indexOf(BOOTSTRAP_MARKER_OPEN)
+  if (start === -1) return null
+  const closeStart = entry.indexOf(
+    BOOTSTRAP_MARKER_CLOSE,
+    start + BOOTSTRAP_MARKER_OPEN.length,
+  )
+  if (closeStart === -1) return null
+  return { start, end: closeStart + BOOTSTRAP_MARKER_CLOSE.length }
+}
 
 export const applyBootstrapContent = (
   output: { system: string[] },
@@ -27,8 +40,10 @@ export const applyBootstrapContent = (
 ): void => {
   for (let i = 0; i < output.system.length; i++) {
     const entry = output.system[i]
-    if (BOOTSTRAP_MARKER_PATTERN.test(entry)) {
-      output.system[i] = entry.replace(BOOTSTRAP_MARKER_PATTERN, content)
+    const block = findBootstrapMarkerBlock(entry)
+    if (block !== null) {
+      output.system[i] =
+        entry.slice(0, block.start) + content + entry.slice(block.end)
       return
     }
   }
