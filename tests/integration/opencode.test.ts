@@ -4,7 +4,6 @@ import os from 'node:os'
 import path from 'node:path'
 import type { Config, PluginInput } from '@opencode-ai/plugin'
 import SystematicPlugin from '../../src/index.js'
-import { _resetPluginSingleton } from '../../src/lib/plugin-singleton.js'
 
 const OPENCODE_AVAILABLE = (() => {
   const result = Bun.spawnSync(['which', 'opencode'])
@@ -109,7 +108,6 @@ describe('SystematicPlugin config hook integration', () => {
   let originalHomedir: typeof os.homedir
 
   beforeEach(() => {
-    _resetPluginSingleton()
     originalHomedir = os.homedir
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-plugin-'))
 
@@ -126,7 +124,6 @@ describe('SystematicPlugin config hook integration', () => {
   afterEach(() => {
     // Restore os.homedir before cleanup so nothing snags on a deleted dir.
     os.homedir = originalHomedir
-    _resetPluginSingleton()
     delete process.env.OPENCODE_CONFIG_DIR
     delete process.env.XDG_DATA_HOME
     fs.rmSync(tempDir, { recursive: true, force: true })
