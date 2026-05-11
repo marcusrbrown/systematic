@@ -313,7 +313,7 @@ describe('validateConfig wrapper', () => {
     expect(result.success).toBe(true)
     if (result.success) {
       expect(result.data).toBeDefined()
-      expect(result.data?.bootstrap.enabled).toBe(true)
+      expect(result.data.bootstrap.enabled).toBe(true)
     }
   })
 
@@ -322,7 +322,30 @@ describe('validateConfig wrapper', () => {
     expect(result.success).toBe(false)
     if (!result.success) {
       expect(result.errors).toBeDefined()
-      expect(result.errors?.length ?? 0).toBeGreaterThan(0)
+      expect(result.errors.length).toBeGreaterThan(0)
+    }
+  })
+
+  test('discriminated union: success branch narrows data without optional chaining', () => {
+    const result = validateConfig({})
+    if (result.success) {
+      // After narrowing via result.success, result.data is non-optional.
+      // This test compiles only if ValidationResult is a discriminated union.
+      const enabled: boolean = result.data.bootstrap.enabled
+      expect(enabled).toBe(true)
+    } else {
+      throw new Error('Expected success')
+    }
+  })
+
+  test('discriminated union: failure branch narrows errors without optional chaining', () => {
+    const result = validateConfig({ foo: 'bar' })
+    if (!result.success) {
+      // After narrowing via !result.success, result.errors is non-optional.
+      const count: number = result.errors.length
+      expect(count).toBeGreaterThan(0)
+    } else {
+      throw new Error('Expected failure')
     }
   })
 })

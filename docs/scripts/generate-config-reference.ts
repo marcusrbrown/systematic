@@ -282,7 +282,14 @@ function renderTopLevelSection(
  *                using the same fallback chain as the JSON Schema generator.
  * @returns The full .mdx content as a string.
  */
+const SEMVER_REGEX = /^\d+\.\d+\.\d+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$/
+
 export function generateConfigReference(version?: string): string {
+  if (version !== undefined && !SEMVER_REGEX.test(version)) {
+    throw new Error(
+      `Error: Invalid version format "${version}". Must be valid semver (e.g., 3.0.0)`,
+    )
+  }
   const resolvedVersion = version ?? resolveVersion(null, PROJECT_ROOT)
   const major = getMajorVersion(resolvedVersion)
   const schemaUrl = SCHEMA_ID_TEMPLATE.replace('%MAJOR%', major)

@@ -157,23 +157,6 @@ function throwTopLevelConfigSchemaError(
   })
 }
 
-/**
- * Type guard for errors thrown by the top-level config schema validator.
- * Use this to distinguish schema validation failures from JSONC parse errors
- * or file read errors.
- */
-export function isConfigSchemaError(err: unknown): err is Error & {
-  _tag: 'ConfigSchemaError'
-  filePath: string
-  trust: ConfigSource['trust']
-  issues: readonly z.core.$ZodIssue[]
-} {
-  return (
-    err instanceof Error &&
-    (err as unknown as { _tag: unknown })._tag === 'ConfigSchemaError'
-  )
-}
-
 function loadConfigSource(
   filePath: string,
   trust: ConfigSource['trust'],
