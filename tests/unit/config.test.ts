@@ -7,7 +7,7 @@ import {
   getConfigPaths,
   loadConfig,
   loadConfigWithSources,
-} from '../../src/lib/config.ts'
+} from '../../src/lib/config.js'
 
 describe('config', () => {
   let testDir: string
@@ -816,6 +816,300 @@ describe('config', () => {
       expect(paths.customDir).toBe(customDirContents)
 
       fs.rmSync(customDir, { recursive: true, force: true })
+    })
+  })
+
+  describe('schema validation', () => {
+    function writeProjectConfig(config: Record<string, unknown>): string {
+      const projectConfigDir = path.join(testDir, '.opencode')
+      fs.mkdirSync(projectConfigDir, { recursive: true })
+      const projectConfigPath = path.join(projectConfigDir, 'systematic.json')
+      fs.writeFileSync(projectConfigPath, JSON.stringify(config))
+      return projectConfigPath
+    }
+
+    test('valid config loads identically — happy path regression', () => {
+      writeProjectConfig({
+        disabled_skills: ['skill-a'],
+        disabled_agents: ['agent-b'],
+        bootstrap: { enabled: false },
+      })
+      const result = loadConfig(testDir)
+      expect(result.disabled_skills).toContain('skill-a')
+      expect(result.disabled_agents).toContain('agent-b')
+      expect(result.bootstrap.enabled).toBe(false)
+    })
+
+    test('disabled_skills as string is rejected with field name and source path in error', () => {
+      const configPath = writeProjectConfig({ disabled_skills: 'not-an-array' })
+      expect(() => loadConfig(testDir)).toThrow(configPath)
+      expect(() => loadConfig(testDir)).toThrow('disabled_skills')
+    })
+
+    test('unknown top-level field is rejected by strict-mode schema with field name in error', () => {
+      const configPath = writeProjectConfig({ agnts: {} })
+      expect(() => loadConfig(testDir)).toThrow(configPath)
+      expect(() => loadConfig(testDir)).toThrow('agnts')
+    })
+
+    test('malformed agents.<key>.model is rejected with nested field path in error', () => {
+      const configPath = writeProjectConfig({
+        agents: { explorer: { model: {} } },
+      })
+      expect(() => loadConfig(testDir)).toThrow(configPath)
+      expect(() => loadConfig(testDir)).toThrow('agents.explorer.model')
+    })
+
+    test('bootstrap.enabled as string is rejected with field path in error', () => {
+      const configPath = writeProjectConfig({ bootstrap: { enabled: 'yes' } })
+      expect(() => loadConfig(testDir)).toThrow(configPath)
+      expect(() => loadConfig(testDir)).toThrow('bootstrap.enabled')
+    })
+
+    test('empty config loads with all Zod defaults applied', () => {
+      writeProjectConfig({})
+      const result = loadConfig(testDir)
+      expect(result.disabled_skills).toEqual([])
+      expect(result.disabled_agents).toEqual([])
+      expect(result.disabled_commands).toEqual([])
+      expect(result.bootstrap.enabled).toBe(true)
+    })
+
+    test('configs accepted by old hand-rolled validators now reject unknown top-level fields', () => {
+      // Before schema validation was wired into the loader, any JSON object was
+      // accepted without field-level checking. Unknown top-level fields silently
+      // became no-ops. This test captures the expected behavior change: strict Zod
+      // validation now runs on every loaded config source, making unknown fields
+      // a hard error rather than a silent no-op.
+      const configPath = writeProjectConfig({
+        disabled_skills: [],
+        unknownField: true,
+      })
+      expect(() => loadConfig(testDir)).toThrow(configPath)
+      expect(() => loadConfig(testDir)).toThrow('unknownField')
+    })
+
+    test('user config schema validation failure names the user config file in error', () => {
+      const userConfigFilePath = writeUserConfig({ disabled_skills: 'wrong' })
+      expect(() => loadConfig(testDir)).toThrow(userConfigFilePath)
+      expect(() => loadConfig(testDir)).toThrow('disabled_skills')
+    })
+  })
+
+  describe('merge precedence after schema validation', () => {
+    function writeProjectConfig(config: Record<string, unknown>): void {
+      const projectConfigDir = path.join(testDir, '.opencode')
+      fs.mkdirSync(projectConfigDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(projectConfigDir, 'systematic.json'),
+        JSON.stringify(config),
+      )
+    }
+
+    test('user bootstrap.enabled:false is preserved when project config is empty', () => {
+      // Regression: when result.data (Zod-hydrated) is propagated to
+      // ConfigSource.config, Zod's default for bootstrap.enabled is true, so an
+      // empty project config {} produces { bootstrap: { enabled: true } }. The
+      // spread `...projectConfig?.bootstrap (= { enabled: true })` then clobbers
+      // the user's explicit enabled: false. The loader must propagate the raw
+      // parsed JSONC instead so the merge sees `undefined` for unset fields.
+      writeUserConfig({ bootstrap: { enabled: false } })
+      writeProjectConfig({})
+
+      const result = loadConfig(testDir)
+      expect(result.bootstrap.enabled).toBe(false)
+    })
+
+    test('user disabled_skills are preserved when project config is empty', () => {
+      // disabled_skills has a Zod default of []. An empty project config
+      // produces result.data.disabled_skills = [] which then gets merged
+      // into the union set — that is safe because mergeArraysUnique([], [])
+      // stays empty. But the user's value was already in the merge chain,
+      // so this test double-checks the array path remains correct.
+      writeUserConfig({ disabled_skills: ['user-skill-x'] })
+      writeProjectConfig({})
+
+      const result = loadConfig(testDir)
+      expect(result.disabled_skills).toContain('user-skill-x')
+    })
+
+    test('3-source: user bootstrap.enabled:false preserved through project {} and custom {}', () => {
+      const customDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'systematic-custom-'),
+      )
+      process.env.OPENCODE_CONFIG_DIR = customDir
+
+      try {
+        writeUserConfig({ bootstrap: { enabled: false } })
+        writeProjectConfig({})
+        fs.writeFileSync(
+          path.join(customDir, 'systematic.json'),
+          JSON.stringify({}),
+        )
+
+        const result = loadConfig(testDir)
+        expect(result.bootstrap.enabled).toBe(false)
+      } finally {
+        delete process.env.OPENCODE_CONFIG_DIR
+        fs.rmSync(customDir, { recursive: true, force: true })
+      }
+    })
+
+    test('high-priority explicit project override still wins over user setting', () => {
+      // The fix must NOT over-correct: if the project explicitly sets
+      // bootstrap.enabled:true, that should still override user's false.
+      writeUserConfig({ bootstrap: { enabled: false } })
+      writeProjectConfig({ bootstrap: { enabled: true } })
+
+      const result = loadConfig(testDir)
+      expect(result.bootstrap.enabled).toBe(true)
+    })
+
+    test('invalid user config type is rejected by schema validation', () => {
+      // Schema validation must still run even though we propagate rawConfig.
+      const userConfigFilePath = writeUserConfig({
+        disabled_skills: 'not-an-array',
+      })
+
+      expect(() => loadConfig(testDir)).toThrow(userConfigFilePath)
+      expect(() => loadConfig(testDir)).toThrow('disabled_skills')
+    })
+  })
+
+  describe('JSONC precedence', () => {
+    test('AE3: only systematic.json exists — loads it (backward compat)', () => {
+      writeUserConfig({ disabled_skills: ['skill-a'] })
+
+      const result = loadConfig(testDir)
+      expect(result.disabled_skills).toContain('skill-a')
+      expect(result.disabled_skills).toEqual(['skill-a'])
+    })
+
+    test('AE2: only systematic.jsonc exists — loads it correctly', () => {
+      const filePath = userConfigPath().replace(/\.json$/, '.jsonc')
+      fs.mkdirSync(path.dirname(filePath), { recursive: true })
+      fs.writeFileSync(
+        filePath,
+        '{\n  // This is a comment\n  "disabled_skills": ["skill-b"]\n}\n',
+      )
+
+      const result = loadConfig(testDir)
+      expect(result.disabled_skills).toContain('skill-b')
+    })
+
+    test('AE2: JSONC with comments and standard JSON structure parses correctly', () => {
+      const filePath = userConfigPath().replace(/\.json$/, '.jsonc')
+      fs.mkdirSync(path.dirname(filePath), { recursive: true })
+      fs.writeFileSync(
+        filePath,
+        '{\n  // Comment explaining why this skill is disabled\n  "disabled_skills": ["skill-a"]\n}\n',
+      )
+
+      const result = loadConfig(testDir)
+      expect(result.disabled_skills).toEqual(['skill-a'])
+    })
+
+    test('AE1: both jsonc and json exist — .jsonc is loaded, .json is ignored', () => {
+      const jsoncPath = userConfigPath().replace(/\.json$/, '.jsonc')
+      const jsonPath = userConfigPath()
+      fs.mkdirSync(path.dirname(jsoncPath), { recursive: true })
+
+      fs.writeFileSync(
+        jsonPath,
+        JSON.stringify({ disabled_skills: ['from-json'] }),
+      )
+      fs.writeFileSync(jsoncPath, '{\n  "disabled_skills": ["from-jsonc"]\n}\n')
+
+      const result = loadConfig(testDir)
+      expect(result.disabled_skills).toEqual(['from-jsonc'])
+    })
+
+    test('project jsonc takes precedence over project json', () => {
+      const projectConfigDir = path.join(testDir, '.opencode')
+      fs.mkdirSync(projectConfigDir, { recursive: true })
+
+      fs.writeFileSync(
+        path.join(projectConfigDir, 'systematic.json'),
+        JSON.stringify({ disabled_skills: ['from-json'] }),
+      )
+      fs.writeFileSync(
+        path.join(projectConfigDir, 'systematic.jsonc'),
+        JSON.stringify({ disabled_skills: ['from-jsonc'] }),
+      )
+
+      const result = loadConfig(testDir)
+      expect(result.disabled_skills).toEqual(['from-jsonc'])
+    })
+
+    test('custom config jsonc takes precedence over custom config json', () => {
+      const customDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'systematic-custom-'),
+      )
+      process.env.OPENCODE_CONFIG_DIR = customDir
+
+      try {
+        fs.writeFileSync(
+          path.join(customDir, 'systematic.json'),
+          JSON.stringify({ disabled_skills: ['from-json'] }),
+        )
+        fs.writeFileSync(
+          path.join(customDir, 'systematic.jsonc'),
+          JSON.stringify({ disabled_skills: ['from-jsonc'] }),
+        )
+
+        const result = loadConfig(testDir)
+        expect(result.disabled_skills).toEqual(['from-jsonc'])
+      } finally {
+        delete process.env.OPENCODE_CONFIG_DIR
+        fs.rmSync(customDir, { recursive: true, force: true })
+      }
+    })
+
+    test('getConfigPaths returns .jsonc path when .jsonc exists', () => {
+      const jsoncPath = path.join(
+        os.homedir(),
+        '.config/opencode/systematic.jsonc',
+      )
+      fs.mkdirSync(path.dirname(jsoncPath), { recursive: true })
+      fs.writeFileSync(jsoncPath, '{}')
+
+      const paths = getConfigPaths(testDir)
+      expect(paths.userConfig).toBe(jsoncPath)
+    })
+
+    test('getConfigPaths returns .json fallback when neither exists', () => {
+      const paths = getConfigPaths(testDir)
+      expect(paths.userConfig).toBe(
+        path.join(os.homedir(), '.config/opencode/systematic.json'),
+      )
+    })
+
+    test('malformed jsonc throws parse error with file path', () => {
+      const filePath = userConfigPath().replace(/\.json$/, '.jsonc')
+      fs.mkdirSync(path.dirname(filePath), { recursive: true })
+      fs.writeFileSync(filePath, '{invalid jsonc')
+
+      expect(() => loadConfig(testDir)).toThrow(filePath)
+      expect(() => loadConfig(testDir)).toThrow(/parse error/i)
+    })
+
+    test('accepts $schema field in JSONC config without raising configSchemaError', () => {
+      const filePath = userConfigPath().replace(/\.json$/, '.jsonc')
+      fs.mkdirSync(path.dirname(filePath), { recursive: true })
+      fs.writeFileSync(
+        filePath,
+        [
+          '// Top-level user config',
+          '{',
+          '  "$schema": "https://fro.bot/systematic/schemas/v2/systematic-config.schema.json",',
+          '  "disabled_skills": []',
+          '}',
+        ].join('\n'),
+      )
+
+      expect(() => loadConfig(testDir)).not.toThrow()
+      const result = loadConfig(testDir)
+      expect(result.disabled_skills).toEqual([])
     })
   })
 })

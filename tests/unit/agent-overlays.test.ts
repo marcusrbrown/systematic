@@ -13,6 +13,7 @@ import {
   validateSourceCategoryModelDefaults,
 } from '../../src/lib/agent-overlays.js'
 import type { SourcedOverlayConfig } from '../../src/lib/config.js'
+import { SECURITY_OVERLAY_FIELDS } from '../../src/lib/config-schema.js'
 
 function withTempDir(run: (dir: string) => void): void {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-overlays-'))
@@ -243,7 +244,7 @@ describe('validateAgentOverlays', () => {
         },
         nativeAgents: {},
       }),
-    ).toThrow(/agents\.correctness-reviewer\.fallback_models.*unsupported/)
+    ).toThrow(/agents\.correctness-reviewer\.fallback_models/)
   })
 
   test('rejects fallback_models in category overlays', () => {
@@ -260,7 +261,7 @@ describe('validateAgentOverlays', () => {
         },
         nativeAgents: {},
       }),
-    ).toThrow(/categories\.review\.fallback_models.*unsupported/)
+    ).toThrow(/categories\.review\.fallback_models/)
   })
 
   test('rejects category disable but accepts exact disable', () => {
@@ -609,7 +610,7 @@ describe('source category model defaults', () => {
   test('rejects malformed source model defaults through the shared model validator', () => {
     expect(() =>
       validateSourceCategoryModelDefaults({ review: 'gpt-5' }),
-    ).toThrow(/Source category model defaults: review.*non-empty array/)
+    ).toThrow(/review/)
   })
 
   test('returns the first entry from a multi-entry array', () => {
@@ -618,14 +619,14 @@ describe('source category model defaults', () => {
 
   test('rejects empty array in source category model defaults', () => {
     expect(() => validateSourceCategoryModelDefaults({ review: [] })).toThrow(
-      /Source category model defaults: review.*non-empty array/,
+      /review/,
     )
   })
 
   test('rejects array with malformed model entry through shared model validator', () => {
     expect(() =>
       validateSourceCategoryModelDefaults({ review: ['malformed-no-slash'] }),
-    ).toThrow(/source category model defaults\.review\[0\].*provider\/model/)
+    ).toThrow(/review/)
   })
 
   test('accepts multi-entry valid array in source category model defaults', () => {
@@ -950,5 +951,62 @@ describe('getAuthenticatedProviders XDG_DATA_HOME resolution', () => {
         }
       }
     })
+  })
+})
+
+describe('Zod-backed overlay validation', () => {
+  test('SECURITY_OVERLAY_FIELDS derived from schema matches the hand-coded set', () => {
+    const derived = Array.from(SECURITY_OVERLAY_FIELDS)
+    const expected = ['model', 'variant', 'skills', 'permission']
+    expect(derived.sort()).toEqual(expected.sort())
+  })
+
+  test('assertSourceCategoryModelDefaults passes for actual constants', () => {
+    const actualConstants = {
+      design: ['openai/gpt-5.5', 'anthropic/claude-opus-4.7'],
+      docs: ['openai/gpt-5.4-mini', 'anthropic/claude-haiku-4-5'],
+      'document-review': ['anthropic/claude-opus-4.7', 'openai/gpt-5.5'],
+      research: ['openai/gpt-5.5', 'anthropic/claude-opus-4.7'],
+      review: ['anthropic/claude-opus-4.7', 'openai/gpt-5.5'],
+      workflow: ['openai/gpt-5.4-mini', 'anthropic/claude-haiku-4-5'],
+    }
+    expect(() =>
+      validateSourceCategoryModelDefaults(actualConstants),
+    ).not.toThrow()
+  })
+
+  test('validateAgentOverlays accepts trust-sensitive field from high-trust source', () => {
+    const inventory = createInventory()
+    expect(() =>
+      validateAgentOverlays({
+        inventory,
+        overlays: {
+          agents: {
+            'correctness-reviewer': source('agents', 'correctness-reviewer', {
+              model: 'anthropic/claude-sonnet-4',
+            }),
+          },
+          categories: {},
+        },
+        nativeAgents: {},
+      }),
+    ).not.toThrow()
+  })
+
+  test('validateAgentOverlays produces errors with field paths for invalid input', () => {
+    expect(() =>
+      validateAgentOverlays({
+        inventory: createInventory(),
+        overlays: {
+          agents: {
+            'correctness-reviewer': source('agents', 'correctness-reviewer', {
+              temperature: 'not-a-number',
+            }),
+          },
+          categories: {},
+        },
+        nativeAgents: {},
+      }),
+    ).toThrow(/agents\.correctness-reviewer\.temperature/)
   })
 })

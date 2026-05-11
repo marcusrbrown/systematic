@@ -59,6 +59,10 @@ export default defineConfig({
               label: 'Agents',
               autogenerate: { directory: 'reference/agents' },
             },
+            {
+              label: 'User Configuration',
+              link: '/reference/systematic-config/',
+            },
           ],
         },
       ],

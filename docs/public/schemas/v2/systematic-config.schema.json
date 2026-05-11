@@ -1,0 +1,392 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "$schema": {
+      "description": "JSON Schema URL for IDE autocomplete. The value is informational only — the loader does not fetch or validate against it. Add this to enable IDE schema activation and field-level autocomplete in editors that support JSON Schema (VSCode, Zed, IntelliJ).",
+      "examples": [
+        "https://fro.bot/systematic/schemas/v2/systematic-config.schema.json"
+      ],
+      "type": "string",
+      "format": "uri"
+    },
+    "agents": {
+      "default": {},
+      "description": "Per-agent configuration overlays keyed by agent name",
+      "examples": [
+        {
+          "correctness-reviewer": {
+            "temperature": 0.1
+          }
+        },
+        {}
+      ],
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[^\\s/]+\\/\\S+$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Model identifier in provider/model format, or null to inherit parent model",
+            "examples": ["anthropic/claude-sonnet-4", null],
+            "trust": "project-or-higher"
+          },
+          "variant": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "description": "Model variant identifier",
+            "examples": ["v2", "extended"],
+            "trust": "project-or-higher"
+          },
+          "temperature": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Sampling temperature (≥0; 0 = deterministic)",
+            "examples": [0.1, 0.7, 0],
+            "trust": "any"
+          },
+          "top_p": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Nucleus sampling parameter (0 to 1)",
+            "examples": [0.9, 0.1, 1],
+            "trust": "any"
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["subagent", "primary", "all"],
+            "description": "Agent execution mode",
+            "examples": ["subagent", "primary", "all"]
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "primary",
+                  "secondary",
+                  "accent",
+                  "success",
+                  "warning",
+                  "error",
+                  "info"
+                ]
+              },
+              {
+                "type": "string",
+                "pattern": "^#[0-9a-fA-F]{6}$"
+              }
+            ],
+            "description": "Agent color — named token from OpenCode or 6-digit hex color (#RRGGBB)",
+            "examples": ["primary", "#ff6600"]
+          },
+          "steps": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Maximum execution steps (positive integer)",
+            "examples": [10, 50]
+          },
+          "hidden": {
+            "type": "boolean",
+            "description": "Hide agent from UI",
+            "examples": [true, false]
+          },
+          "disable": {
+            "type": "boolean",
+            "description": "Disable this agent overlay",
+            "examples": [true, false]
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Skills enabled for this agent",
+            "examples": [["ce:plan", "ce:review"]],
+            "trust": "project-or-higher"
+          },
+          "permission": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": ["ask", "allow", "deny"]
+                },
+                {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "type": "string",
+                    "enum": ["ask", "allow", "deny"]
+                  }
+                }
+              ]
+            },
+            "description": "Permission overrides per tool",
+            "examples": [
+              {
+                "edit": "allow",
+                "bash": {
+                  "curl": "allow",
+                  "rm": "deny"
+                }
+              }
+            ],
+            "trust": "project-or-higher"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Per-agent configuration overlay",
+        "examples": [
+          {
+            "model": "anthropic/claude-opus-4.7",
+            "temperature": 0.1,
+            "mode": "subagent"
+          }
+        ]
+      }
+    },
+    "categories": {
+      "default": {},
+      "description": "Per-category configuration overlays keyed by category name",
+      "examples": [
+        {
+          "review": {
+            "model": "anthropic/claude-opus-4.7"
+          }
+        },
+        {}
+      ],
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "model": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "pattern": "^[^\\s/]+\\/\\S+$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Model identifier in provider/model format, or null to inherit parent model",
+            "examples": ["anthropic/claude-sonnet-4", null],
+            "trust": "project-or-higher"
+          },
+          "variant": {
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^\\S+$",
+            "description": "Model variant identifier",
+            "examples": ["v2", "extended"],
+            "trust": "project-or-higher"
+          },
+          "temperature": {
+            "type": "number",
+            "minimum": 0,
+            "description": "Sampling temperature (≥0; 0 = deterministic)",
+            "examples": [0.1, 0.7, 0],
+            "trust": "any"
+          },
+          "top_p": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1,
+            "description": "Nucleus sampling parameter (0 to 1)",
+            "examples": [0.9, 0.1, 1],
+            "trust": "any"
+          },
+          "mode": {
+            "type": "string",
+            "enum": ["subagent", "primary", "all"],
+            "description": "Agent execution mode",
+            "examples": ["subagent", "primary", "all"]
+          },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "primary",
+                  "secondary",
+                  "accent",
+                  "success",
+                  "warning",
+                  "error",
+                  "info"
+                ]
+              },
+              {
+                "type": "string",
+                "pattern": "^#[0-9a-fA-F]{6}$"
+              }
+            ],
+            "description": "Agent color — named token from OpenCode or 6-digit hex color (#RRGGBB)",
+            "examples": ["primary", "#ff6600"]
+          },
+          "steps": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991,
+            "description": "Maximum execution steps (positive integer)",
+            "examples": [10, 50]
+          },
+          "hidden": {
+            "type": "boolean",
+            "description": "Hide agent from UI",
+            "examples": [true, false]
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Skills enabled for this agent",
+            "examples": [["ce:plan", "ce:review"]],
+            "trust": "project-or-higher"
+          },
+          "permission": {
+            "type": "object",
+            "propertyNames": {
+              "type": "string"
+            },
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": ["ask", "allow", "deny"]
+                },
+                {
+                  "type": "object",
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "additionalProperties": {
+                    "type": "string",
+                    "enum": ["ask", "allow", "deny"]
+                  }
+                }
+              ]
+            },
+            "description": "Permission overrides per tool",
+            "examples": [
+              {
+                "edit": "allow",
+                "bash": {
+                  "curl": "allow",
+                  "rm": "deny"
+                }
+              }
+            ],
+            "trust": "project-or-higher"
+          }
+        },
+        "additionalProperties": false,
+        "description": "Per-category configuration overlay (same fields as agent minus disable)",
+        "examples": [
+          {
+            "model": "anthropic/claude-opus-4.7",
+            "temperature": 0.1
+          }
+        ]
+      }
+    },
+    "disabled_skills": {
+      "default": [],
+      "description": "Array of skill names to disable globally",
+      "examples": [["ce:plan", "ce:review"]],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "disabled_agents": {
+      "default": [],
+      "description": "Array of agent names to disable globally",
+      "examples": [["previous-comments-reviewer", "cli-readiness-reviewer"]],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "disabled_commands": {
+      "default": [],
+      "description": "Array of command names to disable globally",
+      "examples": [["deprecated-migration-helper"]],
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "bootstrap": {
+      "default": {
+        "enabled": true
+      },
+      "description": "Bootstrap prompt configuration",
+      "examples": [
+        {
+          "enabled": true
+        },
+        {
+          "enabled": false,
+          "file": ".opencode/custom-prompt.md"
+        }
+      ],
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "default": true,
+          "description": "Enable bootstrap prompt injection into every conversation",
+          "examples": [true, false],
+          "type": "boolean"
+        },
+        "file": {
+          "description": "Path to a custom bootstrap prompt file",
+          "examples": ["~/.config/opencode/bootstrap.md"],
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "description": "Systematic user configuration file (systematic.json / systematic.jsonc)",
+  "examples": [
+    {
+      "disabled_skills": ["ce:plan"],
+      "bootstrap": {
+        "enabled": false
+      }
+    }
+  ],
+  "$id": "https://fro.bot/systematic/schemas/v2/systematic-config.schema.json"
+}

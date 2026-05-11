@@ -7,8 +7,8 @@ import {
   createConfigHandler,
   formatAgentDescription,
   toTitleCase,
-} from '../../src/lib/config-handler.ts'
-import { formatFrontmatter } from '../../src/lib/frontmatter.ts'
+} from '../../src/lib/config-handler.js'
+import { formatFrontmatter } from '../../src/lib/frontmatter.js'
 
 describe('config-handler', () => {
   let testDir: string
@@ -90,6 +90,11 @@ Skill content for ${name}.`,
       path.join(projectDir, '.opencode/systematic.json'),
       JSON.stringify(value),
     )
+  }
+
+  function writeSystematicJsoncConfig(value: string): void {
+    fs.mkdirSync(path.join(projectDir, '.opencode'), { recursive: true })
+    fs.writeFileSync(path.join(projectDir, '.opencode/systematic.jsonc'), value)
   }
 
   function writeCustomSystematicConfig(value: Record<string, unknown>): void {
@@ -1577,6 +1582,47 @@ model: gpt-4
       await expect(handler(config)).rejects.toThrow(/missing-skill/)
 
       expect(config).toEqual(before)
+    })
+
+    test('loads project config from systematic.jsonc with comments', async () => {
+      createCategorizedAgent('review', 'correctness-reviewer', {
+        name: 'correctness-reviewer',
+        description: 'Reviews correctness',
+      })
+      writeSystematicJsoncConfig(
+        '{\n  // JSONC config with comment\n  "categories": {\n    "review": { "temperature": 0.33 }\n  }\n}\n',
+      )
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.['correctness-reviewer']?.temperature).toBe(0.33)
+    })
+
+    test('malformed systematic.json surfaces schema validation error from config loader', async () => {
+      writeSystematicConfig({ disabled_skills: 'not-an-array' })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      const expectedConfigPath = path.join(
+        projectDir,
+        '.opencode/systematic.json',
+      )
+      await expect(handler(config)).rejects.toThrow(expectedConfigPath)
+      await expect(handler(config)).rejects.toThrow('disabled_skills')
     })
   })
 })

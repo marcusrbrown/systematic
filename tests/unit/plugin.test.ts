@@ -87,6 +87,55 @@ describe('plugin loading', () => {
     }
   })
 
+  test('loads bootstrap config from systematic.jsonc with comments', async () => {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-plugin-'))
+    const opencodeDir = path.join(tempDir, '.opencode')
+    const bootstrapPath = path.join(tempDir, 'bootstrap.md')
+    const configPath = path.join(opencodeDir, 'systematic.jsonc')
+
+    fs.mkdirSync(opencodeDir, { recursive: true })
+    fs.writeFileSync(bootstrapPath, 'JSONC bootstrap content')
+    fs.writeFileSync(
+      configPath,
+      '{\n  // Bootstrap via JSONC\n  "bootstrap": {\n    "enabled": true,\n    "file": "' +
+        bootstrapPath.replace(/\\/g, '\\\\') +
+        '"\n  }\n}\n',
+    )
+
+    try {
+      const pluginPath = path.join(SRC_DIR, 'index.ts')
+      const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
+        default: (args: {
+          client: { app: { log: (entry: unknown) => Promise<void> } }
+          directory: string
+        }) => Promise<{
+          'experimental.chat.system.transform': (
+            input: unknown,
+            output: { system: string[] },
+          ) => Promise<void>
+        }>
+      }
+
+      const plugin = await pluginModule.default({
+        client: {
+          app: {
+            log: async () => {},
+          },
+        },
+        directory: tempDir,
+      })
+
+      const output = { system: ['Existing system prompt'] }
+      await plugin['experimental.chat.system.transform']({}, output)
+
+      expect(output.system).toEqual([
+        'Existing system prompt\n\nJSONC bootstrap content',
+      ])
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
   test('CI smoke test validates the workflow plugin export and registry drift contract', () => {
     const workflowPath = path.join(ROOT_DIR, '.github/workflows/main.yaml')
     const workflow = fs.readFileSync(workflowPath, 'utf8')

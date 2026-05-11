@@ -46,6 +46,10 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import {
+  isValidAgentColor,
+  OPENCODE_AGENT_COLOR_TOKENS,
+} from '../src/lib/agent-colors.js'
 import { parseFrontmatter } from '../src/lib/frontmatter.js'
 import { SKILL_FRONTMATTER_FIELDS } from '../src/lib/skills.js'
 import { walkDir } from '../src/lib/walk-dir.js'
@@ -710,30 +714,6 @@ function checkSkillFrontmatterFields(
       })
     }
   }
-}
-
-/**
- * OpenCode `/config` response schema accepts agent colors as either a hex
- * `#RRGGBB` literal or one of these named theme tokens. Any other value is
- * rejected by HttpApi validation (see anomalyco/opencode commits 2793502db /
- * 96a534d8c) and surfaces to the user as `400: (empty response body)` on TUI
- * launch.
- */
-export const OPENCODE_AGENT_COLOR_TOKENS = [
-  'primary',
-  'secondary',
-  'accent',
-  'success',
-  'warning',
-  'error',
-  'info',
-] as const
-
-const HEX_COLOR_REGEX = /^#[0-9a-fA-F]{6}$/
-
-function isValidAgentColor(value: string): boolean {
-  if (HEX_COLOR_REGEX.test(value)) return true
-  return (OPENCODE_AGENT_COLOR_TOKENS as readonly string[]).includes(value)
 }
 
 export function checkAgentColors(

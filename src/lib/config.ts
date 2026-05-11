@@ -6,6 +6,11 @@ import {
   parse as parseJsonc,
   printParseErrorCode,
 } from 'jsonc-parser'
+import type { z } from 'zod'
+import {
+  SECURITY_OVERLAY_FIELDS as SCHEMA_SECURITY_OVERLAY_FIELDS,
+  SystematicConfigSchema,
+} from './config-schema.js'
 
 export interface BootstrapConfig {
   enabled: boolean
@@ -64,12 +69,18 @@ interface ConfigSource {
   trust: 'user' | 'project' | 'custom'
 }
 
-const SECURITY_OVERLAY_FIELDS = new Set([
-  'model',
-  'variant',
-  'permission',
-  'skills',
-])
+const SECURITY_OVERLAY_FIELDS = new Set(SCHEMA_SECURITY_OVERLAY_FIELDS)
+
+/**
+ * Resolve a config file path by checking `.jsonc` first, then `.json`.
+ * Returns the first existing file, or the `.json` path as fallback so
+ * callers that `fs.existsSync` the result still work.
+ */
+function resolveConfigPath(dir: string, basename: string): string {
+  const jsoncPath = path.join(dir, `${basename}.jsonc`)
+  if (fs.existsSync(jsoncPath)) return jsoncPath
+  return path.join(dir, `${basename}.json`)
+}
 
 function isErrorWithCode(error: unknown): error is Error & { code?: unknown } {
   return error instanceof Error && 'code' in error
@@ -108,14 +119,79 @@ function loadJsoncFile(filePath: string): RawSystematicConfig | null {
   return parsed as RawSystematicConfig
 }
 
+/**
+ * Throw a schema validation error for a top-level config source.
+ *
+ * Mirrors the error-message format used by `throwConfigError` in
+ * `agent-overlays.ts` and `throwOverlaySchemaError` for overlay fields,
+ * so every config error includes the source file path and the offending
+ * field path. The thrown error carries `_tag`, `filePath`, and `issues`
+ * properties for programmatic inspection.
+ */
+function throwTopLevelConfigSchemaError(
+  filePath: string,
+  trust: ConfigSource['trust'],
+  issues: readonly z.core.$ZodIssue[],
+): never {
+  const issue = issues[0]
+  if (!issue) {
+    throw Object.assign(
+      new Error(
+        `Invalid Systematic config in ${filePath}: schema validation failed`,
+      ),
+      { _tag: 'ConfigSchemaError' as const, filePath, trust, issues },
+    )
+  }
+  const fieldPath =
+    issue.code === 'unrecognized_keys'
+      ? (issue.message.match(/"([^"]+)"/)?.[1] ?? issue.path.join('.'))
+      : issue.path.join('.')
+  const message = fieldPath
+    ? `Invalid Systematic config in ${filePath}: ${fieldPath} ${issue.message}`
+    : `Invalid Systematic config in ${filePath}: ${issue.message}`
+  throw Object.assign(new Error(message), {
+    _tag: 'ConfigSchemaError' as const,
+    filePath,
+    trust,
+    issues,
+  })
+}
+
+/**
+ * Type guard for errors thrown by the top-level config schema validator.
+ * Use this to distinguish schema validation failures from JSONC parse errors
+ * or file read errors.
+ */
+export function isConfigSchemaError(err: unknown): err is Error & {
+  _tag: 'ConfigSchemaError'
+  filePath: string
+  trust: ConfigSource['trust']
+  issues: readonly z.core.$ZodIssue[]
+} {
+  return (
+    err instanceof Error &&
+    (err as unknown as { _tag: unknown })._tag === 'ConfigSchemaError'
+  )
+}
+
 function loadConfigSource(
   filePath: string,
   trust: ConfigSource['trust'],
 ): ConfigSource | null {
-  const config = loadJsoncFile(filePath)
-  if (!config) return null
+  const rawConfig = loadJsoncFile(filePath)
+  if (!rawConfig) return null
 
-  return { path: filePath, config, trust }
+  const result = SystematicConfigSchema.safeParse(rawConfig)
+  if (!result.success) {
+    throwTopLevelConfigSchemaError(filePath, trust, result.error.issues)
+  }
+
+  // Validation succeeded; propagate raw parsed JSONC so the merge layer
+  // sees undefined for unset fields (preserves merge semantics where a
+  // higher-priority empty config does NOT override a lower-priority explicit
+  // setting). The schema's defaults are applied by the merge layer via
+  // DEFAULT_CONFIG at the top of the spread chain.
+  return { path: filePath, config: rawConfig, trust }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -299,12 +375,18 @@ export function getConfigPaths(projectDir: string) {
   const customConfigDir = process.env.OPENCODE_CONFIG_DIR?.trim()
 
   const result = {
-    userConfig: path.join(homeDir, '.config/opencode/systematic.json'),
-    projectConfig: path.join(projectDir, '.opencode/systematic.json'),
+    userConfig: resolveConfigPath(
+      path.join(homeDir, '.config/opencode'),
+      'systematic',
+    ),
+    projectConfig: resolveConfigPath(
+      path.join(projectDir, '.opencode'),
+      'systematic',
+    ),
     userDir: path.join(homeDir, '.config/opencode/systematic'),
     projectDir: path.join(projectDir, '.opencode/systematic'),
     ...(customConfigDir && {
-      customConfig: path.join(customConfigDir, 'systematic.json'),
+      customConfig: resolveConfigPath(customConfigDir, 'systematic'),
       customDir: path.join(customConfigDir, 'systematic'),
     }),
   }
