@@ -21,6 +21,11 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import { SystematicConfigSchema } from '../src/lib/config-schema.js'
+import {
+  getZodDefaultInnerType,
+  getZodObjectShape,
+  getZodTypeName,
+} from './lib/zod-internals.js'
 
 /**
  * Run Biome's formatter over JSON content via stdin. Used to keep the
@@ -59,6 +64,53 @@ const SEMVER_REGEX = /^\d+\.\d+\.\d+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$/
 export const SCHEMA_ID_TEMPLATE =
   'https://fro.bot/systematic/schemas/v%MAJOR%/systematic-config.schema.json'
 
+function resolveVersionFromGit(rootDir: string): string | null {
+  // Prefer `describe` (locates a tag in the commit's ancestry), then fall
+  // back to listing all semver-shaped tags. The fallback covers two real
+  // CI cases that `git describe` cannot:
+  //   - shallow checkout where the tagged commit isn't in local history
+  //   - PR synthetic merge commits that aren't ancestors of any tag
+  for (const cmd of [
+    'git describe --tags --abbrev=0',
+    'git tag -l "v*.*.*" --sort=-v:refname',
+  ]) {
+    let tag = ''
+    try {
+      const out = execSync(cmd, { encoding: 'utf-8', cwd: rootDir }).trim()
+      tag = out.split('\n')[0]?.trim() ?? ''
+    } catch {
+      continue
+    }
+    if (tag.length === 0) continue
+    const normalized = tag.startsWith('v') ? tag.slice(1) : tag
+    if (SEMVER_REGEX.test(normalized)) return normalized
+    throw new Error(
+      `Error: Invalid git tag format "${tag}". Expected semver or v-prefixed semver (e.g., v1.2.3)`,
+    )
+  }
+  return null
+}
+
+function resolveVersionFromPackageJson(rootDir: string): string | null {
+  const pkgPath = path.join(rootDir, 'package.json')
+  try {
+    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as {
+      version?: string
+    }
+    const v = pkg.version
+    if (
+      typeof v === 'string' &&
+      v.length > 0 &&
+      !v.includes('semantic-release')
+    ) {
+      return v
+    }
+  } catch {
+    // fall through
+  }
+  return null
+}
+
 /**
  * Resolve the version to use for schema generation.
  *
@@ -86,48 +138,11 @@ export function resolveVersion(
     return explicit
   }
 
-  // Try git: prefer describe (locates a tag in the commit's ancestry),
-  // fall back to listing all semver-shaped tags sorted by version. The
-  // fallback covers two real CI cases that `git describe` cannot:
-  //   - shallow checkout where the tagged commit isn't in local history
-  //   - PR synthetic merge commits that aren't ancestors of any tag
-  for (const cmd of [
-    'git describe --tags --abbrev=0',
-    'git tag -l "v*.*.*" --sort=-v:refname',
-  ]) {
-    try {
-      const out = execSync(cmd, { encoding: 'utf-8', cwd: rootDir }).trim()
-      const tag = out.split('\n')[0]?.trim() ?? ''
-      if (tag.length === 0) continue
-      const normalized = tag.startsWith('v') ? tag.slice(1) : tag
-      if (SEMVER_REGEX.test(normalized)) {
-        return normalized
-      }
-      throw new Error(
-        `Error: Invalid git tag format "${tag}". Expected semver or v-prefixed semver (e.g., v1.2.3)`,
-      )
-    } catch {
-      // try next strategy
-    }
-  }
+  const fromGit = resolveVersionFromGit(rootDir)
+  if (fromGit != null) return fromGit
 
-  // Try package.json
-  const pkgPath = path.join(rootDir, 'package.json')
-  try {
-    const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as {
-      version?: string
-    }
-    const v = pkg.version
-    if (
-      typeof v === 'string' &&
-      v.length > 0 &&
-      !v.includes('semantic-release')
-    ) {
-      return v
-    }
-  } catch {
-    // package.json read failed, fall through to error
-  }
+  const fromPkg = resolveVersionFromPackageJson(rootDir)
+  if (fromPkg != null) return fromPkg
 
   throw new Error(
     'Error: No resolvable version. Specify --version <semver>, ensure a git tag exists, or set a valid semver in package.json.',
@@ -144,53 +159,51 @@ export function getMajorVersion(version: string): string {
 }
 
 /**
- * Walk a JSON Schema object tree and remove fields from `required` arrays
- * when the corresponding Zod shape field has a `.default()` wrapper.
- *
- * A field with a runtime default is optional from the user's perspective:
- * Zod fills it in if absent. Leaving it in `required` causes IDEs to
- * redline valid minimal configs that the runtime accepts fine.
- *
- * Handles both the top-level object and nested objects (e.g., `bootstrap`).
- *
- * @param jsonNode  The JSON Schema object node to process (mutated in-place)
- * @param zodNode   The corresponding Zod schema node (used to detect defaults)
+ * Unwrap `ZodDefault` / `ZodOptional` wrappers to reach the underlying schema
+ * (typically a `ZodObject`). Stops as soon as the inner type is neither.
  */
+function unwrapZodWrappers(schema: z.ZodType): z.ZodType {
+  let inner: z.ZodType = schema
+  for (;;) {
+    const typeName = getZodTypeName(inner)
+    if (typeName !== 'default' && typeName !== 'optional') return inner
+    const next = getZodDefaultInnerType(inner)
+    if (next == null) return inner
+    inner = next
+  }
+}
+
+/**
+ * Drop keys from `jsonNode.required` whose Zod field has a runtime default.
+ * Removes the `required` key entirely when nothing remains.
+ */
+function pruneRequiredArray(
+  jsonNode: Record<string, unknown>,
+  shape: Record<string, z.ZodType>,
+): void {
+  if (!Array.isArray(jsonNode.required)) return
+  const filtered = (jsonNode.required as string[]).filter((key) => {
+    const field = shape[key]
+    if (field == null) return true
+    return getZodTypeName(field) !== 'default'
+  })
+  if (filtered.length === 0) {
+    delete jsonNode.required
+  } else {
+    jsonNode.required = filtered
+  }
+}
+
 function removeDefaultFieldsFromRequired(
   jsonNode: Record<string, unknown>,
   zodNode: z.ZodType,
 ): void {
-  // Unwrap ZodDefault / ZodOptional wrappers to reach the inner ZodObject.
-  let inner: z.ZodType = zodNode
-  for (;;) {
-    const def = inner._def as { type?: string; innerType?: z.ZodType }
-    if (def.type === 'default' || def.type === 'optional') {
-      inner = def.innerType as z.ZodType
-    } else {
-      break
-    }
-  }
-
-  // Only ZodObject has ._def.shape; skip everything else (ZodRecord, ZodArray, …)
+  // Only ZodObject has a shape; skip everything else (ZodRecord, ZodArray, …)
   // In this Zod 4 build, shape is a plain object (not a lazy function).
-  const innerDef = inner._def as { shape?: Record<string, z.ZodType> }
-  const shape = innerDef.shape
+  const shape = getZodObjectShape(unwrapZodWrappers(zodNode))
   if (shape == null) return
 
-  // Remove keys from `required` when the Zod shape field is ZodDefault
-  if (Array.isArray(jsonNode.required)) {
-    const filtered = (jsonNode.required as string[]).filter((key) => {
-      const field = shape[key]
-      if (field == null) return true
-      const fieldDef = field._def as { type?: string }
-      return fieldDef.type !== 'default'
-    })
-    if (filtered.length === 0) {
-      delete jsonNode.required
-    } else {
-      jsonNode.required = filtered
-    }
-  }
+  pruneRequiredArray(jsonNode, shape)
 
   // Recurse into `properties` to catch nested object schemas (e.g., `bootstrap`)
   const props = jsonNode.properties as

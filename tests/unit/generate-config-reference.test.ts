@@ -481,3 +481,32 @@ describe('schema-described field parity', () => {
     }
   })
 })
+
+describe('--version flag semver validation', () => {
+  let generateFn: (version?: string) => string
+
+  beforeAll(async () => {
+    const mod = await import('../../docs/scripts/generate-config-reference.js')
+    generateFn = mod.generateConfigReference
+  })
+
+  test('valid semver is accepted and produces the expected schema URL', () => {
+    const mdx = generateFn('3.0.0')
+    expect(mdx).toContain('v3')
+  })
+
+  test('pre-release semver is accepted', () => {
+    const mdx = generateFn('3.0.0-alpha.1')
+    expect(mdx).toContain('v3')
+  })
+
+  test('empty version string is rejected with semver error', () => {
+    expect(() => generateFn('')).toThrow('Invalid version format ""')
+  })
+
+  test('garbage version string is rejected with semver error', () => {
+    expect(() => generateFn('garbage')).toThrow(
+      'Invalid version format "garbage"',
+    )
+  })
+})

@@ -281,11 +281,9 @@ export const SystematicConfigSchema = z
     examples: [{ disabled_skills: ['ce:plan'], bootstrap: { enabled: false } }],
   })
 
-export interface ValidationResult {
-  success: boolean
-  data?: z.infer<typeof SystematicConfigSchema>
-  errors?: readonly z.ZodIssue[]
-}
+export type ValidationResult =
+  | { success: true; data: z.infer<typeof SystematicConfigSchema> }
+  | { success: false; errors: readonly z.ZodIssue[] }
 
 export function validateConfig(input: unknown): ValidationResult {
   const result = SystematicConfigSchema.safeParse(input)

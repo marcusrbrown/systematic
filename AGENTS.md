@@ -109,7 +109,6 @@ systematic/
 | `loadConfig` | fn | src/lib/config.ts:47 | 5 | JSONC config loading + 3-source merge |
 | `SystematicConfigSchema` | const | src/lib/config-schema.ts | 6 | Canonical Zod schema for user config |
 | `validateConfig` | fn | src/lib/config-schema.ts | 4 | Safe parse wrapper returning ValidationResult |
-| `isConfigSchemaError` | fn | src/lib/config.ts | 2 | Type guard for config validation errors |
 | `SECURITY_OVERLAY_FIELDS` | const | src/lib/config-schema.ts | 3 | Trust-protected overlay field names |
 | `isValidAgentColor` | fn | src/lib/agent-colors.ts | 3 | Color validator (hex or token) |
 | `OPENCODE_AGENT_COLOR_TOKENS` | const | src/lib/agent-colors.ts | 4 | Accepted OpenCode color token enum |
