@@ -1,6 +1,7 @@
 ---
 title: OpenCode plugin loader treats named exports as additional plugin factories — load failure
 date: 2026-05-11
+last_updated: 2026-05-11
 category: integration-issues
 module: systematic-plugin
 problem_type: integration_issue
@@ -11,6 +12,7 @@ symptoms:
   - OpenCode log shows `service=plugin path=@fro.bot/systematic@2.12.1 ... failed to load plugin`
   - Skill count drops from 54 (working) to 10 (only OpenCode built-ins)
   - CI smoke test passes; user install fails
+  - Any named export from plugin entry — even a latent one that hasn't crashed yet — is a release-blocker waiting to happen
 root_cause: scope_issue
 resolution_type: code_fix
 severity: critical
@@ -21,6 +23,7 @@ tags:
   - named-exports
   - plugin-entry-point
   - regression-pattern
+  - cross-repo-pattern
 ---
 
 # OpenCode plugin loader treats named exports as additional plugin factories — load failure
@@ -48,6 +51,8 @@ INFO  service=skill count=54 init
 CI was green on the broken release. The Node ESM smoke test ran `m.default(...)` directly and only checked that bundled agents and commands loaded under the default export. It did not assert anything about the *shape* of the export set, so a stowaway named export went unnoticed.
 
 This was the **second occurrence** of the same pattern. v2.5.0 / PR #309 had previously broken plugin loading by exporting `INTERNAL_AGENT_SIGNATURES` from the entry. That fix moved the constant to `src/lib/bootstrap.ts` and added a comment "must NOT be re-exported from the plugin entry point." PR #352 added a different helper and didn't internalize the rule. The CI smoke test still didn't check export shape, so the second regression slipped through identically.
+
+After the v2.12.1 hotfix, a proactive audit of the sister plugin repo `marcusrbrown/opencode-copilot-delegate` found a **third instance** of the anti-pattern, latent. `src/index.ts` exported `wireRpcServerCleanup` (the cleanup helper that wires `beforeExit` / `SIGTERM` shutdown for the RPC server). The export hadn't yet crashed only because the function returns when called with no args — but it was the same shape of latent bug, one helper signature change away from production. PR #123 in that repo moved the helper to `src/lib/rpc-cleanup.ts` and added the same Node ESM export-shape gate to its `.github/workflows/ci.yaml`. The cross-repo audit confirms the pattern is structural to OpenCode's plugin loader, not Systematic-specific.
 
 ## What Didn't Work
 
@@ -122,20 +127,48 @@ Moving helpers to `src/lib/` is the right structural answer because:
 
 The CI gate works because it asserts a *property of the build artifact* rather than a *property of the entry source*. Even if a future contributor exports a helper from `src/index.ts`, the build output is the canary, and the gate fails fast with an explanation of why.
 
+The cross-repo evidence reinforces both points. In Systematic, helpers live at `src/lib/<name>.ts` and are imported with the `.js` extension to satisfy the project's `moduleResolution: 'node16'`-style needs. In `opencode-copilot-delegate`, helpers live at the same `src/lib/<name>.ts` path but are imported without an extension because the project uses `moduleResolution: 'bundler'`. The conventions differ in detail; the structural rule is identical: **plugin entry exports `default` only, helpers live in `src/lib/`**. Sister-repo PR #123 also had to switch the plugin entry build target from `bun` to `node` so the artifact was Node-loadable — required because the smoke gate runs under Node (Bun's loader is more permissive about CommonJS-style attachments and can mask the bug).
+
 ## Prevention
 
-1. **Plugin entrypoint files (`src/index.ts`) must contain a default export only.** Helpers, constants, types, and test-visible internals belong in `src/lib/`. This rule is structural, not aesthetic — OpenCode's loader makes it a correctness requirement.
+1. **Plugin entrypoint files (`src/index.ts`) must contain a default export only.** Helpers, constants, types, and test-visible internals belong in `src/lib/`. This rule is structural, not aesthetic — OpenCode's loader makes it a correctness requirement. The convention applies across every OpenCode plugin in this organization (Systematic, `opencode-copilot-delegate`, and any future plugin).
 
-2. **CI smoke tests for plugins must assert export shape, not just call signature.** Asserting that `m.default()` works is necessary but not sufficient. The full assertion is `Object.keys(m) === ['default']`.
+2. **CI smoke tests for plugins must assert export shape, not just call signature.** Asserting that `m.default()` works is necessary but not sufficient. The full assertion is `Object.keys(m) === ['default']`. Run the smoke under Node (not Bun) — Bun's loader is more permissive about CommonJS-style attachments and can mask the bug. For Bun-target plugin builds, switch the plugin entry to `target: 'node'` so the smoke can load the artifact at all (sister-repo PR #123 had to do exactly this).
 
-3. **When a comment warns "must NOT be re-exported," promote the warning to an executable check.** The bootstrap.ts comment about `INTERNAL_AGENT_SIGNATURES` was honest documentation; it did not prevent the regression. The CI gate added in this fix is the executable form of the same warning.
+3. **When a comment warns "must NOT be re-exported," promote the warning to an executable check.** The bootstrap.ts comment about `INTERNAL_AGENT_SIGNATURES` was honest documentation; it did not prevent the regression. The CI gate added in this fix is the executable form of the same warning. The sister-repo CI gate (PR #123, `.github/workflows/ci.yaml`) is a reference implementation:
+
+   ```yaml
+   - name: Node ESM export-shape smoke test
+     run: |
+       node --input-type=module -e "
+         import('./dist/index.js').then(m => {
+           const keys = Object.keys(m).sort();
+           if (keys.length !== 1 || keys[0] !== 'default') {
+             console.error('Plugin entry exposed unexpected named exports: ' + keys.join(', '));
+             console.error('Move helpers to src/lib/ — plugin entry must export only default.');
+             process.exit(1);
+           }
+           if (typeof m.default !== 'function') {
+             console.error('Plugin default export is not a function');
+             process.exit(1);
+           }
+           console.log('Export shape OK: only default, typeof=function');
+         });
+       "
+   ```
 
 4. **For published-package regressions, check `npm view <pkg> version` and `dist/index.js` exports before the user's bug report.** When a release ships and behavior changes, `node -e "import('./dist/index.js').then(m => console.log(Object.keys(m)))"` against the installed copy answers "did our export surface change" in seconds.
+
+5. **Audit related plugin repos when a new entry-shape rule is established.** v2.12.1's hotfix established the rule; the same-day audit of `opencode-copilot-delegate` caught a latent third instance before it shipped. Any time a plugin authoring rule is hardened in one repo, the other plugin repos in the org get a quick `grep -n '^export' src/index.ts` to check for the same pattern. The audit is cheap; the production regression isn't.
 
 ## Cross-references
 
 - Memory `#2065` (replaced as `#2687` post-PR #352) — the v2.5.0 lesson about `INTERNAL_AGENT_SIGNATURES`. The comment that came out of that incident is in `src/lib/bootstrap.ts:7-11`.
+- Memory `#2762` — the rule promoted to org-wide constraint after this doc's update. Plugin entry MUST export only `default`; helpers belong in `src/lib/`.
 - `docs/solutions/integration-issues/opencode-plugin-factory-duplicate-registration-2026-05-04.md` — the PR #335 origin of `plugInOnce`, which PR #352 inverted into per-load registration. That inversion is what brought `applyBootstrapContent` into existence as a testable symbol that needed an export.
 - `docs/solutions/integration-issues/opencode-config-schema-rejects-ad-hoc-agent-colors-2026-05-09.md` — the v2.9.2 launch-time regression. Same shape: CI green, npm publish, user install breaks. Both regressions share a root cause class: tests asserted source-level properties, not behavior of the published artifact against the real OpenCode launch lifecycle.
 - PR #352 (`refactor(plugin):` → no semantic-release, so the named-export change shipped only when PR #354's `fix:` triggered v2.12.1).
 - PR #354 (the `fix:` commit that triggered v2.12.1 — its diff is irrelevant to this regression, but its release trigger was the proximate cause of users seeing the bug).
+- PR #355 (the v2.12.1 → v2.12.2 hotfix that this doc originally captured).
+- `marcusrbrown/opencode-copilot-delegate` PR #123 — the cross-repo proactive fix. Same anti-pattern caught latent; same structural solution applied (helper to `src/lib/rpc-cleanup.ts`, CI export-shape gate, plugin entry build target switched to `node`). The cross-repo evidence is what elevated this from a Systematic-specific gotcha to an OpenCode plugin authoring rule.
+- `marcusrbrown/opencode-copilot-delegate` PR #121 — the precursor that established the test-driven dual-path pattern in the sister repo. Set the stage for PR #123's structural follow-ups.
