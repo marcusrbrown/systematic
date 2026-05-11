@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { applyBootstrapContent } from '../../src/index.js'
+import { applyBootstrapContent } from '../../src/lib/bootstrap.js'
 
 const SRC_DIR = path.resolve(import.meta.dirname, '../../src')
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')

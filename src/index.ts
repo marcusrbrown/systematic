@@ -3,6 +3,7 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Plugin, PluginInput } from '@opencode-ai/plugin'
 import {
+  applyBootstrapContent,
   getBootstrapContent,
   INTERNAL_AGENT_SIGNATURES,
 } from './lib/bootstrap.js'
@@ -17,42 +18,6 @@ const bundledSkillsDir = path.join(packageRoot, 'skills')
 const bundledAgentsDir = path.join(packageRoot, 'agents')
 const bundledCommandsDir = path.join(packageRoot, 'commands')
 const packageJsonPath = path.join(packageRoot, 'package.json')
-
-const BOOTSTRAP_MARKER_OPEN = '<SYSTEMATIC_WORKFLOWS>'
-const BOOTSTRAP_MARKER_CLOSE = '</SYSTEMATIC_WORKFLOWS>'
-
-const findBootstrapMarkerBlock = (
-  entry: string,
-): { start: number; end: number } | null => {
-  const start = entry.indexOf(BOOTSTRAP_MARKER_OPEN)
-  if (start === -1) return null
-  const closeStart = entry.indexOf(
-    BOOTSTRAP_MARKER_CLOSE,
-    start + BOOTSTRAP_MARKER_OPEN.length,
-  )
-  if (closeStart === -1) return null
-  return { start, end: closeStart + BOOTSTRAP_MARKER_CLOSE.length }
-}
-
-export const applyBootstrapContent = (
-  output: { system: string[] },
-  content: string,
-): void => {
-  for (let i = 0; i < output.system.length; i++) {
-    const entry = output.system[i]
-    const block = findBootstrapMarkerBlock(entry)
-    if (block !== null) {
-      output.system[i] =
-        entry.slice(0, block.start) + content + entry.slice(block.end)
-      return
-    }
-  }
-  if (output.system.length > 0) {
-    output.system[output.system.length - 1] += `\n\n${content}`
-  } else {
-    output.system.push(content)
-  }
-}
 
 const getPackageVersion = (): string => {
   try {
