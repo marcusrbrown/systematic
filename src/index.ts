@@ -8,7 +8,6 @@ import {
 } from './lib/bootstrap.js'
 import { loadConfig } from './lib/config.js'
 import { createConfigHandler } from './lib/config-handler.js'
-import { plugInOnce } from './lib/plugin-singleton.js'
 import { createSkillTool } from './lib/skill-tool.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -18,12 +17,21 @@ const bundledSkillsDir = path.join(packageRoot, 'skills')
 const bundledAgentsDir = path.join(packageRoot, 'agents')
 const bundledCommandsDir = path.join(packageRoot, 'commands')
 const packageJsonPath = path.join(packageRoot, 'package.json')
-let hasLoggedInit = false
 
-const applyBootstrapContent = (
+const BOOTSTRAP_MARKER_PATTERN =
+  /<SYSTEMATIC_WORKFLOWS>[\s\S]*?<\/SYSTEMATIC_WORKFLOWS>/
+
+export const applyBootstrapContent = (
   output: { system: string[] },
   content: string,
 ): void => {
+  for (let i = 0; i < output.system.length; i++) {
+    const entry = output.system[i]
+    if (BOOTSTRAP_MARKER_PATTERN.test(entry)) {
+      output.system[i] = entry.replace(BOOTSTRAP_MARKER_PATTERN, content)
+      return
+    }
+  }
   if (output.system.length > 0) {
     output.system[output.system.length - 1] += `\n\n${content}`
   } else {
@@ -42,15 +50,8 @@ const getPackageVersion = (): string => {
   }
 }
 
-/**
- * Build the plugin hook surface for a single OpenCode plugin invocation.
- *
- * Extracted into a named initializer so the default export can wrap it through
- * `plugInOnce(...)`, making duplicate factory calls in the same process
- * converge on the same hooks promise. See `src/lib/plugin-singleton.ts` for
- * the duplicate-load justification.
- */
 const initializePlugin = async ({ client, directory }: PluginInput) => {
+  let hasLoggedInit = false
   const config = loadConfig(directory)
   // Snapshot bootstrap once per plugin init so the cached system prefix stays
   // stable across requests. Custom bootstrap file edits take effect on restart.
@@ -129,13 +130,7 @@ const initializePlugin = async ({ client, directory }: PluginInput) => {
 }
 
 const SystematicPlugin: Plugin = async (input) => {
-  const { hooks } = await plugInOnce({
-    doInit: () => initializePlugin(input),
-  })
-  // hooks is the real plugin hook surface on every invocation — first and
-  // duplicate alike. Returning it unconditionally keeps every configured
-  // plugin source functional instead of suppressing duplicates with `{}`.
-  return hooks
+  return initializePlugin(input)
 }
 
 export default SystematicPlugin

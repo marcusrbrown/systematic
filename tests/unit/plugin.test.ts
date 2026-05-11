@@ -1,20 +1,14 @@
-import { beforeEach, describe, expect, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { _resetPluginSingleton } from '../../src/lib/plugin-singleton.js'
+import { applyBootstrapContent } from '../../src/index.js'
 
 const SRC_DIR = path.resolve(import.meta.dirname, '../../src')
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
 
 describe('plugin loading', () => {
-  // Reset singleton between cases so factory invocations across tests do not
-  // share cached hooks. `globalThis` state otherwise leaks across the file.
-  beforeEach(() => {
-    _resetPluginSingleton()
-  })
-
   test('plugin file exists at src/index.ts', () => {
     const pluginPath = path.join(SRC_DIR, 'index.ts')
     expect(fs.existsSync(pluginPath)).toBe(true)
@@ -328,5 +322,257 @@ describe('CLI functionality', () => {
     expect(result.exitCode).toBe(0)
     expect(output).toContain('User:')
     expect(output).toContain('Project:')
+  })
+})
+
+describe('per-invocation plugin registration', () => {
+  const makeInput = (
+    tempDir: string,
+    logSpy?: (entry: unknown) => Promise<void>,
+  ) => ({
+    client: {
+      app: {
+        log: logSpy ?? (async () => {}),
+      },
+    },
+    directory: tempDir,
+  })
+
+  test('each SystematicPlugin call returns a distinct hooks object', async () => {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-per-init-'),
+    )
+    fs.mkdirSync(path.join(tempDir, '.opencode'), { recursive: true })
+    try {
+      const pluginPath = path.join(SRC_DIR, 'index.ts')
+      const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
+        default: (
+          args: ReturnType<typeof makeInput>,
+        ) => Promise<Record<string, unknown>>
+      }
+      const input = makeInput(tempDir)
+      const result1 = await pluginModule.default(input)
+      const result2 = await pluginModule.default(input)
+      expect(result1).not.toBe(result2)
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  test('each invocation returns distinct function references for all three hook surfaces', async () => {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-per-init-'),
+    )
+    fs.mkdirSync(path.join(tempDir, '.opencode'), { recursive: true })
+    try {
+      const pluginPath = path.join(SRC_DIR, 'index.ts')
+      const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
+        default: (args: ReturnType<typeof makeInput>) => Promise<{
+          config: unknown
+          tool: { systematic_skill: unknown }
+          'experimental.chat.system.transform': unknown
+        }>
+      }
+      const input = makeInput(tempDir)
+      const result1 = await pluginModule.default(input)
+      const result2 = await pluginModule.default(input)
+      expect(result1.tool.systematic_skill).not.toBe(
+        result2.tool.systematic_skill,
+      )
+      expect(result1.config).not.toBe(result2.config)
+      expect(result1['experimental.chat.system.transform']).not.toBe(
+        result2['experimental.chat.system.transform'],
+      )
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  test('two independent registrations leave exactly one marker block in the system array', async () => {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-per-init-'),
+    )
+    fs.mkdirSync(path.join(tempDir, '.opencode'), { recursive: true })
+    try {
+      const pluginPath = path.join(SRC_DIR, 'index.ts')
+      const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
+        default: (args: ReturnType<typeof makeInput>) => Promise<{
+          'experimental.chat.system.transform': (
+            input: unknown,
+            output: { system: string[] },
+          ) => Promise<void>
+        }>
+      }
+      const input = makeInput(tempDir)
+      const plugin1 = await pluginModule.default(input)
+      const plugin2 = await pluginModule.default(input)
+
+      const output = { system: ['base system prompt'] }
+      await plugin1['experimental.chat.system.transform']({}, output)
+      await plugin2['experimental.chat.system.transform']({}, output)
+
+      const joined = output.system.join('\n')
+      const openTagCount = (joined.match(/<SYSTEMATIC_WORKFLOWS>/g) ?? [])
+        .length
+      expect(openTagCount).toBe(1)
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  test('each independent registration logs its own init message', async () => {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-per-init-'),
+    )
+    fs.mkdirSync(path.join(tempDir, '.opencode'), { recursive: true })
+    try {
+      const pluginPath = path.join(SRC_DIR, 'index.ts')
+      const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
+        default: (args: ReturnType<typeof makeInput>) => Promise<{
+          'experimental.chat.system.transform': (
+            input: unknown,
+            output: { system: string[] },
+          ) => Promise<void>
+        }>
+      }
+
+      const logCalls: unknown[] = []
+      const logSpy = async (entry: unknown) => {
+        logCalls.push(entry)
+      }
+
+      const input = makeInput(tempDir, logSpy)
+      const plugin1 = await pluginModule.default(input)
+      const plugin2 = await pluginModule.default(input)
+
+      const output1 = { system: ['base'] }
+      const output2 = { system: ['base'] }
+      await plugin1['experimental.chat.system.transform']({}, output1)
+      await plugin2['experimental.chat.system.transform']({}, output2)
+
+      const initLogs = logCalls.filter(
+        (entry) =>
+          typeof entry === 'object' &&
+          entry !== null &&
+          'body' in entry &&
+          typeof (entry as { body: unknown }).body === 'object' &&
+          (entry as { body: { message?: unknown } }).body !== null &&
+          (entry as { body: { message?: unknown } }).body.message ===
+            'Systematic plugin initialized',
+      )
+      expect(initLogs).toHaveLength(2)
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+
+  test('invoking one registration transform twice produces exactly one marker block per turn', async () => {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-per-init-'),
+    )
+    fs.mkdirSync(path.join(tempDir, '.opencode'), { recursive: true })
+    try {
+      const pluginPath = path.join(SRC_DIR, 'index.ts')
+      const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
+        default: (args: ReturnType<typeof makeInput>) => Promise<{
+          'experimental.chat.system.transform': (
+            input: unknown,
+            output: { system: string[] },
+          ) => Promise<void>
+        }>
+      }
+      const input = makeInput(tempDir)
+      const plugin = await pluginModule.default(input)
+
+      const output1 = { system: ['turn one base'] }
+      await plugin['experimental.chat.system.transform']({}, output1)
+      const count1 = (
+        output1.system.join('\n').match(/<SYSTEMATIC_WORKFLOWS>/g) ?? []
+      ).length
+      expect(count1).toBe(1)
+
+      const output2 = { system: ['turn two base'] }
+      await plugin['experimental.chat.system.transform']({}, output2)
+      const count2 = (
+        output2.system.join('\n').match(/<SYSTEMATIC_WORKFLOWS>/g) ?? []
+      ).length
+      expect(count2).toBe(1)
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('applyBootstrapContent marker-based idempotency', () => {
+  const MARKER_OPEN = '<SYSTEMATIC_WORKFLOWS>'
+  const MARKER_CLOSE = '</SYSTEMATIC_WORKFLOWS>'
+  const wrap = (body: string) => `${MARKER_OPEN}${body}${MARKER_CLOSE}`
+
+  test('pushes content when system array is empty', () => {
+    const output = { system: [] as string[] }
+    applyBootstrapContent(output, wrap('NEW CONTENT'))
+    expect(output.system).toHaveLength(1)
+    expect(output.system[0]).toBe(wrap('NEW CONTENT'))
+  })
+
+  test('appends content to last entry when no prior marker block exists', () => {
+    const output = { system: ['existing system prompt'] }
+    applyBootstrapContent(output, wrap('NEW CONTENT'))
+    expect(output.system).toHaveLength(1)
+    expect(output.system[0]).toBe(
+      `existing system prompt\n\n${wrap('NEW CONTENT')}`,
+    )
+  })
+
+  test('replaces existing marker block in-place, keeping array length at 1', () => {
+    const output = {
+      system: [`existing prompt with ${wrap('OLD CONTENT')} embedded`],
+    }
+    applyBootstrapContent(output, wrap('NEW CONTENT'))
+    expect(output.system).toHaveLength(1)
+    const result = output.system[0]
+    const openTagCount = (result.match(new RegExp(MARKER_OPEN, 'g')) ?? [])
+      .length
+    expect(openTagCount).toBe(1)
+    expect(result).toContain('NEW CONTENT')
+    expect(result).not.toContain('OLD CONTENT')
+  })
+
+  test('replaces marker block in a non-last slot when found there', () => {
+    const output = {
+      system: ['slot 0', `slot 1 with ${wrap('OLD CONTENT')}`, 'slot 2'],
+    }
+    applyBootstrapContent(output, wrap('NEW CONTENT'))
+    expect(output.system).toHaveLength(3)
+    expect(output.system[1]).toContain('NEW CONTENT')
+    expect(output.system[1]).not.toContain('OLD CONTENT')
+    expect(output.system[2]).toBe('slot 2')
+  })
+
+  test('non-greedy regex stops at first closing tag, leaving subsequent blocks untouched', () => {
+    const twoBlocks = `${wrap('A')}B${wrap('C')}`
+    const output = { system: [twoBlocks] }
+    applyBootstrapContent(output, wrap('X'))
+    const result = output.system[0]
+    expect(result).toBe(`${wrap('X')}B${wrap('C')}`)
+  })
+
+  test('fully replaces an entry that is only the marker block', () => {
+    const output = { system: [wrap('A')] }
+    applyBootstrapContent(output, wrap('B'))
+    expect(output.system).toHaveLength(1)
+    expect(output.system[0]).toBe(wrap('B'))
+  })
+
+  test('two sequential transform invocations leave exactly one marker block with content from the second call', () => {
+    const output = { system: ['base system prompt'] }
+    applyBootstrapContent(output, wrap('FIRST REGISTRATION'))
+    applyBootstrapContent(output, wrap('SECOND REGISTRATION'))
+    const joined = output.system.join('\n')
+    const openTagCount = (joined.match(new RegExp(MARKER_OPEN, 'g')) ?? [])
+      .length
+    expect(openTagCount).toBe(1)
+    expect(joined).toContain('SECOND REGISTRATION')
+    expect(joined).not.toContain('FIRST REGISTRATION')
   })
 })
