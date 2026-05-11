@@ -15,6 +15,52 @@ export const INTERNAL_AGENT_SIGNATURES = [
   'Summarize what was done in this conversation',
 ]
 
+const BOOTSTRAP_MARKER_OPEN = '<SYSTEMATIC_WORKFLOWS>'
+const BOOTSTRAP_MARKER_CLOSE = '</SYSTEMATIC_WORKFLOWS>'
+
+const findBootstrapMarkerBlock = (
+  entry: string,
+): { start: number; end: number } | null => {
+  const start = entry.indexOf(BOOTSTRAP_MARKER_OPEN)
+  if (start === -1) return null
+  const closeStart = entry.indexOf(
+    BOOTSTRAP_MARKER_CLOSE,
+    start + BOOTSTRAP_MARKER_OPEN.length,
+  )
+  if (closeStart === -1) return null
+  return { start, end: closeStart + BOOTSTRAP_MARKER_CLOSE.length }
+}
+
+/**
+ * Inject bootstrap content into the system prompt array, replacing any
+ * existing `<SYSTEMATIC_WORKFLOWS>` block. Multi-load idempotency is via
+ * the marker — most-recently-registered plugin wins under FIFO hook order.
+ *
+ * Exported for test access — must NOT be re-exported from the plugin entry
+ * point (src/index.ts) because OpenCode's plugin loader expects a single
+ * function export; additional named exports break loading. See
+ * `docs/solutions/integration-issues/` for the v2.5.0 and v2.12.1 incidents.
+ */
+export const applyBootstrapContent = (
+  output: { system: string[] },
+  content: string,
+): void => {
+  for (let i = 0; i < output.system.length; i++) {
+    const entry = output.system[i]
+    const block = findBootstrapMarkerBlock(entry)
+    if (block !== null) {
+      output.system[i] =
+        entry.slice(0, block.start) + content + entry.slice(block.end)
+      return
+    }
+  }
+  if (output.system.length > 0) {
+    output.system[output.system.length - 1] += `\n\n${content}`
+  } else {
+    output.system.push(content)
+  }
+}
+
 export interface BootstrapDeps {
   bundledSkillsDir: string
 }
