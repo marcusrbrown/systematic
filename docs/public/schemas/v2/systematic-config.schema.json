@@ -161,7 +161,7 @@
         "description": "Per-agent configuration overlay",
         "examples": [
           {
-            "model": "anthropic/claude-opus-4.7",
+            "model": "anthropic/claude-opus-4-7",
             "temperature": 0.1,
             "mode": "subagent"
           }
@@ -174,7 +174,7 @@
       "examples": [
         {
           "review": {
-            "model": "anthropic/claude-opus-4.7"
+            "model": "anthropic/claude-opus-4-7"
           }
         },
         {}
@@ -314,7 +314,7 @@
         "description": "Per-category configuration overlay (same fields as agent minus disable)",
         "examples": [
           {
-            "model": "anthropic/claude-opus-4.7",
+            "model": "anthropic/claude-opus-4-7",
             "temperature": 0.1
           }
         ]

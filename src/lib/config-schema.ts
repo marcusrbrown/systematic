@@ -166,7 +166,7 @@ export const AgentOverlaySchema = z
     description: 'Per-agent configuration overlay',
     examples: [
       {
-        model: 'anthropic/claude-opus-4.7',
+        model: 'anthropic/claude-opus-4-7',
         temperature: 0.1,
         mode: 'subagent',
       },
@@ -190,7 +190,7 @@ export const CategoryOverlaySchema = z
   .meta({
     description:
       'Per-category configuration overlay (same fields as agent minus disable)',
-    examples: [{ model: 'anthropic/claude-opus-4.7', temperature: 0.1 }],
+    examples: [{ model: 'anthropic/claude-opus-4-7', temperature: 0.1 }],
   })
 
 export const BootstrapSchema = z
@@ -243,7 +243,7 @@ export const SystematicConfigSchema = z
       .meta({
         description:
           'Per-category configuration overlays keyed by category name',
-        examples: [{ review: { model: 'anthropic/claude-opus-4.7' } }, {}],
+        examples: [{ review: { model: 'anthropic/claude-opus-4-7' } }, {}],
       }),
     disabled_skills: z
       .array(z.string())
@@ -302,7 +302,7 @@ const SourceCategoryModelDefaultsSchema = z
   )
   .meta({
     description: 'Validates source category model defaults shape',
-    examples: [{ design: ['openai/gpt-5.5', 'anthropic/claude-opus-4.7'] }],
+    examples: [{ design: ['openai/gpt-5.5', 'anthropic/claude-opus-4-7'] }],
   })
 
 export function assertSourceCategoryModelDefaults(

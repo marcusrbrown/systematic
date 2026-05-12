@@ -338,7 +338,7 @@ Systematic separates config-source precedence from overlay precedence. Config fi
 
 Source category model defaults are primary model choices only — they are not fallback chains. Systematic does not support `fallback_models`, inherited retry semantics, runtime fallback behavior, or fallback to the parent model when a source model is unavailable. Explicit and source model IDs are structurally validated and may still fail at OpenCode runtime if the provider or model is unavailable.
 
-Source category model defaults are now ordered preference arrays per category rather than single strings. At plugin load, Systematic reads OpenCode's authentication state from `auth.json` and selects the first array entry whose provider is authenticated. For example, the `review` category defaults to `['anthropic/claude-opus-4.7', 'openai/gpt-5.5']` — a user authenticated only to OpenAI receives `openai/gpt-5.5` (first match), while a user authenticated to Anthropic (or both) receives the more preferred `anthropic/claude-opus-4.7`. If no array entry's provider is authenticated, the first entry is used as the default. The arrays are an ordered preference list, not a runtime fallback chain — `fallback_models` is still not supported.
+Source category model defaults are now ordered preference arrays per category rather than single strings. At plugin load, Systematic reads OpenCode's authentication state from `auth.json` and selects the first array entry whose provider is authenticated. For example, the `review` category defaults to `['anthropic/claude-opus-4-7', 'openai/gpt-5.5']` — a user authenticated only to OpenAI receives `openai/gpt-5.5` (first match), while a user authenticated to Anthropic (or both) receives the more preferred `anthropic/claude-opus-4-7`. If no array entry's provider is authenticated, the first entry is used as the default. The arrays are an ordered preference list, not a runtime fallback chain — `fallback_models` is still not supported.
 
 If you want to restore OpenCode parent-model inheritance for a bundled agent or category (opting out of the source default), set `"model": null` in high-trust user or `$OPENCODE_CONFIG_DIR/systematic.json` config. Project config cannot use `model: null` — project config cannot set, erase, or shadow `model` at any value.
 
@@ -348,9 +348,9 @@ The source defaults are:
 |----------|-----------------|-----------|
 | `design` | `openai/gpt-5.5` | High-judgment UX/product/design work benefits from a strong general reasoning model. |
 | `docs` | `openai/gpt-5.4-mini` | Documentation and summarization should start cheaper/faster. |
-| `document-review` | `anthropic/claude-opus-4.7` | Requirements and plan critique benefit from strongest nuanced reasoning. |
+| `document-review` | `anthropic/claude-opus-4-7` | Requirements and plan critique benefit from strongest nuanced reasoning. |
 | `research` | `openai/gpt-5.5` | Tool-heavy synthesis and source evaluation benefit from a strong general reasoning model. |
-| `review` | `anthropic/claude-opus-4.7` | Code/security/adversarial review benefits from strongest reasoning. |
+| `review` | `anthropic/claude-opus-4-7` | Code/security/adversarial review benefits from strongest reasoning. |
 | `workflow` | `openai/gpt-5.4-mini` | Orchestration and bounded implementation should default cheaper/faster. |
 
 These defaults are owned by Systematic code and emitted for bundled agents in each category when no stronger high-trust exact or category `model` override exists. Uncategorized bundled agents receive no source default and continue inheriting the parent OpenCode model. Native OpenCode agents with the same emitted key are full replacements and receive no Systematic source model default.
