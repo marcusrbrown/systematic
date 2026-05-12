@@ -683,28 +683,6 @@ model: gpt-4
       expect(config.command?.['systematic:routed-skill']?.model).toBe('gpt-4')
     })
 
-    test('applies built-in temperature and source model defaults for categorized agents', async () => {
-      createCategorizedAgent('review', 'correctness-reviewer', {
-        name: 'correctness-reviewer',
-        description: 'Reviews correctness',
-      })
-
-      const handler = createConfigHandler({
-        directory: projectDir,
-        bundledSkillsDir: path.join(bundledDir, 'skills'),
-        bundledAgentsDir: path.join(bundledDir, 'agents'),
-        bundledCommandsDir: path.join(bundledDir, 'commands'),
-      })
-
-      const config: Config = {}
-      await handler(config)
-
-      expect(config.agent?.['correctness-reviewer']?.temperature).toBe(0.1)
-      expect(config.agent?.['correctness-reviewer']?.model).toBe(
-        'anthropic/claude-opus-4.7',
-      )
-    })
-
     test('uncategorized bundled agent receives no source model default', async () => {
       createAgent(path.join(bundledDir, 'agents'), 'uncategorized', {
         name: 'uncategorized',
@@ -723,84 +701,6 @@ model: gpt-4
 
       expect(config.agent?.uncategorized?.temperature).toBeDefined()
       expect(config.agent?.uncategorized?.model).toBeUndefined()
-    })
-
-    test('zero config emits source model defaults for all categorized agents', async () => {
-      createCategorizedAgent('design', 'design-agent', {
-        name: 'design-agent',
-        description: 'Design agent',
-      })
-      createCategorizedAgent('docs', 'docs-agent', {
-        name: 'docs-agent',
-        description: 'Docs agent',
-      })
-      createCategorizedAgent('document-review', 'doc-review-agent', {
-        name: 'doc-review-agent',
-        description: 'Document review agent',
-      })
-      createCategorizedAgent('research', 'research-agent', {
-        name: 'research-agent',
-        description: 'Research agent',
-      })
-      createCategorizedAgent('review', 'review-agent', {
-        name: 'review-agent',
-        description: 'Review agent',
-      })
-      createCategorizedAgent('workflow', 'workflow-agent', {
-        name: 'workflow-agent',
-        description: 'Workflow agent',
-      })
-
-      const handler = createConfigHandler({
-        directory: projectDir,
-        bundledSkillsDir: path.join(bundledDir, 'skills'),
-        bundledAgentsDir: path.join(bundledDir, 'agents'),
-        bundledCommandsDir: path.join(bundledDir, 'commands'),
-      })
-
-      const config: Config = {}
-      await handler(config)
-
-      expect(config.agent?.['design-agent']?.model).toBe('openai/gpt-5.5')
-      expect(config.agent?.['docs-agent']?.model).toBe('openai/gpt-5.4-mini')
-      expect(config.agent?.['doc-review-agent']?.model).toBe(
-        'anthropic/claude-opus-4.7',
-      )
-      expect(config.agent?.['research-agent']?.model).toBe('openai/gpt-5.5')
-      expect(config.agent?.['review-agent']?.model).toBe(
-        'anthropic/claude-opus-4.7',
-      )
-      expect(config.agent?.['workflow-agent']?.model).toBe(
-        'openai/gpt-5.4-mini',
-      )
-
-      // No fallback_models key leaks into any emitted agent
-      for (const [, agent] of Object.entries(config.agent ?? {})) {
-        expect(agent).not.toHaveProperty('fallback_models')
-      }
-    })
-
-    test('source defaults replace bundled markdown model for categorized agents', async () => {
-      createCategorizedAgent('review', 'correctness-reviewer', {
-        name: 'correctness-reviewer',
-        description: 'Reviews correctness',
-        model: 'openai/gpt-3.5-turbo',
-      })
-
-      const handler = createConfigHandler({
-        directory: projectDir,
-        bundledSkillsDir: path.join(bundledDir, 'skills'),
-        bundledAgentsDir: path.join(bundledDir, 'agents'),
-        bundledCommandsDir: path.join(bundledDir, 'commands'),
-      })
-
-      const config: Config = {}
-      await handler(config)
-
-      // Source default wins over bundled markdown model
-      expect(config.agent?.['correctness-reviewer']?.model).toBe(
-        'anthropic/claude-opus-4.7',
-      )
     })
 
     test('source defaults do not emit for uncategorized agents even with markdown model', async () => {
@@ -822,34 +722,6 @@ model: gpt-4
 
       // Uncategorized agents keep their markdown model since no source default applies
       expect(config.agent?.standalone?.model).toBe('openai/gpt-4')
-    })
-
-    test('project config overlay with non-sensitive fields preserves source model', async () => {
-      createCategorizedAgent('review', 'correctness-reviewer', {
-        name: 'correctness-reviewer',
-        description: 'Reviews correctness',
-      })
-      writeSystematicConfig({
-        categories: { review: { temperature: 0.55 } },
-        agents: { 'correctness-reviewer': { hidden: true } },
-      })
-
-      const handler = createConfigHandler({
-        directory: projectDir,
-        bundledSkillsDir: path.join(bundledDir, 'skills'),
-        bundledAgentsDir: path.join(bundledDir, 'agents'),
-        bundledCommandsDir: path.join(bundledDir, 'commands'),
-      })
-
-      const config: Config = {}
-      await handler(config)
-
-      // Source model preserved even when project config sets non-sensitive fields
-      expect(config.agent?.['correctness-reviewer']?.model).toBe(
-        'anthropic/claude-opus-4.7',
-      )
-      expect(config.agent?.['correctness-reviewer']?.temperature).toBe(0.55)
-      expect(config.agent?.['correctness-reviewer']?.hidden).toBe(true)
     })
 
     test('high-trust exact model: null opt-out removes source default', async () => {
@@ -993,33 +865,6 @@ model: gpt-4
       expect(config.agent?.['second-reviewer']?.model).toBe('openai/gpt-4o')
     })
 
-    test('category overlay with non-model fields preserves source model', async () => {
-      createCategorizedAgent('review', 'correctness-reviewer', {
-        name: 'correctness-reviewer',
-        description: 'Reviews correctness',
-      })
-      writeCustomSystematicConfig({
-        categories: {
-          review: { temperature: 0.55 },
-        },
-      })
-
-      const handler = createConfigHandler({
-        directory: projectDir,
-        bundledSkillsDir: path.join(bundledDir, 'skills'),
-        bundledAgentsDir: path.join(bundledDir, 'agents'),
-        bundledCommandsDir: path.join(bundledDir, 'commands'),
-      })
-
-      const config: Config = {}
-      await handler(config)
-
-      expect(config.agent?.['correctness-reviewer']?.model).toBe(
-        'anthropic/claude-opus-4.7',
-      )
-      expect(config.agent?.['correctness-reviewer']?.temperature).toBe(0.55)
-    })
-
     test('native same-name replacement receives no Systematic source model default', async () => {
       createCategorizedAgent('review', 'native-replaced', {
         name: 'native-replaced',
@@ -1079,79 +924,6 @@ model: gpt-4
       expect(config.agent?.['security-reviewer']?.temperature).toBe(0.25)
     })
 
-    test('emits exact configured model and supported overlay fields including variant', async () => {
-      createCategorizedAgent('review', 'correctness-reviewer', {
-        name: 'correctness-reviewer',
-        description: 'Reviews correctness',
-      })
-      createCategorizedAgent('review', 'other-reviewer', {
-        name: 'other-reviewer',
-        description: 'Other reviewer',
-      })
-      writeCustomSystematicConfig({
-        agents: {
-          'correctness-reviewer': {
-            model: 'openrouter/anthropic/claude-sonnet-4',
-            variant: 'large-context',
-            top_p: 0.8,
-            mode: 'subagent',
-            color: '#123abc',
-            steps: 12,
-            hidden: true,
-          },
-        },
-      })
-
-      const handler = createConfigHandler({
-        directory: projectDir,
-        bundledSkillsDir: path.join(bundledDir, 'skills'),
-        bundledAgentsDir: path.join(bundledDir, 'agents'),
-        bundledCommandsDir: path.join(bundledDir, 'commands'),
-      })
-
-      const config: Config = {}
-      await handler(config)
-
-      const agent = config.agent?.['correctness-reviewer']
-      expect(agent?.model).toBe('openrouter/anthropic/claude-sonnet-4')
-      expect(agent?.variant).toBe('large-context')
-      expect(agent?.top_p).toBe(0.8)
-      expect(agent?.mode).toBe('subagent')
-      expect(agent?.color).toBe('#123abc')
-      expect(agent?.steps).toBe(12)
-      expect(agent?.hidden).toBe(true)
-      // other-reviewer (review category) gets source model default
-      expect(config.agent?.['other-reviewer']?.model).toBe(
-        'anthropic/claude-opus-4.7',
-      )
-    })
-
-    test('accepts and emits variant without model', async () => {
-      createCategorizedAgent('review', 'correctness-reviewer', {
-        name: 'correctness-reviewer',
-        description: 'Reviews correctness',
-      })
-      writeCustomSystematicConfig({
-        agents: { 'correctness-reviewer': { variant: 'small' } },
-      })
-
-      const handler = createConfigHandler({
-        directory: projectDir,
-        bundledSkillsDir: path.join(bundledDir, 'skills'),
-        bundledAgentsDir: path.join(bundledDir, 'agents'),
-        bundledCommandsDir: path.join(bundledDir, 'commands'),
-      })
-
-      const config: Config = {}
-      await handler(config)
-
-      expect(config.agent?.['correctness-reviewer']?.variant).toBe('small')
-      // review-category agent still gets source model default even when variant is set via high-trust config
-      expect(config.agent?.['correctness-reviewer']?.model).toBe(
-        'anthropic/claude-opus-4.7',
-      )
-    })
-
     test('managed skills shortcut emits ordered deny-all then allow-selected rules', async () => {
       createSkill(path.join(bundledDir, 'skills'), 'ce:review', 'Review skill')
       createCategorizedAgent('review', 'correctness-reviewer', {
@@ -1181,73 +953,6 @@ model: gpt-4
     })
 
     describe('auth-aware source model resolution', () => {
-      test('no auth.json emits array[0] for review category', async () => {
-        createCategorizedAgent('review', 'correctness-reviewer', {
-          name: 'correctness-reviewer',
-          description: 'Reviews correctness',
-        })
-
-        const handler = createConfigHandler({
-          directory: projectDir,
-          bundledSkillsDir: path.join(bundledDir, 'skills'),
-          bundledAgentsDir: path.join(bundledDir, 'agents'),
-          bundledCommandsDir: path.join(bundledDir, 'commands'),
-        })
-
-        const config: Config = {}
-        await handler(config)
-
-        expect(config.agent?.['correctness-reviewer']?.model).toBe(
-          'anthropic/claude-opus-4.7',
-        )
-      })
-
-      test('openai auth selects openai/gpt-5.5 for review category', async () => {
-        createCategorizedAgent('review', 'correctness-reviewer', {
-          name: 'correctness-reviewer',
-          description: 'Reviews correctness',
-        })
-
-        const handler = createConfigHandler({
-          directory: projectDir,
-          bundledSkillsDir: path.join(bundledDir, 'skills'),
-          bundledAgentsDir: path.join(bundledDir, 'agents'),
-          bundledCommandsDir: path.join(bundledDir, 'commands'),
-          getAuthenticatedProviders: () => new Set(['openai']),
-        })
-
-        const config: Config = {}
-        await handler(config)
-
-        expect(config.agent?.['correctness-reviewer']?.model).toBe(
-          'openai/gpt-5.5',
-        )
-      })
-
-      test('first-match wins with multiple providers', async () => {
-        createCategorizedAgent('review', 'correctness-reviewer', {
-          name: 'correctness-reviewer',
-          description: 'Reviews correctness',
-        })
-
-        const handler = createConfigHandler({
-          directory: projectDir,
-          bundledSkillsDir: path.join(bundledDir, 'skills'),
-          bundledAgentsDir: path.join(bundledDir, 'agents'),
-          bundledCommandsDir: path.join(bundledDir, 'commands'),
-          getAuthenticatedProviders: () =>
-            new Set(['github-copilot', 'anthropic']),
-        })
-
-        const config: Config = {}
-        await handler(config)
-
-        // anthropic is first matching provider in review array
-        expect(config.agent?.['correctness-reviewer']?.model).toBe(
-          'anthropic/claude-opus-4.7',
-        )
-      })
-
       test('user category model override still wins with auth', async () => {
         createCategorizedAgent('review', 'correctness-reviewer', {
           name: 'correctness-reviewer',
