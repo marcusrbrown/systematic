@@ -246,11 +246,11 @@ describe('SystematicConfigSchema', () => {
 describe('assertSourceCategoryModelDefaults', () => {
   test('passes for the actual SOURCE_CATEGORY_MODEL_DEFAULTS constant', () => {
     const actualConstants = {
-      design: ['openai/gpt-5.5', 'anthropic/claude-opus-4.7'],
+      design: ['openai/gpt-5.5', 'anthropic/claude-opus-4-7'],
       docs: ['openai/gpt-5.4-mini', 'anthropic/claude-haiku-4-5'],
-      'document-review': ['anthropic/claude-opus-4.7', 'openai/gpt-5.5'],
-      research: ['openai/gpt-5.5', 'anthropic/claude-opus-4.7'],
-      review: ['anthropic/claude-opus-4.7', 'openai/gpt-5.5'],
+      'document-review': ['anthropic/claude-opus-4-7', 'openai/gpt-5.5'],
+      research: ['openai/gpt-5.5', 'anthropic/claude-opus-4-7'],
+      review: ['anthropic/claude-opus-4-7', 'openai/gpt-5.5'],
       workflow: ['openai/gpt-5.4-mini', 'anthropic/claude-haiku-4-5'],
     }
 

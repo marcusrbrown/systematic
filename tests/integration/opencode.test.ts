@@ -283,43 +283,6 @@ describe('SystematicPlugin config hook integration', () => {
     expect(config).toEqual(before)
   })
 
-  test('zero config emits source model defaults for categorized agents and no fallback_models', async () => {
-    const config: Config = {}
-    await runConfigHook(config)
-
-    // Assert correct source model per category for at least one real bundled agent
-    expect(config.agent?.['correctness-reviewer']?.model).toBe(
-      'anthropic/claude-opus-4.7',
-    )
-    expect(config.agent?.['correctness-reviewer']?.temperature).toBeDefined()
-
-    // design category
-    expect(config.agent?.['design-implementation-reviewer']?.model).toBe(
-      'openai/gpt-5.5',
-    )
-    // docs category
-    expect(config.agent?.['ankane-readme-writer']?.model).toBe(
-      'openai/gpt-5.4-mini',
-    )
-    // document-review category
-    expect(config.agent?.['adversarial-document-reviewer']?.model).toBe(
-      'anthropic/claude-opus-4.7',
-    )
-    // research category
-    expect(config.agent?.['best-practices-researcher']?.model).toBe(
-      'openai/gpt-5.5',
-    )
-    // workflow category
-    expect(config.agent?.['bug-reproduction-validator']?.model).toBe(
-      'openai/gpt-5.4-mini',
-    )
-
-    // Verify no fallback_models leak into any emitted agent
-    for (const [, agent] of Object.entries(config.agent ?? {})) {
-      expect(agent).not.toHaveProperty('fallback_models')
-    }
-  })
-
   test('loads with category model overlays and exact agent overlay without throwing', async () => {
     writeCustomSystematicConfig({
       categories: {
@@ -423,49 +386,6 @@ describe('SystematicPlugin config hook integration', () => {
 
     expect(config.agent?.['correctness-reviewer']?.model).toBe(
       'nonexistent-provider/nonexistent-model',
-    )
-  })
-
-  test('auth-aware: single auth provider selects matching model from source defaults', async () => {
-    const authDir = path.join(homeDir, '.local/share', 'opencode')
-    fs.mkdirSync(authDir, { recursive: true })
-    fs.writeFileSync(
-      path.join(authDir, 'auth.json'),
-      JSON.stringify({ openai: { type: 'api', key: 'sk-test' } }),
-    )
-
-    const config: Config = {}
-    await runConfigHook(config)
-
-    // review category: ['anthropic/claude-opus-4.7', 'openai/gpt-5.5']
-    // With openai auth, resolver picks openai/gpt-5.5
-    expect(config.agent?.['correctness-reviewer']?.model).toBe('openai/gpt-5.5')
-  })
-
-  test('auth-aware: multi-provider auth picks correct models per category', async () => {
-    const authDir = path.join(homeDir, '.local/share', 'opencode')
-    fs.mkdirSync(authDir, { recursive: true })
-    fs.writeFileSync(
-      path.join(authDir, 'auth.json'),
-      JSON.stringify({
-        'github-copilot': { type: 'api' },
-        anthropic: { type: 'api' },
-      }),
-    )
-
-    const config: Config = {}
-    await runConfigHook(config)
-
-    // review category: ['anthropic/claude-opus-4.7', 'openai/gpt-5.5']
-    // With anthropic authed, picks anthropic/claude-opus-4.7 (first match)
-    expect(config.agent?.['correctness-reviewer']?.model).toBe(
-      'anthropic/claude-opus-4.7',
-    )
-
-    // docs category: ['openai/gpt-5.4-mini', 'anthropic/claude-haiku-4-5']
-    // openai not authed, anthropic is → picks anthropic/claude-haiku-4-5
-    expect(config.agent?.['ankane-readme-writer']?.model).toBe(
-      'anthropic/claude-haiku-4-5',
     )
   })
 

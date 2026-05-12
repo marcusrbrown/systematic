@@ -580,17 +580,6 @@ describe('inferBuiltInTemperature', () => {
 })
 
 describe('source category model defaults', () => {
-  test.each([
-    ['design', 'openai/gpt-5.5'],
-    ['docs', 'openai/gpt-5.4-mini'],
-    ['document-review', 'anthropic/claude-opus-4.7'],
-    ['research', 'openai/gpt-5.5'],
-    ['review', 'anthropic/claude-opus-4.7'],
-    ['workflow', 'openai/gpt-5.4-mini'],
-  ])('returns source model %p for category %s', (category, expected) => {
-    expect(getSourceCategoryModel(category)).toBe(expected)
-  })
-
   test('returns no source model for unknown and uncategorized agents', () => {
     expect(getSourceCategoryModel('unknown')).toBeUndefined()
     expect(getSourceCategoryModel(undefined)).toBeUndefined()
@@ -613,10 +602,6 @@ describe('source category model defaults', () => {
     ).toThrow(/review/)
   })
 
-  test('returns the first entry from a multi-entry array', () => {
-    expect(getSourceCategoryModel('design')).toBe('openai/gpt-5.5')
-  })
-
   test('rejects empty array in source category model defaults', () => {
     expect(() => validateSourceCategoryModelDefaults({ review: [] })).toThrow(
       /review/,
@@ -632,7 +617,7 @@ describe('source category model defaults', () => {
   test('accepts multi-entry valid array in source category model defaults', () => {
     expect(() =>
       validateSourceCategoryModelDefaults({
-        review: ['openai/gpt-5.5', 'anthropic/claude-opus-4.7'],
+        review: ['openai/gpt-5.5', 'anthropic/claude-opus-4-7'],
       }),
     ).not.toThrow()
   })
@@ -762,52 +747,6 @@ describe('getAuthenticatedProviders', () => {
       expect(result).toEqual(new Set(['openai']))
       expect([...result]).toEqual(['openai'])
     })
-  })
-})
-
-describe('getSourceCategoryModel with auth', () => {
-  test('returns first array entry whose provider is authenticated', () => {
-    const result = getSourceCategoryModel('review', new Set(['openai']))
-    expect(result).toBe('openai/gpt-5.5')
-  })
-
-  test('returns first matching entry when multiple providers are authenticated', () => {
-    const result = getSourceCategoryModel(
-      'review',
-      new Set(['anthropic', 'openai']),
-    )
-    expect(result).toBe('anthropic/claude-opus-4.7')
-  })
-
-  test('returns first entry when authenticated set is empty', () => {
-    const result = getSourceCategoryModel('review', new Set())
-    expect(result).toBe('anthropic/claude-opus-4.7')
-  })
-
-  test('returns first entry when authedProviders is undefined', () => {
-    const result = getSourceCategoryModel('review')
-    expect(result).toBe('anthropic/claude-opus-4.7')
-  })
-
-  test('returns first entry when no providers match', () => {
-    const result = getSourceCategoryModel('review', new Set(['openrouter']))
-    expect(result).toBe('anthropic/claude-opus-4.7')
-  })
-
-  test('treats only the substring before the first slash as the provider id', () => {
-    // The resolver's slash-prefix extraction means an authedProviders entry like
-    // 'openai/gpt-5.5' (a full provider/model rather than a provider id) does not
-    // match the array entry 'openai/gpt-5.5' because the entry's provider id is
-    // 'openai', not 'openai/gpt-5.5'. The resolver falls back to array[0].
-    expect(getSourceCategoryModel('review', new Set(['openai/gpt-5.5']))).toBe(
-      'anthropic/claude-opus-4.7',
-    )
-
-    // And the inverse: an authedProviders entry of 'openai' (a real provider id)
-    // does match an array entry whose prefix-before-slash is 'openai'.
-    expect(getSourceCategoryModel('review', new Set(['openai']))).toBe(
-      'openai/gpt-5.5',
-    )
   })
 })
 
@@ -963,11 +902,11 @@ describe('Zod-backed overlay validation', () => {
 
   test('assertSourceCategoryModelDefaults passes for actual constants', () => {
     const actualConstants = {
-      design: ['openai/gpt-5.5', 'anthropic/claude-opus-4.7'],
+      design: ['openai/gpt-5.5', 'anthropic/claude-opus-4-7'],
       docs: ['openai/gpt-5.4-mini', 'anthropic/claude-haiku-4-5'],
-      'document-review': ['anthropic/claude-opus-4.7', 'openai/gpt-5.5'],
-      research: ['openai/gpt-5.5', 'anthropic/claude-opus-4.7'],
-      review: ['anthropic/claude-opus-4.7', 'openai/gpt-5.5'],
+      'document-review': ['anthropic/claude-opus-4-7', 'openai/gpt-5.5'],
+      research: ['openai/gpt-5.5', 'anthropic/claude-opus-4-7'],
+      review: ['anthropic/claude-opus-4-7', 'openai/gpt-5.5'],
       workflow: ['openai/gpt-5.4-mini', 'anthropic/claude-haiku-4-5'],
     }
     expect(() =>

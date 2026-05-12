@@ -16,7 +16,7 @@ User overlays (`agents.<key>.model`, `categories.<id>.model`) remain string-only
 
 ## Problem Frame
 
-Systematic ships zero-config category defaults like `review → anthropic/claude-opus-4.7`. A user authenticated only to OpenAI receives a Systematic agent that names a model their installation cannot reach; OpenCode then surfaces a runtime error per request, or the user has to override every category in `~/.config/opencode/systematic.json` just to get past the default.
+Systematic ships zero-config category defaults like `review → anthropic/claude-opus-4-7`. A user authenticated only to OpenAI receives a Systematic agent that names a model their installation cannot reach; OpenCode then surfaces a runtime error per request, or the user has to override every category in `~/.config/opencode/systematic.json` just to get past the default.
 
 The published reference plugins (`@cortexkit/opencode-magic-context`, `oh-my-opencode-slim`, `@kodrunhq/opencode-autopilot`) all considered some form of multi-model defaults; all three settled for `array[0]` selection plus runtime error fallback. None inspect auth state before picking. Brainstorm research established that the OpenCode plugin lifecycle does NOT expose a hook between `config` and `chat.params` where auth-aware mutation is possible — but a synchronous read of OpenCode's `auth.json` at `config(cfg)` time produces correct results for the explicit-credential case (API/OAuth/WellKnown providers), which is the common shape.
 
@@ -154,11 +154,11 @@ The auth set is built once and threaded through the existing per-agent loop. No 
 **Approach:**
 - Change the constant to `Record<CategoryId, readonly string[]>`. Each existing single-string value becomes a one-element array as the starting point. New entries can be added in this unit or a follow-up — the shape change is the unit's primary deliverable.
 - Recommended starting arrays (subject to current-catalog verification during implementation):
-  - `design`: `['openai/gpt-5.5', 'anthropic/claude-opus-4.7']`
+  - `design`: `['openai/gpt-5.5', 'anthropic/claude-opus-4-7']`
   - `docs`: `['openai/gpt-5.4-mini', 'anthropic/claude-haiku-4-5']`
-  - `document-review`: `['anthropic/claude-opus-4.7', 'openai/gpt-5.5']`
-  - `research`: `['openai/gpt-5.5', 'anthropic/claude-opus-4.7']`
-  - `review`: `['anthropic/claude-opus-4.7', 'openai/gpt-5.5']`
+  - `document-review`: `['anthropic/claude-opus-4-7', 'openai/gpt-5.5']`
+  - `research`: `['openai/gpt-5.5', 'anthropic/claude-opus-4-7']`
+  - `review`: `['anthropic/claude-opus-4-7', 'openai/gpt-5.5']`
   - `workflow`: `['openai/gpt-5.4-mini', 'anthropic/claude-haiku-4-5']`
 - Update `validateSourceCategoryModelDefaults` to iterate each category's array and call `validateModel` per entry with an indexed key path like `source category model defaults.${category}[${index}]`. Reject empty arrays explicitly.
 - `assertSourceCategoryModelCoverage` keeps its key-coverage shape; the value-shape check delegates to `validateSourceCategoryModelDefaults` as today.
@@ -174,7 +174,7 @@ The auth set is built once and threaded through the existing per-agent loop. No 
 - Error path: `validateSourceCategoryModelDefaults` throws when fed a fixture with `category: []` (empty array).
 - Error path: `validateSourceCategoryModelDefaults` throws when fed a fixture with `category: ['malformed-no-slash']` (each entry is structurally validated).
 - Error path: `assertSourceCategoryModelCoverage` still throws when fed a category not present in the constant.
-- Edge case: `validateSourceCategoryModelDefaults` accepts a fixture with `category: ['openai/gpt-5.5', 'anthropic/claude-opus-4.7']` (multi-entry valid array).
+- Edge case: `validateSourceCategoryModelDefaults` accepts a fixture with `category: ['openai/gpt-5.5', 'anthropic/claude-opus-4-7']` (multi-entry valid array).
 
 **Verification:**
 - All existing `tests/unit/agent-overlays.test.ts` source-default tests continue to pass with no behavior change at the integration boundary (because Unit 1 still returns `array[0]`).
@@ -222,8 +222,8 @@ The auth set is built once and threaded through the existing per-agent loop. No 
 - Edge case: Returns empty `Set` and emits one stderr diagnostic when the file contains malformed JSON (`{not valid`).
 - Edge case: Returns empty `Set` when the file parses to a non-object (`null`, array, scalar) — treated as malformed.
 - Edge case: Returns `Set(['openai'])` when the value at the key is anything (R9a — values are not inspected).
-- Happy path: `getSourceCategoryModel('review', new Set(['openai']))` returns `'openai/gpt-5.5'` for the array `['anthropic/claude-opus-4.7', 'openai/gpt-5.5']`.
-- Happy path: `getSourceCategoryModel('review', new Set(['anthropic','openai']))` returns `'anthropic/claude-opus-4.7'` (first match wins).
+- Happy path: `getSourceCategoryModel('review', new Set(['openai']))` returns `'openai/gpt-5.5'` for the array `['anthropic/claude-opus-4-7', 'openai/gpt-5.5']`.
+- Happy path: `getSourceCategoryModel('review', new Set(['anthropic','openai']))` returns `'anthropic/claude-opus-4-7'` (first match wins).
 - Edge case: `getSourceCategoryModel('review', new Set())` returns `array[0]` (R6 fallback).
 - Edge case: `getSourceCategoryModel('review')` (no second arg) returns `array[0]` (backward compat).
 - Edge case: `getSourceCategoryModel('review', new Set(['openrouter']))` returns `array[0]` when no entry matches the authed set.
@@ -263,8 +263,8 @@ The auth set is built once and threaded through the existing per-agent loop. No 
 
 **Test scenarios:**
 - Happy path: With no `auth.json` present in the test home dir, an emitted `review`-category agent gets the array's first entry (current zero-config behavior, no regression).
-- Happy path: With `auth.json` containing `{"openai":{...}}` and a `review` category whose array starts `['anthropic/claude-opus-4.7', 'openai/gpt-5.5']`, the emitted model is `'openai/gpt-5.5'`.
-- Happy path: With `auth.json` containing `{"github-copilot":{...},"anthropic":{...}}` for the same array, the emitted model is `'anthropic/claude-opus-4.7'` (first match wins).
+- Happy path: With `auth.json` containing `{"openai":{...}}` and a `review` category whose array starts `['anthropic/claude-opus-4-7', 'openai/gpt-5.5']`, the emitted model is `'openai/gpt-5.5'`.
+- Happy path: With `auth.json` containing `{"github-copilot":{...},"anthropic":{...}}` for the same array, the emitted model is `'anthropic/claude-opus-4-7'` (first match wins).
 - Happy path: `getAuthenticatedProviders` is invoked exactly once per `config(cfg)` invocation, regardless of how many bundled agents exist. Assert by either (a) `mock.module('./agent-overlays.js', ...)` before importing `config-handler.ts` and counting calls on the mocked function, or (b) injecting the reader through `ConfigHandlerDeps` for test purposes and counting through the injected version. The contract being tested is the helper-invocation count from `config-handler`, not the underlying `fs.readFileSync` call count.
 - Edge case: A user-supplied `categories.review.model` overrides the auth-aware source default; the overlay still wins regardless of auth state.
 - Edge case: A user-supplied `agents.<name>.model` exact overlay overrides both category overlay and source defaults; auth-aware resolution does not run for that agent.

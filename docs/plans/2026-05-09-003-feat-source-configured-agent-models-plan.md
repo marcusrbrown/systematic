@@ -87,9 +87,9 @@ These source defaults are primary model choices only. They are intentionally **n
 |----------|-----------------|-----------|
 | `design` | `openai/gpt-5.5` | High-judgment UX/product/design work benefits from a strong general reasoning model. |
 | `docs` | `openai/gpt-5.4-mini` | Documentation and summarization should start cheaper/faster. |
-| `document-review` | `anthropic/claude-opus-4.7` | Requirements and plan critique benefit from strongest nuanced reasoning. |
+| `document-review` | `anthropic/claude-opus-4-7` | Requirements and plan critique benefit from strongest nuanced reasoning. |
 | `research` | `openai/gpt-5.5` | Tool-heavy synthesis and source evaluation benefit from a strong general reasoning model. |
-| `review` | `anthropic/claude-opus-4.7` | Code/security/adversarial review benefits from strongest reasoning. |
+| `review` | `anthropic/claude-opus-4-7` | Code/security/adversarial review benefits from strongest reasoning. |
 | `workflow` | `openai/gpt-5.4-mini` | Orchestration and bounded implementation should default cheaper/faster. |
 
 ## Key Technical Decisions
@@ -125,7 +125,7 @@ The emitted model for a Systematic bundled agent should resolve in this order:
 |------------|--------|---------|
 | 1 | High-trust exact overlay | `agents.correctness-reviewer.model` |
 | 2 | High-trust category overlay | `categories.review.model` |
-| 3 | Source category default | `review -> anthropic/claude-opus-4.7` |
+| 3 | Source category default | `review -> anthropic/claude-opus-4-7` |
 | 4 | Bundled markdown | omitted for bundled assets |
 | 5 | OpenCode inherited parent model | no `model` emitted |
 

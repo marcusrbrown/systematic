@@ -97,15 +97,15 @@ The follow-up should add source-owned category defaults intentionally, not by op
 
 ### Recommended Source Model Defaults
 
-These are source-configured defaults for the next PR. They should live in one audited table and be applied by bundled agent category when no stronger user/custom exact/category model override exists. Model IDs must get a final compatibility check against currently supported provider catalogs before implementation. IDs below are source-backed where they appear in OMO Slim or Magic Context; `anthropic/claude-opus-4.7` is included because the user explicitly requested current Opus-class coverage and should be verified before shipping.
+These are source-configured defaults for the next PR. They should live in one audited table and be applied by bundled agent category when no stronger user/custom exact/category model override exists. Model IDs must get a final compatibility check against currently supported provider catalogs before implementation. IDs below are source-backed where they appear in OMO Slim or Magic Context; `anthropic/claude-opus-4-7` is included because the user explicitly requested current Opus-class coverage and should be verified before shipping.
 
 | Category | Default `model` | Ordered `fallback_models` | Rationale |
 |----------|-----------------|---------------------------|-----------|
-| `design` | `openai/gpt-5.5` | `anthropic/claude-opus-4.7`, `google/gemini-3.1-pro`, `opencode-go/kimi-k2.6` | High-judgment UX/product/design reasoning first, with strong cross-provider and OpenCode Go fallback. |
+| `design` | `openai/gpt-5.5` | `anthropic/claude-opus-4-7`, `google/gemini-3.1-pro`, `opencode-go/kimi-k2.6` | High-judgment UX/product/design reasoning first, with strong cross-provider and OpenCode Go fallback. |
 | `docs` | `openai/gpt-5.4-mini` | `opencode-go/minimax-m2.7`, `google/gemini-3-flash`, `openai/gpt-5.3-codex-spark` | Cost/speed-efficient docs work first, then writing/summarization fallbacks used in current adjacent defaults. |
-| `document-review` | `anthropic/claude-opus-4.7` | `openai/gpt-5.5`, `google/gemini-3.1-pro`, `opencode-go/deepseek-v4-pro` | Nuanced critique and consistency review favor strongest reasoning, with OpenAI/Google/OpenCode Go coverage. |
-| `research` | `openai/gpt-5.5` | `anthropic/claude-opus-4.7`, `google/gemini-3.1-pro`, `opencode-go/minimax-m2.7` | Tool-heavy synthesis and citation quality first, with broad provider resilience. |
-| `review` | `anthropic/claude-opus-4.7` | `openai/gpt-5.5`, `opencode-go/deepseek-v4-pro`, `google/gemini-3.1-pro` | Code/security review and adversarial reasoning favor highest signal, with OpenCode Go coding-model fallback. |
+| `document-review` | `anthropic/claude-opus-4-7` | `openai/gpt-5.5`, `google/gemini-3.1-pro`, `opencode-go/deepseek-v4-pro` | Nuanced critique and consistency review favor strongest reasoning, with OpenAI/Google/OpenCode Go coverage. |
+| `research` | `openai/gpt-5.5` | `anthropic/claude-opus-4-7`, `google/gemini-3.1-pro`, `opencode-go/minimax-m2.7` | Tool-heavy synthesis and citation quality first, with broad provider resilience. |
+| `review` | `anthropic/claude-opus-4-7` | `openai/gpt-5.5`, `opencode-go/deepseek-v4-pro`, `google/gemini-3.1-pro` | Code/security review and adversarial reasoning favor highest signal, with OpenCode Go coding-model fallback. |
 | `workflow` | `openai/gpt-5.4-mini` | `opencode-go/deepseek-v4-flash`, `opencode/gpt-5-nano`, `google/gemini-3-flash` | Orchestration should start cheap/fast and tolerate transient outages with fast OpenCode/OpenCode Go fallbacks. |
 
 ### Prior PR Non-Blocking Concerns
