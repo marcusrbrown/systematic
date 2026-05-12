@@ -60,12 +60,20 @@ export interface ResolvedAgentOverlaySet {
 // first array entry whose provider is authenticated; entries are not a
 // runtime fallback chain. Keep arrays non-empty.
 const SOURCE_CATEGORY_MODEL_DEFAULTS = {
-  design: ['openai/gpt-5.5', 'anthropic/claude-opus-4.7'],
-  docs: ['openai/gpt-5.4-mini', 'anthropic/claude-haiku-4-5'],
-  'document-review': ['anthropic/claude-opus-4.7', 'openai/gpt-5.5'],
-  research: ['openai/gpt-5.5', 'anthropic/claude-opus-4.7'],
-  review: ['anthropic/claude-opus-4.7', 'openai/gpt-5.5'],
-  workflow: ['openai/gpt-5.4-mini', 'anthropic/claude-haiku-4-5'],
+  design: [
+    'github-copilot/gemini-3.1-pro-preview',
+    'openai/gpt-5.5',
+    'anthropic/claude-opus-4-7',
+  ],
+  docs: [
+    'github-copilot/gemini-3.1-pro-preview',
+    'openai/gpt-5.4-mini',
+    'anthropic/claude-haiku-4-5',
+  ],
+  'document-review': ['anthropic/claude-sonnet-4-6', 'openai/gpt-5.4-mini'],
+  research: ['openai/gpt-5.4-mini', 'anthropic/claude-sonnet-4-6'],
+  review: ['anthropic/claude-sonnet-4-6', 'openai/gpt-5.3-codex'],
+  workflow: ['openai/gpt-5.4-mini', 'anthropic/claude-sonnet-4-6'],
 } as const satisfies Record<string, readonly string[]>
 
 export function buildBundledAgentInventory(
