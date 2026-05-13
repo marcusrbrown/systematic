@@ -84,16 +84,18 @@ If you want to restore OpenCode parent-model inheritance for a bundled agent or 
 
 ### Source Category Model Defaults
 
-The following source defaults apply to bundled Systematic agents by category when no stronger high-trust exact or category `model` override exists:
+The following source defaults apply to bundled Systematic agents by category when no stronger high-trust exact or category `model` override exists. The chain column shows the provider resolution order (first available provider/model wins); variants are shown as `+variant` suffixes. Run `bun run docs:generate` to regenerate this table from source.
 
-| Category | Default `model` | Rationale |
-|----------|-----------------|-----------|
-| `design` | `openai/gpt-5.5` | High-judgment UX/product/design work benefits from a strong general reasoning model. |
-| `docs` | `openai/gpt-5.4-mini` | Documentation and summarization should start cheaper/faster. |
-| `document-review` | `anthropic/claude-opus-4-7` | Requirements and plan critique benefit from strongest nuanced reasoning. |
-| `research` | `openai/gpt-5.5` | Tool-heavy synthesis and source evaluation benefit from a strong general reasoning model. |
-| `review` | `anthropic/claude-opus-4-7` | Code/security/adversarial review benefits from strongest reasoning. |
-| `workflow` | `openai/gpt-5.4-mini` | Orchestration and bounded implementation should default cheaper/faster. |
+{/* SYSTEMATIC:SOURCE-DEFAULTS:START */}
+| Category | Chain | Rationale | When to Override |
+| --- | --- | --- | --- |
+| design | github-copilot/gemini-3.1-pro-preview, openai/gpt-5.5+high, anthropic/claude-opus-4-7+max, … | High-judgment UX, product, and design work benefits from a strong general reasoning model with broad creative capability. | Override to a faster/cheaper model when design tasks are primarily templating or low-stakes layout work. |
+| docs | github-copilot/gemini-3.1-pro-preview, openai/gpt-5.4-mini, anthropic/claude-haiku-4-5, … | Documentation and summarization tasks should start cheaper and faster; quality is sufficient at mid-tier models. | — |
+| document-review | anthropic/claude-opus-4-7+max, openai/gpt-5.5+high, github-copilot/gemini-3.1-pro-preview, … | Requirements and plan critique benefit from the strongest nuanced reasoning to surface non-obvious gaps and contradictions. | — |
+| research | openai/gpt-5.4-mini, anthropic/claude-sonnet-4-6, github-copilot/gemini-3.1-pro-preview, … | Tool-heavy synthesis and source evaluation benefit from a strong general reasoning model with broad knowledge. | — |
+| review | anthropic/claude-sonnet-4-6, openai/gpt-5.3-codex, github-copilot/gemini-3.1-pro-preview, … | Code, security, and adversarial review benefits from the strongest reasoning to catch subtle bugs and security issues. | Override to a faster model when review tasks are primarily style or formatting checks rather than correctness or security analysis. |
+| workflow | openai/gpt-5.4-mini, anthropic/claude-sonnet-4-6, opencode/claude-haiku-4-5, … | Orchestration and bounded implementation tasks should default cheaper and faster; strong reasoning is rarely needed for routing decisions. | — |
+{/* SYSTEMATIC:SOURCE-DEFAULTS:END */}
 
 These defaults are owned by Systematic code and emitted only for Systematic-owned bundled agents. Uncategorized bundled agents receive no source default and continue inheriting the parent OpenCode model. Native OpenCode agents with the same emitted key are full replacements and receive no Systematic source model default.
 
@@ -121,39 +123,25 @@ This only works from high-trust config (user or `$OPENCODE_CONFIG_DIR/systematic
 
 Native OpenCode agents with the same emitted key are full replacements. If `config.agent.security-sentinel` already exists in OpenCode config, `agents.security-sentinel` or `agents.review/security-sentinel` conflicts because ownership would be ambiguous. Category overlays skip native replacements and continue applying to the remaining Systematic-owned bundled agents in that category.
 
-#### Auth-Aware Resolution
+#### Availability-Aware Resolution
 
-Source category model defaults are now ordered preference arrays per category rather than single strings. At plugin load, Systematic reads OpenCode's authentication state and selects the first array entry whose provider is authenticated.
+Source category model defaults are provider-grouped chains rather than single strings. At plugin load, Systematic asks OpenCode which providers are connected via the plugin SDK's `client.config.providers()` call, then walks each category's provider chain in order and selects the first `provider/model` pair whose provider+model is in the connected set. If a connected provider has none of the category's listed models available, resolution continues to the next provider in the chain. If no model in the chain matches, the first listed entry of the first provider is used as a last-resort fallback.
 
-```jsonc
-// The built-in defaults for each category (code-owned, not user-configurable).
-// The resolver picks the first entry whose provider is in the auth set.
-{
-  "design":           ["openai/gpt-5.5", "anthropic/claude-opus-4-7"],
-  "docs":             ["openai/gpt-5.4-mini", "anthropic/claude-haiku-4-5"],
-  "document-review":  ["anthropic/claude-opus-4-7", "openai/gpt-5.5"],
-  "research":         ["openai/gpt-5.5", "anthropic/claude-opus-4-7"],
-  "review":           ["anthropic/claude-opus-4-7", "openai/gpt-5.5"],
-  "workflow":         ["openai/gpt-5.4-mini", "anthropic/claude-haiku-4-5"]
-}
-```
+Connected providers are those OpenCode considers usable — providers with a config block in `opencode.json`, providers with an env var matching their `provider.env` list, providers with an `auth.json` entry of type `api`, or providers contributed by a plugin's `auth.loader`. All four signals are merged server-side; Systematic never reads `auth.json` directly.
 
-The authentication file is read from `${XDG_DATA_HOME:-~/.local/share}/opencode/auth.json`. Systematic reads only the top-level keys of this file — it never inspects, logs, persists, or transmits the nested credential values.
+If the SDK call fails for any reason, Systematic falls back to reading the locally cached `${XDG_CACHE_HOME:-~/.cache}/opencode/models.json` (or `models-<hash>.json` when `OPENCODE_MODELS_URL` is set) — the same catalog OpenCode itself writes from `models.dev`. A missing, unreadable, or schema-mismatched cache produces an empty availability set, which triggers last-resort resolution.
 
-**Precedence:** The auth-aware resolver only applies when no stronger user override exists. Full precedence for a bundled agent's model:
+When a chain entry carries an optional `variant`, it flows through to the emitted agent config alongside `model`. User overrides via `categories.<id>.variant` or `agents.<key>.variant` win over the source variant. When an override sets `model` without `variant`, any source or lower-precedence variant is cleared so users never get a (user-model, stale-variant) hybrid.
+
+**Precedence.** The availability-aware resolver applies only when no stronger user override exists. Full precedence for a bundled agent's model:
 
 1. `agents.<key>.model` (user or `$OPENCODE_CONFIG_DIR/systematic.json`)
 2. `categories.<id>.model` (user or `$OPENCODE_CONFIG_DIR/systematic.json`)
-3. Source category model default resolved against authenticated providers
+3. Source category model default resolved against the connected-providers set
 4. Bundled markdown/frontmatter defaults (unused — bundled agents omit `model`)
 5. OpenCode inherited defaults
 
-User-supplied `agents.<key>.model` and `categories.<id>.model` remain single `provider/model` strings in this iteration — arrays are not accepted in user config. If you supply a scalar model string, the auth-aware resolver is skipped for that agent or category and your overlay is used as-is.
-
-**Limitations:**
-
-- **Environment-variable providers.** Providers that load credentials from environment variables (e.g., AWS Bedrock, with `autoload: true` in OpenCode's provider registry) may not appear in `auth.json`. The resolver skips them and falls back to the first array entry. To override, pin a model via `categories.<id>.model` or `agents.<key>.model`.
-- **Auth-file race window.** OpenCode writes `auth.json` non-atomically; the resolver reads it once at plugin load. If you authenticate after starting OpenCode, restart OpenCode to refresh the resolved model.
+User-supplied `agents.<key>.model` and `categories.<id>.model` are single `provider/model` strings — provider-grouped chains live only in source defaults. Supplying a scalar model string skips the availability-aware resolver for that agent or category and uses your overlay as-is.
 
 ## Project-Specific Content
 

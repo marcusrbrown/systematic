@@ -33,6 +33,7 @@
       "!**/*.md",
       "!**/.astro",
       "!.sisyphus",
+      "!.slim",
       "!**/.worktrees",
       "!**/.context"
     ]

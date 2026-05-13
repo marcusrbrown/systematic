@@ -3,8 +3,6 @@ import type { AgentConfig } from '@opencode-ai/sdk'
 import {
   assertSourceCategoryModelCoverage,
   buildBundledAgentInventory,
-  getAuthenticatedProviders,
-  getSourceCategoryModel,
   inferBuiltInTemperature,
   type ResolvedAgentOverlaySet,
   resolveAgentOverlaySet,
@@ -15,8 +13,13 @@ import { extractCommandFrontmatter, findCommandsInDir } from './commands.js'
 import { loadConfigWithSources } from './config.js'
 import { convertFileWithCache } from './converter.js'
 import { parseFrontmatter } from './frontmatter.js'
+import {
+  getAvailableModels,
+  type OpencodeClientLike,
+} from './model-availability.js'
 import { type LoadedSkill, loadSkill } from './skill-loader.js'
 import { findSkillsInDir } from './skills.js'
+import { resolveSourceModel } from './source-model-defaults.js'
 import { isRecord, type PermissionSetting } from './validation.js'
 
 export interface ConfigHandlerDeps {
@@ -24,8 +27,8 @@ export interface ConfigHandlerDeps {
   bundledSkillsDir: string
   bundledAgentsDir: string
   bundledCommandsDir: string
-  /** Override for authenticated provider reader; for testing. */
-  getAuthenticatedProviders?: (rootDirOverride?: string) => ReadonlySet<string>
+  /** OpenCode client for availability lookup. When omitted, availability falls back to empty set (last-resort resolution). */
+  client?: OpencodeClientLike
 }
 
 type CommandConfig = NonNullable<Config['command']>[string]
@@ -155,12 +158,19 @@ function loadSkillAsCommand(loaded: LoadedSkill): CommandConfig {
   return config
 }
 
+/**
+ * Source-default model resolution skips when `availabilitySet` is
+ * `undefined`. That happens when both the client API call and the
+ * models.json fallback failed — pinning a source default would risk
+ * emitting agents the user cannot use, so we leave bundled agents to
+ * inherit OpenCode's parent model instead.
+ */
 function collectAgents(
   dir: string,
   disabledAgents: string[],
   nativeAgents: Record<string, unknown>,
   overlays: ResolvedAgentOverlaySet,
-  authedProviders: ReadonlySet<string>,
+  availabilitySet: ReadonlySet<string> | undefined,
 ): NonNullable<Config['agent']> {
   const agents: NonNullable<Config['agent']> = {}
   const agentList = findAgentsInDir(dir)
@@ -182,7 +192,7 @@ function collectAgents(
         config,
         agentInfo,
         overlays,
-        authedProviders,
+        availabilitySet,
       )
     }
   }
@@ -194,7 +204,7 @@ function applyAgentOverlays(
   config: AgentConfig,
   agentInfo: { name: string; category?: string },
   overlays: ResolvedAgentOverlaySet,
-  authedProviders: ReadonlySet<string>,
+  availabilitySet: ReadonlySet<string> | undefined,
 ): AgentConfig {
   const id = agentInfo.category
     ? `${agentInfo.category}/${agentInfo.name}`
@@ -222,21 +232,37 @@ function applyAgentOverlays(
   // Source defaults defensively replace any bundled markdown model before
   // high-trust overlays apply. Precedence: exact overlay > category overlay
   // > source model default > markdown / inheritance.
-  if (agentInfo.category) {
-    const sourceModel = getSourceCategoryModel(
-      agentInfo.category,
-      authedProviders,
-    )
-    if (sourceModel) {
-      result.model = sourceModel
+  //
+  // Variant flows alongside model. When a higher-precedence overlay sets model
+  // but not variant, the source variant is cleared to avoid pairing a
+  // user-selected model with a source-selected variant.
+  // Skip source-default pinning when availability is unknown — model
+  // discovery failed and pinning a source default would risk emitting an
+  // agent the user cannot use. Inheriting OpenCode's parent model is the
+  // safer degraded behavior.
+  if (agentInfo.category && availabilitySet !== undefined) {
+    const resolved = resolveSourceModel(agentInfo.category, availabilitySet)
+    result.model = `${resolved.provider}/${resolved.model}`
+    if (resolved.variant !== undefined) {
+      result.variant = resolved.variant
+    } else {
+      delete result.variant
     }
   }
 
   if (categoryOverlay) {
-    applyOverlayObject(result, categoryOverlay.value, permissionRules)
+    applyOverlayObjectWithVariantClearing(
+      result,
+      categoryOverlay.value,
+      permissionRules,
+    )
   }
   if (exactOverlay) {
-    applyOverlayObject(result, exactOverlay.value, permissionRules)
+    applyOverlayObjectWithVariantClearing(
+      result,
+      exactOverlay.value,
+      permissionRules,
+    )
   }
 
   if (hasPermissionOverlay) {
@@ -271,11 +297,23 @@ const OVERLAY_ASSIGN_FIELDS = [
   'hidden',
 ] as const
 
-function applyOverlayObject(
+function applyOverlayObjectWithVariantClearing(
   target: AgentConfig,
   overlay: Record<string, unknown>,
   permissionRules: PermissionRuleAccumulator,
 ): void {
+  // When an overlay sets model but not variant, clear any lower-precedence
+  // variant so the user-selected model is not paired with a stale source variant.
+  // `model: null` (explicit inheritance opt-out) also counts as setting
+  // model — without this, `model: null` without `variant` would silently
+  // keep a stale source variant attached to OpenCode's inherited parent
+  // model.
+  const overlayHasModel = Object.hasOwn(overlay, 'model')
+  const overlayHasVariant = Object.hasOwn(overlay, 'variant')
+  if (overlayHasModel && !overlayHasVariant) {
+    delete target.variant
+  }
+
   for (const field of OVERLAY_ASSIGN_FIELDS) {
     if (Object.hasOwn(overlay, field)) {
       // model: null means "restore inheritance" — delete any source default
@@ -434,8 +472,6 @@ function collectEnabledSkillNames(
 export function createConfigHandler(deps: ConfigHandlerDeps) {
   const { directory, bundledSkillsDir, bundledAgentsDir, bundledCommandsDir } =
     deps
-  const readAuthProviders =
-    deps.getAuthenticatedProviders ?? getAuthenticatedProviders
 
   return async (config: Config): Promise<void> => {
     const { config: systematicConfig, overlays } =
@@ -464,13 +500,23 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
     })
     const resolvedOverlays = resolveAgentOverlaySet(validatedOverlays)
 
-    const authedProviders = readAuthProviders()
+    // When the client is unavailable (tests that don't inject it), or when
+    // discovery fails entirely (API + cache both unreachable), we fall
+    // through to OpenCode parent-model inheritance for bundled agents
+    // rather than pinning potentially-wrong defaults.
+    const availability = deps.client
+      ? await getAvailableModels(deps.client)
+      : undefined
+    const availabilitySet =
+      availability && availability.status !== 'unknown'
+        ? availability.models
+        : undefined
     const bundledAgents = collectAgents(
       bundledAgentsDir,
       systematicConfig.disabled_agents,
       existingAgents,
       resolvedOverlays,
-      authedProviders,
+      availabilitySet,
     )
 
     const bundledCommands = collectCommands(
