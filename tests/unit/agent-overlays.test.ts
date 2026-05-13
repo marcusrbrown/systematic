@@ -13,6 +13,7 @@ import {
 import type { SourcedOverlayConfig } from '../../src/lib/config.js'
 import { createConfigHandler } from '../../src/lib/config-handler.js'
 import { SECURITY_OVERLAY_FIELDS } from '../../src/lib/config-schema.js'
+import { SOURCE_CATEGORY_MODEL_DEFAULTS } from '../../src/lib/source-model-defaults.js'
 
 function withTempDir(run: (dir: string) => void): void {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-overlays-'))
@@ -611,7 +612,7 @@ describe('source category model defaults', () => {
   test('accepts multi-entry valid array in source category model defaults', () => {
     expect(() =>
       validateSourceCategoryModelDefaults({
-        review: ['openai/gpt-5.5', 'anthropic/claude-opus-4-7'],
+        review: ['openai/gpt-5.5', 'anthropic/claude-opus-4-7'], // intentional fixture: arbitrary valid strings for flat-array validator, not mirroring source defaults
       }),
     ).not.toThrow()
   })
@@ -676,7 +677,11 @@ describe('variant emission via overlay flow', () => {
 
   test('integration: source variant emitted when no override', async () => {
     await withVariantTestEnv(null, async (agentsDir, projectDir) => {
-      // review category, last-resort: anthropic/claude-sonnet-4-6, no variant
+      // review category, last-resort: first provider/model from SOURCE_CATEGORY_MODEL_DEFAULTS.review
+      const reviewDefaults = SOURCE_CATEGORY_MODEL_DEFAULTS.review
+      const firstProvider = reviewDefaults.providers[0]
+      const firstModel = firstProvider.models[0]
+      const expectedModel = `${firstProvider.provider}/${firstModel.model}`
       const handler = createConfigHandler({
         directory: projectDir,
         bundledSkillsDir: path.join(agentsDir, '..', 'skills'),
@@ -689,7 +694,7 @@ describe('variant emission via overlay flow', () => {
       const agent = (config.agent as Record<string, unknown> | undefined)?.[
         'correctness-reviewer'
       ] as Record<string, unknown> | undefined
-      expect(agent?.model).toBe('anthropic/claude-sonnet-4-6')
+      expect(agent?.model).toBe(expectedModel)
       expect(agent?.variant).toBeUndefined()
     })
   })
@@ -716,10 +721,11 @@ describe('variant emission via overlay flow', () => {
   })
 
   test('integration: partial model override at category level clears source variant', async () => {
-    // review category resolves to anthropic/claude-sonnet-4-6 (no variant) by default.
+    // review category resolves to source default (no variant) by default.
     // Override model at category level without variant → no variant in emitted config.
+    // intentional fixture: 'openai/gpt-5.5' deliberately differs from source defaults to test override behavior
     await withVariantTestEnv(
-      { categories: { review: { model: 'openai/gpt-5.5' } } },
+      { categories: { review: { model: 'openai/gpt-5.5' } } }, // intentional fixture: differs from source defaults to test override
       async (agentsDir, projectDir) => {
         const handler = createConfigHandler({
           directory: projectDir,
@@ -733,7 +739,7 @@ describe('variant emission via overlay flow', () => {
         const agent = (config.agent as Record<string, unknown> | undefined)?.[
           'correctness-reviewer'
         ] as Record<string, unknown> | undefined
-        expect(agent?.model).toBe('openai/gpt-5.5')
+        expect(agent?.model).toBe('openai/gpt-5.5') // intentional fixture: differs from source defaults to test override
         expect(agent?.variant).toBeUndefined()
       },
     )
@@ -763,20 +769,6 @@ describe('Zod-backed overlay validation', () => {
     const derived = Array.from(SECURITY_OVERLAY_FIELDS)
     const expected = ['model', 'variant', 'skills', 'permission']
     expect(derived.sort()).toEqual(expected.sort())
-  })
-
-  test('assertSourceCategoryModelDefaults passes for actual constants', () => {
-    const actualConstants = {
-      design: ['openai/gpt-5.5', 'anthropic/claude-opus-4-7'],
-      docs: ['openai/gpt-5.4-mini', 'anthropic/claude-haiku-4-5'],
-      'document-review': ['anthropic/claude-opus-4-7', 'openai/gpt-5.5'],
-      research: ['openai/gpt-5.5', 'anthropic/claude-opus-4-7'],
-      review: ['anthropic/claude-opus-4-7', 'openai/gpt-5.5'],
-      workflow: ['openai/gpt-5.4-mini', 'anthropic/claude-haiku-4-5'],
-    }
-    expect(() =>
-      validateSourceCategoryModelDefaults(actualConstants),
-    ).not.toThrow()
   })
 
   test('validateAgentOverlays accepts trust-sensitive field from high-trust source', () => {

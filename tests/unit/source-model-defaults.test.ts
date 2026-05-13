@@ -11,6 +11,13 @@ import {
 } from '../../src/lib/source-model-defaults.js'
 
 describe('SOURCE_CATEGORY_MODEL_DEFAULTS', () => {
+  test('golden snapshot', () => {
+    // Captures only the exported constant — not resolveSourceModel, formatForDocs,
+    // or any availability-derived state. Renovate/plugin bumps cannot change this
+    // snapshot unless SOURCE_CATEGORY_MODEL_DEFAULTS itself changes.
+    expect(SOURCE_CATEGORY_MODEL_DEFAULTS).toMatchSnapshot()
+  })
+
   test('happy path: schema parse of the actual constant succeeds', () => {
     const result = SourceCategoryDefaultsSchema.safeParse(
       SOURCE_CATEGORY_MODEL_DEFAULTS,
