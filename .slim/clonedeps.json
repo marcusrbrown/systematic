@@ -1,0 +1,24 @@
+{
+  "version": "1.0.0",
+  "updatedAt": "2026-05-12T21:59:00.000Z",
+  "dependencies": [
+    {
+      "name": "@opencode-ai/sdk",
+      "resolvedVersion": "1.14.41",
+      "repoUrl": "https://github.com/anomalyco/opencode.git",
+      "ref": "v1.14.41",
+      "path": ".slim/clonedeps/repos/anomalyco__opencode",
+      "packagePath": "packages/sdk/js",
+      "reason": "Inspect OpencodeClient construction, client.provider.list() and client.model.list() runtime behavior — unknowns deferred to Unit 2 implementation in the active client-API source-model resolution plan"
+    },
+    {
+      "name": "@opencode-ai/plugin",
+      "resolvedVersion": "1.14.41",
+      "repoUrl": "https://github.com/anomalyco/opencode.git",
+      "ref": "v1.14.41",
+      "path": ".slim/clonedeps/repos/anomalyco__opencode",
+      "packagePath": "packages/plugin",
+      "reason": "Inspect plugin loader hook iteration order, PluginInput.client construction site, and config-hook invocation lifecycle — verifies the FIFO assumption and per-invocation freshness contract from PR #352"
+    }
+  ]
+}

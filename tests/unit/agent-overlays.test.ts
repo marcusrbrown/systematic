@@ -1,4 +1,4 @@
-import { describe, expect, spyOn, test } from 'bun:test'
+import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -6,14 +6,13 @@ import {
   assertSourceCategoryModelCoverage,
   type BundledAgentInventory,
   buildBundledAgentInventory,
-  getAuthenticatedProviders,
-  getSourceCategoryModel,
   inferBuiltInTemperature,
   validateAgentOverlays,
-  validateSourceCategoryModelDefaults,
 } from '../../src/lib/agent-overlays.js'
 import type { SourcedOverlayConfig } from '../../src/lib/config.js'
+import { createConfigHandler } from '../../src/lib/config-handler.js'
 import { SECURITY_OVERLAY_FIELDS } from '../../src/lib/config-schema.js'
+import { SOURCE_CATEGORY_MODEL_DEFAULTS } from '../../src/lib/source-model-defaults.js'
 
 function withTempDir(run: (dir: string) => void): void {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-overlays-'))
@@ -580,11 +579,6 @@ describe('inferBuiltInTemperature', () => {
 })
 
 describe('source category model defaults', () => {
-  test('returns no source model for unknown and uncategorized agents', () => {
-    expect(getSourceCategoryModel('unknown')).toBeUndefined()
-    expect(getSourceCategoryModel(undefined)).toBeUndefined()
-  })
-
   test('covers every discovered bundled category intentionally', () => {
     const inventory = buildBundledAgentInventory(
       path.join(process.cwd(), 'agents'),
@@ -595,300 +589,150 @@ describe('source category model defaults', () => {
       assertSourceCategoryModelCoverage(inventory.categories),
     ).not.toThrow()
   })
+})
 
-  test('rejects malformed source model defaults through the shared model validator', () => {
-    expect(() =>
-      validateSourceCategoryModelDefaults({ review: 'gpt-5' }),
-    ).toThrow(/review/)
+describe('variant emission via overlay flow', () => {
+  // Security-sensitive overlay fields (model, variant) can only be set in
+  // user config or OPENCODE_CONFIG_DIR config, not project-level config.
+  // Tests mock os.homedir() to isolate from the real user config.
+  function withVariantTestEnv(
+    systematicJson: Record<string, unknown> | null,
+    run: (agentsDir: string, projectDir: string) => Promise<void>,
+  ): Promise<void> {
+    const testDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-variant-'),
+    )
+    const agentsDir = path.join(testDir, 'agents')
+    const projectDir = path.join(testDir, 'project')
+    const fakeHome = path.join(testDir, 'home')
+    fs.mkdirSync(path.join(agentsDir, 'review'), { recursive: true })
+    fs.mkdirSync(path.join(projectDir, '.opencode'), { recursive: true })
+    fs.mkdirSync(path.join(fakeHome, '.config/opencode'), { recursive: true })
+    fs.writeFileSync(
+      path.join(agentsDir, 'review', 'correctness-reviewer.md'),
+      '---\nname: correctness-reviewer\ndescription: Reviews code\n---\nPrompt',
+    )
+    if (systematicJson !== null) {
+      // Write to user config (under fakeHome) — security overlay fields allowed here
+      fs.writeFileSync(
+        path.join(fakeHome, '.config/opencode/systematic.json'),
+        JSON.stringify(systematicJson),
+      )
+    }
+    const prevHomedir = os.homedir
+    os.homedir = () => fakeHome
+    return run(agentsDir, projectDir).finally(() => {
+      os.homedir = prevHomedir
+      fs.rmSync(testDir, { recursive: true, force: true })
+    })
+  }
+
+  function makeClient(
+    availability: string[],
+  ): Parameters<typeof createConfigHandler>[0]['client'] {
+    return {
+      config: {
+        providers: async () => ({
+          data: {
+            providers: availability.map((key) => {
+              const slash = key.indexOf('/')
+              const id = key.slice(0, slash)
+              const model = key.slice(slash + 1)
+              return { id, models: { [model]: {} } }
+            }),
+            default: {},
+          },
+          error: undefined,
+        }),
+      },
+    }
+  }
+
+  test('integration: source variant emitted when no override', async () => {
+    await withVariantTestEnv(null, async (agentsDir, projectDir) => {
+      // review category, last-resort: first provider/model from SOURCE_CATEGORY_MODEL_DEFAULTS.review
+      const reviewDefaults = SOURCE_CATEGORY_MODEL_DEFAULTS.review
+      const firstProvider = reviewDefaults.providers[0]
+      const firstModel = firstProvider.models[0]
+      const expectedModel = `${firstProvider.provider}/${firstModel.model}`
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(agentsDir, '..', 'skills'),
+        bundledAgentsDir: agentsDir,
+        bundledCommandsDir: path.join(agentsDir, '..', 'commands'),
+        client: makeClient([]),
+      })
+      const config: Record<string, unknown> = {}
+      await handler(config as Parameters<typeof handler>[0])
+      const agent = (config.agent as Record<string, unknown> | undefined)?.[
+        'correctness-reviewer'
+      ] as Record<string, unknown> | undefined
+      expect(agent?.model).toBe(expectedModel)
+      expect(agent?.variant).toBeUndefined()
+    })
   })
 
-  test('rejects empty array in source category model defaults', () => {
-    expect(() => validateSourceCategoryModelDefaults({ review: [] })).toThrow(
-      /review/,
+  test('integration: variant override at category level wins over source', async () => {
+    await withVariantTestEnv(
+      { categories: { review: { variant: 'high' } } },
+      async (agentsDir, projectDir) => {
+        const handler = createConfigHandler({
+          directory: projectDir,
+          bundledSkillsDir: path.join(agentsDir, '..', 'skills'),
+          bundledAgentsDir: agentsDir,
+          bundledCommandsDir: path.join(agentsDir, '..', 'commands'),
+          client: makeClient([]),
+        })
+        const config: Record<string, unknown> = {}
+        await handler(config as Parameters<typeof handler>[0])
+        const agent = (config.agent as Record<string, unknown> | undefined)?.[
+          'correctness-reviewer'
+        ] as Record<string, unknown> | undefined
+        expect(agent?.variant).toBe('high')
+      },
     )
   })
 
-  test('rejects array with malformed model entry through shared model validator', () => {
-    expect(() =>
-      validateSourceCategoryModelDefaults({ review: ['malformed-no-slash'] }),
-    ).toThrow(/review/)
+  test('integration: partial model override at category level clears source variant', async () => {
+    // review category resolves to source default (no variant) by default.
+    // Override model at category level without variant → no variant in emitted config.
+    // intentional fixture: 'openai/gpt-5.5' deliberately differs from source defaults to test override behavior
+    await withVariantTestEnv(
+      { categories: { review: { model: 'openai/gpt-5.5' } } }, // intentional fixture: differs from source defaults to test override
+      async (agentsDir, projectDir) => {
+        const handler = createConfigHandler({
+          directory: projectDir,
+          bundledSkillsDir: path.join(agentsDir, '..', 'skills'),
+          bundledAgentsDir: agentsDir,
+          bundledCommandsDir: path.join(agentsDir, '..', 'commands'),
+          client: makeClient([]),
+        })
+        const config: Record<string, unknown> = {}
+        await handler(config as Parameters<typeof handler>[0])
+        const agent = (config.agent as Record<string, unknown> | undefined)?.[
+          'correctness-reviewer'
+        ] as Record<string, unknown> | undefined
+        expect(agent?.model).toBe('openai/gpt-5.5') // intentional fixture: differs from source defaults to test override
+        expect(agent?.variant).toBeUndefined()
+      },
+    )
   })
 
-  test('accepts multi-entry valid array in source category model defaults', () => {
-    expect(() =>
-      validateSourceCategoryModelDefaults({
-        review: ['openai/gpt-5.5', 'anthropic/claude-opus-4-7'],
-      }),
-    ).not.toThrow()
-  })
-})
-
-describe('getAuthenticatedProviders', () => {
-  test('returns set with single provider from auth.json', () => {
-    withTempDir((dir) => {
-      const authDir = path.join(dir, 'opencode')
-      fs.mkdirSync(authDir, { recursive: true })
-      fs.writeFileSync(
-        path.join(authDir, 'auth.json'),
-        JSON.stringify({ openai: { type: 'api', key: 'x' } }),
-      )
-      const result = getAuthenticatedProviders(dir)
-      expect(result).toEqual(new Set(['openai']))
-    })
-  })
-
-  test('returns set with multiple providers from auth.json', () => {
-    withTempDir((dir) => {
-      const authDir = path.join(dir, 'opencode')
-      fs.mkdirSync(authDir, { recursive: true })
-      fs.writeFileSync(
-        path.join(authDir, 'auth.json'),
-        JSON.stringify({ 'github-copilot': {}, anthropic: {} }),
-      )
-      const result = getAuthenticatedProviders(dir)
-      expect(result).toEqual(new Set(['github-copilot', 'anthropic']))
-    })
-  })
-
-  test('returns empty set silently when auth.json is missing', () => {
-    withTempDir((dir) => {
-      const warnSpy = spyOn(console, 'warn')
-      try {
-        const result = getAuthenticatedProviders(dir)
-        expect(result).toEqual(new Set())
-        expect(warnSpy).not.toHaveBeenCalled()
-      } finally {
-        warnSpy.mockRestore()
-      }
-    })
-  })
-
-  test('returns empty set and warns when auth.json is unreadable', () => {
-    withTempDir((dir) => {
-      const authDir = path.join(dir, 'opencode')
-      const authPath = path.join(authDir, 'auth.json')
-      fs.mkdirSync(authDir, { recursive: true })
-      fs.writeFileSync(authPath, JSON.stringify({ openai: {} }))
-      fs.chmodSync(authPath, 0o000)
-
-      const warnSpy = spyOn(console, 'warn')
-      try {
-        const result = getAuthenticatedProviders(dir)
-        expect(result).toEqual(new Set())
-        expect(warnSpy).toHaveBeenCalledTimes(1)
-        const msg = warnSpy.mock.calls[0][0]
-        expect(msg).toContain('[systematic]')
-        expect(msg).toContain('auth.json')
-        expect(msg).toContain('unreadable')
-        expect(msg).toContain(authPath)
-      } finally {
-        warnSpy.mockRestore()
-        fs.chmodSync(authPath, 0o644)
-      }
-    })
-  })
-
-  test('returns empty set and warns when auth.json contains malformed JSON', () => {
-    withTempDir((dir) => {
-      const authDir = path.join(dir, 'opencode')
-      const authPath = path.join(authDir, 'auth.json')
-      fs.mkdirSync(authDir, { recursive: true })
-      fs.writeFileSync(authPath, '{not valid', 'utf8')
-
-      const warnSpy = spyOn(console, 'warn')
-      try {
-        const result = getAuthenticatedProviders(dir)
-        expect(result).toEqual(new Set())
-        expect(warnSpy).toHaveBeenCalledTimes(1)
-        const msg = warnSpy.mock.calls[0][0]
-        expect(msg).toContain('[systematic]')
-        expect(msg).toContain('auth.json')
-        expect(msg).toContain('malformed')
-        expect(msg).toContain(authPath)
-      } finally {
-        warnSpy.mockRestore()
-      }
-    })
-  })
-
-  test('returns empty set when auth.json parses to a non-object', () => {
-    withTempDir((dir) => {
-      const authDir = path.join(dir, 'opencode')
-      const authPath = path.join(authDir, 'auth.json')
-      fs.mkdirSync(authDir, { recursive: true })
-      fs.writeFileSync(
-        authPath,
-        JSON.stringify(['array', 'not', 'object']),
-        'utf8',
-      )
-
-      const warnSpy = spyOn(console, 'warn')
-      try {
-        const result = getAuthenticatedProviders(dir)
-        expect(result).toEqual(new Set())
-        expect(warnSpy).toHaveBeenCalledTimes(1)
-        const msg = warnSpy.mock.calls[0][0]
-        expect(msg).toContain('malformed')
-      } finally {
-        warnSpy.mockRestore()
-      }
-    })
-  })
-
-  test('returns keys only without inspecting nested values', () => {
-    withTempDir((dir) => {
-      const authDir = path.join(dir, 'opencode')
-      fs.mkdirSync(authDir, { recursive: true })
-      fs.writeFileSync(
-        path.join(authDir, 'auth.json'),
-        JSON.stringify({ openai: { type: 'api', key: 'sk-secret' } }),
-      )
-      const result = getAuthenticatedProviders(dir)
-      expect(result).toEqual(new Set(['openai']))
-      expect([...result]).toEqual(['openai'])
-    })
-  })
-})
-
-describe('getAuthenticatedProviders integration', () => {
-  test('does not leak auth.json nested values in output', () => {
-    withTempDir((dir) => {
-      const authDir = path.join(dir, 'opencode')
-      fs.mkdirSync(authDir, { recursive: true })
-      const secretKey = 'sk-test-do-not-leak-XXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
-      fs.writeFileSync(
-        path.join(authDir, 'auth.json'),
-        JSON.stringify({ openai: { type: 'api', key: secretKey } }),
-      )
-
-      const warnSpy = spyOn(console, 'warn')
-      const logSpy = spyOn(console, 'log')
-      try {
-        const result = getAuthenticatedProviders(dir)
-        expect(result).toEqual(new Set(['openai']))
-
-        const allOutputs = [
-          ...warnSpy.mock.calls.map((c) => String(c[0])),
-          ...logSpy.mock.calls.map((c) => String(c[0])),
-        ]
-        const joined = allOutputs.join(' ')
-
-        // The literal secret must not appear in any output
-        expect(joined).not.toContain(secretKey)
-
-        // No token-like strings (30+ alphanumeric/underscore/hyphen characters)
-        const tokenPattern = /[A-Za-z0-9_-]{30,}/
-        expect(joined).not.toMatch(tokenPattern)
-      } finally {
-        warnSpy.mockRestore()
-        logSpy.mockRestore()
-      }
-    })
-  })
-
-  test('does not modify auth.json file', () => {
-    withTempDir((dir) => {
-      const authDir = path.join(dir, 'opencode')
-      const authPath = path.join(authDir, 'auth.json')
-      fs.mkdirSync(authDir, { recursive: true })
-      const initialContent = JSON.stringify({
-        openai: { type: 'api', key: 'x' },
+  test('integration: variant absence preserved when source has no variant', async () => {
+    await withVariantTestEnv(null, async (agentsDir, projectDir) => {
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(agentsDir, '..', 'skills'),
+        bundledAgentsDir: agentsDir,
+        bundledCommandsDir: path.join(agentsDir, '..', 'commands'),
+        client: makeClient([]),
       })
-      fs.writeFileSync(authPath, initialContent, 'utf8')
-
-      const beforeStat = fs.statSync(authPath)
-
-      getAuthenticatedProviders(dir)
-
-      const afterStat = fs.statSync(authPath)
-      expect(afterStat.mtimeMs).toBe(beforeStat.mtimeMs)
-      expect(afterStat.size).toBe(beforeStat.size)
-    })
-  })
-})
-
-describe('getAuthenticatedProviders XDG_DATA_HOME resolution', () => {
-  test('uses XDG_DATA_HOME when set to an absolute path', () => {
-    withTempDir((dir) => {
-      const xdgDataHome = path.join(dir, 'xdg-data')
-      const authDir = path.join(xdgDataHome, 'opencode')
-      fs.mkdirSync(authDir, { recursive: true })
-      fs.writeFileSync(
-        path.join(authDir, 'auth.json'),
-        JSON.stringify({ 'github-copilot': { type: 'oauth' } }),
-        'utf8',
-      )
-
-      const previousXdg = process.env.XDG_DATA_HOME
-      process.env.XDG_DATA_HOME = xdgDataHome
-      try {
-        const result = getAuthenticatedProviders()
-        expect(result.has('github-copilot')).toBe(true)
-      } finally {
-        if (previousXdg === undefined) {
-          delete process.env.XDG_DATA_HOME
-        } else {
-          process.env.XDG_DATA_HOME = previousXdg
-        }
-      }
-    })
-  })
-
-  test('falls back to os.homedir() when XDG_DATA_HOME is empty', () => {
-    withTempDir((dir) => {
-      const fakeHome = path.join(dir, 'fake-home')
-      const authDir = path.join(fakeHome, '.local/share/opencode')
-      fs.mkdirSync(authDir, { recursive: true })
-      fs.writeFileSync(
-        path.join(authDir, 'auth.json'),
-        JSON.stringify({ openai: { type: 'api', key: 'x' } }),
-        'utf8',
-      )
-
-      const previousXdg = process.env.XDG_DATA_HOME
-      const previousHomedir = os.homedir
-      process.env.XDG_DATA_HOME = ''
-      os.homedir = () => fakeHome
-      try {
-        const result = getAuthenticatedProviders()
-        expect(result.has('openai')).toBe(true)
-      } finally {
-        os.homedir = previousHomedir
-        if (previousXdg === undefined) {
-          delete process.env.XDG_DATA_HOME
-        } else {
-          process.env.XDG_DATA_HOME = previousXdg
-        }
-      }
-    })
-  })
-
-  test('falls back to os.homedir() when XDG_DATA_HOME is non-absolute', () => {
-    withTempDir((dir) => {
-      const fakeHome = path.join(dir, 'fake-home')
-      const authDir = path.join(fakeHome, '.local/share/opencode')
-      fs.mkdirSync(authDir, { recursive: true })
-      fs.writeFileSync(
-        path.join(authDir, 'auth.json'),
-        JSON.stringify({ anthropic: { type: 'api', key: 'x' } }),
-        'utf8',
-      )
-
-      const previousXdg = process.env.XDG_DATA_HOME
-      const previousHomedir = os.homedir
-      process.env.XDG_DATA_HOME = 'relative/path'
-      os.homedir = () => fakeHome
-      try {
-        const result = getAuthenticatedProviders()
-        expect(result.has('anthropic')).toBe(true)
-      } finally {
-        os.homedir = previousHomedir
-        if (previousXdg === undefined) {
-          delete process.env.XDG_DATA_HOME
-        } else {
-          process.env.XDG_DATA_HOME = previousXdg
-        }
-      }
+      const config: Record<string, unknown> = {}
+      await handler(config as Parameters<typeof handler>[0])
+      const agent = (config.agent as Record<string, unknown> | undefined)?.[
+        'correctness-reviewer'
+      ] as Record<string, unknown> | undefined
+      expect(Object.hasOwn(agent ?? {}, 'variant')).toBe(false)
     })
   })
 })
@@ -898,20 +742,6 @@ describe('Zod-backed overlay validation', () => {
     const derived = Array.from(SECURITY_OVERLAY_FIELDS)
     const expected = ['model', 'variant', 'skills', 'permission']
     expect(derived.sort()).toEqual(expected.sort())
-  })
-
-  test('assertSourceCategoryModelDefaults passes for actual constants', () => {
-    const actualConstants = {
-      design: ['openai/gpt-5.5', 'anthropic/claude-opus-4-7'],
-      docs: ['openai/gpt-5.4-mini', 'anthropic/claude-haiku-4-5'],
-      'document-review': ['anthropic/claude-opus-4-7', 'openai/gpt-5.5'],
-      research: ['openai/gpt-5.5', 'anthropic/claude-opus-4-7'],
-      review: ['anthropic/claude-opus-4-7', 'openai/gpt-5.5'],
-      workflow: ['openai/gpt-5.4-mini', 'anthropic/claude-haiku-4-5'],
-    }
-    expect(() =>
-      validateSourceCategoryModelDefaults(actualConstants),
-    ).not.toThrow()
   })
 
   test('validateAgentOverlays accepts trust-sensitive field from high-trust source', () => {

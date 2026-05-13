@@ -6,7 +6,6 @@ import {
 } from '../../src/lib/agent-colors.js'
 import {
   AgentOverlaySchema,
-  assertSourceCategoryModelDefaults,
   BootstrapSchema,
   CategoryOverlaySchema,
   SECURITY_OVERLAY_FIELDS,
@@ -239,63 +238,6 @@ describe('SystematicConfigSchema', () => {
       expect(issue.keys).toContain('foo')
       // Path should indicate the agent overlay context
       expect(issue.path).toEqual(['agents', 'explorer'])
-    }
-  })
-})
-
-describe('assertSourceCategoryModelDefaults', () => {
-  test('passes for the actual SOURCE_CATEGORY_MODEL_DEFAULTS constant', () => {
-    const actualConstants = {
-      design: ['openai/gpt-5.5', 'anthropic/claude-opus-4-7'],
-      docs: ['openai/gpt-5.4-mini', 'anthropic/claude-haiku-4-5'],
-      'document-review': ['anthropic/claude-opus-4-7', 'openai/gpt-5.5'],
-      research: ['openai/gpt-5.5', 'anthropic/claude-opus-4-7'],
-      review: ['anthropic/claude-opus-4-7', 'openai/gpt-5.5'],
-      workflow: ['openai/gpt-5.4-mini', 'anthropic/claude-haiku-4-5'],
-    }
-
-    expect(() =>
-      assertSourceCategoryModelDefaults(actualConstants),
-    ).not.toThrow()
-  })
-
-  test('throws with a path-named error for an intentionally bad mock', () => {
-    // A record with invalid values (numbers instead of string arrays)
-    const badMock = {
-      design: 42,
-      research: ['openai/valid-model'],
-    }
-
-    expect(() => assertSourceCategoryModelDefaults(badMock)).toThrow()
-    // Specifically check the error message contains the offending field path
-    try {
-      assertSourceCategoryModelDefaults(badMock)
-    } catch (err) {
-      const error = err as Error
-      expect(error.message).toMatch(/design/)
-      expect(error.message).not.toMatch(/research/)
-    }
-  })
-
-  test('throws for empty array (must have at least one entry)', () => {
-    const badMock = { design: [] }
-    expect(() => assertSourceCategoryModelDefaults(badMock)).toThrow()
-    try {
-      assertSourceCategoryModelDefaults(badMock)
-    } catch (err) {
-      const error = err as Error
-      expect(error.message).toMatch(/design/)
-    }
-  })
-
-  test('throws for empty string in model defaults', () => {
-    const badMock = { design: [''] }
-    expect(() => assertSourceCategoryModelDefaults(badMock)).toThrow()
-    try {
-      assertSourceCategoryModelDefaults(badMock)
-    } catch (err) {
-      const error = err as Error
-      expect(error.message).toMatch(/design/)
     }
   })
 })

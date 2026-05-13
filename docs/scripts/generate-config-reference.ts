@@ -24,6 +24,7 @@ import {
   SCHEMA_ID_TEMPLATE,
 } from '../../scripts/generate-config-schema.js'
 import { SystematicConfigSchema } from '../../src/lib/config-schema.js'
+import { formatForDocs } from '../../src/lib/source-model-defaults.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -461,6 +462,79 @@ function checkExamples(
   }
 }
 
+const SOURCE_DEFAULTS_START = '{/* SYSTEMATIC:SOURCE-DEFAULTS:START */}'
+const SOURCE_DEFAULTS_END = '{/* SYSTEMATIC:SOURCE-DEFAULTS:END */}'
+const SOURCE_DEFAULTS_HEADING = '### Source Category Model Defaults'
+
+/**
+ * Inject the generated source-defaults table into `configuration.mdx`.
+ *
+ * Boundary strategy:
+ * - Finds SYSTEMATIC:SOURCE-DEFAULTS:START and SYSTEMATIC:SOURCE-DEFAULTS:END
+ *   MDX comment delimiters under the "### Source Category Model Defaults" heading.
+ * - Replaces only the content between the delimiters with the generated table.
+ * - Preserves all prose outside the delimiters byte-for-byte.
+ * - If delimiters are absent, inserts them under the heading on first run.
+ * - If delimiters are malformed (only one present, or START after END), throws a clear error.
+ * - Idempotent: running twice with no source changes produces byte-identical output.
+ *
+ * @param mdxPath  Absolute path to the configuration.mdx file.
+ * @returns        The updated file content as a string.
+ */
+export function injectSourceDefaultsTable(mdxPath: string): string {
+  const original = fs.readFileSync(mdxPath, 'utf-8')
+  const table = formatForDocs()
+
+  const startIdx = original.indexOf(SOURCE_DEFAULTS_START)
+  const endIdx = original.indexOf(SOURCE_DEFAULTS_END)
+
+  // Validate delimiter state
+  if (startIdx !== -1 && endIdx !== -1) {
+    // Both present — validate ordering
+    if (startIdx > endIdx) {
+      const startLine = original.slice(0, startIdx).split('\n').length
+      const endLine = original.slice(0, endIdx).split('\n').length
+      throw new Error(
+        `Malformed delimiters in ${mdxPath}: START delimiter (line ${startLine}) appears after END delimiter (line ${endLine}). Fix the file manually before running the generator.`,
+      )
+    }
+    // Replace content between delimiters
+    const before = original.slice(0, startIdx + SOURCE_DEFAULTS_START.length)
+    const after = original.slice(endIdx)
+    return `${before}\n${table}${after}`
+  }
+
+  if (startIdx !== -1 && endIdx === -1) {
+    const startLine = original.slice(0, startIdx).split('\n').length
+    throw new Error(
+      `Malformed delimiters in ${mdxPath}: START delimiter found at line ${startLine} but END delimiter is missing. Fix the file manually before running the generator.`,
+    )
+  }
+
+  if (startIdx === -1 && endIdx !== -1) {
+    const endLine = original.slice(0, endIdx).split('\n').length
+    throw new Error(
+      `Malformed delimiters in ${mdxPath}: END delimiter found at line ${endLine} but START delimiter is missing. Fix the file manually before running the generator.`,
+    )
+  }
+
+  // Neither delimiter present — insert under the heading on first run
+  const headingIdx = original.indexOf(`\n${SOURCE_DEFAULTS_HEADING}\n`)
+  if (headingIdx === -1) {
+    throw new Error(
+      `Cannot inject source-defaults table: heading "${SOURCE_DEFAULTS_HEADING}" not found in ${mdxPath}. Add the heading manually or check the file path.`,
+    )
+  }
+
+  // Find the end of the heading line
+  const afterHeadingNewline =
+    headingIdx + `\n${SOURCE_DEFAULTS_HEADING}\n`.length
+  const before = original.slice(0, afterHeadingNewline)
+  const after = original.slice(afterHeadingNewline)
+
+  return `${before}\n${SOURCE_DEFAULTS_START}\n${table}${SOURCE_DEFAULTS_END}\n${after}`
+}
+
 /**
  * Run the generator and return an exit code (0 = success, 1 = error).
  * Replaces `process.exit(1)` with a return value for testability.
@@ -499,6 +573,22 @@ function main(): void {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     console.error(`Error generating config reference:\n${msg}`)
+    process.exit(1)
+  }
+
+  // Inject source-defaults table into configuration.mdx
+  const configMdxPath = path.join(
+    PROJECT_ROOT,
+    'docs/src/content/docs/getting-started/configuration.mdx',
+  )
+  try {
+    const updated = injectSourceDefaultsTable(configMdxPath)
+    fs.writeFileSync(configMdxPath, updated, 'utf-8')
+    const relPath = path.relative(PROJECT_ROOT, configMdxPath)
+    console.log(`✓ Injected source-defaults table into ${relPath}`)
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err)
+    console.error(`Error injecting source-defaults table:\n${msg}`)
     process.exit(1)
   }
 }
