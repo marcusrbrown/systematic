@@ -59,6 +59,7 @@ const modelSchema = z
 const variantSchema = z
   .string()
   .min(1)
+  .max(128, 'variant must be at most 128 characters')
   .regex(/^\S+$/, 'must be a non-empty string without whitespace')
   .meta({
     description: 'Model variant identifier',
