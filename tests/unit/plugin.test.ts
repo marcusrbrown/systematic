@@ -618,6 +618,22 @@ describe('applyBootstrapContent marker-based idempotency', () => {
     expect(openTagCount).toBe(2)
   })
 
+  test('malformed open-only marker fragment survives sequential transforms', () => {
+    const malformed = `${MARKER_OPEN} USER FRAGMENT KEEP`
+    const output = { system: [malformed] }
+
+    applyBootstrapContent(output, wrap('FIRST REGISTRATION'))
+    applyBootstrapContent(output, wrap('SECOND REGISTRATION'))
+
+    const result = output.system[0]
+    expect(result).toContain(malformed)
+    expect(result).toContain('SECOND REGISTRATION')
+    expect(result).not.toContain('FIRST REGISTRATION')
+    const closeTagCount = (result.match(new RegExp(MARKER_CLOSE, 'g')) ?? [])
+      .length
+    expect(closeTagCount).toBe(1)
+  })
+
   test('completes in linear time on malicious input with many opening markers and no closing tag', () => {
     // Regression: the prior regex implementation was vulnerable to ReDoS on
     // inputs starting with the opening marker repeated and missing a closing

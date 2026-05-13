@@ -22,7 +22,7 @@ const BOOTSTRAP_MARKER_CLOSE = '</SYSTEMATIC_WORKFLOWS>'
 const findBootstrapMarkerBlock = (
   entry: string,
   fromIndex = 0,
-): { start: number; end: number } | null => {
+): { start: number; closeStart: number; end: number } | null => {
   const start = entry.indexOf(BOOTSTRAP_MARKER_OPEN, fromIndex)
   if (start === -1) return null
   const closeStart = entry.indexOf(
@@ -30,7 +30,7 @@ const findBootstrapMarkerBlock = (
     start + BOOTSTRAP_MARKER_OPEN.length,
   )
   if (closeStart === -1) return null
-  return { start, end: closeStart + BOOTSTRAP_MARKER_CLOSE.length }
+  return { start, closeStart, end: closeStart + BOOTSTRAP_MARKER_CLOSE.length }
 }
 
 const removeCompleteBootstrapBlocks = (entry: string): string => {
@@ -39,6 +39,18 @@ const removeCompleteBootstrapBlocks = (entry: string): string => {
   let block = findBootstrapMarkerBlock(entry, cursor)
 
   while (block !== null) {
+    const nestedStart = entry.indexOf(
+      BOOTSTRAP_MARKER_OPEN,
+      block.start + BOOTSTRAP_MARKER_OPEN.length,
+    )
+
+    if (nestedStart !== -1 && nestedStart < block.closeStart) {
+      segments.push(entry.slice(cursor, nestedStart))
+      cursor = nestedStart
+      block = findBootstrapMarkerBlock(entry, cursor)
+      continue
+    }
+
     segments.push(entry.slice(cursor, block.start))
     cursor = block.end
     block = findBootstrapMarkerBlock(entry, cursor)
