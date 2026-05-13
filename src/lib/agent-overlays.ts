@@ -240,6 +240,10 @@ export function getAuthenticatedProviders(
   return new Set(Object.keys(parsed))
 }
 
+/**
+ * @deprecated Use `resolveSourceModel` from `./source-model-defaults.js` instead.
+ * This function will be removed in a future unit.
+ */
 export function getSourceCategoryModel(
   category: string | undefined,
   authedProviders?: ReadonlySet<string>,

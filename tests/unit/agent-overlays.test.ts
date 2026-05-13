@@ -13,6 +13,7 @@ import {
   validateSourceCategoryModelDefaults,
 } from '../../src/lib/agent-overlays.js'
 import type { SourcedOverlayConfig } from '../../src/lib/config.js'
+import { createConfigHandler } from '../../src/lib/config-handler.js'
 import { SECURITY_OVERLAY_FIELDS } from '../../src/lib/config-schema.js'
 
 function withTempDir(run: (dir: string) => void): void {
@@ -889,6 +890,147 @@ describe('getAuthenticatedProviders XDG_DATA_HOME resolution', () => {
           process.env.XDG_DATA_HOME = previousXdg
         }
       }
+    })
+  })
+})
+
+describe('variant emission via overlay flow', () => {
+  // Security-sensitive overlay fields (model, variant) can only be set in
+  // user config or OPENCODE_CONFIG_DIR config, not project-level config.
+  // Tests mock os.homedir() to isolate from the real user config.
+  function withVariantTestEnv(
+    systematicJson: Record<string, unknown> | null,
+    run: (agentsDir: string, projectDir: string) => Promise<void>,
+  ): Promise<void> {
+    const testDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-variant-'),
+    )
+    const agentsDir = path.join(testDir, 'agents')
+    const projectDir = path.join(testDir, 'project')
+    const fakeHome = path.join(testDir, 'home')
+    fs.mkdirSync(path.join(agentsDir, 'review'), { recursive: true })
+    fs.mkdirSync(path.join(projectDir, '.opencode'), { recursive: true })
+    fs.mkdirSync(path.join(fakeHome, '.config/opencode'), { recursive: true })
+    fs.writeFileSync(
+      path.join(agentsDir, 'review', 'correctness-reviewer.md'),
+      '---\nname: correctness-reviewer\ndescription: Reviews code\n---\nPrompt',
+    )
+    if (systematicJson !== null) {
+      // Write to user config (under fakeHome) — security overlay fields allowed here
+      fs.writeFileSync(
+        path.join(fakeHome, '.config/opencode/systematic.json'),
+        JSON.stringify(systematicJson),
+      )
+    }
+    const prevHomedir = os.homedir
+    os.homedir = () => fakeHome
+    return run(agentsDir, projectDir).finally(() => {
+      os.homedir = prevHomedir
+      fs.rmSync(testDir, { recursive: true, force: true })
+    })
+  }
+
+  function makeClient(
+    availability: string[],
+  ): Parameters<typeof createConfigHandler>[0]['client'] {
+    return {
+      config: {
+        providers: async () => ({
+          data: {
+            providers: availability.map((key) => {
+              const slash = key.indexOf('/')
+              const id = key.slice(0, slash)
+              const model = key.slice(slash + 1)
+              return { id, models: { [model]: {} } }
+            }),
+            default: {},
+          },
+          error: undefined,
+        }),
+      },
+    }
+  }
+
+  test('integration: source variant emitted when no override', async () => {
+    await withVariantTestEnv(null, async (agentsDir, projectDir) => {
+      // review category, last-resort: anthropic/claude-sonnet-4-6, no variant
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(agentsDir, '..', 'skills'),
+        bundledAgentsDir: agentsDir,
+        bundledCommandsDir: path.join(agentsDir, '..', 'commands'),
+        client: makeClient([]),
+      })
+      const config: Record<string, unknown> = {}
+      await handler(config as Parameters<typeof handler>[0])
+      const agent = (config.agent as Record<string, unknown> | undefined)?.[
+        'correctness-reviewer'
+      ] as Record<string, unknown> | undefined
+      expect(agent?.model).toBe('anthropic/claude-sonnet-4-6')
+      expect(agent?.variant).toBeUndefined()
+    })
+  })
+
+  test('integration: variant override at category level wins over source', async () => {
+    await withVariantTestEnv(
+      { categories: { review: { variant: 'high' } } },
+      async (agentsDir, projectDir) => {
+        const handler = createConfigHandler({
+          directory: projectDir,
+          bundledSkillsDir: path.join(agentsDir, '..', 'skills'),
+          bundledAgentsDir: agentsDir,
+          bundledCommandsDir: path.join(agentsDir, '..', 'commands'),
+          client: makeClient([]),
+        })
+        const config: Record<string, unknown> = {}
+        await handler(config as Parameters<typeof handler>[0])
+        const agent = (config.agent as Record<string, unknown> | undefined)?.[
+          'correctness-reviewer'
+        ] as Record<string, unknown> | undefined
+        expect(agent?.variant).toBe('high')
+      },
+    )
+  })
+
+  test('integration: partial model override at category level clears source variant', async () => {
+    // review category resolves to anthropic/claude-sonnet-4-6 (no variant) by default.
+    // Override model at category level without variant → no variant in emitted config.
+    await withVariantTestEnv(
+      { categories: { review: { model: 'openai/gpt-5.5' } } },
+      async (agentsDir, projectDir) => {
+        const handler = createConfigHandler({
+          directory: projectDir,
+          bundledSkillsDir: path.join(agentsDir, '..', 'skills'),
+          bundledAgentsDir: agentsDir,
+          bundledCommandsDir: path.join(agentsDir, '..', 'commands'),
+          client: makeClient([]),
+        })
+        const config: Record<string, unknown> = {}
+        await handler(config as Parameters<typeof handler>[0])
+        const agent = (config.agent as Record<string, unknown> | undefined)?.[
+          'correctness-reviewer'
+        ] as Record<string, unknown> | undefined
+        expect(agent?.model).toBe('openai/gpt-5.5')
+        expect(agent?.variant).toBeUndefined()
+      },
+    )
+  })
+
+  test('integration: variant absence preserved when source has no variant', async () => {
+    await withVariantTestEnv(null, async (agentsDir, projectDir) => {
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(agentsDir, '..', 'skills'),
+        bundledAgentsDir: agentsDir,
+        bundledCommandsDir: path.join(agentsDir, '..', 'commands'),
+        client: makeClient([]),
+      })
+      const config: Record<string, unknown> = {}
+      await handler(config as Parameters<typeof handler>[0])
+      const agent = (config.agent as Record<string, unknown> | undefined)?.[
+        'correctness-reviewer'
+      ] as Record<string, unknown> | undefined
+      expect(Object.hasOwn(agent ?? {}, 'variant')).toBe(false)
     })
   })
 })

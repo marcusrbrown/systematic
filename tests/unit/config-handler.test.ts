@@ -1007,7 +1007,11 @@ model: gpt-4
         )
       })
 
-      test('getAuthenticatedProviders invoked exactly once per config', async () => {
+      // Skipped: config-handler no longer calls the getAuthenticatedProviders
+      // seam — availability now comes from client.config.providers(). The
+      // entire `auth-aware source model resolution` describe block is removed
+      // when the auth.json reader and its injection seam are excised.
+      test.skip('getAuthenticatedProviders invoked exactly once per config', async () => {
         let callCount = 0
         const spyGetAuthProviders = () => {
           callCount++

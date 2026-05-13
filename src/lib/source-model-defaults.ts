@@ -315,3 +315,54 @@ export const SOURCE_CATEGORY_MODEL_DEFAULTS: SourceCategoryDefaults = {
     ],
   },
 }
+
+/**
+ * Walk the provider-grouped shape for a category and return the first available
+ * provider/model pair from the availability set.
+ *
+ * Algorithm:
+ * 1. Look up the category. Unknown category is a programmer error — throw.
+ * 2. Walk providers in declared order. For each provider, walk its models in
+ *    declared order and test `${provider}/${model}` membership in availabilitySet.
+ * 3. On first hit, return { provider, model, variant? }.
+ * 4. Last-resort fallback (no available model anywhere): return the first model
+ *    entry of the first provider entry, including its variant if present.
+ */
+export function resolveSourceModel(
+  category: string,
+  availabilitySet: Set<string>,
+): { provider: ProviderID; model: string; variant?: string } {
+  const categoryDefault = (
+    SOURCE_CATEGORY_MODEL_DEFAULTS as Record<
+      string,
+      CategoryDefault | undefined
+    >
+  )[category]
+  if (!categoryDefault) {
+    throw new Error(
+      `resolveSourceModel: unknown category "${category}". Valid categories: ${Object.keys(SOURCE_CATEGORY_MODEL_DEFAULTS).join(', ')}`,
+    )
+  }
+
+  for (const providerEntry of categoryDefault.providers) {
+    for (const modelEntry of providerEntry.models) {
+      const key = `${providerEntry.provider}/${modelEntry.model}`
+      if (availabilitySet.has(key)) {
+        return {
+          provider: providerEntry.provider,
+          model: modelEntry.model,
+          variant: modelEntry.variant,
+        }
+      }
+    }
+  }
+
+  // Last-resort fallback: first provider's first model
+  const firstProvider = categoryDefault.providers[0]
+  const firstModel = firstProvider.models[0]
+  return {
+    provider: firstProvider.provider,
+    model: firstModel.model,
+    variant: firstModel.variant,
+  }
+}

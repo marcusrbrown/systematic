@@ -42,6 +42,7 @@ const initializePlugin = async ({ client, directory }: PluginInput) => {
     bundledSkillsDir,
     bundledAgentsDir,
     bundledCommandsDir,
+    client,
   })
 
   return {
