@@ -29,8 +29,6 @@ export interface ConfigHandlerDeps {
   bundledCommandsDir: string
   /** OpenCode client for availability lookup. When omitted, availability falls back to empty set (last-resort resolution). */
   client?: OpencodeClientLike
-  /** Override for authenticated provider reader; for testing. */
-  getAuthenticatedProviders?: (rootDirOverride?: string) => ReadonlySet<string>
 }
 
 type CommandConfig = NonNullable<Config['command']>[string]

@@ -1,5 +1,4 @@
 import fs from 'node:fs'
-import os from 'node:os'
 import path from 'node:path'
 import type { z } from 'zod'
 import type { SourcedOverlayConfigMap } from './config.js'
@@ -8,6 +7,7 @@ import {
   assertSourceCategoryModelDefaults,
   CategoryOverlaySchema,
 } from './config-schema.js'
+import { SOURCE_CATEGORY_MODEL_DEFAULTS } from './source-model-defaults.js'
 import { isRecord } from './validation.js'
 
 export interface BundledAgentInventoryEntry {
@@ -55,26 +55,6 @@ export interface ResolvedAgentOverlaySet {
   agentsByTargetId: Map<string, ValidatedAgentOverlay>
   categoriesByKey: Map<string, ValidatedCategoryOverlay>
 }
-
-// Ordered preference lists, most preferred first. The resolver picks the
-// first array entry whose provider is authenticated; entries are not a
-// runtime fallback chain. Keep arrays non-empty.
-const SOURCE_CATEGORY_MODEL_DEFAULTS = {
-  design: [
-    'github-copilot/gemini-3.1-pro-preview',
-    'openai/gpt-5.5',
-    'anthropic/claude-opus-4-7',
-  ],
-  docs: [
-    'github-copilot/gemini-3.1-pro-preview',
-    'openai/gpt-5.4-mini',
-    'anthropic/claude-haiku-4-5',
-  ],
-  'document-review': ['anthropic/claude-sonnet-4-6', 'openai/gpt-5.4-mini'],
-  research: ['openai/gpt-5.4-mini', 'anthropic/claude-sonnet-4-6'],
-  review: ['anthropic/claude-sonnet-4-6', 'openai/gpt-5.3-codex'],
-  workflow: ['openai/gpt-5.4-mini', 'anthropic/claude-sonnet-4-6'],
-} as const satisfies Record<string, readonly string[]>
 
 export function buildBundledAgentInventory(
   agentsDir: string,
@@ -181,98 +161,7 @@ export function inferBuiltInTemperature(
   }
   return 0.3
 }
-
-/**
- * Read which providers are authenticated from OpenCode's auth.json.
- *
- * Reads only top-level keys (provider IDs). Nested values are NEVER
- * inspected, logged, persisted, or transmitted. This is a hard contract:
- * the auth file holds API keys and OAuth tokens, and Systematic must
- * never expose them via stderr, telemetry, or any other channel.
- *
- * Intended for one invocation per plugin config(cfg) cycle. Repeated
- * calls trigger repeated file reads and, on malformed input, repeated
- * stderr diagnostics.
- *
- * @param rootDirOverride - Optional path override for tests. When
- *   non-empty, the auth file is resolved as
- *   `path.join(rootDirOverride, 'opencode', 'auth.json')`. When
- *   omitted, resolution follows XDG_DATA_HOME -> ~/.local/share
- *   convention.
- * @returns A readonly set of authenticated provider IDs (empty set on
- *   any failure).
- */
-export function getAuthenticatedProviders(
-  rootDirOverride?: string,
-): ReadonlySet<string> {
-  const xdgDataHome = process.env.XDG_DATA_HOME?.trim()
-  const rootDir =
-    rootDirOverride ||
-    (xdgDataHome && path.isAbsolute(xdgDataHome)
-      ? xdgDataHome
-      : path.join(os.homedir(), '.local/share'))
-  const authPath = path.join(rootDir, 'opencode', 'auth.json')
-
-  let raw: string
-  try {
-    raw = fs.readFileSync(authPath, 'utf8')
-  } catch (err: unknown) {
-    if (isSystemError(err) && err.code === 'ENOENT') {
-      return new Set()
-    }
-    console.warn(`[systematic] auth.json unreadable at ${authPath}; ignoring`)
-    return new Set()
-  }
-
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(raw)
-  } catch {
-    console.warn(`[systematic] auth.json malformed at ${authPath}; ignoring`)
-    return new Set()
-  }
-
-  if (!isRecord(parsed)) {
-    console.warn(`[systematic] auth.json malformed at ${authPath}; ignoring`)
-    return new Set()
-  }
-
-  return new Set(Object.keys(parsed))
-}
-
-/**
- * @deprecated Use `resolveSourceModel` from `./source-model-defaults.js` instead.
- * This function will be removed in a future unit.
- */
-export function getSourceCategoryModel(
-  category: string | undefined,
-  authedProviders?: ReadonlySet<string>,
-): string | undefined {
-  if (!category) return undefined
-  const candidates = (
-    SOURCE_CATEGORY_MODEL_DEFAULTS as Record<
-      string,
-      readonly string[] | undefined
-    >
-  )[category]
-  if (!candidates || candidates.length === 0) return undefined
-  if (!authedProviders || authedProviders.size === 0) return candidates[0]
-
-  for (const entry of candidates) {
-    const slashIndex = entry.indexOf('/')
-    if (slashIndex <= 0) continue
-    const providerId = entry.slice(0, slashIndex)
-    if (authedProviders.has(providerId)) {
-      return entry
-    }
-  }
-
-  return candidates[0]
-}
-
 export function assertSourceCategoryModelCoverage(categories: string[]): void {
-  validateSourceCategoryModelDefaults()
-
   const missingCategories = categories.filter(
     (category) => !Object.hasOwn(SOURCE_CATEGORY_MODEL_DEFAULTS, category),
   )
@@ -285,7 +174,7 @@ export function assertSourceCategoryModelCoverage(categories: string[]): void {
 }
 
 export function validateSourceCategoryModelDefaults(
-  defaults: Record<string, unknown> = SOURCE_CATEGORY_MODEL_DEFAULTS,
+  defaults: Record<string, unknown>,
 ): void {
   assertSourceCategoryModelDefaults(defaults)
 }
@@ -490,14 +379,5 @@ function throwConfigError(
 ): never {
   throw new Error(
     `Invalid Systematic config in ${sourcePath}: ${keyPath} ${message}`,
-  )
-}
-
-function isSystemError(err: unknown): err is { code: string } {
-  return (
-    typeof err === 'object' &&
-    err !== null &&
-    'code' in err &&
-    typeof (err as { code: unknown }).code === 'string'
   )
 }
