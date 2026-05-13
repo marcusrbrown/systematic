@@ -192,7 +192,12 @@ function readFallbackCache(): ModelAvailability {
     if (urlResult !== null) {
       return { status: 'cache', models: urlResult }
     }
-    // Fall through to models.json when the URL-derived cache is absent
+    // When OPENCODE_MODELS_URL is set, the URL-derived cache file is the
+    // only authoritative source for this registry. Do not fall through to
+    // the default models.json — that file belongs to a different registry
+    // trust domain and could cause Systematic to pin source defaults from
+    // unrelated availability data.
+    return emptyAvailability()
   }
 
   const defaultPath = path.join(cacheDir, MODELS_JSON_FILENAME)

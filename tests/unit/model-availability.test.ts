@@ -273,7 +273,7 @@ describe('getAvailableModels', () => {
       expect(result.models.has('openai/gpt-5.5')).toBe(false)
     })
 
-    test('falls back to models.json when OPENCODE_MODELS_URL is set but no URL-derived file exists', async () => {
+    test('returns unknown (not models.json) when OPENCODE_MODELS_URL is set but no URL-derived file exists', async () => {
       const cacheDir = path.join(testDir, 'cache', 'opencode')
       fs.mkdirSync(cacheDir, { recursive: true })
 
@@ -289,8 +289,36 @@ describe('getAvailableModels', () => {
       const client = makeThrowingClient(new Error('network error'))
       const result = await getAvailableModels(client)
 
-      expect(result.status).toBe('cache')
-      expect(result.models.has('openai/gpt-5.5')).toBe(true)
+      expect(result.status).toBe('unknown')
+      expect(result.models.size).toBe(0)
+    })
+
+    test('does NOT read models.json when OPENCODE_MODELS_URL is set and URL-derived file is absent (spy verification)', async () => {
+      const cacheDir = path.join(testDir, 'cache', 'opencode')
+      fs.mkdirSync(cacheDir, { recursive: true })
+
+      fs.writeFileSync(
+        path.join(cacheDir, 'models.json'),
+        JSON.stringify({ openai: { models: { 'gpt-5.5': {} } } }),
+      )
+
+      process.env.XDG_CACHE_HOME = path.join(testDir, 'cache')
+      process.env.OPENCODE_MODELS_URL =
+        'https://custom.models.example.com/api.json'
+
+      const openSyncSpy = spyOn(fs, 'openSync')
+
+      const client = makeThrowingClient(new Error('network error'))
+      await getAvailableModels(client)
+
+      const modelsJsonCalls = openSyncSpy.mock.calls.filter(
+        (args) =>
+          typeof args[0] === 'string' &&
+          (args[0] as string).endsWith('models.json'),
+      )
+      expect(modelsJsonCalls.length).toBe(0)
+
+      openSyncSpy.mockRestore()
     })
   })
 
