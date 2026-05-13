@@ -126,6 +126,34 @@ description: A test skill for unit testing
       expect(tool.description).toContain('A test skill for unit testing')
     })
 
+    test('description uses compact catalog format, not verbose XML', () => {
+      const skillDir = path.join(testDir, 'ce-brainstorm')
+      fs.mkdirSync(skillDir)
+      fs.writeFileSync(
+        path.join(skillDir, 'SKILL.md'),
+        `---
+name: ce:brainstorm
+description: Explore requirements and approaches through collaborative dialogue
+---
+# Brainstorm Content`,
+      )
+
+      const tool = createSkillTool({
+        bundledSkillsDir: testDir,
+        disabledSkills: [],
+      })
+
+      // Compact format: markdown bullet list
+      expect(tool.description).toContain('ce:brainstorm')
+      expect(tool.description).toContain(
+        'Explore requirements and approaches through collaborative dialogue',
+      )
+      // Must NOT contain verbose XML catalog
+      expect(tool.description).not.toContain('<available_skills>')
+      expect(tool.description).not.toContain('</available_skills>')
+      expect(tool.description).not.toContain('<location>')
+    })
+
     test('filters out disabled skills from description', () => {
       const skill1Dir = path.join(testDir, 'enabled-skill')
       const skill2Dir = path.join(testDir, 'disabled-skill')

@@ -3,6 +3,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { ToolDefinition } from '@opencode-ai/plugin'
 import { tool } from '@opencode-ai/plugin/tool'
+import { renderCatalogCompact } from './skill-catalog.js'
 import {
   extractSkillBody,
   formatSkillCommandName,
@@ -101,34 +102,17 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
   }
 
   const buildDescription = (): string => {
-    const skills = getDiscoverableSkills()
+    const catalog = renderCatalogCompact({ bundledSkillsDir, disabledSkills })
 
-    if (skills.length === 0) {
-      return 'Load a skill to get detailed instructions for a specific task. No skills are currently available.'
-    }
+    return `Load a specialized skill that provides domain-specific instructions and workflows.
 
-    const skillInfos = skills.map((s) => ({
-      name: s.name,
-      description: s.description,
-      path: s.path,
-      skillFile: s.skillFile,
-    }))
-    const systematicXml = formatSkillsXml(skillInfos)
+When you recognize that a task matches one of the available skills listed below, use this tool to load the full skill instructions.
 
-    return [
-      'Load a specialized skill that provides domain-specific instructions and workflows.',
-      '',
-      'When you recognize that a task matches one of the available skills listed below, use this tool to load the full skill instructions.',
-      '',
-      'The skill will inject detailed instructions, workflows, and access to bundled resources (scripts, references, templates) into the conversation context.',
-      '',
-      'Tool output includes a `<skill_content name="...">` block with the loaded content.',
-      '',
-      'The following skills provide specialized sets of instructions for particular tasks.',
-      'Invoke this tool to load a skill when a task matches one of the available skills listed below:',
-      '',
-      systematicXml,
-    ].join('\n')
+The skill will inject detailed instructions, workflows, and access to bundled resources (scripts, references, templates) into the conversation context.
+
+Tool output includes a \`<skill_content name="...">\` block with the loaded content.
+
+${catalog}`
   }
 
   const buildParameterHint = (): string => {
