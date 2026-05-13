@@ -672,9 +672,9 @@ describe('variant emission via overlay flow', () => {
     })
   })
 
-  test('integration: variant override at category level wins over source', async () => {
+  test('integration: explicit model and variant override at category level wins over source', async () => {
     await withVariantTestEnv(
-      { categories: { review: { variant: 'high' } } },
+      { categories: { review: { model: 'openai/gpt-5.5', variant: 'high' } } },
       async (agentsDir, projectDir) => {
         const handler = createConfigHandler({
           directory: projectDir,
@@ -688,6 +688,7 @@ describe('variant emission via overlay flow', () => {
         const agent = (config.agent as Record<string, unknown> | undefined)?.[
           'correctness-reviewer'
         ] as Record<string, unknown> | undefined
+        expect(agent?.model).toBe('openai/gpt-5.5')
         expect(agent?.variant).toBe('high')
       },
     )

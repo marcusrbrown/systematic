@@ -166,6 +166,23 @@
             "temperature": 0.1,
             "mode": "subagent"
           }
+        ],
+        "allOf": [
+          {
+            "if": {
+              "required": ["variant"]
+            },
+            "then": {
+              "required": ["model"],
+              "properties": {
+                "model": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^[^\\s/]+\\/\\S+$"
+                }
+              }
+            }
+          }
         ]
       }
     },
@@ -318,6 +335,23 @@
           {
             "model": "anthropic/claude-opus-4-7",
             "temperature": 0.1
+          }
+        ],
+        "allOf": [
+          {
+            "if": {
+              "required": ["variant"]
+            },
+            "then": {
+              "required": ["model"],
+              "properties": {
+                "model": {
+                  "type": "string",
+                  "minLength": 1,
+                  "pattern": "^[^\\s/]+\\/\\S+$"
+                }
+              }
+            }
           }
         ]
       }

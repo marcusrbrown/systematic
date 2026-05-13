@@ -219,6 +219,77 @@ function removeDefaultFieldsFromRequired(
   }
 }
 
+function asObject(value: unknown): Record<string, unknown> | null {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return null
+  }
+  return value as Record<string, unknown>
+}
+
+function getSchemaNode(
+  root: Record<string, unknown>,
+  path: readonly string[],
+): Record<string, unknown> | null {
+  let current: Record<string, unknown> | null = root
+  for (const segment of path) {
+    current = asObject(current?.[segment])
+    if (current === null) return null
+  }
+  return current
+}
+
+function cloneSchemaNode(
+  node: Record<string, unknown>,
+): Record<string, unknown> {
+  return JSON.parse(JSON.stringify(node)) as Record<string, unknown>
+}
+
+function getNonNullModelBranch(
+  overlayNode: Record<string, unknown>,
+): Record<string, unknown> | null {
+  const properties = asObject(overlayNode.properties)
+  const modelNode = asObject(properties?.model)
+  const anyOf = modelNode?.anyOf
+  if (!Array.isArray(anyOf)) return null
+
+  for (const candidate of anyOf) {
+    const branch = asObject(candidate)
+    if (branch?.type === 'string') return cloneSchemaNode(branch)
+  }
+
+  return null
+}
+
+function addVariantRequiresExplicitModel(
+  overlayNode: Record<string, unknown>,
+): void {
+  const modelStringBranch = getNonNullModelBranch(overlayNode)
+  if (modelStringBranch === null) return
+
+  const variantRequiresModel: Record<string, unknown> = {
+    if: { required: ['variant'] },
+  }
+  variantRequiresModel['then'] = {
+    required: ['model'],
+    properties: {
+      model: modelStringBranch,
+    },
+  }
+
+  const allOf = Array.isArray(overlayNode.allOf) ? overlayNode.allOf : []
+  overlayNode.allOf = [...allOf, variantRequiresModel]
+}
+
+function addOverlayCrossFieldConstraints(root: Record<string, unknown>): void {
+  for (const path of [
+    ['properties', 'agents', 'additionalProperties'],
+    ['properties', 'categories', 'additionalProperties'],
+  ] as const) {
+    const overlayNode = getSchemaNode(root, path)
+    if (overlayNode !== null) addVariantRequiresExplicitModel(overlayNode)
+  }
+}
+
 /**
  * Generate the JSON Schema content string for the given version.
  *
@@ -258,6 +329,7 @@ export function generateSchemaContent(version: string): string {
     clean as Record<string, unknown>,
     SystematicConfigSchema,
   )
+  addOverlayCrossFieldConstraints(clean as Record<string, unknown>)
 
   const raw = `${JSON.stringify(clean, null, 2)}\n`
   return formatJsonWithBiome(raw, 'systematic-config.schema.json')

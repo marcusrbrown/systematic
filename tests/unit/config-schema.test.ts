@@ -290,6 +290,28 @@ describe('validateConfig wrapper', () => {
       throw new Error('Expected failure')
     }
   })
+
+  test('rejects agent variant without same-overlay model', () => {
+    const result = validateConfig({
+      agents: { explorer: { variant: 'high' } },
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.errors[0].path).toEqual(['agents', 'explorer', 'variant'])
+      expect(result.errors[0].message).toContain('model')
+    }
+  })
+
+  test('rejects category variant without same-overlay model', () => {
+    const result = validateConfig({
+      categories: { review: { variant: 'high' } },
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.errors[0].path).toEqual(['categories', 'review', 'variant'])
+      expect(result.errors[0].message).toContain('model')
+    }
+  })
 })
 
 describe('AgentOverlaySchema', () => {
@@ -301,6 +323,33 @@ describe('AgentOverlaySchema', () => {
   test('accepts null model (opt-out)', () => {
     const result = AgentOverlaySchema.safeParse({ model: null })
     expect(result.success).toBe(true)
+  })
+
+  test('accepts variant with same-overlay model', () => {
+    const result = AgentOverlaySchema.safeParse({
+      model: 'openai/gpt-5.5',
+      variant: 'high',
+    })
+    expect(result.success).toBe(true)
+  })
+
+  test('rejects variant without same-overlay model', () => {
+    const result = AgentOverlaySchema.safeParse({ variant: 'high' })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('model')
+    }
+  })
+
+  test('rejects variant with model null inheritance opt-out', () => {
+    const result = AgentOverlaySchema.safeParse({
+      model: null,
+      variant: 'high',
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('model')
+    }
   })
 
   test('rejects unknown fields via strict mode', () => {
@@ -327,6 +376,38 @@ describe('CategoryOverlaySchema', () => {
       model: 'anthropic/claude-3',
     })
     expect(result.success).toBe(true)
+  })
+
+  test('accepts null model (opt-out)', () => {
+    const result = CategoryOverlaySchema.safeParse({ model: null })
+    expect(result.success).toBe(true)
+  })
+
+  test('accepts variant with same-overlay model', () => {
+    const result = CategoryOverlaySchema.safeParse({
+      model: 'openai/gpt-5.5',
+      variant: 'high',
+    })
+    expect(result.success).toBe(true)
+  })
+
+  test('rejects variant without same-overlay model', () => {
+    const result = CategoryOverlaySchema.safeParse({ variant: 'high' })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('model')
+    }
+  })
+
+  test('rejects variant with model null inheritance opt-out', () => {
+    const result = CategoryOverlaySchema.safeParse({
+      model: null,
+      variant: 'high',
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(result.error.issues[0].message).toContain('model')
+    }
   })
 
   test('rejects disable field (only valid for agents)', () => {

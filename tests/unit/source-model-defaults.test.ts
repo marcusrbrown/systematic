@@ -473,7 +473,10 @@ describe('user-facing variantSchema bounds (config-schema.ts)', () => {
 
   test('happy path: variant of exactly 128 chars in AgentOverlaySchema passes', () => {
     const maxVariant = 'a'.repeat(128)
-    const result = AgentOverlaySchema.safeParse({ variant: maxVariant })
+    const result = AgentOverlaySchema.safeParse({
+      model: 'openai/gpt-5.5',
+      variant: maxVariant,
+    })
     expect(result.success).toBe(true)
   })
 
@@ -495,7 +498,10 @@ describe('user-facing variantSchema bounds (config-schema.ts)', () => {
 
   test('happy path: variant of exactly 128 chars in CategoryOverlaySchema passes', () => {
     const maxVariant = 'a'.repeat(128)
-    const result = CategoryOverlaySchema.safeParse({ variant: maxVariant })
+    const result = CategoryOverlaySchema.safeParse({
+      model: 'openai/gpt-5.5',
+      variant: maxVariant,
+    })
     expect(result.success).toBe(true)
   })
 })
