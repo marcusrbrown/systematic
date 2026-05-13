@@ -43,3 +43,7 @@ cep-guide.md
 
 # Systematic
 .context/
+
+# BEGIN oh-my-opencode-slim clonedeps
+.slim/clonedeps/repos/
+# END oh-my-opencode-slim clonedeps
