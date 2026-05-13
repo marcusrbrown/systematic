@@ -30,7 +30,7 @@ The same refactor exposed three orthogonal problems that the auth-file approach 
 2. **Documentation drifted independently.** The Source Category Model Defaults table in `docs/src/content/docs/getting-started/configuration.mdx` was hand-maintained. Every Renovate bump or manual tuning of the source-defaults constant left the docs stale.
 3. **Planning had to guess at upstream behavior.** The original plan deferred four technical questions to implementation time: which endpoint to call, what algorithm OpenCode uses for `OPENCODE_MODELS_URL` cache filenames, what "connected" semantically encompasses, and whether `client` is in-process or HTTP.
 
-PR #358's 9-commit refactor produced five patterns worth lifting out of the specific change. They share one shape: **move from implicit assumptions to explicit contracts.**
+PR #358's 10-commit refactor (including review-fix follow-up) produced six patterns worth lifting out of the specific change. They share one shape: **move from implicit assumptions to explicit contracts.**
 
 ## Guidance
 
@@ -154,15 +154,112 @@ export async function getAvailableModels(
 
 Two regression tests assert the behavior: one with a cache present (expects `status: 'cache'`), one without (expects `status: 'unknown'`). Future plugin-input variations and third-party callers degrade safely instead of crashing.
 
+### 6. Bounded-read file handles eliminate TOCTOU races and unsafe shared state
+
+Two adjacent failure modes surface together when a plugin reads a local cache file and returns the parsed result to multiple callers:
+
+1. **Time-of-Check to Time-of-Use (TOCTOU)** — `fs.statSync(path)` + `fs.readFileSync(path)` checks the file size, then reopens the path to read. Between the two calls the file at `path` can be replaced (symlink swap), grown (concurrent writer extends past the size cap), or shrunk (writer truncates and rewrites). CodeQL flags this pattern as `js/file-system-race-condition` because the check and use are decoupled.
+2. **Shared mutable singleton** — a module-level constant returned by reference from multiple early-exit paths lets any caller corrupt every future caller's view. The bug is latent until a caller mutates the returned set; then the next caller sees the mutation.
+
+The fixes are independent in scope but share the same shape: **make the returned thing impossible to share or to read inconsistently.**
+
+**Anti-pattern (TOCTOU):**
+
+```ts
+const stat = fs.statSync(filePath)
+if (stat.size > MAX_BYTES) return null     // check
+const raw = fs.readFileSync(filePath, 'utf8')  // use — different fs.open() under the hood
+```
+
+**Pattern (single-descriptor bounded read):**
+
+```ts
+function readModelsFromCache(filePath: string): Set<string> | null {
+  let fd: number
+  try {
+    fd = fs.openSync(filePath, 'r')
+  } catch {
+    return null
+  }
+  try {
+    const stat = fs.fstatSync(fd)              // check on the descriptor
+    if (!stat.isFile()) return null
+    if (stat.size === 0) return null
+    if (stat.size > MAX_BYTES) return null
+    const buffer = Buffer.alloc(stat.size)
+    const bytesRead = fs.readSync(fd, buffer, 0, stat.size, 0)  // use the same descriptor
+    if (bytesRead !== stat.size) return null   // mid-read truncation guard
+    return parse(buffer.toString('utf8'))
+  } finally {
+    try {
+      fs.closeSync(fd)
+    } catch {
+      // best-effort close
+    }
+  }
+}
+```
+
+The descriptor binds check and use to the same inode. A replaced or rewritten file at `path` is invisible — the fd still points at the original file. A shrunk file shows up as `bytesRead < statSize` and is rejected.
+
+**Anti-pattern (shared singleton):**
+
+```ts
+const EMPTY_AVAILABILITY: ModelAvailability = {
+  status: 'unknown',
+  models: new Set<string>(),  // shared mutable Set
+}
+function readFallbackCache(): ModelAvailability {
+  // ...
+  return EMPTY_AVAILABILITY  // every "unknown" caller gets the same Set reference
+}
+```
+
+**Pattern (factory + `ReadonlySet`):**
+
+```ts
+function emptyAvailability(): ModelAvailability {
+  return { status: 'unknown', models: new Set<string>() }
+}
+
+export interface ModelAvailability {
+  status: DiscoveryStatus
+  /**
+   * Set of `${providerId}/${modelId}` strings. Typed `ReadonlySet` because
+   * callers must not mutate the returned collection — mutation would corrupt
+   * future calls in the same process.
+   */
+  models: ReadonlySet<string>
+}
+```
+
+`ReadonlySet<string>` is a TypeScript-level guard: honest callers cannot call `.add()` or `.delete()`. It is not a runtime guarantee (a cast through `as Set<string>` defeats it), but the factory pattern handles the runtime side: every caller gets an independent set, so even a forced cast-and-mutate cannot leak across calls.
+
+The combined `ReadonlySet` + factory pattern outperforms `Object.freeze` on Set values. `Object.freeze` on a Set freezes only the container, not the contents — you would need to reassign `Set.prototype.add` or similar tricks. The factory is simpler and clearer.
+
+**Why apply both together:** the singleton fix without the TOCTOU fix means callers get independent sets that may still be parsed from inconsistent file contents. The TOCTOU fix without the singleton fix means safely-read data still ends up shared. Both fixes target "make the returned thing impossible to share or to read inconsistently."
+
+A regression test for the singleton fix forces mutation through a cast and asserts the next call sees an empty set:
+
+```ts
+const first = await getAvailableModels(client)
+const firstMutable = first.models as Set<string>
+firstMutable.add('attacker/poisoned-model')
+
+const second = await getAvailableModels(client)
+expect(second.models.has('attacker/poisoned-model')).toBe(false)
+```
+
 ## Why This Matters
 
-The structural win across all five patterns is the same: **explicit contracts over implicit assumptions.**
+The structural win across all six patterns is the same: **explicit contracts over implicit assumptions.**
 
 - Live API discovery is more complete than file-based inference because the runtime sees signals the file never captures.
 - Discriminated envelopes prevent callers from pretending failure is success by making degraded paths show up in the type system.
 - Generated docs eliminate drift between code and documentation because there is only one place that can change.
 - Upstream source inspection reduces planning risk because empirical evidence beats inferred behavior every time.
 - Defensive guards make partial inputs survivable because the production code itself documents what shape it actually requires.
+- Single-descriptor reads and factory-allocated returns close the windows where unrelated code paths can corrupt each other through shared file handles or shared state.
 
 These patterns matter most in plugin and integration-heavy systems where current truth is distributed across config, environment, runtime state, and external APIs. Reading any single store as ground truth is a bet that you understand every other writer. The bet rarely holds.
 
@@ -176,6 +273,8 @@ Use these patterns when:
 - Upstream behavior is unclear during planning and the plan currently defers it to implementation
 - Integration tests inject partial objects or stubs into production code
 - Multiple provider, model, or capability sources can coexist simultaneously
+- A module-level constant is returned by reference from multiple early-exit paths
+- A function performs `stat` followed by `read` on the same path and the path could change between the two calls
 
 Do **not** apply these as ceremony to trivial local code. Use them when the system has more than one writer, more than one discovery path, or more than one failure mode.
 
