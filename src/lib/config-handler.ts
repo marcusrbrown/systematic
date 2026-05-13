@@ -170,7 +170,7 @@ function collectAgents(
   disabledAgents: string[],
   nativeAgents: Record<string, unknown>,
   overlays: ResolvedAgentOverlaySet,
-  availabilitySet: Set<string> | undefined,
+  availabilitySet: ReadonlySet<string> | undefined,
 ): NonNullable<Config['agent']> {
   const agents: NonNullable<Config['agent']> = {}
   const agentList = findAgentsInDir(dir)
@@ -204,7 +204,7 @@ function applyAgentOverlays(
   config: AgentConfig,
   agentInfo: { name: string; category?: string },
   overlays: ResolvedAgentOverlaySet,
-  availabilitySet: Set<string> | undefined,
+  availabilitySet: ReadonlySet<string> | undefined,
 ): AgentConfig {
   const id = agentInfo.category
     ? `${agentInfo.category}/${agentInfo.name}`

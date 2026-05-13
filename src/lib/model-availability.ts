@@ -44,12 +44,24 @@ export type DiscoveryStatus = 'api' | 'cache' | 'unknown'
 
 export interface ModelAvailability {
   status: DiscoveryStatus
-  models: Set<string>
+  /**
+   * Set of `${providerId}/${modelId}` strings. Typed `ReadonlySet` because
+   * callers must not mutate the returned collection — mutation would corrupt
+   * future calls in the same process. Each `ModelAvailability` is a fresh
+   * instance (see `emptyAvailability()`), so mutation via cast cannot
+   * propagate, but the type makes intent explicit.
+   */
+  models: ReadonlySet<string>
 }
 
-const EMPTY_AVAILABILITY: ModelAvailability = {
-  status: 'unknown',
-  models: new Set<string>(),
+/**
+ * Returns a fresh `ModelAvailability` representing total discovery failure.
+ * Factory pattern (not a shared singleton) guarantees each caller receives
+ * an independent `models` set — a forced mutation via cast on one return
+ * value cannot leak into any other caller's view.
+ */
+function emptyAvailability(): ModelAvailability {
+  return { status: 'unknown', models: new Set<string>() }
 }
 
 const MAX_CACHE_FILE_BYTES = 16 * 1024 * 1024 // 16MB ceiling
@@ -81,30 +93,59 @@ function isProviderRecord(
 }
 
 function readModelsFromCache(filePath: string): Set<string> | null {
-  let stat: fs.Stats
+  // Open the file FIRST, then fstat the descriptor and read from it. This
+  // avoids the TOCTOU race that `statSync(path)` + `readFileSync(path)`
+  // creates — between the two calls the file at `path` can be replaced or
+  // grown. By holding a single fd across both operations we read exactly
+  // the bytes whose size we already checked.
+  let fd: number
   try {
-    stat = fs.statSync(filePath)
+    fd = fs.openSync(filePath, 'r')
   } catch {
-    return null
-  }
-
-  // Skip non-regular files (symlinks, devices) and oversized caches before
-  // allocating a multi-megabyte string. Pathological cache files must not
-  // OOM plugin startup.
-  if (!stat.isFile()) return null
-  if (stat.size === 0) return null
-  if (stat.size > MAX_CACHE_FILE_BYTES) {
-    console.warn(
-      `[systematic] models.json at ${filePath} is ${stat.size} bytes (>${MAX_CACHE_FILE_BYTES}); treating as cache miss.`,
-    )
     return null
   }
 
   let raw: string
   try {
-    raw = fs.readFileSync(filePath, 'utf8')
-  } catch {
-    return null
+    let stat: fs.Stats
+    try {
+      stat = fs.fstatSync(fd)
+    } catch {
+      return null
+    }
+
+    // Skip non-regular files (devices, FIFOs, sockets) and oversized caches
+    // before allocating a multi-megabyte buffer. Pathological cache files
+    // must not OOM plugin startup.
+    if (!stat.isFile()) return null
+    if (stat.size === 0) return null
+    if (stat.size > MAX_CACHE_FILE_BYTES) {
+      console.warn(
+        `[systematic] models.json at ${filePath} is ${stat.size} bytes (>${MAX_CACHE_FILE_BYTES}); treating as cache miss.`,
+      )
+      return null
+    }
+
+    const buffer = Buffer.alloc(stat.size)
+    let bytesRead: number
+    try {
+      bytesRead = fs.readSync(fd, buffer, 0, stat.size, 0)
+    } catch {
+      return null
+    }
+
+    // If the file shrank between fstat and read (concurrent rewrite by
+    // OpenCode), we got a partial buffer. Treat as cache miss rather than
+    // attempting to parse truncated JSON.
+    if (bytesRead !== stat.size) return null
+
+    raw = buffer.toString('utf8')
+  } finally {
+    try {
+      fs.closeSync(fd)
+    } catch {
+      // Best-effort close; nothing actionable if it fails.
+    }
   }
 
   if (raw.trim().length === 0) return null
@@ -160,7 +201,7 @@ function readFallbackCache(): ModelAvailability {
     return { status: 'cache', models: defaultResult }
   }
 
-  return EMPTY_AVAILABILITY
+  return emptyAvailability()
 }
 
 function buildSetFromProviders(providers: ConnectedProvider[]): Set<string> {

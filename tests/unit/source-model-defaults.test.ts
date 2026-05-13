@@ -1,9 +1,13 @@
 import { describe, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import {
   AgentOverlaySchema,
   CategoryOverlaySchema,
 } from '../../src/lib/config-schema.js'
 import {
+  assertCategoryCoverageOnDisk,
   formatForDocs,
   resolveSourceModel,
   SOURCE_CATEGORY_MODEL_DEFAULTS,
@@ -224,10 +228,10 @@ describe('SourceCategoryDefaultsSchema validation', () => {
     }
   })
 
-  test('error path: category key not matching agents/<category>/ directory fails validation', () => {
+  test('error path: rationale containing pipe character fails validation', () => {
     const input = {
-      'nonexistent-category': {
-        rationale: 'Test rationale',
+      design: {
+        rationale: 'Test rationale | with pipe',
         providers: [
           {
             provider: 'anthropic',
@@ -240,7 +244,48 @@ describe('SourceCategoryDefaultsSchema validation', () => {
     expect(result.success).toBe(false)
     if (!result.success) {
       const messages = result.error.issues.map((i) => i.message).join(' ')
-      expect(messages.toLowerCase()).toMatch(/category|bundled|agents/)
+      expect(messages).toMatch(/pipe|newline|table/i)
+    }
+  })
+
+  test('error path: rationale containing newline character fails validation', () => {
+    const input = {
+      design: {
+        rationale: 'Test\nrationale with newline',
+        providers: [
+          {
+            provider: 'anthropic',
+            models: [{ model: 'claude-opus-4-7' }],
+          },
+        ],
+      },
+    }
+    const result = SourceCategoryDefaultsSchema.safeParse(input)
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const messages = result.error.issues.map((i) => i.message).join(' ')
+      expect(messages).toMatch(/pipe|newline|table/i)
+    }
+  })
+
+  test('error path: whenToOverride containing pipe character fails validation', () => {
+    const input = {
+      design: {
+        rationale: 'Valid rationale',
+        whenToOverride: 'Override | when bad',
+        providers: [
+          {
+            provider: 'anthropic',
+            models: [{ model: 'claude-opus-4-7' }],
+          },
+        ],
+      },
+    }
+    const result = SourceCategoryDefaultsSchema.safeParse(input)
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const messages = result.error.issues.map((i) => i.message).join(' ')
+      expect(messages).toMatch(/pipe|newline|table/i)
     }
   })
 
@@ -252,6 +297,67 @@ describe('SourceCategoryDefaultsSchema validation', () => {
     if (result.success) {
       expect(result.data).toEqual(SOURCE_CATEGORY_MODEL_DEFAULTS)
     }
+  })
+})
+
+describe('assertCategoryCoverageOnDisk', () => {
+  // Build a temp agents/ directory layout so coverage checks have something
+  // concrete to validate against without depending on the package's real
+  // bundled-agents tree.
+  let tmpAgentsRoot: string
+
+  function makeTempAgentsDir(categories: string[]): string {
+    const root = mkdtempSync(path.join(tmpdir(), 'systematic-coverage-'))
+    for (const cat of categories) {
+      mkdirSync(path.join(root, cat), { recursive: true })
+    }
+    return root
+  }
+
+  test('happy path: every category key resolves to an existing directory', () => {
+    tmpAgentsRoot = makeTempAgentsDir(['design', 'docs', 'review'])
+    expect(() =>
+      assertCategoryCoverageOnDisk(['design', 'docs', 'review'], tmpAgentsRoot),
+    ).not.toThrow()
+    rmSync(tmpAgentsRoot, { recursive: true, force: true })
+  })
+
+  test('error path: unknown category throws with descriptive message', () => {
+    tmpAgentsRoot = makeTempAgentsDir(['design'])
+    expect(() =>
+      assertCategoryCoverageOnDisk(
+        ['design', 'nonexistent-category'],
+        tmpAgentsRoot,
+      ),
+    ).toThrow(/nonexistent-category/)
+    rmSync(tmpAgentsRoot, { recursive: true, force: true })
+  })
+
+  test('error path: multiple unknown categories all named in the error', () => {
+    tmpAgentsRoot = makeTempAgentsDir(['design'])
+    expect(() =>
+      assertCategoryCoverageOnDisk(
+        ['design', 'missing-one', 'missing-two'],
+        tmpAgentsRoot,
+      ),
+    ).toThrow(/missing-one.*missing-two|missing-two.*missing-one/)
+    rmSync(tmpAgentsRoot, { recursive: true, force: true })
+  })
+
+  test('edge case: agents directory missing entirely — tolerated as no-op', () => {
+    // Without a bundled agents directory present, the validator skips the check
+    // so that test environments and packaging variations don't false-positive.
+    const nonexistentRoot = path.join(tmpdir(), 'systematic-no-agents-here')
+    expect(() =>
+      assertCategoryCoverageOnDisk(['design'], nonexistentRoot),
+    ).not.toThrow()
+  })
+
+  test('integration: real bundled agents/ directory covers every SOURCE_CATEGORY_MODEL_DEFAULTS key', () => {
+    // No agentsDir argument — uses the package's real bundled-agents tree.
+    // This is the production invariant the PR commits SOURCE_CATEGORY_MODEL_DEFAULTS to.
+    const keys = Object.keys(SOURCE_CATEGORY_MODEL_DEFAULTS)
+    expect(() => assertCategoryCoverageOnDisk(keys)).not.toThrow()
   })
 })
 

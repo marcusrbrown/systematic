@@ -42,6 +42,21 @@ const variantSchema = z
   .max(128, 'variant must be at most 128 characters')
   .regex(/^\S+$/, 'variant must not contain whitespace')
 
+/**
+ * Table-cell-safe string for `rationale` and `whenToOverride`. Markdown
+ * table cells cannot contain raw `|` (pipe — would split the row) or
+ * `\r` / `\n` (newline — would terminate the row). The generator interpolates
+ * these strings directly into table rows in `formatForDocs()`, so failing
+ * fast at the schema level beats producing a malformed table downstream.
+ */
+const tableCellSchema = z
+  .string()
+  .min(1, 'must be a non-empty string')
+  .regex(
+    /^[^|\r\n]+$/,
+    'must not contain pipe (|) or newline characters — these break Markdown table generation',
+  )
+
 const ModelEntrySchema = z
   .object({
     model: z.string().min(1, 'model must be a non-empty string'),
@@ -78,8 +93,8 @@ const ProviderEntrySchema = z
 
 const CategoryDefaultSchema = z
   .object({
-    rationale: z.string().min(1, 'rationale must be a non-empty string'),
-    whenToOverride: z.string().min(1).optional(),
+    rationale: tableCellSchema,
+    whenToOverride: tableCellSchema.optional(),
     providers: z
       .array(ProviderEntrySchema)
       .min(
@@ -105,8 +120,11 @@ const CategoryDefaultSchema = z
 
 /**
  * Reads the bundled agents directory and returns the set of valid category names.
- * Used to validate that every key in SOURCE_CATEGORY_MODEL_DEFAULTS maps to a
- * real bundled-agent category directory.
+ *
+ * Used by `assertCategoryCoverageOnDisk` to verify that every key in
+ * `SOURCE_CATEGORY_MODEL_DEFAULTS` maps to a real bundled-agent category
+ * directory. Pure helper — kept separate from the schema so the schema
+ * stays free of filesystem I/O.
  */
 function readBundledAgentCategories(agentsDir: string): Set<string> {
   if (!fs.existsSync(agentsDir)) return new Set()
@@ -123,30 +141,52 @@ function readBundledAgentCategories(agentsDir: string): Set<string> {
 /**
  * Zod schema for the full source category model defaults map.
  *
- * Enforces:
+ * Schema is **pure** — it validates only structural correctness:
  * - Shape correctness (CategoryDefaultSchema per value)
- * - Every key maps to an existing bundled-agent category directory
  * - Provider lists non-empty (enforced by CategoryDefaultSchema)
  * - Model lists non-empty (enforced by ProviderEntrySchema)
  * - (model, variant) pairs unique within a provider entry
  * - Provider IDs unique within a category
  * - variant is non-empty, whitespace-free, max 128 chars
+ * - `rationale` and `whenToOverride` reject pipe (`|`) and newline characters
+ *   so the generator produces well-formed Markdown tables
+ *
+ * Filesystem coverage (every key resolves to a real `agents/<category>/`
+ * directory) is NOT checked here. Use `assertCategoryCoverageOnDisk` to
+ * enforce that invariant from tests where it matters; the production
+ * runtime path uses `assertSourceCategoryModelCoverage` from
+ * `agent-overlays.ts` against an in-memory inventory rather than reading
+ * disk again.
  */
-export const SourceCategoryDefaultsSchema = z
-  .record(z.string(), CategoryDefaultSchema)
-  .superRefine((defaults, ctx) => {
-    const validCategories = readBundledAgentCategories(bundledAgentsDir)
-    if (validCategories.size === 0) return // skip in environments without bundled agents
-    const unknownKeys = Object.keys(defaults).filter(
-      (k) => !validCategories.has(k),
+export const SourceCategoryDefaultsSchema = z.record(
+  z.string(),
+  CategoryDefaultSchema,
+)
+
+/**
+ * Verify that every category key in `categories` maps to a real
+ * `agents/<category>/` directory on disk under `agentsDir` (defaulting to
+ * the package's bundled-agents directory). Throws with a useful message if
+ * any keys are unrecognized.
+ *
+ * Use from tests to lock the SOURCE_CATEGORY_MODEL_DEFAULTS ↔ agents/
+ * directory layout contract. The production runtime path validates the
+ * inverse direction (every bundled-agent category has a source default)
+ * via `assertSourceCategoryModelCoverage` in `agent-overlays.ts`.
+ */
+export function assertCategoryCoverageOnDisk(
+  categories: readonly string[],
+  agentsDir: string = bundledAgentsDir,
+): void {
+  const validCategories = readBundledAgentCategories(agentsDir)
+  if (validCategories.size === 0) return // tolerate environments without bundled agents
+  const unknownKeys = categories.filter((k) => !validCategories.has(k))
+  if (unknownKeys.length > 0) {
+    throw new Error(
+      `assertCategoryCoverageOnDisk: no agents/<category>/ directory found for: ${unknownKeys.join(', ')}. Either add the directories or remove the keys from SOURCE_CATEGORY_MODEL_DEFAULTS.`,
     )
-    if (unknownKeys.length > 0) {
-      ctx.addIssue({
-        code: 'custom',
-        message: `category missing in bundled agents directory — no agents/<category>/ directory found for: ${unknownKeys.join(', ')}`,
-      })
-    }
-  })
+  }
+}
 
 export interface ModelEntry {
   model: string
@@ -374,7 +414,7 @@ export function formatForDocs(): string {
  */
 export function resolveSourceModel(
   category: string,
-  availabilitySet: Set<string>,
+  availabilitySet: ReadonlySet<string>,
 ): { provider: ProviderID; model: string; variant?: string } {
   const categoryDefault = (
     SOURCE_CATEGORY_MODEL_DEFAULTS as Record<

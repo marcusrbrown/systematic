@@ -71,6 +71,25 @@ Adding a new top-level field to `SystematicConfigSchema` with `.meta({ descripti
 
 NOTE: The top-level `commands/` directory has been removed (all commands converted to skills). The generation script may still have backward-compat command handling code but produces no command pages from current source.
 
+### 3. Source Category Model Defaults — dual-output injection
+
+`scripts/generate-config-reference.ts` ALSO injects the source category model defaults table into the **committed** `src/content/docs/getting-started/configuration.mdx` page. This is a deliberate dual-output contract:
+
+| Output | Path | Tracked? | Purpose |
+|---|---|---|---|
+| Full config reference | `src/content/docs/reference/systematic-config.mdx` | **No** (gitignored) | Auto-generated from `SystematicConfigSchema`; full Zod-derived field reference; regenerated on every `docs:generate` |
+| Source defaults table | `src/content/docs/getting-started/configuration.mdx` | **Yes** (committed) | Manual guide page; generator injects the `## Source Category Model Defaults` table between `<!-- SYSTEMATIC:SOURCE-DEFAULTS:BEGIN -->` and `<!-- SYSTEMATIC:SOURCE-DEFAULTS:END -->` HTML-comment delimiters |
+
+The injection is **idempotent**: running `docs:generate` twice in a row produces no diff (the second run replaces the delimited block with the same content). CI's `docs:build` step runs the generator and fails if the committed `configuration.mdx` is out of sync with the source constant.
+
+**Single source of truth**: the source data lives in `src/lib/source-model-defaults.ts` (`SOURCE_CATEGORY_MODEL_DEFAULTS` constant, `formatForDocs()` helper). The generator imports both, calls `formatForDocs()`, and replaces the delimited block. Editing `configuration.mdx` between the delimiters is futile — your changes will be overwritten on the next generate.
+
+When changing the source defaults:
+1. Edit `src/lib/source-model-defaults.ts:SOURCE_CATEGORY_MODEL_DEFAULTS`
+2. Update the golden snapshot if needed: `bun test tests/unit/source-model-defaults.test.ts --update-snapshots`
+3. Run `bun run docs:generate` to refresh the injected table
+4. Commit `configuration.mdx` alongside the source change
+
 ## Where to Look
 
 | Task | Location |

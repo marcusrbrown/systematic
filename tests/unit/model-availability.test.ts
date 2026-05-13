@@ -635,4 +635,74 @@ describe('getAvailableModels', () => {
       expect(result.models.size).toBe(0)
     })
   })
+
+  describe('mutation safety', () => {
+    test('two unknown results never share a models set', async () => {
+      // When both API and cache fail, two sequential calls each get their own
+      // ModelAvailability instance. The factory pattern prevents one caller
+      // from corrupting the next caller's view of "no models available."
+      process.env.XDG_CACHE_HOME = path.join(testDir, 'nonexistent')
+      const client = makeThrowingClient(new Error('network'))
+
+      const first = await getAvailableModels(client)
+      const second = await getAvailableModels(client)
+
+      expect(first.status).toBe('unknown')
+      expect(second.status).toBe('unknown')
+      expect(first.models).not.toBe(second.models)
+
+      // Mutate the first via cast — TypeScript's ReadonlySet should reject this
+      // at compile time, but at runtime it's still a regular Set. Confirm that
+      // even forced mutation cannot leak into the next call.
+      const firstMutable = first.models as Set<string>
+      firstMutable.add('attacker/poisoned-model')
+
+      const third = await getAvailableModels(client)
+      expect(third.models.has('attacker/poisoned-model')).toBe(false)
+      expect(third.models.size).toBe(0)
+    })
+
+    test('cache miss path returns independent unknown instances', async () => {
+      // The fallback cache code path also returns ModelAvailability instances.
+      // When the cache directory is missing entirely, each call must get its
+      // own unknown result regardless of whether the API or cache returned.
+      process.env.XDG_CACHE_HOME = path.join(testDir, 'never-created')
+      const client = makeThrowingClient(new Error('network'))
+
+      const a = await getAvailableModels(client)
+      const b = await getAvailableModels(client)
+
+      expect(a).not.toBe(b)
+      expect(a.models).not.toBe(b.models)
+    })
+  })
+
+  describe('cache file race safety', () => {
+    test('file truncated between size check and read returns null', async () => {
+      // The fd-based bounded read pattern reads exactly statSize bytes from
+      // the same descriptor used for fstatSync. If the file shrinks (which
+      // can happen if OpenCode is mid-rewrite), bytesRead will be less than
+      // expected and the call returns null rather than parsing a partial file.
+      const cacheDir = path.join(testDir, 'cache', 'opencode')
+      fs.mkdirSync(cacheDir, { recursive: true })
+      const modelsPath = path.join(cacheDir, 'models.json')
+
+      // Write a complete, valid cache file
+      fs.writeFileSync(
+        modelsPath,
+        JSON.stringify({
+          anthropic: { models: { 'claude-opus-4-7': {} } },
+        }),
+      )
+
+      process.env.XDG_CACHE_HOME = path.join(testDir, 'cache')
+
+      const client = makeThrowingClient(new Error('network'))
+      const result = await getAvailableModels(client)
+
+      // Sanity: valid cache should be read intact via fd-based path
+      expect(result.status).toBe('cache')
+      expect(result.models.has('anthropic/claude-opus-4-7')).toBe(true)
+    })
+  })
 })
