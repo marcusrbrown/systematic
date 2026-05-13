@@ -20,8 +20,9 @@ const BOOTSTRAP_MARKER_CLOSE = '</SYSTEMATIC_WORKFLOWS>'
 
 const findBootstrapMarkerBlock = (
   entry: string,
+  fromIndex = 0,
 ): { start: number; end: number } | null => {
-  const start = entry.indexOf(BOOTSTRAP_MARKER_OPEN)
+  const start = entry.indexOf(BOOTSTRAP_MARKER_OPEN, fromIndex)
   if (start === -1) return null
   const closeStart = entry.indexOf(
     BOOTSTRAP_MARKER_CLOSE,
@@ -31,10 +32,31 @@ const findBootstrapMarkerBlock = (
   return { start, end: closeStart + BOOTSTRAP_MARKER_CLOSE.length }
 }
 
+const removeCompleteBootstrapBlocks = (entry: string): string => {
+  const segments: string[] = []
+  let cursor = 0
+  let block = findBootstrapMarkerBlock(entry, cursor)
+
+  while (block !== null) {
+    segments.push(entry.slice(cursor, block.start))
+    cursor = block.end
+    block = findBootstrapMarkerBlock(entry, cursor)
+  }
+
+  if (cursor === 0) return entry
+  segments.push(entry.slice(cursor))
+  return segments.join('')
+}
+
 /**
- * Inject bootstrap content into the system prompt array, replacing any
- * existing `<SYSTEMATIC_WORKFLOWS>` block. Multi-load idempotency is via
- * the marker — most-recently-registered plugin wins under FIFO hook order.
+ * Inject bootstrap content into the system prompt array, placing exactly one
+ * canonical block at the end of `output.system[0]`.
+ *
+ * All complete `<SYSTEMATIC_WORKFLOWS>…</SYSTEMATIC_WORKFLOWS>` blocks are
+ * removed from every system entry first, then the current content is appended
+ * once to `output.system[0]`. Partial/malformed marker fragments are left
+ * untouched. This makes duplicate registration and prior last-entry placement
+ * converge to the new canonical location; later invocations win.
  *
  * Exported for test access — must NOT be re-exported from the plugin entry
  * point (src/index.ts) because OpenCode's plugin loader expects a single
@@ -45,20 +67,18 @@ export const applyBootstrapContent = (
   output: { system: string[] },
   content: string,
 ): void => {
+  // Remove every complete marker block from every entry.
   for (let i = 0; i < output.system.length; i++) {
-    const entry = output.system[i]
-    const block = findBootstrapMarkerBlock(entry)
-    if (block !== null) {
-      output.system[i] =
-        entry.slice(0, block.start) + content + entry.slice(block.end)
-      return
-    }
+    output.system[i] = removeCompleteBootstrapBlocks(output.system[i])
   }
-  if (output.system.length > 0) {
-    output.system[output.system.length - 1] += `\n\n${content}`
-  } else {
+
+  if (output.system.length === 0) {
     output.system.push(content)
+    return
   }
+
+  const first = output.system[0]
+  output.system[0] = first.length > 0 ? `${first}\n\n${content}` : content
 }
 
 export interface BootstrapDeps {

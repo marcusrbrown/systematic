@@ -508,14 +508,14 @@ describe('applyBootstrapContent marker-based idempotency', () => {
   const MARKER_CLOSE = '</SYSTEMATIC_WORKFLOWS>'
   const wrap = (body: string) => `${MARKER_OPEN}${body}${MARKER_CLOSE}`
 
-  test('pushes content when system array is empty', () => {
+  test('pushes content as sole entry when system array is empty', () => {
     const output = { system: [] as string[] }
     applyBootstrapContent(output, wrap('NEW CONTENT'))
     expect(output.system).toHaveLength(1)
     expect(output.system[0]).toBe(wrap('NEW CONTENT'))
   })
 
-  test('appends content to last entry when no prior marker block exists', () => {
+  test('appends content to system[0] when no prior marker block exists', () => {
     const output = { system: ['existing system prompt'] }
     applyBootstrapContent(output, wrap('NEW CONTENT'))
     expect(output.system).toHaveLength(1)
@@ -524,7 +524,15 @@ describe('applyBootstrapContent marker-based idempotency', () => {
     )
   })
 
-  test('replaces existing marker block in-place, keeping array length at 1', () => {
+  test('two system entries with no marker: bootstrap appended to system[0], system[1] unchanged', () => {
+    const output = { system: ['slot 0 content', 'slot 1 content'] }
+    applyBootstrapContent(output, wrap('NEW CONTENT'))
+    expect(output.system).toHaveLength(2)
+    expect(output.system[0]).toBe(`slot 0 content\n\n${wrap('NEW CONTENT')}`)
+    expect(output.system[1]).toBe('slot 1 content')
+  })
+
+  test('removes existing marker block from system[0] then appends current content', () => {
     const output = {
       system: [`existing prompt with ${wrap('OLD CONTENT')} embedded`],
     }
@@ -538,23 +546,36 @@ describe('applyBootstrapContent marker-based idempotency', () => {
     expect(result).not.toContain('OLD CONTENT')
   })
 
-  test('replaces marker block in a non-last slot when found there', () => {
+  test('removes complete marker block from a non-first slot and appends current content to system[0]', () => {
     const output = {
       system: ['slot 0', `slot 1 with ${wrap('OLD CONTENT')}`, 'slot 2'],
     }
     applyBootstrapContent(output, wrap('NEW CONTENT'))
     expect(output.system).toHaveLength(3)
-    expect(output.system[1]).toContain('NEW CONTENT')
+    // Block removed from slot 1
     expect(output.system[1]).not.toContain('OLD CONTENT')
+    expect(output.system[1]).not.toContain(MARKER_OPEN)
+    // Current content appended to slot 0
+    expect(output.system[0]).toContain('NEW CONTENT')
+    expect(output.system[0]).toContain(MARKER_OPEN)
+    // slot 2 unchanged
     expect(output.system[2]).toBe('slot 2')
   })
 
-  test('non-greedy regex stops at first closing tag, leaving subsequent blocks untouched', () => {
+  test('removes all complete blocks across all entries then appends one current block to system[0]', () => {
     const twoBlocks = `${wrap('A')}B${wrap('C')}`
-    const output = { system: [twoBlocks] }
+    const output = { system: [twoBlocks, wrap('D')] }
     applyBootstrapContent(output, wrap('X'))
-    const result = output.system[0]
-    expect(result).toBe(`${wrap('X')}B${wrap('C')}`)
+    // Both complete blocks in system[0] removed, block in system[1] removed
+    const openTagCount = (
+      output.system.join('\n').match(new RegExp(MARKER_OPEN, 'g')) ?? []
+    ).length
+    expect(openTagCount).toBe(1)
+    expect(output.system[0]).toContain('X')
+    expect(output.system[0]).not.toContain(wrap('A'))
+    expect(output.system[0]).not.toContain(wrap('C'))
+    expect(output.system[1]).not.toContain(wrap('D'))
+    expect(output.system[1]).not.toContain(MARKER_OPEN)
   })
 
   test('fully replaces an entry that is only the marker block', () => {
@@ -574,6 +595,27 @@ describe('applyBootstrapContent marker-based idempotency', () => {
     expect(openTagCount).toBe(1)
     expect(joined).toContain('SECOND REGISTRATION')
     expect(joined).not.toContain('FIRST REGISTRATION')
+  })
+
+  test('malformed open-only marker fragment is left untouched while current block is appended to system[0]', () => {
+    const malformed = `${MARKER_OPEN} trailing content with no close`
+    const output = { system: [malformed] }
+    applyBootstrapContent(output, wrap('NEW CONTENT'))
+    // No complete block matched, so the fragment remains and content is appended
+    expect(output.system).toHaveLength(1)
+    expect(output.system[0]).toContain(MARKER_OPEN)
+    expect(output.system[0]).toContain('trailing content with no close')
+    expect(output.system[0]).toContain('NEW CONTENT')
+    // Exactly one complete block (the appended one)
+    const openTagCount = (
+      output.system[0].match(new RegExp(MARKER_OPEN, 'g')) ?? []
+    ).length
+    const closeTagCount = (
+      output.system[0].match(new RegExp(MARKER_CLOSE, 'g')) ?? []
+    ).length
+    expect(closeTagCount).toBe(1)
+    // Two open tags: one from the malformed fragment, one from the appended block
+    expect(openTagCount).toBe(2)
   })
 
   test('completes in linear time on malicious input with many opening markers and no closing tag', () => {
