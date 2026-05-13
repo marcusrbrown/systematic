@@ -596,6 +596,31 @@ describe('AJV parity: Zod runtime contract vs generated JSON Schema', () => {
       accepted: false,
     },
     {
+      name: 'agent variant without explicit model rejected by both',
+      value: { agents: { foo: { variant: 'high' } } },
+      accepted: false,
+    },
+    {
+      name: 'category variant without explicit model rejected by both',
+      value: { categories: { review: { variant: 'high' } } },
+      accepted: false,
+    },
+    {
+      name: 'agent variant with model:null rejected by both',
+      value: { agents: { foo: { model: null, variant: 'high' } } },
+      accepted: false,
+    },
+    {
+      name: 'category variant with model:null rejected by both',
+      value: { categories: { review: { model: null, variant: 'high' } } },
+      accepted: false,
+    },
+    {
+      name: 'variant with explicit model accepted by both',
+      value: { agents: { foo: { model: 'openai/gpt-5.5', variant: 'high' } } },
+      accepted: true,
+    },
+    {
       // SystematicConfigSchema uses .strict() so unknown top-level keys are rejected.
       name: 'unknown top-level field "agnts" rejected by both (strict mode)',
       value: { agnts: {} },

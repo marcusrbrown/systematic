@@ -454,10 +454,17 @@ describe('config', () => {
         for (const config of [
           {
             agents: {
-              'correctness-reviewer': { variant: 'large-context' },
+              'correctness-reviewer': {
+                model: 'openai/gpt-5',
+                variant: 'large-context',
+              },
             },
           },
-          { categories: { review: { variant: 'small' } } },
+          {
+            categories: {
+              review: { model: 'openai/gpt-5', variant: 'small' },
+            },
+          },
         ]) {
           fs.writeFileSync(projectConfigPath, JSON.stringify(config))
 
@@ -481,6 +488,7 @@ describe('config', () => {
           },
           categories: {
             review: {
+              model: 'openai/gpt-5',
               variant: 'small',
               temperature: 0.2,
             },
@@ -506,6 +514,7 @@ describe('config', () => {
         })
         expect(result.config.categories?.review).toEqual({
           temperature: 0.5,
+          model: 'openai/gpt-5',
           variant: 'small',
         })
       })

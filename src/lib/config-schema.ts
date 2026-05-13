@@ -148,6 +148,26 @@ function trustProtected<T extends z.ZodType>(schema: T): T {
   return schema.meta({ trust: 'project-or-higher' }) as T
 }
 
+interface OverlayModelVariantFields {
+  model?: string | null
+  variant?: string
+}
+
+function enforceVariantHasExplicitModel(
+  overlay: OverlayModelVariantFields,
+  ctx: z.RefinementCtx,
+): void {
+  if (overlay.variant === undefined) return
+  if (typeof overlay.model === 'string') return
+
+  ctx.addIssue({
+    code: 'custom',
+    path: ['variant'],
+    message:
+      'variant requires a non-null model in the same overlay; remove variant or set model explicitly',
+  })
+}
+
 export const AgentOverlaySchema = z
   .object({
     model: trustProtected(modelSchema).optional(),
@@ -163,6 +183,7 @@ export const AgentOverlaySchema = z
     permission: trustProtected(permissionSchema).optional(),
   })
   .strict()
+  .superRefine(enforceVariantHasExplicitModel)
   .meta({
     description: 'Per-agent configuration overlay',
     examples: [
@@ -188,6 +209,7 @@ export const CategoryOverlaySchema = z
     permission: trustProtected(permissionSchema).optional(),
   })
   .strict()
+  .superRefine(enforceVariantHasExplicitModel)
   .meta({
     description:
       'Per-category configuration overlay (same fields as agent minus disable)',
