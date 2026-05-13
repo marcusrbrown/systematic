@@ -317,6 +317,50 @@ export const SOURCE_CATEGORY_MODEL_DEFAULTS: SourceCategoryDefaults = {
 }
 
 /**
+ * Format the SOURCE_CATEGORY_MODEL_DEFAULTS as a GitHub-flavored markdown table
+ * for injection into documentation.
+ *
+ * Columns: Category | Chain | Rationale | When to Override
+ *
+ * Chain format: comma-separated `provider/model[+variant]` for the first 2–3
+ * provider entries (first model per provider). Appends `, …` when there are
+ * more than 3 provider entries.
+ *
+ * Returns a string ending with `\n` for clean concatenation.
+ */
+export function formatForDocs(): string {
+  const header =
+    '| Category | Chain | Rationale | When to Override |\n| --- | --- | --- | --- |\n'
+
+  const rows = Object.entries(SOURCE_CATEGORY_MODEL_DEFAULTS)
+    .map(([category, entry]) => {
+      // Build chain: up to 3 provider entries, first model per provider
+      const MAX_PROVIDERS = 3
+      const providerEntries = entry.providers
+      const shown = providerEntries.slice(0, MAX_PROVIDERS)
+      const hasMore = providerEntries.length > MAX_PROVIDERS
+
+      const chainParts = shown.map((pe) => {
+        const firstModel = pe.models[0]
+        const base = `${pe.provider}/${firstModel.model}`
+        return firstModel.variant ? `${base}+${firstModel.variant}` : base
+      })
+
+      if (hasMore) {
+        chainParts.push('…')
+      }
+
+      const chain = chainParts.join(', ')
+      const whenToOverride = entry.whenToOverride ?? '—'
+
+      return `| ${category} | ${chain} | ${entry.rationale} | ${whenToOverride} |`
+    })
+    .join('\n')
+
+  return `${header}${rows}\n`
+}
+
+/**
  * Walk the provider-grouped shape for a category and return the first available
  * provider/model pair from the availability set.
  *
