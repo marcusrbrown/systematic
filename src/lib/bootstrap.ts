@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { SystematicConfig } from './config.js'
 import { parseFrontmatter } from './frontmatter.js'
+import { renderCatalogVerbose } from './skill-catalog.js'
 
 // Signatures used to identify OpenCode internal agents (title generator,
 // summarizer, etc.) so bootstrap injection can be skipped. Exported for
@@ -133,6 +134,11 @@ export function getBootstrapContent(
   const { body } = parseFrontmatter(fullContent)
   const content = body.trim()
   const toolMapping = getToolMappingTemplate()
+  const catalog = renderCatalogVerbose({
+    bundledSkillsDir,
+    disabledSkills: config.disabled_skills,
+  })
+  const catalogSection = catalog.length > 0 ? `\n\n${catalog}` : ''
 
   return `<SYSTEMATIC_WORKFLOWS>
 You have access to structured engineering workflows via the systematic plugin.
@@ -141,6 +147,6 @@ You have access to structured engineering workflows via the systematic plugin.
 
 ${content}
 
-${toolMapping}
+${toolMapping}${catalogSection}
 </SYSTEMATIC_WORKFLOWS>`
 }
