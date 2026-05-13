@@ -8,7 +8,6 @@ import {
   buildBundledAgentInventory,
   inferBuiltInTemperature,
   validateAgentOverlays,
-  validateSourceCategoryModelDefaults,
 } from '../../src/lib/agent-overlays.js'
 import type { SourcedOverlayConfig } from '../../src/lib/config.js'
 import { createConfigHandler } from '../../src/lib/config-handler.js'
@@ -588,32 +587,6 @@ describe('source category model defaults', () => {
 
     expect(() =>
       assertSourceCategoryModelCoverage(inventory.categories),
-    ).not.toThrow()
-  })
-
-  test('rejects malformed source model defaults through the shared model validator', () => {
-    expect(() =>
-      validateSourceCategoryModelDefaults({ review: 'gpt-5' }),
-    ).toThrow(/review/)
-  })
-
-  test('rejects empty array in source category model defaults', () => {
-    expect(() => validateSourceCategoryModelDefaults({ review: [] })).toThrow(
-      /review/,
-    )
-  })
-
-  test('rejects array with malformed model entry through shared model validator', () => {
-    expect(() =>
-      validateSourceCategoryModelDefaults({ review: ['malformed-no-slash'] }),
-    ).toThrow(/review/)
-  })
-
-  test('accepts multi-entry valid array in source category model defaults', () => {
-    expect(() =>
-      validateSourceCategoryModelDefaults({
-        review: ['openai/gpt-5.5', 'anthropic/claude-opus-4-7'], // intentional fixture: arbitrary valid strings for flat-array validator, not mirroring source defaults
-      }),
     ).not.toThrow()
   })
 })

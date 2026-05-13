@@ -2,11 +2,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import type { z } from 'zod'
 import type { SourcedOverlayConfigMap } from './config.js'
-import {
-  AgentOverlaySchema,
-  assertSourceCategoryModelDefaults,
-  CategoryOverlaySchema,
-} from './config-schema.js'
+import { AgentOverlaySchema, CategoryOverlaySchema } from './config-schema.js'
 import { SOURCE_CATEGORY_MODEL_DEFAULTS } from './source-model-defaults.js'
 import { isRecord } from './validation.js'
 
@@ -171,12 +167,6 @@ export function assertSourceCategoryModelCoverage(categories: string[]): void {
       `Source category model defaults missing intentional coverage for: ${missingCategories.join(', ')}`,
     )
   }
-}
-
-export function validateSourceCategoryModelDefaults(
-  defaults: Record<string, unknown>,
-): void {
-  assertSourceCategoryModelDefaults(defaults)
 }
 
 function validateExactAgentOverlays(

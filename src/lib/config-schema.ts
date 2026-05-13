@@ -294,24 +294,6 @@ export function validateConfig(input: unknown): ValidationResult {
   return { success: false, errors: result.error.issues }
 }
 
-const SourceCategoryModelDefaultsSchema = z
-  .record(
-    z.string(),
-    z
-      .array(z.string().min(1).regex(MODEL_FORMAT_REGEX, MODEL_FORMAT_MESSAGE))
-      .min(1),
-  )
-  .meta({
-    description: 'Validates source category model defaults shape',
-    examples: [{ design: ['openai/gpt-5.5', 'anthropic/claude-opus-4-7'] }],
-  })
-
-export function assertSourceCategoryModelDefaults(
-  defaults: Record<string, unknown>,
-): void {
-  SourceCategoryModelDefaultsSchema.parse(defaults)
-}
-
 /**
  * Overlay fields that require a project-or-higher trust source.
  *
