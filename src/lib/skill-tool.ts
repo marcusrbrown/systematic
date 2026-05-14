@@ -4,6 +4,11 @@ import { pathToFileURL } from 'node:url'
 import type { ToolDefinition } from '@opencode-ai/plugin'
 import { tool } from '@opencode-ai/plugin/tool'
 import {
+  buildCatalogEntries,
+  escapeXml,
+  renderCatalogCompact,
+} from './skill-catalog.js'
+import {
   extractSkillBody,
   formatSkillCommandName,
   type LoadedSkill,
@@ -27,8 +32,8 @@ export function formatSkillsXml(skills: SkillInfo[]): string {
   // Uses space-delimited join with indented XML structure
   const skillLines = skills.flatMap((skill) => [
     '  <skill>',
-    `    <name>${formatSkillCommandName(skill.name)}</name>`,
-    `    <description>${skill.description}</description>`,
+    `    <name>${escapeXml(formatSkillCommandName(skill.name))}</name>`,
+    `    <description>${escapeXml(skill.description)}</description>`,
     `    <location>${pathToFileURL(skill.path).href}</location>`,
     '  </skill>',
   ])
@@ -96,44 +101,23 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
       .sort((a, b) => a.name.localeCompare(b.name))
   }
 
-  const getDiscoverableSkills = (): LoadedSkill[] => {
-    return getAllSkills().filter((s) => s.disableModelInvocation !== true)
-  }
-
   const buildDescription = (): string => {
-    const skills = getDiscoverableSkills()
+    const catalog = renderCatalogCompact({ bundledSkillsDir, disabledSkills })
 
-    if (skills.length === 0) {
-      return 'Load a skill to get detailed instructions for a specific task. No skills are currently available.'
-    }
+    return `Load a specialized skill that provides domain-specific instructions and workflows.
 
-    const skillInfos = skills.map((s) => ({
-      name: s.name,
-      description: s.description,
-      path: s.path,
-      skillFile: s.skillFile,
-    }))
-    const systematicXml = formatSkillsXml(skillInfos)
+When you recognize that a task matches one of the available skills listed below, use this tool to load the full skill instructions.
 
-    return [
-      'Load a specialized skill that provides domain-specific instructions and workflows.',
-      '',
-      'When you recognize that a task matches one of the available skills listed below, use this tool to load the full skill instructions.',
-      '',
-      'The skill will inject detailed instructions, workflows, and access to bundled resources (scripts, references, templates) into the conversation context.',
-      '',
-      'Tool output includes a `<skill_content name="...">` block with the loaded content.',
-      '',
-      'The following skills provide specialized sets of instructions for particular tasks.',
-      'Invoke this tool to load a skill when a task matches one of the available skills listed below:',
-      '',
-      systematicXml,
-    ].join('\n')
+The skill will inject detailed instructions, workflows, and access to bundled resources (scripts, references, templates) into the conversation context.
+
+Tool output includes a \`<skill_content name="...">\` block with the loaded content.
+
+${catalog}`
   }
 
   const buildParameterHint = (): string => {
-    const skills = getDiscoverableSkills()
-    const examples = skills
+    const entries = buildCatalogEntries({ bundledSkillsDir, disabledSkills })
+    const examples = entries
       .slice(0, 3)
       .map((s) => `'${s.prefixedName}'`)
       .join(', ')
@@ -172,9 +156,10 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
       const matchedSkill = skills.find((s) => s.name === normalizedName)
 
       if (!matchedSkill) {
-        const availableSystematic = getDiscoverableSkills().map(
-          (s) => s.prefixedName,
-        )
+        const availableSystematic = buildCatalogEntries({
+          bundledSkillsDir,
+          disabledSkills,
+        }).map((s) => s.prefixedName)
         throw new Error(
           `Skill "${requestedName}" not found. Available systematic skills: ${availableSystematic.join(', ')}`,
         )

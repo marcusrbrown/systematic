@@ -102,6 +102,22 @@ describe('skill-tool', () => {
       expect(result).toContain('<name>ce:plan</name>')
       expect(result).not.toContain('<name>systematic:ce:plan</name>')
     })
+
+    test('escapes XML special chars in name and description', () => {
+      const result = formatSkillsXml([
+        {
+          path: '/test/path',
+          skillFile: '/test/path/SKILL.md',
+          name: 'a&b',
+          description: 'A & B <special>',
+        },
+      ])
+
+      expect(result).toContain('<name>systematic:a&amp;b</name>')
+      expect(result).toContain(
+        '<description>A &amp; B &lt;special&gt;</description>',
+      )
+    })
   })
 
   describe('createSkillTool', () => {
@@ -124,6 +140,34 @@ description: A test skill for unit testing
 
       expect(tool.description).toContain('systematic:test-skill')
       expect(tool.description).toContain('A test skill for unit testing')
+    })
+
+    test('description uses compact catalog format, not verbose XML', () => {
+      const skillDir = path.join(testDir, 'ce-brainstorm')
+      fs.mkdirSync(skillDir)
+      fs.writeFileSync(
+        path.join(skillDir, 'SKILL.md'),
+        `---
+name: ce:brainstorm
+description: Explore requirements and approaches through collaborative dialogue
+---
+# Brainstorm Content`,
+      )
+
+      const tool = createSkillTool({
+        bundledSkillsDir: testDir,
+        disabledSkills: [],
+      })
+
+      // Compact format: markdown bullet list
+      expect(tool.description).toContain('ce:brainstorm')
+      expect(tool.description).toContain(
+        'Explore requirements and approaches through collaborative dialogue',
+      )
+      // Must NOT contain verbose XML catalog
+      expect(tool.description).not.toContain('<available_skills>')
+      expect(tool.description).not.toContain('</available_skills>')
+      expect(tool.description).not.toContain('<location>')
     })
 
     test('filters out disabled skills from description', () => {
@@ -191,6 +235,70 @@ disable-model-invocation: true
 
       expect(tool.description).toContain('systematic:visible-skill')
       expect(tool.description).not.toContain('systematic:hidden-skill')
+    })
+
+    test('compact description and execution loadability agree on disabled vs disable-model-invocation skills', async () => {
+      const normalDir = path.join(testDir, 'normal-skill')
+      const disabledDir = path.join(testDir, 'disabled-skill')
+      const hiddenDir = path.join(testDir, 'hidden-skill')
+      fs.mkdirSync(normalDir)
+      fs.mkdirSync(disabledDir)
+      fs.mkdirSync(hiddenDir)
+
+      fs.writeFileSync(
+        path.join(normalDir, 'SKILL.md'),
+        `---
+name: normal-skill
+description: Normal skill
+---
+# Normal`,
+      )
+
+      fs.writeFileSync(
+        path.join(disabledDir, 'SKILL.md'),
+        `---
+name: disabled-skill
+description: Disabled skill
+---
+# Disabled`,
+      )
+
+      fs.writeFileSync(
+        path.join(hiddenDir, 'SKILL.md'),
+        `---
+name: hidden-skill
+description: Hidden skill
+disable-model-invocation: true
+---
+# Hidden`,
+      )
+
+      const tool = createSkillTool({
+        bundledSkillsDir: testDir,
+        disabledSkills: ['disabled-skill'],
+      })
+
+      // Disabled: not in description, not loadable
+      expect(tool.description).not.toContain('systematic:disabled-skill')
+      await expect(
+        tool.execute({ name: 'systematic:disabled-skill' }, mockContext),
+      ).rejects.toThrow()
+
+      // Hidden (disableModelInvocation): not in description, IS loadable
+      expect(tool.description).not.toContain('systematic:hidden-skill')
+      const hiddenResult = await tool.execute(
+        { name: 'systematic:hidden-skill' },
+        mockContext,
+      )
+      expect(hiddenResult).toContain('# Hidden')
+
+      // Normal: in description, loadable
+      expect(tool.description).toContain('systematic:normal-skill')
+      const normalResult = await tool.execute(
+        { name: 'systematic:normal-skill' },
+        mockContext,
+      )
+      expect(normalResult).toContain('# Normal')
     })
   })
 

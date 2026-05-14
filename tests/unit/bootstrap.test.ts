@@ -181,7 +181,7 @@ describe('getBootstrapContent', () => {
     expect(content).not.toContain('description: Test skill')
   })
 
-  test('embeds bundledSkillsDir absolute path in the tool-mapping template', () => {
+  test('tool-mapping template does not embed bundledSkillsDir as a raw path', () => {
     const bundledSkillsDir = makeBundledSkillsDir(
       '---\nname: using-systematic\n---\nbody',
     )
@@ -194,10 +194,170 @@ describe('getBootstrapContent', () => {
     const content = getBootstrapContent(config, { bundledSkillsDir })
 
     expect(content).not.toBeNull()
-    expect(content).not.toContain(bundledSkillsDir)
+    // The tool-mapping prose must not embed the raw path. Slice from the
+    // heading up to the catalog block (or end of string if no catalog).
+    const toolMappingHeading = '**Tool Mapping for OpenCode:**'
+    const toolMappingStart = (content ?? '').indexOf(toolMappingHeading)
+    expect(toolMappingStart).toBeGreaterThan(-1)
+    const afterHeading = (content ?? '').slice(toolMappingStart)
+    const catalogStart = afterHeading.indexOf('<available_skills>')
+    const toolMappingProse =
+      catalogStart >= 0 ? afterHeading.slice(0, catalogStart) : afterHeading
+    expect(toolMappingProse).not.toContain(bundledSkillsDir)
     expect(content).toContain(
       'Bundled skills ship with the Systematic plugin and are discoverable via `systematic_skill`.',
     )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Verbose skill catalog in default bootstrap
+// ---------------------------------------------------------------------------
+
+describe('getBootstrapContent — verbose skill catalog', () => {
+  let testDir: string
+
+  beforeEach(() => {
+    testDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-bootstrap-catalog-'),
+    )
+  })
+
+  afterEach(() => {
+    fs.rmSync(testDir, { recursive: true, force: true })
+  })
+
+  function makeSkillsDir(
+    skills: Array<{ name: string; description: string; extra?: string }>,
+  ): string {
+    const bundledSkillsDir = path.join(testDir, 'skills')
+    fs.mkdirSync(path.join(bundledSkillsDir, 'using-systematic'), {
+      recursive: true,
+    })
+    fs.writeFileSync(
+      path.join(bundledSkillsDir, 'using-systematic', 'SKILL.md'),
+      '---\nname: using-systematic\ndescription: Use when starting any conversation\n---\nBootstrap body.',
+    )
+    for (const skill of skills) {
+      const dir = path.join(bundledSkillsDir, skill.name)
+      fs.mkdirSync(dir, { recursive: true })
+      const extra = skill.extra ?? ''
+      fs.writeFileSync(
+        path.join(dir, 'SKILL.md'),
+        `---\nname: ${skill.name}\ndescription: ${skill.description}${extra}\n---\nBody.`,
+      )
+    }
+    return bundledSkillsDir
+  }
+
+  test('default bootstrap contains <available_skills> with skill name, description, and file URL', () => {
+    const bundledSkillsDir = makeSkillsDir([
+      { name: 'git-commit', description: 'Create a git commit' },
+      { name: 'ce:plan', description: 'Create structured plans' },
+    ])
+    const config = {
+      bootstrap: { enabled: true, file: undefined },
+      disabled_skills: [] as string[],
+      disabled_agents: [] as string[],
+      disabled_commands: [] as string[],
+    }
+
+    const content = getBootstrapContent(config, { bundledSkillsDir })
+
+    expect(content).not.toBeNull()
+    expect(content).toContain('<available_skills>')
+    expect(content).toContain('</available_skills>')
+    // Skills appear with prefixed names
+    expect(content).toContain('<name>systematic:git-commit</name>')
+    expect(content).toContain('<description>Create a git commit</description>')
+    expect(content).toContain('<location>file://')
+    expect(content).toContain('git-commit')
+    // ce:plan already has a colon so it keeps its name
+    expect(content).toContain('<name>ce:plan</name>')
+  })
+
+  test('disabled skills are absent from the default bootstrap catalog', () => {
+    const bundledSkillsDir = makeSkillsDir([
+      { name: 'git-commit', description: 'Create a git commit' },
+      { name: 'ce:plan', description: 'Create structured plans' },
+    ])
+    const config = {
+      bootstrap: { enabled: true, file: undefined },
+      disabled_skills: ['git-commit'] as string[],
+      disabled_agents: [] as string[],
+      disabled_commands: [] as string[],
+    }
+
+    const content = getBootstrapContent(config, { bundledSkillsDir })
+
+    expect(content).not.toBeNull()
+    expect(content).not.toContain('<name>systematic:git-commit</name>')
+    expect(content).toContain('<name>ce:plan</name>')
+  })
+
+  test('skills with disableModelInvocation are absent from the default bootstrap catalog', () => {
+    const bundledSkillsDir = makeSkillsDir([
+      { name: 'git-commit', description: 'Create a git commit' },
+      {
+        name: 'internal-tool',
+        description: 'Internal only',
+        extra: '\ndisable-model-invocation: true',
+      },
+    ])
+    const config = {
+      bootstrap: { enabled: true, file: undefined },
+      disabled_skills: [] as string[],
+      disabled_agents: [] as string[],
+      disabled_commands: [] as string[],
+    }
+
+    const content = getBootstrapContent(config, { bundledSkillsDir })
+
+    expect(content).not.toBeNull()
+    expect(content).toContain('<name>systematic:git-commit</name>')
+    expect(content).not.toContain('<name>systematic:internal-tool</name>')
+  })
+
+  test('custom bootstrap file content is returned verbatim without verbose catalog', () => {
+    const bundledSkillsDir = makeSkillsDir([
+      { name: 'git-commit', description: 'Create a git commit' },
+    ])
+    const customPath = path.join(testDir, 'custom-bootstrap.md')
+    fs.writeFileSync(customPath, 'CUSTOM bootstrap content — no catalog here')
+
+    const config = {
+      bootstrap: { enabled: true, file: customPath },
+      disabled_skills: [] as string[],
+      disabled_agents: [] as string[],
+      disabled_commands: [] as string[],
+    }
+
+    const content = getBootstrapContent(config, { bundledSkillsDir })
+
+    expect(content).toBe('CUSTOM bootstrap content — no catalog here')
+    expect(content).not.toContain('<available_skills>')
+  })
+
+  test('missing custom bootstrap path falls through to default bootstrap with catalog', () => {
+    const bundledSkillsDir = makeSkillsDir([
+      { name: 'git-commit', description: 'Create a git commit' },
+    ])
+    const config = {
+      bootstrap: {
+        enabled: true,
+        file: path.join(testDir, 'does-not-exist.md'),
+      },
+      disabled_skills: [] as string[],
+      disabled_agents: [] as string[],
+      disabled_commands: [] as string[],
+    }
+
+    const content = getBootstrapContent(config, { bundledSkillsDir })
+
+    expect(content).not.toBeNull()
+    expect(content).toContain('<SYSTEMATIC_WORKFLOWS>')
+    expect(content).toContain('<available_skills>')
+    expect(content).toContain('<name>systematic:git-commit</name>')
   })
 })
 

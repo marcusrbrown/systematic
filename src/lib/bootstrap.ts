@@ -3,6 +3,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { SystematicConfig } from './config.js'
 import { parseFrontmatter } from './frontmatter.js'
+import { renderCatalogVerbose } from './skill-catalog.js'
 
 // Signatures used to identify OpenCode internal agents (title generator,
 // summarizer, etc.) so bootstrap injection can be skipped. Exported for
@@ -20,21 +21,66 @@ const BOOTSTRAP_MARKER_CLOSE = '</SYSTEMATIC_WORKFLOWS>'
 
 const findBootstrapMarkerBlock = (
   entry: string,
-): { start: number; end: number } | null => {
-  const start = entry.indexOf(BOOTSTRAP_MARKER_OPEN)
+  fromIndex = 0,
+): { start: number; closeStart: number; end: number } | null => {
+  const start = entry.indexOf(BOOTSTRAP_MARKER_OPEN, fromIndex)
   if (start === -1) return null
   const closeStart = entry.indexOf(
     BOOTSTRAP_MARKER_CLOSE,
     start + BOOTSTRAP_MARKER_OPEN.length,
   )
   if (closeStart === -1) return null
-  return { start, end: closeStart + BOOTSTRAP_MARKER_CLOSE.length }
+  return { start, closeStart, end: closeStart + BOOTSTRAP_MARKER_CLOSE.length }
+}
+
+const removeCompleteBootstrapBlocks = (entry: string): string => {
+  const segments: string[] = []
+  let cursor = 0
+  let block = findBootstrapMarkerBlock(entry, cursor)
+  let hadNestedBlock = false
+
+  while (block !== null) {
+    const nestedStart = entry.indexOf(
+      BOOTSTRAP_MARKER_OPEN,
+      block.start + BOOTSTRAP_MARKER_OPEN.length,
+    )
+
+    if (nestedStart !== -1 && nestedStart < block.closeStart) {
+      hadNestedBlock = true
+      segments.push(entry.slice(cursor, nestedStart))
+      cursor = nestedStart
+      block = findBootstrapMarkerBlock(entry, cursor)
+      continue
+    }
+
+    segments.push(entry.slice(cursor, block.start))
+    cursor = block.end
+    block = findBootstrapMarkerBlock(entry, cursor)
+  }
+
+  if (cursor === 0) return entry
+  segments.push(entry.slice(cursor))
+  const result = segments.join('')
+
+  // When nested blocks are removed, previously truncated outer open/close
+  // markers may now form a complete block. Recurse once to clean up in a
+  // single call rather than requiring a second transform invocation.
+  if (hadNestedBlock) {
+    return removeCompleteBootstrapBlocks(result)
+  }
+
+  return result
 }
 
 /**
- * Inject bootstrap content into the system prompt array, replacing any
- * existing `<SYSTEMATIC_WORKFLOWS>` block. Multi-load idempotency is via
- * the marker — most-recently-registered plugin wins under FIFO hook order.
+ * Inject bootstrap content into the system prompt array, placing exactly one
+ * canonical block at the end of `output.system[0]`.
+ *
+ * All complete `<SYSTEMATIC_WORKFLOWS>…</SYSTEMATIC_WORKFLOWS>` blocks are
+ * removed from every system entry first, then the current content is appended
+ * once to `output.system[0]`. Partial/malformed marker fragments are left
+ * untouched. This makes duplicate registration and prior last-entry placement
+ * converge to the new canonical location; later invocations win.
  *
  * Exported for test access — must NOT be re-exported from the plugin entry
  * point (src/index.ts) because OpenCode's plugin loader expects a single
@@ -45,20 +91,18 @@ export const applyBootstrapContent = (
   output: { system: string[] },
   content: string,
 ): void => {
+  // Remove every complete marker block from every entry.
   for (let i = 0; i < output.system.length; i++) {
-    const entry = output.system[i]
-    const block = findBootstrapMarkerBlock(entry)
-    if (block !== null) {
-      output.system[i] =
-        entry.slice(0, block.start) + content + entry.slice(block.end)
-      return
-    }
+    output.system[i] = removeCompleteBootstrapBlocks(output.system[i])
   }
-  if (output.system.length > 0) {
-    output.system[output.system.length - 1] += `\n\n${content}`
-  } else {
+
+  if (output.system.length === 0) {
     output.system.push(content)
+    return
   }
+
+  const first = output.system[0]
+  output.system[0] = first.length > 0 ? `${first}\n\n${content}` : content
 }
 
 export interface BootstrapDeps {
@@ -113,6 +157,11 @@ export function getBootstrapContent(
   const { body } = parseFrontmatter(fullContent)
   const content = body.trim()
   const toolMapping = getToolMappingTemplate()
+  const catalog = renderCatalogVerbose({
+    bundledSkillsDir,
+    disabledSkills: config.disabled_skills,
+  })
+  const catalogSection = catalog.length > 0 ? `\n\n${catalog}` : ''
 
   return `<SYSTEMATIC_WORKFLOWS>
 You have access to structured engineering workflows via the systematic plugin.
@@ -121,6 +170,6 @@ You have access to structured engineering workflows via the systematic plugin.
 
 ${content}
 
-${toolMapping}
+${toolMapping}${catalogSection}
 </SYSTEMATIC_WORKFLOWS>`
 }

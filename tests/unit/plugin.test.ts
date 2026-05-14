@@ -508,14 +508,14 @@ describe('applyBootstrapContent marker-based idempotency', () => {
   const MARKER_CLOSE = '</SYSTEMATIC_WORKFLOWS>'
   const wrap = (body: string) => `${MARKER_OPEN}${body}${MARKER_CLOSE}`
 
-  test('pushes content when system array is empty', () => {
+  test('pushes content as sole entry when system array is empty', () => {
     const output = { system: [] as string[] }
     applyBootstrapContent(output, wrap('NEW CONTENT'))
     expect(output.system).toHaveLength(1)
     expect(output.system[0]).toBe(wrap('NEW CONTENT'))
   })
 
-  test('appends content to last entry when no prior marker block exists', () => {
+  test('appends content to system[0] when no prior marker block exists', () => {
     const output = { system: ['existing system prompt'] }
     applyBootstrapContent(output, wrap('NEW CONTENT'))
     expect(output.system).toHaveLength(1)
@@ -524,7 +524,15 @@ describe('applyBootstrapContent marker-based idempotency', () => {
     )
   })
 
-  test('replaces existing marker block in-place, keeping array length at 1', () => {
+  test('two system entries with no marker: bootstrap appended to system[0], system[1] unchanged', () => {
+    const output = { system: ['slot 0 content', 'slot 1 content'] }
+    applyBootstrapContent(output, wrap('NEW CONTENT'))
+    expect(output.system).toHaveLength(2)
+    expect(output.system[0]).toBe(`slot 0 content\n\n${wrap('NEW CONTENT')}`)
+    expect(output.system[1]).toBe('slot 1 content')
+  })
+
+  test('removes existing marker block from system[0] then appends current content', () => {
     const output = {
       system: [`existing prompt with ${wrap('OLD CONTENT')} embedded`],
     }
@@ -538,23 +546,36 @@ describe('applyBootstrapContent marker-based idempotency', () => {
     expect(result).not.toContain('OLD CONTENT')
   })
 
-  test('replaces marker block in a non-last slot when found there', () => {
+  test('removes complete marker block from a non-first slot and appends current content to system[0]', () => {
     const output = {
       system: ['slot 0', `slot 1 with ${wrap('OLD CONTENT')}`, 'slot 2'],
     }
     applyBootstrapContent(output, wrap('NEW CONTENT'))
     expect(output.system).toHaveLength(3)
-    expect(output.system[1]).toContain('NEW CONTENT')
+    // Block removed from slot 1
     expect(output.system[1]).not.toContain('OLD CONTENT')
+    expect(output.system[1]).not.toContain(MARKER_OPEN)
+    // Current content appended to slot 0
+    expect(output.system[0]).toContain('NEW CONTENT')
+    expect(output.system[0]).toContain(MARKER_OPEN)
+    // slot 2 unchanged
     expect(output.system[2]).toBe('slot 2')
   })
 
-  test('non-greedy regex stops at first closing tag, leaving subsequent blocks untouched', () => {
+  test('removes all complete blocks across all entries then appends one current block to system[0]', () => {
     const twoBlocks = `${wrap('A')}B${wrap('C')}`
-    const output = { system: [twoBlocks] }
+    const output = { system: [twoBlocks, wrap('D')] }
     applyBootstrapContent(output, wrap('X'))
-    const result = output.system[0]
-    expect(result).toBe(`${wrap('X')}B${wrap('C')}`)
+    // Both complete blocks in system[0] removed, block in system[1] removed
+    const openTagCount = (
+      output.system.join('\n').match(new RegExp(MARKER_OPEN, 'g')) ?? []
+    ).length
+    expect(openTagCount).toBe(1)
+    expect(output.system[0]).toContain('X')
+    expect(output.system[0]).not.toContain(wrap('A'))
+    expect(output.system[0]).not.toContain(wrap('C'))
+    expect(output.system[1]).not.toContain(wrap('D'))
+    expect(output.system[1]).not.toContain(MARKER_OPEN)
   })
 
   test('fully replaces an entry that is only the marker block', () => {
@@ -574,6 +595,128 @@ describe('applyBootstrapContent marker-based idempotency', () => {
     expect(openTagCount).toBe(1)
     expect(joined).toContain('SECOND REGISTRATION')
     expect(joined).not.toContain('FIRST REGISTRATION')
+  })
+
+  test('malformed open-only marker fragment is left untouched while current block is appended to system[0]', () => {
+    const malformed = `${MARKER_OPEN} trailing content with no close`
+    const output = { system: [malformed] }
+    applyBootstrapContent(output, wrap('NEW CONTENT'))
+    // No complete block matched, so the fragment remains and content is appended
+    expect(output.system).toHaveLength(1)
+    expect(output.system[0]).toContain(MARKER_OPEN)
+    expect(output.system[0]).toContain('trailing content with no close')
+    expect(output.system[0]).toContain('NEW CONTENT')
+    // Exactly one complete block (the appended one)
+    const openTagCount = (
+      output.system[0].match(new RegExp(MARKER_OPEN, 'g')) ?? []
+    ).length
+    const closeTagCount = (
+      output.system[0].match(new RegExp(MARKER_CLOSE, 'g')) ?? []
+    ).length
+    expect(closeTagCount).toBe(1)
+    // Two open tags: one from the malformed fragment, one from the appended block
+    expect(openTagCount).toBe(2)
+  })
+
+  test('malformed open-only marker fragment survives sequential transforms', () => {
+    const malformed = `${MARKER_OPEN} USER FRAGMENT KEEP`
+    const output = { system: [malformed] }
+
+    applyBootstrapContent(output, wrap('FIRST REGISTRATION'))
+    applyBootstrapContent(output, wrap('SECOND REGISTRATION'))
+
+    const result = output.system[0]
+    expect(result).toContain(malformed)
+    expect(result).toContain('SECOND REGISTRATION')
+    expect(result).not.toContain('FIRST REGISTRATION')
+    const closeTagCount = (result.match(new RegExp(MARKER_CLOSE, 'g')) ?? [])
+      .length
+    expect(closeTagCount).toBe(1)
+  })
+
+  test('removes nested complete blocks in a single call', () => {
+    const nested = `${MARKER_OPEN}outer ${wrap('inner')} tail${MARKER_CLOSE}`
+    const output = { system: [nested] }
+    applyBootstrapContent(output, wrap('NEW'))
+
+    const joined = output.system.join('\n')
+    const openTagCount = (joined.match(new RegExp(MARKER_OPEN, 'g')) ?? [])
+      .length
+    expect(openTagCount).toBe(1)
+    // Only the appended block remains
+    expect(output.system[0]).toBe(wrap('NEW'))
+  })
+
+  test('nested block with surrounding content converges in one call', () => {
+    const nested = `intro ${MARKER_OPEN}outer ${wrap('inner')} tail${MARKER_CLOSE} more`
+    const output = { system: [nested] }
+    applyBootstrapContent(output, wrap('NEW'))
+
+    const joined = output.system.join('\n')
+    const openTagCount = (joined.match(new RegExp(MARKER_OPEN, 'g')) ?? [])
+      .length
+    expect(openTagCount).toBe(1)
+    // User text outside the outermost block survives
+    expect(output.system[0]).toContain('intro')
+    expect(output.system[0]).toContain('more')
+    // Text inside the outermost block is removed with it
+    expect(output.system[0]).not.toContain('outer')
+    expect(output.system[0]).not.toContain('tail')
+  })
+
+  test('two levels of nesting converge in one call', () => {
+    const nested = `${MARKER_OPEN}${MARKER_OPEN}${wrap('deep')}${MARKER_CLOSE}${MARKER_CLOSE}`
+    const output = { system: [nested] }
+    applyBootstrapContent(output, wrap('NEW'))
+
+    const joined = output.system.join('\n')
+    const openTagCount = (joined.match(new RegExp(MARKER_OPEN, 'g')) ?? [])
+      .length
+    expect(openTagCount).toBe(1)
+    expect(output.system[0]).toBe(wrap('NEW'))
+  })
+
+  test('malformed open-only fragment survives even when nesting is also present', () => {
+    // No outer close tag — the outer open is an orphan fragment that should
+    // survive, while the complete inner block is removed.
+    const mixed = `${MARKER_OPEN}keep me ${wrap('inner')}`
+    const output = { system: [mixed] }
+    applyBootstrapContent(output, wrap('NEW'))
+
+    // The fragment open tag survives (no matching close for outermost)
+    expect(output.system[0]).toContain(MARKER_OPEN)
+    expect(output.system[0]).toContain('keep me')
+    // The appended block exists
+    expect(output.system[0]).toContain('NEW')
+    // The inner block is removed — only fragment + appended block remain
+    const openTagCount = (
+      output.system[0].match(new RegExp(MARKER_OPEN, 'g')) ?? []
+    ).length
+    expect(openTagCount).toBe(2)
+    const closeTagCount = (
+      output.system[0].match(new RegExp(MARKER_CLOSE, 'g')) ?? []
+    ).length
+    expect(closeTagCount).toBe(1)
+  })
+
+  test('malformed open-only fragment survives sequential transforms when nesting preceeded it', () => {
+    // No outer close tag — the outer open is an orphan that should survive
+    // across sequential transforms.
+    const mixed = `${MARKER_OPEN}keep me ${wrap('first')}`
+    const output = { system: [mixed] }
+
+    applyBootstrapContent(output, wrap('FIRST'))
+    applyBootstrapContent(output, wrap('SECOND'))
+
+    // Fragment still survives after second transform
+    expect(output.system[0]).toContain('keep me')
+    expect(output.system[0]).toContain('SECOND')
+    expect(output.system[0]).not.toContain('FIRST')
+    // One complete block (the appended second one)
+    const closeTagCount = (
+      output.system[0].match(new RegExp(MARKER_CLOSE, 'g')) ?? []
+    ).length
+    expect(closeTagCount).toBe(1)
   })
 
   test('completes in linear time on malicious input with many opening markers and no closing tag', () => {
