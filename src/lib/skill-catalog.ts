@@ -2,6 +2,15 @@ import { pathToFileURL } from 'node:url'
 import { formatSkillCommandName } from './skill-loader.js'
 import { findSkillsInDir } from './skills.js'
 
+/**
+ * Escape XML special characters (&, <, >) in text content.
+ * Quotes are not escaped because catalog names and descriptions are rendered
+ * as element text, not attribute values.
+ */
+export function escapeXml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
 export interface CatalogEntry {
   name: string
   prefixedName: string
@@ -47,8 +56,8 @@ export function renderCatalogVerbose(options: CatalogOptions): string {
 
   const skillLines = entries.flatMap((entry) => [
     '  <skill>',
-    `    <name>${entry.prefixedName}</name>`,
-    `    <description>${entry.description}</description>`,
+    `    <name>${escapeXml(entry.prefixedName)}</name>`,
+    `    <description>${escapeXml(entry.description)}</description>`,
     `    <location>${pathToFileURL(entry.path).href}</location>`,
     '  </skill>',
   ])

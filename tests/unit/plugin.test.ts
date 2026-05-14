@@ -634,6 +634,91 @@ describe('applyBootstrapContent marker-based idempotency', () => {
     expect(closeTagCount).toBe(1)
   })
 
+  test('removes nested complete blocks in a single call', () => {
+    const nested = `${MARKER_OPEN}outer ${wrap('inner')} tail${MARKER_CLOSE}`
+    const output = { system: [nested] }
+    applyBootstrapContent(output, wrap('NEW'))
+
+    const joined = output.system.join('\n')
+    const openTagCount = (joined.match(new RegExp(MARKER_OPEN, 'g')) ?? [])
+      .length
+    expect(openTagCount).toBe(1)
+    // Only the appended block remains
+    expect(output.system[0]).toBe(wrap('NEW'))
+  })
+
+  test('nested block with surrounding content converges in one call', () => {
+    const nested = `intro ${MARKER_OPEN}outer ${wrap('inner')} tail${MARKER_CLOSE} more`
+    const output = { system: [nested] }
+    applyBootstrapContent(output, wrap('NEW'))
+
+    const joined = output.system.join('\n')
+    const openTagCount = (joined.match(new RegExp(MARKER_OPEN, 'g')) ?? [])
+      .length
+    expect(openTagCount).toBe(1)
+    // User text outside the outermost block survives
+    expect(output.system[0]).toContain('intro')
+    expect(output.system[0]).toContain('more')
+    // Text inside the outermost block is removed with it
+    expect(output.system[0]).not.toContain('outer')
+    expect(output.system[0]).not.toContain('tail')
+  })
+
+  test('two levels of nesting converge in one call', () => {
+    const nested = `${MARKER_OPEN}${MARKER_OPEN}${wrap('deep')}${MARKER_CLOSE}${MARKER_CLOSE}`
+    const output = { system: [nested] }
+    applyBootstrapContent(output, wrap('NEW'))
+
+    const joined = output.system.join('\n')
+    const openTagCount = (joined.match(new RegExp(MARKER_OPEN, 'g')) ?? [])
+      .length
+    expect(openTagCount).toBe(1)
+    expect(output.system[0]).toBe(wrap('NEW'))
+  })
+
+  test('malformed open-only fragment survives even when nesting is also present', () => {
+    // No outer close tag — the outer open is an orphan fragment that should
+    // survive, while the complete inner block is removed.
+    const mixed = `${MARKER_OPEN}keep me ${wrap('inner')}`
+    const output = { system: [mixed] }
+    applyBootstrapContent(output, wrap('NEW'))
+
+    // The fragment open tag survives (no matching close for outermost)
+    expect(output.system[0]).toContain(MARKER_OPEN)
+    expect(output.system[0]).toContain('keep me')
+    // The appended block exists
+    expect(output.system[0]).toContain('NEW')
+    // The inner block is removed — only fragment + appended block remain
+    const openTagCount = (
+      output.system[0].match(new RegExp(MARKER_OPEN, 'g')) ?? []
+    ).length
+    expect(openTagCount).toBe(2)
+    const closeTagCount = (
+      output.system[0].match(new RegExp(MARKER_CLOSE, 'g')) ?? []
+    ).length
+    expect(closeTagCount).toBe(1)
+  })
+
+  test('malformed open-only fragment survives sequential transforms when nesting preceeded it', () => {
+    // No outer close tag — the outer open is an orphan that should survive
+    // across sequential transforms.
+    const mixed = `${MARKER_OPEN}keep me ${wrap('first')}`
+    const output = { system: [mixed] }
+
+    applyBootstrapContent(output, wrap('FIRST'))
+    applyBootstrapContent(output, wrap('SECOND'))
+
+    // Fragment still survives after second transform
+    expect(output.system[0]).toContain('keep me')
+    expect(output.system[0]).toContain('SECOND')
+    expect(output.system[0]).not.toContain('FIRST')
+    // One complete block (the appended second one)
+    const closeTagCount = (
+      output.system[0].match(new RegExp(MARKER_CLOSE, 'g')) ?? []
+    ).length
+    expect(closeTagCount).toBe(1)
+  })
+
   test('completes in linear time on malicious input with many opening markers and no closing tag', () => {
     // Regression: the prior regex implementation was vulnerable to ReDoS on
     // inputs starting with the opening marker repeated and missing a closing

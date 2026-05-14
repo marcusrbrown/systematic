@@ -3,7 +3,11 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { ToolDefinition } from '@opencode-ai/plugin'
 import { tool } from '@opencode-ai/plugin/tool'
-import { renderCatalogCompact } from './skill-catalog.js'
+import {
+  buildCatalogEntries,
+  escapeXml,
+  renderCatalogCompact,
+} from './skill-catalog.js'
 import {
   extractSkillBody,
   formatSkillCommandName,
@@ -28,8 +32,8 @@ export function formatSkillsXml(skills: SkillInfo[]): string {
   // Uses space-delimited join with indented XML structure
   const skillLines = skills.flatMap((skill) => [
     '  <skill>',
-    `    <name>${formatSkillCommandName(skill.name)}</name>`,
-    `    <description>${skill.description}</description>`,
+    `    <name>${escapeXml(formatSkillCommandName(skill.name))}</name>`,
+    `    <description>${escapeXml(skill.description)}</description>`,
     `    <location>${pathToFileURL(skill.path).href}</location>`,
     '  </skill>',
   ])
@@ -97,10 +101,6 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
       .sort((a, b) => a.name.localeCompare(b.name))
   }
 
-  const getDiscoverableSkills = (): LoadedSkill[] => {
-    return getAllSkills().filter((s) => s.disableModelInvocation !== true)
-  }
-
   const buildDescription = (): string => {
     const catalog = renderCatalogCompact({ bundledSkillsDir, disabledSkills })
 
@@ -116,8 +116,8 @@ ${catalog}`
   }
 
   const buildParameterHint = (): string => {
-    const skills = getDiscoverableSkills()
-    const examples = skills
+    const entries = buildCatalogEntries({ bundledSkillsDir, disabledSkills })
+    const examples = entries
       .slice(0, 3)
       .map((s) => `'${s.prefixedName}'`)
       .join(', ')
@@ -156,9 +156,10 @@ ${catalog}`
       const matchedSkill = skills.find((s) => s.name === normalizedName)
 
       if (!matchedSkill) {
-        const availableSystematic = getDiscoverableSkills().map(
-          (s) => s.prefixedName,
-        )
+        const availableSystematic = buildCatalogEntries({
+          bundledSkillsDir,
+          disabledSkills,
+        }).map((s) => s.prefixedName)
         throw new Error(
           `Skill "${requestedName}" not found. Available systematic skills: ${availableSystematic.join(', ')}`,
         )

@@ -37,6 +37,7 @@ const removeCompleteBootstrapBlocks = (entry: string): string => {
   const segments: string[] = []
   let cursor = 0
   let block = findBootstrapMarkerBlock(entry, cursor)
+  let hadNestedBlock = false
 
   while (block !== null) {
     const nestedStart = entry.indexOf(
@@ -45,6 +46,7 @@ const removeCompleteBootstrapBlocks = (entry: string): string => {
     )
 
     if (nestedStart !== -1 && nestedStart < block.closeStart) {
+      hadNestedBlock = true
       segments.push(entry.slice(cursor, nestedStart))
       cursor = nestedStart
       block = findBootstrapMarkerBlock(entry, cursor)
@@ -58,7 +60,16 @@ const removeCompleteBootstrapBlocks = (entry: string): string => {
 
   if (cursor === 0) return entry
   segments.push(entry.slice(cursor))
-  return segments.join('')
+  const result = segments.join('')
+
+  // When nested blocks are removed, previously truncated outer open/close
+  // markers may now form a complete block. Recurse once to clean up in a
+  // single call rather than requiring a second transform invocation.
+  if (hadNestedBlock) {
+    return removeCompleteBootstrapBlocks(result)
+  }
+
+  return result
 }
 
 /**

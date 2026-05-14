@@ -6,6 +6,7 @@ import path from 'node:path'
 import {
   buildCatalogEntries,
   type CatalogOptions,
+  escapeXml,
   renderCatalogCompact,
   renderCatalogVerbose,
 } from '../../src/lib/skill-catalog.js'
@@ -273,6 +274,40 @@ describe('skill-catalog', () => {
       })
 
       expect(result).toContain('No Systematic skills are currently available.')
+    })
+  })
+
+  describe('escapeXml', () => {
+    test('escapes &, <, > characters', () => {
+      expect(escapeXml('A & B <test>')).toBe('A &amp; B &lt;test&gt;')
+    })
+
+    test('passes through text without special chars', () => {
+      expect(escapeXml('normal text')).toBe('normal text')
+    })
+
+    test('escapes multiple occurrences', () => {
+      expect(escapeXml('<a> & <b>')).toBe('&lt;a&gt; &amp; &lt;b&gt;')
+    })
+
+    test('handles empty string', () => {
+      expect(escapeXml('')).toBe('')
+    })
+  })
+
+  describe('renderCatalogVerbose XML escaping', () => {
+    test('escapes XML special chars in name and description', () => {
+      writeSkill(testDir, 'a&b', 'Skill with A & B <special> chars')
+
+      const result = renderCatalogVerbose({
+        bundledSkillsDir: testDir,
+        disabledSkills: [],
+      })
+
+      expect(result).toContain('<name>systematic:a&amp;b</name>')
+      expect(result).toContain(
+        '<description>Skill with A &amp; B &lt;special&gt; chars</description>',
+      )
     })
   })
 })
