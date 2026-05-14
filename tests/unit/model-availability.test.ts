@@ -154,11 +154,17 @@ describe('getAvailableModels', () => {
     })
   })
 
-  describe('edge case: valid empty providers', () => {
-    test('returns empty Set without consulting disk when providers array is empty', async () => {
+  describe('edge case: empty discovery collapses to unknown', () => {
+    // An empty API response (no providers connected) is operationally identical to total
+    // discovery failure — we cannot point bundled agents at anything the user can call.
+    // Empirical anchor: `.slim/clonedeps/repos/anomalyco__opencode/packages/opencode/src/provider/provider.ts:1115-1336`
+    // shows logged-out, unconfigured, and unauthenticated providers all converge to an empty
+    // providers array. The threshold checks `models.size === 0` after `buildSetFromProviders`,
+    // which catches all variants regardless of upstream SDK shape.
+
+    test('returns status: unknown when API providers array is empty', async () => {
       // Point XDG_CACHE_HOME to a non-existent dir — if fallback were triggered, it would
-      // still return empty set, but we verify by checking the result is empty and no error
-      // is thrown even with a bad cache path.
+      // still return empty set, but the assertion here is that we never fell through.
       process.env.XDG_CACHE_HOME = path.join(testDir, 'nonexistent')
 
       const client = makeMockClient({
@@ -168,13 +174,36 @@ describe('getAvailableModels', () => {
 
       const result = await getAvailableModels(client)
 
-      // Empty connected set is authoritative — status is 'api', not 'unknown'
-      expect(result.status).toBe('api')
+      expect(result.status).toBe('unknown')
       expect(result.models).toBeInstanceOf(Set)
       expect(result.models.size).toBe(0)
     })
 
-    test('does NOT read disk when API returns empty providers (spy verification)', async () => {
+    test('returns status: unknown when providers list is non-empty but no models discovered', async () => {
+      // Catches the adversarial-flagged edge cases where SDK shape produces a non-empty
+      // providers array but `buildSetFromProviders` still yields zero models — e.g., a
+      // provider entry with `models: {}` from `enabled_providers` without auth, or a
+      // plugin auth loader that registered but returned no models.
+      process.env.XDG_CACHE_HOME = path.join(testDir, 'nonexistent')
+
+      const client = makeMockClient({
+        data: {
+          providers: [{ id: 'fake', models: {} }],
+          default: {},
+        },
+        error: undefined,
+      })
+
+      const result = await getAvailableModels(client)
+
+      expect(result.status).toBe('unknown')
+      expect(result.models.size).toBe(0)
+    })
+
+    test('does NOT read disk when API succeeds with empty discovery (spy verification)', async () => {
+      // The empty-discovery collapse path goes straight to `emptyAvailability()`, not through the cache
+      // fallback. Even when models.json exists with usable entries, an authoritative empty
+      // API response must not consult disk.
       const cacheDir = path.join(testDir, 'cache', 'opencode')
       fs.mkdirSync(cacheDir, { recursive: true })
       fs.writeFileSync(
@@ -192,7 +221,7 @@ describe('getAvailableModels', () => {
 
       const result = await getAvailableModels(client)
 
-      expect(result.status).toBe('api')
+      expect(result.status).toBe('unknown')
       expect(result.models.size).toBe(0)
       // readFileSync should NOT have been called for models.json
       const modelsJsonCalls = readFileSyncSpy.mock.calls.filter(
@@ -202,6 +231,25 @@ describe('getAvailableModels', () => {
       expect(modelsJsonCalls.length).toBe(0)
 
       readFileSyncSpy.mockRestore()
+    })
+
+    test('each empty discovery returns a fresh Set (factory pattern regression)', async () => {
+      // Regression coverage against accidental shared-mutable-state regression —
+      // `emptyAvailability()` is currently `new Set<string>()` per call; this test guards
+      // against a future optimization that would replace it with a shared singleton.
+      process.env.XDG_CACHE_HOME = path.join(testDir, 'nonexistent')
+
+      const client = makeMockClient({
+        data: { providers: [], default: {} },
+        error: undefined,
+      })
+
+      const first = await getAvailableModels(client)
+      const second = await getAvailableModels(client)
+
+      expect(first.models).not.toBe(second.models)
+      expect(first.status).toBe('unknown')
+      expect(second.status).toBe('unknown')
     })
   })
 
