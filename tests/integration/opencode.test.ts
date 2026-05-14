@@ -296,6 +296,14 @@ const PROBE_SYSTEM_KINDS = new Set<ProbeTransformKind>([
   'unknown',
 ])
 
+function isProbeSystemEvent(value: ProbeEvent): value is ProbeSystemEvent {
+  return value.type === 'system'
+}
+
+function isProbeToolEvent(value: ProbeEvent): value is ProbeToolEvent {
+  return value.type === 'tool'
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
@@ -450,7 +458,7 @@ function assertOk(result: OpencodeResult): void {
 }
 
 function assertMixedVersionProbeEvents(events: ProbeEvent[]): void {
-  const systemEvents = events.filter((event) => event.type === 'system')
+  const systemEvents = events.filter(isProbeSystemEvent)
   const chatSystemEvents = systemEvents.filter((event) => event.kind === 'chat')
   const titleSystemEvents = systemEvents.filter(
     (event) => event.kind === 'title',
@@ -521,6 +529,105 @@ test('assertOk redacts token-like diagnostics while keeping context', () => {
 
     if (originalOpenaiKey === undefined) delete process.env.OPENAI_API_KEY
     else process.env.OPENAI_API_KEY = originalOpenaiKey
+  }
+})
+
+function assertFixtureEnvironmentRoots(fixture: IsolatedFixture): void {
+  const childEnv = buildChildEnv({
+    HOME: fixture.homeDir,
+    XDG_CONFIG_HOME: fixture.xdgConfigHome,
+    XDG_DATA_HOME: fixture.xdgDataHome,
+    XDG_CACHE_HOME: fixture.xdgCacheHome,
+    XDG_STATE_HOME: fixture.xdgStateHome,
+  })
+
+  expect(childEnv.HOME).toBe(fixture.homeDir)
+  expect(childEnv.XDG_CONFIG_HOME).toBe(fixture.xdgConfigHome)
+  expect(childEnv.XDG_DATA_HOME).toBe(fixture.xdgDataHome)
+  expect(childEnv.XDG_CACHE_HOME).toBe(fixture.xdgCacheHome)
+  expect(childEnv.XDG_STATE_HOME).toBe(fixture.xdgStateHome)
+}
+
+interface EnvBackup {
+  HOME: string | undefined
+  XDG_CONFIG_HOME: string | undefined
+  XDG_DATA_HOME: string | undefined
+  XDG_CACHE_HOME: string | undefined
+  XDG_STATE_HOME: string | undefined
+  OPENCODE_CONFIG_DIR: string | undefined
+  OPENCODE_CONFIG_CONTENT: string | undefined
+}
+
+function restoreEnv(backup: EnvBackup): void {
+  if (backup.OPENCODE_CONFIG_DIR === undefined)
+    delete process.env.OPENCODE_CONFIG_DIR
+  else process.env.OPENCODE_CONFIG_DIR = backup.OPENCODE_CONFIG_DIR
+
+  if (backup.OPENCODE_CONFIG_CONTENT === undefined)
+    delete process.env.OPENCODE_CONFIG_CONTENT
+  else process.env.OPENCODE_CONFIG_CONTENT = backup.OPENCODE_CONFIG_CONTENT
+
+  if (backup.HOME === undefined) delete process.env.HOME
+  else process.env.HOME = backup.HOME
+
+  if (backup.XDG_CONFIG_HOME === undefined) delete process.env.XDG_CONFIG_HOME
+  else process.env.XDG_CONFIG_HOME = backup.XDG_CONFIG_HOME
+
+  if (backup.XDG_DATA_HOME === undefined) delete process.env.XDG_DATA_HOME
+  else process.env.XDG_DATA_HOME = backup.XDG_DATA_HOME
+
+  if (backup.XDG_CACHE_HOME === undefined) delete process.env.XDG_CACHE_HOME
+  else process.env.XDG_CACHE_HOME = backup.XDG_CACHE_HOME
+
+  if (backup.XDG_STATE_HOME === undefined) delete process.env.XDG_STATE_HOME
+  else process.env.XDG_STATE_HOME = backup.XDG_STATE_HOME
+}
+
+test('fixture env overrides parent HOME and XDG roots', () => {
+  const fixture = createIsolatedFixture()
+  const originalHome = process.env.HOME
+  const originalXdgConfigHome = process.env.XDG_CONFIG_HOME
+  const originalXdgDataHome = process.env.XDG_DATA_HOME
+  const originalXdgCacheHome = process.env.XDG_CACHE_HOME
+  const originalXdgStateHome = process.env.XDG_STATE_HOME
+
+  process.env.HOME = '/poisoned/home'
+  process.env.XDG_CONFIG_HOME = '/poisoned/xdg-config'
+  process.env.XDG_DATA_HOME = '/poisoned/xdg-data'
+  process.env.XDG_CACHE_HOME = '/poisoned/xdg-cache'
+  process.env.XDG_STATE_HOME = '/poisoned/xdg-state'
+
+  try {
+    const childEnv = buildChildEnv({
+      HOME: fixture.homeDir,
+      XDG_CONFIG_HOME: fixture.xdgConfigHome,
+      XDG_DATA_HOME: fixture.xdgDataHome,
+      XDG_CACHE_HOME: fixture.xdgCacheHome,
+      XDG_STATE_HOME: fixture.xdgStateHome,
+    })
+
+    expect(childEnv.HOME).toBe(fixture.homeDir)
+    expect(childEnv.XDG_CONFIG_HOME).toBe(fixture.xdgConfigHome)
+    expect(childEnv.XDG_DATA_HOME).toBe(fixture.xdgDataHome)
+    expect(childEnv.XDG_CACHE_HOME).toBe(fixture.xdgCacheHome)
+    expect(childEnv.XDG_STATE_HOME).toBe(fixture.xdgStateHome)
+  } finally {
+    if (originalHome === undefined) delete process.env.HOME
+    else process.env.HOME = originalHome
+
+    if (originalXdgConfigHome === undefined) delete process.env.XDG_CONFIG_HOME
+    else process.env.XDG_CONFIG_HOME = originalXdgConfigHome
+
+    if (originalXdgDataHome === undefined) delete process.env.XDG_DATA_HOME
+    else process.env.XDG_DATA_HOME = originalXdgDataHome
+
+    if (originalXdgCacheHome === undefined) delete process.env.XDG_CACHE_HOME
+    else process.env.XDG_CACHE_HOME = originalXdgCacheHome
+
+    if (originalXdgStateHome === undefined) delete process.env.XDG_STATE_HOME
+    else process.env.XDG_STATE_HOME = originalXdgStateHome
+
+    destroyIsolatedFixture(fixture)
   }
 })
 
@@ -1014,13 +1121,27 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
       // poison values that might be set in the parent process. If the parent
       // env leaked through, the child would load the poison config and the
       // systematic plugin would not register systematic_skill.
-      const originalConfigDir = process.env.OPENCODE_CONFIG_DIR
-      const originalConfigContent = process.env.OPENCODE_CONFIG_CONTENT
+      const backup: EnvBackup = {
+        HOME: process.env.HOME,
+        XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+        XDG_DATA_HOME: process.env.XDG_DATA_HOME,
+        XDG_CACHE_HOME: process.env.XDG_CACHE_HOME,
+        XDG_STATE_HOME: process.env.XDG_STATE_HOME,
+        OPENCODE_CONFIG_DIR: process.env.OPENCODE_CONFIG_DIR,
+        OPENCODE_CONFIG_CONTENT: process.env.OPENCODE_CONFIG_CONTENT,
+      }
       try {
         process.env.OPENCODE_CONFIG_DIR = '/nonexistent-poison-config-dir'
         process.env.OPENCODE_CONFIG_CONTENT = JSON.stringify({
           plugin: ['/nonexistent-poison-plugin.js'],
         })
+        process.env.HOME = '/nonexistent-poison-home'
+        process.env.XDG_CONFIG_HOME = '/nonexistent-poison-xdg-config'
+        process.env.XDG_DATA_HOME = '/nonexistent-poison-xdg-data'
+        process.env.XDG_CACHE_HOME = '/nonexistent-poison-xdg-cache'
+        process.env.XDG_STATE_HOME = '/nonexistent-poison-xdg-state'
+
+        assertFixtureEnvironmentRoots(fixture)
 
         const result = await runOpencode(
           'Use the systematic_skill tool to load systematic:setup',
@@ -1029,17 +1150,14 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
 
         expect(result.exitCode).toBe(0)
         expect(result.stderr).toMatch(/systematic_skill/)
+        expect(result.stderr).toMatch(/setup/)
+        expect(result.stderr).not.toContain('/nonexistent-poison-home')
+        expect(result.stderr).not.toContain('/nonexistent-poison-xdg-config')
+        expect(result.stderr).not.toContain('/nonexistent-poison-xdg-data')
+        expect(result.stderr).not.toContain('/nonexistent-poison-xdg-cache')
+        expect(result.stderr).not.toContain('/nonexistent-poison-xdg-state')
       } finally {
-        if (originalConfigDir === undefined) {
-          delete process.env.OPENCODE_CONFIG_DIR
-        } else {
-          process.env.OPENCODE_CONFIG_DIR = originalConfigDir
-        }
-        if (originalConfigContent === undefined) {
-          delete process.env.OPENCODE_CONFIG_CONTENT
-        } else {
-          process.env.OPENCODE_CONFIG_CONTENT = originalConfigContent
-        }
+        restoreEnv(backup)
       }
     },
     TIMEOUT_MS * MAX_RETRIES,
@@ -1063,6 +1181,8 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
 const MIXED_VERSION_ENABLED = process.env.SYSTEMATIC_MIXED_VERSION_TEST === '1'
 
 function buildMixedVersionConfig(probePluginUrl: string): string {
+  // Pin the published package to a known-good OpenCode integration surface;
+  // bump this only when intentionally revalidating a newer release here.
   const pinnedPackage = '@fro.bot/systematic@2.14.1'
   const localSource = `file://${path.join(REPO_ROOT, 'src/index.ts')}`
   return JSON.stringify({
@@ -1107,7 +1227,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
 
         assertMixedVersionProbeEvents(events)
 
-        const toolEvents = events.filter((event) => event.type === 'tool')
+        const toolEvents = events.filter(isProbeToolEvent)
         expect(toolEvents.length).toBeGreaterThanOrEqual(2)
         expect(new Set(toolEvents.map((event) => event.description)).size).toBe(
           1,
