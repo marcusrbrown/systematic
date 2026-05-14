@@ -334,6 +334,248 @@ Skill content for ce:plan.`,
       expect(config.command?.['existing-command']).toBeDefined()
     })
 
+    test('later Systematic hook overwrites earlier Systematic output while preserving native config', async () => {
+      fs.mkdirSync(path.join(bundledDir, 'agents', 'workflow'), {
+        recursive: true,
+      })
+      createAgent(
+        path.join(bundledDir, 'agents', 'workflow'),
+        'systematic-implementer',
+        'Bundled systematic implementer',
+      )
+
+      createSkill(path.join(bundledDir, 'skills'), 'test-skill', 'A test skill')
+      createCommand(
+        path.join(bundledDir, 'commands'),
+        'test-command',
+        'A test command',
+      )
+
+      writeCustomSystematicConfig({
+        agents: {
+          'systematic-implementer': {
+            temperature: 0.25,
+          },
+        },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {
+        agent: {
+          'systematic-implementer': {
+            description:
+              'Global Systematic output (Systematic-Implementer - Systematic)',
+            prompt: 'global prompt',
+          },
+          'native-agent': {
+            description: 'Native agent',
+            prompt: 'native prompt',
+          },
+        },
+        command: {
+          'systematic:test-command': {
+            description: '(Systematic) Previous command output',
+            template: 'previous command template',
+          },
+          'native-command': {
+            description: 'Native command',
+            template: 'native command template',
+          },
+        },
+      }
+
+      await handler(config)
+
+      expect(config.agent?.['systematic-implementer']?.description).toContain(
+        '(Systematic-Implementer - Systematic)',
+      )
+      expect(config.agent?.['systematic-implementer']?.prompt).toContain(
+        'Agent prompt for systematic-implementer.',
+      )
+      expect(config.agent?.['native-agent']).toEqual({
+        description: 'Native agent',
+        prompt: 'native prompt',
+      })
+
+      expect(config.command?.['systematic:test-command']?.description).toBe(
+        '(Systematic) A test command',
+      )
+      expect(config.command?.['systematic:test-command']?.template).toContain(
+        'Command template for test-command',
+      )
+      expect(config.command?.['native-command']).toEqual({
+        description: 'Native command',
+        template: 'native command template',
+      })
+      expect(config.command?.['systematic:test-skill']?.description).toBe(
+        '(Systematic - Skill) A test skill',
+      )
+    })
+
+    test('drops stale prior Systematic agent and command entries when local hook no longer emits them', async () => {
+      fs.mkdirSync(path.join(bundledDir, 'agents', 'workflow'), {
+        recursive: true,
+      })
+      createAgent(
+        path.join(bundledDir, 'agents', 'workflow'),
+        'systematic-implementer',
+        'Bundled systematic implementer',
+      )
+
+      createSkill(path.join(bundledDir, 'skills'), 'test-skill', 'A test skill')
+      createCommand(
+        path.join(bundledDir, 'commands'),
+        'test-command',
+        'A test command',
+      )
+
+      writeCustomSystematicConfig({
+        agents: {},
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {
+        agent: {
+          'systematic-legacy-agent': {
+            description: 'Old Systematic output (Legacy-Agent - Systematic)',
+            prompt: 'old systematic prompt',
+          },
+          'native-agent': {
+            description: 'Native agent',
+            prompt: 'native prompt',
+          },
+        },
+        command: {
+          'systematic:legacy-command': {
+            description: '(Systematic) Old command',
+            template: 'old command template',
+          },
+          'systematic:legacy-skill': {
+            description: '(Systematic - Skill) Old skill command',
+            template: 'old skill template',
+          },
+          'native-command': {
+            description: 'Native command',
+            template: 'native command template',
+          },
+        },
+      }
+
+      await handler(config)
+
+      expect(config.agent?.['systematic-legacy-agent']).toBeUndefined()
+      expect(config.agent?.['native-agent']).toEqual({
+        description: 'Native agent',
+        prompt: 'native prompt',
+      })
+      expect(config.command?.['systematic:legacy-command']).toBeUndefined()
+      expect(config.command?.['systematic:legacy-skill']).toBeUndefined()
+      expect(config.command?.['native-command']).toEqual({
+        description: 'Native command',
+        template: 'native command template',
+      })
+    })
+
+    test('preserves native command collisions over emitted Systematic command keys', async () => {
+      createCommand(
+        path.join(bundledDir, 'commands'),
+        'test-command',
+        'A test command',
+      )
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const nativeCommand = {
+        description: 'Native command override',
+        template: 'native template',
+      }
+      const config: Config = {
+        command: {
+          'systematic:test-command': nativeCommand,
+        },
+      }
+
+      await handler(config)
+
+      expect(config.command?.['systematic:test-command']).toBe(nativeCommand)
+    })
+
+    test('preserves native agent collisions over emitted Systematic agent keys', async () => {
+      fs.mkdirSync(path.join(bundledDir, 'agents', 'workflow'), {
+        recursive: true,
+      })
+      createAgent(
+        path.join(bundledDir, 'agents', 'workflow'),
+        'systematic-implementer',
+        'Bundled systematic implementer',
+      )
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const nativeAgent = {
+        description: 'Native agent override',
+        prompt: 'native prompt',
+      }
+      const config: Config = {
+        agent: {
+          'systematic-implementer': nativeAgent,
+        },
+      }
+
+      await handler(config)
+
+      expect(config.agent?.['systematic-implementer']).toBe(nativeAgent)
+    })
+
+    test('replaces prior Systematic skill paths and keeps non-Systematic paths', async () => {
+      createSkill(path.join(bundledDir, 'skills'), 'test-skill', 'A test skill')
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config = {
+        skills: {
+          paths: [
+            '/Users/me/.config/opencode/systematic/skills',
+            '/Users/me/.local/share/opencode/skills',
+          ],
+        },
+      } as Config & { skills?: { paths?: string[] } }
+
+      await handler(config)
+
+      expect(config.skills?.paths).toEqual([
+        '/Users/me/.local/share/opencode/skills',
+        path.join(bundledDir, 'skills'),
+      ])
+    })
+
     test('existing config overrides bundled content (preserves user config)', async () => {
       createAgent(
         path.join(bundledDir, 'agents'),
