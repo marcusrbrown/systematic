@@ -188,7 +188,7 @@ The sibling `opencode-copilot-delegate` integration tests use a cleaner fixture 
 **Verification:**
 - Mixed-version test passes in isolation and does not require global user OpenCode config.
 
-- [ ] **Unit 4: Consolidate leakage assertions and fixture documentation**
+- [x] **Unit 4: Consolidate leakage assertions and fixture documentation**
 
 **Goal:** Keep isolation guarantees understandable and regression-tested without duplicating the fixture setup from Unit 1.
 

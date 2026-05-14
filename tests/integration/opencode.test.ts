@@ -17,6 +17,19 @@ const OPENCODE_TEST_MODEL = 'opencode/big-pickle'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..')
 
+// Snapshot the repo's .opencode directory entries at module load so tests can
+// assert that no new session subdirectories are created during a run. Captured
+// once here so the baseline reflects the state before any test executes.
+const REPO_OPENCODE_DIR = path.join(REPO_ROOT, '.opencode')
+const REPO_OPENCODE_SNAPSHOT: ReadonlySet<string> = (() => {
+  try {
+    return new Set(fs.readdirSync(REPO_OPENCODE_DIR))
+  } catch {
+    // .opencode does not exist — containment assertions will be skipped.
+    return new Set<string>()
+  }
+})()
+
 type AgentConfig = NonNullable<Config['agent']>[string]
 
 function skillPermission(agent: AgentConfig | undefined): unknown {
@@ -92,8 +105,18 @@ function buildChildEnv(
   return { ...base, ...overrides }
 }
 
-// Fixture for isolated live OpenCode subprocess runs. Each test gets its own
-// temp root so OpenCode cannot read or write the real user/project environment.
+/*
+ * Isolation rationale for live OpenCode subprocess tests:
+ *
+ * OPENCODE_CONFIG_DIR alone is not enough. OpenCode and its plugins resolve
+ * config, cache, data, and state through multiple root paths — including HOME
+ * (~/.config/opencode, ~/.local/share, etc.) and the XDG base directories.
+ * Without overriding all of them, a test process can silently read the
+ * developer's real user config or write sessions into the real TUI session
+ * list. Each test therefore gets its own temp root with isolated HOME,
+ * XDG_CONFIG_HOME, XDG_DATA_HOME, XDG_CACHE_HOME, and XDG_STATE_HOME so
+ * OpenCode has no path back to the real user environment.
+ */
 interface IsolatedFixture {
   tempRoot: string
   projectDir: string
@@ -185,7 +208,14 @@ async function runOpencode(
     XDG_STATE_HOME: fixture.xdgStateHome,
     OPENCODE_CONFIG_DIR: fixture.configDir,
     OPENCODE_CONFIG_CONTENT: configContent,
-    // Suppress first-boot side effects that are irrelevant to plugin tests.
+    // Suppress first-boot side effects that are irrelevant to plugin tests:
+    // OPENCODE_DISABLE_AUTOUPDATE prevents the binary from self-updating mid-test;
+    // OPENCODE_DISABLE_LSP_DOWNLOAD skips language-server downloads that would
+    // hit the network and write into the fixture's data dir;
+    // OPENCODE_DISABLE_MODELS_FETCH skips the provider model-list fetch that
+    // would make an outbound API call on every startup;
+    // OPENCODE_DISABLE_PRUNE prevents session-storage pruning that could race
+    // with the test's own filesystem assertions.
     OPENCODE_DISABLE_AUTOUPDATE: '1',
     OPENCODE_DISABLE_LSP_DOWNLOAD: '1',
     OPENCODE_DISABLE_MODELS_FETCH: '1',
@@ -599,6 +629,67 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
       )
 
       expectSetupSkillLoaded(result)
+    },
+    TIMEOUT_MS * MAX_RETRIES,
+  )
+
+  test(
+    'fixture env overrides parent OPENCODE_CONFIG_DIR and OPENCODE_CONFIG_CONTENT',
+    async () => {
+      // Verify that the child process sees the fixture's env values, not any
+      // poison values that might be set in the parent process. If the parent
+      // env leaked through, the child would load the poison config and the
+      // systematic plugin would not register systematic_skill.
+      const originalConfigDir = process.env.OPENCODE_CONFIG_DIR
+      const originalConfigContent = process.env.OPENCODE_CONFIG_CONTENT
+      try {
+        process.env.OPENCODE_CONFIG_DIR = '/nonexistent-poison-config-dir'
+        process.env.OPENCODE_CONFIG_CONTENT = JSON.stringify({
+          plugin: ['/nonexistent-poison-plugin.js'],
+        })
+
+        const result = await runOpencode(
+          'Use the systematic_skill tool to load systematic:setup',
+          { fixture, configContent: buildSourceLocalConfig() },
+        )
+
+        expect(result.exitCode).toBe(0)
+        expect(result.stderr).toMatch(/systematic_skill/)
+      } finally {
+        if (originalConfigDir === undefined) {
+          delete process.env.OPENCODE_CONFIG_DIR
+        } else {
+          process.env.OPENCODE_CONFIG_DIR = originalConfigDir
+        }
+        if (originalConfigContent === undefined) {
+          delete process.env.OPENCODE_CONFIG_CONTENT
+        } else {
+          process.env.OPENCODE_CONFIG_CONTENT = originalConfigContent
+        }
+      }
+    },
+    TIMEOUT_MS * MAX_RETRIES,
+  )
+
+  test(
+    'fixture run does not write into repo .opencode directory',
+    async () => {
+      // Only assert containment when we have a baseline snapshot. If .opencode
+      // did not exist at module load, there is nothing to protect.
+      if (REPO_OPENCODE_SNAPSHOT.size === 0) return
+
+      const result = await runOpencode(
+        'Use the systematic_skill tool to load systematic:setup',
+        { fixture, configContent: buildSourceLocalConfig() },
+      )
+
+      expectSetupSkillLoaded(result)
+
+      const currentEntries = new Set(fs.readdirSync(REPO_OPENCODE_DIR))
+      const newEntries = [...currentEntries].filter(
+        (entry) => !REPO_OPENCODE_SNAPSHOT.has(entry),
+      )
+      expect(newEntries).toEqual([])
     },
     TIMEOUT_MS * MAX_RETRIES,
   )
