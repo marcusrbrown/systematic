@@ -123,7 +123,7 @@ The sibling `opencode-copilot-delegate` integration tests use a cleaner fixture 
 - Live integration tests pass when `opencode` is available.
 - A local run no longer adds sessions to the real project TUI session list.
 
-- [ ] **Unit 2: Make local source and dist targets explicit**
+- [x] **Unit 2: Make local source and dist targets explicit**
 
 **Goal:** Ensure ordinary integration tests load local Systematic through named source-local and dist-local targets rather than an implicit global package.
 
@@ -155,7 +155,7 @@ The sibling `opencode-copilot-delegate` integration tests use a cleaner fixture 
 **Verification:**
 - `bun test tests/integration` exercises source-local checkout behavior even without a prior build, and dist-local coverage is explicit when the built artifact exists.
 
-- [ ] **Unit 3: Add explicit mixed-version coverage**
+- [x] **Unit 3: Add explicit mixed-version coverage**
 
 **Goal:** Cover global/npm plus local plugin interaction intentionally, without inheriting Marcus's user config.
 

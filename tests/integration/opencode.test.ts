@@ -155,6 +155,7 @@ function destroyIsolatedFixture(fixture: IsolatedFixture): void {
 interface RunOpencodeOptions {
   fixture: IsolatedFixture
   configContent: string
+  extraEnv?: Record<string, string>
 }
 
 function assertOk(result: OpencodeResult): void {
@@ -172,7 +173,7 @@ async function runOpencode(
   prompt: string,
   options: RunOpencodeOptions,
 ): Promise<OpencodeResult> {
-  const { fixture, configContent } = options
+  const { fixture, configContent, extraEnv } = options
 
   // Build a narrow child environment. Override all OpenCode config/state paths
   // so the subprocess cannot read or write the real user environment.
@@ -189,6 +190,7 @@ async function runOpencode(
     OPENCODE_DISABLE_LSP_DOWNLOAD: '1',
     OPENCODE_DISABLE_MODELS_FETCH: '1',
     OPENCODE_DISABLE_PRUNE: '1',
+    ...extraEnv,
   })
 
   let lastResult: OpencodeResult = { stdout: '', stderr: '', exitCode: -1 }
@@ -601,3 +603,100 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
     TIMEOUT_MS * MAX_RETRIES,
   )
 })
+
+// npm cache variables needed when resolving a pinned package spec inside the
+// isolated fixture. Rooted under tempRoot so resolution cannot silently fall
+// back to the developer's user-level npm cache or prefix.
+const MIXED_VERSION_NPM_ENV_KEYS = [
+  'npm_config_cache',
+  'npm_config_prefix',
+] as const
+
+// Extend the allowlist so buildChildEnv forwards these when the mixed-version
+// test sets them as overrides. They are only present in the child env when the
+// gated test explicitly passes them as overrides — they are never read from the
+// parent process environment.
+for (const key of MIXED_VERSION_NPM_ENV_KEYS) {
+  ENV_ALLOWLIST.add(key)
+}
+
+const MIXED_VERSION_ENABLED = process.env.SYSTEMATIC_MIXED_VERSION_TEST === '1'
+
+function buildMixedVersionConfig(): string {
+  const pinnedPackage = '@fro.bot/systematic@2.14.1'
+  const localSource = `file://${path.join(REPO_ROOT, 'src/index.ts')}`
+  return JSON.stringify({ plugin: [pinnedPackage, localSource] })
+}
+
+describe.skipIf(!OPENCODE_AVAILABLE)(
+  'opencode mixed-version integration',
+  () => {
+    let fixture: IsolatedFixture
+
+    beforeEach(() => {
+      fixture = createIsolatedFixture()
+    })
+
+    afterEach(() => {
+      destroyIsolatedFixture(fixture)
+    })
+
+    test.skipIf(!MIXED_VERSION_ENABLED)(
+      'pinned package plus local source both load systematic_skill and expose known skills',
+      async () => {
+        if (!MIXED_VERSION_ENABLED) {
+          // Explicit message for the skip path — test.skipIf handles the actual
+          // skip, but document the opt-in here for clarity in test output.
+          console.log(
+            'Skipped: set SYSTEMATIC_MIXED_VERSION_TEST=1 to run mixed-version compatibility probe',
+          )
+          return
+        }
+
+        const npmCacheDir = path.join(fixture.tempRoot, 'npm-cache')
+        const npmPrefixDir = path.join(fixture.tempRoot, 'npm-prefix')
+        fs.mkdirSync(npmCacheDir, { recursive: true })
+        fs.mkdirSync(npmPrefixDir, { recursive: true })
+
+        // npm_config_cache and npm_config_prefix are passed as overrides so
+        // buildChildEnv forwards them into the child process. Package resolution
+        // for the pinned spec is rooted here and cannot use the developer's cache.
+        const result = await runOpencode(
+          'Use the systematic_skill tool to load ce:review',
+          {
+            fixture,
+            configContent: buildMixedVersionConfig(),
+            extraEnv: {
+              npm_config_cache: npmCacheDir,
+              npm_config_prefix: npmPrefixDir,
+            },
+          },
+        )
+
+        assertOk(result)
+        // The tool must be callable — OpenCode logs tool invocations to stderr.
+        expect(result.stderr).toMatch(/systematic_skill/)
+        // At least one known Systematic skill must be discoverable in the output.
+        expect(result.stdout).toMatch(/ce:review/i)
+        // The SYSTEMATIC_WORKFLOWS marker must appear exactly once in the final
+        // assistant output. If OpenCode collapses duplicate bootstrap blocks from
+        // both plugin sources, the marker count must be 1. If the CLI output does
+        // not surface the raw system prompt, this assertion is skipped with a note.
+        const markerMatches =
+          result.stdout.match(/<SYSTEMATIC_WORKFLOWS>/g) ?? []
+        if (markerMatches.length > 0) {
+          expect(markerMatches.length).toBe(1)
+        } else {
+          // The CLI output does not echo the raw system prompt — the marker
+          // assertion cannot run here without a probe plugin. Skipping per plan
+          // constraint (no probe plugin in this unit).
+          console.log(
+            'Note: <SYSTEMATIC_WORKFLOWS> marker not visible in CLI stdout; ' +
+              'marker-count assertion skipped (no probe plugin in this unit)',
+          )
+        }
+      },
+      TIMEOUT_MS * MAX_RETRIES,
+    )
+  },
+)
