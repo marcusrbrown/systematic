@@ -567,11 +567,22 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
       systematicConfig.disabled_commands,
     )
 
+    // The drop predicate uses the explicit emitted-key set instead of
+    // `Object.hasOwn(bundledAgents, key)` so the invariant ("only drop a prior
+    // entry when this hook is emitting a replacement") is self-evident and
+    // independent of how `collectAgents` builds its result. The
+    // `isSystematicAgentConfig` regex matches descriptions ending with
+    // `(<Name> - Systematic)`; this is a heuristic, not ownership proof. A
+    // user-authored agent with a Systematic-styled description can be treated
+    // as prior Systematic output. Acceptable today because the false-positive
+    // only triggers when the user also reuses an emitted key — which already
+    // signals an intentional override.
+    const bundledAgentKeys = new Set(Object.keys(bundledAgents))
     config.agent = mergeSystematicEntries(
       existingAgents as Record<string, AgentConfig>,
       bundledAgents as Record<string, AgentConfig>,
       (key, agent) =>
-        Object.hasOwn(bundledAgents, key) && isSystematicAgentConfig(agent),
+        bundledAgentKeys.has(key) && isSystematicAgentConfig(agent),
     )
 
     const emittedCommands = { ...bundledCommands, ...bundledSkills }

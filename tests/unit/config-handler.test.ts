@@ -631,6 +631,42 @@ Skill content for ce:plan.`,
       ])
     })
 
+    test('keeps a prior Systematic-emitted agent when the same key is disabled (no replacement emitted)', async () => {
+      // When the bundled agent is in `disabled_agents`, the local hook does
+      // NOT emit a replacement key. The drop predicate must return false so
+      // the prior Systematic-emitted entry survives — replacing it with
+      // nothing would leave the user with neither the previous output nor a
+      // current one. Asserts the explicit `bundledAgentKeys` guard short-
+      // circuits before `isSystematicAgentConfig` decides to drop.
+      createAgent(
+        path.join(bundledDir, 'agents'),
+        'disabled-tool',
+        'Bundled disabled-tool',
+      )
+      writeSystematicConfig({ disabled_agents: ['disabled-tool'] })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const priorEmitted = {
+        description: 'Prior emission (Disabled-Tool - Systematic)',
+        prompt: 'prior prompt',
+      }
+      const config: Config = {
+        agent: {
+          'disabled-tool': priorEmitted,
+        },
+      }
+
+      await handler(config)
+
+      expect(config.agent?.['disabled-tool']).toBe(priorEmitted)
+    })
+
     test('existing config overrides bundled content (preserves user config)', async () => {
       createAgent(
         path.join(bundledDir, 'agents'),
