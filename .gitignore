@@ -47,3 +47,6 @@ cep-guide.md
 # BEGIN oh-my-opencode-slim clonedeps
 .slim/clonedeps/repos/
 # END oh-my-opencode-slim clonedeps
+
+# oh-my-opencode-slim project config
+.opencode/oh-my-opencode-slim.jsonc
