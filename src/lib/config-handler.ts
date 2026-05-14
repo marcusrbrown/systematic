@@ -33,6 +33,45 @@ export interface ConfigHandlerDeps {
 
 type CommandConfig = NonNullable<Config['command']>[string]
 
+function isSystematicAgentConfig(agent: AgentConfig | undefined): boolean {
+  const description = agent?.description
+  return (
+    typeof description === 'string' && /\(.* - Systematic\)$/.test(description)
+  )
+}
+
+function isSystematicCommandConfig(
+  command: CommandConfig | undefined,
+): boolean {
+  const description = command?.description
+  return (
+    typeof description === 'string' &&
+    (description.startsWith('(Systematic) ') ||
+      description.startsWith('(Systematic - Skill) '))
+  )
+}
+
+function mergeSystematicEntries<T>(
+  existing: Record<string, T> | undefined,
+  emitted: Record<string, T>,
+  shouldDropExisting: (key: string, value: T | undefined) => boolean,
+): Record<string, T> {
+  const merged: Record<string, T> = { ...(existing ?? {}) }
+
+  for (const [key, value] of Object.entries(existing ?? {})) {
+    if (shouldDropExisting(key, value)) {
+      delete merged[key]
+    }
+  }
+
+  for (const [key, value] of Object.entries(emitted)) {
+    if (Object.hasOwn(merged, key)) continue
+    merged[key] = value
+  }
+
+  return merged
+}
+
 export function toTitleCase(name: string): string {
   return name
     .split('-')
@@ -228,53 +267,52 @@ function applyAgentOverlays(
     result.description,
   )
 
-  // Apply source category model default for categorized bundled agents.
-  // Source defaults defensively replace any bundled markdown model before
-  // high-trust overlays apply. Precedence: exact overlay > category overlay
-  // > source model default > markdown / inheritance.
-  //
-  // Variant flows alongside model. When a higher-precedence overlay sets model
-  // but not variant, the source variant is cleared to avoid pairing a
-  // user-selected model with a source-selected variant.
-  // Skip source-default pinning when availability is unknown — model
-  // discovery failed and pinning a source default would risk emitting an
-  // agent the user cannot use. Inheriting OpenCode's parent model is the
-  // safer degraded behavior.
-  if (agentInfo.category && availabilitySet !== undefined) {
-    const resolved = resolveSourceModel(agentInfo.category, availabilitySet)
-    result.model = `${resolved.provider}/${resolved.model}`
-    if (resolved.variant !== undefined) {
-      result.variant = resolved.variant
-    } else {
-      delete result.variant
-    }
-  }
-
-  if (categoryOverlay) {
-    applyOverlayObjectWithVariantClearing(
-      result,
-      categoryOverlay.value,
-      permissionRules,
-    )
-  }
-  if (exactOverlay) {
-    applyOverlayObjectWithVariantClearing(
-      result,
-      exactOverlay.value,
-      permissionRules,
-    )
-  }
-
-  if (hasPermissionOverlay) {
-    const permission = permissionFromRules(permissionRules)
-    if (permission) {
-      result.permission = permission as AgentConfig['permission']
-    } else {
-      delete result.permission
-    }
-  }
+  applySourceModelDefault(result, agentInfo, availabilitySet)
+  applyAgentOverlay(result, categoryOverlay?.value, permissionRules)
+  applyAgentOverlay(result, exactOverlay?.value, permissionRules)
+  applyPermissionOverlay(result, permissionRules, hasPermissionOverlay)
 
   return result
+}
+
+function applySourceModelDefault(
+  target: AgentConfig,
+  agentInfo: { category?: string },
+  availabilitySet: ReadonlySet<string> | undefined,
+): void {
+  if (!agentInfo.category || availabilitySet === undefined) return
+
+  const resolved = resolveSourceModel(agentInfo.category, availabilitySet)
+  target.model = `${resolved.provider}/${resolved.model}`
+  if (resolved.variant !== undefined) {
+    target.variant = resolved.variant
+  } else {
+    delete target.variant
+  }
+}
+
+function applyAgentOverlay(
+  target: AgentConfig,
+  overlay: Record<string, unknown> | undefined,
+  permissionRules: PermissionRuleAccumulator,
+): void {
+  if (overlay === undefined) return
+  applyOverlayObjectWithVariantClearing(target, overlay, permissionRules)
+}
+
+function applyPermissionOverlay(
+  target: AgentConfig,
+  permissionRules: PermissionRuleAccumulator,
+  hasPermissionOverlay: boolean,
+): void {
+  if (!hasPermissionOverlay) return
+
+  const permission = permissionFromRules(permissionRules)
+  if (permission) {
+    target.permission = permission as AgentConfig['permission']
+  } else {
+    delete target.permission
+  }
 }
 
 function overlayControlsPermission(
@@ -478,6 +516,11 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
       loadConfigWithSources(directory)
     const existingAgents = { ...(config.agent ?? {}) }
     const existingCommands = { ...(config.command ?? {}) }
+    const nativeAgents = Object.fromEntries(
+      Object.entries(existingAgents).filter(
+        ([, agent]) => !isSystematicAgentConfig(agent),
+      ),
+    ) as Record<string, unknown>
 
     const bundledSkills = collectSkillsAsCommands(
       bundledSkillsDir,
@@ -495,7 +538,7 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
     const validatedOverlays = validateAgentOverlays({
       inventory,
       overlays,
-      nativeAgents: existingAgents,
+      nativeAgents,
       enabledSkills: enabledSkillNames,
     })
     const resolvedOverlays = resolveAgentOverlaySet(validatedOverlays)
@@ -514,7 +557,7 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
     const bundledAgents = collectAgents(
       bundledAgentsDir,
       systematicConfig.disabled_agents,
-      existingAgents,
+      nativeAgents,
       resolvedOverlays,
       availabilitySet,
     )
@@ -524,16 +567,33 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
       systematicConfig.disabled_commands,
     )
 
-    config.agent = {
-      ...bundledAgents,
-      ...existingAgents,
-    }
+    // The drop predicate uses the explicit emitted-key set instead of
+    // `Object.hasOwn(bundledAgents, key)` so the invariant ("only drop a prior
+    // entry when this hook is emitting a replacement") is self-evident and
+    // independent of how `collectAgents` builds its result. The
+    // `isSystematicAgentConfig` regex matches descriptions ending with
+    // `(<Name> - Systematic)`; this is a heuristic, not ownership proof. A
+    // user-authored agent with a Systematic-styled description can be treated
+    // as prior Systematic output. Acceptable today because the false-positive
+    // only triggers when the user also reuses an emitted key — which already
+    // signals an intentional override.
+    const bundledAgentKeys = new Set(Object.keys(bundledAgents))
+    config.agent = mergeSystematicEntries(
+      existingAgents as Record<string, AgentConfig>,
+      bundledAgents as Record<string, AgentConfig>,
+      (key, agent) =>
+        bundledAgentKeys.has(key) && isSystematicAgentConfig(agent),
+    )
 
-    config.command = {
-      ...bundledCommands,
-      ...bundledSkills,
-      ...existingCommands,
-    }
+    const emittedCommands = { ...bundledCommands, ...bundledSkills }
+    const emittedCommandKeys = new Set(Object.keys(emittedCommands))
+    config.command = mergeSystematicEntries(
+      existingCommands as Record<string, CommandConfig>,
+      emittedCommands as Record<string, CommandConfig>,
+      (key, command) =>
+        isSystematicCommandConfig(command) &&
+        (emittedCommandKeys.has(key) || isSystematicOwnedCommandKey(key)),
+    )
 
     // skills.paths exists at runtime (v2 SDK types) but not in our v1 import
     registerSkillsPaths(config, bundledSkillsDir)
@@ -549,11 +609,35 @@ type ConfigWithSkills = Config & {
 export function registerSkillsPaths(config: Config, skillsDir: string): void {
   const extended = config as ConfigWithSkills
   const paths = extended.skills?.paths ?? []
-  const nextPaths = paths.includes(skillsDir)
-    ? [...paths]
-    : [...paths, skillsDir]
+  const nextPaths = removeSystematicSkillPaths(paths)
+  if (!nextPaths.includes(skillsDir)) nextPaths.push(skillsDir)
   extended.skills = {
     ...extended.skills,
     paths: nextPaths,
   }
+}
+
+function removeSystematicSkillPaths(paths: string[]): string[] {
+  return paths.filter((path) => !isSystematicSkillPath(path))
+}
+
+function isSystematicSkillPath(path: string): boolean {
+  const normalizedPath = normalizePath(path)
+  return (
+    normalizedPath.endsWith('/.config/opencode/systematic/skills') ||
+    normalizedPath.endsWith('/.cache/opencode/systematic/skills') ||
+    normalizedPath.endsWith('/.local/share/opencode/systematic/skills') ||
+    normalizedPath.endsWith('/.opencode/systematic/skills') ||
+    /(?:^|\/)\.cache\/opencode\/packages\/@fro\.bot\/systematic@[^/]+\/node_modules\/@fro\.bot\/systematic\/skills(?:$|\/)/u.test(
+      normalizedPath,
+    )
+  )
+}
+
+function normalizePath(path: string): string {
+  return path.replaceAll('\\', '/').replace(/\/+$/u, '')
+}
+
+function isSystematicOwnedCommandKey(key: string): boolean {
+  return key.startsWith('systematic:') || key.startsWith('ce:')
 }

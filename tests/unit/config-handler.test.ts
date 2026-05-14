@@ -334,6 +334,339 @@ Skill content for ce:plan.`,
       expect(config.command?.['existing-command']).toBeDefined()
     })
 
+    test('later Systematic hook overwrites earlier Systematic output while preserving native config', async () => {
+      fs.mkdirSync(path.join(bundledDir, 'agents', 'workflow'), {
+        recursive: true,
+      })
+      createAgent(
+        path.join(bundledDir, 'agents', 'workflow'),
+        'systematic-implementer',
+        'Bundled systematic implementer',
+      )
+
+      createSkill(path.join(bundledDir, 'skills'), 'test-skill', 'A test skill')
+      createSkill(
+        path.join(bundledDir, 'skills'),
+        'ce:review',
+        'A review skill',
+      )
+      createCommand(
+        path.join(bundledDir, 'commands'),
+        'test-command',
+        'A test command',
+      )
+
+      writeCustomSystematicConfig({
+        agents: {
+          'systematic-implementer': {
+            temperature: 0.25,
+          },
+        },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {
+        agent: {
+          'systematic-implementer': {
+            description:
+              'Global Systematic output (Systematic-Implementer - Systematic)',
+            prompt: 'global prompt',
+          },
+          'native-agent': {
+            description: 'Native agent',
+            prompt: 'native prompt',
+          },
+        },
+        command: {
+          'systematic:test-command': {
+            description: '(Systematic) Previous command output',
+            template: 'previous command template',
+          },
+          'native-command': {
+            description: 'Native command',
+            template: 'native command template',
+          },
+        },
+      }
+
+      await handler(config)
+
+      expect(config.agent?.['systematic-implementer']?.description).toContain(
+        '(Systematic-Implementer - Systematic)',
+      )
+      expect(config.agent?.['systematic-implementer']?.prompt).toContain(
+        'Agent prompt for systematic-implementer.',
+      )
+      expect(config.agent?.['systematic-implementer']?.temperature).toBe(0.25)
+      expect(config.agent?.['native-agent']).toEqual({
+        description: 'Native agent',
+        prompt: 'native prompt',
+      })
+
+      expect(config.command?.['systematic:test-command']?.description).toBe(
+        '(Systematic) A test command',
+      )
+      expect(config.command?.['systematic:test-command']?.template).toContain(
+        'Command template for test-command',
+      )
+      expect(config.command?.['native-command']).toEqual({
+        description: 'Native command',
+        template: 'native command template',
+      })
+      expect(config.command?.['systematic:test-skill']?.description).toBe(
+        '(Systematic - Skill) A test skill',
+      )
+    })
+
+    test('preserves native entries with Systematic-looking descriptions while replacing emitted Systematic output', async () => {
+      fs.mkdirSync(path.join(bundledDir, 'agents', 'workflow'), {
+        recursive: true,
+      })
+      createAgent(
+        path.join(bundledDir, 'agents', 'workflow'),
+        'systematic-implementer',
+        'Bundled systematic implementer',
+      )
+
+      createSkill(path.join(bundledDir, 'skills'), 'test-skill', 'A test skill')
+      fs.mkdirSync(path.join(bundledDir, 'skills', 'ce-plan'), {
+        recursive: true,
+      })
+      fs.writeFileSync(
+        path.join(bundledDir, 'skills', 'ce-plan', 'SKILL.md'),
+        `---
+name: ce:plan
+description: A plan skill
+---
+# ce-plan
+
+Skill content for ce:plan.`,
+      )
+      createCommand(
+        path.join(bundledDir, 'commands'),
+        'test-command',
+        'A test command',
+      )
+
+      writeCustomSystematicConfig({
+        agents: {},
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {
+        agent: {
+          'native-agent': {
+            description: 'Native agent (Native-Agent - Systematic)',
+            prompt: 'native prompt',
+          },
+          'systematic-implementer': {
+            description:
+              'Old Systematic output (Systematic-Implementer - Systematic)',
+            prompt: 'old systematic prompt',
+          },
+        },
+        command: {
+          'native-command': {
+            description: '(Systematic) Native command',
+            template: 'native command template',
+          },
+          'ce:plan': {
+            description: '(Systematic - Skill) Old plan command',
+            template: 'old plan template',
+          },
+          'systematic:legacy-command': {
+            description: '(Systematic) Old command',
+            template: 'old command template',
+          },
+          'systematic:legacy-skill': {
+            description: '(Systematic - Skill) Old skill command',
+            template: 'old skill template',
+          },
+          'systematic:test-command': {
+            description: '(Systematic) Old command',
+            template: 'old command template',
+          },
+          'systematic:test-skill': {
+            description: '(Systematic - Skill) Old skill command',
+            template: 'old skill template',
+          },
+        },
+      }
+
+      await handler(config)
+
+      expect(config.agent?.['native-agent']).toEqual({
+        description: 'Native agent (Native-Agent - Systematic)',
+        prompt: 'native prompt',
+      })
+      expect(config.agent?.['systematic-implementer']?.description).toContain(
+        '(Systematic-Implementer - Systematic)',
+      )
+      expect(config.agent?.['systematic-implementer']?.prompt).toContain(
+        'Agent prompt for systematic-implementer.',
+      )
+      expect(config.command?.['native-command']).toEqual({
+        description: '(Systematic) Native command',
+        template: 'native command template',
+      })
+      expect(config.command?.['ce:plan']?.description).toBe(
+        '(Systematic - Skill) A plan skill',
+      )
+      expect(config.command?.['ce:plan']?.template).toContain(
+        'Skill content for ce:plan',
+      )
+      expect(config.command?.['systematic:legacy-command']).toBeUndefined()
+      expect(config.command?.['systematic:legacy-skill']).toBeUndefined()
+      expect(config.command?.['systematic:test-command']?.description).toBe(
+        '(Systematic) A test command',
+      )
+      expect(config.command?.['systematic:test-command']?.template).toContain(
+        'Command template for test-command',
+      )
+      expect(config.command?.['systematic:test-skill']?.description).toBe(
+        '(Systematic - Skill) A test skill',
+      )
+    })
+
+    test('preserves native command collisions over emitted Systematic command keys', async () => {
+      createCommand(
+        path.join(bundledDir, 'commands'),
+        'test-command',
+        'A test command',
+      )
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const nativeCommand = {
+        description: 'Native command override',
+        template: 'native template',
+      }
+      const config: Config = {
+        command: {
+          'systematic:test-command': nativeCommand,
+        },
+      }
+
+      await handler(config)
+
+      expect(config.command?.['systematic:test-command']).toBe(nativeCommand)
+    })
+
+    test('preserves native agent collisions over emitted Systematic agent keys', async () => {
+      fs.mkdirSync(path.join(bundledDir, 'agents', 'workflow'), {
+        recursive: true,
+      })
+      createAgent(
+        path.join(bundledDir, 'agents', 'workflow'),
+        'systematic-implementer',
+        'Bundled systematic implementer',
+      )
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const nativeAgent = {
+        description: 'Native agent override',
+        prompt: 'native prompt',
+      }
+      const config: Config = {
+        agent: {
+          'systematic-implementer': nativeAgent,
+        },
+      }
+
+      await handler(config)
+
+      expect(config.agent?.['systematic-implementer']).toBe(nativeAgent)
+    })
+
+    test('replaces prior Systematic skill paths and keeps unrelated paths containing the same segment', async () => {
+      createSkill(path.join(bundledDir, 'skills'), 'test-skill', 'A test skill')
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config = {
+        skills: {
+          paths: [
+            '/Users/me/.config/opencode/systematic/skills',
+            '/Users/me/.cache/opencode/packages/@fro.bot/systematic@2.14.1/node_modules/@fro.bot/systematic/skills',
+            '/Users/me/projects/systematic/skills/custom',
+            '/Users/me/.local/share/opencode/skills',
+          ],
+        },
+      } as Config & { skills?: { paths?: string[] } }
+
+      await handler(config)
+
+      expect(config.skills?.paths).toEqual([
+        '/Users/me/projects/systematic/skills/custom',
+        '/Users/me/.local/share/opencode/skills',
+        path.join(bundledDir, 'skills'),
+      ])
+    })
+
+    test('keeps a prior Systematic-emitted agent when the same key is disabled (no replacement emitted)', async () => {
+      // When the bundled agent is in `disabled_agents`, the local hook does
+      // NOT emit a replacement key. The drop predicate must return false so
+      // the prior Systematic-emitted entry survives — replacing it with
+      // nothing would leave the user with neither the previous output nor a
+      // current one. Asserts the explicit `bundledAgentKeys` guard short-
+      // circuits before `isSystematicAgentConfig` decides to drop.
+      createAgent(
+        path.join(bundledDir, 'agents'),
+        'disabled-tool',
+        'Bundled disabled-tool',
+      )
+      writeSystematicConfig({ disabled_agents: ['disabled-tool'] })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const priorEmitted = {
+        description: 'Prior emission (Disabled-Tool - Systematic)',
+        prompt: 'prior prompt',
+      }
+      const config: Config = {
+        agent: {
+          'disabled-tool': priorEmitted,
+        },
+      }
+
+      await handler(config)
+
+      expect(config.agent?.['disabled-tool']).toBe(priorEmitted)
+    })
+
     test('existing config overrides bundled content (preserves user config)', async () => {
       createAgent(
         path.join(bundledDir, 'agents'),
