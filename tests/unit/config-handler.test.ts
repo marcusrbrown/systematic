@@ -398,6 +398,7 @@ Skill content for ce:plan.`,
       expect(config.agent?.['systematic-implementer']?.prompt).toContain(
         'Agent prompt for systematic-implementer.',
       )
+      expect(config.agent?.['systematic-implementer']?.temperature).toBe(0.25)
       expect(config.agent?.['native-agent']).toEqual({
         description: 'Native agent',
         prompt: 'native prompt',
