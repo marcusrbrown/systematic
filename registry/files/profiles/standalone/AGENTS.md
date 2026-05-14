@@ -84,7 +84,7 @@ Full workflow from plan to execution:
 | Skill | Use Case |
 |-------|----------|
 | `using-systematic` | Bootstrap — learn how to use Systematic |
-| `brainstorming` | Explore features before planning |
+| `ce:brainstorm` | Explore features before planning |
 | `git-worktree` | Isolated parallel development with git |
 | `frontend-design` | Production-grade UI implementation |
 | `agent-native-architecture` | Design systems where agents are first-class |
