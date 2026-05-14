@@ -171,7 +171,7 @@ The sibling `opencode-copilot-delegate` integration tests use a cleaner fixture 
 - Resolve the package side through an exact package spec (for example `@fro.bot/systematic@2.14.1`) with npm/OpenCode cache directories rooted under the temp fixture. Do not rely on the developer's globally configured plugin list.
 - If package resolution cannot be made hermetic enough for ordinary CI, gate the mixed-version test behind an explicit environment variable and document that it is an intentional compatibility probe.
 - Use a probe plugin when needed to capture host-visible system/tool surfaces without requiring changes to runtime code. If the probe runs between package and local entries, it can snapshot package-only state before the local plugin rewrites the marker block; a second probe or final capture can verify the converged final state.
-- Assert the observable compatibility contract: `systematic_skill` remains callable, both plugin sources are demonstrably loaded or resolved from their intended origins, and duplicate bootstrap blocks converge to one marker block in the final system prompt.
+- Assert the observable compatibility contract: `systematic_skill` remains callable under pinned-package plus local-source registration, and duplicate bootstrap blocks converge to one marker block in the final system prompt.
 - Keep this test separate from ordinary local smoke coverage so failures point to mixed-version behavior, not normal plugin functionality.
 
 **Patterns to follow:**
@@ -180,7 +180,7 @@ The sibling `opencode-copilot-delegate` integration tests use a cleaner fixture 
 
 **Test scenarios:**
 - Happy path: mixed package/local config can load a Systematic skill through `systematic_skill`.
-- Integration: probe/captured evidence shows the package spec and local file URL are distinct intended origins.
+- Integration: probe/captured evidence shows the mixed package/local config still exposes deterministic host-visible `systematic_skill` tool definitions.
 - Integration: final system prompt contains exactly one complete `<SYSTEMATIC_WORKFLOWS>` marker block after both plugins run.
 - Integration: if tool definitions are captured, duplicate `systematic_skill` definitions are identical or otherwise deterministically safe.
 - Error path: package resolution failure reports which plugin spec failed without leaking token-bearing environment values.

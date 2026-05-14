@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import type { Config, PluginInput } from '@opencode-ai/plugin'
 import SystematicPlugin from '../../src/index.js'
 
@@ -156,7 +157,11 @@ function createIsolatedFixture(): IsolatedFixture {
   // project root rather than walking up into the real repository.
   fs.writeFileSync(
     path.join(projectDir, 'package.json'),
-    JSON.stringify({ name: 'systematic-integration-fixture', private: true }),
+    JSON.stringify({
+      name: 'systematic-integration-fixture',
+      private: true,
+      type: 'module',
+    }),
   )
 
   return {
@@ -181,6 +186,88 @@ interface RunOpencodeOptions {
   extraEnv?: Record<string, string>
 }
 
+interface ProbeEvent {
+  type: 'loaded' | 'system' | 'tool'
+  system?: string[]
+  description?: string
+  parameters?: unknown
+}
+
+function countWorkflowBlocks(system: readonly string[]): number {
+  return system.reduce(
+    (count, entry) => count + entry.split('<SYSTEMATIC_WORKFLOWS>').length - 1,
+    0,
+  )
+}
+
+function createProbePlugin(fixture: IsolatedFixture): {
+  url: string
+  capturePath: string
+} {
+  const probeDir = path.join(fixture.tempRoot, 'probe-plugin')
+  const probePath = path.join(probeDir, 'index.mjs')
+  const capturePath = path.join(fixture.tempRoot, 'probe-capture.jsonl')
+  fs.mkdirSync(probeDir, { recursive: true })
+  fs.writeFileSync(
+    path.join(probeDir, 'package.json'),
+    JSON.stringify({
+      name: 'systematic-integration-probe',
+      type: 'module',
+      main: './index.mjs',
+    }),
+  )
+  fs.writeFileSync(
+    probePath,
+    `import fs from 'node:fs'
+
+const capturePath = ${JSON.stringify(capturePath)}
+
+function append(entry) {
+  fs.appendFileSync(capturePath, JSON.stringify(entry) + '\\n')
+}
+
+export default async function probe() {
+  append({ type: 'loaded' })
+  return {
+    'tool.definition': async (input, output) => {
+      if (input.toolID !== 'systematic_skill') return
+      append({
+        type: 'tool',
+        description: output.description,
+        parameters: output.parameters,
+      })
+    },
+    'experimental.chat.system.transform': async (_input, output) => {
+      append({ type: 'system', system: output.system })
+    },
+  }
+}
+`,
+  )
+
+  return { url: pathToFileURL(probeDir).href, capturePath }
+}
+
+function readProbeEvents(capturePath: string): ProbeEvent[] {
+  if (!fs.existsSync(capturePath)) return []
+  const content = fs.readFileSync(capturePath, 'utf8').trim()
+  if (content === '') return []
+  return content
+    .split('\n')
+    .map((line: string) => JSON.parse(line) as ProbeEvent)
+}
+
+function assertProbeCapturedEvents(probe: {
+  capturePath: string
+}): ProbeEvent[] {
+  const events = readProbeEvents(probe.capturePath)
+  if (events.length > 0) return events
+
+  throw new Error(
+    `probe plugin did not capture any events at ${probe.capturePath}`,
+  )
+}
+
 function assertOk(result: OpencodeResult): void {
   if (result.exitCode === 0) return
   const stdoutTail = redactSensitive(result.stdout.slice(-2000))
@@ -192,6 +279,37 @@ function assertOk(result: OpencodeResult): void {
   )
 }
 
+function assertParentNpmConfigNotForwarded(): void {
+  const env = buildChildEnv({})
+  expect(env.npm_config_cache).toBeUndefined()
+  expect(env.npm_config_prefix).toBeUndefined()
+}
+
+test('buildChildEnv ignores parent npm_config env unless explicitly overridden', () => {
+  const originalCache = process.env.npm_config_cache
+  const originalPrefix = process.env.npm_config_prefix
+
+  process.env.npm_config_cache = '/parent/cache'
+  process.env.npm_config_prefix = '/parent/prefix'
+
+  try {
+    assertParentNpmConfigNotForwarded()
+
+    const overridden = buildChildEnv({
+      npm_config_cache: '/fixture/cache',
+      npm_config_prefix: '/fixture/prefix',
+    })
+
+    expect(overridden.npm_config_cache).toBe('/fixture/cache')
+    expect(overridden.npm_config_prefix).toBe('/fixture/prefix')
+  } finally {
+    if (originalCache === undefined) delete process.env.npm_config_cache
+    else process.env.npm_config_cache = originalCache
+    if (originalPrefix === undefined) delete process.env.npm_config_prefix
+    else process.env.npm_config_prefix = originalPrefix
+  }
+})
+
 async function runOpencode(
   prompt: string,
   options: RunOpencodeOptions,
@@ -201,13 +319,6 @@ async function runOpencode(
   // Build a narrow child environment. Override all OpenCode config/state paths
   // so the subprocess cannot read or write the real user environment.
   const childEnv = buildChildEnv({
-    HOME: fixture.homeDir,
-    XDG_CONFIG_HOME: fixture.xdgConfigHome,
-    XDG_DATA_HOME: fixture.xdgDataHome,
-    XDG_CACHE_HOME: fixture.xdgCacheHome,
-    XDG_STATE_HOME: fixture.xdgStateHome,
-    OPENCODE_CONFIG_DIR: fixture.configDir,
-    OPENCODE_CONFIG_CONTENT: configContent,
     // Suppress first-boot side effects that are irrelevant to plugin tests:
     // OPENCODE_DISABLE_AUTOUPDATE prevents the binary from self-updating mid-test;
     // OPENCODE_DISABLE_LSP_DOWNLOAD skips language-server downloads that would
@@ -221,6 +332,13 @@ async function runOpencode(
     OPENCODE_DISABLE_MODELS_FETCH: '1',
     OPENCODE_DISABLE_PRUNE: '1',
     ...extraEnv,
+    HOME: fixture.homeDir,
+    XDG_CONFIG_HOME: fixture.xdgConfigHome,
+    XDG_DATA_HOME: fixture.xdgDataHome,
+    XDG_CACHE_HOME: fixture.xdgCacheHome,
+    XDG_STATE_HOME: fixture.xdgStateHome,
+    OPENCODE_CONFIG_DIR: fixture.configDir,
+    OPENCODE_CONFIG_CONTENT: configContent,
   })
 
   let lastResult: OpencodeResult = { stdout: '', stderr: '', exitCode: -1 }
@@ -686,8 +804,8 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
       expectSetupSkillLoaded(result)
 
       const currentEntries = new Set(fs.readdirSync(REPO_OPENCODE_DIR))
-      const newEntries = [...currentEntries].filter(
-        (entry) => !REPO_OPENCODE_SNAPSHOT.has(entry),
+      const newEntries = Array.from(currentEntries).filter(
+        (entry) => !REPO_OPENCODE_SNAPSHOT.has(String(entry)),
       )
       expect(newEntries).toEqual([])
     },
@@ -695,28 +813,14 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
   )
 })
 
-// npm cache variables needed when resolving a pinned package spec inside the
-// isolated fixture. Rooted under tempRoot so resolution cannot silently fall
-// back to the developer's user-level npm cache or prefix.
-const MIXED_VERSION_NPM_ENV_KEYS = [
-  'npm_config_cache',
-  'npm_config_prefix',
-] as const
-
-// Extend the allowlist so buildChildEnv forwards these when the mixed-version
-// test sets them as overrides. They are only present in the child env when the
-// gated test explicitly passes them as overrides — they are never read from the
-// parent process environment.
-for (const key of MIXED_VERSION_NPM_ENV_KEYS) {
-  ENV_ALLOWLIST.add(key)
-}
-
 const MIXED_VERSION_ENABLED = process.env.SYSTEMATIC_MIXED_VERSION_TEST === '1'
 
-function buildMixedVersionConfig(): string {
+function buildMixedVersionConfig(probePluginUrl: string): string {
   const pinnedPackage = '@fro.bot/systematic@2.14.1'
   const localSource = `file://${path.join(REPO_ROOT, 'src/index.ts')}`
-  return JSON.stringify({ plugin: [pinnedPackage, localSource] })
+  return JSON.stringify({
+    plugin: [pinnedPackage, localSource, probePluginUrl],
+  })
 }
 
 describe.skipIf(!OPENCODE_AVAILABLE)(
@@ -733,7 +837,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
     })
 
     test.skipIf(!MIXED_VERSION_ENABLED)(
-      'pinned package plus local source both load systematic_skill and expose known skills',
+      'pinned package plus local source keep systematic_skill deterministic and converge bootstrap',
       async () => {
         if (!MIXED_VERSION_ENABLED) {
           // Explicit message for the skip path — test.skipIf handles the actual
@@ -744,47 +848,59 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
           return
         }
 
-        const npmCacheDir = path.join(fixture.tempRoot, 'npm-cache')
-        const npmPrefixDir = path.join(fixture.tempRoot, 'npm-prefix')
-        fs.mkdirSync(npmCacheDir, { recursive: true })
-        fs.mkdirSync(npmPrefixDir, { recursive: true })
-
-        // npm_config_cache and npm_config_prefix are passed as overrides so
-        // buildChildEnv forwards them into the child process. Package resolution
-        // for the pinned spec is rooted here and cannot use the developer's cache.
+        const probe = createProbePlugin(fixture)
         const result = await runOpencode(
           'Use the systematic_skill tool to load ce:review',
           {
             fixture,
-            configContent: buildMixedVersionConfig(),
+            configContent: buildMixedVersionConfig(probe.url),
             extraEnv: {
-              npm_config_cache: npmCacheDir,
-              npm_config_prefix: npmPrefixDir,
+              npm_config_cache: path.join(fixture.tempRoot, 'npm-cache'),
+              npm_config_prefix: path.join(fixture.tempRoot, 'npm-prefix'),
             },
           },
         )
 
         assertOk(result)
-        // The tool must be callable — OpenCode logs tool invocations to stderr.
         expect(result.stderr).toMatch(/systematic_skill/)
-        // At least one known Systematic skill must be discoverable in the output.
         expect(result.stdout).toMatch(/ce:review/i)
-        // The SYSTEMATIC_WORKFLOWS marker must appear exactly once in the final
-        // assistant output. If OpenCode collapses duplicate bootstrap blocks from
-        // both plugin sources, the marker count must be 1. If the CLI output does
-        // not surface the raw system prompt, this assertion is skipped with a note.
-        const markerMatches =
-          result.stdout.match(/<SYSTEMATIC_WORKFLOWS>/g) ?? []
-        if (markerMatches.length > 0) {
-          expect(markerMatches.length).toBe(1)
-        } else {
-          // The CLI output does not echo the raw system prompt — the marker
-          // assertion cannot run here without a probe plugin. Skipping per plan
-          // constraint (no probe plugin in this unit).
-          console.log(
-            'Note: <SYSTEMATIC_WORKFLOWS> marker not visible in CLI stdout; ' +
-              'marker-count assertion skipped (no probe plugin in this unit)',
-          )
+
+        const events = assertProbeCapturedEvents(probe)
+
+        const systemEvents = events.filter((event) => event.type === 'system')
+        expect(systemEvents.length).toBeGreaterThan(0)
+
+        const workflowSystems = systemEvents
+          .map((event) => event.system ?? [])
+          .filter((system) => countWorkflowBlocks(system) > 0)
+        expect(workflowSystems.length).toBeGreaterThan(0)
+
+        for (const system of workflowSystems) {
+          expect(countWorkflowBlocks(system)).toBe(1)
+          expect(system[0]).toContain('<SYSTEMATIC_WORKFLOWS>')
+          for (const [index, entry] of system.entries()) {
+            if (index > 0) {
+              expect(entry).not.toContain('<SYSTEMATIC_WORKFLOWS>')
+            }
+          }
+          expect(system[0]).toContain('<available_skills>')
+          expect(system[0]).toMatch(/ce:brainstorm|systematic:setup/)
+        }
+
+        const toolEvents = events.filter((event) => event.type === 'tool')
+        expect(toolEvents.length).toBeGreaterThanOrEqual(2)
+        expect(new Set(toolEvents.map((event) => event.description)).size).toBe(
+          1,
+        )
+        expect(
+          new Set(toolEvents.map((event) => JSON.stringify(event.parameters)))
+            .size,
+        ).toBe(1)
+        for (const event of toolEvents) {
+          expect(event.description).toContain('## Available Systematic Skills')
+          expect(event.description).toMatch(/ce:brainstorm|systematic:setup/)
+          expect(event.description).not.toContain('<available_skills>')
+          expect(event.description).not.toContain('<location>')
         }
       },
       TIMEOUT_MS * MAX_RETRIES,
