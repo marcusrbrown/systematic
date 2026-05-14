@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { Config, PluginInput } from '@opencode-ai/plugin'
+
 import SystematicPlugin from '../../src/index.js'
 
 const OPENCODE_AVAILABLE = (() => {
@@ -18,17 +20,14 @@ const OPENCODE_TEST_MODEL = 'opencode/big-pickle'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..')
 
-// Snapshot the repo's .opencode directory entries at module load so tests can
-// assert that no new session subdirectories are created during a run. Captured
-// once here so the baseline reflects the state before any test executes.
+// Snapshot the repo's .opencode tree at module load so tests can assert that
+// live OpenCode subprocesses do not mutate the real repository state.
 const REPO_OPENCODE_DIR = path.join(REPO_ROOT, '.opencode')
-const REPO_OPENCODE_SNAPSHOT: ReadonlySet<string> = (() => {
-  try {
-    return new Set(fs.readdirSync(REPO_OPENCODE_DIR))
-  } catch {
-    // .opencode does not exist — containment assertions will be skipped.
-    return new Set<string>()
-  }
+type OpencodeTreeSnapshot = ReadonlyMap<string, string>
+
+const REPO_OPENCODE_SNAPSHOT: OpencodeTreeSnapshot | null = (() => {
+  if (!fs.existsSync(REPO_OPENCODE_DIR)) return null
+  return snapshotDirectoryTree(REPO_OPENCODE_DIR)
 })()
 
 type AgentConfig = NonNullable<Config['agent']>[string]
@@ -42,6 +41,91 @@ interface OpencodeResult {
   stderr: string
   exitCode: number
 }
+
+function snapshotDirectoryTree(rootDir: string): OpencodeTreeSnapshot {
+  const entries = new Map<string, string>()
+
+  function walk(currentDir: string): void {
+    for (const entry of fs.readdirSync(currentDir, { withFileTypes: true })) {
+      const entryPath = path.join(currentDir, entry.name)
+      const relativePath = path.relative(rootDir, entryPath)
+
+      if (entry.isDirectory()) {
+        entries.set(relativePath, 'dir')
+        walk(entryPath)
+        continue
+      }
+
+      if (entry.isSymbolicLink()) {
+        entries.set(relativePath, `symlink:${fs.readlinkSync(entryPath)}`)
+        continue
+      }
+
+      if (entry.isFile()) {
+        const content = fs.readFileSync(entryPath)
+        const digest = createHash('sha256').update(content).digest('hex')
+        entries.set(relativePath, `file:${digest}:${content.byteLength}`)
+      }
+    }
+  }
+
+  walk(rootDir)
+  return entries
+}
+
+function assertTreeUnchanged(
+  before: OpencodeTreeSnapshot | null,
+  afterDir: string,
+): void {
+  if (before === null) {
+    expect(fs.existsSync(afterDir)).toBe(false)
+    return
+  }
+
+  const after = snapshotDirectoryTree(afterDir)
+  const sortedBefore = Array.from(before.entries()).sort(([left], [right]) =>
+    left.localeCompare(right),
+  )
+  const sortedAfter = Array.from(after.entries()).sort(([left], [right]) =>
+    left.localeCompare(right),
+  )
+  expect(sortedAfter).toEqual(sortedBefore)
+}
+
+test('snapshotDirectoryTree records symlink targets', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-symlink-'))
+  try {
+    const targetFile = path.join(tempRoot, 'target.txt')
+    const linkFile = path.join(tempRoot, 'link.txt')
+    fs.writeFileSync(targetFile, 'linked content')
+    fs.symlinkSync('target.txt', linkFile)
+
+    const snapshot = snapshotDirectoryTree(tempRoot)
+
+    expect(snapshot.get('link.txt')).toBe('symlink:target.txt')
+    expect(snapshot.get('target.txt')).toMatch(/^file:/)
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true })
+  }
+})
+
+test('assertTreeUnchanged ignores snapshot entry order', () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-tree-'))
+  try {
+    fs.writeFileSync(path.join(tempRoot, 'a.txt'), 'one')
+    fs.writeFileSync(path.join(tempRoot, 'b.txt'), 'two')
+
+    const actual = snapshotDirectoryTree(tempRoot)
+    const before = new Map<string, string>([
+      ['b.txt', actual.get('b.txt') ?? ''],
+      ['a.txt', actual.get('a.txt') ?? ''],
+    ])
+
+    expect(() => assertTreeUnchanged(before, tempRoot)).not.toThrow()
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true })
+  }
+})
 
 // Environment variable name patterns whose values must not appear in
 // diagnostic output because they may carry credentials.
@@ -186,12 +270,91 @@ interface RunOpencodeOptions {
   extraEnv?: Record<string, string>
 }
 
-interface ProbeEvent {
-  type: 'loaded' | 'system' | 'tool'
-  system?: string[]
-  description?: string
-  parameters?: unknown
+type ProbeTransformKind = 'chat' | 'title' | 'unknown'
+
+interface ProbeLoadedEvent {
+  type: 'loaded'
 }
+
+interface ProbeSystemEvent {
+  type: 'system'
+  kind: ProbeTransformKind
+  input: Record<string, unknown>
+  system: string[]
+}
+
+interface ProbeToolEvent {
+  type: 'tool'
+  description: string
+  parameters: unknown
+}
+
+type ProbeEvent = ProbeLoadedEvent | ProbeSystemEvent | ProbeToolEvent
+const PROBE_SYSTEM_KINDS = new Set<ProbeTransformKind>([
+  'chat',
+  'title',
+  'unknown',
+])
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) && value.every((entry) => typeof entry === 'string')
+  )
+}
+
+function isProbeEvent(value: unknown): value is ProbeEvent {
+  if (!isRecord(value) || typeof value.type !== 'string') return false
+
+  if (value.type === 'loaded') return Object.keys(value).length === 1
+
+  if (value.type === 'system') {
+    return (
+      typeof value.kind === 'string' &&
+      PROBE_SYSTEM_KINDS.has(value.kind as ProbeTransformKind) &&
+      isRecord(value.input) &&
+      isStringArray(value.system)
+    )
+  }
+
+  if (value.type === 'tool') {
+    return typeof value.description === 'string' && 'parameters' in value
+  }
+
+  return false
+}
+
+function parseProbeEvent(line: string, index: number): ProbeEvent {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(line) as unknown
+  } catch (error) {
+    throw new Error(`invalid JSONL capture line ${index + 1}: ${String(error)}`)
+  }
+
+  if (!isProbeEvent(parsed)) {
+    throw new Error(`malformed probe event at line ${index + 1}: ${line}`)
+  }
+
+  return parsed
+}
+
+test('parseProbeEvent rejects invalid system transform kind', () => {
+  expect(() =>
+    parseProbeEvent(
+      JSON.stringify({
+        type: 'system',
+        kind: 'bogus',
+        input: {},
+        system: [],
+      }),
+      0,
+    ),
+  ).toThrow(/malformed probe event/i)
+})
 
 function countWorkflowBlocks(system: readonly string[]): number {
   return system.reduce(
@@ -226,6 +389,13 @@ function append(entry) {
   fs.appendFileSync(capturePath, JSON.stringify(entry) + '\\n')
 }
 
+function classifyTransformInput(input) {
+  if (!input || typeof input !== 'object') return 'unknown'
+  if (typeof input.sessionID === 'string' && 'model' in input) return 'chat'
+  if ('model' in input && !('sessionID' in input)) return 'title'
+  return 'unknown'
+}
+
 export default async function probe() {
   append({ type: 'loaded' })
   return {
@@ -237,8 +407,8 @@ export default async function probe() {
         parameters: output.parameters,
       })
     },
-    'experimental.chat.system.transform': async (_input, output) => {
-      append({ type: 'system', system: output.system })
+    'experimental.chat.system.transform': async (input, output) => {
+      append({ type: 'system', kind: classifyTransformInput(input), input, system: output.system })
     },
   }
 }
@@ -254,7 +424,7 @@ function readProbeEvents(capturePath: string): ProbeEvent[] {
   if (content === '') return []
   return content
     .split('\n')
-    .map((line: string) => JSON.parse(line) as ProbeEvent)
+    .map((line: string, index: number) => parseProbeEvent(line, index))
 }
 
 function assertProbeCapturedEvents(probe: {
@@ -278,6 +448,81 @@ function assertOk(result: OpencodeResult): void {
       `--- stderr (tail) ---\n${stderrTail}`,
   )
 }
+
+function assertMixedVersionProbeEvents(events: ProbeEvent[]): void {
+  const systemEvents = events.filter((event) => event.type === 'system')
+  const chatSystemEvents = systemEvents.filter((event) => event.kind === 'chat')
+  const titleSystemEvents = systemEvents.filter(
+    (event) => event.kind === 'title',
+  )
+  expect(chatSystemEvents.length).toBeGreaterThan(0)
+
+  const workflowSystems = chatSystemEvents
+    .map((event) => event.system)
+    .filter((system) => countWorkflowBlocks(system) > 0)
+  expect(workflowSystems.length).toBeGreaterThan(0)
+
+  for (const system of workflowSystems) {
+    expect(countWorkflowBlocks(system)).toBe(1)
+    expect(system[0]).toContain('<SYSTEMATIC_WORKFLOWS>')
+    for (const [index, entry] of system.entries()) {
+      if (index > 0) {
+        expect(entry).not.toContain('<SYSTEMATIC_WORKFLOWS>')
+      }
+    }
+    expect(system[0]).toContain('<available_skills>')
+    expect(system[0]).toMatch(/ce:brainstorm|systematic:setup/)
+  }
+
+  if (titleSystemEvents.length > 0) {
+    for (const event of titleSystemEvents) {
+      expect(countWorkflowBlocks(event.system)).toBe(0)
+    }
+  }
+}
+
+test('assertOk redacts token-like diagnostics while keeping context', () => {
+  const originalAnthropicKey = process.env.ANTHROPIC_API_KEY
+  const originalOpenaiKey = process.env.OPENAI_API_KEY
+
+  process.env.ANTHROPIC_API_KEY = 'sk-test-1234567890abcdef'
+  process.env.OPENAI_API_KEY = 'ghp_1234567890abcdef'
+
+  try {
+    expect(() =>
+      assertOk({
+        exitCode: 1,
+        stdout:
+          'bootstrap ok\napi token: sk-test-1234567890abcdef\nmore context',
+        stderr: 'stderr context\nerror key: ghp_1234567890abcdef\nextra detail',
+      }),
+    ).toThrow(
+      /bootstrap ok[\s\S]*\[REDACTED\][\s\S]*stderr context[\s\S]*\[REDACTED\]/,
+    )
+
+    try {
+      assertOk({
+        exitCode: 1,
+        stdout:
+          'bootstrap ok\napi token: sk-test-1234567890abcdef\nmore context',
+        stderr: 'stderr context\nerror key: ghp_1234567890abcdef\nextra detail',
+      })
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      expect(message).toContain('[REDACTED]')
+      expect(message).toContain('bootstrap ok')
+      expect(message).toContain('stderr context')
+      expect(message).not.toContain('sk-test-1234567890abcdef')
+      expect(message).not.toContain('ghp_1234567890abcdef')
+    }
+  } finally {
+    if (originalAnthropicKey === undefined) delete process.env.ANTHROPIC_API_KEY
+    else process.env.ANTHROPIC_API_KEY = originalAnthropicKey
+
+    if (originalOpenaiKey === undefined) delete process.env.OPENAI_API_KEY
+    else process.env.OPENAI_API_KEY = originalOpenaiKey
+  }
+})
 
 function assertParentNpmConfigNotForwarded(): void {
   const env = buildChildEnv({})
@@ -792,22 +1037,13 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
   test(
     'fixture run does not write into repo .opencode directory',
     async () => {
-      // Only assert containment when we have a baseline snapshot. If .opencode
-      // did not exist at module load, there is nothing to protect.
-      if (REPO_OPENCODE_SNAPSHOT.size === 0) return
-
       const result = await runOpencode(
         'Use the systematic_skill tool to load systematic:setup',
         { fixture, configContent: buildSourceLocalConfig() },
       )
 
       expectSetupSkillLoaded(result)
-
-      const currentEntries = new Set(fs.readdirSync(REPO_OPENCODE_DIR))
-      const newEntries = Array.from(currentEntries).filter(
-        (entry) => !REPO_OPENCODE_SNAPSHOT.has(String(entry)),
-      )
-      expect(newEntries).toEqual([])
+      assertTreeUnchanged(REPO_OPENCODE_SNAPSHOT, REPO_OPENCODE_DIR)
     },
     TIMEOUT_MS * MAX_RETRIES,
   )
@@ -839,15 +1075,6 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
     test.skipIf(!MIXED_VERSION_ENABLED)(
       'pinned package plus local source keep systematic_skill deterministic and converge bootstrap',
       async () => {
-        if (!MIXED_VERSION_ENABLED) {
-          // Explicit message for the skip path — test.skipIf handles the actual
-          // skip, but document the opt-in here for clarity in test output.
-          console.log(
-            'Skipped: set SYSTEMATIC_MIXED_VERSION_TEST=1 to run mixed-version compatibility probe',
-          )
-          return
-        }
-
         const probe = createProbePlugin(fixture)
         const result = await runOpencode(
           'Use the systematic_skill tool to load ce:review',
@@ -867,25 +1094,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
 
         const events = assertProbeCapturedEvents(probe)
 
-        const systemEvents = events.filter((event) => event.type === 'system')
-        expect(systemEvents.length).toBeGreaterThan(0)
-
-        const workflowSystems = systemEvents
-          .map((event) => event.system ?? [])
-          .filter((system) => countWorkflowBlocks(system) > 0)
-        expect(workflowSystems.length).toBeGreaterThan(0)
-
-        for (const system of workflowSystems) {
-          expect(countWorkflowBlocks(system)).toBe(1)
-          expect(system[0]).toContain('<SYSTEMATIC_WORKFLOWS>')
-          for (const [index, entry] of system.entries()) {
-            if (index > 0) {
-              expect(entry).not.toContain('<SYSTEMATIC_WORKFLOWS>')
-            }
-          }
-          expect(system[0]).toContain('<available_skills>')
-          expect(system[0]).toMatch(/ce:brainstorm|systematic:setup/)
-        }
+        assertMixedVersionProbeEvents(events)
 
         const toolEvents = events.filter((event) => event.type === 'tool')
         expect(toolEvents.length).toBeGreaterThanOrEqual(2)
