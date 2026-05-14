@@ -86,7 +86,7 @@ The sibling `opencode-copilot-delegate` integration tests use a cleaner fixture 
 
 ## Implementation Units
 
-- [ ] **Unit 1: Introduce isolated OpenCode fixture**
+- [x] **Unit 1: Introduce isolated OpenCode fixture**
 
 **Goal:** Centralize live OpenCode subprocess setup so every integration run uses temp project/config/state roots and a diagnostic result wrapper.
 

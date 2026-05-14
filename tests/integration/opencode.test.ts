@@ -29,39 +29,175 @@ interface OpencodeResult {
   exitCode: number
 }
 
-interface RunOpencodeOptions {
-  cwd: string
-  configContent?: string
+// Environment variable name patterns whose values must not appear in
+// diagnostic output because they may carry credentials.
+const REDACT_PATTERNS = [/TOKEN/i, /KEY/i, /SECRET/i, /PAT/i, /AUTH/i]
+
+// Variables forwarded from the parent process into isolated OpenCode child
+// processes. Everything else is either overridden by the fixture or dropped.
+const ENV_ALLOWLIST = new Set([
+  'PATH',
+  'HOME',
+  'USER',
+  'LOGNAME',
+  'SHELL',
+  'LANG',
+  'LC_ALL',
+  'LC_CTYPE',
+  'TERM',
+  'TMPDIR',
+  'TMP',
+  'TEMP',
+  // Node/Bun resolution
+  'NODE_PATH',
+  // OpenCode model auth — forwarded so the test model can authenticate.
+  // Token values are redacted from failure diagnostics before surfacing.
+  'ANTHROPIC_API_KEY',
+  'OPENAI_API_KEY',
+  'OPENROUTER_API_KEY',
+  'GOOGLE_API_KEY',
+  'GEMINI_API_KEY',
+  'MISTRAL_API_KEY',
+  'GROQ_API_KEY',
+  'COHERE_API_KEY',
+  'TOGETHER_API_KEY',
+  'FIREWORKS_API_KEY',
+  'PERPLEXITY_API_KEY',
+  'XAI_API_KEY',
+  'DEEPSEEK_API_KEY',
+  'OPENCODE_API_KEY',
+])
+
+function redactSensitive(text: string): string {
+  let result = text
+  for (const [key, value] of Object.entries(process.env)) {
+    if (!value || value.length < 8) continue
+    if (REDACT_PATTERNS.some((pattern) => pattern.test(key))) {
+      result = result.replaceAll(value, '[REDACTED]')
+    }
+  }
+  return result
 }
 
-function buildOpencodeConfig(): string {
-  const pluginPath = `file://${path.join(REPO_ROOT, 'src/index.ts')}`
-  return JSON.stringify({
-    plugin: [pluginPath],
-  })
+function buildChildEnv(
+  overrides: Record<string, string>,
+): Record<string, string> {
+  const base: Record<string, string> = {}
+  for (const key of ENV_ALLOWLIST) {
+    const value = process.env[key]
+    if (value !== undefined) {
+      base[key] = value
+    }
+  }
+  return { ...base, ...overrides }
+}
+
+// Fixture for isolated live OpenCode subprocess runs. Each test gets its own
+// temp root so OpenCode cannot read or write the real user/project environment.
+interface IsolatedFixture {
+  tempRoot: string
+  projectDir: string
+  configDir: string
+  homeDir: string
+  xdgConfigHome: string
+  xdgDataHome: string
+  xdgCacheHome: string
+  xdgStateHome: string
+}
+
+function createIsolatedFixture(): IsolatedFixture {
+  const tempRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'systematic-opencode-'),
+  )
+  const projectDir = path.join(tempRoot, 'project')
+  const configDir = path.join(tempRoot, 'opencode-config')
+  const homeDir = path.join(tempRoot, 'home')
+  const xdgConfigHome = path.join(tempRoot, 'xdg-config')
+  const xdgDataHome = path.join(tempRoot, 'xdg-data')
+  const xdgCacheHome = path.join(tempRoot, 'xdg-cache')
+  const xdgStateHome = path.join(tempRoot, 'xdg-state')
+
+  for (const dir of [
+    projectDir,
+    configDir,
+    homeDir,
+    xdgConfigHome,
+    xdgDataHome,
+    xdgCacheHome,
+    xdgStateHome,
+  ]) {
+    fs.mkdirSync(dir, { recursive: true })
+  }
+
+  // A minimal package.json makes OpenCode treat this directory as an isolated
+  // project root rather than walking up into the real repository.
+  fs.writeFileSync(
+    path.join(projectDir, 'package.json'),
+    JSON.stringify({ name: 'systematic-integration-fixture', private: true }),
+  )
+
+  return {
+    tempRoot,
+    projectDir,
+    configDir,
+    homeDir,
+    xdgConfigHome,
+    xdgDataHome,
+    xdgCacheHome,
+    xdgStateHome,
+  }
+}
+
+function destroyIsolatedFixture(fixture: IsolatedFixture): void {
+  fs.rmSync(fixture.tempRoot, { recursive: true, force: true })
+}
+
+interface RunOpencodeOptions {
+  fixture: IsolatedFixture
+  configContent: string
+}
+
+function assertOk(result: OpencodeResult): void {
+  if (result.exitCode === 0) return
+  const stdoutTail = redactSensitive(result.stdout.slice(-2000))
+  const stderrTail = redactSensitive(result.stderr.slice(-2000))
+  throw new Error(
+    `opencode exited with code ${result.exitCode}\n` +
+      `--- stdout (tail) ---\n${stdoutTail}\n` +
+      `--- stderr (tail) ---\n${stderrTail}`,
+  )
 }
 
 async function runOpencode(
   prompt: string,
   options: RunOpencodeOptions,
 ): Promise<OpencodeResult> {
-  let lastResult: { stdout: string; stderr: string; exitCode: number } = {
-    stdout: '',
-    stderr: '',
-    exitCode: -1,
-  }
+  const { fixture, configContent } = options
+
+  // Build a narrow child environment. Override all OpenCode config/state paths
+  // so the subprocess cannot read or write the real user environment.
+  const childEnv = buildChildEnv({
+    HOME: fixture.homeDir,
+    XDG_CONFIG_HOME: fixture.xdgConfigHome,
+    XDG_DATA_HOME: fixture.xdgDataHome,
+    XDG_CACHE_HOME: fixture.xdgCacheHome,
+    XDG_STATE_HOME: fixture.xdgStateHome,
+    OPENCODE_CONFIG_DIR: fixture.configDir,
+    OPENCODE_CONFIG_CONTENT: configContent,
+    // Suppress first-boot side effects that are irrelevant to plugin tests.
+    OPENCODE_DISABLE_AUTOUPDATE: '1',
+    OPENCODE_DISABLE_LSP_DOWNLOAD: '1',
+    OPENCODE_DISABLE_MODELS_FETCH: '1',
+    OPENCODE_DISABLE_PRUNE: '1',
+  })
+
+  let lastResult: OpencodeResult = { stdout: '', stderr: '', exitCode: -1 }
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    const env = {
-      ...process.env,
-      ...(options.configContent
-        ? { OPENCODE_CONFIG_CONTENT: options.configContent }
-        : {}),
-    }
     const args = ['opencode', 'run', '--model', OPENCODE_TEST_MODEL, prompt]
     const result = Bun.spawnSync(args, {
-      cwd: options.cwd,
-      env,
+      cwd: fixture.projectDir,
+      env: childEnv,
       timeout: TIMEOUT_MS,
     })
 
@@ -73,7 +209,6 @@ async function runOpencode(
 
     const isTimeout =
       lastResult.exitCode === -1 || lastResult.stderr.includes('ETIMEDOUT')
-
     const isRateLimit =
       lastResult.stderr.includes('rate limit') ||
       lastResult.stderr.includes('429')
@@ -94,8 +229,13 @@ async function runOpencode(
   return lastResult
 }
 
+function buildOpencodeConfig(): string {
+  const pluginPath = `file://${path.join(REPO_ROOT, 'src/index.ts')}`
+  return JSON.stringify({ plugin: [pluginPath] })
+}
+
 function expectSetupSkillLoaded(result: OpencodeResult): void {
-  expect(result.exitCode).toBe(0)
+  assertOk(result)
   expect(result.stderr).toMatch(/systematic_skill/)
   expect(result.stderr).toMatch(/setup/)
   expect(result.stdout).toMatch(/ce:review/i)
@@ -305,7 +445,7 @@ describe('SystematicPlugin config hook integration', () => {
 
     // Category model overlays are applied to bundled agents from each category.
     expect(config.agent).toBeDefined()
-    expect(Object.keys(config.agent!).length).toBeGreaterThan(0)
+    expect(Object.keys(config.agent ?? {}).length).toBeGreaterThan(0)
     expect(config.agent?.['design-iterator']?.model).toBe('openai/gpt-4')
     expect(config.agent?.['ankane-readme-writer']?.model).toBe('openai/gpt-4')
     expect(config.agent?.['adversarial-document-reviewer']?.model).toBe(
@@ -324,7 +464,7 @@ describe('SystematicPlugin config hook integration', () => {
 
     // Skills registered as commands.
     expect(config.command).toBeDefined()
-    expect(Object.keys(config.command!).length).toBeGreaterThan(0)
+    expect(Object.keys(config.command ?? {}).length).toBeGreaterThan(0)
 
     // Skills paths registered.
     const configWithSkills = config as Config & {
@@ -404,31 +544,14 @@ describe('SystematicPlugin config hook integration', () => {
 })
 
 describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
-  let testEnv: {
-    tempDir: string
-    projectDir: string
-    originalCwd: string
-  }
+  let fixture: IsolatedFixture
 
   beforeEach(() => {
-    const tempBase = fs.mkdtempSync(
-      path.join(os.tmpdir(), 'systematic-opencode-'),
-    )
-
-    testEnv = {
-      tempDir: tempBase,
-      projectDir: path.join(tempBase, 'project'),
-      originalCwd: process.cwd(),
-    }
-
-    fs.mkdirSync(testEnv.projectDir, { recursive: true })
+    fixture = createIsolatedFixture()
   })
 
   afterEach(() => {
-    process.chdir(testEnv.originalCwd)
-    if (testEnv.tempDir) {
-      fs.rmSync(testEnv.tempDir, { recursive: true, force: true })
-    }
+    destroyIsolatedFixture(fixture)
   })
 
   test(
@@ -436,10 +559,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
     async () => {
       const result = await runOpencode(
         'Use the systematic_skill tool to load systematic:setup',
-        {
-          cwd: testEnv.projectDir,
-          configContent: buildOpencodeConfig(),
-        },
+        { fixture, configContent: buildOpencodeConfig() },
       )
 
       expectSetupSkillLoaded(result)
@@ -452,10 +572,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
     async () => {
       const result = await runOpencode(
         'Use the systematic_skill tool to load setup',
-        {
-          cwd: testEnv.projectDir,
-          configContent: buildOpencodeConfig(),
-        },
+        { fixture, configContent: buildOpencodeConfig() },
       )
 
       expectSetupSkillLoaded(result)
