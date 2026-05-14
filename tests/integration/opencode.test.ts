@@ -229,10 +229,18 @@ async function runOpencode(
   return lastResult
 }
 
-function buildOpencodeConfig(): string {
+function buildSourceLocalConfig(): string {
   const pluginPath = `file://${path.join(REPO_ROOT, 'src/index.ts')}`
   return JSON.stringify({ plugin: [pluginPath] })
 }
+
+function buildDistLocalConfig(): string {
+  const pluginPath = `file://${path.join(REPO_ROOT, 'dist/index.js')}`
+  return JSON.stringify({ plugin: [pluginPath] })
+}
+
+const DIST_INDEX = path.join(REPO_ROOT, 'dist/index.js')
+const DIST_LOCAL_AVAILABLE = fs.existsSync(DIST_INDEX)
 
 function expectSetupSkillLoaded(result: OpencodeResult): void {
   assertOk(result)
@@ -555,11 +563,11 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
   })
 
   test(
-    'systematic_skill tool loads systematic skill with prefix',
+    'source-local plugin loads systematic skill with prefix',
     async () => {
       const result = await runOpencode(
         'Use the systematic_skill tool to load systematic:setup',
-        { fixture, configContent: buildOpencodeConfig() },
+        { fixture, configContent: buildSourceLocalConfig() },
       )
 
       expectSetupSkillLoaded(result)
@@ -568,11 +576,24 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
   )
 
   test(
-    'systematic_skill tool loads systematic skill without prefix',
+    'source-local plugin loads systematic skill without prefix',
     async () => {
       const result = await runOpencode(
         'Use the systematic_skill tool to load setup',
-        { fixture, configContent: buildOpencodeConfig() },
+        { fixture, configContent: buildSourceLocalConfig() },
+      )
+
+      expectSetupSkillLoaded(result)
+    },
+    TIMEOUT_MS * MAX_RETRIES,
+  )
+
+  test.skipIf(!DIST_LOCAL_AVAILABLE)(
+    'dist-local plugin registers systematic_skill and loads setup skill after bun run build',
+    async () => {
+      const result = await runOpencode(
+        'Use the systematic_skill tool to load setup',
+        { fixture, configContent: buildDistLocalConfig() },
       )
 
       expectSetupSkillLoaded(result)
