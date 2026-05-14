@@ -385,10 +385,10 @@ name: my-skill
 description: A skill
 ---
 Use /compound-engineering:skill-name to invoke.
-The compound-engineering:brainstorming skill is useful.`
+The compound-engineering:setup skill is useful.`
         const result = convertContent(input, 'skill')
         expect(result).toContain('/systematic:skill-name')
-        expect(result).toContain('systematic:brainstorming')
+        expect(result).toContain('systematic:setup')
       })
 
       test('transforms WebSearch and WebFetch', () => {

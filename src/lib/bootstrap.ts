@@ -109,22 +109,15 @@ export interface BootstrapDeps {
   bundledSkillsDir: string
 }
 
-function getToolMappingTemplate(): string {
-  return `**Tool Mapping for OpenCode:**
-When skills reference tools you don't have, substitute OpenCode equivalents:
-- \`TodoWrite\` → \`todowrite\`
-- \`Task\` tool with subagents → Use OpenCode's subagent system (@mention)
-- \`Skill\` tool → OpenCode's native \`skill\` tool
-- \`SystematicSkill\` tool → \`systematic_skill\` (Systematic plugin skills)
-- \`Read\`, \`Write\`, \`Edit\`, \`Bash\` → Your native tools
-
-**Skills naming:**
-- Bundled skills use the \`systematic:\` prefix (e.g., \`systematic:brainstorming\`)
+function getSkillUsageTemplate(): string {
+  return `**Skills naming:**
+- Systematic bundled skills use the \`systematic:\` prefix (e.g., \`systematic:setup\`)
+- Workflow skills with their own namespace keep it (e.g., \`ce:brainstorm\`)
 - Skills can also be invoked without prefix if unambiguous
 
 **Skills usage:**
 - Use \`systematic_skill\` to load Systematic bundled skills
-- Use the native \`skill\` tool for non-Systematic skills
+- Use the \`skill\` tool for non-Systematic skills
 
 **Skills location:**
 Bundled skills ship with the Systematic plugin and are discoverable via \`systematic_skill\`.`
@@ -156,7 +149,7 @@ export function getBootstrapContent(
   const fullContent = fs.readFileSync(usingSystematicPath, 'utf8')
   const { body } = parseFrontmatter(fullContent)
   const content = body.trim()
-  const toolMapping = getToolMappingTemplate()
+  const skillUsage = getSkillUsageTemplate()
   const catalog = renderCatalogVerbose({
     bundledSkillsDir,
     disabledSkills: config.disabled_skills,
@@ -164,12 +157,12 @@ export function getBootstrapContent(
   const catalogSection = catalog.length > 0 ? `\n\n${catalog}` : ''
 
   return `<SYSTEMATIC_WORKFLOWS>
-You have access to structured engineering workflows via the systematic plugin.
+You have access to structured engineering workflows via the Systematic plugin.
 
 **IMPORTANT: The using-systematic skill content is included below. It is ALREADY LOADED - you are currently following it. Do NOT use the systematic_skill tool to load "using-systematic" again - that would be redundant.**
 
 ${content}
 
-${toolMapping}${catalogSection}
+${skillUsage}${catalogSection}
 </SYSTEMATIC_WORKFLOWS>`
 }

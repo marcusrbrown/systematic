@@ -71,7 +71,7 @@ This loads Systematic's skills guide. Then check OMO:
 
 ### Typical Systematic-only Flow
 ```
-/systematic:brainstorming → Design
+/ce:brainstorm → Design
 /workflows:plan → Create detailed plan
 /workflows:review → Architectural review
 /workflows:work → Disciplined execution
@@ -79,7 +79,7 @@ This loads Systematic's skills guide. Then check OMO:
 
 ### Combined OMO + Systematic Flow (Recommended)
 ```
-1. /systematic:brainstorming → Explore design space
+1. /ce:brainstorm → Explore design space
 2. @Metis → Find hidden requirements
 3. /workflows:plan → Create executable plan
 4. @Sisyphus with parallel agents → Execute with OMO power:
@@ -95,7 +95,7 @@ This loads Systematic's skills guide. Then check OMO:
 
 | Need | Tool | Why |
 |------|------|-----|
-| Systematic exploration | `/systematic:brainstorming` | Structured dialogue, captures requirements |
+| Systematic exploration | `/ce:brainstorm` | Structured dialogue, captures requirements |
 | Finding hidden issues | `@Metis` | Pre-planning expert finds gaps |
 | Detailed planning | `/workflows:plan` | Multi-phase plans with resource allocation |
 | Codebase research | `@Sisyphus` + `@explore` | Parallel search across files |
@@ -134,7 +134,7 @@ Results documented in compound-docs
 | Skill | Command | Use Case |
 |-------|---------|----------|
 | `using-systematic` | `/systematic:using-systematic` | Bootstrap — learn Systematic |
-| `brainstorming` | `/systematic:brainstorming` | Explore features, requirements |
+| `ce:brainstorm` | `/ce:brainstorm` | Explore features, requirements |
 | `git-worktree` | `/systematic:git-worktree` | Isolated parallel development |
 | `frontend-design` | `/systematic:frontend-design` | Production-grade UI implementation |
 | `create-agent-skill` | `/systematic:create-agent-skill` | Author new skills |
