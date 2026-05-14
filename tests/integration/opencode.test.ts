@@ -639,10 +639,21 @@ const DIST_LOCAL_AVAILABLE = fs.existsSync(DIST_INDEX)
 
 function expectSetupSkillLoaded(result: OpencodeResult): void {
   assertOk(result)
-  expect(result.stderr).toMatch(/systematic_skill/)
-  expect(result.stderr).toMatch(/setup/)
+  expect(result.stderr).toMatch(
+    /(?:Skill\s+"?setup"?|systematic_skill\s*\{"name":"(?:systematic:)?setup"\})/i,
+  )
   expect(result.stdout).toMatch(/ce:review/i)
 }
+
+test('expectSetupSkillLoaded accepts setup output without tool id mention', () => {
+  expect(() =>
+    expectSetupSkillLoaded({
+      exitCode: 0,
+      stdout: 'Loaded ce:review',
+      stderr: '→ Skill "setup"\n',
+    }),
+  ).not.toThrow()
+})
 
 describe('SystematicPlugin config hook integration', () => {
   let tempDir: string
