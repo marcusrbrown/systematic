@@ -345,6 +345,11 @@ Skill content for ce:plan.`,
       )
 
       createSkill(path.join(bundledDir, 'skills'), 'test-skill', 'A test skill')
+      createSkill(
+        path.join(bundledDir, 'skills'),
+        'ce:review',
+        'A review skill',
+      )
       createCommand(
         path.join(bundledDir, 'commands'),
         'test-command',
@@ -419,7 +424,7 @@ Skill content for ce:plan.`,
       )
     })
 
-    test('drops stale prior Systematic agent and command entries when local hook no longer emits them', async () => {
+    test('preserves native entries with Systematic-looking descriptions while replacing emitted Systematic output', async () => {
       fs.mkdirSync(path.join(bundledDir, 'agents', 'workflow'), {
         recursive: true,
       })
@@ -430,6 +435,19 @@ Skill content for ce:plan.`,
       )
 
       createSkill(path.join(bundledDir, 'skills'), 'test-skill', 'A test skill')
+      fs.mkdirSync(path.join(bundledDir, 'skills', 'ce-plan'), {
+        recursive: true,
+      })
+      fs.writeFileSync(
+        path.join(bundledDir, 'skills', 'ce-plan', 'SKILL.md'),
+        `---
+name: ce:plan
+description: A plan skill
+---
+# ce-plan
+
+Skill content for ce:plan.`,
+      )
       createCommand(
         path.join(bundledDir, 'commands'),
         'test-command',
@@ -449,16 +467,25 @@ Skill content for ce:plan.`,
 
       const config: Config = {
         agent: {
-          'systematic-legacy-agent': {
-            description: 'Old Systematic output (Legacy-Agent - Systematic)',
-            prompt: 'old systematic prompt',
-          },
           'native-agent': {
-            description: 'Native agent',
+            description: 'Native agent (Native-Agent - Systematic)',
             prompt: 'native prompt',
+          },
+          'systematic-implementer': {
+            description:
+              'Old Systematic output (Systematic-Implementer - Systematic)',
+            prompt: 'old systematic prompt',
           },
         },
         command: {
+          'native-command': {
+            description: '(Systematic) Native command',
+            template: 'native command template',
+          },
+          'ce:plan': {
+            description: '(Systematic - Skill) Old plan command',
+            template: 'old plan template',
+          },
           'systematic:legacy-command': {
             description: '(Systematic) Old command',
             template: 'old command template',
@@ -467,26 +494,50 @@ Skill content for ce:plan.`,
             description: '(Systematic - Skill) Old skill command',
             template: 'old skill template',
           },
-          'native-command': {
-            description: 'Native command',
-            template: 'native command template',
+          'systematic:test-command': {
+            description: '(Systematic) Old command',
+            template: 'old command template',
+          },
+          'systematic:test-skill': {
+            description: '(Systematic - Skill) Old skill command',
+            template: 'old skill template',
           },
         },
       }
 
       await handler(config)
 
-      expect(config.agent?.['systematic-legacy-agent']).toBeUndefined()
       expect(config.agent?.['native-agent']).toEqual({
-        description: 'Native agent',
+        description: 'Native agent (Native-Agent - Systematic)',
         prompt: 'native prompt',
       })
-      expect(config.command?.['systematic:legacy-command']).toBeUndefined()
-      expect(config.command?.['systematic:legacy-skill']).toBeUndefined()
+      expect(config.agent?.['systematic-implementer']?.description).toContain(
+        '(Systematic-Implementer - Systematic)',
+      )
+      expect(config.agent?.['systematic-implementer']?.prompt).toContain(
+        'Agent prompt for systematic-implementer.',
+      )
       expect(config.command?.['native-command']).toEqual({
-        description: 'Native command',
+        description: '(Systematic) Native command',
         template: 'native command template',
       })
+      expect(config.command?.['ce:plan']?.description).toBe(
+        '(Systematic - Skill) A plan skill',
+      )
+      expect(config.command?.['ce:plan']?.template).toContain(
+        'Skill content for ce:plan',
+      )
+      expect(config.command?.['systematic:legacy-command']).toBeUndefined()
+      expect(config.command?.['systematic:legacy-skill']).toBeUndefined()
+      expect(config.command?.['systematic:test-command']?.description).toBe(
+        '(Systematic) A test command',
+      )
+      expect(config.command?.['systematic:test-command']?.template).toContain(
+        'Command template for test-command',
+      )
+      expect(config.command?.['systematic:test-skill']?.description).toBe(
+        '(Systematic - Skill) A test skill',
+      )
     })
 
     test('preserves native command collisions over emitted Systematic command keys', async () => {
@@ -550,7 +601,7 @@ Skill content for ce:plan.`,
       expect(config.agent?.['systematic-implementer']).toBe(nativeAgent)
     })
 
-    test('replaces prior Systematic skill paths and keeps non-Systematic paths', async () => {
+    test('replaces prior Systematic skill paths and keeps unrelated paths containing the same segment', async () => {
       createSkill(path.join(bundledDir, 'skills'), 'test-skill', 'A test skill')
 
       const handler = createConfigHandler({
@@ -564,6 +615,8 @@ Skill content for ce:plan.`,
         skills: {
           paths: [
             '/Users/me/.config/opencode/systematic/skills',
+            '/Users/me/.cache/opencode/packages/@fro.bot/systematic@2.14.1/node_modules/@fro.bot/systematic/skills',
+            '/Users/me/projects/systematic/skills/custom',
             '/Users/me/.local/share/opencode/skills',
           ],
         },
@@ -572,6 +625,7 @@ Skill content for ce:plan.`,
       await handler(config)
 
       expect(config.skills?.paths).toEqual([
+        '/Users/me/projects/systematic/skills/custom',
         '/Users/me/.local/share/opencode/skills',
         path.join(bundledDir, 'skills'),
       ])

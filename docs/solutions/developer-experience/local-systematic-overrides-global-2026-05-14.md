@@ -55,8 +55,9 @@ addCurrentSystematicEntriesUnlessNativeConfigExists(merged, emitted)
 ```
 
 The shipped fix applies that shape in `src/lib/config-handler.ts` for emitted
-agents and commands, and refreshes `skills.paths` so the local checkout's
-bundled skills directory wins over stale prior Systematic paths.
+agents and commands. Command cleanup treats `systematic:` and `ce:` as
+Systematic-owned command namespaces, and `skills.paths` cleanup removes known
+Systematic-managed roots while preserving unrelated user paths.
 
 Tests should prove both sides of the boundary:
 
@@ -92,8 +93,8 @@ Systematic output while native/user config and user overlays still survive.
   agents, skills-as-commands, commands, or `skills.paths`.
 - When a local `./src/index.ts` development session behaves differently from an
   isolated test fixture.
-- When an OpenCode startup conflict involves a `systematic-*` key or a bundled
-  Systematic asset name.
+- When an OpenCode startup conflict involves a `systematic-*`, `systematic:*`,
+  or `ce:*` key, or a bundled Systematic asset name.
 
 ## Examples
 
@@ -116,14 +117,14 @@ host-order regressions, use an isolated mixed-version OpenCode probe that loads
 the published package first and the local checkout second, then inspects the
 agent-observable config surface.
 
-## Follow-up Caveats
+## Caveats
 
 - Systematic-origin detection is currently heuristic. Tighten it when changing
   these predicates so user-authored entries that merely look Systematic-branded
   are not discarded by accident.
-- Skill path cleanup should stay narrow enough to remove prior Systematic paths
-  without removing unrelated user paths that happen to contain a
-  `systematic/skills` segment.
+- Skill path cleanup must stay narrow: remove known Systematic-managed roots,
+  including npm package cache roots, without removing unrelated user paths that
+  happen to contain a `systematic/skills` segment.
 
 ## Related
 

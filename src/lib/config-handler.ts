@@ -54,13 +54,14 @@ function isSystematicCommandConfig(
 function mergeSystematicEntries<T>(
   existing: Record<string, T> | undefined,
   emitted: Record<string, T>,
-  isSystematicEntry: (value: T | undefined) => boolean,
+  shouldDropExisting: (key: string, value: T | undefined) => boolean,
 ): Record<string, T> {
-  const merged: Record<string, T> = {}
+  const merged: Record<string, T> = { ...(existing ?? {}) }
 
   for (const [key, value] of Object.entries(existing ?? {})) {
-    if (isSystematicEntry(value)) continue
-    merged[key] = value
+    if (shouldDropExisting(key, value)) {
+      delete merged[key]
+    }
   }
 
   for (const [key, value] of Object.entries(emitted)) {
@@ -569,14 +570,18 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
     config.agent = mergeSystematicEntries(
       existingAgents as Record<string, AgentConfig>,
       bundledAgents as Record<string, AgentConfig>,
-      isSystematicAgentConfig,
+      (key, agent) =>
+        Object.hasOwn(bundledAgents, key) && isSystematicAgentConfig(agent),
     )
 
     const emittedCommands = { ...bundledCommands, ...bundledSkills }
+    const emittedCommandKeys = new Set(Object.keys(emittedCommands))
     config.command = mergeSystematicEntries(
       existingCommands as Record<string, CommandConfig>,
       emittedCommands as Record<string, CommandConfig>,
-      isSystematicCommandConfig,
+      (key, command) =>
+        isSystematicCommandConfig(command) &&
+        (emittedCommandKeys.has(key) || isSystematicOwnedCommandKey(key)),
     )
 
     // skills.paths exists at runtime (v2 SDK types) but not in our v1 import
@@ -606,5 +611,22 @@ function removeSystematicSkillPaths(paths: string[]): string[] {
 }
 
 function isSystematicSkillPath(path: string): boolean {
-  return /(?:^|[\\/])systematic(?:[\\/])skills(?:$|[\\/])/u.test(path)
+  const normalizedPath = normalizePath(path)
+  return (
+    normalizedPath.endsWith('/.config/opencode/systematic/skills') ||
+    normalizedPath.endsWith('/.cache/opencode/systematic/skills') ||
+    normalizedPath.endsWith('/.local/share/opencode/systematic/skills') ||
+    normalizedPath.endsWith('/.opencode/systematic/skills') ||
+    /(?:^|\/)\.cache\/opencode\/packages\/@fro\.bot\/systematic@[^/]+\/node_modules\/@fro\.bot\/systematic\/skills(?:$|\/)/u.test(
+      normalizedPath,
+    )
+  )
+}
+
+function normalizePath(path: string): string {
+  return path.replaceAll('\\', '/').replace(/\/+$/u, '')
+}
+
+function isSystematicOwnedCommandKey(key: string): boolean {
+  return key.startsWith('systematic:') || key.startsWith('ce:')
 }
