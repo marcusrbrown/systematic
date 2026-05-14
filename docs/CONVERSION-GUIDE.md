@@ -306,28 +306,19 @@ systematic/
 
 1. **Project skills**: `.opencode/skills/` in current project
 2. **User skills**: `~/.config/opencode/skills/`
-3. **Bundled skills**: Provided by systematic plugin
+3. **Bundled skills**: Provided by the Systematic plugin
 
-### Tool Mapping Instruction
+### Tool References
 
-Include this instruction in skills that reference tools:
-
-```markdown
-**Tool Mapping for OpenCode:**
-When skills reference tools you don't have, substitute OpenCode equivalents:
-- `TodoWrite` → `todowrite`
-- `Task` tool with subagents → Use OpenCode's subagent system (@mention)
-- `Skill` tool → OpenCode's native `skill` tool
-- `SystematicSkill` tool → `systematic_skill` (Systematic plugin skills)
-- `Read`, `Write`, `Edit`, `Bash` → Your native tools
-- `AskUserQuestion` tool → Use OpenCode's native `question` tool
-```
+Author Systematic skills directly against OpenCode tool names. Do not add a
+generic tool-mapping block to converted skills; converter output should use the
+actual tool names the runtime exposes.
 
 ### Bootstrap Skill Pattern
 
 The `using-systematic` skill is injected into the system prompt and teaches the agent:
 - How to discover available skills
-- When to use `systematic_skill` vs native `skill` tool
+- When to use `systematic_skill` vs the `skill` tool
 - Skill invocation discipline (invoke BEFORE any response)
 
 ---

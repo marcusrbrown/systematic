@@ -14,14 +14,12 @@ import type { SkillInfo } from '../../src/lib/skills.ts'
 describe('skill-loader', () => {
   describe('formatSkillCommandName', () => {
     test('adds systematic: prefix to plain name', () => {
-      expect(formatSkillCommandName('brainstorming')).toBe(
-        'systematic:brainstorming',
-      )
+      expect(formatSkillCommandName('setup')).toBe('systematic:setup')
     })
 
     test('does not double-prefix already prefixed name', () => {
-      expect(formatSkillCommandName('systematic:brainstorming')).toBe(
-        'systematic:brainstorming',
+      expect(formatSkillCommandName('systematic:setup')).toBe(
+        'systematic:setup',
       )
     })
 

@@ -40,7 +40,7 @@ This skill teaches you how to discover and use all available Systematic skills.
 Before implementing features, explore requirements systematically:
 
 ```
-/systematic:brainstorming
+/ce:brainstorm
 ```
 
 This guides collaborative design thinking and requirement clarification.

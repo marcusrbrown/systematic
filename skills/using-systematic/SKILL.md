@@ -13,7 +13,7 @@ This is not negotiable. This is not optional. You cannot rationalize your way ou
 
 ## How to Access Skills
 
-Use the `systematic_skill` tool for Systematic bundled skills. Use the native `skill` tool for non-Systematic skills. When you invoke a skill, its content is loaded and presented to you—follow it directly.
+Use the `systematic_skill` tool for Systematic bundled skills. Use the `skill` tool for non-Systematic skills. When you invoke a skill, its content is loaded and presented to you—follow it directly.
 
 # Using Skills
 
@@ -94,4 +94,4 @@ Instructions say WHAT, not HOW. "Add X" or "Fix Y" doesn't mean skip workflows.
 
 ## Skill Resolution
 
-Systematic bundled skills are listed in the `systematic_skill` tool description. Use the native `skill` tool for skills outside the Systematic plugin.
+Systematic bundled skills are listed in the `systematic_skill` tool description. Use the `skill` tool for skills outside the Systematic plugin.

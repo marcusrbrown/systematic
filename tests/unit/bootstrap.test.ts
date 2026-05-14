@@ -1,11 +1,4 @@
-import {
-  afterAll,
-  afterEach,
-  beforeEach,
-  describe,
-  expect,
-  test,
-} from 'bun:test'
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -13,7 +6,6 @@ import {
   getBootstrapContent,
   INTERNAL_AGENT_SIGNATURES,
 } from '../../src/lib/bootstrap.ts'
-import { TOOL_NAME_MAP } from '../../src/lib/converter.ts'
 
 /**
  * Reconstruct the production skip predicate from src/index.ts:91-97 using the
@@ -76,7 +68,8 @@ describe('getBootstrapContent', () => {
     expect(content).toContain('<SYSTEMATIC_WORKFLOWS>')
     expect(content).toContain('</SYSTEMATIC_WORKFLOWS>')
     expect(content).toContain('Bootstrap body content here.')
-    expect(content).toContain('**Tool Mapping for OpenCode:**')
+    expect(content).toContain('**Skills naming:**')
+    expect(content).not.toContain('**Tool Mapping for OpenCode:**')
   })
 
   test('config.bootstrap.enabled = false returns null', () => {
@@ -181,7 +174,7 @@ describe('getBootstrapContent', () => {
     expect(content).not.toContain('description: Test skill')
   })
 
-  test('tool-mapping template does not embed bundledSkillsDir as a raw path', () => {
+  test('skill-usage template does not embed bundledSkillsDir as a raw path', () => {
     const bundledSkillsDir = makeBundledSkillsDir(
       '---\nname: using-systematic\n---\nbody',
     )
@@ -194,16 +187,16 @@ describe('getBootstrapContent', () => {
     const content = getBootstrapContent(config, { bundledSkillsDir })
 
     expect(content).not.toBeNull()
-    // The tool-mapping prose must not embed the raw path. Slice from the
+    // The skill-usage prose must not embed the raw path. Slice from the
     // heading up to the catalog block (or end of string if no catalog).
-    const toolMappingHeading = '**Tool Mapping for OpenCode:**'
-    const toolMappingStart = (content ?? '').indexOf(toolMappingHeading)
-    expect(toolMappingStart).toBeGreaterThan(-1)
-    const afterHeading = (content ?? '').slice(toolMappingStart)
+    const skillUsageHeading = '**Skills naming:**'
+    const skillUsageStart = (content ?? '').indexOf(skillUsageHeading)
+    expect(skillUsageStart).toBeGreaterThan(-1)
+    const afterHeading = (content ?? '').slice(skillUsageStart)
     const catalogStart = afterHeading.indexOf('<available_skills>')
-    const toolMappingProse =
+    const skillUsageProse =
       catalogStart >= 0 ? afterHeading.slice(0, catalogStart) : afterHeading
-    expect(toolMappingProse).not.toContain(bundledSkillsDir)
+    expect(skillUsageProse).not.toContain(bundledSkillsDir)
     expect(content).toContain(
       'Bundled skills ship with the Systematic plugin and are discoverable via `systematic_skill`.',
     )
@@ -425,125 +418,4 @@ describe('INTERNAL_AGENT_SIGNATURES skip heuristic', () => {
     ]
     expect(shouldSkipBootstrap(legitimate)).toBe(true)
   })
-})
-
-// ---------------------------------------------------------------------------
-// TOOL_NAME_MAP ↔ bootstrap template consistency
-// ---------------------------------------------------------------------------
-
-describe('TOOL_NAME_MAP / bootstrap template consistency', () => {
-  // Track temp dirs created by createTempBundledSkillsDir for cleanup.
-  const tempDirs: string[] = []
-  afterAll(() => {
-    for (const dir of tempDirs) {
-      fs.rmSync(dir, { recursive: true, force: true })
-    }
-  })
-  /**
-   * Extract all CC tool names from the left side of `→` arrows in the
-   * "Tool Mapping for OpenCode" section of the bootstrap template.
-   *
-   * Handles all three bullet forms found in the template:
-   *   - `X` → `y`              (simple 1:1, backtick-delimited OC name)
-   *   - `X` tool with … → prose  (prose RHS; extracts X only)
-   *   - `A`, `B`, `C` → prose  (multi-name LHS; extracts A, B, C)
-   *
-   * Note: this is an overlap-subset check, not a full-map consistency check.
-   * The bootstrap prose and the converter map only partially overlap by design —
-   * the bootstrap is instructional text, not a serialised TOOL_NAME_MAP.
-   */
-  // Section heading used to locate the tool-mapping block in the bootstrap
-  // template. Must match the literal heading in src/lib/bootstrap.ts's
-  // getToolMappingTemplate(). If that heading changes, this must be updated.
-  const TOOL_MAPPING_HEADING = '**Tool Mapping for OpenCode:**'
-
-  // Matches the start of the NEXT bold markdown heading after the tool-mapping
-  // section. The negative lookahead (?!Tool Mapping) prevents matching the
-  // section's own heading if it appears in a self-referential context.
-  // A new bold heading starting with "Tool" (but not "Tool Mapping") will
-  // correctly terminate the section — the lookahead only exempts the exact
-  // phrase "Tool Mapping".
-  const NEXT_BOLD_HEADING_RE = /\n\*\*(?!Tool Mapping)/
-
-  function extractCCToolNames(template: string): string[] {
-    // Isolate the tool-mapping section to avoid false-positive matches on
-    // unrelated `→` arrows elsewhere in the bootstrap content.
-    const sectionStart = template.indexOf(TOOL_MAPPING_HEADING)
-    if (sectionStart === -1) return []
-    const rest = template.slice(sectionStart)
-    const nextHeading = rest.search(NEXT_BOLD_HEADING_RE)
-    const section = nextHeading >= 0 ? rest.slice(0, nextHeading) : rest
-
-    // For each bullet line, extract backtick-quoted tokens from the LHS of `→`.
-    // Uses flatMap to avoid nested loops that inflate cognitive complexity.
-    return section
-      .split('\n')
-      .filter((line) => line.startsWith('- '))
-      .flatMap((line) => {
-        const arrowIdx = line.indexOf(' → ')
-        const lhs = arrowIdx >= 0 ? line.slice(0, arrowIdx) : line
-        return [...lhs.matchAll(/`([^`]+)`/g)].map((m) => m[1] ?? '')
-      })
-      .filter(Boolean)
-  }
-
-  /**
-   * Names that appear in the template mapping section but are intentionally
-   * Systematic-specific rather than imported from CC. These do not need a
-   * TOOL_NAME_MAP entry (the map covers CC→Systematic converter renames only).
-   */
-  const SYSTEMATIC_ONLY_TOOLS = new Set(['systematicskill'])
-
-  test('rendered template contains at least one CC tool reference', () => {
-    const content = getBootstrapContent(
-      {
-        bootstrap: { enabled: true, file: undefined },
-        disabled_skills: [],
-        disabled_agents: [],
-        disabled_commands: [],
-      },
-      { bundledSkillsDir: createTempBundledSkillsDir() },
-    )
-    expect(content).not.toBeNull()
-    expect(extractCCToolNames(content ?? '').length).toBeGreaterThan(0)
-  })
-
-  test('every CC tool name in the template mapping section is a key in TOOL_NAME_MAP', () => {
-    const content = getBootstrapContent(
-      {
-        bootstrap: { enabled: true, file: undefined },
-        disabled_skills: [],
-        disabled_agents: [],
-        disabled_commands: [],
-      },
-      { bundledSkillsDir: createTempBundledSkillsDir() },
-    )
-    const ccNames = extractCCToolNames(content ?? '')
-    // Guard against section-parse regressions
-    expect(ccNames.length).toBeGreaterThan(0)
-
-    for (const cc of ccNames) {
-      const normalized = cc.toLowerCase()
-      if (SYSTEMATIC_ONLY_TOOLS.has(normalized)) continue
-      expect(
-        TOOL_NAME_MAP,
-        `Bootstrap template references "${cc}" but TOOL_NAME_MAP has no key "${normalized}"`,
-      ).toHaveProperty(normalized)
-    }
-  })
-
-  function createTempBundledSkillsDir(): string {
-    const dir = fs.mkdtempSync(
-      path.join(os.tmpdir(), 'systematic-bootstrap-consistency-'),
-    )
-    tempDirs.push(dir)
-    fs.mkdirSync(path.join(dir, 'skills', 'using-systematic'), {
-      recursive: true,
-    })
-    fs.writeFileSync(
-      path.join(dir, 'skills', 'using-systematic', 'SKILL.md'),
-      '---\nname: using-systematic\n---\nbody',
-    )
-    return path.join(dir, 'skills')
-  }
 })

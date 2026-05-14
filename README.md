@@ -402,7 +402,7 @@ The plugin exposes one tool to OpenCode:
 |------|-------------|
 | `systematic_skill` | Load Systematic bundled skills by name. Lists available skills in its description and returns formatted skill content when invoked. |
 
-For non-Systematic skills (project or user-level), use OpenCode's native `skill` tool.
+For non-Systematic skills (project or user-level), use OpenCode's `skill` tool.
 
 ## How It Works
 
