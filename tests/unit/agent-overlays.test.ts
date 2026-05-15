@@ -648,13 +648,15 @@ describe('variant emission via overlay flow', () => {
     }
   }
 
-  test('integration: source variant emitted when no override', async () => {
+  test('integration: empty availability skips source-default pinning', async () => {
+    // When `client.config.providers()` returns an empty connected set,
+    // `getAvailableModels` collapses to `status: 'unknown'`. The downstream
+    // gate in `createConfigHandler` then sets `availabilitySet = undefined`,
+    // which makes `applySourceModelDefault` skip pinning entirely. Bundled
+    // agents emit without `model` or `variant`, inheriting OpenCode's parent
+    // model rather than being pinned to a last-resort first-provider/first-model
+    // entry the user cannot access.
     await withVariantTestEnv(null, async (agentsDir, projectDir) => {
-      // review category, last-resort: first provider/model from SOURCE_CATEGORY_MODEL_DEFAULTS.review
-      const reviewDefaults = SOURCE_CATEGORY_MODEL_DEFAULTS.review
-      const firstProvider = reviewDefaults.providers[0]
-      const firstModel = firstProvider.models[0]
-      const expectedModel = `${firstProvider.provider}/${firstModel.model}`
       const handler = createConfigHandler({
         directory: projectDir,
         bundledSkillsDir: path.join(agentsDir, '..', 'skills'),
@@ -667,8 +669,39 @@ describe('variant emission via overlay flow', () => {
       const agent = (config.agent as Record<string, unknown> | undefined)?.[
         'correctness-reviewer'
       ] as Record<string, unknown> | undefined
-      expect(agent?.model).toBe(expectedModel)
+      expect(agent).toBeDefined()
+      expect(agent?.model).toBeUndefined()
       expect(agent?.variant).toBeUndefined()
+    })
+  })
+
+  test('integration: source variant emitted when category has matching availability', async () => {
+    // Companion to the empty-availability test above: when availability includes the first
+    // category default, the source-default pinning still works — including the
+    // variant string carried alongside the model entry.
+    await withVariantTestEnv(null, async (agentsDir, projectDir) => {
+      const reviewDefaults = SOURCE_CATEGORY_MODEL_DEFAULTS.review
+      const firstProvider = reviewDefaults.providers[0]
+      const firstModel = firstProvider.models[0]
+      const expectedModel = `${firstProvider.provider}/${firstModel.model}`
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(agentsDir, '..', 'skills'),
+        bundledAgentsDir: agentsDir,
+        bundledCommandsDir: path.join(agentsDir, '..', 'commands'),
+        client: makeClient([expectedModel]),
+      })
+      const config: Record<string, unknown> = {}
+      await handler(config as Parameters<typeof handler>[0])
+      const agent = (config.agent as Record<string, unknown> | undefined)?.[
+        'correctness-reviewer'
+      ] as Record<string, unknown> | undefined
+      expect(agent?.model).toBe(expectedModel)
+      if (firstModel.variant !== undefined) {
+        expect(agent?.variant).toBe(firstModel.variant)
+      } else {
+        expect(agent?.variant).toBeUndefined()
+      }
     })
   })
 

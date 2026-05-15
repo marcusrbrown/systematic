@@ -1532,6 +1532,54 @@ model: gpt-4
       expect(config).toEqual(before)
     })
 
+    test('discovery completes before user-overlay validation throws', async () => {
+      // When `validateAgentOverlays` rejects a user overlay (here: an unknown
+      // skill reference), the config hook must have already invoked
+      // `client.config.providers()` for availability discovery. This protects
+      // the lifecycle ordering: discover first, validate second. Future
+      // validators that need the availability picture must be able to assume
+      // it's already computed by the time validation runs.
+      createCategorizedAgent('review', 'correctness-reviewer', {
+        name: 'correctness-reviewer',
+        description: 'Reviews correctness',
+      })
+      writeCustomSystematicConfig({
+        agents: { 'correctness-reviewer': { skills: ['missing-skill'] } },
+      })
+
+      const providersCalls: number[] = []
+      const trackingClient = {
+        config: {
+          providers: async () => {
+            providersCalls.push(Date.now())
+            return {
+              data: { providers: [], default: {} },
+              error: undefined,
+            }
+          },
+        },
+      }
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+        client: trackingClient as Parameters<
+          typeof createConfigHandler
+        >[0]['client'],
+      })
+
+      // The handler should still throw because the overlay is invalid; but
+      // the assertion below is that discovery already happened before the
+      // throw site.
+      await expect(handler({})).rejects.toThrow(/missing-skill/)
+
+      // Spy fired exactly once, BEFORE the throw — proves discovery is no
+      // longer gated behind user-overlay validation.
+      expect(providersCalls.length).toBe(1)
+    })
+
     test('loads project config from systematic.jsonc with comments', async () => {
       createCategorizedAgent('review', 'correctness-reviewer', {
         name: 'correctness-reviewer',

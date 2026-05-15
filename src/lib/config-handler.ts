@@ -534,15 +534,21 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
       bundledAgentsDir,
       systematicConfig.disabled_agents,
     )
-    assertSourceCategoryModelCoverage(inventory.categories)
-    const validatedOverlays = validateAgentOverlays({
-      inventory,
-      overlays,
-      nativeAgents,
-      enabledSkills: enabledSkillNames,
-    })
-    const resolvedOverlays = resolveAgentOverlaySet(validatedOverlays)
 
+    // Discovery runs BEFORE validation. Two reasons:
+    //
+    // 1. Diagnostic clarity. If validation throws, the user sees the
+    //    validation error — and we know discovery already attempted (and
+    //    succeeded or fell back gracefully). Without this ordering, a
+    //    validator throw obscures whether discovery ever ran.
+    //
+    // 2. Forward-compatible lifecycle seam. Future validators that consult
+    //    availability (e.g., rejecting an overlay whose target model is not
+    //    in the connected set) can assume `availabilitySet` is already
+    //    computed by the time validation runs. Do not move discovery back
+    //    down on the grounds that current validators don't consume it; that
+    //    would reintroduce the same ordering bug class.
+    //
     // When the client is unavailable (tests that don't inject it), or when
     // discovery fails entirely (API + cache both unreachable), we fall
     // through to OpenCode parent-model inheritance for bundled agents
@@ -554,6 +560,15 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
       availability && availability.status !== 'unknown'
         ? availability.models
         : undefined
+
+    assertSourceCategoryModelCoverage(inventory.categories)
+    const validatedOverlays = validateAgentOverlays({
+      inventory,
+      overlays,
+      nativeAgents,
+      enabledSkills: enabledSkillNames,
+    })
+    const resolvedOverlays = resolveAgentOverlaySet(validatedOverlays)
     const bundledAgents = collectAgents(
       bundledAgentsDir,
       systematicConfig.disabled_agents,

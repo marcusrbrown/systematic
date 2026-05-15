@@ -29,16 +29,22 @@ export interface OpencodeClientLike {
  * Outcome of model availability discovery.
  *
  * - `api`: The OpenCode server's `/config/providers` endpoint responded with
- *   a connected-providers payload. `models` may be empty if no providers
- *   are authenticated; that is authoritative.
+ *   a connected-providers payload AND `models` is non-empty. An authoritatively
+ *   empty response (`data.providers = []`, or providers present with zero
+ *   models) collapses to `'unknown'` instead — see below — because the
+ *   operational consequence is identical and downstream consumers should treat
+ *   both cases the same way.
  * - `cache`: The API call failed (error envelope, thrown, or timed out) and
  *   the local `models.json` cache was readable. `models` reflects whatever
- *   OpenCode last wrote to disk.
- * - `unknown`: Both the API call and the cache fallback failed (cache
- *   missing, unreadable, corrupt, or schema-mismatched). Resolution should
- *   degrade gracefully — callers should treat `unknown` as a signal to
- *   skip source-default model pinning so users do not get agents pinned
- *   to inaccessible models. `models` is the empty set.
+ *   OpenCode last wrote to disk. The cache may itself be empty; callers that
+ *   need to distinguish "cached empty" from "cached with content" should
+ *   inspect `models.size`.
+ * - `unknown`: Either both the API call and the cache fallback failed (cache
+ *   missing, unreadable, corrupt, or schema-mismatched), OR the API call
+ *   succeeded with zero usable models. Resolution should degrade gracefully —
+ *   callers should treat `unknown` as a signal to skip source-default model
+ *   pinning so users do not get agents pinned to inaccessible models.
+ *   `models` is the empty set.
  */
 export type DiscoveryStatus = 'api' | 'cache' | 'unknown'
 
@@ -296,8 +302,30 @@ export async function getAvailableModels(
     return readFallbackCache()
   }
 
+  const models = buildSetFromProviders(response.data.providers)
+
+  // Empty discovery collapses to `'unknown'`. An authoritatively-empty API
+  // response is operationally identical to total discovery failure — we cannot
+  // point bundled agents at any model the user can call. Downstream consumers
+  // gate on `status !== 'unknown'`, so returning `'unknown'` here funnels the
+  // empty case through the same skip-source-default-pinning path that real
+  // discovery failures take.
+  //
+  // Empirical anchor: `.slim/clonedeps/repos/anomalyco__opencode/packages/opencode/src/provider/provider.ts:1115-1336`
+  // shows `mergeProvider` only adds a provider to `state.providers` when one
+  // of four signals fires (config block, env var, auth.json type:"api", or
+  // plugin auth.loader). Logged-out, unconfigured, and unauthenticated
+  // providers all converge to the same SDK shape — an empty `providers`
+  // array. The threshold checks `models.size === 0` after
+  // `buildSetFromProviders`, which catches all variants regardless of upstream
+  // SDK shape (including non-empty `providers` arrays where the provider
+  // entries themselves have no usable models).
+  if (models.size === 0) {
+    return emptyAvailability()
+  }
+
   return {
     status: 'api',
-    models: buildSetFromProviders(response.data.providers),
+    models,
   }
 }
