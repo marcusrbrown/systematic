@@ -14,13 +14,7 @@ applies_when:
 related_components:
   - tooling
   - authentication
-tags:
-  - lifecycle-ordering
-  - discovery-before-validation
-  - graceful-degradation
-  - availability-envelope
-  - empty-set-collapse
-  - plugin-config-hook
+tags: [lifecycle-ordering, discovery-before-validation, graceful-degradation, availability-envelope, empty-set-collapse, plugin-config-hook]
 ---
 
 # Run capability discovery before user-config validation in plugin lifecycle hooks
