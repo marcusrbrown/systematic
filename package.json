@@ -68,7 +68,7 @@
     "@opencode-ai/sdk": "1.14.48",
     "@types/bun": "latest",
     "@types/js-yaml": "4.0.9",
-    "@types/node": "24.12.3",
+    "@types/node": "24.12.4",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
     "conventional-changelog-conventionalcommits": "9.3.1",
