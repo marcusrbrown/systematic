@@ -1,9 +1,10 @@
 ---
 title: feat: Move Systematic bootstrap and skill catalog into first system message
 type: feat
-status: active
+status: completed
 date: 2026-05-13
 origin: docs/brainstorms/2026-05-13-bootstrap-message0-skill-catalog-requirements.md
+shipped: "PR #365"
 ---
 
 # feat: Move Systematic bootstrap and skill catalog into first system message
