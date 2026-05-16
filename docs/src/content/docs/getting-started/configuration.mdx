@@ -147,6 +147,44 @@ When a chain entry carries an optional `variant`, it flows through to the emitte
 
 User-supplied `agents.<key>.model` and `categories.<id>.model` are single `provider/model` strings — provider-grouped chains live only in source defaults. Supplying a scalar model string skips the availability-aware resolver for that agent or category and uses your overlay as-is.
 
+### Typed Validation and IDE Autocomplete
+
+Starting with v2.15.0, Systematic validates your configuration against a strict Zod schema at load time. Keys in `agents`, `disabled_agents`, and `disabled_skills` must match real bundled names. A typo fails loudly with a clear error that names the offending key — no silent misconfiguration.
+
+```
+Error: Unrecognized key(s) in object: 'correctness-reviwer'.
+```
+
+The valid bundled names are listed in the error when validation fails, so the error message is the fix. Fields that control provider routing or capability policy — `model`, `permission`, and `variant` — are rejected at parse time if they appear in a context that doesn't allow them (for example, project config). The trust boundary is enforced before any overlay-application phase reads the value.
+
+#### `$schema` for IDE Autocomplete
+
+Add a `$schema` field to your `systematic.json` to enable per-key autocomplete in editors that honor JSON Schema property completion:
+
+```jsonc
+{
+  "$schema": "https://fro.bot/systematic/schemas/v2/systematic-config.schema.json",
+
+  "disabled_skills": ["git-worktree"],
+  "agents": {
+    "correctness-reviewer": { "temperature": 0.1 },
+    "security-reviewer": { "steps": 20 }
+  }
+}
+```
+
+VS Code is the reference target — it picks up `$schema` automatically and provides inline completion, hover documentation, and validation squiggles. Zed, IntelliJ, and other editors that support JSON Schema property completion will also benefit, though support varies by editor version.
+
+#### Migrating to v2.15.0
+
+If your config contains a typo in `agents.<key>`, `disabled_agents`, or `disabled_skills`, Systematic will fail to load on upgrade and surface the error. The fix is to correct the key to a valid bundled name.
+
+If you need a grace period, pin `@fro.bot/systematic` to `^2.14.x` in CI, upgrade locally first, observe and fix any validation errors, then bump CI.
+
+:::note[Shadow audit before upgrading]
+If you have a file at `.opencode/agents/<bundled-name>.md` that shadows a bundled Systematic agent AND a `agents.<bundled-name>` overlay in your Systematic config, audit that combination before upgrading. Combining a native OpenCode agent shadow with a Systematic overlay for the same key is a special case — the overlay targets a Systematic-owned bundled agent, but the shadow replaces it with a native OpenCode agent, making the overlay's effect undefined. The safe path is to configure the native agent through OpenCode's own config rather than through Systematic overlays.
+:::
+
 ## Project-Specific Content
 
 One of Systematic's most powerful features is the ability to add your own skills and agents that live alongside (or override) the bundled ones.
