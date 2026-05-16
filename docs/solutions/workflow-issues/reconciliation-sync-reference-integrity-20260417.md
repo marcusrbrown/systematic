@@ -3,14 +3,14 @@ title: 'Reconciliation-Only Sync Creates Phantom References When Upstream Adds N
 date: 2026-04-17
 severity: high
 category: workflow-issues
-component: cep-sync-infrastructure
+component: content-integrity-gate
 tags:
-  - sync-workflow
-  - cep-migration
-  - reconciliation
   - reference-integrity
   - phantom-references
   - slack-researcher
+  - content-integrity
+  - content-integrity-gate
+last_refreshed: 2026-05-16
 environment: 'Systematic plugin / CEP upstream sync / reconciliation-only policy'
 symptoms:
   - 'Three bundled skills (`ce-brainstorm`, `ce-ideate`, `ce-plan`) dispatch `systematic:research:slack-researcher` but no such agent exists in `agents/research/`'
@@ -92,9 +92,11 @@ done < <(grep -rhoE 'systematic:(research|review|workflow|design|docs|document-r
 [ $MISSING -gt 0 ] && echo "FAIL: $MISSING phantom refs" && exit 1
 ```
 
+This logic is now implemented in `scripts/content-integrity.ts` (the `checkReferenceIntegrity` check) and runs on every CI build.
+
 **If doing future reconciliation-only syncs**, always include this step — either in the sync tooling itself, or as a post-sync verification in the calling workflow. The sync tooling that previously existed (`convert-cc-defs` skill, `check-cep-upstream.ts` script) never had a reference-integrity step. The CLI `convert` command, which remains available for ad-hoc conversions, also does not check reference integrity — callers must do this themselves.
 
-**CI drift gate should include reference integrity** (not just string patterns). Deferred to Initiative #3 — tracked in memory #677 along with the zsh-batch bug's CI-gate recommendation. Both bugs in this PR cycle would have been caught by a gate that asserts:
+**CI drift gate should include reference integrity** (not just string patterns). This is now implemented in `scripts/content-integrity.ts`, which runs on every CI build and asserts:
 
 1. Zero known-stale CEP/CC patterns in actionable source files
 2. Every `systematic:*` reference resolves to an existing file
@@ -104,5 +106,3 @@ done < <(grep -rhoE 'systematic:(research|review|workflow|design|docs|document-r
 - Scrub the reference from the updated content
 
 Leaving a dangling reference and hoping runtime catches it is the failure mode this doc exists to prevent.
-
-**Memory saved as #681** — known trap for any future CEP reconciliation work via the CLI `convert` command.
