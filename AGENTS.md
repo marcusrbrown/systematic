@@ -184,4 +184,4 @@ The top-level `commands/` directory has been removed (all bundled commands were 
 
 Read-only dependency source repositories are available under `.slim/clonedeps/repos/` for inspection. Do not edit these clones.
 
-- `.slim/clonedeps/repos/anomalyco__opencode/` — `anomalyco/opencode` at `v1.14.41`; OpenCode monorepo containing `packages/sdk/js` (the `OpencodeClient` runtime that `client.provider.list()` and `client.model.list()` are dispatched through) and `packages/plugin` (the `PluginInput` type definitions and the plugin loader/hook iteration semantics — useful for verifying the FIFO assumption and `output` reference-sharing contract from PR #352).
+- `.slim/clonedeps/repos/anomalyco__opencode/` — `anomalyco/opencode` at `v1.15.1`; OpenCode monorepo containing `packages/sdk/js` (the `OpencodeClient` runtime that `client.provider.list()` and `client.model.list()` are dispatched through) and `packages/plugin` (the `PluginInput` type definitions and the plugin loader/hook iteration semantics — useful for verifying the FIFO assumption and `output` reference-sharing contract from PR #352).
