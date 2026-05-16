@@ -27,7 +27,7 @@ describe('SystematicConfigSchema', () => {
   test('parses a complete valid config with all fields populated', () => {
     const input = {
       agents: {
-        explorer: {
+        'correctness-reviewer': {
           model: 'openai/gpt-4',
           variant: 'v2',
           temperature: 0.3,
@@ -47,8 +47,8 @@ describe('SystematicConfigSchema', () => {
           temperature: 0.1,
         },
       },
-      disabled_skills: ['skill-1'],
-      disabled_agents: ['agent-1'],
+      disabled_skills: ['ce:plan'],
+      disabled_agents: ['correctness-reviewer'],
       disabled_commands: ['cmd-1'],
       bootstrap: {
         enabled: false,
@@ -59,13 +59,14 @@ describe('SystematicConfigSchema', () => {
     const result = SystematicConfigSchema.safeParse(input)
     expect(result.success).toBe(true)
     if (result.success) {
-      expect(result.data.agents.explorer.model).toBe('openai/gpt-4')
-      expect(result.data.agents.explorer.temperature).toBe(0.3)
-      expect(result.data.agents.explorer.mode).toBe('subagent')
-      expect(result.data.agents.explorer.color).toBe('primary')
+      const overlay = result.data.agents['correctness-reviewer']
+      expect(overlay?.model).toBe('openai/gpt-4')
+      expect(overlay?.temperature).toBe(0.3)
+      expect(overlay?.mode).toBe('subagent')
+      expect(overlay?.color).toBe('primary')
       expect(result.data.categories.review.model).toBe('anthropic/claude-3')
-      expect(result.data.disabled_skills).toEqual(['skill-1'])
-      expect(result.data.disabled_agents).toEqual(['agent-1'])
+      expect(result.data.disabled_skills).toEqual(['ce:plan'])
+      expect(result.data.disabled_agents).toEqual(['correctness-reviewer'])
       expect(result.data.disabled_commands).toEqual(['cmd-1'])
       expect(result.data.bootstrap.enabled).toBe(false)
       expect(result.data.bootstrap.file).toBe('/tmp/prompt.md')
@@ -112,31 +113,35 @@ describe('SystematicConfigSchema', () => {
 
   test('rejects temperature as string (expected number)', () => {
     const result = SystematicConfigSchema.safeParse({
-      agents: { explorer: { temperature: 'high' } },
+      agents: { 'correctness-reviewer': { temperature: 'high' } },
     })
     expect(result.success).toBe(false)
     if (!result.success) {
       const issue = result.error.issues[0]
-      expect(issue.path).toEqual(['agents', 'explorer', 'temperature'])
+      expect(issue.path).toEqual([
+        'agents',
+        'correctness-reviewer',
+        'temperature',
+      ])
       expect(issue.message).toMatch(/number/i)
     }
   })
 
   test('rejects top_p > 1 (out of range 0-1)', () => {
     const result = SystematicConfigSchema.safeParse({
-      agents: { explorer: { top_p: 1.5 } },
+      agents: { 'correctness-reviewer': { top_p: 1.5 } },
     })
     expect(result.success).toBe(false)
     if (!result.success) {
       const issue = result.error.issues[0]
-      expect(issue.path).toEqual(['agents', 'explorer', 'top_p'])
+      expect(issue.path).toEqual(['agents', 'correctness-reviewer', 'top_p'])
       expect(issue.message).toMatch(/<=1|too big|max/i)
     }
   })
 
   test('rejects invalid color "purple" with path-named error', () => {
     const result = SystematicConfigSchema.safeParse({
-      agents: { explorer: { color: 'purple' } },
+      agents: { 'correctness-reviewer': { color: 'purple' } },
     })
     expect(result.success).toBe(false)
     if (!result.success) {
@@ -145,18 +150,20 @@ describe('SystematicConfigSchema', () => {
       // of the branch errors. Just verify the correct field path is named and
       // that the overall parse rejected the value.
       const paths = result.error.issues.map((i) => i.path.join('.'))
-      expect(paths.some((p) => p === 'agents.explorer.color')).toBe(true)
+      expect(paths.some((p) => p === 'agents.correctness-reviewer.color')).toBe(
+        true,
+      )
     }
   })
 
   test('rejects invalid mode "weird" and lists valid options', () => {
     const result = SystematicConfigSchema.safeParse({
-      agents: { explorer: { mode: 'weird' } },
+      agents: { 'correctness-reviewer': { mode: 'weird' } },
     })
     expect(result.success).toBe(false)
     if (!result.success) {
       const issue = result.error.issues[0]
-      expect(issue.path).toEqual(['agents', 'explorer', 'mode'])
+      expect(issue.path).toEqual(['agents', 'correctness-reviewer', 'mode'])
       const message = issue.message.toLowerCase()
       expect(message).toContain('subagent')
       expect(message).toContain('primary')
@@ -166,23 +173,23 @@ describe('SystematicConfigSchema', () => {
 
   test('rejects steps as negative integer', () => {
     const result = SystematicConfigSchema.safeParse({
-      agents: { explorer: { steps: -1 } },
+      agents: { 'correctness-reviewer': { steps: -1 } },
     })
     expect(result.success).toBe(false)
     if (!result.success) {
       const issue = result.error.issues[0]
-      expect(issue.path).toEqual(['agents', 'explorer', 'steps'])
+      expect(issue.path).toEqual(['agents', 'correctness-reviewer', 'steps'])
     }
   })
 
   test('rejects steps as zero (must be positive)', () => {
     const result = SystematicConfigSchema.safeParse({
-      agents: { explorer: { steps: 0 } },
+      agents: { 'correctness-reviewer': { steps: 0 } },
     })
     expect(result.success).toBe(false)
     if (!result.success) {
       const issue = result.error.issues[0]
-      expect(issue.path).toEqual(['agents', 'explorer', 'steps'])
+      expect(issue.path).toEqual(['agents', 'correctness-reviewer', 'steps'])
       // positive means > 0
       expect(issue.message).toMatch(/0|positive|>0|minimum/i)
     }
@@ -190,24 +197,28 @@ describe('SystematicConfigSchema', () => {
 
   test('rejects hidden as string instead of boolean', () => {
     const result = SystematicConfigSchema.safeParse({
-      agents: { explorer: { hidden: 'yes' } },
+      agents: { 'correctness-reviewer': { hidden: 'yes' } },
     })
     expect(result.success).toBe(false)
     if (!result.success) {
       const issue = result.error.issues[0]
-      expect(issue.path).toEqual(['agents', 'explorer', 'hidden'])
+      expect(issue.path).toEqual(['agents', 'correctness-reviewer', 'hidden'])
       expect(issue.message).toMatch(/boolean/i)
     }
   })
 
   test('rejects permission as string (expected object)', () => {
     const result = SystematicConfigSchema.safeParse({
-      agents: { explorer: { permission: 'open' } },
+      agents: { 'correctness-reviewer': { permission: 'open' } },
     })
     expect(result.success).toBe(false)
     if (!result.success) {
       const issue = result.error.issues[0]
-      expect(issue.path).toEqual(['agents', 'explorer', 'permission'])
+      expect(issue.path).toEqual([
+        'agents',
+        'correctness-reviewer',
+        'permission',
+      ])
     }
   })
 
@@ -225,7 +236,7 @@ describe('SystematicConfigSchema', () => {
 
   test('rejects unknown field in agent overlay with path-named error', () => {
     const result = SystematicConfigSchema.safeParse({
-      agents: { explorer: { foo: 'bar' } },
+      agents: { 'correctness-reviewer': { foo: 'bar' } },
     })
     expect(result.success).toBe(false)
     if (!result.success) {
@@ -237,7 +248,7 @@ describe('SystematicConfigSchema', () => {
       expect(issue.code).toBe('unrecognized_keys')
       expect(issue.keys).toContain('foo')
       // Path should indicate the agent overlay context
-      expect(issue.path).toEqual(['agents', 'explorer'])
+      expect(issue.path).toEqual(['agents', 'correctness-reviewer'])
     }
   })
 })
@@ -293,11 +304,15 @@ describe('validateConfig wrapper', () => {
 
   test('rejects agent variant without same-overlay model', () => {
     const result = validateConfig({
-      agents: { explorer: { variant: 'high' } },
+      agents: { 'correctness-reviewer': { variant: 'high' } },
     })
     expect(result.success).toBe(false)
     if (!result.success) {
-      expect(result.errors[0].path).toEqual(['agents', 'explorer', 'variant'])
+      expect(result.errors[0].path).toEqual([
+        'agents',
+        'correctness-reviewer',
+        'variant',
+      ])
       expect(result.errors[0].message).toContain('model')
     }
   })
@@ -581,5 +596,99 @@ describe('SECURITY_OVERLAY_FIELDS parity (9c)', () => {
         expect(securitySet.has(key)).toBe(true)
       }
     }
+  })
+})
+
+describe('typed bundled-name validation', () => {
+  test('accepts an overlay on a real bundled agent name', () => {
+    const result = SystematicConfigSchema.safeParse({
+      agents: {
+        'correctness-reviewer': {
+          model: 'anthropic/claude-sonnet-4-5',
+        },
+      },
+    })
+    expect(result.success).toBe(true)
+  })
+
+  test('rejects an overlay on a misspelled bundled agent name', () => {
+    const result = SystematicConfigSchema.safeParse({
+      agents: {
+        'correctness-reviwer': {
+          model: 'anthropic/claude-haiku-4-5',
+        },
+      },
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const messages = result.error.issues.map((i) => i.message).join('\n')
+      expect(messages.toLowerCase()).toMatch(
+        /unrecognized|correctness-reviwer/i,
+      )
+    }
+  })
+
+  test('rejects an overlay on a user-defined agent name', () => {
+    const result = SystematicConfigSchema.safeParse({
+      agents: {
+        'my-custom-agent': {
+          model: 'anthropic/claude-sonnet-4-5',
+        },
+      },
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('accepts disabled_agents listing real bundled names', () => {
+    const result = SystematicConfigSchema.safeParse({
+      disabled_agents: ['security-reviewer', 'correctness-reviewer'],
+    })
+    expect(result.success).toBe(true)
+  })
+
+  test('rejects disabled_agents with a misspelled bundled name', () => {
+    const result = SystematicConfigSchema.safeParse({
+      disabled_agents: ['correctness-reviewer', 'oraqle'],
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      // The error must point at the array index of the bad entry.
+      const paths = result.error.issues.map((i) => i.path.join('.'))
+      expect(paths.some((p) => p.startsWith('disabled_agents'))).toBe(true)
+    }
+  })
+
+  test('accepts disabled_skills listing real bundled skill names', () => {
+    const result = SystematicConfigSchema.safeParse({
+      disabled_skills: ['ce:plan', 'ce:review'],
+    })
+    expect(result.success).toBe(true)
+  })
+
+  test('rejects disabled_skills with a nonexistent skill name', () => {
+    const result = SystematicConfigSchema.safeParse({
+      disabled_skills: ['nonexistent-skill'],
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('empty agents/disabled_agents/disabled_skills parse cleanly via defaults', () => {
+    const result = SystematicConfigSchema.safeParse({})
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.agents).toEqual({})
+      expect(result.data.disabled_agents).toEqual([])
+      expect(result.data.disabled_skills).toEqual([])
+    }
+  })
+
+  test('multiple bundled agent overlays parse cleanly side by side', () => {
+    const result = SystematicConfigSchema.safeParse({
+      agents: {
+        'correctness-reviewer': { temperature: 0.1 },
+        'security-reviewer': { temperature: 0.0 },
+      },
+    })
+    expect(result.success).toBe(true)
   })
 })

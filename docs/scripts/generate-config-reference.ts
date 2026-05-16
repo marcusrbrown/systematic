@@ -321,8 +321,27 @@ export function generateConfigReference(version?: string): string {
   }
 
   // Agent overlay fields section (shared reference)
-  const agentProps = (properties.agents as Record<string, unknown> | undefined)
-    ?.additionalProperties as Record<string, unknown> | undefined
+  // The agents field is now a typed object with specific bundled-agent keys (not additionalProperties).
+  // The JSON Schema emits additionalProperties: false (not an object) for strict mode, so we must
+  // check if additionalProperties is an object before using it, then fall back to the first property value.
+  const agentsSchema = properties.agents as Record<string, unknown> | undefined
+  const agentsAdditional = agentsSchema?.additionalProperties
+  const agentProps: Record<string, unknown> | undefined =
+    agentsAdditional !== null &&
+    typeof agentsAdditional === 'object' &&
+    !Array.isArray(agentsAdditional)
+      ? (agentsAdditional as Record<string, unknown>)
+      : (() => {
+          const agentProperties = agentsSchema?.properties as
+            | Record<string, Record<string, unknown>>
+            | undefined
+          const firstKey = agentProperties
+            ? Object.keys(agentProperties)[0]
+            : undefined
+          return firstKey && agentProperties
+            ? agentProperties[firstKey]
+            : undefined
+        })()
 
   const overlaySection = agentProps?.properties
     ? `## Agent/Category Overlay Fields
