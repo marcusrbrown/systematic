@@ -874,3 +874,220 @@ describe('ajv regression: generated schema validates representative config', () 
     expect(validate.errors).toBeDefined()
   })
 })
+
+// ═════════════════════════════════════════════════════════════════
+// discoverBundledNames — filesystem walk for bundled agent/skill names
+// ═════════════════════════════════════════════════════════════════
+
+function seedBundledFilesystem(
+  root: string,
+  agents: { category: string; name: string }[],
+  skills: string[],
+): void {
+  for (const { category, name } of agents) {
+    writeFile(
+      root,
+      `agents/${category}/${name}.md`,
+      `---\nname: ${name}\ndescription: test\n---\n\nbody`,
+    )
+  }
+  for (const name of skills) {
+    writeFile(
+      root,
+      `skills/${name}/SKILL.md`,
+      `---\nname: ${name}\ndescription: test\n---\n\nbody`,
+    )
+  }
+}
+
+describe('discoverBundledNames — filesystem walk', () => {
+  let discoverFn: (rootDir: string) => { agents: string[]; skills: string[] }
+
+  beforeAll(async () => {
+    const mod = await import('../../scripts/generate-config-schema.js')
+    discoverFn = mod.discoverBundledNames
+  })
+
+  test('walks the agents directory and returns sorted bundled agent names', () => {
+    const tmp = makeTempRepo()
+    seedBundledFilesystem(
+      tmp,
+      [
+        { category: 'review', name: 'correctness-reviewer' },
+        { category: 'design', name: 'designer' },
+        { category: 'review', name: 'security-reviewer' },
+      ],
+      [],
+    )
+    const { agents } = discoverFn(tmp)
+    expect(agents).toEqual([
+      'correctness-reviewer',
+      'designer',
+      'security-reviewer',
+    ])
+  })
+
+  test('walks the skills directory and returns sorted bundled skill names', () => {
+    const tmp = makeTempRepo()
+    seedBundledFilesystem(tmp, [], ['ce:plan', 'ce:review', 'ce:work'])
+    const { skills } = discoverFn(tmp)
+    expect(skills).toEqual(['ce:plan', 'ce:review', 'ce:work'])
+  })
+
+  test('returns empty arrays when directories are empty', () => {
+    const tmp = makeTempRepo()
+    fs.mkdirSync(path.join(tmp, 'agents'), { recursive: true })
+    fs.mkdirSync(path.join(tmp, 'skills'), { recursive: true })
+    const { agents, skills } = discoverFn(tmp)
+    expect(agents).toEqual([])
+    expect(skills).toEqual([])
+  })
+
+  test('returns empty arrays when directories are absent (no agents/ or skills/)', () => {
+    const tmp = makeTempRepo()
+    const { agents, skills } = discoverFn(tmp)
+    expect(agents).toEqual([])
+    expect(skills).toEqual([])
+  })
+
+  test('discovers agents in real repo and returns at least 50 names', () => {
+    // Smoke check against the actual project layout — should never go below 50.
+    const projectRoot = path.resolve(__dirname, '../..')
+    const { agents, skills } = discoverFn(projectRoot)
+    expect(agents.length).toBeGreaterThanOrEqual(50)
+    expect(skills.length).toBeGreaterThanOrEqual(40)
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════
+// generateBundledNamesContent — TS emission + sanity check
+// ═════════════════════════════════════════════════════════════════
+
+describe('generateBundledNamesContent — sanity check + emission', () => {
+  let generateFn: (
+    agents: string[],
+    skills: string[],
+    options?: {
+      previousAgentCount?: number
+      previousSkillCount?: number
+      allowShrink?: boolean
+    },
+  ) => string
+
+  beforeAll(async () => {
+    const mod = await import('../../scripts/generate-config-schema.js')
+    generateFn = mod.generateBundledNamesContent
+  })
+
+  test('emits BUNDLED_AGENT_NAMES and BUNDLED_SKILL_NAMES as as-const tuples', () => {
+    const out = generateFn(['agent-a', 'agent-b'], ['skill-a'])
+    expect(out).toContain('export const BUNDLED_AGENT_NAMES')
+    expect(out).toContain('export const BUNDLED_SKILL_NAMES')
+    expect(out).toContain('as const')
+    expect(out).toContain("'agent-a'")
+    expect(out).toContain("'agent-b'")
+    expect(out).toContain("'skill-a'")
+  })
+
+  test('emits header comment marking the file as generated', () => {
+    const out = generateFn(['a'], ['b'])
+    // Header must indicate generated-by-script and discourage hand-editing.
+    expect(out).toMatch(/generated|DO NOT EDIT/i)
+    expect(out).toContain('generate-config-schema.ts')
+  })
+
+  test('produces byte-identical output on consecutive calls with same input', () => {
+    const a = generateFn(['x', 'y'], ['z'])
+    const b = generateFn(['x', 'y'], ['z'])
+    expect(a).toBe(b)
+  })
+
+  test('aborts when discovered agents is empty', () => {
+    expect(() => generateFn([], ['skill-a'])).toThrow(/empty/i)
+  })
+
+  test('aborts when discovered skills is empty', () => {
+    expect(() => generateFn(['agent-a'], [])).toThrow(/empty/i)
+  })
+
+  test('aborts when agent count shrinks from previous committed count', () => {
+    expect(() =>
+      generateFn(['agent-a'], ['skill-a', 'skill-b'], {
+        previousAgentCount: 5,
+        previousSkillCount: 2,
+      }),
+    ).toThrow(/shrink|allow-shrink/i)
+  })
+
+  test('aborts when skill count shrinks from previous committed count', () => {
+    expect(() =>
+      generateFn(['agent-a', 'agent-b'], ['skill-a'], {
+        previousAgentCount: 2,
+        previousSkillCount: 5,
+      }),
+    ).toThrow(/shrink|allow-shrink/i)
+  })
+
+  test('partial-discovery (significantly reduced count) is caught by shrink check', () => {
+    // Simulates filesystem-permission failure, truncated walk, or symlink issue
+    // that returns only some of the expected names.
+    expect(() =>
+      generateFn(
+        ['agent-a', 'agent-b'], // discovered: 2
+        ['skill-a', 'skill-b'],
+        { previousAgentCount: 51, previousSkillCount: 45 }, // expected: 51 + 45
+      ),
+    ).toThrow(/shrink|allow-shrink/i)
+  })
+
+  test('--allow-shrink override permits a smaller bundled-name set', () => {
+    expect(() =>
+      generateFn(['agent-a'], ['skill-a'], {
+        previousAgentCount: 5,
+        previousSkillCount: 2,
+        allowShrink: true,
+      }),
+    ).not.toThrow()
+  })
+
+  test('first-run exemption: no previous count → no shrink check (only empty-discovery enforced)', () => {
+    // previousAgentCount / previousSkillCount are undefined when the file doesn't exist.
+    expect(() => generateFn(['a'], ['b'])).not.toThrow()
+  })
+
+  test('first-run exemption still rejects empty discovery', () => {
+    // Even on first run, an empty set is a real generator bug, not "no previous baseline".
+    expect(() => generateFn([], [])).toThrow(/empty/i)
+  })
+
+  test('growth (more bundled names than previous) is always allowed', () => {
+    expect(() =>
+      generateFn(['a', 'b', 'c'], ['x', 'y'], {
+        previousAgentCount: 2,
+        previousSkillCount: 1,
+      }),
+    ).not.toThrow()
+  })
+
+  test('exact same count as previous (no shrink, no growth) is allowed', () => {
+    expect(() =>
+      generateFn(['a', 'b'], ['x', 'y'], {
+        previousAgentCount: 2,
+        previousSkillCount: 2,
+      }),
+    ).not.toThrow()
+  })
+
+  test('emitted content survives biome format with no formatting changes', () => {
+    const content = generateFn(['agent-a', 'agent-b'], ['skill-a', 'skill-b'])
+    const formatted = execSync(
+      'bun biome format --stdin-file-path=src/lib/bundled-names.ts',
+      {
+        input: content,
+        encoding: 'utf-8',
+        cwd: path.resolve(__dirname, '../..'),
+      },
+    )
+    expect(formatted).toBe(content)
+  })
+})
