@@ -1,150 +1,224 @@
 ---
-title: OpenCode plugin factory invoked once per opencode.json source — duplicate tool registration
+title: 'OpenCode plugin multi-source loading: per-load registration with marker-based bootstrap'
 date: 2026-05-04
+last_refreshed: 2026-05-16
 category: integration-issues
-module: systematic-plugin
 problem_type: integration_issue
 component: tooling
-symptoms:
-  - systematic_skill appeared twice in the LLM-visible tool catalog (opencode-doctor returned 2)
-  - plugin factory ran twice in the same process when listed in both user-level and project-level opencode.json
-  - heavy initialization (loadConfig, getBootstrapContent, createConfigHandler, createSkillTool) ran twice
-root_cause: scope_issue
-resolution_type: code_fix
-severity: high
+severity: medium
+applies_when:
+  - Designing an OpenCode plugin that may be loaded from multiple opencode.json sources in the same process
+  - A plugin must inject content into the system prompt array idempotently across multiple registrations
+  - A previous singleton pattern needs to be replaced with per-load registration without breaking single-source consumers
 tags:
   - opencode
   - plugin-registration
-  - singleton
-  - duplicate-tools
-  - globalthis
-  - config-sources
+  - multi-source-loading
+  - bootstrap-injection
+  - idempotency
+  - marker-based
+  - system-prompt
+related_components:
+  - tooling
+  - plugin-runtime
 ---
 
-# OpenCode plugin factory invoked once per opencode.json source — duplicate tool registration
+# OpenCode plugin multi-source loading: per-load registration with marker-based bootstrap
 
 ## Problem
 
-OpenCode invokes a plugin's exported factory function **once per `opencode.json` source that lists the plugin**. When a user has the same plugin listed in both their user-level config (`~/.config/opencode/opencode.json`) and a project-level config (`<repo>/opencode.json`), the factory runs twice in the same process. The host then registers each returned hooks object independently, so the LLM sees the plugin's tools listed twice in its catalog.
+OpenCode plugins can be configured from multiple sources in the same process — typically a user-level
+`~/.config/opencode/opencode.json` plus a project-level `<repo>/.opencode/opencode.json`. When a plugin
+is referenced in both, OpenCode's plugin loader invokes the plugin factory once per source. For Systematic
+specifically, a contributor working in the Systematic repo may have `@fro.bot/systematic` installed in
+their user config AND `./src/index.ts` configured in their project config — different code, different
+bundled assets, but the same plugin identity from OpenCode's perspective.
 
-For Systematic specifically: `systematic_skill` showed up twice in the doctor's tool listing, `experimental.chat.system.transform` ran twice on every prompt, and the configuration merge ran twice. Without a guard, the plugin had no way to know it was being asked to register itself a second time.
+Originally (PR #335), Systematic guarded the factory with `plugInOnce` — a process-level singleton that
+returned the same hooks reference for every invocation. This prevented duplicate tool registration in the
+TUI catalog, but it also collapsed both invocations onto whichever loaded first. In the contributor
+scenario, that meant the user-config (npm) version silently shadowed the project (local source) version —
+the dev workflow was broken in a way that looked like "it works" because OpenCode reported no errors.
+
+PR #352 (v2.13.0) removed `plugInOnce` entirely. The current model is **per-load registration** with
+**marker-based bootstrap idempotency**.
 
 ## Symptoms
 
-Run the OpenCode doctor against a dual-source config:
+**Pre-singleton (before PR #335):**
+
+- `systematic_skill` appeared twice in the LLM-visible tool catalog
+- `experimental.chat.system.transform` ran twice on every prompt
+- Bootstrap content (`<SYSTEMATIC_WORKFLOWS>` block) stacked N times in the system prompt
+
+**With the singleton (PR #335, before PR #352):**
+
+- Only the first-loaded plugin's behavior was visible — the second source's code was silently shadowed
+- A contributor with both npm and local-source configs saw the npm version's skills and bootstrap, never
+  their local changes
+- No error was surfaced; OpenCode reported a healthy plugin
+
+**Root symptom that motivated the original singleton:**
 
 ```bash
+# Before PR #335, dual-source config produced:
 mise run opencode:doctor --only tools --full --format json \
-  | jq '.[] | select(.label == "Tools").data | map(.id) \
+  | jq '.[] | select(.label == "Tools").data | map(.id)
         | map(select(. == "systematic_skill")) | length'
+# Output: 2
 ```
 
-Before the fix: `2`.
+## Root Cause
 
-In the OpenCode log (`~/.local/share/opencode/log/<timestamp>.log`):
+The correct mental model: **each plugin source is a distinct registration**. Tools, hooks, and config
+handlers should register N times — that is OpenCode's natural behavior. The one piece that genuinely
+cannot be multiplied is bootstrap content in the chat system prompt, because it lands in the same
+`output.system` array once per `experimental.chat.system.transform` invocation. N registrations stacking
+the same block in every chat turn is the only real problem; everything else is fine when registrations
+run independently.
 
-- `service=tool.registry status=started systematic_skill` appears twice per session
-- `service=tool.registry status=completed ... systematic_skill` appears twice per session
-- `Skipping bootstrap prompt injection` (or whatever the bootstrap-injection branch logs) appears twice
-- Two distinct heavy-init runs visible in any `console.warn` instrumentation added to the factory
+PR #335's `plugInOnce` was an over-correction. It solved the bootstrap-stacking symptom by collapsing
+every registration onto one — but at the cost of multi-source code visibility. The singleton's
+deduplication of init work had no visible effect on the TUI tool catalog (OpenCode registers tools
+per-source regardless of hooks reference identity), but it did collapse all loads onto whichever ran
+first, silently shadowing later sources.
 
-## What Didn't Work
-
-**Assuming this was a single-source bug fixable by config dedup.** Wrong — OpenCode's plugin host calls the factory once per source by design. Whether two sources point at the same path or two different paths, the host invokes the factory twice.
-
-**Whole-hooks reuse (the natural first instinct).** Cache the first call's `hooks` object, return the same reference to duplicate callers. This is what `opencode-copilot-delegate`'s `src/runtime/plugin-singleton.ts` does — the precedent that initially looked transferable. **Empirically insufficient**: the OpenCode host iterates each config source's returned hooks and calls `register(hooks.tool.<name>)` per-source regardless of reference identity. Two register calls = two catalog entries, even when the references match. After applying whole-hooks reuse, the doctor still reported `2`.
-
-**Treating source-string equality as the dedup key.** Wrong. Different paths like `/abs/path/dist/index.js` and `./src/index.ts` produce different module instances even when they resolve to functionally-equivalent code. The OpenCode loader doesn't reconcile them. (When *both* sources point at the *same* path string, the loader does dedup at the path-string level — but that's a happy coincidence, not the typical setup.)
+The actual problem was never "multiple registrations." It was "multiple bootstrap injections without a
+replacement strategy."
 
 ## Solution
 
-Per-process register-once guard in `src/lib/plugin-singleton.ts`. The cache key is a `Symbol.for('@fro.bot/systematic/plugin-singleton')` slot on `globalThis` (PID-stamped to prevent cross-process cache poisoning when modules are shared via worker threads or process forks).
+PR #352 (v2.13.0) removed `plugInOnce` entirely and introduced marker-based bootstrap idempotency.
 
-The exported plugin factory is wrapped through `plugInOnce`. **The first invocation runs init and returns the real hooks. Duplicate invocations skip init and return an empty hooks object `{}`** so the host has nothing to register a second time.
+### Per-load registration
 
-### Helper API
-
-```typescript
-// src/lib/plugin-singleton.ts
-export interface PlugInOnceResult<T> {
-  isFirst: boolean
-  hooks: T
-}
-
-export interface PlugInOnceOptions<T> {
-  doInit: () => Promise<T>
-  onDuplicate?: (pid: number) => void
-  /** Test override for the PID guard; production callers omit this. */
-  pid?: number
-}
-
-export async function plugInOnce<T>(
-  options: PlugInOnceOptions<T>,
-): Promise<PlugInOnceResult<T>>
-```
-
-- **First call**: `{ isFirst: true, hooks }` — `hooks` contains real `tool`, `config`, and `experimental.chat.system.transform` registrations.
-- **Duplicate call** (same process): `{ isFirst: false, hooks: {} as T }` — empty hooks object. The host iterates over its keys, finds none, registers nothing.
-- **Sticky failure**: if `doInit` rejects, the rejection is cached and replayed to all subsequent callers in the same PID. No retry-on-failure.
-- **Concurrent safety**: simultaneous first calls share a single in-flight init promise.
-
-### Factory wiring
+Each factory invocation runs `initializePlugin(input)` independently:
 
 ```typescript
 // src/index.ts
 const SystematicPlugin: Plugin = async (input) => {
-  const { hooks } = await plugInOnce({
-    doInit: () => initializePlugin(input),
-    onDuplicate: (pid) => {
-      const message = `[systematic] duplicate factory invocation in same process (pid=${pid}); skipping duplicate registration. Multiple opencode.json sources may list this plugin.`
-      console.warn(message)
-      // Fire-and-forget; never block plugin init on the structured-log call.
-      input.client.app
-        .log({
-          body: { service: 'systematic', level: 'warn', message },
-        })
-        .catch(() => {})
-    },
-  })
-  return hooks
+  return initializePlugin(input)  // Runs every time. No singleton.
+}
+
+export default SystematicPlugin
+```
+
+`initializePlugin` performs the full init sequence — `loadConfig`, `getBootstrapContent`,
+`createConfigHandler`, `createSkillTool` — for every source that lists the plugin. No process-level
+state, no `globalThis` slots, no shared mutable references.
+
+### Marker-based bootstrap idempotency
+
+`applyBootstrapContent` in `src/lib/bootstrap.ts` handles the one piece that must not multiply:
+
+```typescript
+// src/lib/bootstrap.ts
+export const applyBootstrapContent = (
+  output: { system: string[] },
+  content: string,
+): void => {
+  // 1. Strip every complete <SYSTEMATIC_WORKFLOWS>...</SYSTEMATIC_WORKFLOWS> block
+  //    from all system entries — including blocks from prior plugin invocations.
+  for (let i = 0; i < output.system.length; i++) {
+    output.system[i] = removeCompleteBootstrapBlocks(output.system[i])
+  }
+
+  // 2. Append one canonical block to output.system[0].
+  //    Marker-based replacement is idempotent: N invocations converge on exactly
+  //    one block in output.system[0], regardless of registration order.
+  if (output.system.length === 0) {
+    output.system.push(content)
+    return
+  }
+
+  const first = output.system[0]
+  output.system[0] = first.length > 0 ? `${first}\n\n${content}` : content
 }
 ```
 
-`initializePlugin` is the heavy work — `loadConfig`, `getBootstrapContent`, `createConfigHandler`, `createSkillTool`. It runs once per process even when the host invokes the factory N times.
-
-### Diagnostics
-
-`onDuplicate` fires once per duplicate caller and emits both a synchronous `console.warn` (for terminal visibility during dev) and a best-effort structured `client.app.log` (for parity with the rest of OpenCode's structured logging). Failures of `client.app.log` are swallowed so they can't break startup.
+The system prompt array itself is the coordination point. The `<SYSTEMATIC_WORKFLOWS>` sentinel is unique
+to Systematic; no other writer produces that tag. Strip-and-append is therefore safe and unambiguous.
 
 ## Why This Works
 
-**Root cause.** OpenCode's plugin host iterates each `opencode.json` source's plugin list and registers tools, transforms, and config from each returned hooks object independently. Reference equality is not part of its dedup logic — the host doesn't compare the second call's hooks to the first's. So whatever the second factory call returns will be registered as if it were a separate plugin's hooks.
+Each plugin source registers its own tools and hooks — OpenCode handles composition at the host level.
+The only multiplied work is bootstrap injection, and marker-based replacement handles that idempotently:
 
-**Why empty-hooks fixes it.** When the duplicate caller returns `{}`, there is literally no `tool` field, no `experimental.chat.system.transform` field, no `config` field for the host to enumerate. The first caller's registrations stand. The second caller's "registrations" are no-ops because there is nothing to register.
+- **First transform invocation:** no existing marker in `output.system`, append the block.
+- **Second transform invocation:** existing marker found, strip the old block from all entries, append
+  the new one to `output.system[0]`.
+- **Last transform wins** (per OpenCode's FIFO transform-handler iteration), so the most-recently-loaded
+  plugin's bootstrap content lands in the final prompt.
 
-**Why whole-hooks reuse doesn't fix it.** Even with reference equality, the host calls `register(hooks.tool.systematic_skill)` once per source. Two register calls produce two catalog entries regardless of whether the handler function is the same reference both times.
+For multi-source contributors (e.g., npm + local source): the project-level `./src/index.ts` is declared
+second in source order, so its `experimental.chat.system.transform` handler runs second. Its bootstrap
+content wins. The contributor's local changes are visible.
+
+For single-source consumers: per-load registration is transparent. One invocation, one registration, one
+bootstrap block — identical to the pre-singleton behavior.
 
 ## Prevention
 
-- **Verify singleton fixes against the LLM-visible tool catalog, not just diagnostic logs.** The `mise run opencode:doctor --only tools --full --format json | jq '...'` command is the canonical verification — it queries `client.tool.list({ provider, model })` which is exactly what the LLM sees. Fingerprint-matching probes only tell you the singleton helper fired; they don't tell you the host stopped registering twice.
-- **Don't transfer plugin singleton patterns from precedent without dual-source verification.** A pattern that works for a plugin listed only in user-level config will pass its own internal tests yet fail under dual-source listing. Always set up the dual-source case explicitly when verifying a register-once guard.
-- **For register-once guards in OpenCode plugins, return empty hooks/handlers to duplicate callers.** Not cached real handlers. Empty `{}` is what makes the host stop registering.
-- **Run a Phase 0 empirical probe before designing the singleton.** Before any code, instrument the factory with a module-scope counter, sync `console.warn`, and best-effort structured log. Reproduce the bug in a dual-source config to confirm: same PID, count=1 in both invocations (independent module instances), all caller-scoped fingerprints match. Probe artifacts: `tests/manual/companion-aware-probe.ts` is a usable scaffold.
-- **Test the helper's behavior branches:** first-call init, duplicate-call skip, `onDuplicate` callback wiring, concurrent first calls (shared in-flight promise), sticky failure, PID-change recovery (use the test-only `pid?` override), and a reset hook for test isolation.
-- **Add a factory-level regression test** that calls the plugin factory three times in the same process and asserts only the first invocation returns real hooks; calls 2+ return empty `{}`. This is the host-visible contract the fix targets — separate from the helper's unit tests, and the one that catches future drift.
-- **Operational gotcha when verifying empirically:**
-  - `opencode-doctor` reuses any existing `opencode serve` already listening on port 4096 instead of spawning fresh — it cannot pick up a rebuilt plugin while a stale serve is alive. Run `pkill -KILL -f '\.opencode serve'` first; SIGTERM is often ignored.
-  - The OpenCode TUI session you are inside caches its plugin module instances at session start. Rebuilding the plugin and re-running tools via the same TUI will not pick up changes — verification must happen from a fresh shell after killing orphaned serves, or after exiting and restarting the TUI.
+- **Trust the system prompt array as a coordination point.** Don't reach for `globalThis` or
+  module-level singletons to enforce idempotency. The mutable state you're trying to coordinate is
+  already in the array.
 
-## Related Issues
+- **Mark injected content with a unique sentinel string.** `<SYSTEMATIC_WORKFLOWS>` is unique to
+  Systematic; no other writer produces that tag. Replacement is then a deterministic strip-and-append.
 
-- Systematic PR #335 — the fix as shipped: <https://github.com/marcusrbrown/systematic/pull/335>
-- Plan document: `docs/plans/2026-05-01-001-fix-idempotent-plugin-registration-plan.md`
-- Adjacent upstream pattern (idempotence under cache-busting hook injection): <https://github.com/alvinunreal/oh-my-opencode-slim/issues/415>
-- Precedent that initially appeared transferable but used the insufficient whole-hooks pattern: `opencode-copilot-delegate/src/runtime/plugin-singleton.ts`
+- **Per-invocation independence is OpenCode's default.** Plugins should not fight it unless they have a
+  specific shared resource (a singleton DB client, a long-lived TCP connection) — and even then, scope
+  the sharing to that resource, not to the plugin factory itself.
 
-## 2026-05-10 follow-up: singleton removed
+- **Single-source consumers see no behavior change.** Per-load registration is transparent when there's
+  only one source. Verify both the single-source and dual-source cases when changing registration logic.
 
-The `plugInOnce` singleton introduced in PR #335 was reverted in a later PR. The duplicate-tool-entry concern that motivated the singleton turned out to be a non-issue — OpenCode registers tools per-source regardless of whether the hooks reference is shared, so the singleton's deduplication of the init work had no visible effect on the TUI tool catalog. What it DID do in dev setups with multiple plugin sources was collapse all loads onto whichever ran first, silently shadowing later sources.
+- **Verify against the LLM-visible tool catalog, not just diagnostic logs.** The
+  `opencode:doctor --only tools` command queries `client.tool.list({ provider, model })` — exactly what
+  the LLM sees. Internal fingerprint probes only tell you a guard fired; they don't tell you the host
+  stopped registering twice.
 
-The real correctness contract is now marker-based idempotency in `applyBootstrapContent`: each registration applies its bootstrap content by walking `output.system` for any prior `<SYSTEMATIC_WORKFLOWS>...</SYSTEMATIC_WORKFLOWS>` block and replacing it in-place. Under OpenCode's FIFO hook iteration, the last transform to run owns the final block — most-recently-registered plugin wins. The architectural rationale is captured in `docs/brainstorms/2026-05-10-multi-load-plugin-registration-requirements.md` and the implementation plan at `docs/plans/2026-05-10-002-refactor-multi-load-plugin-registration-plan.md`.
+- **Don't transfer plugin singleton patterns from precedent without dual-source verification.** A pattern
+  that works for a plugin listed only in user-level config will pass its own internal tests yet fail
+  under dual-source listing. Always set up the dual-source case explicitly.
+
+## Verification
+
+The pattern is verified by:
+
+1. **`tests/integration/opencode.test.ts`** — a `pinned package plus local source` test exercises the
+   multi-source scenario and asserts that bootstrap content appears exactly once in the system prompt
+   after both transform handlers have run.
+
+2. **CI smoke test in `.github/workflows/main.yaml`** — runs the plugin under Node.js and asserts
+   `Object.keys(import('./dist/index.js'))` equals `['default']` only (no named exports leak the
+   singleton's old import pattern).
+
+3. **`grep -rn plugInOnce src/`** returns 0 hits — sanity check that the singleton is fully gone.
+
+```bash
+# Confirm singleton is absent
+grep -rn plugInOnce src/
+# Expected: (no output)
+
+# Confirm factory shape
+node -e "import('./dist/index.js').then(m => console.log(Object.keys(m)))"
+# Expected: [ 'default' ]
+```
+
+## Related
+
+- `docs/solutions/best-practices/provider-availability-source-defaults-2026-05-12.md` — uses the same
+  per-load registration model; provides Pattern 8 (discovery before validation), a sibling lifecycle
+  ordering pattern
+- `docs/solutions/integration-issues/opencode-plugin-named-exports-break-loader-2026-05-11.md` —
+  orthogonal export-shape contract at the same plugin boundary
+- `docs/solutions/developer-experience/local-systematic-overrides-global-2026-05-14.md` — applies the
+  per-load registration model to the project-overrides-user case
+- `docs/brainstorms/2026-05-10-multi-load-plugin-registration-requirements.md` — design rationale
+  (per-load registration; bootstrap idempotency via `<SYSTEMATIC_WORKFLOWS>` marker; system prompt array
+  as coordination point; no global state)
+- PR #335 — introduced `plugInOnce` singleton (later removed by PR #352)
+- PR #352 (v2.13.0) — removed `plugInOnce`, introduced marker-based bootstrap idempotency
+- `src/index.ts` — per-invocation `initializePlugin(input)`
+- `src/lib/bootstrap.ts:applyBootstrapContent` — marker-based strip-and-replace

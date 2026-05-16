@@ -2,7 +2,9 @@
 title: Workflow command dry-run prompt integration
 date: 2026-02-16
 category: integration-issues
-status: resolved
+status: stale
+stale_reason: "The /sync-cep workflow this doc was written against was deleted in April 2026. The generic dry-run safety lessons (align test invocation with workflow invocation; deny edit permissions in dry-run test config; keep dry-run prompt minimal) still apply to any future workflow command that supports a dry-run mode, but the specific implementation details documented here reference removed infrastructure. A focused replacement following ce:compound would be more useful than further patching this doc."
+stale_date: 2026-05-16
 component: sync-cep workflow + OpenCode command
 symptoms:
   - Dry-run output continued into live-sync guidance
@@ -17,6 +19,8 @@ resolution: >-
   bot, and enforce no-edit permissions in test OpenCode config. Use the command
   frontmatter when building test config so tests match real command settings.
 ---
+
+**Note (2026-05-16):** The `/sync-cep` workflow this doc was written against was deleted in April 2026. The generic lessons about dry-run safety (align test invocation with workflow invocation, deny edit permissions, keep prompts minimal) still apply. The implementation specifics below reference removed infrastructure (`/sync-cep`, `sync-manifest.json`, `convert-cc-defs`) and are preserved for historical context.
 
 ## Problem
 The `/sync-cep` dry-run did not consistently stop after the summary. In CI and

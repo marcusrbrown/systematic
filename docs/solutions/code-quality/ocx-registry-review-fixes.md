@@ -25,6 +25,7 @@ tags:
   - biome
   - testing
 related_issues: []
+last_refreshed: 2026-05-16
 ---
 
 # Code Review Fixes for OCX Registry Support
@@ -36,6 +37,8 @@ Code review of the `feat/add-ocx-support` branch identified Critical and Medium 
 **Trigger:** Post-implementation code review of the OCX registry support feature.
 
 **Branch:** `feat/add-ocx-support`
+
+**Note (2026-05-16):** The OCX registry was migrated from V1 to V2 schema in PR #315 (May 2026, v2.6.0). The shape examples below show V1 conventions; current registry uses V2 (no `ocx:` type prefix, repo-root-relative file paths, string-shorthand file entries). The validation, lint, and CI lessons below remain applicable. See `scripts/generate-registry.ts` and `registry/registry.jsonc` for the current V2 implementation.
 
 **Baseline:** 6 lint warnings, 4 infos, 21 tests passing (452 assertions).
 
@@ -249,9 +252,7 @@ For future OCX registry and build script changes:
 
 ### Documentation
 - [OCX Registry Guide](../../../src/content/docs/guides/ocx-registry.mdx)
-- [Batch Import CEP Agents](../integration-issues/batch-import-cep-agents-to-systematic-20260210.md)
 - [Converter Code Block Capitalization](../integration-issues/converter-code-block-tool-name-capitalization-20260210.md)
-- [Structured Manual Override Tracking](../best-practices/structured-manual-override-tracking-Systematic-20260210.md)
 - [Destructive to Non-destructive Converter](../best-practices/destructive-to-nondestructive-converter-Systematic-20260209.md)
 
 ### Related Commits

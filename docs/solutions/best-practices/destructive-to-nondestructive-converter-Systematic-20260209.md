@@ -13,13 +13,14 @@ root_cause: logic_error
 resolution_type: code_fix
 severity: high
 tags: [converter, frontmatter, map-and-preserve, non-destructive, cep-to-opencode]
+last_refreshed: 2026-05-16
 ---
 
 # Map-and-Preserve Strategy for CEP-to-OpenCode Conversion
 
 ## Problem
 
-The Systematic plugin's converter (`src/lib/converter.ts`) used a destructive "strip-all" approach when converting CEP (Compound Engineering Plugin) frontmatter to OpenCode format. Fields that had direct OpenCode equivalents were silently removed instead of being mapped, causing data loss during conversion. Unknown fields that should have passed through were also stripped.
+The Systematic plugin's converter (`src/lib/converter.ts`) used a destructive "strip-all" approach when converting CEP (Compound Engineering Plugin) frontmatter to OpenCode format. Note: as of April 2026, Systematic no longer auto-syncs from CEP; the converter is now reserved for ad-hoc CLI conversions (`bun src/cli.ts convert <file>`). Fields that had direct OpenCode equivalents were silently removed instead of being mapped, causing data loss during conversion. Unknown fields that should have passed through were also stripped.
 
 ## Environment
 
@@ -133,7 +134,4 @@ const PERMISSION_MODE_MAP: Record<string, PermissionConfig> = {
 - **Test coverage:** The 41 new unit tests + 7 idempotency tests ensure each mapping is verified independently. Future field additions should include corresponding test cases.
 - **Lookup table sync:** `TOOL_NAME_MAP` must stay synchronized with the `TOOL_MAPPINGS` constant used in bootstrap.ts. A code comment marks this coupling.
 
-## Related Issues
 
-- See also: [Structured Manual Override Tracking](./structured-manual-override-tracking-Systematic-20260210.md) — builds on the manifest infrastructure to track post-import customizations with provenance
-- See also: [Batch Importing CEP Agents to Systematic](../integration-issues/batch-import-cep-agents-to-systematic-20260210.md) — batch import of 24 agents that validated the converter pipeline at scale

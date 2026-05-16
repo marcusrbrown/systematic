@@ -8,9 +8,8 @@ tags:
   - converter
   - code-blocks
   - tool-names
-  - cep-migration
   - orchestrating-swarms
-  - convert-cc-defs
+last_refreshed: 2026-05-16
 environment: "Bun 1.x / TypeScript 5.7+ / OpenCode"
 symptoms:
   - "Code examples show Task({ instead of task({ after CC→OC conversion"
@@ -19,10 +18,7 @@ symptoms:
 root_cause: "Converter intentionally skips fenced code blocks to avoid false positives (e.g., 'Task' as a noun). Manual code block audit step in convert-cc-defs skill was missed during batch import of a 1718-line file."
 resolution_type: process
 confidence: verified
-related:
-  - docs/solutions/integration-issues/batch-import-cep-agents-to-systematic-20260210.md
-  - docs/CONVERSION-GUIDE.md
-  - .opencode/skills/convert-cc-defs/SKILL.md
+related: []
 ---
 
 # Converter Skips Code Blocks: 47 Broken Tool Name Examples in orchestrating-swarms
@@ -50,20 +46,9 @@ The converter (`src/lib/converter.ts`) uses `CODE_BLOCK_PATTERN` to identify fen
 
 The converter's behavior is tested and correct. The problem is downstream.
 
-### Step 2: Check the convert-cc-defs workflow
+### Step 2: Understand the code-block audit requirement
 
-The `convert-cc-defs` skill (`.opencode/skills/convert-cc-defs/SKILL.md`) documents a "Phase 3d: Code Block Audit" step with a table of patterns to manually fix after mechanical conversion:
-
-| Pattern in code blocks | Action |
-|------------------------|--------|
-| `Task(agent-name)` or `Task({ ... })` | → `task(agent-name)` / `task({ ... })` |
-| `TodoWrite` | → `todowrite` |
-| `CLAUDE.md` | → `AGENTS.md` |
-| `.claude/skills/` paths | → `.opencode/skills/` |
-| `Teammate({ operation: ... })` | Aspirational note or adapt to `task` |
-| `AskUserQuestion` | → `question tool` |
-
-The documentation was correct. The audit step was simply skipped during execution — easy to miss in a batch import of 10 skills, especially when the problematic file is 1718 lines with 47 occurrences spread across dozens of code blocks.
+The converter's intentional code-block skip is documented in `src/lib/converter.ts` source comments (see `CODE_BLOCK_PATTERN` and `transformBody()`). The `convert-cc-defs` workflow that previously documented the manual audit step has been deleted. Any batch conversion run via the CLI (`bun src/cli.ts convert <file>`) must include a separate code-block audit step — the converter will not fix capitalized tool names inside fenced code blocks.
 
 ### Step 3: Verify scope
 
@@ -96,16 +81,9 @@ sed -i '' 's/await Task(/await task(/g' skills/orchestrating-swarms/SKILL.md
 
 Verified: 0 `Task({` remaining, 47 `task({` present.
 
-### Manifest tracking (applied)
+### Manifest tracking
 
-Added rewrite entry to `sync-manifest.json`:
-
-```json
-{
-  "field": "body:code-block-tool-names",
-  "reason": "Fixed 47 instances of Task({ → task({ in code examples. Converter skips code blocks by design; these were missed during initial manual code block audit."
-}
-```
+Manifest tracking was previously used during the CEP sync era; that infrastructure no longer exists. Today, the content-integrity gate at `scripts/content-integrity.ts` catches `Task(` (capitalized) inside fenced code blocks as a CC heritage pattern.
 
 ### Skill improvement (applied)
 
@@ -117,32 +95,7 @@ Added a high-risk pattern note to the convert-cc-defs skill's Code Block Audit s
 
 ### 1. Post-conversion validation command
 
-Run after any conversion to detect CC tool markers inside code blocks:
-
-```bash
-python3 -c "
-import re, sys, pathlib
-CODE_BLOCKS = re.compile(r'\x60\x60\x60[\s\S]*?\x60\x60\x60|\x60[^\x60\n]+\x60')
-FORBIDDEN = [
-  (re.compile(r'\bTask\s*\('), 'Task('),
-  (re.compile(r'\b(TodoWrite|AskUserQuestion|WebSearch|WebFetch)\b'), 'CC tool'),
-  (re.compile(r'CLAUDE\.md'), 'CLAUDE.md'),
-  (re.compile(r'\.claude/'), '.claude/ path'),
-]
-total = 0
-for f in pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else 'skills').rglob('*.md'):
-  text = f.read_text()
-  for m in CODE_BLOCKS.finditer(text):
-    block = m.group(0)
-    for rx, label in FORBIDDEN:
-      for mm in rx.finditer(block):
-        line = text.count('\n', 0, m.start()) + 1
-        print(f'  {f}:{line}: {label}: {mm.group(0)}')
-        total += 1
-print(f'\n{\"FAIL: \" + str(total) + \" issues\" if total else \"OK: no CC markers in code blocks\"}')
-sys.exit(1 if total else 0)
-"
-```
+`scripts/content-integrity.ts` already runs banned-pattern detection (including `Task(` in code blocks) on every CI run. For ad-hoc CLI conversions, run it locally with `bun scripts/content-integrity.ts` before committing.
 
 ### 2. Workflow guardrails
 
@@ -172,11 +125,9 @@ bun run build && bun run typecheck && bun run lint && bun test
 
 ## Cross-References
 
-- **Related solution:** [Batch Importing CEP Agents](./batch-import-cep-agents-to-systematic-20260210.md) — same batch import session, different issue (phantom agents)
-- **Conversion guide:** [docs/CONVERSION-GUIDE.md](../../CONVERSION-GUIDE.md) — tool name mappings reference
-- **Workflow skill:** [convert-cc-defs](../../../.opencode/skills/convert-cc-defs/SKILL.md) — Phase 3d Code Block Audit
 - **PR:** [#63](https://github.com/marcusrbrown/systematic/pull/63) — feat: sync all CEP skills from upstream
 - **Converter source:** `src/lib/converter.ts` — `CODE_BLOCK_PATTERN` and `transformBody()`
+- **Content-integrity gate:** `scripts/content-integrity.ts` — CI enforcement for CC heritage patterns
 
 ## Key Takeaway
 

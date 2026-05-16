@@ -11,7 +11,8 @@ tags:
   - batch-operations
   - silent-failure
   - verification-gap
-  - cep-migration
+  - batch-conversion
+last_refreshed: 2026-05-16
 environment: 'macOS / zsh 5.9 / bun 1.x'
 symptoms:
   - 'Batch `sed` conversion reports success but zero files actually modified'
@@ -119,6 +120,6 @@ find skills agents -type f \( -name '*.md' -o -name '*.mdx' \) \
 1. Zero `Claude Code`, `TaskCreate`, `AskUserQuestion`, `compound-engineering:`, `.claude/`, `CLAUDE.md`, `${CLAUDE_PLUGIN_ROOT}` patterns in `skills/`, `agents/`, `.opencode/` (with documented exceptions)
 2. Every `systematic:*` agent/skill reference in content files resolves to an existing file on disk
 
-Deferred to Initiative #3 (Infra Improvements); tracked in memory #677.
+the content-integrity gate at `scripts/content-integrity.ts` (live since v2.5.0).
 
 **General rule:** when writing batch shell scripts that will be run on different developer machines, **test with `set -x` at least once** to confirm the loop body runs the expected number of times. Silent correctness in shell is a trap.
