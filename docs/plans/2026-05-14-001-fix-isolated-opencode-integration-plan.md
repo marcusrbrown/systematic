@@ -1,8 +1,9 @@
 ---
 title: fix: Isolate OpenCode integration tests
 type: fix
-status: active
+status: completed
 date: 2026-05-14
+shipped: "PR #369"
 ---
 
 # fix: Isolate OpenCode integration tests

@@ -1,10 +1,11 @@
 ---
 title: 'feat: Client-API source-model resolution'
 type: feat
-status: active
+status: completed
 date: 2026-05-12
 origin: docs/brainstorms/2026-05-12-client-api-source-model-resolution-requirements.md
 deepened: 2026-05-12
+shipped: "PR #358 (v2.13.0)"
 ---
 
 # feat: Client-API source-model resolution

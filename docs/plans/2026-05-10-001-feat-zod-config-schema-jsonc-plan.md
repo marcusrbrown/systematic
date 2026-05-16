@@ -1,11 +1,12 @@
 ---
 title: "feat: Zod-backed user config + published JSON schema + first-class JSONC"
 type: feat
-status: active
+status: completed
 date: 2026-05-10
 revised: 2026-05-10
 origin: docs/brainstorms/2026-05-10-zod-config-schema-jsonc-requirements.md
 review_run: .context/systematic/ce-review/20260510-025753-c8196bd1/
+shipped: "PR #351 (v2.12.0); follow-ups PR #354 + #357 + #363"
 target_release: 2.12.0
 ---
 
