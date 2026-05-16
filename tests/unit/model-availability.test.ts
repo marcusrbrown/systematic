@@ -253,6 +253,79 @@ describe('getAvailableModels', () => {
     })
   })
 
+  describe('edge case: empty cache collapses to unknown', () => {
+    // Parallel of `edge case: empty discovery collapses to unknown` for the cache
+    // fallback path. When the API call fails AND the on-disk cache file is present
+    // but produces a zero-size model set (e.g., schema-valid empty object, or
+    // provider entries with `models: {}`), `readFallbackCache` must collapse to
+    // `emptyAvailability()` rather than returning `{ status: 'cache', models: <empty Set> }`.
+    //
+    // Operationally identical to the empty-API case: an empty set on either path
+    // means we cannot pin bundled agents to anything the user can call. The downstream
+    // gate `availability.status !== 'unknown'` admits any non-'unknown' status, so
+    // the collapse must happen at the envelope construction site to keep the gate a
+    // single rule rather than `status !== 'unknown' && models.size > 0` at every consumer.
+
+    test('returns status: unknown when models.json is a schema-valid empty object', async () => {
+      const cacheDir = path.join(testDir, 'cache', 'opencode')
+      fs.mkdirSync(cacheDir, { recursive: true })
+      fs.writeFileSync(path.join(cacheDir, 'models.json'), '{}')
+      process.env.XDG_CACHE_HOME = path.join(testDir, 'cache')
+
+      const client = makeThrowingClient(new Error('ECONNREFUSED'))
+
+      const result = await getAvailableModels(client)
+
+      expect(result.status).toBe('unknown')
+      expect(result.models).toBeInstanceOf(Set)
+      expect(result.models.size).toBe(0)
+    })
+
+    test('returns status: unknown when models.json has providers with empty models records', async () => {
+      // Catches the case where `enabled_providers` populates entries without
+      // auth-driven model lists — schema is valid, `buildSetFromCache` produces
+      // a zero-size set, but `'cache'` would still slip past the gate without
+      // the collapse.
+      const cacheDir = path.join(testDir, 'cache', 'opencode')
+      fs.mkdirSync(cacheDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(cacheDir, 'models.json'),
+        JSON.stringify({
+          anthropic: { models: {} },
+          openai: { models: {} },
+        }),
+      )
+      process.env.XDG_CACHE_HOME = path.join(testDir, 'cache')
+
+      const client = makeThrowingClient(new Error('ECONNREFUSED'))
+
+      const result = await getAvailableModels(client)
+
+      expect(result.status).toBe('unknown')
+      expect(result.models.size).toBe(0)
+    })
+
+    test('returns status: unknown when OPENCODE_MODELS_URL-derived cache exists but is empty', async () => {
+      // OPENCODE_MODELS_URL routes the cache through the URL-derived `models-<hash>.json`
+      // filename and explicitly does NOT fall through to default models.json (trust-domain
+      // boundary). The collapse must still apply on the URL-derived path.
+      const cacheDir = path.join(testDir, 'cache', 'opencode')
+      fs.mkdirSync(cacheDir, { recursive: true })
+      const url = 'https://models.example.com/registry.json'
+      const hashedFilename = `models-${sha1Hex(url)}.json`
+      fs.writeFileSync(path.join(cacheDir, hashedFilename), '{}')
+      process.env.XDG_CACHE_HOME = path.join(testDir, 'cache')
+      process.env.OPENCODE_MODELS_URL = url
+
+      const client = makeThrowingClient(new Error('ECONNREFUSED'))
+
+      const result = await getAvailableModels(client)
+
+      expect(result.status).toBe('unknown')
+      expect(result.models.size).toBe(0)
+    })
+  })
+
   describe('edge case: cache path resolution', () => {
     test('uses XDG_CACHE_HOME when set', async () => {
       const cacheDir = path.join(testDir, 'xdg-cache', 'opencode')
