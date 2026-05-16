@@ -164,6 +164,23 @@
               "temperature": 0.1,
               "mode": "subagent"
             }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
+            }
           ]
         },
         "adversarial-reviewer": {
@@ -306,6 +323,23 @@
               "model": "anthropic/claude-opus-4-7",
               "temperature": 0.1,
               "mode": "subagent"
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
             }
           ]
         },
@@ -450,6 +484,23 @@
               "temperature": 0.1,
               "mode": "subagent"
             }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
+            }
           ]
         },
         "ankane-readme-writer": {
@@ -592,6 +643,23 @@
               "model": "anthropic/claude-opus-4-7",
               "temperature": 0.1,
               "mode": "subagent"
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
             }
           ]
         },
@@ -736,6 +804,23 @@
               "temperature": 0.1,
               "mode": "subagent"
             }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
+            }
           ]
         },
         "architecture-strategist": {
@@ -878,6 +963,23 @@
               "model": "anthropic/claude-opus-4-7",
               "temperature": 0.1,
               "mode": "subagent"
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
             }
           ]
         },
@@ -1022,6 +1124,23 @@
               "temperature": 0.1,
               "mode": "subagent"
             }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
+            }
           ]
         },
         "bug-reproduction-validator": {
@@ -1164,6 +1283,23 @@
               "model": "anthropic/claude-opus-4-7",
               "temperature": 0.1,
               "mode": "subagent"
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
             }
           ]
         },
@@ -1308,6 +1444,23 @@
               "temperature": 0.1,
               "mode": "subagent"
             }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
+            }
           ]
         },
         "cli-readiness-reviewer": {
@@ -1450,6 +1603,23 @@
               "model": "anthropic/claude-opus-4-7",
               "temperature": 0.1,
               "mode": "subagent"
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
             }
           ]
         },
@@ -1594,6 +1764,23 @@
               "temperature": 0.1,
               "mode": "subagent"
             }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
+            }
           ]
         },
         "coherence-reviewer": {
@@ -1736,6 +1923,23 @@
               "model": "anthropic/claude-opus-4-7",
               "temperature": 0.1,
               "mode": "subagent"
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
             }
           ]
         },
@@ -1880,6 +2084,23 @@
               "temperature": 0.1,
               "mode": "subagent"
             }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
+            }
           ]
         },
         "data-integrity-guardian": {
@@ -2022,6 +2243,23 @@
               "model": "anthropic/claude-opus-4-7",
               "temperature": 0.1,
               "mode": "subagent"
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
             }
           ]
         },
@@ -2166,6 +2404,23 @@
               "temperature": 0.1,
               "mode": "subagent"
             }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
+            }
           ]
         },
         "data-migrations-reviewer": {
@@ -2308,6 +2563,23 @@
               "model": "anthropic/claude-opus-4-7",
               "temperature": 0.1,
               "mode": "subagent"
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
             }
           ]
         },
@@ -2452,6 +2724,23 @@
               "temperature": 0.1,
               "mode": "subagent"
             }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
+            }
           ]
         },
         "design-implementation-reviewer": {
@@ -2594,6 +2883,23 @@
               "model": "anthropic/claude-opus-4-7",
               "temperature": 0.1,
               "mode": "subagent"
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
             }
           ]
         },
@@ -2738,6 +3044,23 @@
               "temperature": 0.1,
               "mode": "subagent"
             }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
+            }
           ]
         },
         "design-lens-reviewer": {
@@ -2880,6 +3203,23 @@
               "model": "anthropic/claude-opus-4-7",
               "temperature": 0.1,
               "mode": "subagent"
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
             }
           ]
         },
@@ -3024,6 +3364,23 @@
               "temperature": 0.1,
               "mode": "subagent"
             }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
+            }
           ]
         },
         "feasibility-reviewer": {
@@ -3166,6 +3523,23 @@
               "model": "anthropic/claude-opus-4-7",
               "temperature": 0.1,
               "mode": "subagent"
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
             }
           ]
         },
@@ -3310,6 +3684,23 @@
               "temperature": 0.1,
               "mode": "subagent"
             }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
+            }
           ]
         },
         "framework-docs-researcher": {
@@ -3452,6 +3843,23 @@
               "model": "anthropic/claude-opus-4-7",
               "temperature": 0.1,
               "mode": "subagent"
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
             }
           ]
         },
@@ -3596,6 +4004,23 @@
               "temperature": 0.1,
               "mode": "subagent"
             }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
+            }
           ]
         },
         "issue-intelligence-analyst": {
@@ -3738,6 +4163,23 @@
               "model": "anthropic/claude-opus-4-7",
               "temperature": 0.1,
               "mode": "subagent"
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
             }
           ]
         },
@@ -3882,6 +4324,23 @@
               "temperature": 0.1,
               "mode": "subagent"
             }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
+            }
           ]
         },
         "kieran-python-reviewer": {
@@ -4024,6 +4483,23 @@
               "model": "anthropic/claude-opus-4-7",
               "temperature": 0.1,
               "mode": "subagent"
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
             }
           ]
         },
@@ -4168,6 +4644,23 @@
               "temperature": 0.1,
               "mode": "subagent"
             }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
+            }
           ]
         },
         "kieran-typescript-reviewer": {
@@ -4310,6 +4803,23 @@
               "model": "anthropic/claude-opus-4-7",
               "temperature": 0.1,
               "mode": "subagent"
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
             }
           ]
         },
@@ -4454,6 +4964,23 @@
               "temperature": 0.1,
               "mode": "subagent"
             }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
+            }
           ]
         },
         "lint": {
@@ -4596,6 +5123,23 @@
               "model": "anthropic/claude-opus-4-7",
               "temperature": 0.1,
               "mode": "subagent"
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
             }
           ]
         },
@@ -4740,6 +5284,23 @@
               "temperature": 0.1,
               "mode": "subagent"
             }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
+            }
           ]
         },
         "pattern-recognition-specialist": {
@@ -4882,6 +5443,23 @@
               "model": "anthropic/claude-opus-4-7",
               "temperature": 0.1,
               "mode": "subagent"
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
             }
           ]
         },
@@ -5026,6 +5604,23 @@
               "temperature": 0.1,
               "mode": "subagent"
             }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
+            }
           ]
         },
         "performance-reviewer": {
@@ -5168,6 +5763,23 @@
               "model": "anthropic/claude-opus-4-7",
               "temperature": 0.1,
               "mode": "subagent"
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
             }
           ]
         },
@@ -5312,6 +5924,23 @@
               "temperature": 0.1,
               "mode": "subagent"
             }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
+            }
           ]
         },
         "previous-comments-reviewer": {
@@ -5454,6 +6083,23 @@
               "model": "anthropic/claude-opus-4-7",
               "temperature": 0.1,
               "mode": "subagent"
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
             }
           ]
         },
@@ -5598,6 +6244,23 @@
               "temperature": 0.1,
               "mode": "subagent"
             }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
+            }
           ]
         },
         "project-standards-reviewer": {
@@ -5740,6 +6403,23 @@
               "model": "anthropic/claude-opus-4-7",
               "temperature": 0.1,
               "mode": "subagent"
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
             }
           ]
         },
@@ -5884,6 +6564,23 @@
               "temperature": 0.1,
               "mode": "subagent"
             }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
+            }
           ]
         },
         "repo-research-analyst": {
@@ -6026,6 +6723,23 @@
               "model": "anthropic/claude-opus-4-7",
               "temperature": 0.1,
               "mode": "subagent"
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
             }
           ]
         },
@@ -6170,6 +6884,23 @@
               "temperature": 0.1,
               "mode": "subagent"
             }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
+            }
           ]
         },
         "scope-guardian-reviewer": {
@@ -6312,6 +7043,23 @@
               "model": "anthropic/claude-opus-4-7",
               "temperature": 0.1,
               "mode": "subagent"
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
             }
           ]
         },
@@ -6456,6 +7204,23 @@
               "temperature": 0.1,
               "mode": "subagent"
             }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
+            }
           ]
         },
         "security-reviewer": {
@@ -6598,6 +7363,23 @@
               "model": "anthropic/claude-opus-4-7",
               "temperature": 0.1,
               "mode": "subagent"
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
             }
           ]
         },
@@ -6742,6 +7524,23 @@
               "temperature": 0.1,
               "mode": "subagent"
             }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
+            }
           ]
         },
         "slack-researcher": {
@@ -6884,6 +7683,23 @@
               "model": "anthropic/claude-opus-4-7",
               "temperature": 0.1,
               "mode": "subagent"
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
             }
           ]
         },
@@ -7028,6 +7844,23 @@
               "temperature": 0.1,
               "mode": "subagent"
             }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
+            }
           ]
         },
         "systematic-implementer": {
@@ -7171,6 +8004,23 @@
               "temperature": 0.1,
               "mode": "subagent"
             }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
+            }
           ]
         },
         "testing-reviewer": {
@@ -7313,6 +8163,23 @@
               "model": "anthropic/claude-opus-4-7",
               "temperature": 0.1,
               "mode": "subagent"
+            }
+          ],
+          "allOf": [
+            {
+              "if": {
+                "required": ["variant"]
+              },
+              "then": {
+                "required": ["model"],
+                "properties": {
+                  "model": {
+                    "type": "string",
+                    "minLength": 1,
+                    "pattern": "^[^\\s/]+\\/\\S+$"
+                  }
+                }
+              }
             }
           ]
         }

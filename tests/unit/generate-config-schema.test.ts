@@ -750,8 +750,17 @@ describe('AJV parity: Zod runtime contract vs generated JSON Schema', () => {
     },
     {
       name: 'agent variant without explicit model rejected by both',
-      value: { agents: { foo: { variant: 'high' } } },
+      value: { agents: { 'correctness-reviewer': { variant: 'high' } } },
       accepted: false,
+    },
+    {
+      name: 'agent variant with explicit model accepted by both',
+      value: {
+        agents: {
+          'correctness-reviewer': { model: 'openai/gpt-5.5', variant: 'high' },
+        },
+      },
+      accepted: true,
     },
     {
       name: 'category variant without explicit model rejected by both',

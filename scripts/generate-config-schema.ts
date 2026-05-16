@@ -283,12 +283,26 @@ function addVariantRequiresExplicitModel(
 }
 
 function addOverlayCrossFieldConstraints(root: Record<string, unknown>): void {
-  for (const path of [
-    ['properties', 'agents', 'additionalProperties'],
-    ['properties', 'categories', 'additionalProperties'],
-  ] as const) {
-    const overlayNode = getSchemaNode(root, path)
-    if (overlayNode !== null) addVariantRequiresExplicitModel(overlayNode)
+  // categories: still uses additionalProperties (z.record)
+  const categoriesOverlay = getSchemaNode(root, [
+    'properties',
+    'categories',
+    'additionalProperties',
+  ])
+  if (categoriesOverlay !== null)
+    addVariantRequiresExplicitModel(categoriesOverlay)
+
+  // agents: now a typed object — inject constraint into each per-agent entry
+  const agentProperties = getSchemaNode(root, [
+    'properties',
+    'agents',
+    'properties',
+  ])
+  if (agentProperties !== null) {
+    for (const key of Object.keys(agentProperties)) {
+      const entry = asObject((agentProperties as Record<string, unknown>)[key])
+      if (entry !== null) addVariantRequiresExplicitModel(entry)
+    }
   }
 }
 

@@ -510,3 +510,104 @@ describe('--version flag semver validation', () => {
     )
   })
 })
+
+// ═════════════════════════════════════════════════════════════════
+// resolveAgentOverlaySchema — typed-object fallback path
+// ═════════════════════════════════════════════════════════════════
+
+describe('resolveAgentOverlaySchema', () => {
+  let resolveFn: (
+    properties: Record<string, unknown>,
+  ) => Record<string, unknown> | undefined
+
+  beforeAll(async () => {
+    const mod = await import('../../docs/scripts/generate-config-reference.js')
+    resolveFn = mod.resolveAgentOverlaySchema
+  })
+
+  test('returns additionalProperties when agents is a record schema', () => {
+    const overlayShape = {
+      type: 'object',
+      properties: {
+        model: {
+          type: 'string',
+          description: 'Model',
+          examples: ['openai/gpt-4o'],
+        },
+      },
+    }
+    const properties: Record<string, unknown> = {
+      agents: {
+        type: 'object',
+        additionalProperties: overlayShape,
+      },
+    }
+    const result = resolveFn(properties)
+    expect(result).toBe(overlayShape)
+  })
+
+  test('returns first per-agent entry when agents has additionalProperties: false', () => {
+    const agentEntry = {
+      type: 'object',
+      properties: {
+        model: {
+          type: 'string',
+          description: 'Model',
+          examples: ['openai/gpt-4o'],
+        },
+        variant: { type: 'string', description: 'Variant', examples: ['high'] },
+      },
+    }
+    const properties: Record<string, unknown> = {
+      agents: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          'correctness-reviewer': agentEntry,
+          'security-reviewer': { type: 'object', properties: {} },
+        },
+      },
+    }
+    const result = resolveFn(properties)
+    // Should return the first property value (correctness-reviewer's schema)
+    expect(result).toBe(agentEntry)
+    expect(result?.properties).toBeDefined()
+  })
+
+  test('overlay field documentation is present when additionalProperties is false', () => {
+    // Synthetic schema that mirrors the strict-mode agents shape.
+    // Verifies the fallback path surfaces overlay field docs from typed properties.
+    const overlayFields = {
+      model: {
+        type: 'string',
+        description: 'Model override',
+        examples: ['openai/gpt-4o'],
+      },
+      variant: {
+        type: 'string',
+        description: 'Variant override',
+        examples: ['high'],
+      },
+    }
+    const agentEntry = { type: 'object', properties: overlayFields }
+    const properties: Record<string, unknown> = {
+      agents: {
+        type: 'object',
+        additionalProperties: false,
+        properties: { oracle: agentEntry },
+      },
+    }
+    const result = resolveFn(properties)
+    expect(result).toBeDefined()
+    const resultProps = result?.properties as
+      | Record<string, unknown>
+      | undefined
+    expect(resultProps?.model).toBeDefined()
+    expect(resultProps?.variant).toBeDefined()
+  })
+
+  test('returns undefined when agents property is absent', () => {
+    const result = resolveFn({ categories: {} })
+    expect(result).toBeUndefined()
+  })
+})
