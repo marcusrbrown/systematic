@@ -423,17 +423,49 @@ describe('checkSchemaFiles — drift detection', () => {
     rootDir: string,
   ) => string[]
   let generateSchemaContentFn: (version: string) => string
+  let generateBundledNamesContentFn: (
+    agents: string[],
+    skills: string[],
+    options?: {
+      previousAgentCount?: number
+      previousSkillCount?: number
+      allowShrink?: boolean
+    },
+  ) => string
   let checkSchemaFilesFn: (
     rootDir: string,
     explicitVersion?: string | null,
   ) => { ok: boolean; message: string }
+  let writeBundledNamesFileFn: (content: string, rootDir: string) => string
 
   beforeAll(async () => {
     const mod = await import('../../scripts/generate-config-schema.js')
     generateAndWriteFn = mod.generateAndWrite
     generateSchemaContentFn = mod.generateSchemaContent
+    generateBundledNamesContentFn = mod.generateBundledNamesContent
     checkSchemaFilesFn = mod.checkSchemaFiles
+    writeBundledNamesFileFn = mod.writeBundledNamesFile
   })
+
+  /**
+   * Seed a minimal bundled-names.ts into a temp repo AND create matching
+   * agents/ and skills/ directories so that discoverBundledNames() returns
+   * the same set that was committed (keeping the drift check clean).
+   */
+  function writeBundledNames(
+    root: string,
+    agents: string[],
+    skills: string[],
+  ): void {
+    const content = generateBundledNamesContentFn(agents, skills)
+    writeBundledNamesFileFn(content, root)
+    // Seed matching filesystem entries so discovery agrees with the committed file
+    seedBundledFilesystem(
+      root,
+      agents.map((name) => ({ category: 'review', name })),
+      skills,
+    )
+  }
 
   test('happy path: all files up to date — returns ok', () => {
     const tmp = makeTempRepo()
@@ -442,6 +474,7 @@ describe('checkSchemaFiles — drift detection', () => {
     // Run generator to produce clean state
     const content = generateSchemaContentFn('3.0.0')
     generateAndWriteFn(content, '3.0.0', tmp)
+    writeBundledNames(tmp, ['agent-a', 'agent-b'], ['skill-a'])
 
     const result = checkSchemaFilesFn(tmp, '3.0.0')
     expect(result.ok).toBe(true)
@@ -454,6 +487,7 @@ describe('checkSchemaFiles — drift detection', () => {
 
     const content = generateSchemaContentFn('3.0.0')
     generateAndWriteFn(content, '3.0.0', tmp)
+    writeBundledNames(tmp, ['agent-a', 'agent-b'], ['skill-a'])
 
     // Hand-edit one file
     const v3Path = path.join(
@@ -485,6 +519,7 @@ describe('checkSchemaFiles — drift detection', () => {
     // Generate and write all three (v3/, latest/, dist/)
     const content = generateSchemaContentFn('3.0.0')
     generateAndWriteFn(content, '3.0.0', tmp)
+    writeBundledNames(tmp, ['agent-a', 'agent-b'], ['skill-a'])
 
     // Delete latest/ to simulate gitignored-clean-checkout scenario
     const latestPath = path.join(
@@ -511,12 +546,130 @@ describe('checkSchemaFiles — drift detection', () => {
       'docs/public/schemas/v3/systematic-config.schema.json',
       content,
     )
+    writeBundledNames(tmp, ['agent-a', 'agent-b'], ['skill-a'])
     // Intentionally do NOT write dist/schemas/ — this is the bug scenario
 
     // Must pass: dist/schemas/ is a publish-only artifact, not checked here
     const result = checkSchemaFilesFn(tmp, '3.0.0')
     expect(result.ok).toBe(true)
     expect(result.message).toContain('up to date')
+  })
+
+  // ── bundled-names drift scenarios ──────────────────────────────
+
+  test('reports drift when bundled-names.ts is stale', () => {
+    const tmp = makeTempRepo()
+    writePackageJson(tmp, '3.0.0')
+
+    // Write a fresh JSON Schema
+    const schemaContent = generateSchemaContentFn('3.0.0')
+    writeSchemaFile(
+      tmp,
+      'docs/public/schemas/v3/systematic-config.schema.json',
+      schemaContent,
+    )
+
+    // Write bundled-names.ts with a smaller agent set than what's on disk
+    writeBundledNames(tmp, ['agent-a'], ['skill-a'])
+
+    // Now seed the filesystem with an extra agent that's NOT in bundled-names.ts
+    seedBundledFilesystem(
+      tmp,
+      [
+        { category: 'review', name: 'agent-a' },
+        { category: 'review', name: 'agent-b' }, // extra — not in committed file
+      ],
+      ['skill-a'],
+    )
+
+    const result = checkSchemaFilesFn(tmp, '3.0.0')
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('bundled-names.ts')
+    expect(result.message).toMatch(/out of date|generate-config-schema/i)
+  })
+
+  test('reports error when bundled-names.ts is missing', () => {
+    const tmp = makeTempRepo()
+    writePackageJson(tmp, '3.0.0')
+
+    // Write a fresh JSON Schema but no bundled-names.ts
+    const schemaContent = generateSchemaContentFn('3.0.0')
+    writeSchemaFile(
+      tmp,
+      'docs/public/schemas/v3/systematic-config.schema.json',
+      schemaContent,
+    )
+
+    // Seed filesystem agents/skills so discovery works
+    seedBundledFilesystem(
+      tmp,
+      [{ category: 'review', name: 'agent-a' }],
+      ['skill-a'],
+    )
+
+    const result = checkSchemaFilesFn(tmp, '3.0.0')
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('bundled-names.ts')
+    expect(result.message).toMatch(/not found|does not exist/i)
+  })
+
+  test('aggregates both failures when both artifacts are stale', () => {
+    const tmp = makeTempRepo()
+    writePackageJson(tmp, '3.0.0')
+
+    // Write a stale JSON Schema (wrong content)
+    writeSchemaFile(
+      tmp,
+      'docs/public/schemas/v3/systematic-config.schema.json',
+      JSON.stringify({ stale: true }),
+    )
+
+    // Write bundled-names.ts with a smaller agent set
+    writeBundledNames(tmp, ['agent-a'], ['skill-a'])
+
+    // Seed filesystem with extra agent
+    seedBundledFilesystem(
+      tmp,
+      [
+        { category: 'review', name: 'agent-a' },
+        { category: 'review', name: 'agent-b' },
+      ],
+      ['skill-a'],
+    )
+
+    const result = checkSchemaFilesFn(tmp, '3.0.0')
+    expect(result.ok).toBe(false)
+    // Both artifact paths should appear in the combined message
+    expect(result.message).toContain('docs/public/schemas/v3')
+    expect(result.message).toContain('bundled-names.ts')
+  })
+
+  test('bundled-names drift check is independent of version resolution', () => {
+    // A repo with no git tag and no resolvable package.json version.
+    // The JSON Schema check will fail with "no resolvable version".
+    // The bundled-names check should still detect drift on bundled-names.ts
+    // independently — the combined message must mention bundled-names.ts.
+    const tmp = makeTempRepo()
+    // No package.json → resolveVersion will throw
+
+    // Seed filesystem agents/skills
+    seedBundledFilesystem(
+      tmp,
+      [
+        { category: 'review', name: 'agent-a' },
+        { category: 'review', name: 'agent-b' },
+      ],
+      ['skill-a'],
+    )
+
+    // Write a bundled-names.ts that only lists agent-a (stale — missing agent-b)
+    writeBundledNames(tmp, ['agent-a'], ['skill-a'])
+
+    // No explicit version → resolveVersion will fail; bundled-names drift should still surface
+    const result = checkSchemaFilesFn(tmp, null)
+    expect(result.ok).toBe(false)
+    // The bundled-names drift must be mentioned regardless of version failure
+    expect(result.message).toContain('bundled-names.ts')
   })
 })
 
@@ -535,7 +688,7 @@ describe('AJV parity: Zod runtime contract vs generated JSON Schema', () => {
       name: 'valid full config accepted by both',
       value: {
         agents: {
-          explorer: {
+          'correctness-reviewer': {
             model: 'openai/gpt-4',
             temperature: 0.3,
             mode: 'subagent',
@@ -617,7 +770,11 @@ describe('AJV parity: Zod runtime contract vs generated JSON Schema', () => {
     },
     {
       name: 'variant with explicit model accepted by both',
-      value: { agents: { foo: { model: 'openai/gpt-5.5', variant: 'high' } } },
+      value: {
+        agents: {
+          'correctness-reviewer': { model: 'openai/gpt-5.5', variant: 'high' },
+        },
+      },
       accepted: true,
     },
     {
@@ -813,7 +970,7 @@ describe('ajv regression: generated schema validates representative config', () 
     // Representative minimal config
     const validConfig = {
       agents: {
-        explorer: {
+        'correctness-reviewer': {
           model: 'openai/gpt-4',
           temperature: 0.3,
           mode: 'subagent',
@@ -863,7 +1020,7 @@ describe('ajv regression: generated schema validates representative config', () 
 
     const invalidConfig = {
       agents: {
-        explorer: {
+        'correctness-reviewer': {
           temperature: 'high', // string instead of number
         },
       },
