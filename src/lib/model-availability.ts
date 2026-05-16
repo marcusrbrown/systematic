@@ -35,10 +35,10 @@ export interface OpencodeClientLike {
  *   operational consequence is identical and downstream consumers should treat
  *   both cases the same way.
  * - `cache`: The API call failed (error envelope, thrown, or timed out) and
- *   the local `models.json` cache was readable. `models` reflects whatever
- *   OpenCode last wrote to disk. The cache may itself be empty; callers that
- *   need to distinguish "cached empty" from "cached with content" should
- *   inspect `models.size`.
+ *   the local `models.json` cache was readable AND non-empty. `models`
+ *   reflects whatever OpenCode last wrote to disk. A cache that loads
+ *   successfully but produces a zero-size set collapses to `'unknown'` for
+ *   the same operational reason an empty API response does.
  * - `unknown`: Either both the API call and the cache fallback failed (cache
  *   missing, unreadable, corrupt, or schema-mismatched), OR the API call
  *   succeeded with zero usable models. Resolution should degrade gracefully —
@@ -183,6 +183,15 @@ function readFallbackCache(): ModelAvailability {
   const cacheDir = resolveCacheDir()
   const openCodeModelsUrl = process.env.OPENCODE_MODELS_URL?.trim()
 
+  // Both branches below check `result.size > 0` before returning
+  // `{ status: 'cache', ... }`. Symmetric with the empty-API collapse in
+  // `getAvailableModels`: a cache file that loads successfully but produces a
+  // zero-size set is operationally identical to no cache at all — we cannot
+  // point bundled agents at any model the user can call. Funneling the empty
+  // case through `emptyAvailability()` keeps the downstream gate
+  // `availability.status !== 'unknown'` a single rule for every consumer
+  // rather than `status !== 'unknown' && models.size > 0`.
+
   // When OPENCODE_MODELS_URL is set, OpenCode writes the cache to
   // `models-<sha1-hex>.json` where the hash is `Hash.fast(url)` — verified
   // against `.slim/clonedeps/repos/anomalyco__opencode/packages/core/src/util/hash.ts`.
@@ -195,7 +204,7 @@ function readFallbackCache(): ModelAvailability {
       `models-${fastHash(openCodeModelsUrl)}.json`,
     )
     const urlResult = readModelsFromCache(urlDerivedPath)
-    if (urlResult !== null) {
+    if (urlResult !== null && urlResult.size > 0) {
       return { status: 'cache', models: urlResult }
     }
     // When OPENCODE_MODELS_URL is set, the URL-derived cache file is the
@@ -208,7 +217,7 @@ function readFallbackCache(): ModelAvailability {
 
   const defaultPath = path.join(cacheDir, MODELS_JSON_FILENAME)
   const defaultResult = readModelsFromCache(defaultPath)
-  if (defaultResult !== null) {
+  if (defaultResult !== null && defaultResult.size > 0) {
     return { status: 'cache', models: defaultResult }
   }
 
