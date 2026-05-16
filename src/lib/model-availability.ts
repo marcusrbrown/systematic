@@ -74,6 +74,28 @@ const MAX_CACHE_FILE_BYTES = 16 * 1024 * 1024 // 16MB ceiling
 const DEFAULT_API_TIMEOUT_MS = 1500
 const MODELS_JSON_FILENAME = 'models.json'
 
+/**
+ * Module-scope memoization keyed on `OpencodeClient` identity. Multi-source
+ * Systematic plugin loads share the same `client` reference (built once per
+ * OpenCode process and passed by reference to every plugin factory — verified
+ * against `anomalyco/opencode@v1.15.1` at `packages/opencode/src/plugin/index.ts:128-150`).
+ *
+ * Only **successful** discovery (`'api'` or `'cache'` status) populates the
+ * map. `'unknown'` outcomes are intentionally left uncached so that a transient
+ * failure on the first call does not pin every subsequent call into
+ * restart-required mode for the rest of the process lifetime — the next call
+ * gets a fresh attempt instead.
+ *
+ * The `WeakMap` auto-invalidates when `client` is collected (i.e., on OpenCode
+ * restart), which is the documented invalidation contract. No TTL is needed.
+ *
+ * Cached envelopes are returned by reference; callers MUST NOT mutate the
+ * returned `models` Set. The `ReadonlySet<string>` type contract enforces this
+ * at the type level — runtime mutation via cast would corrupt the cache, but
+ * no such code exists in this codebase today.
+ */
+const availabilityCache = new WeakMap<OpencodeClientLike, ModelAvailability>()
+
 function resolveCacheDir(): string {
   const xdgCacheHome = process.env.XDG_CACHE_HOME?.trim()
   const cacheBase =
@@ -267,6 +289,26 @@ export async function getAvailableModels(
   client: OpencodeClientLike,
   options: AvailabilityOptions = {},
 ): Promise<ModelAvailability> {
+  // Memoization fast path: a prior successful discovery (`'api'` or `'cache'`)
+  // for this exact `client` reference returns the cached envelope by reference.
+  // `'unknown'` outcomes are not cached (see `availabilityCache` JSDoc), so a
+  // prior failure does not block the next call from retrying.
+  const cached = availabilityCache.get(client)
+  if (cached !== undefined) {
+    return cached
+  }
+
+  // Resolve the discovery result via the normal flow, then funnel every
+  // success path through `cacheAndReturn`. The helper guards the
+  // "only cache successful discovery" invariant in one place — any future
+  // return path that adds `'cache'` or `'api'` outcomes inherits the rule.
+  const cacheAndReturn = (envelope: ModelAvailability): ModelAvailability => {
+    if (envelope.status !== 'unknown') {
+      availabilityCache.set(client, envelope)
+    }
+    return envelope
+  }
+
   const timeoutMs =
     options.apiTimeoutMs === undefined
       ? DEFAULT_API_TIMEOUT_MS
@@ -278,7 +320,7 @@ export async function getAvailableModels(
   // matches the documented contract of "never rejects, always returns a
   // ModelAvailability envelope."
   if (typeof client.config?.providers !== 'function') {
-    return readFallbackCache()
+    return cacheAndReturn(readFallbackCache())
   }
 
   const apiCall = client.config.providers()
@@ -299,16 +341,16 @@ export async function getAvailableModels(
         console.warn(
           `[systematic] client.config.providers() exceeded ${timeoutMs}ms; falling back to models.json cache.`,
         )
-        return readFallbackCache()
+        return cacheAndReturn(readFallbackCache())
       }
       response = raced
     }
   } catch {
-    return readFallbackCache()
+    return cacheAndReturn(readFallbackCache())
   }
 
   if (response.error !== undefined || response.data === undefined) {
-    return readFallbackCache()
+    return cacheAndReturn(readFallbackCache())
   }
 
   const models = buildSetFromProviders(response.data.providers)
@@ -330,11 +372,11 @@ export async function getAvailableModels(
   // SDK shape (including non-empty `providers` arrays where the provider
   // entries themselves have no usable models).
   if (models.size === 0) {
-    return emptyAvailability()
+    return cacheAndReturn(emptyAvailability())
   }
 
-  return {
+  return cacheAndReturn({
     status: 'api',
     models,
-  }
+  })
 }

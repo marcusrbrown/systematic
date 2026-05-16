@@ -826,6 +826,169 @@ describe('getAvailableModels', () => {
     })
   })
 
+  describe('memoization (WeakMap keyed on client identity)', () => {
+    // Multi-source Systematic plugin loads share the same OpencodeClient
+    // reference (verified empirically against the OpenCode plugin loader at
+    // v1.15.1). This describe block covers the contract:
+    //   - successful discovery (`'api'` and `'cache'`) is cached by client
+    //     identity; subsequent calls return the cached envelope by reference
+    //   - `'unknown'` outcomes are NOT cached so transient failures can retry
+    //   - distinct client instances each populate their own cache slot
+    //   - tests construct fresh clients to avoid module-scope state bleed
+
+    test('same client returning api caches the envelope (one HTTP call only)', async () => {
+      const providersSpy = spyOn(
+        {
+          fn: () =>
+            Promise.resolve({
+              data: {
+                providers: [
+                  {
+                    id: 'anthropic',
+                    models: {
+                      'claude-opus-4-7': {
+                        id: 'claude-opus-4-7',
+                        name: 'Claude Opus 4.7',
+                      },
+                    },
+                  },
+                ],
+                default: {},
+              },
+              error: undefined,
+            }),
+        },
+        'fn',
+      )
+
+      const client = { config: { providers: providersSpy } }
+
+      const first = await getAvailableModels(client)
+      const second = await getAvailableModels(client)
+
+      expect(first.status).toBe('api')
+      // Second call returns the exact same envelope by reference — the cached
+      // ModelAvailability is reused, not recomputed.
+      expect(second).toBe(first)
+      // Underlying HTTP call fired exactly once.
+      expect(providersSpy).toHaveBeenCalledTimes(1)
+    })
+
+    test('different client instances each fire their own HTTP call', async () => {
+      const responseA = {
+        data: {
+          providers: [{ id: 'anthropic', models: { 'claude-opus-4-7': {} } }],
+          default: {},
+        },
+        error: undefined,
+      } as const
+      const responseB = {
+        data: {
+          providers: [{ id: 'openai', models: { 'gpt-5': {} } }],
+          default: {},
+        },
+        error: undefined,
+      } as const
+
+      const spyA = spyOn({ fn: () => Promise.resolve(responseA) }, 'fn')
+      const spyB = spyOn({ fn: () => Promise.resolve(responseB) }, 'fn')
+
+      const clientA = { config: { providers: spyA } }
+      const clientB = { config: { providers: spyB } }
+
+      const a = await getAvailableModels(clientA)
+      const b = await getAvailableModels(clientB)
+
+      expect(a.status).toBe('api')
+      expect(b.status).toBe('api')
+      expect(a.models.has('anthropic/claude-opus-4-7')).toBe(true)
+      expect(b.models.has('openai/gpt-5')).toBe(true)
+      // Each client triggers its own HTTP call — no false sharing across keys.
+      expect(spyA).toHaveBeenCalledTimes(1)
+      expect(spyB).toHaveBeenCalledTimes(1)
+      // The two envelopes are distinct (different cache slots).
+      expect(a).not.toBe(b)
+    })
+
+    test('unknown status is NOT cached so transient failures can retry', async () => {
+      // First call: API returns empty providers → `'unknown'`. Second call with
+      // the same client must re-invoke the underlying API path (the transient
+      // failure is not sticky). This is the refinement that emerged from
+      // document review — caching `'unknown'` would pin every subsequent call
+      // into restart-required mode after a single network blip.
+      process.env.XDG_CACHE_HOME = path.join(testDir, 'nonexistent')
+
+      const providersSpy = spyOn(
+        {
+          fn: () =>
+            Promise.resolve({
+              data: { providers: [], default: {} },
+              error: undefined,
+            }),
+        },
+        'fn',
+      )
+
+      const client = { config: { providers: providersSpy } }
+
+      const first = await getAvailableModels(client)
+      const second = await getAvailableModels(client)
+
+      expect(first.status).toBe('unknown')
+      expect(second.status).toBe('unknown')
+      // The HTTP call fires on BOTH invocations — `'unknown'` is not cached.
+      expect(providersSpy).toHaveBeenCalledTimes(2)
+    })
+
+    test('cache status caches too — second call skips API and disk read', async () => {
+      // Sequential multi-source scenario: configure the API to throw, but
+      // pre-write a valid models.json. The first call returns `'cache'`. The
+      // second call (still sequential, same shared client) must hit the
+      // WeakMap, skipping BOTH the failing API call AND the fs.readFileSync
+      // of models.json. Spy on the underlying API to assert it fires exactly
+      // once, and spy on fs internals to assert no second disk read happens.
+      const cacheDir = path.join(testDir, 'cache', 'opencode')
+      fs.mkdirSync(cacheDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(cacheDir, 'models.json'),
+        JSON.stringify({
+          anthropic: { models: { 'claude-opus-4-7': {} } },
+        }),
+      )
+      process.env.XDG_CACHE_HOME = path.join(testDir, 'cache')
+
+      const providersSpy = spyOn(
+        { fn: () => Promise.reject(new Error('ECONNREFUSED')) },
+        'fn',
+      )
+      const client = { config: { providers: providersSpy } }
+
+      // First call populates the cache via the fallback path.
+      const first = await getAvailableModels(client)
+      expect(first.status).toBe('cache')
+      expect(first.models.has('anthropic/claude-opus-4-7')).toBe(true)
+
+      // Spy on fs.openSync — the entrypoint for `readModelsFromCache`. If the
+      // cache hits, no new fd is opened against models.json on the second call.
+      const openSyncSpy = spyOn(fs, 'openSync')
+
+      // Reset the providers spy call count to isolate the second call's behavior.
+      providersSpy.mockClear()
+
+      const second = await getAvailableModels(client)
+      expect(second).toBe(first)
+      // Neither the API call nor any models.json fd was opened on the second call.
+      expect(providersSpy).toHaveBeenCalledTimes(0)
+      const modelsJsonOpens = openSyncSpy.mock.calls.filter(
+        (args) =>
+          typeof args[0] === 'string' && (args[0] as string).includes('models'),
+      )
+      expect(modelsJsonOpens.length).toBe(0)
+
+      openSyncSpy.mockRestore()
+    })
+  })
+
   describe('cache file race safety', () => {
     test('file truncated between size check and read returns null', async () => {
       // The fd-based bounded read pattern reads exactly statSize bytes from
