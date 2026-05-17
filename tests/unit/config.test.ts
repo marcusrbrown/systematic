@@ -905,6 +905,39 @@ describe('config', () => {
       expect(() => loadConfig(testDir)).toThrow(userConfigFilePath)
       expect(() => loadConfig(testDir)).toThrow('disabled_skills')
     })
+
+    test('typo on agents key produces a message pointing at the documentation URL', () => {
+      const configPath = writeProjectConfig({
+        agents: { 'security-reviwer': { temperature: 0.1 } },
+      })
+      let errorMessage = ''
+      try {
+        loadConfig(testDir)
+      } catch (err) {
+        errorMessage = (err as Error).message
+      }
+      expect(errorMessage).toContain(configPath)
+      expect(errorMessage).toContain('security-reviwer')
+      expect(errorMessage).toContain(
+        'https://systematic.fro.bot/getting-started/configuration#typed-validation',
+      )
+    })
+
+    test('typo on disabled_agents value produces a message pointing at the documentation URL', () => {
+      const configPath = writeProjectConfig({
+        disabled_agents: ['security-reviwer'],
+      })
+      let errorMessage = ''
+      try {
+        loadConfig(testDir)
+      } catch (err) {
+        errorMessage = (err as Error).message
+      }
+      expect(errorMessage).toContain(configPath)
+      // disabled_agents is an enum array — Zod reports a value-level error, not unrecognized_keys.
+      // The error should still name the file and the invalid field path.
+      expect(errorMessage).toContain('disabled_agents')
+    })
   })
 
   describe('merge precedence after schema validation', () => {
