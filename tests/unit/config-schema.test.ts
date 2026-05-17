@@ -5,9 +5,15 @@ import {
   OPENCODE_AGENT_COLOR_TOKENS,
 } from '../../src/lib/agent-colors.js'
 import {
+  BUNDLED_AGENT_NAMES,
+  BUNDLED_AGENT_QUALIFIED_IDS,
+  BUNDLED_SKILL_NAMES,
+} from '../../src/lib/bundled-names.js'
+import {
   AgentOverlaySchema,
   BootstrapSchema,
   CategoryOverlaySchema,
+  createSystematicConfigSchema,
   SECURITY_OVERLAY_FIELDS,
   SystematicConfigSchema,
   validateConfig,
@@ -732,5 +738,51 @@ describe('typed bundled-name validation', () => {
       disabled_agents: ['review/security-reviwer'],
     })
     expect(result.success).toBe(false)
+  })
+})
+
+describe('createSystematicConfigSchema factory', () => {
+  test('runtime SystematicConfigSchema is byte-identical to factory call with committed bundled names', () => {
+    const factorySchema = createSystematicConfigSchema({
+      agentNames: BUNDLED_AGENT_NAMES,
+      qualifiedAgentIds: BUNDLED_AGENT_QUALIFIED_IDS,
+      skillNames: BUNDLED_SKILL_NAMES,
+    })
+    const validConfig = {
+      agents: { 'correctness-reviewer': { temperature: 0.2 } },
+    }
+    expect(SystematicConfigSchema.safeParse(validConfig).success).toBe(true)
+    expect(factorySchema.safeParse(validConfig).success).toBe(true)
+  })
+
+  test('factory accepts custom agent name sets', () => {
+    const fresh = createSystematicConfigSchema({
+      agentNames: ['only-this-one'],
+      qualifiedAgentIds: ['custom/qualified'],
+      skillNames: ['only-this-skill'],
+    })
+    expect(fresh.safeParse({ agents: { 'only-this-one': {} } }).success).toBe(
+      true,
+    )
+    expect(
+      fresh.safeParse({ agents: { 'custom/qualified': {} } }).success,
+    ).toBe(true)
+    expect(
+      fresh.safeParse({ agents: { 'correctness-reviewer': {} } }).success,
+    ).toBe(false)
+  })
+
+  test('factory rejects skills outside the provided skillNames', () => {
+    const fresh = createSystematicConfigSchema({
+      agentNames: ['correctness-reviewer'],
+      qualifiedAgentIds: [],
+      skillNames: ['only-skill'],
+    })
+    expect(fresh.safeParse({ disabled_skills: ['only-skill'] }).success).toBe(
+      true,
+    )
+    expect(fresh.safeParse({ disabled_skills: ['ce:plan'] }).success).toBe(
+      false,
+    )
   })
 })
