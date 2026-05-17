@@ -457,7 +457,11 @@ describe('checkSchemaFiles — drift detection', () => {
     agents: string[],
     skills: string[],
   ): void {
-    const content = generateBundledNamesContentFn(agents, skills)
+    // Agents are seeded with category 'review', so qualified IDs are 'review/<name>'
+    const agentQualifiedIds = agents.map((name) => `review/${name}`)
+    const content = generateBundledNamesContentFn(agents, skills, {
+      agentQualifiedIds,
+    })
     writeBundledNamesFileFn(content, root)
     // Seed matching filesystem entries so discovery agrees with the committed file
     seedBundledFilesystem(
@@ -1255,5 +1259,52 @@ describe('generateBundledNamesContent — sanity check + emission', () => {
       },
     )
     expect(formatted).toBe(content)
+  })
+})
+
+// ── Parity: --check path vs write path ───────────────────────────────────────
+// Regression guard: the two call sites in generate-config-schema.ts that call
+// generateBundledNamesContent must pass the same option shape so that the drift
+// check (--check) and the write path (main) produce byte-identical output.
+describe('--check path and write path produce byte-identical bundled-names content', () => {
+  const PROJECT_ROOT = path.resolve(__dirname, '../..')
+
+  let discoverFn: (rootDir: string) => {
+    agents: string[]
+    agentQualifiedIds: string[]
+    skills: string[]
+  }
+  let generateFn: (
+    agents: string[],
+    skills: string[],
+    opts?: { agentQualifiedIds?: string[] },
+  ) => string
+  let readCommittedFn: (rootDir: string) => {
+    previousAgentCount: number
+    previousSkillCount: number
+  }
+
+  beforeAll(async () => {
+    const mod = await import('../../scripts/generate-config-schema.js')
+    discoverFn = mod.discoverBundledNames
+    generateFn = mod.generateBundledNamesContent
+    readCommittedFn = mod.readCommittedBundledNamesCounts
+  })
+
+  test('check-path content matches committed bundled-names.ts', () => {
+    const { agents, skills, agentQualifiedIds } = discoverFn(PROJECT_ROOT)
+    const previous = readCommittedFn(PROJECT_ROOT)
+
+    const checkContent = generateFn(agents, skills, {
+      ...previous,
+      agentQualifiedIds,
+    })
+
+    const onDisk = fs.readFileSync(
+      path.join(PROJECT_ROOT, 'src/lib/bundled-names.ts'),
+      'utf-8',
+    )
+
+    expect(checkContent).toBe(onDisk)
   })
 })

@@ -16,7 +16,11 @@
 
 import { z } from 'zod'
 import { OPENCODE_AGENT_COLOR_TOKENS } from './agent-colors.js'
-import { BUNDLED_AGENT_NAMES, BUNDLED_SKILL_NAMES } from './bundled-names.js'
+import {
+  BUNDLED_AGENT_NAMES,
+  BUNDLED_AGENT_QUALIFIED_IDS,
+  BUNDLED_SKILL_NAMES,
+} from './bundled-names.js'
 
 const permissionSettingSchema = z.enum(['ask', 'allow', 'deny'] as const)
 
@@ -257,12 +261,12 @@ export const SystematicConfigSchema = z
     agents: z
       .object(
         Object.fromEntries(
-          BUNDLED_AGENT_NAMES.map((name) => [
-            name,
-            AgentOverlaySchema.optional(),
-          ]),
+          [...BUNDLED_AGENT_NAMES, ...BUNDLED_AGENT_QUALIFIED_IDS].map(
+            (name) => [name, AgentOverlaySchema.optional()],
+          ),
         ) as Record<
-          (typeof BUNDLED_AGENT_NAMES)[number],
+          | (typeof BUNDLED_AGENT_NAMES)[number]
+          | (typeof BUNDLED_AGENT_QUALIFIED_IDS)[number],
           z.ZodOptional<typeof AgentOverlaySchema>
         >,
       )
@@ -270,8 +274,12 @@ export const SystematicConfigSchema = z
       .default({})
       .meta({
         description:
-          'Per-agent configuration overlays keyed by bundled agent name. Unknown keys are rejected with a Zod parse error listing every valid bundled-agent name. To overlay a user-defined agent, configure it through OpenCode-native config (.opencode/opencode.json) instead.',
-        examples: [{ 'correctness-reviewer': { temperature: 0.1 } }, {}],
+          'Per-agent configuration overlays keyed by bundled agent name (bare or qualified category/name). Unknown keys are rejected with a Zod parse error. To overlay a user-defined agent, configure it through OpenCode-native config (.opencode/opencode.json) instead.',
+        examples: [
+          { 'correctness-reviewer': { temperature: 0.1 } },
+          { 'review/correctness-reviewer': { temperature: 0.1 } },
+          {},
+        ],
       }),
     categories: z
       .record(z.string(), CategoryOverlaySchema)
@@ -290,12 +298,20 @@ export const SystematicConfigSchema = z
         examples: [['ce:plan', 'ce:review']],
       }),
     disabled_agents: z
-      .array(z.enum(BUNDLED_AGENT_NAMES))
+      .array(
+        z.enum([
+          ...BUNDLED_AGENT_NAMES,
+          ...BUNDLED_AGENT_QUALIFIED_IDS,
+        ] as const),
+      )
       .default([])
       .meta({
         description:
-          'Array of bundled agent names to disable globally. Unknown agent names are rejected at parse time.',
-        examples: [['previous-comments-reviewer', 'cli-readiness-reviewer']],
+          'Array of bundled agent names (bare or qualified category/name) to disable globally. Unknown agent names are rejected at parse time.',
+        examples: [
+          ['previous-comments-reviewer', 'cli-readiness-reviewer'],
+          ['review/security-reviewer'],
+        ],
       }),
     disabled_commands: z
       .array(z.string())

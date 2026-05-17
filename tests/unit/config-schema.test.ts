@@ -691,4 +691,46 @@ describe('typed bundled-name validation', () => {
     })
     expect(result.success).toBe(true)
   })
+
+  test('accepts an overlay on a qualified bundled-agent key', () => {
+    const result = SystematicConfigSchema.safeParse({
+      agents: {
+        'review/correctness-reviewer': { temperature: 0.1 },
+      },
+    })
+    expect(result.success).toBe(true)
+  })
+
+  test('accepts both bare and qualified keys for the same agent', () => {
+    const result = SystematicConfigSchema.safeParse({
+      agents: {
+        'correctness-reviewer': { temperature: 0.5 },
+        'review/correctness-reviewer': { temperature: 0.1 },
+      },
+    })
+    expect(result.success).toBe(true)
+  })
+
+  test('rejects an overlay on a misspelled qualified key', () => {
+    const result = SystematicConfigSchema.safeParse({
+      agents: {
+        'review/correctness-reviwer': { temperature: 0.1 },
+      },
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('accepts disabled_agents with a qualified bundled-agent name', () => {
+    const result = SystematicConfigSchema.safeParse({
+      disabled_agents: ['review/security-reviewer'],
+    })
+    expect(result.success).toBe(true)
+  })
+
+  test('rejects disabled_agents with a misspelled qualified name', () => {
+    const result = SystematicConfigSchema.safeParse({
+      disabled_agents: ['review/security-reviwer'],
+    })
+    expect(result.success).toBe(false)
+  })
 })
