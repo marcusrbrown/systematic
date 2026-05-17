@@ -82,7 +82,7 @@ When multiple skills could apply, use this order:
 
 ## Skill Types
 
-**Rigid** (TDD, debugging): Follow exactly. Don't adapt away discipline.
+**Rigid** (TDD, debugging): Follow exactly. Don't adapt away discipline. The canonical bundled Rigid skill is `test-driven-development` — load it when implementing any feature or bugfix that requires test-first discipline.
 
 **Flexible** (patterns): Adapt principles to context.
 
