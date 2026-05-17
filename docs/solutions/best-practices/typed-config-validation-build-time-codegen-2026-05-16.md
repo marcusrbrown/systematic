@@ -1,6 +1,7 @@
 ---
-title: 'Build-time codegen for typed config validation: three traps to avoid'
+title: 'Build-time codegen for typed config validation: four traps to avoid'
 date: 2026-05-16
+last_updated: 2026-05-17
 category: best-practices
 module: scripts/generate-config-schema.ts + src/lib/config-schema.ts
 problem_type: best_practice
@@ -14,6 +15,7 @@ applies_when:
   - emitting committed code that other build steps import immediately
   - designing drift checks across multiple generated artifacts
   - exposing alias or qualified-ID surfaces in config validation
+  - parsing or introspecting formatter-controlled auto-generated code
 tags:
   - config-validation
   - codegen
@@ -22,9 +24,11 @@ tags:
   - schema-generation
   - alias-resolution
   - tooling
+  - formatter-introspection
+  - latent-bugs
 ---
 
-# Build-time codegen for typed config validation: three traps to avoid
+# Build-time codegen for typed config validation: four traps to avoid
 
 ## Context
 
@@ -37,6 +41,8 @@ The migration looked simple — walk `agents/` and `skills/` at codegen time, em
 - the drift gate's `--check` callback and the `main()` write path called the producer function with different option shapes, so drift detection misfired immediately after a fresh regeneration
 
 That combination produced a nasty failure mode: configs that worked in v2.14.x became invalid under the new schema, the first run of the generator after an agents/ change shipped a stale published schema, and the safety check that should have caught both failed for the wrong reason.
+
+A fourth trap surfaced in PR #394 (v2.17.0) when Fro Bot's review caught a latent bug in the same generator: a regex used to count bundled entries in the auto-generated source file was quote-style-sensitive but the file was formatter-controlled. The shrink-protection guard built on top of that regex was silently inert. This update folds that learning in as Trap #4 alongside the original three.
 
 ## Guidance
 
@@ -120,7 +126,57 @@ generateAndWrite(generateSchemaContentFromSchema(version, freshSchema), version)
 
 This project shipped this pattern in v2.15.0 (PR #384) and migrated to the factory in PR #393. The cache-bust approach works but is fragile: it relies on the runtime's URL-keyed module cache treating query strings as distinct entries, which is a Bun/Node implementation detail rather than an ESM spec guarantee.
 
-### 3. Keep `--check` and write paths byte-identical
+### 3. Don't introspect formatter-controlled auto-generated code with quote-sensitive regex
+
+If the generator parses its own committed output to make decisions (count entries, detect shrinks, compare prior state), the parser must match the formatter's actual output style — not what the source code looks like before formatting.
+
+In this case, `readCommittedBundledNamesCounts(rootDir)` parsed the committed `src/lib/bundled-names.ts` file and counted entries in the `BUNDLED_AGENT_NAMES` and `BUNDLED_SKILL_NAMES` arrays. The inner counter was:
+
+```ts
+// Broken — single-quote only:
+const countEntries = (block: string): number =>
+  block.split('\n').filter((line) => /^\s*'[^']+',\s*$/.test(line)).length
+```
+
+But the generated file is Biome-formatted before commit. Biome's default output uses **double quotes**:
+
+```ts
+export const BUNDLED_AGENT_NAMES = [
+  "adversarial-document-reviewer",
+  "adversarial-reviewer",
+  // ...
+]
+```
+
+So `countEntries` returned 0 for every entry. The function's caller — the shrink guard that prevents accidental removal of bundled agents or skills without an explicit `--allow-shrink` flag — was effectively dead code. Every regeneration looked like a first run with no committed-counts baseline, so the shrink protection silently passed through.
+
+The fix is quote-agnostic:
+
+```ts
+// Works with both single and double quote styles:
+const countEntries = (block: string): number =>
+  block.split('\n').filter((line) => /^\s*['"][^'"]+['"],\s*$/.test(line)).length
+```
+
+The general lesson generalizes beyond quotes. Any code that introspects auto-generated source by regex is vulnerable to formatter output changes:
+
+- Quote style (`'` vs `"`)
+- Trailing comma policy
+- Whitespace conventions (indentation, padding inside brackets)
+- Semicolon style
+- Comment style (`//` vs `/*`)
+- Line-ending style (`\n` vs `\r\n`)
+
+Defensive patterns:
+
+- Make regexes quote-agnostic, whitespace-tolerant, trailing-character-tolerant
+- Test against actual formatter output, NOT against synthetic fixtures hand-written in your IDE
+- Prefer side-channel metadata over scraping: emit a separate `.json` count file alongside the generated source, or include a structured comment header like `// COUNT: 50`
+- Best of all: parse the AST. If you control the generator, you already know the shape
+
+The shrink guard's failure mode here was the most insidious kind: a guard that silently returns "no baseline" / "first run" / "empty result" rather than throwing. The bug doesn't fire on its own — it just makes the guard inert. You only notice when something else catches the consequence, or by code review from someone who knows what the formatter emits.
+
+### 4. Keep `--check` and write paths byte-identical
 
 A drift gate works by computing "expected" content fresh from sources, reading the on-disk file, and comparing. For this to be sound, both call sites — the `--check` `produce()` callback and the `main()` write path — must call the producer with identical option shapes and defaults. Any divergence in inputs, defaults, sort order, or formatting and drift detection silently misfires.
 
