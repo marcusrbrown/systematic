@@ -1308,3 +1308,35 @@ describe('--check path and write path produce byte-identical bundled-names conte
     expect(checkContent).toBe(onDisk)
   })
 })
+
+describe('createSystematicConfigSchema — generator integration', () => {
+  // Verifies that the factory correctly reflects custom name sets, which is the
+  // property that makes the cache-bust workaround unnecessary: the generator
+  // passes fresh discovery results directly to the factory rather than relying
+  // on a re-imported module to pick up a freshly written bundled-names.ts.
+  test('factory schema accepts only the names passed to it, not the committed bundled set', async () => {
+    const { createSystematicConfigSchema } = await import(
+      '../../src/lib/config-schema.js'
+    )
+    const customSchema = createSystematicConfigSchema({
+      agentNames: ['custom-agent'],
+      qualifiedAgentIds: ['custom/custom-agent'],
+      skillNames: ['custom-skill'],
+    })
+    // Custom names are accepted
+    expect(
+      customSchema.safeParse({ agents: { 'custom-agent': {} } }).success,
+    ).toBe(true)
+    expect(
+      customSchema.safeParse({ disabled_skills: ['custom-skill'] }).success,
+    ).toBe(true)
+    // Committed bundled names are rejected (they're not in this factory call)
+    expect(
+      customSchema.safeParse({ agents: { 'correctness-reviewer': {} } })
+        .success,
+    ).toBe(false)
+    expect(
+      customSchema.safeParse({ disabled_skills: ['ce:plan'] }).success,
+    ).toBe(false)
+  })
+})
