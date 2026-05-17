@@ -202,8 +202,10 @@ function pruneRequiredArray(
 }
 
 function removeDefaultFieldsFromRequired(
+  root: Record<string, unknown>,
   jsonNode: Record<string, unknown>,
   zodNode: z.ZodType,
+  mutated = new WeakSet<Record<string, unknown>>(),
 ): void {
   // Only ZodObject has a shape; skip everything else (ZodRecord, ZodArray, …)
   // In this Zod 4 build, shape is a plain object (not a lazy function).
@@ -212,7 +214,12 @@ function removeDefaultFieldsFromRequired(
 
   pruneRequiredArray(jsonNode, shape)
 
-  // Recurse into `properties` to catch nested object schemas (e.g., `bootstrap`)
+  // Recurse into `properties` to catch nested object schemas (e.g., `bootstrap`).
+  // With `reused: 'ref'`, a property node may be a `{ "$ref": "..." }` indirection
+  // rather than an inline object with its own `properties`. Resolve through any
+  // ref/allOf-wrapper indirection before recursing so we mutate the shared
+  // definition (which propagates to every referrer). Track already-mutated
+  // definitions in a WeakSet to avoid double-processing shared definitions.
   const props = jsonNode.properties as
     | Record<string, Record<string, unknown>>
     | undefined
@@ -220,9 +227,14 @@ function removeDefaultFieldsFromRequired(
 
   for (const [key, field] of Object.entries(shape)) {
     const propNode = props[key]
-    if (propNode != null) {
-      removeDefaultFieldsFromRequired(propNode, field)
-    }
+    if (propNode == null) continue
+
+    // Resolve any $ref / allOf-wrapper indirection to get the structural body.
+    const resolved = resolveRef(root, propNode) ?? propNode
+    if (mutated.has(resolved)) continue
+    mutated.add(resolved)
+
+    removeDefaultFieldsFromRequired(root, resolved, field, mutated)
   }
 }
 
@@ -245,6 +257,62 @@ function getSchemaNode(
   return current
 }
 
+/**
+ * Resolve a node that may be a `{ "$ref": "#/definitions/__schemaN" }` indirection
+ * to the underlying definition object. Returns the node itself if it is not a ref,
+ * or null if the ref is unresolvable. Mutating the returned object mutates the
+ * shared definition — which is the point when injecting cross-field constraints
+ * that should apply to every referrer.
+ *
+ * Also unwraps trivial `allOf: [{ $ref: ... }]` wrappers that Zod emits when a
+ * schema carries metadata (`.describe()`, `.default()`) AND is referenced via
+ * `reused: 'ref'`. The metadata wrapper holds the description/default; the
+ * underlying object structure (`properties`, `additionalProperties`) lives in
+ * the wrapped definition. Without unwrapping, callers walking `properties.foo`
+ * paths see only the wrapper and miss the real schema body.
+ *
+ * Supports JSON Schema draft-07 (`#/definitions/...`) only — the target this
+ * generator currently emits.
+ */
+function resolveRef(
+  root: Record<string, unknown>,
+  node: Record<string, unknown>,
+): Record<string, unknown> | null {
+  let current: Record<string, unknown> | null = node
+
+  // Follow at most a handful of levels of indirection (ref → wrapper → ref → ...)
+  // to defend against malformed schemas without risking an infinite loop.
+  for (let i = 0; current !== null && i < 8; i++) {
+    const ref = current['$ref']
+    if (typeof ref === 'string') {
+      const prefix = '#/definitions/'
+      if (!ref.startsWith(prefix)) return null
+      const defKey = ref.slice(prefix.length)
+      const definitions = asObject(root.definitions)
+      if (definitions === null) return null
+      current = asObject(definitions[defKey])
+      continue
+    }
+
+    // Unwrap a trivial single-ref allOf wrapper. Zod uses this shape when a
+    // schema has metadata (description, default, examples) at the wrapper
+    // level and the structural body (properties, additionalProperties) at the
+    // wrapped level.
+    const allOf = current['allOf']
+    if (Array.isArray(allOf) && allOf.length === 1) {
+      const wrapped = asObject(allOf[0])
+      if (wrapped !== null && '$ref' in wrapped) {
+        current = wrapped
+        continue
+      }
+    }
+
+    return current
+  }
+
+  return null
+}
+
 function cloneSchemaNode(
   node: Record<string, unknown>,
 ): Record<string, unknown> {
@@ -252,25 +320,38 @@ function cloneSchemaNode(
 }
 
 function getNonNullModelBranch(
+  root: Record<string, unknown>,
   overlayNode: Record<string, unknown>,
 ): Record<string, unknown> | null {
   const properties = asObject(overlayNode.properties)
   const modelNode = asObject(properties?.model)
-  const anyOf = modelNode?.anyOf
+  if (modelNode === null) return null
+
+  // With `reused: 'ref'`, the model field is several layers of ref/wrapper
+  // indirection (overlay.properties.model → ref → allOf wrapper → ref → anyOf).
+  // Resolve through them to reach the anyOf union that lists the string and
+  // null branches.
+  const modelBody = resolveRef(root, modelNode)
+  const anyOf = modelBody?.anyOf
   if (!Array.isArray(anyOf)) return null
 
   for (const candidate of anyOf) {
     const branch = asObject(candidate)
-    if (branch?.type === 'string') return cloneSchemaNode(branch)
+    if (branch === null) continue
+    // The string branch may itself be a $ref to a definition that holds the
+    // type/pattern constraints; resolve it before checking `type === 'string'`.
+    const resolved = resolveRef(root, branch)
+    if (resolved?.type === 'string') return cloneSchemaNode(resolved)
   }
 
   return null
 }
 
 function addVariantRequiresExplicitModel(
+  root: Record<string, unknown>,
   overlayNode: Record<string, unknown>,
 ): void {
-  const modelStringBranch = getNonNullModelBranch(overlayNode)
+  const modelStringBranch = getNonNullModelBranch(root, overlayNode)
   if (modelStringBranch === null) return
 
   const variantRequiresModel: Record<string, unknown> = {
@@ -288,25 +369,46 @@ function addVariantRequiresExplicitModel(
 }
 
 function addOverlayCrossFieldConstraints(root: Record<string, unknown>): void {
-  // categories: still uses additionalProperties (z.record)
-  const categoriesOverlay = getSchemaNode(root, [
-    'properties',
-    'categories',
-    'additionalProperties',
-  ])
-  if (categoriesOverlay !== null)
-    addVariantRequiresExplicitModel(categoriesOverlay)
+  // With `reused: 'ref'`, repeated overlay shapes live under `#/definitions/__schemaN`
+  // and are referenced from `properties.agents.properties.<agentName>` (one ref per
+  // bundled agent) and from `properties.categories.additionalProperties`. Resolving
+  // the ref before mutating lets a single allOf injection propagate to every
+  // referrer.
+  //
+  // Track which definition nodes have already received the constraint so we don't
+  // double-inject when multiple referrers (categories + 102 agents) share the same
+  // underlying definition.
+  const mutated = new WeakSet<Record<string, unknown>>()
 
-  // agents: now a typed object — inject constraint into each per-agent entry
-  const agentProperties = getSchemaNode(root, [
-    'properties',
-    'agents',
-    'properties',
-  ])
+  const applyConstraint = (node: Record<string, unknown> | null): void => {
+    if (node === null) return
+    const target = resolveRef(root, node)
+    if (target === null || mutated.has(target)) return
+    mutated.add(target)
+    addVariantRequiresExplicitModel(root, target)
+  }
+
+  // categories: still uses additionalProperties (z.record). The root path
+  // `properties.categories` may be a ref to a metadata-wrapped def; resolveRef
+  // unwraps both layers to reach the structural body that holds
+  // `additionalProperties`.
+  const categoriesNode = getSchemaNode(root, ['properties', 'categories'])
+  const categoriesBody =
+    categoriesNode === null ? null : resolveRef(root, categoriesNode)
+  if (categoriesBody !== null) {
+    applyConstraint(asObject(categoriesBody['additionalProperties']))
+  }
+
+  // agents: a typed object whose container is itself behind a ref/wrapper.
+  // Resolve the container first to expose `properties`, then iterate per-agent
+  // entries (each of which is a ref to the shared overlay definition).
+  // Resolving once and mutating the overlay definition covers all 102 keys.
+  const agentsNode = getSchemaNode(root, ['properties', 'agents'])
+  const agentsBody = agentsNode === null ? null : resolveRef(root, agentsNode)
+  const agentProperties = asObject(agentsBody?.['properties'])
   if (agentProperties !== null) {
     for (const key of Object.keys(agentProperties)) {
-      const entry = asObject((agentProperties as Record<string, unknown>)[key])
-      if (entry !== null) addVariantRequiresExplicitModel(entry)
+      applyConstraint(asObject(agentProperties[key]))
     }
   }
 }
@@ -343,6 +445,12 @@ export function generateSchemaContentFromSchema(
 
   const result = z.toJSONSchema(schema, {
     target: 'draft-7',
+    // Deduplicate repeated schema shapes by extracting them to definitions.
+    // Without this, the agents.<key> overlay (and its embedded sub-schemas)
+    // is inlined once per bundled agent (~100x), bloating the schema by ~15K
+    // lines. With `reused: 'ref'`, repeated shapes become a single definition
+    // referenced via $ref, collapsing the schema to a fraction of its size.
+    reused: 'ref',
     override: (ctx) => {
       // Only set $id at the root schema level (path length === 0)
       if (ctx.path.length === 0) {
@@ -363,7 +471,11 @@ export function generateSchemaContentFromSchema(
   // Zod emits `required:[all fields]` for every object, including fields with
   // `.default()`. From the user's perspective those fields are optional — the
   // runtime fills them in. Without this step, IDEs redline valid minimal configs.
-  removeDefaultFieldsFromRequired(clean as Record<string, unknown>, schema)
+  removeDefaultFieldsFromRequired(
+    clean as Record<string, unknown>,
+    clean as Record<string, unknown>,
+    schema,
+  )
   addOverlayCrossFieldConstraints(clean as Record<string, unknown>)
 
   const raw = `${JSON.stringify(clean, null, 2)}\n`
