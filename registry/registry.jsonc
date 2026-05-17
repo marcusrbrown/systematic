@@ -733,6 +733,20 @@
       "files": ["skills/using-systematic/SKILL.md"]
     },
     {
+      "name": "writing-skills",
+      "type": "skill",
+      "description": "Use when creating new skills, editing existing skills, or verifying skills work before deployment",
+      "files": [
+        "skills/writing-skills/SKILL.md",
+        "skills/writing-skills/references/anthropic-best-practices-distilled.md",
+        "skills/writing-skills/references/examples/skill-testing-walkthrough.md",
+        "skills/writing-skills/references/graphviz-conventions.dot",
+        "skills/writing-skills/references/persuasion-principles.md",
+        "skills/writing-skills/references/testing-skills-with-subagents.md",
+        "skills/writing-skills/scripts/render-graphs.js"
+      ]
+    },
+    {
       "name": "writing-systematic-skills",
       "type": "skill",
       "description": "Use when creating, editing, auditing, or fixing bundled Systematic skills, especially when authoring SKILL.md files, adding skill reference files, resolving content-integrity frontmatter failures, or deciding which Systematic conventions apply beyond the general writing-skills guidance.",
@@ -791,6 +805,7 @@
         "todo-resolve",
         "todo-triage",
         "using-systematic",
+        "writing-skills",
         "writing-systematic-skills"
       ],
       "files": []
