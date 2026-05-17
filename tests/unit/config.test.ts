@@ -938,6 +938,140 @@ describe('config', () => {
       // The error should still name the file and the invalid field path.
       expect(errorMessage).toContain('disabled_agents')
     })
+
+    describe('enrichUnrecognizedKeyIssues — verbose enum suppression and multi-key handling', () => {
+      const DOCS_URL =
+        'https://systematic.fro.bot/getting-started/configuration#typed-validation'
+
+      // #385 — suppress verbose enum list in disabled_agents / disabled_skills errors
+
+      test('typo in disabled_agents produces a short message with the bad value and docs URL, not the full enum list', () => {
+        writeProjectConfig({ disabled_agents: ['security-reviwer'] })
+        let errorMessage = ''
+        try {
+          loadConfig(testDir)
+        } catch (err) {
+          errorMessage = (err as Error).message
+        }
+        expect(errorMessage).toContain('security-reviwer')
+        expect(errorMessage).toContain('disabled_agents')
+        expect(errorMessage).toContain(DOCS_URL)
+        expect(errorMessage.length).toBeLessThan(500)
+        // Must NOT dump the full valid-name list inline
+        expect(errorMessage).not.toContain('adversarial-reviewer')
+        expect(errorMessage).not.toContain('architecture-strategist')
+      })
+
+      test('typo in disabled_skills produces a short message with the bad value and docs URL', () => {
+        writeProjectConfig({ disabled_skills: ['typed-config-validatoin'] })
+        let errorMessage = ''
+        try {
+          loadConfig(testDir)
+        } catch (err) {
+          errorMessage = (err as Error).message
+        }
+        expect(errorMessage).toContain('typed-config-validatoin')
+        expect(errorMessage).toContain('disabled_skills')
+        expect(errorMessage).toContain(DOCS_URL)
+        expect(errorMessage.length).toBeLessThan(500)
+        // Must NOT dump the full valid-name list inline
+        expect(errorMessage).not.toContain('ce:plan')
+        expect(errorMessage).not.toContain('ce:brainstorm')
+      })
+
+      test('valid disabled_agents entry passes through enrichment unchanged', () => {
+        writeProjectConfig({ disabled_agents: ['correctness-reviewer'] })
+        expect(() => loadConfig(testDir)).not.toThrow()
+        const result = loadConfig(testDir)
+        expect(result.disabled_agents).toContain('correctness-reviewer')
+      })
+
+      // #386 — surface every unknown key in unrecognized_keys hints
+
+      test("multiple typo'd agent keys produce a hint listing all of them", () => {
+        writeProjectConfig({ agents: { 'typo-a': {}, 'typo-b': {} } })
+        let errorMessage = ''
+        try {
+          loadConfig(testDir)
+        } catch (err) {
+          errorMessage = (err as Error).message
+        }
+        expect(errorMessage).toContain('typo-a')
+        expect(errorMessage).toContain('typo-b')
+        expect(errorMessage).toContain('Unrecognized keys')
+      })
+
+      test("single typo'd agent key still produces singular form", () => {
+        writeProjectConfig({ agents: { 'typo-a': {} } })
+        let errorMessage = ''
+        try {
+          loadConfig(testDir)
+        } catch (err) {
+          errorMessage = (err as Error).message
+        }
+        expect(errorMessage).toContain('typo-a')
+        expect(errorMessage).toMatch(/Unrecognized key '/)
+        expect(errorMessage).not.toMatch(/Unrecognized keys '/)
+      })
+
+      test("three typo'd agent keys produce a comma-separated list", () => {
+        writeProjectConfig({
+          agents: { 'typo-a': {}, 'typo-b': {}, 'typo-c': {} },
+        })
+        let errorMessage = ''
+        try {
+          loadConfig(testDir)
+        } catch (err) {
+          errorMessage = (err as Error).message
+        }
+        expect(errorMessage).toContain('typo-a')
+        expect(errorMessage).toContain('typo-b')
+        expect(errorMessage).toContain('typo-c')
+        expect(errorMessage).toContain('Unrecognized keys')
+      })
+
+      // Finding 2 — mixed issues regression
+      test('mixed agents typo and disabled_agents typo each produce their own enriched hint', () => {
+        // Both unrecognized_keys (agents) and invalid_value (disabled_agents) in one config
+        writeProjectConfig({
+          agents: { 'typo-a': {}, 'typo-b': {} },
+          disabled_agents: ['security-reviwer'],
+        })
+        let errorMessage = ''
+        try {
+          loadConfig(testDir)
+        } catch (err) {
+          errorMessage = (err as Error).message
+        }
+        // The first issue thrown should be enriched — either the agents typo or the
+        // disabled_agents typo. Both enrichments must be present in the issues array.
+        // We verify the thrown message is short (not a raw enum dump) and contains
+        // the docs URL, confirming at least one enrichment fired.
+        expect(errorMessage).toContain(DOCS_URL)
+        expect(errorMessage.length).toBeLessThan(500)
+        // Must not dump the full enum list
+        expect(errorMessage).not.toContain('adversarial-reviewer')
+      })
+
+      // Finding 3 — non-string disabled_agents entry edge case
+      test('non-string disabled_agents entry produces a short generic hint', () => {
+        // null is not a valid string entry — exercises the fallback branch where
+        // resolveValueAtPath returns a non-string value
+        writeProjectConfig({ disabled_agents: [null] })
+        let errorMessage = ''
+        try {
+          loadConfig(testDir)
+        } catch (err) {
+          errorMessage = (err as Error).message
+        }
+        expect(errorMessage).toContain('disabled_agents')
+        expect(errorMessage).toContain(DOCS_URL)
+        expect(errorMessage.length).toBeLessThan(500)
+        // Must not dump the full valid-name list inline
+        expect(errorMessage).not.toContain('oracle')
+        expect(errorMessage).not.toContain('correctness-reviewer')
+      })
+    })
   })
 
   describe('merge precedence after schema validation', () => {

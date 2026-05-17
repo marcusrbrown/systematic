@@ -138,37 +138,110 @@ const TYPED_KEY_FIELDS = new Set([
 ])
 
 /**
+ * Format the human-readable hint for unrecognized-key issues. Requires a
+ * non-empty `badKeys` array — Zod 4's $ZodIssueUnrecognizedKeys carries at
+ * least one key by construction, so the empty case is unreachable in practice.
+ */
+function formatUnrecognizedKeysHint(
+  badKeys: readonly string[],
+  topField: string,
+): string {
+  if (badKeys.length === 0) {
+    // Defensive: Zod 4's $ZodIssueUnrecognizedKeys always carries non-empty
+    // keys; this branch is unreachable under the current Zod 4 contract.
+    throw new Error('formatUnrecognizedKeysHint requires non-empty keys')
+  }
+  if (badKeys.length === 1) {
+    return `Unrecognized key '${badKeys[0]}' in \`${topField}\`. This must be a bundled name. See ${TYPED_VALIDATION_DOCS_URL} for the full list of valid names.`
+  }
+  const joined = badKeys.map((k) => `'${k}'`).join(', ')
+  return `Unrecognized keys ${joined} in \`${topField}\`. These must be bundled names. See ${TYPED_VALIDATION_DOCS_URL} for the full list of valid names.`
+}
+
+/**
  * Post-process Zod issues to enrich unrecognized-key errors on typed fields
  * (agents, disabled_agents, disabled_skills) with a pointer to the docs URL
  * where the full list of valid bundled names is published.
+ *
+ * Also suppresses the verbose enum list that Zod emits for invalid_value
+ * issues on disabled_agents and disabled_skills, replacing it with a short
+ * hint that surfaces the bad value and points at the docs URL.
  *
  * Returns the issues array unchanged when no enrichment is needed.
  */
 function enrichUnrecognizedKeyIssues(
   issues: readonly z.core.$ZodIssue[],
+  rawInput: unknown,
 ): readonly z.core.$ZodIssue[] {
   return issues.map((issue) => {
-    if (issue.code !== 'unrecognized_keys') return issue
-    // issue.path[0] is the top-level field name (e.g., 'agents')
     const topField = issue.path[0]
     if (typeof topField !== 'string' || !TYPED_KEY_FIELDS.has(topField)) {
       return issue
     }
-    // Extract the bad key from the default Zod message ("Unrecognized key: \"foo\"")
-    const badKey = issue.message.match(/"([^"]+)"/)?.[1] ?? ''
-    const hint = badKey
-      ? `Unrecognized key '${badKey}' in \`${topField}\`. This must be a bundled name. See ${TYPED_VALIDATION_DOCS_URL} for the full list of valid names.`
-      : `${issue.message} See ${TYPED_VALIDATION_DOCS_URL} for the full list of valid names.`
-    return { ...issue, message: hint }
+
+    // Handle unrecognized_keys (typo'd agents overlay keys).
+    // Use issue.keys (Zod 4 structured field) — avoids regex and handles any key value.
+    if (issue.code === 'unrecognized_keys') {
+      const hint = formatUnrecognizedKeysHint(issue.keys, topField)
+      return { ...issue, message: hint }
+    }
+
+    // Handle invalid_value (typo'd disabled_agents / disabled_skills entries) —
+    // suppress the verbose enum list Zod emits by default.
+    // Zod 4's $ZodIssueInvalidValue does not carry the bad value in the issue
+    // object itself, so we resolve it from the raw input via the issue path.
+    if (
+      issue.code === 'invalid_value' &&
+      (topField === 'disabled_agents' || topField === 'disabled_skills')
+    ) {
+      const badValue = resolveValueAtPath(rawInput, issue.path)
+      const kind = topField === 'disabled_agents' ? 'agent' : 'skill'
+      const hint =
+        typeof badValue === 'string'
+          ? `Unrecognized ${kind} name '${badValue}' in \`${topField}\`. This must be a bundled name. See ${TYPED_VALIDATION_DOCS_URL} for the full list of valid names.`
+          : `Invalid value in \`${topField}\`. See ${TYPED_VALIDATION_DOCS_URL} for the full list of valid names.`
+      return { ...issue, message: hint }
+    }
+
+    return issue
   })
+}
+
+/**
+ * Walk a path of string/number keys into a nested object/array structure and
+ * return the value at that location, or undefined if any step is missing.
+ */
+function resolveValueAtPath(
+  root: unknown,
+  path: readonly (string | number | symbol)[],
+): unknown {
+  let current: unknown = root
+  for (const segment of path) {
+    if (typeof segment === 'symbol') {
+      // Defensive: Zod 4's path type includes symbol, but issues never carry
+      // symbol segments at runtime. If a future Zod release changes that, this
+      // returns undefined so the fallback "Invalid value" hint is used instead
+      // of crashing.
+      return undefined
+    }
+    if (typeof segment === 'number') {
+      if (!Array.isArray(current)) return undefined
+      current = current[segment]
+    } else {
+      if (!isRecord(current)) return undefined
+      current = current[segment]
+    }
+  }
+  return current
 }
 
 function throwTopLevelConfigSchemaError(
   filePath: string,
   trust: ConfigSource['trust'],
   rawIssues: readonly z.core.$ZodIssue[],
+  rawInput: unknown,
 ): never {
-  const issues = enrichUnrecognizedKeyIssues(rawIssues)
+  const issues = enrichUnrecognizedKeyIssues(rawIssues, rawInput)
   const issue = issues[0]
   if (!issue) {
     throw Object.assign(
@@ -200,7 +273,12 @@ function loadConfigSource(
 
   const result = SystematicConfigSchema.safeParse(rawConfig)
   if (!result.success) {
-    throwTopLevelConfigSchemaError(filePath, trust, result.error.issues)
+    throwTopLevelConfigSchemaError(
+      filePath,
+      trust,
+      result.error.issues,
+      rawConfig,
+    )
   }
 
   // Validation succeeded; propagate raw parsed JSONC so the merge layer
