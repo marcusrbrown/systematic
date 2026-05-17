@@ -691,6 +691,15 @@
       "files": ["skills/test-browser/SKILL.md"]
     },
     {
+      "name": "test-driven-development",
+      "type": "skill",
+      "description": "Use when implementing any feature or bugfix, before writing implementation code",
+      "files": [
+        "skills/test-driven-development/SKILL.md",
+        "skills/test-driven-development/references/testing-anti-patterns.md"
+      ]
+    },
+    {
       "name": "test-xcode",
       "type": "skill",
       "description": "Build and test iOS apps on simulator using XcodeBuildMCP. Use after making iOS code changes, before creating a PR, or when verifying app behavior and checking for crashes on simulator.",
@@ -776,6 +785,7 @@
         "setup",
         "slfg",
         "test-browser",
+        "test-driven-development",
         "test-xcode",
         "todo-create",
         "todo-resolve",
