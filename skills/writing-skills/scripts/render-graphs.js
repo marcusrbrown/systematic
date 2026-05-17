@@ -1,5 +1,11 @@
 #!/usr/bin/env node
 
+// Why CommonJS in a "type": "module" package?
+// This is a skill-bundled developer utility, not part of the plugin's
+// runtime ESM surface. Skill-bundled scripts run via `node` directly
+// and have no need to participate in the plugin's module resolution.
+// The CommonJS style is preserved from upstream (obra/superpowers).
+
 /**
  * Render graphviz diagrams from a skill's SKILL.md to SVG files.
  *

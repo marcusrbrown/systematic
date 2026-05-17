@@ -322,6 +322,16 @@ function resolveRef(
     return current
   }
 
+  // The loop exhausted MAX_SCHEMA_REF_RESOLUTION_DEPTH without finding a
+  // concrete (non-ref, non-allOf-wrapper) node. This means Zod emitted a
+  // longer ref/wrapper chain than expected. Warn loudly so the next Zod
+  // upgrade surfaces it instead of silently skipping cross-field constraints
+  // and required-pruning on the affected node.
+  console.warn(
+    `[generate-config-schema] resolveRef exhausted MAX_SCHEMA_REF_RESOLUTION_DEPTH (${MAX_SCHEMA_REF_RESOLUTION_DEPTH}). ` +
+      'A schema node was not resolved; downstream post-processors will skip it. ' +
+      'If this triggers after a Zod upgrade, raise the depth bound.',
+  )
   return null
 }
 
@@ -713,8 +723,9 @@ export function readCommittedBundledNamesCounts(rootDir: string): {
   }
 
   const countEntries = (block: string): number => {
-    return block.split('\n').filter((line) => /^\s*'[^']+',\s*$/.test(line))
-      .length
+    return block
+      .split('\n')
+      .filter((line) => /^\s*['"][^'"]+['"],\s*$/.test(line)).length
   }
 
   const agentMatch = content.match(

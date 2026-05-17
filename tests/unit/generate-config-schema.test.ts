@@ -1339,6 +1339,48 @@ describe('--check path and write path produce byte-identical bundled-names conte
   })
 })
 
+// readCommittedBundledNamesCounts — regression guard for quote-agnostic regex
+// The countEntries regex must match Biome-formatted double-quoted entries.
+// A single-quote-only regex returns 0 for every entry, making the shrink
+// guard silently dead (every run looks like a first-run with no baseline).
+describe('readCommittedBundledNamesCounts — double-quoted entry parsing', () => {
+  let readCommittedFn: (rootDir: string) => {
+    previousAgentCount?: number
+    previousSkillCount?: number
+  }
+
+  beforeAll(async () => {
+    const mod = await import('../../scripts/generate-config-schema.js')
+    readCommittedFn = mod.readCommittedBundledNamesCounts
+  })
+
+  test('counts double-quoted entries (Biome output format) correctly', () => {
+    const tmp = makeTempRepo()
+    // Write a fake bundled-names.ts with double-quoted entries — the format
+    // Biome actually emits. A single-quote-only regex would return 0 here.
+    writeFile(
+      tmp,
+      'src/lib/bundled-names.ts',
+      [
+        'export const BUNDLED_AGENT_NAMES = [',
+        '  "agent-a",',
+        '  "agent-b",',
+        '  "agent-c",',
+        '] as const',
+        '',
+        'export const BUNDLED_SKILL_NAMES = [',
+        '  "skill-x",',
+        '  "skill-y",',
+        '] as const',
+      ].join('\n'),
+    )
+
+    const result = readCommittedFn(tmp)
+    expect(result.previousAgentCount).toBe(3)
+    expect(result.previousSkillCount).toBe(2)
+  })
+})
+
 describe('createSystematicConfigSchema — generator integration', () => {
   // Verifies that the factory correctly reflects custom name sets, which is the
   // property that makes the cache-bust workaround unnecessary: the generator
