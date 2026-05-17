@@ -17,7 +17,8 @@
   "files": [
     "dist",
     "skills",
-    "agents"
+    "agents",
+    "ATTRIBUTIONS.md"
   ],
   "workspaces": [
     "docs"
