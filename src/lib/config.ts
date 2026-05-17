@@ -242,8 +242,10 @@ function throwTopLevelConfigSchemaError(
   rawInput: unknown,
 ): never {
   const issues = enrichUnrecognizedKeyIssues(rawIssues, rawInput)
-  const issue = issues[0]
-  if (!issue) {
+  // Defensive fallback. Zod 4 invariant: safeParse never returns success: false with an
+  // empty issues array, but enrichUnrecognizedKeyIssues is a pure transform and could in
+  // principle yield zero entries from a future Zod that emits issues we filter out.
+  if (issues.length === 0) {
     throw Object.assign(
       new Error(
         `Invalid Systematic config in ${filePath}: schema validation failed`,
@@ -251,11 +253,18 @@ function throwTopLevelConfigSchemaError(
       { _tag: 'ConfigSchemaError' as const, filePath, trust, issues },
     )
   }
-  const fieldPath =
-    issue.code === 'unrecognized_keys' ? null : issue.path.join('.')
-  const message = fieldPath
-    ? `Invalid Systematic config in ${filePath}: ${fieldPath} ${issue.message}`
-    : `Invalid Systematic config in ${filePath}: ${issue.message}`
+  const formatIssue = (issue: z.core.$ZodIssue): string => {
+    const fieldPath =
+      issue.code === 'unrecognized_keys' ? null : issue.path.join('.')
+    return fieldPath ? `${fieldPath} ${issue.message}` : issue.message
+  }
+  const formatted = issues.map(formatIssue)
+  // Single-issue case keeps the one-line shape for backward compatibility with existing
+  // user expectations. Multi-issue case uses a bullet list so every problem surfaces.
+  const message =
+    formatted.length === 1
+      ? `Invalid Systematic config in ${filePath}: ${formatted[0]}`
+      : `Invalid Systematic config in ${filePath}:\n${formatted.map((entry) => `  - ${entry}`).join('\n')}`
   throw Object.assign(new Error(message), {
     _tag: 'ConfigSchemaError' as const,
     filePath,
