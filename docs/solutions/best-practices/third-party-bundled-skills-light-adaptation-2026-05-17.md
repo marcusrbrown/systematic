@@ -157,7 +157,7 @@ head -3 skills/writing-skills/references/anthropic-best-practices-distilled.md |
 head -3 skills/writing-skills/references/anthropic-best-practices-distilled.md | grep -c 'docs.claude.com'
 # 1 ✓
 
-# Heading 1:1 match check
+# Heading 1:1 match check (substitute your upstream clone path)
 comm -12 \
   <(grep '^## ' skills/writing-skills/references/anthropic-best-practices-distilled.md | sort -u) \
   <(grep '^## ' .slim/clonedeps/repos/obra__superpowers/skills/writing-skills/anthropic-best-practices.md | sort -u) | wc -l

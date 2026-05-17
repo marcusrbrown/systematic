@@ -46,7 +46,7 @@ A fourth trap surfaced in PR #394 (v2.17.0) when Fro Bot's review caught a laten
 
 ## Guidance
 
-Before migrating permissive config to strict validation, three rules need to hold simultaneously.
+Before migrating permissive config to strict validation, four rules need to hold simultaneously.
 
 ### 1. Audit the runtime's full input surface, not just the documented happy path
 
@@ -184,15 +184,16 @@ Best long-term shape: factor the shared option-derivation into a single helper t
 
 ## Why This Matters
 
-The meta-principle is straightforward: **moving from permissive to strict validation freezes runtime behavior into a contract.** If the contract misses any of the three surfaces below, it lies.
+The meta-principle is straightforward: **moving from permissive to strict validation freezes runtime behavior into a contract.** If the contract misses any of the four surfaces below, it lies.
 
 | Surface | Failure shape |
 |---|---|
 | Hidden runtime flexibility | Schema rejects inputs the runtime would have accepted; users hit parse errors with no migration guidance. |
 | Generator read-after-write ordering | First-run output is stale; CI drift gate catches it but only after the artifact ships. |
+| Formatter-controlled introspection | Regex-based parsers built on the wrong quote/style assumptions silently return empty results; guards built on top of them become dead code. |
 | Drift-gate call-site parity | `--check` reports drift right after a clean regenerate; humans waste time chasing a phantom. |
 
-The damage is asymmetric. The runtime surface miss breaks users in production. The codegen ordering trap ships stale artifacts. The drift-gate asymmetry erodes trust in the safety check. Each trap is independently fixable but, taken together, the three define a small playbook for strict-validation migrations.
+The damage is asymmetric. The runtime surface miss breaks users in production. The codegen ordering trap ships stale artifacts. The formatter-introspection trap turns a safety guard into a no-op without any visible signal. The drift-gate asymmetry erodes trust in the safety check. Each trap is independently fixable but, taken together, the four define a small playbook for strict-validation migrations.
 
 ## When to Apply
 
