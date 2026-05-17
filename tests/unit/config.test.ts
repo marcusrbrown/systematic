@@ -1043,12 +1043,11 @@ describe('config', () => {
         } catch (err) {
           errorMessage = (err as Error).message
         }
-        // The first issue thrown should be enriched — either the agents typo or the
-        // disabled_agents typo. Both enrichments must be present in the issues array.
-        // We verify the thrown message is short (not a raw enum dump) and contains
-        // the docs URL, confirming at least one enrichment fired.
+        // Both issues are now surfaced in the message. We verify the message
+        // contains the docs URL (confirming enrichment fired) and is not a raw
+        // enum dump (which would be thousands of chars).
         expect(errorMessage).toContain(DOCS_URL)
-        expect(errorMessage.length).toBeLessThan(500)
+        expect(errorMessage.length).toBeLessThan(1000)
         // Must not dump the full enum list
         expect(errorMessage).not.toContain('adversarial-reviewer')
       })
@@ -1070,6 +1069,41 @@ describe('config', () => {
         // Must not dump the full valid-name list inline
         expect(errorMessage).not.toContain('oracle')
         expect(errorMessage).not.toContain('correctness-reviewer')
+      })
+
+      // #391 — surface every issue in the human-readable message
+
+      test('surfaces every issue when multiple Zod issues are returned', () => {
+        writeProjectConfig({
+          agents: { 'typo-agent-name': { color: 'primary' } },
+          disabled_agents: ['security-reviwer'],
+        })
+        let errorMessage = ''
+        try {
+          loadConfig(testDir)
+        } catch (e) {
+          errorMessage = (e as Error).message
+        }
+        // Both issues must surface in the human-readable message.
+        expect(errorMessage).toContain('typo-agent-name')
+        expect(errorMessage).toContain('security-reviwer')
+        // Multi-line format with bullet prefix when multiple issues exist.
+        expect(errorMessage).toMatch(/\n {2}-/)
+      })
+
+      test('preserves single-line format when only one issue is returned', () => {
+        writeProjectConfig({
+          agents: { 'typo-agent-name': { color: 'primary' } },
+        })
+        let errorMessage = ''
+        try {
+          loadConfig(testDir)
+        } catch (e) {
+          errorMessage = (e as Error).message
+        }
+        // No bullet prefix; backward-compat one-line format.
+        expect(errorMessage).not.toMatch(/\n {2}-/)
+        expect(errorMessage).toContain('typo-agent-name')
       })
     })
   })
