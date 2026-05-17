@@ -200,7 +200,7 @@ Determine how to proceed based on what was provided in `<input_document>`.
      - Evaluate for incremental commit (see below)
    ```
 
-   When a unit carries an `Execution note`, honor it. For test-first units, write the failing test before implementation for that unit. For characterization-first units, capture existing behavior before changing it. For units without an `Execution note`, proceed pragmatically.
+   When a unit carries an `Execution note`, honor it. For test-first units, write the failing test before implementation for that unit — invoke the bundled `test-driven-development` skill for the canonical RED-GREEN-REFACTOR discipline. For characterization-first units, capture existing behavior before changing it. For units without an `Execution note`, proceed pragmatically.
 
    Guardrails for execution posture:
    - Do not write the test and implementation in the same step when working test-first

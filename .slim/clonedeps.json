@@ -1,6 +1,6 @@
 {
   "version": "1.0.0",
-  "updatedAt": "2026-05-16T10:00:00.000Z",
+  "updatedAt": "2026-05-17T06:00:00.000Z",
   "dependencies": [
     {
       "name": "@opencode-ai/sdk",
@@ -19,6 +19,15 @@
       "path": ".slim/clonedeps/repos/anomalyco__opencode",
       "packagePath": "packages/plugin",
       "reason": "Inspect plugin loader hook iteration order, PluginInput.client construction site, and config-hook invocation lifecycle — verifies the FIFO assumption and per-invocation freshness contract from PR #352 and resolves multi-source plugin-loader topology questions for the DX hardening brainstorm"
+    },
+    {
+      "name": "obra/superpowers",
+      "resolvedVersion": "5.1.0",
+      "repoUrl": "https://github.com/obra/superpowers.git",
+      "ref": "v5.1.0",
+      "path": ".slim/clonedeps/repos/obra__superpowers",
+      "packagePath": "skills",
+      "reason": "Source for the test-driven-development and writing-skills skills being imported into Systematic's bundle. MIT-licensed. Used to verify exact upstream content during the adaptation pass and to track future upstream drift."
     }
   ]
 }

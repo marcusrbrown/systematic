@@ -878,6 +878,36 @@ describe('AJV parity: Zod runtime contract vs generated JSON Schema', () => {
       expect(zodResult.success).toBe(ajvResult)
     })
   }
+
+  test('parity: qualified bundled agent rejects variant without explicit model', () => {
+    if (!ajvAvailable) {
+      console.warn('SKIP: ajv not available')
+      return
+    }
+    const config = {
+      agents: { 'review/correctness-reviewer': { variant: 'v2' } },
+    }
+    // Both Zod and JSON Schema must reject this
+    expect(zodParse(config).success).toBe(false)
+    expect(ajvValidate(config)).toBe(false)
+  })
+
+  test('parity: qualified bundled agent accepts variant with explicit model', () => {
+    if (!ajvAvailable) {
+      console.warn('SKIP: ajv not available')
+      return
+    }
+    const config = {
+      agents: {
+        'review/correctness-reviewer': {
+          variant: 'v2',
+          model: 'anthropic/claude-sonnet-4',
+        },
+      },
+    }
+    expect(zodParse(config).success).toBe(true)
+    expect(ajvValidate(config)).toBe(true)
+  })
 })
 
 // Meta-schema smoke test: the generated JSON Schema must itself be a valid
@@ -1306,6 +1336,48 @@ describe('--check path and write path produce byte-identical bundled-names conte
     )
 
     expect(checkContent).toBe(onDisk)
+  })
+})
+
+// readCommittedBundledNamesCounts — regression guard for quote-agnostic regex
+// The countEntries regex must match Biome-formatted double-quoted entries.
+// A single-quote-only regex returns 0 for every entry, making the shrink
+// guard silently dead (every run looks like a first-run with no baseline).
+describe('readCommittedBundledNamesCounts — double-quoted entry parsing', () => {
+  let readCommittedFn: (rootDir: string) => {
+    previousAgentCount?: number
+    previousSkillCount?: number
+  }
+
+  beforeAll(async () => {
+    const mod = await import('../../scripts/generate-config-schema.js')
+    readCommittedFn = mod.readCommittedBundledNamesCounts
+  })
+
+  test('counts double-quoted entries (Biome output format) correctly', () => {
+    const tmp = makeTempRepo()
+    // Write a fake bundled-names.ts with double-quoted entries — the format
+    // Biome actually emits. A single-quote-only regex would return 0 here.
+    writeFile(
+      tmp,
+      'src/lib/bundled-names.ts',
+      [
+        'export const BUNDLED_AGENT_NAMES = [',
+        '  "agent-a",',
+        '  "agent-b",',
+        '  "agent-c",',
+        '] as const',
+        '',
+        'export const BUNDLED_SKILL_NAMES = [',
+        '  "skill-x",',
+        '  "skill-y",',
+        '] as const',
+      ].join('\n'),
+    )
+
+    const result = readCommittedFn(tmp)
+    expect(result.previousAgentCount).toBe(3)
+    expect(result.previousSkillCount).toBe(2)
   })
 })
 

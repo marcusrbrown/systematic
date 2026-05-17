@@ -33,6 +33,16 @@
       "pathGlob": "src/lib/skills.ts",
       "patterns": ["Claude Code"],
       "reason": "Comments annotate converter-mapped YAML fields (disableModelInvocation, userInvocable, allowedTools, etc.) with their CC-format origin. Historical documentation, not accidental reintroduction. Same category as src/lib/converter.ts."
+    },
+    {
+      "pathGlob": "skills/writing-skills/references/examples/skill-testing-walkthrough.md",
+      "patterns": ["CLAUDE.md"],
+      "reason": "Historical worked example documenting a skill-testing campaign that tested CLAUDE.md documentation variants in agent harnesses. The CLAUDE.md references describe what the walkthrough tested, not Systematic-prescriptive content. Converting to AGENTS.md would falsify the historical record."
+    },
+    {
+      "pathGlob": "skills/writing-skills/references/testing-skills-with-subagents.md",
+      "patterns": ["CLAUDE.md"],
+      "reason": "Cross-reference to skill-testing-walkthrough.md, describing what that walkthrough tested. Same rationale as the walkthrough file's exemption."
     }
   ]
 }

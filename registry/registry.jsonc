@@ -691,6 +691,15 @@
       "files": ["skills/test-browser/SKILL.md"]
     },
     {
+      "name": "test-driven-development",
+      "type": "skill",
+      "description": "Use when implementing any feature or bugfix, before writing implementation code",
+      "files": [
+        "skills/test-driven-development/SKILL.md",
+        "skills/test-driven-development/references/testing-anti-patterns.md"
+      ]
+    },
+    {
       "name": "test-xcode",
       "type": "skill",
       "description": "Build and test iOS apps on simulator using XcodeBuildMCP. Use after making iOS code changes, before creating a PR, or when verifying app behavior and checking for crashes on simulator.",
@@ -722,6 +731,20 @@
       "type": "skill",
       "description": "Use when starting any conversation - establishes how to find and use skills, requiring skill tool invocation before ANY response including clarifying questions",
       "files": ["skills/using-systematic/SKILL.md"]
+    },
+    {
+      "name": "writing-skills",
+      "type": "skill",
+      "description": "Use when creating new skills, editing existing skills, or verifying skills work before deployment",
+      "files": [
+        "skills/writing-skills/SKILL.md",
+        "skills/writing-skills/references/anthropic-best-practices-distilled.md",
+        "skills/writing-skills/references/examples/skill-testing-walkthrough.md",
+        "skills/writing-skills/references/graphviz-conventions.dot",
+        "skills/writing-skills/references/persuasion-principles.md",
+        "skills/writing-skills/references/testing-skills-with-subagents.md",
+        "skills/writing-skills/scripts/render-graphs.js"
+      ]
     },
     {
       "name": "writing-systematic-skills",
@@ -776,11 +799,13 @@
         "setup",
         "slfg",
         "test-browser",
+        "test-driven-development",
         "test-xcode",
         "todo-create",
         "todo-resolve",
         "todo-triage",
         "using-systematic",
+        "writing-skills",
         "writing-systematic-skills"
       ],
       "files": []

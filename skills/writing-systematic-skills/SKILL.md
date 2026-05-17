@@ -17,7 +17,7 @@ Use this skill when you are:
 - Deciding whether a skill needs references, scripts, assets, or templates
 - Auditing bundled skills for provider-portable defaults
 
-Do not use this as a replacement for `~/.agents/skills/writing-skills/SKILL.md`. Load that foundation first when authoring or substantially editing skill content.
+Load `writing-skills` first (bundled). This skill covers the Systematic delta.
 
 ## Foundation
 
