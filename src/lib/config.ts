@@ -120,19 +120,55 @@ function loadJsoncFile(filePath: string): RawSystematicConfig | null {
 }
 
 /**
- * Throw a schema validation error for a top-level config source.
- *
- * Mirrors the error-message format used by `throwConfigError` in
- * `agent-overlays.ts` and `throwOverlaySchemaError` for overlay fields,
- * so every config error includes the source file path and the offending
- * field path. The thrown error carries `_tag`, `filePath`, and `issues`
- * properties for programmatic inspection.
+ * Documentation URL for the full list of valid bundled agent and skill names.
+ * Appended to unrecognized-key error messages so users can self-serve without
+ * having to dump all 100+ names inline in the error.
  */
+const TYPED_VALIDATION_DOCS_URL =
+  'https://systematic.fro.bot/getting-started/configuration#typed-validation'
+
+/**
+ * Fields in the top-level config where an unrecognized key means a typo'd
+ * bundled name. For these paths we append the docs URL to the error message.
+ */
+const TYPED_KEY_FIELDS = new Set([
+  'agents',
+  'disabled_agents',
+  'disabled_skills',
+])
+
+/**
+ * Post-process Zod issues to enrich unrecognized-key errors on typed fields
+ * (agents, disabled_agents, disabled_skills) with a pointer to the docs URL
+ * where the full list of valid bundled names is published.
+ *
+ * Returns the issues array unchanged when no enrichment is needed.
+ */
+function enrichUnrecognizedKeyIssues(
+  issues: readonly z.core.$ZodIssue[],
+): readonly z.core.$ZodIssue[] {
+  return issues.map((issue) => {
+    if (issue.code !== 'unrecognized_keys') return issue
+    // issue.path[0] is the top-level field name (e.g., 'agents')
+    const topField = issue.path[0]
+    if (typeof topField !== 'string' || !TYPED_KEY_FIELDS.has(topField)) {
+      return issue
+    }
+    // Extract the bad key from the default Zod message ("Unrecognized key: \"foo\"")
+    const badKey = issue.message.match(/"([^"]+)"/)?.[1] ?? ''
+    const hint = badKey
+      ? `Unrecognized key '${badKey}' in \`${topField}\`. This must be a bundled name. See ${TYPED_VALIDATION_DOCS_URL} for the full list of valid names.`
+      : `${issue.message} See ${TYPED_VALIDATION_DOCS_URL} for the full list of valid names.`
+    return { ...issue, message: hint }
+  })
+}
+
 function throwTopLevelConfigSchemaError(
   filePath: string,
   trust: ConfigSource['trust'],
-  issues: readonly z.core.$ZodIssue[],
+  rawIssues: readonly z.core.$ZodIssue[],
 ): never {
+  const issues = enrichUnrecognizedKeyIssues(rawIssues)
   const issue = issues[0]
   if (!issue) {
     throw Object.assign(
@@ -143,9 +179,7 @@ function throwTopLevelConfigSchemaError(
     )
   }
   const fieldPath =
-    issue.code === 'unrecognized_keys'
-      ? (issue.message.match(/"([^"]+)"/)?.[1] ?? issue.path.join('.'))
-      : issue.path.join('.')
+    issue.code === 'unrecognized_keys' ? null : issue.path.join('.')
   const message = fieldPath
     ? `Invalid Systematic config in ${filePath}: ${fieldPath} ${issue.message}`
     : `Invalid Systematic config in ${filePath}: ${issue.message}`

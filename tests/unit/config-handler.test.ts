@@ -640,10 +640,10 @@ Skill content for ce:plan.`,
       // circuits before `isSystematicAgentConfig` decides to drop.
       createAgent(
         path.join(bundledDir, 'agents'),
-        'disabled-tool',
-        'Bundled disabled-tool',
+        'adversarial-reviewer',
+        'Bundled adversarial-reviewer',
       )
-      writeSystematicConfig({ disabled_agents: ['disabled-tool'] })
+      writeSystematicConfig({ disabled_agents: ['adversarial-reviewer'] })
 
       const handler = createConfigHandler({
         directory: projectDir,
@@ -658,13 +658,13 @@ Skill content for ce:plan.`,
       }
       const config: Config = {
         agent: {
-          'disabled-tool': priorEmitted,
+          'adversarial-reviewer': priorEmitted,
         },
       }
 
       await handler(config)
 
-      expect(config.agent?.['disabled-tool']).toBe(priorEmitted)
+      expect(config.agent?.['adversarial-reviewer']).toBe(priorEmitted)
     })
 
     test('existing config overrides bundled content (preserves user config)', async () => {
@@ -1357,12 +1357,12 @@ model: gpt-4
 
     test('exact permission.skill can override category skills and exact skills can override category permission.skill', async () => {
       createSkill(path.join(bundledDir, 'skills'), 'skill-a', 'Skill A')
-      createCategorizedAgent('review', 'explicit-exact', {
-        name: 'explicit-exact',
+      createCategorizedAgent('review', 'security-reviewer', {
+        name: 'security-reviewer',
         description: 'Explicit exact',
       })
-      createCategorizedAgent('review', 'managed-exact', {
-        name: 'managed-exact',
+      createCategorizedAgent('review', 'performance-reviewer', {
+        name: 'performance-reviewer',
         description: 'Managed exact',
       })
       writeCustomSystematicConfig({
@@ -1373,10 +1373,10 @@ model: gpt-4
           },
         },
         agents: {
-          'explicit-exact': {
+          'security-reviewer': {
             permission: { skill: { 'skill-a': 'deny' } },
           },
-          'managed-exact': { skills: ['skill-a'] },
+          'performance-reviewer': { skills: ['skill-a'] },
         },
       })
 
@@ -1390,23 +1390,25 @@ model: gpt-4
       const config: Config = {}
       await handler(config)
 
-      expect(config.agent?.['explicit-exact']?.permission?.skill).toEqual({
+      expect(config.agent?.['security-reviewer']?.permission?.skill).toEqual({
         '*': 'deny',
         'skill-a': 'deny',
       })
-      expect(config.agent?.['explicit-exact']?.permission?.bash).toEqual({
+      expect(config.agent?.['security-reviewer']?.permission?.bash).toEqual({
         '*': 'deny',
       })
-      expect(config.agent?.['managed-exact']?.permission?.skill).toEqual({
-        '*': 'deny',
-        'skill-a': 'allow',
-      })
+      expect(config.agent?.['performance-reviewer']?.permission?.skill).toEqual(
+        {
+          '*': 'deny',
+          'skill-a': 'allow',
+        },
+      )
     })
 
     test('exact managed skills override category permission.skill denial through last-match order', async () => {
       createSkill(path.join(bundledDir, 'skills'), 'skill-a', 'Skill A')
-      createCategorizedAgent('review', 'managed-exact', {
-        name: 'managed-exact',
+      createCategorizedAgent('review', 'performance-reviewer', {
+        name: 'performance-reviewer',
         description: 'Managed exact',
       })
       writeCustomSystematicConfig({
@@ -1416,7 +1418,7 @@ model: gpt-4
           },
         },
         agents: {
-          'managed-exact': { skills: ['skill-a'] },
+          'performance-reviewer': { skills: ['skill-a'] },
         },
       })
 
@@ -1430,10 +1432,12 @@ model: gpt-4
       const config: Config = {}
       await handler(config)
 
-      expect(config.agent?.['managed-exact']?.permission?.skill).toEqual({
-        '*': 'deny',
-        'skill-a': 'allow',
-      })
+      expect(config.agent?.['performance-reviewer']?.permission?.skill).toEqual(
+        {
+          '*': 'deny',
+          'skill-a': 'allow',
+        },
+      )
     })
 
     test('category overlay skips native replacement and applies to other bundled agents', async () => {
@@ -1466,11 +1470,11 @@ model: gpt-4
     })
 
     test('disabled exact overlay has no emitted config', async () => {
-      createCategorizedAgent('workflow', 'helper', {
-        name: 'helper',
+      createCategorizedAgent('workflow', 'lint', {
+        name: 'lint',
         description: 'Helper',
       })
-      writeSystematicConfig({ agents: { helper: { disable: true } } })
+      writeSystematicConfig({ agents: { lint: { disable: true } } })
 
       const handler = createConfigHandler({
         directory: projectDir,
@@ -1482,7 +1486,7 @@ model: gpt-4
       const config: Config = {}
       await handler(config)
 
-      expect(config.agent?.helper).toBeUndefined()
+      expect(config.agent?.lint).toBeUndefined()
     })
 
     test('assertSourceCategoryModelCoverage fires on missing category', async () => {

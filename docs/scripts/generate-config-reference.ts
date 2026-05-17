@@ -277,6 +277,36 @@ function renderTopLevelSection(
 }
 
 /**
+ * Resolve the overlay schema object for agent entries from the top-level
+ * JSON Schema properties map.
+ *
+ * When `agents` is a typed object (strict mode, `additionalProperties: false`),
+ * the overlay shape is taken from the first per-agent entry under `properties`.
+ * When `agents` is a record (`additionalProperties` is an object), that object
+ * is used directly. Returns `undefined` if neither path yields a schema.
+ *
+ * Exported for testing the fallback path with synthetic schemas.
+ */
+export function resolveAgentOverlaySchema(
+  properties: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const agentsSchema = properties.agents as Record<string, unknown> | undefined
+  const agentsAdditional = agentsSchema?.additionalProperties
+  if (
+    agentsAdditional !== null &&
+    typeof agentsAdditional === 'object' &&
+    !Array.isArray(agentsAdditional)
+  ) {
+    return agentsAdditional as Record<string, unknown>
+  }
+  const agentProperties = agentsSchema?.properties as
+    | Record<string, Record<string, unknown>>
+    | undefined
+  const firstKey = agentProperties ? Object.keys(agentProperties)[0] : undefined
+  return firstKey && agentProperties ? agentProperties[firstKey] : undefined
+}
+
+/**
  * Generate the .mdx content for the systematic-config reference page.
  *
  * @param version Semver string (e.g., "2.11.0") — if omitted, resolves
@@ -321,8 +351,7 @@ export function generateConfigReference(version?: string): string {
   }
 
   // Agent overlay fields section (shared reference)
-  const agentProps = (properties.agents as Record<string, unknown> | undefined)
-    ?.additionalProperties as Record<string, unknown> | undefined
+  const agentProps = resolveAgentOverlaySchema(properties)
 
   const overlaySection = agentProps?.properties
     ? `## Agent/Category Overlay Fields

@@ -20,7 +20,9 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
+import { findAgentsInDir } from '../src/lib/agents.js'
 import { SystematicConfigSchema } from '../src/lib/config-schema.js'
+import { findSkillsInDir } from '../src/lib/skills.js'
 import {
   getZodDefaultInnerType,
   getZodObjectShape,
@@ -281,12 +283,26 @@ function addVariantRequiresExplicitModel(
 }
 
 function addOverlayCrossFieldConstraints(root: Record<string, unknown>): void {
-  for (const path of [
-    ['properties', 'agents', 'additionalProperties'],
-    ['properties', 'categories', 'additionalProperties'],
-  ] as const) {
-    const overlayNode = getSchemaNode(root, path)
-    if (overlayNode !== null) addVariantRequiresExplicitModel(overlayNode)
+  // categories: still uses additionalProperties (z.record)
+  const categoriesOverlay = getSchemaNode(root, [
+    'properties',
+    'categories',
+    'additionalProperties',
+  ])
+  if (categoriesOverlay !== null)
+    addVariantRequiresExplicitModel(categoriesOverlay)
+
+  // agents: now a typed object — inject constraint into each per-agent entry
+  const agentProperties = getSchemaNode(root, [
+    'properties',
+    'agents',
+    'properties',
+  ])
+  if (agentProperties !== null) {
+    for (const key of Object.keys(agentProperties)) {
+      const entry = asObject((agentProperties as Record<string, unknown>)[key])
+      if (entry !== null) addVariantRequiresExplicitModel(entry)
+    }
   }
 }
 
@@ -300,10 +316,27 @@ function addOverlayCrossFieldConstraints(root: Record<string, unknown>): void {
  * @returns Pretty-printed JSON string of the generated schema
  */
 export function generateSchemaContent(version: string): string {
+  return generateSchemaContentFromSchema(version, SystematicConfigSchema)
+}
+
+/**
+ * Generate the JSON Schema content string for the given version, using the
+ * provided Zod schema. Separating the schema parameter from the version allows
+ * `main()` to pass a dynamically-imported fresh schema after rewriting
+ * `bundled-names.ts`, avoiding the stale-static-import problem.
+ *
+ * @param version Semver string (e.g., "3.0.0")
+ * @param schema The Zod schema to convert (typically SystematicConfigSchema)
+ * @returns Pretty-printed JSON string of the generated schema
+ */
+export function generateSchemaContentFromSchema(
+  version: string,
+  schema: z.ZodType,
+): string {
   const major = getMajorVersion(version)
   const schemaId = SCHEMA_ID_TEMPLATE.replace('%MAJOR%', major)
 
-  const result = z.toJSONSchema(SystematicConfigSchema, {
+  const result = z.toJSONSchema(schema, {
     target: 'draft-7',
     override: (ctx) => {
       // Only set $id at the root schema level (path length === 0)
@@ -325,10 +358,7 @@ export function generateSchemaContent(version: string): string {
   // Zod emits `required:[all fields]` for every object, including fields with
   // `.default()`. From the user's perspective those fields are optional — the
   // runtime fills them in. Without this step, IDEs redline valid minimal configs.
-  removeDefaultFieldsFromRequired(
-    clean as Record<string, unknown>,
-    SystematicConfigSchema,
-  )
+  removeDefaultFieldsFromRequired(clean as Record<string, unknown>, schema)
   addOverlayCrossFieldConstraints(clean as Record<string, unknown>)
 
   const raw = `${JSON.stringify(clean, null, 2)}\n`
@@ -402,8 +432,225 @@ export function normalizeForCompare(content: string): string {
 }
 
 /**
+ * Path to the generated `bundled-names.ts` artifact, relative to a project root.
+ */
+export const BUNDLED_NAMES_RELATIVE_PATH = 'src/lib/bundled-names.ts'
+
+/**
+ * Walk the project's `agents/` and `skills/` directories and return the
+ * lexicographically-sorted list of bundled agent and skill names. Pure helper
+ * exposed for testing — pass a project root, get back the discovered sets.
+ *
+ * Returns empty arrays when a directory is missing or contains no matching
+ * files. Generator callers must apply a separate sanity check before emitting
+ * (see `generateBundledNamesContent` below).
+ */
+export function discoverBundledNames(rootDir: string): {
+  agents: string[]
+  agentQualifiedIds: string[]
+  skills: string[]
+} {
+  const agentsDir = path.join(rootDir, 'agents')
+  const skillsDir = path.join(rootDir, 'skills')
+
+  const agentInfos = fs.existsSync(agentsDir) ? findAgentsInDir(agentsDir) : []
+  const agents = agentInfos.map((info) => info.name).sort()
+  const agentQualifiedIds = agentInfos
+    .filter((info) => info.category !== undefined)
+    .map((info) => `${info.category}/${info.name}`)
+    .sort()
+
+  const skills = fs.existsSync(skillsDir)
+    ? findSkillsInDir(skillsDir)
+        .map((info) => info.name)
+        .sort()
+    : []
+
+  return { agents, agentQualifiedIds, skills }
+}
+
+/**
+ * Generate the contents of `src/lib/bundled-names.ts` from a discovered set
+ * of agent and skill names. Pure function — does not write to disk.
+ *
+ * Applies a sanity check:
+ *   - Empty discovery (either list empty) → aborts with an `empty` error
+ *   - Shrinkage from a previous committed count → aborts unless `allowShrink`
+ *
+ * First-run callers (file does not yet exist) leave `previousAgentCount` /
+ * `previousSkillCount` undefined; only the empty-discovery branch fires.
+ *
+ * Maintainers who intentionally remove a bundled agent or skill set
+ * `allowShrink: true` (wired to the script's `--allow-shrink` CLI flag).
+ * CI never sets this flag; the shrink check is a local guardrail.
+ */
+export function generateBundledNamesContent(
+  agents: string[],
+  skills: string[],
+  options: {
+    previousAgentCount?: number
+    previousSkillCount?: number
+    allowShrink?: boolean
+    agentQualifiedIds?: string[]
+  } = {},
+): string {
+  if (agents.length === 0 || skills.length === 0) {
+    throw new Error(
+      'Error: bundled-names discovery is empty. Either the agents/ or skills/ directory was not found or contains no matching files. Refusing to emit an empty enum that would brick every config validation.',
+    )
+  }
+
+  const {
+    previousAgentCount,
+    previousSkillCount,
+    allowShrink = false,
+    agentQualifiedIds = [],
+  } = options
+
+  if (!allowShrink) {
+    if (
+      previousAgentCount !== undefined &&
+      agents.length < previousAgentCount
+    ) {
+      throw new Error(
+        `Error: bundled-agent count shrank from ${previousAgentCount} to ${agents.length}. ` +
+          'If this is an intentional removal, regenerate with `bun scripts/generate-config-schema.ts --allow-shrink`. ' +
+          'If not, investigate before committing — partial discovery (filesystem permission issues, truncated walks, symlink edge cases) can manifest as unintended shrinkage.',
+      )
+    }
+    if (
+      previousSkillCount !== undefined &&
+      skills.length < previousSkillCount
+    ) {
+      throw new Error(
+        `Error: bundled-skill count shrank from ${previousSkillCount} to ${skills.length}. ` +
+          'If this is an intentional removal, regenerate with `bun scripts/generate-config-schema.ts --allow-shrink`. ' +
+          'If not, investigate before committing — partial discovery can manifest as unintended shrinkage.',
+      )
+    }
+  }
+
+  const agentLiterals = agents.map((n) => `  ${JSON.stringify(n)},`).join('\n')
+  const qualifiedLiterals = agentQualifiedIds
+    .map((n) => `  ${JSON.stringify(n)},`)
+    .join('\n')
+  const skillLiterals = skills.map((n) => `  ${JSON.stringify(n)},`).join('\n')
+
+  const qualifiedBlock =
+    qualifiedLiterals.length > 0
+      ? `\nexport const BUNDLED_AGENT_QUALIFIED_IDS = [\n${qualifiedLiterals}\n] as const\n`
+      : '\nexport const BUNDLED_AGENT_QUALIFIED_IDS: readonly string[] = []\n'
+
+  const raw = `// Generated by scripts/generate-config-schema.ts — DO NOT EDIT BY HAND.
+// Re-run \`bun scripts/generate-config-schema.ts\` to regenerate.
+//
+// Source of truth for the bundled-agent and bundled-skill name sets that
+// drive typed config validation in src/lib/config-schema.ts and the
+// published JSON Schema. Walks agents/ and skills/ at codegen time.
+
+export const BUNDLED_AGENT_NAMES = [
+${agentLiterals}
+] as const
+${qualifiedBlock}
+export const BUNDLED_SKILL_NAMES = [
+${skillLiterals}
+] as const
+
+export type BundledAgentName = (typeof BUNDLED_AGENT_NAMES)[number]
+export type BundledSkillName = (typeof BUNDLED_SKILL_NAMES)[number]
+`
+
+  return formatJsonWithBiome(raw, 'bundled-names.ts')
+}
+
+/**
+ * Read the previously-committed `bundled-names.ts` file (if any) and extract
+ * the lengths of `BUNDLED_AGENT_NAMES` and `BUNDLED_SKILL_NAMES`.
+ *
+ * Returns `undefined` for missing fields when the file doesn't exist or
+ * can't be parsed — the generator treats this as the first-run case and
+ * skips the shrink check (only empty-discovery enforced).
+ */
+export function readCommittedBundledNamesCounts(rootDir: string): {
+  previousAgentCount?: number
+  previousSkillCount?: number
+} {
+  const filePath = path.join(rootDir, BUNDLED_NAMES_RELATIVE_PATH)
+  let content: string
+  try {
+    content = fs.readFileSync(filePath, 'utf-8')
+  } catch {
+    return {}
+  }
+
+  const countEntries = (block: string): number => {
+    return block.split('\n').filter((line) => /^\s*'[^']+',\s*$/.test(line))
+      .length
+  }
+
+  const agentMatch = content.match(
+    /export const BUNDLED_AGENT_NAMES = \[([\s\S]*?)\] as const/,
+  )
+  const skillMatch = content.match(
+    /export const BUNDLED_SKILL_NAMES = \[([\s\S]*?)\] as const/,
+  )
+
+  return {
+    previousAgentCount: agentMatch ? countEntries(agentMatch[1]) : undefined,
+    previousSkillCount: skillMatch ? countEntries(skillMatch[1]) : undefined,
+  }
+}
+
+/**
+ * Write the generated bundled-names content to `src/lib/bundled-names.ts`,
+ * relative to the given project root.
+ *
+ * Mirrors the mtime-preservation pattern from `generateAndWrite`: skip the
+ * write when on-disk content already matches.
+ */
+export function writeBundledNamesFile(
+  content: string,
+  rootDir = PROJECT_ROOT,
+): string {
+  const targetPath = path.join(rootDir, BUNDLED_NAMES_RELATIVE_PATH)
+  fs.mkdirSync(path.dirname(targetPath), { recursive: true })
+
+  try {
+    const existing = fs.readFileSync(targetPath, 'utf-8')
+    if (normalizeForCompare(existing) === normalizeForCompare(content)) {
+      return targetPath
+    }
+  } catch {
+    // File doesn't exist — write it
+  }
+
+  fs.writeFileSync(targetPath, content, 'utf-8')
+  return targetPath
+}
+
+/**
+ * Describes a single committed artifact that the drift gate must verify.
+ * Each artifact has an independent `produce` pipeline and a path on disk.
+ */
+interface CheckArtifact {
+  /** Returns the expected content string for this artifact. */
+  produce: () => string
+  /** Absolute path to the committed file on disk. */
+  pathOnDisk: string
+  /** Human-readable identifier for error messages (relative path). */
+  displayName: string
+}
+
+/**
  * Check whether the generated schema files on disk match the expected output.
  * Used by `--check` mode for CI drift detection.
+ *
+ * Checks two committed artifacts:
+ *   1. docs/public/schemas/v<MAJOR>/systematic-config.schema.json
+ *   2. src/lib/bundled-names.ts
+ *
+ * All failures are aggregated so a stale-both scenario surfaces both errors
+ * at once instead of falsely clearing the second after the first is fixed.
  *
  * @param rootDir Project root directory
  * @param explicitVersion Optional explicit version override
@@ -413,68 +660,118 @@ export function checkSchemaFiles(
   rootDir = PROJECT_ROOT,
   explicitVersion: string | null = null,
 ): { ok: boolean; message: string } {
-  const version = resolveVersion(explicitVersion, rootDir)
-  const expected = generateSchemaContent(version)
-  const major = getMajorVersion(version)
+  // ── Artifact 1: bundled-names.ts (version-agnostic) ─────────────────────
+  // Resolved first so its result is always available regardless of whether
+  // version resolution succeeds for the JSON Schema artifact.
+  const bundledNamesArtifact: CheckArtifact = {
+    produce: () => {
+      const { agents, skills, agentQualifiedIds } =
+        discoverBundledNames(rootDir)
+      const previous = readCommittedBundledNamesCounts(rootDir)
+      return generateBundledNamesContent(agents, skills, {
+        ...previous,
+        agentQualifiedIds,
+      })
+    },
+    pathOnDisk: path.join(rootDir, BUNDLED_NAMES_RELATIVE_PATH),
+    displayName: BUNDLED_NAMES_RELATIVE_PATH,
+  }
 
-  const majorPath = path.join(
-    rootDir,
-    'docs/public/schemas',
-    `v${major}`,
-    'systematic-config.schema.json',
-  )
-
+  // ── Artifact 2: versioned JSON Schema ────────────────────────────────────
   // Only the v<MAJOR>/ file is the canonical committed version — MUST match.
   // dist/schemas/ is a publish-only artifact regenerated by prepublishOnly; it
   // is absent after a clean `bun run build` and must not be checked here.
   // latest/ is regenerated at docs:generate time and is gitignored — not checked.
-  const checkPaths: string[] = [majorPath]
+  let schemaArtifact: CheckArtifact | null = null
+  let versionFailureMessage: string | null = null
+  let resolvedMajor = ''
 
-  let allOk = true
-  let firstFailure = ''
+  try {
+    const version = resolveVersion(explicitVersion, rootDir)
+    const major = getMajorVersion(version)
+    resolvedMajor = major
+    const majorPath = path.join(
+      rootDir,
+      'docs/public/schemas',
+      `v${major}`,
+      'systematic-config.schema.json',
+    )
+    schemaArtifact = {
+      produce: () => generateSchemaContent(version),
+      pathOnDisk: majorPath,
+      displayName: path.relative(rootDir, majorPath),
+    }
+  } catch (err) {
+    versionFailureMessage = (err as Error).message
+  }
 
-  for (const filePath of checkPaths) {
-    const relPath = path.relative(rootDir, filePath)
+  // ── Drift loop ───────────────────────────────────────────────────────────
+  const failures: string[] = []
 
-    if (!fs.existsSync(filePath)) {
-      allOk = false
-      if (!firstFailure) {
-        firstFailure = `${relPath} does not exist. Run \`bun scripts/generate-config-schema.ts\` to create it.`
-      }
+  const artifacts: CheckArtifact[] = [bundledNamesArtifact]
+  if (schemaArtifact !== null) {
+    artifacts.push(schemaArtifact)
+  }
+
+  for (const artifact of artifacts) {
+    const { pathOnDisk, displayName } = artifact
+
+    if (!fs.existsSync(pathOnDisk)) {
+      failures.push(
+        `${displayName} does not exist. Run \`bun scripts/generate-config-schema.ts\` to create it.`,
+      )
       continue
     }
 
-    const existing = fs.readFileSync(filePath, 'utf-8')
+    let expected: string
+    try {
+      expected = artifact.produce()
+    } catch (err) {
+      failures.push(
+        `${displayName} drift check failed: ${(err as Error).message}`,
+      )
+      continue
+    }
+
+    const existing = fs.readFileSync(pathOnDisk, 'utf-8')
     if (normalizeForCompare(existing) !== normalizeForCompare(expected)) {
-      allOk = false
-      if (!firstFailure) {
-        firstFailure = `${relPath} is out of date. Run \`bun scripts/generate-config-schema.ts\` to update it.`
-      }
+      failures.push(
+        `${displayName} is out of date. Run \`bun scripts/generate-config-schema.ts\` to update it.`,
+      )
     }
   }
 
-  if (allOk) {
+  if (versionFailureMessage !== null) {
+    failures.push(versionFailureMessage)
+  }
+
+  if (failures.length === 0) {
+    const vSuffix = resolvedMajor ? ` (v${resolvedMajor})` : ''
     return {
       ok: true,
-      message: `Schema files are up to date (v${major}).`,
+      message: `Schema files are up to date${vSuffix}.`,
     }
   }
 
-  return { ok: false, message: firstFailure }
+  return { ok: false, message: failures.join('\n\n') }
 }
 
 function parseArgs(argv: string[]): {
   check: boolean
   version: string | null
+  allowShrink: boolean
 } {
   const args = argv.slice(2)
   let check = false
   let version: string | null = null
+  let allowShrink = false
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
     if (arg === '--check') {
       check = true
+    } else if (arg === '--allow-shrink') {
+      allowShrink = true
     } else if (arg === '--version') {
       const next = args[i + 1]
       if (next == null || next.startsWith('--')) {
@@ -488,11 +785,15 @@ function parseArgs(argv: string[]): {
     }
   }
 
-  return { check, version }
+  return { check, version, allowShrink }
 }
 
-function main(): void {
-  const { check, version: explicitVersion } = parseArgs(process.argv)
+async function main(): Promise<void> {
+  const {
+    check,
+    version: explicitVersion,
+    allowShrink,
+  } = parseArgs(process.argv)
 
   if (check) {
     const result = checkSchemaFiles(PROJECT_ROOT, explicitVersion)
@@ -512,11 +813,48 @@ function main(): void {
     process.exit(1)
   }
 
-  const content = generateSchemaContent(resolvedVersion)
-  const paths = generateAndWrite(content, resolvedVersion)
+  // Step 1: Discover bundled names from the filesystem and write bundled-names.ts
+  // BEFORE generating the JSON Schema. The static import of SystematicConfigSchema
+  // at the top of this file reads BUNDLED_AGENT_NAMES from the committed file, so
+  // if an agent was added or removed, the schema would be built from stale data.
+  // Writing bundled-names.ts first and then dynamically importing config-schema
+  // with a cache-busting query ensures the schema reflects the current filesystem.
+  let bundledNamesPath: string
+  try {
+    const { agents, agentQualifiedIds, skills } =
+      discoverBundledNames(PROJECT_ROOT)
+    const previous = readCommittedBundledNamesCounts(PROJECT_ROOT)
+    const bundledContent = generateBundledNamesContent(agents, skills, {
+      ...previous,
+      allowShrink,
+      agentQualifiedIds,
+    })
+    bundledNamesPath = writeBundledNamesFile(bundledContent, PROJECT_ROOT)
+  } catch (err) {
+    console.error((err as Error).message)
+    process.exit(1)
+  }
+
+  console.log(`Bundled names ${path.relative(PROJECT_ROOT, bundledNamesPath)}`)
+
+  // Step 2: Dynamically import config-schema with a cache-busting query so Bun
+  // re-evaluates the module and picks up the freshly written bundled-names.ts.
+  // ESM module caches are keyed by URL; appending ?cache=<timestamp> forces a
+  // fresh evaluation even if the static import at the top of this file already
+  // cached the old version.
+  const schemaModuleUrl = `../src/lib/config-schema.js?cache=${Date.now()}`
+  const schemaModule = await import(schemaModuleUrl)
+  const freshSchema =
+    schemaModule.SystematicConfigSchema as import('zod').ZodType
+
+  const schemaContent = generateSchemaContentFromSchema(
+    resolvedVersion,
+    freshSchema,
+  )
+  const schemaPaths = generateAndWrite(schemaContent, resolvedVersion)
 
   const major = getMajorVersion(resolvedVersion)
-  const relPaths = paths.map((p) => path.relative(PROJECT_ROOT, p))
+  const relPaths = schemaPaths.map((p) => path.relative(PROJECT_ROOT, p))
 
   console.log(`Systematic Config Schema v${major} (${resolvedVersion})`)
   console.log(`  ${relPaths[0]}`)
@@ -525,5 +863,8 @@ function main(): void {
 }
 
 if (import.meta.main) {
-  main()
+  main().catch((err: unknown) => {
+    console.error((err as Error).message)
+    process.exit(1)
+  })
 }

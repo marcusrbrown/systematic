@@ -62,12 +62,12 @@ describe('config', () => {
         fs.writeFileSync(
           path.join(projectConfigDir, 'systematic.json'),
           JSON.stringify({
-            disabled_skills: ['skill-1'],
+            disabled_skills: ['ce:plan'],
           }),
         )
 
         const result = loadConfig(testDir)
-        expect(result.disabled_skills).toContain('skill-1')
+        expect(result.disabled_skills).toContain('ce:plan')
         expect(result.disabled_agents).toEqual([])
         expect(result.disabled_commands).toEqual([])
         expect(result.bootstrap).toEqual(DEFAULT_CONFIG.bootstrap)
@@ -108,10 +108,10 @@ describe('config', () => {
 
     describe('user config only', () => {
       test('merges user config with defaults', () => {
-        writeUserConfig({ disabled_agents: ['agent-1'] })
+        writeUserConfig({ disabled_agents: ['correctness-reviewer'] })
 
         const result = loadConfig(testDir)
-        expect(result.disabled_agents).toContain('agent-1')
+        expect(result.disabled_agents).toContain('correctness-reviewer')
         expect(result.disabled_skills).toEqual([])
         expect(result.disabled_commands).toEqual([])
       })
@@ -119,20 +119,20 @@ describe('config', () => {
 
     describe('both configs', () => {
       test('project config overrides user config', () => {
-        writeUserConfig({ disabled_skills: ['user-skill'] })
+        writeUserConfig({ disabled_skills: ['ce:brainstorm'] })
 
         const projectConfigDir = path.join(testDir, '.opencode')
         fs.mkdirSync(projectConfigDir)
         fs.writeFileSync(
           path.join(projectConfigDir, 'systematic.json'),
           JSON.stringify({
-            disabled_skills: ['project-skill'],
+            disabled_skills: ['ce:compound'],
           }),
         )
 
         const result = loadConfig(testDir)
-        expect(result.disabled_skills).toContain('user-skill')
-        expect(result.disabled_skills).toContain('project-skill')
+        expect(result.disabled_skills).toContain('ce:brainstorm')
+        expect(result.disabled_skills).toContain('ce:compound')
       })
 
       test('project bootstrap overrides user bootstrap', () => {
@@ -161,7 +161,7 @@ describe('config', () => {
         fs.writeFileSync(
           path.join(projectConfigDir, 'systematic.json'),
           JSON.stringify({
-            disabled_skills: ['skill-a', 'skill-b', 'skill-a'],
+            disabled_skills: ['ce:plan', 'ce:review', 'ce:plan'],
           }),
         )
 
@@ -171,37 +171,37 @@ describe('config', () => {
       })
 
       test('combines user and project disabled_skills arrays', () => {
-        writeUserConfig({ disabled_skills: ['skill-a'] })
+        writeUserConfig({ disabled_skills: ['ce:plan'] })
 
         const projectConfigDir = path.join(testDir, '.opencode')
         fs.mkdirSync(projectConfigDir)
         fs.writeFileSync(
           path.join(projectConfigDir, 'systematic.json'),
           JSON.stringify({
-            disabled_skills: ['skill-b'],
+            disabled_skills: ['ce:review'],
           }),
         )
 
         const result = loadConfig(testDir)
-        expect(result.disabled_skills).toContain('skill-a')
-        expect(result.disabled_skills).toContain('skill-b')
+        expect(result.disabled_skills).toContain('ce:plan')
+        expect(result.disabled_skills).toContain('ce:review')
       })
 
       test('combines user and project disabled_agents arrays', () => {
-        writeUserConfig({ disabled_agents: ['agent-a'] })
+        writeUserConfig({ disabled_agents: ['correctness-reviewer'] })
 
         const projectConfigDir = path.join(testDir, '.opencode')
         fs.mkdirSync(projectConfigDir)
         fs.writeFileSync(
           path.join(projectConfigDir, 'systematic.json'),
           JSON.stringify({
-            disabled_agents: ['agent-b'],
+            disabled_agents: ['security-reviewer'],
           }),
         )
 
         const result = loadConfig(testDir)
-        expect(result.disabled_agents).toContain('agent-a')
-        expect(result.disabled_agents).toContain('agent-b')
+        expect(result.disabled_agents).toContain('correctness-reviewer')
+        expect(result.disabled_agents).toContain('security-reviewer')
       })
 
       test('combines user and project disabled_commands arrays', () => {
@@ -596,7 +596,7 @@ describe('config', () => {
         expect(() => loadConfigWithSources(testDir)).toThrow(keyPath)
       })
 
-      test('preserves unqualified and qualified alias keys across source priorities', () => {
+      test('preserves multiple bundled agent overlays across source priorities', () => {
         writeUserConfig({
           agents: { 'correctness-reviewer': { temperature: 0.1 } },
         })
@@ -606,7 +606,7 @@ describe('config', () => {
         fs.writeFileSync(
           path.join(projectConfigDir, 'systematic.json'),
           JSON.stringify({
-            agents: { 'review/correctness-reviewer': { temperature: 0.2 } },
+            agents: { 'security-reviewer': { temperature: 0.2 } },
           }),
         )
 
@@ -614,7 +614,7 @@ describe('config', () => {
 
         expect(result.config.agents).toEqual({
           'correctness-reviewer': { temperature: 0.1 },
-          'review/correctness-reviewer': { temperature: 0.2 },
+          'security-reviewer': { temperature: 0.2 },
         })
       })
     })
@@ -693,20 +693,20 @@ describe('config', () => {
 
       fs.writeFileSync(
         path.join(customDir, 'systematic.json'),
-        JSON.stringify({ disabled_skills: ['custom-skill'] }),
+        JSON.stringify({ disabled_skills: ['ce:work'] }),
       )
 
       const projectConfigDir = path.join(testDir, '.opencode')
       fs.mkdirSync(projectConfigDir, { recursive: true })
       fs.writeFileSync(
         path.join(projectConfigDir, 'systematic.json'),
-        JSON.stringify({ disabled_skills: ['project-skill'] }),
+        JSON.stringify({ disabled_skills: ['ce:compound'] }),
       )
 
       const config = loadConfig(testDir)
 
-      expect(config.disabled_skills).toContain('custom-skill')
-      expect(config.disabled_skills).toContain('project-skill')
+      expect(config.disabled_skills).toContain('ce:work')
+      expect(config.disabled_skills).toContain('ce:compound')
 
       fs.rmSync(customDir, { recursive: true, force: true })
     })
@@ -783,7 +783,7 @@ describe('config', () => {
     })
 
     test('custom disabled_skills merges with project and user config', () => {
-      writeUserConfig({ disabled_skills: ['user-skill'] })
+      writeUserConfig({ disabled_skills: ['ce:brainstorm'] })
 
       const customDir = fs.mkdtempSync(
         path.join(os.tmpdir(), 'systematic-custom-'),
@@ -794,19 +794,19 @@ describe('config', () => {
       fs.mkdirSync(projectConfigDir, { recursive: true })
       fs.writeFileSync(
         path.join(projectConfigDir, 'systematic.json'),
-        JSON.stringify({ disabled_skills: ['project-skill'] }),
+        JSON.stringify({ disabled_skills: ['ce:compound'] }),
       )
 
       fs.writeFileSync(
         path.join(customDir, 'systematic.json'),
-        JSON.stringify({ disabled_skills: ['custom-skill'] }),
+        JSON.stringify({ disabled_skills: ['ce:work'] }),
       )
 
       const config = loadConfig(testDir)
 
-      expect(config.disabled_skills).toContain('user-skill')
-      expect(config.disabled_skills).toContain('project-skill')
-      expect(config.disabled_skills).toContain('custom-skill')
+      expect(config.disabled_skills).toContain('ce:brainstorm')
+      expect(config.disabled_skills).toContain('ce:compound')
+      expect(config.disabled_skills).toContain('ce:work')
 
       fs.rmSync(customDir, { recursive: true, force: true })
     })
@@ -839,13 +839,13 @@ describe('config', () => {
 
     test('valid config loads identically — happy path regression', () => {
       writeProjectConfig({
-        disabled_skills: ['skill-a'],
-        disabled_agents: ['agent-b'],
+        disabled_skills: ['ce:plan'],
+        disabled_agents: ['security-reviewer'],
         bootstrap: { enabled: false },
       })
       const result = loadConfig(testDir)
-      expect(result.disabled_skills).toContain('skill-a')
-      expect(result.disabled_agents).toContain('agent-b')
+      expect(result.disabled_skills).toContain('ce:plan')
+      expect(result.disabled_agents).toContain('security-reviewer')
       expect(result.bootstrap.enabled).toBe(false)
     })
 
@@ -863,10 +863,12 @@ describe('config', () => {
 
     test('malformed agents.<key>.model is rejected with nested field path in error', () => {
       const configPath = writeProjectConfig({
-        agents: { explorer: { model: {} } },
+        agents: { 'correctness-reviewer': { model: {} } },
       })
       expect(() => loadConfig(testDir)).toThrow(configPath)
-      expect(() => loadConfig(testDir)).toThrow('agents.explorer.model')
+      expect(() => loadConfig(testDir)).toThrow(
+        'agents.correctness-reviewer.model',
+      )
     })
 
     test('bootstrap.enabled as string is rejected with field path in error', () => {
@@ -903,6 +905,39 @@ describe('config', () => {
       expect(() => loadConfig(testDir)).toThrow(userConfigFilePath)
       expect(() => loadConfig(testDir)).toThrow('disabled_skills')
     })
+
+    test('typo on agents key produces a message pointing at the documentation URL', () => {
+      const configPath = writeProjectConfig({
+        agents: { 'security-reviwer': { temperature: 0.1 } },
+      })
+      let errorMessage = ''
+      try {
+        loadConfig(testDir)
+      } catch (err) {
+        errorMessage = (err as Error).message
+      }
+      expect(errorMessage).toContain(configPath)
+      expect(errorMessage).toContain('security-reviwer')
+      expect(errorMessage).toContain(
+        'https://systematic.fro.bot/getting-started/configuration#typed-validation',
+      )
+    })
+
+    test('typo on disabled_agents value produces a message pointing at the documentation URL', () => {
+      const configPath = writeProjectConfig({
+        disabled_agents: ['security-reviwer'],
+      })
+      let errorMessage = ''
+      try {
+        loadConfig(testDir)
+      } catch (err) {
+        errorMessage = (err as Error).message
+      }
+      expect(errorMessage).toContain(configPath)
+      // disabled_agents is an enum array — Zod reports a value-level error, not unrecognized_keys.
+      // The error should still name the file and the invalid field path.
+      expect(errorMessage).toContain('disabled_agents')
+    })
   })
 
   describe('merge precedence after schema validation', () => {
@@ -935,11 +970,11 @@ describe('config', () => {
       // into the union set — that is safe because mergeArraysUnique([], [])
       // stays empty. But the user's value was already in the merge chain,
       // so this test double-checks the array path remains correct.
-      writeUserConfig({ disabled_skills: ['user-skill-x'] })
+      writeUserConfig({ disabled_skills: ['ce:ideate'] })
       writeProjectConfig({})
 
       const result = loadConfig(testDir)
-      expect(result.disabled_skills).toContain('user-skill-x')
+      expect(result.disabled_skills).toContain('ce:ideate')
     })
 
     test('3-source: user bootstrap.enabled:false preserved through project {} and custom {}', () => {
@@ -987,11 +1022,11 @@ describe('config', () => {
 
   describe('JSONC precedence', () => {
     test('AE3: only systematic.json exists — loads it (backward compat)', () => {
-      writeUserConfig({ disabled_skills: ['skill-a'] })
+      writeUserConfig({ disabled_skills: ['ce:plan'] })
 
       const result = loadConfig(testDir)
-      expect(result.disabled_skills).toContain('skill-a')
-      expect(result.disabled_skills).toEqual(['skill-a'])
+      expect(result.disabled_skills).toContain('ce:plan')
+      expect(result.disabled_skills).toEqual(['ce:plan'])
     })
 
     test('AE2: only systematic.jsonc exists — loads it correctly', () => {
@@ -999,11 +1034,11 @@ describe('config', () => {
       fs.mkdirSync(path.dirname(filePath), { recursive: true })
       fs.writeFileSync(
         filePath,
-        '{\n  // This is a comment\n  "disabled_skills": ["skill-b"]\n}\n',
+        '{\n  // This is a comment\n  "disabled_skills": ["ce:review"]\n}\n',
       )
 
       const result = loadConfig(testDir)
-      expect(result.disabled_skills).toContain('skill-b')
+      expect(result.disabled_skills).toContain('ce:review')
     })
 
     test('AE2: JSONC with comments and standard JSON structure parses correctly', () => {
@@ -1011,11 +1046,11 @@ describe('config', () => {
       fs.mkdirSync(path.dirname(filePath), { recursive: true })
       fs.writeFileSync(
         filePath,
-        '{\n  // Comment explaining why this skill is disabled\n  "disabled_skills": ["skill-a"]\n}\n',
+        '{\n  // Comment explaining why this skill is disabled\n  "disabled_skills": ["ce:plan"]\n}\n',
       )
 
       const result = loadConfig(testDir)
-      expect(result.disabled_skills).toEqual(['skill-a'])
+      expect(result.disabled_skills).toEqual(['ce:plan'])
     })
 
     test('AE1: both jsonc and json exist — .jsonc is loaded, .json is ignored', () => {
@@ -1025,12 +1060,12 @@ describe('config', () => {
 
       fs.writeFileSync(
         jsonPath,
-        JSON.stringify({ disabled_skills: ['from-json'] }),
+        JSON.stringify({ disabled_skills: ['ce:plan'] }),
       )
-      fs.writeFileSync(jsoncPath, '{\n  "disabled_skills": ["from-jsonc"]\n}\n')
+      fs.writeFileSync(jsoncPath, '{\n  "disabled_skills": ["ce:review"]\n}\n')
 
       const result = loadConfig(testDir)
-      expect(result.disabled_skills).toEqual(['from-jsonc'])
+      expect(result.disabled_skills).toEqual(['ce:review'])
     })
 
     test('project jsonc takes precedence over project json', () => {
@@ -1039,15 +1074,15 @@ describe('config', () => {
 
       fs.writeFileSync(
         path.join(projectConfigDir, 'systematic.json'),
-        JSON.stringify({ disabled_skills: ['from-json'] }),
+        JSON.stringify({ disabled_skills: ['ce:plan'] }),
       )
       fs.writeFileSync(
         path.join(projectConfigDir, 'systematic.jsonc'),
-        JSON.stringify({ disabled_skills: ['from-jsonc'] }),
+        JSON.stringify({ disabled_skills: ['ce:review'] }),
       )
 
       const result = loadConfig(testDir)
-      expect(result.disabled_skills).toEqual(['from-jsonc'])
+      expect(result.disabled_skills).toEqual(['ce:review'])
     })
 
     test('custom config jsonc takes precedence over custom config json', () => {
@@ -1059,15 +1094,15 @@ describe('config', () => {
       try {
         fs.writeFileSync(
           path.join(customDir, 'systematic.json'),
-          JSON.stringify({ disabled_skills: ['from-json'] }),
+          JSON.stringify({ disabled_skills: ['ce:plan'] }),
         )
         fs.writeFileSync(
           path.join(customDir, 'systematic.jsonc'),
-          JSON.stringify({ disabled_skills: ['from-jsonc'] }),
+          JSON.stringify({ disabled_skills: ['ce:review'] }),
         )
 
         const result = loadConfig(testDir)
-        expect(result.disabled_skills).toEqual(['from-jsonc'])
+        expect(result.disabled_skills).toEqual(['ce:review'])
       } finally {
         delete process.env.OPENCODE_CONFIG_DIR
         fs.rmSync(customDir, { recursive: true, force: true })

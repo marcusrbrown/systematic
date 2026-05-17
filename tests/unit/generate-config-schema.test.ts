@@ -423,17 +423,53 @@ describe('checkSchemaFiles — drift detection', () => {
     rootDir: string,
   ) => string[]
   let generateSchemaContentFn: (version: string) => string
+  let generateBundledNamesContentFn: (
+    agents: string[],
+    skills: string[],
+    options?: {
+      previousAgentCount?: number
+      previousSkillCount?: number
+      allowShrink?: boolean
+    },
+  ) => string
   let checkSchemaFilesFn: (
     rootDir: string,
     explicitVersion?: string | null,
   ) => { ok: boolean; message: string }
+  let writeBundledNamesFileFn: (content: string, rootDir: string) => string
 
   beforeAll(async () => {
     const mod = await import('../../scripts/generate-config-schema.js')
     generateAndWriteFn = mod.generateAndWrite
     generateSchemaContentFn = mod.generateSchemaContent
+    generateBundledNamesContentFn = mod.generateBundledNamesContent
     checkSchemaFilesFn = mod.checkSchemaFiles
+    writeBundledNamesFileFn = mod.writeBundledNamesFile
   })
+
+  /**
+   * Seed a minimal bundled-names.ts into a temp repo AND create matching
+   * agents/ and skills/ directories so that discoverBundledNames() returns
+   * the same set that was committed (keeping the drift check clean).
+   */
+  function writeBundledNames(
+    root: string,
+    agents: string[],
+    skills: string[],
+  ): void {
+    // Agents are seeded with category 'review', so qualified IDs are 'review/<name>'
+    const agentQualifiedIds = agents.map((name) => `review/${name}`)
+    const content = generateBundledNamesContentFn(agents, skills, {
+      agentQualifiedIds,
+    })
+    writeBundledNamesFileFn(content, root)
+    // Seed matching filesystem entries so discovery agrees with the committed file
+    seedBundledFilesystem(
+      root,
+      agents.map((name) => ({ category: 'review', name })),
+      skills,
+    )
+  }
 
   test('happy path: all files up to date — returns ok', () => {
     const tmp = makeTempRepo()
@@ -442,6 +478,7 @@ describe('checkSchemaFiles — drift detection', () => {
     // Run generator to produce clean state
     const content = generateSchemaContentFn('3.0.0')
     generateAndWriteFn(content, '3.0.0', tmp)
+    writeBundledNames(tmp, ['agent-a', 'agent-b'], ['skill-a'])
 
     const result = checkSchemaFilesFn(tmp, '3.0.0')
     expect(result.ok).toBe(true)
@@ -454,6 +491,7 @@ describe('checkSchemaFiles — drift detection', () => {
 
     const content = generateSchemaContentFn('3.0.0')
     generateAndWriteFn(content, '3.0.0', tmp)
+    writeBundledNames(tmp, ['agent-a', 'agent-b'], ['skill-a'])
 
     // Hand-edit one file
     const v3Path = path.join(
@@ -485,6 +523,7 @@ describe('checkSchemaFiles — drift detection', () => {
     // Generate and write all three (v3/, latest/, dist/)
     const content = generateSchemaContentFn('3.0.0')
     generateAndWriteFn(content, '3.0.0', tmp)
+    writeBundledNames(tmp, ['agent-a', 'agent-b'], ['skill-a'])
 
     // Delete latest/ to simulate gitignored-clean-checkout scenario
     const latestPath = path.join(
@@ -511,12 +550,130 @@ describe('checkSchemaFiles — drift detection', () => {
       'docs/public/schemas/v3/systematic-config.schema.json',
       content,
     )
+    writeBundledNames(tmp, ['agent-a', 'agent-b'], ['skill-a'])
     // Intentionally do NOT write dist/schemas/ — this is the bug scenario
 
     // Must pass: dist/schemas/ is a publish-only artifact, not checked here
     const result = checkSchemaFilesFn(tmp, '3.0.0')
     expect(result.ok).toBe(true)
     expect(result.message).toContain('up to date')
+  })
+
+  // ── bundled-names drift scenarios ──────────────────────────────
+
+  test('reports drift when bundled-names.ts is stale', () => {
+    const tmp = makeTempRepo()
+    writePackageJson(tmp, '3.0.0')
+
+    // Write a fresh JSON Schema
+    const schemaContent = generateSchemaContentFn('3.0.0')
+    writeSchemaFile(
+      tmp,
+      'docs/public/schemas/v3/systematic-config.schema.json',
+      schemaContent,
+    )
+
+    // Write bundled-names.ts with a smaller agent set than what's on disk
+    writeBundledNames(tmp, ['agent-a'], ['skill-a'])
+
+    // Now seed the filesystem with an extra agent that's NOT in bundled-names.ts
+    seedBundledFilesystem(
+      tmp,
+      [
+        { category: 'review', name: 'agent-a' },
+        { category: 'review', name: 'agent-b' }, // extra — not in committed file
+      ],
+      ['skill-a'],
+    )
+
+    const result = checkSchemaFilesFn(tmp, '3.0.0')
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('bundled-names.ts')
+    expect(result.message).toMatch(/out of date|generate-config-schema/i)
+  })
+
+  test('reports error when bundled-names.ts is missing', () => {
+    const tmp = makeTempRepo()
+    writePackageJson(tmp, '3.0.0')
+
+    // Write a fresh JSON Schema but no bundled-names.ts
+    const schemaContent = generateSchemaContentFn('3.0.0')
+    writeSchemaFile(
+      tmp,
+      'docs/public/schemas/v3/systematic-config.schema.json',
+      schemaContent,
+    )
+
+    // Seed filesystem agents/skills so discovery works
+    seedBundledFilesystem(
+      tmp,
+      [{ category: 'review', name: 'agent-a' }],
+      ['skill-a'],
+    )
+
+    const result = checkSchemaFilesFn(tmp, '3.0.0')
+    expect(result.ok).toBe(false)
+    expect(result.message).toContain('bundled-names.ts')
+    expect(result.message).toMatch(/not found|does not exist/i)
+  })
+
+  test('aggregates both failures when both artifacts are stale', () => {
+    const tmp = makeTempRepo()
+    writePackageJson(tmp, '3.0.0')
+
+    // Write a stale JSON Schema (wrong content)
+    writeSchemaFile(
+      tmp,
+      'docs/public/schemas/v3/systematic-config.schema.json',
+      JSON.stringify({ stale: true }),
+    )
+
+    // Write bundled-names.ts with a smaller agent set
+    writeBundledNames(tmp, ['agent-a'], ['skill-a'])
+
+    // Seed filesystem with extra agent
+    seedBundledFilesystem(
+      tmp,
+      [
+        { category: 'review', name: 'agent-a' },
+        { category: 'review', name: 'agent-b' },
+      ],
+      ['skill-a'],
+    )
+
+    const result = checkSchemaFilesFn(tmp, '3.0.0')
+    expect(result.ok).toBe(false)
+    // Both artifact paths should appear in the combined message
+    expect(result.message).toContain('docs/public/schemas/v3')
+    expect(result.message).toContain('bundled-names.ts')
+  })
+
+  test('bundled-names drift check is independent of version resolution', () => {
+    // A repo with no git tag and no resolvable package.json version.
+    // The JSON Schema check will fail with "no resolvable version".
+    // The bundled-names check should still detect drift on bundled-names.ts
+    // independently — the combined message must mention bundled-names.ts.
+    const tmp = makeTempRepo()
+    // No package.json → resolveVersion will throw
+
+    // Seed filesystem agents/skills
+    seedBundledFilesystem(
+      tmp,
+      [
+        { category: 'review', name: 'agent-a' },
+        { category: 'review', name: 'agent-b' },
+      ],
+      ['skill-a'],
+    )
+
+    // Write a bundled-names.ts that only lists agent-a (stale — missing agent-b)
+    writeBundledNames(tmp, ['agent-a'], ['skill-a'])
+
+    // No explicit version → resolveVersion will fail; bundled-names drift should still surface
+    const result = checkSchemaFilesFn(tmp, null)
+    expect(result.ok).toBe(false)
+    // The bundled-names drift must be mentioned regardless of version failure
+    expect(result.message).toContain('bundled-names.ts')
   })
 })
 
@@ -535,7 +692,7 @@ describe('AJV parity: Zod runtime contract vs generated JSON Schema', () => {
       name: 'valid full config accepted by both',
       value: {
         agents: {
-          explorer: {
+          'correctness-reviewer': {
             model: 'openai/gpt-4',
             temperature: 0.3,
             mode: 'subagent',
@@ -597,8 +754,17 @@ describe('AJV parity: Zod runtime contract vs generated JSON Schema', () => {
     },
     {
       name: 'agent variant without explicit model rejected by both',
-      value: { agents: { foo: { variant: 'high' } } },
+      value: { agents: { 'correctness-reviewer': { variant: 'high' } } },
       accepted: false,
+    },
+    {
+      name: 'agent variant with explicit model accepted by both',
+      value: {
+        agents: {
+          'correctness-reviewer': { model: 'openai/gpt-5.5', variant: 'high' },
+        },
+      },
+      accepted: true,
     },
     {
       name: 'category variant without explicit model rejected by both',
@@ -617,7 +783,11 @@ describe('AJV parity: Zod runtime contract vs generated JSON Schema', () => {
     },
     {
       name: 'variant with explicit model accepted by both',
-      value: { agents: { foo: { model: 'openai/gpt-5.5', variant: 'high' } } },
+      value: {
+        agents: {
+          'correctness-reviewer': { model: 'openai/gpt-5.5', variant: 'high' },
+        },
+      },
       accepted: true,
     },
     {
@@ -813,7 +983,7 @@ describe('ajv regression: generated schema validates representative config', () 
     // Representative minimal config
     const validConfig = {
       agents: {
-        explorer: {
+        'correctness-reviewer': {
           model: 'openai/gpt-4',
           temperature: 0.3,
           mode: 'subagent',
@@ -863,7 +1033,7 @@ describe('ajv regression: generated schema validates representative config', () 
 
     const invalidConfig = {
       agents: {
-        explorer: {
+        'correctness-reviewer': {
           temperature: 'high', // string instead of number
         },
       },
@@ -872,5 +1042,269 @@ describe('ajv regression: generated schema validates representative config', () 
     const result = validate(invalidConfig)
     expect(result).toBe(false)
     expect(validate.errors).toBeDefined()
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════
+// discoverBundledNames — filesystem walk for bundled agent/skill names
+// ═════════════════════════════════════════════════════════════════
+
+function seedBundledFilesystem(
+  root: string,
+  agents: { category: string; name: string }[],
+  skills: string[],
+): void {
+  for (const { category, name } of agents) {
+    writeFile(
+      root,
+      `agents/${category}/${name}.md`,
+      `---\nname: ${name}\ndescription: test\n---\n\nbody`,
+    )
+  }
+  for (const name of skills) {
+    writeFile(
+      root,
+      `skills/${name}/SKILL.md`,
+      `---\nname: ${name}\ndescription: test\n---\n\nbody`,
+    )
+  }
+}
+
+describe('discoverBundledNames — filesystem walk', () => {
+  let discoverFn: (rootDir: string) => { agents: string[]; skills: string[] }
+
+  beforeAll(async () => {
+    const mod = await import('../../scripts/generate-config-schema.js')
+    discoverFn = mod.discoverBundledNames
+  })
+
+  test('walks the agents directory and returns sorted bundled agent names', () => {
+    const tmp = makeTempRepo()
+    seedBundledFilesystem(
+      tmp,
+      [
+        { category: 'review', name: 'correctness-reviewer' },
+        { category: 'design', name: 'designer' },
+        { category: 'review', name: 'security-reviewer' },
+      ],
+      [],
+    )
+    const { agents } = discoverFn(tmp)
+    expect(agents).toEqual([
+      'correctness-reviewer',
+      'designer',
+      'security-reviewer',
+    ])
+  })
+
+  test('walks the skills directory and returns sorted bundled skill names', () => {
+    const tmp = makeTempRepo()
+    seedBundledFilesystem(tmp, [], ['ce:plan', 'ce:review', 'ce:work'])
+    const { skills } = discoverFn(tmp)
+    expect(skills).toEqual(['ce:plan', 'ce:review', 'ce:work'])
+  })
+
+  test('returns empty arrays when directories are empty', () => {
+    const tmp = makeTempRepo()
+    fs.mkdirSync(path.join(tmp, 'agents'), { recursive: true })
+    fs.mkdirSync(path.join(tmp, 'skills'), { recursive: true })
+    const { agents, skills } = discoverFn(tmp)
+    expect(agents).toEqual([])
+    expect(skills).toEqual([])
+  })
+
+  test('returns empty arrays when directories are absent (no agents/ or skills/)', () => {
+    const tmp = makeTempRepo()
+    const { agents, skills } = discoverFn(tmp)
+    expect(agents).toEqual([])
+    expect(skills).toEqual([])
+  })
+
+  test('discovers agents in real repo and returns at least 50 names', () => {
+    // Smoke check against the actual project layout — should never go below 50.
+    const projectRoot = path.resolve(__dirname, '../..')
+    const { agents, skills } = discoverFn(projectRoot)
+    expect(agents.length).toBeGreaterThanOrEqual(50)
+    expect(skills.length).toBeGreaterThanOrEqual(40)
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════
+// generateBundledNamesContent — TS emission + sanity check
+// ═════════════════════════════════════════════════════════════════
+
+describe('generateBundledNamesContent — sanity check + emission', () => {
+  let generateFn: (
+    agents: string[],
+    skills: string[],
+    options?: {
+      previousAgentCount?: number
+      previousSkillCount?: number
+      allowShrink?: boolean
+    },
+  ) => string
+
+  beforeAll(async () => {
+    const mod = await import('../../scripts/generate-config-schema.js')
+    generateFn = mod.generateBundledNamesContent
+  })
+
+  test('emits BUNDLED_AGENT_NAMES and BUNDLED_SKILL_NAMES as as-const tuples', () => {
+    const out = generateFn(['agent-a', 'agent-b'], ['skill-a'])
+    expect(out).toContain('export const BUNDLED_AGENT_NAMES')
+    expect(out).toContain('export const BUNDLED_SKILL_NAMES')
+    expect(out).toContain('as const')
+    expect(out).toContain("'agent-a'")
+    expect(out).toContain("'agent-b'")
+    expect(out).toContain("'skill-a'")
+  })
+
+  test('emits header comment marking the file as generated', () => {
+    const out = generateFn(['a'], ['b'])
+    // Header must indicate generated-by-script and discourage hand-editing.
+    expect(out).toMatch(/generated|DO NOT EDIT/i)
+    expect(out).toContain('generate-config-schema.ts')
+  })
+
+  test('produces byte-identical output on consecutive calls with same input', () => {
+    const a = generateFn(['x', 'y'], ['z'])
+    const b = generateFn(['x', 'y'], ['z'])
+    expect(a).toBe(b)
+  })
+
+  test('aborts when discovered agents is empty', () => {
+    expect(() => generateFn([], ['skill-a'])).toThrow(/empty/i)
+  })
+
+  test('aborts when discovered skills is empty', () => {
+    expect(() => generateFn(['agent-a'], [])).toThrow(/empty/i)
+  })
+
+  test('aborts when agent count shrinks from previous committed count', () => {
+    expect(() =>
+      generateFn(['agent-a'], ['skill-a', 'skill-b'], {
+        previousAgentCount: 5,
+        previousSkillCount: 2,
+      }),
+    ).toThrow(/shrink|allow-shrink/i)
+  })
+
+  test('aborts when skill count shrinks from previous committed count', () => {
+    expect(() =>
+      generateFn(['agent-a', 'agent-b'], ['skill-a'], {
+        previousAgentCount: 2,
+        previousSkillCount: 5,
+      }),
+    ).toThrow(/shrink|allow-shrink/i)
+  })
+
+  test('partial-discovery (significantly reduced count) is caught by shrink check', () => {
+    // Simulates filesystem-permission failure, truncated walk, or symlink issue
+    // that returns only some of the expected names.
+    expect(() =>
+      generateFn(
+        ['agent-a', 'agent-b'], // discovered: 2
+        ['skill-a', 'skill-b'],
+        { previousAgentCount: 51, previousSkillCount: 45 }, // expected: 51 + 45
+      ),
+    ).toThrow(/shrink|allow-shrink/i)
+  })
+
+  test('--allow-shrink override permits a smaller bundled-name set', () => {
+    expect(() =>
+      generateFn(['agent-a'], ['skill-a'], {
+        previousAgentCount: 5,
+        previousSkillCount: 2,
+        allowShrink: true,
+      }),
+    ).not.toThrow()
+  })
+
+  test('first-run exemption: no previous count → no shrink check (only empty-discovery enforced)', () => {
+    // previousAgentCount / previousSkillCount are undefined when the file doesn't exist.
+    expect(() => generateFn(['a'], ['b'])).not.toThrow()
+  })
+
+  test('first-run exemption still rejects empty discovery', () => {
+    // Even on first run, an empty set is a real generator bug, not "no previous baseline".
+    expect(() => generateFn([], [])).toThrow(/empty/i)
+  })
+
+  test('growth (more bundled names than previous) is always allowed', () => {
+    expect(() =>
+      generateFn(['a', 'b', 'c'], ['x', 'y'], {
+        previousAgentCount: 2,
+        previousSkillCount: 1,
+      }),
+    ).not.toThrow()
+  })
+
+  test('exact same count as previous (no shrink, no growth) is allowed', () => {
+    expect(() =>
+      generateFn(['a', 'b'], ['x', 'y'], {
+        previousAgentCount: 2,
+        previousSkillCount: 2,
+      }),
+    ).not.toThrow()
+  })
+
+  test('emitted content survives biome format with no formatting changes', () => {
+    const content = generateFn(['agent-a', 'agent-b'], ['skill-a', 'skill-b'])
+    const formatted = execSync(
+      'bun biome format --stdin-file-path=src/lib/bundled-names.ts',
+      {
+        input: content,
+        encoding: 'utf-8',
+        cwd: path.resolve(__dirname, '../..'),
+      },
+    )
+    expect(formatted).toBe(content)
+  })
+})
+
+// ── Parity: --check path vs write path ───────────────────────────────────────
+// Regression guard: the two call sites in generate-config-schema.ts that call
+// generateBundledNamesContent must pass the same option shape so that the drift
+// check (--check) and the write path (main) produce byte-identical output.
+describe('--check path and write path produce byte-identical bundled-names content', () => {
+  const PROJECT_ROOT = path.resolve(__dirname, '../..')
+
+  let discoverFn: (rootDir: string) => {
+    agents: string[]
+    agentQualifiedIds: string[]
+    skills: string[]
+  }
+  let generateFn: (
+    agents: string[],
+    skills: string[],
+    opts?: { agentQualifiedIds?: string[] },
+  ) => string
+  let readCommittedFn: (rootDir: string) => {
+    previousAgentCount: number
+    previousSkillCount: number
+  }
+
+  beforeAll(async () => {
+    const mod = await import('../../scripts/generate-config-schema.js')
+    discoverFn = mod.discoverBundledNames
+    generateFn = mod.generateBundledNamesContent
+    readCommittedFn = mod.readCommittedBundledNamesCounts
+  })
+
+  test('check-path content matches committed bundled-names.ts', () => {
+    const { agents, skills, agentQualifiedIds } = discoverFn(PROJECT_ROOT)
+    const previous = readCommittedFn(PROJECT_ROOT)
+
+    const checkContent = generateFn(agents, skills, {
+      ...previous,
+      agentQualifiedIds,
+    })
+
+    const onDisk = fs.readFileSync(
+      path.join(PROJECT_ROOT, 'src/lib/bundled-names.ts'),
+      'utf-8',
+    )
+
+    expect(checkContent).toBe(onDisk)
   })
 })
