@@ -245,95 +245,131 @@ export const BootstrapSchema = z
     examples: [{ enabled: true }, { enabled: false }],
   })
 
-export const SystematicConfigSchema = z
-  .object({
-    $schema: z
-      .string()
-      .url()
-      .optional()
-      .meta({
-        description:
-          'JSON Schema URL for IDE autocomplete. The value is informational only — the loader does not fetch or validate against it. Add this to enable IDE schema activation and field-level autocomplete in editors that support JSON Schema (VSCode, Zed, IntelliJ).',
+export interface SystematicConfigSchemaOptions {
+  readonly agentNames: readonly string[]
+  readonly qualifiedAgentIds: readonly string[]
+  readonly skillNames: readonly string[]
+}
+
+/**
+ * Construct the top-level Systematic config schema from a discovered set of
+ * bundled agent and skill names. Used in two contexts:
+ *   1. At runtime (the default `SystematicConfigSchema` export below) — uses
+ *      the committed `bundled-names.ts` values, frozen at module-load time.
+ *   2. At codegen time (scripts/generate-config-schema.ts) — uses fresh
+ *      filesystem-discovered values so the published JSON Schema reflects
+ *      the current state of `agents/` and `skills/` even on first runs.
+ *
+ * Returning a fresh schema for each call decouples generator-time schema
+ * construction from runtime schema; the runtime cannot observe a generator
+ * call's discovery results.
+ *
+ * @returns A Zod object schema parsing the top-level Systematic config,
+ * built from the provided agent and skill name sets.
+ */
+export function createSystematicConfigSchema(
+  opts: SystematicConfigSchemaOptions,
+): z.ZodObject<z.core.$ZodLooseShape> {
+  const { agentNames, qualifiedAgentIds, skillNames } = opts
+  return z
+    .object({
+      $schema: z
+        .string()
+        .url()
+        .optional()
+        .meta({
+          description:
+            'JSON Schema URL for IDE autocomplete. The value is informational only — the loader does not fetch or validate against it. Add this to enable IDE schema activation and field-level autocomplete in editors that support JSON Schema (VSCode, Zed, IntelliJ).',
+          examples: [
+            'https://fro.bot/systematic/schemas/v2/systematic-config.schema.json',
+          ],
+        }),
+      agents: z
+        .object(
+          Object.fromEntries(
+            [...agentNames, ...qualifiedAgentIds].map((name) => [
+              name,
+              AgentOverlaySchema.optional(),
+            ]),
+          ) as Record<string, z.ZodOptional<typeof AgentOverlaySchema>>,
+        )
+        .strict()
+        .default({})
+        .meta({
+          description:
+            'Per-agent configuration overlays keyed by bundled agent name (bare or qualified category/name). Unknown keys are rejected with a Zod parse error. To overlay a user-defined agent, configure it through OpenCode-native config (.opencode/opencode.json) instead.',
+          examples: [
+            { 'correctness-reviewer': { temperature: 0.1 } },
+            { 'review/correctness-reviewer': { temperature: 0.1 } },
+            {},
+          ],
+        }),
+      categories: z
+        .record(z.string(), CategoryOverlaySchema)
+        .default({})
+        .meta({
+          description:
+            'Per-category configuration overlays keyed by category name',
+          examples: [{ review: { model: 'anthropic/claude-opus-4-7' } }, {}],
+        }),
+      disabled_skills: z
+        // z.enum requires a non-empty tuple; skillNames is guaranteed non-empty
+        // by the sanity check in generateBundledNamesContent.
+        .array(z.enum(skillNames as readonly [string, ...string[]]))
+        .default([])
+        .meta({
+          description:
+            'Array of bundled skill names to disable globally. Unknown skill names are rejected at parse time.',
+          examples: [['ce:plan', 'ce:review']],
+        }),
+      disabled_agents: z
+        .array(
+          // z.enum requires a non-empty tuple; the combined list is guaranteed
+          // non-empty by the sanity check in generateBundledNamesContent.
+          z.enum([...agentNames, ...qualifiedAgentIds] as unknown as readonly [
+            string,
+            ...string[],
+          ]),
+        )
+        .default([])
+        .meta({
+          description:
+            'Array of bundled agent names (bare or qualified category/name) to disable globally. Unknown agent names are rejected at parse time.',
+          examples: [
+            ['previous-comments-reviewer', 'cli-readiness-reviewer'],
+            ['review/security-reviewer'],
+          ],
+        }),
+      disabled_commands: z
+        .array(z.string())
+        .default([])
+        .meta({
+          description: 'Array of command names to disable globally',
+          examples: [['deprecated-migration-helper']],
+        }),
+      bootstrap: BootstrapSchema.default({ enabled: true }).meta({
+        description: 'Bootstrap prompt configuration',
         examples: [
-          'https://fro.bot/systematic/schemas/v2/systematic-config.schema.json',
+          { enabled: true },
+          { enabled: false, file: '.opencode/custom-prompt.md' },
         ],
       }),
-    agents: z
-      .object(
-        Object.fromEntries(
-          [...BUNDLED_AGENT_NAMES, ...BUNDLED_AGENT_QUALIFIED_IDS].map(
-            (name) => [name, AgentOverlaySchema.optional()],
-          ),
-        ) as Record<
-          | (typeof BUNDLED_AGENT_NAMES)[number]
-          | (typeof BUNDLED_AGENT_QUALIFIED_IDS)[number],
-          z.ZodOptional<typeof AgentOverlaySchema>
-        >,
-      )
-      .strict()
-      .default({})
-      .meta({
-        description:
-          'Per-agent configuration overlays keyed by bundled agent name (bare or qualified category/name). Unknown keys are rejected with a Zod parse error. To overlay a user-defined agent, configure it through OpenCode-native config (.opencode/opencode.json) instead.',
-        examples: [
-          { 'correctness-reviewer': { temperature: 0.1 } },
-          { 'review/correctness-reviewer': { temperature: 0.1 } },
-          {},
-        ],
-      }),
-    categories: z
-      .record(z.string(), CategoryOverlaySchema)
-      .default({})
-      .meta({
-        description:
-          'Per-category configuration overlays keyed by category name',
-        examples: [{ review: { model: 'anthropic/claude-opus-4-7' } }, {}],
-      }),
-    disabled_skills: z
-      .array(z.enum(BUNDLED_SKILL_NAMES))
-      .default([])
-      .meta({
-        description:
-          'Array of bundled skill names to disable globally. Unknown skill names are rejected at parse time.',
-        examples: [['ce:plan', 'ce:review']],
-      }),
-    disabled_agents: z
-      .array(
-        z.enum([
-          ...BUNDLED_AGENT_NAMES,
-          ...BUNDLED_AGENT_QUALIFIED_IDS,
-        ] as const),
-      )
-      .default([])
-      .meta({
-        description:
-          'Array of bundled agent names (bare or qualified category/name) to disable globally. Unknown agent names are rejected at parse time.',
-        examples: [
-          ['previous-comments-reviewer', 'cli-readiness-reviewer'],
-          ['review/security-reviewer'],
-        ],
-      }),
-    disabled_commands: z
-      .array(z.string())
-      .default([])
-      .meta({
-        description: 'Array of command names to disable globally',
-        examples: [['deprecated-migration-helper']],
-      }),
-    bootstrap: BootstrapSchema.default({ enabled: true }).meta({
-      description: 'Bootstrap prompt configuration',
+    })
+    .strict()
+    .meta({
+      description:
+        'Systematic user configuration file (systematic.json / systematic.jsonc)',
       examples: [
-        { enabled: true },
-        { enabled: false, file: '.opencode/custom-prompt.md' },
+        { disabled_skills: ['ce:plan'], bootstrap: { enabled: false } },
       ],
-    }),
-  })
-  .strict()
-  .meta({
-    description:
-      'Systematic user configuration file (systematic.json / systematic.jsonc)',
-    examples: [{ disabled_skills: ['ce:plan'], bootstrap: { enabled: false } }],
-  })
+    })
+}
+
+export const SystematicConfigSchema = createSystematicConfigSchema({
+  agentNames: BUNDLED_AGENT_NAMES,
+  qualifiedAgentIds: BUNDLED_AGENT_QUALIFIED_IDS,
+  skillNames: BUNDLED_SKILL_NAMES,
+})
 
 export type ValidationResult =
   | { success: true; data: z.infer<typeof SystematicConfigSchema> }

@@ -2,13 +2,15 @@
 /**
  * Generate the JSON Schema for `systematic-config` from the Zod source.
  *
- * Reads the `SystematicConfigSchema` from `src/lib/config-schema.ts`, generates
- * a draft-07 JSON Schema, and writes it to three locations:
+ * Discovers bundled agent and skill names from the filesystem, calls
+ * `createSystematicConfigSchema` with the fresh names, then serializes the
+ * resulting Zod schema to draft-07 JSON Schema for IDE autocomplete and
+ * runtime validation parity. Writes to three byte-identical locations:
  *   1. docs/public/schemas/v<MAJOR>/systematic-config.schema.json  (major-versioned docs URL)
  *   2. docs/public/schemas/latest/systematic-config.schema.json    (latest mirror)
  *   3. dist/schemas/systematic-config.schema.json                  (bundled npm copy)
  *
- * All three copies are byte-identical and share the same `$id`.
+ * All three copies share the same `$id`.
  *
  * Usage:
  *   bun scripts/generate-config-schema.ts                         # Resolves version, generates + writes
@@ -21,7 +23,10 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { z } from 'zod'
 import { findAgentsInDir } from '../src/lib/agents.js'
-import { SystematicConfigSchema } from '../src/lib/config-schema.js'
+import {
+  createSystematicConfigSchema,
+  SystematicConfigSchema,
+} from '../src/lib/config-schema.js'
 import { findSkillsInDir } from '../src/lib/skills.js'
 import {
   getZodDefaultInnerType,
@@ -697,6 +702,11 @@ export function checkSchemaFiles(
       'systematic-config.schema.json',
     )
     schemaArtifact = {
+      // --check uses the static SystematicConfigSchema (committed bundled names)
+      // rather than the factory with fresh discovery. This is intentional: drift
+      // detection compares the committed JSON Schema against what the committed
+      // bundled-names.ts produces. main() uses the factory because it's writing
+      // fresh artifacts; --check is reading them.
       produce: () => generateSchemaContent(version),
       pathOnDisk: majorPath,
       displayName: path.relative(rootDir, majorPath),
@@ -814,15 +824,15 @@ async function main(): Promise<void> {
   }
 
   // Step 1: Discover bundled names from the filesystem and write bundled-names.ts
-  // BEFORE generating the JSON Schema. The static import of SystematicConfigSchema
-  // at the top of this file reads BUNDLED_AGENT_NAMES from the committed file, so
-  // if an agent was added or removed, the schema would be built from stale data.
-  // Writing bundled-names.ts first and then dynamically importing config-schema
-  // with a cache-busting query ensures the schema reflects the current filesystem.
+  // BEFORE generating the JSON Schema. The factory in Step 2 takes the discovered
+  // names as parameters, so the schema always reflects the current filesystem state.
   let bundledNamesPath: string
+  let agents: string[]
+  let agentQualifiedIds: string[]
+  let skills: string[]
   try {
-    const { agents, agentQualifiedIds, skills } =
-      discoverBundledNames(PROJECT_ROOT)
+    ;({ agents, agentQualifiedIds, skills } =
+      discoverBundledNames(PROJECT_ROOT))
     const previous = readCommittedBundledNamesCounts(PROJECT_ROOT)
     const bundledContent = generateBundledNamesContent(agents, skills, {
       ...previous,
@@ -837,15 +847,15 @@ async function main(): Promise<void> {
 
   console.log(`Bundled names ${path.relative(PROJECT_ROOT, bundledNamesPath)}`)
 
-  // Step 2: Dynamically import config-schema with a cache-busting query so Bun
-  // re-evaluates the module and picks up the freshly written bundled-names.ts.
-  // ESM module caches are keyed by URL; appending ?cache=<timestamp> forces a
-  // fresh evaluation even if the static import at the top of this file already
-  // cached the old version.
-  const schemaModuleUrl = `../src/lib/config-schema.js?cache=${Date.now()}`
-  const schemaModule = await import(schemaModuleUrl)
-  const freshSchema =
-    schemaModule.SystematicConfigSchema as import('zod').ZodType
+  // Step 2: Build a fresh schema from the just-discovered names. The factory
+  // takes names as parameters, so there is no need for a cache-busting dynamic
+  // import — the static SystematicConfigSchema export (built from the committed
+  // bundled-names.ts at module load) is intentionally bypassed here.
+  const freshSchema = createSystematicConfigSchema({
+    agentNames: agents,
+    qualifiedAgentIds: agentQualifiedIds,
+    skillNames: skills,
+  })
 
   const schemaContent = generateSchemaContentFromSchema(
     resolvedVersion,

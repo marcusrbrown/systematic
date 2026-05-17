@@ -52,10 +52,73 @@ In this case the runtime's `buildBundledAgentInventory` quietly populated `alias
 
 If a generator writes a file and then imports code that depends on that file, static ESM imports stay stale. ESM module caches are keyed by resolved URL, not by file mtime. Rewriting `src/lib/bundled-names.ts` to disk does not invalidate the module the schema was imported from.
 
-Two paths through:
+**Preferred fix — schema factory**: Refactor the consumer to accept fresh inputs as parameters via a factory like `createSystematicConfigSchema({ agentNames, qualifiedAgentIds, skillNames })`. The static export stays for runtime; the generator passes fresh discovery results directly to the factory. No module re-evaluation needed.
 
-- Use a cache-busted dynamic import after writing: `await import('../src/lib/config-schema.js?cache=' + Date.now())`. The query string forces a fresh module fetch.
-- Better long-term: refactor the consumer to accept fresh inputs as parameters via a factory like `createSystematicConfigSchema({ agentNames, skillNames })`. The static export stays for runtime; the generator passes fresh discovery results.
+```typescript
+// src/lib/config-schema.ts
+export function createSystematicConfigSchema(opts: {
+  agentNames: readonly string[]
+  qualifiedAgentIds: readonly string[]
+  skillNames: readonly string[]
+}) {
+  const { agentNames, qualifiedAgentIds, skillNames } = opts
+  return z.object({
+    agents: z.object(
+      Object.fromEntries(
+        [...agentNames, ...qualifiedAgentIds].map((name) => [name, AgentOverlaySchema.optional()]),
+      ) as Record<string, z.ZodOptional<typeof AgentOverlaySchema>>,
+    ).strict().default({}),
+    disabled_agents: z.array(
+      z.enum([...agentNames, ...qualifiedAgentIds] as unknown as readonly [string, ...string[]]),
+    ).default([]),
+    // ...
+  }).strict()
+}
+
+// Static export for runtime — built from committed bundled-names.ts at module load.
+export const SystematicConfigSchema = createSystematicConfigSchema({
+  agentNames: BUNDLED_AGENT_NAMES,
+  qualifiedAgentIds: BUNDLED_AGENT_QUALIFIED_IDS,
+  skillNames: BUNDLED_SKILL_NAMES,
+})
+```
+
+```typescript
+// scripts/generate-config-schema.ts — generator uses factory directly
+import { createSystematicConfigSchema } from '../src/lib/config-schema.js'
+
+async function main(): Promise<void> {
+  const { agents, agentQualifiedIds, skills } = discoverBundledNames(PROJECT_ROOT)
+  writeBundledNamesFile(/* ... */)
+
+  // Build a fresh schema from the just-discovered names. No cache-busting needed.
+  const freshSchema = createSystematicConfigSchema({
+    agentNames: agents,
+    qualifiedAgentIds: agentQualifiedIds,
+    skillNames: skills,
+  })
+  generateAndWrite(generateSchemaContentFromSchema(version, freshSchema), version)
+}
+```
+
+This pattern was introduced in PR #393 after the project initially used the cache-bust workaround below.
+
+**Alternative — cache-busted dynamic import**: If refactoring the consumer into a factory is impractical, force a fresh module read by appending a query string to the import URL after writing:
+
+```typescript
+// scripts/generate-config-schema.ts (historical alternative — prefer factory above)
+writeBundledNamesFile(bundledContent, PROJECT_ROOT)
+
+// ESM module caches are keyed by URL; appending ?cache=<timestamp> forces a
+// fresh import that re-reads bundled-names.ts.
+const schemaModuleUrl = `../src/lib/config-schema.js?cache=${Date.now()}`
+const schemaModule = await import(schemaModuleUrl)
+const freshSchema = schemaModule.SystematicConfigSchema
+
+generateAndWrite(generateSchemaContentFromSchema(version, freshSchema), version)
+```
+
+This project shipped this pattern in v2.15.0 (PR #384) and migrated to the factory in PR #393. The cache-bust approach works but is fragile: it relies on the runtime's URL-keyed module cache treating query strings as distinct entries, which is a Bun/Node implementation detail rather than an ESM spec guarantee.
 
 ### 3. Keep `--check` and write paths byte-identical
 
@@ -258,4 +321,5 @@ This shape is integration-flavored — it runs against the live filesystem and a
 - [Plugin provider availability discovery and source-default resolution](./provider-availability-source-defaults-2026-05-12.md) — generator-owned dual outputs pattern. Useful precedent for runtime discovery driving generated artifacts.
 - [Code Review Fixes for OCX Registry Support](../code-quality/ocx-registry-review-fixes.md) — earlier codegen + drift-gate work. The current doc formalizes the parity rule that registry codegen implicitly relied on.
 - PR #384 — implementation reference for all three lessons.
+- PR #393 — refactored the generator to remove the cache-bust workaround entirely; introduced `createSystematicConfigSchema` factory.
 - Follow-up issues: #385 (verbose enum suppression for `disabled_*` typos), #386 (multi-key extraction in unrecognized-key hints).
