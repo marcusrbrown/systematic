@@ -20,4 +20,4 @@ jobs:
     secrets:
       APPLICATION_ID: ${{ secrets.APPLICATION_ID }}
       APPLICATION_PRIVATE_KEY: ${{ secrets.APPLICATION_PRIVATE_KEY }}
-    uses: bfra-me/.github/.github/workflows/update-repo-settings.yaml@5cb8bc230d36f005cd2de807fe408b428a44c4d5 # v4.16.17
+    uses: bfra-me/.github/.github/workflows/update-repo-settings.yaml@f055576cb64541acf07ebc38b12020bcda35d7e5 # v4.16.18
