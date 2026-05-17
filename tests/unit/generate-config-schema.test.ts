@@ -878,6 +878,36 @@ describe('AJV parity: Zod runtime contract vs generated JSON Schema', () => {
       expect(zodResult.success).toBe(ajvResult)
     })
   }
+
+  test('parity: qualified bundled agent rejects variant without explicit model', () => {
+    if (!ajvAvailable) {
+      console.warn('SKIP: ajv not available')
+      return
+    }
+    const config = {
+      agents: { 'review/correctness-reviewer': { variant: 'v2' } },
+    }
+    // Both Zod and JSON Schema must reject this
+    expect(zodParse(config).success).toBe(false)
+    expect(ajvValidate(config)).toBe(false)
+  })
+
+  test('parity: qualified bundled agent accepts variant with explicit model', () => {
+    if (!ajvAvailable) {
+      console.warn('SKIP: ajv not available')
+      return
+    }
+    const config = {
+      agents: {
+        'review/correctness-reviewer': {
+          variant: 'v2',
+          model: 'anthropic/claude-sonnet-4',
+        },
+      },
+    }
+    expect(zodParse(config).success).toBe(true)
+    expect(ajvValidate(config)).toBe(true)
+  })
 })
 
 // Meta-schema smoke test: the generated JSON Schema must itself be a valid

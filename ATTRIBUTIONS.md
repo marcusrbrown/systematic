@@ -29,7 +29,7 @@ The following bundled skills are adaptations of the upstream `obra/superpowers` 
 - `skills/writing-skills/references/examples/skill-testing-walkthrough.md` (renamed from upstream's `examples/CLAUDE_MD_TESTING.md`)
 - `skills/writing-skills/scripts/render-graphs.js`
 
-These files carry `license: MIT` in their frontmatter to make the licensing inheritance explicit at the file level.
+The two `SKILL.md` files (`skills/test-driven-development/SKILL.md` and `skills/writing-skills/SKILL.md`) carry `license: MIT` in their frontmatter to make the licensing inheritance explicit at the file level. The reference files, script, and graphviz definition inherit MIT licensing from this attribution file — frontmatter `license:` is a YAML-only convention.
 
 ### Adaptation notes
 
@@ -41,10 +41,38 @@ These files carry `license: MIT` in their frontmatter to make the licensing inhe
 
 Future upstream refreshes from `obra/superpowers` are explicit human-reviewed events, not automatic syncs. Bumping the pinned commit requires re-running the adaptation pass and re-validating the two-layer originality check for the Anthropic-distilled reference (see below). The pinned commit above is the stable source-of-truth for the currently-shipped versions.
 
+### Upstream MIT license text
+
+The following is the full MIT license text from `obra/superpowers@v5.1.0`, reproduced here in compliance with the MIT license's notice requirements:
+
+```
+MIT License
+
+Copyright (c) 2025 Jesse Vincent
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+```
+
 ## Anthropic — CC-BY-4.0
 
 **Source page:** [Skill authoring best practices](https://docs.claude.com/en/docs/agents-and-tools/agent-skills/best-practices)
-**License:** CC-BY-4.0 (Creative Commons Attribution 4.0 International)
+**License:** [CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/) (Creative Commons Attribution 4.0 International). The distilled file is a **modified derivative work** of Anthropic's source under the CC-BY-4.0 grant — reorganized by Systematic-relevant authoring tasks (per the Distillation Outline below) rather than mirroring the upstream document structure.
 **Publisher:** Anthropic
 **Retrieved:** 2026-05-17
 

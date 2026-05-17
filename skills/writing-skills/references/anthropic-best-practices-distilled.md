@@ -1,4 +1,4 @@
-> **Source**: Distilled from [Anthropic's Skill authoring best practices](https://docs.claude.com/en/docs/agents-and-tools/agent-skills/best-practices) (CC-BY-4.0). Retrieved 2026-05-17.
+> **Source**: Modified from [Anthropic's Skill authoring best practices](https://docs.claude.com/en/docs/agents-and-tools/agent-skills/best-practices) ([CC-BY-4.0](https://creativecommons.org/licenses/by/4.0/)). Retrieved 2026-05-17.
 
 # Skill Authoring: Distilled Reference for Systematic
 

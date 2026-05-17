@@ -65,6 +65,14 @@ const PROJECT_ROOT = path.resolve(__dirname, '..')
 const SEMVER_REGEX = /^\d+\.\d+\.\d+(-[a-zA-Z0-9.-]+)?(\+[a-zA-Z0-9.-]+)?$/
 
 /**
+ * Upper bound on how many levels of `$ref` / `allOf-wrapper` indirection
+ * resolveRef() will follow before giving up. Set generously above observed
+ * Zod-emitted chains (ref → wrapper → ref → ... ~3 levels in practice) to
+ * absorb future generator changes without becoming a magic-number cliff.
+ */
+const MAX_SCHEMA_REF_RESOLUTION_DEPTH = 8
+
+/**
  * Template for the schema's $id field.
  * %MAJOR% is replaced with the computed major version.
  */
@@ -282,7 +290,11 @@ function resolveRef(
 
   // Follow at most a handful of levels of indirection (ref → wrapper → ref → ...)
   // to defend against malformed schemas without risking an infinite loop.
-  for (let i = 0; current !== null && i < 8; i++) {
+  for (
+    let i = 0;
+    current !== null && i < MAX_SCHEMA_REF_RESOLUTION_DEPTH;
+    i++
+  ) {
     const ref = current['$ref']
     if (typeof ref === 'string') {
       const prefix = '#/definitions/'
