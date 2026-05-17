@@ -153,11 +153,13 @@ export const BUNDLED_SKILL_NAMES = [
   'setup',
   'slfg',
   'test-browser',
+  'test-driven-development',
   'test-xcode',
   'todo-create',
   'todo-resolve',
   'todo-triage',
   'using-systematic',
+  'writing-skills',
   'writing-systematic-skills',
 ] as const
 
