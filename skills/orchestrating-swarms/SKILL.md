@@ -2,6 +2,11 @@
 name: orchestrating-swarms
 description: Use when orchestrating multi-agent swarms, coordinating parallel code reviews, creating pipeline workflows with dependencies, building self-organizing task queues, or any task benefiting from divide-and-conquer patterns.
 disable-model-invocation: true
+deprecated:
+  since: v2.19.0
+  removal: v3.0.0
+  replacement: orchestrating-subagents
+  reason: "Documents the CEP Teammate API (TeammateTool, spawnTeam, TaskCreate/TaskList/TaskGet, team_name parameter on task(), CC subagent_type names). These primitives do not exist in OpenCode. A replacement skill will cover OpenCode-native parallel task() orchestration."
 ---
 
 # Swarm Orchestration

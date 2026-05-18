@@ -149,6 +149,8 @@ export interface FrontmatterViolation {
     | 'empty-required-field'
     | 'malformed-frontmatter'
     | 'missing-frontmatter'
+    | 'deprecated-reason-missing'
+    | 'deprecated-missing-required-fields'
   field?: string
   message: string
   remediation: string
@@ -657,6 +659,7 @@ function scanSkillFrontmatter(
   checkRequiredSkillField(relPath, parsed.data, 'name', violations)
   checkRequiredSkillField(relPath, parsed.data, 'description', violations)
   checkSkillFrontmatterFields(relPath, parsed.data, violations)
+  checkDeprecatedBlockForBundled(relPath, parsed.data, violations)
 }
 
 function checkRequiredSkillField(
@@ -714,6 +717,48 @@ function checkSkillFrontmatterFields(
       })
     }
   }
+}
+
+function checkDeprecatedBlockForBundled(
+  relPath: string,
+  data: Record<string, unknown>,
+  violations: FrontmatterViolation[],
+): void {
+  if (!isSkillEntryFile(relPath)) return
+  if (!Object.hasOwn(data, 'deprecated')) return
+  const deprecated = data['deprecated']
+  if (!isRecord(deprecated)) return
+
+  const since = deprecated['since']
+  const removal = deprecated['removal']
+  const sinceMissing = typeof since !== 'string' || since.trim() === ''
+  const removalMissing = typeof removal !== 'string' || removal.trim() === ''
+  if (sinceMissing || removalMissing) {
+    const missingFields = [
+      sinceMissing ? 'deprecated.since' : null,
+      removalMissing ? 'deprecated.removal' : null,
+    ]
+      .filter(Boolean)
+      .join(', ')
+    violations.push({
+      file: relPath,
+      rule: 'deprecated-missing-required-fields',
+      field: missingFields,
+      message: `Bundled skill deprecated block must include non-empty string fields: ${missingFields}. The runtime silently drops the entire deprecated block when these are missing, defeating the deprecation cycle.`,
+      remediation: FRONTMATTER_REMEDIATION,
+    })
+  }
+
+  const reason = deprecated['reason']
+  if (typeof reason === 'string' && reason.trim() !== '') return
+  violations.push({
+    file: relPath,
+    rule: 'deprecated-reason-missing',
+    field: 'deprecated.reason',
+    message:
+      'Bundled skill deprecated block must include a non-empty reason string.',
+    remediation: FRONTMATTER_REMEDIATION,
+  })
 }
 
 export function checkAgentColors(

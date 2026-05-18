@@ -9,6 +9,13 @@ import {
 } from './validation.js'
 import { walkDir } from './walk-dir.js'
 
+export interface SkillDeprecated {
+  since: string
+  removal: string
+  replacement?: string
+  reason?: string
+}
+
 export interface SkillFrontmatter {
   name: string
   description: string
@@ -16,6 +23,7 @@ export interface SkillFrontmatter {
   license?: string
   compatibility?: string
   metadata?: Record<string, string>
+  deprecated?: SkillDeprecated
   // Claude Code converted fields
   disableModelInvocation?: boolean // from YAML key: disable-model-invocation
   userInvocable?: boolean // from YAML key: user-invocable
@@ -35,6 +43,7 @@ export interface SkillInfo {
   license?: string
   compatibility?: string
   metadata?: Record<string, string>
+  deprecated?: SkillDeprecated
   // Claude Code converted fields
   disableModelInvocation?: boolean
   userInvocable?: boolean
@@ -54,6 +63,7 @@ export const SKILL_FRONTMATTER_FIELDS = [
   'license',
   'compatibility',
   'metadata',
+  'deprecated',
   'user-invocable',
   'agent',
   'model',
@@ -80,6 +90,29 @@ export function extractFrontmatter(filePath: string): SkillFrontmatter {
       }
     }
 
+    const deprecatedRaw = data.deprecated
+    let deprecated: SkillDeprecated | undefined
+    if (isRecord(deprecatedRaw)) {
+      const since =
+        typeof deprecatedRaw.since === 'string' && deprecatedRaw.since !== ''
+          ? deprecatedRaw.since
+          : undefined
+      const removal =
+        typeof deprecatedRaw.removal === 'string' &&
+        deprecatedRaw.removal !== ''
+          ? deprecatedRaw.removal
+          : undefined
+      if (since !== undefined && removal !== undefined) {
+        deprecated = { since, removal }
+        if (typeof deprecatedRaw.replacement === 'string') {
+          deprecated.replacement = deprecatedRaw.replacement
+        }
+        if (typeof deprecatedRaw.reason === 'string') {
+          deprecated.reason = deprecatedRaw.reason
+        }
+      }
+    }
+
     const argumentHintRaw = extractNonEmptyString(data, 'argument-hint')
     const argumentHint =
       argumentHintRaw?.replace(/^["']|["']$/g, '') || undefined
@@ -90,6 +123,7 @@ export function extractFrontmatter(filePath: string): SkillFrontmatter {
       license: extractNonEmptyString(data, 'license'),
       compatibility: extractNonEmptyString(data, 'compatibility'),
       metadata,
+      deprecated,
       disableModelInvocation: extractBoolean(data, 'disable-model-invocation'),
       userInvocable: extractBoolean(data, 'user-invocable'),
       subtask:
@@ -126,6 +160,7 @@ export function findSkillsInDir(dir: string, maxDepth = 3): SkillInfo[] {
         license: frontmatter.license,
         compatibility: frontmatter.compatibility,
         metadata: frontmatter.metadata,
+        deprecated: frontmatter.deprecated,
         disableModelInvocation: frontmatter.disableModelInvocation,
         userInvocable: frontmatter.userInvocable,
         subtask: frontmatter.subtask,

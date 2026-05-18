@@ -3,6 +3,10 @@ name: claude-permissions-optimizer
 context: fork
 description: Optimize Claude Code permissions by finding safe Bash commands from session history and auto-applying them to settings.json. Can run from any coding agent but targets Claude Code specifically. Use when experiencing permission fatigue, too many permission prompts, wanting to optimize permissions, or needing to set up allowlists. Triggers on "optimize permissions", "reduce permission prompts", "allowlist commands", "too many permission prompts", "permission fatigue", "permission setup", or complaints about clicking approve too often.
 subtask: true
+deprecated:
+  since: v2.19.0
+  removal: v3.0.0
+  reason: "Targets Claude Code's ~/.claude/settings.json allowlist mechanism. OpenCode uses a SQLite-backed session-scoped permission model with built-in always-persistence via the always button. No prompt-fatigue analog exists in OpenCode; there is no equivalent allowlist to optimize."
 ---
 
 # Claude Permissions Optimizer
