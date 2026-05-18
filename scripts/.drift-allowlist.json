@@ -43,6 +43,11 @@
       "pathGlob": "skills/writing-skills/references/testing-skills-with-subagents.md",
       "patterns": ["CLAUDE.md"],
       "reason": "Cross-reference to skill-testing-walkthrough.md, describing what that walkthrough tested. Same rationale as the walkthrough file's exemption."
+    },
+    {
+      "pathGlob": "skills/using-systematic/SKILL.md",
+      "patterns": ["CLAUDE.md"],
+      "reason": "Instruction Priority section lists CLAUDE.md alongside GEMINI.md and AGENTS.md as examples of user instruction files across harnesses. Intentional multi-harness documentation; not a CC-specific pattern reintroduction."
     }
   ]
 }

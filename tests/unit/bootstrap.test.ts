@@ -354,6 +354,96 @@ describe('getBootstrapContent — verbose skill catalog', () => {
   })
 })
 
+describe('using-systematic SKILL.md structural invariants', () => {
+  // Point at the real bundled skills directory so these tests exercise the
+  // actual shipped SKILL.md content, not a synthetic fixture.
+  const realBundledSkillsDir = path.resolve(
+    path.dirname(new URL(import.meta.url).pathname),
+    '../../skills',
+  )
+
+  const defaultConfig = {
+    bootstrap: { enabled: true, file: undefined },
+    disabled_skills: [] as string[],
+    disabled_agents: [] as string[],
+    disabled_commands: [] as string[],
+  }
+
+  test('bootstrap content contains the <SUBAGENT-STOP> marker', () => {
+    const content = getBootstrapContent(defaultConfig, {
+      bundledSkillsDir: realBundledSkillsDir,
+    })
+    expect(content).not.toBeNull()
+    expect(content).toContain('<SUBAGENT-STOP>')
+  })
+
+  test('bootstrap content contains the ## Instruction Priority section', () => {
+    const content = getBootstrapContent(defaultConfig, {
+      bundledSkillsDir: realBundledSkillsDir,
+    })
+    expect(content).not.toBeNull()
+    expect(content).toContain('## Instruction Priority')
+  })
+
+  test('<SUBAGENT-STOP> appears before <EXTREMELY-IMPORTANT> in bootstrap output', () => {
+    const content = getBootstrapContent(defaultConfig, {
+      bundledSkillsDir: realBundledSkillsDir,
+    })
+    expect(content).not.toBeNull()
+    const str = content as string
+    const subagentStop = str.indexOf('<SUBAGENT-STOP>')
+    const extremelyImportant = str.indexOf('<EXTREMELY-IMPORTANT>')
+    expect(subagentStop).toBeGreaterThan(-1)
+    expect(extremelyImportant).toBeGreaterThan(-1)
+    expect(subagentStop).toBeLessThan(extremelyImportant)
+  })
+
+  test('## Instruction Priority appears before ## How to Access Skills in bootstrap output', () => {
+    const content = getBootstrapContent(defaultConfig, {
+      bundledSkillsDir: realBundledSkillsDir,
+    })
+    expect(content).not.toBeNull()
+    const str = content as string
+    const instructionPriority = str.indexOf('## Instruction Priority')
+    const howToAccess = str.indexOf('## How to Access Skills')
+    expect(instructionPriority).toBeGreaterThan(-1)
+    expect(howToAccess).toBeGreaterThan(-1)
+    expect(instructionPriority).toBeLessThan(howToAccess)
+  })
+})
+
+describe('shouldSkipBootstrap behavioral non-regression', () => {
+  test('returns true for "You are a title generator" system prompt', () => {
+    expect(
+      shouldSkipBootstrap([
+        'You are a title generator. Generate a short title.',
+      ]),
+    ).toBe(true)
+  })
+
+  test('returns true for "You are a helpful AI assistant tasked with summarizing conversations" system prompt', () => {
+    expect(
+      shouldSkipBootstrap([
+        'You are a helpful AI assistant tasked with summarizing conversations. Be concise.',
+      ]),
+    ).toBe(true)
+  })
+
+  test('returns true for "Summarize what was done in this conversation" system prompt', () => {
+    expect(
+      shouldSkipBootstrap(['Summarize what was done in this conversation.']),
+    ).toBe(true)
+  })
+
+  test('returns false for a primary-agent-shape prompt with no internal signatures', () => {
+    expect(
+      shouldSkipBootstrap([
+        'You are a code review assistant for the marcusrbrown/systematic project. Review the diff carefully and provide actionable feedback.',
+      ]),
+    ).toBe(false)
+  })
+})
+
 // ---------------------------------------------------------------------------
 // INTERNAL_AGENT_SIGNATURES skip heuristic (src/index.ts:91-97)
 // ---------------------------------------------------------------------------
