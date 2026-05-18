@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
+  applyBootstrapContent,
   getBootstrapContent,
   INTERNAL_AGENT_SIGNATURES,
 } from '../../src/lib/bootstrap.ts'
@@ -409,6 +410,27 @@ describe('using-systematic SKILL.md structural invariants', () => {
     expect(instructionPriority).toBeGreaterThan(-1)
     expect(howToAccess).toBeGreaterThan(-1)
     expect(instructionPriority).toBeLessThan(howToAccess)
+  })
+
+  test('post-injection: applyBootstrapContent preserves SUBAGENT-STOP before EXTREMELY-IMPORTANT in rendered output.system[0]', () => {
+    // CORRECTNESS: pre-injection tests against getBootstrapContent() can pass
+    // while applyBootstrapContent's assembly logic silently breaks the
+    // subagent-visible invariant. This test exercises the actual injection
+    // surface that subagent system prompts see.
+    const content = getBootstrapContent(defaultConfig, {
+      bundledSkillsDir: realBundledSkillsDir,
+    })
+    expect(content).not.toBeNull()
+
+    const output = { system: ['You are a primary agent. Do the work.'] }
+    applyBootstrapContent(output, content as string)
+
+    const rendered = output.system[0]
+    const subagentStop = rendered.indexOf('<SUBAGENT-STOP>')
+    const extremelyImportant = rendered.indexOf('<EXTREMELY-IMPORTANT>')
+    expect(subagentStop).toBeGreaterThan(-1)
+    expect(extremelyImportant).toBeGreaterThan(-1)
+    expect(subagentStop).toBeLessThan(extremelyImportant)
   })
 })
 
