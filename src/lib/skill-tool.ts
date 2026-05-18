@@ -100,7 +100,10 @@ function formatDeprecationMessage(
 ): string {
   let msg = `[systematic] skill "${name}" is deprecated since ${deprecated.since}; will be removed in ${deprecated.removal}.`
   if (deprecated.replacement) {
-    msg += ` Replacement: ${deprecated.replacement}.`
+    msg += ` Replacement: ${deprecated.replacement}`
+    if (!deprecated.replacement.endsWith('.')) {
+      msg += '.'
+    }
   }
   if (deprecated.reason) {
     msg += ` Reason: ${deprecated.reason}`
@@ -113,6 +116,10 @@ function formatDeprecationMessage(
 
 export function createSkillTool(options: SkillToolOptions): ToolDefinition {
   const { bundledSkillsDir, disabledSkills } = options
+  // Per-createSkillTool instance, intentionally not per-session. OpenCode's
+  // current per-session plugin-init behavior makes this de facto per-session
+  // today. If a future OpenCode reuses plugin instances across sessions, the
+  // warning de-emits indefinitely — acceptable since deprecation is informational.
   const warnedSkills = new Set<string>()
 
   const getAllSkills = (): LoadedSkill[] => {

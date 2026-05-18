@@ -15,6 +15,7 @@
  * No external dependencies; no OpenCode TUI; no persistent session.
  */
 
+import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -23,6 +24,11 @@ const projectRoot = path.resolve(__dirname, '../..')
 
 // Import the BUILT plugin, not the source.
 const builtPluginPath = path.join(projectRoot, 'dist', 'index.js')
+if (!fs.existsSync(builtPluginPath)) {
+  console.error(`Built plugin not found at ${builtPluginPath}`)
+  console.error('Run "bun run build" first, then re-run this smoke test.')
+  process.exit(1)
+}
 const pluginModule = (await import(builtPluginPath)) as {
   default: (input: unknown) => Promise<{ tool?: Record<string, unknown> }>
 }

@@ -759,6 +759,45 @@ deprecated:
       warnSpy.mockRestore()
     })
 
+    test('does not produce double-dot when replacement already ends with a period', async () => {
+      const skillDir = path.join(testDir, 'trailing-dot-replacement')
+      fs.mkdirSync(skillDir)
+      fs.writeFileSync(
+        path.join(skillDir, 'SKILL.md'),
+        `---
+name: trailing-dot-replacement
+description: Deprecated with trailing-dot replacement
+deprecated:
+  since: v2.19.0
+  removal: v3.0.0
+  replacement: "new-skill."
+  reason: "Old API removed."
+---
+# Content`,
+      )
+
+      const tool = createSkillTool({
+        bundledSkillsDir: testDir,
+        disabledSkills: [],
+      })
+
+      const warnSpy = spyOn(console, 'warn')
+
+      await tool.execute({ name: 'trailing-dot-replacement' }, mockContext)
+
+      const deprecationWarns = (warnSpy.mock.calls as unknown[][]).filter(
+        (args: unknown[]) =>
+          typeof args[0] === 'string' &&
+          args[0].includes('"trailing-dot-replacement"'),
+      )
+      expect(deprecationWarns.length).toBe(1)
+      const msg = (deprecationWarns[0] as unknown[])[0] as string
+      expect(msg).not.toMatch(/\.\./u)
+      expect(msg).toContain('Replacement: new-skill.')
+
+      warnSpy.mockRestore()
+    })
+
     test('a fresh createSkillTool instance re-emits the warning for the same skill', async () => {
       makeDeprecatedSkill(testDir, 'old-skill')
 

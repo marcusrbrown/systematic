@@ -858,6 +858,8 @@ describe('checkFrontmatter — deprecated.reason enforcement', () => {
           'name: my-skill',
           'description: A skill',
           'deprecated:',
+          '  since: v2.19.0',
+          '  removal: v3.0.0',
           '  reason: "Use the new-skill instead."',
           '---',
           'body',
@@ -929,6 +931,31 @@ describe('checkFrontmatter — deprecated.reason enforcement', () => {
     }
   })
 
+  test('silently accepts non-object deprecated value (consistent with runtime drop behavior)', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'my-skill',
+        [
+          '---',
+          'name: my-skill',
+          'description: A skill',
+          'deprecated: "malformed"',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const targets = collectScanTargets(root)
+      const violations = checkFrontmatter(root, targets.markdown)
+      expect(
+        violations.filter((v) => v.rule === 'deprecated-reason-missing'),
+      ).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   test('integration: real repo skills with deprecated blocks all have non-empty reason', () => {
     const result = checkFrontmatter(
       REPO_ROOT,
@@ -938,6 +965,94 @@ describe('checkFrontmatter — deprecated.reason enforcement', () => {
       (v) => v.rule === 'deprecated-reason-missing',
     )
     expect(deprecatedReasonViolations).toEqual([])
+  })
+
+  test('bundled skill with deprecated block missing both since and removal emits deprecated-missing-required-fields violation', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'my-skill',
+        [
+          '---',
+          'name: my-skill',
+          'description: A skill',
+          'deprecated:',
+          '  reason: "Use new-skill instead."',
+          '  replacement: new-skill',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const targets = collectScanTargets(root)
+      const violations = checkFrontmatter(root, targets.markdown)
+      const match = violations.filter(
+        (v) => v.rule === 'deprecated-missing-required-fields',
+      )
+      expect(match).toHaveLength(1)
+      expect(match[0]?.file).toBe('skills/my-skill/SKILL.md')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('bundled skill with deprecated block missing removal emits deprecated-missing-required-fields violation', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'my-skill',
+        [
+          '---',
+          'name: my-skill',
+          'description: A skill',
+          'deprecated:',
+          '  since: v2.19.0',
+          '  reason: "Use new-skill instead."',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const targets = collectScanTargets(root)
+      const violations = checkFrontmatter(root, targets.markdown)
+      const match = violations.filter(
+        (v) => v.rule === 'deprecated-missing-required-fields',
+      )
+      expect(match).toHaveLength(1)
+      expect(match[0]?.file).toBe('skills/my-skill/SKILL.md')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('bundled skill with deprecated block where since is non-string emits deprecated-missing-required-fields violation', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'my-skill',
+        [
+          '---',
+          'name: my-skill',
+          'description: A skill',
+          'deprecated:',
+          '  since: 42',
+          '  removal: v3.0.0',
+          '  reason: "Use new-skill instead."',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const targets = collectScanTargets(root)
+      const violations = checkFrontmatter(root, targets.markdown)
+      const match = violations.filter(
+        (v) => v.rule === 'deprecated-missing-required-fields',
+      )
+      expect(match).toHaveLength(1)
+      expect(match[0]?.file).toBe('skills/my-skill/SKILL.md')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
   })
 })
 
