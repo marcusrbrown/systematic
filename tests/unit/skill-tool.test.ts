@@ -716,7 +716,8 @@ deprecated:
       const msg = (deprecationWarns[0] as unknown[])[0] as string
       expect(msg).not.toContain('Replacement:')
       expect(msg).toContain('Reason: No replacement available.')
-      expect(msg).not.toMatch(/\. {2}|\.$\.$/)
+      // Should not have any double-period artifacts (e.g., ".." at end or ". ." patterns)
+      expect(msg).not.toMatch(/\.\.$|\. \./)
 
       warnSpy.mockRestore()
     })
