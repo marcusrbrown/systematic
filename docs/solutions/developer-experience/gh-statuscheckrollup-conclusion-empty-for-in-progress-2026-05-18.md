@@ -113,6 +113,8 @@ fi
 
 ### Diagnostic — surface raw state when debugging
 
+The wrong/right blocks above hardcode the actual PR number (`405`) from the incident that prompted this doc. The diagnostic below uses `<num>` because it is general guidance — substitute the PR number under investigation.
+
 ```sh
 gh pr view <num> --json statusCheckRollup \
   -q '.statusCheckRollup[] | {name, status, conclusion}'
