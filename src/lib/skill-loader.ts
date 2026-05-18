@@ -1,7 +1,7 @@
 import path from 'node:path'
 import { convertFileWithCache } from './converter.js'
 import { parseFrontmatter } from './frontmatter.js'
-import type { SkillInfo } from './skills.js'
+import type { SkillDeprecated, SkillInfo } from './skills.js'
 
 const SKILL_PREFIX = 'systematic:'
 const SKILL_DESCRIPTION_PREFIX = '(Systematic - Skill) '
@@ -19,6 +19,7 @@ export interface LoadedSkill {
   agent?: string
   model?: string
   argumentHint?: string
+  deprecated?: SkillDeprecated
 }
 
 export function formatSkillCommandName(name: string): string {
@@ -84,6 +85,7 @@ export function loadSkill(skillInfo: SkillInfo): LoadedSkill | null {
       agent: skillInfo.agent,
       model: skillInfo.model,
       argumentHint: skillInfo.argumentHint,
+      deprecated: skillInfo.deprecated,
     }
   } catch {
     return null
