@@ -149,6 +149,7 @@ export interface FrontmatterViolation {
     | 'empty-required-field'
     | 'malformed-frontmatter'
     | 'missing-frontmatter'
+    | 'deprecated-reason-missing'
   field?: string
   message: string
   remediation: string
@@ -657,6 +658,7 @@ function scanSkillFrontmatter(
   checkRequiredSkillField(relPath, parsed.data, 'name', violations)
   checkRequiredSkillField(relPath, parsed.data, 'description', violations)
   checkSkillFrontmatterFields(relPath, parsed.data, violations)
+  checkDeprecatedReasonForBundled(relPath, parsed.data, violations)
 }
 
 function checkRequiredSkillField(
@@ -714,6 +716,27 @@ function checkSkillFrontmatterFields(
       })
     }
   }
+}
+
+function checkDeprecatedReasonForBundled(
+  relPath: string,
+  data: Record<string, unknown>,
+  violations: FrontmatterViolation[],
+): void {
+  if (!isSkillEntryFile(relPath)) return
+  if (!Object.hasOwn(data, 'deprecated')) return
+  const deprecated = data['deprecated']
+  if (!isRecord(deprecated)) return
+  const reason = deprecated['reason']
+  if (typeof reason === 'string' && reason.trim() !== '') return
+  violations.push({
+    file: relPath,
+    rule: 'deprecated-reason-missing',
+    field: 'deprecated.reason',
+    message:
+      'Bundled skill deprecated block must include a non-empty reason string.',
+    remediation: FRONTMATTER_REMEDIATION,
+  })
 }
 
 export function checkAgentColors(

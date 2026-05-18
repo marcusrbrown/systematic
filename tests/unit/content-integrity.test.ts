@@ -846,6 +846,101 @@ describe('checkFrontmatter', () => {
   })
 })
 
+describe('checkFrontmatter — deprecated.reason enforcement', () => {
+  test('bundled skill with deprecated.reason populated passes with no violation', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'my-skill',
+        [
+          '---',
+          'name: my-skill',
+          'description: A skill',
+          'deprecated:',
+          '  reason: "Use the new-skill instead."',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const targets = collectScanTargets(root)
+      const violations = checkFrontmatter(root, targets.markdown)
+      expect(
+        violations.filter((v) => v.rule === 'deprecated-reason-missing'),
+      ).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('bundled skill with deprecated block but no reason field fails with structured violation', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'my-skill',
+        [
+          '---',
+          'name: my-skill',
+          'description: A skill',
+          'deprecated: {}',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const targets = collectScanTargets(root)
+      const violations = checkFrontmatter(root, targets.markdown)
+      const match = violations.filter(
+        (v) => v.rule === 'deprecated-reason-missing',
+      )
+      expect(match).toHaveLength(1)
+      expect(match[0]?.file).toBe('skills/my-skill/SKILL.md')
+      expect(match[0]?.field).toBe('deprecated.reason')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('bundled skill with deprecated.reason as empty string fails with structured violation', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'my-skill',
+        [
+          '---',
+          'name: my-skill',
+          'description: A skill',
+          'deprecated:',
+          '  reason: ""',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const targets = collectScanTargets(root)
+      const violations = checkFrontmatter(root, targets.markdown)
+      const match = violations.filter(
+        (v) => v.rule === 'deprecated-reason-missing',
+      )
+      expect(match).toHaveLength(1)
+      expect(match[0]?.field).toBe('deprecated.reason')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('integration: real repo skills with deprecated blocks all have non-empty reason', () => {
+    const result = checkFrontmatter(
+      REPO_ROOT,
+      collectScanTargets(REPO_ROOT).markdown,
+    )
+    const deprecatedReasonViolations = result.filter(
+      (v) => v.rule === 'deprecated-reason-missing',
+    )
+    expect(deprecatedReasonViolations).toEqual([])
+  })
+})
+
 describe('checkAgentColors', () => {
   test('allows OpenCode theme tokens and hex colors', () => {
     const root = makeFixtureRepo()
