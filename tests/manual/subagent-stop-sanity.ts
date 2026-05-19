@@ -66,7 +66,7 @@ import fs from 'node:fs'
 
 const LOG_FILE = ${JSON.stringify(logFile)}
 
-function appendLine(obj) {
+function appendLine(obj: Record<string, unknown>) {
   try {
     fs.appendFileSync(LOG_FILE, JSON.stringify(obj) + '\\n')
   } catch (err) {
@@ -139,10 +139,14 @@ async function startServer(env: NodeJS.ProcessEnv): Promise<{
 }
 
 function killServer(server: ChildProcess): Promise<void> {
+  // Unlike the full probe, the sanity test fires its prompt via fetch with an
+  // AbortSignal.timeout. By the time killServer is called, the HTTP connection
+  // is already closed or aborting, so waiting on 'close' is safe — no live
+  // request can hold the server open indefinitely. The 5s SIGKILL fallback
+  // covers the residual case where SIGTERM is ignored.
   return new Promise<void>((resolve) => {
     server.once('close', () => resolve())
     server.kill('SIGTERM')
-    // Force-kill after 5s if SIGTERM is ignored
     setTimeout(() => {
       try {
         server.kill('SIGKILL')

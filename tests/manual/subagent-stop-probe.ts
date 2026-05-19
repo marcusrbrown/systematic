@@ -130,7 +130,7 @@ import type { Plugin } from '@opencode-ai/plugin'
 const LOG_FILE = ${JSON.stringify(logFile)}
 const RUN_LABEL = ${JSON.stringify(runLabel)}
 
-function appendLine(obj) {
+function appendLine(obj: Record<string, unknown>) {
   try {
     fs.appendFileSync(LOG_FILE, JSON.stringify(obj) + '\\n')
   } catch (err) {
