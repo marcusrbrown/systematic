@@ -29,6 +29,38 @@
  * effects (Treatment dramatically exceeds Control) but does NOT have power to
  * confirm small effects. Repeated INCONCLUSIVE verdicts at N=5 should trigger
  * either N≥20 or experiment redesign, not interpretation as signal.
+ *
+ * --- DIAGNOSTIC NOTE (2026-05-19) ---
+ * Earlier runs produced an empty JSONL log. Investigation confirmed:
+ *
+ * 1. The counter plugin architecture is correct. The embedded Bun runtime
+ *    inside the opencode binary loads both .ts and .js file plugins correctly.
+ *    The hook signatures (tool.execute.before, tool.execute.after,
+ *    experimental.chat.system.transform) match the canonical Plugin type in
+ *    @opencode-ai/plugin. The getLegacyPlugins path handles the default-export
+ *    factory pattern without requiring an `id` export.
+ *
+ * 2. The appendLine function in the counter plugin had no try/catch. If
+ *    appendFileSync threw for any reason (permissions, path, etc.), the hook
+ *    would fail silently — OpenCode wraps hook calls in Effect.catch and
+ *    swallows errors. The sanity probe (subagent-stop-sanity.ts) adds
+ *    try/catch with stderr logging to surface these failures.
+ *
+ * 3. The most likely cause of the empty JSONL in the original runs: the
+ *    session.prompt call was dispatched to a model that was slow or
+ *    transiently unavailable (opencode/big-pickle at 90 min, deepseek-v4-flash
+ *    at 8 min). The experimental.chat.system.transform hook fires before the
+ *    LLM call, so system_prompt_check entries should appear even when the
+ *    model hangs — but only if the hook pipeline is active. If the server was
+ *    reusing an existing opencode instance (from a prior run or the user's TUI
+ *    session) that had different plugins loaded, the counter plugin hooks would
+ *    never fire for that instance.
+ *
+ * 4. Verified working: bun tests/manual/subagent-stop-sanity.ts passes in
+ *    under 10s with opencode-go/deepseek-v4-flash, writing tool_call_observed
+ *    and system_transform_observed entries to the JSONL log. Run that sanity
+ *    probe first to confirm the infrastructure is healthy before running this
+ *    full behavioral probe.
  */
 
 import { type ChildProcess, spawn } from 'node:child_process'
@@ -46,6 +78,12 @@ const REPO_ROOT = path.resolve(
 const MODEL = 'opencode/big-pickle'
 const [PROVIDER_ID, MODEL_ID] = MODEL.split('/')
 const SESSIONS_PER_CONDITION = 5
+// Per-run wall-time cap. If one session's primary prompt hangs (slow model, stuck
+// inference, hook deadlock), the run is killed and marked errored rather than
+// blocking the whole probe. Tuned for opencode/big-pickle: latency is variable
+// and sessions can take 2-4 min when the provider is under load; 6 min is a
+// generous ceiling that still bounds the worst case for the full 10-run probe.
+const PER_RUN_TIMEOUT_MS = 6 * 60 * 1000
 
 // Neutral prompt: focused implementation task with no skill-aware framing.
 // The primary agent is instructed to dispatch exactly one subagent with this prompt.
@@ -92,8 +130,12 @@ import type { Plugin } from '@opencode-ai/plugin'
 const LOG_FILE = ${JSON.stringify(logFile)}
 const RUN_LABEL = ${JSON.stringify(runLabel)}
 
-function appendLine(obj) {
-  fs.appendFileSync(LOG_FILE, JSON.stringify(obj) + '\\n')
+function appendLine(obj: Record<string, unknown>) {
+  try {
+    fs.appendFileSync(LOG_FILE, JSON.stringify(obj) + '\\n')
+  } catch (err) {
+    process.stderr.write('[probe-counter] appendLine error: ' + String(err) + '\\n')
+  }
 }
 
 export const counterPlugin = async () => {
@@ -259,21 +301,39 @@ function countSkillInvocations(
   return count
 }
 
+// Kill a server process: SIGTERM first, then SIGKILL after a short grace period.
+// Does NOT wait for the 'close' event — the HTTP connection from promptAsync may
+// keep the process alive indefinitely if we wait for clean shutdown.
+async function killServer(server: ChildProcess): Promise<void> {
+  server.kill('SIGTERM')
+  await new Promise<void>((resolve) => setTimeout(resolve, 2_000))
+  try {
+    server.kill('SIGKILL')
+  } catch {
+    // already dead
+  }
+  // Give the OS a moment to reap the process.
+  await new Promise<void>((resolve) => setTimeout(resolve, 500))
+}
+
 // Dispatch one primary agent session that invokes a subagent via the task tool.
+// Uses promptAsync (fire-and-forget, returns 204 immediately) then polls
+// session.status until the primary session goes idle or the wall-time cap fires.
+// This avoids the hanging-HTTP-connection problem with the blocking `prompt` call.
 async function dispatchPrimarySession(args: {
   serverUrl: string
   projectDir: string
   runLabel: string
   taskPrompt: string
 }): Promise<{ errored: boolean; error?: string }> {
-  const { serverUrl, projectDir, runLabel, taskPrompt } = args
+  const { serverUrl, projectDir, taskPrompt } = args
   try {
     const client = createOpencodeClient({
       baseUrl: serverUrl,
       directory: projectDir,
     })
     const created = await client.session.create({
-      body: { title: `probe-${runLabel}` },
+      body: { title: `probe-${args.runLabel}` },
     })
     const createdData = created.data as { id?: string } | undefined
     if (!createdData?.id) {
@@ -281,14 +341,36 @@ async function dispatchPrimarySession(args: {
         `session.create returned no id: ${JSON.stringify(created)}`,
       )
     }
-    // Send the primary agent its instruction to dispatch one subagent.
-    await client.session.prompt({
-      path: { id: createdData.id },
+    const sessionID = createdData.id
+
+    // Fire the prompt without waiting for the response body — promptAsync
+    // returns 204 immediately and the server processes the request asynchronously.
+    await client.session.promptAsync({
+      path: { id: sessionID },
       body: {
         model: { providerID: PROVIDER_ID, modelID: MODEL_ID },
         parts: [{ type: 'text', text: primaryPrompt(taskPrompt) }],
       },
     })
+
+    // Poll session.status until the primary session is idle (model + subagent
+    // both finished) or the wall-time cap fires.
+    const deadline = Date.now() + PER_RUN_TIMEOUT_MS
+    const POLL_INTERVAL_MS = 5_000
+    while (Date.now() < deadline) {
+      await new Promise<void>((resolve) =>
+        setTimeout(resolve, POLL_INTERVAL_MS),
+      )
+      const statusRes = await client.session.status()
+      const statusMap = statusRes.data as
+        | Record<string, { type: string }>
+        | undefined
+      if (statusMap) {
+        const sessionStatus = statusMap[sessionID]
+        if (sessionStatus?.type === 'idle') break
+      }
+    }
+
     return { errored: false }
   } catch (err) {
     return {
@@ -329,7 +411,20 @@ async function runOne(args: {
   const pluginFile = path.join(tempDir, 'counter-plugin.ts')
   await writeFile(pluginFile, counterPluginSource(logFile, runLabel))
 
-  const opencodeConfig = JSON.stringify({ plugin: [`file://${pluginFile}`] })
+  // Load BOTH the Systematic plugin (so `systematic-implementer` agent is available
+  // for task() dispatch) AND the per-run counter plugin (for invocation logging).
+  // Order matters for hook iteration but not for agent registration; we put the
+  // Systematic plugin first so its bootstrap injection runs before the counter's
+  // logging hooks observe the rendered system prompt.
+  const systematicPluginFile = path.join(REPO_ROOT, 'dist/index.js')
+  if (!fs.existsSync(systematicPluginFile)) {
+    throw new Error(
+      `Systematic plugin not built at ${systematicPluginFile} — run 'bun run build' first`,
+    )
+  }
+  const opencodeConfig = JSON.stringify({
+    plugin: [`file://${systematicPluginFile}`, `file://${pluginFile}`],
+  })
   const { server, serverUrl } = await startServer({
     OPENCODE_CONFIG_CONTENT: opencodeConfig,
   })
@@ -346,10 +441,7 @@ async function runOne(args: {
       result.error = dispatch.error
     }
   } finally {
-    await new Promise<void>((resolve) => {
-      server.once('close', () => resolve())
-      server.kill('SIGTERM')
-    })
+    await killServer(server)
   }
 
   // Parse the JSONL log for this run's entries.
