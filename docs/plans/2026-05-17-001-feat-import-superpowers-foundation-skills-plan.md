@@ -1,7 +1,8 @@
 ---
 title: 'feat: Import test-driven-development and writing-skills from obra/superpowers'
 type: feat
-status: active
+status: completed
+shipped: PR #394 → v2.17.0
 date: 2026-05-17
 deepened: 2026-05-17
 origin: docs/brainstorms/2026-05-17-import-superpowers-foundation-skills-requirements.md

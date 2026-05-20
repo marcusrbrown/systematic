@@ -1,7 +1,8 @@
 ---
 title: 'feat(skills): add SUBAGENT-STOP block and Instruction Priority section to using-systematic'
 type: feat
-status: active
+status: completed
+shipped: PR #405 → v2.20.0
 date: 2026-05-17
 deepened: 2026-05-17
 origin: docs/brainstorms/2026-05-17-subagent-stop-instruction-priority-requirements.md

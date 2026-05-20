@@ -1,7 +1,8 @@
 ---
 title: 'fix(overlay): memoize getAvailableModels per OpencodeClient instance'
 type: fix
-status: active
+status: completed
+shipped: PR #383 → v2.14.5
 date: 2026-05-16
 origin: docs/brainstorms/2026-05-14-provider-availability-dx-hardening-requirements.md
 ---
