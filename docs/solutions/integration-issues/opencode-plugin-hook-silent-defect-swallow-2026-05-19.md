@@ -4,6 +4,7 @@ module: tests/manual (observability hooks)
 date: 2026-05-19
 problem_type: integration_issue
 component: tooling
+category: integration-issues
 severity: medium
 tags:
   - opencode-plugin
@@ -17,7 +18,7 @@ symptoms:
   - JSONL or other side-channel log stays empty for an entire probe run with no error in stderr
   - opencode serve process keeps running normally; no traceback, no warning, no degraded mode
   - The same hook works in isolation (different fixture, different invocation) but fails silently in the real fixture
-root_cause: missing_validation
+root_cause: unhandled_effect_defect
 resolution_type: code_fix
 related_components:
   - manual-probes
@@ -108,4 +109,5 @@ Future probes that depend on hook side effects can copy this scaffold and replac
 
 - `docs/solutions/integration-issues/zsh-for-loop-word-splitting-silent-failure-20260417.md` — different mechanism (zsh `for x in $VAR` not word-splitting unquoted variables in zsh), same shape (instrumentation silently misreports its own state). Both are cases where the operator gets zero diagnostic signal from a failure that would be loud in a less-clever runtime.
 - `docs/solutions/workflow-issues/risks-table-rows-must-enforce-as-spec-checks-2026-05-18.md` — plan-writing analog of the same trap: a mitigation identified in the Risks table silently dropped from the Unit spec produces a code change that looks correct but lacks the intended defensive check.
-- OpenCode source for the trigger mechanism: `.slim/clonedeps/repos/anomalyco__opencode/packages/opencode/src/plugin/index.ts:261-273` (the `Effect.promise` wrap) and `packages/opencode/src/session/prompt.ts:582-601` (the bare `yield* plugin.trigger` call site).
+- `docs/solutions/developer-experience/gh-statuscheckrollup-conclusion-empty-for-in-progress-2026-05-18.md` — CI polling analog: `gh pr view --json statusCheckRollup` emits empty-string `conclusion` for in-progress jobs, so the same empty-string check used in hook errors that silently look like success.
+- OpenCode source for the trigger mechanism: [`packages/opencode/src/plugin/index.ts` lines 261–273](https://github.com/anomalyco/opencode/blob/v1.15.1/packages/opencode/src/plugin/index.ts#L261-L273) (the `Effect.promise` wrap) and [`packages/opencode/src/session/prompt.ts` lines 582–601](https://github.com/anomalyco/opencode/blob/v1.15.1/packages/opencode/src/session/prompt.ts#L582-L601) (the bare `yield* plugin.trigger` call site). Pinned to v1.15.1 — the clonedep at `.slim/clonedeps/repos/anomalyco__opencode/` is a runtime-local checkout.
