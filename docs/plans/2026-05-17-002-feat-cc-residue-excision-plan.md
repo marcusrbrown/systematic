@@ -1,7 +1,8 @@
 ---
 title: 'feat: Minimal skill-deprecation surface (v2.19.0) + mark CC-residue skills as deprecated'
 type: feat
-status: active
+status: completed
+shipped: PR #401 → v2.19.0 (implementation phase; v3.0.0 excision in Future Work appendix, no committed timeline)
 date: 2026-05-17
 origin: docs/brainstorms/2026-05-17-excise-cc-residue-skills-requirements.md
 ---

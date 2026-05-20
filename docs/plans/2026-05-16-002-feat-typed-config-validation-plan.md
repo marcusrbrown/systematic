@@ -1,7 +1,8 @@
 ---
 title: feat: Typed config validation for bundled agent and skill names
 type: feat
-status: active
+status: completed
+shipped: PR #384 → v2.15.0
 date: 2026-05-16
 origin: docs/brainstorms/2026-05-16-typed-config-validation-requirements.md
 ---
