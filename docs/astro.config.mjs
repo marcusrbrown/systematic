@@ -31,6 +31,29 @@ export default defineConfig({
     starlight({
       title: 'Systematic',
       description: 'Structured engineering workflows for OpenCode',
+      head: [
+        {
+          tag: 'meta',
+          attrs: {
+            property: 'og:image',
+            content: 'https://fro.bot/systematic/og-image.png',
+          },
+        },
+        {
+          tag: 'meta',
+          attrs: {
+            property: 'og:image:width',
+            content: '1200',
+          },
+        },
+        {
+          tag: 'meta',
+          attrs: {
+            property: 'og:image:height',
+            content: '630',
+          },
+        },
+      ],
       social: [
         {
           icon: 'github',
