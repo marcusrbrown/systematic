@@ -517,7 +517,7 @@ See [`AGENTS.md`](./AGENTS.md) for detailed development guidelines, code style c
 
 ## Converting from Claude Code
 
-Migrating skills or agents from CEP or other Claude Code-format sources to Systematic? See the [Conversion Guide](https://fro.bot/systematic/guides/conversion-guide/) for field mappings and examples.
+Migrating skills or agents from Claude Code format to Systematic? The CLI includes a converter — run `bun src/cli.ts convert <file>` for field mappings and tool name translations.
 
 ## References
 
