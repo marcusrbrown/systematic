@@ -17,8 +17,8 @@ export default defineConfig({
             themeVariables: {
               primaryColor: '#182225',
               primaryTextColor: '#f3f6f7',
-              primaryBorderColor: '#4fd1c5',
-              lineColor: '#4fd1c5',
+              primaryBorderColor: '#59d3c8',
+              lineColor: '#59d3c8',
               secondaryColor: '#243033',
               tertiaryColor: '#101719',
             },

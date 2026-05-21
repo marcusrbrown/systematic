@@ -27,6 +27,7 @@
   --space-2: 0.5rem;
   --space-3: 0.75rem;
   --space-4: 1rem;
+  --space-5: 1.25rem;
   --space-6: 1.5rem;
   --space-8: 2rem;
   --space-12: 3rem;
@@ -76,7 +77,7 @@
   color: var(--sl-color-gray-3);
   text-decoration: none;
   font-size: var(--sl-text-xs);
-  transition: color 0.4s var(--ease-out-expo);
+  transition: color 0.25s var(--ease-out-expo);
 }
 
 .definition-source:hover {
@@ -114,8 +115,8 @@
   text-decoration-thickness: 1px;
   text-underline-offset: 4px;
   transition:
-    color 0.4s var(--ease-out-expo),
-    text-decoration-color 0.4s var(--ease-out-expo);
+    color 0.25s var(--ease-out-expo),
+    text-decoration-color 0.25s var(--ease-out-expo);
 }
 
 .sl-markdown-content a:not(.not-content):hover {
@@ -129,8 +130,8 @@
   background-color: var(--sl-color-gray-6);
   border-radius: 0.25rem;
   transition:
-    transform 0.4s var(--ease-out-expo),
-    border-color 0.4s var(--ease-out-expo);
+    transform 0.25s var(--ease-out-expo),
+    border-color 0.25s var(--ease-out-expo);
 }
 
 .card:hover,
@@ -161,7 +162,6 @@
   width: 100%;
   border: 1px solid var(--sl-color-gray-5);
   border-radius: 0;
-  overflow: hidden;
   margin-bottom: var(--space-6);
 }
 
