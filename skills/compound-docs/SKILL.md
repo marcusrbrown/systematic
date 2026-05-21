@@ -38,7 +38,7 @@ This skill captures problem solutions immediately after confirmation, creating s
 - "problem solved"
 - "that did it"
 
-**OR manual:** `/doc-fix` command
+**OR manual:** Invoke the `ce:compound` skill directly
 
 **Non-trivial problems only:**
 
@@ -348,7 +348,7 @@ Action:
 ## Integration Points
 
 **Invoked by:**
-- /compound command (primary interface)
+- `/ce:compound` skill (primary interface)
 - Manual invocation in conversation after solution confirmed
 - Can be triggered by detecting confirmation phrases like "that worked", "it's fixed", etc.
 
