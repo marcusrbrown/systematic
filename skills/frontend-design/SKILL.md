@@ -1,6 +1,6 @@
 ---
 name: frontend-design
-description: 'Build web interfaces with genuine design quality, not AI slop. Use for any frontend work - landing pages, web apps, dashboards, admin panels, components, interactive experiences. Activates for both greenfield builds and modifications to existing applications. Detects existing design systems and respects them. Covers composition, typography, color, motion, and copy. Verifies results via screenshots before declaring done.'
+description: 'Use when building or reviewing any frontend interface. Covers the full design lifecycle: context detection, pre-build planning, design laws (OKLCH color, theme forcing function, layout rhythm, absolute bans on AI-slop patterns), implementation guidance, and visual verification. Use for landing pages, dashboards, components, or any web UI where design quality matters.'
 license: Apache-2.0
 ---
 
@@ -135,7 +135,7 @@ Match-and-refuse. If you're about to write any of these, rewrite the element wit
 
 ### The AI slop test
 
-If someone could look at this interface and say "AI made that" without doubt, it's failed. Cross-register failures are the absolute bans above.
+If someone could look at this interface and say "AI made that" without doubt, it's failed. The absolute bans above are the primary failure class — they are never acceptable regardless of context.
 
 **Category-reflex check.** Run at two altitudes; the second one catches what the first one misses.
 
@@ -157,7 +157,7 @@ These principles apply across all context types. Each yields to existing design 
 ### Color & Theme
 
 - Commit to a cohesive palette using CSS variables. A dominant color with sharp accents outperforms timid, evenly-distributed palettes.
-- No purple-on-white bias, no dark-mode bias. Vary between light and dark based on context.
+- No purple-on-white bias. For dark vs. light choice, apply the scene-sentence forcing function in Design Laws above.
 - One accent color by default unless the product already has a multi-color system.
 - *Yields to existing color tokens when detected.*
 

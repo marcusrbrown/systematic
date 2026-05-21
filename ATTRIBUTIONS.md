@@ -69,6 +69,23 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
 
+## pbakaus/impeccable — Apache 2.0
+
+**Source repository:** [https://github.com/pbakaus/impeccable](https://github.com/pbakaus/impeccable)  
+**Pinned commit:** `642f03d5a10eb3deb91bd511241e387e23b9aa39`  
+**License:** Apache 2.0  
+**Copyright:** Paul Bakaus  
+
+### Files derived
+
+- `skills/frontend-design/SKILL.md` — Design Laws section
+
+### Adaptation notes
+
+Verbatim merge of the `## Shared design laws` section. Register-specific qualifiers ("both registers") replaced with register-agnostic phrasing ("every design"). The `{{model}}` placeholder found in the section intro was removed (not substituted). No other `{{placeholder}}` syntax was present in the imported section.
+
+Impeccable itself incorporates Anthropic's frontend-design skill content (CC-BY-4.0). The Apache 2.0 license from Impeccable governs this derived work per its own attribution chain.
+
 ## Anthropic — CC-BY-4.0
 
 **Source page:** [Skill authoring best practices](https://docs.claude.com/en/docs/agents-and-tools/agent-skills/best-practices)
