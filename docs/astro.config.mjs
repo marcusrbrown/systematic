@@ -15,12 +15,12 @@ export default defineConfig({
           mermaidConfig: {
             theme: 'dark',
             themeVariables: {
-              primaryColor: '#1a1a2e',
-              primaryTextColor: '#fff',
-              primaryBorderColor: '#4FD1C5',
-              lineColor: '#4FD1C5',
-              secondaryColor: '#16213e',
-              tertiaryColor: '#0f0f23',
+              primaryColor: '#182225',
+              primaryTextColor: '#f3f6f7',
+              primaryBorderColor: '#4fd1c5',
+              lineColor: '#4fd1c5',
+              secondaryColor: '#243033',
+              tertiaryColor: '#101719',
             },
           },
         },

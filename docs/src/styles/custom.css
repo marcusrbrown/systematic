@@ -1,38 +1,62 @@
 :root {
-  --sl-color-accent-low: #0f403c;
-  --sl-color-accent: #4fd1c5;
-  --sl-color-accent-high: #b2f5ea;
-  --sl-color-white: #ffffff;
-  --sl-color-gray-1: #eceef2;
-  --sl-color-gray-2: #c0c8d1;
-  --sl-color-gray-3: #94a1b2;
-  --sl-color-gray-4: #485870;
-  --sl-color-gray-5: #252c38;
-  --sl-color-gray-6: #1a1a2e;
-  --sl-color-black: #0f0f23;
+  /* OKLCH Tinted Neutrals (Teal hue ~195) */
+  --sl-color-accent-low: oklch(0.3 0.05 195);
+  --sl-color-accent: oklch(0.8 0.1 195);
+  --sl-color-accent-high: oklch(0.95 0.05 195);
+  --sl-color-white: oklch(0.98 0.005 195);
+  --sl-color-gray-1: oklch(0.9 0.01 195);
+  --sl-color-gray-2: oklch(0.75 0.015 195);
+  --sl-color-gray-3: oklch(0.55 0.015 195);
+  --sl-color-gray-4: oklch(0.35 0.015 195);
+  --sl-color-gray-5: oklch(0.25 0.015 195);
+  --sl-color-gray-6: oklch(0.2 0.015 195);
+  --sl-color-black: oklch(0.15 0.015 195);
+
+  /* Typography - Editorial Reference Manual escape */
+  --sl-font-system:
+    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  --sl-font-heading:
+    ui-serif, Georgia, Cambria, "Times New Roman", Times, serif;
+  --sl-font-mono:
+    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
+    "Courier New", monospace;
+
+  /* Spacing Scale Rhythm */
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-12: 3rem;
+
+  --sl-line-height: 1.6;
+  --sl-nav-gap: var(--space-3);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 [data-theme="light"] {
-  --sl-color-accent-low: #b2f5ea;
-  --sl-color-accent: #4fd1c5;
-  --sl-color-accent-high: #0f403c;
-  --sl-color-white: #0f0f23;
-  --sl-color-gray-1: #1a1a2e;
-  --sl-color-gray-2: #252c38;
-  --sl-color-gray-3: #485870;
-  --sl-color-gray-4: #94a1b2;
-  --sl-color-gray-5: #c0c8d1;
-  --sl-color-gray-6: #eceef2;
-  --sl-color-black: #ffffff;
+  --sl-color-accent-low: oklch(0.95 0.05 195);
+  --sl-color-accent: oklch(0.5 0.1 195);
+  --sl-color-accent-high: oklch(0.3 0.05 195);
+  --sl-color-white: oklch(0.15 0.015 195);
+  --sl-color-gray-1: oklch(0.2 0.015 195);
+  --sl-color-gray-2: oklch(0.25 0.015 195);
+  --sl-color-gray-3: oklch(0.35 0.015 195);
+  --sl-color-gray-4: oklch(0.55 0.015 195);
+  --sl-color-gray-5: oklch(0.75 0.015 195);
+  --sl-color-gray-6: oklch(0.9 0.01 195);
+  --sl-color-black: oklch(0.98 0.005 195);
 }
 
 /* Definition header for reference pages */
 .definition-header {
   display: flex;
   align-items: center;
-  gap: 0.5rem;
-  padding: 0.5rem 0;
-  margin-bottom: 1rem;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  margin-bottom: var(--space-4);
   border-bottom: 1px solid var(--sl-color-gray-5);
   font-size: var(--sl-text-sm);
 }
@@ -43,8 +67,8 @@
   letter-spacing: 0.05em;
   background: var(--sl-color-gray-5);
   color: var(--sl-color-white);
-  padding: 0.125rem 0.5rem;
-  border-radius: 0.25rem;
+  padding: var(--space-1) var(--space-2);
+  border-radius: 0.125rem;
 }
 
 .definition-source {
@@ -52,48 +76,37 @@
   color: var(--sl-color-gray-3);
   text-decoration: none;
   font-size: var(--sl-text-xs);
+  transition: color 0.4s var(--ease-out-expo);
 }
 
 .definition-source:hover {
   color: var(--sl-color-accent);
 }
 
-/* Typography & Spacing Polish - OpenCode Aligned */
-:root {
-  /* Refined Typography */
-  --sl-font-system:
-    ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
-    Roboto, "Helvetica Neue", Arial, sans-serif;
-  --sl-font-heading: var(--sl-font-system);
-  --sl-font-mono:
-    ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
-    "Courier New", monospace;
-
-  /* Spacing & Layout */
-  --sl-line-height: 1.75;
-  --sl-nav-gap: 0.75rem;
-}
-
-/* Heading Polish */
+/* Heading Polish - Editorial */
 .sl-markdown-content h1,
 .sl-markdown-content h2,
 .sl-markdown-content h3,
 .sl-markdown-content h4 {
-  font-weight: 700;
-  letter-spacing: -0.025em;
-  margin-top: 2.5em;
-  margin-bottom: 0.75em;
+  font-family: var(--sl-font-heading);
+  font-weight: 500;
+  letter-spacing: -0.01em;
+  margin-top: var(--space-8);
+  margin-bottom: var(--space-3);
+  color: var(--sl-color-white);
 }
 
 .sl-markdown-content h1 {
-  font-size: 2.5rem;
-  line-height: 1.2;
+  font-size: 2.75rem;
+  line-height: 1.1;
+  margin-top: 0;
+  margin-bottom: var(--space-6);
 }
 
 .sl-markdown-content p {
-  margin-bottom: 1.5em;
-  line-height: 1.8;
-  color: var(--sl-color-gray-2);
+  margin-bottom: var(--space-6);
+  line-height: var(--sl-line-height);
+  color: var(--sl-color-gray-1);
 }
 
 /* Link Polish */
@@ -101,22 +114,23 @@
   text-decoration-thickness: 1px;
   text-underline-offset: 4px;
   transition:
-    color 0.2s ease,
-    text-decoration-color 0.2s ease;
+    color 0.4s var(--ease-out-expo),
+    text-decoration-color 0.4s var(--ease-out-expo);
 }
 
 .sl-markdown-content a:not(.not-content):hover {
   text-decoration-color: var(--sl-color-accent);
 }
 
-/* Card Polish */
+/* Card Polish - Refined Motion */
 .card,
 .link-card {
   border: 1px solid var(--sl-color-gray-5);
   background-color: var(--sl-color-gray-6);
+  border-radius: 0.25rem;
   transition:
-    transform 0.2s ease,
-    border-color 0.2s ease;
+    transform 0.4s var(--ease-out-expo),
+    border-color 0.4s var(--ease-out-expo);
 }
 
 .card:hover,
@@ -127,37 +141,41 @@
 
 /* Code Block Polish */
 .expressive-code .ec-line {
-  line-height: 1.6;
+  line-height: 1.5;
 }
 
 /* Blockquote Polish */
 .sl-markdown-content blockquote {
   border-left-color: var(--sl-color-accent);
   background-color: var(--sl-color-gray-6);
-  padding: 1rem 1.5rem;
-  border-radius: 0.25rem;
+  padding: var(--space-4) var(--space-6);
+  border-radius: 0; /* Boxy editorial feel */
+  font-family: var(--sl-font-heading);
+  font-style: italic;
+  font-size: 1.1rem;
 }
 
 /* Table Polish */
 .sl-markdown-content table {
-  border-collapse: separate;
-  border-spacing: 0;
+  border-collapse: collapse;
   width: 100%;
   border: 1px solid var(--sl-color-gray-5);
-  border-radius: 0.5rem;
+  border-radius: 0;
   overflow: hidden;
+  margin-bottom: var(--space-6);
 }
 
 .sl-markdown-content th {
   background-color: var(--sl-color-gray-6);
   border-bottom: 1px solid var(--sl-color-gray-5);
-  padding: 0.75rem 1rem;
+  padding: var(--space-3) var(--space-4);
   text-align: left;
-  font-weight: 600;
+  font-weight: 500;
+  font-family: var(--sl-font-system);
 }
 
 .sl-markdown-content td {
-  padding: 0.75rem 1rem;
+  padding: var(--space-3) var(--space-4);
   border-bottom: 1px solid var(--sl-color-gray-5);
 }
 

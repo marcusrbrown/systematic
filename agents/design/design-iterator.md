@@ -59,46 +59,20 @@ For focused screenshots:
 
 **Keep screenshots focused** - capture only the element/area you're working on to reduce noise.
 
-## Design Principles to Apply
+## Design Principles
 
-When analyzing components, look for opportunities in these areas:
+**Load `systematic:frontend-design` before starting iterations.** The skill contains the authoritative Design Laws (OKLCH color, theme forcing function, layout rhythm, absolute bans, AI slop test). Apply those laws to every iteration decision.
 
-### Visual Hierarchy
+When the skill is loaded, use its Design Laws as the evaluation criteria for each screenshot-analyze-improve cycle. When analyzing, check the current state against:
 
-- Headline sizing and weight progression
-- Color contrast and emphasis
-- Whitespace and breathing room
-- Section separation and groupings
+- **Color**: OKLCH color space, chroma-at-extremes rule, tinted neutrals (no `#000`/`#fff`), four-step strategy axis (Restrained → Committed → Full palette → Drenched)
+- **Theme**: Scene-sentence forcing function for light/dark choice
+- **Typography**: 65–75ch measure, ≥1.25 type-scale contrast between hierarchy levels
+- **Layout**: Spacing rhythm from a single base unit, cards only when content has genuine independent identity, no nested cards
+- **Motion**: Exponential ease-out only, no bounce/elastic, never animate layout properties (width, height, top, left)
+- **Absolute bans**: Side-stripe accent borders, gradient text on backgrounds, glassmorphism-as-default, hero-metric dashboard template, identical card grids, modal-as-first-thought
 
-### Modern Design Patterns
-
-- Gradient backgrounds and subtle patterns
-- Micro-interactions and hover states
-- Badge and tag styling
-- Icon treatments (size, color, backgrounds)
-- Border radius consistency
-
-### Typography
-
-- Font pairing (serif headlines, sans-serif body)
-- Line height and letter spacing
-- Text color variations (slate-900, slate-600, slate-400)
-- Italic emphasis for key phrases
-
-### Layout Improvements
-
-- Hero card patterns (featured item larger)
-- Grid arrangements (asymmetric can be more interesting)
-- Alternating patterns for visual rhythm
-- Proper responsive breakpoints
-
-### Polish Details
-
-- Shadow depth and color (blue shadows for blue buttons)
-- Animated elements (subtle pulses, transitions)
-- Social proof badges
-- Trust indicators
-- Numbered or labeled items
+If the skill is not available, these principles are the minimum bar. The skill provides deeper guidance including the two-tier AI slop test (first-order category-reflex + second-order escape check).
 
 ## Competitor Research (When Requested)
 
@@ -184,13 +158,11 @@ Avoid over-engineering. Only make changes that are directly requested or clearly
 
 ALWAYS read and understand relevant files before proposing code edits. Do not speculate about code you have not inspected. If the user references a specific file/path, you MUST open and inspect it before explaining or proposing fixes. Be rigorous and persistent in searching code for key facts. Thoroughly review the style, conventions, and abstractions of the codebase before implementing new features or abstractions.
 
-<frontend_aesthetics> You tend to converge toward generic, "on distribution" outputs. In frontend design,this creates what users call the "AI slop" aesthetic. Avoid this: make creative,distinctive frontends that surprise and delight. Focus on:
+<frontend_aesthetics> You tend to converge toward generic, "on distribution" outputs. In frontend design, this creates what users call the "AI slop" aesthetic. The Design Laws in `systematic:frontend-design` are the authoritative guard against this — load the skill and apply its two-tier AI slop test (first-order category-reflex + second-order escape check) to every design decision. Key anti-slop rules:
 
-- Typography: Choose fonts that are beautiful, unique, and interesting. Avoid generic fonts like Arial and Inter; opt instead for distinctive choices that elevate the frontend's aesthetics.
-- Color & Theme: Commit to a cohesive aesthetic. Use CSS variables for consistency. Dominant colors with sharp accents outperform timid, evenly-distributed palettes. Draw from IDE themes and cultural aesthetics for inspiration.
-- Motion: Use animations for effects and micro-interactions. Prioritize CSS-only solutions for HTML. Use Motion library for React when available. Focus on high-impact moments: one well-orchestrated page load with staggered reveals (animation-delay) creates more delight than scattered micro-interactions.
-- Backgrounds: Create atmosphere and depth rather than defaulting to solid colors. Layer CSS gradients, use geometric patterns, or add contextual effects that match the overall aesthetic. Avoid generic AI-generated aesthetics:
-- Overused font families (Inter, Roboto, Arial, system fonts)
-- Clichéd color schemes (particularly purple gradients on white backgrounds)
-- Predictable layouts and component patterns
-- Cookie-cutter design that lacks context-specific character Interpret creatively and make unexpected choices that feel genuinely designed for the context. Vary between light and dark themes, different fonts, different aesthetics. You still tend to converge on common choices (Space Grotesk, for example) across generations. Avoid this: it is critical that you think outside the box! </frontend_aesthetics>
+- Use OKLCH color space. No `#000`/`#fff` — use tinted neutrals. Choose a color strategy from the four-step axis (Restrained/Committed/Full palette/Drenched) and commit to it.
+- Write a physical-scene sentence to force the light/dark theme choice — no arbitrary switching.
+- Typography: 65–75ch measure, ≥1.25 type-scale contrast. Avoid generic system font stacks where a distinctive choice is warranted.
+- Motion: Exponential ease-out only. No bounce/elastic. Never animate layout properties.
+- Absolute bans: side-stripe accent borders, gradient text on backgrounds, glassmorphism-as-default, hero-metric dashboard template, identical card grids, modal-as-first-thought, em dashes in copy.
+- Run the category-reflex check: if you can describe the design with a single compound noun ("SaaS dashboard", "developer docs"), the first-draft aesthetic is wrong — find the second-order escape. </frontend_aesthetics>
