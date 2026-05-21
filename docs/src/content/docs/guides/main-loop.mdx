@@ -5,7 +5,7 @@ sidebar:
   order: 2
 ---
 
-At the heart of Systematic is a four-step loop adapted from battle-tested compound engineering principles:
+At the heart of Systematic is a four-step loop that transforms your AI assistant from a simple code generator into a disciplined engineering collaborator:
 
 ```mermaid
 flowchart LR
@@ -14,13 +14,13 @@ flowchart LR
     C --> D[Compound]
     D --> A
 
-    style A fill:#1a1a2e,stroke:#4FD1C5,color:#fff
-    style B fill:#16213e,stroke:#4FD1C5,color:#4FD1C5
-    style C fill:#16213e,stroke:#E91E8C,color:#E91E8C
-    style D fill:#16213e,stroke:#F5A623,color:#F5A623
+    style A fill:#1e2530,stroke:#33b1c4,color:#fff
+    style B fill:#1e2530,stroke:#33b1c4,color:#33b1c4
+    style C fill:#1e2530,stroke:#c74a8a,color:#c74a8a
+    style D fill:#1e2530,stroke:#c4a033,color:#c4a033
 ```
 
-This loop transforms your AI assistant from a simple code generator into a disciplined engineering collaborator. By following this cycle, you ensure that every change is researched, executed in isolation, rigorously reviewed, and documented for the future.
+By following this cycle, you ensure that every change is researched, executed in isolation, rigorously reviewed, and documented for the future.
 
 ---
 
@@ -69,7 +69,7 @@ The review phase catches issues before they ship. Systematic launches multiple s
 
 ## 4. Compound
 
-The compound phase turns today's solutions into tomorrow's advantages. By documenting solved problems, you build "institutional knowledge" that future AI agents can use.
+The compound phase turns today's solutions into tomorrow's advantages. By documenting solved problems, you build institutional knowledge that future AI agents can use.
 
 **Skill:** [`/ce:compound`](/systematic/reference/skills/ce-compound/)
 
@@ -83,13 +83,13 @@ The compound phase turns today's solutions into tomorrow's advantages. By docume
 
 ## Quick Reference
 
-| Phase | Skill | Primary Agent/Skill |
+| Phase | Skill | What it does |
 | :--- | :--- | :--- |
-| **Plan** | `/ce:plan` | `@repo-research-analyst` |
-| **Work** | `/ce:work` | `skill:git-worktree` |
-| **Review** | `/ce:review` | `@architecture-strategist` |
-| **Compound** | `/ce:compound` | `skill:compound-docs` |
-| **Full Loop** | `/systematic:lfg` | All of the above (Autonomous) |
+| **Plan** | [`ce:plan`](/systematic/reference/skills/ce-plan/) | Researches codebase and produces an implementation blueprint |
+| **Work** | [`ce:work`](/systematic/reference/skills/ce-work/) | Executes the plan in an isolated branch, runs verification |
+| **Review** | [`ce:review`](/systematic/reference/skills/ce-review/) | Runs parallel agent audits and resolves findings by severity |
+| **Compound** | [`ce:compound`](/systematic/reference/skills/ce-compound/) | Documents the solution as reusable institutional knowledge |
+| **Full Loop** | [`systematic:lfg`](/systematic/reference/skills/lfg/) | Runs all four phases autonomously end-to-end |
 
 ---
 
