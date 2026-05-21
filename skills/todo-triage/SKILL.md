@@ -9,7 +9,7 @@ disable-model-invocation: true
 
 Interactive workflow for reviewing pending todos one by one and deciding whether to approve, skip, or modify each.
 
-**Do not write code during triage.** This is purely for review and prioritization -- implementation happens in `/todo-resolve`.
+**Do not write code during triage.** This is purely for review and prioritization -- implementation happens in `/systematic:todo-resolve`.
 
 - First set the /model to Haiku
 - Read all pending todos from `.context/systematic/todos/` and legacy `todos/` directories
@@ -64,7 +64,7 @@ After all items processed:
 ```markdown
 What would you like to do next?
 
-1. run /todo-resolve to resolve the todos
+1. run `/systematic:todo-resolve` to resolve the todos
 2. commit the todos
 3. nothing, go chill
 ```

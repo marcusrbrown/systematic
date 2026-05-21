@@ -68,7 +68,7 @@ This file contains the shipping workflow (Phase 3-4). Load it only when all Phas
 
 1. **Prepare Evidence Context**
 
-   Do not invoke `ce-demo-reel` directly in this step. Evidence capture belongs to the PR creation or PR description update flow, where the final PR diff and description context are available.
+   Do not invoke `feature-video` directly in this step. Evidence capture belongs to the PR creation or PR description update flow, where the final PR diff and description context are available.
 
    Note whether the completed work has observable behavior (UI rendering, CLI output, API/library behavior with a runnable example, generated artifacts, or workflow output). The `ce-commit-push-pr` skill will ask whether to capture evidence only when evidence is possible.
 

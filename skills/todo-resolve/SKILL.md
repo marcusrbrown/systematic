@@ -62,7 +62,7 @@ Todos cleaned up: [count deleted]
 If pending todos were skipped, list them:
 
 ```
-Skipped pending todos (run /todo-triage to approve):
+Skipped pending todos (run `/systematic:todo-triage` to approve):
   - 003-pending-p2-missing-index.md
   - 005-pending-p3-rename-variable.md
 ```
