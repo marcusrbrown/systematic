@@ -25,6 +25,7 @@
     },
     {
       matchPackageNames: ['@opencode-ai/{/,}**'],
+      groupName: 'OpenCode',
       semanticCommitType: 'build',
     },
   ],
