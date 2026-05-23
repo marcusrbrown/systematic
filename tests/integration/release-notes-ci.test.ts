@@ -123,6 +123,7 @@ interface ScenarioEnv {
   MOCK_GH_RUN_WATCH_EXIT?: string
   MOCK_GH_RELEASE_VIEW_BODY_LEN?: string
   MOCK_GH_WORKFLOW_RUN_PROMPT?: string
+  MOCK_GH_WORKFLOW_RUN_CORRELATION?: string
   RELEASE_NOTES_TEST_POLL_BUDGET_SECS?: string
   RELEASE_NOTES_TEST_POLL_INTERVAL_SECS?: string
   RELEASE_NOTES_TEST_WATCH_TIMEOUT_SECS?: string
@@ -173,13 +174,24 @@ function runSuccessCmd(
     extraMockBinDir ?? fs.mkdtempSync(path.join(os.tmpdir(), 'mock-bin-'))
   const ghLink = path.join(mockBinDir, 'gh')
 
-  // Create a wrapper that delegates to mock-gh.sh, forwarding all args
-  if (!fs.existsSync(ghLink)) {
-    fs.writeFileSync(
+  // Create a wrapper that delegates to mock-gh.sh, forwarding all args.
+  // Tests that supply extraMockBinDir may pre-populate gh with a custom wrapper
+  // (scenario 7 does this for per-run-ID log responses); in that case we leave
+  // the existing wrapper in place. Otherwise we write the default shim.
+  // Using fs.openSync with O_CREAT|O_EXCL is atomic — no check-then-write race
+  // (avoids js/file-system-race CodeQL flag).
+  try {
+    const fd = fs.openSync(
       ghLink,
-      `#!/usr/bin/env bash\nexec "${MOCK_GH_PATH}" "$@"\n`,
+      fs.constants.O_CREAT | fs.constants.O_EXCL | fs.constants.O_WRONLY,
+      0o755,
     )
-    fs.chmodSync(ghLink, 0o755)
+    fs.writeSync(fd, `#!/usr/bin/env bash\nexec "${MOCK_GH_PATH}" "$@"\n`)
+    fs.closeSync(fd)
+  } catch (err) {
+    // EEXIST means a custom wrapper is already in place; leave it.
+    const code = (err as NodeJS.ErrnoException).code
+    if (code !== 'EEXIST') throw err
   }
 
   const parentPath = process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin'
@@ -226,6 +238,11 @@ function runSuccessCmd(
 
   if (env.MOCK_GH_WORKFLOW_RUN_PROMPT !== undefined) {
     childEnv.MOCK_GH_WORKFLOW_RUN_PROMPT = env.MOCK_GH_WORKFLOW_RUN_PROMPT
+  }
+
+  if (env.MOCK_GH_WORKFLOW_RUN_CORRELATION !== undefined) {
+    childEnv.MOCK_GH_WORKFLOW_RUN_CORRELATION =
+      env.MOCK_GH_WORKFLOW_RUN_CORRELATION
   }
 
   const result = Bun.spawnSync(['bash', scriptPath], {
@@ -431,6 +448,28 @@ describe('release-notes-ci successCmd smoke tests', () => {
   )
 
   // -------------------------------------------------------------------------
+  // 5b. Edge case — unexpected non-zero WATCH_EXIT (not 124, not 0)
+  // -------------------------------------------------------------------------
+  it.skipIf(!successCmdAvailable)(
+    'exits 1 with ::error:: for unexpected gh run watch exit (e.g., SIGKILL via 137)',
+    () => {
+      const result = run({
+        RELEASE_VERSION: 'v2.23.0',
+        // Common signal-propagation exit code: 128 + 9 (SIGKILL) = 137
+        MOCK_GH_RUN_WATCH_EXIT: '137',
+        MOCK_GH_RUN_VIEW_CONCLUSION: 'failure',
+      })
+
+      expect(result.exitCode).toBe(1)
+      const combined = result.stdout + result.stderr
+      expect(combined).toContain('::error::')
+      expect(combined).toMatch(/unexpected gh run watch exit/i)
+      expect(combined).toContain('WATCH_EXIT=137')
+    },
+    SCENARIO_TIMEOUT_MS,
+  )
+
+  // -------------------------------------------------------------------------
   // 6. Edge case — dispatch not registered within 90s
   // -------------------------------------------------------------------------
   it.skipIf(!successCmdAvailable)(
@@ -523,12 +562,17 @@ exit 1
         { databaseId: 12345 },
       ])
 
+      // Use a specific correlation token so the script and the custom mock's
+      // run-12345 log agree on the exact match value. The custom mock returns
+      // "no correlation here" for run 99999, so only run 12345's log matches.
+      const knownCorrelation = 'second-run-correlation-token'
       const result = runSuccessCmd(
         scriptPath,
         {
           RELEASE_VERSION: 'v2.23.0',
+          RELEASE_NOTES_TEST_CORRELATION_ID: knownCorrelation,
           MOCK_GH_RUN_LIST_JSON: runListJson,
-          MOCK_GH_RUN_VIEW_LOG: 'correlation=PLACEHOLDER\nsome log',
+          MOCK_GH_RUN_VIEW_LOG: `correlation=${knownCorrelation}\nsome log`,
           MOCK_GH_RUN_VIEW_CONCLUSION: 'success',
           MOCK_GH_RELEASE_VIEW_BODY_LEN: '800',
         },
@@ -753,14 +797,21 @@ exit 1
   // 18. Integration — prompt construction includes correlation token, target tag, repo name
   // -------------------------------------------------------------------------
   it.skipIf(!successCmdAvailable)(
-    'prompt passed to gh workflow run contains correlation token, target tag, and repo name',
+    'prompt and correlation-id are forwarded to gh workflow run as separate -f fields',
     () => {
       const promptCapturePath = path.join(testTempDir, 'captured-prompt.txt')
+      const correlationCapturePath = path.join(
+        testTempDir,
+        'captured-correlation.txt',
+      )
+      const knownCorrelationId = 'test-known-correlation-uuid-for-scenario-18'
 
       const result = run({
         RELEASE_VERSION: 'v2.23.0',
         GITHUB_REPOSITORY: 'marcusrbrown/systematic',
+        RELEASE_NOTES_TEST_CORRELATION_ID: knownCorrelationId,
         MOCK_GH_WORKFLOW_RUN_PROMPT: promptCapturePath,
+        MOCK_GH_WORKFLOW_RUN_CORRELATION: correlationCapturePath,
         MOCK_GH_RUN_VIEW_CONCLUSION: 'success',
         MOCK_GH_RELEASE_VIEW_BODY_LEN: '800',
       })
@@ -769,9 +820,8 @@ exit 1
       const combined = result.stdout + result.stderr
       expect(combined).toContain('workflow_dispatch event')
 
-      // The captured prompt file must exist
+      // The captured prompt file must exist with the embedded correlation token
       expect(fs.existsSync(promptCapturePath)).toBe(true)
-
       const capturedPrompt = fs.readFileSync(promptCapturePath, 'utf8')
 
       // Must contain the target tag
@@ -782,11 +832,21 @@ exit 1
       // biome-ignore lint/suspicious/noTemplateCurlyInString: Asserting the prompt does NOT contain the literal GitHub workflow-expression syntax `${{ github.repository }}`, which is the failure mode being guarded against.
       expect(capturedPrompt).not.toContain('${{ github.repository }}')
 
-      // Must contain a correlation token reference
-      // The prompt's first line should be `correlation=<uuid>` and the
-      // instruction text must explicitly require Fro Bot to echo it.
+      // Must contain the correlation token as a first-line reference
+      // and an instruction telling Fro Bot to echo it.
       expect(capturedPrompt).toMatch(/^correlation=[a-zA-Z0-9-]+/m)
+      expect(capturedPrompt).toContain(`correlation=${knownCorrelationId}`)
       expect(capturedPrompt).toMatch(/echo.*correlation/i)
+
+      // The correlation-id MUST be forwarded as a separate `-f correlation-id=<value>`
+      // argument, not just embedded in the prompt body. Without this assertion,
+      // accidentally deleting the `-f "correlation-id=$CORRELATION_ID"` line in
+      // the dispatch would silently pass the prompt-construction test.
+      expect(fs.existsSync(correlationCapturePath)).toBe(true)
+      const capturedCorrelation = fs
+        .readFileSync(correlationCapturePath, 'utf8')
+        .trim()
+      expect(capturedCorrelation).toBe(knownCorrelationId)
     },
     SCENARIO_TIMEOUT_MS,
   )

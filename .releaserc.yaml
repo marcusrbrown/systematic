@@ -151,9 +151,18 @@ plugins:
 
         # Classify outcome by precedence. Security-relevant failures exit 1 with ::error::.
         # Narrative failures exit 0 with ::warning::. Happy path exits 0 with plain stdout.
+        # WATCH_EXIT semantics: 0 = run completed (classify by CONCLUSION below),
+        # 124 = timeout (narrative-failure), any other non-zero = unexpected (security-relevant).
+        # The "unexpected" branch covers runner crashes, gh CLI bugs, signal propagation, and
+        # any future gh run watch exit codes we haven't anticipated. Without this branch,
+        # an unexpected WATCH_EXIT falls through to CONCLUSION classification which may
+        # report "unknown" and silently exit 0.
         if [ "$WATCH_EXIT" -eq 124 ]; then
           echo "::warning::Fro Bot run timed out after 10 minutes (run=$RUN_ID, correlation=$CORRELATION_ID)"
           exit 0
+        elif [ "$WATCH_EXIT" -ne 0 ]; then
+          echo "::error::Unexpected gh run watch exit (WATCH_EXIT=$WATCH_EXIT, run=$RUN_ID, correlation=$CORRELATION_ID). May indicate a runner crash, gh CLI bug, or signal propagation."
+          exit 1
         elif [ -n "$OFF_TARGET" ]; then
           echo "::error::Off-target release edit detected (run=$RUN_ID): $OFF_TARGET"
           exit 1

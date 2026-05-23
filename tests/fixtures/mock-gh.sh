@@ -8,7 +8,8 @@
 #   MOCK_GH_RUN_VIEW_CONCLUSION    JSON for `gh run view --json conclusion`
 #   MOCK_GH_RUN_WATCH_EXIT         Exit code for `gh run watch`
 #   MOCK_GH_RELEASE_VIEW_BODY_LEN  Integer body length for `gh release view --json body`
-#   MOCK_GH_WORKFLOW_RUN_PROMPT    File path where the dispatched prompt is written
+#   MOCK_GH_WORKFLOW_RUN_PROMPT       File path where the dispatched prompt is written
+#   MOCK_GH_WORKFLOW_RUN_CORRELATION  File path where the dispatched correlation-id is written
 #
 # Subcommand dispatch: $1 = top-level subcommand (workflow, run, release)
 
@@ -23,15 +24,16 @@ case "$SUBCOMMAND" in
     WORKFLOW_SUB="${2:-}"
     if [[ "$WORKFLOW_SUB" == "run" ]]; then
       # Capture the prompt argument if MOCK_GH_WORKFLOW_RUN_PROMPT is set.
-      if [[ -n "${MOCK_GH_WORKFLOW_RUN_PROMPT:-}" ]]; then
-        # Walk args looking for -f prompt=... or -f "prompt=..."
-        for arg in "$@"; do
-          if [[ "$arg" == prompt=* ]]; then
-            printf '%s' "${arg#prompt=}" > "$MOCK_GH_WORKFLOW_RUN_PROMPT"
-            break
-          fi
-        done
-      fi
+      # Capture the correlation-id argument if MOCK_GH_WORKFLOW_RUN_CORRELATION is set.
+      # The two captures are independent so scenarios can verify the dispatch
+      # forwards both fields, not just the prompt.
+      for arg in "$@"; do
+        if [[ -n "${MOCK_GH_WORKFLOW_RUN_PROMPT:-}" && "$arg" == prompt=* ]]; then
+          printf '%s' "${arg#prompt=}" > "$MOCK_GH_WORKFLOW_RUN_PROMPT"
+        elif [[ -n "${MOCK_GH_WORKFLOW_RUN_CORRELATION:-}" && "$arg" == correlation-id=* ]]; then
+          printf '%s' "${arg#correlation-id=}" > "$MOCK_GH_WORKFLOW_RUN_CORRELATION"
+        fi
+      done
       echo "Created workflow_dispatch event for fro-bot.yaml at refs/heads/main"
       exit 0
     fi
