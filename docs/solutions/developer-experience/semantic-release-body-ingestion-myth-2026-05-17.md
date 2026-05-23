@@ -141,3 +141,4 @@ fi
 - `docs/solutions/developer-experience/gh-api-heredoc-backtick-escape-2026-05-17.md` — sibling lesson from the same release; both involve `gh` CLI body content
 - `.releaserc.yaml` — the source of truth for the plugin chain and section mapping
 - PR #401 / v2.19.0 — where this lesson was empirically verified
+- `.agents/skills/release-notes-narrative/SKILL.md` — formalized procedure for the post-publish patch recommended above
