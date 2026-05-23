@@ -25,6 +25,7 @@ Each skill is a directory containing a `SKILL.md` file with YAML frontmatter. Op
 | Skill | Description |
 |-------|-------------|
 | `generating-project-docs` | Create, refresh, or update project-level docs (`README.md`, `ARCHITECTURE.md`, `STRUCTURE.md`) — derives all facts from the live repo |
+| `release-notes-narrative` | Rewrite terse bucket bullets or spurious `closes [URL-fragment]` autolinks in a semantic-release GitHub release into proper narrative drawn from commit bodies and PR descriptions |
 
 ## Adding a new skill here
 
