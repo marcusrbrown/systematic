@@ -33,7 +33,9 @@ tests/tmp/
 # Docs build artifacts
 docs/dist/
 docs/.astro/
-docs/src/content/docs/reference/
+# Generated reference pages (skills/, agents/) are regenerated at docs:generate time
+docs/src/content/docs/reference/skills/
+docs/src/content/docs/reference/agents/
 # Latest schema mirror is regenerated at docs:generate time (derivative of v<MAJOR>/)
 docs/public/schemas/latest/
 

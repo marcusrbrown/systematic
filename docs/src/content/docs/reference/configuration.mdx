@@ -1,0 +1,500 @@
+---
+title: Configuration
+description: Customize Systematic through config files, agent overlays, and project-specific content.
+---
+
+Systematic works out of the box with sensible defaults. This page covers every way to customize its behavior.
+
+## Config File Locations
+
+Systematic looks for configuration in three places, checked in this order (highest priority first):
+
+1. **Custom config directory:** `$OPENCODE_CONFIG_DIR/systematic.{json,jsonc}`
+2. **Project-specific:** `.opencode/systematic.{json,jsonc}`
+3. **Global:** `~/.config/opencode/systematic.{json,jsonc}`
+
+When both `.jsonc` and `.json` exist in the same directory, `.jsonc` takes precedence and `.json` is silently ignored. This lets you add comments to your config without renaming the existing file.
+
+## Common Examples
+
+### Disabling bundled content
+
+```json
+{
+  "disabled_skills": ["git-worktree"],
+  "disabled_agents": []
+}
+```
+
+### Tuning agents by category
+
+```jsonc
+{
+  "categories": {
+    // Applies to bundled agents in agents/review/*.md unless that agent has
+    // been replaced by a native OpenCode agent with the same emitted key.
+    "review": {
+      "temperature": 0.1,
+      "steps": 12
+    }
+  }
+}
+```
+
+### Tuning a specific agent
+
+```jsonc
+{
+  "agents": {
+    "security-sentinel": {
+      // User or custom config only; project config cannot choose model/provider routing.
+      "model": "anthropic/claude-sonnet-4-5",
+      "variant": "thinking",
+      "temperature": 0.2,
+      "steps": 30
+    }
+  }
+}
+```
+
+## Trust Boundaries
+
+Fields that control provider routing or capability policy — `model`, `variant`, `permission`, and `skills` — are accepted only from user config (`~/.config/opencode/systematic.json`) or `$OPENCODE_CONFIG_DIR/systematic.json`. Project config may tune non-sensitive fields such as `temperature`, `top_p`, `mode`, `color`, `steps`, `hidden`, or exact-agent `disable`, but it cannot choose model/provider routing or loosen permission/capability policy.
+
+A typo in `agents.<key>`, `disabled_agents`, or `disabled_skills` fails loudly with a clear error that names the offending key — no silent misconfiguration.
+
+## Agent and Category Overlays
+
+Use top-level `agents` and `categories` maps to tune bundled Systematic agents without copying their markdown files into native OpenCode agent definitions.
+
+Overlay application precedence for a Systematic-owned bundled agent (strongest first):
+
+1. Exact `agents.<key>` overlay (high-trust `model` wins)
+2. `categories.<category-id>` overlay (high-trust `model` wins)
+3. Source category model default (built-in, code-owned)
+4. Bundled markdown/frontmatter defaults
+5. OpenCode inherited defaults
+
+If you want to restore OpenCode parent-model inheritance for a bundled agent or category (opting out of the source default), set `"model": null` in high-trust user or `$OPENCODE_CONFIG_DIR/systematic.json` config. Project config cannot set, erase, or shadow `model` at any value.
+
+### Source Category Model Defaults
+
+The following source defaults apply to bundled Systematic agents by category when no stronger high-trust exact or category `model` override exists. The chain column shows the provider resolution order (first available provider/model wins); variants are shown as `+variant` suffixes. Run `bun run docs:generate` to regenerate this table from source.
+
+{/* SYSTEMATIC:SOURCE-DEFAULTS:START */}
+| Category | Chain | Rationale | When to Override |
+| --- | --- | --- | --- |
+| design | github-copilot/gemini-3.1-pro-preview, openai/gpt-5.5+high, anthropic/claude-opus-4-7+max, … | High-judgment UX, product, and design work benefits from a strong general reasoning model with broad creative capability. | Override to a faster/cheaper model when design tasks are primarily templating or low-stakes layout work. |
+| docs | github-copilot/gemini-3.1-pro-preview, openai/gpt-5.4-mini, anthropic/claude-haiku-4-5, … | Documentation and summarization tasks should start cheaper and faster; quality is sufficient at mid-tier models. | — |
+| document-review | anthropic/claude-opus-4-7+max, openai/gpt-5.5+high, github-copilot/gemini-3.1-pro-preview, … | Requirements and plan critique benefit from the strongest nuanced reasoning to surface non-obvious gaps and contradictions. | — |
+| research | openai/gpt-5.4-mini, anthropic/claude-sonnet-4-6, github-copilot/gemini-3.1-pro-preview, … | Tool-heavy synthesis and source evaluation benefit from a strong general reasoning model with broad knowledge. | — |
+| review | anthropic/claude-sonnet-4-6, openai/gpt-5.3-codex, github-copilot/gemini-3.1-pro-preview, … | Code, security, and adversarial review benefits from the strongest reasoning to catch subtle bugs and security issues. | Override to a faster model when review tasks are primarily style or formatting checks rather than correctness or security analysis. |
+| workflow | openai/gpt-5.4-mini, anthropic/claude-sonnet-4-6, opencode/claude-haiku-4-5, … | Orchestration and bounded implementation tasks should default cheaper and faster; strong reasoning is rarely needed for routing decisions. | — |
+{/* SYSTEMATIC:SOURCE-DEFAULTS:END */}
+
+These defaults are owned by Systematic code and emitted only for Systematic-owned bundled agents. Uncategorized bundled agents receive no source default and continue inheriting the parent OpenCode model.
+
+## Schema and Autocomplete
+
+Add a `$schema` field to your `systematic.json` to enable per-key autocomplete in editors that honor JSON Schema property completion:
+
+```jsonc
+{
+  "$schema": "https://fro.bot/systematic/schemas/v2/systematic-config.schema.json",
+
+  "disabled_skills": ["git-worktree"],
+  "agents": {
+    "correctness-reviewer": { "temperature": 0.1 },
+    "security-reviewer": { "steps": 20 }
+  }
+}
+```
+
+VS Code is the reference target — it picks up `$schema` automatically and provides inline completion, hover documentation, and validation squiggles. Zed, IntelliJ, and other editors that support JSON Schema property completion will also benefit, though support varies by editor version.
+
+## Typed Validation
+
+Since v2.15.0, Systematic validates `agents.<key>`, `disabled_agents`, and `disabled_skills` against the actual set of bundled names at load time. A typo fails loudly with a clear error that names the offending key. The valid bundled names are listed in the error when validation fails, so the error message is the fix.
+
+If your config contains a typo in any of these fields, Systematic will fail to load on upgrade and surface the error. The fix is to correct the key to a valid bundled name.
+
+---
+
+## Field Reference
+
+The sections below are auto-generated from `src/lib/config-schema.ts`. Do NOT edit the content between the `SYSTEMATIC:FIELD-REFERENCE` markers — run `bun run docs:generate` to regenerate.
+
+{/* SYSTEMATIC:FIELD-REFERENCE:START */}
+## Agent/Category Overlay Fields
+
+The `agents` and `categories` sections share the same set of per-entry overlay fields.
+Each key under `agents` or `categories` is an object with the following fields.
+(The `disable` field is only valid under `agents`, not `categories`.)
+
+### model
+
+Model identifier in provider/model format, or null to inherit parent model
+
+**Type:** `string` | `null`
+
+**Examples:**
+
+```json
+anthropic/claude-sonnet-4
+```
+
+```json
+null
+```
+
+### variant
+
+Model variant identifier
+
+**Type:** `string`
+
+**Examples:**
+
+```json
+v2
+```
+
+```json
+extended
+```
+
+### temperature
+
+Sampling temperature (≥0; 0 = deterministic)
+
+**Type:** `number`
+
+**Examples:**
+
+```json
+0.1
+```
+
+```json
+0.7
+```
+
+```json
+0
+```
+
+### top_p
+
+Nucleus sampling parameter (0 to 1)
+
+**Type:** `number`
+
+**Examples:**
+
+```json
+0.9
+```
+
+```json
+0.1
+```
+
+```json
+1
+```
+
+### mode
+
+Agent execution mode
+
+**Type:** `string`
+
+**Valid values:** `subagent`, `primary`, `all`
+
+**Examples:**
+
+```json
+subagent
+```
+
+```json
+primary
+```
+
+```json
+all
+```
+
+### color
+
+Agent color — named token from OpenCode or 6-digit hex color (#RRGGBB)
+
+**Type:** `string` | `string`
+
+**Examples:**
+
+```json
+primary
+```
+
+```json
+#ff6600
+```
+
+### steps
+
+Maximum execution steps (positive integer)
+
+**Type:** `integer`
+
+**Examples:**
+
+```json
+10
+```
+
+```json
+50
+```
+
+### hidden
+
+Hide agent from UI
+
+**Type:** `boolean`
+
+**Examples:**
+
+```json
+true
+```
+
+```json
+false
+```
+
+### disable
+
+Disable this agent overlay
+
+**Type:** `boolean`
+
+**Examples:**
+
+```json
+true
+```
+
+```json
+false
+```
+
+### skills
+
+Skills enabled for this agent
+
+**Type:** `string`[]
+
+**Examples:**
+
+```json
+[
+  "ce:plan",
+  "ce:review"
+]
+```
+
+### permission
+
+Permission overrides per tool
+
+**Type:** `object`
+
+**Examples:**
+
+```json
+{
+  "edit": "allow",
+  "bash": {
+    "curl": "allow",
+    "rm": "deny"
+  }
+}
+```
+
+## $schema
+
+JSON Schema URL for IDE autocomplete. The value is informational only — the loader does not fetch or validate against it. Add this to enable IDE schema activation and field-level autocomplete in editors that support JSON Schema (VSCode, Zed, IntelliJ).
+
+**Type:** `string`
+
+**Examples:**
+
+```json
+"$schema": "https://fro.bot/systematic/schemas/v2/systematic-config.schema.json"
+```
+
+## agents
+
+Per-agent configuration overlays keyed by bundled agent name (bare or qualified category/name). Unknown keys are rejected with a Zod parse error. To overlay a user-defined agent, configure it through OpenCode-native config (.opencode/opencode.json) instead.
+
+**Type:** `object`
+**Default:** `{}`
+**Examples:**
+
+```json
+{
+  "correctness-reviewer": {
+    "temperature": 0.1
+  }
+}
+```
+
+```json
+{
+  "review/correctness-reviewer": {
+    "temperature": 0.1
+  }
+}
+```
+
+```json
+{}
+```
+
+
+Per-entry overlay fields are documented in the [Agent/Category Overlay Fields](#agentcategory-overlay-fields) section above.
+
+## categories
+
+Per-category configuration overlays keyed by category name
+
+**Type:** `object`
+**Default:** `{}`
+**Examples:**
+
+```json
+{
+  "review": {
+    "model": "anthropic/claude-opus-4-7"
+  }
+}
+```
+
+```json
+{}
+```
+
+
+Per-entry overlay fields are documented in the [Agent/Category Overlay Fields](#agentcategory-overlay-fields) section above.
+
+## disabled_skills
+
+Array of bundled skill names to disable globally. Unknown skill names are rejected at parse time.
+
+**Type:** `string`[]
+**Default:** `[]`
+**Examples:**
+
+```json
+[
+  "ce:plan",
+  "ce:review"
+]
+```
+
+
+## disabled_agents
+
+Array of bundled agent names (bare or qualified category/name) to disable globally. Unknown agent names are rejected at parse time.
+
+**Type:** `string`[]
+**Default:** `[]`
+**Examples:**
+
+```json
+[
+  "previous-comments-reviewer",
+  "cli-readiness-reviewer"
+]
+```
+
+```json
+[
+  "review/security-reviewer"
+]
+```
+
+
+## disabled_commands
+
+Array of command names to disable globally
+
+**Type:** `string`[]
+**Default:** `[]`
+**Examples:**
+
+```json
+[
+  "deprecated-migration-helper"
+]
+```
+
+
+## bootstrap
+
+Bootstrap prompt configuration
+
+**Type:** `object`
+**Default:** `{"enabled":true}`
+**Examples:**
+
+```json
+{
+  "enabled": true
+}
+```
+
+```json
+{
+  "enabled": false,
+  "file": ".opencode/custom-prompt.md"
+}
+```
+
+
+### enabled
+
+Enable bootstrap prompt injection into every conversation
+
+**Type:** `boolean`
+**Default:** `true`
+
+**Examples:**
+
+```json
+true
+```
+
+```json
+false
+```
+
+
+### file
+
+Path to a custom bootstrap prompt file
+
+**Type:** `string`
+
+**Examples:**
+
+```json
+~/.config/opencode/bootstrap.md
+```
+
+
+## Offline IDE behavior
+
+The schema's `$id` points to the canonical online URL above, so IDEs that prefer fetching the canonical schema may attempt to reach the docs site even when the bundled npm copy is also on disk. If you need strict offline behavior, configure your editor to associate `systematic.{json,jsonc}` with `node_modules/@fro.bot/systematic/dist/schemas/systematic-config.schema.json` directly.
+{/* SYSTEMATIC:FIELD-REFERENCE:END */}

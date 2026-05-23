@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   DEFAULT_CONFIG,
   getConfigPaths,
@@ -919,7 +920,7 @@ describe('config', () => {
       expect(errorMessage).toContain(configPath)
       expect(errorMessage).toContain('security-reviwer')
       expect(errorMessage).toContain(
-        'https://systematic.fro.bot/getting-started/configuration#typed-validation',
+        'https://fro.bot/systematic/reference/configuration#typed-validation',
       )
     })
 
@@ -941,7 +942,7 @@ describe('config', () => {
 
     describe('enrichUnrecognizedKeyIssues — verbose enum suppression and multi-key handling', () => {
       const DOCS_URL =
-        'https://systematic.fro.bot/getting-started/configuration#typed-validation'
+        'https://fro.bot/systematic/reference/configuration#typed-validation'
 
       // #385 — suppress verbose enum list in disabled_agents / disabled_skills errors
 
@@ -1323,5 +1324,74 @@ describe('config', () => {
       const result = loadConfig(testDir)
       expect(result.disabled_skills).toEqual([])
     })
+  })
+})
+
+// The TYPED_VALIDATION_DOCS_URL constant in src/lib/config.ts is surfaced
+// directly to end users in validation error messages. These tests catch two
+// classes of drift on that URL: the host and base-path (correct DNS target)
+// and the fragment (a heading that actually exists in the rendered docs).
+
+describe('TYPED_VALIDATION_DOCS_URL', () => {
+  const __dirname = path.dirname(fileURLToPath(import.meta.url))
+  const CONFIG_TS = path.resolve(__dirname, '../../src/lib/config.ts')
+  const CONFIG_MDX = path.resolve(
+    __dirname,
+    '../../docs/src/content/docs/reference/configuration.mdx',
+  )
+
+  /**
+   * Extract the literal URL string assigned to TYPED_VALIDATION_DOCS_URL
+   * from the source file. Reading the source avoids coupling the test to
+   * the module export shape and matches how other constants in this file
+   * are validated.
+   */
+  function readTypedValidationDocsUrl(): string {
+    const source = fs.readFileSync(CONFIG_TS, 'utf-8')
+    const match = source.match(
+      /TYPED_VALIDATION_DOCS_URL\s*=\s*\n?\s*'([^']+)'/,
+    )
+    if (!match) {
+      throw new Error('Could not locate TYPED_VALIDATION_DOCS_URL in config.ts')
+    }
+    return match[1]
+  }
+
+  test('URL points at fro.bot/systematic (host drift regression)', () => {
+    // The subdomain form `systematic.fro.bot` does not resolve in DNS.
+    // The production site is served from `https://fro.bot/systematic/`
+    // (matches `site` + `base` in docs/astro.config.mjs).
+    const url = readTypedValidationDocsUrl()
+    expect(url).toMatch(/^https:\/\/fro\.bot\/systematic\//)
+    expect(url).toContain('#typed-validation')
+  })
+
+  /**
+   * Derive heading slugs from MDX content using Starlight's conservative
+   * slugify rules: lowercase, spaces → hyphens, strip non-alphanumeric-or-hyphen.
+   */
+  function slugify(heading: string): string {
+    return heading
+      .toLowerCase()
+      .replace(/\s+/g, '-')
+      .replace(/[^a-z0-9-]/g, '')
+  }
+
+  function extractHeadingSlugs(mdx: string): Set<string> {
+    const slugs = new Set<string>()
+    for (const line of mdx.split('\n')) {
+      const m = line.match(/^#{1,6}\s+(.+)$/)
+      if (m) {
+        slugs.add(slugify(m[1].trim()))
+      }
+    }
+    return slugs
+  }
+
+  test('configuration.mdx contains a heading that slugifies to "typed-validation"', () => {
+    expect(fs.existsSync(CONFIG_MDX)).toBe(true)
+    const mdx = fs.readFileSync(CONFIG_MDX, 'utf-8')
+    const slugs = extractHeadingSlugs(mdx)
+    expect(slugs.has('typed-validation')).toBe(true)
   })
 })
