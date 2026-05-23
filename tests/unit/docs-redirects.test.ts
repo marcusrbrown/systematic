@@ -38,17 +38,19 @@ describe('astro.config.mjs redirects', () => {
     expect(Object.keys(redirects).length).toBeGreaterThan(0)
   })
 
-  test('/getting-started/configuration/ redirects to /reference/configuration/', () => {
+  test('/getting-started/configuration/ redirects to /systematic/reference/configuration/', () => {
     const source = fs.readFileSync(ASTRO_CONFIG_PATH, 'utf-8')
     const r = extractRedirects(source)
     expect(r['/getting-started/configuration/']).toBe(
-      '/reference/configuration/',
+      '/systematic/reference/configuration/',
     )
   })
 
-  test('/reference/systematic-config/ redirects to /reference/configuration/', () => {
+  test('/reference/systematic-config/ redirects to /systematic/reference/configuration/', () => {
     const source = fs.readFileSync(ASTRO_CONFIG_PATH, 'utf-8')
     const r = extractRedirects(source)
-    expect(r['/reference/systematic-config/']).toBe('/reference/configuration/')
+    expect(r['/reference/systematic-config/']).toBe(
+      '/systematic/reference/configuration/',
+    )
   })
 })

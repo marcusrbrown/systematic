@@ -7,8 +7,8 @@ export default defineConfig({
   base: '/systematic',
   trailingSlash: 'always',
   redirects: {
-    '/getting-started/configuration/': '/reference/configuration/',
-    '/reference/systematic-config/': '/reference/configuration/',
+    '/getting-started/configuration/': '/systematic/reference/configuration/',
+    '/reference/systematic-config/': '/systematic/reference/configuration/',
   },
   markdown: {
     rehypePlugins: [
