@@ -310,11 +310,15 @@ beforeEach(() => {
   // expression with `${RELEASE_VERSION:-v2.23.0}` (a bash env var the test sets).
   if (successCmdAvailable) {
     scriptPath = path.join(testTempDir, 'successCmd.sh')
-    const lodashSubstituted = successCmdScript.replace(
-      /\$\{nextRelease\.gitTag\}/g,
-      // biome-ignore lint/suspicious/noTemplateCurlyInString: Literal bash parameter expansion, not a JS template placeholder. The string is written verbatim into the bash script.
-      '${RELEASE_VERSION:-v2.23.0}',
-    )
+    // The YAML successCmd escapes all bash ${...} as \${...} so Lodash passes them
+    // through unmodified. In tests we bypass semantic-release, so we must:
+    //   1. Unescape \${...} → ${...} (undo the Lodash escaping).
+    //   2. Replace ${nextRelease.gitTag} with ${RELEASE_VERSION:-v2.23.0} (simulate
+    //      the Lodash interpolation that semantic-release would normally perform).
+    // biome-ignore lint/suspicious/noTemplateCurlyInString: Literal bash parameter expansions written verbatim into the bash script — not JS template placeholders.
+    const lodashSubstituted = successCmdScript
+      .replace(/\\\$/g, '$')
+      .replace(/\$\{nextRelease\.gitTag\}/g, '${RELEASE_VERSION:-v2.23.0}')
     fs.writeFileSync(
       scriptPath,
       `#!/usr/bin/env bash\nset -Eeuo pipefail\n${lodashSubstituted}\n`,
