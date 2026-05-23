@@ -112,7 +112,7 @@ Add a `$schema` field to your `systematic.json` to enable per-key autocomplete i
 
 VS Code is the reference target — it picks up `$schema` automatically and provides inline completion, hover documentation, and validation squiggles. Zed, IntelliJ, and other editors that support JSON Schema property completion will also benefit, though support varies by editor version.
 
-## Typed Validation {#typed-validation}
+## Typed Validation
 
 Since v2.15.0, Systematic validates `agents.<key>`, `disabled_agents`, and `disabled_skills` against the actual set of bundled names at load time. A typo fails loudly with a clear error that names the offending key. The valid bundled names are listed in the error when validation fails, so the error message is the fix.
 
