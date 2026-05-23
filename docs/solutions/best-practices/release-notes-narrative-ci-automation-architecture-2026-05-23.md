@@ -68,7 +68,7 @@ fro-bot.yaml (called via workflow_call)
               └─ apply via gh release edit --notes-file (using FRO_BOT_PAT)
 ```
 
-The successCmd is implemented as an inline multi-line YAML literal block (~140 lines) rather than a separate `scripts/dispatch-release-notes.sh`. The logic is bounded, fits cleanly into `.releaserc.yaml`, and avoids a second editing surface for related logic. If the dispatch logic grows beyond ~200 lines in a future iteration, extraction to a script becomes worthwhile.
+The successCmd is implemented as `scripts/dispatch-release-notes.sh`, invoked from `.releaserc.yaml` via a one-line `successCmd:` field. See "External script for shell logic" in Key Design Decisions for why the inline approach was abandoned after two production failures.
 
 ## Key Design Decisions
 
@@ -103,6 +103,20 @@ This eliminates the false-match class entirely. The cost is a 5-second polling i
 `@semantic-release/exec` resolves `${nextRelease.gitTag}` (and other context keys like `${nextRelease.version}`) via Lodash templating BEFORE handing the resulting string to the shell. After resolution, the bash block sees a literal value like `v2.23.0` — no shell variable expansion is happening at that point.
 
 The implementer must use `${...}` for Lodash-template context keys and `$VAR` for runtime bash variables. Mixing the two in the same expression is a common source of bugs. The successCmd documents this in a header comment, and the integration test verifies it by substituting `${nextRelease.gitTag}` with a bash env var (`${RELEASE_VERSION:-v2.23.0}`) when writing the extracted script to a temp file. Production runs and tests exercise different substitution paths but produce equivalent semantic-release-style and bash-style behavior.
+
+### External script for shell logic
+
+**Supersedes the original "Inline successCmd" decision.** Two consecutive production releases (v2.23.0 and v2.23.1) failed with `SyntaxError: Unexpected token ':'` from bash `${VAR:-default}` parameter expansion being consumed by Lodash's template renderer before the string reached the shell.
+
+The root cause: `@semantic-release/exec` passes the entire `successCmd` YAML value through Lodash's `_.template()` with default interpolation settings (`${...}` delimiters). Lodash evaluates EVERY `${...}` occurrence as a JavaScript expression — including bash parameter expansions like `${VAR:-default}`, `${VAR:+value}`, and `${#VAR}`. The "escape as `\${VAR}`" workaround was attempted and empirically verified to fail: `template('\\${VAR}')({})` throws `ReferenceError: VAR is not defined` because Lodash's default template settings have no escape-sequence support for `${...}`.
+
+The fix: extract all bash logic to `scripts/dispatch-release-notes.sh` and reduce the YAML `successCmd:` to a single line containing only the one genuine Lodash interpolation:
+
+```yaml
+successCmd: 'scripts/dispatch-release-notes.sh "${nextRelease.gitTag}"'
+```
+
+After Lodash rendering, the shell sees `scripts/dispatch-release-notes.sh "v2.23.2"`. The script receives the tag as `$1` and is otherwise an ordinary shell script with no Lodash surface. The Lodash template surface shrinks from ~170 lines to one trivial line containing only the interpolation we WANT Lodash to perform.
 
 ### Skill stays the single source of truth, with optional CI escape hatches
 

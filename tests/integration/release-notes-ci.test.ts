@@ -1,19 +1,17 @@
 /**
- * Smoke tests for the successCmd bash logic embedded in .releaserc.yaml.
+ * Smoke tests for the successCmd bash logic in scripts/dispatch-release-notes.sh.
  *
- * Strategy: extract the successCmd block from .releaserc.yaml at test runtime,
- * write it to a temp shell file, and invoke it with a mock `gh` binary on PATH.
- * The mock binary's behavior is controlled per-scenario via environment variables.
+ * Strategy: copy scripts/dispatch-release-notes.sh to a temp dir and invoke it
+ * with a mock `gh` binary on PATH. The mock binary's behavior is controlled
+ * per-scenario via environment variables.
  *
- * The test fails loudly if .releaserc.yaml is missing the successCmd block,
- * which prevents drift between the plugin config and this test suite.
- *
- * All 18 scenarios are covered:
+ * All 22 scenarios are covered:
  *  1.  Validation — invalid RELEASE_VERSION
  *  2.  Validation — valid pre-release (v2.23.0-rc.1)
  *  3.  Happy path — success conclusion + valid body length
  *  4.  Happy path — neutral conclusion (idempotent short-circuit)
  *  5.  Edge case — timeout (WATCH_EXIT=124)
+ *  5b. Edge case — unexpected non-zero WATCH_EXIT (e.g., 137)
  *  6.  Edge case — dispatch not registered within 90s
  *  7.  Edge case — correlation token matches second-newest run, not first
  *  8.  Error — HTTP 401 auth denial
@@ -39,76 +37,12 @@ import path from 'node:path'
 // ---------------------------------------------------------------------------
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..')
-const RELEASERC_PATH = path.join(REPO_ROOT, '.releaserc.yaml')
+const SCRIPT_PATH = path.join(REPO_ROOT, 'scripts/dispatch-release-notes.sh')
 const MOCK_GH_PATH = path.join(REPO_ROOT, 'tests/fixtures/mock-gh.sh')
 
 // Timeout per scenario — the successCmd has a 90s polling loop; we cap it
 // tightly in tests by making the mock return immediately.
 const SCENARIO_TIMEOUT_MS = 30_000
-
-// ---------------------------------------------------------------------------
-// YAML successCmd extraction
-// ---------------------------------------------------------------------------
-
-/**
- * Extracts the successCmd block from .releaserc.yaml.
- *
- * The block is expected to appear as a YAML literal block scalar under the
- * @semantic-release/exec plugin entry:
- *
- *   - - '@semantic-release/exec'
- *     - successCmd: |
- *         <bash content>
- *
- * Returns null if the block is not present (e.g., the @semantic-release/exec plugin entry has not been added yet).
- */
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: YAML literal-block extraction inherently branches on indent levels, block boundaries, and blank-line handling — the cognitive load lives in the YAML grammar, not the code shape.
-function extractSuccessCmd(releasercContent: string): string | null {
-  // Find the successCmd: | line and capture everything indented beneath it.
-  const lines = releasercContent.split('\n')
-  let inSuccessCmd = false
-  let baseIndent = -1
-  const cmdLines: string[] = []
-
-  for (const line of lines) {
-    if (!inSuccessCmd) {
-      // Match lines like `    - successCmd: |` or `    successCmd: |`
-      // The key may be preceded by a YAML list marker `- `.
-      const match = line.match(/^(\s*)(?:-\s+)?successCmd:\s*\|\s*$/)
-      if (match) {
-        inSuccessCmd = true
-        // Determine content indent from the next non-blank line
-        // For now, use key indent + 4 (typical YAML literal block indent)
-        baseIndent = (match[1]?.length ?? 0) + 4
-      }
-    } else {
-      // We're inside the literal block. Lines that are more indented than
-      // baseIndent belong to the block; anything at or below baseIndent-2
-      // (the successCmd key's indent) ends the block.
-      if (line.trim() === '') {
-        // Blank lines are part of the literal block
-        cmdLines.push('')
-        continue
-      }
-      const indent = line.match(/^(\s*)/)?.[1]?.length ?? 0
-      if (indent < baseIndent) {
-        // End of literal block
-        break
-      }
-      // Strip exactly baseIndent spaces of leading whitespace
-      cmdLines.push(line.slice(baseIndent))
-    }
-  }
-
-  if (cmdLines.length === 0) return null
-
-  // Trim trailing blank lines
-  while (cmdLines.length > 0 && cmdLines[cmdLines.length - 1]?.trim() === '') {
-    cmdLines.pop()
-  }
-
-  return cmdLines.join('\n')
-}
 
 // ---------------------------------------------------------------------------
 // Test infrastructure
@@ -162,7 +96,8 @@ function makeRunListJson(entries: Array<{ databaseId: number }>): string {
 }
 
 /**
- * Runs the successCmd script in a temp directory with the mock-gh binary on PATH.
+ * Runs the dispatch-release-notes.sh script in a temp directory with the mock-gh binary on PATH.
+ * The script receives RELEASE_VERSION as its first positional argument.
  */
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Test scaffold consolidates default env-var wiring, correlation-token plumbing, log-prepending, and timeout escape hatches in one place by design — splitting into helpers would scatter related context across multiple functions.
 function runSuccessCmd(
@@ -213,9 +148,10 @@ function runSuccessCmd(
         ? '' // explicit empty — caller wants polling to fail
         : `${correlationLine}${providedLog}`
 
+  const releaseVersion = env.RELEASE_VERSION ?? 'v2.23.0'
+
   const childEnv: Record<string, string> = {
     PATH: `${mockBinDir}:${parentPath}`,
-    RELEASE_VERSION: env.RELEASE_VERSION ?? 'v2.23.0',
     GITHUB_REPOSITORY: env.GITHUB_REPOSITORY ?? 'marcusrbrown/systematic',
     MOCK_GH_RUN_LIST_JSON:
       env.MOCK_GH_RUN_LIST_JSON ?? makeRunListJson([{ databaseId: 12345 }]),
@@ -226,7 +162,7 @@ function runSuccessCmd(
     RELEASE_NOTES_TEST_CORRELATION_ID: defaultCorrelationId,
     HOME: process.env.HOME ?? '/tmp',
     TMPDIR: process.env.TMPDIR ?? '/tmp',
-    // Shorten polling and watch budgets so the 18 scenarios complete quickly.
+    // Shorten polling and watch budgets so the scenarios complete quickly.
     // Production runs use the default 90s / 5s / 600s values; tests use sub-second.
     RELEASE_NOTES_TEST_POLL_BUDGET_SECS:
       env.RELEASE_NOTES_TEST_POLL_BUDGET_SECS ?? '2',
@@ -245,7 +181,8 @@ function runSuccessCmd(
       env.MOCK_GH_WORKFLOW_RUN_CORRELATION
   }
 
-  const result = Bun.spawnSync(['bash', scriptPath], {
+  // The script receives RELEASE_VERSION as its first positional argument.
+  const result = Bun.spawnSync(['bash', scriptPath, releaseVersion], {
     env: childEnv,
     timeout: SCENARIO_TIMEOUT_MS,
   })
@@ -258,73 +195,22 @@ function runSuccessCmd(
 }
 
 // ---------------------------------------------------------------------------
-// Module-level setup: extract successCmd once
-// ---------------------------------------------------------------------------
-
-// Module-load-time extraction: it.skipIf() evaluates its predicate when it() is
-// invoked (module-load time), not when the test runs. beforeAll() runs too late
-// to flip the skip flag. Doing the extraction synchronously at module-load time
-// makes the predicate see the correct value.
-const successCmdScript: string = (() => {
-  if (!fs.existsSync(RELEASERC_PATH)) {
-    console.warn(
-      '[release-notes-ci] .releaserc.yaml not found — all scenarios will be skipped. ' +
-        'The @semantic-release/exec plugin entry must be present in .releaserc.yaml before these scenarios can run.',
-    )
-    return ''
-  }
-
-  const releasercContent = fs.readFileSync(RELEASERC_PATH, 'utf8')
-  const extracted = extractSuccessCmd(releasercContent)
-
-  if (extracted === null) {
-    console.warn(
-      '[release-notes-ci] successCmd block not found in .releaserc.yaml — ' +
-        'all scenarios will be skipped until the @semantic-release/exec plugin entry is added.',
-    )
-    return ''
-  }
-
-  return extracted
-})()
-
-const successCmdAvailable = successCmdScript.length > 0
-let scriptPath = ''
-
-// ---------------------------------------------------------------------------
 // Per-test temp directory
 // ---------------------------------------------------------------------------
 
 let testTempDir = ''
 let testMockBinDir = ''
+let scriptPath = ''
 
 beforeEach(() => {
   testTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'release-notes-ci-'))
   testMockBinDir = path.join(testTempDir, 'mock-bin')
   fs.mkdirSync(testMockBinDir, { recursive: true })
 
-  // Write the successCmd to a temp script file for this test.
-  // The production successCmd contains `${nextRelease.gitTag}` — a Lodash template
-  // that @semantic-release/exec resolves BEFORE handing the string to the shell.
-  // In tests we don't go through semantic-release, so we substitute the Lodash
-  // expression with `${RELEASE_VERSION:-v2.23.0}` (a bash env var the test sets).
-  if (successCmdAvailable) {
-    scriptPath = path.join(testTempDir, 'successCmd.sh')
-    // The YAML successCmd escapes all bash ${...} as \${...} so Lodash passes them
-    // through unmodified. In tests we bypass semantic-release, so we must:
-    //   1. Unescape \${...} → ${...} (undo the Lodash escaping).
-    //   2. Replace ${nextRelease.gitTag} with ${RELEASE_VERSION:-v2.23.0} (simulate
-    //      the Lodash interpolation that semantic-release would normally perform).
-    // biome-ignore lint/suspicious/noTemplateCurlyInString: Literal bash parameter expansions written verbatim into the bash script — not JS template placeholders.
-    const lodashSubstituted = successCmdScript
-      .replace(/\\\$/g, '$')
-      .replace(/\$\{nextRelease\.gitTag\}/g, '${RELEASE_VERSION:-v2.23.0}')
-    fs.writeFileSync(
-      scriptPath,
-      `#!/usr/bin/env bash\nset -Eeuo pipefail\n${lodashSubstituted}\n`,
-    )
-    fs.chmodSync(scriptPath, 0o755)
-  }
+  // Copy the canonical script to the per-test temp dir.
+  scriptPath = path.join(testTempDir, 'successCmd.sh')
+  fs.copyFileSync(SCRIPT_PATH, scriptPath)
+  fs.chmodSync(scriptPath, 0o755)
 })
 
 afterEach(() => {
@@ -347,7 +233,7 @@ describe('release-notes-ci successCmd smoke tests', () => {
   // -------------------------------------------------------------------------
   // 1. Validation — invalid RELEASE_VERSION
   // -------------------------------------------------------------------------
-  it.skipIf(!successCmdAvailable)(
+  it(
     'exits 1 and emits ::error:: for invalid RELEASE_VERSION shape',
     () => {
       const result = run({ RELEASE_VERSION: 'not-a-tag' })
@@ -365,7 +251,7 @@ describe('release-notes-ci successCmd smoke tests', () => {
   // -------------------------------------------------------------------------
   // 2. Validation — valid pre-release passes validation
   // -------------------------------------------------------------------------
-  it.skipIf(!successCmdAvailable)(
+  it(
     'accepts valid pre-release version v2.23.0-rc.1 and proceeds to dispatch',
     () => {
       const result = run({
@@ -386,7 +272,7 @@ describe('release-notes-ci successCmd smoke tests', () => {
   // -------------------------------------------------------------------------
   // 3. Happy path — success conclusion + valid body length
   // -------------------------------------------------------------------------
-  it.skipIf(!successCmdAvailable)(
+  it(
     'exits 0 with narrative-applied message on success conclusion and body length >= 200',
     () => {
       const correlationId = 'test-correlation-happy-path'
@@ -412,7 +298,7 @@ describe('release-notes-ci successCmd smoke tests', () => {
   // -------------------------------------------------------------------------
   // 4. Happy path — neutral conclusion (idempotent short-circuit)
   // -------------------------------------------------------------------------
-  it.skipIf(!successCmdAvailable)(
+  it(
     'exits 0 with no-action-taken message on neutral conclusion',
     () => {
       const result = run({
@@ -433,7 +319,7 @@ describe('release-notes-ci successCmd smoke tests', () => {
   // -------------------------------------------------------------------------
   // 5. Edge case — timeout (WATCH_EXIT=124)
   // -------------------------------------------------------------------------
-  it.skipIf(!successCmdAvailable)(
+  it(
     'exits 0 with ::warning:: annotation when gh run watch times out (exit 124)',
     () => {
       const result = run({
@@ -454,7 +340,7 @@ describe('release-notes-ci successCmd smoke tests', () => {
   // -------------------------------------------------------------------------
   // 5b. Edge case — unexpected non-zero WATCH_EXIT (not 124, not 0)
   // -------------------------------------------------------------------------
-  it.skipIf(!successCmdAvailable)(
+  it(
     'exits 1 with ::error:: for unexpected gh run watch exit (e.g., SIGKILL via 137)',
     () => {
       const result = run({
@@ -476,7 +362,7 @@ describe('release-notes-ci successCmd smoke tests', () => {
   // -------------------------------------------------------------------------
   // 6. Edge case — dispatch not registered within 90s
   // -------------------------------------------------------------------------
-  it.skipIf(!successCmdAvailable)(
+  it(
     'exits 1 with ::error:: when dispatched run is never found in run list',
     () => {
       // Return an empty run list so the correlation token is never matched
@@ -496,7 +382,7 @@ describe('release-notes-ci successCmd smoke tests', () => {
   // -------------------------------------------------------------------------
   // 7. Edge case — correlation token matches second-newest run, not first
   // -------------------------------------------------------------------------
-  it.skipIf(!successCmdAvailable)(
+  it(
     'uses the second run when correlation token only appears in its log',
     () => {
       // Two runs: 99999 (newest, no correlation match) and 12345 (second, matches)
@@ -596,7 +482,7 @@ exit 1
   // -------------------------------------------------------------------------
   // 8. Error — HTTP 401 auth denial
   // -------------------------------------------------------------------------
-  it.skipIf(!successCmdAvailable)(
+  it(
     'exits 1 with ::error:: Auth failure when log contains HTTP 401',
     () => {
       const result = run({
@@ -616,7 +502,7 @@ exit 1
   // -------------------------------------------------------------------------
   // 9. Error — HTTP 403 + permission denied
   // -------------------------------------------------------------------------
-  it.skipIf(!successCmdAvailable)(
+  it(
     'exits 1 with ::error:: Auth failure when log contains HTTP 403 and permission denied',
     () => {
       const result = run({
@@ -637,7 +523,7 @@ exit 1
   // -------------------------------------------------------------------------
   // 10. Error — "Resource not accessible" auth keyword
   // -------------------------------------------------------------------------
-  it.skipIf(!successCmdAvailable)(
+  it(
     'exits 1 with ::error:: Auth failure when log contains "Resource not accessible"',
     () => {
       const result = run({
@@ -658,7 +544,7 @@ exit 1
   // -------------------------------------------------------------------------
   // 11. Error — off-target tag edit (ANSI-stripped)
   // -------------------------------------------------------------------------
-  it.skipIf(!successCmdAvailable)(
+  it(
     'exits 1 with ::error:: Off-target when log contains ANSI-colored edit of a different tag',
     () => {
       // ANSI-colored log line: `gh release edit v9.9.9` in red
@@ -680,7 +566,7 @@ exit 1
   // -------------------------------------------------------------------------
   // 12. Error — success conclusion but body too short
   // -------------------------------------------------------------------------
-  it.skipIf(!successCmdAvailable)(
+  it(
     'exits 1 with ::error:: body integrity check failed when conclusion=success but body length < 200',
     () => {
       const result = run({
@@ -700,7 +586,7 @@ exit 1
   // -------------------------------------------------------------------------
   // 13. Error — action_required conclusion
   // -------------------------------------------------------------------------
-  it.skipIf(!successCmdAvailable)(
+  it(
     'exits 1 with ::error:: manual intervention when conclusion=action_required',
     () => {
       const result = run({
@@ -719,7 +605,7 @@ exit 1
   // -------------------------------------------------------------------------
   // 14. Error — skipped conclusion (policy block)
   // -------------------------------------------------------------------------
-  it.skipIf(!successCmdAvailable)(
+  it(
     'exits 1 with ::error:: policy/branch protection when conclusion=skipped',
     () => {
       const result = run({
@@ -738,7 +624,7 @@ exit 1
   // -------------------------------------------------------------------------
   // 15. Edge case — cancelled conclusion
   // -------------------------------------------------------------------------
-  it.skipIf(!successCmdAvailable)(
+  it(
     'exits 0 with ::warning:: when conclusion=cancelled',
     () => {
       const result = run({
@@ -757,7 +643,7 @@ exit 1
   // -------------------------------------------------------------------------
   // 16. Edge case — generic narrative failure
   // -------------------------------------------------------------------------
-  it.skipIf(!successCmdAvailable)(
+  it(
     'exits 0 with ::warning:: for generic failure with no security signals',
     () => {
       const result = run({
@@ -780,7 +666,7 @@ exit 1
   // -------------------------------------------------------------------------
   // 17. Edge case — unknown future conclusion
   // -------------------------------------------------------------------------
-  it.skipIf(!successCmdAvailable)(
+  it(
     'exits 0 with ::warning:: Unknown conclusion for unrecognized conclusion values',
     () => {
       const result = run({
@@ -800,7 +686,7 @@ exit 1
   // -------------------------------------------------------------------------
   // 18. Integration — prompt construction includes correlation token, target tag, repo name
   // -------------------------------------------------------------------------
-  it.skipIf(!successCmdAvailable)(
+  it(
     'prompt and correlation-id are forwarded to gh workflow run as separate -f fields',
     () => {
       const promptCapturePath = path.join(testTempDir, 'captured-prompt.txt')
@@ -854,49 +740,4 @@ exit 1
     },
     SCENARIO_TIMEOUT_MS,
   )
-})
-
-// ---------------------------------------------------------------------------
-// Structural test: successCmd extraction is well-formed
-// ---------------------------------------------------------------------------
-
-describe('successCmd extraction from .releaserc.yaml', () => {
-  it('extractSuccessCmd returns null when successCmd block is absent', () => {
-    const yaml = `
-plugins:
-  - '@semantic-release/commit-analyzer'
-  - '@semantic-release/github'
-`
-    expect(extractSuccessCmd(yaml)).toBeNull()
-  })
-
-  it('extractSuccessCmd captures multi-line bash block', () => {
-    const yaml = `
-plugins:
-  - - '@semantic-release/exec'
-    - successCmd: |
-        RELEASE_VERSION="\${nextRelease.gitTag}"
-        echo "hello $RELEASE_VERSION"
-        exit 0
-  - '@semantic-release/github'
-`
-    const result = extractSuccessCmd(yaml)
-    expect(result).not.toBeNull()
-    expect(result).toContain('RELEASE_VERSION=')
-    expect(result).toContain('echo "hello $RELEASE_VERSION"')
-    expect(result).toContain('exit 0')
-  })
-
-  it('extractSuccessCmd does not include content from the next plugin entry', () => {
-    const yaml = `
-plugins:
-  - - '@semantic-release/exec'
-    - successCmd: |
-        echo "cmd line"
-  - '@semantic-release/github'
-`
-    const result = extractSuccessCmd(yaml)
-    expect(result).not.toBeNull()
-    expect(result).not.toContain('@semantic-release/github')
-  })
 })
