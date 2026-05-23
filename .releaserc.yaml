@@ -13,6 +13,179 @@ plugins:
     - releasedLabels: false
       successComment: false
 
+  - - '@semantic-release/exec'
+    - successCmd: |
+        # @semantic-release/exec resolves Lodash template expressions before handing
+        # the resulting string to the shell. ${nextRelease.gitTag} becomes a literal
+        # value like v2.23.0 at that point; capture it as a bash variable.
+        RELEASE_VERSION="${nextRelease.gitTag}"
+
+        # Validate the tag shape before any interpolation or dispatch.
+        # A malformed value could indicate a tag-spoofing attempt or a semantic-release
+        # plugin upgrade that changed the gitTag contract.
+        if ! echo "$RELEASE_VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]+)?$'; then
+          echo "::error::Invalid RELEASE_VERSION shape: $RELEASE_VERSION"
+          exit 1
+        fi
+
+        # Generate a UUID to uniquely identify this dispatch. The token is passed both
+        # as a workflow input field and embedded in the prompt so Fro Bot echoes it as
+        # its first log line. Polling matches by scanning early log lines for this token,
+        # eliminating same-second collision ambiguity.
+        # Test escape hatch: integration tests set RELEASE_NOTES_TEST_CORRELATION_ID to
+        # a known UUID so mock-gh fixtures can include the same value in their log output.
+        # Production runs never set this; uuidgen / /proc/sys/kernel/random/uuid is the
+        # real source of correlation tokens.
+        if [[ -n "${RELEASE_NOTES_TEST_CORRELATION_ID:-}" ]]; then
+          CORRELATION_ID="$RELEASE_NOTES_TEST_CORRELATION_ID"
+        elif command -v uuidgen >/dev/null 2>&1; then
+          CORRELATION_ID="$(uuidgen | tr '[:upper:]' '[:lower:]')"
+        else
+          CORRELATION_ID="$(cat /proc/sys/kernel/random/uuid)"
+        fi
+
+        # Construct the prompt. $RELEASE_VERSION, $CORRELATION_ID, and $GITHUB_REPOSITORY
+        # are runtime bash env vars expanded by the heredoc. Do NOT use ${{ github.* }}
+        # workflow-expression syntax here — those are not interpolated inside successCmd
+        # strings, which run on the runner after YAML preprocessing is complete.
+        PROMPT=$(cat <<PROMPT_EOF
+        correlation=$CORRELATION_ID
+
+        You are running the release-notes-narrative skill against a just-published GitHub release.
+        First, echo the line "correlation=$CORRELATION_ID" to stdout (the line above this prompt) so
+        the dispatching workflow can identify this run. This is mandatory.
+
+        Target release tag: $RELEASE_VERSION
+        Target repository: $GITHUB_REPOSITORY
+
+        Idempotency check (do this FIRST):
+        - Fetch the current release body: \`gh release view $RELEASE_VERSION --json body --jq '.body'\`
+        - If the body starts with the heading \`## What's new\`, the narrative has already been applied.
+          Log "already-applied; short-circuiting" and exit cleanly. Conclusion will be reported as \`neutral\`.
+
+        Procedure (only if idempotency check did NOT short-circuit):
+        1. Load the skill at .agents/skills/release-notes-narrative/SKILL.md from this checkout.
+        2. Execute the 13-step procedure against tag $RELEASE_VERSION.
+        3. Apply the rendered body via \`gh release edit $RELEASE_VERSION --notes-file <tmpfile>\`.
+
+        Scope constraints (do not violate):
+        - Do NOT comment on any PR, issue, or discussion.
+        - Do NOT open or close any issue.
+        - Do NOT edit any release body OTHER than $RELEASE_VERSION.
+        - Do NOT modify any file in the repository.
+        - Do NOT push commits, create branches, or create tags.
+
+        Report back with: the target tag, the chars-before and chars-after counts, and the
+        GitHub release URL.
+        PROMPT_EOF
+        )
+
+        # Dispatch the Fro Bot workflow. gh workflow run does not return a parseable run ID,
+        # so we identify our run via correlation-token polling below.
+        gh workflow run --ref main fro-bot.yaml \
+          -f "prompt=$PROMPT" \
+          -f "correlation-id=$CORRELATION_ID"
+
+        # Poll up to 90 seconds for a run whose early log lines contain our correlation token.
+        # Every 5 seconds, list recent fro-bot.yaml runs on main and scan the first 50 log
+        # lines of each candidate for the token. The first match is our dispatched run.
+        # Test escape hatches: RELEASE_NOTES_TEST_POLL_BUDGET_SECS and
+        # RELEASE_NOTES_TEST_POLL_INTERVAL_SECS shorten the loop for unit tests.
+        # Production runs always use 90s budget / 5s interval.
+        POLL_BUDGET_SECS="${RELEASE_NOTES_TEST_POLL_BUDGET_SECS:-90}"
+        POLL_INTERVAL_SECS="${RELEASE_NOTES_TEST_POLL_INTERVAL_SECS:-5}"
+        RUN_ID=""
+        POLL_DEADLINE=$(( $(date +%s) + POLL_BUDGET_SECS ))
+        while [ "$(date +%s)" -lt "$POLL_DEADLINE" ]; do
+          CANDIDATES="$(gh run list --workflow=fro-bot.yaml --branch=main \
+            --json databaseId,createdAt --limit 10 2>/dev/null \
+            | jq -r '.[].databaseId')"
+          for CANDIDATE_ID in $CANDIDATES; do
+            if gh run view "$CANDIDATE_ID" --log --limit 50 2>/dev/null \
+                | grep -q "correlation=$CORRELATION_ID"; then
+              RUN_ID="$CANDIDATE_ID"
+              break 2
+            fi
+          done
+          sleep "$POLL_INTERVAL_SECS"
+        done
+
+        if [ -z "$RUN_ID" ]; then
+          echo "::error::Dispatched workflow run not found within ${POLL_BUDGET_SECS}s (correlation=$CORRELATION_ID). GitHub may have rejected the dispatch or the workflow never started."
+          exit 1
+        fi
+
+        # Wait for the run to complete, hard-bounded at 10 minutes.
+        # Test escape hatch: RELEASE_NOTES_TEST_WATCH_TIMEOUT_SECS shortens the wait.
+        # Disable errexit around `timeout` so a non-zero exit (e.g., 124 for timeout)
+        # is captured into WATCH_EXIT rather than killing the script.
+        WATCH_TIMEOUT_SECS="${RELEASE_NOTES_TEST_WATCH_TIMEOUT_SECS:-600}"
+        set +e
+        timeout "$WATCH_TIMEOUT_SECS" gh run watch "$RUN_ID" --exit-status
+        WATCH_EXIT=$?
+        set -e
+
+        # Fetch conclusion and full log (ANSI codes stripped) for classification.
+        CONCLUSION="$(gh run view "$RUN_ID" --json conclusion --jq '.conclusion' 2>/dev/null || echo 'unknown')"
+        LOG="$(gh run view "$RUN_ID" --log 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g')"
+
+        # Check for off-target release edits: any 'release edit vX.Y.Z' line that is NOT
+        # our target tag is a security signal (Fro Bot edited the wrong release).
+        OFF_TARGET="$(echo "$LOG" | grep -E 'release edit v[0-9]+\.[0-9]+\.[0-9]+' \
+          | grep -v "release edit $RELEASE_VERSION" || true)"
+
+        # Check for auth/permission failure keywords in the log.
+        AUTH_FAIL=0
+        if echo "$LOG" | grep -qE 'HTTP 401|HTTP 403|Bad credentials|Resource not accessible|requires authentication|permission denied'; then
+          AUTH_FAIL=1
+        fi
+
+        # Post-write integrity check: if Fro Bot reported success, verify the release body
+        # is substantive (>=200 chars). A short body means the write silently failed or
+        # produced a partial/empty result.
+        BODY_LEN=0
+        if [ "$CONCLUSION" = "success" ]; then
+          BODY_LEN="$(gh release view "$RELEASE_VERSION" --json body \
+            --jq '.body | length' 2>/dev/null || echo 0)"
+        fi
+
+        # Classify outcome by precedence. Security-relevant failures exit 1 with ::error::.
+        # Narrative failures exit 0 with ::warning::. Happy path exits 0 with plain stdout.
+        if [ "$WATCH_EXIT" -eq 124 ]; then
+          echo "::warning::Fro Bot run timed out after 10 minutes (run=$RUN_ID, correlation=$CORRELATION_ID)"
+          exit 0
+        elif [ -n "$OFF_TARGET" ]; then
+          echo "::error::Off-target release edit detected (run=$RUN_ID): $OFF_TARGET"
+          exit 1
+        elif [ "$AUTH_FAIL" -eq 1 ]; then
+          echo "::error::Auth failure in dispatched run (run=$RUN_ID, correlation=$CORRELATION_ID). Check FRO_BOT_PAT scope."
+          exit 1
+        elif [ "$CONCLUSION" = "action_required" ]; then
+          echo "::error::Workflow requires manual intervention (run=$RUN_ID, conclusion=$CONCLUSION)"
+          exit 1
+        elif [ "$CONCLUSION" = "skipped" ]; then
+          echo "::error::Workflow was skipped — likely blocked by policy/branch protection (run=$RUN_ID)"
+          exit 1
+        elif [ "$CONCLUSION" = "success" ] && [ "$BODY_LEN" -lt 200 ]; then
+          echo "::error::Reported success but body integrity check failed (BODY_LEN=$BODY_LEN, run=$RUN_ID, tag=$RELEASE_VERSION)"
+          exit 1
+        elif [ "$CONCLUSION" = "success" ]; then
+          echo "Narrative applied: tag=$RELEASE_VERSION run=$RUN_ID correlation=$CORRELATION_ID"
+          exit 0
+        elif [ "$CONCLUSION" = "neutral" ]; then
+          echo "No-action-taken (already-applied idempotency short-circuit): tag=$RELEASE_VERSION run=$RUN_ID"
+          exit 0
+        elif [ "$CONCLUSION" = "cancelled" ]; then
+          echo "::warning::Workflow cancelled (run=$RUN_ID, correlation=$CORRELATION_ID)"
+          exit 0
+        elif [ "$CONCLUSION" = "failure" ]; then
+          echo "::warning::Fro Bot run failed (narrative-failure, no security signals detected): run=$RUN_ID"
+          exit 0
+        else
+          echo "::warning::Unknown conclusion: $CONCLUSION (run=$RUN_ID, correlation=$CORRELATION_ID)"
+          exit 0
+        fi
+
   - semantic-release-export-data
 
 analyzeCommits:
