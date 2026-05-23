@@ -6,6 +6,10 @@ export default defineConfig({
   site: 'https://fro.bot',
   base: '/systematic',
   trailingSlash: 'always',
+  redirects: {
+    '/getting-started/configuration/': '/reference/configuration/',
+    '/reference/systematic-config/': '/reference/configuration/',
+  },
   markdown: {
     rehypePlugins: [
       [
@@ -83,8 +87,8 @@ export default defineConfig({
               autogenerate: { directory: 'reference/agents' },
             },
             {
-              label: 'User Configuration',
-              link: '/reference/systematic-config/',
+              label: 'Configuration',
+              link: '/reference/configuration/',
             },
           ],
         },

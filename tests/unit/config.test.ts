@@ -919,7 +919,7 @@ describe('config', () => {
       expect(errorMessage).toContain(configPath)
       expect(errorMessage).toContain('security-reviwer')
       expect(errorMessage).toContain(
-        'https://systematic.fro.bot/getting-started/configuration#typed-validation',
+        'https://systematic.fro.bot/reference/configuration#typed-validation',
       )
     })
 
@@ -941,7 +941,7 @@ describe('config', () => {
 
     describe('enrichUnrecognizedKeyIssues — verbose enum suppression and multi-key handling', () => {
       const DOCS_URL =
-        'https://systematic.fro.bot/getting-started/configuration#typed-validation'
+        'https://systematic.fro.bot/reference/configuration#typed-validation'
 
       // #385 — suppress verbose enum list in disabled_agents / disabled_skills errors
 

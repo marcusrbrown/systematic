@@ -87,14 +87,12 @@ describe('generateConfigReference', () => {
     generateFn = mod.generateConfigReference
   })
 
-  test('happy path: produces mdx with frontmatter and $schema block', () => {
+  test('happy path: produces field reference content with $schema block', () => {
     const content = generateFn('2.11.0')
 
-    // Has frontmatter delimiters with title + description
-    expect(content).toMatch(/^---\n/)
-    expect(content).toContain('title:')
-    expect(content).toContain('description:')
-    expect(content).toMatch(/\n---\n/)
+    // Does NOT include frontmatter (injected into human-owned file)
+    expect(content).not.toMatch(/^---\n/)
+    expect(content).not.toContain('title:')
 
     // Has copy-paste $schema block referencing major-versioned URL
     expect(content).toContain(
@@ -146,13 +144,6 @@ describe('generateConfigReference', () => {
     expect(content).toMatch(/offline/i)
     expect(content).toMatch(/offline IDE/i)
     expect(content).toMatch(/bundled npm/i)
-  })
-
-  test('includes auto-generated header comment', () => {
-    const content = generateFn('2.11.0')
-    expect(content).toMatch(/auto-generated/i)
-    expect(content).toMatch(/src\/lib\/config-schema\.ts/)
-    expect(content).toMatch(/Do NOT edit/i)
   })
 
   test('version 3.0.0 produces v3 $schema URL', () => {
