@@ -3,7 +3,7 @@ title: Systematic
 description: Structured Engineering Workflows for OpenCode
 template: splash
 hero:
-  tagline: Transform your AI assistant into a disciplined engineering collaborator.
+  tagline: "Your AI writes code. Systematic adds engineering discipline."
   image:
     file: ../../assets/banner.svg
     alt: Systematic plugin banner
@@ -18,19 +18,67 @@ hero:
       variant: minimal
 ---
 
-import { Card, CardGrid } from '@astrojs/starlight/components'
+import { Card, CardGrid, Steps } from '@astrojs/starlight/components'
+
+## What You Get
 
 <CardGrid stagger>
-  <Card title="Structured Skills" icon="open-book">
-    Pre-built workflows for brainstorming, planning, and code review that guide the AI through systematic processes.
+  <Card title="40+ Bundled Skills" icon="open-book">
+    Structured workflows for every phase: brainstorm, plan, work, review, compound, TDD, browser testing, and more. Each skill encodes a repeatable engineering process — not a prompt, a discipline.
   </Card>
-  <Card title="Specialized Agents" icon="rocket">
-    Purpose-built subagents for architecture, security, performance, and UI/UX refinement.
+  <Card title="50+ Specialized Agents" icon="rocket">
+    Purpose-built subagents for architecture, security, performance, design, and code review. They run as OpenCode subagents and inherit your model — no extra config.
   </Card>
-  <Card title="Zero Configuration" icon="setting">
-    Works immediately after installation via OpenCode config hooks. No manual setup required.
+  <Card title="Zero-Config Install" icon="setting">
+    Drop one line into your OpenCode config. Skills and agents register automatically via plugin hooks. Nothing to wire up.
   </Card>
-  <Card title="Extensible" icon="puzzle">
-    Add project-specific skills and agents alongside bundled ones to match your team's patterns.
+  <Card title="OCX Registry Support" icon="puzzle">
+    Install individual components via the OCX registry — pick only the skills and agents your project needs, or install everything at once.
   </Card>
 </CardGrid>
+
+## The Workflow
+
+Systematic is built around a loop. You plan before you build. You review before you ship.
+
+<Steps>
+1. **Brainstorm** — Start with `/ce:brainstorm`. Explore requirements, surface edge cases, and produce a right-sized requirements document before writing a line of code.
+
+2. **Plan** — Run `/ce:plan` to break the work into a structured implementation plan. Deepen it with `/systematic:deepen-plan` when the stakes are high.
+
+3. **Work** — Use `/ce:work` to execute the plan. The skill keeps the agent focused, tracks progress, and surfaces blockers instead of silently guessing.
+
+4. **Review** — Run `/ce:review` before opening a PR. Tiered persona agents check for correctness, security, performance, and style — in parallel.
+</Steps>
+
+After shipping, use `/ce:compound` to capture what you learned so the next time this problem comes up, the system already knows the answer.
+
+## Quick Start
+
+Add Systematic to your OpenCode config:
+
+```json
+{
+  "plugins": ["@fro.bot/systematic@latest"]
+}
+```
+
+Then start your first task:
+
+```
+/ce:brainstorm "add dark mode toggle"
+```
+
+That's it. Skills and agents are available immediately. No API keys, no accounts, no telemetry.
+
+## What Systematic Is Not
+
+**Not a model wrapper or prompt pack.** Systematic doesn't touch your model selection or inject hidden system prompts into every message. It registers structured skills you invoke explicitly.
+
+**Not another chat UI.** It runs inside OpenCode. You keep your existing setup.
+
+**Not SaaS or telemetry.** Everything is local-first markdown assets bundled with the npm package. Nothing phones home.
+
+**Not magic autopilot.** The AI still does the work. Systematic gives it a process to follow — the same process a disciplined engineer would use. You stay in the loop.
+
+If you want to understand the philosophy behind the loop, read [The Systematic Philosophy →](/systematic/guides/philosophy/)
