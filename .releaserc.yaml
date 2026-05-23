@@ -50,6 +50,11 @@ plugins:
         # are runtime bash env vars expanded by the heredoc. Do NOT use GitHub Actions
         # workflow-expression syntax (e.g. github.repository) here — those are not interpolated inside successCmd
         # strings, which run on the runner after YAML preprocessing is complete.
+        #
+        # Escaping note: every bash ${...} below this comment is written as \${...} so
+        # @semantic-release/exec's Lodash template renderer passes it through to the shell
+        # as a literal. Bare $-forms like $(...), $((...)), and $? do NOT need escaping
+        # because Lodash's default interpolate delimiter only matches ${...}.
         PROMPT=$(cat <<PROMPT_EOF
         correlation=\$CORRELATION_ID
 
