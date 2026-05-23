@@ -99,3 +99,9 @@ Every sentence in the after-state traces to the commit log. The PR body for #425
 - [`docs/solutions/developer-experience/semantic-release-body-ingestion-myth-2026-05-17.md`](../developer-experience/semantic-release-body-ingestion-myth-2026-05-17.md) — original lesson that this skill formalizes: the generator never ingests commit bodies or PR descriptions, and the fix is post-publish enrichment rather than generator configuration
 - [`docs/solutions/developer-experience/gh-api-heredoc-backtick-escape-2026-05-17.md`](../developer-experience/gh-api-heredoc-backtick-escape-2026-05-17.md) — adjacent safety pattern for `gh` body-writing: backtick escaping in heredoc contexts when passing markdown to `gh release edit`
 - [`.agents/skills/release-notes-narrative/SKILL.md`](../../.agents/skills/release-notes-narrative/SKILL.md) — the formalized procedure: full step-by-step with bucket map, thin-body threshold calibration, preflight checks, and rollback instructions
+
+## Update: 2026-05-23 — CI automation
+
+The skill now runs automatically post-publish via `@semantic-release/exec`'s `successCmd` in `.releaserc.yaml`. The hook dispatches `fro-bot.yaml` with a prompt that loads this skill and applies the procedure against the just-published tag. Manual invocation remains the canonical path for retroactive patches and historical releases; CI handles forward-going releases without operator intervention.
+
+See [`docs/solutions/best-practices/release-notes-narrative-ci-automation-architecture-2026-05-23.md`](release-notes-narrative-ci-automation-architecture-2026-05-23.md) for the trigger chain, fail-soft contract, and security signal classification.
