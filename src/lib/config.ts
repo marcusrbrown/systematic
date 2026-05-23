@@ -125,7 +125,7 @@ function loadJsoncFile(filePath: string): RawSystematicConfig | null {
  * having to dump all 100+ names inline in the error.
  */
 const TYPED_VALIDATION_DOCS_URL =
-  'https://systematic.fro.bot/reference/configuration#typed-validation'
+  'https://fro.bot/systematic/reference/configuration#typed-validation'
 
 /**
  * Fields in the top-level config where an unrecognized key means a typo'd

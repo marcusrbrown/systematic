@@ -29,12 +29,10 @@ function extractRedirects(source: string): Record<string, string> {
 }
 
 describe('astro.config.mjs redirects', () => {
-  let redirects: Record<string, string>
-
   test('astro.config.mjs exists and is readable', () => {
     expect(fs.existsSync(ASTRO_CONFIG_PATH)).toBe(true)
     const source = fs.readFileSync(ASTRO_CONFIG_PATH, 'utf-8')
-    redirects = extractRedirects(source)
+    const redirects = extractRedirects(source)
     expect(Object.keys(redirects).length).toBeGreaterThan(0)
   })
 

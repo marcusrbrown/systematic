@@ -267,7 +267,10 @@ function renderTopLevelSection(
         .join('\n\n')
   }
 
-  // Cross-reference for agent/category overlay sections
+  // Cross-reference for agent/category overlay sections.
+  // The Overlay Fields block renders before the agents/categories sections in
+  // configuration.mdx (around line 120). If that section order ever changes,
+  // update the "above" wording in the string below to match the new layout.
   const crossRef =
     key === 'agents' || key === 'categories'
       ? '\n\nPer-entry overlay fields are documented in the [Agent/Category Overlay Fields](#agentcategory-overlay-fields) section above.'
