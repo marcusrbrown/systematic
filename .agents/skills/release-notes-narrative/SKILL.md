@@ -187,8 +187,10 @@ rm -f "${TMPFILE}"
 
 ```bash
 NEW_LEN=$(gh release view "${TARGET}" --json body --jq '.body|length')
-PRE_LEN=$(wc -c < ".context/pr-evidence/release-notes-narrative/${TARGET}-before.md")
+PRE_LEN=$(jq -Rs 'length' < ".context/pr-evidence/release-notes-narrative/${TARGET}-before.md")
 ```
+
+Both sides measure UTF-8 character count (not byte count). The `jq -Rs 'length'` form reads the snapshot file as a single raw string and reports its character length, matching the units `gh release view --jq '.body|length'` produces on the live body. Using `wc -c` here would compare bytes against characters, producing false-positive failures on bodies containing multibyte characters.
 
 Assert:
 - `NEW_LEN` is greater than `PRE_LEN`

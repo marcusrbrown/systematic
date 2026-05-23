@@ -18,7 +18,7 @@ A link is stripped only when **all four** of the following conditions hold:
 
 **(a)** The link is parsed from the rendered body's markdown AST as a discrete `[text](url)` node — not matched via raw-string regex over the body. Regex sweeps fail on multiline content and nested markdown; AST traversal is the only reliable approach.
 
-**(b)** The link text equals the URL's last path segment, or is a single-line substring of that segment. This catches both the compact form `[typed-validation](.../issues/typed-validation)` and the verbose form `[fro.bot/systematic/reference/configuration#typed-validation](.../issues/typed-validation)`.
+**(b)** The link text equals the URL's last path segment, or contains the last path segment as a single-line substring. This catches both the compact form `[typed-validation](.../issues/typed-validation)` (text equals the segment) and the verbose form `[fro.bot/systematic/reference/configuration#typed-validation](.../issues/typed-validation)` (text contains the segment).
 
 **(c)** The target URL, after stripping any query string or fragment, matches the shape:
 
@@ -44,7 +44,7 @@ closes [fro.bot/systematic/reference/configuration#typed-validation](https://git
 
 Condition check:
 - (a) AST contains a link node with text `fro.bot/systematic/reference/configuration#typed-validation` and href `https://github.com/fro.bot/systematic/reference/configuration/issues/typed-validation` ✓
-- (b) Link text is a substring of the last path segment `typed-validation` (the fragment `#typed-validation` is part of the display text) ✓
+- (b) Link text `fro.bot/systematic/reference/configuration#typed-validation` contains the last path segment `typed-validation` as a substring ✓
 - (c) Bare URL `https://github.com/fro.bot/systematic/reference/configuration/issues/typed-validation` matches the shape; segment `typed-validation` contains non-digit characters ✓
 - (d) Preceding text node ends with `closes` ✓
 
@@ -62,7 +62,7 @@ closes [docs/foo#section-bar](https://github.com/marcusrbrown/example/issues/sec
 
 Condition check:
 - (a) AST link node present ✓
-- (b) Link text `docs/foo#section-bar` is a substring of last segment `section-bar` ✓
+- (b) Link text `docs/foo#section-bar` contains the last path segment `section-bar` as a substring ✓
 - (c) Bare URL matches shape; segment `section-bar` contains non-digit characters ✓
 - (d) Preceding text node ends with `closes` ✓
 
@@ -118,7 +118,7 @@ Strip query string before evaluating: bare URL is `https://github.com/foo/bar/is
 [closes the loop](https://github.com/foo/bar/issues/explanation)
 ```
 
-Link text is `closes the loop`. Last URL segment is `explanation`. The text is neither equal to nor a substring of `explanation`. Condition (b) fails. Link preserved.
+Link text is `closes the loop`. Last URL segment is `explanation`. The text neither equals `explanation` nor contains it as a substring. Condition (b) fails. Link preserved.
 
 ---
 

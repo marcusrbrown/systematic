@@ -93,7 +93,7 @@ Three solution docs added under `docs/solutions/` capturing the learnings.
 
 ### Compare
 
-[2.20.6...2.21.0](https://github.com/marcusrbrown/systematic/compare/v2.20.6...v2.21.0)
+[v2.20.6...v2.21.0](https://github.com/marcusrbrown/systematic/compare/v2.20.6...v2.21.0)
 
 ---
 
