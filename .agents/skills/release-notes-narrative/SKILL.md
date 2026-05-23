@@ -6,6 +6,12 @@ argument-hint: <tag-or-range>
 
 # Release Notes Narrative
 
+## CI Automation
+
+This skill also runs automatically post-publish via `@semantic-release/exec`'s `successCmd` in `.releaserc.yaml`. The hook dispatches `fro-bot.yaml` with a prompt that loads this skill and applies the 13-step procedure against the just-published tag. Manual invocation remains the canonical path for retroactive patches and historical releases; CI automation handles forward-going releases without operator intervention.
+
+If you are reading this as the dispatched Fro Bot run, the prompt embedded the target tag and a correlation token. Echo the correlation token as your first log line, then proceed with the procedure below.
+
 ## Overview
 
 `@semantic-release/release-notes-generator` with the `conventionalcommits` preset builds release bodies from commit subject lines only — commit bodies and PR descriptions are never ingested. The result is mechanically correct but qualitatively thin: a bucket of one-line bullets that tells readers what changed but not why it matters. The same generator also misparses any `path#fragment` substring in a commit body as a `Closes #N` footer, emitting broken autolinks pointing at nonexistent issues.
