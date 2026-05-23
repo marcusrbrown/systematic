@@ -1,7 +1,7 @@
 ---
 name: generating-project-docs
 description: Use when creating, refreshing, or updating project-level documentation — README.md, ARCHITECTURE.md, STRUCTURE.md, or scoped section updates
-argument-hint: "[readme|architecture|structure|section-name]"
+argument-hint: "[readme|architecture|structure|all|section-name]"
 ---
 
 # Generating Project Documentation
@@ -35,8 +35,8 @@ $ARGUMENTS
 - **Empty or `readme`** — Update `README.md` (default)
 - **`architecture`** — Update `ARCHITECTURE.md`
 - **`structure`** — Update `STRUCTURE.md`
+- **`all`** — Update all three docs
 - **`<section-name>`** — Update only that named section within the target doc (e.g. `skills`, `agents`, `cli`)
-- **No argument** — Update all three docs
 
 For scoped updates: read the current document, locate the section by heading, replace only that section's content. Preserve surrounding structure exactly.
 

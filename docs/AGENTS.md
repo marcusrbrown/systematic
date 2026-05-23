@@ -31,12 +31,12 @@ docs/
 │   ├── styles/custom.css     # Theme overrides
 │   └── content/docs/
 │       ├── index.mdx         # Landing page
-│       ├── getting-started/  # 2 manual pages (installation, configuration)
+│       ├── getting-started/  # 2 manual pages (installation, quick-start)
 │       ├── guides/           # 5 manual pages (philosophy, main-loop, agent-install, architecture, ocx-registry)
-│       └── reference/        # Generated — DO NOT EDIT
-│           ├── skills/       # 45 pages + index.mdx (generated from skills/)
-│           ├── agents/       # 51 pages + index.mdx (generated from agents/)
-│           └── systematic-config.mdx  # Config field reference (generated from schema)
+│       └── reference/
+│           ├── skills/       # Generated — gitignored (from skills/)
+│           ├── agents/       # Generated — gitignored (from agents/)
+│           └── configuration.mdx  # Human-owned; two sentinel-injected generated regions
 └── package.json
 ```
 
@@ -59,30 +59,24 @@ Each run cleans output dirs before regenerating. Index pages (`index.mdx`) are d
 
 ### 2. `scripts/generate-config-reference.ts` — config field reference
 
-Derives the config reference page by walking `SystematicConfigSchema`'s JSON Schema output. For each top-level field it renders a `## <field>` section with:
+Derives field reference content by walking `SystematicConfigSchema`'s JSON Schema output. For each top-level field it renders a `## <field>` section with:
 - Description (from `.meta({ description })` in the schema)
 - Type/accepted shape (from `type`/`enum`/`anyOf`/`pattern`)
 - Default value (from JSON Schema `default`)
 - Examples (from `.meta({ examples })`)
 
-Output: `src/content/docs/reference/systematic-config.mdx`
+**No standalone page is produced.** Instead, the generator injects content into the committed human-owned page `src/content/docs/reference/configuration.mdx` between two sets of sentinel markers:
+
+| Sentinel pair | What is injected |
+|---|---|
+| `{/* SYSTEMATIC:FIELD-REFERENCE:START */}` … `{/* SYSTEMATIC:FIELD-REFERENCE:END */}` | Full Zod-derived field reference (overlay fields + top-level sections) |
+| `{/* SYSTEMATIC:SOURCE-DEFAULTS:START */}` … `{/* SYSTEMATIC:SOURCE-DEFAULTS:END */}` | Source category model defaults table (from `src/lib/source-model-defaults.ts`) |
+
+`reference/configuration.mdx` is committed, human-owned content. Only the regions between the sentinel markers are overwritten on each `docs:generate` run. All prose outside the markers is preserved byte-for-byte.
 
 Adding a new top-level field to `SystematicConfigSchema` with `.meta({ description })` automatically produces a new MDX section on the next `docs:generate` run — no manual template update required.
 
-NOTE: The top-level `commands/` directory has been removed (all commands converted to skills). The generation script may still have backward-compat command handling code but produces no command pages from current source.
-
-### 3. Source Category Model Defaults — dual-output injection
-
-`scripts/generate-config-reference.ts` ALSO injects the source category model defaults table into the **committed** `src/content/docs/getting-started/configuration.mdx` page. This is a deliberate dual-output contract:
-
-| Output | Path | Tracked? | Purpose |
-|---|---|---|---|
-| Full config reference | `src/content/docs/reference/systematic-config.mdx` | **No** (gitignored) | Auto-generated from `SystematicConfigSchema`; full Zod-derived field reference; regenerated on every `docs:generate` |
-| Source defaults table | `src/content/docs/getting-started/configuration.mdx` | **Yes** (committed) | Manual guide page; generator injects the `## Source Category Model Defaults` table between `<!-- SYSTEMATIC:SOURCE-DEFAULTS:BEGIN -->` and `<!-- SYSTEMATIC:SOURCE-DEFAULTS:END -->` HTML-comment delimiters |
-
-The injection is **idempotent**: running `docs:generate` twice in a row produces no diff (the second run replaces the delimited block with the same content). CI's `docs:build` step runs the generator and fails if the committed `configuration.mdx` is out of sync with the source constant.
-
-**Single source of truth**: the source data lives in `src/lib/source-model-defaults.ts` (`SOURCE_CATEGORY_MODEL_DEFAULTS` constant, `formatForDocs()` helper). The generator imports both, calls `formatForDocs()`, and replaces the delimited block. Editing `configuration.mdx` between the delimiters is futile — your changes will be overwritten on the next generate.
+The injection is **idempotent**: running `docs:generate` twice in a row produces no diff.
 
 When changing the source defaults:
 1. Edit `src/lib/source-model-defaults.ts:SOURCE_CATEGORY_MODEL_DEFAULTS`

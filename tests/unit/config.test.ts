@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import {
   DEFAULT_CONFIG,
   getConfigPaths,
@@ -1323,5 +1324,48 @@ describe('config', () => {
       const result = loadConfig(testDir)
       expect(result.disabled_skills).toEqual([])
     })
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════
+// TYPED_VALIDATION_DOCS_URL fragment regression
+// Asserts that the heading slug referenced in the URL exists in the
+// docs page. Catches renames that forget to update the constant.
+// ═════════════════════════════════════════════════════════════════
+
+describe('TYPED_VALIDATION_DOCS_URL fragment', () => {
+  const __dirname = path.dirname(fileURLToPath(import.meta.url))
+  const CONFIG_MDX = path.resolve(
+    __dirname,
+    '../../docs/src/content/docs/reference/configuration.mdx',
+  )
+
+  /**
+   * Derive heading slugs from MDX content using Starlight's conservative
+   * slugify rules: lowercase, spaces → hyphens, strip non-alphanumeric-or-hyphen.
+   */
+  function slugify(heading: string): string {
+    return heading
+      .toLowerCase()
+      .replace(/\s+/g, '-')
+      .replace(/[^a-z0-9-]/g, '')
+  }
+
+  function extractHeadingSlugs(mdx: string): Set<string> {
+    const slugs = new Set<string>()
+    for (const line of mdx.split('\n')) {
+      const m = line.match(/^#{1,6}\s+(.+)$/)
+      if (m) {
+        slugs.add(slugify(m[1].trim()))
+      }
+    }
+    return slugs
+  }
+
+  test('configuration.mdx contains a heading that slugifies to "typed-validation"', () => {
+    expect(fs.existsSync(CONFIG_MDX)).toBe(true)
+    const mdx = fs.readFileSync(CONFIG_MDX, 'utf-8')
+    const slugs = extractHeadingSlugs(mdx)
+    expect(slugs.has('typed-validation')).toBe(true)
   })
 })

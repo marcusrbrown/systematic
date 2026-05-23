@@ -506,6 +506,74 @@ describe('--version flag semver validation', () => {
 // resolveAgentOverlaySchema — typed-object fallback path
 // ═════════════════════════════════════════════════════════════════
 
+// ═════════════════════════════════════════════════════════════════
+// injectFieldReference — sentinel marker injection
+// ═════════════════════════════════════════════════════════════════
+
+describe('injectFieldReference', () => {
+  let injectFn: (mdxPath: string, content: string) => string
+  let tmpDir: string
+
+  beforeAll(async () => {
+    const mod = await import('../../docs/scripts/generate-config-reference.js')
+    injectFn = mod.injectFieldReference
+    tmpDir = fs.mkdtempSync('/tmp/inject-field-ref-')
+    TEMP_ROOTS.push(tmpDir)
+  })
+
+  function writeTmp(name: string, content: string): string {
+    const p = `${tmpDir}/${name}`
+    fs.writeFileSync(p, content, 'utf-8')
+    return p
+  }
+
+  const START = '{/* SYSTEMATIC:FIELD-REFERENCE:START */}'
+  const END = '{/* SYSTEMATIC:FIELD-REFERENCE:END */}'
+
+  test('missing START marker throws with clear message', () => {
+    const p = writeTmp('no-start.mdx', `prefix\n${END}\nsuffix`)
+    expect(() => injectFn(p, 'content')).toThrow(/sentinel markers not found/)
+  })
+
+  test('missing END marker throws with clear message', () => {
+    const p = writeTmp('no-end.mdx', `prefix\n${START}\nsuffix`)
+    expect(() => injectFn(p, 'content')).toThrow(/sentinel markers not found/)
+  })
+
+  test('END before START throws with clear message', () => {
+    const p = writeTmp(
+      'reversed.mdx',
+      `prefix\n${END}\nmiddle\n${START}\nsuffix`,
+    )
+    expect(() => injectFn(p, 'content')).toThrow(/Malformed markers/)
+  })
+
+  test('content outside markers is preserved verbatim', () => {
+    const prefix = 'BEFORE_CONTENT\n'
+    const suffix = '\nAFTER_CONTENT'
+    const p = writeTmp(
+      'preserve.mdx',
+      `${prefix}${START}\nold\n${END}${suffix}`,
+    )
+    const result = injectFn(p, 'new-content\n')
+    expect(result.startsWith(prefix)).toBe(true)
+    expect(result.endsWith(suffix)).toBe(true)
+  })
+
+  test('idempotent: injecting the same content twice produces byte-identical output', () => {
+    const p = writeTmp(
+      'idempotent.mdx',
+      `header\n${START}\nold\n${END}\nfooter`,
+    )
+    const injected = 'generated-content\n'
+    const first = injectFn(p, injected)
+    // Write the first result back and inject again
+    fs.writeFileSync(p, first, 'utf-8')
+    const second = injectFn(p, injected)
+    expect(first).toBe(second)
+  })
+})
+
 describe('resolveAgentOverlaySchema', () => {
   let resolveFn: (
     properties: Record<string, unknown>,
