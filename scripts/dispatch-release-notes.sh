@@ -88,13 +88,16 @@ gh workflow run --ref main fro-bot.yaml \
 POLL_BUDGET_SECS="${RELEASE_NOTES_TEST_POLL_BUDGET_SECS:-90}"
 POLL_INTERVAL_SECS="${RELEASE_NOTES_TEST_POLL_INTERVAL_SECS:-5}"
 RUN_ID=""
-POLL_DEADLINE=$(( $(date +%s) + $POLL_BUDGET_SECS ))
+POLL_DEADLINE=$(( $(date +%s) + POLL_BUDGET_SECS ))
 while [ "$(date +%s)" -lt "$POLL_DEADLINE" ]; do
   CANDIDATES="$(gh run list --workflow=fro-bot.yaml --branch=main \
     --json databaseId,createdAt --limit 10 2>/dev/null \
     | jq -r '.[].databaseId')"
   for CANDIDATE_ID in $CANDIDATES; do
-    if gh run view "$CANDIDATE_ID" --log --limit 50 2>/dev/null \
+    # `gh run view --log` has no --limit flag (it belongs to `gh run list`).
+    # Pipe through head -n 50 to bound the scan to early log lines where the
+    # correlation token is echoed by Fro Bot.
+    if gh run view "$CANDIDATE_ID" --log 2>/dev/null | head -n 50 \
         | grep -q "correlation=$CORRELATION_ID"; then
       RUN_ID="$CANDIDATE_ID"
       break 2
