@@ -639,7 +639,8 @@ describe('release-notes-ci successCmd smoke tests', () => {
         testTempDir,
         'captured-correlation.txt',
       )
-      const knownCorrelationId = 'test-known-correlation-uuid-for-scenario-18'
+      const knownCorrelationId =
+        'test-known-correlation-uuid-for-forwarding-assertion'
 
       const result = run({
         RELEASE_VERSION: 'v2.23.0',

@@ -21,12 +21,14 @@ if ! echo "$RELEASE_VERSION" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.-]
   exit 1
 fi
 
-# Generate a UUID to uniquely identify this dispatch. The token is passed both
-# as a workflow input field and embedded in the prompt so Fro Bot echoes it as
-# its first log line. Polling matches by scanning early log lines for this token,
-# eliminating same-second collision ambiguity.
+# Generate a UUID to uniquely identify this dispatch. The token is passed as a
+# workflow input field (correlation-id, declared on fro-bot.yaml) and remains
+# visible in the dispatched run's inputs metadata for auditing. Primary run
+# identification is timestamp-based via DISPATCH_EPOCH below — the correlation
+# token is a secondary audit anchor, not the polling matcher.
 # Test escape hatch: integration tests set RELEASE_NOTES_TEST_CORRELATION_ID to
-# a known UUID so mock-gh fixtures can include the same value in their log output.
+# a known UUID so mock-gh fixtures can assert it is forwarded verbatim through
+# the -f correlation-id=... argument to gh workflow run.
 # Production runs never set this; uuidgen / /proc/sys/kernel/random/uuid is the
 # real source of correlation tokens.
 if [[ -n "${RELEASE_NOTES_TEST_CORRELATION_ID:-}" ]]; then
@@ -45,8 +47,8 @@ PROMPT=$(cat <<PROMPT_EOF
 correlation=$CORRELATION_ID
 
 You are running the release-notes-narrative skill against a just-published GitHub release.
-First, echo the line "correlation=$CORRELATION_ID" to stdout (the line above this prompt) so
-the dispatching workflow can identify this run. This is mandatory.
+The dispatching workflow identifies this run by timestamp via gh run list, so no
+specific echo is required of you — the correlation value above is for audit only.
 
 Target release tag: $RELEASE_VERSION
 Target repository: $GITHUB_REPOSITORY
