@@ -1,6 +1,7 @@
 ---
 title: Release notes narrative CI automation architecture
 date: 2026-05-23
+last_updated: 2026-05-23
 category: best-practices
 module: release-pipeline
 problem_type: best_practice
@@ -11,14 +12,20 @@ applies_when:
   - Wiring `@semantic-release/exec` to call external automation after a release lands
   - Dispatching a `workflow_call`-enabled GitHub Actions workflow from inside another workflow and waiting on the result
   - Splitting CI failure modes into fail-soft (narrative-quality) and fail-hard (security-relevant) classes
-  - Defending against same-second workflow_dispatch race conditions when polling for a freshly dispatched run
+  - Identifying a dispatched workflow run reliably when the agent has multi-minute bootstrap time
+  - Reasoning about `${...}` collisions between Lodash template rendering and bash parameter expansion
 tags:
   - semantic-release
   - github-actions
   - workflow-call
+  - workflow-dispatch
   - llm-in-ci
   - fail-soft
-  - correlation-token
+  - lodash-template
+  - shell-extraction
+  - run-identification
+  - timestamp-polling
+  - fro-bot
 ---
 
 # Release notes narrative CI automation architecture
@@ -43,25 +50,26 @@ The trigger chain is fully synchronous inside the Release job, with all coordina
       ├─ @semantic-release/npm (publishes to npm)
       ├─ @semantic-release/github (creates GitHub release; body is live)
       ├─ @semantic-release/exec (NEW — successCmd fires here)
-      │   └─ inline bash:
-      │       ├─ RELEASE_VERSION = ${nextRelease.gitTag}   ← Lodash template, then bash
-      │       ├─ validate against semver regex             ← reject malformed tags
-      │       ├─ CORRELATION_ID = $(uuidgen)               ← unique per dispatch
-      │       ├─ gh workflow run fro-bot.yaml \
-      │       │     -f prompt=<bundled-skill-prompt> \
+      │   └─ scripts/dispatch-release-notes.sh "$RELEASE_VERSION":
+      │       ├─ RELEASE_VERSION = $1 (Lodash injected ${nextRelease.gitTag})
+      │       ├─ validate against semver regex          ← reject malformed tags
+      │       ├─ CORRELATION_ID = $(uuidgen)            ← unique per dispatch
+      │       ├─ DISPATCH_EPOCH = $(date +%s)           ← captured BEFORE dispatch
+      │       ├─ gh workflow run --ref main fro-bot.yaml \
+      │       │     -f prompt=<release-notes-narrative-prompt> \
       │       │     -f correlation-id=$CORRELATION_ID
-      │       ├─ poll up to 90s: gh run list | grep correlation in early log lines
+      │       ├─ poll up to 90s: gh run list --event=workflow_dispatch \
+      │       │     | jq 'createdAt > $DISPATCH_EPOCH' | newest wins
       │       ├─ timeout 600 gh run watch $RUN_ID --exit-status
       │       ├─ fetch conclusion + log (ANSI-stripped) + post-write body length
       │       └─ classify: success / neutral / cancelled / timeout / auth-failure /
       │                   off-target-edit / action_required / skipped / integrity-fail
       └─ semantic-release-export-data (emits final outputs)
 
-fro-bot.yaml (called via workflow_call)
+fro-bot.yaml (called via workflow_dispatch from the script above)
   └─ checkout main with FRO_BOT_PAT, fetch-depth: 0
       └─ fro-bot/agent action (LLM execution)
           └─ executes prompt:
-              ├─ echo correlation=<token> as first log line (mandatory)
               ├─ idempotency check: if existing body starts with ## What's new, short-circuit
               ├─ load .agents/skills/release-notes-narrative/SKILL.md
               ├─ execute 13-step procedure against target tag
@@ -90,13 +98,21 @@ This matters because GitHub's reusable-workflow permission rules forbid called w
 
 The pre-merge gate for the v2 PR requires explicit evidence of PAT scope (either a screenshot of GitHub PAT settings or citation of v2.22.0's successful manual run). Going to production without verifying this gate would deploy a successCmd that silently fails on every release.
 
-### Correlation-token-based polling
+### Timestamp-based polling with correlation as audit anchor
 
-`gh workflow run` does NOT return a parseable run ID. Its stdout is a URL string, not JSON. The naive approach of "poll `gh run list` and pick the newest workflow_dispatch run after our dispatch timestamp" is vulnerable to same-second race conditions: a Renovate-scheduled dispatch, a manual operator dispatch, or a runner clock skew can all produce a false match.
+**Supersedes the original "Correlation-token-based polling" design.** The first draft of v2 polled `gh run view --log` on each candidate run for a correlation token Fro Bot was instructed to echo as its first log line. This was production-tested in v2.23.3 and proven structurally unworkable: Fro Bot's OpenCode agent has a multi-minute bootstrap sequence (runner spin-up → full checkout → `bun install --frozen-lockfile` → model/auth setup → MCP server startup → OpenCode CLI launch) before any prompt-derived content reaches the run's logs. A 90-second log-scan budget completes long before the token ever appears in the logs. Mock-based integration tests with `mock-gh.sh` returned canned log content instantly, so the failure mode was invisible to the test suite — production caught what mocks could not.
 
-The chosen approach: generate a UUID via `uuidgen` (or `cat /proc/sys/kernel/random/uuid` fallback) and pass it as both a `-f correlation-id=$UUID` workflow input AND as the first line of the prompt. The dispatched Fro Bot run is instructed to echo `correlation=<UUID>` as its first log line. Polling matches by scanning the first 50 log lines of each candidate run for the literal token. Only the run that echoed OUR token is OUR run, regardless of dispatch timing.
+The replacement design (landed in PR #434, verified on v2.23.4):
 
-This eliminates the false-match class entirely. The cost is a 5-second polling interval and an upper-bound 90-second poll budget before the run appears in `gh run list`. Production runs see the matching run within 30-60s in practice; the budget exists for GitHub backend hiccups, not for normal operation.
+1. Capture `DISPATCH_EPOCH=$(date +%s)` IMMEDIATELY before `gh workflow run`.
+2. Dispatch the workflow with the correlation UUID as a structured `-f correlation-id=$UUID` field (and embedded in the prompt as a secondary audit anchor).
+3. Poll `gh run list --workflow=fro-bot.yaml --branch=main --event=workflow_dispatch --json databaseId,createdAt`.
+4. Filter candidates with jq: `[.[] | . + {epoch: (.createdAt | fromdateiso8601)}] | map(select(.epoch > $cutoff)) | sort_by(.epoch) | reverse | .[0].databaseId // empty`.
+5. The first match is the dispatched run. `gh run list` reflects run-CREATION time, not first-log time, so the run is visible to the API as soon as registered — typically within 1–5 seconds.
+
+The correlation-id field is preserved as a secondary audit anchor. It's still passed to `gh workflow run`, still declared on `fro-bot.yaml` as an optional input on both `workflow_dispatch:` and `workflow_call:` blocks (PR #433 added that declaration; without it, the API rejects the dispatch with `HTTP 422: Unexpected inputs provided: ["correlation-id"]` — the called workflow's input schema is validated at dispatch time regardless of whether the workflow body uses the value). The token remains visible in the dispatched run's `inputs` metadata for any future debugging session, but it is no longer the primary identification mechanism.
+
+This eliminates the bootstrap-time race entirely. Production runs see the dispatched run identified within 1–5 seconds of `gh workflow run` returning; the 90-second poll budget exists for GitHub backend hiccups, not for agent boot time. Same-second collisions in this repo's single-dispatcher topology are not a concern — `main.yaml`'s Release job is the only caller. If multiple dispatchers were to share `fro-bot.yaml`, the correlation token would need to upgrade from audit-only to primary-key status, with polling validating it against the dispatched run's `inputs.correlation-id` via `gh api`.
 
 ### Lodash template, then bash
 
@@ -155,8 +171,44 @@ Several alternatives were explicitly rejected during planning or document review
 - **Auto-issue-creation on Fro Bot failure.** The fail-soft contract uses Actions annotations plus the dispatched run's own status as the visibility surface. Auto-creating issues for every transient failure would pollute the issue tracker; release frequency is low enough that operator review of failed Actions runs is sufficient.
 - **A fallback LLM provider when Fro Bot is unavailable.** v2 fails-soft on narrative-generation; the release still ships with the auto-generated body, and the operator can manually invoke the skill against an alternative provider if narrative quality matters for that specific release.
 - **Backfill of historical releases on the v2 PR.** v1 already retroactively patched v2.20.5, v2.20.6, v2.21.0, and v2.22.0. v2 fires on each NEW release going forward; older releases remain patchable via manual skill invocation if needed.
-- **An end-to-end synthetic test of the full chain** (`workflow_call` → Fro Bot agent → `gh release edit`). The chain cannot be fully exercised before a real release ships. U2's smoke test covers the prompt construction, polling, watch handling, classification, and annotation paths — everything the successCmd controls. The end-to-end behavior is validated by the first real release after merge.
+- **An end-to-end synthetic test of the full chain** (`workflow_call` → Fro Bot agent → `gh release edit`). The chain cannot be fully exercised before a real release ships. The smoke test covers the prompt construction, polling, watch handling, classification, and annotation paths — everything the successCmd controls. The end-to-end behavior is validated by the first real release after merge. **In practice, the first release was not enough**: four consecutive production releases (v2.23.0–v2.23.3) each surfaced a different contract violation invisible to mock-based tests. See the Production Verification section below.
 - **Cancellation of the Fro Bot run on Release job interrupt.** If the operator cancels the Release job mid-run, the dispatched Fro Bot run continues to completion. This is acceptable because (a) the Fro Bot run is read-mostly until the final `gh release edit`, and (b) the idempotency contract handles re-runs cleanly.
+
+## Production Verification
+
+The v2 automation took five releases to reach a stable green pipeline. Each step in the chain surfaced a contract violation that mock-based integration tests could not detect. The pattern is worth preserving as a check-list for future automation that bridges semantic-release, GitHub Actions workflow dispatch, and agent-driven runs.
+
+| PR | Tag | Failure | Root cause |
+|----|-----|---------|------------|
+| #430 | v2.23.0 | `SyntaxError: Unexpected token ':'` from `@semantic-release/exec` | Inline `successCmd` YAML scalar contained `${VAR:-default}` bash parameter expansion, eaten by Lodash template renderer |
+| #431 | v2.23.1 | Same SyntaxError, this time from the comment block in the YAML | `\${VAR}` escape attempt; Lodash default settings have no backslash-escape semantics. Verified locally: `template('\\${VAR}')({})` throws `VAR is not defined` |
+| #432 | v2.23.2 | `HTTP 422: Unexpected inputs provided: ["correlation-id"]` at dispatch | `fro-bot.yaml` did not declare `correlation-id` as a `workflow_dispatch:` / `workflow_call:` input. GitHub validates input names against the called workflow's schema at dispatch time, regardless of body usage |
+| #433 | v2.23.3 | Polling timed out after 90s scanning logs for correlation token | Fro Bot's OpenCode agent takes several minutes to bootstrap before emitting any prompt-derived log content. Log-scan-based identification cannot win against multi-minute boot times |
+| #434 | v2.23.4 | **SUCCESS** — auto-narrative end-to-end | Timestamp-based identification via `gh run list --json createdAt` filtering. `gh run list` reflects run-creation time, visible to the API within 1–5 seconds of dispatch |
+
+The structural lesson: **mock-based integration tests cover everything the dispatching script controls, but cannot model real-world Lodash rendering, GitHub API contract validation, or agent runtime characteristics.** Any new automation in this class needs either:
+
+1. A staging environment where the actual remote contracts can be exercised before merge to `main`, OR
+2. Explicit acceptance of the "first N releases catch contract violations" pattern, with fail-soft semantics that keep the release shipping even when the automation fails.
+
+This automation chose option 2. The fail-soft contract for narrative-generation failures kept npm and GitHub release publishing fully functional across all four failed attempts, so the only operational impact was missing prose in four release bodies (later patched manually using the v1 skill procedure).
+
+For the next class of automation that bridges these systems, consider adding a one-line local Lodash render check as a pre-push gate. Requires `bun add -d lodash-es js-yaml` (this repo already has both as transitive dependencies of `@semantic-release/exec` and `@semantic-release/release-notes-generator`).
+
+```bash
+bun -e "
+import yaml from 'js-yaml';
+import { readFileSync } from 'node:fs';
+const { default: template } = await import('lodash-es/template.js');
+const config = yaml.load(readFileSync('.releaserc.yaml', 'utf8'));
+const exec = config.plugins.find(p => Array.isArray(p) && p[0] === '@semantic-release/exec');
+if (!exec) process.exit(0);
+const rendered = template(exec[1].successCmd)({ nextRelease: { gitTag: 'v0.0.0' } });
+console.log('OK:', rendered);
+"
+```
+
+If this throws `ReferenceError: VAR is not defined`, the YAML has a Lodash collision before any release runs. The local check would have caught PRs #430 and #431 before merge.
 
 ## Operational Considerations
 
