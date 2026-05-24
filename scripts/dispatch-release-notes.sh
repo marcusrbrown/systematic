@@ -73,15 +73,28 @@ GitHub release URL.
 PROMPT_EOF
 )
 
-# Dispatch the Fro Bot workflow. gh workflow run does not return a parseable run ID,
-# so we identify our run via correlation-token polling below.
+# Capture dispatch timestamp BEFORE issuing the workflow_run call.
+# We identify our dispatched run by selecting the newest workflow_dispatch run on
+# fro-bot.yaml created strictly after this timestamp. The correlation-id input
+# is also passed (and declared on fro-bot.yaml as an optional input) so that the
+# value is visible in the run's inputs metadata for auditing, but the primary
+# identification mechanism is timestamp-based.
+#
+# Previous strategy (log-scanning for correlation token echo) did not work in
+# production: Fro Bot's agent takes several minutes to bootstrap (bun install,
+# model download, MCP server startup) before it emits any prompt-derived log
+# content, so a 90-second log scan budget completed before the correlation
+# token ever appeared in the logs. Timestamp-based identification is robust
+# against arbitrary agent boot times since gh run list reflects run creation
+# time, not first-log time.
+DISPATCH_EPOCH=$(date +%s)
 gh workflow run --ref main fro-bot.yaml \
   -f "prompt=$PROMPT" \
   -f "correlation-id=$CORRELATION_ID"
 
-# Poll up to 90 seconds for a run whose early log lines contain our correlation token.
-# Every 5 seconds, list recent fro-bot.yaml runs on main and scan the first 50 log
-# lines of each candidate for the token. The first match is our dispatched run.
+# Poll up to 90 seconds for a workflow_dispatch run on fro-bot.yaml that was
+# created strictly after DISPATCH_EPOCH. Once found, this is our dispatched run
+# (no other dispatchers race against this from main.yaml's Release job).
 # Test escape hatches: RELEASE_NOTES_TEST_POLL_BUDGET_SECS and
 # RELEASE_NOTES_TEST_POLL_INTERVAL_SECS shorten the loop for unit tests.
 # Production runs always use 90s budget / 5s interval.
@@ -90,24 +103,24 @@ POLL_INTERVAL_SECS="${RELEASE_NOTES_TEST_POLL_INTERVAL_SECS:-5}"
 RUN_ID=""
 POLL_DEADLINE=$(( $(date +%s) + POLL_BUDGET_SECS ))
 while [ "$(date +%s)" -lt "$POLL_DEADLINE" ]; do
-  CANDIDATES="$(gh run list --workflow=fro-bot.yaml --branch=main \
+  # Find the newest workflow_dispatch run on main whose createdAt is strictly
+  # after DISPATCH_EPOCH. gh run list returns ISO-8601 timestamps; convert each
+  # to epoch via `date -d` and compare numerically.
+  CANDIDATE_ID="$(gh run list --workflow=fro-bot.yaml --branch=main --event=workflow_dispatch \
     --json databaseId,createdAt --limit 10 2>/dev/null \
-    | jq -r '.[].databaseId')"
-  for CANDIDATE_ID in $CANDIDATES; do
-    # `gh run view --log` has no --limit flag (it belongs to `gh run list`).
-    # Pipe through head -n 50 to bound the scan to early log lines where the
-    # correlation token is echoed by Fro Bot.
-    if gh run view "$CANDIDATE_ID" --log 2>/dev/null | head -n 50 \
-        | grep -q "correlation=$CORRELATION_ID"; then
-      RUN_ID="$CANDIDATE_ID"
-      break 2
-    fi
-  done
+    | jq -r --argjson cutoff "$DISPATCH_EPOCH" \
+      '[.[] | . + {epoch: (.createdAt | fromdateiso8601)}]
+       | map(select(.epoch > $cutoff))
+       | sort_by(.epoch) | reverse | .[0].databaseId // empty')"
+  if [ -n "$CANDIDATE_ID" ] && [ "$CANDIDATE_ID" != "null" ]; then
+    RUN_ID="$CANDIDATE_ID"
+    break
+  fi
   sleep "$POLL_INTERVAL_SECS"
 done
 
 if [ -z "$RUN_ID" ]; then
-  echo "::error::Dispatched workflow run not found within ${POLL_BUDGET_SECS}s (correlation=$CORRELATION_ID). GitHub may have rejected the dispatch or the workflow never started."
+  echo "::error::Dispatched workflow run not found within ${POLL_BUDGET_SECS}s (correlation=$CORRELATION_ID, dispatched_at_epoch=$DISPATCH_EPOCH). GitHub may have rejected the dispatch or the workflow never started."
   exit 1
 fi
 
