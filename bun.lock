@@ -13,7 +13,7 @@
         "@biomejs/biome": "2.4.15",
         "@opencode-ai/plugin": "1.15.6",
         "@opencode-ai/sdk": "1.15.6",
-        "@semantic-release/exec": "^7",
+        "@semantic-release/exec": "7.1.0",
         "@types/bun": "latest",
         "@types/js-yaml": "4.0.9",
         "@types/node": "24.12.4",
