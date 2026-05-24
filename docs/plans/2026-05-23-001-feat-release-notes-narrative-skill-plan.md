@@ -1,9 +1,13 @@
 ---
 title: "feat: Add release-notes-narrative project-scoped skill"
 type: feat
-status: active
+status: completed
 date: 2026-05-23
 origin: docs/brainstorms/2026-05-23-release-notes-narrative-skill-requirements.md
+shipped:
+  pr: 429
+  release: v2.22.0
+  date: 2026-05-23
 ---
 
 # feat: Add release-notes-narrative project-scoped skill

@@ -1,10 +1,14 @@
 ---
 title: "feat: Launch surface cleanup — docs, README, and repo polish"
 type: feat
-status: active
+status: completed
 date: 2026-05-22
 deepened: 2026-05-22
 origin: docs/brainstorms/2026-05-22-launch-surface-requirements.md
+shipped:
+  pr: 428
+  release: v2.21.0
+  date: 2026-05-23
 ---
 
 # Launch Surface Cleanup
