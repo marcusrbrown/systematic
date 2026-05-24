@@ -193,7 +193,7 @@ The structural lesson: **mock-based integration tests cover everything the dispa
 
 This automation chose option 2. The fail-soft contract for narrative-generation failures kept npm and GitHub release publishing fully functional across all four failed attempts, so the only operational impact was missing prose in four release bodies (later patched manually using the v1 skill procedure).
 
-For the next class of automation that bridges these systems, consider adding a one-line local Lodash render check as a pre-push gate:
+For the next class of automation that bridges these systems, consider adding a one-line local Lodash render check as a pre-push gate. Requires `bun add -d lodash-es js-yaml` (this repo already has both as transitive dependencies of `@semantic-release/exec` and `@semantic-release/release-notes-generator`).
 
 ```bash
 bun -e "
