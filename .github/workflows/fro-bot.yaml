@@ -20,11 +20,26 @@ on:
       prompt:
         description: Custom prompt for the Fro Bot agent
         required: true
+      correlation-id:
+        description: >-
+          Optional UUID for callers that need to identify their dispatched run by
+          scanning early log output. The release-notes-narrative automation uses
+          this to match its dispatch against gh run list output. Unused by all
+          other entry points; the value is informational only and Fro Bot does
+          not act on it directly.
+        required: false
   workflow_call:
     inputs:
       prompt:
         description: Prompt for the Fro Bot agent
         required: true
+        type: string
+      correlation-id:
+        description: >-
+          Optional UUID for callers that need to identify their dispatched run
+          by scanning early log output. See workflow_dispatch input of the
+          same name.
+        required: false
         type: string
 
 permissions:
