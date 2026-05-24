@@ -5,26 +5,27 @@
  * with a mock `gh` binary on PATH. The mock binary's behavior is controlled
  * per-scenario via environment variables.
  *
- * All 22 scenarios are covered:
+ * All 19 scenarios are covered:
  *  1.  Validation — invalid RELEASE_VERSION
  *  2.  Validation — valid pre-release (v2.23.0-rc.1)
  *  3.  Happy path — success conclusion + valid body length
  *  4.  Happy path — neutral conclusion (idempotent short-circuit)
  *  5.  Edge case — timeout (WATCH_EXIT=124)
  *  5b. Edge case — unexpected non-zero WATCH_EXIT (e.g., 137)
- *  6.  Edge case — dispatch not registered within 90s
- *  7.  Edge case — correlation token matches second-newest run, not first
- *  8.  Error — HTTP 401 auth denial
- *  9.  Error — HTTP 403 + permission denied
- * 10.  Error — "Resource not accessible" auth keyword
- * 11.  Error — off-target tag edit (ANSI-stripped)
- * 12.  Error — success conclusion but body too short
- * 13.  Error — action_required conclusion
- * 14.  Error — skipped conclusion (policy block)
- * 15.  Edge case — cancelled conclusion
- * 16.  Edge case — generic narrative failure
- * 17.  Edge case — unknown future conclusion
- * 18.  Integration — prompt construction includes correlation token, target tag, repo name
+ *  6.  Edge case — dispatch not registered within 90s (empty run list)
+ *  7.  Edge case — no run created after dispatch epoch (all runs pre-date cutoff)
+ *  8.  Edge case — selects newest workflow_dispatch run created after dispatch epoch
+ *  9.  Error — HTTP 401 auth denial
+ * 10.  Error — HTTP 403 + permission denied
+ * 11.  Error — "Resource not accessible" auth keyword
+ * 12.  Error — off-target tag edit (ANSI-stripped)
+ * 13.  Error — success conclusion but body too short
+ * 14.  Error — action_required conclusion
+ * 15.  Error — skipped conclusion (policy block)
+ * 16.  Edge case — cancelled conclusion
+ * 17.  Edge case — generic narrative failure
+ * 18.  Edge case — unknown future conclusion
+ * 19.  Integration — prompt construction includes correlation token, target tag, repo name
  */
 
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
@@ -71,26 +72,21 @@ interface ScenarioResult {
 }
 
 /**
- * Builds a run-list JSON array where each entry has a databaseId and a log
- * that either matches or does not match the correlation token.
+ * Builds a run-list JSON array where each entry has a databaseId and a
+ * createdAt timestamp. The script identifies the dispatched run by selecting
+ * the newest workflow_dispatch run whose createdAt is strictly after the
+ * DISPATCH_EPOCH captured immediately before `gh workflow run`.
  *
- * The successCmd polls `gh run list` and then calls `gh run view <id> --log`
- * for each candidate. The mock-gh.sh returns MOCK_GH_RUN_VIEW_LOG for ALL
- * `gh run view --log` calls. To simulate "second run matches", we need the
- * run-list to contain two entries and the log to contain the correlation token
- * (the script will find it on the second attempt after the first fails).
- *
- * For the "second matches" scenario we use a special env var
- * MOCK_GH_RUN_VIEW_LOG_BY_ID which the mock reads to return different logs
- * per run ID. Since our mock-gh.sh is simple (single MOCK_GH_RUN_VIEW_LOG),
- * we implement the "second matches" scenario by having the first run's ID
- * appear in a MOCK_GH_SKIP_IDS list that causes the mock to return empty log.
+ * Using a far-future fixed timestamp ensures the run is always selected
+ * regardless of when the test executes.
  */
-function makeRunListJson(entries: Array<{ databaseId: number }>): string {
+function makeRunListJson(
+  entries: Array<{ databaseId: number; createdAt?: string }>,
+): string {
   return JSON.stringify(
     entries.map((e) => ({
       databaseId: e.databaseId,
-      createdAt: new Date().toISOString(),
+      createdAt: e.createdAt ?? '2099-01-01T00:00:00Z',
     })),
   )
 }
@@ -131,22 +127,17 @@ function runSuccessCmd(
 
   const parentPath = process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin'
 
-  // Default correlation ID — used to wire the polling loop end-to-end so most
-  // tests can focus on conclusion classification rather than re-mocking polling.
-  // Tests that explicitly want polling to FAIL set MOCK_GH_RUN_LIST_JSON: '[]'.
-  // The correlation line is auto-prepended to any provided MOCK_GH_RUN_VIEW_LOG
-  // so tests that override the log to inject auth/off-target signals still let
-  // the polling loop find their run.
+  // Default correlation ID — forwarded as RELEASE_NOTES_TEST_CORRELATION_ID so
+  // scenario 19 can assert the value is passed as a separate -f arg to gh workflow run.
   const defaultCorrelationId =
     env.RELEASE_NOTES_TEST_CORRELATION_ID ?? 'test-correlation-token-default'
-  const correlationLine = `correlation=${defaultCorrelationId}\n`
-  const providedLog = env.MOCK_GH_RUN_VIEW_LOG
+
+  // Default log provides a realistic success-path output for off-target detection
+  // and auth-failure scanning. Run identification is now timestamp-based, so the
+  // log is NOT scanned for the correlation token during polling.
   const effectiveLog =
-    providedLog === undefined
-      ? `${correlationLine}release edit ${env.RELEASE_VERSION ?? 'v2.23.0'} succeeded\n`
-      : providedLog === ''
-        ? '' // explicit empty — caller wants polling to fail
-        : `${correlationLine}${providedLog}`
+    env.MOCK_GH_RUN_VIEW_LOG ??
+    `release edit ${env.RELEASE_VERSION ?? 'v2.23.0'} succeeded\n`
 
   const releaseVersion = env.RELEASE_VERSION ?? 'v2.23.0'
 
@@ -154,7 +145,10 @@ function runSuccessCmd(
     PATH: `${mockBinDir}:${parentPath}`,
     GITHUB_REPOSITORY: env.GITHUB_REPOSITORY ?? 'marcusrbrown/systematic',
     MOCK_GH_RUN_LIST_JSON:
-      env.MOCK_GH_RUN_LIST_JSON ?? makeRunListJson([{ databaseId: 12345 }]),
+      env.MOCK_GH_RUN_LIST_JSON ??
+      makeRunListJson([
+        { databaseId: 12345, createdAt: '2099-01-01T00:00:00Z' },
+      ]),
     MOCK_GH_RUN_VIEW_LOG: effectiveLog,
     MOCK_GH_RUN_VIEW_CONCLUSION: env.MOCK_GH_RUN_VIEW_CONCLUSION ?? 'success',
     MOCK_GH_RUN_WATCH_EXIT: env.MOCK_GH_RUN_WATCH_EXIT ?? '0',
@@ -275,13 +269,12 @@ describe('release-notes-ci successCmd smoke tests', () => {
   it(
     'exits 0 with narrative-applied message on success conclusion and body length >= 200',
     () => {
-      const correlationId = 'test-correlation-happy-path'
       const result = run({
         RELEASE_VERSION: 'v2.23.0',
         MOCK_GH_RUN_VIEW_CONCLUSION: 'success',
         MOCK_GH_RELEASE_VIEW_BODY_LEN: '800',
-        // Log must contain the correlation token so polling finds the run
-        MOCK_GH_RUN_VIEW_LOG: `correlation=${correlationId}\nsome other log content`,
+        MOCK_GH_RUN_VIEW_LOG:
+          'release edit v2.23.0 succeeded\nsome other log content',
       })
 
       expect(result.exitCode).toBe(0)
@@ -380,107 +373,59 @@ describe('release-notes-ci successCmd smoke tests', () => {
   )
 
   // -------------------------------------------------------------------------
-  // 7. Edge case — correlation token matches second-newest run, not first
+  // 7. Edge case — no run created after dispatch epoch
   // -------------------------------------------------------------------------
   it(
-    'uses the second run when correlation token only appears in its log',
+    'exits 1 with ::error:: when all candidate runs pre-date the dispatch epoch',
     () => {
-      // Two runs: 99999 (newest, no correlation match) and 12345 (second, matches)
-      // The mock returns MOCK_GH_RUN_VIEW_LOG for ALL view --log calls.
-      // We need the first run (99999) to NOT match and the second (12345) to match.
-      //
-      // Since mock-gh.sh returns the same log for all run IDs, we use a
-      // special approach: set the log to contain the correlation token, but
-      // also write a wrapper that skips the first ID.
-      //
-      // Simpler: use a custom mock-gh wrapper that checks the run ID arg.
-      const customMockBin = path.join(testTempDir, 'custom-mock-bin')
-      fs.mkdirSync(customMockBin, { recursive: true })
+      // All runs have a createdAt in the past — before any real DISPATCH_EPOCH.
+      // The script's jq filter selects runs with epoch > DISPATCH_EPOCH, so none
+      // qualify and the polling loop times out.
+      const result = run({
+        RELEASE_VERSION: 'v2.23.0',
+        MOCK_GH_RUN_LIST_JSON: makeRunListJson([
+          { databaseId: 12345, createdAt: '1999-01-01T00:00:00Z' },
+        ]),
+      })
 
-      const customGh = path.join(customMockBin, 'gh')
-      // The script returns empty log for run 99999, and a correlation-matching
-      // log for run 12345. The correlation token is embedded in the log.
-      fs.writeFileSync(
-        customGh,
-        `#!/usr/bin/env bash
-set -Eeuo pipefail
-SUBCOMMAND="\${1:-}"
-if [[ "$SUBCOMMAND" == "run" && "\${2:-}" == "list" ]]; then
-  echo "\${MOCK_GH_RUN_LIST_JSON:-[]}"
-  exit 0
-fi
-if [[ "$SUBCOMMAND" == "run" && "\${2:-}" == "view" ]]; then
-  RUN_ID="\${3:-}"
-  LOG_FLAG=0
-  JSON_FLAG=0
-  for arg in "$@"; do
-    [[ "$arg" == "--log" ]] && LOG_FLAG=1
-    [[ "$arg" == "--json" ]] && JSON_FLAG=1
-  done
-  if [[ "$LOG_FLAG" == "1" ]]; then
-    if [[ "$RUN_ID" == "99999" ]]; then
-      echo "no correlation here"
-    else
-      echo "\${MOCK_GH_RUN_VIEW_LOG:-}"
-    fi
-    exit 0
-  fi
-  if [[ "$JSON_FLAG" == "1" ]]; then
-    echo "{\\"conclusion\\":\\"\${MOCK_GH_RUN_VIEW_CONCLUSION:-success}\\"}"
-    exit 0
-  fi
-fi
-if [[ "$SUBCOMMAND" == "run" && "\${2:-}" == "watch" ]]; then
-  exit "\${MOCK_GH_RUN_WATCH_EXIT:-0}"
-fi
-if [[ "$SUBCOMMAND" == "workflow" && "\${2:-}" == "run" ]]; then
-  echo "Created workflow_dispatch event for fro-bot.yaml at refs/heads/main"
-  exit 0
-fi
-if [[ "$SUBCOMMAND" == "release" && "\${2:-}" == "view" ]]; then
-  echo "\${MOCK_GH_RELEASE_VIEW_BODY_LEN:-800}"
-  exit 0
-fi
-echo "custom-mock-gh: unhandled: $*" >&2
-exit 1
-`,
-      )
-      fs.chmodSync(customGh, 0o755)
-
-      const runListJson = makeRunListJson([
-        { databaseId: 99999 },
-        { databaseId: 12345 },
-      ])
-
-      // Use a specific correlation token so the script and the custom mock's
-      // run-12345 log agree on the exact match value. The custom mock returns
-      // "no correlation here" for run 99999, so only run 12345's log matches.
-      const knownCorrelation = 'second-run-correlation-token'
-      const result = runSuccessCmd(
-        scriptPath,
-        {
-          RELEASE_VERSION: 'v2.23.0',
-          RELEASE_NOTES_TEST_CORRELATION_ID: knownCorrelation,
-          MOCK_GH_RUN_LIST_JSON: runListJson,
-          MOCK_GH_RUN_VIEW_LOG: `correlation=${knownCorrelation}\nsome log`,
-          MOCK_GH_RUN_VIEW_CONCLUSION: 'success',
-          MOCK_GH_RELEASE_VIEW_BODY_LEN: '800',
-        },
-        customMockBin,
-      )
-
-      // The script should find run 12345 (second) and succeed
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode).toBe(1)
       const combined = result.stdout + result.stderr
-      expect(combined).not.toContain('::error::')
-      // Should contain the second run's ID in output
-      expect(combined).toContain('12345')
+      expect(combined).toContain('::error::')
+      expect(combined).toMatch(/not found within/i)
+      expect(combined).toContain('dispatched_at_epoch=')
     },
     SCENARIO_TIMEOUT_MS,
   )
 
   // -------------------------------------------------------------------------
-  // 8. Error — HTTP 401 auth denial
+  // 8. Edge case — selects newest workflow_dispatch run created after dispatch epoch
+  // -------------------------------------------------------------------------
+  it(
+    'selects newest workflow_dispatch run created after dispatch epoch when two candidates exist',
+    () => {
+      // Two runs both after the cutoff. Run 99999 has a later createdAt than 12345,
+      // so the script should select 99999 (newest-after-cutoff wins).
+      const result = run({
+        RELEASE_VERSION: 'v2.23.0',
+        MOCK_GH_RUN_LIST_JSON: JSON.stringify([
+          { databaseId: 99999, createdAt: '2099-06-01T00:00:00Z' },
+          { databaseId: 12345, createdAt: '2099-01-01T00:00:00Z' },
+        ]),
+        MOCK_GH_RUN_VIEW_CONCLUSION: 'success',
+        MOCK_GH_RELEASE_VIEW_BODY_LEN: '800',
+      })
+
+      expect(result.exitCode).toBe(0)
+      const combined = result.stdout + result.stderr
+      expect(combined).not.toContain('::error::')
+      // The newer run (99999) should be selected and appear in the output
+      expect(combined).toContain('99999')
+    },
+    SCENARIO_TIMEOUT_MS,
+  )
+
+  // -------------------------------------------------------------------------
+  // 9. Error — HTTP 401 auth denial
   // -------------------------------------------------------------------------
   it(
     'exits 1 with ::error:: Auth failure when log contains HTTP 401',
@@ -500,7 +445,7 @@ exit 1
   )
 
   // -------------------------------------------------------------------------
-  // 9. Error — HTTP 403 + permission denied
+  // 10. Error — HTTP 403 + permission denied
   // -------------------------------------------------------------------------
   it(
     'exits 1 with ::error:: Auth failure when log contains HTTP 403 and permission denied',
@@ -521,7 +466,7 @@ exit 1
   )
 
   // -------------------------------------------------------------------------
-  // 10. Error — "Resource not accessible" auth keyword
+  // 11. Error — "Resource not accessible" auth keyword
   // -------------------------------------------------------------------------
   it(
     'exits 1 with ::error:: Auth failure when log contains "Resource not accessible"',
@@ -542,7 +487,7 @@ exit 1
   )
 
   // -------------------------------------------------------------------------
-  // 11. Error — off-target tag edit (ANSI-stripped)
+  // 12. Error — off-target tag edit (ANSI-stripped)
   // -------------------------------------------------------------------------
   it(
     'exits 1 with ::error:: Off-target when log contains ANSI-colored edit of a different tag',
@@ -564,7 +509,7 @@ exit 1
   )
 
   // -------------------------------------------------------------------------
-  // 12. Error — success conclusion but body too short
+  // 13. Error — success conclusion but body too short
   // -------------------------------------------------------------------------
   it(
     'exits 1 with ::error:: body integrity check failed when conclusion=success but body length < 200',
@@ -584,7 +529,7 @@ exit 1
   )
 
   // -------------------------------------------------------------------------
-  // 13. Error — action_required conclusion
+  // 14. Error — action_required conclusion
   // -------------------------------------------------------------------------
   it(
     'exits 1 with ::error:: manual intervention when conclusion=action_required',
@@ -603,7 +548,7 @@ exit 1
   )
 
   // -------------------------------------------------------------------------
-  // 14. Error — skipped conclusion (policy block)
+  // 15. Error — skipped conclusion (policy block)
   // -------------------------------------------------------------------------
   it(
     'exits 1 with ::error:: policy/branch protection when conclusion=skipped',
@@ -622,7 +567,7 @@ exit 1
   )
 
   // -------------------------------------------------------------------------
-  // 15. Edge case — cancelled conclusion
+  // 16. Edge case — cancelled conclusion
   // -------------------------------------------------------------------------
   it(
     'exits 0 with ::warning:: when conclusion=cancelled',
@@ -641,7 +586,7 @@ exit 1
   )
 
   // -------------------------------------------------------------------------
-  // 16. Edge case — generic narrative failure
+  // 17. Edge case — generic narrative failure
   // -------------------------------------------------------------------------
   it(
     'exits 0 with ::warning:: for generic failure with no security signals',
@@ -664,7 +609,7 @@ exit 1
   )
 
   // -------------------------------------------------------------------------
-  // 17. Edge case — unknown future conclusion
+  // 18. Edge case — unknown future conclusion
   // -------------------------------------------------------------------------
   it(
     'exits 0 with ::warning:: Unknown conclusion for unrecognized conclusion values',
@@ -684,7 +629,7 @@ exit 1
   )
 
   // -------------------------------------------------------------------------
-  // 18. Integration — prompt construction includes correlation token, target tag, repo name
+  // 19. Integration — prompt construction includes correlation token, target tag, repo name
   // -------------------------------------------------------------------------
   it(
     'prompt and correlation-id are forwarded to gh workflow run as separate -f fields',
@@ -694,7 +639,8 @@ exit 1
         testTempDir,
         'captured-correlation.txt',
       )
-      const knownCorrelationId = 'test-known-correlation-uuid-for-scenario-18'
+      const knownCorrelationId =
+        'test-known-correlation-uuid-for-forwarding-assertion'
 
       const result = run({
         RELEASE_VERSION: 'v2.23.0',
