@@ -2,6 +2,7 @@
 title: semantic-release release-notes-generator ignores commit bodies; patch with gh release edit
 module: .releaserc.yaml + release-pipeline
 date: 2026-05-17
+last_updated: 2026-05-23
 problem_type: developer_experience
 component: tooling
 severity: medium
@@ -11,11 +12,14 @@ tags:
   - changelog
   - gh-cli
   - conventional-commits
+  - ci-automation
 applies_when:
   - A release needs an audience-facing narrative (deprecation cycle, migration steps, breaking changes) beyond the auto-generated commit-subject bullets
   - Authoring a squash-commit message body intending for it to appear in the GitHub release notes
   - Validating release-notes content after a semantic-release publish
 ---
+
+> **Note (2026-05-23):** The manual `gh release edit` workflow described here is now automated for this repo. As of v2.23.4, `scripts/dispatch-release-notes.sh` (wired via `@semantic-release/exec` in `.releaserc.yaml`) dispatches the `release-notes-narrative` skill on every successful publish from `main`. See [`docs/solutions/best-practices/release-notes-narrative-ci-automation-architecture-2026-05-23.md`](../best-practices/release-notes-narrative-ci-automation-architecture-2026-05-23.md) for the v2 CI automation architecture and [`docs/solutions/best-practices/release-notes-narrative-procedure-2026-05-23.md`](../best-practices/release-notes-narrative-procedure-2026-05-23.md) for the v1 manual procedure both modes inherit. The myth itself — that release-notes-generator ingests commit bodies — remains true. Manual `gh release edit` is still the right answer when the automation fails-soft or for backfilling historical releases.
 
 # semantic-release release-notes-generator ignores commit bodies; patch with gh release edit
 
