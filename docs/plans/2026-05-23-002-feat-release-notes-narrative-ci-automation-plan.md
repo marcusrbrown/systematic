@@ -1,9 +1,15 @@
 ---
 title: Wire CI automation for release-notes-narrative skill
 type: feat
-status: active
+status: completed
 date: 2026-05-23
 origin: docs/brainstorms/2026-05-23-release-notes-narrative-ci-automation-requirements.md
+shipped:
+  pr: 430
+  hotfix_prs: [431, 432, 433, 434]
+  release: v2.23.4
+  date: 2026-05-23
+  note: "v2.23.0–v2.23.3 each surfaced a different production contract violation; v2.23.4 is the end-to-end-verified release with auto-narrative landing within seconds of tag publication. See docs/solutions/best-practices/release-notes-narrative-ci-automation-architecture-2026-05-23.md for the Production Verification table."
 ---
 
 # Wire CI automation for release-notes-narrative skill
