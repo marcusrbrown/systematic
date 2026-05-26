@@ -56,7 +56,22 @@ function toTitleCase(name: string): string {
 }
 
 function cleanDescription(raw: string): string {
-  return raw.replace(/<[^>]+>/g, '').replace(/\\\\n/g, '\n')
+  // Trust boundary: `raw` is the description field of bundled SKILL.md / agent
+  // frontmatter we ship in this repo. It is not user-supplied at runtime — the
+  // docs build only ever runs against committed source. The HTML-tag strip is
+  // cosmetic (descriptions occasionally include `<br>` etc.), not a security
+  // control. The regex is still iterated to a fixed point so the static analyzer
+  // (CodeQL `js/incomplete-multi-character-sanitization`, alert #31) sees a
+  // sanitizer that cannot leave a stripped prefix behind on adversarial input
+  // like `<<tag>` — defense in depth in case this helper is ever reused on
+  // untrusted input by a future change.
+  let cleaned = raw
+  let previous: string
+  do {
+    previous = cleaned
+    cleaned = cleaned.replace(/<[^>]+>/g, '')
+  } while (cleaned !== previous)
+  return cleaned.replace(/\\\\n/g, '\n')
 }
 
 function transformFrontmatter(
