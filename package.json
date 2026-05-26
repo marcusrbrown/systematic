@@ -65,8 +65,8 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.4.15",
-    "@opencode-ai/plugin": "1.15.8",
-    "@opencode-ai/sdk": "1.15.8",
+    "@opencode-ai/plugin": "1.15.10",
+    "@opencode-ai/sdk": "1.15.10",
     "@semantic-release/exec": "7.1.0",
     "@types/bun": "latest",
     "@types/js-yaml": "4.0.9",
