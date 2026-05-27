@@ -295,7 +295,7 @@ function resolveRef(
     current !== null && i < MAX_SCHEMA_REF_RESOLUTION_DEPTH;
     i++
   ) {
-    const ref = current['$ref']
+    const ref = current.$ref
     if (typeof ref === 'string') {
       const prefix = '#/definitions/'
       if (!ref.startsWith(prefix)) return null
@@ -310,7 +310,7 @@ function resolveRef(
     // schema has metadata (description, default, examples) at the wrapper
     // level and the structural body (properties, additionalProperties) at the
     // wrapped level.
-    const allOf = current['allOf']
+    const allOf = current.allOf
     if (Array.isArray(allOf) && allOf.length === 1) {
       const wrapped = asObject(allOf[0])
       if (wrapped !== null && '$ref' in wrapped) {
@@ -418,7 +418,7 @@ function addOverlayCrossFieldConstraints(root: Record<string, unknown>): void {
   const categoriesBody =
     categoriesNode === null ? null : resolveRef(root, categoriesNode)
   if (categoriesBody !== null) {
-    applyConstraint(asObject(categoriesBody['additionalProperties']))
+    applyConstraint(asObject(categoriesBody.additionalProperties))
   }
 
   // agents: a typed object whose container is itself behind a ref/wrapper.
@@ -427,7 +427,7 @@ function addOverlayCrossFieldConstraints(root: Record<string, unknown>): void {
   // Resolving once and mutating the overlay definition covers all 102 keys.
   const agentsNode = getSchemaNode(root, ['properties', 'agents'])
   const agentsBody = agentsNode === null ? null : resolveRef(root, agentsNode)
-  const agentProperties = asObject(agentsBody?.['properties'])
+  const agentProperties = asObject(agentsBody?.properties)
   if (agentProperties !== null) {
     for (const key of Object.keys(agentProperties)) {
       applyConstraint(asObject(agentProperties[key]))

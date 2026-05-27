@@ -19,9 +19,9 @@
  * Requires: graphviz (dot) installed on system
  */
 
-const fs = require('fs')
-const path = require('path')
-const { execSync } = require('child_process')
+const fs = require('node:fs')
+const path = require('node:path')
+const { execSync } = require('node:child_process')
 
 function extractDotBlocks(markdown) {
   const blocks = []
@@ -61,7 +61,7 @@ function combineGraphs(blocks, skillName) {
     label="${block.name}";
     ${body
       .split('\n')
-      .map((line) => '  ' + line)
+      .map((line) => `  ${line}`)
       .join('\n')}
   }`
   })
