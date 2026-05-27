@@ -69,22 +69,22 @@ export default defineConfig({
       sidebar: [
         {
           label: 'Getting Started',
-          autogenerate: { directory: 'getting-started' },
+          items: [{ autogenerate: { directory: 'getting-started' } }],
         },
         {
           label: 'Guides',
-          autogenerate: { directory: 'guides' },
+          items: [{ autogenerate: { directory: 'guides' } }],
         },
         {
           label: 'Reference',
           items: [
             {
               label: 'Skills',
-              autogenerate: { directory: 'reference/skills' },
+              items: [{ autogenerate: { directory: 'reference/skills' } }],
             },
             {
               label: 'Agents',
-              autogenerate: { directory: 'reference/agents' },
+              items: [{ autogenerate: { directory: 'reference/agents' } }],
             },
             {
               label: 'Configuration',
