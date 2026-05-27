@@ -570,6 +570,22 @@ jobs:
           # Modernization Watch) is the only consumer and only ever runs from
           # the daily autoheal schedule or an autoheal-mode dispatch.
           IS_SUNDAY_UTC: ${{ env.IS_SUNDAY_UTC || 'false' }}
+          # PROMPT routing precedence — ORDER MATTERS.
+          #
+          # Both workflow_call AND workflow_dispatch can carry a non-empty
+          # `inputs.prompt`, and both branches MUST come BEFORE the mode-gated
+          # branches below. External callers (release-notes-narrative
+          # automation via scripts/dispatch-release-notes.sh, manual
+          # operators, sister workflows) commonly dispatch with prompt-only
+          # and let `mode` default to `autoheal`. If a mode-gated branch
+          # captured them first, the supplied prompt would be silently
+          # ignored and AUTOHEAL_PROMPT rendered instead — breaking the live
+          # release-notes automation contract verified across v2.23.4-v2.24.0.
+          #
+          # When editing this ternary, walk every event_name × mode × cron
+          # combination explicitly. The validate-review-mode-inputs step
+          # above only protects against `mode=review` with empty prompt;
+          # all other invalid combinations rely entirely on this ordering.
           PROMPT: >-
             ${{
               (github.event_name == 'workflow_call' && inputs.prompt != '' && inputs.prompt)
