@@ -510,6 +510,24 @@ jobs:
         )
       )
     steps:
+      # Fork-guard asymmetry across the four PR-adjacent event types:
+      #
+      #   pull_request                  github.event.pull_request populated →
+      #                                 top-level if: gate catches forks.
+      #   pull_request_review_comment   github.event.pull_request populated →
+      #                                 top-level if: gate catches forks.
+      #   issue_comment                 github.event.pull_request is NULL even
+      #                                 when the issue IS a PR (GitHub uses
+      #                                 github.event.issue.pull_request instead).
+      #                                 Top-level gate cannot see the fork bit,
+      #                                 so this explicit API-query step is the
+      #                                 only line of defense for this path.
+      #   discussion_comment            No PR association possible → fork check
+      #                                 is N/A; OWNER/MEMBER/COLLABORATOR
+      #                                 association gate alone is sufficient.
+      #
+      # This step exists ONLY for the issue_comment case. Verified against
+      # GitHub webhook docs for each event type's payload shape.
       - name: Refuse fork PR heads from comment triggers
         if: github.event_name == 'issue_comment' && github.event.issue.pull_request
         env:
