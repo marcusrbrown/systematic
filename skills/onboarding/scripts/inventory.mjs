@@ -120,7 +120,7 @@ async function listDirNames(dir) {
   const entries = await listDir(dir)
   return entries
     .filter((e) => e.isDirectory() && !EXCLUDED_DIRS.has(e.name))
-    .map((e) => e.name + '/')
+    .map((e) => `${e.name}/`)
 }
 
 async function listFileNames(dir, opts) {
@@ -511,7 +511,7 @@ async function getStructure() {
   for (const entry of entries) {
     if (EXCLUDED_DIRS.has(entry.name)) continue
     if (entry.isDirectory()) {
-      topLevel.push(entry.name + '/')
+      topLevel.push(`${entry.name}/`)
     } else {
       topLevel.push(entry.name)
     }

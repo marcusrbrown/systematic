@@ -726,11 +726,11 @@ function checkDeprecatedBlockForBundled(
 ): void {
   if (!isSkillEntryFile(relPath)) return
   if (!Object.hasOwn(data, 'deprecated')) return
-  const deprecated = data['deprecated']
+  const deprecated = data.deprecated
   if (!isRecord(deprecated)) return
 
-  const since = deprecated['since']
-  const removal = deprecated['removal']
+  const since = deprecated.since
+  const removal = deprecated.removal
   const sinceMissing = typeof since !== 'string' || since.trim() === ''
   const removalMissing = typeof removal !== 'string' || removal.trim() === ''
   if (sinceMissing || removalMissing) {
@@ -749,7 +749,7 @@ function checkDeprecatedBlockForBundled(
     })
   }
 
-  const reason = deprecated['reason']
+  const reason = deprecated.reason
   if (typeof reason === 'string' && reason.trim() !== '') return
   violations.push({
     file: relPath,

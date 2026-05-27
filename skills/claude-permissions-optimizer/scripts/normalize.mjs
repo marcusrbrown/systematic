@@ -47,20 +47,20 @@ export function normalize(command) {
 
   // Handle pnpm --filter <pkg> <subcommand> specially
   const pnpmFilter = command.match(/^pnpm\s+--filter\s+\S+\s+(\S+)/)
-  if (pnpmFilter) return 'pnpm --filter * ' + pnpmFilter[1] + ' *'
+  if (pnpmFilter) return `pnpm --filter * ${pnpmFilter[1]} *`
 
   // Handle sed specially -- preserve the mode flag to keep safe patterns narrow.
   // sed -i (in-place) is destructive; sed -n, sed -e, bare sed are read-only.
   if (/^sed\s/.test(command)) {
     if (/\s-i\b/.test(command)) return 'sed -i *'
     const sedFlag = command.match(/^sed\s+(-[a-zA-Z])\s/)
-    return sedFlag ? 'sed ' + sedFlag[1] + ' *' : 'sed *'
+    return sedFlag ? `sed ${sedFlag[1]} *` : 'sed *'
   }
 
   // Handle ast-grep specially -- preserve --rewrite flag.
   if (/^(ast-grep|sg)\s/.test(command)) {
     const base = command.startsWith('sg') ? 'sg' : 'ast-grep'
-    return /\s--rewrite\b/.test(command) ? base + ' --rewrite *' : base + ' *'
+    return /\s--rewrite\b/.test(command) ? `${base} --rewrite *` : `${base} *`
   }
 
   // Handle find specially -- preserve key action flags.
@@ -70,12 +70,12 @@ export function normalize(command) {
     if (/\s-exec\s/.test(command)) return 'find -exec *'
     // Extract the first predicate flag for a narrower safe pattern
     const findFlag = command.match(/\s(-(?:name|type|path|iname))\s/)
-    return findFlag ? 'find ' + findFlag[1] + ' *' : 'find *'
+    return findFlag ? `find ${findFlag[1]} *` : 'find *'
   }
 
   // Handle git -C <dir> <subcommand> -- strip the -C <dir> and normalize the git subcommand
   const gitC = command.match(/^git\s+-C\s+\S+\s+(.+)$/)
-  if (gitC) return normalize('git ' + gitC[1])
+  if (gitC) return normalize(`git ${gitC[1]}`)
 
   // Split on compound operators -- normalize the first command only
   const compoundMatch = command.match(/^(.+?)\s*(&&|\|\||;)\s*(.+)$/)
@@ -123,7 +123,7 @@ export function normalize(command) {
   let argStart = 1
 
   if (multiWordBases.includes(base) && parts.length > 1) {
-    prefix = base + ' ' + parts[1]
+    prefix = `${base} ${parts[1]}`
     argStart = 2
   }
 
@@ -141,11 +141,11 @@ export function normalize(command) {
   }
 
   const flagStr =
-    preservedFlags.length > 0 ? ' ' + preservedFlags.join(' ') : ''
+    preservedFlags.length > 0 ? ` ${preservedFlags.join(' ')}` : ''
   const hasVaryingArgs = parts.length > argStart + preservedFlags.length
 
   if (hasVaryingArgs) {
-    return prefix + flagStr + ' *'
+    return `${prefix + flagStr} *`
   }
   return prefix + flagStr
 }

@@ -93,7 +93,7 @@ function matchGlob(pattern, command) {
   if (normalized.endsWith(' *')) {
     const base = normalized.slice(0, -2)
     const escaped = base.replace(/[.+^${}()|[\]\\]/g, '\\$&')
-    regexStr = '^' + escaped + '($| .*)'
+    regexStr = `^${escaped}($| .*)`
   } else {
     regexStr =
       '^' +
@@ -530,7 +530,7 @@ for (const [command, data] of commands) {
     continue
   }
 
-  const pattern = 'Bash(' + normalize(command) + ')'
+  const pattern = `Bash(${normalize(command)})`
   const { tier, reason } = classify(command)
 
   const existing = patternGroups.get(pattern)
