@@ -34,6 +34,7 @@ bun test --filter "pattern"  # Filter tests
 bun run docs:dev         # Local docs site
 bun run docs:build       # Build docs (generates reference + builds Starlight)
 bun run docs:generate    # Sync reference content from bundled assets
+bun run docs:verify      # Run docs build the same way CI does (use before approving docs-framework dep bumps)
 bun run registry:build   # Build OCX registry
 bun run registry:drift   # Check registry source drift vs generated assets
 bun run registry:validate  # Validate registry without building
