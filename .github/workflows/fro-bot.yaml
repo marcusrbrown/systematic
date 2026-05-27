@@ -498,7 +498,7 @@ jobs:
         ) ||
         github.event_name == 'schedule' ||
         github.event_name == 'workflow_dispatch' ||
-        inputs.prompt != '' ||
+        (github.event_name == 'workflow_call' && inputs.prompt != '') ||
         (
           (github.event_name == 'issue_comment' ||
            github.event_name == 'pull_request_review_comment' ||
@@ -563,12 +563,17 @@ jobs:
         uses: fro-bot/agent@8aac0fc36437a6c871321fa3389033c8262504b7 # v0.45.0
         env:
           OPENCODE_PROMPT_ARTIFACT: 'true'
+          # IS_SUNDAY_UTC is set by the "Detect Sunday UTC" step only on schedule
+          # and workflow_dispatch events. For all other entry points (PR review,
+          # comment triggers, issue events, workflow_call), the fallback 'false'
+          # is correct because category 7 of AUTOHEAL_PROMPT (Upstream
+          # Modernization Watch) is the only consumer and only ever runs from
+          # the daily autoheal schedule or an autoheal-mode dispatch.
           IS_SUNDAY_UTC: ${{ env.IS_SUNDAY_UTC || 'false' }}
           PROMPT: >-
             ${{
               (github.event_name == 'workflow_call' && inputs.prompt != '' && inputs.prompt)
               || (github.event_name == 'workflow_dispatch' && inputs.prompt != '' && inputs.prompt)
-              || (github.event_name == 'workflow_dispatch' && inputs.mode == 'review' && inputs.prompt != '' && inputs.prompt)
               || (github.event_name == 'workflow_dispatch' && inputs.mode == 'maintenance' && env.MAINTENANCE_PROMPT)
               || (github.event_name == 'workflow_dispatch' && inputs.mode == 'autoheal' && env.AUTOHEAL_PROMPT)
               || (github.event_name == 'workflow_dispatch' && env.AUTOHEAL_PROMPT)
