@@ -1,0 +1,94 @@
+---
+title: "With and Without Systematic: Recorded Sessions"
+description: Side-by-side recorded OpenCode sessions on real tasks, with and without Systematic loaded — showing what the structured review loop catches that one-shot prompting misses.
+sidebar:
+  order: 3
+---
+
+AI models write competent first drafts. Systematic makes the review happen.
+
+This page is not a benchmark. It is a set of **recorded sessions** — real `opencode run` transcripts on real tasks, with and without Systematic loaded, captured verbatim. The point is not "the AI is bad without us." Modern frontier models write solid code on the first pass. The point is what often *didn't* happen on that first pass in these sessions: the structured planning and review that catches production risks before they ship.
+
+The honest finding up front: **simply asking a good model to "review your work" gets you surprisingly far.** Systematic's value is that the planning-and-review loop becomes the default path — structured, independent, multi-pass — instead of something you have to remember to ask for and hope the model does thoroughly.
+
+## The 30-second version
+
+One task: add a `last_login_at` column to a 5-million-row Postgres `users` table and backfill it from a 500-million-row `login_events` table. Same model (`gpt-5.5`), same task. The prompts differed because the Systematic run explicitly invokes the workflow — the prompt-parity column below isolates that effect so you can see what comes from "asking for review" versus what comes from Systematic.
+
+| | Bare prompt (no plugin) | "Review it" prompt (no plugin) | With Systematic |
+|---|---|---|---|
+| Wall time | 56 seconds | ~3 minutes | ~9 minutes |
+| Process | one response | one response, inline review | brainstorm → plan → implement → review |
+| Independent review passes | 0 | 0 (inline only) | 7 review subagents, 5 revisions |
+| Caught the trigger-window race | no (0/3 runs) | yes | yes |
+| Caught DDL timeouts + unbounded backfill | no | no | yes |
+
+The bare migration was not bad. It used `CREATE INDEX CONCURRENTLY`, batched commits, and `GREATEST(...)` to avoid clobbering newer values. A competent engineer would have written something similar. It just shipped without anyone checking it.
+
+## A bug that looks fine
+
+Both versions installed a trigger to keep `last_login_at` current during the backfill, then swapped it in. The "without" version did this:
+
+```sql
+DROP TRIGGER IF EXISTS login_events_update_user_last_login_at ON login_events;
+-- ... set up backfill ...
+CREATE TRIGGER login_events_update_user_last_login_at ...
+```
+
+With autocommit on, `DROP TRIGGER` and `CREATE TRIGGER` run in separate transactions. There is a window between them. A login that lands in that window fires no trigger and is not in the backfill snapshot — so that user's `last_login_at` is **silently stale, potentially indefinitely**, until a later login or a reconciliation job happens to fix it. No error. No crash. Just quietly wrong data.
+
+The Systematic run's review subagent caught it:
+
+> With autocommit enabled, DROP TRIGGER and CREATE TRIGGER run in separate transactions. A concurrent insert can occur after the drop commits but before the create takes effect... it will not fire the trigger and will not be included in the backfill, leaving `users.last_login_at` stale.
+
+It also flagged three more: a row-level (`FOR EACH ROW`) trigger that adds an extra `users` update per login event, increasing write-ahead-log volume and row-lock contention under hot users; an unbounded full-scan backfill that can't be restarted; and missing `lock_timeout`/`statement_timeout` on the DDL. Five revisions later, the migration was clean.
+
+We ran the bare "without" version **three times**. It missed the trigger-window race **all three times**.
+
+## "Couldn't you just ask it to review?"
+
+Yes — mostly. This is the most important control on this page, so here it is plainly.
+
+We ran a third version: **no plugin**, but the prompt itself said "brainstorm, plan, implement, then review." On its own, with no Systematic loaded, that prompt caught the trigger-window race and the trigger-overhead problem. Just asking for review is a strong baseline, and you should do it.
+
+What it did *not* do: it reviewed inline, in a single pass, and stopped there. The Systematic run dispatched **independent** review subagents — separate passes for performance, safety, and correctness — that caught the two issues the prompt-parity run missed: the missing DDL timeouts and the unbounded, non-resumable backfill.
+
+So the honest claim is narrow and true: **Systematic doesn't make the model smarter. It makes structured, independent review the default instead of an optional afterthought** — and in these sessions, that default caught real bugs that one-shot generation repeatedly missed.
+
+## Does it hold in another risk domain?
+
+Different task, different kind of risk: add "Sign in with GitHub" OAuth to an existing Express app.
+
+Both versions used a `state` parameter for CSRF — table stakes. The "without" version shipped there, unreviewed. The Systematic run used four review subagents, including a dedicated security pass, which caught two real vulnerabilities in code that otherwise looked complete:
+
+- **Session fixation** — the session ID was not regenerated after login, so a pre-login session token stays valid post-authentication.
+- **OAuth state replay** — an error callback (`?error=access_denied&state=<valid>`) returned *before* consuming the stored state, leaving it reusable on a later callback. Replay protection, defeated.
+
+Data-integrity in the migration task, session security in the OAuth task — the same pattern in both: the review step caught what the first draft skipped. (The OAuth task was a single run per arm, with no separate prompt-parity control — so read it as a second data point, not a second controlled experiment.)
+
+## Does it hold across models?
+
+We also ran the migration task on an open-source model (`kimi-k2.6`). It followed the workflow enough to produce an inline, severity-rated self-review and apply its own fixes, but it did not dispatch independent review subagents. So this run supports a narrower claim: the workflow prompt can help outside frontier models, but the independent-review effect we saw with `gpt-5.5` was not reproduced here.
+
+## What this costs
+
+Nine minutes versus fifty-six seconds. That is the trade. Use Systematic for work where a quiet data-corruption bug or a session-fixation hole is expensive. Do not use it for a throwaway script or a one-line fix — the overhead isn't worth it there. See [when not to use it](#when-systematic-is-not-worth-it) below.
+
+## When Systematic is not worth it
+
+- Throwaway scripts and prototypes you'll delete tomorrow
+- Single-file edits with no integration surface
+- Tasks where you already know the answer and just need it typed out
+- Anything where a wrong result is cheap to detect and cheap to fix
+
+These sessions make the case for using Systematic on high-stakes work: migrations, auth, anything touching production data or security boundaries.
+
+## Honest limits
+
+- **These are recorded sessions, not a controlled benchmark.** Sample sizes are small and explicit: the bare migration baseline was run n=3 (to check consistency); the prompt-parity control, the Systematic migration run, both OAuth runs, and the `kimi-k2.6` run were each n=1. LLM output varies run to run.
+- **The "with" prompt differs from the "without" prompt** — it explicitly invokes the workflow. That is how you actually use Systematic, and we disclose it rather than hiding it. The prompt-parity control above exists precisely to separate "asking for review" from "Systematic."
+- **The baseline is competent.** We are not claiming otherwise. The gap is process, not first-draft quality.
+
+## Reproduce it
+
+The harness, both task prompts, the pre-registered evaluation rubrics (written before any run), and the raw JSONL transcripts are in the repository under `tests/manual/with-without-eval/`. The rubric and task were committed before the runs so the result could not be retrofitted. Run it yourself against any model you have access to.
