@@ -185,7 +185,7 @@ docs:generate  →  transform-content.ts      (skills/agents pages + counts in m
 
 ### Bucket 1 — Instrument + Launch-Slice
 
-- [ ] **Unit 1: Umami analytics wiring (docs-side, hard-disabled until launch)**
+- [x] **Unit 1: Umami analytics wiring (docs-side, hard-disabled until launch)**
 
 **Goal:** Wire the docs site so Umami CAN load and fire activation events, but ship it HARD-DISABLED (script omitted at build time) until infra#315 is live. Unit 9 flips it on.
 
@@ -220,7 +220,7 @@ docs:generate  →  transform-content.ts      (skills/agents pages + counts in m
 
 ---
 
-- [ ] **Unit 2: Privacy page + footer link**
+- [x] **Unit 2: Privacy page + footer link**
 
 **Goal:** Publish a Privacy page documenting the cookie-free, self-hosted, no-PII analytics posture, linked from every docs page footer.
 
@@ -294,7 +294,7 @@ docs:generate  →  transform-content.ts      (skills/agents pages + counts in m
 
 ### Bucket 2 — Ship + List
 
-- [ ] **Unit 4: Live-counts emitter (StatsBanner data source)**
+- [x] **Unit 4: Live-counts emitter (StatsBanner data source)**
 
 **Goal:** Add a build-time generator that emits a counts artifact (skills, agents, OCX components, latest version) for the homepage to consume — never hardcoded.
 
@@ -332,7 +332,7 @@ docs:generate  →  transform-content.ts      (skills/agents pages + counts in m
 
 ---
 
-- [ ] **Unit 5: Homepage layout uplift**
+- [x] **Unit 5: Homepage layout uplift**
 
 **Goal:** Rewrite the homepage to the three-flatland structural pattern with Systematic theme — StatsBanner, FeatureCard grid, alternating ValueProp sections — no shader, no React.
 
@@ -370,7 +370,7 @@ docs:generate  →  transform-content.ts      (skills/agents pages + counts in m
 
 ---
 
-- [ ] **Unit 6: SEO metadata**
+- [x] **Unit 6: SEO metadata**
 
 **Goal:** Add structured SEO metadata across the docs site.
 
@@ -435,7 +435,7 @@ docs:generate  →  transform-content.ts      (skills/agents pages + counts in m
 
 ### Bucket 3 — Promote
 
-- [ ] **Unit 8: Social-channel drafts**
+- [x] **Unit 8: Social-channel drafts**
 
 **Goal:** Commit per-channel promotion drafts with count-accuracy guarded against drift.
 
