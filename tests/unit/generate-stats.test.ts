@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { generateStats, type Stats } from './generate-stats.js'
+import { generateStats, type Stats } from '../../docs/scripts/generate-stats.js'
 
 function makeTempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'generate-stats-'))
