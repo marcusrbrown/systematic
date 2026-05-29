@@ -26,6 +26,7 @@ Each skill is a directory containing a `SKILL.md` file with YAML frontmatter. Op
 |-------|-------------|
 | `generating-project-docs` | Create, refresh, or update project-level docs (`README.md`, `ARCHITECTURE.md`, `STRUCTURE.md`) — derives all facts from the live repo |
 | `release-notes-narrative` | Rewrite terse bucket bullets or spurious `closes [URL-fragment]` autolinks in a semantic-release GitHub release into proper narrative drawn from commit bodies and PR descriptions |
+| `running-with-without-evals` | Produce or refresh a with/without-Systematic demo or A/B plugin evaluation — recorded `opencode run` sessions comparing behavior with and without a plugin loaded, with pre-registration, controls, and honest framing |
 
 ## Adding a new skill here
 
