@@ -57,6 +57,21 @@ export default defineConfig({
             content: '630',
           },
         },
+        ...(process.env.UMAMI_WEBSITE_ID
+          ? [
+              {
+                tag: 'script',
+                attrs: {
+                  src: 'https://metrics.fro.bot/script.js',
+                  defer: true,
+                  'data-website-id': process.env.UMAMI_WEBSITE_ID,
+                  'data-do-not-track': 'true',
+                  'data-exclude-search': 'true',
+                  'data-exclude-hash': 'true',
+                },
+              },
+            ]
+          : []),
       ],
       social: [
         {
