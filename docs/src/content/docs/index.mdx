@@ -1,6 +1,6 @@
 ---
 title: Systematic
-description: Systematic adds structured engineering workflows to OpenCode — brainstorm, plan, work, and review with 40+ bundled skills and 50+ specialized agents.
+description: Systematic adds structured engineering workflows to OpenCode — brainstorm, plan, work, and review with bundled skills and specialized agents.
 template: splash
 hero:
   tagline: "Your AI writes code. Systematic adds engineering discipline."
@@ -12,6 +12,8 @@ hero:
       link: /systematic/getting-started/installation/
       icon: right-arrow
       variant: primary
+      attrs:
+        data-umami-event: click_install_cta
     - text: View on GitHub
       link: https://github.com/marcusrbrown/systematic
       icon: external
@@ -19,39 +21,54 @@ hero:
 ---
 
 import { Card, CardGrid, Steps } from '@astrojs/starlight/components'
+import StatsBanner from '../../components/StatsBanner.astro'
+
+<StatsBanner />
+
+## See the Difference
+
+Most AI coding sessions produce code. Systematic produces a process — brainstorm before planning, plan before building, review before shipping.
+
+[Walk through the workflow →](/systematic/guides/main-loop/)
 
 ## What You Get
 
 <CardGrid stagger>
-  <Card title="40+ Bundled Skills" icon="open-book">
+  <Card title="Bundled Skills" icon="open-book">
     Structured workflows for every phase: brainstorm, plan, work, review, compound, TDD, browser testing, and more. Each skill encodes a repeatable engineering process — not a prompt, a discipline.
   </Card>
-  <Card title="50+ Specialized Agents" icon="rocket">
-    Purpose-built subagents for architecture, security, performance, design, and code review. They run as OpenCode subagents and inherit your model — no extra config.
+  <Card title="Specialized Agents" icon="rocket">
+    Purpose-built subagents for architecture, security, performance, design, and code review. They run inside OpenCode and inherit your model — no extra config.
   </Card>
-  <Card title="Zero-Config Install" icon="setting">
-    Drop one line into your OpenCode config. Skills and agents register automatically via plugin hooks. Nothing to wire up.
+  <Card title="Bootstrap Injection" icon="setting">
+    Drop one line into your OpenCode config. Skills and agents register automatically via plugin hooks. Nothing to wire up, no scaffolding commands to run.
   </Card>
-  <Card title="OCX Registry Support" icon="puzzle">
-    Install individual components via the OCX registry — pick only the skills and agents your project needs, or install everything at once.
+  <Card title="Typed Config" icon="puzzle">
+    Plugin configuration is fully typed. Your editor catches mistakes before you run anything.
+  </Card>
+  <Card title="OCX Registry" icon="list-format">
+    Install individual components via the OCX registry — pick only what your project needs, or pull everything at once.
+  </Card>
+  <Card title="Content-Integrity CI" icon="approve-check-circle">
+    A built-in gate enforces structural rules on bundled agents — no model field in subagent frontmatter, no banned patterns. Catches authoring mistakes before they ship.
   </Card>
 </CardGrid>
 
-## The Workflow
+## Engineering Effort That Compounds
 
-Systematic is built around a loop. You plan before you build. You review before you ship.
+Right now, every new task takes roughly the same effort as the last one. Systematic changes that.
 
-<Steps>
-1. **Brainstorm** — Start with `/ce:brainstorm`. Explore requirements, surface edge cases, and produce a right-sized requirements document before writing a line of code.
+When you run `/ce:compound` after a solved problem, you're writing the solution into the system permanently. The next time that problem comes up — or a close relative of it — the agent already has the pattern. The tenth task is faster than the first. The hundredth can run in parallel.
 
-2. **Plan** — Run `/ce:plan` to break the work into a structured implementation plan. Deepen it with `/systematic:deepen-plan` when the stakes are high.
+This isn't a feature. It's the entire design goal. [Read the philosophy →](/systematic/guides/philosophy/)
 
-3. **Work** — Use `/ce:work` to execute the plan. The skill keeps the agent focused, tracks progress, and surfaces blockers instead of silently guessing.
+## A Loop You Can Trust
 
-4. **Review** — Run `/ce:review` before opening a PR. Tiered persona agents check for correctness, security, performance, and style — in parallel.
-</Steps>
+Ad-hoc AI sessions produce ad-hoc results. Systematic structures the session into stages you can audit.
 
-After shipping, use `/ce:compound` to capture what you learned so the next time this problem comes up, the system already knows the answer.
+The loop is: brainstorm → plan → work → review → compound. Each stage has a skill. Each skill has a defined scope and exit condition. You know what the agent is supposed to do at each step, and you can verify it did.
+
+No hidden prompts. No global context injection. You invoke skills explicitly when you want them.
 
 ## Quick Start
 
@@ -69,7 +86,7 @@ Then start your first task:
 /ce:brainstorm "add dark mode toggle"
 ```
 
-That's it. Skills and agents are available immediately. No API keys, no accounts, no telemetry.
+Skills and agents are available immediately. No API keys, no accounts, no telemetry.
 
 ## What Systematic Is Not
 

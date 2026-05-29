@@ -1,0 +1,52 @@
+---
+title: Privacy
+description: How the Systematic docs site handles analytics — cookie-free, self-hosted, no PII collected.
+sidebar:
+  hidden: true
+---
+
+The Systematic docs site is designed to respect your privacy. This page documents exactly what is and is not collected when you visit.
+
+## Analytics
+
+The docs site uses [Umami](https://umami.is/), a self-hosted, open-source analytics platform deployed at `metrics.fro.bot`. No third-party analytics provider processes your data.
+
+Analytics are **only active** when the site is built with the `UMAMI_WEBSITE_ID` environment variable set. In development builds this variable is unset, so no tracking script is loaded at all.
+
+### What is collected
+
+- **Aggregate pageviews** — which pages are visited and how often, with no visitor-level linkage across sessions.
+- **One named interaction event:** `click_install_cta` — recorded when a visitor clicks an install call-to-action.
+- Quick Start page visits are captured as ordinary aggregate pageviews, not as a separate named event.
+
+That is the complete list. Nothing else is collected.
+
+### What is not collected
+
+- **No cookies.** Umami operates without setting any cookies.
+- **No personally identifiable information (PII).** Names, email addresses, and device identifiers are never recorded.
+- **No cross-site tracking.** The tracker is self-hosted and does not participate in any ad network or cross-domain tracking scheme.
+- **No fingerprinting.** Canvas, font, or hardware fingerprinting is not used.
+- **No URL query strings or fragments.** The tracker is configured with `data-exclude-search="true"` and `data-exclude-hash="true"`, so query parameters and URL fragments are stripped before any pageview is recorded.
+
+### Do Not Track
+
+The tracker is configured with `data-do-not-track="true"`. Umami honors the browser [Do Not Track](https://www.eff.org/issues/do-not-track) signal — when DNT is enabled in your browser, no data is sent.
+
+### Self-hosted, no third-party processor
+
+All analytics data stays on infrastructure controlled by this project. No data is shared with, sold to, or processed by any third party.
+
+### Retention and IP handling
+
+Retention period and IP address handling depend on the specific Umami instance configuration.
+
+> **Note:** Specific retention and IP-handling details are pending review of the live instance configuration and will be added here before the public launch.
+
+## Plugin runtime
+
+The Systematic plugin itself — the code that runs inside OpenCode on your machine — **transmits no telemetry of any kind**. It does not phone home, does not report usage, and does not collect or send any data anywhere. Analytics are strictly limited to this documentation website.
+
+## Contact
+
+If you have questions about privacy on this site, open an issue on [GitHub](https://github.com/marcusrbrown/systematic/issues).

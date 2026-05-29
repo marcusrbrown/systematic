@@ -38,6 +38,8 @@ docs/src/content/docs/reference/skills/
 docs/src/content/docs/reference/agents/
 # Latest schema mirror is regenerated at docs:generate time (derivative of v<MAJOR>/)
 docs/public/schemas/latest/
+# Homepage stats artifact is regenerated at docs:generate time (live counts + version)
+docs/src/data/stats.json
 
 # Workflow artifacts
 docs/brainstorms/
