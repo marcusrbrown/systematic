@@ -80,6 +80,9 @@ export default defineConfig({
           href: 'https://github.com/marcusrbrown/systematic',
         },
       ],
+      components: {
+        Footer: './src/components/CustomFooter.astro',
+      },
       customCss: ['./src/styles/custom.css'],
       sidebar: [
         {
