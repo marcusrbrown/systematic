@@ -12,7 +12,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { parse as parseJsonc } from 'jsonc-parser'
+import { type ParseError, parse as parseJsonc } from 'jsonc-parser'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -26,12 +26,8 @@ export interface Stats {
   version: string
 }
 
-interface RegistryShape {
-  components?: unknown[]
-}
-
-interface PackageJson {
-  version?: string
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 /** Count skill subdirectories that contain a SKILL.md file. */
@@ -70,8 +66,8 @@ function countAgents(rootDir: string): number {
 /**
  * Count entries in registry/registry.jsonc.
  *
- * Throws if the file is missing or has no components array — a zero count on
- * the homepage is worse than a build failure.
+ * Throws if the file is missing, malformed, or has no components array — a
+ * zero count on the homepage is worse than a build failure.
  */
 function countComponents(rootDir: string): number {
   const registryPath = path.join(rootDir, 'registry', 'registry.jsonc')
@@ -84,9 +80,17 @@ function countComponents(rootDir: string): number {
   }
 
   const raw = fs.readFileSync(registryPath, 'utf8')
-  const parsed = parseJsonc(raw) as RegistryShape | null | undefined
+  const errors: ParseError[] = []
+  const parsed: unknown = parseJsonc(raw, errors)
 
-  if (parsed == null || !Array.isArray(parsed.components)) {
+  if (errors.length > 0) {
+    throw new Error(
+      `registry/registry.jsonc contains parse errors (${errors.length} error(s)). ` +
+        'Fix the registry file before regenerating stats.',
+    )
+  }
+
+  if (!isRecord(parsed) || !Array.isArray(parsed.components)) {
     throw new Error(
       'registry/registry.jsonc is missing the `components` array. ' +
         'A zero component count would silently misrepresent the project.',
@@ -121,8 +125,12 @@ function resolveVersion(
 ): string {
   const pkgPath = path.join(rootDir, 'package.json')
   const raw = fs.readFileSync(pkgPath, 'utf8')
-  const pkg = JSON.parse(raw) as PackageJson
-  if (typeof pkg.version !== 'string' || pkg.version.length === 0) {
+  const pkg: unknown = JSON.parse(raw)
+  if (
+    !isRecord(pkg) ||
+    typeof pkg.version !== 'string' ||
+    pkg.version.length === 0
+  ) {
     throw new Error(`package.json at ${pkgPath} is missing a version string.`)
   }
 

@@ -5,7 +5,10 @@ const items = [
   { label: 'Bundled Skills', value: stats.skills },
   { label: 'Specialized Agents', value: stats.agents },
   { label: 'OCX Components', value: stats.components },
-  { label: 'Current Version', value: `v${stats.version}` },
+  {
+    label: 'Current Version',
+    value: stats.version === 'unreleased' ? 'unreleased' : `v${stats.version}`,
+  },
 ]
 ---
 

@@ -2,7 +2,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { generateStats, type Stats } from '../../docs/scripts/generate-stats.js'
+import {
+  generateStats,
+  serializeStats,
+} from '../../docs/scripts/generate-stats.js'
 
 function makeTempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'generate-stats-'))
@@ -168,7 +171,7 @@ describe('generateStats', () => {
       `${JSON.stringify({ version: '1.0.0' })}\n`,
     )
 
-    expect(() => generateStats(tmpDir)).toThrow()
+    expect(() => generateStats(tmpDir)).toThrow(/registry\/registry\.jsonc/)
   })
 
   it('throws loudly when registry.jsonc has no components array', () => {
@@ -183,7 +186,22 @@ describe('generateStats', () => {
       `${JSON.stringify({ name: 'empty' })}\n`,
     )
 
-    expect(() => generateStats(tmpDir)).toThrow()
+    expect(() => generateStats(tmpDir)).toThrow(/registry\/registry\.jsonc/)
+  })
+
+  it('throws loudly when registry.jsonc is malformed JSONC', () => {
+    setupFixtureTree(tmpDir, {
+      skills: ['ce-plan'],
+      agents: { review: ['correctness-reviewer'] },
+      version: '1.0.0',
+    })
+    // Trailing comma followed by garbage — recoverable by jsonc-parser but wrong
+    fs.writeFileSync(
+      path.join(tmpDir, 'registry', 'registry.jsonc'),
+      '{ "components": [{"name":"a","type":"skill"},], %%%GARBAGE%%% }\n',
+    )
+
+    expect(() => generateStats(tmpDir)).toThrow(/registry\/registry\.jsonc/)
   })
 
   it('idempotence: running twice produces byte-identical output', () => {
@@ -211,8 +229,3 @@ describe('generateStats', () => {
     expect(json2).toBe(json1)
   })
 })
-
-// Mirror the serialization the script uses so the idempotence test is meaningful.
-function serializeStats(stats: Stats): string {
-  return `${JSON.stringify(stats, null, 2)}\n`
-}
