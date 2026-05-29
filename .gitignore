@@ -54,3 +54,6 @@ cep-guide.md
 
 # oh-my-opencode-slim project config
 .opencode/oh-my-opencode-slim.jsonc
+
+# Eval debug logs (verbose opencode run logs; JSONL transcripts are kept)
+tests/manual/with-without-eval/**/*.log

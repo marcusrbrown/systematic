@@ -1,0 +1,1 @@
+List the names of every tool and slash-command you have available. Output only a bullet list of names, nothing else.
