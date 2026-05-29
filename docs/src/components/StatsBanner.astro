@@ -1,0 +1,55 @@
+---
+import stats from '../data/stats.json'
+
+const items = [
+  { label: 'Bundled Skills', value: stats.skills },
+  { label: 'Specialized Agents', value: stats.agents },
+  { label: 'OCX Components', value: stats.components },
+  { label: 'Current Version', value: `v${stats.version}` },
+]
+---
+
+<div class="stats-banner">
+  {items.map((item) => (
+    <div class="stats-card">
+      <span class="stats-value">{item.value}</span>
+      <span class="stats-label">{item.label}</span>
+    </div>
+  ))}
+</div>
+
+<style>
+  .stats-banner {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
+    gap: var(--space-4);
+    margin: var(--space-8) 0;
+  }
+
+  .stats-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-6) var(--space-4);
+    border: 1px solid var(--sl-color-gray-5);
+    background-color: var(--sl-color-gray-6);
+    border-radius: 0.25rem;
+    text-align: center;
+  }
+
+  .stats-value {
+    font-family: var(--sl-font-mono);
+    font-size: 2rem;
+    font-weight: 600;
+    line-height: 1;
+    color: var(--sl-color-accent);
+  }
+
+  .stats-label {
+    font-size: var(--sl-text-sm);
+    color: var(--sl-color-gray-2);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+</style>
