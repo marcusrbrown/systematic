@@ -33,8 +33,9 @@ export default defineConfig({
   },
   integrations: [
     starlight({
-      title: 'Systematic',
-      description: 'Structured engineering workflows for OpenCode',
+      title: 'Systematic — Structured Engineering Workflows for OpenCode',
+      description:
+        'Systematic is an OpenCode plugin that brings structure to AI-assisted development — brainstorm, plan, implement, and review with bundled skills and agents that encode proven engineering workflows.',
       head: [
         {
           tag: 'meta',
@@ -56,6 +57,54 @@ export default defineConfig({
             property: 'og:image:height',
             content: '630',
           },
+        },
+        {
+          tag: 'meta',
+          attrs: {
+            property: 'og:type',
+            content: 'website',
+          },
+        },
+        {
+          tag: 'meta',
+          attrs: {
+            property: 'og:site_name',
+            content: 'Systematic',
+          },
+        },
+        {
+          tag: 'meta',
+          attrs: {
+            name: 'twitter:card',
+            content: 'summary_large_image',
+          },
+        },
+        {
+          tag: 'meta',
+          attrs: {
+            name: 'twitter:image',
+            content: 'https://fro.bot/systematic/og-image.png',
+          },
+        },
+        {
+          tag: 'script',
+          attrs: { type: 'application/ld+json' },
+          content: JSON.stringify({
+            '@context': 'https://schema.org',
+            '@type': 'SoftwareSourceCode',
+            name: 'Systematic',
+            description:
+              'An OpenCode plugin that brings structure to AI-assisted development with bundled skills and agents encoding proven engineering workflows.',
+            codeRepository: 'https://github.com/marcusrbrown/systematic',
+            license: 'https://opensource.org/licenses/MIT',
+            programmingLanguage: 'TypeScript',
+            keywords: ['opencode', 'plugin', 'ai', 'workflow', 'engineering'],
+            author: {
+              '@type': 'Person',
+              name: 'Marcus R. Brown',
+              url: 'https://github.com/marcusrbrown',
+            },
+          }),
         },
         ...(process.env.UMAMI_WEBSITE_ID
           ? [
