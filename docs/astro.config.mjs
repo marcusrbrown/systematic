@@ -37,6 +37,7 @@ export default defineConfig({
   integrations: [
     starlight({
       title: 'Systematic',
+      favicon: '/favicon.svg',
       description:
         'Systematic is an OpenCode plugin that brings structure to AI-assisted development — brainstorm, plan, implement, and review with bundled skills and agents that encode proven engineering workflows.',
       head: [
