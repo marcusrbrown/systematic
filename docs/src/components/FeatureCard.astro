@@ -1,0 +1,79 @@
+---
+import { Icon } from '@astrojs/starlight/components'
+
+interface Props {
+  icon?: string
+  title: string
+}
+
+const { icon, title } = Astro.props
+---
+
+<article class="not-content feature-card">
+  <div class="head">
+    {icon && (
+      <span class="icon-wrap" aria-hidden="true">
+        <Icon name={icon as any} size="1.25rem" class="card-icon" />
+      </span>
+    )}
+    <h3 class="title" set:html={title} />
+  </div>
+  <p class="description"><slot /></p>
+</article>
+
+<style>
+  .feature-card {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+    padding: var(--space-5) var(--space-5) var(--space-6);
+    background: var(--sl-color-gray-6);
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.25rem;
+    transition: border-color 180ms cubic-bezier(0.16, 1, 0.3, 1),
+                background-color 180ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .feature-card:hover {
+    border-color: var(--sl-color-accent);
+    background-color: color-mix(in oklab, var(--sl-color-accent) 6%, var(--sl-color-gray-6));
+  }
+
+  .head {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    margin-bottom: var(--space-2);
+  }
+
+  .icon-wrap {
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 2.25rem;
+    height: 2.25rem;
+    border-radius: 0.2rem;
+    background-color: color-mix(in oklab, var(--sl-color-accent) 15%, transparent);
+    color: var(--sl-color-accent);
+  }
+
+  .title {
+    font-family: var(--sl-font-system); /* Keeping it simple and readable */
+    font-weight: 600;
+    font-size: 1.125rem;
+    line-height: 1.2;
+    letter-spacing: -0.01em;
+    color: var(--sl-color-white);
+    margin: 0;
+  }
+
+  .description {
+    flex: 1;
+    font-size: 0.9375rem;
+    line-height: 1.55;
+    color: var(--sl-color-gray-2);
+    margin: 0;
+  }
+</style>

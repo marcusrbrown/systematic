@@ -2,9 +2,8 @@
 import stats from '../data/stats.json'
 
 const items = [
-  { label: 'Bundled Skills', value: stats.skills },
-  { label: 'Specialized Agents', value: stats.agents },
-  { label: 'OCX Components', value: stats.components },
+  { label: 'Bundled Skills', value: stats.skills.toString() },
+  { label: 'Specialized Agents', value: stats.agents.toString() },
   {
     label: 'Current Version',
     value: stats.version === 'unreleased' ? 'unreleased' : `v${stats.version}`,
@@ -12,47 +11,84 @@ const items = [
 ]
 ---
 
-<div class="stats-banner">
-  {items.map((item) => (
-    <div class="stats-card">
-      <span class="stats-value">{item.value}</span>
-      <span class="stats-label">{item.label}</span>
-    </div>
-  ))}
-</div>
+<aside class="not-content stats-banner" aria-label="Project statistics">
+  <div class="stats-grid">
+    {items.map((stat) => (
+      <div class="stat-item">
+        <span class="stat-value">{stat.value}</span>
+        <span class="stat-label">{stat.label}</span>
+      </div>
+    ))}
+  </div>
+</aside>
 
 <style>
   .stats-banner {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(10rem, 1fr));
-    gap: var(--space-4);
-    margin: var(--space-8) 0;
+    position: relative;
+    margin: clamp(2rem, 5vw, 4rem) 0;
+    padding: clamp(1.5rem, 3vw, 2.25rem) clamp(1rem, 3vw, 2rem);
+    border-block: 1px solid var(--sl-color-gray-5);
+    background-color: var(--sl-color-gray-6);
   }
 
-  .stats-card {
+  .stats-grid {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: space-around;
+    gap: clamp(1rem, 3vw, 2rem);
+    max-width: 56rem;
+    margin: 0 auto;
+  }
+
+  .stat-item {
+    position: relative;
     display: flex;
     flex-direction: column;
-    align-items: center;
     gap: var(--space-2);
-    padding: var(--space-6) var(--space-4);
-    border: 1px solid var(--sl-color-gray-5);
-    background-color: var(--sl-color-gray-6);
-    border-radius: 0.25rem;
+    align-items: center;
+    padding-bottom: var(--space-2);
+    contain: paint;
+    isolation: isolate;
+    border-bottom: 2px solid transparent;
+    background-image: linear-gradient(
+      90deg,
+      var(--sl-color-accent) 0%,
+      color-mix(in oklab, var(--sl-color-accent) 70%, transparent) 70%,
+      transparent 100%
+    );
+    background-size: 100% 2px;
+    background-repeat: no-repeat;
+    background-position: 0 100%;
+    min-width: 12rem;
     text-align: center;
   }
 
-  .stats-value {
-    font-family: var(--sl-font-mono);
-    font-size: 2rem;
-    font-weight: 600;
-    line-height: 1;
-    color: var(--sl-color-accent);
+  /* Different alignment for desktop to look less generic */
+  @media (min-width: 600px) {
+    .stats-grid {
+      justify-content: space-between;
+    }
+    .stat-item {
+      align-items: flex-start;
+      text-align: left;
+    }
   }
 
-  .stats-label {
-    font-size: var(--sl-text-sm);
+  .stat-value {
+    font-family: var(--sl-font-mono);
+    font-size: clamp(1.75rem, 3.2vw, 2.5rem);
+    font-weight: 500;
+    color: var(--sl-color-accent);
+    line-height: 1;
+    letter-spacing: -0.02em;
+  }
+
+  .stat-label {
+    font-family: var(--sl-font-system);
+    font-weight: 500;
+    font-size: 0.75rem;
     color: var(--sl-color-gray-2);
     text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.08em;
   }
 </style>

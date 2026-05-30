@@ -32,6 +32,7 @@
       "!**/node_modules",
       "!**/*.md",
       "!**/.astro",
+      "!**/*.astro",
       "!.sisyphus",
       "!.slim",
       "!**/.worktrees",

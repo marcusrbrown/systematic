@@ -1,60 +1,99 @@
 ---
 title: Installation
-description: Add Systematic to OpenCode in one step — install the plugin, restart, and verify that skills and agents are registered and ready to use.
+description: Install Systematic and run your first workflow in under five minutes. Add one line to opencode.json, restart, and start your first brainstorm.
 sidebar:
   order: 1
 ---
 
-import { Steps } from '@astrojs/starlight/components';
+import { Steps } from '@astrojs/starlight/components'
+
+This page gets you from zero to your first Systematic workflow in under five minutes. Add one line to your OpenCode config, restart, and you are ready.
 
 ## Prerequisites
 
-Before installing Systematic, ensure you have the following:
+You need [OpenCode](https://opencode.ai) installed and running, plus **Node.js 18+** or the **Bun** runtime. That is it. No API keys, no accounts, no extra tooling.
 
-- **OpenCode** installed and configured on your machine.
-- **Node.js 18+** or the **Bun** runtime installed.
-
-## Installation
-
-Systematic is distributed as an npm package and integrates directly into OpenCode via its plugin system.
+## Install
 
 <Steps>
-1.  **Add the plugin to your configuration**
-    
-    Open your global OpenCode configuration file (typically located at `~/.config/opencode/opencode.json`) and add `@fro.bot/systematic` to the `plugins` array:
+1. **Add the plugin to your OpenCode config**
 
-    ```json
-    {
-      "plugins": ["@fro.bot/systematic@latest"]
-    }
-    ```
+   Open your global OpenCode config (typically `~/.config/opencode/opencode.json`) and add Systematic to the `plugins` array:
 
-2.  **Restart OpenCode**
+   ```json
+   {
+     "plugins": ["@fro.bot/systematic@latest"]
+   }
+   ```
 
-    Restart your OpenCode session to load the new plugin. Systematic uses OpenCode's `config` hook to automatically register all bundled skills and agents.
+   If you already have other plugins, add it to the existing array.
 
-3.  **Verify Installation**
+2. **Restart OpenCode**
 
-    In any OpenCode conversation, run the bootstrap skill to verify that the plugin is working:
+   Close and reopen your OpenCode session. Systematic uses OpenCode's `config` hook to register all bundled skills and agents automatically on startup. No manual wiring, no scaffolding commands.
 
-    ```bash
-    /systematic:using-systematic
-    ```
+3. **Verify it's working**
 
-    If the skill loads and displays usage instructions, the installation was successful.
+   In any conversation, check that `systematic_skill` appears in the available tool list. You can also run the bootstrap skill:
+
+   ```
+   /systematic:using-systematic
+   ```
+
+   If the skill loads and displays usage instructions, the installation succeeded.
 </Steps>
 
-## Automatic Asset Discovery
+## Automatic asset discovery
 
-One of the key features of Systematic is that it requires zero manual file copying. When the plugin loads, it automatically:
+Systematic requires zero manual file copying. When the plugin loads, it automatically:
 
 - Discovers all bundled **skills** and makes them available via the `systematic_skill` tool.
 - Registers bundled **agents** so you can @mention them immediately.
 - Exposes bundled skills as slash-invokable workflows (for example, `/ce:plan`).
 
-## Next Steps
+## Your first workflow
 
-Once you've verified the installation, you can:
+Systematic is built around a four-step loop. Here is what it looks like in practice, using a concrete task: adding a dark mode toggle.
 
-- [Configure the plugin](/systematic/getting-started/configuration/) to disable specific bundled content.
-- Explore the [architecture](/systematic/guides/architecture/) to understand how Systematic works under the hood.
+<Steps>
+1. **Brainstorm** — explore the problem before writing code
+
+   ```
+   /ce:brainstorm "add dark mode toggle"
+   ```
+
+   The brainstorm skill asks clarifying questions, surfaces edge cases, and produces a requirements document. You end up with a clear scope before a single line of code is written.
+
+2. **Plan** — break the work into a structured implementation plan
+
+   ```
+   /ce:plan
+   ```
+
+   Takes the requirements document from the brainstorm and produces a sequenced implementation plan. For high-stakes work, run `/systematic:deepen-plan` afterward to stress-test the plan's assumptions.
+
+3. **Work** — execute the plan
+
+   ```
+   /ce:work
+   ```
+
+   The agent follows the plan, tracks progress, and surfaces blockers instead of silently guessing. You stay in the loop without micromanaging every step.
+
+4. **Review** — check the work before opening a PR
+
+   ```
+   /ce:review
+   ```
+
+   Tiered persona agents check for correctness, security, performance, and style, in parallel. You get a structured report, not a wall of unranked comments.
+</Steps>
+
+After shipping, use `/ce:compound` to capture what you learned. That knowledge becomes part of the system and speeds up the next similar task.
+
+## Next steps
+
+- [The Systematic Philosophy](/systematic/guides/philosophy/) — understand why the loop is structured this way and what "compounding" actually means in practice.
+- [Configuration](/systematic/reference/configuration/) — disable bundled content you don't want, add project-specific skills, or configure agent overlays.
+- [Skills Reference](/systematic/reference/skills/) — browse all bundled skills and when to reach for each one.
+- [Agents Reference](/systematic/reference/agents/) — explore the specialized subagents available for review, research, and architecture work.

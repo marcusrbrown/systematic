@@ -9,6 +9,9 @@ export default defineConfig({
   redirects: {
     '/getting-started/configuration/': '/systematic/reference/configuration/',
     '/reference/systematic-config/': '/systematic/reference/configuration/',
+    // Quick Start merged into Installation; keep the old URL alive.
+    '/getting-started/quick-start/':
+      '/systematic/getting-started/installation/',
   },
   markdown: {
     rehypePlugins: [
@@ -33,7 +36,7 @@ export default defineConfig({
   },
   integrations: [
     starlight({
-      title: 'Systematic — Structured Engineering Workflows for OpenCode',
+      title: 'Systematic',
       description:
         'Systematic is an OpenCode plugin that brings structure to AI-assisted development — brainstorm, plan, implement, and review with bundled skills and agents that encode proven engineering workflows.',
       head: [
@@ -131,6 +134,7 @@ export default defineConfig({
       ],
       components: {
         Footer: './src/components/CustomFooter.astro',
+        SiteTitle: './src/components/SiteTitle.astro',
       },
       customCss: ['./src/styles/custom.css'],
       sidebar: [
