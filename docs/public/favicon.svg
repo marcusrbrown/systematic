@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-86 -70 172 172">
+  <defs>
+    <linearGradient id="fav-line" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#4FD1C5" />
+      <stop offset="100%" stop-color="#E91E8C" />
+    </linearGradient>
+    <linearGradient id="fav-accent" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#4FD1C5" />
+      <stop offset="50%" stop-color="#E91E8C" />
+      <stop offset="100%" stop-color="#F5A623" />
+    </linearGradient>
+    <filter id="fav-glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur" />
+      <feMerge>
+        <feMergeNode in="coloredBlur" />
+        <feMergeNode in="SourceGraphic" />
+      </feMerge>
+    </filter>
+  </defs>
+  <g filter="url(#fav-glow)">
+    <line x1="0" y1="0" x2="-70" y2="40" stroke="url(#fav-line)" stroke-width="3.5" opacity="0.8" />
+    <line x1="0" y1="0" x2="70" y2="40" stroke="url(#fav-line)" stroke-width="3.5" opacity="0.8" />
+    <line x1="-70" y1="40" x2="70" y2="40" stroke="url(#fav-accent)" stroke-width="3.5" opacity="0.8" />
+    <circle cx="0" cy="0" r="24" fill="#4FD1C5" />
+    <circle cx="-70" cy="40" r="16" fill="#E91E8C" />
+    <circle cx="70" cy="40" r="16" fill="#F5A623" />
+  </g>
+</svg>

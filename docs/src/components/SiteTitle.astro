@@ -1,33 +1,11 @@
 ---
-import { logos } from 'virtual:starlight/user-images';
+import Logo from './Logo.astro';
 import config from 'virtual:starlight/user-config';
 const { siteTitle, siteTitleHref } = Astro.locals.starlightRoute;
 ---
 
 <a href={siteTitleHref} class="site-title sl-flex">
-	{
-		config.logo && logos.dark && (
-			<>
-				<img
-					class:list={{ 'light:sl-hidden print:hidden': !('src' in config.logo) }}
-					alt={config.logo.alt}
-					src={logos.dark.src}
-					width={logos.dark.width}
-					height={logos.dark.height}
-				/>
-				{/* Show light alternate if a user configure both light and dark logos. */}
-				{!('src' in config.logo) && (
-					<img
-						class="dark:sl-hidden print:block"
-						alt={config.logo.alt}
-						src={logos.light?.src}
-						width={logos.light?.width}
-						height={logos.light?.height}
-					/>
-				)}
-			</>
-		)
-	}
+	<Logo />
 	<span class:list={["title-wrapper", { 'sr-only': config.logo?.replacesTitle }]} translate="no">
 		<span class="title-text">{siteTitle}</span>
 		<span class="tagline">Structured Engineering Workflows for OpenCode</span>
@@ -65,13 +43,6 @@ const { siteTitle, siteTitleHref } = Astro.locals.starlightRoute;
 			.tagline {
 				display: block;
 			}
-		}
-		img {
-			height: calc(var(--sl-nav-height) - 2 * var(--sl-nav-pad-y));
-			width: auto;
-			max-width: 100%;
-			object-fit: contain;
-			object-position: 0 50%;
 		}
 	}
 </style>
