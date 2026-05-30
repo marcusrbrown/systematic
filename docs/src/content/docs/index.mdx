@@ -1,101 +1,390 @@
 ---
-title: Systematic
-description: Systematic adds structured engineering workflows to OpenCode — brainstorm, plan, work, and review with bundled skills and specialized agents.
+title: Structured Engineering Workflows for OpenCode
+description: "Systematic adds structured engineering workflows to OpenCode: brainstorm, plan, work, and review with bundled skills and specialized agents."
 template: splash
-hero:
-  tagline: "Your AI writes code. Systematic adds engineering discipline."
-  image:
-    file: ../../assets/banner.svg
-    alt: Systematic plugin banner
-  actions:
-    - text: Install the Plugin
-      link: /systematic/getting-started/installation/
-      icon: right-arrow
-      variant: primary
-      attrs:
-        data-umami-event: click_install_cta
-    - text: View on GitHub
-      link: https://github.com/marcusrbrown/systematic
-      icon: external
-      variant: minimal
 ---
 
-import { Card, CardGrid, Steps } from '@astrojs/starlight/components'
+import FeatureCard from '../../components/FeatureCard.astro'
 import StatsBanner from '../../components/StatsBanner.astro'
+
+<section class="hero-section not-content">
+  <div class="hero-overlay-inner">
+    <p class="hero-eyebrow">@fro.bot/systematic</p>
+    <h1 class="hero-title">Your AI writes code.<br />Systematic adds engineering discipline.</h1>
+    <p class="hero-subtagline">Systematic brings structured workflows to OpenCode. Brainstorm, plan, implement, and review with bundled skills and agents.</p>
+    <div class="hero-actions">
+      <a href="/systematic/getting-started/installation/" class="sl-link-button primary" data-umami-event="click_install_cta">
+        <span>Install the Plugin</span>
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7" /></svg>
+      </a>
+      <a href="https://github.com/marcusrbrown/systematic" class="sl-link-button secondary">
+        <span>View on GitHub</span>
+        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17l9.2-9.2M17 17V7H7" /></svg>
+      </a>
+    </div>
+  </div>
+</section>
+
+<div class="page-body not-content">
 
 <StatsBanner />
 
-## See the Difference
+<h2 class="section-heading">See the Difference</h2>
 
-Most AI coding sessions produce code. Systematic produces a process — brainstorm before planning, plan before building, review before shipping.
+<div class="value-prop">
+  <p>Most AI coding sessions produce code. Systematic produces a process. Brainstorm before planning, plan before building, review before shipping.</p>
+  <a href="/systematic/guides/with-without-systematic/" class="sl-link-button">
+    <span>Walk through the workflow</span>
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7" /></svg>
+  </a>
+</div>
 
-[Walk through the workflow →](/systematic/guides/main-loop/)
+<h2 class="section-heading">What You Get</h2>
 
-## What You Get
+<div class="feature-grid">
+  <FeatureCard
+    icon="open-book"
+    title="Bundled Skills"
+  >
+    Structured workflows for every phase: brainstorm, plan, work, review, compound, TDD, browser testing, and more. Each skill encodes a repeatable engineering process, not just a prompt.
+  </FeatureCard>
 
-<CardGrid stagger>
-  <Card title="Bundled Skills" icon="open-book">
-    Structured workflows for every phase: brainstorm, plan, work, review, compound, TDD, browser testing, and more. Each skill encodes a repeatable engineering process — not a prompt, a discipline.
-  </Card>
-  <Card title="Specialized Agents" icon="rocket">
-    Purpose-built subagents for architecture, security, performance, design, and code review. They run inside OpenCode and inherit your model — no extra config.
-  </Card>
-  <Card title="Bootstrap Injection" icon="setting">
+  <FeatureCard
+    icon="rocket"
+    title="Specialized Agents"
+  >
+    Purpose-built subagents for architecture, security, performance, design, and code review. They run inside OpenCode and inherit your model, requiring no extra configuration.
+  </FeatureCard>
+
+  <FeatureCard
+    icon="setting"
+    title="Bootstrap Injection"
+  >
     Drop one line into your OpenCode config. Skills and agents register automatically via plugin hooks. Nothing to wire up, no scaffolding commands to run.
-  </Card>
-  <Card title="Typed Config" icon="puzzle">
-    Plugin configuration is fully typed. Your editor catches mistakes before you run anything.
-  </Card>
-  <Card title="OCX Registry" icon="list-format">
-    Install individual components via the OCX registry — pick only what your project needs, or pull everything at once.
-  </Card>
-  <Card title="Content-Integrity CI" icon="approve-check-circle">
-    A built-in gate enforces structural rules on bundled agents — no model field in subagent frontmatter, no banned patterns. Catches authoring mistakes before they ship.
-  </Card>
-</CardGrid>
+  </FeatureCard>
 
-## Engineering Effort That Compounds
+  <FeatureCard
+    icon="puzzle"
+    title="Typed Config"
+  >
+    Plugin configuration is fully typed. Your editor catches mistakes before you run anything, ensuring your setup is correct from the start.
+  </FeatureCard>
 
-Right now, every new task takes roughly the same effort as the last one. Systematic changes that.
+  <FeatureCard
+    icon="approve-check-circle"
+    title="Content-Integrity CI"
+  >
+    A built-in gate enforces structural rules on bundled agents. No model field in subagent frontmatter, no banned patterns. Catches authoring mistakes before they ship.
+  </FeatureCard>
+</div>
 
-When you run `/ce:compound` after a solved problem, you're writing the solution into the system permanently. The next time that problem comes up — or a close relative of it — the agent already has the pattern. The tenth task is faster than the first. The hundredth can run in parallel.
+<h2 class="section-heading">Engineering Effort That Compounds</h2>
 
-This isn't a feature. It's the entire design goal. [Read the philosophy →](/systematic/guides/philosophy/)
+<div class="value-prop">
+  <p>Right now, every new task takes roughly the same effort as the last one. Systematic changes that.</p>
+  <p>When you run <code>/ce:compound</code> after a solved problem, you're writing the solution into the system permanently. The next time that problem comes up, or a close relative of it, the agent already has the pattern. The tenth task is faster than the first. The hundredth can run in parallel.</p>
+  <p>This isn't a feature. It's the entire design goal.</p>
+  <a href="/systematic/guides/philosophy/" class="sl-link-button secondary" style="margin-top: 1rem;">
+    <span>Read the philosophy</span>
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14M12 5l7 7-7 7" /></svg>
+  </a>
+</div>
 
-## A Loop You Can Trust
+<h2 class="section-heading">A Loop You Can Trust</h2>
 
-Ad-hoc AI sessions produce ad-hoc results. Systematic structures the session into stages you can audit.
+<div class="value-prop">
+  <p>Ad-hoc AI sessions produce ad-hoc results. Systematic structures the session into stages you can audit.</p>
+  <p>The loop is: <strong>brainstorm → plan → work → review → compound</strong>. Each stage has a skill. Each skill has a defined scope and exit condition. You know what the agent is supposed to do at each step, and you can verify it did.</p>
+  <p>No hidden prompts. No global context injection. You invoke skills explicitly when you want them.</p>
+</div>
 
-The loop is: brainstorm → plan → work → review → compound. Each stage has a skill. Each skill has a defined scope and exit condition. You know what the agent is supposed to do at each step, and you can verify it did.
+<h2 class="section-heading">Quick Start</h2>
 
-No hidden prompts. No global context injection. You invoke skills explicitly when you want them.
-
-## Quick Start
-
-Add Systematic to your OpenCode config:
-
-```json
-{
+<div class="quick-start-box">
+  <p>Add Systematic to your OpenCode config:</p>
+  <pre><code>&#123;
   "plugins": ["@fro.bot/systematic@latest"]
-}
-```
+&#125;</code></pre>
+  <p>Then start your first task:</p>
+  <pre><code>/ce:brainstorm "add dark mode toggle"</code></pre>
+  <p class="quick-start-note">Skills and agents are available immediately. No API keys, no accounts, no telemetry.</p>
+</div>
 
-Then start your first task:
+<h2 class="section-heading">What Systematic Is Not</h2>
 
-```
-/ce:brainstorm "add dark mode toggle"
-```
+<div class="not-list">
+  <div class="not-item">
+    <strong>Not a model wrapper or prompt pack.</strong> Systematic doesn't touch your model selection or inject hidden system prompts into every message. It registers structured skills you invoke explicitly.
+  </div>
+  <div class="not-item">
+    <strong>Not another chat UI.</strong> It runs inside OpenCode. You keep your existing setup.
+  </div>
+  <div class="not-item">
+    <strong>Not SaaS or telemetry.</strong> Everything is local-first markdown assets bundled with the npm package. Nothing phones home.
+  </div>
+  <div class="not-item">
+    <strong>Not magic autopilot.</strong> The AI still does the work. Systematic gives it a process to follow, the same process a disciplined engineer would use. You stay in the loop.
+  </div>
+</div>
 
-Skills and agents are available immediately. No API keys, no accounts, no telemetry.
+<p class="ocx-note">
+  Also supported: install individual components via the OCX registry if you don't want the full bundle.
+</p>
 
-## What Systematic Is Not
+</div>
 
-**Not a model wrapper or prompt pack.** Systematic doesn't touch your model selection or inject hidden system prompts into every message. It registers structured skills you invoke explicitly.
+<style>
+{`
+  /* Remove empty vertical gaps above the hero section.
+     The first .content-panel wraps the sr-only h1#_top.
+     The second .content-panel contains the hero section. */
+  .content-panel:first-of-type {
+    padding: 0 !important;
+    border: none !important;
+  }
+  .content-panel:nth-of-type(2) {
+    padding-top: 0 !important;
+    border-top: none !important;
+  }
+  .content-panel:first-of-type {
+    padding: 0 !important;
+  }
+  .content-panel:nth-of-type(2) {
+    padding-top: 0 !important;
+  }
 
-**Not another chat UI.** It runs inside OpenCode. You keep your existing setup.
+  /* Starlight renders the frontmatter title as a content <h1 id="_top">.
+     The custom hero below is the real visible heading, so visually hide the
+     auto h1 (sr-only, not display:none) to keep the skip-link target and a
+     single semantic brand heading without showing a redundant "Systematic". */
+  .content-panel > .sl-container > h1#_top,
+  h1#_top {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+  }
 
-**Not SaaS or telemetry.** Everything is local-first markdown assets bundled with the npm package. Nothing phones home.
+  .hero-section {
+    position: relative;
+    width: 100%;
+    min-height: 40vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: clamp(3rem, 6vw, 6rem) clamp(1.5rem, 4vw, 3rem);
+    text-align: center;
+    border-bottom: 1px solid var(--sl-color-gray-5);
+    background: linear-gradient(to bottom, var(--sl-color-gray-6) 0%, var(--sl-color-black) 100%);
+  }
 
-**Not magic autopilot.** The AI still does the work. Systematic gives it a process to follow — the same process a disciplined engineer would use. You stay in the loop.
+  .hero-overlay-inner {
+    position: relative;
+    z-index: 3;
+    width: 100%;
+    max-width: 56rem;
+    margin-inline: auto;
+  }
 
-If you want to understand the philosophy behind the loop, read [The Systematic Philosophy →](/systematic/guides/philosophy/)
+  .hero-eyebrow {
+    font-family: var(--sl-font-mono);
+    font-size: clamp(0.75rem, 1vw, 0.875rem);
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--sl-color-accent);
+    margin-bottom: var(--space-4);
+  }
+
+  .hero-title {
+    font-family: var(--sl-font-heading);
+    font-size: clamp(2rem, 4.5vw, 3.25rem);
+    font-weight: 400;
+    line-height: 1.1;
+    letter-spacing: -0.015em;
+    color: var(--sl-color-white);
+    max-width: 24ch;
+    margin-inline: auto;
+    margin-bottom: var(--space-5);
+    text-wrap: balance;
+  }
+
+  .hero-subtagline {
+    font-family: var(--sl-font-system);
+    font-size: clamp(1rem, 1.5vw, 1.125rem);
+    line-height: 1.5;
+    color: var(--sl-color-gray-2);
+    max-width: 42rem;
+    margin-inline: auto;
+    margin-bottom: var(--space-8);
+    text-wrap: balance;
+  }
+
+  .hero-actions {
+    display: flex;
+    justify-content: center;
+    gap: var(--space-4);
+    flex-wrap: wrap;
+  }
+
+  .sl-link-button {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-6);
+    border-radius: 0.25rem;
+    font-family: var(--sl-font-system);
+    font-weight: 500;
+    font-size: 1rem;
+    text-decoration: none !important;
+    transition: all 0.2s var(--ease-out-expo);
+  }
+
+  .sl-link-button.primary {
+    background-color: var(--sl-color-accent);
+    color: var(--sl-color-black);
+    border: 1px solid var(--sl-color-accent);
+  }
+
+  .sl-link-button.primary:hover {
+    background-color: var(--sl-color-accent-high);
+    border-color: var(--sl-color-accent-high);
+    transform: translateY(-1px);
+  }
+
+  .sl-link-button.secondary {
+    background-color: transparent;
+    color: var(--sl-color-white);
+    border: 1px solid var(--sl-color-gray-4);
+  }
+
+  .sl-link-button.secondary:hover {
+    background-color: var(--sl-color-gray-6);
+    border-color: var(--sl-color-gray-2);
+    transform: translateY(-1px);
+  }
+
+  .page-body {
+    padding-inline: clamp(1.5rem, 4vw, 3rem);
+    padding-bottom: var(--space-12);
+    max-width: 72rem;
+    margin: 0 auto;
+  }
+
+  .section-heading {
+    font-family: var(--sl-font-heading);
+    font-size: clamp(1.625rem, 2.6vw, 2rem);
+    font-weight: 500;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+    color: var(--sl-color-white);
+    margin: var(--space-12) 0 var(--space-6);
+    border-bottom: 1px solid var(--sl-color-gray-5);
+    padding-bottom: var(--space-3);
+  }
+
+  .feature-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+    grid-auto-rows: 1fr;
+    gap: 1.5rem;
+    align-items: stretch;
+    margin-bottom: var(--space-8);
+  }
+
+  /* Make sure children stretch */
+  /* Make sure children stretch */
+  .feature-grid > article {
+    height: 100%;
+  }
+
+  @media (min-width: 900px) {
+    .feature-grid {
+      grid-template-columns: repeat(3, 1fr);
+    }
+  }
+
+  .value-prop {
+    font-family: var(--sl-font-system);
+    font-size: 1.0625rem;
+    line-height: 1.6;
+    color: var(--sl-color-gray-1);
+    max-width: 56rem;
+  }
+
+  .value-prop p {
+    margin-bottom: var(--space-4);
+  }
+
+  .quick-start-box {
+    background: var(--sl-color-gray-6);
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.25rem;
+    padding: var(--space-6);
+    max-width: 48rem;
+  }
+
+  .quick-start-box p {
+    margin-bottom: var(--space-3);
+    color: var(--sl-color-white);
+  }
+
+  .quick-start-box pre {
+    background: var(--sl-color-black);
+    border: 1px solid var(--sl-color-gray-5);
+    padding: var(--space-4);
+    border-radius: 0.25rem;
+    margin-bottom: var(--space-5);
+    overflow-x: auto;
+  }
+
+  .quick-start-box code {
+    font-family: var(--sl-font-mono);
+    font-size: 0.875rem;
+    color: var(--sl-color-gray-1);
+  }
+
+  .quick-start-note {
+    font-size: 0.875rem;
+    color: var(--sl-color-gray-3) !important;
+    margin-top: var(--space-4);
+    margin-bottom: 0 !important;
+  }
+
+  .not-list {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    max-width: 56rem;
+  }
+
+  .not-item {
+    background: var(--sl-color-gray-6);
+    border: 1px solid var(--sl-color-gray-5);
+    border-radius: 0.25rem;
+    padding: var(--space-4) var(--space-5);
+    color: var(--sl-color-gray-2);
+    line-height: 1.5;
+  }
+
+  .not-item strong {
+    color: var(--sl-color-white);
+    font-weight: 500;
+  }
+
+  .ocx-note {
+    margin-top: var(--space-12);
+    padding-top: var(--space-6);
+    border-top: 1px solid var(--sl-color-gray-5);
+    color: var(--sl-color-gray-3);
+    font-size: 0.875rem;
+    text-align: center;
+  }
+`}
+</style>
