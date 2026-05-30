@@ -78,6 +78,10 @@ jobs:
           fi
 
       - name: Build docs
+        env:
+          # Public website id (ships in the client HTML), so a repo variable, not a
+          # secret. When unset, astro.config.mjs omits the analytics script entirely.
+          UMAMI_WEBSITE_ID: ${{ vars.UMAMI_WEBSITE_ID }}
         run: bun run --cwd docs build
 
       - name: Copy registry to docs output

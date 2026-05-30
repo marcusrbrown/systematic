@@ -37,11 +37,9 @@ The tracker is configured with `data-do-not-track="true"`. Umami honors the brow
 
 All analytics data stays on infrastructure controlled by this project. No data is shared with, sold to, or processed by any third party.
 
-### Retention and IP handling
+### IP addresses and identifiers
 
-Retention period and IP address handling depend on the specific Umami instance configuration.
-
-> **Note:** Specific retention and IP-handling details are pending review of the live instance configuration and will be added here before the public launch.
+No raw IP addresses or personal identifiers are stored. Visitors are counted using a one-way hash that rotates monthly, so the same visitor cannot be tracked across months and the original IP cannot be recovered. Approximate location (country, region, city) is derived locally from the IP address at collection time, with no third-party calls. Visitors with Do Not Track enabled are not recorded at all.
 
 ## Plugin runtime
 
