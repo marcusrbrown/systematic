@@ -4,3 +4,11 @@ name: queries
 queries:
   - uses: security-extended
   - uses: security-and-quality
+
+# Manual test scaffolding is never shipped (the npm package ships dist/, skills/,
+# agents/, ATTRIBUTIONS.md) and is never run in production. The with/without-eval
+# seed app under tests/manual/ is a deliberately minimal, imperfect "existing app"
+# that the evaluation asks a model to harden — its known gaps (session fixation,
+# missing CSRF, etc.) are the eval premise, not production code to scan.
+paths-ignore:
+  - tests/manual

@@ -1,0 +1,8 @@
+I'm working on a Postgres database for a web app. Two existing tables:
+
+- users(id bigint primary key, email text, created_at timestamptz) — about 5 million rows
+- login_events(id bigint primary key, user_id bigint references users(id), occurred_at timestamptz) — about 500 million rows, growing constantly
+
+I need to add a last_login_at timestamptz column to the users table and backfill it with each user's most recent login_events.occurred_at. Write the migration.
+
+Approach this end to end: brainstorm the requirements and edge cases, plan the migration, then implement it, then review it.

@@ -255,7 +255,7 @@ docs:generate  →  transform-content.ts      (skills/agents pages + counts in m
 
 ---
 
-- [ ] **Unit 3: Canonical "with vs without Systematic" demo guide (centerpiece)**
+- [x] **Unit 3: Canonical "with vs without Systematic" demo guide (centerpiece)**
 
 **Goal:** Author the demo page that *is* the pitch — a real complex task run with and without the plugin, showing the engineering-discipline delta honestly.
 

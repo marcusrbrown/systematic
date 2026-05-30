@@ -1,0 +1,1 @@
+I have an existing Express/Node web app with a `users` table (id, email, created_at) and `express-session` already configured. I want to add "Sign in with GitHub" OAuth so users can log in with their GitHub account. Implement the login flow.

@@ -2,6 +2,11 @@
   $schema: 'https://docs.renovatebot.com/renovate-schema.json',
   description: ['Use the config preset for the @fro.bot/systematic repository'],
   extends: ['local>marcusrbrown/renovate-config', 'github>sanity-io/renovate-config:semantic-commit-type'],
+  // Test fixtures (e.g. the with/without-eval seed app) declare arbitrary,
+  // intentionally-fixed dependency versions and are never shipped or installed
+  // in CI — Renovate must not try to manage them. Preserves Renovate's default
+  // node_modules/bower ignores since setting this key replaces the default.
+  ignorePaths: ['**/node_modules/**', '**/bower_components/**', 'tests/**'],
   packageRules: [
     {
       description: 'Only allow LTS versions of @types/node (even major versions)',
