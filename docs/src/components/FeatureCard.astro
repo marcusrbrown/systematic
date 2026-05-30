@@ -1,8 +1,11 @@
 ---
+import type { ComponentProps } from 'astro/types'
 import { Icon } from '@astrojs/starlight/components'
 
+type IconName = ComponentProps<typeof Icon>['name']
+
 interface Props {
-  icon?: string
+  icon?: IconName
   title: string
 }
 
@@ -13,7 +16,7 @@ const { icon, title } = Astro.props
   <div class="feature-head">
     {icon && (
       <div class="icon-wrap" aria-hidden="true">
-        <Icon name={icon as any} size="1.25rem" class="card-icon" />
+        <Icon name={icon} size="1.25rem" class="card-icon" />
       </div>
     )}
     <div class="title" set:html={title} />
