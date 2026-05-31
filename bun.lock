@@ -11,8 +11,8 @@
       },
       "devDependencies": {
         "@biomejs/biome": "2.4.16",
-        "@opencode-ai/plugin": "1.15.11",
-        "@opencode-ai/sdk": "1.15.11",
+        "@opencode-ai/plugin": "1.15.12",
+        "@opencode-ai/sdk": "1.15.12",
         "@semantic-release/exec": "7.1.0",
         "@types/bun": "latest",
         "@types/js-yaml": "4.0.9",
@@ -281,9 +281,9 @@
 
     "@octokit/types": ["@octokit/types@16.0.0", "", { "dependencies": { "@octokit/openapi-types": "^27.0.0" } }, "sha512-sKq+9r1Mm4efXW1FCk7hFSeJo4QKreL/tTbR0rz/qx/r1Oa2VV83LTA/H/MuCOX7uCIJmQVRKBcbmWoySjAnSg=="],
 
-    "@opencode-ai/plugin": ["@opencode-ai/plugin@1.15.11", "", { "dependencies": { "@opencode-ai/sdk": "1.15.11", "effect": "4.0.0-beta.66", "zod": "4.1.8" }, "peerDependencies": { "@opentui/core": ">=0.2.15", "@opentui/keymap": ">=0.2.15", "@opentui/solid": ">=0.2.15" }, "optionalPeers": ["@opentui/core", "@opentui/keymap", "@opentui/solid"] }, "sha512-RDvYDCHO0+3OAGD590oDQqtryrENrUW04SjtoA4sgRV2efpZeBFjx3TnonBsXKq6nWqYg172nhltUEZsihGnXQ=="],
+    "@opencode-ai/plugin": ["@opencode-ai/plugin@1.15.12", "", { "dependencies": { "@opencode-ai/sdk": "1.15.12", "effect": "4.0.0-beta.66", "zod": "4.1.8" }, "peerDependencies": { "@opentui/core": ">=0.2.16", "@opentui/keymap": ">=0.2.16", "@opentui/solid": ">=0.2.16" }, "optionalPeers": ["@opentui/core", "@opentui/keymap", "@opentui/solid"] }, "sha512-BBteGXEwJt+1ehHqQ+yKXmoWltrW+2xO++B1Fm/dnMGYWT9luEKA5RlUuVYA2qDF6uwlE7kmHZvQZAM79zWHEA=="],
 
-    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.15.11", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-IyYyDVsO8SKbKbkSadHpDuYnYC+2vmEeLU+rW+rH2M54Sigq6l3gDHno16+U6SRut+lowbph7v/ry3WbV67V3w=="],
+    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.15.12", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-lOaBNX93dkakZe6C42ttX1bkSx3K2c6+Yv+w8Qv02v5rPlu1vCXbmdfYDh9/bw+oq+NKPSaBm9d6kPA19hA5Lg=="],
 
     "@oslojs/encoding": ["@oslojs/encoding@1.1.0", "", {}, "sha512-70wQhgYmndg4GCPxPPxPGevRKqTIJ2Nh4OkiMWmDAVYsTQ+Ta7Sq+rPevXyXGdzr30/qZBnyOalCszoMxlyldQ=="],
 
