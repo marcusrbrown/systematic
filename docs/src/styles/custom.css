@@ -123,23 +123,6 @@
   text-decoration-color: var(--sl-color-accent);
 }
 
-/* Card Polish - Refined Motion */
-.card,
-.link-card {
-  border: 1px solid var(--sl-color-gray-5);
-  background-color: var(--sl-color-gray-6);
-  border-radius: 0.25rem;
-  transition:
-    transform 0.25s var(--ease-out-expo),
-    border-color 0.25s var(--ease-out-expo);
-}
-
-.card:hover,
-.link-card:hover {
-  border-color: var(--sl-color-accent);
-  transform: translateY(-2px);
-}
-
 /* Code Block Polish */
 .expressive-code .ec-line {
   line-height: 1.5;
@@ -147,10 +130,10 @@
 
 /* Blockquote Polish */
 .sl-markdown-content blockquote {
-  border-left-color: var(--sl-color-accent);
+  border-inline-start: none;
   background-color: var(--sl-color-gray-6);
   padding: var(--space-4) var(--space-6);
-  border-radius: 0; /* Boxy editorial feel */
+  border-radius: 0;
   font-family: var(--sl-font-heading);
   font-style: italic;
   font-size: 1.1rem;
@@ -160,18 +143,16 @@
 .sl-markdown-content table {
   border-collapse: collapse;
   width: 100%;
-  border: 1px solid var(--sl-color-gray-5);
-  border-radius: 0;
   margin-bottom: var(--space-6);
 }
 
 .sl-markdown-content th {
-  background-color: var(--sl-color-gray-6);
-  border-bottom: 1px solid var(--sl-color-gray-5);
+  border-bottom: 1px solid var(--sl-color-gray-4);
   padding: var(--space-3) var(--space-4);
   text-align: left;
-  font-weight: 500;
+  font-weight: 600;
   font-family: var(--sl-font-system);
+  color: var(--sl-color-white);
 }
 
 .sl-markdown-content td {
