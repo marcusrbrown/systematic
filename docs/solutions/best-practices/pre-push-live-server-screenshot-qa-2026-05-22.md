@@ -1,6 +1,7 @@
 ---
 title: Pre-push live-server screenshot QA catches production bugs static gates miss
 date: 2026-05-22
+last_updated: 2026-06-04
 module: development workflow
 problem_type: best_practice
 component: development_workflow
@@ -69,6 +70,10 @@ kill $DEV_PID
 ```
 
 When using `agent-browser batch` with `--json`, chain all navigation+screenshot commands into a single call so the dev server doesn't get torn down between subprocess boundaries.
+
+**HTTP 200 is not a render signal.** Astro's dev server returns `200` even when a page crashes — it injects an error overlay into the body. Step 2's `%{http_code}` check confirms the server is *up*, not that the page *rendered*. To confirm a render, inspect the actual page content: assert the error text is absent (`curl -s <url> | grep -c 'expects its content'` → `0`, or a browser DOM eval), never the status code alone. See [starlight-steps-astro-hmr-regression-2026-06-04](../runtime-errors/starlight-steps-astro-hmr-regression-2026-06-04.md).
+
+**When HMR itself is unstable**, iterate on the static preview (`astro build` + preview server) instead of the dev server — no HMR re-transform, so a known dev-only crash (e.g. the Astro 6.0.x `<Steps>` slot regression) can't keep re-poisoning the page mid-review.
 
 ## Why This Matters
 
