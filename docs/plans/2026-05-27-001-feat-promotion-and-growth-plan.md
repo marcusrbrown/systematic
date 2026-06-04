@@ -7,6 +7,7 @@ origin: docs/brainstorms/2026-05-27-promotion-and-growth-requirements.md
 deepened: 2026-05-27
 review: document-review 4 personas (coherence, feasibility, scope-guardian, adversarial) — all findings resolved
 infra: marcusrbrown/infra#315 Umami LIVE + verified 2026-05-27 (https://metrics.fro.bot) — Units 1–8 unblocked; Unit 9 first precondition met
+shipped: Units 1–6, 8 merged via PR #454, #455, #456, #457, #460 (all non-releasing — docs/chore/ci; docs site deployed manually). Unit 9 analytics activated + verified live 2026-05-30 (umami script + website-id in production). Unit 7 ecosystem PR anomalyco/opencode#29925 OPEN upstream (awaiting maintainer review). Remaining: Unit 7 upstream merge + Unit 9 numeric-gate measurement window (manual Discord test post).
 ---
 
 # Promotion and Growth
@@ -476,6 +477,8 @@ docs:generate  →  transform-content.ts      (skills/agents pages + counts in m
 ### Launch Gate (hard-gated on infra#315 — NOT a code unit)
 
 - [ ] **Unit 9: Public launch + numeric gate**
+
+> **Status (2026-05-30):** Analytics activation (steps 1–2) DONE — `UMAMI_WEBSITE_ID` repo var set, docs redeployed, and a real pageview + event verified against `metrics.fro.bot` in production. Remaining: the manual public-promotion + numeric-gate measurement window (steps 3–4 — Discord test post starts the 72h clock). Left unchecked because the directional gate is a human measurement step, not a code deliverable.
 
 **Goal:** Activate analytics, verify it measures, then perform the public-launch actions and run the directional smoke-signal gate. This unit is operational, not code — it executes only after `marcusrbrown/infra`#315 is live.
 
