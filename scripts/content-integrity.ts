@@ -176,6 +176,11 @@ export interface AgentModelViolation {
   message: string
 }
 
+export interface AgentModeViolation {
+  file: string
+  message: string
+}
+
 export interface AgentStemViolation {
   stem: string
   files: string[]
@@ -192,6 +197,7 @@ export interface CheckResult {
   frontmatterViolations: FrontmatterViolation[]
   parseSafetyViolations: FrontmatterViolation[]
   agentModelViolations: AgentModelViolation[]
+  agentModeViolations: AgentModeViolation[]
   agentColorViolations: AgentColorViolation[]
   agentStemViolations: AgentStemViolation[]
   exemptHits: ExemptHit[]
@@ -973,6 +979,30 @@ export function checkAgentModel(
   return violations
 }
 
+export function checkAgentMode(
+  rootDir: string,
+  markdownFiles: readonly string[],
+): AgentModeViolation[] {
+  const violations: AgentModeViolation[] = []
+
+  for (const relPath of markdownFiles) {
+    if (!isAgentFile(relPath)) continue
+    const content = readFileSafe(path.join(rootDir, relPath))
+    if (content === null) continue
+    const parsed = parseFrontmatter(content)
+    if (!isRecord(parsed.data)) continue
+    if (parsed.data.mode !== 'subagent') {
+      violations.push({
+        file: relPath,
+        message:
+          "Bundled agents must declare `mode: subagent` explicitly. The converter's fill-if-absent default will be removed in v3.0.0; without an explicit `mode`, agents would fall back to OpenCode's native default (`all`), making internal agents primary-visible.",
+      })
+    }
+  }
+
+  return violations
+}
+
 export function checkAgentStemUniqueness(
   rootDir: string,
   markdownFiles: readonly string[],
@@ -1122,6 +1152,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     targets.solutionMarkdown,
   )
   const agentModelViolations = checkAgentModel(rootDir, targets.markdown)
+  const agentModeViolations = checkAgentMode(rootDir, targets.markdown)
   const agentColorViolations = checkAgentColors(rootDir, targets.markdown)
   const agentStemViolations = checkAgentStemUniqueness(
     rootDir,
@@ -1143,6 +1174,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     frontmatterViolations,
     parseSafetyViolations,
     agentModelViolations,
+    agentModeViolations,
     agentColorViolations,
     agentStemViolations,
     exemptHits,
@@ -1189,6 +1221,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
     'Parse-safety violations',
   )
   printAgentModelViolations(result.agentModelViolations)
+  printAgentModeViolations(result.agentModeViolations)
   printAgentColorViolations(result.agentColorViolations)
   printAgentStemViolations(result.agentStemViolations)
 
@@ -1271,6 +1304,16 @@ function printAgentModelViolations(
   }
 }
 
+function printAgentModeViolations(
+  violations: readonly AgentModeViolation[],
+): void {
+  if (violations.length === 0) return
+  process.stderr.write(`\nAgent mode violations (${violations.length}):\n`)
+  for (const v of violations) {
+    process.stderr.write(`  ${v.file}  ${v.message}\n`)
+  }
+}
+
 function printAgentColorViolations(
   violations: readonly AgentColorViolation[],
 ): void {
@@ -1304,6 +1347,7 @@ function totalViolations(result: CheckResult): number {
     result.frontmatterViolations.length +
     result.parseSafetyViolations.length +
     result.agentModelViolations.length +
+    result.agentModeViolations.length +
     result.agentColorViolations.length +
     result.agentStemViolations.length
   )

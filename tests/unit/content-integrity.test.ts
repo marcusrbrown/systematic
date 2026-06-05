@@ -7,6 +7,7 @@ import {
   type AllowlistEntry,
   BANNED_PATTERNS,
   checkAgentColors,
+  checkAgentMode,
   checkAgentModel,
   checkAgentStemUniqueness,
   checkBannedPatterns,
@@ -21,6 +22,8 @@ import {
   matchesPathGlob,
   SUBFILE_DIRECTORY_NAMES,
 } from '../../scripts/content-integrity.ts'
+import { convertContent } from '../../src/lib/converter.ts'
+import { parseFrontmatter } from '../../src/lib/frontmatter.ts'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -55,12 +58,12 @@ function writeAllowlist(root: string, exemptions: AllowlistEntry[]): void {
 }
 
 function writeAgent(root: string, category: string, name: string): void {
-  // Bundled agents must omit the `model` field per content-integrity gate;
-  // OpenCode subagents inherit the invoking primary agent's model when unset.
+  // Bundled agents must omit the `model` field and declare `mode: subagent`
+  // per content-integrity gate invariants.
   writeFile(
     root,
     `agents/${category}/${name}.md`,
-    `---\nname: ${name}\n---\nagent body`,
+    `---\nname: ${name}\nmode: subagent\n---\nagent body`,
   )
 }
 
@@ -1213,6 +1216,156 @@ describe('checkAgentModel', () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
+  })
+})
+
+describe('checkAgentMode', () => {
+  test('returns no violations when all agents declare mode: subagent', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'agents/research/analyst.md',
+        '---\nname: analyst\nmode: subagent\n---\nbody',
+      )
+      writeFile(
+        root,
+        'agents/review/sentinel.md',
+        '---\nname: sentinel\nmode: subagent\n---\nbody',
+      )
+      const targets = collectScanTargets(root)
+      expect(checkAgentMode(root, targets.markdown)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags an agent with no mode field', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'agents/research/no-mode.md',
+        '---\nname: no-mode\n---\nbody',
+      )
+      const targets = collectScanTargets(root)
+      const violations = checkAgentMode(root, targets.markdown)
+      expect(violations).toHaveLength(1)
+      expect(violations[0]?.file).toBe('agents/research/no-mode.md')
+      expect(violations[0]?.message).toContain('mode: subagent')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags an agent with mode set to a non-subagent value', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'agents/research/wrong-mode.md',
+        '---\nname: wrong-mode\nmode: all\n---\nbody',
+      )
+      const targets = collectScanTargets(root)
+      const violations = checkAgentMode(root, targets.markdown)
+      expect(violations).toHaveLength(1)
+      expect(violations[0]?.file).toBe('agents/research/wrong-mode.md')
+      expect(violations[0]?.message).toContain('mode: subagent')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('does not flag non-agent markdown files under agents/ (e.g. README-style files excluded by isAgentFile)', () => {
+    const root = makeFixtureRepo()
+    try {
+      // A file at agents/README.md has only 2 path parts — isAgentFile requires exactly 3.
+      writeFile(root, 'agents/README.md', '---\nname: readme\n---\nbody')
+      // A skill file is also not an agent file.
+      writeCompliantSkill(root, 'foo', 'body')
+      const targets = collectScanTargets(root)
+      expect(checkAgentMode(root, targets.markdown)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('scans only agent markdown files, not skill files', () => {
+    const root = makeFixtureRepo()
+    try {
+      // Skill with no mode field — must not be flagged.
+      writeCompliantSkill(root, 'foo', 'body')
+      // Agent with correct mode — no violation.
+      writeFile(
+        root,
+        'agents/research/a.md',
+        '---\nname: a\nmode: subagent\n---\nbody',
+      )
+      const targets = collectScanTargets(root)
+      expect(checkAgentMode(root, targets.markdown)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('converter equivalence: explicit mode: subagent is behavior-preserving', () => {
+  test('converting an agent with no mode field produces the same resolved mode as one with explicit mode: subagent', () => {
+    const withoutMode = `---
+name: test-agent
+description: A test agent
+---
+Agent body`
+
+    const withExplicitMode = `---
+name: test-agent
+description: A test agent
+mode: subagent
+---
+Agent body`
+
+    const convertedWithout = convertContent(withoutMode, 'agent', {
+      agentMode: 'subagent',
+    })
+    const convertedWith = convertContent(withExplicitMode, 'agent', {
+      agentMode: 'subagent',
+    })
+
+    // Both must emit mode: subagent
+    expect(convertedWithout).toContain('mode: subagent')
+    expect(convertedWith).toContain('mode: subagent')
+
+    // Parse both emitted configs and compare resolved field values.
+    // The converter may reorder YAML keys, so we compare parsed objects, not strings.
+    const parsedWithout = parseFrontmatter(convertedWithout)
+    const parsedWith = parseFrontmatter(convertedWith)
+
+    expect(parsedWithout.data).toEqual(parsedWith.data)
+  })
+
+  test('explicit mode: subagent does not alter any other resolved field', () => {
+    const base = `---
+name: security-sentinel
+description: Security review agent
+---
+Agent body`
+
+    const withMode = `---
+name: security-sentinel
+description: Security review agent
+mode: subagent
+---
+Agent body`
+
+    const parsedBase = parseFrontmatter(
+      convertContent(base, 'agent', { agentMode: 'subagent' }),
+    )
+    const parsedWith = parseFrontmatter(
+      convertContent(withMode, 'agent', { agentMode: 'subagent' }),
+    )
+
+    // All resolved fields must be identical — adding explicit mode is a no-op.
+    expect(parsedBase.data).toEqual(parsedWith.data)
   })
 })
 
@@ -2383,6 +2536,13 @@ describe('integration: real repo', () => {
       throw new Error(`Parse-safety violations in repo:\n  ${details}`)
     }
 
+    if (result.agentModeViolations.length > 0) {
+      const details = result.agentModeViolations
+        .map((v) => `${v.file}  ${v.message}`)
+        .join('\n  ')
+      throw new Error(`Agent mode violations in repo:\n  ${details}`)
+    }
+
     expect(result.phantomRefs).toEqual([])
     expect(result.brokenSubfileRefs).toEqual([])
     expect(result.bannedPatterns).toEqual([])
@@ -2390,6 +2550,7 @@ describe('integration: real repo', () => {
     expect(result.agentModelViolations).toEqual([])
     expect(result.agentStemViolations).toEqual([])
     expect(result.parseSafetyViolations).toEqual([])
+    expect(result.agentModeViolations).toEqual([])
     expect(result.allowlistWarnings).toEqual([])
     expect(result.scanStats.markdownFiles).toBeGreaterThan(0)
     expect(result.scanStats.typescriptFiles).toBeGreaterThan(0)
