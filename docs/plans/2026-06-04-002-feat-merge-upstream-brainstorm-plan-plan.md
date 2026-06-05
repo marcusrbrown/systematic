@@ -163,7 +163,7 @@ because content-integrity only scans SKILL.md entry files, NOT nested reference 
 
 ## Implementation Units
 
-- [ ] **Unit 1: ce-brainstorm merge — Phase 2.5 Synthesis Summary + markdown rendering + sections**
+- [x] **Unit 1: ce-brainstorm merge — Phase 2.5 Synthesis Summary + markdown rendering + sections**
 
 **Goal:** Merge upstream's improvements into `skills/ce-brainstorm/`, preserving Phase 3.5 Document
 Review + `requirements-capture.md`. No html, no output-mode.
@@ -209,7 +209,7 @@ hygiene from prior CEP imports.
 **Verification:** content-integrity clean; merged skill reads as one coherent workflow; Phase 3.5 +
 requirements-capture.md intact; no html/output-mode residue.
 
-- [ ] **Unit 2: ce-plan merge — 3.7 Anti-Expansion + 0.7/5.1.5 scope synthesis + markdown rendering + sections**
+- [x] **Unit 2: ce-plan merge — 3.7 Anti-Expansion + 0.7/5.1.5 scope synthesis + markdown rendering + sections**
 
 **Goal:** Merge upstream's improvements into `skills/ce-plan/`, preserving the Core Plan Template +
 `visual-communication.md`; defer 0.1a Approach-Altitude; no html, no output-mode.
@@ -254,7 +254,7 @@ conversion hygiene.
 **Verification:** content-integrity clean; one-synthesis-model holds (0.7 xor 5.1.5); 3.7 routes to our
 Deferred section; Core Plan Template preserved; 0.1a + html/output-mode not present.
 
-- [ ] **Unit 3: Regenerate registry + full gate + dogfood verification**
+- [x] **Unit 3: Regenerate registry + full gate + dogfood verification**
 
 **Goal:** Reconcile generated artifacts and prove the full quality gate.
 
