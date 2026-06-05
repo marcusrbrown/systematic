@@ -1849,6 +1849,33 @@ describe('checkFrontmatterParseSafety', () => {
       fs.rmSync(root, { recursive: true, force: true })
     }
   })
+
+  test('does NOT flag a space-hash inside a nested (indented) mapping value', () => {
+    // Indented lines are out of scope by design — the check covers flat
+    // top-level `key: value` lines only. A `#` inside a nested mapping value
+    // such as `  note: cache miss # under load` is not scanned.
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/solutions/test-doc.md',
+        [
+          '---',
+          'meta:',
+          '  note: cache miss # under load',
+          'date: 2026-01-01',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkFrontmatterParseSafety(root, [
+        'docs/solutions/test-doc.md',
+      ])
+      expect(violations).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
 })
 
 // ---------------------------------------------------------------------------

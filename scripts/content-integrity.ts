@@ -55,7 +55,10 @@ import {
   isValidAgentColor,
   OPENCODE_AGENT_COLOR_TOKENS,
 } from '../src/lib/agent-colors.js'
-import { parseFrontmatter } from '../src/lib/frontmatter.js'
+import {
+  extractFrontmatterBlock,
+  parseFrontmatter,
+} from '../src/lib/frontmatter.js'
 import { SKILL_FRONTMATTER_FIELDS } from '../src/lib/skills.js'
 import { walkDir } from '../src/lib/walk-dir.js'
 
@@ -797,6 +800,10 @@ function checkDeprecatedBlockForBundled(
 /**
  * Ban unquoted inline comments in docs/solutions/ frontmatter.
  *
+ * Scope: flat top-level `key: value` lines only. Nested/indented mapping
+ * values (lines that start with whitespace) are intentionally not scanned —
+ * see `extractFlatKeyValue`.
+ *
  * A top-level flat `key: value` line is flagged when ALL of:
  * - It is a flat key-value line (not a full-line comment, list item, indented
  *   continuation, or block-scalar indicator).
@@ -832,11 +839,9 @@ function scanFrontmatterParseSafety(
   content: string,
   violations: FrontmatterViolation[],
 ): void {
-  // Extract the raw frontmatter block (between the first --- delimiters).
-  const frontmatterMatch = content.match(/^---\r?\n([\s\S]*?)\r?\n?---/)
-  if (!frontmatterMatch) return
+  const rawBlock = extractFrontmatterBlock(content)
+  if (rawBlock === null) return
 
-  const rawBlock = frontmatterMatch[1] ?? ''
   const lines = rawBlock.split('\n')
   for (const line of lines) {
     const violation = checkParseSafetyLine(relPath, line)
@@ -878,6 +883,11 @@ function checkParseSafetyLine(
  * Extract the key and raw value from a flat `key: value` frontmatter line.
  * Returns null for lines that are not flat key-value pairs (comments, list
  * items, indented lines, block-scalar indicators).
+ *
+ * Scope boundary: indented lines (lines starting with whitespace) are skipped
+ * unconditionally. A `#` inside a nested mapping value such as
+ * `  note: cache miss # under load` is therefore out of scope by design —
+ * only flat top-level key-value lines are inspected.
  */
 function extractFlatKeyValue(
   line: string,

@@ -235,13 +235,13 @@ validation_rules:
   - "date must match YYYY-MM-DD format"
   - "rails_version, if provided, must match X.Y.Z format and only applies to bug-track docs"
   - "tags should be lowercase and hyphen-separated"
-  - >-
+  - |-
     YAML quoting: scalar values that contain ' #' (space-hash) must be
     double-quoted to prevent silent YAML comment truncation (the YAML parser
     treats ' #' as an inline comment, silently dropping the rest of the value
-    with parseError: false). Example: problem: \"cache miss # under load\".
-  - >-
+    with parseError: false). Example: problem: "cache miss # under load".
+  - |-
     YAML quoting: array-of-strings frontmatter items must be double-quoted when
     the value starts with a YAML reserved indicator (e.g., '{', '[', '|', '>',
     '!', '&', '*', '?', ':', '-') or contains ': ' (colon-space). Example:
-    symptoms: - \"[mdx-js/rollup] Could not parse expression\"
+    symptoms: - "[mdx-js/rollup] Could not parse expression"
