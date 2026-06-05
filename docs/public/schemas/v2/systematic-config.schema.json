@@ -1280,6 +1280,7 @@
           "git-worktree",
           "lfg",
           "onboarding",
+          "orchestrating-subagents",
           "orchestrating-swarms",
           "proof",
           "rclone",

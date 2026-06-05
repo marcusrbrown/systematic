@@ -144,6 +144,7 @@ export const BUNDLED_SKILL_NAMES = [
   'git-worktree',
   'lfg',
   'onboarding',
+  'orchestrating-subagents',
   'orchestrating-swarms',
   'proof',
   'rclone',

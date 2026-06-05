@@ -633,6 +633,12 @@
       ]
     },
     {
+      "name": "orchestrating-subagents",
+      "type": "skill",
+      "description": "Use when dispatching parallel or serial subagents in OpenCode, coordinating multi-unit plan execution, synthesizing results from independent subagent runs, or handling subagent failure and retry. Triggers on requests to run tasks in parallel, divide work across subagents, orchestrate a pipeline of dependent steps, or coordinate multiple agents without shared-file conflicts.",
+      "files": ["skills/orchestrating-subagents/SKILL.md"]
+    },
+    {
       "name": "orchestrating-swarms",
       "type": "skill",
       "description": "Use when orchestrating multi-agent swarms, coordinating parallel code reviews, creating pipeline workflows with dependencies, building self-organizing task queues, or any task benefiting from divide-and-conquer patterns.",
@@ -798,6 +804,7 @@
         "git-worktree",
         "lfg",
         "onboarding",
+        "orchestrating-subagents",
         "orchestrating-swarms",
         "proof",
         "rclone",
