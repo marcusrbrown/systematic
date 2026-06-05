@@ -69,7 +69,7 @@ The runtime converter (`src/lib/converter.ts`) injects `mode: subagent` as a fil
 
 ## Implementation Units
 
-- [ ] **Unit 1: Add explicit `mode: subagent` to the 36 agents**
+- [x] **Unit 1: Add explicit `mode: subagent` to the 36 agents**
 
 **Goal:** Every bundled agent declares an explicit `mode:` field; the 36 that relied on the converter default now state `mode: subagent`.
 
@@ -92,7 +92,7 @@ The runtime converter (`src/lib/converter.ts`) injects `mode: subagent` as a fil
 **Verification:**
 - Every agent entry declares an explicit `mode:` field (checked by the gate's agent-file predicate, not a broad `grep` over `agents/`).
 
-- [ ] **Unit 2: Enforce explicit agent mode in the content-integrity gate**
+- [x] **Unit 2: Enforce explicit agent mode in the content-integrity gate**
 
 **Goal:** A bundled agent missing an explicit `mode:` field fails content-integrity, locking in the hardening so future agents cannot regress to the converter default.
 
@@ -124,7 +124,7 @@ The runtime converter (`src/lib/converter.ts`) injects `mode: subagent` as a fil
 - The equivalence test proves explicit `mode: subagent` resolves identically to the converter-defaulted form.
 - Full unit suite green.
 
-- [ ] **Unit 3: Record the converter-injected-field audit as a v3.0.0 finding**
+- [x] **Unit 3: Record the converter-injected-field audit as a v3.0.0 finding**
 
 **Goal:** The converter-injected-field audit (especially the `temperature` heuristic) is documented precisely enough that the v3.0.0 plan can act on it without re-deriving it.
 
