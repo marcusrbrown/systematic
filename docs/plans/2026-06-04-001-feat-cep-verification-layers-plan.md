@@ -1,7 +1,8 @@
 ---
 title: "feat: CEP verification-layer ports (ce-review Stage 5b + frontmatter parse-safety)"
 type: feat
-status: active
+status: completed
+shipped: "PR #485 (commit c3032ee); released in v2.25.0"
 date: 2026-06-04
 origin: docs/brainstorms/2026-06-04-cep-verification-layers-requirements.md
 ---
@@ -152,7 +153,7 @@ verification / quality-floor layers. Two map to real gaps in Systematic (see ori
 
 ## Implementation Units
 
-- [ ] **Unit 1: ce-review Stage 5b validation pass (prose + validator template)**
+- [x] **Unit 1: ce-review Stage 5b validation pass (prose + validator template)**
 
 **Goal:** Add an independent, validate-only finding-validation pass to `ce:review` between Stage 5
 and Stage 6, with a reusable validator subagent template.
@@ -228,7 +229,7 @@ against a known false-positive to confirm the flow reads correctly. No code is a
 
 ---
 
-- [ ] **Unit 2: content-integrity frontmatter parse-safety + docs/solutions scan + schema enums**
+- [x] **Unit 2: content-integrity frontmatter parse-safety + docs/solutions scan + schema enums**
 
 **Goal:** Extend the CI gate to detect the silent `#`-truncation frontmatter class and to scan
 `docs/solutions/`, and tighten the ce-compound schema enums.
