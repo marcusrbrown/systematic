@@ -179,13 +179,30 @@ If relevant, call out whether the choice is:
 - Extend an existing capability
 - Build something net new
 
+### Phase 2.5: Synthesis Summary
+
+**STOP. Before composing the synthesis, read `references/synthesis-summary.md`.** The two-stage shape (internal three-bucket draft → chat-time scoping synthesis), the Path A / Path B gate, the four scoping synthesis sections with their keep tests, the tier-aware bullet budget with re-cut rule, anti-pattern guidance, soft-cut behavior, self-redirect support, and headless-mode routing all live there. Composing a synthesis without these rules loaded reliably produces malformed output — pasting the full internal three-bucket draft verbatim into chat, implementation-detail leakage into the scoping synthesis, the proposal-pitch anti-pattern. **Each scoping synthesis bullet must pass the affirmability test (can the user evaluate this without reading code?) AND the detail test (1–2 lines max, conversational not documentary); over-share and over-detail are the failure modes to avoid.** This is not optional supplementary reading; it is the source of truth for how the phase behaves.
+
+Surface a scoping synthesis to the user before Phase 3 writes the requirements doc — the user's last opportunity to correct scope before the artifact lands. **Phase 2.5 is the only scope gate in this workflow.** The scoping synthesis is shaped like what two product collaborators would confirm before writing a PRD, not like a comprehensive audit or a one-line preview.
+
+Fires for **all tiers** including Lightweight. Skip Phase 2.5 entirely on the Phase 0.1b non-software (universal-brainstorming) route.
+
+**Path A vs Path B:** the scoping synthesis shape depends on TWO signals — whether any blocking question fired AND what tier Phase 0.3 classified the scope as.
+
+- **Path A — no blocking questions fired AND tier is Lightweight**: announce-mode. Emit "What we're building" prose only (1–3 sentences), then proceed to Phase 3 doc-write in the same turn. No other sections, no confirmation question. Do NOT end the turn waiting for acknowledgment. The user can revise after the doc lands if the shape is wrong — Lightweight Path A docs are short, post-hoc revision is cheap.
+- **Path B — at least one blocking question fired, OR tier is Standard / Deep-feature / Deep-product**: full tier-aware scoping synthesis with confirmation gate. Two scenarios fire Path B: (a) the user invested answer-time during dialogue, or (b) the user pre-loaded substantive scope content (Phase 0.2 fast-path with a richly-specified opening prompt). Either way, the substance earns a real checkpoint. Confirmation is unconditional even when zero call-outs survive the keep test.
+
+**Why the tier guard on Path A**: Phase 0.2's fast path serves two very different cases — a tight one-liner that needs no dialogue ("fix the typo on line 47") and a richly pre-loaded brainstorm context that ALSO needs no dialogue because the user pre-stated everything. Without the tier guard, both route to Path A and the pre-loaded case gets a 1-sentence checkpoint for what may be 20+ items worth of scope. Tier-classifying Phase 0.3 distinguishes the two — pre-loaded substance makes the tier Standard or Deep, which then routes to Path B.
+
 ### Phase 3: Capture the Requirements
 
-Write or update a requirements document only when the conversation produced durable decisions worth preserving. Read `references/requirements-capture.md` for the document template, formatting rules, visual aid guidance, and completeness checks.
+Write or update a requirements document only when the conversation produced durable decisions worth preserving. Read `references/requirements-capture.md` for the document template, formatting rules, visual aid guidance, and completeness checks. Read `references/brainstorm-sections.md` for metadata field contracts and ID conventions. Read `references/markdown-rendering.md` for markdown presentation principles.
 
 For **Lightweight** brainstorms, keep the document compact. Skip document creation when the user only needs brief alignment and no durable decisions need to be preserved.
 
 ### Phase 3.5: Document Review
+
+**This is a quality and format review of the written artifact — not a second scope negotiation.** Scope was confirmed at Phase 2.5; Phase 3.5 checks that the written doc faithfully reflects that confirmed scope and meets quality standards. Do not re-open scope decisions here.
 
 When a requirements document was created or updated, run the `document-review` skill on it before presenting handoff options. Pass the document path as the argument.
 

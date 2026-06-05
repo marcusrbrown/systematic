@@ -384,9 +384,13 @@
       "description": "Explore requirements and approaches through collaborative dialogue before writing a right-sized requirements document and planning implementation. Use for feature ideas, problem framing, when the user says 'let's brainstorm', or when they want to think through options before deciding what to build. Also use when a user describes a vague or ambitious feature request, asks 'what should we build', 'help me think through X', presents a problem with multiple valid solutions, or seems unsure about scope or direction — even if they don't explicitly ask to brainstorm.",
       "files": [
         "skills/ce-brainstorm/SKILL.md",
+        "skills/ce-brainstorm/references/brainstorm-sections.md",
         "skills/ce-brainstorm/references/handoff.md",
+        "skills/ce-brainstorm/references/markdown-rendering.md",
         "skills/ce-brainstorm/references/requirements-capture.md",
-        "skills/ce-brainstorm/references/universal-brainstorming.md"
+        "skills/ce-brainstorm/references/synthesis-summary.md",
+        "skills/ce-brainstorm/references/universal-brainstorming.md",
+        "skills/ce-brainstorm/references/visual-communication.md"
       ]
     },
     {
@@ -427,7 +431,10 @@
       "files": [
         "skills/ce-plan/SKILL.md",
         "skills/ce-plan/references/deepening-workflow.md",
+        "skills/ce-plan/references/markdown-rendering.md",
         "skills/ce-plan/references/plan-handoff.md",
+        "skills/ce-plan/references/plan-sections.md",
+        "skills/ce-plan/references/synthesis-summary.md",
         "skills/ce-plan/references/universal-planning.md",
         "skills/ce-plan/references/visual-communication.md"
       ]
