@@ -1,7 +1,8 @@
 ---
 title: "feat: Agent mode explicit hardening"
 type: feat
-status: active
+status: completed
+shipped: "PR #488; released in v2.27.0"
 date: 2026-06-05
 origin: docs/brainstorms/2026-06-05-agent-mode-explicit-hardening-requirements.md
 ---

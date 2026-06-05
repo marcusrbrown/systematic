@@ -1,7 +1,8 @@
 ---
 title: "feat: Merge upstream ce-brainstorm + ce-plan improvements into ours"
 type: feat
-status: active
+status: completed
+shipped: "PR #486; released in v2.26.0"
 date: 2026-06-04
 origin: docs/brainstorms/2026-06-04-merge-upstream-brainstorm-plan-requirements.md
 ---
