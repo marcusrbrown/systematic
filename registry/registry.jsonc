@@ -443,7 +443,8 @@
         "skills/ce-review/references/persona-catalog.md",
         "skills/ce-review/references/resolve-base.sh",
         "skills/ce-review/references/review-output-template.md",
-        "skills/ce-review/references/subagent-template.md"
+        "skills/ce-review/references/subagent-template.md",
+        "skills/ce-review/references/validator-template.md"
       ]
     },
     {

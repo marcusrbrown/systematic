@@ -8,6 +8,22 @@ export interface FrontmatterResult<T = Record<string, unknown>> {
 }
 
 /**
+ * Returns the raw YAML text between the opening and closing `---` delimiters,
+ * or `null` when the content has no frontmatter block.
+ *
+ * Scope: flat top-level frontmatter only. Nested/indented mapping values are
+ * returned verbatim as part of the block — callers that scan individual lines
+ * (e.g. parse-safety checks) must skip indented lines themselves.
+ *
+ * Handles LF and CRLF line endings. The closing `---` does not need a trailing
+ * newline (handles files that end immediately after the delimiter).
+ */
+export function extractFrontmatterBlock(content: string): string | null {
+  const match = content.match(/^---\r?\n([\s\S]*?)\r?\n?---/)
+  return match ? (match[1] ?? '') : null
+}
+
+/**
  * Parses YAML frontmatter from Markdown content.
  *
  * Uses js-yaml with JSON_SCHEMA for security (prevents code execution via YAML tags).

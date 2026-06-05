@@ -12,6 +12,7 @@ import {
   checkBannedPatterns,
   checkContentIntegrity,
   checkFrontmatter,
+  checkFrontmatterParseSafety,
   checkReferenceIntegrity,
   checkSubfileReferences,
   collectScanTargets,
@@ -1360,6 +1361,738 @@ describe('checkContentIntegrity (top-level)', () => {
 })
 
 // ---------------------------------------------------------------------------
+// checkFrontmatterParseSafety — adversarial fixture suite
+// ---------------------------------------------------------------------------
+
+describe('checkFrontmatterParseSafety', () => {
+  test('flags unquoted value containing space-hash (truncation trigger)', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/solutions/test-doc.md',
+        [
+          '---',
+          'problem: cache miss # under load',
+          'date: 2026-01-01',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkFrontmatterParseSafety(root, [
+        'docs/solutions/test-doc.md',
+      ])
+      expect(violations).toHaveLength(1)
+      expect(violations[0]).toMatchObject({
+        file: 'docs/solutions/test-doc.md',
+        rule: 'parse-safety',
+        field: 'problem',
+      })
+      expect(violations[0]?.message).toContain('#')
+      expect(violations[0]?.remediation).toContain('Quote')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('does NOT flag a double-quoted value containing hash (safe)', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/solutions/test-doc.md',
+        [
+          '---',
+          'problem: "cache miss # under load"',
+          'date: 2026-01-01',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkFrontmatterParseSafety(root, [
+        'docs/solutions/test-doc.md',
+      ])
+      expect(violations).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('does NOT flag a single-quoted value containing hash (safe)', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/solutions/test-doc.md',
+        [
+          '---',
+          "problem: 'cache miss # under load'",
+          'date: 2026-01-01',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkFrontmatterParseSafety(root, [
+        'docs/solutions/test-doc.md',
+      ])
+      expect(violations).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('does NOT flag a full-line YAML comment (not a value)', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/solutions/test-doc.md',
+        [
+          '---',
+          '# this is a real YAML comment',
+          'problem: cache miss',
+          'date: 2026-01-01',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkFrontmatterParseSafety(root, [
+        'docs/solutions/test-doc.md',
+      ])
+      expect(violations).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('does NOT flag a URL with #fragment inside a quoted value', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/solutions/test-doc.md',
+        [
+          '---',
+          'url: "https://example.com/page#section"',
+          'date: 2026-01-01',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkFrontmatterParseSafety(root, [
+        'docs/solutions/test-doc.md',
+      ])
+      expect(violations).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags a hash at the start of an unquoted value (value-start # is a comment trigger)', () => {
+    // `tag: #important` — the ban rule applies: value starts with #.
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/solutions/test-doc.md',
+        ['---', 'tag: #important', 'date: 2026-01-01', '---', 'body'].join(
+          '\n',
+        ),
+      )
+      const violations = checkFrontmatterParseSafety(root, [
+        'docs/solutions/test-doc.md',
+      ])
+      expect(violations).toHaveLength(1)
+      expect(violations[0]).toMatchObject({
+        file: 'docs/solutions/test-doc.md',
+        rule: 'parse-safety',
+        field: 'tag',
+      })
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('does NOT flag a list item line (not a flat key: scalar)', () => {
+    // List items like `  - cache miss # under load` are not flat key: scalar lines.
+    // The check skips them to avoid false positives on YAML arrays.
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/solutions/test-doc.md',
+        [
+          '---',
+          'symptoms:',
+          '  - cache miss # under load',
+          'date: 2026-01-01',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkFrontmatterParseSafety(root, [
+        'docs/solutions/test-doc.md',
+      ])
+      expect(violations).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('does NOT flag a hash inside a value when no space precedes it', () => {
+    // e.g. `title: MDX {#anchor} syntax` — {# has no space before #
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/solutions/test-doc.md',
+        [
+          '---',
+          'title: MDX heading anchor syntax `{#anchor}` crashes the build',
+          'date: 2026-01-01',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkFrontmatterParseSafety(root, [
+        'docs/solutions/test-doc.md',
+      ])
+      expect(violations).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('returns empty for a file with no frontmatter', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, 'docs/solutions/test-doc.md', '# Just a heading\n\nbody')
+      const violations = checkFrontmatterParseSafety(root, [
+        'docs/solutions/test-doc.md',
+      ])
+      expect(violations).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('returns empty for a file with clean frontmatter (no space-hash in values)', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/solutions/test-doc.md',
+        [
+          '---',
+          'problem: cache miss under load',
+          'date: 2026-01-01',
+          'severity: high',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkFrontmatterParseSafety(root, [
+        'docs/solutions/test-doc.md',
+      ])
+      expect(violations).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags multiple truncating fields in the same file', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/solutions/test-doc.md',
+        [
+          '---',
+          'problem: cache miss # under load',
+          'solution: add index # on column',
+          'date: 2026-01-01',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkFrontmatterParseSafety(root, [
+        'docs/solutions/test-doc.md',
+      ])
+      expect(violations).toHaveLength(2)
+      const fields = violations.map((v) => v.field).sort()
+      expect(fields).toEqual(['problem', 'solution'])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags tab-before-hash (tab is whitespace, same comment trigger as space)', () => {
+    // `problem: cache miss\t# under load` — tab counts as whitespace; the ban
+    // rule applies: unquoted value with whitespace-before-#.
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/solutions/test-doc.md',
+        [
+          '---',
+          'problem: cache miss\t# under load',
+          'date: 2026-01-01',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkFrontmatterParseSafety(root, [
+        'docs/solutions/test-doc.md',
+      ])
+      expect(violations).toHaveLength(1)
+      expect(violations[0]).toMatchObject({
+        file: 'docs/solutions/test-doc.md',
+        rule: 'parse-safety',
+        field: 'problem',
+      })
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags hash-at-value-start (value-start # is a comment trigger)', () => {
+    // `tag: #important` — the ban rule applies: value starts with #.
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/solutions/test-doc.md',
+        ['---', 'tag: #important', 'date: 2026-01-01', '---', 'body'].join(
+          '\n',
+        ),
+      )
+      const violations = checkFrontmatterParseSafety(root, [
+        'docs/solutions/test-doc.md',
+      ])
+      expect(violations).toHaveLength(1)
+      expect(violations[0]).toMatchObject({
+        file: 'docs/solutions/test-doc.md',
+        rule: 'parse-safety',
+        field: 'tag',
+      })
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags anchor-prefixed value with inline comment (whitespace-before-#)', () => {
+    // `problem: &p cache miss # under load` — unquoted value with whitespace-before-#;
+    // the anchor prefix does not exempt the line from the ban.
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/solutions/test-doc.md',
+        [
+          '---',
+          'problem: &p cache miss # under load',
+          'date: 2026-01-01',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkFrontmatterParseSafety(root, [
+        'docs/solutions/test-doc.md',
+      ])
+      expect(violations).toHaveLength(1)
+      expect(violations[0]).toMatchObject({
+        file: 'docs/solutions/test-doc.md',
+        rule: 'parse-safety',
+        field: 'problem',
+      })
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('does NOT flag anchor-prefixed value with no inline comment', () => {
+    // `key: &anchor value` — has no `#`, so the ban rule does not apply.
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/solutions/test-doc.md',
+        ['---', 'key: &anchor value', 'date: 2026-01-01', '---', 'body'].join(
+          '\n',
+        ),
+      )
+      const violations = checkFrontmatterParseSafety(root, [
+        'docs/solutions/test-doc.md',
+      ])
+      expect(violations).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags trailing comment on boolean scalar (unquoted value with whitespace-#)', () => {
+    // `draft: false # intentionally published` — the ban rule applies to all
+    // unquoted values with whitespace-before-#, including booleans. Policy:
+    // inline comments in solution-doc frontmatter are banned regardless of
+    // whether the YAML parser happens to preserve the value.
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/solutions/test-doc.md',
+        [
+          '---',
+          'draft: false # intentionally published',
+          'date: 2026-01-01',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkFrontmatterParseSafety(root, [
+        'docs/solutions/test-doc.md',
+      ])
+      expect(violations).toHaveLength(1)
+      expect(violations[0]).toMatchObject({
+        file: 'docs/solutions/test-doc.md',
+        rule: 'parse-safety',
+        field: 'draft',
+      })
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags trailing comment on date string scalar (unquoted value with whitespace-#)', () => {
+    // `date: 2026-01-01 # created` — the ban rule applies: unquoted value with
+    // whitespace-before-#. Authors should quote: date: "2026-01-01".
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/solutions/test-doc.md',
+        [
+          '---',
+          'problem: cache miss',
+          'date: 2026-01-01 # created',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkFrontmatterParseSafety(root, [
+        'docs/solutions/test-doc.md',
+      ])
+      expect(violations).toHaveLength(1)
+      expect(violations[0]).toMatchObject({
+        rule: 'parse-safety',
+        field: 'date',
+      })
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags string value with trailing inline comment (whitespace-before-#)', () => {
+    // `title: My Feature # draft` — unquoted value with whitespace-before-#; banned.
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/solutions/test-doc.md',
+        [
+          '---',
+          'title: My Feature # draft',
+          'date: 2026-01-01',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkFrontmatterParseSafety(root, [
+        'docs/solutions/test-doc.md',
+      ])
+      expect(violations).toHaveLength(1)
+      expect(violations[0]).toMatchObject({
+        file: 'docs/solutions/test-doc.md',
+        rule: 'parse-safety',
+        field: 'title',
+      })
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags value with multiple spaces before hash (multi-space whitespace-before-#)', () => {
+    // `field: value  # comment` (2+ spaces) — whitespace-before-# still matches; banned.
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/solutions/test-doc.md',
+        [
+          '---',
+          'field: value  # comment',
+          'date: 2026-01-01',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkFrontmatterParseSafety(root, [
+        'docs/solutions/test-doc.md',
+      ])
+      expect(violations).toHaveLength(1)
+      expect(violations[0]).toMatchObject({
+        file: 'docs/solutions/test-doc.md',
+        rule: 'parse-safety',
+        field: 'field',
+      })
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('does NOT flag a space-hash inside a nested (indented) mapping value', () => {
+    // Indented lines are out of scope by design — the check covers flat
+    // top-level `key: value` lines only. A `#` inside a nested mapping value
+    // such as `  note: cache miss # under load` is not scanned.
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/solutions/test-doc.md',
+        [
+          '---',
+          'meta:',
+          '  note: cache miss # under load',
+          'date: 2026-01-01',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkFrontmatterParseSafety(root, [
+        'docs/solutions/test-doc.md',
+      ])
+      expect(violations).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// collectScanTargets — docs/solutions/ isolation
+// ---------------------------------------------------------------------------
+
+describe('collectScanTargets — docs/solutions/ isolation', () => {
+  test('solutionMarkdown collects markdown under docs/solutions/', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, 'docs/solutions/best-practices/foo.md', '# foo')
+      writeFile(root, 'docs/solutions/workflow-issues/bar.md', '# bar')
+      writeFile(
+        root,
+        'skills/my-skill/SKILL.md',
+        '---\nname: x\ndescription: y\n---\nbody',
+      )
+
+      const targets = collectScanTargets(root)
+
+      // solutionMarkdown must contain the docs/solutions/ files
+      expect(targets.solutionMarkdown).toContain(
+        'docs/solutions/best-practices/foo.md',
+      )
+      expect(targets.solutionMarkdown).toContain(
+        'docs/solutions/workflow-issues/bar.md',
+      )
+
+      // docs/solutions/ files must NOT appear in targets.markdown (banned-pattern scope)
+      expect(targets.markdown).not.toContain(
+        'docs/solutions/best-practices/foo.md',
+      )
+      expect(targets.markdown).not.toContain(
+        'docs/solutions/workflow-issues/bar.md',
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('solutionMarkdown is empty when docs/solutions/ does not exist', () => {
+    const root = makeFixtureRepo()
+    try {
+      const targets = collectScanTargets(root)
+      expect(targets.solutionMarkdown).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('existing markdown and typescript targets are unaffected by docs/solutions/ addition', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'skills/foo/SKILL.md',
+        '---\nname: foo\ndescription: bar\n---\nbody',
+      )
+      writeFile(root, 'agents/research/a.md', '---\nname: a\n---\nagent')
+      writeFile(root, 'src/lib/foo.ts', '// ts')
+      writeFile(root, 'docs/solutions/best-practices/doc.md', '# doc')
+
+      const targets = collectScanTargets(root)
+
+      // Existing scopes unchanged
+      expect(targets.markdown).toContain('skills/foo/SKILL.md')
+      expect(targets.markdown).toContain('agents/research/a.md')
+      expect(targets.typescript).toContain('src/lib/foo.ts')
+
+      // docs/solutions/ isolated
+      expect(targets.solutionMarkdown).toContain(
+        'docs/solutions/best-practices/doc.md',
+      )
+      expect(targets.markdown).not.toContain(
+        'docs/solutions/best-practices/doc.md',
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// checkContentIntegrity — parse-safety integration
+// ---------------------------------------------------------------------------
+
+describe('checkContentIntegrity — parse-safety integration', () => {
+  test('a malformed docs/solutions/ fixture is now picked up by the gate', () => {
+    // This is the key integration proof: before this change, docs/solutions/
+    // was unscanned. Now a truncating value in a solution doc is detected.
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/solutions/best-practices/truncating.md',
+        [
+          '---',
+          'problem: cache miss # under load',
+          'date: 2026-01-01',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+
+      const result = checkContentIntegrity(root)
+      expect(result.parseSafetyViolations).toHaveLength(1)
+      expect(result.parseSafetyViolations[0]).toMatchObject({
+        file: 'docs/solutions/best-practices/truncating.md',
+        rule: 'parse-safety',
+        field: 'problem',
+      })
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('a clean docs/solutions/ fixture produces no parse-safety violations', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/solutions/best-practices/clean.md',
+        [
+          '---',
+          'problem: cache miss under load',
+          'date: 2026-01-01',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+
+      const result = checkContentIntegrity(root)
+      expect(result.parseSafetyViolations).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('regression: existing skill/agent frontmatter checks still pass unchanged', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeCompliantSkill(root, 'foo', 'body')
+      writeAgent(root, 'research', 'a')
+
+      const result = checkContentIntegrity(root)
+      expect(result.frontmatterViolations).toEqual([])
+      expect(result.agentModelViolations).toEqual([])
+      expect(result.parseSafetyViolations).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('docs/solutions/ files are NOT subject to banned-pattern enforcement', () => {
+    // Historical solution docs may legitimately reference CC/CEP terms in
+    // their problem descriptions. They must not be scanned for banned patterns.
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/solutions/workflow-issues/historical.md',
+        [
+          '---',
+          'problem: migrated from Claude Code',
+          'date: 2026-01-01',
+          '---',
+          'We used Claude Code before switching.',
+        ].join('\n'),
+      )
+
+      const result = checkContentIntegrity(root)
+      // No banned-pattern hits from the solution doc
+      expect(result.bannedPatterns).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('allowlist zero-match warning still fires when glob covers docs/solutions/ but solutionMarkdown is excluded from allScannedFiles', () => {
+    // solutionMarkdown must NOT leak into allScannedFiles (which feeds loadAllowlist).
+    // A docs/solutions/** allowlist entry should produce a zero-match warning
+    // because no scanned file (skills/agents/src) matches that glob.
+    // We include a skill so allScannedFiles is non-empty (zero-match check only
+    // runs when scannedFiles.length > 0).
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/solutions/best-practices/doc.md',
+        ['---', 'problem: cache miss', 'date: 2026-01-01', '---', 'body'].join(
+          '\n',
+        ),
+      )
+      // A skill gives allScannedFiles a non-empty entry so the zero-match check runs.
+      writeCompliantSkill(root, 'foo', 'body')
+      writeAllowlist(root, [
+        {
+          pathGlob: 'docs/solutions/**',
+          patterns: ['Claude Code'],
+          reason: 'Historical solution docs may reference Claude Code by name.',
+        },
+      ])
+
+      const result = checkContentIntegrity(root)
+      // The allowlist entry covers docs/solutions/** but no scanned file
+      // (skills/agents/src) matches it → zero-match warning must appear.
+      const zeroMatch = result.allowlistWarnings.filter(
+        (w) => w.kind === 'zero-match' && w.pathGlob === 'docs/solutions/**',
+      )
+      expect(zeroMatch).toHaveLength(1)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Integration smoke: run the gate against the real repo. This is the test
 // that catches both v2.4.0 cycle bugs if they reintroduce themselves, and the
 // one that actually fails CI when content drifts.
@@ -1643,12 +2376,20 @@ describe('integration: real repo', () => {
       throw new Error(`Duplicate bundled agent stems in repo:\n  ${details}`)
     }
 
+    if (result.parseSafetyViolations.length > 0) {
+      const details = result.parseSafetyViolations
+        .map((v) => `${v.file}  ${v.field ?? ''}  ${v.message}`)
+        .join('\n  ')
+      throw new Error(`Parse-safety violations in repo:\n  ${details}`)
+    }
+
     expect(result.phantomRefs).toEqual([])
     expect(result.brokenSubfileRefs).toEqual([])
     expect(result.bannedPatterns).toEqual([])
     expect(result.frontmatterViolations).toEqual([])
     expect(result.agentModelViolations).toEqual([])
     expect(result.agentStemViolations).toEqual([])
+    expect(result.parseSafetyViolations).toEqual([])
     expect(result.allowlistWarnings).toEqual([])
     expect(result.scanStats.markdownFiles).toBeGreaterThan(0)
     expect(result.scanStats.typescriptFiles).toBeGreaterThan(0)
@@ -1720,6 +2461,36 @@ describe('CLI', () => {
         'Banned patterns outside allowlist',
       )
       expect(result.stderr.toString()).toContain('TaskCreate')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('exits 1 when a parse-safety violation exists in docs/solutions/', () => {
+    // A docs/solutions/ file with a truncating frontmatter value must cause
+    // the CLI to exit 1 and report the violation path and rule.
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/solutions/truncating.md',
+        [
+          '---',
+          'problem: cache miss # under load',
+          'date: 2026-01-01',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const result = Bun.spawnSync(['bun', SCRIPT_PATH, root], {
+        cwd: REPO_ROOT,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+      expect(result.exitCode).toBe(1)
+      const stderr = result.stderr.toString()
+      expect(stderr).toContain('Parse-safety violations')
+      expect(stderr).toContain('truncating.md')
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }

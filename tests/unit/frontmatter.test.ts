@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import {
+  extractFrontmatterBlock,
   formatFrontmatter,
   parseFrontmatter,
   stripFrontmatter,
@@ -228,5 +229,48 @@ Content with leading newline`
       const result = stripFrontmatter(content)
       expect(result).toBe('Content with leading newline')
     })
+  })
+})
+
+describe('extractFrontmatterBlock', () => {
+  test('returns the raw YAML text between delimiters for well-formed frontmatter', () => {
+    const content = '---\nname: test\ndescription: A skill\n---\n# Body'
+    expect(extractFrontmatterBlock(content)).toBe(
+      'name: test\ndescription: A skill',
+    )
+  })
+
+  test('returns null when there is no frontmatter', () => {
+    expect(extractFrontmatterBlock('# Just a heading\nSome content')).toBeNull()
+  })
+
+  test('returns null when only the opening delimiter is present', () => {
+    expect(
+      extractFrontmatterBlock('---\nname: test\n# No closing delimiter'),
+    ).toBeNull()
+  })
+
+  test('handles Windows (CRLF) line endings', () => {
+    const content = '---\r\nname: test\r\n---\r\nBody'
+    expect(extractFrontmatterBlock(content)).toBe('name: test')
+  })
+
+  test('handles no trailing newline before the closing delimiter', () => {
+    // File ends immediately after closing --- with no trailing newline.
+    const content = '---\nname: test\n---'
+    expect(extractFrontmatterBlock(content)).toBe('name: test')
+  })
+
+  test('returns an empty string for empty frontmatter', () => {
+    const content = '---\n---\n# Body'
+    expect(extractFrontmatterBlock(content)).toBe('')
+  })
+
+  test('preserves nested/indented lines verbatim in the returned block', () => {
+    // The helper returns raw text; callers are responsible for skipping
+    // indented lines when scanning flat top-level key-value pairs.
+    const content = '---\nmeta:\n  note: cache miss # under load\n---\nbody'
+    const block = extractFrontmatterBlock(content)
+    expect(block).toBe('meta:\n  note: cache miss # under load')
   })
 })

@@ -477,12 +477,31 @@ Convert multiple reviewer compact JSON returns into one deduplicated, confidence
 10. **Collect coverage data.** Union residual_risks and testing_gaps across reviewers.
 11. **Preserve CE agent artifacts.** Keep the learnings, agent-native, schema-drift, and deployment-verification outputs alongside the merged finding set. Do not drop unstructured agent output just because it does not match the persona JSON schema.
 
+### Stage 5b: Validation pass
+
+Run an independent validation pass over the merged finding set before synthesis. This pass annotates each gated finding `validated: true` or `validated: false` with a one-sentence reason. It never deletes a finding — findings with `validated: false` are surfaced in the "Filtered (not validated)" group in Stage 6, not removed from the report.
+
+**Gating band (default):** Validate only findings that are **P0 or P1 severity**, or that have `requires_verification: true`. Findings outside this band pass through to Stage 6 unvalidated and unfiltered — no validator is dispatched for them. This bounds cost: one validator subagent per gated finding.
+
+**Dispatch:**
+
+1. Identify all gated findings from the Stage 5 merged set.
+2. For each gated finding, spawn one validator subagent in parallel using the validator template at `references/validator-template.md`. Pass the finding fields, the intent summary, the file list, and the full diff.
+3. Collect `{validated, reason}` from each validator. Attach both fields to the finding.
+4. **Never drop a finding.** A finding with `validated: false` is routed to the "Filtered (not validated)" group for Stage 6 presentation. It is not removed from the report, not suppressed, and not excluded from the Coverage count.
+5. Findings with `validated: true` flow through to Stage 6 unchanged — they appear in the normal severity tables.
+6. Findings outside the gating band carry no `validated` annotation and appear in Stage 6 severity tables unchanged.
+
+**Failure handling:** If a validator subagent fails or times out, treat the finding as `validated: true` (conservative fallback — keep it in the actioned set) and note the validator failure in the Coverage section.
+
+**Output-contract compatibility:** This pass is additive. Existing severity tables in Stage 6 keep their structure, headings, and order. The "Filtered (not validated)" group is appended after the existing severity tables. Consumers relying on existing section order are unaffected — new content only ever appears after existing sections.
+
 ### Stage 6: Synthesize and present
 
 Assemble the final report using **pipe-delimited markdown tables for findings** from the review output template included below. The table format is mandatory for finding rows in interactive mode — do not render findings as freeform text blocks or horizontal-rule-separated prose. Other report sections (Applied Fixes, Learnings, Coverage, etc.) use bullet lists and the `---` separator before the verdict, as shown in the template.
 
 1. **Header.** Scope, intent, mode, reviewer team with per-conditional justifications.
-2. **Findings.** Rendered as pipe-delimited tables grouped by severity (`### P0 -- Critical`, `### P1 -- High`, `### P2 -- Moderate`, `### P3 -- Low`). Each finding row shows `#`, file, issue, reviewer(s), confidence, and synthesized route. Omit empty severity levels. Never render findings as freeform text blocks or numbered lists.
+2. **Findings.** Rendered as pipe-delimited tables grouped by severity (`### P0 -- Critical`, `### P1 -- High`, `### P2 -- Moderate`, `### P3 -- Low`). Each finding row shows `#`, file, issue, reviewer(s), confidence, and synthesized route. Omit empty severity levels. Never render findings as freeform text blocks or numbered lists. Only findings with `validated: true` (or no `validated` annotation) appear in these tables.
 3. **Requirements Completeness.** Include only when a plan was found in Stage 2b. For each requirement (R1, R2, etc.) and implementation unit in the plan, report whether corresponding work appears in the diff. Use a simple checklist: met / not addressed / partially addressed. Routing depends on `plan_source`:
    - **`explicit`** (caller-provided or PR body): Flag unaddressed requirements as P1 findings with `autofix_class: manual`, `owner: downstream-resolver`. These enter the residual actionable queue and can become todos.
    - **`inferred`** (auto-discovered): Flag unaddressed requirements as P3 findings with `autofix_class: advisory`, `owner: human`. These stay in the report only — no todos, no autonomous follow-up. An inferred plan match is a hint, not a contract.
@@ -490,12 +509,13 @@ Assemble the final report using **pipe-delimited markdown tables for findings** 
 4. **Applied Fixes.** Include only if a fix phase ran in this invocation.
 5. **Residual Actionable Work.** Include when unresolved actionable findings were handed off or should be handed off.
 6. **Pre-existing.** Separate section, does not count toward verdict.
-7. **Learnings & Past Solutions.** Surface learnings-researcher results: if past solutions are relevant, flag them as "Known Pattern" with links to docs/solutions/ files.
-8. **Agent-Native Gaps.** Surface agent-native-reviewer results. Omit section if no gaps found.
-9. **Schema Drift Check.** If schema-drift-detector ran, summarize whether drift was found. If drift exists, list the unrelated schema objects and the required cleanup command. If clean, say so briefly.
-10. **Deployment Notes.** If deployment-verification-agent ran, surface the key Go/No-Go items: blocking pre-deploy checks, the most important verification queries, rollback caveats, and monitoring focus areas. Keep the checklist actionable rather than dropping it into Coverage.
-11. **Coverage.** Suppressed count, residual risks, testing gaps, failed/timed-out reviewers, and any intent uncertainty carried by non-interactive modes.
-12. **Verdict.** Ready to merge / Ready with fixes / Not ready. Fix order if applicable. When an `explicit` plan has unaddressed requirements, the verdict must reflect it — a PR that's code-clean but missing planned requirements is "Not ready" unless the omission is intentional. When an `inferred` plan has unaddressed requirements, note it in the verdict reasoning but do not block on it alone.
+7. **Filtered (not validated).** Include when Stage 5b produced any findings with `validated: false`. Render as a pipe-delimited table with columns `#`, `File`, `Issue`, `Reviewer`, `Confidence`, `Validator reason`. These findings are surfaced for human review — they are not removed from the report. The validator found evidence that the issue may not be real in the code as written, was not introduced by this diff, or is already handled elsewhere; the human reviewer makes the final call. Omit this section when no findings were filtered.
+8. **Learnings & Past Solutions.** Surface learnings-researcher results: if past solutions are relevant, flag them as "Known Pattern" with links to docs/solutions/ files.
+9. **Agent-Native Gaps.** Surface agent-native-reviewer results. Omit section if no gaps found.
+10. **Schema Drift Check.** If schema-drift-detector ran, summarize whether drift was found. If drift exists, list the unrelated schema objects and the required cleanup command. If clean, say so briefly.
+11. **Deployment Notes.** If deployment-verification-agent ran, surface the key Go/No-Go items: blocking pre-deploy checks, the most important verification queries, rollback caveats, and monitoring focus areas. Keep the checklist actionable rather than dropping it into Coverage.
+12. **Coverage.** Suppressed count, residual risks, testing gaps, failed/timed-out reviewers, validator failures, and any intent uncertainty carried by non-interactive modes.
+13. **Verdict.** Ready to merge / Ready with fixes / Not ready. Fix order if applicable. When an `explicit` plan has unaddressed requirements, the verdict must reflect it — a PR that's code-clean but missing planned requirements is "Not ready" unless the omission is intentional. When an `inferred` plan has unaddressed requirements, note it in the verdict reasoning but do not block on it alone.
 
 Do not include time estimates.
 
@@ -539,6 +559,10 @@ Pre-existing issues:
 [P2][gated_auto -> downstream-resolver] File: <file:line> -- <title> (<reviewer>, confidence <N>)
   Why: <why_it_matters>
 
+Filtered (not validated):
+[P1][gated_auto -> downstream-resolver] File: <file:line> -- <title> (<reviewer>, confidence <N>)
+  Validator reason: <one-sentence reason from the validator>
+
 Residual risks:
 - <risk>
 
@@ -559,6 +583,7 @@ Testing gaps:
 
 Coverage:
 - Suppressed: <N> findings below 0.60 confidence (P0 at 0.50+ retained)
+- Filtered (not validated): <N> findings surfaced for human review
 - Untracked files excluded: <file1>, <file2>
 - Failed reviewers: <reviewer>
 
@@ -576,6 +601,7 @@ Review complete
 - The `Artifact:` line gives callers the path to the full run artifact for machine-readable access to the complete findings schema. The text envelope is the primary handoff; the artifact is for debugging and full-fidelity access.
 - Findings with `owner: release` appear in the Advisory section (they are operational/rollout items, not code fixes).
 - Findings with `pre_existing: true` appear in the Pre-existing section regardless of autofix_class.
+- Findings with `validated: false` from Stage 5b appear in the "Filtered (not validated)" section. They are surfaced for human review — not removed. Include the validator reason on the indented `Validator reason:` line.
 - The Verdict appears in the metadata header (deliberately reordered from the interactive format where it appears at the bottom) so programmatic callers get the verdict first.
 - Omit any section with zero items.
 - If all reviewers fail or time out, emit `Code review degraded (headless mode). Reason: 0 of N reviewers returned results.` followed by "Review complete".

@@ -59,6 +59,12 @@ Use this **exact format** when presenting synthesized review findings. Findings 
 |---|------|-------|----------|
 | 1 | `orders_controller.rb:12` | Broad rescue masking failed permission check | correctness |
 
+### Filtered (not validated)
+
+| # | File | Issue | Reviewer | Confidence | Validator reason |
+|---|------|-------|----------|------------|-----------------|
+| 1 | `orders_controller.rb:55` | Rate limit bypass via header spoofing | security | 0.72 | The `X-Forwarded-For` header is already stripped by the load balancer before reaching the application, so the cited bypass path does not exist in this deployment. |
+
 ### Learnings & Past Solutions
 
 - [Known Pattern] `docs/solutions/export-pagination.md` -- previous export pagination fix applies to this endpoint
@@ -126,6 +132,7 @@ This fails because: no pipe-delimited tables, no severity-grouped `###` headers,
 - **Applied Fixes section** -- include only when a fix phase ran in this review invocation
 - **Residual Actionable Work section** -- include only when unresolved actionable findings were handed off for later work
 - **Pre-existing section** -- separate table, no confidence column (these are informational)
+- **Filtered (not validated) section** -- findings where Stage 5b returned `validated: false`. Rendered as a pipe-delimited table with columns `#`, `File`, `Issue`, `Reviewer`, `Confidence`, `Validator reason`. These findings are surfaced for human review, not removed. Omit this section when Stage 5b produced no filtered findings.
 - **Learnings & Past Solutions section** -- results from learnings-researcher, with links to docs/solutions/ files
 - **Agent-Native Gaps section** -- results from agent-native-reviewer. Omit if no gaps found.
 - **Schema Drift Check section** -- results from schema-drift-detector. Omit if the agent did not run.
@@ -145,4 +152,5 @@ In `mode:headless`, replace the interactive pipe-delimited table report with a s
 - **`Artifact:` line** in metadata header gives callers the path to the full run artifact.
 - **`[needs-verification]` marker** on findings where `requires_verification: true`.
 - **Evidence lines** included per finding.
+- **"Filtered (not validated)" section** included when Stage 5b produced findings with `validated: false`. Uses `[severity][autofix_class -> owner] File: <file:line> -- <title>` format with an indented `Validator reason:` line. These findings are surfaced for human review, not removed.
 - **Completion signal:** "Review complete" as the final line.

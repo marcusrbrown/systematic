@@ -27,9 +27,14 @@
  *    model instead of hardcoding provider-specific model IDs.
  *
  * Scope is narrow by design: `skills/**\/*.md`, `agents/**\/*.md`, and
- * `src/**\/*.ts`. The gate does not scan `docs/`, `.opencode/`, `.github/`,
+ * `src/**\/*.ts` for the full invariant suite. Additionally, `docs/solutions/**\/*.md`
+ * is scanned for frontmatter parse-safety only (flags any unquoted inline comment —
+ * whitespace-before-`#` or value-start `#` — in frontmatter; remediation is to quote
+ * the value or remove the comment). The gate does not scan `.opencode/`, `.github/`,
  * `dist/`, `node_modules/`, `registry/`, or markdown files under `src/` —
  * those intentionally contain historical or documented CC/CEP references.
+ * Solution docs are intentionally excluded from banned-pattern enforcement
+ * because historical docs may legitimately reference CC/CEP terms.
  *
  * Agent categories are discovered at runtime from `agents/` subdirectories so
  * adding a new category auto-extends coverage without a regex update.
@@ -50,7 +55,10 @@ import {
   isValidAgentColor,
   OPENCODE_AGENT_COLOR_TOKENS,
 } from '../src/lib/agent-colors.js'
-import { parseFrontmatter } from '../src/lib/frontmatter.js'
+import {
+  extractFrontmatterBlock,
+  parseFrontmatter,
+} from '../src/lib/frontmatter.js'
 import { SKILL_FRONTMATTER_FIELDS } from '../src/lib/skills.js'
 import { walkDir } from '../src/lib/walk-dir.js'
 
@@ -151,6 +159,7 @@ export interface FrontmatterViolation {
     | 'missing-frontmatter'
     | 'deprecated-reason-missing'
     | 'deprecated-missing-required-fields'
+    | 'parse-safety'
   field?: string
   message: string
   remediation: string
@@ -181,6 +190,7 @@ export interface CheckResult {
   brokenSubfileRefs: BrokenSubfileRef[]
   bannedPatterns: BannedPatternHit[]
   frontmatterViolations: FrontmatterViolation[]
+  parseSafetyViolations: FrontmatterViolation[]
   agentModelViolations: AgentModelViolation[]
   agentColorViolations: AgentColorViolation[]
   agentStemViolations: AgentStemViolation[]
@@ -188,6 +198,7 @@ export interface CheckResult {
   scanStats: {
     markdownFiles: number
     typescriptFiles: number
+    solutionMarkdownFiles: number
   }
 }
 
@@ -421,11 +432,19 @@ export function discoverCategories(rootDir: string): string[] {
 export interface ScanTargets {
   markdown: string[] // repo-relative paths under skills/ and agents/
   typescript: string[] // repo-relative paths under src/ (excluding markdown)
+  solutionMarkdown: string[] // repo-relative paths under docs/solutions/ (parse-safety only)
 }
 
 /**
  * Collect the files the gate scans. Paths are repo-relative for consistent
  * allowlist matching.
+ *
+ * - `markdown`: skills/ and agents/ markdown — full invariant suite.
+ * - `typescript`: src/ TypeScript — banned-pattern scan.
+ * - `solutionMarkdown`: docs/solutions/ markdown — parse-safety check ONLY.
+ *   Deliberately NOT merged into `markdown` to keep banned-pattern enforcement
+ *   scoped to skills+agents+src; historical solution docs may legitimately
+ *   reference CC/CEP terms.
  */
 export function collectScanTargets(rootDir: string): ScanTargets {
   const markdown: string[] = []
@@ -454,9 +473,22 @@ export function collectScanTargets(rootDir: string): ScanTargets {
     }
   }
 
+  const solutionMarkdown: string[] = []
+  const solutionsDir = path.join(rootDir, 'docs', 'solutions')
+  if (fs.existsSync(solutionsDir)) {
+    const entries = walkDir(solutionsDir, {
+      maxDepth: 10,
+      filter: (e) => !e.isDirectory && e.name.endsWith('.md'),
+    })
+    for (const e of entries) {
+      solutionMarkdown.push(path.relative(rootDir, e.path))
+    }
+  }
+
   markdown.sort()
   typescript.sort()
-  return { markdown, typescript }
+  solutionMarkdown.sort()
+  return { markdown, typescript, solutionMarkdown }
 }
 
 // ---------------------------------------------------------------------------
@@ -761,6 +793,137 @@ function checkDeprecatedBlockForBundled(
   })
 }
 
+// ---------------------------------------------------------------------------
+// Frontmatter parse-safety check
+// ---------------------------------------------------------------------------
+
+/**
+ * Ban unquoted inline comments in docs/solutions/ frontmatter.
+ *
+ * Scope: flat top-level `key: value` lines only. Nested/indented mapping
+ * values (lines that start with whitespace) are intentionally not scanned —
+ * see `extractFlatKeyValue`.
+ *
+ * A top-level flat `key: value` line is flagged when ALL of:
+ * - It is a flat key-value line (not a full-line comment, list item, indented
+ *   continuation, or block-scalar indicator).
+ * - The value is NOT wrapped in matching quotes (quoted values are safe; a `#`
+ *   inside quotes is literal).
+ * - The unquoted value contains a comment trigger: whitespace-before-`#`
+ *   (`/\s#/`) OR the value's first non-space char is `#` (`/^\s*#/`).
+ *
+ * The decision is purely lexical — no parse-diff corroboration. Policy: inline
+ * YAML comments in solution-doc frontmatter are banned regardless of whether
+ * the YAML parser happens to preserve the value, because the distinction is
+ * undecidable from the raw text alone.
+ *
+ * Emits a `FrontmatterViolation` with `rule: 'parse-safety'`.
+ */
+export function checkFrontmatterParseSafety(
+  rootDir: string,
+  markdownFiles: readonly string[],
+): FrontmatterViolation[] {
+  const violations: FrontmatterViolation[] = []
+
+  for (const relPath of markdownFiles) {
+    const content = readFileSafe(path.join(rootDir, relPath))
+    if (content === null) continue
+    scanFrontmatterParseSafety(relPath, content, violations)
+  }
+
+  return violations
+}
+
+function scanFrontmatterParseSafety(
+  relPath: string,
+  content: string,
+  violations: FrontmatterViolation[],
+): void {
+  const rawBlock = extractFrontmatterBlock(content)
+  if (rawBlock === null) return
+
+  const lines = rawBlock.split('\n')
+  for (const line of lines) {
+    const violation = checkParseSafetyLine(relPath, line)
+    if (violation) violations.push(violation)
+  }
+}
+
+/**
+ * Inspect a single frontmatter line for an unquoted inline comment.
+ * Returns a violation if the line is a flat `key: value` with an unquoted
+ * value containing a comment trigger, or null if the line is safe or out of
+ * scope.
+ */
+function checkParseSafetyLine(
+  relPath: string,
+  line: string,
+): FrontmatterViolation | null {
+  const kv = extractFlatKeyValue(line)
+  if (!kv) return null
+
+  const { key, rawValue } = kv
+  if (isQuotedValue(rawValue)) return null
+  if (!isCommentCandidate(rawValue)) return null
+
+  return {
+    file: relPath,
+    rule: 'parse-safety',
+    field: key,
+    message:
+      `Frontmatter field \`${key}\` contains an unquoted inline comment (whitespace before \`#\` or value starting with \`#\`). ` +
+      `Inline YAML comments in solution-doc frontmatter are silently stripped and risk data loss. ` +
+      `Raw value: ${JSON.stringify(rawValue)}`,
+    remediation:
+      'Quote the value or remove the inline comment — inline YAML comments in solution-doc frontmatter are silently stripped and risk data loss.',
+  }
+}
+
+/**
+ * Extract the key and raw value from a flat `key: value` frontmatter line.
+ * Returns null for lines that are not flat key-value pairs (comments, list
+ * items, indented lines, block-scalar indicators).
+ *
+ * Scope boundary: indented lines (lines starting with whitespace) are skipped
+ * unconditionally. A `#` inside a nested mapping value such as
+ * `  note: cache miss # under load` is therefore out of scope by design —
+ * only flat top-level key-value lines are inspected.
+ */
+function extractFlatKeyValue(
+  line: string,
+): { key: string; rawValue: string } | null {
+  if (/^\s*#/.test(line)) return null
+  if (/^\s*- /.test(line)) return null
+  if (/^\s/.test(line)) return null
+  if (/^([^:]+):\s*[|>]/.test(line)) return null
+
+  const kvMatch = line.match(/^([^:]+):\s(.*)$/)
+  if (!kvMatch) return null
+
+  return { key: (kvMatch[1] ?? '').trim(), rawValue: kvMatch[2] ?? '' }
+}
+
+/**
+ * True when `rawValue` is a candidate for comment-truncation: it contains
+ * whitespace-before-hash (`\s#`) or starts with `#` (both cause YAML to treat
+ * the text as a comment, silently dropping content).
+ */
+function isCommentCandidate(rawValue: string): boolean {
+  return /\s#/.test(rawValue) || /^\s*#/.test(rawValue)
+}
+
+/**
+ * True when `value` is wrapped in matching double or single quotes.
+ * A `#` inside a quoted value is literal, not a comment trigger.
+ */
+function isQuotedValue(value: string): boolean {
+  const trimmed = value.trim()
+  return (
+    (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2) ||
+    (trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2)
+  )
+}
+
 export function checkAgentColors(
   rootDir: string,
   markdownFiles: readonly string[],
@@ -937,6 +1100,9 @@ function findExemption(
 export function checkContentIntegrity(rootDir: string): CheckResult {
   const categories = discoverCategories(rootDir)
   const targets = collectScanTargets(rootDir)
+  // allScannedFiles feeds banned-pattern enforcement and allowlist warnings.
+  // solutionMarkdown is intentionally excluded: historical solution docs may
+  // legitimately reference CC/CEP terms and must not trigger banned-pattern hits.
   const allScannedFiles = [...targets.markdown, ...targets.typescript]
 
   const { allowlist, warnings: allowlistWarnings } = loadAllowlist(
@@ -951,6 +1117,10 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
   )
   const brokenSubfileRefs = checkSubfileReferences(rootDir, targets.markdown)
   const frontmatterViolations = checkFrontmatter(rootDir, targets.markdown)
+  const parseSafetyViolations = checkFrontmatterParseSafety(
+    rootDir,
+    targets.solutionMarkdown,
+  )
   const agentModelViolations = checkAgentModel(rootDir, targets.markdown)
   const agentColorViolations = checkAgentColors(rootDir, targets.markdown)
   const agentStemViolations = checkAgentStemUniqueness(
@@ -971,6 +1141,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     brokenSubfileRefs,
     bannedPatterns,
     frontmatterViolations,
+    parseSafetyViolations,
     agentModelViolations,
     agentColorViolations,
     agentStemViolations,
@@ -978,6 +1149,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     scanStats: {
       markdownFiles: targets.markdown.length,
       typescriptFiles: targets.typescript.length,
+      solutionMarkdownFiles: targets.solutionMarkdown.length,
     },
   }
 }
@@ -1012,6 +1184,10 @@ function printResult(result: CheckResult, verbose: boolean): void {
   printBrokenSubfileRefs(result.brokenSubfileRefs)
   printBannedPatterns(result.bannedPatterns)
   printFrontmatterViolations(result.frontmatterViolations)
+  printFrontmatterViolations(
+    result.parseSafetyViolations,
+    'Parse-safety violations',
+  )
   printAgentModelViolations(result.agentModelViolations)
   printAgentColorViolations(result.agentColorViolations)
   printAgentStemViolations(result.agentStemViolations)
@@ -1019,7 +1195,8 @@ function printResult(result: CheckResult, verbose: boolean): void {
   if (totalViolations(result) === 0) {
     process.stdout.write(
       `content-integrity: clean (${result.scanStats.markdownFiles} md + ` +
-        `${result.scanStats.typescriptFiles} ts scanned, ` +
+        `${result.scanStats.typescriptFiles} ts + ` +
+        `${result.scanStats.solutionMarkdownFiles} solution-md scanned, ` +
         `${result.exemptHits.length} exempt hits, ` +
         `${result.allowlistWarnings.length} warnings)\n`,
     )
@@ -1028,8 +1205,9 @@ function printResult(result: CheckResult, verbose: boolean): void {
   if (verbose) {
     process.stdout.write(
       `\ncategories: ${result.categories.join(', ')}\n` +
-        `scanStats: ${result.scanStats.markdownFiles} md + ${result.scanStats.typescriptFiles} ts\n` +
+        `scanStats: ${result.scanStats.markdownFiles} md + ${result.scanStats.typescriptFiles} ts + ${result.scanStats.solutionMarkdownFiles} solution-md\n` +
         `frontmatterViolations: ${result.frontmatterViolations.length}\n` +
+        `parseSafetyViolations: ${result.parseSafetyViolations.length}\n` +
         `agentModelViolations: ${result.agentModelViolations.length}\n` +
         `agentColorViolations: ${result.agentColorViolations.length}\n` +
         `agentStemViolations: ${result.agentStemViolations.length}\n` +
@@ -1072,9 +1250,10 @@ function printBannedPatterns(hits: readonly BannedPatternHit[]): void {
 
 function printFrontmatterViolations(
   violations: readonly FrontmatterViolation[],
+  label = 'Frontmatter violations',
 ): void {
   if (violations.length === 0) return
-  process.stderr.write(`\nFrontmatter violations (${violations.length}):\n`)
+  process.stderr.write(`\n${label} (${violations.length}):\n`)
   for (const v of violations) {
     const field = v.field ? ` (${v.field})` : ''
     process.stderr.write(`  ${v.file}  ${v.rule}${field}: ${v.message}\n`)
@@ -1123,6 +1302,7 @@ function totalViolations(result: CheckResult): number {
     result.brokenSubfileRefs.length +
     result.bannedPatterns.length +
     result.frontmatterViolations.length +
+    result.parseSafetyViolations.length +
     result.agentModelViolations.length +
     result.agentColorViolations.length +
     result.agentStemViolations.length
