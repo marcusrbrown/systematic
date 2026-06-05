@@ -4,6 +4,7 @@ description: Always-on code-review persona. Reviews code for test coverage gaps,
 tools: Read, Grep, Glob, Bash
 color: info
 
+mode: subagent
 ---
 
 # Testing Reviewer

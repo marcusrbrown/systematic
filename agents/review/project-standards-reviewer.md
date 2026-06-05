@@ -4,6 +4,7 @@ description: Always-on code-review persona. Audits changes against the project's
 tools: Read, Grep, Glob, Bash
 color: info
 
+mode: subagent
 ---
 
 # Project Standards Reviewer
