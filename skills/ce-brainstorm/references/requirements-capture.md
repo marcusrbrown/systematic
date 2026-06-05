@@ -24,6 +24,7 @@ The requirements document is for product definition and scope control. Do **not*
 | Key Decisions | Include when material | Include when material | Include when material |
 | Dependencies / Assumptions | Include when material | Include when material | Include when material |
 | Outstanding Questions | Include when material | Include when material | Include when material |
+| Sources / Research | Include when material | Include when material | Include when material |
 
 ## Summary vs Problem Frame discipline
 
@@ -47,6 +48,25 @@ In the truly-trivial Lightweight case where Summary is skipped (synthesis ≤ 2 
 **Key Flows** — include when the work involves multi-step interaction or coordinates across existing flows. At Deep-product tier, include 2-4 primary flows by default; omit only when the product is not meaningfully flow-shaped (e.g., pure API, policy, or artifact output) and Actors, Requirements, Scope Boundaries, and Acceptance Examples already prevent downstream invention of user/agent paths. When omitting at product tier, note the reason in the doc.
 
 **Acceptance Examples** — include when a requirement's behavior is hard to pin down without a concrete scenario. **Always include AEs covering behavioral-conditional requirements** — any requirement framed as "When X, Y" or "If X, Y" — regardless of tier. Conditional framing signals state-dependent behavior, which is exactly where prose alone leaves implicit ambiguity (e.g., "When `--quiet` is set, errors continue to surface" — does that include warnings? does it include binary-side errors? AE pins it down). Each example disambiguates one or more requirements via a `Covers: R-IDs` back-reference. Non-conditional requirements may be omitted unless ambiguity surfaces in review; the section is not exhaustive.
+
+**Sources / Research** — surface research that orients the planner or justifies framing choices. The test: *"if I were the planner reading this cold, would this breadcrumb help me make better choices?"* Yes → surface (code locations, external docs, RFCs, constraints, prior plans — the category is inclusive, not enumerated). Process exhaust (reading the user's prompt, glancing at obvious files) → omit.
+
+## Prose economy
+
+A section can be material and still be written loosely — the failure mode is a material section padded into a wall of text where contradictions hide and a downstream agent loses the thread. Length that earns its place is fine; wordiness around that length is not.
+
+Hold every kept section to these:
+
+- **One idea per sentence.** A Summary is a handful of sentences, not one sentence with five semicolons and four parentheticals. If a sentence needs a second parenthetical to stay true, split it.
+- **A requirement is one sentence of intent plus at most one qualifier.** When a requirement would specify two outcomes ("either A or B, planning decides"), state the intent and send the fork to Outstanding Questions — don't write both arms in full inside the requirement.
+- **Cut hedges and intensifiers.** "Critically", "deliberately", "explicitly", "genuinely", "actually", "simply" carry nothing a downstream agent acts on.
+- **Prefer the verb to the nominalization.** "Demote the grid", not "the demotion of the grid is the deliberate change in this brief".
+
+Precision is not padding: keep domain terms, conditionals, and exact thresholds verbatim. Economy targets the connective tissue around them, never the precision itself.
+
+**Resolve in place; don't stratify.** When a later decision answers a parked question or supersedes earlier text, rewrite or remove the original entry — don't append a separate "resolutions" layer that leaves the superseded text standing. Version control holds the history. Stacked question/resolution strata double the reading surface and hide which text is live.
+
+**Named test, run before the doc is declared written:** could a reader find a contradiction in each section in one pass? A sentence carrying more than one parenthetical, or a requirement specifying two outcomes, fails the test — split it or defer it.
 
 ## Template
 
