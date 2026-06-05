@@ -69,131 +69,7 @@ When skipping the plan doc, the work proceeds directly to `ce:work` or to
 implementation, and any decisions made along the way land in the commit
 message or `docs/solutions/` if they're worth carrying forward.
 
-## Hard floor
-
-When a plan doc is warranted, these sections are present. They carry the
-contracts downstream consumers depend on.
-
-- **Summary** — what the plan proposes, in 1-3 lines. Forward-looking; orients
-  the reader before they invest in detail.
-- **Problem Frame** — why the work is being done. Backward-looking /
-  situational. May merge with Summary for compact plans where the motivation
-  is a single sentence.
-- **Requirements** (with stable R-IDs) — what must be true after the work
-  ships. Reviewer's checklist; downstream code review verifies against these.
-- **Key Technical Decisions** (KTDs) — the load-bearing choices that constrain
-  implementation. Each entry is `<decision>: <rationale>`. Without these, the
-  implementer can't tell which design choices are open and which are pinned.
-- **Implementation Units** (with stable U-IDs) — the discrete units of work,
-  sized so each is independently landable. `ce:work` consumes these to
-  execute. For trivial single-step plans the work may collapse into Summary
-  prose and U-IDs may be omitted; this is rare.
-
-## Include when material
-
-These sections are present when they carry information that isn't covered
-elsewhere. The test is not "is this a substantial plan?" — it is
-*"does this specific plan have content this section would surface?"* Filling
-a section with placeholder prose is worse than omitting it.
-
-- **High-Level Technical Design** — include when the technical approach has
-  shape that prose alone doesn't carry well: architecture across components,
-  sequencing across processes, state machines, branching gates.
-  Visualizations (component topology, sequence, swim lane, flowchart,
-  data-flow) typically live here. Skip when the approach is a one-paragraph
-  pattern application that the prose itself conveys.
-
-- **Scope Boundaries** — include when scope is contested, when there are
-  tempting non-goals worth naming explicitly, or when "deferred for later"
-  needs distinguishing from "outside the product's identity." Skip when scope
-  is obvious from Requirements alone.
-
-- **Open Questions** — include when there are genuinely unresolved items that
-  block planning or implementation. Skip when the plan is complete; an empty
-  "Open Questions: none" section signals false uncertainty.
-
-- **System-Wide Impact** — include when the change affects cross-cutting
-  concerns (data lifecycles, auth boundaries, performance posture, cardinal
-  rules, shared infrastructure). Skip for changes localized to one component
-  where the impact is self-evident.
-
-- **Risks & Dependencies** — include when there are real risks worth flagging
-  (external service changes, version pins under churn, behavioral assumptions
-  worth highlighting) or material upstream dependencies. Skip for low-risk
-  localized work.
-
-- **Acceptance Examples** — include when any requirement has a state-dependent
-  or conditional shape ("When X, Y") where the prose alone leaves ambiguity
-  about edge cases. Skip when all requirements are unconditional and
-  unambiguous.
-
-- **Documentation / Operational Notes** — include when documentation,
-  monitoring, runbooks, or rollout steps need explicit notes. Skip when the
-  work is purely internal and uses existing operational scaffolding without
-  modification.
-
-- **Sources / Research** — surface the research that orients the implementer
-  or justifies load-bearing choices. The test: *"if I were the implementer
-  reading this cold, would this breadcrumb help me make better choices?"*
-  Yes → surface (code locations, external docs, RFCs, constraints, prior
-  plans — the category is inclusive, not enumerated). Process exhaust
-  (reading the user's prompt, glancing at obvious entry points, restating
-  prose) → omit. Surface inline next to the KTD or unit it justifies, or
-  as a dedicated section — both shapes work.
-
-## Agent agency
-
-The catalog is a floor, not a ceiling. When the plan's content doesn't fit
-any catalog section, introduce a new one — don't force the content into a
-section it doesn't belong in. Content drives section choices, not vice
-versa.
-
-The agent also picks per artifact:
-
-- Whether Problem Frame merges into Summary
-- Sub-groupings (Requirements by capability, KTDs by component, Units phased
-  into milestones)
-- How much detail each section carries
-- Whether HTD has one diagram, several, or none — and whether visualizations
-  live in HTD or embedded in other sections
-
-## Prose economy
-
-"Include when material" sizes *which* sections appear; this sizes *how the kept
-prose reads*. A section can be material and still be written loosely — the
-failure mode is a material section padded into a wall of text where
-contradictions hide and the implementing agent loses the thread. A deep plan
-earns length through coverage (more units, more traced requirements, real
-risks), never through wordiness around that coverage.
-
-Hold every kept section to these:
-
-- **One idea per sentence.** A Summary is a handful of sentences, not one
-  sentence with five semicolons and four parentheticals. A KTD's rationale is
-  the load-bearing reason, not every reason.
-- **A requirement or unit is one sentence of intent plus at most one
-  qualifier.** When it would specify two outcomes ("either A or B, the
-  implementer decides"), state the intent and send the fork to Open Questions —
-  don't write both arms in full inside the item.
-- **Cut hedges and intensifiers.** "Critically", "deliberately", "explicitly",
-  "genuinely", "actually", "simply" carry nothing the implementer acts on.
-- **Prefer the verb to the nominalization.** "Demote the grid", not "the
-  demotion of the grid is the deliberate change in this plan".
-
-Precision is not padding: keep file paths, IDs, conditionals, and exact
-thresholds verbatim. Economy targets the connective tissue around them, never
-the precision itself.
-
-**Resolve in place; don't stratify.** When deepening, a doc-review pass, or a
-later decision supersedes earlier text, rewrite or remove the original — don't
-leave it standing as strikethrough or stack a separate "resolutions" layer on
-top of it. Version control holds the history. Stacked strata double the reading
-surface and hide which text is live.
-
-**Named test, run before the plan is declared written:** could the implementer
-find a contradiction in each section in one pass? A sentence carrying more than
-one parenthetical, or an item specifying two outcomes, fails the test — split it
-or defer it.
+> **Section inventory and meaning are owned by the Core Plan Template in `ce-plan/SKILL.md`; this file covers only how sections render and order.**
 
 ## Plan metadata fields
 
@@ -231,36 +107,11 @@ repurpose its semantics. Agents composing new plans MUST use these exact
 names; adding new fields is fine, but renaming `status` to `state` or
 `origin` to `source` breaks the downstream consumers above.
 
-## ID and content rules
-
-These apply regardless of rendering format.
-
-- **Stable IDs.** R-IDs (Requirements), U-IDs (Implementation Units), A-IDs
-  (if Actors fire), F-IDs (if Flows fire), AE-IDs (if Acceptance Examples
-  fire). IDs are stable across plan revisions — never renumber to "clean
-  up gaps."
-- **Plain prefix.** `R1.`, `U1.` as bullet prefixes. Do not bold; the prefix
-  is visually distinctive on its own.
-- **Repo-relative paths.** Always. Never absolute paths in plan content;
-  they break portability across machines, worktrees, teammates.
-- **No process exhaust.** No "captured at Phase X" notes, no `## Next Steps`
-  pointing to the next skill, no italic provenance lines. Engineering process
-  metadata belongs in commit messages and tool output, not the artifact.
-- **Group Requirements by concern when they span distinct logical areas.**
-  The trigger is distinct concerns, not item count — even four requirements
-  benefit from grouping if they cover three different topics. Skip grouping
-  only when all requirements are genuinely about the same thing; a long flat
-  list is a smell that subgroups were missed. Group by capability (e.g.,
-  "Packaging", "Migration and compatibility", "Contributor workflow"), not by
-  the order requirements were discussed. R-IDs stay continuous across groups
-  (R1, R2 in the first group; R3, R4 in the second; never restart at R1 per
-  group).
-
 ## Rendering
 
-The format-specific reference describes how to render these sections:
+The format-specific reference describes how to render plan sections:
 
 - **Markdown rendering:** `references/markdown-rendering.md`
 
-This reference (`plan-sections.md`) is about WHAT the plan contains;
-the rendering reference is about HOW markdown presents it.
+This reference (`plan-sections.md`) covers metadata format and rendering conventions;
+section inventory and content rules live in the Core Plan Template in `ce-plan/SKILL.md`.

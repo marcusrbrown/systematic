@@ -38,40 +38,7 @@ or repurpose its semantics. Agents composing new brainstorms MUST use these
 exact names; adding new fields is fine, but renaming `topic` to `subject`
 or `date` to `created` breaks filename construction and resume detection.
 
-## ID and content rules
-
-- **Stable IDs.** R-IDs (Requirements), A-IDs (if Actors fire), F-IDs (if
-  Flows fire), AE-IDs (if Acceptance Examples fire). No other ID namespaces.
-- **Plain prefix.** `R1.`, `A1.`, `F1.`, `AE1.` as bullet prefixes. Do not
-  bold; the prefix is visually distinctive on its own.
-- **Bold leader labels** inside Flows and Acceptance Examples
-  (`**Trigger:**`, `**Covers R4, R8.**`) provide structure without deeper
-  heading levels.
-- **Repo-relative paths.** Always. Never absolute paths.
-- **No process exhaust.** No "captured at Phase X" notes, no `## Next Steps`
-  pointing to ce-plan, no italic provenance lines. Engineering process
-  metadata belongs in commit messages and tool output, not the artifact.
-- **No implementation details by default.** Libraries, schemas, endpoints,
-  file layouts, code structure stay out unless the brainstorm itself is
-  inherently about a technical or architectural change and those details are
-  the subject of the decision.
-
-## Discipline: Summary vs Problem Frame
-
-When both sections are present, they earn separate sections only by holding
-to different purposes:
-
-| Section | Question it answers | Time direction | Length |
-|---|---|---|---|
-| `## Summary` | What is this doc proposing? | Forward-looking | 1-3 lines |
-| `## Problem Frame` | Why does this proposal exist? | Backward-looking / situational | Paragraphs |
-
-- **Summary doesn't need problem context.** A reader scanning Summary gets
-  the proposal at a glance.
-- **Problem Frame doesn't restate the proposal.** It establishes the
-  situation, the specific moment of pain, and the cost shape — then stops.
-  The remedy lives in Summary; restating it in Problem Frame is the
-  duplication that makes the two sections feel redundant.
+> **Section inventory, content rules, and the Summary vs Problem Frame discipline are owned by `references/requirements-capture.md`; this file covers rendering conventions and metadata contracts only.**
 
 ## Rendering
 
