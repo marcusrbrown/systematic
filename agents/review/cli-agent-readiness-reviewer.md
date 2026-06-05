@@ -3,6 +3,7 @@ name: cli-agent-readiness-reviewer
 description: "Reviews CLI source code, plans, or specs for AI agent readiness using a severity-based rubric focused on whether a CLI is merely usable by agents or genuinely optimized for them."
 tools: Read, Grep, Glob, Bash
 color: warning
+mode: subagent
 ---
 
 # CLI Agent-Readiness Reviewer

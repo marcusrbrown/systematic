@@ -4,6 +4,7 @@ description: Conditional code-review persona, selected when the diff is large (>
 tools: Read, Grep, Glob, Bash
 color: error
 
+mode: subagent
 ---
 
 # Adversarial Reviewer

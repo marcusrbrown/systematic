@@ -1,6 +1,7 @@
 ---
 name: git-history-analyzer
 description: "Performs archaeological analysis of git history to trace code evolution, identify contributors, and understand why code patterns exist. Use when you need historical context for code changes."
+mode: subagent
 ---
 
 **Note: The current year is 2026.** Use this when interpreting commit dates and recent changes.

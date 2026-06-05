@@ -4,6 +4,7 @@ description: Conditional code-review persona, selected when reviewing a PR that 
 tools: Read, Grep, Glob, Bash
 color: warning
 
+mode: subagent
 ---
 
 # Previous Comments Reviewer
