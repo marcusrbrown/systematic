@@ -2,7 +2,7 @@
 /**
  * Content-Integrity Gate
  *
- * Enforces five content invariants across Systematic's shipped assets:
+ * Enforces six content invariants across Systematic's shipped assets:
  *
  * 1. **Cross-skill reference integrity** — every `systematic:<category>:<name>`
  *    reference in bundled skills and agents resolves to an actual
@@ -25,6 +25,10 @@
  *
  * 5. **Agent model portability** — bundled agents inherit the user's configured
  *    model instead of hardcoding provider-specific model IDs.
+ *
+ * 6. **Agent mode** — bundled agents must declare `mode: subagent` explicitly so
+ *    they remain invisible to primary-agent discovery regardless of future
+ *    OpenCode default changes.
  *
  * Scope is narrow by design: `skills/**\/*.md`, `agents/**\/*.md`, and
  * `src/**\/*.ts` for the full invariant suite. Additionally, `docs/solutions/**\/*.md`
@@ -990,8 +994,7 @@ export function checkAgentMode(
     const content = readFileSafe(path.join(rootDir, relPath))
     if (content === null) continue
     const parsed = parseFrontmatter(content)
-    if (!isRecord(parsed.data)) continue
-    if (parsed.data.mode !== 'subagent') {
+    if (!isRecord(parsed.data) || parsed.data.mode !== 'subagent') {
       violations.push({
         file: relPath,
         message:
@@ -1242,6 +1245,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
         `frontmatterViolations: ${result.frontmatterViolations.length}\n` +
         `parseSafetyViolations: ${result.parseSafetyViolations.length}\n` +
         `agentModelViolations: ${result.agentModelViolations.length}\n` +
+        `agentModeViolations: ${result.agentModeViolations.length}\n` +
         `agentColorViolations: ${result.agentColorViolations.length}\n` +
         `agentStemViolations: ${result.agentStemViolations.length}\n` +
         `exemptHits: ${result.exemptHits.length}\n`,

@@ -1307,6 +1307,26 @@ describe('checkAgentMode', () => {
       fs.rmSync(root, { recursive: true, force: true })
     }
   })
+
+  test('flags an agent whose frontmatter is a valid YAML list (non-object top-level)', () => {
+    const root = makeFixtureRepo()
+    try {
+      // A YAML list at the top level is valid YAML but not a record — the agent
+      // cannot declare mode: subagent, so it must be flagged.
+      writeFile(
+        root,
+        'agents/research/list-fm.md',
+        '---\n- name: list-fm\n- mode: subagent\n---\nbody',
+      )
+      const targets = collectScanTargets(root)
+      const violations = checkAgentMode(root, targets.markdown)
+      expect(violations).toHaveLength(1)
+      expect(violations[0]?.file).toBe('agents/research/list-fm.md')
+      expect(violations[0]?.message).toContain('mode: subagent')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('converter equivalence: explicit mode: subagent is behavior-preserving', () => {
@@ -1343,29 +1363,41 @@ Agent body`
     expect(parsedWithout.data).toEqual(parsedWith.data)
   })
 
-  test('explicit mode: subagent does not alter any other resolved field', () => {
-    const base = `---
+  test('explicit mode: subagent does not alter any other resolved field, including tools, color, and temperature', () => {
+    // Uses a fixture that mirrors a real agent's frontmatter shape to prove
+    // behavior-preservation across the full set of fields, not just the trivial case.
+    const withoutMode = `---
 name: security-sentinel
 description: Security review agent
+tools:
+  - read
+  - grep
+color: red
+temperature: 0.3
 ---
 Agent body`
 
-    const withMode = `---
+    const withExplicitMode = `---
 name: security-sentinel
 description: Security review agent
+tools:
+  - read
+  - grep
+color: red
+temperature: 0.3
 mode: subagent
 ---
 Agent body`
 
-    const parsedBase = parseFrontmatter(
-      convertContent(base, 'agent', { agentMode: 'subagent' }),
+    const parsedWithout = parseFrontmatter(
+      convertContent(withoutMode, 'agent', { agentMode: 'subagent' }),
     )
     const parsedWith = parseFrontmatter(
-      convertContent(withMode, 'agent', { agentMode: 'subagent' }),
+      convertContent(withExplicitMode, 'agent', { agentMode: 'subagent' }),
     )
 
     // All resolved fields must be identical — adding explicit mode is a no-op.
-    expect(parsedBase.data).toEqual(parsedWith.data)
+    expect(parsedWithout.data).toEqual(parsedWith.data)
   })
 })
 
@@ -1507,6 +1539,30 @@ describe('checkContentIntegrity (top-level)', () => {
         'agents/research/same-stem.md',
         'agents/review/same-stem.md',
       ])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('populates agentModeViolations when an agent is missing mode: subagent', () => {
+    const root = makeFixtureRepo()
+    try {
+      // Agent without mode field — the gate must surface this through the
+      // aggregate entry point, proving the wiring from checkAgentMode into
+      // checkContentIntegrity is intact.
+      writeFile(
+        root,
+        'agents/research/no-mode.md',
+        '---\nname: no-mode\n---\nagent body',
+      )
+
+      const result = checkContentIntegrity(root)
+
+      expect(result.agentModeViolations).toHaveLength(1)
+      expect(result.agentModeViolations[0]?.file).toBe(
+        'agents/research/no-mode.md',
+      )
+      expect(result.agentModeViolations[0]?.message).toContain('mode: subagent')
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
@@ -2479,69 +2535,90 @@ describe('checkContentIntegrity (sub-file refs)', () => {
   })
 })
 
+/**
+ * Throws a descriptive error when a violation array is non-empty.
+ * Keeps the integration test body flat and under the cognitive-complexity limit.
+ */
+function assertNoViolations(
+  violations: readonly unknown[],
+  format: (v: unknown) => string,
+  label: string,
+): void {
+  if (violations.length > 0) {
+    const details = violations.map(format).join('\n  ')
+    throw new Error(`${label}:\n  ${details}`)
+  }
+}
+
 describe('integration: real repo', () => {
   test('content-integrity gate passes against current HEAD', () => {
     const result = checkContentIntegrity(REPO_ROOT)
 
     // Zero phantoms, zero non-exempt banned patterns, zero warnings.
-    if (result.phantomRefs.length > 0) {
-      const details = result.phantomRefs
-        .map((p) => `${p.file}:${p.line}  ${p.reference}`)
-        .join('\n  ')
-      throw new Error(`Phantom references in repo:\n  ${details}`)
-    }
-
-    if (result.bannedPatterns.length > 0) {
-      const details = result.bannedPatterns
-        .map(
-          (h) =>
-            `${h.file}:${h.line}  ${JSON.stringify(h.pattern)}  ${h.lineContent}`,
-        )
-        .join('\n  ')
-      throw new Error(`Banned patterns outside allowlist:\n  ${details}`)
-    }
-
-    if (result.brokenSubfileRefs.length > 0) {
-      const details = result.brokenSubfileRefs
-        .map((r) => `${r.file}:${r.line}  ${r.reference}  → ${r.resolvedPath}`)
-        .join('\n  ')
-      throw new Error(`Broken sub-file references in repo:\n  ${details}`)
-    }
-
-    if (result.frontmatterViolations.length > 0) {
-      const details = result.frontmatterViolations
-        .map((v) => `${v.file}  ${v.rule}  ${v.field ?? ''}`)
-        .join('\n  ')
-      throw new Error(`Frontmatter violations in repo:\n  ${details}`)
-    }
-
-    if (result.agentModelViolations.length > 0) {
-      const details = result.agentModelViolations
-        .map((v) => `${v.file}  ${v.message}`)
-        .join('\n  ')
-      throw new Error(`Agent model violations in repo:\n  ${details}`)
-    }
-
-    if (result.agentStemViolations.length > 0) {
-      const details = result.agentStemViolations
-        .map((v) => `${v.stem}  ${v.files.join(', ')}`)
-        .join('\n  ')
-      throw new Error(`Duplicate bundled agent stems in repo:\n  ${details}`)
-    }
-
-    if (result.parseSafetyViolations.length > 0) {
-      const details = result.parseSafetyViolations
-        .map((v) => `${v.file}  ${v.field ?? ''}  ${v.message}`)
-        .join('\n  ')
-      throw new Error(`Parse-safety violations in repo:\n  ${details}`)
-    }
-
-    if (result.agentModeViolations.length > 0) {
-      const details = result.agentModeViolations
-        .map((v) => `${v.file}  ${v.message}`)
-        .join('\n  ')
-      throw new Error(`Agent mode violations in repo:\n  ${details}`)
-    }
+    assertNoViolations(
+      result.phantomRefs,
+      (v) => {
+        const p = v as (typeof result.phantomRefs)[number]
+        return `${p.file}:${p.line}  ${p.reference}`
+      },
+      'Phantom references in repo',
+    )
+    assertNoViolations(
+      result.bannedPatterns,
+      (v) => {
+        const h = v as (typeof result.bannedPatterns)[number]
+        return `${h.file}:${h.line}  ${JSON.stringify(h.pattern)}  ${h.lineContent}`
+      },
+      'Banned patterns outside allowlist',
+    )
+    assertNoViolations(
+      result.brokenSubfileRefs,
+      (v) => {
+        const r = v as (typeof result.brokenSubfileRefs)[number]
+        return `${r.file}:${r.line}  ${r.reference}  → ${r.resolvedPath}`
+      },
+      'Broken sub-file references in repo',
+    )
+    assertNoViolations(
+      result.frontmatterViolations,
+      (v) => {
+        const fv = v as (typeof result.frontmatterViolations)[number]
+        return `${fv.file}  ${fv.rule}  ${fv.field ?? ''}`
+      },
+      'Frontmatter violations in repo',
+    )
+    assertNoViolations(
+      result.agentModelViolations,
+      (v) => {
+        const av = v as (typeof result.agentModelViolations)[number]
+        return `${av.file}  ${av.message}`
+      },
+      'Agent model violations in repo',
+    )
+    assertNoViolations(
+      result.agentStemViolations,
+      (v) => {
+        const sv = v as (typeof result.agentStemViolations)[number]
+        return `${sv.stem}  ${sv.files.join(', ')}`
+      },
+      'Duplicate bundled agent stems in repo',
+    )
+    assertNoViolations(
+      result.parseSafetyViolations,
+      (v) => {
+        const pv = v as (typeof result.parseSafetyViolations)[number]
+        return `${pv.file}  ${pv.field ?? ''}  ${pv.message}`
+      },
+      'Parse-safety violations in repo',
+    )
+    assertNoViolations(
+      result.agentModeViolations,
+      (v) => {
+        const mv = v as (typeof result.agentModeViolations)[number]
+        return `${mv.file}  ${mv.message}`
+      },
+      'Agent mode violations in repo',
+    )
 
     expect(result.phantomRefs).toEqual([])
     expect(result.brokenSubfileRefs).toEqual([])
