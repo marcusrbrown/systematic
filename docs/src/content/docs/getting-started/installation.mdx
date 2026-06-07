@@ -13,7 +13,9 @@ This page gets you from zero to your first Systematic workflow in under five min
 
 You need [OpenCode](https://opencode.ai) installed and running, plus **Node.js 18+** or the **Bun** runtime. That is it. No API keys, no accounts, no extra tooling.
 
-## Install
+## Install the OpenCode plugin
+
+The OpenCode plugin is the recommended installation path. It provides the full experience: slash commands, the `systematic_skill` tool, agent registration, and automatic bootstrap.
 
 <Steps>
 1. **Add the plugin to your OpenCode config**
@@ -45,27 +47,67 @@ You need [OpenCode](https://opencode.ai) installed and running, plus **Node.js 1
 
 ## Or install skill content with `npx skills`
 
-> **Choosing an install path:**
-> - **OpenCode plugin (above)** — Use this for the full OpenCode experience: slash commands, the `systematic_skill` tool, agent registration, and bootstrap. Recommended if you use OpenCode.
-> - **`npx skills` (below)** — Use this to install the skill content in any AI harness (OpenCode, Claude Code, Cursor, Copilot, …). Installs skill Markdown files only — no slash-command registration, no `systematic_skill` tool, no bootstrap.
+Use `npx skills` to install the skill Markdown files directly. This path works in any AI harness (OpenCode, Claude Code, Cursor, Copilot) but installs the content only. It does not include slash-command registration, the `systematic_skill` tool, or automatic bootstrap.
 
-Install the whole collection into your current project:
+<div className="quick-start-box">
+  <div className="install-path secondary">
+    <div className="install-header">
+      <h3 className="install-title">Whole collection</h3>
+      <span className="install-cue">Current project</span>
+    </div>
+    <p>Install all Systematic skills into the current working directory.</p>
+    ```bash
+    npx skills add marcusrbrown/systematic
+    ```
+  </div>
 
-```bash
-npx skills add marcusrbrown/systematic
-```
+  <div className="install-path secondary">
+    <div className="install-header">
+      <h3 className="install-title">Global install</h3>
+      <span className="install-cue">All projects</span>
+    </div>
+    <p>Make skills available across all projects.</p>
+    ```bash
+    npx skills add marcusrbrown/systematic -g
+    ```
+  </div>
 
-### Useful flags
+  <div className="install-path secondary">
+    <div className="install-header">
+      <h3 className="install-title">Specific AI Harness</h3>
+      <span className="install-cue">OpenCode / Claude Code</span>
+    </div>
+    <p>Target a specific AI coding assistant.</p>
+    ```bash
+    npx skills add marcusrbrown/systematic -a opencode
+    ```
+    ```bash
+    npx skills add marcusrbrown/systematic -a claude-code
+    ```
+  </div>
 
-| What you want | Command |
-|---|---|
-| Target OpenCode specifically | `npx skills add marcusrbrown/systematic -a opencode` |
-| Target Claude Code specifically | `npx skills add marcusrbrown/systematic -a claude-code` |
-| Install globally (all projects) | `npx skills add marcusrbrown/systematic -g` |
-| List available skills before installing | `npx skills add marcusrbrown/systematic --list` |
-| Install a single skill by name | `npx skills add marcusrbrown/systematic --skill <name>` |
+  <div className="install-path secondary">
+    <div className="install-header">
+      <h3 className="install-title">Specific skill</h3>
+      <span className="install-cue">Single workflow</span>
+    </div>
+    <p>Install just one skill instead of the entire collection.</p>
+    ```bash
+    npx skills add marcusrbrown/systematic --skill [name]
+    ```
+  </div>
 
-Each command is a single line — click the copy button and paste it directly into your terminal.
+  <div className="install-path secondary">
+    <div className="install-header">
+      <h3 className="install-title">List skills</h3>
+      <span className="install-cue">Discovery</span>
+    </div>
+    <p>See what skills are available in the collection before installing.</p>
+    ```bash
+    npx skills add marcusrbrown/systematic --list
+    ```
+  </div>
+</div>
 
 ## Automatic asset discovery
 
