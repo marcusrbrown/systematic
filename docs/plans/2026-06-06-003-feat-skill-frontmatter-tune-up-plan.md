@@ -70,7 +70,7 @@ A deferred note estimated ~14 skills needed `argument-hint`. Grounding corrected
 
 ## Implementation Units
 
-- [ ] **Unit 1: Add argument-hint to ce-compound-refresh + annotate field table**
+- [x] **Unit 1: Add argument-hint to ce-compound-refresh + annotate field table**
 
 **Goal:** Close the one `argument-hint` gap and annotate the field-semantics table with enforcement status.
 
@@ -95,7 +95,7 @@ A deferred note estimated ~14 skills needed `argument-hint`. Grounding corrected
 **Verification:**
 - `ce-compound-refresh` has an accurate `argument-hint`; no skill uses `$ARGUMENTS` without one; the field table marks enforcement status; content-integrity clean.
 
-- [ ] **Unit 2: Content-integrity argument-hint warning + tests**
+- [x] **Unit 2: Content-integrity argument-hint violation + tests**
 
 **Goal:** A content-integrity violation fires when a skill uses `$ARGUMENTS` (outside code fences) without `argument-hint`, with unit coverage.
 
