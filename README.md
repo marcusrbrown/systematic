@@ -33,13 +33,21 @@ Systematic is an [OpenCode](https://opencode.ai/) plugin that ships 40+ bundled 
 
 ## Quick Install
 
-Add to your `opencode.json` and restart OpenCode:
+**OpenCode plugin** — full integration (slash commands, `systematic_skill` tool, agent registration):
 
 ```json
 { "plugins": ["@fro.bot/systematic@latest"] }
 ```
 
-Your global config lives at `~/.config/opencode/opencode.json`.
+Add that to `~/.config/opencode/opencode.json` and restart OpenCode.
+
+**`npx skills`** — portable skill content for any AI harness (Claude Code, Cursor, Copilot, …):
+
+```bash
+npx skills add marcusrbrown/systematic
+```
+
+Use the plugin if you're on OpenCode and want the complete experience. Use `npx skills` if you want the skill Markdown files dropped into whatever harness you're running.
 
 ## First Workflow
 
