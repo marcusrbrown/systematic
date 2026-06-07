@@ -3,6 +3,7 @@ title: "feat: Explicit agent temperature hardening"
 type: feat
 status: completed
 date: 2026-06-06
+shipped: PR #495 merged 9dd0b4c; released @fro.bot/systematic@2.29.0
 ---
 
 # feat: Explicit agent temperature hardening

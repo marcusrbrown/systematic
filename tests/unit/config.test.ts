@@ -1190,7 +1190,7 @@ describe('config', () => {
   })
 
   describe('JSONC precedence', () => {
-    test('AE3: only systematic.json exists — loads it (backward compat)', () => {
+    test('only systematic.json exists -- loads it (backward compat)', () => {
       writeUserConfig({ disabled_skills: ['ce:plan'] })
 
       const result = loadConfig(testDir)
@@ -1198,7 +1198,7 @@ describe('config', () => {
       expect(result.disabled_skills).toEqual(['ce:plan'])
     })
 
-    test('AE2: only systematic.jsonc exists — loads it correctly', () => {
+    test('only systematic.jsonc exists -- loads it correctly', () => {
       const filePath = userConfigPath().replace(/\.json$/, '.jsonc')
       fs.mkdirSync(path.dirname(filePath), { recursive: true })
       fs.writeFileSync(
@@ -1210,7 +1210,7 @@ describe('config', () => {
       expect(result.disabled_skills).toContain('ce:review')
     })
 
-    test('AE2: JSONC with comments and standard JSON structure parses correctly', () => {
+    test('JSONC with comments and standard JSON structure parses correctly', () => {
       const filePath = userConfigPath().replace(/\.json$/, '.jsonc')
       fs.mkdirSync(path.dirname(filePath), { recursive: true })
       fs.writeFileSync(
@@ -1222,7 +1222,7 @@ describe('config', () => {
       expect(result.disabled_skills).toEqual(['ce:plan'])
     })
 
-    test('AE1: both jsonc and json exist — .jsonc is loaded, .json is ignored', () => {
+    test('both jsonc and json exist -- .jsonc is loaded, .json is ignored', () => {
       const jsoncPath = userConfigPath().replace(/\.json$/, '.jsonc')
       const jsonPath = userConfigPath()
       fs.mkdirSync(path.dirname(jsoncPath), { recursive: true })
