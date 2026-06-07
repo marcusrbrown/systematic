@@ -127,7 +127,9 @@ export function generateDefinitionHeader(options: {
   if (options.category != null) {
     parts.push(`<span class="definition-category">${options.category}</span>`)
   }
-  parts.push(`<a class="definition-source" href="${githubUrl}">View source</a>`)
+  parts.push(
+    `<a class="definition-source" href="${escapeAttr(githubUrl)}">View source</a>`,
+  )
 
   const header = `<div class="definition-header not-content">\n${parts.map((p) => `  ${p}`).join('\n')}\n</div>\n`
 
