@@ -11,6 +11,7 @@ import {
   checkAgentModel,
   checkAgentStemUniqueness,
   checkAgentTemperature,
+  checkArgumentHint,
   checkBannedPatterns,
   checkContentIntegrity,
   checkFrontmatter,
@@ -3051,5 +3052,270 @@ describe('ce-work -> systematic-implementer dispatch contract', () => {
     expect(frontmatter).toMatch(/^name:\s*"?systematic-implementer"?$/m)
     expect(frontmatter).toMatch(/^mode:\s*"?subagent"?$/m)
     expect(frontmatter).not.toMatch(/^model:/m)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// checkArgumentHint
+// ---------------------------------------------------------------------------
+
+describe('checkArgumentHint', () => {
+  test('flags skill body referencing $ARGUMENTS without argument-hint in frontmatter', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'needs-hint',
+        [
+          '---',
+          'name: needs-hint',
+          'description: A skill that uses arguments',
+          '---',
+          'Pass $ARGUMENTS to the tool.',
+        ].join('\n'),
+      )
+      const targets = collectScanTargets(root)
+      const violations = checkArgumentHint(root, targets.markdown)
+      expect(violations).toHaveLength(1)
+      expect(violations[0]?.file).toBe('skills/needs-hint/SKILL.md')
+      expect(violations[0]?.message).toContain('argument-hint')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('no violation when body references $ARGUMENTS and frontmatter has argument-hint', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'has-hint',
+        [
+          '---',
+          'name: has-hint',
+          'description: A skill that uses arguments',
+          'argument-hint: "[topic]"',
+          '---',
+          'Pass $ARGUMENTS to the tool.',
+        ].join('\n'),
+      )
+      const targets = collectScanTargets(root)
+      const violations = checkArgumentHint(root, targets.markdown)
+      expect(violations).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('no violation when body has neither $ARGUMENTS nor argument-hint', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeCompliantSkill(
+        root,
+        'plain',
+        'Just a plain skill body with no arguments.',
+      )
+      const targets = collectScanTargets(root)
+      const violations = checkArgumentHint(root, targets.markdown)
+      expect(violations).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('no violation when $ARGUMENTS appears only inside a fenced code block (fence-stripping works)', () => {
+    // A skill that DOCUMENTS $ARGUMENTS inside a code fence must not be flagged.
+    // The check must strip fenced code blocks before scanning for the literal.
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'docs-only',
+        [
+          '---',
+          'name: docs-only',
+          'description: Documents the $ARGUMENTS placeholder',
+          '---',
+          'This skill shows how to use the placeholder:',
+          '',
+          '```',
+          'bun run skill $ARGUMENTS',
+          '```',
+          '',
+          'The above is just an example.',
+        ].join('\n'),
+      )
+      const targets = collectScanTargets(root)
+      const violations = checkArgumentHint(root, targets.markdown)
+      expect(violations).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags skill when $ARGUMENTS appears both inside and outside a fenced code block', () => {
+    // Outside-fence occurrence must still trigger the violation even when
+    // there is also an inside-fence occurrence.
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'mixed',
+        [
+          '---',
+          'name: mixed',
+          'description: Mixed usage',
+          '---',
+          'Run with $ARGUMENTS as the input.',
+          '',
+          '```',
+          'example: $ARGUMENTS',
+          '```',
+        ].join('\n'),
+      )
+      const targets = collectScanTargets(root)
+      const violations = checkArgumentHint(root, targets.markdown)
+      expect(violations).toHaveLength(1)
+      expect(violations[0]?.file).toBe('skills/mixed/SKILL.md')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('scans only skill entry files (SKILL.md), not agent files or sub-files', () => {
+    const root = makeFixtureRepo()
+    try {
+      // Agent file with $ARGUMENTS in body -- must not be flagged.
+      writeFile(
+        root,
+        'agents/research/a.md',
+        '---\nname: a\nmode: subagent\ntemperature: 0.3\n---\nUse $ARGUMENTS here.',
+      )
+      // Skill sub-file with $ARGUMENTS -- must not be flagged.
+      writeFile(
+        root,
+        'skills/foo/references/ref.md',
+        'Reference using $ARGUMENTS.',
+      )
+      // Compliant SKILL.md with no $ARGUMENTS -- no violation.
+      writeCompliantSkill(root, 'foo', 'body')
+      const targets = collectScanTargets(root)
+      const violations = checkArgumentHint(root, targets.markdown)
+      expect(violations).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('no crash on malformed frontmatter (non-object data)', () => {
+    // Malformed frontmatter produces non-object parsed.data; the check must
+    // not throw. Fail-closed: if we cannot parse frontmatter we skip the file.
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'malformed',
+        '---\n- item: one\n---\nBody with $ARGUMENTS here.',
+      )
+      const targets = collectScanTargets(root)
+      // Must not throw regardless of outcome.
+      expect(() => checkArgumentHint(root, targets.markdown)).not.toThrow()
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('integration: real repo skills produce zero argument-hint violations', () => {
+    const violations = checkArgumentHint(
+      REPO_ROOT,
+      collectScanTargets(REPO_ROOT).markdown,
+    )
+    expect(violations).toEqual([])
+  })
+})
+
+describe('checkContentIntegrity -- argumentHintViolations wiring', () => {
+  test('populates argumentHintViolations when a skill uses $ARGUMENTS without argument-hint', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'needs-hint',
+        [
+          '---',
+          'name: needs-hint',
+          'description: A skill',
+          '---',
+          'Run with $ARGUMENTS.',
+        ].join('\n'),
+      )
+
+      const result = checkContentIntegrity(root)
+
+      expect(result.argumentHintViolations).toHaveLength(1)
+      expect(result.argumentHintViolations[0]?.file).toBe(
+        'skills/needs-hint/SKILL.md',
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('argumentHintViolations counts toward totalViolations (CLI exits 1)', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'needs-hint',
+        [
+          '---',
+          'name: needs-hint',
+          'description: A skill',
+          '---',
+          'Run with $ARGUMENTS.',
+        ].join('\n'),
+      )
+
+      const proc = Bun.spawnSync(['bun', SCRIPT_PATH, root], {
+        cwd: REPO_ROOT,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+      expect(proc.exitCode).toBe(1)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('printArgumentHintViolations -- CLI print path', () => {
+  test('emits the argument-hint-violation heading and offending file to stderr', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'needs-hint',
+        [
+          '---',
+          'name: needs-hint',
+          'description: A skill',
+          '---',
+          'Run with $ARGUMENTS.',
+        ].join('\n'),
+      )
+
+      const proc = Bun.spawnSync(['bun', SCRIPT_PATH, root], {
+        cwd: REPO_ROOT,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+
+      expect(proc.exitCode).toBe(1)
+      const stderr = proc.stderr.toString()
+      expect(stderr).toContain('Argument-hint violations')
+      expect(stderr).toContain('skills/needs-hint/SKILL.md')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
   })
 })
