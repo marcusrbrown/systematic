@@ -1093,6 +1093,9 @@ export function checkAgentStemUniqueness(
  */
 function stripFencedCodeBlocks(body: string): string {
   // Matches ``` or ~~~ fences (with optional language tag) across multiple lines.
+  // Anchored at line start, so fences indented inside list items or blockquotes
+  // are not stripped. No bundled skill nests a fenced `$ARGUMENTS` that way; if one
+  // ever does, the real-tree integration test will surface the false positive.
   return body.replace(/^(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\1[ \t]*$/gm, '')
 }
 
