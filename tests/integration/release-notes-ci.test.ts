@@ -12,7 +12,7 @@
  *  4.  Happy path — neutral conclusion (idempotent short-circuit)
  *  5.  Edge case — timeout (WATCH_EXIT=124)
  *  5b. Edge case — unexpected non-zero WATCH_EXIT (e.g., 137)
- *  6.  Edge case — dispatch not registered within 90s (empty run list)
+ *  6.  Edge case — dispatch not registered within poll budget (empty run list, non-fatal)
  *  7.  Edge case — no run created after dispatch epoch (all runs pre-date cutoff)
  *  8.  Edge case — selects newest workflow_dispatch run created after dispatch epoch
  *  9.  Error — HTTP 401 auth denial
@@ -41,7 +41,7 @@ const REPO_ROOT = path.resolve(import.meta.dirname, '../..')
 const SCRIPT_PATH = path.join(REPO_ROOT, 'scripts/dispatch-release-notes.sh')
 const MOCK_GH_PATH = path.join(REPO_ROOT, 'tests/fixtures/mock-gh.sh')
 
-// Timeout per scenario — the successCmd has a 90s polling loop; we cap it
+// Timeout per scenario — the successCmd has a 180s polling loop; we cap it
 // tightly in tests by making the mock return immediately.
 const SCENARIO_TIMEOUT_MS = 30_000
 
@@ -353,21 +353,22 @@ describe('release-notes-ci successCmd smoke tests', () => {
   )
 
   // -------------------------------------------------------------------------
-  // 6. Edge case — dispatch not registered within 90s
+  // 6. Edge case — dispatch not registered within poll budget (empty run list)
   // -------------------------------------------------------------------------
   it(
-    'exits 1 with ::error:: when dispatched run is never found in run list',
+    'exits 0 with ::warning:: when dispatched run is never found in run list (non-fatal observability gap)',
     () => {
-      // Return an empty run list so the correlation token is never matched
+      // Return an empty run list so the run is never confirmed within the poll budget
       const result = run({
         RELEASE_VERSION: 'v2.23.0',
         MOCK_GH_RUN_LIST_JSON: '[]',
       })
 
-      expect(result.exitCode).toBe(1)
+      expect(result.exitCode).toBe(0)
       const combined = result.stdout + result.stderr
-      expect(combined).toContain('::error::')
-      expect(combined).toMatch(/not found within/i)
+      expect(combined).toContain('::warning::')
+      expect(combined).not.toContain('::error::')
+      expect(combined).toMatch(/not found within|could not be confirmed/i)
     },
     SCENARIO_TIMEOUT_MS,
   )
@@ -376,7 +377,7 @@ describe('release-notes-ci successCmd smoke tests', () => {
   // 7. Edge case — no run created after dispatch epoch
   // -------------------------------------------------------------------------
   it(
-    'exits 1 with ::error:: when all candidate runs pre-date the dispatch epoch',
+    'exits 0 with ::warning:: when all candidate runs pre-date the dispatch epoch (non-fatal observability gap)',
     () => {
       // All runs have a createdAt in the past — before any real DISPATCH_EPOCH.
       // The script's jq filter selects runs with epoch > DISPATCH_EPOCH, so none
@@ -388,10 +389,11 @@ describe('release-notes-ci successCmd smoke tests', () => {
         ]),
       })
 
-      expect(result.exitCode).toBe(1)
+      expect(result.exitCode).toBe(0)
       const combined = result.stdout + result.stderr
-      expect(combined).toContain('::error::')
-      expect(combined).toMatch(/not found within/i)
+      expect(combined).toContain('::warning::')
+      expect(combined).not.toContain('::error::')
+      expect(combined).toMatch(/not found within|could not be confirmed/i)
       expect(combined).toContain('dispatched_at_epoch=')
     },
     SCENARIO_TIMEOUT_MS,
