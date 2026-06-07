@@ -102,6 +102,8 @@ function transformFrontmatter(
   return transformed
 }
 
+type DefinitionType = 'skill' | 'agent'
+
 function generatePage(
   frontmatter: Record<string, unknown>,
   body: string,
@@ -112,9 +114,12 @@ function generatePage(
   return `---\n${fm}\n---\n\n${header}\n${cleanedBody}`
 }
 
-function generateDefinitionHeader(options: {
+export function generateDefinitionHeader(options: {
   category?: string
   sourcePath: string
+  name?: string
+  definitionType?: DefinitionType
+  deprecated?: boolean
 }): string {
   const githubUrl = `${GITHUB_BASE}/${options.sourcePath}`
   const parts: string[] = []
@@ -124,10 +129,19 @@ function generateDefinitionHeader(options: {
   }
   parts.push(`<a class="definition-source" href="${githubUrl}">View source</a>`)
 
-  return `<div class="definition-header not-content">\n${parts.map((p) => `  ${p}`).join('\n')}\n</div>\n`
-}
+  const header = `<div class="definition-header not-content">\n${parts.map((p) => `  ${p}`).join('\n')}\n</div>\n`
 
-type DefinitionType = 'skill' | 'agent'
+  if (
+    options.definitionType === 'skill' &&
+    options.name != null &&
+    !options.deprecated
+  ) {
+    const installBlock = `\`\`\`bash\nnpx skills add marcusrbrown/systematic --skill ${options.name}\n\`\`\`\n`
+    return `${header}\n${installBlock}`
+  }
+
+  return header
+}
 
 function deriveName(
   data: Frontmatter,
@@ -305,7 +319,14 @@ function processDirectory(
         .relative(PROJECT_ROOT, file)
         .split(path.sep)
         .join('/')
-      const header = generateDefinitionHeader({ category, sourcePath })
+      const deprecated = data.deprecated != null
+      const header = generateDefinitionHeader({
+        category,
+        sourcePath,
+        name,
+        definitionType,
+        deprecated,
+      })
       const mdx = generatePage(frontmatter, body, header)
 
       const slug = name
@@ -350,17 +371,19 @@ function processDirectory(
   return { count, entries }
 }
 
-console.log('Generating reference documentation...')
+if (import.meta.main) {
+  console.log('Generating reference documentation...')
 
-const { count: skillsCount } = processDirectory(
-  path.join(PROJECT_ROOT, 'skills'),
-  'skills',
-  'skill',
-  /SKILL\.md$/,
-)
-const { count: agentsCount } = processDirectory(
-  path.join(PROJECT_ROOT, 'agents'),
-  'agents',
-  'agent',
-)
-console.log(`✓ Generated ${skillsCount} skills, ${agentsCount} agents`)
+  const { count: skillsCount } = processDirectory(
+    path.join(PROJECT_ROOT, 'skills'),
+    'skills',
+    'skill',
+    /SKILL\.md$/,
+  )
+  const { count: agentsCount } = processDirectory(
+    path.join(PROJECT_ROOT, 'agents'),
+    'agents',
+    'agent',
+  )
+  console.log(`✓ Generated ${skillsCount} skills, ${agentsCount} agents`)
+}
