@@ -35,6 +35,11 @@
  *    treated as absent (the runtime's fill-if-absent fallback will be removed in
  *    v3.0.0), so only a real finite number satisfies this invariant.
  *
+ * 8. **Skill argument-hint** — bundled skills whose body references the literal
+ *    `$ARGUMENTS` outside fenced code blocks must declare a non-empty
+ *    `argument-hint` field in frontmatter. Fenced code blocks are stripped before
+ *    scanning so skills that only document the placeholder are not flagged.
+ *
  * Scope is narrow by design: `skills/**\/*.md`, `agents/**\/*.md`, and
  * `src/**\/*.ts` for the full invariant suite. Additionally, `docs/solutions/**\/*.md`
  * is scanned for frontmatter parse-safety only (flags any unquoted inline comment —
@@ -201,6 +206,11 @@ export interface AgentTemperatureViolation {
   message: string
 }
 
+export interface ArgumentHintViolation {
+  file: string
+  message: string
+}
+
 export interface CheckResult {
   rootDir: string
   categories: string[]
@@ -215,6 +225,7 @@ export interface CheckResult {
   agentColorViolations: AgentColorViolation[]
   agentStemViolations: AgentStemViolation[]
   agentTemperatureViolations: AgentTemperatureViolation[]
+  argumentHintViolations: ArgumentHintViolation[]
   exemptHits: ExemptHit[]
   scanStats: {
     markdownFiles: number
@@ -1075,6 +1086,52 @@ export function checkAgentStemUniqueness(
     .sort((a, b) => a.stem.localeCompare(b.stem))
 }
 
+/**
+ * Strip fenced code blocks (``` or ~~~) from a markdown body string.
+ * Returns the body with all fenced regions replaced by empty strings so that
+ * literal patterns inside fences are not matched by subsequent scans.
+ */
+function stripFencedCodeBlocks(body: string): string {
+  // Matches ``` or ~~~ fences (with optional language tag) across multiple lines.
+  return body.replace(/^(`{3,}|~{3,})[^\n]*\n[\s\S]*?\n\1[ \t]*$/gm, '')
+}
+
+/**
+ * Check that every bundled skill whose body references the literal `$ARGUMENTS`
+ * outside fenced code blocks also declares a non-empty `argument-hint` field in
+ * its frontmatter. Skills that only document `$ARGUMENTS` inside code fences are
+ * not flagged -- the fence-stripping pass removes those occurrences first.
+ */
+export function checkArgumentHint(
+  rootDir: string,
+  markdownFiles: readonly string[],
+): ArgumentHintViolation[] {
+  const violations: ArgumentHintViolation[] = []
+
+  for (const relPath of markdownFiles) {
+    if (!isSkillEntryFile(relPath)) continue
+    const content = readFileSafe(path.join(rootDir, relPath))
+    if (content === null) continue
+    const parsed = parseFrontmatter(content)
+    if (!isRecord(parsed.data)) continue
+
+    const strippedBody = stripFencedCodeBlocks(parsed.body)
+    if (!strippedBody.includes('$ARGUMENTS')) continue
+
+    const hint = parsed.data['argument-hint']
+    if (typeof hint === 'string' && hint.trim() !== '') continue
+
+    violations.push({
+      file: relPath,
+      message:
+        `Skill body references \`$ARGUMENTS\` outside fenced code blocks but frontmatter is missing a non-empty \`argument-hint\` field. ` +
+        `Add \`argument-hint: "<description>"\` to the frontmatter so callers know what to pass.`,
+    })
+  }
+
+  return violations
+}
+
 function isAgentFile(relPath: string): boolean {
   const parts = relPath.split('/')
   return (
@@ -1206,6 +1263,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     rootDir,
     targets.markdown,
   )
+  const argumentHintViolations = checkArgumentHint(rootDir, targets.markdown)
   const { hits: bannedPatterns, exempt: exemptHits } = checkBannedPatterns(
     rootDir,
     allScannedFiles,
@@ -1226,6 +1284,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     agentColorViolations,
     agentStemViolations,
     agentTemperatureViolations,
+    argumentHintViolations,
     exemptHits,
     scanStats: {
       markdownFiles: targets.markdown.length,
@@ -1274,6 +1333,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
   printAgentColorViolations(result.agentColorViolations)
   printAgentStemViolations(result.agentStemViolations)
   printAgentTemperatureViolations(result.agentTemperatureViolations)
+  printArgumentHintViolations(result.argumentHintViolations)
 
   if (totalViolations(result) === 0) {
     process.stdout.write(
@@ -1402,6 +1462,16 @@ function printAgentTemperatureViolations(
   }
 }
 
+function printArgumentHintViolations(
+  violations: readonly ArgumentHintViolation[],
+): void {
+  if (violations.length === 0) return
+  process.stderr.write(`\nArgument-hint violations (${violations.length}):\n`)
+  for (const v of violations) {
+    process.stderr.write(`  ${v.file}  ${v.message}\n`)
+  }
+}
+
 function totalViolations(result: CheckResult): number {
   return (
     result.phantomRefs.length +
@@ -1413,7 +1483,8 @@ function totalViolations(result: CheckResult): number {
     result.agentModeViolations.length +
     result.agentColorViolations.length +
     result.agentStemViolations.length +
-    result.agentTemperatureViolations.length
+    result.agentTemperatureViolations.length +
+    result.argumentHintViolations.length
   )
 }
 
