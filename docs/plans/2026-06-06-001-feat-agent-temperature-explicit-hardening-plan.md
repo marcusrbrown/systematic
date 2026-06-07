@@ -1,7 +1,7 @@
 ---
 title: "feat: Explicit agent temperature hardening"
 type: feat
-status: active
+status: completed
 date: 2026-06-06
 ---
 
@@ -62,7 +62,7 @@ Making temperature explicit + respecting it (fill-if-absent, mirroring the `mode
 
 ## Implementation Units
 
-- [ ] **Unit 1: Add explicit temperature to all bundled agents**
+- [x] **Unit 1: Add explicit temperature to all bundled agents**
 
 **Goal:** Every bundled agent declares an explicit `temperature:` equal to its current resolved value.
 
@@ -85,7 +85,7 @@ Making temperature explicit + respecting it (fill-if-absent, mirroring the `mode
 **Verification:**
 - All 51 agents have an explicit `temperature:`; the resolved temperature per agent (via the runtime path) is unchanged from before.
 
-- [ ] **Unit 2: Respect explicit temperature at runtime + gate + equivalence test**
+- [x] **Unit 2: Respect explicit temperature at runtime + gate + equivalence test**
 
 **Goal:** Runtime respects explicit frontmatter temperature (fill-if-absent), the gate enforces explicit temperature, and an equivalence test proves zero behavior change.
 
