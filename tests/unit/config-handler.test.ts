@@ -823,7 +823,7 @@ Skill content for ce:plan.`,
       expect(agent).toBeDefined()
       expect(agent?.description).toBe('A full agent (Full-Agent - Systematic)')
       expect(agent?.model).toBe('openai/gpt-4')
-      expect(agent?.temperature).toBe(0.3)
+      expect(agent?.temperature).toBe(0.7)
       expect(agent?.top_p).toBe(1)
       expect(agent?.steps).toBe(10)
       expect(agent?.color).toBe('#ff0000')
@@ -1623,6 +1623,80 @@ model: gpt-4
       )
       await expect(handler(config)).rejects.toThrow(expectedConfigPath)
       await expect(handler(config)).rejects.toThrow('disabled_skills')
+    })
+
+    test('explicit frontmatter temperature is preserved (fill-if-absent)', async () => {
+      // An agent with explicit temperature: 0.5 in frontmatter must keep 0.5
+      // after applyAgentOverlays — the runtime must not overwrite it with the
+      // inferred value. This is the RED test: it fails before the fill-if-absent
+      // change because the current code unconditionally overwrites.
+      createAgent(path.join(bundledDir, 'agents'), 'test-agent', {
+        name: 'test-agent',
+        description: 'A test agent',
+        temperature: 0.5,
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      // 0.5 is not the inferred value for 'test-agent' (which would be 0.3),
+      // so this assertion fails before the fill-if-absent change.
+      expect(config.agent?.['test-agent']?.temperature).toBe(0.5)
+    })
+
+    test('agent without explicit temperature falls back to inferred value', async () => {
+      // An agent with no temperature in frontmatter must still resolve to the
+      // inferBuiltInTemperature value — the fallback path must remain intact.
+      // 'security-sentinel' matches the review/security regex → inferred 0.1.
+      createAgent(path.join(bundledDir, 'agents'), 'security-sentinel', {
+        name: 'security-sentinel',
+        description: 'Security review agent',
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.['security-sentinel']?.temperature).toBe(0.1)
+    })
+
+    test('user overlay temperature overrides explicit frontmatter temperature (precedence preserved)', async () => {
+      // Proves the overlay layer is untouched: user overlay > explicit frontmatter.
+      // Agent has explicit temperature: 0.5 in frontmatter; user overlay sets 0.9.
+      // The resolved value must be 0.9 (overlay wins).
+      createCategorizedAgent('review', 'correctness-reviewer', {
+        name: 'correctness-reviewer',
+        description: 'Reviews correctness',
+        temperature: 0.5,
+      })
+      writeSystematicConfig({
+        agents: { 'correctness-reviewer': { temperature: 0.9 } },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.['correctness-reviewer']?.temperature).toBe(0.9)
     })
   })
 })

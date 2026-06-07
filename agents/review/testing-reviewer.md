@@ -5,6 +5,7 @@ tools: Read, Grep, Glob, Bash
 color: info
 
 mode: subagent
+temperature: 0.1
 ---
 
 # Testing Reviewer

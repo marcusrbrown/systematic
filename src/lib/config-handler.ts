@@ -262,10 +262,9 @@ function applyAgentOverlays(
     addPermissionRules(permissionRules, config.permission)
   }
 
-  result.temperature = inferBuiltInTemperature(
-    agentInfo.name,
-    result.description,
-  )
+  result.temperature =
+    result.temperature ??
+    inferBuiltInTemperature(agentInfo.name, result.description)
 
   applySourceModelDefault(result, agentInfo, availabilitySet)
   applyAgentOverlay(result, categoryOverlay?.value, permissionRules)

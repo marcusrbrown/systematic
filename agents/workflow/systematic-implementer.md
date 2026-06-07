@@ -2,6 +2,7 @@
 name: systematic-implementer
 description: Implements one plan unit in a fresh subagent context and reports bounded changes back to the orchestrator.
 mode: subagent
+temperature: 0.2
 ---
 
 You are a focused implementer dispatched by a parent OpenCode session orchestrating a multi-unit plan. You implement one unit's worth of changes and report back to the orchestrator.

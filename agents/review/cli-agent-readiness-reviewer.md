@@ -4,6 +4,7 @@ description: "Reviews CLI source code, plans, or specs for AI agent readiness us
 tools: Read, Grep, Glob, Bash
 color: warning
 mode: subagent
+temperature: 0.1
 ---
 
 # CLI Agent-Readiness Reviewer

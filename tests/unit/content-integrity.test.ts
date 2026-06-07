@@ -10,6 +10,7 @@ import {
   checkAgentMode,
   checkAgentModel,
   checkAgentStemUniqueness,
+  checkAgentTemperature,
   checkBannedPatterns,
   checkContentIntegrity,
   checkFrontmatter,
@@ -58,12 +59,12 @@ function writeAllowlist(root: string, exemptions: AllowlistEntry[]): void {
 }
 
 function writeAgent(root: string, category: string, name: string): void {
-  // Bundled agents must omit the `model` field and declare `mode: subagent`
-  // per content-integrity gate invariants.
+  // Bundled agents must omit the `model` field, declare `mode: subagent`,
+  // and declare an explicit `temperature:` per content-integrity gate invariants.
   writeFile(
     root,
     `agents/${category}/${name}.md`,
-    `---\nname: ${name}\nmode: subagent\n---\nagent body`,
+    `---\nname: ${name}\nmode: subagent\ntemperature: 0.3\n---\nagent body`,
   )
 }
 
@@ -1323,6 +1324,236 @@ describe('checkAgentMode', () => {
       expect(violations).toHaveLength(1)
       expect(violations[0]?.file).toBe('agents/research/list-fm.md')
       expect(violations[0]?.message).toContain('mode: subagent')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('checkAgentTemperature', () => {
+  test('returns no violations when all agents declare an explicit temperature', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'agents/research/analyst.md',
+        '---\nname: analyst\nmode: subagent\ntemperature: 0.2\n---\nbody',
+      )
+      writeFile(
+        root,
+        'agents/review/sentinel.md',
+        '---\nname: sentinel\nmode: subagent\ntemperature: 0.1\n---\nbody',
+      )
+      const targets = collectScanTargets(root)
+      expect(checkAgentTemperature(root, targets.markdown)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags an agent with no temperature field', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'agents/research/no-temp.md',
+        '---\nname: no-temp\nmode: subagent\n---\nbody',
+      )
+      const targets = collectScanTargets(root)
+      const violations = checkAgentTemperature(root, targets.markdown)
+      expect(violations).toHaveLength(1)
+      expect(violations[0]?.file).toBe('agents/research/no-temp.md')
+      expect(violations[0]?.message).toContain('temperature')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags an agent whose frontmatter is a valid YAML list (non-object top-level, fail-closed)', () => {
+    // A YAML list at the top level is valid YAML but not a record — the agent
+    // cannot declare temperature, so it must be flagged (fail closed, not skipped).
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'agents/research/list-fm.md',
+        '---\n- name: list-fm\n- temperature: 0.3\n---\nbody',
+      )
+      const targets = collectScanTargets(root)
+      const violations = checkAgentTemperature(root, targets.markdown)
+      expect(violations).toHaveLength(1)
+      expect(violations[0]?.file).toBe('agents/research/list-fm.md')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('scans only agent markdown files, not skill files', () => {
+    const root = makeFixtureRepo()
+    try {
+      // Skill with no temperature field — must not be flagged.
+      writeCompliantSkill(root, 'foo', 'body')
+      // Agent with explicit temperature — no violation.
+      writeFile(
+        root,
+        'agents/research/a.md',
+        '---\nname: a\nmode: subagent\ntemperature: 0.3\n---\nbody',
+      )
+      const targets = collectScanTargets(root)
+      expect(checkAgentTemperature(root, targets.markdown)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags an agent with temperature: null (null is not a finite number)', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'agents/research/null-temp.md',
+        '---\nname: null-temp\nmode: subagent\ntemperature: null\n---\nbody',
+      )
+      const targets = collectScanTargets(root)
+      const violations = checkAgentTemperature(root, targets.markdown)
+      expect(violations).toHaveLength(1)
+      expect(violations[0]?.file).toBe('agents/research/null-temp.md')
+      expect(violations[0]?.message).toContain('temperature')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags an agent with temperature: "0.3" (string is not a finite number)', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'agents/research/string-temp.md',
+        '---\nname: string-temp\nmode: subagent\ntemperature: "0.3"\n---\nbody',
+      )
+      const targets = collectScanTargets(root)
+      const violations = checkAgentTemperature(root, targets.markdown)
+      expect(violations).toHaveLength(1)
+      expect(violations[0]?.file).toBe('agents/research/string-temp.md')
+      expect(violations[0]?.message).toContain('temperature')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags an agent with empty temperature: (YAML null, not a finite number)', () => {
+    // `temperature:` with no value parses as null in YAML — same as temperature: null.
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'agents/research/empty-temp.md',
+        '---\nname: empty-temp\nmode: subagent\ntemperature:\n---\nbody',
+      )
+      const targets = collectScanTargets(root)
+      const violations = checkAgentTemperature(root, targets.markdown)
+      expect(violations).toHaveLength(1)
+      expect(violations[0]?.file).toBe('agents/research/empty-temp.md')
+      expect(violations[0]?.message).toContain('temperature')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('passes for an agent with temperature: 0.3 (finite number)', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'agents/research/valid-temp.md',
+        '---\nname: valid-temp\nmode: subagent\ntemperature: 0.3\n---\nbody',
+      )
+      const targets = collectScanTargets(root)
+      expect(checkAgentTemperature(root, targets.markdown)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('integration: gate passes against the current hardened real tree (all agents have explicit temperature)', () => {
+    const violations = checkAgentTemperature(
+      REPO_ROOT,
+      collectScanTargets(REPO_ROOT).markdown,
+    )
+    expect(violations).toEqual([])
+  })
+})
+
+describe('checkContentIntegrity — agentTemperatureViolations wiring', () => {
+  test('populates agentTemperatureViolations when an agent is missing temperature', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'agents/research/no-temp.md',
+        '---\nname: no-temp\nmode: subagent\n---\nagent body',
+      )
+
+      const result = checkContentIntegrity(root)
+
+      expect(result.agentTemperatureViolations).toHaveLength(1)
+      expect(result.agentTemperatureViolations[0]?.file).toBe(
+        'agents/research/no-temp.md',
+      )
+      expect(result.agentTemperatureViolations[0]?.message).toContain(
+        'temperature',
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('agentTemperatureViolations counts toward totalViolations (CLI exits 1)', () => {
+    // Proves the wiring end-to-end: agentTemperatureViolations must cause the
+    // CLI to exit 1. A result with only agentTemperatureViolations non-empty
+    // and all other arrays empty must produce a non-zero exit — deleting the
+    // agentTemperatureViolations term from totalViolations() would break this.
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'agents/research/no-temp.md',
+        '---\nname: no-temp\nmode: subagent\n---\nagent body',
+      )
+
+      const proc = Bun.spawnSync(['bun', SCRIPT_PATH, root], {
+        cwd: REPO_ROOT,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+      expect(proc.exitCode).toBe(1)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('printAgentTemperatureViolations — CLI print path', () => {
+  test('emits the agent-temperature-violation heading and offending file to stderr', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'agents/research/no-temp.md',
+        '---\nname: no-temp\nmode: subagent\n---\nagent body',
+      )
+
+      const proc = Bun.spawnSync(['bun', SCRIPT_PATH, root], {
+        cwd: REPO_ROOT,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+
+      expect(proc.exitCode).toBe(1)
+      const stderr = proc.stderr.toString()
+      expect(stderr).toContain('Agent temperature violations (1)')
+      expect(stderr).toContain('agents/research/no-temp.md')
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
@@ -2619,6 +2850,14 @@ describe('integration: real repo', () => {
       },
       'Agent mode violations in repo',
     )
+    assertNoViolations(
+      result.agentTemperatureViolations,
+      (v) => {
+        const tv = v as (typeof result.agentTemperatureViolations)[number]
+        return `${tv.file}  ${tv.message}`
+      },
+      'Agent temperature violations in repo',
+    )
 
     expect(result.phantomRefs).toEqual([])
     expect(result.brokenSubfileRefs).toEqual([])
@@ -2628,6 +2867,7 @@ describe('integration: real repo', () => {
     expect(result.agentStemViolations).toEqual([])
     expect(result.parseSafetyViolations).toEqual([])
     expect(result.agentModeViolations).toEqual([])
+    expect(result.agentTemperatureViolations).toEqual([])
     expect(result.allowlistWarnings).toEqual([])
     expect(result.scanStats.markdownFiles).toBeGreaterThan(0)
     expect(result.scanStats.typescriptFiles).toBeGreaterThan(0)
