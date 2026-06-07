@@ -191,6 +191,11 @@ export interface AgentStemViolation {
   message: string
 }
 
+export interface AgentTemperatureViolation {
+  file: string
+  message: string
+}
+
 export interface CheckResult {
   rootDir: string
   categories: string[]
@@ -204,6 +209,7 @@ export interface CheckResult {
   agentModeViolations: AgentModeViolation[]
   agentColorViolations: AgentColorViolation[]
   agentStemViolations: AgentStemViolation[]
+  agentTemperatureViolations: AgentTemperatureViolation[]
   exemptHits: ExemptHit[]
   scanStats: {
     markdownFiles: number
@@ -1006,6 +1012,31 @@ export function checkAgentMode(
   return violations
 }
 
+export function checkAgentTemperature(
+  rootDir: string,
+  markdownFiles: readonly string[],
+): AgentTemperatureViolation[] {
+  const violations: AgentTemperatureViolation[] = []
+
+  for (const relPath of markdownFiles) {
+    if (!isAgentFile(relPath)) continue
+    const content = readFileSafe(path.join(rootDir, relPath))
+    if (content === null) continue
+    const parsed = parseFrontmatter(content)
+    if (!isRecord(parsed.data) || !Object.hasOwn(parsed.data, 'temperature')) {
+      violations.push({
+        file: relPath,
+        message:
+          'Bundled agents must declare an explicit `temperature:` in frontmatter. ' +
+          'The runtime fill-if-absent fallback (`inferBuiltInTemperature`) will be removed in v3.0.0; ' +
+          'without an explicit `temperature:`, agents would lose their tuned value.',
+      })
+    }
+  }
+
+  return violations
+}
+
 export function checkAgentStemUniqueness(
   rootDir: string,
   markdownFiles: readonly string[],
@@ -1161,6 +1192,10 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     rootDir,
     targets.markdown,
   )
+  const agentTemperatureViolations = checkAgentTemperature(
+    rootDir,
+    targets.markdown,
+  )
   const { hits: bannedPatterns, exempt: exemptHits } = checkBannedPatterns(
     rootDir,
     allScannedFiles,
@@ -1180,6 +1215,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     agentModeViolations,
     agentColorViolations,
     agentStemViolations,
+    agentTemperatureViolations,
     exemptHits,
     scanStats: {
       markdownFiles: targets.markdown.length,
@@ -1227,6 +1263,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
   printAgentModeViolations(result.agentModeViolations)
   printAgentColorViolations(result.agentColorViolations)
   printAgentStemViolations(result.agentStemViolations)
+  printAgentTemperatureViolations(result.agentTemperatureViolations)
 
   if (totalViolations(result) === 0) {
     process.stdout.write(
@@ -1343,6 +1380,18 @@ function printAgentStemViolations(
   }
 }
 
+function printAgentTemperatureViolations(
+  violations: readonly AgentTemperatureViolation[],
+): void {
+  if (violations.length === 0) return
+  process.stderr.write(
+    `\nAgent temperature violations (${violations.length}):\n`,
+  )
+  for (const v of violations) {
+    process.stderr.write(`  ${v.file}  ${v.message}\n`)
+  }
+}
+
 function totalViolations(result: CheckResult): number {
   return (
     result.phantomRefs.length +
@@ -1353,7 +1402,8 @@ function totalViolations(result: CheckResult): number {
     result.agentModelViolations.length +
     result.agentModeViolations.length +
     result.agentColorViolations.length +
-    result.agentStemViolations.length
+    result.agentStemViolations.length +
+    result.agentTemperatureViolations.length
   )
 }
 
