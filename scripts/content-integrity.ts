@@ -2,7 +2,7 @@
 /**
  * Content-Integrity Gate
  *
- * Enforces six content invariants across Systematic's shipped assets:
+ * Enforces content invariants across Systematic's shipped assets:
  *
  * 1. **Cross-skill reference integrity** — every `systematic:<category>:<name>`
  *    reference in bundled skills and agents resolves to an actual
@@ -29,6 +29,11 @@
  * 6. **Agent mode** — bundled agents must declare `mode: subagent` explicitly so
  *    they remain invisible to primary-agent discovery regardless of future
  *    OpenCode default changes.
+ *
+ * 7. **Agent temperature** — bundled agents must declare an explicit `temperature:`
+ *    as a finite number in frontmatter. A missing, null, or non-numeric value is
+ *    treated as absent (the runtime's fill-if-absent fallback will be removed in
+ *    v3.0.0), so only a real finite number satisfies this invariant.
  *
  * Scope is narrow by design: `skills/**\/*.md`, `agents/**\/*.md`, and
  * `src/**\/*.ts` for the full invariant suite. Additionally, `docs/solutions/**\/*.md`
@@ -1023,7 +1028,12 @@ export function checkAgentTemperature(
     const content = readFileSafe(path.join(rootDir, relPath))
     if (content === null) continue
     const parsed = parseFrontmatter(content)
-    if (!isRecord(parsed.data) || !Object.hasOwn(parsed.data, 'temperature')) {
+    if (
+      !isRecord(parsed.data) ||
+      !Object.hasOwn(parsed.data, 'temperature') ||
+      typeof parsed.data.temperature !== 'number' ||
+      !Number.isFinite(parsed.data.temperature)
+    ) {
       violations.push({
         file: relPath,
         message:
