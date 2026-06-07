@@ -1,7 +1,7 @@
 ---
 title: "feat: npx skills install commands"
 type: feat
-status: active
+status: completed
 date: 2026-06-06
 origin: docs/brainstorms/2026-06-06-npx-skills-install-commands-requirements.md
 ---
@@ -66,7 +66,7 @@ Systematic's only documented install is the npm plugin (OpenCode-specific). The 
 
 ## Implementation Units
 
-- [ ] **Unit 1: Per-skill command injection in the generator**
+- [x] **Unit 1: Per-skill command injection in the generator**
 
 **Goal:** Each generated skill reference page carries a copyable `npx skills add marcusrbrown/systematic --skill <name>` command in the header slot, using @designer's specified markup.
 
@@ -100,7 +100,7 @@ Systematic's only documented install is the npm plugin (OpenCode-specific). The 
 **Verification:**
 - Generated non-deprecated skill pages contain the per-skill command in the header slot; deprecated skill pages and all agent pages do not; the generator is importable and unit-tested; `bun run docs:build` passes; regeneration is idempotent.
 
-- [ ] **Unit 2: Installation page npx skills secondary path**
+- [x] **Unit 2: Installation page npx skills secondary path**
 
 **Goal:** The installation page presents the `npx skills` path as a prominent secondary section after the plugin Steps, with a chooser cue and a scannable flag-variant treatment.
 
@@ -120,7 +120,7 @@ Systematic's only documented install is the npm plugin (OpenCode-specific). The 
 **Verification:**
 - Installation page shows both paths with the chooser cue, plugin primary; flag variants render as a scannable table/list; `bun run docs:build` passes.
 
-- [ ] **Unit 3: README whole-collection command + chooser cue**
+- [x] **Unit 3: README whole-collection command + chooser cue**
 
 **Goal:** README Quick Install presents the `npx skills` whole-collection command as a secondary path beside the plugin, with a chooser cue.
 
@@ -140,7 +140,7 @@ Systematic's only documented install is the npm plugin (OpenCode-specific). The 
 **Verification:**
 - README shows both install paths with the chooser cue, plugin primary; no taxonomy leak.
 
-- [ ] **Unit 4: @designer — homepage dual-path block + per-skill slot markup**
+- [x] **Unit 4: @designer — homepage dual-path block + per-skill slot markup**
 
 **Goal:** @designer designs the homepage dual-path install block (chooser cue, plugin-primary hierarchy) and specifies the per-skill command-slot markup for skill pages.
 
