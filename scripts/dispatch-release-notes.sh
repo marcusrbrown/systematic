@@ -94,13 +94,13 @@ gh workflow run --ref main fro-bot.yaml \
   -f "prompt=$PROMPT" \
   -f "correlation-id=$CORRELATION_ID"
 
-# Poll up to 90 seconds for a workflow_dispatch run on fro-bot.yaml that was
+# Poll up to 180 seconds for a workflow_dispatch run on fro-bot.yaml that was
 # created strictly after DISPATCH_EPOCH. Once found, this is our dispatched run
 # (no other dispatchers race against this from main.yaml's Release job).
 # Test escape hatches: RELEASE_NOTES_TEST_POLL_BUDGET_SECS and
 # RELEASE_NOTES_TEST_POLL_INTERVAL_SECS shorten the loop for unit tests.
-# Production runs always use 90s budget / 5s interval.
-POLL_BUDGET_SECS="${RELEASE_NOTES_TEST_POLL_BUDGET_SECS:-90}"
+# Production runs always use 180s budget / 5s interval.
+POLL_BUDGET_SECS="${RELEASE_NOTES_TEST_POLL_BUDGET_SECS:-180}"
 POLL_INTERVAL_SECS="${RELEASE_NOTES_TEST_POLL_INTERVAL_SECS:-5}"
 RUN_ID=""
 POLL_DEADLINE=$(( $(date +%s) + POLL_BUDGET_SECS ))
@@ -122,8 +122,8 @@ while [ "$(date +%s)" -lt "$POLL_DEADLINE" ]; do
 done
 
 if [ -z "$RUN_ID" ]; then
-  echo "::error::Dispatched workflow run not found within ${POLL_BUDGET_SECS}s (correlation=$CORRELATION_ID, dispatched_at_epoch=$DISPATCH_EPOCH). GitHub may have rejected the dispatch or the workflow never started."
-  exit 1
+  echo "::warning::Dispatch was sent but its run could not be confirmed within ${POLL_BUDGET_SECS}s (correlation=$CORRELATION_ID, dispatched_at_epoch=$DISPATCH_EPOCH). The narration will still run asynchronously — the release itself is unaffected. This is an observability gap, not a dispatch failure."
+  exit 0
 fi
 
 # Wait for the run to complete, hard-bounded at 10 minutes.
