@@ -1,7 +1,8 @@
 ---
 title: "feat: Skill frontmatter tune-up"
 type: feat
-status: active
+status: completed
+shipped: PR #505 merged 75622be; released @fro.bot/systematic@2.31.0
 date: 2026-06-06
 origin: docs/brainstorms/2026-06-06-skill-frontmatter-tune-up-requirements.md
 ---

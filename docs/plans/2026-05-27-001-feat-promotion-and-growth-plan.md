@@ -1,13 +1,13 @@
 ---
 title: "feat: Promotion and growth — analytics, homepage uplift, ecosystem listing, social drafts"
 type: feat
-status: active
+status: completed
 date: 2026-05-27
 origin: docs/brainstorms/2026-05-27-promotion-and-growth-requirements.md
 deepened: 2026-05-27
 review: document-review 4 personas (coherence, feasibility, scope-guardian, adversarial) — all findings resolved
-infra: marcusrbrown/infra#315 Umami LIVE + verified 2026-05-27 (https://metrics.fro.bot) — Units 1–8 unblocked; Unit 9 first precondition met
-shipped: Units 1–6, 8 merged via PR #454, #455, #456, #457, #460 (all non-releasing — docs/chore/ci; docs site deployed manually). Unit 9 analytics activated + verified live 2026-05-30 (umami script + website-id in production). Unit 7 ecosystem PR anomalyco/opencode#29925 OPEN upstream (awaiting maintainer review). Remaining: Unit 7 upstream merge + Unit 9 numeric-gate measurement window (manual Discord test post).
+infra: marcusrbrown/infra#315 Umami LIVE + verified 2026-05-27 (https://metrics.fro.bot)
+shipped: All Systematic-side units complete. Units 1–6, 8 merged via PR #454, #455, #456, #457, #460; Unit 9 analytics activated + verified live in production 2026-05-30. Externally tracked (not Systematic-repo work): Unit 7 ecosystem listing PR anomalyco/opencode#29925 awaits upstream maintainer review; the Unit 9 numeric-gate measurement window is a manual ongoing activity.
 ---
 
 # Promotion and Growth
