@@ -5,6 +5,7 @@ tools: Read, Grep, Glob, Bash
 color: warning
 
 mode: subagent
+temperature: 0.1
 ---
 
 # Previous Comments Reviewer

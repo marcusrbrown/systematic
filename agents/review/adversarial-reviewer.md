@@ -5,6 +5,7 @@ tools: Read, Grep, Glob, Bash
 color: error
 
 mode: subagent
+temperature: 0.1
 ---
 
 # Adversarial Reviewer

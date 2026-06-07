@@ -4,6 +4,7 @@ description: "Conditional code-review persona, selected when the diff touches CL
 tools: Read, Grep, Glob, Bash
 color: info
 mode: subagent
+temperature: 0.1
 ---
 
 # CLI Agent-Readiness Reviewer

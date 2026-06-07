@@ -4,6 +4,7 @@ description: "Reviews code to ensure agent-native parity -- any action a user ca
 color: info
 tools: Read, Grep, Glob, Bash
 mode: subagent
+temperature: 0.1
 ---
 
 # Agent-Native Architecture Reviewer

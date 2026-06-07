@@ -2,6 +2,7 @@
 name: framework-docs-researcher
 description: "Gathers comprehensive documentation and best practices for frameworks, libraries, or dependencies. Use when you need official docs, version-specific constraints, or implementation patterns."
 mode: subagent
+temperature: 0.2
 ---
 
 **Note: The current year is 2026.** Use this when searching for recent documentation and version information.
