@@ -101,12 +101,38 @@ import StatsBanner from '../../components/StatsBanner.astro'
 <h2 class="section-heading">Quick Start</h2>
 
 <div class="quick-start-box">
-  <p>Add Systematic to your OpenCode config:</p>
-  <pre><code>&#123;
-  "plugins": ["@fro.bot/systematic@latest"]
-&#125;</code></pre>
-  <p>Then start your first task:</p>
-  <pre><code>/ce:brainstorm "add dark mode toggle"</code></pre>
+  <div class="install-path primary">
+    <div class="install-header">
+      <h3 class="install-title">OpenCode Plugin <span>(Recommended)</span></h3>
+      <span class="install-cue">OpenCode, full runtime</span>
+    </div>
+    <p>Add Systematic to your configuration:</p>
+    
+    ```json
+    {
+      "plugins": ["@fro.bot/systematic@latest"]
+    }
+    ```
+    
+    <p>Then start your first task:</p>
+    
+    ```bash
+    /ce:brainstorm "add dark mode toggle"
+    ```
+  </div>
+
+  <div class="install-path secondary">
+    <div class="install-header">
+      <h3 class="install-title">CLI Installer</h3>
+      <span class="install-cue">Any harness, skills only</span>
+    </div>
+    <p>Install Markdown skills directly into your repo:</p>
+    
+    ```bash
+    npx skills add marcusrbrown/systematic
+    ```
+  </div>
+
   <p class="quick-start-note">Skills and agents are available immediately. No API keys, no accounts, no telemetry.</p>
 </div>
 
@@ -281,40 +307,19 @@ import StatsBanner from '../../components/StatsBanner.astro'
     letter-spacing: -0.02em;
     color: var(--sl-color-white);
     margin: var(--space-12) 0 var(--space-6);
-    border-bottom: 1px solid var(--sl-color-gray-5);
-    padding-bottom: var(--space-3);
-  }
-
-  .feature-list {
+  .quick-start-box {
     display: flex;
     flex-direction: column;
-    margin-bottom: var(--space-8);
-    background: var(--sl-color-gray-6);
-    border: 1px solid var(--sl-color-gray-5);
-    border-radius: 0.5rem;
-    overflow: hidden;
-  }
-
-  .value-prop {
-    font-family: var(--sl-font-system);
-    font-size: 1.0625rem;
-    line-height: 1.6;
-    color: var(--sl-color-gray-1);
-    max-width: 56rem;
-  }
-
-  .value-prop p {
-    margin-bottom: var(--space-4);
-  }
-
-  .quick-start-box {
-    background: var(--sl-color-gray-6);
-    border: 1px solid var(--sl-color-gray-5);
-    border-radius: 0.25rem;
-    padding: var(--space-6);
+    gap: var(--space-6);
     max-width: 48rem;
   }
 
+  .quick-start-note {
+    font-size: 0.875rem;
+    color: var(--sl-color-gray-3) !important;
+    margin-top: 0;
+    margin-bottom: 0 !important;
+  }
   .quick-start-box p {
     margin-bottom: var(--space-3);
     color: var(--sl-color-white);

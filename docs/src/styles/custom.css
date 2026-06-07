@@ -163,3 +163,76 @@
 .sl-markdown-content tr:last-child td {
   border-bottom: none;
 }
+
+/* Quick Start Dual Path Styling */
+.quick-start-box {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+  background: transparent;
+  border: none;
+  padding: 0;
+  max-width: 48rem;
+}
+
+.install-path {
+  background: var(--sl-color-gray-6);
+  border: 1px solid var(--sl-color-gray-5);
+  border-radius: 0.5rem;
+  padding: var(--space-6);
+}
+
+.install-path.primary {
+  border-color: var(--sl-color-accent-low);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.install-path.secondary {
+  opacity: 0.9;
+}
+
+.install-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  margin-bottom: var(--space-4);
+  border-bottom: 1px solid var(--sl-color-gray-5);
+  padding-bottom: var(--space-3);
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.install-title {
+  margin: 0 !important;
+  font-family: var(--sl-font-heading);
+  font-size: 1.25rem !important;
+  font-weight: 500;
+  color: var(--sl-color-white) !important;
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+
+.install-title span {
+  font-family: var(--sl-font-system);
+  font-size: 0.875rem;
+  font-weight: 400;
+  color: var(--sl-color-accent);
+}
+
+.install-cue {
+  font-family: var(--sl-font-system);
+  font-size: 0.875rem;
+  color: var(--sl-color-gray-3);
+}
+
+.install-path p {
+  margin-bottom: var(--space-3);
+  color: var(--sl-color-gray-1);
+}
+
+.quick-start-note {
+  font-size: 0.875rem;
+  color: var(--sl-color-gray-3);
+  margin-top: var(--space-2);
+}
