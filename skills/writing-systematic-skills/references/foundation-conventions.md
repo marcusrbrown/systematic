@@ -6,21 +6,21 @@ This reference expands the Systematic-specific rules from `SKILL.md`. The mechan
 
 Systematic skill frontmatter mirrors what the runtime loader actually reads. Do not invent fields for documentation structure. If the loader does not consume the field, put the information in the body.
 
-| Field | Required | When To Use | Example |
-|---|---:|---|---|
-| `name` | Yes | Every skill. Use the unprefixed skill identifier unless another namespace is intentional. | `name: writing-systematic-skills` |
-| `description` | Yes | Trigger-oriented discovery text. Third person. Prefer `Use when...`. | `description: Use when fixing bundled skill frontmatter failures...` |
-| `argument-hint` | No | The skill accepts meaningful invocation arguments. | `argument-hint: "[path/to/document.md]"` |
-| `disable-model-invocation` | No | Dispatcher or routing skills that should not be directly model-invoked. | `disable-model-invocation: true` |
-| `allowed-tools` | No | The skill needs an explicit tool allowlist. | `allowed-tools: Bash, Read` |
-| `license` | No | Licensing metadata matters for distribution. | `license: MIT` |
-| `compatibility` | No | A platform or version caveat is real and useful. | `compatibility: OpenCode` |
-| `metadata` | No | String-only metadata map. Keep it boring. | `metadata: { owner: systematic }` |
-| `user-invocable` | No | Direct user invocation should be explicitly advertised or suppressed. | `user-invocable: false` |
-| `agent` | No | A loader-supported companion agent is required. | `agent: general` |
-| `model` | No | A skill-level model choice is justified for *skill execution* (not bundled agents — see below). | `model: anthropic/claude-haiku-4-5` |
-| `context` | No | Forked execution is required. `fork` derives subtask behavior at runtime. | `context: fork` |
-| `subtask` | No | Explicit forked-subtask dispatch marker. | `subtask: true` |
+| Field | Required | When To Use | Enforcement | Example |
+|---|---:|---|---|---|
+| `name` | Yes | Every skill. Use the unprefixed skill identifier unless another namespace is intentional. | Read + enforced (loader rejects missing/null) | `name: writing-systematic-skills` |
+| `description` | Yes | Trigger-oriented discovery text. Third person. Prefer `Use when...`. | Read + enforced (loader rejects missing/null) | `description: Use when fixing bundled skill frontmatter failures...` |
+| `argument-hint` | No | The skill accepts meaningful invocation arguments. | Read + surfaced to callers | `argument-hint: "[path/to/document.md]"` |
+| `disable-model-invocation` | No | Dispatcher or routing skills that should not be directly model-invoked. | Read + enforced (loader acts on it) | `disable-model-invocation: true` |
+| `allowed-tools` | No | The skill needs an explicit tool allowlist. | **Read but not enforced.** `src/lib/skills.ts` parses it into `SkillFrontmatter.allowedTools` and passes it through, but no permission gate in `src/lib` acts on it. OpenCode treats it as metadata, not enforced permissions. Do not rely on this field to restrict tool access. | `allowed-tools: Bash, Read` |
+| `license` | No | Licensing metadata matters for distribution. | Read, passed through as metadata | `license: MIT` |
+| `compatibility` | No | A platform or version caveat is real and useful. | Read, passed through as metadata | `compatibility: OpenCode` |
+| `metadata` | No | String-only metadata map. Keep it boring. | Read, passed through as metadata | `metadata: { owner: systematic }` |
+| `user-invocable` | No | Direct user invocation should be explicitly advertised or suppressed. | Read + surfaced to callers | `user-invocable: false` |
+| `agent` | No | A loader-supported companion agent is required. | Read + enforced (loader acts on it) | `agent: general` |
+| `model` | No | A skill-level model choice is justified for *skill execution* (not bundled agents -- see below). | Read + enforced (loader acts on it; banned in bundled agent markdown) | `model: anthropic/claude-haiku-4-5` |
+| `context` | No | Forked execution is required. `fork` derives subtask behavior at runtime. | Read + enforced (runtime-recognized) | `context: fork` |
+| `subtask` | No | Explicit forked-subtask dispatch marker. | Read + enforced (runtime-recognized) | `subtask: true` |
 
 ### Required Fields
 
