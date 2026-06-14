@@ -117,6 +117,18 @@ Systematic requires zero manual file copying. When the plugin loads, it automati
 - Registers bundled **agents** so you can @mention them immediately.
 - Exposes bundled skills as slash-invokable workflows (for example, `/ce:plan`).
 
+## Recommended: enable background subagents
+
+Set `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` before starting OpenCode. This allows Systematic workflows to dispatch subagents in the background. The orchestrator continues working while subagents run, and results are pushed into the parent session automatically upon completion.
+
+```bash
+export OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true
+```
+
+Add this to your shell profile (`.zshrc`, `.bashrc`, or equivalent) to persist the setting.
+
+This flag is experimental but stable in recent OpenCode versions. It is optional but recommended for parallel and long-running workflow steps. Without it, Systematic falls back to foreground dispatch, which is serial but correct.
+
 ## Your first workflow
 
 Systematic is built around a four-step loop. Here is what it looks like in practice, using a concrete task: adding a dark mode toggle.
