@@ -71,7 +71,7 @@
     "@semantic-release/exec": "7.1.0",
     "@types/bun": "latest",
     "@types/js-yaml": "4.0.9",
-    "@types/node": "24.13.1",
+    "@types/node": "24.13.2",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
     "conventional-changelog-conventionalcommits": "9.3.1",
