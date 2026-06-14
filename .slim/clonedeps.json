@@ -1,24 +1,24 @@
 {
   "version": "1.0.0",
-  "updatedAt": "2026-06-05T00:00:00.000Z",
+  "updatedAt": "2026-07-13T00:00:00.000Z",
   "dependencies": [
     {
       "name": "@opencode-ai/sdk",
-      "resolvedVersion": "1.15.10",
+      "resolvedVersion": "1.17.6",
       "repoUrl": "https://github.com/anomalyco/opencode.git",
-      "ref": "v1.15.10",
+      "ref": "v1.17.6",
       "path": ".slim/clonedeps/repos/anomalyco__opencode",
       "packagePath": "packages/sdk/js",
-      "reason": "Inspect OpencodeClient construction, client.provider.list() and client.model.list() runtime behavior — supports provider-availability hardening work and future plan deferred-to-implementation questions"
+      "reason": "Inspect OpencodeClient construction, client.provider.list() and client.model.list() runtime behavior \u2014 supports provider-availability hardening work and future plan deferred-to-implementation questions"
     },
     {
       "name": "@opencode-ai/plugin",
-      "resolvedVersion": "1.15.10",
+      "resolvedVersion": "1.17.6",
       "repoUrl": "https://github.com/anomalyco/opencode.git",
-      "ref": "v1.15.10",
+      "ref": "v1.17.6",
       "path": ".slim/clonedeps/repos/anomalyco__opencode",
       "packagePath": "packages/plugin",
-      "reason": "Inspect plugin loader hook iteration order, PluginInput.client construction site, and config-hook invocation lifecycle — verifies the FIFO assumption and per-invocation freshness contract from PR #352 and resolves multi-source plugin-loader topology questions for the DX hardening brainstorm"
+      "reason": "Inspect plugin loader hook iteration order, PluginInput.client construction site, and config-hook invocation lifecycle \u2014 verifies the FIFO assumption and per-invocation freshness contract from PR #352 and resolves multi-source plugin-loader topology questions for the DX hardening brainstorm"
     },
     {
       "name": "obra/superpowers",
