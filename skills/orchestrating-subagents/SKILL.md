@@ -44,11 +44,11 @@ task({
 })
 ```
 
-**When background is available:** OpenCode exposes `task_status` in the tool list and the `task()` tool description includes background mode instructions. This requires `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` or the umbrella `OPENCODE_EXPERIMENTAL=true` flag.
+**When background is available:** `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true` (or the umbrella `OPENCODE_EXPERIMENTAL=true`) must be set. When enabled, `background: true` runs the subagent asynchronously. OpenCode automatically injects the result into the parent session as a synthetic message when the subagent completes. You are notified; you do not poll.
 
-**When background is unavailable:** `task_status` is not registered. Passing `background: true` returns an error. Fall back to foreground dispatch — dispatch subagents serially or in small foreground batches instead.
+**When background is unavailable:** Passing `background: true` returns an error. Fall back to foreground dispatch — dispatch subagents serially or in small foreground batches instead.
 
-**Check before assuming:** If you see `task_status` in your available tools, background dispatch is enabled. If you do not see it, use foreground dispatch only.
+**Check before assuming:** Rely on whether `background: true` is accepted (i.e., the env flag is set). If it returns an error, use foreground dispatch only.
 
 ## Serial vs Parallel Dispatch
 
@@ -119,7 +119,7 @@ After subagents complete, the orchestrator synthesizes results:
 - If a subagent returns an error or its output is incomplete, diagnose before dispatching dependent units.
 - Do not dispatch dependent units on a broken tree.
 - Retry a failed unit by dispatching a new `task()` call with a corrected prompt, or resume the prior session with `task_id`.
-- For background tasks (when available): use `task_status` to poll or wait for terminal state before retrying.
+- For background tasks (when available): wait for the automatic completion notification (the result is injected into the parent session). Do not poll or sleep. Retry by dispatching a new `task()` with a corrected prompt, or resume with `task_id`.
 
 ## Quick Reference
 
@@ -128,7 +128,7 @@ After subagents complete, the orchestrator synthesizes results:
 | Units have dependencies | Serial foreground dispatch |
 | Units share files | Serial foreground dispatch |
 | Units are independent, no file overlap | Parallel foreground dispatch |
-| Background available + long-running work | Parallel background dispatch with `task_status` |
+| Background available + long-running work | Parallel background dispatch; results are pushed back to the parent on completion (no polling) |
 | Background unavailable | Foreground only — serial or batched |
 | Subagent fails | Diagnose, fix prompt, retry with new `task()` or resume with `task_id` |
 | File collision detected post-parallel | Stage non-colliding files (if workflow owns git ops), re-run colliding units serially |
@@ -137,8 +137,8 @@ After subagents complete, the orchestrator synthesizes results:
 
 | Mistake | Fix |
 |---|---|
-| Assuming `task_status` is always available | Check tool list first; fall back to foreground if absent |
+| Polling or sleeping to wait for a background subagent | Background results are pushed into the parent session automatically; never poll or sleep |
 | Parallel subagents staging or committing | Instruct subagents not to stage/commit; the current workflow owner handles git ops when applicable, otherwise synthesize file inventory and results for the caller or user |
 | Dispatching dependent units without waiting | Always wait for prerequisites to complete and verify their output |
 | Ignoring file overlap in parallel batches | Run the Parallel Safety Check before every parallel dispatch |
-| Using `background: true` without checking the flag | Only use when `task_status` appears in available tools |
+| Using `background: true` without the experimental flag enabled | Only use background when `OPENCODE_EXPERIMENTAL_BACKGROUND_SUBAGENTS=true`; otherwise dispatch foreground |
