@@ -21,6 +21,10 @@ import {
   BUNDLED_AGENT_QUALIFIED_IDS,
   BUNDLED_SKILL_NAMES,
 } from './bundled-names.js'
+import {
+  REMOVED_BUNDLED_AGENT_NAMES,
+  REMOVED_BUNDLED_SKILL_NAMES,
+} from './removed-names.js'
 
 const permissionSettingSchema = z.enum(['ask', 'allow', 'deny'] as const)
 
@@ -249,6 +253,8 @@ export interface SystematicConfigSchemaOptions {
   readonly agentNames: readonly string[]
   readonly qualifiedAgentIds: readonly string[]
   readonly skillNames: readonly string[]
+  readonly removedSkillNames?: readonly string[]
+  readonly removedAgentNames?: readonly string[]
 }
 
 /**
@@ -270,7 +276,13 @@ export interface SystematicConfigSchemaOptions {
 export function createSystematicConfigSchema(
   opts: SystematicConfigSchemaOptions,
 ): z.ZodObject<z.core.$ZodLooseShape> {
-  const { agentNames, qualifiedAgentIds, skillNames } = opts
+  const {
+    agentNames,
+    qualifiedAgentIds,
+    skillNames,
+    removedSkillNames = [],
+    removedAgentNames = [],
+  } = opts
   return z
     .object({
       $schema: z
@@ -314,8 +326,15 @@ export function createSystematicConfigSchema(
         }),
       disabled_skills: z
         // z.enum requires a non-empty tuple; skillNames is guaranteed non-empty
-        // by the sanity check in generateBundledNamesContent.
-        .array(z.enum(skillNames as readonly [string, ...string[]]))
+        // by the sanity check in generateBundledNamesContent. Removed names are
+        // appended so they parse without throwing; the actual drop+warn happens
+        // post-parse in config.ts (not here).
+        .array(
+          z.enum([...skillNames, ...removedSkillNames] as unknown as readonly [
+            string,
+            ...string[],
+          ]),
+        )
         .default([])
         .meta({
           description:
@@ -325,11 +344,14 @@ export function createSystematicConfigSchema(
       disabled_agents: z
         .array(
           // z.enum requires a non-empty tuple; the combined list is guaranteed
-          // non-empty by the sanity check in generateBundledNamesContent.
-          z.enum([...agentNames, ...qualifiedAgentIds] as unknown as readonly [
-            string,
-            ...string[],
-          ]),
+          // non-empty by the sanity check in generateBundledNamesContent. Removed
+          // names are appended so they parse without throwing; the actual
+          // drop+warn happens post-parse in config.ts (not here).
+          z.enum([
+            ...agentNames,
+            ...qualifiedAgentIds,
+            ...removedAgentNames,
+          ] as unknown as readonly [string, ...string[]]),
         )
         .default([])
         .meta({
@@ -369,6 +391,8 @@ export const SystematicConfigSchema = createSystematicConfigSchema({
   agentNames: BUNDLED_AGENT_NAMES,
   qualifiedAgentIds: BUNDLED_AGENT_QUALIFIED_IDS,
   skillNames: BUNDLED_SKILL_NAMES,
+  removedSkillNames: REMOVED_BUNDLED_SKILL_NAMES,
+  removedAgentNames: REMOVED_BUNDLED_AGENT_NAMES,
 })
 
 export type ValidationResult =
