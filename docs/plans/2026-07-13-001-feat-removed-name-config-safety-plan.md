@@ -1,7 +1,7 @@
 ---
 title: "feat: warn-and-ignore removed bundled names in disable lists"
 type: feat
-status: active
+status: executed-pending-pr
 date: 2026-07-13
 origin: docs/brainstorms/2026-07-13-v3-cleanup-release-requirements.md
 ---
@@ -84,7 +84,7 @@ v2.19.0 deprecation guidance told users to set `disabled_skills: ["orchestrating
 
 ## Implementation Units
 
-- [ ] **Unit 1: Removed-names mechanism in the schema factory**
+- [x] **Unit 1: Removed-names mechanism in the schema factory**
 
 **Goal:** Accept known-removed names in `disabled_skills`/`disabled_agents` without throwing, while preserving strict rejection for unknown names.
 
@@ -123,7 +123,7 @@ v2.19.0 deprecation guidance told users to set `disabled_skills: ["orchestrating
 **Verification:**
 - The factory accepts synthetic removed names without throwing; unknown names still throw; the overlap gate rejects removed/current collisions.
 
-- [ ] **Unit 2: Warn on dropped names + wire through config load**
+- [x] **Unit 2: Warn on dropped names + wire through config load**
 
 **Goal:** After a successful parse, drop removed names from the effective config and emit a stateless, per-load-deduplicated `[systematic]` warning, without mutating raw config or failing load.
 
@@ -157,7 +157,7 @@ v2.19.0 deprecation guidance told users to set `disabled_skills: ["orchestrating
 **Verification:**
 - Removed names warn-and-load end to end; unknown names still throw; dedup is per-load and stateless; raw config preserved.
 
-- [ ] **Unit 3: Thread removed-names through the schema generator**
+- [x] **Unit 3: Thread removed-names through the schema generator**
 
 **Goal:** Keep the published JSON Schema enum aligned with runtime acceptance so editors and runtime agree once the list is populated.
 
