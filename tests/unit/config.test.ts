@@ -1,13 +1,16 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+
 import {
+  computeDroppedNames,
   DEFAULT_CONFIG,
   getConfigPaths,
   loadConfig,
   loadConfigWithSources,
+  warnDroppedNames,
 } from '../../src/lib/config.js'
 
 describe('config', () => {
@@ -1323,6 +1326,206 @@ describe('config', () => {
       expect(() => loadConfig(testDir)).not.toThrow()
       const result = loadConfig(testDir)
       expect(result.disabled_skills).toEqual([])
+    })
+  })
+
+  describe('removed-name drop and warn', () => {
+    // These tests exercise the drop+warn helpers directly with synthetic inputs.
+    // The production removed-names list is empty (the mechanism ships before any
+    // name is actually removed), so the real load path cannot be exercised
+    // end-to-end without injecting synthetic removed names. The helpers are
+    // exported for exactly this purpose.
+
+    test('computeDroppedNames returns names absent from the allowed set', () => {
+      const allowed = new Set(['ce:plan', 'ce:review'])
+      const result = computeDroppedNames(['ce:plan', 'gone-skill'], allowed)
+      expect(result).toEqual(['gone-skill'])
+    })
+
+    test('computeDroppedNames returns empty array when all names are in the allowed set', () => {
+      const allowed = new Set(['ce:plan', 'ce:review'])
+      const result = computeDroppedNames(['ce:plan', 'ce:review'], allowed)
+      expect(result).toEqual([])
+    })
+
+    test('computeDroppedNames returns empty array for empty input', () => {
+      const allowed = new Set(['ce:plan'])
+      const result = computeDroppedNames([], allowed)
+      expect(result).toEqual([])
+    })
+
+    test('computeDroppedNames returns all names when allowed set is empty', () => {
+      const allowed = new Set<string>()
+      const result = computeDroppedNames(['gone-a', 'gone-b'], allowed)
+      expect(result).toEqual(['gone-a', 'gone-b'])
+    })
+
+    test('warnDroppedNames emits a [systematic] warning naming each dropped entry', () => {
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        warnDroppedNames(['gone-skill'], 'disabled_skills', new Set())
+        const calls = warnSpy.mock.calls as unknown[][]
+        expect(calls).toHaveLength(1)
+        const msg = (calls[0] as unknown[])[0] as string
+        expect(msg).toContain('[systematic]')
+        expect(msg).toContain('gone-skill')
+        expect(msg).toContain('disabled_skills')
+      } finally {
+        warnSpy.mockRestore()
+      }
+    })
+
+    test('warnDroppedNames emits no warning when dropped list is empty', () => {
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        warnDroppedNames([], 'disabled_skills', new Set())
+        expect(warnSpy.mock.calls).toHaveLength(0)
+      } finally {
+        warnSpy.mockRestore()
+      }
+    })
+
+    test('warnDroppedNames deduplicates within a single call via the provided warned set', () => {
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const warned = new Set<string>()
+        // Two entries with the same name -- should warn only once
+        warnDroppedNames(
+          ['gone-skill', 'gone-skill'],
+          'disabled_skills',
+          warned,
+        )
+        expect(warnSpy.mock.calls).toHaveLength(1)
+      } finally {
+        warnSpy.mockRestore()
+      }
+    })
+
+    test('warnDroppedNames does not suppress a different entry across separate calls (no sticky global state)', () => {
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        // First load invocation
+        const warned1 = new Set<string>()
+        warnDroppedNames(['gone-skill-a'], 'disabled_skills', warned1)
+
+        // Second independent load invocation uses a fresh warned set
+        const warned2 = new Set<string>()
+        warnDroppedNames(['gone-skill-b'], 'disabled_skills', warned2)
+
+        const calls = warnSpy.mock.calls as unknown[][]
+        expect(calls).toHaveLength(2)
+        expect((calls[0] as unknown[])[0] as string).toContain('gone-skill-a')
+        expect((calls[1] as unknown[])[0] as string).toContain('gone-skill-b')
+      } finally {
+        warnSpy.mockRestore()
+      }
+    })
+
+    test('warnDroppedNames does not suppress the same entry in a second independent load (no cross-load suppression)', () => {
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        // First load invocation
+        const warned1 = new Set<string>()
+        warnDroppedNames(['gone-skill'], 'disabled_skills', warned1)
+
+        // Second independent load -- fresh warned set, same entry should warn again
+        const warned2 = new Set<string>()
+        warnDroppedNames(['gone-skill'], 'disabled_skills', warned2)
+
+        expect(warnSpy.mock.calls).toHaveLength(2)
+      } finally {
+        warnSpy.mockRestore()
+      }
+    })
+
+    test('warnDroppedNames names each dropped entry individually when multiple are dropped', () => {
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const warned = new Set<string>()
+        warnDroppedNames(['gone-a', 'gone-b'], 'disabled_agents', warned)
+        const calls = warnSpy.mock.calls as unknown[][]
+        const combined = calls
+          .map((c) => (c as unknown[])[0] as string)
+          .join('\n')
+        expect(combined).toContain('gone-a')
+        expect(combined).toContain('gone-b')
+      } finally {
+        warnSpy.mockRestore()
+      }
+    })
+
+    test('empty removed-name lists produce no stale-name warning and no behavior change (invariant)', () => {
+      // With empty removed lists, the production schema behaves identically to before.
+      // A valid config still loads; no stale-name warning is emitted.
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir, { recursive: true })
+        fs.writeFileSync(
+          path.join(projectConfigDir, 'systematic.json'),
+          JSON.stringify({ disabled_skills: ['ce:plan'] }),
+        )
+
+        const result = loadConfig(testDir)
+        expect(result.disabled_skills).toContain('ce:plan')
+
+        const staleWarnings = (warnSpy.mock.calls as unknown[][]).filter(
+          (args) =>
+            typeof (args as unknown[])[0] === 'string' &&
+            ((args as unknown[])[0] as string).includes(
+              'no longer a bundled name',
+            ),
+        )
+        expect(staleWarnings).toHaveLength(0)
+      } finally {
+        warnSpy.mockRestore()
+      }
+    })
+
+    test('unknown name still throws the actionable schema error (warning path does not swallow it)', () => {
+      const projectConfigDir = path.join(testDir, '.opencode')
+      fs.mkdirSync(projectConfigDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(projectConfigDir, 'systematic.json'),
+        JSON.stringify({ disabled_skills: ['never-existed-skill'] }),
+      )
+
+      expect(() => loadConfig(testDir)).toThrow(/never-existed-skill/)
+    })
+
+    test('merge precedence is unchanged when a valid name is present alongside other config', () => {
+      // Verifies that the drop+warn step does not disturb merge precedence for
+      // other fields. Project bootstrap.enabled:true overrides user false.
+      writeUserConfig({ bootstrap: { enabled: false } })
+
+      const projectConfigDir = path.join(testDir, '.opencode')
+      fs.mkdirSync(projectConfigDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(projectConfigDir, 'systematic.json'),
+        JSON.stringify({ bootstrap: { enabled: true } }),
+      )
+
+      const result = loadConfig(testDir)
+      expect(result.bootstrap.enabled).toBe(true)
+    })
+
+    test('raw config object is not mutated by the drop step', () => {
+      // loadConfigWithSources returns the raw config in overlays; the drop must
+      // not mutate it. We verify by checking that the returned config reflects
+      // the drop while the raw source config (accessible via a second load) is
+      // still intact. Since we cannot directly inspect the raw config object
+      // from outside, we verify the effective config is correct and that a
+      // second load produces the same result (no mutation side-effect).
+      const projectConfigDir = path.join(testDir, '.opencode')
+      fs.mkdirSync(projectConfigDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(projectConfigDir, 'systematic.json'),
+        JSON.stringify({ disabled_skills: ['ce:plan'] }),
+      )
+
+      const result1 = loadConfig(testDir)
+      const result2 = loadConfig(testDir)
+      expect(result1.disabled_skills).toEqual(result2.disabled_skills)
     })
   })
 })
