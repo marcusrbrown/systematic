@@ -27,6 +27,10 @@ import {
   createSystematicConfigSchema,
   SystematicConfigSchema,
 } from '../src/lib/config-schema.js'
+import {
+  REMOVED_BUNDLED_AGENT_NAMES,
+  REMOVED_BUNDLED_SKILL_NAMES,
+} from '../src/lib/removed-names.js'
 import { findSkillsInDir } from '../src/lib/skills.js'
 import {
   getZodDefaultInnerType,
@@ -990,6 +994,8 @@ async function main(): Promise<void> {
     agentNames: agents,
     qualifiedAgentIds: agentQualifiedIds,
     skillNames: skills,
+    removedSkillNames: REMOVED_BUNDLED_SKILL_NAMES,
+    removedAgentNames: REMOVED_BUNDLED_AGENT_NAMES,
   })
 
   const schemaContent = generateSchemaContentFromSchema(

@@ -17,6 +17,7 @@ import {
   checkFrontmatter,
   checkFrontmatterParseSafety,
   checkReferenceIntegrity,
+  checkRemovedNamesOverlap,
   checkSubfileReferences,
   collectScanTargets,
   discoverCategories,
@@ -3317,5 +3318,84 @@ describe('printArgumentHintViolations -- CLI print path', () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
+  })
+})
+
+describe('checkRemovedNamesOverlap', () => {
+  // Disjoint lists: no overlap between removed and current bundled names.
+  test('disjoint removed and current names: no violations', () => {
+    const violations = checkRemovedNamesOverlap(
+      ['gone-skill'],
+      [],
+      ['ce:plan', 'ce:review'],
+      [],
+      [],
+    )
+    expect(violations).toHaveLength(0)
+  })
+
+  // A removed skill name that equals a current bundled skill name must fail.
+  test('removed skill name overlapping current bundled skill name: violation', () => {
+    const violations = checkRemovedNamesOverlap(
+      ['ce:plan'],
+      [],
+      ['ce:plan', 'ce:review'],
+      [],
+      [],
+    )
+    expect(violations.length).toBeGreaterThan(0)
+    expect(violations.some((v) => v.name === 'ce:plan')).toBe(true)
+  })
+
+  // A removed agent name that equals a current bundled agent bare name must fail.
+  test('removed agent name overlapping current bundled agent bare name: violation', () => {
+    const violations = checkRemovedNamesOverlap(
+      [],
+      ['correctness-reviewer'],
+      [],
+      ['correctness-reviewer'],
+      [],
+    )
+    expect(violations.length).toBeGreaterThan(0)
+    expect(violations.some((v) => v.name === 'correctness-reviewer')).toBe(true)
+  })
+
+  // A removed agent name that equals a current bundled qualified id must fail.
+  test('removed agent name overlapping current bundled qualified id: violation', () => {
+    const violations = checkRemovedNamesOverlap(
+      [],
+      ['review/correctness-reviewer'],
+      [],
+      [],
+      ['review/correctness-reviewer'],
+    )
+    expect(violations.length).toBeGreaterThan(0)
+    expect(
+      violations.some((v) => v.name === 'review/correctness-reviewer'),
+    ).toBe(true)
+  })
+
+  // Multiple overlaps are all reported.
+  test('multiple overlapping names: all reported', () => {
+    const violations = checkRemovedNamesOverlap(
+      ['ce:plan', 'ce:review'],
+      ['correctness-reviewer'],
+      ['ce:plan', 'ce:review'],
+      ['correctness-reviewer'],
+      [],
+    )
+    expect(violations.length).toBe(3)
+  })
+
+  // Empty removed lists: no violations regardless of current names.
+  test('empty removed lists: no violations', () => {
+    const violations = checkRemovedNamesOverlap(
+      [],
+      [],
+      ['ce:plan', 'ce:review'],
+      ['correctness-reviewer'],
+      ['review/correctness-reviewer'],
+    )
+    expect(violations).toHaveLength(0)
   })
 })

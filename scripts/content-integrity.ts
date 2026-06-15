@@ -70,9 +70,18 @@ import {
   OPENCODE_AGENT_COLOR_TOKENS,
 } from '../src/lib/agent-colors.js'
 import {
+  BUNDLED_AGENT_NAMES,
+  BUNDLED_AGENT_QUALIFIED_IDS,
+  BUNDLED_SKILL_NAMES,
+} from '../src/lib/bundled-names.js'
+import {
   extractFrontmatterBlock,
   parseFrontmatter,
 } from '../src/lib/frontmatter.js'
+import {
+  REMOVED_BUNDLED_AGENT_NAMES,
+  REMOVED_BUNDLED_SKILL_NAMES,
+} from '../src/lib/removed-names.js'
 import { SKILL_FRONTMATTER_FIELDS } from '../src/lib/skills.js'
 import { walkDir } from '../src/lib/walk-dir.js'
 
@@ -211,6 +220,12 @@ export interface ArgumentHintViolation {
   message: string
 }
 
+export interface RemovedNamesOverlapViolation {
+  kind: 'skill' | 'agent'
+  name: string
+  message: string
+}
+
 export interface CheckResult {
   rootDir: string
   categories: string[]
@@ -226,6 +241,7 @@ export interface CheckResult {
   agentStemViolations: AgentStemViolation[]
   agentTemperatureViolations: AgentTemperatureViolation[]
   argumentHintViolations: ArgumentHintViolation[]
+  removedNamesOverlapViolations: RemovedNamesOverlapViolation[]
   exemptHits: ExemptHit[]
   scanStats: {
     markdownFiles: number
@@ -1135,6 +1151,62 @@ export function checkArgumentHint(
   return violations
 }
 
+// ---------------------------------------------------------------------------
+// Removed-names overlap gate
+// ---------------------------------------------------------------------------
+
+/**
+ * Assert that removed-name lists have no overlap with current bundled names.
+ *
+ * A removed name must never shadow a live bundled name. If a name appears in
+ * both the removed list and the current bundled set, it would be accepted by
+ * the schema even if it were re-added to the catalog, silently bypassing
+ * strict validation. This gate prevents that drift.
+ *
+ * Parameters are explicit rather than reading module-level constants so the
+ * function is testable with synthetic name sets.
+ */
+export function checkRemovedNamesOverlap(
+  removedSkillNames: readonly string[],
+  removedAgentNames: readonly string[],
+  currentSkillNames: readonly string[],
+  currentAgentNames: readonly string[],
+  currentQualifiedAgentIds: readonly string[],
+): RemovedNamesOverlapViolation[] {
+  const violations: RemovedNamesOverlapViolation[] = []
+
+  const currentSkillSet = new Set(currentSkillNames)
+  for (const name of removedSkillNames) {
+    if (currentSkillSet.has(name)) {
+      violations.push({
+        kind: 'skill',
+        name,
+        message:
+          `Removed skill name "${name}" overlaps with a current bundled skill name. ` +
+          'Remove it from REMOVED_BUNDLED_SKILL_NAMES or delete it from the bundled catalog first.',
+      })
+    }
+  }
+
+  const currentAgentSet = new Set([
+    ...currentAgentNames,
+    ...currentQualifiedAgentIds,
+  ])
+  for (const name of removedAgentNames) {
+    if (currentAgentSet.has(name)) {
+      violations.push({
+        kind: 'agent',
+        name,
+        message:
+          `Removed agent name "${name}" overlaps with a current bundled agent name or qualified id. ` +
+          'Remove it from REMOVED_BUNDLED_AGENT_NAMES or delete it from the bundled catalog first.',
+      })
+    }
+  }
+
+  return violations
+}
+
 function isAgentFile(relPath: string): boolean {
   const parts = relPath.split('/')
   return (
@@ -1267,6 +1339,13 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     targets.markdown,
   )
   const argumentHintViolations = checkArgumentHint(rootDir, targets.markdown)
+  const removedNamesOverlapViolations = checkRemovedNamesOverlap(
+    REMOVED_BUNDLED_SKILL_NAMES,
+    REMOVED_BUNDLED_AGENT_NAMES,
+    BUNDLED_SKILL_NAMES,
+    BUNDLED_AGENT_NAMES,
+    BUNDLED_AGENT_QUALIFIED_IDS,
+  )
   const { hits: bannedPatterns, exempt: exemptHits } = checkBannedPatterns(
     rootDir,
     allScannedFiles,
@@ -1288,6 +1367,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     agentStemViolations,
     agentTemperatureViolations,
     argumentHintViolations,
+    removedNamesOverlapViolations,
     exemptHits,
     scanStats: {
       markdownFiles: targets.markdown.length,
@@ -1337,6 +1417,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
   printAgentStemViolations(result.agentStemViolations)
   printAgentTemperatureViolations(result.agentTemperatureViolations)
   printArgumentHintViolations(result.argumentHintViolations)
+  printRemovedNamesOverlapViolations(result.removedNamesOverlapViolations)
 
   if (totalViolations(result) === 0) {
     process.stdout.write(
@@ -1475,6 +1556,18 @@ function printArgumentHintViolations(
   }
 }
 
+function printRemovedNamesOverlapViolations(
+  violations: readonly RemovedNamesOverlapViolation[],
+): void {
+  if (violations.length === 0) return
+  process.stderr.write(
+    `\nRemoved-names overlap violations (${violations.length}):\n`,
+  )
+  for (const v of violations) {
+    process.stderr.write(`  [${v.kind}] ${v.name}  ${v.message}\n`)
+  }
+}
+
 function totalViolations(result: CheckResult): number {
   return (
     result.phantomRefs.length +
@@ -1487,7 +1580,8 @@ function totalViolations(result: CheckResult): number {
     result.agentColorViolations.length +
     result.agentStemViolations.length +
     result.agentTemperatureViolations.length +
-    result.argumentHintViolations.length
+    result.argumentHintViolations.length +
+    result.removedNamesOverlapViolations.length
   )
 }
 

@@ -4,6 +4,12 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import {
+  BUNDLED_AGENT_NAMES,
+  BUNDLED_AGENT_QUALIFIED_IDS,
+  BUNDLED_SKILL_NAMES,
+} from '../../src/lib/bundled-names.js'
+import { createSystematicConfigSchema } from '../../src/lib/config-schema.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -243,6 +249,56 @@ describe('generateSchemaContent', () => {
     const first = generateSchemaContentFn('3.0.0')
     const second = generateSchemaContentFn('3.0.0')
     expect(first).toBe(second)
+  })
+})
+
+// ═════════════════════════════════════════════════════════════════
+// generateSchemaContentFromSchema removed-names threading
+// ═════════════════════════════════════════════════════════════════
+
+describe('generateSchemaContentFromSchema removed-names threading', () => {
+  let generateSchemaContentFromSchemaFn: (
+    version: string,
+    schema: import('zod').ZodType,
+  ) => string
+  let generateSchemaContentFn: (version: string) => string
+
+  beforeAll(async () => {
+    const mod = await import('../../scripts/generate-config-schema.js')
+    generateSchemaContentFromSchemaFn = mod.generateSchemaContentFromSchema
+    generateSchemaContentFn = mod.generateSchemaContent
+  })
+
+  test('synthetic removed skill name appears in disabled_skills enum of generated JSON Schema', () => {
+    // Build a schema with a synthetic removed skill name to prove the
+    // removed-names are threaded through to the JSON Schema output.
+    const schema = createSystematicConfigSchema({
+      agentNames: BUNDLED_AGENT_NAMES,
+      qualifiedAgentIds: BUNDLED_AGENT_QUALIFIED_IDS,
+      skillNames: BUNDLED_SKILL_NAMES,
+      removedSkillNames: ['gone-skill'],
+      removedAgentNames: [],
+    })
+    const content = generateSchemaContentFromSchemaFn('3.0.0', schema)
+    // The generated JSON must contain the synthetic name somewhere in the
+    // disabled_skills enum (exact path varies with Zod's $ref deduplication).
+    expect(content).toContain('"gone-skill"')
+  })
+
+  test('empty removed lists produce byte-identical output to the baseline (no drift)', () => {
+    // With both removed lists empty, the factory schema is equivalent to the
+    // committed SystematicConfigSchema. The generated JSON Schema must be
+    // byte-identical to the baseline generateSchemaContent output.
+    const schema = createSystematicConfigSchema({
+      agentNames: BUNDLED_AGENT_NAMES,
+      qualifiedAgentIds: BUNDLED_AGENT_QUALIFIED_IDS,
+      skillNames: BUNDLED_SKILL_NAMES,
+      removedSkillNames: [],
+      removedAgentNames: [],
+    })
+    const fromFactory = generateSchemaContentFromSchemaFn('3.0.0', schema)
+    const baseline = generateSchemaContentFn('3.0.0')
+    expect(fromFactory).toBe(baseline)
   })
 })
 

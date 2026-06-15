@@ -8,6 +8,11 @@ import {
 } from 'jsonc-parser'
 import type { z } from 'zod'
 import {
+  BUNDLED_AGENT_NAMES,
+  BUNDLED_AGENT_QUALIFIED_IDS,
+  BUNDLED_SKILL_NAMES,
+} from './bundled-names.js'
+import {
   SECURITY_OVERLAY_FIELDS as SCHEMA_SECURITY_OVERLAY_FIELDS,
   SystematicConfigSchema,
 } from './config-schema.js'
@@ -70,6 +75,57 @@ interface ConfigSource {
 }
 
 const SECURITY_OVERLAY_FIELDS = new Set(SCHEMA_SECURITY_OVERLAY_FIELDS)
+
+/**
+ * The set of currently-bundled skill names. Used to identify removed names
+ * that parsed successfully (because they are in the removed-names list) but
+ * are no longer active and must be dropped from the effective config.
+ */
+const CURRENT_SKILL_NAMES_SET: ReadonlySet<string> = new Set(
+  BUNDLED_SKILL_NAMES,
+)
+
+/**
+ * The set of currently-bundled agent names (bare and qualified). Used to
+ * identify removed names that parsed successfully but are no longer active.
+ */
+const CURRENT_AGENT_NAMES_SET: ReadonlySet<string> = new Set([
+  ...BUNDLED_AGENT_NAMES,
+  ...BUNDLED_AGENT_QUALIFIED_IDS,
+])
+
+/**
+ * Return the subset of `names` that are absent from `allowedSet`. These are
+ * names that parsed successfully (they are in the removed-names list so the
+ * schema accepted them) but are no longer active bundled names and must be
+ * dropped from the effective config.
+ */
+export function computeDroppedNames(
+  names: readonly string[],
+  allowedSet: ReadonlySet<string>,
+): string[] {
+  return names.filter((n) => !allowedSet.has(n))
+}
+
+/**
+ * Emit a `[systematic]` warning for each dropped name that has not already
+ * been warned about in this load invocation. The `warned` set is local to a
+ * single load call -- callers must NOT share it across independent loads.
+ * Passing a fresh set per load ensures no cross-load suppression.
+ */
+export function warnDroppedNames(
+  dropped: string[],
+  field: string,
+  warned: Set<string>,
+): void {
+  for (const name of dropped) {
+    if (warned.has(name)) continue
+    warned.add(name)
+    console.warn(
+      `[systematic] "${name}" in \`${field}\` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning.`,
+    )
+  }
+}
 
 /**
  * Resolve a config file path by checking `.jsonc` first, then `.json`.
@@ -376,7 +432,41 @@ export function loadConfigWithSources(
     categories: overlayValues(overlays.categories),
   }
 
-  return { config: result, overlays }
+  // Drop removed names from the effective config and warn about each one.
+  // This runs on the merged output, not on the raw config objects, so merge
+  // precedence and raw-config preservation are both unaffected. A local Set
+  // deduplicates warnings within this single load invocation without any
+  // sticky module-global state that could suppress unrelated later warnings.
+  const warned = new Set<string>()
+  const droppedSkills = computeDroppedNames(
+    result.disabled_skills,
+    CURRENT_SKILL_NAMES_SET,
+  )
+  warnDroppedNames(droppedSkills, 'disabled_skills', warned)
+
+  const droppedAgents = computeDroppedNames(
+    result.disabled_agents,
+    CURRENT_AGENT_NAMES_SET,
+  )
+  warnDroppedNames(droppedAgents, 'disabled_agents', warned)
+
+  const droppedSkillSet = new Set(droppedSkills)
+  const droppedAgentSet = new Set(droppedAgents)
+
+  const effectiveConfig: SystematicConfig =
+    droppedSkillSet.size === 0 && droppedAgentSet.size === 0
+      ? result
+      : {
+          ...result,
+          disabled_skills: result.disabled_skills.filter(
+            (n) => !droppedSkillSet.has(n),
+          ),
+          disabled_agents: result.disabled_agents.filter(
+            (n) => !droppedAgentSet.has(n),
+          ),
+        }
+
+  return { config: effectiveConfig, overlays }
 }
 
 function mergeOverlaySources(sources: ConfigSource[]): SourcedOverlayConfigMap {

@@ -786,3 +786,143 @@ describe('createSystematicConfigSchema factory', () => {
     )
   })
 })
+
+describe('removed-names in createSystematicConfigSchema', () => {
+  // Synthetic removed names used throughout this block to exercise the
+  // accept-and-parse path without depending on the (currently empty)
+  // production removed-names lists.
+  const SYNTHETIC_REMOVED_SKILL = 'gone-skill'
+  const SYNTHETIC_REMOVED_AGENT_BARE = 'gone-agent'
+  const SYNTHETIC_REMOVED_AGENT_QUALIFIED = 'review/gone-agent'
+
+  const schemaWithRemovedSkill = createSystematicConfigSchema({
+    agentNames: BUNDLED_AGENT_NAMES,
+    qualifiedAgentIds: BUNDLED_AGENT_QUALIFIED_IDS,
+    skillNames: BUNDLED_SKILL_NAMES,
+    removedSkillNames: [SYNTHETIC_REMOVED_SKILL],
+    removedAgentNames: [],
+  })
+
+  const schemaWithRemovedAgent = createSystematicConfigSchema({
+    agentNames: BUNDLED_AGENT_NAMES,
+    qualifiedAgentIds: BUNDLED_AGENT_QUALIFIED_IDS,
+    skillNames: BUNDLED_SKILL_NAMES,
+    removedSkillNames: [],
+    removedAgentNames: [
+      SYNTHETIC_REMOVED_AGENT_BARE,
+      SYNTHETIC_REMOVED_AGENT_QUALIFIED,
+    ],
+  })
+
+  // Happy path: a removed skill name parses without throwing.
+  test('removed skill name parses without throwing', () => {
+    const result = schemaWithRemovedSkill.safeParse({
+      disabled_skills: [SYNTHETIC_REMOVED_SKILL],
+    })
+    expect(result.success).toBe(true)
+  })
+
+  // Edge case: mix of removed and current skill names parses without throwing.
+  test('mix of removed and current skill names parses without throwing', () => {
+    const result = schemaWithRemovedSkill.safeParse({
+      disabled_skills: [SYNTHETIC_REMOVED_SKILL, 'ce:plan'],
+    })
+    expect(result.success).toBe(true)
+  })
+
+  // Error path: a name in neither current nor removed set still fails.
+  test('name in neither current nor removed set still fails validation', () => {
+    const result = schemaWithRemovedSkill.safeParse({
+      disabled_skills: ['never-existed'],
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const paths = result.error.issues.map((i) => i.path.join('.'))
+      expect(paths.some((p) => p.startsWith('disabled_skills'))).toBe(true)
+    }
+  })
+
+  // Invariant: with empty removed lists, a made-up name still throws exactly as today.
+  test('empty removed lists: unknown name still fails (invariant)', () => {
+    const schemaEmptyRemoved = createSystematicConfigSchema({
+      agentNames: BUNDLED_AGENT_NAMES,
+      qualifiedAgentIds: BUNDLED_AGENT_QUALIFIED_IDS,
+      skillNames: BUNDLED_SKILL_NAMES,
+      removedSkillNames: [],
+      removedAgentNames: [],
+    })
+    const result = schemaEmptyRemoved.safeParse({
+      disabled_skills: ['never-existed'],
+    })
+    expect(result.success).toBe(false)
+  })
+
+  // Invariant: with empty removed lists, current valid configs still parse.
+  test('empty removed lists: current valid configs still parse (invariant)', () => {
+    const schemaEmptyRemoved = createSystematicConfigSchema({
+      agentNames: BUNDLED_AGENT_NAMES,
+      qualifiedAgentIds: BUNDLED_AGENT_QUALIFIED_IDS,
+      skillNames: BUNDLED_SKILL_NAMES,
+      removedSkillNames: [],
+      removedAgentNames: [],
+    })
+    const result = schemaEmptyRemoved.safeParse({
+      disabled_skills: ['ce:plan'],
+      disabled_agents: ['correctness-reviewer'],
+    })
+    expect(result.success).toBe(true)
+  })
+
+  // Removed agent bare name parses without throwing.
+  test('removed agent bare name parses without throwing', () => {
+    const result = schemaWithRemovedAgent.safeParse({
+      disabled_agents: [SYNTHETIC_REMOVED_AGENT_BARE],
+    })
+    expect(result.success).toBe(true)
+  })
+
+  // Removed agent qualified id parses without throwing.
+  test('removed agent qualified id parses without throwing', () => {
+    const result = schemaWithRemovedAgent.safeParse({
+      disabled_agents: [SYNTHETIC_REMOVED_AGENT_QUALIFIED],
+    })
+    expect(result.success).toBe(true)
+  })
+
+  // Mix of removed and current agent names parses without throwing.
+  test('mix of removed and current agent names parses without throwing', () => {
+    const result = schemaWithRemovedAgent.safeParse({
+      disabled_agents: [SYNTHETIC_REMOVED_AGENT_BARE, 'correctness-reviewer'],
+    })
+    expect(result.success).toBe(true)
+  })
+
+  // Invalid agent name not in either set still fails.
+  test('invalid agent name not in either set still fails', () => {
+    const result = schemaWithRemovedAgent.safeParse({
+      disabled_agents: ['never-existed-agent'],
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const paths = result.error.issues.map((i) => i.path.join('.'))
+      expect(paths.some((p) => p.startsWith('disabled_agents'))).toBe(true)
+    }
+  })
+
+  // No bare/qualified inference: a removed bare name does not let through
+  // a qualified variant that was not explicitly listed.
+  test('removed bare name does not let through unlisted qualified variant', () => {
+    const schemaBarOnly = createSystematicConfigSchema({
+      agentNames: BUNDLED_AGENT_NAMES,
+      qualifiedAgentIds: BUNDLED_AGENT_QUALIFIED_IDS,
+      skillNames: BUNDLED_SKILL_NAMES,
+      removedSkillNames: [],
+      removedAgentNames: [SYNTHETIC_REMOVED_AGENT_BARE],
+    })
+    // The qualified form was not listed in removedAgentNames, so it must fail.
+    const result = schemaBarOnly.safeParse({
+      disabled_agents: [SYNTHETIC_REMOVED_AGENT_QUALIFIED],
+    })
+    expect(result.success).toBe(false)
+  })
+})
