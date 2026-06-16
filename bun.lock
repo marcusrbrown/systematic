@@ -11,8 +11,8 @@
       },
       "devDependencies": {
         "@biomejs/biome": "2.4.16",
-        "@opencode-ai/plugin": "1.17.4",
-        "@opencode-ai/sdk": "1.17.4",
+        "@opencode-ai/plugin": "1.17.5",
+        "@opencode-ai/sdk": "1.17.5",
         "@semantic-release/exec": "7.1.0",
         "@types/bun": "latest",
         "@types/js-yaml": "4.0.9",
@@ -281,9 +281,9 @@
 
     "@octokit/types": ["@octokit/types@16.0.0", "", { "dependencies": { "@octokit/openapi-types": "^27.0.0" } }, "sha512-sKq+9r1Mm4efXW1FCk7hFSeJo4QKreL/tTbR0rz/qx/r1Oa2VV83LTA/H/MuCOX7uCIJmQVRKBcbmWoySjAnSg=="],
 
-    "@opencode-ai/plugin": ["@opencode-ai/plugin@1.17.4", "", { "dependencies": { "@opencode-ai/sdk": "1.17.4", "effect": "4.0.0-beta.74", "zod": "4.1.8" }, "peerDependencies": { "@opentui/core": ">=0.3.4", "@opentui/keymap": ">=0.3.4", "@opentui/solid": ">=0.3.4" }, "optionalPeers": ["@opentui/core", "@opentui/keymap", "@opentui/solid"] }, "sha512-jqXxfYnunCwyiEEsdVNDsKUhKznXytAntwzeW3uLd2zbIYsbVCiq5nG5ZSlo4mz1IXgRLWzXDYk1OnmfG15V2A=="],
+    "@opencode-ai/plugin": ["@opencode-ai/plugin@1.17.5", "", { "dependencies": { "@opencode-ai/sdk": "1.17.5", "effect": "4.0.0-beta.74", "zod": "4.1.8" }, "peerDependencies": { "@opentui/core": ">=0.3.4", "@opentui/keymap": ">=0.3.4", "@opentui/solid": ">=0.3.4" }, "optionalPeers": ["@opentui/core", "@opentui/keymap", "@opentui/solid"] }, "sha512-Q6WJw//nq0S3Cjxgt+VNJIXjONqvEcLLYpsO0DaPwslU88Ti/mQkAETZKZpKw/ACJ+Rsg1XlMxnCGQjJwSj0gw=="],
 
-    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.17.4", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-OdHkBoNIQOjQsPnFtkcxAp9HsLAKn/MQiq7wIQURkRARmw8yhFqGiMPYbNm+UfLn6bMkx97rdPkWQARejMyiXQ=="],
+    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.17.5", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-3+ztjioTYgFRt4BPU6RYOQ0hOr6nb3rjDfjwfDeVrtfgbo8vOudc+LUzR2KtAVruZnbd0lS/k01bcYykLNIbmA=="],
 
     "@oslojs/encoding": ["@oslojs/encoding@1.1.0", "", {}, "sha512-70wQhgYmndg4GCPxPPxPGevRKqTIJ2Nh4OkiMWmDAVYsTQ+Ta7Sq+rPevXyXGdzr30/qZBnyOalCszoMxlyldQ=="],
 
