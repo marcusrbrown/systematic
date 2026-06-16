@@ -202,12 +202,12 @@
   gap: var(--space-2);
 }
 
-.install-title {
-  margin: 0 !important;
+.install-header .install-title {
+  margin: 0;
   font-family: var(--sl-font-heading);
-  font-size: 1.25rem !important;
+  font-size: 1.25rem;
   font-weight: 500;
-  color: var(--sl-color-white) !important;
+  color: var(--sl-color-white);
   display: flex;
   align-items: baseline;
   gap: var(--space-2);

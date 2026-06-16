@@ -1,4 +1,5 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="-86 -70 172 172">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-86 -70 172 172" role="img" aria-labelledby="favicon-title">
+  <title id="favicon-title">Systematic</title>
   <defs>
     <linearGradient id="fav-line" x1="0%" y1="0%" x2="100%" y2="100%">
       <stop offset="0%" stop-color="#4FD1C5" />
