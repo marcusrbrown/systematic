@@ -578,7 +578,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Run Fro Bot
-        uses: fro-bot/agent@4091bb604b4e507f61304bc11befefe876611e73 # v0.72.0
+        uses: fro-bot/agent@df12102509c5c6168ab978cdc52f49b0edfb8a27 # v0.73.0
         env:
           OPENCODE_PROMPT_ARTIFACT: 'true'
           # IS_SUNDAY_UTC is set by the "Detect Sunday UTC" step only on schedule
