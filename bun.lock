@@ -11,8 +11,8 @@
       },
       "devDependencies": {
         "@biomejs/biome": "2.5.1",
-        "@opencode-ai/plugin": "1.17.10",
-        "@opencode-ai/sdk": "1.17.10",
+        "@opencode-ai/plugin": "1.17.11",
+        "@opencode-ai/sdk": "1.17.11",
         "@semantic-release/exec": "7.1.0",
         "@types/bun": "latest",
         "@types/js-yaml": "4.0.9",
@@ -283,9 +283,9 @@
 
     "@octokit/types": ["@octokit/types@16.0.0", "", { "dependencies": { "@octokit/openapi-types": "^27.0.0" } }, "sha512-sKq+9r1Mm4efXW1FCk7hFSeJo4QKreL/tTbR0rz/qx/r1Oa2VV83LTA/H/MuCOX7uCIJmQVRKBcbmWoySjAnSg=="],
 
-    "@opencode-ai/plugin": ["@opencode-ai/plugin@1.17.10", "", { "dependencies": { "@ai-sdk/provider": "3.0.8", "@opencode-ai/sdk": "1.17.10", "effect": "4.0.0-beta.83", "zod": "4.1.8" }, "peerDependencies": { "@opentui/core": ">=0.4.2", "@opentui/keymap": ">=0.4.2", "@opentui/solid": ">=0.4.2" }, "optionalPeers": ["@opentui/core", "@opentui/keymap", "@opentui/solid"] }, "sha512-rwhRB0DiK+nG1c23qlR7/+LugcSKxyL+ZXxWG41nBcyOtfkIIAv5CFcw9D3/Au/MdHkpbPfLGVMa/IcwQ4IZCw=="],
+    "@opencode-ai/plugin": ["@opencode-ai/plugin@1.17.11", "", { "dependencies": { "@ai-sdk/provider": "3.0.8", "@opencode-ai/sdk": "1.17.11", "effect": "4.0.0-beta.83", "zod": "4.1.8" }, "peerDependencies": { "@opentui/core": ">=0.3.4", "@opentui/keymap": ">=0.3.4", "@opentui/solid": ">=0.3.4" }, "optionalPeers": ["@opentui/core", "@opentui/keymap", "@opentui/solid"] }, "sha512-mE6SR1tVxL98zbZrlneqF/+dpIKLeZHKzWZy35Hq54uEnuCM1gKq3LK8F2PG2zMBDKQtz2fahEIksJ7svoPLLw=="],
 
-    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.17.10", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-s9OcS7pubNCimS98B9ERJ/59veOj1SSGHD0qGBxGIx+164wSspUlHsAWhQIihvF8eZe16F5VY1XUQIEXGBTm2Q=="],
+    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.17.11", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-UdSwnNM4/cD5rHnI8O7VaHuiwYnsEOglpRPVeeYE2S5Nm1K34ijCyZGDvBecb0ShdBQgn49XvyQWJH6cREsIPw=="],
 
     "@oslojs/encoding": ["@oslojs/encoding@1.1.0", "", {}, "sha512-70wQhgYmndg4GCPxPPxPGevRKqTIJ2Nh4OkiMWmDAVYsTQ+Ta7Sq+rPevXyXGdzr30/qZBnyOalCszoMxlyldQ=="],
 
