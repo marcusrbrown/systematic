@@ -441,65 +441,82 @@ export function validateFieldExamples(
   const errors: string[] = []
   const currentPrefix = prefix ?? ''
 
-  // Check direct properties
+  checkDirectProperties(schema, currentPrefix, errors)
+  checkAdditionalProperties(schema, currentPrefix, errors)
+
+  return errors
+}
+
+function checkDirectProperties(
+  schema: Record<string, unknown>,
+  currentPrefix: string,
+  errors: string[],
+): void {
   if (
-    schema.properties &&
-    typeof schema.properties === 'object' &&
-    !Array.isArray(schema.properties)
+    !schema.properties ||
+    typeof schema.properties !== 'object' ||
+    Array.isArray(schema.properties)
   ) {
-    const props = schema.properties as Record<string, unknown>
-    for (const [key, value] of Object.entries(props)) {
+    return
+  }
+
+  const props = schema.properties as Record<string, unknown>
+  for (const [key, value] of Object.entries(props)) {
+    const val = value as Record<string, unknown>
+    const fieldPath = currentPrefix ? `${currentPrefix}.${key}` : key
+
+    // Skip objects that serve as containers (they have sub-properties)
+    const hasSubProperties =
+      (val.properties || val.additionalProperties) &&
+      !val.type?.toString().startsWith('array')
+
+    if (hasSubProperties) {
+      // Recurse into sub-properties
+      const subErrors = validateFieldExamples(val, fieldPath)
+      errors.push(...subErrors)
+      // Also check the container itself for examples, if it has a description
+      if (val.description) {
+        checkExamples(val, fieldPath, errors)
+      }
+    } else if (val.description) {
+      checkExamples(val, fieldPath, errors)
+    }
+  }
+}
+
+function checkAdditionalProperties(
+  schema: Record<string, unknown>,
+  currentPrefix: string,
+  errors: string[],
+): void {
+  if (
+    !schema.additionalProperties ||
+    typeof schema.additionalProperties !== 'object' ||
+    Array.isArray(schema.additionalProperties)
+  ) {
+    return
+  }
+
+  const addProps = schema.additionalProperties as Record<string, unknown>
+  // If the additional properties value has sub-properties, recurse
+  if (addProps.properties && typeof addProps.properties === 'object') {
+    const innerProps = addProps.properties as Record<string, unknown>
+    for (const [key, value] of Object.entries(innerProps)) {
       const val = value as Record<string, unknown>
-      const fieldPath = currentPrefix ? `${currentPrefix}.${key}` : key
+      const fieldPath = currentPrefix
+        ? `${currentPrefix}.<name>.${key}`
+        : `<name>.${key}`
 
-      // Skip objects that serve as containers (they have sub-properties)
-      const hasSubProperties =
-        (val.properties || val.additionalProperties) &&
-        !val.type?.toString().startsWith('array')
-
-      if (hasSubProperties) {
-        // Recurse into sub-properties
-        const subErrors = validateFieldExamples(val, fieldPath)
-        errors.push(...subErrors)
-        // Also check the container itself for examples, if it has a description
-        if (val.description) {
-          checkExamples(val, fieldPath, errors)
-        }
-      } else if (val.description) {
+      if (val.description) {
         checkExamples(val, fieldPath, errors)
       }
     }
   }
-
-  // Check additionalProperties (record-type schemas)
-  if (
-    schema.additionalProperties &&
-    typeof schema.additionalProperties === 'object' &&
-    !Array.isArray(schema.additionalProperties)
-  ) {
-    const addProps = schema.additionalProperties as Record<string, unknown>
-    // If the additional properties value has sub-properties, recurse
-    if (addProps.properties && typeof addProps.properties === 'object') {
-      const innerProps = addProps.properties as Record<string, unknown>
-      for (const [key, value] of Object.entries(innerProps)) {
-        const val = value as Record<string, unknown>
-        const fieldPath = currentPrefix
-          ? `${currentPrefix}.<name>.${key}`
-          : `<name>.${key}`
-
-        if (val.description) {
-          checkExamples(val, fieldPath, errors)
-        }
-      }
-    }
-    // Also check the additionalProperties container itself if it has a description
-    if (addProps.description) {
-      const fieldPath = currentPrefix ? `${currentPrefix}.<value>` : '<value>'
-      checkExamples(addProps, fieldPath, errors)
-    }
+  // Also check the additionalProperties container itself if it has a description
+  if (addProps.description) {
+    const fieldPath = currentPrefix ? `${currentPrefix}.<value>` : '<value>'
+    checkExamples(addProps, fieldPath, errors)
   }
-
-  return errors
 }
 
 function checkExamples(

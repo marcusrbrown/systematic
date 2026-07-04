@@ -71,6 +71,50 @@ export const SKILL_FRONTMATTER_FIELDS = [
   'subtask',
 ] as const
 
+function parseMetadata(
+  data: Record<string, unknown>,
+): Record<string, string> | undefined {
+  const metadataRaw = data.metadata
+  if (!isRecord(metadataRaw)) {
+    return undefined
+  }
+  const entries = Object.entries(metadataRaw)
+  if (!entries.every(([, v]) => typeof v === 'string')) {
+    return undefined
+  }
+  return Object.fromEntries(entries) as Record<string, string>
+}
+
+function parseDeprecated(
+  data: Record<string, unknown>,
+): SkillDeprecated | undefined {
+  const deprecatedRaw = data.deprecated
+  if (!isRecord(deprecatedRaw)) {
+    return undefined
+  }
+
+  const since =
+    typeof deprecatedRaw.since === 'string' && deprecatedRaw.since !== ''
+      ? deprecatedRaw.since
+      : undefined
+  const removal =
+    typeof deprecatedRaw.removal === 'string' && deprecatedRaw.removal !== ''
+      ? deprecatedRaw.removal
+      : undefined
+  if (since === undefined || removal === undefined) {
+    return undefined
+  }
+
+  const deprecated: SkillDeprecated = { since, removal }
+  if (typeof deprecatedRaw.replacement === 'string') {
+    deprecated.replacement = deprecatedRaw.replacement
+  }
+  if (typeof deprecatedRaw.reason === 'string') {
+    deprecated.reason = deprecatedRaw.reason
+  }
+  return deprecated
+}
+
 export function extractFrontmatter(filePath: string): SkillFrontmatter {
   try {
     const content = fs.readFileSync(filePath, 'utf8')
@@ -81,37 +125,8 @@ export function extractFrontmatter(filePath: string): SkillFrontmatter {
       return { name: '', description: '' }
     }
 
-    const metadataRaw = data.metadata
-    let metadata: Record<string, string> | undefined
-    if (isRecord(metadataRaw)) {
-      const entries = Object.entries(metadataRaw)
-      if (entries.every(([, v]) => typeof v === 'string')) {
-        metadata = Object.fromEntries(entries) as Record<string, string>
-      }
-    }
-
-    const deprecatedRaw = data.deprecated
-    let deprecated: SkillDeprecated | undefined
-    if (isRecord(deprecatedRaw)) {
-      const since =
-        typeof deprecatedRaw.since === 'string' && deprecatedRaw.since !== ''
-          ? deprecatedRaw.since
-          : undefined
-      const removal =
-        typeof deprecatedRaw.removal === 'string' &&
-        deprecatedRaw.removal !== ''
-          ? deprecatedRaw.removal
-          : undefined
-      if (since !== undefined && removal !== undefined) {
-        deprecated = { since, removal }
-        if (typeof deprecatedRaw.replacement === 'string') {
-          deprecated.replacement = deprecatedRaw.replacement
-        }
-        if (typeof deprecatedRaw.reason === 'string') {
-          deprecated.reason = deprecatedRaw.reason
-        }
-      }
-    }
+    const metadata = parseMetadata(data)
+    const deprecated = parseDeprecated(data)
 
     const argumentHintRaw = extractNonEmptyString(data, 'argument-hint')
     const argumentHint =
