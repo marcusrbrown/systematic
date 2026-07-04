@@ -1,7 +1,8 @@
 ---
 title: "feat: v3 compatibility cleanup"
 type: feat
-status: active
+status: superseded
+superseded_by: docs/brainstorms/2026-07-13-v3-cleanup-release-requirements.md
 date: 2026-06-05
 origin: docs/brainstorms/2026-05-21-v3-converter-removal-and-excision-requirements.md
 deepened: 2026-06-05

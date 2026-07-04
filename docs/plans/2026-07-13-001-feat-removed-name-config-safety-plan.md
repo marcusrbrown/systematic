@@ -1,7 +1,8 @@
 ---
 title: "feat: warn-and-ignore removed bundled names in disable lists"
 type: feat
-status: executed-pending-pr
+status: completed
+shipped: "PR #534 (commit 70f1891); released in v2.32.0"
 date: 2026-07-13
 origin: docs/brainstorms/2026-07-13-v3-cleanup-release-requirements.md
 ---
