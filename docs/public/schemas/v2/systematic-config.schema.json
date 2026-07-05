@@ -1262,7 +1262,6 @@
           "ce:review",
           "ce:work",
           "changelog",
-          "claude-permissions-optimizer",
           "compound-docs",
           "deepen-plan",
           "deploy-docs",
@@ -1281,7 +1280,6 @@
           "lfg",
           "onboarding",
           "orchestrating-subagents",
-          "orchestrating-swarms",
           "proof",
           "rclone",
           "report-bug-ce",
@@ -1297,7 +1295,9 @@
           "todo-triage",
           "using-systematic",
           "writing-skills",
-          "writing-systematic-skills"
+          "writing-systematic-skills",
+          "orchestrating-swarms",
+          "claude-permissions-optimizer"
         ]
       }
     },

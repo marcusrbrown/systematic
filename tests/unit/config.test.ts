@@ -1192,6 +1192,74 @@ describe('config', () => {
     })
   })
 
+  describe('removed bundled skill names (warn-and-ignore)', () => {
+    function writeProjectConfig(config: Record<string, unknown>): void {
+      const projectConfigDir = path.join(testDir, '.opencode')
+      fs.mkdirSync(projectConfigDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(projectConfigDir, 'systematic.json'),
+        JSON.stringify(config),
+      )
+    }
+
+    test('disabled_skills with "orchestrating-swarms" drops the name, warns, and loads without throwing', () => {
+      writeProjectConfig({ disabled_skills: ['orchestrating-swarms'] })
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+
+      let result: ReturnType<typeof loadConfig> | undefined
+      expect(() => {
+        result = loadConfig(testDir)
+      }).not.toThrow()
+
+      expect(result?.disabled_skills).not.toContain('orchestrating-swarms')
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[systematic] "orchestrating-swarms" in `disabled_skills` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning.',
+      )
+      warnSpy.mockRestore()
+    })
+
+    test('disabled_skills with "claude-permissions-optimizer" drops the name, warns, and loads without throwing', () => {
+      writeProjectConfig({ disabled_skills: ['claude-permissions-optimizer'] })
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+
+      let result: ReturnType<typeof loadConfig> | undefined
+      expect(() => {
+        result = loadConfig(testDir)
+      }).not.toThrow()
+
+      expect(result?.disabled_skills).not.toContain(
+        'claude-permissions-optimizer',
+      )
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[systematic] "claude-permissions-optimizer" in `disabled_skills` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning.',
+      )
+      warnSpy.mockRestore()
+    })
+
+    test('disabled_skills with a genuinely-unknown name still throws the actionable schema error', () => {
+      writeProjectConfig({ disabled_skills: ['never-existed-skill'] })
+
+      expect(() => loadConfig(testDir)).toThrow('disabled_skills')
+      expect(() => loadConfig(testDir)).toThrow('never-existed-skill')
+    })
+
+    test('mixed removed and valid disabled_skills: removed name dropped-with-warning, valid name retained', () => {
+      writeProjectConfig({
+        disabled_skills: ['orchestrating-swarms', 'ce:review'],
+      })
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+
+      const result = loadConfig(testDir)
+
+      expect(result.disabled_skills).not.toContain('orchestrating-swarms')
+      expect(result.disabled_skills).toContain('ce:review')
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[systematic] "orchestrating-swarms" in `disabled_skills` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning.',
+      )
+      warnSpy.mockRestore()
+    })
+  })
+
   describe('JSONC precedence', () => {
     test('only systematic.json exists -- loads it (backward compat)', () => {
       writeUserConfig({ disabled_skills: ['ce:plan'] })

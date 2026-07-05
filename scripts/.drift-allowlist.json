@@ -2,21 +2,6 @@
   "$schema": "./.drift-allowlist.schema.json",
   "exemptions": [
     {
-      "pathGlob": "skills/claude-permissions-optimizer/**",
-      "patterns": ["Claude Code", ".claude/", "CLAUDE.md"],
-      "reason": "Skill explicitly targets Claude Code's settings files and permission allowlist format. CC refs are intentional and documented in the skill's README."
-    },
-    {
-      "pathGlob": "skills/orchestrating-swarms/SKILL.md",
-      "patterns": [
-        "Claude Code",
-        "TaskCreate",
-        ".claude/",
-        "${CLAUDE_PLUGIN_ROOT}"
-      ],
-      "reason": "Pre-existing 114 CC-specific patterns in this skill. Rewrite-or-delete decision is Initiative #2 scope (breaking, 3.0.0); not in scope for Initiative #3 drift prevention. Disable-model-invocation in frontmatter mitigates runtime risk."
-    },
-    {
       "pathGlob": "src/lib/converter.ts",
       "patterns": [
         "Claude Code",
