@@ -46,7 +46,7 @@ describe('generateDefinitionHeader', () => {
     test('error path: deprecated skill emits NO install command', () => {
       const result = generateDefinitionHeader({
         ...baseOptions,
-        name: 'orchestrating-swarms',
+        name: 'orchestrating-subagents',
         definitionType: 'skill',
         deprecated: true,
       })

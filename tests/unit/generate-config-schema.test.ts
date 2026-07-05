@@ -10,6 +10,10 @@ import {
   BUNDLED_SKILL_NAMES,
 } from '../../src/lib/bundled-names.js'
 import { createSystematicConfigSchema } from '../../src/lib/config-schema.js'
+import {
+  REMOVED_BUNDLED_AGENT_NAMES,
+  REMOVED_BUNDLED_SKILL_NAMES,
+} from '../../src/lib/removed-names.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -285,16 +289,17 @@ describe('generateSchemaContentFromSchema removed-names threading', () => {
     expect(content).toContain('"gone-skill"')
   })
 
-  test('empty removed lists produce byte-identical output to the baseline (no drift)', () => {
-    // With both removed lists empty, the factory schema is equivalent to the
-    // committed SystematicConfigSchema. The generated JSON Schema must be
-    // byte-identical to the baseline generateSchemaContent output.
+  test('factory schema built from the committed removed-name lists produces byte-identical output to the baseline (no drift)', () => {
+    // The committed SystematicConfigSchema threads REMOVED_BUNDLED_SKILL_NAMES
+    // and REMOVED_BUNDLED_AGENT_NAMES through createSystematicConfigSchema.
+    // Rebuilding the factory schema with those same committed lists must
+    // produce output byte-identical to the baseline generateSchemaContent.
     const schema = createSystematicConfigSchema({
       agentNames: BUNDLED_AGENT_NAMES,
       qualifiedAgentIds: BUNDLED_AGENT_QUALIFIED_IDS,
       skillNames: BUNDLED_SKILL_NAMES,
-      removedSkillNames: [],
-      removedAgentNames: [],
+      removedSkillNames: REMOVED_BUNDLED_SKILL_NAMES,
+      removedAgentNames: REMOVED_BUNDLED_AGENT_NAMES,
     })
     const fromFactory = generateSchemaContentFromSchemaFn('3.0.0', schema)
     const baseline = generateSchemaContentFn('3.0.0')

@@ -12,6 +12,9 @@
  * actually deleted from the repo.
  */
 
-export const REMOVED_BUNDLED_SKILL_NAMES: readonly string[] = [] as const
+export const REMOVED_BUNDLED_SKILL_NAMES: readonly string[] = [
+  'orchestrating-swarms',
+  'claude-permissions-optimizer',
+] as const
 
 export const REMOVED_BUNDLED_AGENT_NAMES: readonly string[] = [] as const

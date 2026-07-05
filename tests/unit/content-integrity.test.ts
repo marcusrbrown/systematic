@@ -3398,4 +3398,31 @@ describe('checkRemovedNamesOverlap', () => {
     )
     expect(violations).toHaveLength(0)
   })
+
+  // Regression: v3 cleanup unit 1 populates REMOVED_BUNDLED_SKILL_NAMES with
+  // the two deleted skills. The gate must pass only when those names are
+  // absent from the live bundled skill set and present in the removed set —
+  // and must fail if either name were still shipped as a bundled skill.
+  test('v3 cleanup: removed skill names absent from bundled set passes the gate', () => {
+    const violations = checkRemovedNamesOverlap(
+      ['orchestrating-swarms', 'claude-permissions-optimizer'],
+      [],
+      ['orchestrating-subagents', 'ce:plan', 'ce:review'],
+      [],
+      [],
+    )
+    expect(violations).toHaveLength(0)
+  })
+
+  test('v3 cleanup: a removed name still present as a bundled skill fails the gate', () => {
+    const violations = checkRemovedNamesOverlap(
+      ['orchestrating-swarms', 'claude-permissions-optimizer'],
+      [],
+      ['orchestrating-swarms', 'ce:plan'],
+      [],
+      [],
+    )
+    expect(violations.length).toBeGreaterThan(0)
+    expect(violations.some((v) => v.name === 'orchestrating-swarms')).toBe(true)
+  })
 })

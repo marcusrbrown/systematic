@@ -471,16 +471,6 @@
       "files": ["skills/changelog/SKILL.md"]
     },
     {
-      "name": "claude-permissions-optimizer",
-      "type": "skill",
-      "description": "Optimize Claude Code permissions by finding safe Bash commands from session history and auto-applying them to settings.json. Can run from any coding agent but targets Claude Code specifically. Use when experiencing permission fatigue, too many permission prompts, wanting to optimize permissions, or needing to set up allowlists. Triggers on \"optimize permissions\", \"reduce permission prompts\", \"allowlist commands\", \"too many permission prompts\", \"permission fatigue\", \"permission setup\", or complaints about clicking approve too often.",
-      "files": [
-        "skills/claude-permissions-optimizer/SKILL.md",
-        "skills/claude-permissions-optimizer/scripts/extract-commands.mjs",
-        "skills/claude-permissions-optimizer/scripts/normalize.mjs"
-      ]
-    },
-    {
       "name": "compound-docs",
       "type": "skill",
       "description": "Capture solved problems as categorized documentation with YAML frontmatter for fast lookup",
@@ -639,12 +629,6 @@
       "files": ["skills/orchestrating-subagents/SKILL.md"]
     },
     {
-      "name": "orchestrating-swarms",
-      "type": "skill",
-      "description": "Use when orchestrating multi-agent swarms, coordinating parallel code reviews, creating pipeline workflows with dependencies, building self-organizing task queues, or any task benefiting from divide-and-conquer patterns.",
-      "files": ["skills/orchestrating-swarms/SKILL.md"]
-    },
-    {
       "name": "proof",
       "type": "skill",
       "description": "Create, edit, comment on, share, and run human-in-the-loop iteration loops over markdown documents via Proof's web API. Use when asked to \"proof\", \"share a doc\", \"create a proof doc\", \"comment on a document\", \"suggest edits\", \"review in proof\", \"iterate on this doc in proof\", \"HITL this doc\", \"sync a Proof doc to local\", when a caller needs an HITL review loop over a local markdown file (e.g., ce-brainstorm, ce-ideate, or ce-plan handoff), or when given a proofeditor.ai URL. Prefer this skill for any workflow whose output is a Proof URL or that uses a Proof doc as the review surface, even when not named explicitly.",
@@ -786,7 +770,6 @@
         "ce-review",
         "ce-work",
         "changelog",
-        "claude-permissions-optimizer",
         "compound-docs",
         "deepen-plan",
         "deploy-docs",
@@ -805,7 +788,6 @@
         "lfg",
         "onboarding",
         "orchestrating-subagents",
-        "orchestrating-swarms",
         "proof",
         "rclone",
         "report-bug-ce",
