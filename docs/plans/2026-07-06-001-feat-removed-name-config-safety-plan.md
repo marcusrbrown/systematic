@@ -3,8 +3,8 @@ title: "feat: warn-and-ignore removed bundled names in disable lists"
 type: feat
 status: completed
 shipped: "PR #534 (commit 70f1891); released in v2.32.0"
-date: 2026-07-13
-origin: docs/brainstorms/2026-07-13-v3-cleanup-release-requirements.md
+date: 2026-07-06
+origin: docs/brainstorms/2026-07-06-v3-cleanup-release-requirements.md
 ---
 
 # feat: warn-and-ignore removed bundled names in disable lists
@@ -17,7 +17,7 @@ This ships as a v2.x patch BEFORE the v3.0.0 cleanup (which deletes `orchestrati
 
 ## Problem Frame
 
-Verified release-blocker (see origin: `docs/brainstorms/2026-07-13-v3-cleanup-release-requirements.md`). `disabled_skills` is `z.array(z.enum(skillNames))` and `disabled_agents` is `z.array(z.enum([...agentNames, ...qualifiedAgentIds]))` (`src/lib/config-schema.ts:315-342`). A name not in the enum fails `safeParse`; `loadConfigSource` then calls `throwTopLevelConfigSchemaError`, which throws (`src/lib/config.ts:276-299, 238-274`). That throw escapes uncaught from both plugin init (`src/index.ts`) and the config hook (`src/lib/config-handler.ts:513-528`), aborting plugin load.
+Verified release-blocker (see origin: `docs/brainstorms/2026-07-06-v3-cleanup-release-requirements.md`). `disabled_skills` is `z.array(z.enum(skillNames))` and `disabled_agents` is `z.array(z.enum([...agentNames, ...qualifiedAgentIds]))` (`src/lib/config-schema.ts:315-342`). A name not in the enum fails `safeParse`; `loadConfigSource` then calls `throwTopLevelConfigSchemaError`, which throws (`src/lib/config.ts:276-299, 238-274`). That throw escapes uncaught from both plugin init (`src/index.ts`) and the config hook (`src/lib/config-handler.ts:513-528`), aborting plugin load.
 
 v2.19.0 deprecation guidance told users to set `disabled_skills: ["orchestrating-swarms"]`. When v3 deletes that skill, those exact users would be bricked on upgrade. Shipping the warn-and-ignore net first means the v3 deletion only has to add names to the removed list, not also introduce new validation behavior in the same breaking release.
 
@@ -212,7 +212,7 @@ v2.19.0 deprecation guidance told users to set `disabled_skills: ["orchestrating
 
 ## Sources & References
 
-- **Origin document:** `docs/brainstorms/2026-07-13-v3-cleanup-release-requirements.md`
+- **Origin document:** `docs/brainstorms/2026-07-06-v3-cleanup-release-requirements.md`
 - Verified failure path: `src/lib/config-schema.ts:315-342`, `src/lib/config.ts:238-299`, `src/index.ts`, `src/lib/config-handler.ts:513-528`
 - Oracle sequencing recommendation (this session): ship the safety net as a v2.x patch before the v3 deletion.
 - Related future plan: v3.0.0 cleanup (to be written from the same origin brainstorm).

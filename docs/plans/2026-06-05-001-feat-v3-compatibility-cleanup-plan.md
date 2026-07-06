@@ -2,9 +2,9 @@
 title: "feat: v3 compatibility cleanup"
 type: feat
 status: superseded
-superseded_at: 2026-07-13
-superseded_by: docs/brainstorms/2026-07-13-v3-cleanup-release-requirements.md
-superseded_reason: "The v3 cleanup scope was re-derived from scratch in the 2026-07-13 v3-cleanup-release brainstorm after all v2.x behavior-preserving prerequisites shipped (mode:subagent gate v2.27.0, temperature gate v2.29.0, removed-name safety net #534/v2.32.0). The newer brainstorm supersedes this plan's approach; a fresh v3.0.0 plan is authored from it."
+superseded_at: 2026-07-06
+superseded_by: docs/brainstorms/2026-07-06-v3-cleanup-release-requirements.md
+superseded_reason: "The v3 cleanup scope was re-derived from scratch in the 2026-07-06 v3-cleanup-release brainstorm after all v2.x behavior-preserving prerequisites shipped (mode:subagent gate v2.27.0, temperature gate v2.29.0, removed-name safety net #534/v2.32.0). The newer brainstorm supersedes this plan's approach; a fresh v3.0.0 plan is authored from it."
 date: 2026-06-05
 origin: docs/brainstorms/2026-05-21-v3-converter-removal-and-excision-requirements.md
 deepened: 2026-06-05
