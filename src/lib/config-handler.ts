@@ -1,4 +1,3 @@
-import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { Config } from '@opencode-ai/plugin'
@@ -519,10 +518,9 @@ function loadDiscoveredSkillAsCommand(skill: DiscoveredSkill): CommandConfig {
   const description = formatSkillDescription(skill.description, skill.name)
 
   if (skill.frontmatter.disableModelInvocation === true) {
-    const content = fs.readFileSync(skill.skillPath, 'utf8')
-    const { body } = parseFrontmatter(content)
+    // Body was read once at discovery time (DiscoveredSkill.body); no re-read.
     return {
-      template: wrapSkillTemplate(skill.skillPath, body),
+      template: wrapSkillTemplate(skill.skillPath, skill.body),
       description,
     }
   }
@@ -559,6 +557,7 @@ function collectDiscoveredSkillsAsCommands(
   homeDir: string,
   configDir: string,
   opencodeConfigDirOverride: string | undefined,
+  disabledCommands: string[],
 ): NonNullable<Config['command']> {
   const commands: NonNullable<Config['command']> = {}
 
@@ -578,6 +577,10 @@ function collectDiscoveredSkillsAsCommands(
 
   for (const skill of discovered) {
     if (skill.frontmatter.userInvocable === false) continue
+    // A discovered skill registers as a command under its bare name; the
+    // strict `disabled_skills` enum only accepts bundled names, so the
+    // free-form `disabled_commands` field is the suppression path here.
+    if (disabledCommands.includes(skill.name)) continue
 
     try {
       commands[skill.name] = loadDiscoveredSkillAsCommand(skill)
@@ -698,6 +701,7 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
             homeDir,
             opencodeConfigDir,
             opencodeConfigDirOverride,
+            systematicConfig.disabled_commands,
           )
         : {}
 

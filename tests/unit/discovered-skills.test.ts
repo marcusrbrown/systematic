@@ -57,6 +57,9 @@ describe('discoverSkills', () => {
       path.join(projectDir, '.opencode/skills/foo/SKILL.md'),
     )
     expect(result[0]?.root).toBe('project-opencode')
+    // body is read once at discovery (frontmatter stripped) so the inline
+    // command-only path never re-reads the file.
+    expect(result[0]?.body.trim()).toBe('# Body for foo')
   })
 
   test('precedence: .opencode wins over project .claude and global .claude', () => {

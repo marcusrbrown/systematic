@@ -1,6 +1,10 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { extractFrontmatter, type SkillFrontmatter } from './skills.js'
+import { parseFrontmatter } from './frontmatter.js'
+import {
+  extractFrontmatterFromContent,
+  type SkillFrontmatter,
+} from './skills.js'
 import { walkDir } from './walk-dir.js'
 
 /**
@@ -26,6 +30,9 @@ export interface DiscoveredSkill {
   name: string
   description: string
   frontmatter: SkillFrontmatter
+  /** SKILL.md body (frontmatter stripped), read once at discovery so callers
+   * that inline the body don't re-read the file. */
+  body: string
   skillPath: string
   root: DiscoveryRootId
 }
@@ -171,22 +178,26 @@ function globSkillFiles(rootDir: string, subdirNames: string[]): string[] {
 
 /**
  * Turn a discovered `SKILL.md` absolute path into a `DiscoveredSkill`, or
- * `undefined` if it should be skipped (unreadable, not a file, no
+ * `undefined` if it should be skipped (missing, unreadable, a directory, no
  * frontmatter name, or invalid name charset/length). Never throws.
+ *
+ * Reads the file directly with no prior `stat` check: a single `readFileSync`
+ * avoids a check-then-use time-of-check/time-of-use race (a directory throws
+ * `EISDIR`, a missing path throws `ENOENT`, both handled by the catch), and
+ * reads the SKILL.md exactly once so the body can be reused downstream.
  */
 function toDiscoveredSkill(
   skillPath: string,
   rootId: DiscoveryRootId,
 ): DiscoveredSkill | undefined {
-  let stat: fs.Stats
+  let content: string
   try {
-    stat = fs.statSync(skillPath)
+    content = fs.readFileSync(skillPath, 'utf8')
   } catch {
-    return undefined // missing or unreadable: skip
+    return undefined // missing, unreadable, or a directory: skip
   }
-  if (!stat.isFile()) return undefined
 
-  const frontmatter = extractFrontmatter(skillPath)
+  const frontmatter = extractFrontmatterFromContent(content)
   const name = frontmatter.name
   if (!name || !isValidSkillName(name)) return undefined
 
@@ -194,6 +205,7 @@ function toDiscoveredSkill(
     name,
     description: frontmatter.description,
     frontmatter,
+    body: parseFrontmatter(content).body,
     skillPath,
     root: rootId,
   }
