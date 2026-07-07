@@ -1,4 +1,3 @@
-import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { Config } from '@opencode-ai/plugin'
@@ -519,10 +518,9 @@ function loadDiscoveredSkillAsCommand(skill: DiscoveredSkill): CommandConfig {
   const description = formatSkillDescription(skill.description, skill.name)
 
   if (skill.frontmatter.disableModelInvocation === true) {
-    const content = fs.readFileSync(skill.skillPath, 'utf8')
-    const { body } = parseFrontmatter(content)
+    // Body was read once at discovery time (DiscoveredSkill.body); no re-read.
     return {
-      template: wrapSkillTemplate(skill.skillPath, body),
+      template: wrapSkillTemplate(skill.skillPath, skill.body),
       description,
     }
   }

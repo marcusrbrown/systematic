@@ -1,6 +1,10 @@
 import fs from 'node:fs'
 import path from 'node:path'
-import { extractFrontmatter, type SkillFrontmatter } from './skills.js'
+import { parseFrontmatter } from './frontmatter.js'
+import {
+  extractFrontmatterFromContent,
+  type SkillFrontmatter,
+} from './skills.js'
 import { walkDir } from './walk-dir.js'
 
 /**
@@ -26,6 +30,9 @@ export interface DiscoveredSkill {
   name: string
   description: string
   frontmatter: SkillFrontmatter
+  /** SKILL.md body (frontmatter stripped), read once at discovery so callers
+   * that inline the body don't re-read the file. */
+  body: string
   skillPath: string
   root: DiscoveryRootId
 }
@@ -186,7 +193,14 @@ function toDiscoveredSkill(
   }
   if (!stat.isFile()) return undefined
 
-  const frontmatter = extractFrontmatter(skillPath)
+  let content: string
+  try {
+    content = fs.readFileSync(skillPath, 'utf8')
+  } catch {
+    return undefined // unreadable: skip
+  }
+
+  const frontmatter = extractFrontmatterFromContent(content)
   const name = frontmatter.name
   if (!name || !isValidSkillName(name)) return undefined
 
@@ -194,6 +208,7 @@ function toDiscoveredSkill(
     name,
     description: frontmatter.description,
     frontmatter,
+    body: parseFrontmatter(content).body,
     skillPath,
     root: rootId,
   }
