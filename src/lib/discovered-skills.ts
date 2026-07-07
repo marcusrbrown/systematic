@@ -178,7 +178,7 @@ function globSkillFiles(rootDir: string, subdirNames: string[]): string[] {
 
 /**
  * Turn a discovered `SKILL.md` absolute path into a `DiscoveredSkill`, or
- * `undefined` if it should be skipped (unreadable, not a regular file, no
+ * `undefined` if it should be skipped (missing, unreadable, a directory, no
  * frontmatter name, or invalid name charset/length). Never throws.
  *
  * Reads the file directly with no prior `stat` check: a single `readFileSync`
