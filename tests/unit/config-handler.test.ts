@@ -255,7 +255,7 @@ Command template for ${name}.`,
       expect(config.command).toBeDefined()
       expect(config.command?.['systematic:test-skill']).toBeDefined()
       expect(config.command?.['systematic:test-skill']?.description).toBe(
-        '(Systematic - Skill) A test skill',
+        '(Systematic) A test skill',
       )
       expect(config.command?.['systematic:test-skill']?.template).toContain(
         '<skill-instruction>',
@@ -295,7 +295,7 @@ Skill content for ce:plan.`,
       expect(config.command?.['ce:plan']).toBeDefined()
       expect(config.command?.['systematic:ce:plan']).toBeUndefined()
       expect(config.command?.['ce:plan']?.description).toBe(
-        '(Systematic - Skill) Plan workflow skill',
+        '(Systematic) Plan workflow skill',
       )
     })
 
@@ -420,7 +420,7 @@ Skill content for ce:plan.`,
         template: 'native command template',
       })
       expect(config.command?.['systematic:test-skill']?.description).toBe(
-        '(Systematic - Skill) A test skill',
+        '(Systematic) A test skill',
       )
     })
 
@@ -483,7 +483,7 @@ Skill content for ce:plan.`,
             template: 'native command template',
           },
           'ce:plan': {
-            description: '(Systematic - Skill) Old plan command',
+            description: '(Systematic) Old plan command',
             template: 'old plan template',
           },
           'systematic:legacy-command': {
@@ -491,7 +491,7 @@ Skill content for ce:plan.`,
             template: 'old command template',
           },
           'systematic:legacy-skill': {
-            description: '(Systematic - Skill) Old skill command',
+            description: '(Systematic) Old skill command',
             template: 'old skill template',
           },
           'systematic:test-command': {
@@ -499,7 +499,7 @@ Skill content for ce:plan.`,
             template: 'old command template',
           },
           'systematic:test-skill': {
-            description: '(Systematic - Skill) Old skill command',
+            description: '(Systematic) Old skill command',
             template: 'old skill template',
           },
         },
@@ -518,17 +518,14 @@ Skill content for ce:plan.`,
         'Agent prompt for systematic-implementer.',
       )
       // Unlike agents (which still use a key-based `bundledAgentKeys` guard),
-      // the command drop predicate was simplified to drop ANY existing entry
-      // carrying the `(Systematic) `/`(Systematic - Skill) ` marker,
-      // regardless of key — this is required to clean up orphaned
-      // discovered-skill commands (which use bare, unprefixed keys with no
-      // way to distinguish "still owned" from "stale" other than the
-      // marker). A side effect: a bare, non-prefixed key that merely *looks*
-      // like Systematic output but isn't re-emitted (like this synthetic
-      // 'native-command' fixture) is now dropped rather than preserved.
+      // the command drop predicate drops ANY existing entry carrying the
+      // `(Systematic) ` marker, regardless of key. A side effect: a bare,
+      // non-prefixed key that merely *looks* like Systematic output but isn't
+      // re-emitted (like this synthetic 'native-command' fixture) is now
+      // dropped rather than preserved.
       expect(config.command?.['native-command']).toBeUndefined()
       expect(config.command?.['ce:plan']?.description).toBe(
-        '(Systematic - Skill) A plan skill',
+        '(Systematic) A plan skill',
       )
       expect(config.command?.['ce:plan']?.template).toContain(
         'Skill content for ce:plan',
@@ -542,7 +539,7 @@ Skill content for ce:plan.`,
         'Command template for test-command',
       )
       expect(config.command?.['systematic:test-skill']?.description).toBe(
-        '(Systematic - Skill) A test skill',
+        '(Systematic) A test skill',
       )
     })
 
@@ -1750,9 +1747,7 @@ Discovered body for ${name}.`,
 
         const command = config.command?.foo
         expect(command).toBeDefined()
-        expect(command?.description).toBe(
-          '(Systematic - Skill) A discovered skill',
-        )
+        expect(command?.description).toBe('A discovered skill')
         expect(command?.template).toContain('skill tool')
         expect(command?.template).toContain('<user-request>\n$ARGUMENTS')
       })
@@ -1775,9 +1770,7 @@ Discovered body for ${name}.`,
 
         const command = config.command?.bar
         expect(command).toBeDefined()
-        expect(command?.description).toBe(
-          '(Systematic - Skill) A command-only skill',
-        )
+        expect(command?.description).toBe('A command-only skill')
         expect(command?.template).toContain('<skill-instruction>')
         expect(command?.template).toContain('Discovered body for bar')
         expect(command?.template).not.toContain('skill tool')
@@ -1851,7 +1844,7 @@ Discovered body for ${name}.`,
         expect(Object.keys(config.command ?? {})).toEqual(['foo'])
       })
 
-      test('orphaned discovered-skill command is removed once its skill is deleted from disk', async () => {
+      test('discovered-skill command persists after its skill is deleted from disk (unmarked, not refreshed)', async () => {
         const discoveredDir = path.join(projectDir, '.opencode/skills')
         writeDiscoveredSkill(discoveredDir, 'foo')
 
@@ -1871,8 +1864,11 @@ Discovered body for ${name}.`,
           force: true,
         })
 
+        // Discovered-skill commands carry no `(Systematic) ` marker, so the
+        // drop-then-re-emit refresh never touches them: this is intentional,
+        // since OpenCode rebuilds config in-memory on every launch anyway.
         await handler(config)
-        expect(config.command?.foo).toBeUndefined()
+        expect(config.command?.foo).toBeDefined()
       })
 
       test('user-defined command of the same name still survives after the skill is removed (R4)', async () => {
@@ -1905,6 +1901,25 @@ Discovered body for ${name}.`,
         await handler(config)
         expect(config.command?.foo?.description).toBe('User command')
         expect(config.command?.foo?.template).toBe('User template')
+      })
+
+      test('discovered skill command description has no Systematic prefix (honest attribution)', async () => {
+        writeDiscoveredSkill(path.join(projectDir, '.opencode/skills'), 'baz', {
+          description: 'My own custom skill',
+        })
+
+        const handler = createConfigHandler({
+          directory: projectDir,
+          bundledSkillsDir: path.join(bundledDir, 'skills'),
+          bundledAgentsDir: path.join(bundledDir, 'agents'),
+          bundledCommandsDir: path.join(bundledDir, 'commands'),
+        })
+
+        const config: Config = {}
+        await handler(config)
+
+        expect(config.command?.baz?.description).toBe('My own custom skill')
+        expect(config.command?.baz?.description).not.toContain('(Systematic')
       })
 
       test('discovered skill with user-invocable: false does not emit a command', async () => {

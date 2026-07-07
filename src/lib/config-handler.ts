@@ -21,7 +21,6 @@ import {
   type OpencodeClientLike,
 } from './model-availability.js'
 import {
-  formatSkillDescription,
   type LoadedSkill,
   loadSkill,
   wrapSkillTemplate,
@@ -57,9 +56,7 @@ function isSystematicCommandConfig(
 ): boolean {
   const description = command?.description
   return (
-    typeof description === 'string' &&
-    (description.startsWith('(Systematic) ') ||
-      description.startsWith('(Systematic - Skill) '))
+    typeof description === 'string' && description.startsWith('(Systematic) ')
   )
 }
 
@@ -515,7 +512,7 @@ function collectSkillsAsCommands(
  * OpenCode's skill registry or permissions here to compensate.
  */
 function loadDiscoveredSkillAsCommand(skill: DiscoveredSkill): CommandConfig {
-  const description = formatSkillDescription(skill.description, skill.name)
+  const description = skill.description || `${skill.name} skill`
 
   if (skill.frontmatter.disableModelInvocation === true) {
     // Body was read once at discovery time (DiscoveredSkill.body); no re-read.
@@ -728,15 +725,13 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
       ...bundledSkills,
       ...discoveredSkillCommands,
     }
-    // Drop any existing entry Systematic previously emitted (identified by
-    // the `(Systematic) `/`(Systematic - Skill) ` description marker),
-    // regardless of key. If it's still valid this pass, `emittedCommands`
-    // re-adds it below (mergeSystematicEntries drops-then-adds); if the
-    // source (bundled command/skill, or a discovered on-disk skill) no
-    // longer exists, it stays dropped. This also fixes orphaned
-    // discovered-skill commands: those use a bare key (not a
-    // `systematic:`/`ce:`-prefixed key), so removing a skill from disk left
-    // its stale command behind under the old, narrower key-based predicate.
+    // Bundled commands/skills carry the `(Systematic) ` marker and are
+    // dropped-then-re-emitted every load (refresh semantics). Discovered-skill
+    // commands are intentionally UNMARKED — they're the user's own skills,
+    // not Systematic's — so they're add-if-absent and never refreshed or
+    // cleaned up across reloads. That's fine: OpenCode rebuilds config
+    // in-memory on every launch, so a deleted skill just isn't re-emitted;
+    // nothing stale persists to disk.
     config.command = mergeSystematicEntries(
       existingCommands as Record<string, CommandConfig>,
       emittedCommands as Record<string, CommandConfig>,
