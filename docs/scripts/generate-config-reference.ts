@@ -43,6 +43,7 @@ const TOP_LEVEL_KEYS = [
   'disabled_agents',
   'disabled_commands',
   'bootstrap',
+  'skills_as_commands',
 ] as const
 
 /**

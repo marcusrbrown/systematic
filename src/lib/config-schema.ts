@@ -376,6 +376,14 @@ export function createSystematicConfigSchema(
           { enabled: false, file: '.opencode/custom-prompt.md' },
         ],
       }),
+      skills_as_commands: z
+        .boolean()
+        .default(true)
+        .meta({
+          description:
+            'Register skills discovered from user/project skill directories (OpenCode config and other agent-harness-standard locations) as slash commands. Default true.',
+          examples: [true, false],
+        }),
     })
     .strict()
     .meta({

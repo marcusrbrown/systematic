@@ -1,3 +1,6 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import type { Config } from '@opencode-ai/plugin'
 import type { AgentConfig } from '@opencode-ai/sdk'
 import {
@@ -12,12 +15,18 @@ import { extractAgentFrontmatter, findAgentsInDir } from './agents.js'
 import { extractCommandFrontmatter, findCommandsInDir } from './commands.js'
 import { loadConfigWithSources } from './config.js'
 import { convertFileWithCache } from './converter.js'
+import { type DiscoveredSkill, discoverSkills } from './discovered-skills.js'
 import { parseFrontmatter } from './frontmatter.js'
 import {
   getAvailableModels,
   type OpencodeClientLike,
 } from './model-availability.js'
-import { type LoadedSkill, loadSkill } from './skill-loader.js'
+import {
+  formatSkillDescription,
+  type LoadedSkill,
+  loadSkill,
+  wrapSkillTemplate,
+} from './skill-loader.js'
 import { findSkillsInDir } from './skills.js'
 import { resolveSourceModel } from './source-model-defaults.js'
 import { isRecord, type PermissionSetting } from './validation.js'
@@ -29,6 +38,10 @@ export interface ConfigHandlerDeps {
   bundledCommandsDir: string
   /** OpenCode client for availability lookup. When omitted, availability falls back to empty set (last-resort resolution). */
   client?: OpencodeClientLike
+  /** Home directory for discovered-skill lookups. Defaults to `os.homedir()`; inject a temp dir in tests. */
+  homeDir?: string
+  /** OpenCode global config directory override for discovered-skill lookups. Defaults to `<homeDir>/.config/opencode`. */
+  opencodeConfigDir?: string
 }
 
 type CommandConfig = NonNullable<Config['command']>[string]
@@ -486,6 +499,97 @@ function collectSkillsAsCommands(
   return commands
 }
 
+/**
+ * Convert a discovered (non-bundled) skill into a `config.command` entry.
+ *
+ * Model-invocable skills get a one-line shim instructing the agent to load
+ * the skill via OpenCode's native `skill` tool, with the argument string
+ * wrapped as data (never concatenated into instruction text). Command-only
+ * skills (`disable-model-invocation: true`) get the raw SKILL.md body
+ * inlined instead — the sole R3 exception (R6).
+ *
+ * R6 honesty limit: Systematic cannot unregister a skill from OpenCode's own
+ * model-facing skill tool/catalog — there is no API to hide a discovered
+ * skill from the model. This function only controls the *command* surface
+ * (`/skill-name`); the skill remains loadable by the model via the `skill`
+ * tool regardless of `disable-model-invocation`. Do not attempt to mutate
+ * OpenCode's skill registry or permissions here to compensate.
+ */
+function loadDiscoveredSkillAsCommand(skill: DiscoveredSkill): CommandConfig {
+  const description = formatSkillDescription(skill.description, skill.name)
+
+  if (skill.frontmatter.disableModelInvocation === true) {
+    const content = fs.readFileSync(skill.skillPath, 'utf8')
+    const { body } = parseFrontmatter(content)
+    return {
+      template: wrapSkillTemplate(skill.skillPath, body),
+      description,
+    }
+  }
+
+  return {
+    template: buildDiscoveredSkillShimTemplate(skill.name),
+    description,
+  }
+}
+
+/**
+ * Model-invocable shim template instructing the agent to load a discovered
+ * skill via OpenCode's native `skill` tool. The argument string is wrapped as
+ * data (`$ARGUMENTS` inside `<user-request>`), never concatenated into
+ * instruction text.
+ */
+function buildDiscoveredSkillShimTemplate(skillName: string): string {
+  return `Load the "${skillName}" skill using the skill tool, then follow its instructions to address this request:
+
+<user-request>
+$ARGUMENTS
+</user-request>`
+}
+
+/**
+ * Collect discovered (non-bundled) user/project skills as `config.command`
+ * entries. Never throws: `discoverSkills` is defect-swallowing by contract,
+ * and any unexpected error reading/parsing an individual skill degrades to
+ * skipping that skill rather than aborting emission (hook-defect-swallow
+ * learning — config hook code must not throw).
+ */
+function collectDiscoveredSkillsAsCommands(
+  startDir: string,
+  homeDir: string,
+  configDir: string,
+  opencodeConfigDirOverride: string | undefined,
+): NonNullable<Config['command']> {
+  const commands: NonNullable<Config['command']> = {}
+
+  let discovered: DiscoveredSkill[]
+  try {
+    discovered = discoverSkills({
+      startDir,
+      homeDir,
+      configDir,
+      opencodeConfigDirOverride,
+    })
+  } catch {
+    // Config hook code must not throw (hook-defect-swallow): degrade to no
+    // discovered commands this pass rather than aborting the whole config hook.
+    return commands
+  }
+
+  for (const skill of discovered) {
+    if (skill.frontmatter.userInvocable === false) continue
+
+    try {
+      commands[skill.name] = loadDiscoveredSkillAsCommand(skill)
+    } catch {
+      // Config hook code must not throw (hook-defect-swallow): skip this
+      // skill; never let one bad SKILL.md abort emission for the rest.
+    }
+  }
+
+  return commands
+}
+
 function collectEnabledSkillNames(
   dir: string,
   disabledSkills: string[],
@@ -509,6 +613,12 @@ function collectEnabledSkillNames(
 export function createConfigHandler(deps: ConfigHandlerDeps) {
   const { directory, bundledSkillsDir, bundledAgentsDir, bundledCommandsDir } =
     deps
+  const homeDir = deps.homeDir ?? os.homedir()
+  const opencodeConfigDir =
+    deps.opencodeConfigDir ?? path.join(homeDir, '.config/opencode')
+  const opencodeConfigDirOverride = process.env.OPENCODE_CONFIG_DIR?.trim()
+    ? process.env.OPENCODE_CONFIG_DIR
+    : undefined
 
   return async (config: Config): Promise<void> => {
     const { config: systematicConfig, overlays } =
@@ -581,6 +691,16 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
       systematicConfig.disabled_commands,
     )
 
+    const discoveredSkillCommands =
+      systematicConfig.skills_as_commands !== false
+        ? collectDiscoveredSkillsAsCommands(
+            directory,
+            homeDir,
+            opencodeConfigDir,
+            opencodeConfigDirOverride,
+          )
+        : {}
+
     // The drop predicate uses the explicit emitted-key set instead of
     // `Object.hasOwn(bundledAgents, key)` so the invariant ("only drop a prior
     // entry when this hook is emitting a replacement") is self-evident and
@@ -599,14 +719,24 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
         bundledAgentKeys.has(key) && isSystematicAgentConfig(agent),
     )
 
-    const emittedCommands = { ...bundledCommands, ...bundledSkills }
-    const emittedCommandKeys = new Set(Object.keys(emittedCommands))
+    const emittedCommands = {
+      ...bundledCommands,
+      ...bundledSkills,
+      ...discoveredSkillCommands,
+    }
+    // Drop any existing entry Systematic previously emitted (identified by
+    // the `(Systematic) `/`(Systematic - Skill) ` description marker),
+    // regardless of key. If it's still valid this pass, `emittedCommands`
+    // re-adds it below (mergeSystematicEntries drops-then-adds); if the
+    // source (bundled command/skill, or a discovered on-disk skill) no
+    // longer exists, it stays dropped. This also fixes orphaned
+    // discovered-skill commands: those use a bare key (not a
+    // `systematic:`/`ce:`-prefixed key), so removing a skill from disk left
+    // its stale command behind under the old, narrower key-based predicate.
     config.command = mergeSystematicEntries(
       existingCommands as Record<string, CommandConfig>,
       emittedCommands as Record<string, CommandConfig>,
-      (key, command) =>
-        isSystematicCommandConfig(command) &&
-        (emittedCommandKeys.has(key) || isSystematicOwnedCommandKey(key)),
+      (_key, command) => isSystematicCommandConfig(command),
     )
 
     // skills.paths exists at runtime (v2 SDK types) but not in our v1 import
@@ -650,8 +780,4 @@ function isSystematicSkillPath(path: string): boolean {
 
 function normalizePath(path: string): string {
   return path.replaceAll('\\', '/').replace(/\/+$/u, '')
-}
-
-function isSystematicOwnedCommandKey(key: string): boolean {
-  return key.startsWith('systematic:') || key.startsWith('ce:')
 }
