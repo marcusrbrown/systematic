@@ -1698,5 +1698,174 @@ model: gpt-4
 
       expect(config.agent?.['correctness-reviewer']?.temperature).toBe(0.9)
     })
+
+    describe('discovered skills as commands', () => {
+      function writeDiscoveredSkill(
+        dir: string,
+        name: string,
+        opts: {
+          description?: string
+          disableModelInvocation?: boolean
+        } = {},
+      ): void {
+        const skillDir = path.join(dir, name)
+        fs.mkdirSync(skillDir, { recursive: true })
+        const description = opts.description ?? `Description for ${name}`
+        const extraFrontmatter =
+          opts.disableModelInvocation === true
+            ? 'disable-model-invocation: true\n'
+            : ''
+        fs.writeFileSync(
+          path.join(skillDir, 'SKILL.md'),
+          `---
+name: ${name}
+description: ${description}
+${extraFrontmatter}---
+# ${name}
+
+Discovered body for ${name}.`,
+        )
+      }
+
+      test('model-invocable discovered skill becomes a shim command', async () => {
+        writeDiscoveredSkill(path.join(projectDir, '.opencode/skills'), 'foo', {
+          description: 'A discovered skill',
+        })
+
+        const handler = createConfigHandler({
+          directory: projectDir,
+          bundledSkillsDir: path.join(bundledDir, 'skills'),
+          bundledAgentsDir: path.join(bundledDir, 'agents'),
+          bundledCommandsDir: path.join(bundledDir, 'commands'),
+        })
+
+        const config: Config = {}
+        await handler(config)
+
+        const command = config.command?.foo
+        expect(command).toBeDefined()
+        expect(command?.description).toBe(
+          '(Systematic - Skill) A discovered skill',
+        )
+        expect(command?.template).toContain('skill tool')
+        expect(command?.template).toContain('<user-request>\n$ARGUMENTS')
+      })
+
+      test('command-only discovered skill (disable-model-invocation) inlines the body', async () => {
+        writeDiscoveredSkill(path.join(projectDir, '.opencode/skills'), 'bar', {
+          description: 'A command-only skill',
+          disableModelInvocation: true,
+        })
+
+        const handler = createConfigHandler({
+          directory: projectDir,
+          bundledSkillsDir: path.join(bundledDir, 'skills'),
+          bundledAgentsDir: path.join(bundledDir, 'agents'),
+          bundledCommandsDir: path.join(bundledDir, 'commands'),
+        })
+
+        const config: Config = {}
+        await handler(config)
+
+        const command = config.command?.bar
+        expect(command).toBeDefined()
+        expect(command?.description).toBe(
+          '(Systematic - Skill) A command-only skill',
+        )
+        expect(command?.template).toContain('<skill-instruction>')
+        expect(command?.template).toContain('Discovered body for bar')
+        expect(command?.template).not.toContain('skill tool')
+      })
+
+      test('user-defined command of the same name survives untouched (R4)', async () => {
+        writeDiscoveredSkill(path.join(projectDir, '.opencode/skills'), 'foo')
+
+        const handler = createConfigHandler({
+          directory: projectDir,
+          bundledSkillsDir: path.join(bundledDir, 'skills'),
+          bundledAgentsDir: path.join(bundledDir, 'agents'),
+          bundledCommandsDir: path.join(bundledDir, 'commands'),
+        })
+
+        const config: Config = {
+          command: {
+            foo: {
+              description: 'User command',
+              template: 'User template',
+            },
+          },
+        }
+        await handler(config)
+
+        expect(config.command?.foo?.description).toBe('User command')
+        expect(config.command?.foo?.template).toBe('User template')
+      })
+
+      test('skills_as_commands: false disables discovered emission but keeps bundled', async () => {
+        writeDiscoveredSkill(path.join(projectDir, '.opencode/skills'), 'foo')
+        createSkill(
+          path.join(bundledDir, 'skills'),
+          'bundled-skill',
+          'A bundled skill',
+        )
+        writeSystematicConfig({ skills_as_commands: false })
+
+        const handler = createConfigHandler({
+          directory: projectDir,
+          bundledSkillsDir: path.join(bundledDir, 'skills'),
+          bundledAgentsDir: path.join(bundledDir, 'agents'),
+          bundledCommandsDir: path.join(bundledDir, 'commands'),
+        })
+
+        const config: Config = {}
+        await handler(config)
+
+        expect(config.command?.foo).toBeUndefined()
+        expect(config.command?.['systematic:bundled-skill']).toBeDefined()
+      })
+
+      test('running the handler twice yields identical config.command (idempotent)', async () => {
+        writeDiscoveredSkill(path.join(projectDir, '.opencode/skills'), 'foo')
+
+        const handler = createConfigHandler({
+          directory: projectDir,
+          bundledSkillsDir: path.join(bundledDir, 'skills'),
+          bundledAgentsDir: path.join(bundledDir, 'agents'),
+          bundledCommandsDir: path.join(bundledDir, 'commands'),
+        })
+
+        const config: Config = {}
+        await handler(config)
+        const firstRun = JSON.parse(JSON.stringify(config.command))
+
+        await handler(config)
+        const secondRun = JSON.parse(JSON.stringify(config.command))
+
+        expect(secondRun).toEqual(firstRun)
+        expect(Object.keys(config.command ?? {})).toEqual(['foo'])
+      })
+
+      test('bundled systematic:/ce: commands still emitted with discovery enabled', async () => {
+        writeDiscoveredSkill(path.join(projectDir, '.opencode/skills'), 'foo')
+        createSkill(
+          path.join(bundledDir, 'skills'),
+          'ce:review',
+          'A review skill',
+        )
+
+        const handler = createConfigHandler({
+          directory: projectDir,
+          bundledSkillsDir: path.join(bundledDir, 'skills'),
+          bundledAgentsDir: path.join(bundledDir, 'agents'),
+          bundledCommandsDir: path.join(bundledDir, 'commands'),
+        })
+
+        const config: Config = {}
+        await handler(config)
+
+        expect(config.command?.['ce:review']).toBeDefined()
+        expect(config.command?.foo).toBeDefined()
+      })
+    })
   })
 })

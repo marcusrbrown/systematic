@@ -49,6 +49,7 @@ export interface SystematicConfig {
   bootstrap: BootstrapConfig
   agents?: OverlayConfigMap
   categories?: OverlayConfigMap
+  skills_as_commands: boolean
 }
 
 export const DEFAULT_CONFIG: SystematicConfig = {
@@ -60,6 +61,7 @@ export const DEFAULT_CONFIG: SystematicConfig = {
   },
   agents: {},
   categories: {},
+  skills_as_commands: true,
 }
 
 interface RawSystematicConfig
@@ -430,6 +432,11 @@ export function loadConfigWithSources(
     },
     agents: overlayValues(overlays.agents),
     categories: overlayValues(overlays.categories),
+    skills_as_commands:
+      customConfig?.skills_as_commands ??
+      projectConfig?.skills_as_commands ??
+      userConfig?.skills_as_commands ??
+      DEFAULT_CONFIG.skills_as_commands,
   }
 
   // Drop removed names from the effective config and warn about each one.

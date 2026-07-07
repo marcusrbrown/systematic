@@ -22,6 +22,9 @@
     },
     "bootstrap": {
       "$ref": "#/definitions/__schema51"
+    },
+    "skills_as_commands": {
+      "$ref": "#/definitions/__schema57"
     }
   },
   "additionalProperties": false,
@@ -1504,6 +1507,19 @@
     },
     "__schema56": {
       "type": "string"
+    },
+    "__schema57": {
+      "default": true,
+      "description": "Register skills discovered from user/project skill directories (OpenCode config and other agent-harness-standard locations) as slash commands. Default true.",
+      "examples": [true, false],
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema58"
+        }
+      ]
+    },
+    "__schema58": {
+      "type": "boolean"
     }
   }
 }

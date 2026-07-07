@@ -1,3 +1,6 @@
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import type { Config } from '@opencode-ai/plugin'
 import type { AgentConfig } from '@opencode-ai/sdk'
 import {
@@ -12,12 +15,18 @@ import { extractAgentFrontmatter, findAgentsInDir } from './agents.js'
 import { extractCommandFrontmatter, findCommandsInDir } from './commands.js'
 import { loadConfigWithSources } from './config.js'
 import { convertFileWithCache } from './converter.js'
+import { type DiscoveredSkill, discoverSkills } from './discovered-skills.js'
 import { parseFrontmatter } from './frontmatter.js'
 import {
   getAvailableModels,
   type OpencodeClientLike,
 } from './model-availability.js'
-import { type LoadedSkill, loadSkill } from './skill-loader.js'
+import {
+  formatSkillDescription,
+  type LoadedSkill,
+  loadSkill,
+  wrapSkillTemplate,
+} from './skill-loader.js'
 import { findSkillsInDir } from './skills.js'
 import { resolveSourceModel } from './source-model-defaults.js'
 import { isRecord, type PermissionSetting } from './validation.js'
@@ -29,6 +38,10 @@ export interface ConfigHandlerDeps {
   bundledCommandsDir: string
   /** OpenCode client for availability lookup. When omitted, availability falls back to empty set (last-resort resolution). */
   client?: OpencodeClientLike
+  /** Home directory for discovered-skill lookups. Defaults to `os.homedir()`; inject a temp dir in tests. */
+  homeDir?: string
+  /** OpenCode global config directory override for discovered-skill lookups. Defaults to `<homeDir>/.config/opencode`. */
+  opencodeConfigDir?: string
 }
 
 type CommandConfig = NonNullable<Config['command']>[string]
@@ -486,6 +499,82 @@ function collectSkillsAsCommands(
   return commands
 }
 
+/**
+ * Convert a discovered (non-bundled) skill into a `config.command` entry.
+ *
+ * Model-invocable skills get a one-line shim instructing the agent to load
+ * the skill via OpenCode's native `skill` tool, with the argument string
+ * wrapped as data (never concatenated into instruction text). Command-only
+ * skills (`disable-model-invocation: true`) get the raw SKILL.md body
+ * inlined instead — the sole R3 exception (R6).
+ *
+ * R6 honesty limit: Systematic cannot unregister a skill from OpenCode's own
+ * model-facing skill tool/catalog — there is no API to hide a discovered
+ * skill from the model. This function only controls the *command* surface
+ * (`/skill-name`); the skill remains loadable by the model via the `skill`
+ * tool regardless of `disable-model-invocation`. Do not attempt to mutate
+ * OpenCode's skill registry or permissions here to compensate.
+ */
+function loadDiscoveredSkillAsCommand(skill: DiscoveredSkill): CommandConfig {
+  const description = formatSkillDescription(skill.description, skill.name)
+
+  if (skill.frontmatter.disableModelInvocation === true) {
+    const content = fs.readFileSync(skill.skillPath, 'utf8')
+    const { body } = parseFrontmatter(content)
+    return {
+      template: wrapSkillTemplate(skill.skillPath, body),
+      description,
+    }
+  }
+
+  return {
+    template: `Load the "${skill.name}" skill using the skill tool, then follow its instructions to address this request:
+
+<user-request>
+$ARGUMENTS
+</user-request>`,
+    description,
+  }
+}
+
+/**
+ * Collect discovered (non-bundled) user/project skills as `config.command`
+ * entries. Never throws: `discoverSkills` is defect-swallowing by contract,
+ * and any unexpected error reading/parsing an individual skill degrades to
+ * skipping that skill rather than aborting emission (hook-defect-swallow
+ * learning — config hook code must not throw).
+ */
+function collectDiscoveredSkillsAsCommands(
+  startDir: string,
+  homeDir: string,
+  configDir: string,
+  opencodeConfigDirOverride: string | undefined,
+): NonNullable<Config['command']> {
+  const commands: NonNullable<Config['command']> = {}
+
+  let discovered: DiscoveredSkill[]
+  try {
+    discovered = discoverSkills({
+      startDir,
+      homeDir,
+      configDir,
+      opencodeConfigDirOverride,
+    })
+  } catch {
+    return commands
+  }
+
+  for (const skill of discovered) {
+    try {
+      commands[skill.name] = loadDiscoveredSkillAsCommand(skill)
+    } catch {
+      // Skip this skill; never let one bad SKILL.md abort emission.
+    }
+  }
+
+  return commands
+}
+
 function collectEnabledSkillNames(
   dir: string,
   disabledSkills: string[],
@@ -509,6 +598,12 @@ function collectEnabledSkillNames(
 export function createConfigHandler(deps: ConfigHandlerDeps) {
   const { directory, bundledSkillsDir, bundledAgentsDir, bundledCommandsDir } =
     deps
+  const homeDir = deps.homeDir ?? os.homedir()
+  const opencodeConfigDir =
+    deps.opencodeConfigDir ?? path.join(homeDir, '.config/opencode')
+  const opencodeConfigDirOverride = process.env.OPENCODE_CONFIG_DIR?.trim()
+    ? process.env.OPENCODE_CONFIG_DIR
+    : undefined
 
   return async (config: Config): Promise<void> => {
     const { config: systematicConfig, overlays } =
@@ -581,6 +676,16 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
       systematicConfig.disabled_commands,
     )
 
+    const discoveredSkillCommands =
+      systematicConfig.skills_as_commands !== false
+        ? collectDiscoveredSkillsAsCommands(
+            directory,
+            homeDir,
+            opencodeConfigDir,
+            opencodeConfigDirOverride,
+          )
+        : {}
+
     // The drop predicate uses the explicit emitted-key set instead of
     // `Object.hasOwn(bundledAgents, key)` so the invariant ("only drop a prior
     // entry when this hook is emitting a replacement") is self-evident and
@@ -599,7 +704,11 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
         bundledAgentKeys.has(key) && isSystematicAgentConfig(agent),
     )
 
-    const emittedCommands = { ...bundledCommands, ...bundledSkills }
+    const emittedCommands = {
+      ...bundledCommands,
+      ...bundledSkills,
+      ...discoveredSkillCommands,
+    }
     const emittedCommandKeys = new Set(Object.keys(emittedCommands))
     config.command = mergeSystematicEntries(
       existingCommands as Record<string, CommandConfig>,
