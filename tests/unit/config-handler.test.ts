@@ -1935,6 +1935,25 @@ Discovered body for hidden.`,
         expect(config.command?.hidden).toBeUndefined()
       })
 
+      test('disabled_commands suppresses a discovered-skill command', async () => {
+        writeDiscoveredSkill(path.join(projectDir, '.opencode/skills'), 'foo')
+        writeDiscoveredSkill(path.join(projectDir, '.opencode/skills'), 'bar')
+        writeSystematicConfig({ disabled_commands: ['foo'] })
+
+        const handler = createConfigHandler({
+          directory: projectDir,
+          bundledSkillsDir: path.join(bundledDir, 'skills'),
+          bundledAgentsDir: path.join(bundledDir, 'agents'),
+          bundledCommandsDir: path.join(bundledDir, 'commands'),
+        })
+
+        const config: Config = {}
+        await handler(config)
+
+        expect(config.command?.foo).toBeUndefined()
+        expect(config.command?.bar).toBeDefined()
+      })
+
       test('discovered skill without user-invocable field still emits a command', async () => {
         writeDiscoveredSkill(
           path.join(projectDir, '.opencode/skills'),
