@@ -4,7 +4,7 @@ import { parseFrontmatter } from './frontmatter.js'
 import type { SkillDeprecated, SkillInfo } from './skills.js'
 
 const SKILL_PREFIX = 'systematic:'
-const SKILL_DESCRIPTION_PREFIX = '(Systematic - Skill) '
+const SKILL_DESCRIPTION_PREFIX = '(Systematic) '
 
 export interface LoadedSkill {
   name: string
