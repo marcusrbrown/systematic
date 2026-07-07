@@ -2,8 +2,8 @@
 title: "feat: Pi coding-agent harness support"
 type: feat
 status: active
-date: 2026-07-13
-origin: docs/brainstorms/2026-07-13-pi-harness-support-requirements.md
+date: 2026-07-06
+origin: docs/brainstorms/2026-07-06-pi-harness-support-requirements.md
 target_branch: v3
 ---
 
@@ -13,7 +13,7 @@ target_branch: v3
 
 Add **Pi** (`earendil-works/pi`) as a second supported harness, shipped from the **same single `@fro.bot/systematic` npm package** at full parity with the OpenCode experience: Pi users get the bundled skills, the agents as real in-process subagents, the `systematic_skill` tool, and the `using-systematic` bootstrap. The OpenCode plugin (`src/index.ts`) is unchanged in behavior; a new second entry `src/pi.ts` is a thin adapter over the existing `src/lib/*` core, built to `dist/pi.js` and wired via a `pi` manifest key in `package.json`.
 
-This rides the long-lived `v3` branch alongside the v3 cleanup plan (`docs/plans/2026-07-13-002-feat-v3-cleanup-release-plan.md`) but is an independent set of PRs. The two coordinate only on `src/cli.ts` (cleanup removes the `convert` command; this plan adds `setup --harness`).
+This rides the long-lived `v3` branch alongside the v3 cleanup plan (`docs/plans/2026-07-06-002-feat-v3-cleanup-release-plan.md`) but is an independent set of PRs. The two coordinate only on `src/cli.ts` (cleanup removes the `convert` command; this plan adds `setup --harness`).
 
 ## Problem Frame
 
@@ -21,7 +21,7 @@ Systematic is currently OpenCode-only. Pi implements the same Agent Skills stand
 
 ## Requirements Trace
 
-Carried from the origin brainstorm (see origin: `docs/brainstorms/2026-07-13-pi-harness-support-requirements.md`):
+Carried from the origin brainstorm (see origin: `docs/brainstorms/2026-07-06-pi-harness-support-requirements.md`):
 
 - R1. Single package; `src/pi.ts` second entry; build `dist/index.js` + `dist/pi.js` from shared `src/lib/*`.
 - R2. `package.json` carries `"pi": { "extensions": ["./dist/pi.js"], "skills": ["./skills"] }`; keep `skills/`+`agents/` in `files`.
@@ -396,8 +396,8 @@ delegateTool.execute({ agent, task }, ctx):
 
 ## Sources & References
 
-- **Origin document:** docs/brainstorms/2026-07-13-pi-harness-support-requirements.md
-- Related plan (shared v3 branch): docs/plans/2026-07-13-002-feat-v3-cleanup-release-plan.md
+- **Origin document:** docs/brainstorms/2026-07-06-pi-harness-support-requirements.md
+- Related plan (shared v3 branch): docs/plans/2026-07-06-002-feat-v3-cleanup-release-plan.md
 - Packaging targets: package.json, src/index.ts, src/pi.ts (new), src/cli.ts, .github/workflows/main.yaml
 - Shared core: src/lib/skill-loader.ts, src/lib/skills.ts, src/lib/bootstrap.ts, src/lib/agents.ts
 - Test model: tests/integration/opencode.test.ts; cortexkit AFT tests/pi-rpc

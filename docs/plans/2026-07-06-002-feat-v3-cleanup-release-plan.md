@@ -2,8 +2,8 @@
 title: "feat: v3.0.0 compatibility cleanup release"
 type: feat
 status: active
-date: 2026-07-13
-origin: docs/brainstorms/2026-07-13-v3-cleanup-release-requirements.md
+date: 2026-07-06
+origin: docs/brainstorms/2026-07-06-v3-cleanup-release-requirements.md
 target_branch: v3
 ---
 
@@ -25,7 +25,7 @@ Two deprecated skills remain discoverable: `orchestrating-swarms` (a CEP/Claude-
 
 ## Requirements Trace
 
-Carried from the origin brainstorm (see origin: `docs/brainstorms/2026-07-13-v3-cleanup-release-requirements.md`):
+Carried from the origin brainstorm (see origin: `docs/brainstorms/2026-07-06-v3-cleanup-release-requirements.md`):
 
 - R1. Remove runtime converter use from all three callers, replicating or intentionally dropping its normalization rather than only deleting call sites.
 - R2. Delete `src/lib/converter.ts` after a zero-import/zero-call-site audit.
@@ -353,9 +353,9 @@ Phase 3 (convergence + assurance)
 
 ## Sources & References
 
-- **Origin document:** docs/brainstorms/2026-07-13-v3-cleanup-release-requirements.md
+- **Origin document:** docs/brainstorms/2026-07-06-v3-cleanup-release-requirements.md
 - Superseded prior plan: docs/plans/2026-06-05-001-feat-v3-compatibility-cleanup-plan.md
-- Sibling (shipped) prerequisite: docs/plans/2026-07-13-001-feat-removed-name-config-safety-plan.md (warn-and-ignore mechanism, #534 / v2.32.0)
+- Sibling (shipped) prerequisite: docs/plans/2026-07-06-001-feat-removed-name-config-safety-plan.md (warn-and-ignore mechanism, #534 / v2.32.0)
 - Converter removal targets: src/lib/converter.ts, src/lib/config-handler.ts, src/lib/skill-loader.ts, src/cli.ts
 - Generated surfaces: registry/registry.jsonc, src/lib/bundled-names.ts, docs/public/schemas/, docs/src/content/docs/reference/, docs/src/data/stats.json
 - Gates: scripts/content-integrity.ts (overlap gate, reference integrity), schema/registry drift checks
