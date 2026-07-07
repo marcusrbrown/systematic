@@ -528,13 +528,23 @@ function loadDiscoveredSkillAsCommand(skill: DiscoveredSkill): CommandConfig {
   }
 
   return {
-    template: `Load the "${skill.name}" skill using the skill tool, then follow its instructions to address this request:
+    template: buildDiscoveredSkillShimTemplate(skill.name),
+    description,
+  }
+}
+
+/**
+ * Model-invocable shim template instructing the agent to load a discovered
+ * skill via OpenCode's native `skill` tool. The argument string is wrapped as
+ * data (`$ARGUMENTS` inside `<user-request>`), never concatenated into
+ * instruction text.
+ */
+function buildDiscoveredSkillShimTemplate(skillName: string): string {
+  return `Load the "${skillName}" skill using the skill tool, then follow its instructions to address this request:
 
 <user-request>
 $ARGUMENTS
-</user-request>`,
-    description,
-  }
+</user-request>`
 }
 
 /**
@@ -561,14 +571,19 @@ function collectDiscoveredSkillsAsCommands(
       opencodeConfigDirOverride,
     })
   } catch {
+    // Config hook code must not throw (hook-defect-swallow): degrade to no
+    // discovered commands this pass rather than aborting the whole config hook.
     return commands
   }
 
   for (const skill of discovered) {
+    if (skill.frontmatter.userInvocable === false) continue
+
     try {
       commands[skill.name] = loadDiscoveredSkillAsCommand(skill)
     } catch {
-      // Skip this skill; never let one bad SKILL.md abort emission.
+      // Config hook code must not throw (hook-defect-swallow): skip this
+      // skill; never let one bad SKILL.md abort emission for the rest.
     }
   }
 
@@ -709,13 +724,19 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
       ...bundledSkills,
       ...discoveredSkillCommands,
     }
-    const emittedCommandKeys = new Set(Object.keys(emittedCommands))
+    // Drop any existing entry Systematic previously emitted (identified by
+    // the `(Systematic) `/`(Systematic - Skill) ` description marker),
+    // regardless of key. If it's still valid this pass, `emittedCommands`
+    // re-adds it below (mergeSystematicEntries drops-then-adds); if the
+    // source (bundled command/skill, or a discovered on-disk skill) no
+    // longer exists, it stays dropped. This also fixes orphaned
+    // discovered-skill commands: those use a bare key (not a
+    // `systematic:`/`ce:`-prefixed key), so removing a skill from disk left
+    // its stale command behind under the old, narrower key-based predicate.
     config.command = mergeSystematicEntries(
       existingCommands as Record<string, CommandConfig>,
       emittedCommands as Record<string, CommandConfig>,
-      (key, command) =>
-        isSystematicCommandConfig(command) &&
-        (emittedCommandKeys.has(key) || isSystematicOwnedCommandKey(key)),
+      (_key, command) => isSystematicCommandConfig(command),
     )
 
     // skills.paths exists at runtime (v2 SDK types) but not in our v1 import
@@ -759,8 +780,4 @@ function isSystematicSkillPath(path: string): boolean {
 
 function normalizePath(path: string): string {
   return path.replaceAll('\\', '/').replace(/\/+$/u, '')
-}
-
-function isSystematicOwnedCommandKey(key: string): boolean {
-  return key.startsWith('systematic:') || key.startsWith('ce:')
 }

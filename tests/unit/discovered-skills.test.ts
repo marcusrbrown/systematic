@@ -226,6 +226,79 @@ describe('discoverSkills', () => {
     expect(result[0]?.root).toBe('global-opencode-config')
   })
 
+  test('no git worktree root: discovers a skill at startDir itself but does not climb to ancestors', () => {
+    const noGitRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-nogit-'),
+    )
+    try {
+      const startDir = path.join(noGitRoot, 'nested', 'start')
+      fs.mkdirSync(startDir, { recursive: true })
+
+      // Skill at startDir itself: should be discovered.
+      writeSkill(path.join(startDir, '.claude/skills/foo'), 'foo')
+
+      // Skill at a parent of startDir (no .git anywhere): must NOT be
+      // discovered — the walk should not climb past startDir when there is
+      // no git worktree root.
+      writeSkill(path.join(noGitRoot, '.claude/skills/bar'), 'bar')
+
+      const result = discoverSkills({ startDir, homeDir })
+
+      expect(result.map((s) => s.name)).toEqual(['foo'])
+    } finally {
+      fs.rmSync(noGitRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('precedence: project .opencode/skills wins over global .config/opencode/skills', () => {
+    writeSkill(path.join(homeDir, '.config/opencode/skills/foo'), 'foo', {
+      description: 'global opencode config version',
+    })
+    writeSkill(path.join(projectDir, '.opencode/skills/foo'), 'foo', {
+      description: 'project opencode version',
+    })
+
+    const result = discoverSkills({ startDir: projectDir, homeDir })
+    const winners = result.filter((s) => s.name === 'foo')
+
+    expect(winners).toHaveLength(1)
+    expect(winners[0]?.root).toBe('project-opencode')
+    expect(winners[0]?.skillPath).toBe(
+      path.join(projectDir, '.opencode/skills/foo/SKILL.md'),
+    )
+  })
+
+  test('precedence: project .opencode/skills wins over global .agents/skills', () => {
+    writeSkill(path.join(homeDir, '.agents/skills/foo'), 'foo', {
+      description: 'global agents version',
+    })
+    writeSkill(path.join(projectDir, '.opencode/skills/foo'), 'foo', {
+      description: 'project opencode version',
+    })
+
+    const result = discoverSkills({ startDir: projectDir, homeDir })
+    const winners = result.filter((s) => s.name === 'foo')
+
+    expect(winners).toHaveLength(1)
+    expect(winners[0]?.root).toBe('project-opencode')
+    expect(winners[0]?.skillPath).toBe(
+      path.join(projectDir, '.opencode/skills/foo/SKILL.md'),
+    )
+  })
+
+  test('discovery: project-level .agents/skills skill is discovered with root project-agents', () => {
+    writeSkill(path.join(projectDir, '.agents/skills/agent-only'), 'agent-only')
+
+    const result = discoverSkills({ startDir: projectDir, homeDir })
+    const found = result.find((s) => s.name === 'agent-only')
+
+    expect(found).toBeDefined()
+    expect(found?.root).toBe('project-agents')
+    expect(found?.skillPath).toBe(
+      path.join(projectDir, '.agents/skills/agent-only/SKILL.md'),
+    )
+  })
+
   test('opencodeConfigDirOverride: wins over everything, including the default global config dir', () => {
     writeSkill(path.join(homeDir, '.claude/skills/foo'), 'foo', {
       description: 'global claude version',

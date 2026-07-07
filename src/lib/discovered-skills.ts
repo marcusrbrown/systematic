@@ -128,7 +128,9 @@ function buildOpencodeConfigDirs(
 ): string[] {
   const dirs: string[] = [globalConfigDir]
 
-  dirs.push(...upWalk(['.opencode'], startDir, gitRoot ?? undefined))
+  // No git worktree root: bound the walk to startDir itself rather than
+  // climbing to the filesystem root.
+  dirs.push(...upWalk(['.opencode'], startDir, gitRoot ?? startDir))
   dirs.push(...upWalk(['.opencode'], homeDir, homeDir))
 
   if (opencodeConfigDirOverride !== undefined) {
@@ -247,7 +249,7 @@ export function discoverSkills(
   const externalLevels = upWalk(
     ['.claude', '.agents'],
     startDir,
-    gitRoot ?? undefined,
+    gitRoot ?? startDir,
   )
   for (const levelDir of externalLevels) {
     const isClaudeDir = path.basename(levelDir) === '.claude'

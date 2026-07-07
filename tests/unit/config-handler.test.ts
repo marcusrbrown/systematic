@@ -517,10 +517,16 @@ Skill content for ce:plan.`,
       expect(config.agent?.['systematic-implementer']?.prompt).toContain(
         'Agent prompt for systematic-implementer.',
       )
-      expect(config.command?.['native-command']).toEqual({
-        description: '(Systematic) Native command',
-        template: 'native command template',
-      })
+      // Unlike agents (which still use a key-based `bundledAgentKeys` guard),
+      // the command drop predicate was simplified to drop ANY existing entry
+      // carrying the `(Systematic) `/`(Systematic - Skill) ` marker,
+      // regardless of key — this is required to clean up orphaned
+      // discovered-skill commands (which use bare, unprefixed keys with no
+      // way to distinguish "still owned" from "stale" other than the
+      // marker). A side effect: a bare, non-prefixed key that merely *looks*
+      // like Systematic output but isn't re-emitted (like this synthetic
+      // 'native-command' fixture) is now dropped rather than preserved.
+      expect(config.command?.['native-command']).toBeUndefined()
       expect(config.command?.['ce:plan']?.description).toBe(
         '(Systematic - Skill) A plan skill',
       )
@@ -1843,6 +1849,109 @@ Discovered body for ${name}.`,
 
         expect(secondRun).toEqual(firstRun)
         expect(Object.keys(config.command ?? {})).toEqual(['foo'])
+      })
+
+      test('orphaned discovered-skill command is removed once its skill is deleted from disk', async () => {
+        const discoveredDir = path.join(projectDir, '.opencode/skills')
+        writeDiscoveredSkill(discoveredDir, 'foo')
+
+        const handler = createConfigHandler({
+          directory: projectDir,
+          bundledSkillsDir: path.join(bundledDir, 'skills'),
+          bundledAgentsDir: path.join(bundledDir, 'agents'),
+          bundledCommandsDir: path.join(bundledDir, 'commands'),
+        })
+
+        const config: Config = {}
+        await handler(config)
+        expect(config.command?.foo).toBeDefined()
+
+        fs.rmSync(path.join(discoveredDir, 'foo'), {
+          recursive: true,
+          force: true,
+        })
+
+        await handler(config)
+        expect(config.command?.foo).toBeUndefined()
+      })
+
+      test('user-defined command of the same name still survives after the skill is removed (R4)', async () => {
+        const discoveredDir = path.join(projectDir, '.opencode/skills')
+        writeDiscoveredSkill(discoveredDir, 'foo')
+
+        const handler = createConfigHandler({
+          directory: projectDir,
+          bundledSkillsDir: path.join(bundledDir, 'skills'),
+          bundledAgentsDir: path.join(bundledDir, 'agents'),
+          bundledCommandsDir: path.join(bundledDir, 'commands'),
+        })
+
+        const config: Config = {
+          command: {
+            foo: {
+              description: 'User command',
+              template: 'User template',
+            },
+          },
+        }
+        await handler(config)
+        expect(config.command?.foo?.description).toBe('User command')
+
+        fs.rmSync(path.join(discoveredDir, 'foo'), {
+          recursive: true,
+          force: true,
+        })
+
+        await handler(config)
+        expect(config.command?.foo?.description).toBe('User command')
+        expect(config.command?.foo?.template).toBe('User template')
+      })
+
+      test('discovered skill with user-invocable: false does not emit a command', async () => {
+        const skillDir = path.join(projectDir, '.opencode/skills', 'hidden')
+        fs.mkdirSync(skillDir, { recursive: true })
+        fs.writeFileSync(
+          path.join(skillDir, 'SKILL.md'),
+          `---
+name: hidden
+description: A hidden discovered skill
+user-invocable: false
+---
+# hidden
+
+Discovered body for hidden.`,
+        )
+
+        const handler = createConfigHandler({
+          directory: projectDir,
+          bundledSkillsDir: path.join(bundledDir, 'skills'),
+          bundledAgentsDir: path.join(bundledDir, 'agents'),
+          bundledCommandsDir: path.join(bundledDir, 'commands'),
+        })
+
+        const config: Config = {}
+        await handler(config)
+
+        expect(config.command?.hidden).toBeUndefined()
+      })
+
+      test('discovered skill without user-invocable field still emits a command', async () => {
+        writeDiscoveredSkill(
+          path.join(projectDir, '.opencode/skills'),
+          'visible',
+        )
+
+        const handler = createConfigHandler({
+          directory: projectDir,
+          bundledSkillsDir: path.join(bundledDir, 'skills'),
+          bundledAgentsDir: path.join(bundledDir, 'agents'),
+          bundledCommandsDir: path.join(bundledDir, 'commands'),
+        })
+
+        const config: Config = {}
+        await handler(config)
+
+        expect(config.command?.visible).toBeDefined()
       })
 
       test('bundled systematic:/ce: commands still emitted with discovery enabled', async () => {
