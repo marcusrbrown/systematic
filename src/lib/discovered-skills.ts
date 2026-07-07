@@ -178,26 +178,23 @@ function globSkillFiles(rootDir: string, subdirNames: string[]): string[] {
 
 /**
  * Turn a discovered `SKILL.md` absolute path into a `DiscoveredSkill`, or
- * `undefined` if it should be skipped (unreadable, not a file, no
+ * `undefined` if it should be skipped (unreadable, not a regular file, no
  * frontmatter name, or invalid name charset/length). Never throws.
+ *
+ * Reads the file directly with no prior `stat` check: a single `readFileSync`
+ * avoids a check-then-use time-of-check/time-of-use race (a directory throws
+ * `EISDIR`, a missing path throws `ENOENT`, both handled by the catch), and
+ * reads the SKILL.md exactly once so the body can be reused downstream.
  */
 function toDiscoveredSkill(
   skillPath: string,
   rootId: DiscoveryRootId,
 ): DiscoveredSkill | undefined {
-  let stat: fs.Stats
-  try {
-    stat = fs.statSync(skillPath)
-  } catch {
-    return undefined // missing or unreadable: skip
-  }
-  if (!stat.isFile()) return undefined
-
   let content: string
   try {
     content = fs.readFileSync(skillPath, 'utf8')
   } catch {
-    return undefined // unreadable: skip
+    return undefined // missing, unreadable, or a directory: skip
   }
 
   const frontmatter = extractFrontmatterFromContent(content)
