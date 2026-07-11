@@ -65,13 +65,13 @@
     "@opencode-ai/plugin": "^1.1.30"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.2",
+    "@biomejs/biome": "2.5.3",
     "@opencode-ai/plugin": "1.17.15",
     "@opencode-ai/sdk": "1.17.15",
     "@semantic-release/exec": "7.1.0",
     "@types/bun": "latest",
     "@types/js-yaml": "4.0.9",
-    "@types/node": "24.13.2",
+    "@types/node": "24.13.3",
     "ajv": "8.20.0",
     "ajv-formats": "3.0.1",
     "conventional-changelog-conventionalcommits": "9.3.1",
