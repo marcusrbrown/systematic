@@ -296,7 +296,7 @@ Determine how to proceed based on what was provided in `<input_document>`.
    For UI work with Figma designs:
 
    - Implement components following design specs
-   - Use figma-design-sync agent iteratively to compare
+   - Use design-iterator agent iteratively to compare
    - Fix visual differences identified
    - Repeat until implementation matches design
 

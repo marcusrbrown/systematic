@@ -1211,11 +1211,11 @@ describe('discoverBundledNames — filesystem walk', () => {
     expect(skills).toEqual([])
   })
 
-  test('discovers agents in real repo and returns at least 50 names', () => {
-    // Smoke check against the actual project layout — should never go below 50.
+  test('discovers agents in real repo and returns at least 37 names', () => {
+    // Smoke check against the actual project layout — should never go below 37.
     const projectRoot = path.resolve(__dirname, '../..')
     const { agents, skills } = discoverFn(projectRoot)
-    expect(agents.length).toBeGreaterThanOrEqual(50)
+    expect(agents.length).toBeGreaterThanOrEqual(37)
     expect(skills.length).toBeGreaterThanOrEqual(34)
   })
 })

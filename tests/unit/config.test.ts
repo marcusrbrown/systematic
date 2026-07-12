@@ -1290,6 +1290,38 @@ describe('config', () => {
       )
       warnSpy.mockRestore()
     })
+
+    test('disabled_agents with "security-sentinel" drops the name, warns, and loads without throwing', () => {
+      writeProjectConfig({ disabled_agents: ['security-sentinel'] })
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+
+      let result: ReturnType<typeof loadConfig> | undefined
+      expect(() => {
+        result = loadConfig(testDir)
+      }).not.toThrow()
+
+      expect(result?.disabled_agents).not.toContain('security-sentinel')
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[systematic] "security-sentinel" in `disabled_agents` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning.',
+      )
+      warnSpy.mockRestore()
+    })
+
+    test('mixed valid and removed disabled_agents ("correctness-reviewer", "performance-oracle"): valid honored, removed warned', () => {
+      writeProjectConfig({
+        disabled_agents: ['correctness-reviewer', 'performance-oracle'],
+      })
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+
+      const result = loadConfig(testDir)
+
+      expect(result.disabled_agents).toContain('correctness-reviewer')
+      expect(result.disabled_agents).not.toContain('performance-oracle')
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[systematic] "performance-oracle" in `disabled_agents` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning.',
+      )
+      warnSpy.mockRestore()
+    })
   })
 
   describe('JSONC precedence', () => {

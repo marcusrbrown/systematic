@@ -135,7 +135,6 @@ This fails because: no pipe-delimited tables, no severity-grouped `###` headers,
 - **Filtered (not validated) section** -- findings where Stage 5b returned `validated: false`. Rendered as a pipe-delimited table with columns `#`, `File`, `Issue`, `Reviewer`, `Confidence`, `Validator reason`. These findings are surfaced for human review, not removed. Omit this section when Stage 5b produced no filtered findings.
 - **Learnings & Past Solutions section** -- results from learnings-researcher, with links to docs/solutions/ files
 - **Agent-Native Gaps section** -- results from agent-native-reviewer. Omit if no gaps found.
-- **Schema Drift Check section** -- results from schema-drift-detector. Omit if the agent did not run.
 - **Deployment Notes section** -- key checklist items from deployment-verification-agent. Omit if the agent did not run.
 - **Coverage section** -- suppressed count, residual risks, testing gaps, failed reviewers
 - **Summary uses blockquotes** for verdict, reasoning, and fix order

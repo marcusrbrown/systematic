@@ -32,12 +32,6 @@
       "files": ["agents/review/agent-native-reviewer.md"]
     },
     {
-      "name": "agent-ankane-readme-writer",
-      "type": "agent",
-      "description": "Creates or updates README files following Ankane-style template for Ruby gems. Use when writing gem documentation with imperative voice, concise prose, and standard section ordering.",
-      "files": ["agents/docs/ankane-readme-writer.md"]
-    },
-    {
       "name": "agent-api-contract-reviewer",
       "type": "agent",
       "description": "Conditional code-review persona, selected when the diff touches API routes, request/response types, serialization, versioning, or exported type signatures. Reviews code for breaking contract changes.",
@@ -80,12 +74,6 @@
       "files": ["agents/workflow/bug-reproduction-validator.md"]
     },
     {
-      "name": "agent-cli-agent-readiness-reviewer",
-      "type": "agent",
-      "description": "Reviews CLI source code, plans, or specs for AI agent readiness using a severity-based rubric focused on whether a CLI is merely usable by agents or genuinely optimized for them.",
-      "files": ["agents/review/cli-agent-readiness-reviewer.md"]
-    },
-    {
       "name": "agent-cli-readiness-reviewer",
       "type": "agent",
       "description": "Conditional code-review persona, selected when the diff touches CLI command definitions, argument parsing, or command handler implementations. Reviews CLI code for agent readiness -- how well the CLI serves autonomous agents, not just human users.",
@@ -110,18 +98,6 @@
       "files": ["agents/review/correctness-reviewer.md"]
     },
     {
-      "name": "agent-data-integrity-guardian",
-      "type": "agent",
-      "description": "Reviews database migrations, data models, and persistent data code for safety. Use when checking migration safety, data constraints, transaction boundaries, or privacy compliance.",
-      "files": ["agents/review/data-integrity-guardian.md"]
-    },
-    {
-      "name": "agent-data-migration-expert",
-      "type": "agent",
-      "description": "Validates data migrations, backfills, and production data transformations against reality. Use when PRs involve ID mappings, column renames, enum conversions, or schema changes.",
-      "files": ["agents/review/data-migration-expert.md"]
-    },
-    {
       "name": "agent-data-migrations-reviewer",
       "type": "agent",
       "description": "Conditional code-review persona, selected when the diff touches migration files, schema changes, data transformations, or backfill scripts. Reviews code for data integrity and migration safety.",
@@ -132,12 +108,6 @@
       "type": "agent",
       "description": "Produces Go/No-Go deployment checklists with SQL verification queries, rollback procedures, and monitoring plans. Use when PRs touch production data, migrations, or risky data changes.",
       "files": ["agents/review/deployment-verification-agent.md"]
-    },
-    {
-      "name": "agent-design-implementation-reviewer",
-      "type": "agent",
-      "description": "Visually compares live UI implementation against Figma designs and provides detailed feedback on discrepancies. Use after writing or modifying HTML/CSS/React components to verify design fidelity.",
-      "files": ["agents/design/design-implementation-reviewer.md"]
     },
     {
       "name": "agent-design-iterator",
@@ -152,22 +122,10 @@
       "files": ["agents/document-review/design-lens-reviewer.md"]
     },
     {
-      "name": "agent-dhh-rails-reviewer",
-      "type": "agent",
-      "description": "Conditional code-review persona, selected when Rails diffs introduce architectural choices, abstractions, or frontend patterns that may fight the framework. Reviews code from an opinionated DHH perspective.",
-      "files": ["agents/review/dhh-rails-reviewer.md"]
-    },
-    {
       "name": "agent-feasibility-reviewer",
       "type": "agent",
       "description": "Evaluates whether proposed technical approaches in planning documents will survive contact with reality -- architecture conflicts, dependency gaps, migration risks, and implementability. Spawned by the document-review skill.",
       "files": ["agents/document-review/feasibility-reviewer.md"]
-    },
-    {
-      "name": "agent-figma-design-sync",
-      "type": "agent",
-      "description": "Detects and fixes visual differences between a web implementation and its Figma design. Use iteratively when syncing implementation to match Figma specs.",
-      "files": ["agents/design/figma-design-sync.md"]
     },
     {
       "name": "agent-framework-docs-researcher",
@@ -188,24 +146,6 @@
       "files": ["agents/research/issue-intelligence-analyst.md"]
     },
     {
-      "name": "agent-julik-frontend-races-reviewer",
-      "type": "agent",
-      "description": "Conditional code-review persona, selected when the diff touches async UI code, Stimulus/Turbo lifecycles, or DOM-timing-sensitive frontend behavior. Reviews code for race conditions and janky UI failure modes.",
-      "files": ["agents/review/julik-frontend-races-reviewer.md"]
-    },
-    {
-      "name": "agent-kieran-python-reviewer",
-      "type": "agent",
-      "description": "Conditional code-review persona, selected when the diff touches Python code. Reviews changes with Kieran's strict bar for Pythonic clarity, type hints, and maintainability.",
-      "files": ["agents/review/kieran-python-reviewer.md"]
-    },
-    {
-      "name": "agent-kieran-rails-reviewer",
-      "type": "agent",
-      "description": "Conditional code-review persona, selected when the diff touches Rails application code. Reviews Rails changes with Kieran's strict bar for clarity, conventions, and maintainability.",
-      "files": ["agents/review/kieran-rails-reviewer.md"]
-    },
-    {
       "name": "agent-kieran-typescript-reviewer",
       "type": "agent",
       "description": "Conditional code-review persona, selected when the diff touches TypeScript code. Reviews changes with Kieran's strict bar for type safety, clarity, and maintainability.",
@@ -216,12 +156,6 @@
       "type": "agent",
       "description": "Searches docs/solutions/ for relevant past solutions by frontmatter metadata. Use before implementing features or fixing problems to surface institutional knowledge and prevent repeated mistakes.",
       "files": ["agents/research/learnings-researcher.md"]
-    },
-    {
-      "name": "agent-lint",
-      "type": "agent",
-      "description": "Use this agent when you need to run linting and code quality checks on Ruby and ERB files. Run before pushing to origin.",
-      "files": ["agents/workflow/lint.md"]
     },
     {
       "name": "agent-maintainability-reviewer",
@@ -262,12 +196,6 @@
       "type": "agent",
       "description": "Analyzes code for design patterns, anti-patterns, naming conventions, and duplication. Use when checking codebase consistency or verifying new code follows established patterns.",
       "files": ["agents/review/pattern-recognition-specialist.md"]
-    },
-    {
-      "name": "agent-performance-oracle",
-      "type": "agent",
-      "description": "Analyzes code for performance bottlenecks, algorithmic complexity, database queries, memory usage, and scalability. Use after implementing features or when performance concerns arise.",
-      "files": ["agents/review/performance-oracle.md"]
     },
     {
       "name": "agent-performance-reviewer",
@@ -312,12 +240,6 @@
       "files": ["agents/research/repo-research-analyst.md"]
     },
     {
-      "name": "agent-schema-drift-detector",
-      "type": "agent",
-      "description": "Detects unrelated schema.rb changes in PRs by cross-referencing against included migrations. Use when reviewing PRs with database schema changes.",
-      "files": ["agents/review/schema-drift-detector.md"]
-    },
-    {
       "name": "agent-scope-guardian-reviewer",
       "type": "agent",
       "description": "Reviews planning documents for scope alignment and unjustified complexity -- challenges unnecessary abstractions, premature frameworks, and scope that exceeds stated goals. Spawned by the document-review skill.",
@@ -334,12 +256,6 @@
       "type": "agent",
       "description": "Conditional code-review persona, selected when the diff touches auth middleware, public endpoints, user input handling, or permission checks. Reviews code for exploitable vulnerabilities.",
       "files": ["agents/review/security-reviewer.md"]
-    },
-    {
-      "name": "agent-security-sentinel",
-      "type": "agent",
-      "description": "Performs security audits for vulnerabilities, input validation, auth/authz, hardcoded secrets, and OWASP compliance. Use when reviewing code for security issues or before deployment.",
-      "files": ["agents/review/security-sentinel.md"]
     },
     {
       "name": "agent-slack-researcher",
@@ -689,38 +605,26 @@
         "agent-adversarial-document-reviewer",
         "agent-adversarial-reviewer",
         "agent-agent-native-reviewer",
-        "agent-ankane-readme-writer",
         "agent-api-contract-reviewer",
         "agent-architecture-strategist",
         "agent-best-practices-researcher",
         "agent-bug-reproduction-validator",
-        "agent-cli-agent-readiness-reviewer",
         "agent-cli-readiness-reviewer",
         "agent-code-simplicity-reviewer",
         "agent-coherence-reviewer",
         "agent-correctness-reviewer",
-        "agent-data-integrity-guardian",
-        "agent-data-migration-expert",
         "agent-data-migrations-reviewer",
         "agent-deployment-verification-agent",
-        "agent-design-implementation-reviewer",
         "agent-design-iterator",
         "agent-design-lens-reviewer",
-        "agent-dhh-rails-reviewer",
         "agent-feasibility-reviewer",
-        "agent-figma-design-sync",
         "agent-framework-docs-researcher",
         "agent-git-history-analyzer",
         "agent-issue-intelligence-analyst",
-        "agent-julik-frontend-races-reviewer",
-        "agent-kieran-python-reviewer",
-        "agent-kieran-rails-reviewer",
         "agent-kieran-typescript-reviewer",
         "agent-learnings-researcher",
-        "agent-lint",
         "agent-maintainability-reviewer",
         "agent-pattern-recognition-specialist",
-        "agent-performance-oracle",
         "agent-performance-reviewer",
         "agent-pr-comment-resolver",
         "agent-previous-comments-reviewer",
@@ -728,11 +632,9 @@
         "agent-project-standards-reviewer",
         "agent-reliability-reviewer",
         "agent-repo-research-analyst",
-        "agent-schema-drift-detector",
         "agent-scope-guardian-reviewer",
         "agent-security-lens-reviewer",
         "agent-security-reviewer",
-        "agent-security-sentinel",
         "agent-slack-researcher",
         "agent-spec-flow-analyzer",
         "agent-systematic-implementer",

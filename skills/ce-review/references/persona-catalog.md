@@ -43,11 +43,7 @@ These reviewers keep their original opinionated lens. They are additive with the
 
 | Persona | Agent | Select when diff touches... |
 |---------|-------|---------------------------|
-| `dhh-rails` | `systematic:review:dhh-rails-reviewer` | Rails architecture, service objects, authentication/session choices, Hotwire-vs-SPA boundaries, or abstractions that may fight Rails conventions |
-| `kieran-rails` | `systematic:review:kieran-rails-reviewer` | Rails controllers, models, views, jobs, components, routes, or other application-layer Ruby code where clarity and conventions matter |
-| `kieran-python` | `systematic:review:kieran-python-reviewer` | Python modules, endpoints, services, scripts, or typed domain code |
 | `kieran-typescript` | `systematic:review:kieran-typescript-reviewer` | TypeScript components, services, hooks, utilities, or shared types |
-| `julik-frontend-races` | `systematic:review:julik-frontend-races-reviewer` | Stimulus/Turbo controllers, DOM event wiring, timers, async UI flows, animations, or frontend state transitions with race potential |
 
 ## CE Conditional Agents (migration-specific)
 
@@ -55,7 +51,6 @@ These CE-native agents provide specialized analysis beyond what the persona agen
 
 | Agent | Focus |
 |-------|-------|
-| `systematic:review:schema-drift-detector` | Cross-references schema.rb changes against included migrations to catch unrelated drift |
 | `systematic:review:deployment-verification-agent` | Produces Go/No-Go deployment checklist with SQL verification queries and rollback procedures |
 
 ## Selection rules

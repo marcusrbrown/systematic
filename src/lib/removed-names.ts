@@ -29,4 +29,19 @@ export const REMOVED_BUNDLED_SKILL_NAMES: readonly string[] = [
   'test-xcode',
 ] as const
 
-export const REMOVED_BUNDLED_AGENT_NAMES: readonly string[] = [] as const
+export const REMOVED_BUNDLED_AGENT_NAMES: readonly string[] = [
+  'ankane-readme-writer',
+  'cli-agent-readiness-reviewer',
+  'data-integrity-guardian',
+  'data-migration-expert',
+  'design-implementation-reviewer',
+  'dhh-rails-reviewer',
+  'figma-design-sync',
+  'julik-frontend-races-reviewer',
+  'kieran-python-reviewer',
+  'kieran-rails-reviewer',
+  'lint',
+  'performance-oracle',
+  'schema-drift-detector',
+  'security-sentinel',
+] as const

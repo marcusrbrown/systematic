@@ -100,13 +100,6 @@
             }
           ]
         },
-        "ankane-readme-writer": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
         "api-contract-reviewer": {
           "allOf": [
             {
@@ -129,13 +122,6 @@
           ]
         },
         "bug-reproduction-validator": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
-        "cli-agent-readiness-reviewer": {
           "allOf": [
             {
               "$ref": "#/definitions/__schema4"
@@ -170,20 +156,6 @@
             }
           ]
         },
-        "data-integrity-guardian": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
-        "data-migration-expert": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
         "data-migrations-reviewer": {
           "allOf": [
             {
@@ -192,13 +164,6 @@
           ]
         },
         "deployment-verification-agent": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
-        "design-implementation-reviewer": {
           "allOf": [
             {
               "$ref": "#/definitions/__schema4"
@@ -219,21 +184,7 @@
             }
           ]
         },
-        "dhh-rails-reviewer": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
         "feasibility-reviewer": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
-        "figma-design-sync": {
           "allOf": [
             {
               "$ref": "#/definitions/__schema4"
@@ -261,27 +212,6 @@
             }
           ]
         },
-        "julik-frontend-races-reviewer": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
-        "kieran-python-reviewer": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
-        "kieran-rails-reviewer": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
         "kieran-typescript-reviewer": {
           "allOf": [
             {
@@ -296,13 +226,6 @@
             }
           ]
         },
-        "lint": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
         "maintainability-reviewer": {
           "allOf": [
             {
@@ -311,13 +234,6 @@
           ]
         },
         "pattern-recognition-specialist": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
-        "performance-oracle": {
           "allOf": [
             {
               "$ref": "#/definitions/__schema4"
@@ -373,13 +289,6 @@
             }
           ]
         },
-        "schema-drift-detector": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
         "scope-guardian-reviewer": {
           "allOf": [
             {
@@ -395,13 +304,6 @@
           ]
         },
         "security-reviewer": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
-        "security-sentinel": {
           "allOf": [
             {
               "$ref": "#/definitions/__schema4"
@@ -436,28 +338,7 @@
             }
           ]
         },
-        "design/design-implementation-reviewer": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
         "design/design-iterator": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
-        "design/figma-design-sync": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
-        "docs/ankane-readme-writer": {
           "allOf": [
             {
               "$ref": "#/definitions/__schema4"
@@ -590,13 +471,6 @@
             }
           ]
         },
-        "review/cli-agent-readiness-reviewer": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
         "review/cli-readiness-reviewer": {
           "allOf": [
             {
@@ -618,20 +492,6 @@
             }
           ]
         },
-        "review/data-integrity-guardian": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
-        "review/data-migration-expert": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
         "review/data-migrations-reviewer": {
           "allOf": [
             {
@@ -640,34 +500,6 @@
           ]
         },
         "review/deployment-verification-agent": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
-        "review/dhh-rails-reviewer": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
-        "review/julik-frontend-races-reviewer": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
-        "review/kieran-python-reviewer": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
-        "review/kieran-rails-reviewer": {
           "allOf": [
             {
               "$ref": "#/definitions/__schema4"
@@ -689,13 +521,6 @@
           ]
         },
         "review/pattern-recognition-specialist": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
-        "review/performance-oracle": {
           "allOf": [
             {
               "$ref": "#/definitions/__schema4"
@@ -730,21 +555,7 @@
             }
           ]
         },
-        "review/schema-drift-detector": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
         "review/security-reviewer": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
-        "review/security-sentinel": {
           "allOf": [
             {
               "$ref": "#/definitions/__schema4"
@@ -759,13 +570,6 @@
           ]
         },
         "workflow/bug-reproduction-validator": {
-          "allOf": [
-            {
-              "$ref": "#/definitions/__schema4"
-            }
-          ]
-        },
-        "workflow/lint": {
           "allOf": [
             {
               "$ref": "#/definitions/__schema4"
@@ -1325,38 +1129,26 @@
           "adversarial-document-reviewer",
           "adversarial-reviewer",
           "agent-native-reviewer",
-          "ankane-readme-writer",
           "api-contract-reviewer",
           "architecture-strategist",
           "best-practices-researcher",
           "bug-reproduction-validator",
-          "cli-agent-readiness-reviewer",
           "cli-readiness-reviewer",
           "code-simplicity-reviewer",
           "coherence-reviewer",
           "correctness-reviewer",
-          "data-integrity-guardian",
-          "data-migration-expert",
           "data-migrations-reviewer",
           "deployment-verification-agent",
-          "design-implementation-reviewer",
           "design-iterator",
           "design-lens-reviewer",
-          "dhh-rails-reviewer",
           "feasibility-reviewer",
-          "figma-design-sync",
           "framework-docs-researcher",
           "git-history-analyzer",
           "issue-intelligence-analyst",
-          "julik-frontend-races-reviewer",
-          "kieran-python-reviewer",
-          "kieran-rails-reviewer",
           "kieran-typescript-reviewer",
           "learnings-researcher",
-          "lint",
           "maintainability-reviewer",
           "pattern-recognition-specialist",
-          "performance-oracle",
           "performance-reviewer",
           "pr-comment-resolver",
           "previous-comments-reviewer",
@@ -1364,19 +1156,14 @@
           "project-standards-reviewer",
           "reliability-reviewer",
           "repo-research-analyst",
-          "schema-drift-detector",
           "scope-guardian-reviewer",
           "security-lens-reviewer",
           "security-reviewer",
-          "security-sentinel",
           "slack-researcher",
           "spec-flow-analyzer",
           "systematic-implementer",
           "testing-reviewer",
-          "design/design-implementation-reviewer",
           "design/design-iterator",
-          "design/figma-design-sync",
-          "docs/ankane-readme-writer",
           "document-review/adversarial-document-reviewer",
           "document-review/coherence-reviewer",
           "document-review/design-lens-reviewer",
@@ -1395,35 +1182,38 @@
           "review/agent-native-reviewer",
           "review/api-contract-reviewer",
           "review/architecture-strategist",
-          "review/cli-agent-readiness-reviewer",
           "review/cli-readiness-reviewer",
           "review/code-simplicity-reviewer",
           "review/correctness-reviewer",
-          "review/data-integrity-guardian",
-          "review/data-migration-expert",
           "review/data-migrations-reviewer",
           "review/deployment-verification-agent",
-          "review/dhh-rails-reviewer",
-          "review/julik-frontend-races-reviewer",
-          "review/kieran-python-reviewer",
-          "review/kieran-rails-reviewer",
           "review/kieran-typescript-reviewer",
           "review/maintainability-reviewer",
           "review/pattern-recognition-specialist",
-          "review/performance-oracle",
           "review/performance-reviewer",
           "review/previous-comments-reviewer",
           "review/project-standards-reviewer",
           "review/reliability-reviewer",
-          "review/schema-drift-detector",
           "review/security-reviewer",
-          "review/security-sentinel",
           "review/testing-reviewer",
           "workflow/bug-reproduction-validator",
-          "workflow/lint",
           "workflow/pr-comment-resolver",
           "workflow/spec-flow-analyzer",
-          "workflow/systematic-implementer"
+          "workflow/systematic-implementer",
+          "ankane-readme-writer",
+          "cli-agent-readiness-reviewer",
+          "data-integrity-guardian",
+          "data-migration-expert",
+          "design-implementation-reviewer",
+          "dhh-rails-reviewer",
+          "figma-design-sync",
+          "julik-frontend-races-reviewer",
+          "kieran-python-reviewer",
+          "kieran-rails-reviewer",
+          "lint",
+          "performance-oracle",
+          "schema-drift-detector",
+          "security-sentinel"
         ]
       }
     },
