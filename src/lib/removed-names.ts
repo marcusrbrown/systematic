@@ -13,8 +13,20 @@
  */
 
 export const REMOVED_BUNDLED_SKILL_NAMES: readonly string[] = [
-  'orchestrating-swarms',
+  'andrew-kane-gem-writer',
+  'changelog',
   'claude-permissions-optimizer',
+  'dhh-rails-style',
+  'dspy-ruby',
+  'every-style-editor',
+  'feature-video',
+  'gemini-imagegen',
+  'generate_command',
+  'orchestrating-swarms',
+  'proof',
+  'rclone',
+  'setup',
+  'test-xcode',
 ] as const
 
 export const REMOVED_BUNDLED_AGENT_NAMES: readonly string[] = [] as const

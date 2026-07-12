@@ -1258,6 +1258,38 @@ describe('config', () => {
       )
       warnSpy.mockRestore()
     })
+
+    test('disabled_skills with "rclone" drops the name, warns, and loads without throwing', () => {
+      writeProjectConfig({ disabled_skills: ['rclone'] })
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+
+      let result: ReturnType<typeof loadConfig> | undefined
+      expect(() => {
+        result = loadConfig(testDir)
+      }).not.toThrow()
+
+      expect(result?.disabled_skills).not.toContain('rclone')
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[systematic] "rclone" in `disabled_skills` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning.',
+      )
+      warnSpy.mockRestore()
+    })
+
+    test('mixed valid and removed disabled_skills ("test-driven-development", "setup"): valid honored, removed warned', () => {
+      writeProjectConfig({
+        disabled_skills: ['test-driven-development', 'setup'],
+      })
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+
+      const result = loadConfig(testDir)
+
+      expect(result.disabled_skills).toContain('test-driven-development')
+      expect(result.disabled_skills).not.toContain('setup')
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[systematic] "setup" in `disabled_skills` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning.',
+      )
+      warnSpy.mockRestore()
+    })
   })
 
   describe('JSONC precedence', () => {

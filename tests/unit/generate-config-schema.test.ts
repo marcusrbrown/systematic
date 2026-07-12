@@ -1216,7 +1216,7 @@ describe('discoverBundledNames — filesystem walk', () => {
     const projectRoot = path.resolve(__dirname, '../..')
     const { agents, skills } = discoverFn(projectRoot)
     expect(agents.length).toBeGreaterThanOrEqual(50)
-    expect(skills.length).toBeGreaterThanOrEqual(40)
+    expect(skills.length).toBeGreaterThanOrEqual(34)
   })
 })
 

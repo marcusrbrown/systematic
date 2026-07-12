@@ -366,19 +366,6 @@
       "files": ["agents/review/testing-reviewer.md"]
     },
     {
-      "name": "andrew-kane-gem-writer",
-      "type": "skill",
-      "description": "This skill should be used when writing Ruby gems following Andrew Kane's proven patterns and philosophy. It applies when creating new Ruby gems, refactoring existing gems, designing gem APIs, or when clean, minimal, production-ready Ruby library code is needed. Triggers on requests like \"create a gem\", \"write a Ruby library\", \"design a gem API\", or mentions of Andrew Kane's style.",
-      "files": [
-        "skills/andrew-kane-gem-writer/SKILL.md",
-        "skills/andrew-kane-gem-writer/references/database-adapters.md",
-        "skills/andrew-kane-gem-writer/references/module-organization.md",
-        "skills/andrew-kane-gem-writer/references/rails-integration.md",
-        "skills/andrew-kane-gem-writer/references/resources.md",
-        "skills/andrew-kane-gem-writer/references/testing-patterns.md"
-      ]
-    },
-    {
       "name": "ce-brainstorm",
       "type": "skill",
       "description": "Explore requirements and approaches through collaborative dialogue before writing a right-sized requirements document and planning implementation. Use for feature ideas, problem framing, when the user says 'let's brainstorm', or when they want to think through options before deciding what to build. Also use when a user describes a vague or ambitious feature request, asks 'what should we build', 'help me think through X', presents a problem with multiple valid solutions, or seems unsure about scope or direction — even if they don't explicitly ask to brainstorm.",
@@ -465,12 +452,6 @@
       ]
     },
     {
-      "name": "changelog",
-      "type": "skill",
-      "description": "Create engaging changelogs for recent merges to main branch",
-      "files": ["skills/changelog/SKILL.md"]
-    },
-    {
       "name": "compound-docs",
       "type": "skill",
       "description": "Capture solved problems as categorized documentation with YAML frontmatter for fast lookup",
@@ -495,20 +476,6 @@
       "files": ["skills/deploy-docs/SKILL.md"]
     },
     {
-      "name": "dhh-rails-style",
-      "type": "skill",
-      "description": "This skill should be used when writing Ruby and Rails code in DHH's distinctive 37signals style. It applies when writing Ruby code, Rails applications, creating models, controllers, or any Ruby file. Triggers on Ruby/Rails code generation, refactoring requests, code review, or when the user mentions DHH, 37signals, Basecamp, HEY, or Campfire style. Embodies REST purity, fat models, thin controllers, Current attributes, Hotwire patterns, and the \"clarity over cleverness\" philosophy.",
-      "files": [
-        "skills/dhh-rails-style/SKILL.md",
-        "skills/dhh-rails-style/references/architecture.md",
-        "skills/dhh-rails-style/references/controllers.md",
-        "skills/dhh-rails-style/references/frontend.md",
-        "skills/dhh-rails-style/references/gems.md",
-        "skills/dhh-rails-style/references/models.md",
-        "skills/dhh-rails-style/references/testing.md"
-      ]
-    },
-    {
       "name": "document-review",
       "type": "skill",
       "description": "Review requirements or plan documents using parallel persona agents that surface role-specific issues. Use when a requirements document or plan document exists and the user wants to improve it.",
@@ -521,61 +488,10 @@
       ]
     },
     {
-      "name": "dspy-ruby",
-      "type": "skill",
-      "description": "Build type-safe LLM applications with DSPy.rb — Ruby's programmatic prompt framework with signatures, modules, agents, and optimization. Use when implementing predictable AI features, creating LLM signatures and modules, configuring language model providers, building agent systems with tools, optimizing prompts, or testing LLM-powered functionality in Ruby applications.",
-      "files": [
-        "skills/dspy-ruby/SKILL.md",
-        "skills/dspy-ruby/assets/config-template.rb",
-        "skills/dspy-ruby/assets/module-template.rb",
-        "skills/dspy-ruby/assets/signature-template.rb",
-        "skills/dspy-ruby/references/core-concepts.md",
-        "skills/dspy-ruby/references/observability.md",
-        "skills/dspy-ruby/references/optimization.md",
-        "skills/dspy-ruby/references/providers.md",
-        "skills/dspy-ruby/references/toolsets.md"
-      ]
-    },
-    {
-      "name": "every-style-editor",
-      "type": "skill",
-      "description": "This skill should be used when reviewing or editing copy to ensure adherence to Every's style guide. It provides a systematic line-by-line review process for grammar, punctuation, mechanics, and style guide compliance.",
-      "files": [
-        "skills/every-style-editor/SKILL.md",
-        "skills/every-style-editor/references/EVERY_WRITE_STYLE.md"
-      ]
-    },
-    {
-      "name": "feature-video",
-      "type": "skill",
-      "description": "Record a video walkthrough of a feature and add it to the PR description. Use when a PR needs a visual demo for reviewers, when the user asks to demo a feature, create a PR video, record a walkthrough, show what changed visually, or add a video to a pull request.",
-      "files": ["skills/feature-video/SKILL.md"]
-    },
-    {
       "name": "frontend-design",
       "type": "skill",
       "description": "Use when building or reviewing any frontend interface. Covers the full design lifecycle: context detection, pre-build planning, design laws (OKLCH color, theme forcing function, layout rhythm, absolute bans on AI-slop patterns), implementation guidance, and visual verification. Use for landing pages, dashboards, components, or any web UI where design quality matters.",
       "files": ["skills/frontend-design/SKILL.md"]
-    },
-    {
-      "name": "gemini-imagegen",
-      "type": "skill",
-      "description": "This skill should be used when generating and editing images using the Gemini API (Nano Banana Pro). It applies when creating images from text prompts, editing existing images, applying style transfers, generating logos with text, creating stickers, product mockups, or any image generation/manipulation task. Supports text-to-image, image editing, multi-turn refinement, and composition from multiple reference images.",
-      "files": [
-        "skills/gemini-imagegen/SKILL.md",
-        "skills/gemini-imagegen/requirements.txt",
-        "skills/gemini-imagegen/scripts/compose_images.py",
-        "skills/gemini-imagegen/scripts/edit_image.py",
-        "skills/gemini-imagegen/scripts/gemini_images.py",
-        "skills/gemini-imagegen/scripts/generate_image.py",
-        "skills/gemini-imagegen/scripts/multi_turn_chat.py"
-      ]
-    },
-    {
-      "name": "generate-command",
-      "type": "skill",
-      "description": "Create a new custom slash command following conventions and best practices",
-      "files": ["skills/generate_command/SKILL.md"]
     },
     {
       "name": "git-clean-gone-branches",
@@ -629,24 +545,6 @@
       "files": ["skills/orchestrating-subagents/SKILL.md"]
     },
     {
-      "name": "proof",
-      "type": "skill",
-      "description": "Create, edit, comment on, share, and run human-in-the-loop iteration loops over markdown documents via Proof's web API. Use when asked to \"proof\", \"share a doc\", \"create a proof doc\", \"comment on a document\", \"suggest edits\", \"review in proof\", \"iterate on this doc in proof\", \"HITL this doc\", \"sync a Proof doc to local\", when a caller needs an HITL review loop over a local markdown file (e.g., ce-brainstorm, ce-ideate, or ce-plan handoff), or when given a proofeditor.ai URL. Prefer this skill for any workflow whose output is a Proof URL or that uses a Proof doc as the review surface, even when not named explicitly.",
-      "files": [
-        "skills/proof/SKILL.md",
-        "skills/proof/references/hitl-review.md"
-      ]
-    },
-    {
-      "name": "rclone",
-      "type": "skill",
-      "description": "Upload, sync, and manage files across cloud storage providers using rclone. Use when uploading files (images, videos, documents) to S3, Cloudflare R2, Backblaze B2, Google Drive, Dropbox, or any S3-compatible storage. Triggers on \"upload to S3\", \"sync to cloud\", \"rclone\", \"backup files\", \"upload video/image to bucket\", or requests to transfer files to remote storage.",
-      "files": [
-        "skills/rclone/SKILL.md",
-        "skills/rclone/scripts/check_setup.sh"
-      ]
-    },
-    {
       "name": "report-bug-ce",
       "type": "skill",
       "description": "Use this skill when a user needs to report a bug in the Systematic plugin with complete reproduction details and environment data, then open a GitHub issue directly from the CLI.",
@@ -671,12 +569,6 @@
       ]
     },
     {
-      "name": "setup",
-      "type": "skill",
-      "description": "Configure project-level settings for systematic workflows. Currently a placeholder — review agent selection is handled automatically by ce:review.",
-      "files": ["skills/setup/SKILL.md"]
-    },
-    {
       "name": "slfg",
       "type": "skill",
       "description": "Full autonomous engineering workflow using swarm mode for parallel execution",
@@ -696,12 +588,6 @@
         "skills/test-driven-development/SKILL.md",
         "skills/test-driven-development/references/testing-anti-patterns.md"
       ]
-    },
-    {
-      "name": "test-xcode",
-      "type": "skill",
-      "description": "Build and test iOS apps on simulator using XcodeBuildMCP. Use after making iOS code changes, before creating a PR, or when verifying app behavior and checking for crashes on simulator.",
-      "files": ["skills/test-xcode/SKILL.md"]
     },
     {
       "name": "todo-create",
@@ -761,7 +647,6 @@
         "agent-browser",
         "agent-native-architecture",
         "agent-native-audit",
-        "andrew-kane-gem-writer",
         "ce-brainstorm",
         "ce-compound",
         "ce-compound-refresh",
@@ -769,18 +654,11 @@
         "ce-plan",
         "ce-review",
         "ce-work",
-        "changelog",
         "compound-docs",
         "deepen-plan",
         "deploy-docs",
-        "dhh-rails-style",
         "document-review",
-        "dspy-ruby",
-        "every-style-editor",
-        "feature-video",
         "frontend-design",
-        "gemini-imagegen",
-        "generate-command",
         "git-clean-gone-branches",
         "git-commit",
         "git-commit-push-pr",
@@ -788,16 +666,12 @@
         "lfg",
         "onboarding",
         "orchestrating-subagents",
-        "proof",
-        "rclone",
         "report-bug-ce",
         "reproduce-bug",
         "resolve-pr-feedback",
-        "setup",
         "slfg",
         "test-browser",
         "test-driven-development",
-        "test-xcode",
         "todo-create",
         "todo-resolve",
         "todo-triage",
