@@ -42,43 +42,6 @@ exports[`SOURCE_CATEGORY_MODEL_DEFAULTS golden snapshot 1`] = `
     "rationale": "High-judgment UX, product, and design work benefits from a strong general reasoning model with broad creative capability.",
     "whenToOverride": "Override to a faster/cheaper model when design tasks are primarily templating or low-stakes layout work.",
   },
-  "docs": {
-    "providers": [
-      {
-        "models": [
-          {
-            "model": "gemini-3.1-pro-preview",
-          },
-        ],
-        "provider": "github-copilot",
-      },
-      {
-        "models": [
-          {
-            "model": "gpt-5.4-mini",
-          },
-        ],
-        "provider": "openai",
-      },
-      {
-        "models": [
-          {
-            "model": "claude-haiku-4-5",
-          },
-        ],
-        "provider": "anthropic",
-      },
-      {
-        "models": [
-          {
-            "model": "claude-haiku-4-5",
-          },
-        ],
-        "provider": "opencode",
-      },
-    ],
-    "rationale": "Documentation and summarization tasks should start cheaper and faster; quality is sufficient at mid-tier models.",
-  },
   "document-review": {
     "providers": [
       {

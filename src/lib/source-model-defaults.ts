@@ -207,7 +207,7 @@ export interface CategoryDefault {
 export type SourceCategoryDefaults = Record<string, CategoryDefault>
 
 /**
- * Provider-grouped source model defaults for the 6 Systematic agent categories.
+ * Provider-grouped source model defaults for the 5 Systematic agent categories.
  *
  * Provider chains are ordered by OMO category-fit reasoning. The resolver
  * walks providers in order and picks the first available provider/model pair.
@@ -239,28 +239,6 @@ export const SOURCE_CATEGORY_MODEL_DEFAULTS: SourceCategoryDefaults = {
       {
         provider: 'vercel',
         models: [{ model: 'v0-1.5-md' }],
-      },
-    ],
-  },
-  docs: {
-    rationale:
-      'Documentation and summarization tasks should start cheaper and faster; quality is sufficient at mid-tier models.',
-    providers: [
-      {
-        provider: 'github-copilot',
-        models: [{ model: 'gemini-3.1-pro-preview' }],
-      },
-      {
-        provider: 'openai',
-        models: [{ model: 'gpt-5.4-mini' }],
-      },
-      {
-        provider: 'anthropic',
-        models: [{ model: 'claude-haiku-4-5' }],
-      },
-      {
-        provider: 'opencode',
-        models: [{ model: 'claude-haiku-4-5' }],
       },
     ],
   },
