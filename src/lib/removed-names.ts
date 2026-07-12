@@ -27,6 +27,9 @@ export const REMOVED_BUNDLED_SKILL_NAMES: readonly string[] = [
   'rclone',
   'setup',
   'test-xcode',
+  'todo-create',
+  'todo-resolve',
+  'todo-triage',
 ] as const
 
 export const REMOVED_BUNDLED_AGENT_NAMES: readonly string[] = [

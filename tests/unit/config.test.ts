@@ -4,6 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
+import { BUNDLED_SKILL_NAMES } from '../../src/lib/bundled-names.js'
 import {
   computeDroppedNames,
   DEFAULT_CONFIG,
@@ -1287,6 +1288,26 @@ describe('config', () => {
       expect(result.disabled_skills).not.toContain('setup')
       expect(warnSpy).toHaveBeenCalledWith(
         '[systematic] "setup" in `disabled_skills` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning.',
+      )
+      warnSpy.mockRestore()
+    })
+
+    test('"todos" is present in the bundled skill names (merged todo-create/todo-triage/todo-resolve)', () => {
+      expect(BUNDLED_SKILL_NAMES).toContain('todos')
+    })
+
+    test('disabled_skills with "todo-create" drops the name, warns, and loads without throwing', () => {
+      writeProjectConfig({ disabled_skills: ['todo-create'] })
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+
+      let result: ReturnType<typeof loadConfig> | undefined
+      expect(() => {
+        result = loadConfig(testDir)
+      }).not.toThrow()
+
+      expect(result?.disabled_skills).not.toContain('todo-create')
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[systematic] "todo-create" in `disabled_skills` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning.',
       )
       warnSpy.mockRestore()
     })

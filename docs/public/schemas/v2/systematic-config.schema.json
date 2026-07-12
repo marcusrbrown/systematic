@@ -1085,9 +1085,7 @@
           "slfg",
           "test-browser",
           "test-driven-development",
-          "todo-create",
-          "todo-resolve",
-          "todo-triage",
+          "todos",
           "using-systematic",
           "writing-skills",
           "writing-systematic-skills",
@@ -1104,7 +1102,10 @@
           "proof",
           "rclone",
           "setup",
-          "test-xcode"
+          "test-xcode",
+          "todo-create",
+          "todo-resolve",
+          "todo-triage"
         ]
       }
     },

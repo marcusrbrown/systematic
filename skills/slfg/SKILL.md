@@ -32,7 +32,7 @@ Wait for both to complete before continuing.
 
 ## Finalize Phase
 
-8. `/systematic:todo-resolve` — resolve findings, compound on learnings, clean up completed todos
+8. `/systematic:todos` (resolve) — resolve findings, compound on learnings, clean up completed todos
 9. Output `<promise>DONE</promise>` when work is complete
 
 Start with step 1 now.

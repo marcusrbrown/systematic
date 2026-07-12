@@ -21,7 +21,7 @@ CRITICAL: You MUST execute every step below IN ORDER. Do NOT skip any required s
 
    Pass the plan file path from step 2 so ce:review can verify requirements completeness.
 
-5. `/systematic:todo-resolve`
+5. `/systematic:todos` (resolve)
 
 6. `/systematic:test-browser`
 

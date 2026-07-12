@@ -506,25 +506,10 @@
       ]
     },
     {
-      "name": "todo-create",
+      "name": "todos",
       "type": "skill",
-      "description": "Use when creating durable work items, managing todo lifecycle, or tracking findings across sessions in the file-based todo system",
-      "files": [
-        "skills/todo-create/SKILL.md",
-        "skills/todo-create/assets/todo-template.md"
-      ]
-    },
-    {
-      "name": "todo-resolve",
-      "type": "skill",
-      "description": "Use when batch-resolving approved todos, especially after code review or triage sessions",
-      "files": ["skills/todo-resolve/SKILL.md"]
-    },
-    {
-      "name": "todo-triage",
-      "type": "skill",
-      "description": "Use when reviewing pending todos for approval, prioritizing code review findings, or interactively categorizing work items",
-      "files": ["skills/todo-triage/SKILL.md"]
+      "description": "Use when creating durable work items, managing todo lifecycle, or tracking findings across sessions in the file-based todo system; when reviewing pending todos for approval, prioritizing code review findings, or interactively categorizing work items; or when batch-resolving approved todos, especially after code review or triage sessions",
+      "files": ["skills/todos/SKILL.md", "skills/todos/assets/todo-template.md"]
     },
     {
       "name": "using-systematic",
@@ -588,9 +573,7 @@
         "slfg",
         "test-browser",
         "test-driven-development",
-        "todo-create",
-        "todo-resolve",
-        "todo-triage",
+        "todos",
         "using-systematic",
         "writing-skills",
         "writing-systematic-skills"
