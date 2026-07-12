@@ -256,7 +256,7 @@ const ALLOWED_SKILL_FRONTMATTER_FIELDS: ReadonlySet<string> = new Set(
 
 const BANNED_SKILL_FRONTMATTER_FIELDS = new Set(['preconditions'])
 const FRONTMATTER_REMEDIATION =
-  'Update frontmatter to match systematic:writing-systematic-skills.'
+  'Update frontmatter to match systematic:writing-skills (Systematic Bundled Skills section).'
 
 // ---------------------------------------------------------------------------
 // Allowlist loader

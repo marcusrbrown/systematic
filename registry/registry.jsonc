@@ -525,19 +525,11 @@
         "skills/writing-skills/SKILL.md",
         "skills/writing-skills/references/anthropic-best-practices-distilled.md",
         "skills/writing-skills/references/examples/skill-testing-walkthrough.md",
+        "skills/writing-skills/references/foundation-conventions.md",
         "skills/writing-skills/references/graphviz-conventions.dot",
         "skills/writing-skills/references/persuasion-principles.md",
         "skills/writing-skills/references/testing-skills-with-subagents.md",
         "skills/writing-skills/scripts/render-graphs.js"
-      ]
-    },
-    {
-      "name": "writing-systematic-skills",
-      "type": "skill",
-      "description": "Use when creating, editing, auditing, or fixing bundled Systematic skills, especially when authoring SKILL.md files, adding skill reference files, resolving content-integrity frontmatter failures, or deciding which Systematic conventions apply beyond the general writing-skills guidance.",
-      "files": [
-        "skills/writing-systematic-skills/SKILL.md",
-        "skills/writing-systematic-skills/references/foundation-conventions.md"
       ]
     },
     {
@@ -575,8 +567,7 @@
         "test-driven-development",
         "todos",
         "using-systematic",
-        "writing-skills",
-        "writing-systematic-skills"
+        "writing-skills"
       ],
       "files": []
     },

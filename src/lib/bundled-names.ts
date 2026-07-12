@@ -117,7 +117,6 @@ export const BUNDLED_SKILL_NAMES = [
   'todos',
   'using-systematic',
   'writing-skills',
-  'writing-systematic-skills',
 ] as const
 
 export type BundledAgentName = (typeof BUNDLED_AGENT_NAMES)[number]

@@ -1237,6 +1237,22 @@ describe('config', () => {
       warnSpy.mockRestore()
     })
 
+    test('disabled_skills with "writing-systematic-skills" drops the name, warns, and loads without throwing', () => {
+      writeProjectConfig({ disabled_skills: ['writing-systematic-skills'] })
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+
+      let result: ReturnType<typeof loadConfig> | undefined
+      expect(() => {
+        result = loadConfig(testDir)
+      }).not.toThrow()
+
+      expect(result?.disabled_skills).not.toContain('writing-systematic-skills')
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[systematic] "writing-systematic-skills" in `disabled_skills` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning.',
+      )
+      warnSpy.mockRestore()
+    })
+
     test('disabled_skills with a genuinely-unknown name still throws the actionable schema error', () => {
       writeProjectConfig({ disabled_skills: ['never-existed-skill'] })
 

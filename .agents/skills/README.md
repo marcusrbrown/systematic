@@ -43,7 +43,7 @@ Each skill is a directory containing a `SKILL.md` file with YAML frontmatter. Op
 4. **Write the skill body** — follow the same conventions as bundled skills in `skills/`
 5. **Update this README** — add a row to the "Current skills" table above
 
-For skills that belong in the bundle (`skills/`), see the [writing-systematic-skills](../../skills/writing-systematic-skills/SKILL.md) skill for format rules and the content-integrity gate requirements.
+For skills that belong in the bundle (`skills/`), see the "Systematic Bundled Skills" section of the [writing-skills](../../skills/writing-skills/SKILL.md) skill for format rules and the content-integrity gate requirements.
 
 ## See also
 

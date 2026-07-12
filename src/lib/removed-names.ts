@@ -30,6 +30,7 @@ export const REMOVED_BUNDLED_SKILL_NAMES: readonly string[] = [
   'todo-create',
   'todo-resolve',
   'todo-triage',
+  'writing-systematic-skills',
 ] as const
 
 export const REMOVED_BUNDLED_AGENT_NAMES: readonly string[] = [
