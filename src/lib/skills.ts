@@ -115,41 +115,51 @@ function parseDeprecated(
   return deprecated
 }
 
+/**
+ * Parse skill frontmatter from already-read file content. Split out from
+ * `extractFrontmatter` so callers that also need the body (e.g. discovered-skill
+ * command emission) can read the file once and derive both. Never throws.
+ */
+export function extractFrontmatterFromContent(
+  content: string,
+): SkillFrontmatter {
+  const { data, parseError } =
+    parseFrontmatter<Record<string, unknown>>(content)
+
+  if (parseError) {
+    return { name: '', description: '' }
+  }
+
+  const metadata = parseMetadata(data)
+  const deprecated = parseDeprecated(data)
+
+  const argumentHintRaw = extractNonEmptyString(data, 'argument-hint')
+  const argumentHint = argumentHintRaw?.replace(/^["']|["']$/g, '') || undefined
+
+  return {
+    name: extractString(data, 'name'),
+    description: extractString(data, 'description'),
+    license: extractNonEmptyString(data, 'license'),
+    compatibility: extractNonEmptyString(data, 'compatibility'),
+    metadata,
+    deprecated,
+    disableModelInvocation: extractBoolean(data, 'disable-model-invocation'),
+    userInvocable: extractBoolean(data, 'user-invocable'),
+    subtask:
+      data.context === 'fork'
+        ? true
+        : (extractBoolean(data, 'subtask') ?? undefined),
+    agent: extractNonEmptyString(data, 'agent'),
+    model: extractNonEmptyString(data, 'model'),
+    argumentHint: argumentHint !== '' ? argumentHint : undefined,
+    allowedTools: extractNonEmptyString(data, 'allowed-tools'),
+  }
+}
+
 export function extractFrontmatter(filePath: string): SkillFrontmatter {
   try {
     const content = fs.readFileSync(filePath, 'utf8')
-    const { data, parseError } =
-      parseFrontmatter<Record<string, unknown>>(content)
-
-    if (parseError) {
-      return { name: '', description: '' }
-    }
-
-    const metadata = parseMetadata(data)
-    const deprecated = parseDeprecated(data)
-
-    const argumentHintRaw = extractNonEmptyString(data, 'argument-hint')
-    const argumentHint =
-      argumentHintRaw?.replace(/^["']|["']$/g, '') || undefined
-
-    return {
-      name: extractString(data, 'name'),
-      description: extractString(data, 'description'),
-      license: extractNonEmptyString(data, 'license'),
-      compatibility: extractNonEmptyString(data, 'compatibility'),
-      metadata,
-      deprecated,
-      disableModelInvocation: extractBoolean(data, 'disable-model-invocation'),
-      userInvocable: extractBoolean(data, 'user-invocable'),
-      subtask:
-        data.context === 'fork'
-          ? true
-          : (extractBoolean(data, 'subtask') ?? undefined),
-      agent: extractNonEmptyString(data, 'agent'),
-      model: extractNonEmptyString(data, 'model'),
-      argumentHint: argumentHint !== '' ? argumentHint : undefined,
-      allowedTools: extractNonEmptyString(data, 'allowed-tools'),
-    }
+    return extractFrontmatterFromContent(content)
   } catch {
     return { name: '', description: '' }
   }

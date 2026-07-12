@@ -494,6 +494,23 @@ Path to a custom bootstrap prompt file
 ```
 
 
+## skills_as_commands
+
+Register skills discovered from user/project skill directories (OpenCode config and other agent-harness-standard locations) as slash commands. Default true.
+
+**Type:** `boolean`
+**Default:** `true`
+**Examples:**
+
+```json
+true
+```
+
+```json
+false
+```
+
+
 ## Offline IDE behavior
 
 The schema's `$id` points to the canonical online URL above, so IDEs that prefer fetching the canonical schema may attempt to reach the docs site even when the bundled npm copy is also on disk. If you need strict offline behavior, configure your editor to associate `systematic.{json,jsonc}` with `node_modules/@fro.bot/systematic/dist/schemas/systematic-config.schema.json` directly.

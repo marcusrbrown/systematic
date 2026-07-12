@@ -1,0 +1,69 @@
+---
+title: Skills as Commands
+description: Systematic registers the skills you already keep in your project and home directories as slash commands, so you can invoke any discovered skill as /skill-name.
+sidebar:
+  order: 7
+---
+
+OpenCode discovers skills from your project and home directories and exposes them to the model through its built-in `skill` tool. It does not, however, surface them in the TUI's slash-command autocomplete. Systematic closes that gap: every skill OpenCode discovers becomes an invokable `/skill-name` command, the same way Claude Code and other agents treat skills.
+
+This is on by default. If you already keep skills under `.opencode/skills/`, `.claude/skills/`, or `.agents/skills/`, they show up as commands as soon as the plugin loads — no configuration required.
+
+## Where skills are discovered
+
+Systematic mirrors OpenCode's own discovery contract exactly, so the command you invoke resolves to the same skill OpenCode's `skill` tool would load. Skills are discovered from six roots:
+
+| Scope | Locations |
+|-------|-----------|
+| Global | `~/.claude/skills/`, `~/.agents/skills/`, `~/.config/opencode/skills/` |
+| Project | `.opencode/skills/`, `.claude/skills/`, `.agents/skills/` |
+
+Project locations are discovered by walking up from your working directory to the git worktree root, so a skill defined in a subdirectory of a monorepo is found too.
+
+When the same skill name exists in more than one location, the winner follows OpenCode's precedence: `.opencode` skills win over `.claude`/`.agents` skills, and project skills win over global ones. The command Systematic registers always points at that same winner.
+
+## How a command is built
+
+Each discovered skill becomes a `config.command` entry named after the skill (`/git-release`, `/deploy`, and so on). The command instructs the agent to load the skill through OpenCode's native `skill` tool and act on whatever arguments you pass:
+
+```
+/git-release v2.4.0
+```
+
+Arguments after the command name are forwarded to the skill as a request. Because the command loads the skill through the `skill` tool, any skill permissions you have configured still apply.
+
+### Command-only skills
+
+A skill with `disable-model-invocation: true` in its frontmatter is a manual workflow — you invoke it, the model does not load it on its own. For these, Systematic inlines the skill body directly into the command instead of routing through the `skill` tool.
+
+There is one honest limitation here: OpenCode has no mechanism for a plugin to hide a skill from the model's own `skill` tool. Systematic controls the `/command` surface, but a command-only skill remains loadable by the model through OpenCode's skill tool regardless. The `disable-model-invocation` flag shapes the command; it is not a hard guarantee that the model can never reach the skill.
+
+## Trust model
+
+Systematic does not add a trust gate on discovered skills, and this is deliberate. OpenCode already discovers and registers these same skills — including project-local ones from a cloned repository — without a trust prompt, and a command never runs on its own: a human types it. Adding a Systematic-specific gate would restrict less than what OpenCode already exposes while adding friction. Treat skills in a repository you did not write the same way you treat any other code in it.
+
+## Turning it off
+
+Set `skills_as_commands` to `false` in your `systematic.json` to disable the feature entirely:
+
+```json
+{
+  "skills_as_commands": false
+}
+```
+
+Your own commands are never touched — Systematic only registers a discovered skill as a command when no command of that name already exists, so a command you define yourself always wins. Bundled Systematic skills (the `systematic:` and `ce:` commands) are unaffected by this setting.
+
+To suppress a single discovered skill's command rather than the whole feature, add its name to `disabled_commands`:
+
+```json
+{
+  "disabled_commands": ["git-release"]
+}
+```
+
+A discovered skill registers as a command under its bare name, so `disabled_commands` is the field that governs it. (The `disabled_skills` field only accepts bundled Systematic skill names.)
+
+## Relationship to upstream
+
+OpenCode registers discovered skills as commands internally, but its TUI intentionally keeps them out of slash-command autocomplete in favor of a dedicated skills picker. That is a deliberate upstream choice, so this behavior may converge over time. If it does, Systematic's registration degrades gracefully: because Systematic's entry replaces the skill-sourced one by name, you still see exactly one command per skill, and the `skills_as_commands` toggle removes Systematic's entries entirely.

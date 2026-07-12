@@ -20,6 +20,11 @@
       "reason": "Comments annotate converter-mapped YAML fields (disableModelInvocation, userInvocable, allowedTools, etc.) with their CC-format origin. Historical documentation, not accidental reintroduction. Same category as src/lib/converter.ts."
     },
     {
+      "pathGlob": "src/lib/discovered-skills.ts",
+      "patterns": [".claude/"],
+      "reason": "'.claude/skills' is one of OpenCode's own documented skill-discovery roots (see opencode.ai/docs/skills). Discovery must reference it verbatim to match OpenCode's discovery set. This is an OpenCode-compatibility path constant, not CC coupling."
+    },
+    {
       "pathGlob": "skills/writing-skills/references/examples/skill-testing-walkthrough.md",
       "patterns": ["CLAUDE.md"],
       "reason": "Historical worked example documenting a skill-testing campaign that tested CLAUDE.md documentation variants in agent harnesses. The CLAUDE.md references describe what the walkthrough tested, not Systematic-prescriptive content. Converting to AGENTS.md would falsify the historical record."

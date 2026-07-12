@@ -89,7 +89,8 @@ describe('SystematicConfigSchema', () => {
       expect(result.data.bootstrap.enabled).toBe(true)
       expect(result.data.agents).toEqual({})
       expect(result.data.categories).toEqual({})
-      // Verify all six top-level keys exist
+      expect(result.data.skills_as_commands).toBe(true)
+      // Verify all seven top-level keys exist
       expect(Object.keys(result.data).sort()).toEqual([
         'agents',
         'bootstrap',
@@ -97,8 +98,36 @@ describe('SystematicConfigSchema', () => {
         'disabled_agents',
         'disabled_commands',
         'disabled_skills',
+        'skills_as_commands',
       ])
     }
+  })
+
+  describe('skills_as_commands', () => {
+    test('defaults to true when omitted', () => {
+      const result = SystematicConfigSchema.safeParse({})
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.skills_as_commands).toBe(true)
+      }
+    })
+
+    test('accepts explicit false', () => {
+      const result = SystematicConfigSchema.safeParse({
+        skills_as_commands: false,
+      })
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.skills_as_commands).toBe(false)
+      }
+    })
+
+    test('rejects non-boolean value', () => {
+      const result = SystematicConfigSchema.safeParse({
+        skills_as_commands: 'yes',
+      })
+      expect(result.success).toBe(false)
+    })
   })
 
   test('rejects unknown top-level keys with a path-named error', () => {
