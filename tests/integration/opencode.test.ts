@@ -479,7 +479,7 @@ function assertMixedVersionProbeEvents(events: ProbeEvent[]): void {
       }
     }
     expect(system[0]).toContain('<available_skills>')
-    expect(system[0]).toMatch(/ce:brainstorm|systematic:setup/)
+    expect(system[0]).toMatch(/ce:brainstorm|systematic:git-clean-gone-branches/)
   }
 
   if (titleSystemEvents.length > 0) {
@@ -747,17 +747,17 @@ const DIST_LOCAL_AVAILABLE = fs.existsSync(DIST_INDEX)
 function expectSetupSkillLoaded(result: OpencodeResult): void {
   assertOk(result)
   expect(result.stderr).toMatch(
-    /(?:Skill\s+"?setup"?|systematic_skill\s*\{"name":"(?:systematic:)?setup"\})/i,
+    /(?:Skill\s+"?git-clean-gone-branches"?|systematic_skill\s*\{"name":"(?:systematic:)?git-clean-gone-branches"\})/i,
   )
-  expect(result.stdout).toMatch(/ce:review/i)
+  expect(result.stdout).toMatch(/branch/i)
 }
 
-test('expectSetupSkillLoaded accepts setup output without tool id mention', () => {
+test('expectSetupSkillLoaded accepts git-clean-gone-branches output without tool id mention', () => {
   expect(() =>
     expectSetupSkillLoaded({
       exitCode: 0,
-      stdout: 'Loaded ce:review',
-      stderr: '→ Skill "setup"\n',
+      stdout: 'No stale branches found',
+      stderr: '→ Skill "git-clean-gone-branches"\n',
     }),
   ).not.toThrow()
 })
@@ -948,7 +948,6 @@ describe('SystematicPlugin config hook integration', () => {
     writeCustomSystematicConfig({
       categories: {
         design: { model: 'openai/gpt-4' },
-        docs: { model: 'openai/gpt-4' },
         'document-review': { model: 'openai/gpt-4' },
         research: { model: 'openai/gpt-4' },
         review: { model: 'openai/gpt-4' },
@@ -968,7 +967,6 @@ describe('SystematicPlugin config hook integration', () => {
     expect(config.agent).toBeDefined()
     expect(Object.keys(config.agent ?? {}).length).toBeGreaterThan(0)
     expect(config.agent?.['design-iterator']?.model).toBe('openai/gpt-4')
-    expect(config.agent?.['ankane-readme-writer']?.model).toBe('openai/gpt-4')
     expect(config.agent?.['adversarial-document-reviewer']?.model).toBe(
       'openai/gpt-4',
     )
@@ -1079,7 +1077,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
     'source-local plugin loads systematic skill with prefix',
     async () => {
       const result = await runOpencode(
-        'Use the systematic_skill tool to load systematic:setup',
+        'Use the systematic_skill tool to load systematic:git-clean-gone-branches',
         { fixture, configContent: buildSourceLocalConfig() },
       )
 
@@ -1092,7 +1090,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
     'source-local plugin loads systematic skill without prefix',
     async () => {
       const result = await runOpencode(
-        'Use the systematic_skill tool to load setup',
+        'Use the systematic_skill tool to load git-clean-gone-branches',
         { fixture, configContent: buildSourceLocalConfig() },
       )
 
@@ -1102,10 +1100,10 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
   )
 
   test.skipIf(!DIST_LOCAL_AVAILABLE)(
-    'dist-local plugin registers systematic_skill and loads setup skill after bun run build',
+    'dist-local plugin registers systematic_skill and loads git-clean-gone-branches skill after bun run build',
     async () => {
       const result = await runOpencode(
-        'Use the systematic_skill tool to load setup',
+        'Use the systematic_skill tool to load git-clean-gone-branches',
         { fixture, configContent: buildDistLocalConfig() },
       )
 
@@ -1144,13 +1142,13 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
         assertFixtureEnvironmentRoots(fixture)
 
         const result = await runOpencode(
-          'Use the systematic_skill tool to load systematic:setup',
+          'Use the systematic_skill tool to load systematic:git-clean-gone-branches',
           { fixture, configContent: buildSourceLocalConfig() },
         )
 
         expect(result.exitCode).toBe(0)
         expect(result.stderr).toMatch(/systematic_skill/)
-        expect(result.stderr).toMatch(/setup/)
+        expect(result.stderr).toMatch(/git-clean-gone-branches/)
         expect(result.stderr).not.toContain('/nonexistent-poison-home')
         expect(result.stderr).not.toContain('/nonexistent-poison-xdg-config')
         expect(result.stderr).not.toContain('/nonexistent-poison-xdg-data')
@@ -1167,7 +1165,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
     'fixture run does not write into repo .opencode directory',
     async () => {
       const result = await runOpencode(
-        'Use the systematic_skill tool to load systematic:setup',
+        'Use the systematic_skill tool to load systematic:git-clean-gone-branches',
         { fixture, configContent: buildSourceLocalConfig() },
       )
 
@@ -1238,7 +1236,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
         ).toBe(1)
         for (const event of toolEvents) {
           expect(event.description).toContain('## Available Systematic Skills')
-          expect(event.description).toMatch(/ce:brainstorm|systematic:setup/)
+          expect(event.description).toMatch(/ce:brainstorm|systematic:git-clean-gone-branches/)
           expect(event.description).not.toContain('<available_skills>')
           expect(event.description).not.toContain('<location>')
         }

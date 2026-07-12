@@ -1,0 +1,41 @@
+---
+title: Migrating to v3
+description: What changed in Systematic v3 and how to adapt — removed skills and agents, merged skills, and replacement mappings.
+sidebar:
+  order: 9
+---
+
+Systematic v3 curates the bundled catalog around the compound-engineering workflow core. If your config or muscle memory references a removed asset, this page maps every removal to its replacement.
+
+Stale `disabled_skills` / `disabled_agents` entries for removed names produce a **warning, not an error** — your config keeps working.
+
+## Removed skills
+
+| Removed | Use instead |
+| --- | --- |
+| `orchestrating-swarms` | `orchestrating-subagents` |
+| `claude-permissions-optimizer` | — (Claude Code-specific; out of scope) |
+| `dspy-ruby`, `dhh-rails-style`, `andrew-kane-gem-writer` | — (Ruby/Rails vertical; add project-local skills if needed) |
+| `every-style-editor` | — |
+| `rclone`, `gemini-imagegen`, `test-xcode`, `proof` | — (vendor integrations; add project-local skills if needed) |
+| `feature-video` | — (PR evidence: existing `## Demo` blocks are still preserved by `git-commit-push-pr`) |
+| `changelog`, `generate_command`, `setup` | — |
+| `todo-create`, `todo-triage`, `todo-resolve` | `todos` (Create / Triage / Resolve sections) |
+| `writing-systematic-skills` | `writing-skills` ("Systematic Bundled Skills" section) |
+
+## Removed agents
+
+| Removed | Use instead |
+| --- | --- |
+| `security-sentinel` | `security-reviewer` |
+| `performance-oracle` | `performance-reviewer` |
+| `data-integrity-guardian`, `data-migration-expert` | `data-migrations-reviewer` |
+| `cli-agent-readiness-reviewer` | `cli-readiness-reviewer` |
+| `kieran-rails-reviewer`, `kieran-python-reviewer`, `dhh-rails-reviewer`, `julik-frontend-races-reviewer` | — (stack-specific; `kieran-typescript-reviewer` remains) |
+| `schema-drift-detector`, `lint` | — (Rails/Ruby-specific) |
+| `figma-design-sync`, `design-implementation-reviewer` | `design-iterator` (tool-agnostic) |
+| `ankane-readme-writer` | — |
+
+## Why
+
+The v3 bundle is curated to what serves the core loop everywhere it runs — interactive OpenCode sessions and headless harnesses alike: the `ce:*` workflow family, universal review and document-review personas, research agents, and cross-cutting engineering skills. Stack-specific personas and vendor integrations are better served by project-local skills and agents in your own `.opencode/` or `.agents/` directories.
