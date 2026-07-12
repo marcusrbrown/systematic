@@ -1359,6 +1359,38 @@ describe('config', () => {
       )
       warnSpy.mockRestore()
     })
+
+    test('disabled_agents with qualified removed agent "review/security-sentinel" drops the name, warns, and loads without throwing', () => {
+      writeProjectConfig({ disabled_agents: ['review/security-sentinel'] })
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+
+      let result: ReturnType<typeof loadConfig> | undefined
+      expect(() => {
+        result = loadConfig(testDir)
+      }).not.toThrow()
+
+      expect(result?.disabled_agents).not.toContain('review/security-sentinel')
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[systematic] "review/security-sentinel" in `disabled_agents` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning.',
+      )
+      warnSpy.mockRestore()
+    })
+
+    test('disabled_agents with qualified removed agent "design/figma-design-sync" drops the name, warns, and loads without throwing', () => {
+      writeProjectConfig({ disabled_agents: ['design/figma-design-sync'] })
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+
+      let result: ReturnType<typeof loadConfig> | undefined
+      expect(() => {
+        result = loadConfig(testDir)
+      }).not.toThrow()
+
+      expect(result?.disabled_agents).not.toContain('design/figma-design-sync')
+      expect(warnSpy).toHaveBeenCalledWith(
+        '[systematic] "design/figma-design-sync" in `disabled_agents` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning.',
+      )
+      warnSpy.mockRestore()
+    })
   })
 
   describe('JSONC precedence', () => {

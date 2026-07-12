@@ -479,7 +479,9 @@ function assertMixedVersionProbeEvents(events: ProbeEvent[]): void {
       }
     }
     expect(system[0]).toContain('<available_skills>')
-    expect(system[0]).toMatch(/ce:brainstorm|systematic:git-clean-gone-branches/)
+    expect(system[0]).toMatch(
+      /ce:brainstorm|systematic:git-clean-gone-branches/,
+    )
   }
 
   if (titleSystemEvents.length > 0) {
@@ -1236,7 +1238,9 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
         ).toBe(1)
         for (const event of toolEvents) {
           expect(event.description).toContain('## Available Systematic Skills')
-          expect(event.description).toMatch(/ce:brainstorm|systematic:git-clean-gone-branches/)
+          expect(event.description).toMatch(
+            /ce:brainstorm|systematic:git-clean-gone-branches/,
+          )
           expect(event.description).not.toContain('<available_skills>')
           expect(event.description).not.toContain('<location>')
         }

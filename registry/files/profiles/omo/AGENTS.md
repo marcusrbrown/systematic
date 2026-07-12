@@ -166,9 +166,7 @@ task(category='ultrabrain')  # Deep reasoning (GPT-5.3)
 ## Specialized Agents
 
 ### Systematic Design Agents
-- `design-implementation-reviewer` — Verify against design specs
 - `design-iterator` — Iterative UI/UX refinement
-- `figma-design-sync` — Detect visual differences
 
 ### Systematic Research Agents
 - `best-practices-researcher` — External research
@@ -180,8 +178,8 @@ task(category='ultrabrain')  # Deep reasoning (GPT-5.3)
 ### Systematic Review Agents (12 total)
 - `architecture-strategist` — Architectural review
 - `code-simplicity-reviewer` — YAGNI enforcement
-- `security-sentinel` — Security audits
-- `performance-oracle` — Performance analysis
+- `security-reviewer` — Security audits
+- `performance-reviewer` — Performance analysis
 - Plus: data integrity, DHH Rails, TypeScript, pattern recognition, deployment, etc.
 
 ### OMO Orchestrators

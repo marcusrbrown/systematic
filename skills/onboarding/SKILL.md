@@ -389,19 +389,8 @@ After writing, inform the user that `ONBOARDING.md` has been generated. Offer ne
 
 Options:
 1. Open the file for review
-2. Share to Proof
-3. Done
+2. Done
 
 Based on selection:
 - **Open for review** -> Open `ONBOARDING.md` using the current platform's file-open or editor mechanism
-- **Share to Proof** -> Upload the document:
-  ```bash
-  CONTENT=$(cat ONBOARDING.md)
-  TITLE="Onboarding: <project name from inventory>"
-  RESPONSE=$(curl -s -X POST https://www.proofeditor.ai/share/markdown \
-    -H "Content-Type: application/json" \
-    -d "$(jq -n --arg title "$TITLE" --arg markdown "$CONTENT" --arg by "ai:compound" '{title: $title, markdown: $markdown, by: $by}')")
-  PROOF_URL=$(echo "$RESPONSE" | jq -r '.tokenUrl')
-  ```
-  Display `View & collaborate in Proof: <PROOF_URL>` if successful, then return to the options
 - **Done** -> No further action

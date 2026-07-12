@@ -59,5 +59,4 @@ When the conversation has enough material to narrow — reflect back what you've
 
 - **Create a plan** → hand off to `ce:plan` with the decided goal and constraints
 - **Save summary to disk** → write the summary as a markdown file in the current working directory
-- **Open in Proof (web app) — review and comment to iterate with the agent** → load the `ce-proof` skill to open the doc in Every's Proof editor, iterate with the agent via comments, or copy a link to share with others
 - **Done** → the conversation was the value, no artifact needed

@@ -126,7 +126,7 @@ Systematic provides source-owned category model defaults in TypeScript code for 
 
 ### Machine ID
 
-`ai:systematic` is a machine identity string for Systematic-owned operations. Proof uses it as the `by` field on operations and the `X-Agent-Id` header. Keep it lowercase and stable.
+`ai:systematic` is a machine identity string for Systematic-owned operations, used as the `by` field on operations and the `X-Agent-Id` header where applicable. Keep it lowercase and stable.
 
 Do not use `ai:systematic` as a skill-reference pattern. Skill and agent references use their own namespaces, such as `systematic:writing-skills` or `systematic:research:best-practices-researcher`.
 
