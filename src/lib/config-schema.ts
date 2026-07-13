@@ -293,7 +293,7 @@ export function createSystematicConfigSchema(
           description:
             'JSON Schema URL for IDE autocomplete. The value is informational only — the loader does not fetch or validate against it. Add this to enable IDE schema activation and field-level autocomplete in editors that support JSON Schema (VSCode, Zed, IntelliJ).',
           examples: [
-            'https://fro.bot/systematic/schemas/v2/systematic-config.schema.json',
+            'https://fro.bot/systematic/schemas/latest/systematic-config.schema.json',
           ],
         }),
       agents: z
