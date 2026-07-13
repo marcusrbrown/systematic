@@ -14,11 +14,7 @@ import {
   type LoadedSkill,
   loadSkill,
 } from './skill-loader.js'
-import {
-  findSkillsInDir,
-  type SkillDeprecated,
-  type SkillInfo,
-} from './skills.js'
+import { findSkillsInDir, type SkillInfo } from './skills.js'
 
 export interface SkillToolOptions {
   bundledSkillsDir: string
@@ -94,34 +90,12 @@ export function discoverSkillFiles(dir: string, limit = 10): string {
   return files.map((file) => `  <file>${file}</file>`).join('\n')
 }
 
-function formatDeprecationMessage(
-  name: string,
-  deprecated: SkillDeprecated,
-): string {
-  let msg = `[systematic] skill "${name}" is deprecated since ${deprecated.since}; will be removed in ${deprecated.removal}.`
-  if (deprecated.replacement) {
-    msg += ` Replacement: ${deprecated.replacement}`
-    if (!deprecated.replacement.endsWith('.')) {
-      msg += '.'
-    }
-  }
-  if (deprecated.reason) {
-    msg += ` Reason: ${deprecated.reason}`
-    if (!deprecated.reason.endsWith('.')) {
-      msg += '.'
-    }
-  }
-  return msg
-}
-
 export function createSkillTool(options: SkillToolOptions): ToolDefinition {
   const { bundledSkillsDir, disabledSkills } = options
   // Per-createSkillTool instance, intentionally not per-session. OpenCode's
   // current per-session plugin-init behavior makes this de facto per-session
   // today. If a future OpenCode reuses plugin instances across sessions, the
   // warning de-emits indefinitely — acceptable since deprecation is informational.
-  const warnedSkills = new Set<string>()
-
   const getAllSkills = (): LoadedSkill[] => {
     return findSkillsInDir(bundledSkillsDir)
       .filter((s) => !disabledSkills.includes(s.name))
@@ -192,13 +166,6 @@ ${catalog}`
         throw new Error(
           `Skill "${requestedName}" not found. Available systematic skills: ${availableSystematic.join(', ')}`,
         )
-      }
-
-      if (matchedSkill.deprecated && !warnedSkills.has(matchedSkill.name)) {
-        console.warn(
-          formatDeprecationMessage(matchedSkill.name, matchedSkill.deprecated),
-        )
-        warnedSkills.add(matchedSkill.name)
       }
 
       const body = extractSkillBody(matchedSkill.wrappedTemplate)

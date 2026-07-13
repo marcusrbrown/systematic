@@ -192,7 +192,7 @@ argument-hint: '"[pattern]"'
       expect(result.argumentHint).toBe('[pattern]')
     })
 
-    test('parses full deprecated block with all four fields', () => {
+    test('a deprecated: block in frontmatter has no dedicated extraction — field is ignored', () => {
       const filePath = path.join(testDir, 'test.md')
       fs.writeFileSync(
         filePath,
@@ -208,67 +208,7 @@ deprecated:
 # Skill Content`,
       )
       const result = skills.extractFrontmatter(filePath)
-      expect(result.deprecated).toEqual({
-        since: '1.2.0',
-        removal: '2.0.0',
-        replacement: 'new-skill',
-        reason: 'Replaced by new-skill for better performance',
-      })
-    })
-
-    test('drops entire deprecated block when removal is missing', () => {
-      const filePath = path.join(testDir, 'test.md')
-      fs.writeFileSync(
-        filePath,
-        `---
-name: test-skill
-description: A test skill
-deprecated:
-  since: '1.2.0'
-  reason: Missing removal field
----
-# Skill Content`,
-      )
-      const result = skills.extractFrontmatter(filePath)
-      expect(result.deprecated).toBeUndefined()
-    })
-
-    test('keeps since+removal but drops non-string replacement silently', () => {
-      const filePath = path.join(testDir, 'test.md')
-      fs.writeFileSync(
-        filePath,
-        `---
-name: test-skill
-description: A test skill
-deprecated:
-  since: '1.2.0'
-  removal: '2.0.0'
-  replacement: 42
-  reason: Valid reason
----
-# Skill Content`,
-      )
-      const result = skills.extractFrontmatter(filePath)
-      expect(result.deprecated).toEqual({
-        since: '1.2.0',
-        removal: '2.0.0',
-        reason: 'Valid reason',
-      })
-      expect(result.deprecated?.replacement).toBeUndefined()
-    })
-
-    test('skill with no deprecated field has deprecated undefined', () => {
-      const filePath = path.join(testDir, 'test.md')
-      fs.writeFileSync(
-        filePath,
-        `---
-name: test-skill
-description: A test skill
----
-# Skill Content`,
-      )
-      const result = skills.extractFrontmatter(filePath)
-      expect(result.deprecated).toBeUndefined()
+      expect(result).not.toHaveProperty('deprecated')
     })
   })
 

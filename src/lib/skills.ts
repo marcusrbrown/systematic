@@ -9,13 +9,6 @@ import {
 } from './validation.js'
 import { walkDir } from './walk-dir.js'
 
-export interface SkillDeprecated {
-  since: string
-  removal: string
-  replacement?: string
-  reason?: string
-}
-
 export interface SkillFrontmatter {
   name: string
   description: string
@@ -23,7 +16,6 @@ export interface SkillFrontmatter {
   license?: string
   compatibility?: string
   metadata?: Record<string, string>
-  deprecated?: SkillDeprecated
   // Claude Code converted fields
   disableModelInvocation?: boolean // from YAML key: disable-model-invocation
   userInvocable?: boolean // from YAML key: user-invocable
@@ -43,7 +35,6 @@ export interface SkillInfo {
   license?: string
   compatibility?: string
   metadata?: Record<string, string>
-  deprecated?: SkillDeprecated
   // Claude Code converted fields
   disableModelInvocation?: boolean
   userInvocable?: boolean
@@ -63,7 +54,6 @@ export const SKILL_FRONTMATTER_FIELDS = [
   'license',
   'compatibility',
   'metadata',
-  'deprecated',
   'user-invocable',
   'agent',
   'model',
@@ -85,36 +75,6 @@ function parseMetadata(
   return Object.fromEntries(entries) as Record<string, string>
 }
 
-function parseDeprecated(
-  data: Record<string, unknown>,
-): SkillDeprecated | undefined {
-  const deprecatedRaw = data.deprecated
-  if (!isRecord(deprecatedRaw)) {
-    return undefined
-  }
-
-  const since =
-    typeof deprecatedRaw.since === 'string' && deprecatedRaw.since !== ''
-      ? deprecatedRaw.since
-      : undefined
-  const removal =
-    typeof deprecatedRaw.removal === 'string' && deprecatedRaw.removal !== ''
-      ? deprecatedRaw.removal
-      : undefined
-  if (since === undefined || removal === undefined) {
-    return undefined
-  }
-
-  const deprecated: SkillDeprecated = { since, removal }
-  if (typeof deprecatedRaw.replacement === 'string') {
-    deprecated.replacement = deprecatedRaw.replacement
-  }
-  if (typeof deprecatedRaw.reason === 'string') {
-    deprecated.reason = deprecatedRaw.reason
-  }
-  return deprecated
-}
-
 /**
  * Parse skill frontmatter from already-read file content. Split out from
  * `extractFrontmatter` so callers that also need the body (e.g. discovered-skill
@@ -131,7 +91,6 @@ export function extractFrontmatterFromContent(
   }
 
   const metadata = parseMetadata(data)
-  const deprecated = parseDeprecated(data)
 
   const argumentHintRaw = extractNonEmptyString(data, 'argument-hint')
   const argumentHint = argumentHintRaw?.replace(/^["']|["']$/g, '') || undefined
@@ -142,7 +101,6 @@ export function extractFrontmatterFromContent(
     license: extractNonEmptyString(data, 'license'),
     compatibility: extractNonEmptyString(data, 'compatibility'),
     metadata,
-    deprecated,
     disableModelInvocation: extractBoolean(data, 'disable-model-invocation'),
     userInvocable: extractBoolean(data, 'user-invocable'),
     subtask:
@@ -185,7 +143,6 @@ export function findSkillsInDir(dir: string, maxDepth = 3): SkillInfo[] {
         license: frontmatter.license,
         compatibility: frontmatter.compatibility,
         metadata: frontmatter.metadata,
-        deprecated: frontmatter.deprecated,
         disableModelInvocation: frontmatter.disableModelInvocation,
         userInvocable: frontmatter.userInvocable,
         subtask: frontmatter.subtask,

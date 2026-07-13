@@ -6,7 +6,6 @@ import type { AgentConfig } from '@opencode-ai/sdk'
 import {
   assertSourceCategoryModelCoverage,
   buildBundledAgentInventory,
-  inferBuiltInTemperature,
   type ResolvedAgentOverlaySet,
   resolveAgentOverlaySet,
   validateAgentOverlays,
@@ -265,10 +264,6 @@ function applyAgentOverlays(
   if (hasPermissionOverlay && isRecord(config.permission)) {
     addPermissionRules(permissionRules, config.permission)
   }
-
-  result.temperature =
-    result.temperature ??
-    inferBuiltInTemperature(agentInfo.name, result.description)
 
   applySourceModelDefault(result, agentInfo, availabilitySet)
   applyAgentOverlay(result, categoryOverlay?.value, permissionRules)

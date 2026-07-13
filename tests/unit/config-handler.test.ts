@@ -1035,7 +1035,7 @@ model: gpt-4
       const config: Config = {}
       await handler(config)
 
-      expect(config.agent?.uncategorized?.temperature).toBeDefined()
+      expect(config.agent?.uncategorized?.temperature).toBeUndefined()
       expect(config.agent?.uncategorized?.model).toBeUndefined()
     })
 
@@ -1630,11 +1630,9 @@ model: gpt-4
       await expect(handler(config)).rejects.toThrow('disabled_skills')
     })
 
-    test('explicit frontmatter temperature is preserved (fill-if-absent)', async () => {
+    test('explicit frontmatter temperature is preserved', async () => {
       // An agent with explicit temperature: 0.5 in frontmatter must keep 0.5
-      // after applyAgentOverlays — the runtime must not overwrite it with the
-      // inferred value. This is the RED test: it fails before the fill-if-absent
-      // change because the current code unconditionally overwrites.
+      // after applyAgentOverlays.
       createAgent(path.join(bundledDir, 'agents'), 'test-agent', {
         name: 'test-agent',
         description: 'A test agent',
@@ -1656,10 +1654,9 @@ model: gpt-4
       expect(config.agent?.['test-agent']?.temperature).toBe(0.5)
     })
 
-    test('agent without explicit temperature falls back to inferred value', async () => {
-      // An agent with no temperature in frontmatter must still resolve to the
-      // inferBuiltInTemperature value — the fallback path must remain intact.
-      // 'security-sentinel' matches the review/security regex → inferred 0.1.
+    test('agent without explicit temperature leaves temperature unset', async () => {
+      // An agent with no temperature in frontmatter has no runtime fallback;
+      // the resolved config simply omits temperature.
       createAgent(path.join(bundledDir, 'agents'), 'security-sentinel', {
         name: 'security-sentinel',
         description: 'Security review agent',
@@ -1675,7 +1672,7 @@ model: gpt-4
       const config: Config = {}
       await handler(config)
 
-      expect(config.agent?.['security-sentinel']?.temperature).toBe(0.1)
+      expect(config.agent?.['security-sentinel']?.temperature).toBeUndefined()
     })
 
     test('user overlay temperature overrides explicit frontmatter temperature (precedence preserved)', async () => {

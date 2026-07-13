@@ -1065,8 +1065,8 @@ export function checkAgentTemperature(
         file: relPath,
         message:
           'Bundled agents must declare an explicit `temperature:` in frontmatter. ' +
-          'The runtime fill-if-absent fallback (`inferBuiltInTemperature`) will be removed in v3.0.0; ' +
-          'without an explicit `temperature:`, agents would lose their tuned value.',
+          'The runtime has no fallback for a missing value; ' +
+          'without an explicit `temperature:`, the agent would run with no tuned value set.',
       })
     }
   }
