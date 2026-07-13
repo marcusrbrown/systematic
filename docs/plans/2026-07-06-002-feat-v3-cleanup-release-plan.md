@@ -38,10 +38,10 @@ Carried from the origin brainstorm (see origin: `docs/brainstorms/2026-07-06-v3-
 - R8. Keep `claude-permissions-optimizer` removed without replacement; migration guidance states the gap honestly and names OpenCode's own permission config as the manual alternative.
 - R9. `orchestrating-subagents` survives regeneration across the same canonical surface list.
 - R10. Removed bundled names in `disabled_skills`/`disabled_agents` warn-and-ignore, not hard-fail (ships in the same release that deletes the skills).
-- R10a. Durable gate + regression tests: a removed name warns and loads; genuinely-invalid config still throws.
+- R10a. Durable gate + regression tests: a removed name warns and loads; genuinely-invalid config rejects plugin initialization (the OpenCode host catches/logs the loader failure and omits the plugin's hooks, rather than the process throwing).
 - R11. Regenerate the canonical surfaces; **delete** `docs/public/schemas/v2/` on the cut.
 - R12. Committed migration guidance (not only release notes) covering removed skills, config/profile cleanup, CLI converter removal, and the v2 pin path; release checklist verifies narrated notes match committed docs.
-- R13. Verify the packaged v3 plugin in an isolated OpenCode runtime (loads without converter; catalog exposes `orchestrating-subagents`, omits removed skills; removed name in `disabled_skills` loads with a warning; invalid config still throws). Fixture loads the packaged artifact, not only source-local TypeScript.
+- R13. Verify the packaged v3 plugin in an isolated OpenCode runtime (loads without converter; catalog exposes `orchestrating-subagents`, omits removed skills; removed name in `disabled_skills` loads with a warning; genuinely-invalid config rejects plugin initialization -- the OpenCode host catches/logs the loader failure and omits the plugin's hooks). Fixture loads the packaged artifact, not only source-local TypeScript.
 - R14. No broad imported-skill rewrites, model-default changes, or general frontmatter redesign.
 - R15. Correct active product guidance only; do not scrub historical docs for grep cleanliness.
 
@@ -299,7 +299,7 @@ Phase 3 (convergence + assurance)
 
 - [ ] **Unit 6: Isolated packaged-plugin runtime validation**
 
-**Goal:** Verify the packaged v3 plugin in an isolated OpenCode runtime — loads without converter, catalog exposes `orchestrating-subagents` and omits removed skills, a removed name in `disabled_skills` loads with a warning, invalid config still throws. Must load the packaged artifact, not only source-local TypeScript.
+**Goal:** Verify the packaged v3 plugin in an isolated OpenCode runtime — loads without converter, catalog exposes `orchestrating-subagents` and omits removed skills, a removed name in `disabled_skills` loads with a warning, genuinely-invalid config rejects plugin initialization (the OpenCode host catches/logs the loader failure and omits the plugin's hooks, not a process-level throw). Must load the packaged artifact, not only source-local TypeScript.
 
 **Requirements:** R13
 
@@ -312,7 +312,7 @@ Phase 3 (convergence + assurance)
 **Approach:**
 - Extend `IsolatedFixture` with a packaged-artifact load path (`npm pack` → install into `fixture.projectDir/node_modules/@fro.bot/systematic`), reusing the existing HOME/XDG/`OPENCODE_CONFIG_CONTENT` override discipline.
 - Reuse `createProbePlugin` to capture the rendered skill catalog and assert membership.
-- Skip guard stays (`OPENCODE_AVAILABLE` + model auth) so CI without the binary skips cleanly.
+- Skip guard stays (`OPENCODE_AVAILABLE`); this suite is POSIX-only (requires real `tar`/symlink semantics) and relies on the public, no-auth `opencode/big-pickle` model for the model-backed assertion — a provider/service outage is a genuine integration failure here, not a skip condition.
 
 **Execution note:** Integration-first — these assertions only prove value against a real spawned runtime; unit mocks cannot substitute.
 
@@ -320,9 +320,9 @@ Phase 3 (convergence + assurance)
 - Integration: packaged plugin loads; startup produces no converter-related error.
 - Integration: rendered catalog contains `systematic:orchestrating-subagents`, omits `systematic:orchestrating-swarms` and `systematic:claude-permissions-optimizer`.
 - Integration: config `{ disabled_skills: ["orchestrating-swarms"] }` → exit 0 + stderr contains the literal `[systematic] "orchestrating-swarms" in \`disabled_skills\` is no longer a bundled name and will be ignored.`
-- Integration: config `{ disabled_skills: ["never-existed-skill"] }` → non-zero exit + `Invalid Systematic config in …`.
+- Integration: config `{ disabled_skills: ["never-existed-skill"] }` → OpenCode host exit 0 + stderr contains BOTH `failed to load plugin` and `Invalid Systematic config in …` (confirmed OpenCode 1.17.18 host behavior: plugin-factory rejections are caught and logged, not propagated to a nonzero process exit).
 
-**Verification:** integration suite green where `opencode` is available (skips cleanly otherwise); the packaged-artifact path exercises the real tarball, not `file://` source.
+**Verification:** integration suite green where `opencode` is available (skips cleanly otherwise); the packaged-artifact path loads the real tarball via the extracted package root, exercising `package.json` `main` resolution, not `file://` source.
 
 ## System-Wide Impact
 
