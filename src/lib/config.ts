@@ -109,6 +109,8 @@ export function computeDroppedNames(
   return names.filter((n) => !allowedSet.has(n))
 }
 
+const MIGRATION_DOCS_URL = 'https://fro.bot/systematic/guides/v3-migration/'
+
 /**
  * Emit a `[systematic]` warning for each dropped name that has not already
  * been warned about in this load invocation. The `warned` set is local to a
@@ -124,7 +126,7 @@ export function warnDroppedNames(
     if (warned.has(name)) continue
     warned.add(name)
     console.warn(
-      `[systematic] "${name}" in \`${field}\` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning.`,
+      `[systematic] "${name}" in \`${field}\` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning. See ${MIGRATION_DOCS_URL} for migration guidance.`,
     )
   }
 }
