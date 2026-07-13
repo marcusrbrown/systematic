@@ -14,7 +14,7 @@ Stale `disabled_skills` / `disabled_agents` entries for removed names produce a 
 | Removed | Use instead |
 | --- | --- |
 | `orchestrating-swarms` | `orchestrating-subagents` |
-| `claude-permissions-optimizer` | — (Claude Code-specific; out of scope) |
+| `claude-permissions-optimizer` | — (no Systematic replacement; configure permissions manually via OpenCode's own `permission` block in `opencode.jsonc`) |
 | `dspy-ruby`, `dhh-rails-style`, `andrew-kane-gem-writer` | — (Ruby/Rails vertical; add project-local skills if needed) |
 | `every-style-editor` | — |
 | `rclone`, `gemini-imagegen`, `test-xcode`, `proof` | — (vendor integrations; add project-local skills if needed) |
@@ -35,6 +35,34 @@ Stale `disabled_skills` / `disabled_agents` entries for removed names produce a 
 | `schema-drift-detector`, `lint` | — (Rails/Ruby-specific) |
 | `figma-design-sync`, `design-implementation-reviewer` | `design-iterator` (tool-agnostic) |
 | `ankane-readme-writer` | — |
+
+## Config cleanup (optional)
+
+If your `systematic.json`/`systematic.jsonc` lists a removed name in `disabled_skills` or `disabled_agents`, Systematic does **not** fail to load. It drops the stale entry and logs a warning once per name, per load:
+
+```
+[systematic] "orchestrating-swarms" in `disabled_skills` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning. See https://fro.bot/systematic/guides/v3-migration/ for migration guidance.
+```
+
+Removing the stale entry silences the warning — it's cleanup, not a required fix. A genuinely-unknown name (a typo, or a name that never existed) is still a hard validation error.
+
+## CLI converter removal
+
+The `systematic convert` CLI command (Claude Code → OpenCode skill format) is gone in v3. If you need one-off conversion, pin the last v2 release for that task:
+
+```bash
+npm install @fro.bot/systematic@2
+```
+
+Run the conversion under the pinned v2 install, then upgrade back to the current `@fro.bot/systematic@latest` for day-to-day use.
+
+## Deprecated skill frontmatter
+
+Skill frontmatter no longer recognizes a `deprecated:` block. Any skill still shipping one will surface it as an unrecognized field during content-integrity validation — remove the block.
+
+## Bundled agents: explicit `temperature:` (contributor note)
+
+If you maintain or contribute bundled agents, every bundled agent must declare an explicit `temperature:` in its frontmatter. Runtime inference of a default temperature is no longer supported. This only affects agents shipped inside this repo — it does not affect your project config.
 
 ## Why
 

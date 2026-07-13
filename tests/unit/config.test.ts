@@ -1214,7 +1214,7 @@ describe('config', () => {
 
       expect(result?.disabled_skills).not.toContain('orchestrating-swarms')
       expect(warnSpy).toHaveBeenCalledWith(
-        '[systematic] "orchestrating-swarms" in `disabled_skills` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning.',
+        '[systematic] "orchestrating-swarms" in `disabled_skills` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning. See https://fro.bot/systematic/guides/v3-migration/ for migration guidance.',
       )
       warnSpy.mockRestore()
     })
@@ -1232,7 +1232,7 @@ describe('config', () => {
         'claude-permissions-optimizer',
       )
       expect(warnSpy).toHaveBeenCalledWith(
-        '[systematic] "claude-permissions-optimizer" in `disabled_skills` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning.',
+        '[systematic] "claude-permissions-optimizer" in `disabled_skills` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning. See https://fro.bot/systematic/guides/v3-migration/ for migration guidance.',
       )
       warnSpy.mockRestore()
     })
@@ -1248,7 +1248,7 @@ describe('config', () => {
 
       expect(result?.disabled_skills).not.toContain('writing-systematic-skills')
       expect(warnSpy).toHaveBeenCalledWith(
-        '[systematic] "writing-systematic-skills" in `disabled_skills` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning.',
+        '[systematic] "writing-systematic-skills" in `disabled_skills` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning. See https://fro.bot/systematic/guides/v3-migration/ for migration guidance.',
       )
       warnSpy.mockRestore()
     })
@@ -1271,7 +1271,7 @@ describe('config', () => {
       expect(result.disabled_skills).not.toContain('orchestrating-swarms')
       expect(result.disabled_skills).toContain('ce:review')
       expect(warnSpy).toHaveBeenCalledWith(
-        '[systematic] "orchestrating-swarms" in `disabled_skills` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning.',
+        '[systematic] "orchestrating-swarms" in `disabled_skills` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning. See https://fro.bot/systematic/guides/v3-migration/ for migration guidance.',
       )
       warnSpy.mockRestore()
     })
@@ -1287,7 +1287,7 @@ describe('config', () => {
 
       expect(result?.disabled_skills).not.toContain('rclone')
       expect(warnSpy).toHaveBeenCalledWith(
-        '[systematic] "rclone" in `disabled_skills` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning.',
+        '[systematic] "rclone" in `disabled_skills` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning. See https://fro.bot/systematic/guides/v3-migration/ for migration guidance.',
       )
       warnSpy.mockRestore()
     })
@@ -1303,7 +1303,7 @@ describe('config', () => {
       expect(result.disabled_skills).toContain('test-driven-development')
       expect(result.disabled_skills).not.toContain('setup')
       expect(warnSpy).toHaveBeenCalledWith(
-        '[systematic] "setup" in `disabled_skills` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning.',
+        '[systematic] "setup" in `disabled_skills` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning. See https://fro.bot/systematic/guides/v3-migration/ for migration guidance.',
       )
       warnSpy.mockRestore()
     })
@@ -1323,7 +1323,7 @@ describe('config', () => {
 
       expect(result?.disabled_skills).not.toContain('todo-create')
       expect(warnSpy).toHaveBeenCalledWith(
-        '[systematic] "todo-create" in `disabled_skills` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning.',
+        '[systematic] "todo-create" in `disabled_skills` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning. See https://fro.bot/systematic/guides/v3-migration/ for migration guidance.',
       )
       warnSpy.mockRestore()
     })
@@ -1339,7 +1339,7 @@ describe('config', () => {
 
       expect(result?.disabled_agents).not.toContain('security-sentinel')
       expect(warnSpy).toHaveBeenCalledWith(
-        '[systematic] "security-sentinel" in `disabled_agents` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning.',
+        '[systematic] "security-sentinel" in `disabled_agents` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning. See https://fro.bot/systematic/guides/v3-migration/ for migration guidance.',
       )
       warnSpy.mockRestore()
     })
@@ -1355,7 +1355,7 @@ describe('config', () => {
       expect(result.disabled_agents).toContain('correctness-reviewer')
       expect(result.disabled_agents).not.toContain('performance-oracle')
       expect(warnSpy).toHaveBeenCalledWith(
-        '[systematic] "performance-oracle" in `disabled_agents` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning.',
+        '[systematic] "performance-oracle" in `disabled_agents` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning. See https://fro.bot/systematic/guides/v3-migration/ for migration guidance.',
       )
       warnSpy.mockRestore()
     })
@@ -1371,7 +1371,7 @@ describe('config', () => {
 
       expect(result?.disabled_agents).not.toContain('review/security-sentinel')
       expect(warnSpy).toHaveBeenCalledWith(
-        '[systematic] "review/security-sentinel" in `disabled_agents` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning.',
+        '[systematic] "review/security-sentinel" in `disabled_agents` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning. See https://fro.bot/systematic/guides/v3-migration/ for migration guidance.',
       )
       warnSpy.mockRestore()
     })
@@ -1387,7 +1387,7 @@ describe('config', () => {
 
       expect(result?.disabled_agents).not.toContain('design/figma-design-sync')
       expect(warnSpy).toHaveBeenCalledWith(
-        '[systematic] "design/figma-design-sync" in `disabled_agents` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning.',
+        '[systematic] "design/figma-design-sync" in `disabled_agents` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning. See https://fro.bot/systematic/guides/v3-migration/ for migration guidance.',
       )
       warnSpy.mockRestore()
     })
