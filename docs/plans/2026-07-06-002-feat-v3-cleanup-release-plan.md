@@ -1,7 +1,7 @@
 ---
 title: "feat: v3.0.0 compatibility cleanup release"
 type: feat
-status: active
+status: completed
 date: 2026-07-06
 origin: docs/brainstorms/2026-07-06-v3-cleanup-release-requirements.md
 target_branch: v3
@@ -154,7 +154,7 @@ Phase 3 (convergence + assurance)
 
 ## Implementation Units
 
-- [ ] **Unit 1: Delete deprecated skills, populate removed-names, regenerate surfaces**
+- [x] **Unit 1: Delete deprecated skills, populate removed-names, regenerate surfaces**
 
 **Goal:** Remove `orchestrating-swarms` and `claude-permissions-optimizer` from the bundle and every generated/active surface, populate the warn-and-ignore removed-name list, and prove removed names load-with-warning while invalid config still throws. Atomic because the content-integrity overlap gate rejects a removed name that still exists in `bundled-names`.
 
@@ -189,7 +189,7 @@ Phase 3 (convergence + assurance)
 
 **Verification:** `bun run docs:generate` + `bun run registry:build` produce no drift; `bun test` green including the new warn-and-ignore + overlap-gate coverage; `orchestrating-subagents` survives, both deleted names gone everywhere.
 
-- [ ] **Unit 2: Remove the runtime converter, its call sites, and the CLI convert command**
+- [x] **Unit 2: Remove the runtime converter, its call sites, and the CLI convert command**
 
 **Goal:** Delete `src/lib/converter.ts` and all runtime + CLI usage, reading bundled frontmatter directly (normalization is proven no-op on bundled data). Now safe because Unit 1 removed the only skills whose bodies needed the converter's transforms.
 
@@ -224,7 +224,7 @@ Phase 3 (convergence + assurance)
 
 **Verification:** `bun run typecheck` clean (no stale imports); `bun test` green; ESM export-shape smoke test still reports exactly `['default']`.
 
-- [ ] **Unit 3: Remove tied dead code (deprecation machinery + temperature fallback)**
+- [x] **Unit 3: Remove tied dead code (deprecation machinery + temperature fallback)**
 
 **Goal:** Delete the now-unreachable deprecation-warning path and the runtime temperature-inference fallback stranded by Units 1–2.
 
@@ -249,7 +249,7 @@ Phase 3 (convergence + assurance)
 
 **Verification:** `bun run typecheck` clean; `bun test` green; content-integrity still rejects a temperature-less agent.
 
-- [ ] **Unit 4: Delete v2 schema, emit v3 + latest, add AJV parity**
+- [x] **Unit 4: Delete v2 schema, emit v3 + latest, add AJV parity**
 
 **Goal:** On the cut, remove the frozen `docs/public/schemas/v2/` and ensure the generator emits `v3/` + `latest/` matching runtime, with an AJV parity test guarding cross-field constraints.
 
@@ -274,7 +274,7 @@ Phase 3 (convergence + assurance)
 
 **Verification:** schema drift check passes; AJV parity test green; `docs/public/schemas/v2/` absent.
 
-- [ ] **Unit 5: Committed migration guidance**
+- [x] **Unit 5: Committed migration guidance**
 
 **Goal:** Ship migration guidance in active docs (not only release notes) covering removed skills, config/profile cleanup, CLI converter removal, and the v2 pin path.
 
@@ -297,7 +297,7 @@ Phase 3 (convergence + assurance)
 
 **Verification:** `bun run docs:build` green (112+ pages); migration page reachable from active nav; narrated release notes will be reconciled against this page at cut (R12 checklist item).
 
-- [ ] **Unit 6: Isolated packaged-plugin runtime validation**
+- [x] **Unit 6: Isolated packaged-plugin runtime validation**
 
 **Goal:** Verify the packaged v3 plugin in an isolated OpenCode runtime — loads without converter, catalog exposes `orchestrating-subagents` and omits removed skills, a removed name in `disabled_skills` loads with a warning, genuinely-invalid config rejects plugin initialization (the OpenCode host catches/logs the loader failure and omits the plugin's hooks, not a process-level throw). Must load the packaged artifact, not only source-local TypeScript.
 
