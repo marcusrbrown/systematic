@@ -9,8 +9,8 @@
 systematic/
 ├── src/              # TypeScript plugin + CLI source
 │   ├── index.ts      # Plugin entry — default export only
-│   ├── cli.ts        # CLI entry (list / convert / config)
-│   └── lib/          # 15 core modules
+│   ├── cli.ts        # CLI entry (list / config)
+│   └── lib/          # 20 core modules
 ├── skills/           # 45 bundled skills (one directory per skill, SKILL.md format)
 ├── agents/           # 51 bundled agents (6 category subdirectories)
 ├── docs/             # Starlight/Astro docs workspace (separate bun workspace)
@@ -38,7 +38,7 @@ systematic/
 
 **Key files:**
 - `src/index.ts` — plugin factory (`SystematicPlugin`), registers all three OpenCode hooks
-- `src/cli.ts` — CLI commands: `list`, `convert`, `config show/path`
+- `src/cli.ts` — CLI commands: `list`, `config show/path`
 - `src/lib/config.ts` — JSONC config loading, 3-source merge
 - `src/lib/config-schema.ts` — canonical Zod schema, `validateConfig`, `SECURITY_OVERLAY_FIELDS`
 - `src/lib/config-handler.ts` — `createConfigHandler`: merges bundled assets into OpenCode config
@@ -52,7 +52,6 @@ systematic/
 - `src/lib/walk-dir.ts` — `walkDir` (foundation for all asset discovery)
 - `src/lib/validation.ts` — agent config validation + type guards
 - `src/lib/agent-colors.ts` — `isValidAgentColor`, `OPENCODE_AGENT_COLOR_TOKENS`
-- `src/lib/converter.ts` — CC→OpenCode conversion (CLI only)
 
 ### `skills/`
 
@@ -131,7 +130,7 @@ no mocking libraries.
 | File | Role |
 |------|------|
 | `src/index.ts` | Plugin entry — `SystematicPlugin` default export |
-| `src/cli.ts` | CLI entry — `list`, `convert`, `config` commands |
+| `src/cli.ts` | CLI entry — `list`, `config` commands |
 
 ### Configuration
 

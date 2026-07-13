@@ -1,6 +1,6 @@
 # src/lib — Core Implementation
 
-15 modules implementing plugin logic: discovery, conversion, config, schema validation, and tool registration.
+20 modules implementing plugin logic: discovery, config, schema validation, and tool registration.
 
 ## Data Flow
 
@@ -29,11 +29,10 @@ All discovery follows same pattern: `dir → walkDir() → find files → parseF
 | `commands.ts` | `findCommandsInDir`, `CommandInfo`, `CommandFrontmatter` | Command discovery |
 | `frontmatter.ts` | `parseFrontmatter`, `formatFrontmatter`, `stripFrontmatter` | YAML frontmatter parse/format/strip |
 
-### Conversion Layer
+### Loading Layer
 
 | Module | Key Exports | Role |
 |--------|-------------|------|
-| `converter.ts` | `convertContent`, `convertFileWithCache`, `clearConverterCache`, `TOOL_NAME_MAP` | CEP→OpenCode transforms (tool names, models, body refs) |
 | `skill-loader.ts` | `loadSkill`, `LoadedSkill`, `SKILL_PREFIX` | Loads + wraps skill content in XML template |
 | `validation.ts` | `isAgentMode`, `isPermissionSetting`, `normalizePermission`, `extractString`, `extractBoolean` | Agent config extraction + type guards + safe value extraction |
 
@@ -44,7 +43,7 @@ All discovery follows same pattern: `dir → walkDir() → find files → parseF
 | `config.ts` | `loadConfig`, `getConfigPaths`, `SystematicConfig`, `DEFAULT_CONFIG` | JSONC config loading + merging |
 | `config-schema.ts` | `SystematicConfigSchema`, `validateConfig`, `SECURITY_OVERLAY_FIELDS`, `AgentOverlaySchema`, `CategoryOverlaySchema`, `BootstrapSchema` | Canonical Zod schema for user config; security field list |
 | `agent-colors.ts` | `isValidAgentColor`, `OPENCODE_AGENT_COLOR_TOKENS` | Color validator (hex or named token) + accepted token enum |
-| `config-handler.ts` | `createConfigHandler`, `ConfigHandlerDeps`, `formatAgentDescription`, `toTitleCase` | OpenCode config hook (collects + converts all assets) |
+| `config-handler.ts` | `createConfigHandler`, `ConfigHandlerDeps`, `formatAgentDescription`, `toTitleCase` | OpenCode config hook (collects + emits all assets) |
 | `skill-tool.ts` | `createSkillTool`, `SkillToolOptions` | `systematic_skill` tool (XML description, skill execution) |
 | `bootstrap.ts` | `getBootstrapContent`, `INTERNAL_AGENT_SIGNATURES`, `BootstrapDeps` | System prompt injection (using-systematic skill) |
 
@@ -52,11 +51,6 @@ All discovery follows same pattern: `dir → walkDir() → find files → parseF
 
 - **Discovery:** `SkillInfo`, `AgentInfo`, `CommandInfo`, `WalkEntry` — all have `name` + path/file fields
 - **Config:** `SystematicConfig` (disabled lists + bootstrap), `ConfigHandlerDeps` (directory paths)
-- **Conversion:** `ContentType` = `'skill' | 'agent' | 'command'`, `ConvertOptions` (source, agentMode, skipBodyTransform)
-
-## Converter
-
-CEP→OpenCode: tool names (`TodoWrite`→`todowrite`, `Task`→`task`, `AskUserQuestion`→`question`, etc.), Claude model normalization, body reference replacement (regex, outside code blocks), frontmatter field mapping (tools, permissionMode, maxSteps, hidden). `convertFileWithCache` uses mtime for invalidation. Code blocks intentionally skipped to avoid false positives.
 
 ## Patterns
 

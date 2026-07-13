@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { Config } from '@opencode-ai/sdk'
+import { extractAgentFrontmatter } from '../../src/lib/agents.js'
 import {
   createConfigHandler,
   formatAgentDescription,
@@ -825,7 +827,7 @@ Skill content for ce:plan.`,
       const agent = config.agent?.['full-agent']
       expect(agent).toBeDefined()
       expect(agent?.description).toBe('A full agent (Full-Agent - Systematic)')
-      expect(agent?.model).toBe('openai/gpt-4')
+      expect(agent?.model).toBe('gpt-4')
       expect(agent?.temperature).toBe(0.7)
       expect(agent?.top_p).toBe(1)
       expect(agent?.steps).toBe(10)
@@ -880,7 +882,7 @@ Use gpt-4 for this task.`,
       const config: Config = {}
       await handler(config)
 
-      expect(config.command?.['systematic:modeled']?.model).toBe('openai/gpt-4')
+      expect(config.command?.['systematic:modeled']?.model).toBe('gpt-4')
     })
 
     test('includes subtask field in command config', async () => {
@@ -934,7 +936,7 @@ Full command template.`,
       expect(command).toBeDefined()
       expect(command?.description).toBe('(Systematic) A full command')
       expect(command?.agent).toBe('oracle')
-      expect(command?.model).toBe('openai/gpt-4')
+      expect(command?.model).toBe('gpt-4')
       expect(command?.subtask).toBe(true)
       expect(command?.template).toContain('Full command template')
     })
@@ -1035,7 +1037,7 @@ model: gpt-4
       const config: Config = {}
       await handler(config)
 
-      expect(config.agent?.uncategorized?.temperature).toBeDefined()
+      expect(config.agent?.uncategorized?.temperature).toBeUndefined()
       expect(config.agent?.uncategorized?.model).toBeUndefined()
     })
 
@@ -1630,11 +1632,9 @@ model: gpt-4
       await expect(handler(config)).rejects.toThrow('disabled_skills')
     })
 
-    test('explicit frontmatter temperature is preserved (fill-if-absent)', async () => {
+    test('explicit frontmatter temperature is preserved', async () => {
       // An agent with explicit temperature: 0.5 in frontmatter must keep 0.5
-      // after applyAgentOverlays — the runtime must not overwrite it with the
-      // inferred value. This is the RED test: it fails before the fill-if-absent
-      // change because the current code unconditionally overwrites.
+      // after applyAgentOverlays.
       createAgent(path.join(bundledDir, 'agents'), 'test-agent', {
         name: 'test-agent',
         description: 'A test agent',
@@ -1656,10 +1656,9 @@ model: gpt-4
       expect(config.agent?.['test-agent']?.temperature).toBe(0.5)
     })
 
-    test('agent without explicit temperature falls back to inferred value', async () => {
-      // An agent with no temperature in frontmatter must still resolve to the
-      // inferBuiltInTemperature value — the fallback path must remain intact.
-      // 'security-sentinel' matches the review/security regex → inferred 0.1.
+    test('agent without explicit temperature leaves temperature unset', async () => {
+      // An agent with no temperature in frontmatter has no runtime fallback;
+      // the resolved config simply omits temperature.
       createAgent(path.join(bundledDir, 'agents'), 'security-sentinel', {
         name: 'security-sentinel',
         description: 'Security review agent',
@@ -1675,7 +1674,7 @@ model: gpt-4
       const config: Config = {}
       await handler(config)
 
-      expect(config.agent?.['security-sentinel']?.temperature).toBe(0.1)
+      expect(config.agent?.['security-sentinel']?.temperature).toBeUndefined()
     })
 
     test('user overlay temperature overrides explicit frontmatter temperature (precedence preserved)', async () => {
@@ -2011,6 +2010,65 @@ Discovered body for hidden.`,
         expect(config.command?.['ce:review']).toBeDefined()
         expect(config.command?.foo).toBeDefined()
       })
+    })
+  })
+
+  describe('characterization: real bundled agent loads byte-identically pre/post converter removal', () => {
+    // Pins the exact resolved AgentConfig for a representative real bundled
+    // agent (code-simplicity-reviewer). Must pass before AND after Unit 2's
+    // converter removal — proves the direct fs.readFileSync + extractAgentFrontmatter
+    // path produces the same result as the convertFileWithCache path did.
+    test('code-simplicity-reviewer resolves to the expected AgentConfig shape', async () => {
+      const realAgentsDir = path.resolve(
+        path.dirname(fileURLToPath(import.meta.url)),
+        '../../agents',
+      )
+      const realSkillsDir = path.resolve(
+        path.dirname(fileURLToPath(import.meta.url)),
+        '../../skills',
+      )
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: realSkillsDir,
+        bundledAgentsDir: realAgentsDir,
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      const agent = config.agent?.['code-simplicity-reviewer']
+      expect(agent).toBeDefined()
+      if (!agent) throw new Error('Expected agent to load')
+
+      const realAgentFile = path.join(
+        realAgentsDir,
+        'review',
+        'code-simplicity-reviewer.md',
+      )
+      const rawFile = fs.readFileSync(realAgentFile, 'utf8')
+      const frontmatter = extractAgentFrontmatter(rawFile)
+      const expectedDescription = formatAgentDescription(
+        'code-simplicity-reviewer',
+        frontmatter.description,
+      )
+
+      expect(agent).toEqual({
+        description: expectedDescription,
+        prompt: frontmatter.prompt,
+        mode: frontmatter.mode,
+        temperature: frontmatter.temperature,
+      })
+      expect(agent.model).toBeUndefined()
+      expect(agent.variant).toBeUndefined()
+      expect(agent.top_p).toBeUndefined()
+      expect(agent.tools).toBeUndefined()
+      expect(agent.disable).toBeUndefined()
+      expect(agent.color).toBeUndefined()
+      expect(agent.steps).toBeUndefined()
+      expect(agent.hidden).toBeUndefined()
+      expect(agent.permission).toBeUndefined()
     })
   })
 })

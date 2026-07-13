@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { Config } from '@opencode-ai/plugin'
@@ -5,7 +6,6 @@ import type { AgentConfig } from '@opencode-ai/sdk'
 import {
   assertSourceCategoryModelCoverage,
   buildBundledAgentInventory,
-  inferBuiltInTemperature,
   type ResolvedAgentOverlaySet,
   resolveAgentOverlaySet,
   validateAgentOverlays,
@@ -13,7 +13,6 @@ import {
 import { extractAgentFrontmatter, findAgentsInDir } from './agents.js'
 import { extractCommandFrontmatter, findCommandsInDir } from './commands.js'
 import { loadConfigWithSources } from './config.js'
-import { convertFileWithCache } from './converter.js'
 import { type DiscoveredSkill, discoverSkills } from './discovered-skills.js'
 import { parseFrontmatter } from './frontmatter.js'
 import {
@@ -110,10 +109,7 @@ function loadAgentAsConfig(agentInfo: {
   category?: string
 }): AgentConfig | null {
   try {
-    const converted = convertFileWithCache(agentInfo.file, 'agent', {
-      source: 'bundled',
-      agentMode: 'subagent',
-    })
+    const content = fs.readFileSync(agentInfo.file, 'utf8')
     const {
       description,
       prompt,
@@ -128,7 +124,7 @@ function loadAgentAsConfig(agentInfo: {
       steps,
       hidden,
       permission,
-    } = extractAgentFrontmatter(converted)
+    } = extractAgentFrontmatter(content)
 
     const config: AgentConfig = {
       description: formatAgentDescription(agentInfo.name, description),
@@ -159,12 +155,10 @@ function loadCommandAsConfig(commandInfo: {
   category?: string
 }): CommandConfig | null {
   try {
-    const converted = convertFileWithCache(commandInfo.file, 'command', {
-      source: 'bundled',
-    })
+    const content = fs.readFileSync(commandInfo.file, 'utf8')
     const { name, description, agent, model, subtask } =
-      extractCommandFrontmatter(converted)
-    const { body } = parseFrontmatter(converted)
+      extractCommandFrontmatter(content)
+    const { body } = parseFrontmatter(content)
 
     const cleanName = commandInfo.name.replace(/^\//, '')
 
@@ -270,10 +264,6 @@ function applyAgentOverlays(
   if (hasPermissionOverlay && isRecord(config.permission)) {
     addPermissionRules(permissionRules, config.permission)
   }
-
-  result.temperature =
-    result.temperature ??
-    inferBuiltInTemperature(agentInfo.name, result.description)
 
   applySourceModelDefault(result, agentInfo, availabilitySet)
   applyAgentOverlay(result, categoryOverlay?.value, permissionRules)
