@@ -1,4 +1,12 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  test,
+} from 'bun:test'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
@@ -664,28 +672,27 @@ test('buildChildEnv ignores parent npm_config env unless explicitly overridden',
   }
 })
 
-async function runOpencode(
-  prompt: string,
-  options: RunOpencodeOptions,
-): Promise<OpencodeResult> {
-  const { fixture, configContent, extraEnv } = options
-
-  // Build a narrow child environment. Override all OpenCode config/state paths
-  // so the subprocess cannot read or write the real user environment.
-  const childEnv = buildChildEnv({
-    // Suppress first-boot side effects that are irrelevant to plugin tests:
-    // OPENCODE_DISABLE_AUTOUPDATE prevents the binary from self-updating mid-test;
-    // OPENCODE_DISABLE_LSP_DOWNLOAD skips language-server downloads that would
-    // hit the network and write into the fixture's data dir;
-    // OPENCODE_DISABLE_MODELS_FETCH skips the provider model-list fetch that
-    // would make an outbound API call on every startup;
-    // OPENCODE_DISABLE_PRUNE prevents session-storage pruning that could race
-    // with the test's own filesystem assertions.
+/**
+ * Narrow child environment shared by every isolated OpenCode subprocess
+ * invocation. Overrides all OpenCode config/state paths so the subprocess
+ * cannot read or write the real user environment. Security/isolation
+ * sensitive -- keep exact variable set and precedence when reusing.
+ *
+ * Suppresses first-boot side effects irrelevant to plugin tests:
+ * autoupdate, LSP download, provider model-list fetch, session-storage
+ * prune.
+ */
+function buildIsolatedOpencodeEnv(
+  fixture: IsolatedFixture,
+  configContent: string,
+  overrides?: Record<string, string>,
+): Record<string, string> {
+  return buildChildEnv({
     OPENCODE_DISABLE_AUTOUPDATE: '1',
     OPENCODE_DISABLE_LSP_DOWNLOAD: '1',
     OPENCODE_DISABLE_MODELS_FETCH: '1',
     OPENCODE_DISABLE_PRUNE: '1',
-    ...extraEnv,
+    ...overrides,
     HOME: fixture.homeDir,
     XDG_CONFIG_HOME: fixture.xdgConfigHome,
     XDG_DATA_HOME: fixture.xdgDataHome,
@@ -694,6 +701,14 @@ async function runOpencode(
     OPENCODE_CONFIG_DIR: fixture.configDir,
     OPENCODE_CONFIG_CONTENT: configContent,
   })
+}
+
+async function runOpencode(
+  prompt: string,
+  options: RunOpencodeOptions,
+): Promise<OpencodeResult> {
+  const { fixture, configContent, extraEnv } = options
+  const childEnv = buildIsolatedOpencodeEnv(fixture, configContent, extraEnv)
 
   let lastResult: OpencodeResult = { stdout: '', stderr: '', exitCode: -1 }
 
@@ -745,6 +760,102 @@ function buildDistLocalConfig(): string {
 
 const DIST_INDEX = path.join(REPO_ROOT, 'dist/index.js')
 const DIST_LOCAL_AVAILABLE = fs.existsSync(DIST_INDEX)
+
+// Suite-scoped: built and packed once in beforeAll, reused by every fixture
+// in the packaged-runtime describe block, removed in afterAll.
+let packedTarballPath: string | null = null
+let packTempDir: string | null = null
+
+/** Build the repo and run `npm pack` exactly once. Throws with build/pack output on failure. */
+function packTarballOnce(): void {
+  const build = Bun.spawnSync(['bun', 'run', 'build'], {
+    cwd: REPO_ROOT,
+    timeout: 120_000,
+  })
+  if (build.exitCode !== 0) {
+    throw new Error(
+      `bun run build failed (exit ${build.exitCode})\n--- stdout ---\n${build.stdout.toString()}\n--- stderr ---\n${build.stderr.toString()}`,
+    )
+  }
+
+  packTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-pack-'))
+  const pack = Bun.spawnSync(
+    ['npm', 'pack', '--pack-destination', packTempDir, '--silent'],
+    { cwd: REPO_ROOT, timeout: 60_000 },
+  )
+  if (pack.exitCode !== 0) {
+    throw new Error(
+      `npm pack failed (exit ${pack.exitCode})\n--- stdout ---\n${pack.stdout.toString()}\n--- stderr ---\n${pack.stderr.toString()}`,
+    )
+  }
+  const tarballName = pack.stdout.toString().trim().split('\n').at(-1)
+  if (!tarballName) throw new Error('npm pack produced no tarball filename')
+
+  packedTarballPath = path.join(packTempDir, tarballName)
+}
+
+function cleanupPackedTarball(): void {
+  if (packTempDir) fs.rmSync(packTempDir, { recursive: true, force: true })
+  packedTarballPath = null
+  packTempDir = null
+}
+
+/** Symlink `packageName` from the repo's resolved `node_modules` into the fixture's. */
+function linkRuntimeDependency(
+  fixture: IsolatedFixture,
+  packageName: string,
+): void {
+  const source = path.join(REPO_ROOT, 'node_modules', packageName)
+  const target = path.join(fixture.projectDir, 'node_modules', packageName)
+  if (!fs.existsSync(source)) {
+    throw new Error(
+      `runtime dependency "${packageName}" declared by the packaged plugin is missing from ${source}`,
+    )
+  }
+  if (fs.existsSync(target)) return
+  fs.mkdirSync(path.dirname(target), { recursive: true })
+  fs.symlinkSync(source, target, 'dir')
+}
+
+/**
+ * Extract the suite-scoped tarball into `fixture.projectDir/node_modules/@fro.bot/systematic`
+ * and symlink runtime dependencies read from the *extracted* package.json in from the repo's
+ * own resolved `node_modules`. No network install.
+ */
+function extractPackagedPlugin(fixture: IsolatedFixture): {
+  packageDir: string
+  pluginUrl: string
+} {
+  if (!packedTarballPath) throw new Error('packTarballOnce() has not run')
+
+  const scopeDir = path.join(fixture.projectDir, 'node_modules/@fro.bot')
+  const packageDir = path.join(scopeDir, 'systematic')
+  fs.mkdirSync(scopeDir, { recursive: true })
+
+  const extract = Bun.spawnSync(
+    ['tar', 'xzf', packedTarballPath, '-C', scopeDir],
+    { timeout: 30_000 },
+  )
+  if (extract.exitCode !== 0) {
+    throw new Error(
+      `tar extraction failed (exit ${extract.exitCode}): ${extract.stderr.toString()}`,
+    )
+  }
+  fs.renameSync(path.join(scopeDir, 'package'), packageDir)
+
+  const extractedPackageJson = JSON.parse(
+    fs.readFileSync(path.join(packageDir, 'package.json'), 'utf8'),
+  ) as { dependencies?: Record<string, string> }
+  for (const depName of Object.keys(extractedPackageJson.dependencies ?? {})) {
+    linkRuntimeDependency(fixture, depName)
+  }
+  // @opencode-ai/plugin is a peerDependency, not listed in `dependencies`.
+  linkRuntimeDependency(fixture, '@opencode-ai/plugin')
+
+  // Point at the package root (not dist/index.js directly) so package.json
+  // `main` resolution is exercised, matching a real npm-spec plugin load.
+  return { packageDir, pluginUrl: pathToFileURL(packageDir).href }
+}
 
 function expectSetupSkillLoaded(result: OpencodeResult): void {
   assertOk(result)
@@ -1177,6 +1288,123 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
     TIMEOUT_MS * MAX_RETRIES,
   )
 })
+
+/** Model-free `opencode debug config` invocation, isolated the same way as `runOpencode`. */
+function runOpencodeDebugConfig(
+  fixture: IsolatedFixture,
+  configContent: string,
+): OpencodeResult {
+  const childEnv = buildIsolatedOpencodeEnv(fixture, configContent)
+  const result = Bun.spawnSync(
+    ['opencode', 'debug', 'config', '--print-logs', '--log-level', 'ERROR'],
+    { cwd: fixture.projectDir, env: childEnv, timeout: TIMEOUT_MS },
+  )
+  return {
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+    exitCode: result.exitCode ?? -1,
+  }
+}
+
+// Requires real `tar` and symlink semantics for artifact extraction; POSIX only.
+describe.skipIf(!OPENCODE_AVAILABLE || process.platform === 'win32')(
+  'packaged-plugin runtime validation',
+  () => {
+    let fixture: IsolatedFixture
+
+    beforeAll(() => {
+      packTarballOnce()
+    }, 200_000)
+
+    afterAll(() => {
+      cleanupPackedTarball()
+    })
+
+    beforeEach(() => {
+      fixture = createIsolatedFixture()
+    })
+
+    afterEach(() => {
+      destroyIsolatedFixture(fixture)
+    })
+
+    // Relies on `opencode/big-pickle`, confirmed public/no-auth by the
+    // isolated-HOME test above. Provider outage is a genuine integration
+    // failure here, not a skip condition.
+    test(
+      'packaged plugin loads, warns on a removed disabled_skills name, and exposes a compliant catalog',
+      async () => {
+        const probe = createProbePlugin(fixture)
+        const { pluginUrl } = extractPackagedPlugin(fixture)
+        fs.mkdirSync(path.join(fixture.projectDir, '.opencode'), {
+          recursive: true,
+        })
+        fs.writeFileSync(
+          path.join(fixture.projectDir, '.opencode/systematic.json'),
+          JSON.stringify({ disabled_skills: ['orchestrating-swarms'] }),
+        )
+        const configContent = JSON.stringify({
+          plugin: [pluginUrl, probe.url],
+        })
+
+        const result = await runOpencode(
+          'Use the systematic_skill tool to load systematic:git-clean-gone-branches',
+          { fixture, configContent },
+        )
+
+        // Tool actually being invoked and its output surfacing proves the
+        // packaged plugin's hooks registered and ran startup successfully.
+        expectSetupSkillLoaded(result)
+        expect(result.stderr).toContain(
+          '[systematic] "orchestrating-swarms" in `disabled_skills` is no longer a bundled name and will be ignored.',
+        )
+
+        const events = assertProbeCapturedEvents(probe)
+        const toolEvents = events.filter(isProbeToolEvent)
+        expect(toolEvents.length).toBeGreaterThan(0)
+        for (const event of toolEvents) {
+          expect(event.description).toContain(
+            'systematic:orchestrating-subagents',
+          )
+          expect(event.description).not.toContain(
+            'systematic:orchestrating-swarms',
+          )
+          expect(event.description).not.toContain(
+            'systematic:claude-permissions-optimizer',
+          )
+        }
+      },
+      TIMEOUT_MS * MAX_RETRIES,
+    )
+
+    test(
+      'packaged plugin rejects an unrecognized disabled_skills name, model-free',
+      () => {
+        const { pluginUrl } = extractPackagedPlugin(fixture)
+        fs.mkdirSync(path.join(fixture.projectDir, '.opencode'), {
+          recursive: true,
+        })
+        fs.writeFileSync(
+          path.join(fixture.projectDir, '.opencode/systematic.json'),
+          JSON.stringify({ disabled_skills: ['never-existed-skill'] }),
+        )
+        const configContent = JSON.stringify({ plugin: [pluginUrl] })
+
+        const result = runOpencodeDebugConfig(fixture, configContent)
+
+        // OpenCode 1.17.18 host contract: plugin-factory rejections are
+        // caught and logged, hooks omitted, host exits 0
+        // (.slim/clonedeps/repos/anomalyco__opencode/packages/opencode/src/plugin/index.ts:219-235).
+        // Asserting exitCode === 0 (not just log content) prevents a hang
+        // or crash from silently passing.
+        expect(result.exitCode).toBe(0)
+        expect(result.stderr).toContain('failed to load plugin')
+        expect(result.stderr).toContain('Invalid Systematic config in')
+      },
+      TIMEOUT_MS,
+    )
+  },
+)
 
 const MIXED_VERSION_ENABLED = process.env.SYSTEMATIC_MIXED_VERSION_TEST === '1'
 
