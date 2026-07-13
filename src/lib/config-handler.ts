@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { Config } from '@opencode-ai/plugin'
@@ -13,7 +14,6 @@ import {
 import { extractAgentFrontmatter, findAgentsInDir } from './agents.js'
 import { extractCommandFrontmatter, findCommandsInDir } from './commands.js'
 import { loadConfigWithSources } from './config.js'
-import { convertFileWithCache } from './converter.js'
 import { type DiscoveredSkill, discoverSkills } from './discovered-skills.js'
 import { parseFrontmatter } from './frontmatter.js'
 import {
@@ -110,10 +110,7 @@ function loadAgentAsConfig(agentInfo: {
   category?: string
 }): AgentConfig | null {
   try {
-    const converted = convertFileWithCache(agentInfo.file, 'agent', {
-      source: 'bundled',
-      agentMode: 'subagent',
-    })
+    const converted = fs.readFileSync(agentInfo.file, 'utf8')
     const {
       description,
       prompt,
@@ -159,9 +156,7 @@ function loadCommandAsConfig(commandInfo: {
   category?: string
 }): CommandConfig | null {
   try {
-    const converted = convertFileWithCache(commandInfo.file, 'command', {
-      source: 'bundled',
-    })
+    const converted = fs.readFileSync(commandInfo.file, 'utf8')
     const { name, description, agent, model, subtask } =
       extractCommandFrontmatter(converted)
     const { body } = parseFrontmatter(converted)

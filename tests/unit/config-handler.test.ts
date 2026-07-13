@@ -825,7 +825,7 @@ Skill content for ce:plan.`,
       const agent = config.agent?.['full-agent']
       expect(agent).toBeDefined()
       expect(agent?.description).toBe('A full agent (Full-Agent - Systematic)')
-      expect(agent?.model).toBe('openai/gpt-4')
+      expect(agent?.model).toBe('gpt-4')
       expect(agent?.temperature).toBe(0.7)
       expect(agent?.top_p).toBe(1)
       expect(agent?.steps).toBe(10)
@@ -880,7 +880,7 @@ Use gpt-4 for this task.`,
       const config: Config = {}
       await handler(config)
 
-      expect(config.command?.['systematic:modeled']?.model).toBe('openai/gpt-4')
+      expect(config.command?.['systematic:modeled']?.model).toBe('gpt-4')
     })
 
     test('includes subtask field in command config', async () => {
@@ -934,7 +934,7 @@ Full command template.`,
       expect(command).toBeDefined()
       expect(command?.description).toBe('(Systematic) A full command')
       expect(command?.agent).toBe('oracle')
-      expect(command?.model).toBe('openai/gpt-4')
+      expect(command?.model).toBe('gpt-4')
       expect(command?.subtask).toBe(true)
       expect(command?.template).toContain('Full command template')
     })
@@ -2011,6 +2011,50 @@ Discovered body for hidden.`,
         expect(config.command?.['ce:review']).toBeDefined()
         expect(config.command?.foo).toBeDefined()
       })
+    })
+  })
+
+  describe('characterization: real bundled agent loads byte-identically pre/post converter removal', () => {
+    // Pins the exact resolved AgentConfig for a representative real bundled
+    // agent (code-simplicity-reviewer). Must pass before AND after Unit 2's
+    // converter removal — proves the direct fs.readFileSync + extractAgentFrontmatter
+    // path produces the same result as the convertFileWithCache path did.
+    test('code-simplicity-reviewer resolves to the expected AgentConfig shape', async () => {
+      const realAgentsDir = path.resolve(
+        path.dirname(new URL(import.meta.url).pathname),
+        '../../agents',
+      )
+      const realSkillsDir = path.resolve(
+        path.dirname(new URL(import.meta.url).pathname),
+        '../../skills',
+      )
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: realSkillsDir,
+        bundledAgentsDir: realAgentsDir,
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      const agent = config.agent?.['code-simplicity-reviewer']
+      expect(agent).toBeDefined()
+      if (!agent) throw new Error('Expected agent to load')
+
+      expect(agent.description).toBe(
+        'Final review pass to ensure code is as simple and minimal as possible. Use after implementation is complete to identify YAGNI violations and simplification opportunities. (Code-Simplicity-Reviewer - Systematic)',
+      )
+      expect(agent.mode).toBe('subagent')
+      expect(agent.temperature).toBe(0.1)
+      expect(agent.tools).toBeUndefined()
+      expect(agent.prompt).toContain(
+        'You are a code simplicity expert specializing in minimalism',
+      )
+      expect(agent.model).toBeUndefined()
+      expect(agent.color).toBeUndefined()
+      expect(agent.hidden).toBeUndefined()
     })
   })
 })

@@ -240,5 +240,45 @@ Content here.`,
       expect(loaded.wrappedTemplate).toContain('## Triage')
       expect(loaded.wrappedTemplate).toContain('## Resolve')
     })
+
+    // Characterization: pins the exact loaded body + frontmatter for a
+    // representative real bundled skill (onboarding). Must pass before AND
+    // after Unit 2's converter removal — proves the direct fs.readFileSync
+    // path produces the same result as the convertFileWithCache path did.
+    test('loads the real bundled onboarding skill with expected body and description', () => {
+      const realSkillDir = path.resolve(
+        path.dirname(new URL(import.meta.url).pathname),
+        '../../skills/onboarding',
+      )
+      const skillFile = path.join(realSkillDir, 'SKILL.md')
+
+      const skillInfo: SkillInfo = {
+        name: 'onboarding',
+        description:
+          "Generate or regenerate ONBOARDING.md to help new contributors understand a codebase. Use when the user asks to 'create onboarding docs', 'generate ONBOARDING.md', 'document this project for new developers', 'write onboarding documentation', 'vonboard', 'vonboarding', 'prepare this repo for a new contributor', 'refresh the onboarding doc', or 'update ONBOARDING.md'. Also use when someone needs to onboard a new team member and wants a written artifact, or when a codebase lacks onboarding documentation and the user wants to generate one.",
+        path: realSkillDir,
+        skillFile,
+      }
+
+      const loaded = loadSkill(skillInfo)
+
+      expect(loaded).not.toBeNull()
+      if (loaded == null) {
+        throw new Error('Expected onboarding skill to load')
+      }
+
+      expect(loaded.name).toBe('onboarding')
+      expect(loaded.prefixedName).toBe('systematic:onboarding')
+      expect(loaded.description).toBe(
+        "(Systematic) Generate or regenerate ONBOARDING.md to help new contributors understand a codebase. Use when the user asks to 'create onboarding docs', 'generate ONBOARDING.md', 'document this project for new developers', 'write onboarding documentation', 'vonboard', 'vonboarding', 'prepare this repo for a new contributor', 'refresh the onboarding doc', or 'update ONBOARDING.md'. Also use when someone needs to onboard a new team member and wants a written artifact, or when a codebase lacks onboarding documentation and the user wants to generate one.",
+      )
+      expect(loaded.wrappedTemplate).toContain('# Generate Onboarding Document')
+      expect(loaded.wrappedTemplate).toContain(
+        'Crawl a repository and generate `ONBOARDING.md` at the repo root',
+      )
+      expect(loaded.subtask).toBeUndefined()
+      expect(loaded.agent).toBeUndefined()
+      expect(loaded.model).toBeUndefined()
+    })
   })
 })

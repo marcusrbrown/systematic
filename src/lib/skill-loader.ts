@@ -1,5 +1,5 @@
+import fs from 'node:fs'
 import path from 'node:path'
-import { convertFileWithCache } from './converter.js'
 import { parseFrontmatter } from './frontmatter.js'
 import type { SkillDeprecated, SkillInfo } from './skills.js'
 
@@ -63,9 +63,7 @@ export function extractSkillBody(wrappedTemplate: string): string {
 
 export function loadSkill(skillInfo: SkillInfo): LoadedSkill | null {
   try {
-    const converted = convertFileWithCache(skillInfo.skillFile, 'skill', {
-      source: 'bundled',
-    })
+    const converted = fs.readFileSync(skillInfo.skillFile, 'utf8')
     const { body } = parseFrontmatter(converted)
     const wrappedTemplate = wrapSkillTemplate(skillInfo.skillFile, body)
 

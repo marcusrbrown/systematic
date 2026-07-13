@@ -52,9 +52,6 @@ Skill tool (plugin tool hook)
 
 Bootstrap injection (plugin transform hook)
   src/lib/bootstrap.ts       — getBootstrapContent, INTERNAL_AGENT_SIGNATURES
-
-CC→OpenCode conversion (CLI only)
-  src/lib/converter.ts       — convertContent, convertFileWithCache, TOOL_NAME_MAP
 ```
 
 Key symbols:

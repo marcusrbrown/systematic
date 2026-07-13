@@ -25,8 +25,6 @@ import {
   matchesPathGlob,
   SUBFILE_DIRECTORY_NAMES,
 } from '../../scripts/content-integrity.ts'
-import { convertContent } from '../../src/lib/converter.ts'
-import { parseFrontmatter } from '../../src/lib/frontmatter.ts'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -1557,78 +1555,6 @@ describe('printAgentTemperatureViolations — CLI print path', () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
-  })
-})
-
-describe('converter equivalence: explicit mode: subagent is behavior-preserving', () => {
-  test('converting an agent with no mode field produces the same resolved mode as one with explicit mode: subagent', () => {
-    const withoutMode = `---
-name: test-agent
-description: A test agent
----
-Agent body`
-
-    const withExplicitMode = `---
-name: test-agent
-description: A test agent
-mode: subagent
----
-Agent body`
-
-    const convertedWithout = convertContent(withoutMode, 'agent', {
-      agentMode: 'subagent',
-    })
-    const convertedWith = convertContent(withExplicitMode, 'agent', {
-      agentMode: 'subagent',
-    })
-
-    // Both must emit mode: subagent
-    expect(convertedWithout).toContain('mode: subagent')
-    expect(convertedWith).toContain('mode: subagent')
-
-    // Parse both emitted configs and compare resolved field values.
-    // The converter may reorder YAML keys, so we compare parsed objects, not strings.
-    const parsedWithout = parseFrontmatter(convertedWithout)
-    const parsedWith = parseFrontmatter(convertedWith)
-
-    expect(parsedWithout.data).toEqual(parsedWith.data)
-  })
-
-  test('explicit mode: subagent does not alter any other resolved field, including tools, color, and temperature', () => {
-    // Uses a fixture that mirrors a real agent's frontmatter shape to prove
-    // behavior-preservation across the full set of fields, not just the trivial case.
-    const withoutMode = `---
-name: security-sentinel
-description: Security review agent
-tools:
-  - read
-  - grep
-color: red
-temperature: 0.3
----
-Agent body`
-
-    const withExplicitMode = `---
-name: security-sentinel
-description: Security review agent
-tools:
-  - read
-  - grep
-color: red
-temperature: 0.3
-mode: subagent
----
-Agent body`
-
-    const parsedWithout = parseFrontmatter(
-      convertContent(withoutMode, 'agent', { agentMode: 'subagent' }),
-    )
-    const parsedWith = parseFrontmatter(
-      convertContent(withExplicitMode, 'agent', { agentMode: 'subagent' }),
-    )
-
-    // All resolved fields must be identical — adding explicit mode is a no-op.
-    expect(parsedWithout.data).toEqual(parsedWith.data)
   })
 })
 

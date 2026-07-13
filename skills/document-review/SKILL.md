@@ -23,7 +23,7 @@ The caller receives findings with their original classifications intact and deci
 
 Callers invoke headless mode by including `mode:headless` in the skill arguments, e.g.:
 ```
-Skill("systematic:document-review", "mode:headless docs/plans/my-plan.md")
+skill("systematic:document-review", "mode:headless docs/plans/my-plan.md")
 ```
 
 
@@ -35,7 +35,7 @@ If `mode:headless` is not present, the skill runs in its default interactive mod
 
 **If no document is specified (interactive mode):** Ask which document to review, or find the most recent in `docs/brainstorms/` or `docs/plans/` using a file-search/glob tool (e.g., Glob in OpenCode).
 
-**If no document is specified (headless mode):** Output "Review failed: headless mode requires a document path. Re-invoke with: Skill(\"systematic:document-review\", \"mode:headless <path>\")" without dispatching agents.
+**If no document is specified (headless mode):** Output "Review failed: headless mode requires a document path. Re-invoke with: skill(\"systematic:document-review\", \"mode:headless <path>\")" without dispatching agents.
 
 ### Classify Document Type
 
