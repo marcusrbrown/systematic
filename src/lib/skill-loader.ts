@@ -62,8 +62,8 @@ export function extractSkillBody(wrappedTemplate: string): string {
 
 export function loadSkill(skillInfo: SkillInfo): LoadedSkill | null {
   try {
-    const converted = fs.readFileSync(skillInfo.skillFile, 'utf8')
-    const { body } = parseFrontmatter(converted)
+    const content = fs.readFileSync(skillInfo.skillFile, 'utf8')
+    const { body } = parseFrontmatter(content)
     const wrappedTemplate = wrapSkillTemplate(skillInfo.skillFile, body)
 
     return {

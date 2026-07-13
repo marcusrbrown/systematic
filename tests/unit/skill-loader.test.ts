@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { parseFrontmatter } from '../../src/lib/frontmatter.ts'
 import {
   extractSkillBody,
   formatSkillCommandName,
@@ -247,7 +249,7 @@ Content here.`,
     // path produces the same result as the convertFileWithCache path did.
     test('loads the real bundled onboarding skill with expected body and description', () => {
       const realSkillDir = path.resolve(
-        path.dirname(new URL(import.meta.url).pathname),
+        path.dirname(fileURLToPath(import.meta.url)),
         '../../skills/onboarding',
       )
       const skillFile = path.join(realSkillDir, 'SKILL.md')
@@ -272,10 +274,12 @@ Content here.`,
       expect(loaded.description).toBe(
         "(Systematic) Generate or regenerate ONBOARDING.md to help new contributors understand a codebase. Use when the user asks to 'create onboarding docs', 'generate ONBOARDING.md', 'document this project for new developers', 'write onboarding documentation', 'vonboard', 'vonboarding', 'prepare this repo for a new contributor', 'refresh the onboarding doc', or 'update ONBOARDING.md'. Also use when someone needs to onboard a new team member and wants a written artifact, or when a codebase lacks onboarding documentation and the user wants to generate one.",
       )
-      expect(loaded.wrappedTemplate).toContain('# Generate Onboarding Document')
-      expect(loaded.wrappedTemplate).toContain(
-        'Crawl a repository and generate `ONBOARDING.md` at the repo root',
-      )
+
+      const rawFile = fs.readFileSync(skillFile, 'utf8')
+      const { body } = parseFrontmatter(rawFile)
+      const expectedWrappedTemplate = wrapSkillTemplate(skillFile, body)
+      expect(loaded.wrappedTemplate).toBe(expectedWrappedTemplate)
+
       expect(loaded.subtask).toBeUndefined()
       expect(loaded.agent).toBeUndefined()
       expect(loaded.model).toBeUndefined()

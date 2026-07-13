@@ -16,7 +16,7 @@ export interface SkillFrontmatter {
   license?: string
   compatibility?: string
   metadata?: Record<string, string>
-  // Claude Code converted fields
+  // Claude Code compatibility fields (parsed directly from frontmatter)
   disableModelInvocation?: boolean // from YAML key: disable-model-invocation
   userInvocable?: boolean // from YAML key: user-invocable
   subtask?: boolean // from YAML key: subtask, or derived from context: "fork"
@@ -35,7 +35,7 @@ export interface SkillInfo {
   license?: string
   compatibility?: string
   metadata?: Record<string, string>
-  // Claude Code converted fields
+  // Claude Code compatibility fields (parsed directly from frontmatter)
   disableModelInvocation?: boolean
   userInvocable?: boolean
   subtask?: boolean

@@ -4,7 +4,7 @@
     {
       "pathGlob": "src/lib/skills.ts",
       "patterns": ["Claude Code"],
-      "reason": "Comments annotate converter-mapped YAML fields (disableModelInvocation, userInvocable, allowedTools, etc.) with their CC-format origin. Historical documentation, not accidental reintroduction. Same category as src/lib/converter.ts."
+      "reason": "Comments annotate CC-origin compatibility frontmatter fields (disableModelInvocation, userInvocable, allowedTools, etc.) parsed directly from source, with their CC-format origin. Historical documentation, not accidental reintroduction."
     },
     {
       "pathGlob": "src/lib/discovered-skills.ts",

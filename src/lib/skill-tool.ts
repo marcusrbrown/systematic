@@ -92,10 +92,6 @@ export function discoverSkillFiles(dir: string, limit = 10): string {
 
 export function createSkillTool(options: SkillToolOptions): ToolDefinition {
   const { bundledSkillsDir, disabledSkills } = options
-  // Per-createSkillTool instance, intentionally not per-session. OpenCode's
-  // current per-session plugin-init behavior makes this de facto per-session
-  // today. If a future OpenCode reuses plugin instances across sessions, the
-  // warning de-emits indefinitely — acceptable since deprecation is informational.
   const getAllSkills = (): LoadedSkill[] => {
     return findSkillsInDir(bundledSkillsDir)
       .filter((s) => !disabledSkills.includes(s.name))

@@ -20,7 +20,7 @@ three hooks:
 - **`experimental.chat.system.transform`** — injects a bootstrap prompt into the system message and
   suppresses title generation for internal agents.
 
-The CLI (`src/cli.ts`) is a separate entry point exposing `list`, `convert`, and `config` subcommands.
+The CLI (`src/cli.ts`) is a separate entry point exposing `list` and `config` subcommands.
 It does not participate in the plugin hook lifecycle.
 
 ## Codemap

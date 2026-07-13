@@ -31,9 +31,9 @@
  *    OpenCode default changes.
  *
  * 7. **Agent temperature** — bundled agents must declare an explicit `temperature:`
- *    as a finite number in frontmatter. A missing, null, or non-numeric value is
- *    treated as absent (the runtime's fill-if-absent fallback will be removed in
- *    v3.0.0), so only a real finite number satisfies this invariant.
+ * as a finite number in frontmatter. A missing, null, or non-numeric value is
+ * treated as absent — there is no runtime fallback — so only a real finite
+ * number satisfies this invariant.
  *
  * 8. **Skill argument-hint** — bundled skills whose body references the literal
  *    `$ARGUMENTS` outside fenced code blocks must declare a non-empty
@@ -180,8 +180,6 @@ export interface FrontmatterViolation {
     | 'empty-required-field'
     | 'malformed-frontmatter'
     | 'missing-frontmatter'
-    | 'deprecated-reason-missing'
-    | 'deprecated-missing-required-fields'
     | 'parse-safety'
   field?: string
   message: string
@@ -739,7 +737,6 @@ function scanSkillFrontmatter(
   checkRequiredSkillField(relPath, parsed.data, 'name', violations)
   checkRequiredSkillField(relPath, parsed.data, 'description', violations)
   checkSkillFrontmatterFields(relPath, parsed.data, violations)
-  checkDeprecatedBlockForBundled(relPath, parsed.data, violations)
 }
 
 function checkRequiredSkillField(
@@ -797,48 +794,6 @@ function checkSkillFrontmatterFields(
       })
     }
   }
-}
-
-function checkDeprecatedBlockForBundled(
-  relPath: string,
-  data: Record<string, unknown>,
-  violations: FrontmatterViolation[],
-): void {
-  if (!isSkillEntryFile(relPath)) return
-  if (!Object.hasOwn(data, 'deprecated')) return
-  const deprecated = data.deprecated
-  if (!isRecord(deprecated)) return
-
-  const since = deprecated.since
-  const removal = deprecated.removal
-  const sinceMissing = typeof since !== 'string' || since.trim() === ''
-  const removalMissing = typeof removal !== 'string' || removal.trim() === ''
-  if (sinceMissing || removalMissing) {
-    const missingFields = [
-      sinceMissing ? 'deprecated.since' : null,
-      removalMissing ? 'deprecated.removal' : null,
-    ]
-      .filter(Boolean)
-      .join(', ')
-    violations.push({
-      file: relPath,
-      rule: 'deprecated-missing-required-fields',
-      field: missingFields,
-      message: `Bundled skill deprecated block must include non-empty string fields: ${missingFields}. The runtime silently drops the entire deprecated block when these are missing, defeating the deprecation cycle.`,
-      remediation: FRONTMATTER_REMEDIATION,
-    })
-  }
-
-  const reason = deprecated.reason
-  if (typeof reason === 'string' && reason.trim() !== '') return
-  violations.push({
-    file: relPath,
-    rule: 'deprecated-reason-missing',
-    field: 'deprecated.reason',
-    message:
-      'Bundled skill deprecated block must include a non-empty reason string.',
-    remediation: FRONTMATTER_REMEDIATION,
-  })
 }
 
 // ---------------------------------------------------------------------------
@@ -1036,7 +991,7 @@ export function checkAgentMode(
       violations.push({
         file: relPath,
         message:
-          "Bundled agents must declare `mode: subagent` explicitly. The converter's fill-if-absent default will be removed in v3.0.0; without an explicit `mode`, agents would fall back to OpenCode's native default (`all`), making internal agents primary-visible.",
+          "Bundled agents must declare `mode: subagent` explicitly. The runtime applies no default; without an explicit `mode`, agents would fall back to OpenCode's native default (`all`), making internal agents primary-visible.",
       })
     }
   }

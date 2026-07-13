@@ -109,7 +109,7 @@ function loadAgentAsConfig(agentInfo: {
   category?: string
 }): AgentConfig | null {
   try {
-    const converted = fs.readFileSync(agentInfo.file, 'utf8')
+    const content = fs.readFileSync(agentInfo.file, 'utf8')
     const {
       description,
       prompt,
@@ -124,7 +124,7 @@ function loadAgentAsConfig(agentInfo: {
       steps,
       hidden,
       permission,
-    } = extractAgentFrontmatter(converted)
+    } = extractAgentFrontmatter(content)
 
     const config: AgentConfig = {
       description: formatAgentDescription(agentInfo.name, description),
@@ -155,10 +155,10 @@ function loadCommandAsConfig(commandInfo: {
   category?: string
 }): CommandConfig | null {
   try {
-    const converted = fs.readFileSync(commandInfo.file, 'utf8')
+    const content = fs.readFileSync(commandInfo.file, 'utf8')
     const { name, description, agent, model, subtask } =
-      extractCommandFrontmatter(converted)
-    const { body } = parseFrontmatter(converted)
+      extractCommandFrontmatter(content)
+    const { body } = parseFrontmatter(content)
 
     const cleanName = commandInfo.name.replace(/^\//, '')
 

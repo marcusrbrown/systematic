@@ -1,6 +1,6 @@
 # src/lib — Core Implementation
 
-14 modules implementing plugin logic: discovery, config, schema validation, and tool registration.
+20 modules implementing plugin logic: discovery, config, schema validation, and tool registration.
 
 ## Data Flow
 
@@ -43,7 +43,7 @@ All discovery follows same pattern: `dir → walkDir() → find files → parseF
 | `config.ts` | `loadConfig`, `getConfigPaths`, `SystematicConfig`, `DEFAULT_CONFIG` | JSONC config loading + merging |
 | `config-schema.ts` | `SystematicConfigSchema`, `validateConfig`, `SECURITY_OVERLAY_FIELDS`, `AgentOverlaySchema`, `CategoryOverlaySchema`, `BootstrapSchema` | Canonical Zod schema for user config; security field list |
 | `agent-colors.ts` | `isValidAgentColor`, `OPENCODE_AGENT_COLOR_TOKENS` | Color validator (hex or named token) + accepted token enum |
-| `config-handler.ts` | `createConfigHandler`, `ConfigHandlerDeps`, `formatAgentDescription`, `toTitleCase` | OpenCode config hook (collects + converts all assets) |
+| `config-handler.ts` | `createConfigHandler`, `ConfigHandlerDeps`, `formatAgentDescription`, `toTitleCase` | OpenCode config hook (collects + emits all assets) |
 | `skill-tool.ts` | `createSkillTool`, `SkillToolOptions` | `systematic_skill` tool (XML description, skill execution) |
 | `bootstrap.ts` | `getBootstrapContent`, `INTERNAL_AGENT_SIGNATURES`, `BootstrapDeps` | System prompt injection (using-systematic skill) |
 

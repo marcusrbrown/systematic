@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 import type { Config } from '@opencode-ai/sdk'
+import { extractAgentFrontmatter } from '../../src/lib/agents.js'
 import {
   createConfigHandler,
   formatAgentDescription,
@@ -2018,11 +2020,11 @@ Discovered body for hidden.`,
     // path produces the same result as the convertFileWithCache path did.
     test('code-simplicity-reviewer resolves to the expected AgentConfig shape', async () => {
       const realAgentsDir = path.resolve(
-        path.dirname(new URL(import.meta.url).pathname),
+        path.dirname(fileURLToPath(import.meta.url)),
         '../../agents',
       )
       const realSkillsDir = path.resolve(
-        path.dirname(new URL(import.meta.url).pathname),
+        path.dirname(fileURLToPath(import.meta.url)),
         '../../skills',
       )
 
@@ -2040,18 +2042,33 @@ Discovered body for hidden.`,
       expect(agent).toBeDefined()
       if (!agent) throw new Error('Expected agent to load')
 
-      expect(agent.description).toBe(
-        'Final review pass to ensure code is as simple and minimal as possible. Use after implementation is complete to identify YAGNI violations and simplification opportunities. (Code-Simplicity-Reviewer - Systematic)',
+      const realAgentFile = path.join(
+        realAgentsDir,
+        'review',
+        'code-simplicity-reviewer.md',
       )
-      expect(agent.mode).toBe('subagent')
-      expect(agent.temperature).toBe(0.1)
-      expect(agent.tools).toBeUndefined()
-      expect(agent.prompt).toContain(
-        'You are a code simplicity expert specializing in minimalism',
+      const rawFile = fs.readFileSync(realAgentFile, 'utf8')
+      const frontmatter = extractAgentFrontmatter(rawFile)
+      const expectedDescription = formatAgentDescription(
+        'code-simplicity-reviewer',
+        frontmatter.description,
       )
+
+      expect(agent).toEqual({
+        description: expectedDescription,
+        prompt: frontmatter.prompt,
+        mode: frontmatter.mode,
+        temperature: frontmatter.temperature,
+      })
       expect(agent.model).toBeUndefined()
+      expect(agent.variant).toBeUndefined()
+      expect(agent.top_p).toBeUndefined()
+      expect(agent.tools).toBeUndefined()
+      expect(agent.disable).toBeUndefined()
       expect(agent.color).toBeUndefined()
+      expect(agent.steps).toBeUndefined()
       expect(agent.hidden).toBeUndefined()
+      expect(agent.permission).toBeUndefined()
     })
   })
 })
