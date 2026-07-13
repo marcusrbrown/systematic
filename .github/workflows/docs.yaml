@@ -50,6 +50,28 @@ jobs:
       - name: Generate reference content
         run: bun run docs:generate
 
+      # Transition cleanup: the v2 -> v3 schema path migration (deleting
+      # docs/public/schemas/v2/, committing v3/) is gated to land only once a
+      # real v3.0.0+ tag exists. Until that release, v2/ must keep deploying
+      # so IDE $schema URLs pointing at /v2/ keep resolving. This step is a
+      # release-time-only removal of the *workspace copy* (the Astro build
+      # input), gated on the checked-out release tag being v3.0.0 or a higher
+      # major — never on branch/PR/main builds. Safe to delete this step
+      # entirely once the v2 -> v3 directory cut lands for real.
+      - name: Remove legacy v2 schema mirror for v3+ releases
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          tag="${RELEASE_TAG#v}"
+          major="${tag%%.*}"
+          if [ "$major" -ge 3 ] 2>/dev/null; then
+            echo "Release tag ${RELEASE_TAG} is v${major}+ — removing docs/public/schemas/v2/"
+            rm -rf docs/public/schemas/v2
+          else
+            echo "Release tag ${RELEASE_TAG} is pre-v3 — keeping docs/public/schemas/v2/"
+          fi
+
       - name: Resolve registry version
         id: registry-version
         env:

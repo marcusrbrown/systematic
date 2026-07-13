@@ -969,6 +969,55 @@ describe('AJV parity: Zod runtime contract vs generated JSON Schema', () => {
     expect(zodParse(config).success).toBe(true)
     expect(ajvValidate(config)).toBe(true)
   })
+
+  // v3 removed-name parity: REMOVED_BUNDLED_SKILL_NAMES / REMOVED_BUNDLED_AGENT_NAMES
+  // are threaded into the enum so removed names still PARSE (accept-and-warn at
+  // runtime in config.ts, not reject at parse time). Genuinely-unknown names
+  // (typos, names that never existed) must still be rejected by both sides.
+  test('parity: removed bundled skill name accepted by both (accept-and-warn)', () => {
+    if (!ajvAvailable) {
+      console.warn('SKIP: ajv not available')
+      return
+    }
+    // 'orchestrating-swarms' is in REMOVED_BUNDLED_SKILL_NAMES (src/lib/removed-names.ts)
+    const config = { disabled_skills: ['orchestrating-swarms'] }
+    expect(zodParse(config).success).toBe(true)
+    expect(ajvValidate(config)).toBe(true)
+  })
+
+  test('parity: never-existed skill name rejected by both', () => {
+    if (!ajvAvailable) {
+      console.warn('SKIP: ajv not available')
+      return
+    }
+    const config = { disabled_skills: ['never-existed-skill'] }
+    expect(zodParse(config).success).toBe(false)
+    expect(ajvValidate(config)).toBe(false)
+  })
+
+  test('parity: removed bundled agent name accepted by both (accept-and-warn)', () => {
+    if (!ajvAvailable) {
+      console.warn('SKIP: ajv not available')
+      return
+    }
+    // 'security-sentinel' is in REMOVED_BUNDLED_AGENT_NAMES (src/lib/removed-names.ts).
+    // disabled_agents is enum-validated the same way as disabled_skills (both
+    // thread removedAgentNames/removedSkillNames into the z.enum in
+    // createSystematicConfigSchema — see src/lib/config-schema.ts).
+    const config = { disabled_agents: ['security-sentinel'] }
+    expect(zodParse(config).success).toBe(true)
+    expect(ajvValidate(config)).toBe(true)
+  })
+
+  test('parity: never-existed agent name rejected by both', () => {
+    if (!ajvAvailable) {
+      console.warn('SKIP: ajv not available')
+      return
+    }
+    const config = { disabled_agents: ['never-existed-agent'] }
+    expect(zodParse(config).success).toBe(false)
+    expect(ajvValidate(config)).toBe(false)
+  })
 })
 
 // Meta-schema smoke test: the generated JSON Schema must itself be a valid
