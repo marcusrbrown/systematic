@@ -111,7 +111,7 @@ export interface BootstrapDeps {
 
 function getSkillUsageTemplate(): string {
   return `**Skills naming:**
-- Systematic bundled skills use the \`systematic:\` prefix (e.g., \`systematic:setup\`)
+- Systematic bundled skills use the \`systematic:\` prefix (e.g., \`systematic:onboarding\`)
 - Workflow skills with their own namespace keep it (e.g., \`ce:brainstorm\`)
 - Skills can also be invoked without prefix if unambiguous
 

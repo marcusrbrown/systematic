@@ -273,7 +273,7 @@ function validateSkillComponent(
 
   // Derive the skill directory from the SKILL.md location so unlisted-file checks
   // work regardless of any directory-name → component-name sanitization (e.g.,
-  // skills/generate_command/ → component name "generate-command").
+  // skills/git-commit-push-pr/ → component name "git-commit-push-pr").
   if (skillMdFile == null) return
   const skillDir = path.join(PROJECT_ROOT, path.dirname(skillMdFile.path))
   if (fs.existsSync(skillDir)) {

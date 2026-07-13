@@ -32,15 +32,14 @@ describe('SOURCE_CATEGORY_MODEL_DEFAULTS', () => {
     }
   })
 
-  test('covers all 6 Systematic categories', () => {
+  test('covers all 5 Systematic categories', () => {
     const keys = Object.keys(SOURCE_CATEGORY_MODEL_DEFAULTS)
     expect(keys).toContain('design')
-    expect(keys).toContain('docs')
     expect(keys).toContain('document-review')
     expect(keys).toContain('research')
     expect(keys).toContain('review')
     expect(keys).toContain('workflow')
-    expect(keys).toHaveLength(6)
+    expect(keys).toHaveLength(5)
   })
 
   test('every category has a non-empty rationale string', () => {
@@ -528,11 +527,11 @@ describe('formatForDocs', () => {
 
   test('edge case: category without whenToOverride renders em-dash in that column', () => {
     const table = formatForDocs()
-    // 'docs' has no whenToOverride — its row should end with '| — |'
+    // 'research' has no whenToOverride — its row should end with '| — |'
     const lines = table.split('\n')
-    const docsRow = lines.find((l) => l.startsWith('| docs '))
-    expect(docsRow).toBeDefined()
-    expect(docsRow).toMatch(/\| — \|$/)
+    const researchRow = lines.find((l) => l.startsWith('| research '))
+    expect(researchRow).toBeDefined()
+    expect(researchRow).toMatch(/\| — \|$/)
   })
 
   test('edge case: category with whenToOverride renders the text (not em-dash)', () => {

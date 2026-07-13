@@ -14,12 +14,12 @@ import type { SkillInfo } from '../../src/lib/skills.ts'
 describe('skill-loader', () => {
   describe('formatSkillCommandName', () => {
     test('adds systematic: prefix to plain name', () => {
-      expect(formatSkillCommandName('setup')).toBe('systematic:setup')
+      expect(formatSkillCommandName('onboarding')).toBe('systematic:onboarding')
     })
 
     test('does not double-prefix already prefixed name', () => {
-      expect(formatSkillCommandName('systematic:setup')).toBe(
-        'systematic:setup',
+      expect(formatSkillCommandName('systematic:onboarding')).toBe(
+        'systematic:onboarding',
       )
     })
 
@@ -211,6 +211,34 @@ Content here.`,
       expect(extracted).toContain('# Original Body')
       expect(extracted).toContain('Content here.')
       expect(extracted).not.toContain('name: test-skill')
+    })
+
+    test('loads the real bundled todos skill with merged create/triage/resolve sections', () => {
+      const realSkillDir = path.resolve(
+        path.dirname(new URL(import.meta.url).pathname),
+        '../../skills/todos',
+      )
+      const skillFile = path.join(realSkillDir, 'SKILL.md')
+
+      const skillInfo: SkillInfo = {
+        name: 'todos',
+        description: '',
+        path: realSkillDir,
+        skillFile,
+      }
+
+      const loaded = loadSkill(skillInfo)
+
+      expect(loaded).not.toBeNull()
+      if (loaded == null) {
+        throw new Error('Expected todos skill to load')
+      }
+
+      expect(loaded.name).toBe('todos')
+      expect(loaded.description.length).toBeGreaterThan(0)
+      expect(loaded.wrappedTemplate).toContain('## Create')
+      expect(loaded.wrappedTemplate).toContain('## Triage')
+      expect(loaded.wrappedTemplate).toContain('## Resolve')
     })
   })
 })

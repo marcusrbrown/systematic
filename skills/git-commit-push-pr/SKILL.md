@@ -80,7 +80,7 @@ EOF
 
 If the PR is not open or the commit range cannot be resolved, report the issue and stop.
 
-**Evidence decision:** Preserve any existing `## Demo` or `## Screenshots` block from the current body by default. If the user's focus asks to refresh or remove evidence, honor that intent. If no evidence block exists and one would benefit the reader, load the `feature-video` skill to capture evidence, then splice the result as a `## Demo` section into the body file.
+**Evidence decision:** Preserve any existing `## Demo` or `## Screenshots` block from the current body by default. If the user's focus asks to refresh or remove evidence, honor that intent.
 
 **Compare and confirm** — briefly explain what the new description covers differently from the old one. This helps the user decide whether to apply; the description itself does not narrate these differences. Summarize from the body already in context (from the bash call that wrote `body_file`); do not `cat` the temp file, which would re-emit the body.
 
@@ -198,7 +198,6 @@ Use this branch diff (not the working-tree diff) for the evidence decision. If t
 
 **Evidence decision (before delegation).** If the branch diff changes observable behavior (UI, CLI output, API behavior with runnable code, generated artifacts, workflow output) and evidence is not otherwise blocked (unavailable credentials, paid services, deploy-only infrastructure, hardware), ask: "This PR has observable behavior. Capture evidence for the PR description?"
 
-- **Capture now** -- load the `feature-video` skill with a target description inferred from the branch diff. feature-video returns `Tier`, `Description`, and `URL`. Note the captured evidence so it can be spliced into the PR body as a `## Demo` section. If capture returns `Tier: skipped` or `URL: "none"`, proceed with no evidence.
 - **Use existing evidence** -- ask for the URL or markdown embed, then splice it into the PR body as a `## Demo` section before applying.
 - **Skip** -- proceed with no evidence section.
 

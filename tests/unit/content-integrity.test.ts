@@ -714,9 +714,7 @@ describe('checkFrontmatter', () => {
         field: 'preconditions',
       })
       expect(violations[0]?.message).toContain('preconditions')
-      expect(violations[0]?.remediation).toContain(
-        'systematic:writing-systematic-skills',
-      )
+      expect(violations[0]?.remediation).toContain('systematic:writing-skills')
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
@@ -3020,7 +3018,7 @@ describe('CLI', () => {
       expect(stderr).toContain('Agent model violations (1)')
       expect(stderr).toContain('preconditions')
       expect(stderr).toContain(
-        'fix: Update frontmatter to match systematic:writing-systematic-skills.',
+        'fix: Update frontmatter to match systematic:writing-skills',
       )
       expect(stderr).toContain('agents/research/a.md')
     } finally {

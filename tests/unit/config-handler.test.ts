@@ -1473,11 +1473,13 @@ model: gpt-4
     })
 
     test('disabled exact overlay has no emitted config', async () => {
-      createCategorizedAgent('workflow', 'lint', {
-        name: 'lint',
+      createCategorizedAgent('workflow', 'spec-flow-analyzer', {
+        name: 'spec-flow-analyzer',
         description: 'Helper',
       })
-      writeSystematicConfig({ agents: { lint: { disable: true } } })
+      writeSystematicConfig({
+        agents: { 'spec-flow-analyzer': { disable: true } },
+      })
 
       const handler = createConfigHandler({
         directory: projectDir,
@@ -1489,7 +1491,7 @@ model: gpt-4
       const config: Config = {}
       await handler(config)
 
-      expect(config.agent?.lint).toBeUndefined()
+      expect(config.agent?.['spec-flow-analyzer']).toBeUndefined()
     })
 
     test('assertSourceCategoryModelCoverage fires on missing category', async () => {

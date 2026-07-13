@@ -273,12 +273,10 @@ After the learning is written and the refresh decision is made, check whether th
 
 Based on problem type, optionally invoke specialized agents to review the documentation:
 
-- **performance_issue** → `systematic:review:performance-oracle`
-- **security_issue** → `systematic:review:security-sentinel`
-- **database_issue** → `systematic:review:data-integrity-guardian`
+- **performance_issue** → `systematic:review:performance-reviewer`
+- **security_issue** → `systematic:review:security-reviewer`
+- **database_issue** → `systematic:review:data-migrations-reviewer`
 - Any code-heavy issue → always run `systematic:review:code-simplicity-reviewer`, and additionally run the kieran reviewer that matches the repo's primary stack:
-  - Ruby/Rails → also run `systematic:review:kieran-rails-reviewer`
-  - Python → also run `systematic:review:kieran-python-reviewer`
   - TypeScript/JavaScript → also run `systematic:review:kieran-typescript-reviewer`
   - Other stacks → no kieran reviewer needed
 
@@ -397,8 +395,8 @@ Subagent Results:
   ✓ Session History: 3 prior sessions on same branch, 2 failed approaches surfaced
 
 Specialized Agent Reviews (Auto-Triggered):
-  ✓ performance-oracle: Validated query optimization approach
-  ✓ kieran-rails-reviewer: Code examples meet Rails conventions
+  ✓ performance-reviewer: Validated query optimization approach
+  ✓ kieran-typescript-reviewer: Code examples meet TypeScript conventions
   ✓ code-simplicity-reviewer: Solution is appropriately minimal
 
 File created:
@@ -464,16 +462,14 @@ Writes the final learning directly into `docs/solutions/`.
 Based on problem type, these agents can enhance documentation:
 
 ### Code Quality & Review
-- **systematic:review:kieran-rails-reviewer**: Reviews code examples for Rails best practices
-- **systematic:review:kieran-python-reviewer**: Reviews code examples for Python best practices
 - **systematic:review:kieran-typescript-reviewer**: Reviews code examples for TypeScript best practices
 - **systematic:review:code-simplicity-reviewer**: Ensures solution code is minimal and clear
 - **systematic:review:pattern-recognition-specialist**: Identifies anti-patterns or repeating issues
 
 ### Specific Domain Experts
-- **systematic:review:performance-oracle**: Analyzes performance_issue category solutions
-- **systematic:review:security-sentinel**: Reviews security_issue solutions for vulnerabilities
-- **systematic:review:data-integrity-guardian**: Reviews database_issue migrations and queries
+- **systematic:review:performance-reviewer**: Analyzes performance_issue category solutions
+- **systematic:review:security-reviewer**: Reviews security_issue solutions for vulnerabilities
+- **systematic:review:data-migrations-reviewer**: Reviews database_issue migrations and queries
 
 ### Enhancement & Research
 - **systematic:research:best-practices-researcher**: Enriches solution with industry best practices

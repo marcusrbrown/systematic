@@ -46,7 +46,7 @@ All tokens are optional. Each one present means one less thing to infer. When ab
 - **Skip all user questions.** Never pause for approval or clarification once scope has been established.
 - **Apply only `safe_auto -> review-fixer` findings.** Leave `gated_auto`, `manual`, `human`, and `release` work unresolved.
 - **Write a run artifact** under `.context/systematic/ce-review/<run-id>/` summarizing findings, applied fixes, residual actionable work, and advisory outputs.
-- **Create durable todo files only for unresolved actionable findings** whose final owner is `downstream-resolver`. Load the `todo-create` skill for the canonical directory path and naming convention.
+- **Create durable todo files only for unresolved actionable findings** whose final owner is `downstream-resolver`. Load the `todos` skill (Create section) for the canonical directory path and naming convention.
 - **Never commit, push, or create a PR** from autofix mode. Parent workflows own those decisions.
 
 ### Report-only mode rules
@@ -101,7 +101,7 @@ Routing rules:
 
 ## Reviewers
 
-17 reviewer personas in layered conditionals, plus CE-specific agents. See the persona catalog included below for the full catalog.
+13 reviewer personas in layered conditionals, plus CE-specific agents. See the persona catalog included below for the full catalog.
 
 **Always-on (every review):**
 
@@ -131,22 +131,17 @@ Routing rules:
 
 | Agent | Select when diff touches... |
 |-------|---------------------------|
-| `systematic:review:dhh-rails-reviewer` | Rails architecture, service objects, session/auth choices, or Hotwire-vs-SPA boundaries |
-| `systematic:review:kieran-rails-reviewer` | Rails application code where conventions, naming, and maintainability are in play |
-| `systematic:review:kieran-python-reviewer` | Python modules, endpoints, scripts, or services |
 | `systematic:review:kieran-typescript-reviewer` | TypeScript components, services, hooks, utilities, or shared types |
-| `systematic:review:julik-frontend-races-reviewer` | Stimulus/Turbo controllers, DOM events, timers, animations, or async UI flows |
 
 **CE conditional (migration-specific):**
 
 | Agent | Select when diff includes migration files |
 |-------|------------------------------------------|
-| `systematic:review:schema-drift-detector` | Cross-references schema.rb against included migrations |
 | `systematic:review:deployment-verification-agent` | Produces deployment checklist with SQL verification queries |
 
 ## Review Scope
 
-Every review spawns all 4 always-on personas plus the 2 CE always-on agents, then adds whichever cross-cutting and stack-specific conditionals fit the diff. The model naturally right-sizes: a small config change triggers 0 conditionals = 6 reviewers. A Rails auth feature might trigger security + reliability + kieran-rails + dhh-rails = 10 reviewers.
+Every review spawns all 4 always-on personas plus the 2 CE always-on agents, then adds whichever cross-cutting and stack-specific conditionals fit the diff. The model naturally right-sizes: a small config change triggers 0 conditionals = 6 reviewers. An auth feature touching data migrations might trigger security + reliability + data-migrations = 9 reviewers.
 
 ## Protected Artifacts
 
@@ -343,7 +338,7 @@ Read the diff and file list from Stage 1. The 4 always-on personas and 2 CE alwa
 
 **`previous-comments` is PR-only.** Only select this persona when Stage 1 gathered PR metadata (PR number or URL was provided as an argument, or `gh pr view` returned metadata for the current branch). Skip it entirely for standalone branch reviews with no associated PR -- there are no prior comments to check.
 
-Stack-specific personas are additive. A Rails UI change may warrant `kieran-rails` plus `julik-frontend-races`; a TypeScript API diff may warrant `kieran-typescript` plus `api-contract` and `reliability`.
+Stack-specific personas are additive. A TypeScript API diff may warrant `kieran-typescript` plus `api-contract` and `reliability`.
 
 For CE conditional agents, check if the diff includes files matching `db/migrate/*.rb`, `db/schema.rb`, or data backfill scripts.
 
@@ -358,10 +353,7 @@ Review team:
 - agent-native-reviewer (always)
 - learnings-researcher (always)
 - security -- new endpoint in routes.rb accepts user-provided redirect URL
-- kieran-rails -- controller and Turbo flow changed in app/controllers and app/views
-- dhh-rails -- diff adds service objects around ordinary Rails CRUD
 - data-migrations -- adds migration 20260303_add_index_to_orders
-- schema-drift-detector -- migration files present
 ```
 
 This is progress reporting, not a blocking confirmation.
@@ -383,7 +375,7 @@ Persona sub-agents do focused, scoped work and should use a fast mid-tier model 
 
 Use the platform's mid-tier model for all persona and CE sub-agents. In OpenCode, pass `model: "sonnet"` in the Agent tool call. On other platforms, use the equivalent mid-tier (e.g., `gpt-4o` in Codex). If the platform has no model override mechanism or the available model names are unknown, omit the model parameter and let agents inherit the default -- a working review on the parent model is better than a broken dispatch from an unrecognized model name.
 
-CE always-on agents (agent-native-reviewer, learnings-researcher) and CE conditional agents (schema-drift-detector, deployment-verification-agent) also use the mid-tier model since they perform scoped, focused work.
+CE always-on agents (agent-native-reviewer, learnings-researcher) and CE conditional agents (deployment-verification-agent) also use the mid-tier model since they perform scoped, focused work.
 
 The orchestrator (this skill) stays on the default model because it handles intent discovery, reviewer selection, finding merge/dedup, and synthesis -- tasks that benefit from stronger reasoning.
 
@@ -446,7 +438,7 @@ Detail-tier fields (`why_it_matters`, `evidence`) are in the artifact file only.
 
 **CE always-on agents** (agent-native-reviewer, learnings-researcher) are dispatched as standard Agent calls in parallel with the persona agents. Give them the same review context bundle the personas receive: entry mode, any PR metadata gathered in Stage 1, intent summary, review base branch name when known, `BASE:` marker, file list, diff, and `UNTRACKED:` scope notes. Do not invoke them with a generic "review this" prompt. Their output is unstructured and synthesized separately in Stage 6.
 
-**CE conditional agents** (schema-drift-detector, deployment-verification-agent) are also dispatched as standard Agent calls when applicable. Pass the same review context bundle plus the applicability reason (for example, which migration files triggered the agent). For schema-drift-detector specifically, pass the resolved review base branch explicitly so it never assumes `main`. Their output is unstructured and must be preserved for Stage 6 synthesis just like the CE always-on agents.
+**CE conditional agents** (deployment-verification-agent) are also dispatched as standard Agent calls when applicable. Pass the same review context bundle plus the applicability reason (for example, which migration files triggered the agent). Their output is unstructured and must be preserved for Stage 6 synthesis just like the CE always-on agents.
 
 ### Stage 5: Merge findings
 
@@ -512,10 +504,9 @@ Assemble the final report using **pipe-delimited markdown tables for findings** 
 7. **Filtered (not validated).** Include when Stage 5b produced any findings with `validated: false`. Render as a pipe-delimited table with columns `#`, `File`, `Issue`, `Reviewer`, `Confidence`, `Validator reason`. These findings are surfaced for human review — they are not removed from the report. The validator found evidence that the issue may not be real in the code as written, was not introduced by this diff, or is already handled elsewhere; the human reviewer makes the final call. Omit this section when no findings were filtered.
 8. **Learnings & Past Solutions.** Surface learnings-researcher results: if past solutions are relevant, flag them as "Known Pattern" with links to docs/solutions/ files.
 9. **Agent-Native Gaps.** Surface agent-native-reviewer results. Omit section if no gaps found.
-10. **Schema Drift Check.** If schema-drift-detector ran, summarize whether drift was found. If drift exists, list the unrelated schema objects and the required cleanup command. If clean, say so briefly.
-11. **Deployment Notes.** If deployment-verification-agent ran, surface the key Go/No-Go items: blocking pre-deploy checks, the most important verification queries, rollback caveats, and monitoring focus areas. Keep the checklist actionable rather than dropping it into Coverage.
-12. **Coverage.** Suppressed count, residual risks, testing gaps, failed/timed-out reviewers, validator failures, and any intent uncertainty carried by non-interactive modes.
-13. **Verdict.** Ready to merge / Ready with fixes / Not ready. Fix order if applicable. When an `explicit` plan has unaddressed requirements, the verdict must reflect it — a PR that's code-clean but missing planned requirements is "Not ready" unless the omission is intentional. When an `inferred` plan has unaddressed requirements, note it in the verdict reasoning but do not block on it alone.
+10. **Deployment Notes.** If deployment-verification-agent ran, surface the key Go/No-Go items: blocking pre-deploy checks, the most important verification queries, rollback caveats, and monitoring focus areas. Keep the checklist actionable rather than dropping it into Coverage.
+11. **Coverage.** Suppressed count, residual risks, testing gaps, failed/timed-out reviewers, validator failures, and any intent uncertainty carried by non-interactive modes.
+12. **Verdict.** Ready to merge / Ready with fixes / Not ready. Fix order if applicable. When an `explicit` plan has unaddressed requirements, the verdict must reflect it — a PR that's code-clean but missing planned requirements is "Not ready" unless the omission is intentional. When an `inferred` plan has unaddressed requirements, note it in the verdict reasoning but do not block on it alone.
 
 Do not include time estimates.
 
@@ -715,7 +706,7 @@ After presenting findings and verdict (Stage 6), route the next steps by mode. R
   }
   ```
   Capture `branch` and `head_sha` at dispatch time (before any autofixes land), and write the file after the verdict is finalized. This file is additive -- pre-existing artifacts that predate this field are still valid, and downstream skills fall back to file mtime when it is missing.
-- In autofix mode, create durable todo files only for unresolved actionable findings whose final owner is `downstream-resolver`. Load the `todo-create` skill for the canonical directory path, naming convention, YAML frontmatter structure, and template. Each todo should map the finding's severity to the todo priority (`P0`/`P1` -> `p1`, `P2` -> `p2`, `P3` -> `p3`) and set `status: ready` since these findings have already been triaged by synthesis.
+- In autofix mode, create durable todo files only for unresolved actionable findings whose final owner is `downstream-resolver`. Load the `todos` skill (Create section) for the canonical directory path, naming convention, YAML frontmatter structure, and template. Each todo should map the finding's severity to the todo priority (`P0`/`P1` -> `p1`, `P2` -> `p2`, `P3` -> `p3`) and set `status: ready` since these findings have already been triaged by synthesis.
 - Do not create todos for `advisory` findings, `owner: human`, `owner: release`, or protected-artifact cleanup suggestions.
 - If only advisory outputs remain, create no todos.
 - Interactive mode may offer to externalize residual actionable work after fixes, but it is not required to finish the review.

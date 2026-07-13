@@ -1,6 +1,6 @@
 # Foundation Conventions
 
-This reference expands the Systematic-specific rules from `SKILL.md`. The mechanical rules are enforced by `bun scripts/content-integrity.ts`; this file explains the judgment calls behind them.
+This reference expands the Systematic-specific rules from the "Systematic Bundled Skills" section of `SKILL.md`. The mechanical rules are enforced by `bun scripts/content-integrity.ts`; this file explains the judgment calls behind them.
 
 ## Frontmatter
 
@@ -8,8 +8,8 @@ Systematic skill frontmatter mirrors what the runtime loader actually reads. Do 
 
 | Field | Required | When To Use | Enforcement | Example |
 |---|---:|---|---|---|
-| `name` | Yes | Every skill. Use the unprefixed skill identifier unless another namespace is intentional. | Read + enforced (loader rejects missing/null) | `name: writing-systematic-skills` |
-| `description` | Yes | Trigger-oriented discovery text. Third person. Prefer `Use when...`. | Read + enforced (loader rejects missing/null) | `description: Use when fixing bundled skill frontmatter failures...` |
+| `name` | Yes | Every skill. Use the unprefixed skill identifier unless another namespace is intentional. | Read + enforced (loader rejects missing/null) | `name: writing-skills` |
+| `description` | Yes | Trigger-oriented discovery text. Third person. Prefer `Use when...`. | Read + enforced (loader rejects missing/null) | `description: Use when creating new skills, editing existing skills, or verifying skills work before deployment` |
 | `argument-hint` | No | The skill accepts meaningful invocation arguments. | Read + surfaced to callers | `argument-hint: "[path/to/document.md]"` |
 | `disable-model-invocation` | No | Dispatcher or routing skills that should not be directly model-invoked. | Read + enforced (loader acts on it) | `disable-model-invocation: true` |
 | `allowed-tools` | No | The skill needs an explicit tool allowlist. | **Read but not enforced.** `src/lib/skills.ts` parses it into `SkillFrontmatter.allowedTools` and passes it through, but no permission gate in `src/lib` acts on it. OpenCode treats it as metadata, not enforced permissions. Do not rely on this field to restrict tool access. | `allowed-tools: Bash, Read` |
@@ -126,9 +126,9 @@ Systematic provides source-owned category model defaults in TypeScript code for 
 
 ### Machine ID
 
-`ai:systematic` is a machine identity string for Systematic-owned operations. Proof uses it as the `by` field on operations and the `X-Agent-Id` header. Keep it lowercase and stable.
+`ai:systematic` is a machine identity string for Systematic-owned operations, used as the `by` field on operations and the `X-Agent-Id` header where applicable. Keep it lowercase and stable.
 
-Do not use `ai:systematic` as a skill-reference pattern. Skill and agent references use their own namespaces, such as `systematic:writing-systematic-skills` or `systematic:research:best-practices-researcher`.
+Do not use `ai:systematic` as a skill-reference pattern. Skill and agent references use their own namespaces, such as `systematic:writing-skills` or `systematic:research:best-practices-researcher`.
 
 ### Public-Facing Voice
 

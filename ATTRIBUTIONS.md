@@ -35,7 +35,7 @@ The two `SKILL.md` files (`skills/test-driven-development/SKILL.md` and `skills/
 
 - Adaptation was light: rewrote upstream's `@filename` force-load syntax to repo-local `references/` paths; rewrote `superpowers:<skill-name>` namespace cross-references to bare names (matching Systematic's runtime convention where the `systematic:` prefix is applied at load time); swapped `~/.claude/skills` path mentions to the canonical OpenCode path `~/.agents/skills/`; renamed the `CLAUDE_MD_TESTING.md` worked example to `skill-testing-walkthrough.md` to fit Systematic's descriptive-filename convention.
 - Per-file copyright comments are deliberately omitted. Frontmatter `license: MIT` plus this attribution file constitute the full attribution surface.
-- These files are load-bearing for `ce:work`, `ce:plan`, and `writing-systematic-skills` cross-references. Future contributors editing them should preserve the discipline-enforcing prose (e.g., the Iron Law, the rationalization tables, the RED-GREEN-REFACTOR cycle).
+- These files are load-bearing for `ce:work`, `ce:plan`, and the "Systematic Bundled Skills" section of `writing-skills` itself. Future contributors editing them should preserve the discipline-enforcing prose (e.g., the Iron Law, the rationalization tables, the RED-GREEN-REFACTOR cycle).
 
 ### Future refresh discipline
 

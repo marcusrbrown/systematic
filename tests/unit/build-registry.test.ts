@@ -71,7 +71,7 @@ describe('build-registry script', () => {
 
     expect(result.exitCode).toBe(0)
 
-    const packument = readPackument('agent-design-implementation-reviewer')
+    const packument = readPackument('agent-design-iterator')
     const files = packument.versions['1.2.3']?.files ?? []
 
     expect(files.length).toBeGreaterThan(0)
@@ -81,7 +81,7 @@ describe('build-registry script', () => {
     // V2: source path equals target path (string shorthand resolves to {path: x, target: x})
     expect(file.target).toBe(file.path)
     // V2 paths are repo-root-relative with no .opencode/ prefix and no singularization
-    expect(file.target).toBe('agents/design/design-implementation-reviewer.md')
+    expect(file.target).toBe('agents/design/design-iterator.md')
     expect(file.target).not.toContain('.opencode/')
     expect(file.target).not.toMatch(/^\.opencode\/agent\//)
   })
