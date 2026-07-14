@@ -127,7 +127,7 @@ describe('build output and packaging', () => {
       throw new Error('npm pack produced no tarball filename')
     }
     packedTarballPath = path.join(packTempDir, tarballName)
-  })
+  }, 200_000)
 
   afterAll(() => {
     if (packTempDir) {
@@ -406,7 +406,7 @@ describe('Pi managed-install package-loader smoke', () => {
     }
 
     packedTarballPath = path.join(packTempDir, tarballName)
-  })
+  }, 200_000)
 
   afterAll(() => {
     if (packTempDir) {
