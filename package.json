@@ -71,7 +71,7 @@
   },
   "peerDependencies": {
     "@opencode-ai/plugin": "^1.1.30",
-    "@earendil-works/pi-coding-agent": "^0.80.6",
+    "@earendil-works/pi-coding-agent": "0.80.6",
     "typebox": "^1.1.38"
   },
   "peerDependenciesMeta": {
@@ -87,6 +87,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.3",
+    "@earendil-works/pi-coding-agent": "0.80.6",
     "@opencode-ai/plugin": "1.17.15",
     "@opencode-ai/sdk": "1.17.15",
     "@semantic-release/exec": "7.1.0",
