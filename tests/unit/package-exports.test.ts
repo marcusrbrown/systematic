@@ -517,4 +517,94 @@ describe('Pi managed-install package-loader smoke', () => {
       fs.rmSync(smokeControlRoot, { recursive: true, force: true })
     }
   }, 30_000)
+
+  test('bundled skills are discoverable via pi.skills, including sub-file references', () => {
+    if (!packedTarballPath) {
+      throw new Error('packTarballOnce() has not run')
+    }
+
+    const fixture = createIsolatedFixture()
+    try {
+      const installSpec = `npm:@fro.bot/systematic@file:${packedTarballPath}`
+      const install = runPiCommand(
+        fixture.projectDir,
+        fixture.homeDir,
+        fixture.xdgConfigHome,
+        fixture.xdgDataHome,
+        fixture.xdgCacheHome,
+        fixture.xdgStateHome,
+        ['install', installSpec, '-l', '--approve'],
+      )
+      expect(install.exitCode).toBe(0)
+
+      const rpc = runPiCommand(
+        fixture.projectDir,
+        fixture.homeDir,
+        fixture.xdgConfigHome,
+        fixture.xdgDataHome,
+        fixture.xdgCacheHome,
+        fixture.xdgStateHome,
+        ['--mode', 'rpc', '--no-session', '--approve'],
+        '{"type":"get_commands"}\n',
+      )
+      expect(rpc.exitCode).toBe(0)
+
+      const responseLine = rpc.stdout
+        .trim()
+        .split('\n')
+        .find((line) => line.includes('"command":"get_commands"'))
+      expect(responseLine).toBeDefined()
+
+      const response = JSON.parse(responseLine ?? '{}') as {
+        success?: boolean
+        data?: {
+          commands?: Array<{
+            name?: string
+            source?: string
+            sourceInfo?: { path?: string; baseDir?: string }
+          }>
+        }
+      }
+      expect(response.success).toBe(true)
+
+      const cePlanCommand = response.data?.commands?.find(
+        (entry) => entry.name === 'skill:ce:plan',
+      )
+      expect(cePlanCommand).toMatchObject({
+        name: 'skill:ce:plan',
+        source: 'skill',
+      })
+
+      const skillMdPath = cePlanCommand?.sourceInfo?.path
+      const packageBaseDir = cePlanCommand?.sourceInfo?.baseDir
+      expect(typeof skillMdPath).toBe('string')
+      expect(typeof packageBaseDir).toBe('string')
+      if (typeof packageBaseDir === 'string') {
+        expect(fs.existsSync(path.join(packageBaseDir, 'package.json'))).toBe(
+          true,
+        )
+      }
+
+      if (typeof skillMdPath !== 'string') {
+        throw new Error('ce:plan sourceInfo.path missing')
+      }
+      expect(fs.existsSync(skillMdPath)).toBe(true)
+
+      const skillMdBody = fs.readFileSync(skillMdPath, 'utf8')
+      expect(skillMdBody).toContain('references/universal-planning.md')
+
+      const skillDir = path.dirname(skillMdPath)
+      const referencePath = path.resolve(
+        skillDir,
+        'references/universal-planning.md',
+      )
+      expect(referencePath.startsWith(`${skillDir}${path.sep}`)).toBe(true)
+      expect(fs.existsSync(referencePath)).toBe(true)
+
+      const referenceBody = fs.readFileSync(referencePath, 'utf8')
+      expect(referenceBody).toContain('# Universal Planning Workflow')
+    } finally {
+      fs.rmSync(fixture.tempRoot, { recursive: true, force: true })
+    }
+  }, 30_000)
 })
