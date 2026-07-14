@@ -27,8 +27,15 @@
         "typescript": "6.0.3",
       },
       "peerDependencies": {
+        "@earendil-works/pi-coding-agent": "^0.80.6",
         "@opencode-ai/plugin": "^1.1.30",
+        "typebox": "^1.1.38",
       },
+      "optionalPeers": [
+        "@earendil-works/pi-coding-agent",
+        "@opencode-ai/plugin",
+        "typebox",
+      ],
     },
     "docs": {
       "name": "@fro.bot/systematic-docs",

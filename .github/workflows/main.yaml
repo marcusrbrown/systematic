@@ -68,6 +68,16 @@ jobs:
             const commands = Object.keys(config.command).length;
             if (agents === 0 || commands === 0) throw new Error('No assets loaded: ' + agents + ' agents, ' + commands + ' commands');
             console.log('Plugin loaded: ' + agents + ' agents, ' + commands + ' commands, tool: ' + (typeof plugin.tool.systematic_skill.execute));
+
+            const piModule = await import('./dist/pi.js');
+            const piExportKeys = Object.keys(piModule).sort();
+            if (JSON.stringify(piExportKeys) !== JSON.stringify(expected)) {
+              throw new Error('Pi entry must export only \`default\`. Got: ' + JSON.stringify(piExportKeys));
+            }
+            if (typeof piModule.default !== 'function') {
+              throw new Error('Pi entry default export must be a function. Got: ' + typeof piModule.default);
+            }
+            console.log('Pi entry loaded: default export is a function.');
           "
 
       - name: Content integrity gate
