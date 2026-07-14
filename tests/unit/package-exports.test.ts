@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { createHash } from 'node:crypto'
 import { spawnSync } from 'node:child_process'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -281,6 +281,8 @@ function runPiCommand(
       XDG_DATA_HOME: xdgDataHome,
       XDG_CACHE_HOME: xdgCacheHome,
       XDG_STATE_HOME: xdgStateHome,
+      npm_config_cache: path.join(homeDir, '.npm-cache'),
+      npm_config_prefix: path.join(homeDir, '.npm-prefix'),
     },
     input,
     encoding: 'utf8',
