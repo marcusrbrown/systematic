@@ -14,6 +14,14 @@
       "types": "./dist/index.d.ts"
     }
   },
+  "pi": {
+    "extensions": [
+      "./dist/pi.js"
+    ],
+    "skills": [
+      "./skills"
+    ]
+  },
   "files": [
     "dist",
     "skills",
@@ -25,7 +33,7 @@
   ],
   "scripts": {
     "clean": "rimraf dist",
-    "build": "bun run clean && bun build src/index.ts src/cli.ts --outdir dist --target bun --splitting --external @opencode-ai/plugin --external js-yaml && tsc --emitDeclarationOnly",
+    "build": "bun run clean && bun build src/index.ts src/cli.ts --outdir dist --target bun --splitting --external @opencode-ai/plugin --external js-yaml && bun build src/pi.ts --outdir dist --target node --external @earendil-works/pi-coding-agent --external typebox && tsc --emitDeclarationOnly",
     "dev": "bun --watch src/index.ts",
     "test": "bun test tests/unit",
     "test:integration": "bun test tests/integration",
@@ -62,10 +70,24 @@
     "node": ">=18"
   },
   "peerDependencies": {
-    "@opencode-ai/plugin": "^1.1.30"
+    "@opencode-ai/plugin": "^1.1.30",
+    "@earendil-works/pi-coding-agent": "^0.80.6",
+    "typebox": "^1.1.38"
+  },
+  "peerDependenciesMeta": {
+    "@opencode-ai/plugin": {
+      "optional": true
+    },
+    "@earendil-works/pi-coding-agent": {
+      "optional": true
+    },
+    "typebox": {
+      "optional": true
+    }
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.3",
+    "@earendil-works/pi-coding-agent": "0.80.6",
     "@opencode-ai/plugin": "1.17.15",
     "@opencode-ai/sdk": "1.17.15",
     "@semantic-release/exec": "7.1.0",

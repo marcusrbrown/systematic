@@ -20,6 +20,8 @@ Systematic is an OpenCode plugin providing structured engineering workflows for 
 | What conventions apply to my code? | This file (Conventions section below) |
 | What patterns should I follow? | This file (Conventions + Anti-Patterns below) |
 
+Before implementing features or diagnosing failures, search `docs/solutions/` for related past solutions by frontmatter metadata and reuse verified patterns where they still apply.
+
 ## Commands
 
 ```bash
