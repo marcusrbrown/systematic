@@ -1,6 +1,6 @@
 # src/lib — Core Implementation
 
-20 modules implementing plugin logic: discovery, config, schema validation, and tool registration.
+Modules implementing plugin logic: discovery, config, schema validation, and tool registration.
 
 ## Data Flow
 
@@ -35,6 +35,7 @@ All discovery follows same pattern: `dir → walkDir() → find files → parseF
 |--------|-------------|------|
 | `skill-loader.ts` | `loadSkill`, `LoadedSkill`, `SKILL_PREFIX` | Loads + wraps skill content in XML template |
 | `skill-resolver.ts` | `resolveSkill`, `buildSkillToolDescription`, `buildSkillToolParameterHint`, `buildSkillContentOutput`, `discoverSkillFiles` | Harness-neutral skill resolution, wrapped output, and catalog helpers shared by both adapters |
+| `agent-resolver.ts` | `buildAgentCatalog`, `resolveAgent`, `renderAgentCatalogCompact`, `resolveToolAllowlist`, `DEFAULT_READONLY_TOOLS` | Harness-neutral, in-memory runtime catalog built from packaged `agents/<category>/<name>.md` (category dropped from the lookup key, duplicate names fail-closed); parses each persona's `tools:` frontmatter value into a least-privilege Pi tool allowlist, validated at catalog-build time so unknown/denylisted tools fail closed with source-path context |
 | `validation.ts` | `isAgentMode`, `isPermissionSetting`, `normalizePermission`, `extractString`, `extractBoolean` | Agent config extraction + type guards + safe value extraction |
 
 ### Config & Integration Layer
@@ -47,6 +48,8 @@ All discovery follows same pattern: `dir → walkDir() → find files → parseF
 | `config-handler.ts` | `createConfigHandler`, `ConfigHandlerDeps`, `formatAgentDescription`, `toTitleCase` | OpenCode config hook (collects + emits all assets) |
 | `skill-tool.ts` | `createSkillTool`, `SkillToolOptions` | OpenCode `systematic_skill` adapter (tool wiring, permission/metadata side effects, execution bridging) |
 | `bootstrap.ts` | `getBootstrapContent`, `applyBootstrapContent`, `computeBootstrapContentSafe`, `composeSystemPromptWithBootstrap`, `INTERNAL_AGENT_SIGNATURES`, `BootstrapDeps` | System prompt injection (using-systematic skill); harness-neutral safe-compute/compose helpers reused by Pi's `before_agent_start` |
+| `pi-delegate-tool.ts` | `createPiDelegateTool`, `MAX_DELEGATE_TURNS`, `DELEGATE_TOOL_NAME`, `DELEGATE_EXECUTION_MODE`, `DelegateSessionLike`, `CreateDelegateSession` | Pi `systematic_delegate` tool factory: `{agent, task}`-only schema, fail-closed validation (unknown persona/model/tool/re-entry) before any session is created, fixed 20-turn cap enforced via `session.subscribe()` + `abort()`, `AbortSignal` propagation, unsubscribe/dispose in `finally`. Depends on Pi session construction only through the injectable `CreateDelegateSession` seam (no live Pi SDK import), so it is unit-testable without a real Pi session/provider |
+| `pi-delegate-session.ts` | `createRealPiDelegateSession` | The real `CreateDelegateSession` implementation: `DefaultResourceLoader` with `noExtensions: true` (depth 1) plus every other resource category suppressed, `systemPromptOverride` replacing the prompt with the persona body, `SessionManager.inMemory()`, `reload()` before session creation. The only module that statically imports the live Pi SDK for delegation |
 
 ## Key Types
 
@@ -63,9 +66,9 @@ All discovery follows same pattern: `dir → walkDir() → find files → parseF
 
 ## Notes
 
-- `parseFrontmatter` is most-imported function (16 references across codebase)
-- `walkDir` is the foundation layer (7 references — used by all three discovery modules)
-- `findSkillsInDir` is highest-centrality discovery function (6 references across 3 modules)
+- `parseFrontmatter` is the most-imported function across the codebase
+- `walkDir` is the foundation layer, used by all three discovery modules
+- `findSkillsInDir` is the highest-centrality discovery function across the loading layer
 - `SKILL_PREFIX` = `'systematic:'` — all skills registered with this prefix
 - `parseFrontmatter` is regex-based (not a YAML library for delimiter detection)
 - `formatFrontmatter` uses `js-yaml` dump with `noRefs` and core schema

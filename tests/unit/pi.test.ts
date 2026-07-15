@@ -49,18 +49,36 @@ function createFakeExtensionApi(): ExtensionAPI & RegisterToolSpy & OnSpy {
 
 const fakeExtensionContext = {} as ExtensionContext
 
+/** Looks up a registered tool by name; throws if not found so tests fail loudly. */
+function findToolByName(tools: ToolDefinition[], name: string): ToolDefinition {
+  const tool = tools.find((t) => t.name === name)
+  if (!tool) {
+    throw new Error(`Tool not found: ${name}`)
+  }
+  return tool
+}
+
 describe('src/pi.ts systematic_skill tool registration', () => {
-  test('registers exactly one tool named systematic_skill with expected label and catalog-derived description', async () => {
+  test('registers exactly two tools: systematic_skill and systematic_delegate', async () => {
     const api = createFakeExtensionApi()
 
     await piExtension(api)
 
-    expect(api.registeredTools).toHaveLength(1)
-    const [registered] = api.registeredTools
-    expect(registered.name).toBe('systematic_skill')
-    expect(registered.label).toBe('Systematic Skill')
-    expect(registered.description).toBe(
+    expect(api.registeredTools).toHaveLength(2)
+    expect(api.registeredTools.map((t) => t.name).sort()).toEqual([
+      'systematic_delegate',
+      'systematic_skill',
+    ])
+    const registered = api.registeredTools.find(
+      (t) => t.name === 'systematic_skill',
+    )
+    expect(registered).toBeDefined()
+    expect(registered?.label).toBe('Systematic Skill')
+    expect(registered?.description).toBe(
       buildSkillToolDescription(resolverOptions),
+    )
+    expect(registered?.promptSnippet).toBe(
+      'Use `systematic_skill` to load Systematic skills.',
     )
   })
 
@@ -69,7 +87,7 @@ describe('src/pi.ts systematic_skill tool registration', () => {
 
     await piExtension(api)
 
-    const [registered] = api.registeredTools
+    const registered = findToolByName(api.registeredTools, 'systematic_skill')
     const schema = registered.parameters as unknown as {
       type: string
       required: string[]
@@ -87,7 +105,7 @@ describe('src/pi.ts systematic_skill tool registration', () => {
   test('execute returns Pi text content byte-identical to the shared skill content output', async () => {
     const api = createFakeExtensionApi()
     await piExtension(api)
-    const [registered] = api.registeredTools
+    const registered = findToolByName(api.registeredTools, 'systematic_skill')
 
     const expectedSkill = resolveSkill(resolverOptions, 'ce:plan')
     const expected = buildSkillContentOutput(expectedSkill)
@@ -107,7 +125,7 @@ describe('src/pi.ts systematic_skill tool registration', () => {
   test('execute throws the exact shared not-found error text for an unknown skill name', async () => {
     const api = createFakeExtensionApi()
     await piExtension(api)
-    const [registered] = api.registeredTools
+    const registered = findToolByName(api.registeredTools, 'systematic_skill')
 
     let thrown: unknown
     try {
@@ -138,7 +156,7 @@ describe('src/pi.ts systematic_skill tool registration', () => {
   test('Pi and OpenCode adapters return the same wrapped success content and not-found error text for the same real skill fixture', async () => {
     const api = createFakeExtensionApi()
     await piExtension(api)
-    const [piTool] = api.registeredTools
+    const piTool = findToolByName(api.registeredTools, 'systematic_skill')
     const openCodeTool = createSkillTool({
       bundledSkillsDir,
       disabledSkills: [],
@@ -239,10 +257,45 @@ describe('src/pi.ts before_agent_start bootstrap injection', () => {
       '[systematic] Failed to compute Pi bootstrap; continuing without injection.\n',
     )
     expect(api.handlers.before_agent_start).toBeDefined()
-    expect(api.registeredTools).toHaveLength(1)
+    expect(api.registeredTools).toHaveLength(2)
 
     readFileSyncSpy.mockRestore()
     stderrSpy.mockRestore()
+  })
+
+  test('continues initialization when catalog construction throws, keeps systematic_skill registered, omits systematic_delegate, and writes the catalog failure diagnostic with a trailing newline', async () => {
+    const api = createFakeExtensionApi()
+    const stderrSpy = spyOn(process.stderr, 'write').mockImplementation(
+      () => true,
+    )
+
+    try {
+      await expect(
+        piExtension(api, {
+          buildAgentCatalog() {
+            throw new Error('catalog failure')
+          },
+        } as never),
+      ).resolves.toBeUndefined()
+
+      expect(api.handlers.before_agent_start).toBeDefined()
+      expect(api.registeredTools).toHaveLength(1)
+      expect(api.registeredTools.map((tool) => tool.name)).toEqual([
+        'systematic_skill',
+      ])
+      expect(
+        findToolByName(api.registeredTools, 'systematic_skill'),
+      ).toBeDefined()
+      expect(() =>
+        findToolByName(api.registeredTools, 'systematic_delegate'),
+      ).toThrow('Tool not found: systematic_delegate')
+      expect(stderrSpy).toHaveBeenCalledTimes(1)
+      expect(stderrSpy).toHaveBeenCalledWith(
+        '[systematic] Failed to build Pi agent catalog; systematic_delegate will not be registered: catalog failure\n',
+      )
+    } finally {
+      stderrSpy.mockRestore()
+    }
   })
 
   test('an earlier extension contribution remains before exactly one real Systematic bootstrap block', async () => {
@@ -306,5 +359,37 @@ describe('src/pi.ts before_agent_start bootstrap injection', () => {
     expect(systemPrompt).not.toContain(
       'Use the skill tool for non-Systematic skills',
     )
+  })
+})
+
+describe('src/pi.ts systematic_delegate tool registration', () => {
+  test('registers systematic_delegate with only {agent, task} parameters', async () => {
+    const api = createFakeExtensionApi()
+    await piExtension(api)
+
+    const delegateTool = api.registeredTools.find(
+      (t) => t.name === 'systematic_delegate',
+    )
+    expect(delegateTool).toBeDefined()
+    expect(delegateTool?.executionMode).toBe('sequential')
+
+    const schema = delegateTool?.parameters as unknown as {
+      type: string
+      required: string[]
+      properties: Record<string, unknown>
+    }
+    expect(schema.type).toBe('object')
+    expect(Object.keys(schema.properties).sort()).toEqual(['agent', 'task'])
+    expect(schema.required.sort()).toEqual(['agent', 'task'])
+  })
+
+  test('description references real bundled persona names', async () => {
+    const api = createFakeExtensionApi()
+    await piExtension(api)
+
+    const delegateTool = api.registeredTools.find(
+      (t) => t.name === 'systematic_delegate',
+    )
+    expect(delegateTool?.description).toContain('git-history-analyzer')
   })
 })

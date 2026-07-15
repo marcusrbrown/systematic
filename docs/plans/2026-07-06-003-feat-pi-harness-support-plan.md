@@ -29,7 +29,7 @@ Carried from the origin brainstorm (see origin: `docs/brainstorms/2026-07-06-pi-
 - R4. Both harness SDKs + `typebox` are optional peer dependencies (`peerDependenciesMeta.optional`).
 - R5. Existing `skills/` loads in Pi unchanged via `pi.skills`.
 - R6. Systematic's own Pi extension provides subagents from `agents/` via in-process `createAgentSession()` (model-free inherits parent model).
-- R7. Adapt categorized `agents/<category>/<name>.md` to flat Pi agent files; preserve the model-free invariant; **category is dropped** (no Pi consumer).
+- R7. **Resolved during implementation (Unit 5), superseding the original text below:** Pi core has no agent-discovery surface or manifest key of any kind — the original "adapt to flat Pi agent files" premise assumed a Pi-side discovery mechanism that does not exist. Adapt categorized `agents/<category>/<name>.md` into a runtime, in-memory catalog built by Systematic itself (the sole consumer); preserve the model-free invariant; category is dropped from the lookup key (no consumer, Pi or otherwise). No physical/generated flat file tree is produced.
 - R8. Delegation exposed via a registered tool with a Systematic-owned depth/turn guard.
 - R9. Pi `systematic_skill` tool backed by the same `src/lib` skill-loader as OpenCode.
 - R10. Inject `using-systematic` bootstrap via `before_agent_start`.
@@ -66,7 +66,7 @@ Carried from the origin brainstorm (see origin: `docs/brainstorms/2026-07-06-pi-
 - `src/index.ts` — OpenCode plugin, single `default` export (the invariant the ESM smoke test in `.github/workflows/main.yaml` guards).
 - `src/lib/skill-loader.ts` (`loadSkill`) and `src/lib/skills.ts` (`findSkillsInDir`, `extractFrontmatter`) — the skill-resolution core the Pi `systematic_skill` tool reuses.
 - `src/lib/bootstrap.ts` (`getBootstrapContent`, `INTERNAL_AGENT_SIGNATURES`) — bootstrap content the Pi `before_agent_start` handler reuses; already harness-agnostic (returns a string).
-- `src/lib/agents.ts` (`findAgentsInDir`, category from subdirectory) — source for the flat Pi-agent generation.
+- `src/lib/agents.ts` (`findAgentsInDir`, category from subdirectory) — source discovery reused by `src/lib/agent-resolver.ts`'s runtime catalog builder (Unit 5); no flat-file generation step exists.
 - `src/cli.ts` — current `list`/`convert`/`config` commands; the `setup --harness` addition lands here (coordinate with cleanup `002` removing `convert`).
 - `tests/integration/opencode.test.ts` — `IsolatedFixture` (temp HOME + all XDG roots + `OPENCODE_CONFIG_CONTENT`), `runOpencode`, source/dist load paths, `OPENCODE_AVAILABLE` skip guard — the shape to mirror for a Pi-subprocess harness.
 
@@ -90,7 +90,7 @@ Carried from the origin brainstorm (see origin: `docs/brainstorms/2026-07-06-pi-
 - **`--splitting` verification is load-bearing.** The current build uses `bun build --splitting`, which emits shared chunks. Adding `src/pi.ts` sharing `src/lib/*` chunks must not alter `dist/index.js`'s export surface. The ESM smoke test (`['default']`) is extended to run against BOTH entries and is the gate.
 - **In-process subagents via `createAgentSession()`.** No `ExtensionAPI` spawn primitive exists; the extension calls `createAgentSession({ model: ctx.model, tools: allowlist, resourceLoader: DefaultResourceLoader with systemPromptOverride, sessionManager: SessionManager.inMemory() })` inside a registered delegation tool's `execute`, then `await session.prompt(task)`. Model-free personas inherit the parent model here (they do not on the subprocess path).
 - **Re-entry + recursion safety are firm requirements, not deferrals.** Spawn children with Systematic's own extension NOT rebound (`bindExtensions()` re-runs factories in children → infinite recursion of the delegation tool otherwise); keep `configCwd` = parent trusted root (foreign cwd executes that dir's `.pi` extensions in-process); enforce a fail-closed max-depth + max-turns cap (Pi core caps nothing).
-- **Flat agents, category dropped.** Generate flat Pi agent files from the categorized tree at build time; category has no Pi consumer, so it is not encoded.
+- **Runtime catalog, category dropped (resolved Unit 5, supersedes the original "generate flat Pi agent files" text).** Pi has no agent-discovery surface to generate files for. Build an in-memory catalog from the categorized tree at extension-init time (`src/lib/agent-resolver.ts`); category has no consumer, so it is dropped from the lookup key. No build-time file generation step exists.
 - **Optional peer deps.** `@opencode-ai/plugin`, `@earendil-works/pi-coding-agent`, `typebox` all optional peers so single-harness installs get no unmet-peer warnings; `typebox` stays a devDependency for build/typecheck unless `dist/pi.js` imports it at runtime.
 - **Tarball-load is a gating prerequisite.** Before committing to the single-package model, smoke-test Pi's managed-install + manifest load from a `npm pack` tarball; if it fails, fall back to a separate `-pi` package (the only structural pivot).
 
@@ -106,11 +106,11 @@ Carried from the origin brainstorm (see origin: `docs/brainstorms/2026-07-06-pi-
 ### Deferred to Implementation
 
 - **Build target for `dist/pi.js`.** Current build is `--target bun`; Pi jiti-loads TS/JS and cortexkit builds Pi entries `--target node`. Determine whether the Pi output needs a different target/externalization than the OpenCode output (may require splitting the single `bun build` invocation into two).
-- **Exact flat-agent generation mechanism** — build-time generator emitting a flat `agents/` view, vs a Pi-side loader that walks categories, vs a committed second flat tree. Resolve against what Pi's `getAgentDir`/discovery actually accepts and what keeps drift-checkable.
+- **Exact flat-agent generation mechanism — resolved (Unit 5):** none of the three deferred options. Pi has no agent-discovery surface at all, so there is nothing for a flat tree to satisfy. Resolved to a runtime in-memory catalog (`src/lib/agent-resolver.ts`) built from the existing categorized `agents/<category>/<name>.md` tree at extension-init time — no generated flat tree, no drift surface to check.
 - **typebox-vs-zod drift control** for the `systematic_skill` schema — whether a small shared descriptor generates both, or a parity test pins the two hand-written declarations.
 - **Exact `before_agent_start` composition** with other extensions' system-prompt contributions (chained return).
 - **`setup --harness` Pi mechanics** — manifest edit vs `settings.json` vs `pi install` — reconciled with cleanup `002`'s `src/cli.ts` changes.
-- **Depth/turn cap defaults** — concrete max-depth and max-turns numbers, decided against real delegation behavior.
+- **Depth/turn cap defaults — resolved (Unit 5):** structural max depth = 1 (enforced via `DefaultResourceLoader({ noExtensions: true, ... })` in the child, not a counted depth parameter — the child cannot register further extensions or discover further delegation tools at all), max turns = 20 (`MAX_DELEGATE_TURNS`, enforced via `AgentSession.subscribe()` + `abort()`), concurrency = 1 (`ToolDefinition.executionMode: 'sequential'`). None of the three are configurable via tool parameters.
 
 ## High-Level Technical Design
 
@@ -125,10 +125,10 @@ Phase 1 — Foundation (gates everything)
         ▼           ▼               ▼               ▼
 Phase 2 — Parity surfaces (parallel-ish over the shared core)
   Unit 2:     Unit 3:            Unit 4:          Unit 5:
-  skills      systematic_skill   bootstrap        agents → flat gen
-  via pi.skills  tool mirror     via before_      + in-process subagent
-                                 agent_start      delegation tool
-                                                  (re-entry + depth guard)
+  skills      systematic_skill   bootstrap        runtime agent catalog
+  via pi.skills  tool mirror     via before_      + bounded systematic_delegate
+                                 agent_start      tool (depth 1, 20-turn cap,
+                                                   serial, least-privilege)
         └───────────┴───────────────┴───────────────┘
                     │
                     ▼
@@ -140,7 +140,7 @@ Phase 3 — Install, docs, assurance
 
 ## Implementation Units
 
-- [ ] **Unit 1: Two-output build, Pi manifest, optional peers, dual export-shape guard**
+- [x] **Unit 1: Two-output build, Pi manifest, optional peers, dual export-shape guard**
 
 **Goal:** Make the single package emit `dist/pi.js` alongside `dist/index.js`, declare the Pi manifest and optional peer deps, and prove neither entry pollutes the other's export surface. Includes the GATING tarball-load smoke test.
 
@@ -172,7 +172,7 @@ Phase 3 — Install, docs, assurance
 
 **Verification:** both outputs build; dual ESM smoke test green; tarball contains and Pi loads the Pi entry; peer-warning matrix clean.
 
-- [ ] **Unit 2: Skills parity via `pi.skills`**
+- [x] **Unit 2: Skills parity via `pi.skills`**
 
 **Goal:** The existing `skills/` bundle loads in Pi with no per-skill edits.
 
@@ -194,7 +194,7 @@ Phase 3 — Install, docs, assurance
 
 **Verification:** Pi exposes the bundled skills; no per-skill edits required.
 
-- [ ] **Unit 3: `systematic_skill` tool mirror in Pi**
+- [x] **Unit 3: `systematic_skill` tool mirror in Pi**
 
 **Goal:** Register a Pi `systematic_skill` tool backed by the same `src/lib` skill-loader as the OpenCode tool, so skill-load behavior is identical across harnesses.
 
@@ -218,7 +218,7 @@ Phase 3 — Install, docs, assurance
 
 **Verification:** shared handler covered by unit tests; Pi tool resolves a real skill in the subprocess harness (Unit 7).
 
-- [ ] **Unit 4: Bootstrap injection via `before_agent_start`**
+- [x] **Unit 4: Bootstrap injection via `before_agent_start`**
 
 **Goal:** Inject the `using-systematic` bootstrap into Pi sessions so they get the same workflow enforcement as OpenCode sessions.
 
@@ -242,56 +242,57 @@ Phase 3 — Install, docs, assurance
 
 **Verification:** bootstrap present in a fresh Pi session (Unit 7 assertion); composition preserves other contributions.
 
-- [ ] **Unit 5: Flat agent generation + in-process subagent delegation**
+- [x] **Unit 5: Runtime agent catalog + bounded in-process subagent delegation**
 
-**Goal:** Provide Systematic's agents to Pi as real in-process subagents — generate flat Pi agent files from the categorized tree, and register a delegation tool that spawns a persona subagent via `createAgentSession()` with re-entry, depth, and least-privilege guards.
+**Goal:** Provide Systematic's agents to Pi as real in-process subagents via a runtime, in-memory catalog built from packaged `agents/<category>/<name>.md` (no physical flat tree), and register a single `systematic_delegate` tool that spawns a persona subagent with a structural depth-1 guard, a fixed 20-turn cap, serial execution, and least-privilege tool allowlisting.
 
-**Requirements:** R6, R7, R8, R17, R18, R19
+**Requirements:** R6, R7 (resolved: runtime catalog, not Pi-side discovery — Pi has no agent-discovery surface of its own), R8, R17, R18, R19
 
 **Dependencies:** Unit 1
 
-**Files:**
-- Create: a flat-agent generation step (build-time generator, or a Pi-side loader) producing flat Pi agent files from `agents/<category>/<name>.md`
-- Modify: `src/pi.ts` — register the delegation tool; `src/lib/*` for any shared agent-frontmatter parsing seam
-- Test: `tests/unit/pi-agents.test.ts` (flattening + frontmatter), delegation guard unit tests, Unit 7 end-to-end
+**Resolved architecture (supersedes the original "flat Pi agent files" premise and all Deferred depth/turn-cap decisions below):**
+- **No physical/generated flat agent tree.** Pi core has no agents discovery/manifest key; Systematic is the only consumer. `src/lib/agent-resolver.ts` builds an in-memory catalog from packaged `agents/<category>/<name>.md` at extension-init time, flattening category out of the lookup key. Duplicate persona names across categories fail closed (throw) at catalog-build time.
+- **One registered tool, `systematic_delegate`,** with only `{ agent: string, task: string }` parameters — no chain, parallel, cwd, model, or policy parameters. Its description/parameter hint includes the bounded, deterministic persona list from the catalog.
+- **Structural max depth = 1.** The child loader (`src/lib/pi-delegate-session.ts`) uses `DefaultResourceLoader` with `noExtensions: true` (no extension paths/factories of any kind), plus `noSkills`/`noPromptTemplates`/`noThemes`/`noContextFiles` all `true` so no unrelated child resources leak in. The persona body replaces the system prompt via `systemPromptOverride`; `appendSystemPromptOverride` is cleared to `[]`. `reload()` is called before session creation. The child's tool allowlist is asserted (fail-closed) to never include `systematic_delegate` at two points: allowlist resolution in `pi-delegate-tool.ts` and again defensively in `pi-delegate-session.ts` immediately before session construction.
+- **Fixed max turns = 20** (`MAX_DELEGATE_TURNS`), not configurable. Enforced via `AgentSession.subscribe()` counting real `turn_start` events; on exceeding the cap the tool calls `session.abort()` before a 21st turn can start, then throws a plain `Error` whose message preserves persona/turn-count observability rather than returning an `isError` result.
+- **Fixed concurrency = 1 per parent session** via the real `ToolDefinition.executionMode: 'sequential'` — no custom semaphore or future parallel-mode surface. This does not impose a process-global limit across independent Pi sessions.
+- **Model inheritance is fail-closed, not fallback.** The tool passes `ctx.model` straight through; if `ctx.model` is `undefined`, the tool throws a plain `Error` before any child session is created rather than letting Pi select a default model. `cwd` is pinned to `ctx.cwd` with no cwd input exposed. (Note: `noExtensions` prevents project-extension re-entry; it does not confine an explicitly allowed `bash` tool to that `cwd` — that is a real, separate blast-radius property of the `bash` tool itself, not claimed here.)
+- **Ephemeral lifecycle:** `SessionManager.inMemory()`; the tool's own `AbortSignal` is raced against `createDelegateSession()` so a parent abort can preempt a never-settling construction, and if the child resolves after abort the tool makes a best-effort `abort()` + `dispose()` cleanup. The `subscribe()` listener is unsubscribed and `session.dispose()` is always called in `finally` — covering prompt failures and the abort/turn-limit paths, and creation failures where a session exists (there is nothing to dispose if construction itself never returned a session). `abort()` is called at most once per run, its promise is awaited before the outcome is finalized, and a rejecting `abort()` is wrapped into a plain `Error` with the real turn count rather than a false clean `aborted`. A `prompt()` rejection caused by the tool's own abort request is treated as expected and does not override the authoritative `turn_limit`/`aborted` outcome; a `prompt()` rejection with no abort in flight is reported as `failed` with the actual turn count.
+- **Least privilege via parsed frontmatter, Pi-only field.** `src/lib/agent-resolver.ts` reads each persona's `tools:` frontmatter value through `parseFrontmatter`'s parsed YAML data (not a body-wide regex), so a persona body containing a line that merely begins with `tools:` can never be misread as a declaration. This is a Pi-only reading of that field and does not change `extractAgentFrontmatter`'s existing `isToolsMap` (boolean-map) parsing used elsewhere. Every catalog entry is additionally validated fail-closed at build time: YAML parse success, and non-empty `name`/`description`/prompt-body, each throwing a contextual error naming the source file — there is no filename fallback for a missing/empty `name`. Known OpenCode tool names map deliberately to Pi built-ins (`Read`→`read`, `Grep`→`grep`, `Glob`→`find`, `Bash`→`bash`, and defensively `Edit`→`edit`/`Write`→`write`). Any unknown declared name fails closed (throws `UnknownDeclaredToolError`) rather than defaulting silently. `Task` (or any delegation-shaped declaration) is explicitly denylisted and never maps into the child. No `tools:` declaration at all defaults to the read-only allowlist `read, grep, find, ls`. The bundled-markdown model-free invariant is preserved: persona `model`/`variant` frontmatter is never read or forwarded by this path.
+- **Result contract.** The tool returns the final assistant text (`session.getLastAssistantText()`) in `content`; `details` is a small discriminated object `{ persona, turnCount, outcome }` where `outcome` is `'completed' | 'turn_limit' | 'aborted' | 'failed'`. Failures surface as thrown `Error`s through Pi's supported channel, with messages carrying persona and turn-count context where relevant. No usage/cost/UI-renderer fields are in scope.
 
-**Approach:**
-- Flatten `agents/<category>/<name>.md` → flat Pi agent files; preserve model-free frontmatter; drop category.
-- Delegation tool `execute` calls `createAgentSession({ model: ctx.model, tools: <least-privilege allowlist>, resourceLoader: DefaultResourceLoader with systemPromptOverride: () => persona body, sessionManager: SessionManager.inMemory() })`, then `await session.prompt(task)`, collecting assistant text.
-- **Re-entry guard (R17):** spawn children with Systematic's extension NOT rebound (filter/disable `bindExtensions` for the child) so the delegation tool cannot recurse into itself; keep `configCwd` = parent trusted root.
-- **Depth cap (R18):** thread a depth/turn counter (env or context marker) and fail closed at a max; Pi core enforces nothing.
-- **Least privilege (R19):** the child receives an explicit tool allowlist derived from the persona `tools` frontmatter, never the full parent surface by default.
+**Files (actual):**
+- Created: `src/lib/agent-resolver.ts` — harness-neutral in-memory catalog build/validation/tool-allowlist resolution, reusing `findAgentsInDir`/`extractAgentFrontmatter` from `src/lib/agents.ts`
+- Created: `src/lib/pi-delegate-tool.ts` — Pi-specific `systematic_delegate` tool factory; depends on Pi session construction only through an injectable `CreateDelegateSession` seam (no live Pi SDK import), so it is unit-testable without a real provider/session
+- Created: `src/lib/pi-delegate-session.ts` — the real `CreateDelegateSession` implementation using `DefaultResourceLoader`/`createAgentSession`/`SessionManager.inMemory()`
+- Modified: `src/pi.ts` — builds the packaged agent catalog once per extension-factory invocation and registers `systematic_delegate` (fails closed to skipping registration, with a stderr diagnostic, if catalog build fails — e.g. a duplicate-name collision — matching the existing bootstrap-failure pattern)
+- Modified: `src/lib/AGENTS.md` — module map entries for the three new modules
+- Test: `tests/unit/agent-resolver.test.ts` (new), `tests/unit/pi-delegate-tool.test.ts` (new, including the raw failure/late-abort contract and bounded catalog description), `tests/unit/pi-delegate-session.test.ts` (new — pins the live adapter's exact option/order contract without a provider), `tests/unit/pi.test.ts` (extended for `systematic_delegate` registration shape/description)
 
-**Execution note:** Test-first on the re-entry and depth guards — assert a delegation call cannot recursively rebind the extension, and that exceeding max depth fails closed, before wiring the happy path.
+**Execution note:** Test-first — RED tests were written for catalog flattening/duplicate detection, tool-allowlist mapping/denylist, and the full delegate-tool contract (validation-before-session-creation, turn-cap abort, signal propagation, dispose-in-every-path) before the implementation existed.
 
-**Technical design:** *(directional)*
-```
-delegateTool.execute({ agent, task }, ctx):
-  assert depth(ctx) < MAX_DEPTH            # R18 fail-closed
-  persona = loadFlatAgent(agent)           # model-free
-  child = createAgentSession({
-    model: ctx.model,                      # R6/F4 inherit parent
-    tools: allowlistFrom(persona.tools),   # R19 least privilege
-    resourceLoader: DefaultResourceLoader(systemPromptOverride: persona.body),
-    sessionManager: SessionManager.inMemory(),
-    # child does NOT rebind Systematic's extension  # R17 re-entry guard
-  })
-  result = await child.prompt(task)
-  return collectAssistantText(result)
-```
+**Patterns to follow:** `src/lib/skill-resolver.ts` + `src/lib/skill-catalog.ts` (harness-neutral catalog/description-builder split reused here for agents); `src/pi.ts`'s existing `computeBootstrapContentSafe`/stderr-diagnostic fail-open-but-report pattern, mirrored for catalog-build failure.
 
-**Patterns to follow:** community `pi-subagents` `agent-runner.ts` (in-process `createAgentSession` recipe); Pi's exported `parseFrontmatter`/`getAgentDir` for agent files.
+**Test scenarios (implemented):**
+- Catalog flattening, deterministic sorted listing, duplicate-name fail-closed throw.
+- Catalog fails closed on malformed YAML frontmatter, and on missing/empty `name`/`description`/prompt-body — each error names the source file.
+- Regression: a persona body line beginning `tools:` is never mistaken for a frontmatter `tools:` declaration (parsed via `parseFrontmatter`'s YAML data, not a body-wide regex).
+- Declared-tools mapping (`Read, Grep, Glob, Bash` → `read, grep, find, bash`; `Edit`/`Write` supported), unknown-tool fail-closed, undeclared-tools safe default (`read, grep, find, ls`), `Task` denylist.
+- Registered tool schema is exactly `{ agent, task }`, bounded deterministic description, `executionMode: 'sequential'`.
+- Unknown persona and undefined parent model throw before `createDelegateSession` is ever called (asserted via a spy flag in tests).
+- 20-turn bound: a fake session emitting >20 `turn_start` events is aborted before the 21st turn, then throws a plain `Error` whose text includes the persona and turn count; `abort()` is called at most once.
+- A signal already aborted before execution throws before constructing a child session.
+- A signal that aborts while `createDelegateSession()` is still pending preempts promptly; if the child resolves later, the tool performs best-effort cleanup and the rejection identifies the aborted start.
+- A `prompt()` rejection caused by the turn-limit (or external) abort request still reports the authoritative `turn_limit`/`aborted` outcome in the thrown message, not a generic `failed`.
+- A rejecting `abort()` (after either a turn-limit or an external abort request) is wrapped into a plain `Error` with the real turn count, not a false clean abort.
+- `prompt()` failing after several turns already ran preserves the actual `turnCount` in the thrown `failed` message instead of reporting 0.
+- Parent/tool `AbortSignal` abort propagates to `session.abort()` and throws `aborted`.
+- `unsubscribe()`/`dispose()` are called on the success path and on every failure path (creation throw, unknown persona, undefined model, unknown tool, turn-limit, abort, abort-during-construction, rejecting abort).
+- The delegated persona catalog description is bounded under 6,000 characters, keeps every persona name, and includes `promptSnippet` routing guidance.
+- Live adapter contract pinned without a provider (`tests/unit/pi-delegate-session.test.ts`): parent cwd/model, all five `no*` resource-loader flags, authoritative override system prompt with emptied append prompt, `reload()` called before `createAgentSession`, exact mapped `tools`, `customTools: []`, `SessionManager.inMemory()` output passed through untouched, and the delegate-tool denylist re-asserted at this exact boundary (construction short-circuits before even calling `getAgentDir()`).
+- Built `dist/pi.js` is plain-Node importable, exports exactly `['default']`, and registers both `systematic_skill` and `systematic_delegate`; no static OpenCode SDK import (verified by direct `node -e` import and by `tests/unit/package-exports.test.ts`).
 
-**Test scenarios:**
-- Happy path: invoking a persona spawns an in-process subagent that runs to completion and returns its result text.
-- Happy path: a model-free persona runs on the parent session's model.
-- Edge case (flattening): categorized `agents/<category>/<name>.md` produces a flat file with `name`/`description`/`tools`/`model?`/body and no category.
-- Error path (R18): a delegation chain exceeding max depth fails closed with a clear error, not a hang or crash.
-- Error path (R17): the spawned child does not rebind Systematic's extension (no recursive delegation-tool registration); a self-delegation attempt cannot loop.
-- Security (R19): a subagent receives only its allowlisted tools, not the full parent tool surface.
-- Edge case (R17): a foreign `configCwd` is rejected/gated, not silently loaded.
-
-**Verification:** persona delegation returns results end-to-end (Unit 7); re-entry and depth guards proven by unit tests; least-privilege allowlist enforced.
+**Verification:** `bun test tests/unit/agent-resolver.test.ts tests/unit/pi-delegate-tool.test.ts tests/unit/pi-delegate-session.test.ts tests/unit/pi.test.ts` green (86/86); full `bun test tests/unit` green (1075/1075); `bun run typecheck`, `bun run lint`, docs build, content-integrity, and registry drift checks clean; `bun run build` succeeds and a plain-Node `import('./dist/pi.js')` registers both tools.
 
 - [ ] **Unit 6: `setup --harness` CLI**
 
