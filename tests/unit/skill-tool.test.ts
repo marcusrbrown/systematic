@@ -373,11 +373,39 @@ description: Test CE skill
         disabledSkills: [],
       })
 
-      const result = await tool.execute({ name: 'ce:plan' }, mockContext)
+      const askCalls: unknown[] = []
+      const metadataCalls: unknown[] = []
+      const context = {
+        ask: async (payload: unknown) => {
+          askCalls.push(payload)
+        },
+        metadata: (payload: unknown) => {
+          metadataCalls.push(payload)
+        },
+      } as never
+
+      const result = await tool.execute({ name: 'ce:plan' }, context)
 
       expect(result).toContain('ce:plan')
       expect(result).toContain('# CE Plan Content')
       expect(result).not.toContain('systematic:ce:plan')
+      expect(askCalls).toEqual([
+        {
+          permission: 'skill',
+          patterns: ['ce:plan'],
+          always: ['ce:plan'],
+          metadata: {},
+        },
+      ])
+      expect(metadataCalls).toEqual([
+        {
+          title: 'Loaded skill: ce:plan',
+          metadata: {
+            name: 'ce:plan',
+            dir: skillDir,
+          },
+        },
+      ])
     })
 
     test('throws error when skill not found', async () => {
@@ -389,6 +417,31 @@ description: Test CE skill
       await expect(
         tool.execute({ name: 'nonexistent' }, mockContext),
       ).rejects.toThrow('Skill "nonexistent" not found')
+    })
+
+    test('does not call ask or metadata when skill not found', async () => {
+      const tool = createSkillTool({
+        bundledSkillsDir: testDir,
+        disabledSkills: [],
+      })
+
+      const askCalls: unknown[] = []
+      const metadataCalls: unknown[] = []
+      const context = {
+        ask: async (payload: unknown) => {
+          askCalls.push(payload)
+        },
+        metadata: (payload: unknown) => {
+          metadataCalls.push(payload)
+        },
+      } as never
+
+      await expect(
+        tool.execute({ name: 'nonexistent' }, context),
+      ).rejects.toThrow('Skill "nonexistent" not found')
+
+      expect(askCalls).toEqual([])
+      expect(metadataCalls).toEqual([])
     })
 
     test('strips frontmatter from loaded skill content', async () => {

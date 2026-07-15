@@ -11,6 +11,7 @@ import {
   buildSkillToolParameterHint,
   resolveSkill,
 } from '../../src/lib/skill-resolver.ts'
+import { createSkillTool } from '../../src/lib/skill-tool.ts'
 import piExtension from '../../src/pi.ts'
 
 const bundledSkillsDir = fileURLToPath(new URL('../../skills', import.meta.url))
@@ -116,5 +117,80 @@ describe('src/pi.ts systematic_skill tool registration', () => {
         }
       })(),
     )
+  })
+
+  test('Pi and OpenCode adapters return the same wrapped success content and not-found error text for the same real skill fixture', async () => {
+    const api = createFakeExtensionApi()
+    await piExtension(api)
+    const [piTool] = api.registeredTools
+    const openCodeTool = createSkillTool({
+      bundledSkillsDir,
+      disabledSkills: [],
+    })
+
+    const metadataCalls: Array<{
+      title: string
+      metadata: { name: string; dir: string }
+    }> = []
+    const openCodeContext = {
+      ask: async () => {},
+      metadata: (payload: {
+        title: string
+        metadata: { name: string; dir: string }
+      }) => {
+        metadataCalls.push(payload)
+      },
+    } as never
+
+    const skillName = 'ce:plan'
+    const openCodeResult = await openCodeTool.execute(
+      { name: skillName },
+      openCodeContext,
+    )
+    const piResult = (await piTool.execute(
+      'test-tool-call-id',
+      { name: skillName },
+      undefined,
+      undefined,
+      {} as unknown as Parameters<ToolDefinition['execute']>[4],
+    )) as AgentToolResult<{ skillDir: string }>
+
+    expect(piResult.content).toEqual([{ type: 'text', text: openCodeResult }])
+    expect(metadataCalls).toEqual([
+      {
+        title: 'Loaded skill: ce:plan',
+        metadata: {
+          name: 'ce:plan',
+          dir: expect.any(String),
+        },
+      },
+    ])
+    expect(piResult.details.skillDir).toBe(metadataCalls[0]?.metadata.dir)
+
+    const unknownName = '__missing_skill__'
+    const openCodeError = await (async () => {
+      try {
+        await openCodeTool.execute({ name: unknownName }, openCodeContext)
+        throw new Error('openCodeTool.execute unexpectedly succeeded')
+      } catch (error) {
+        return (error as Error).message
+      }
+    })()
+    const piError = await (async () => {
+      try {
+        await piTool.execute(
+          'test-tool-call-id',
+          { name: unknownName },
+          undefined,
+          undefined,
+          {} as unknown as Parameters<ToolDefinition['execute']>[4],
+        )
+        throw new Error('piTool.execute unexpectedly succeeded')
+      } catch (error) {
+        return (error as Error).message
+      }
+    })()
+
+    expect(piError).toBe(openCodeError)
   })
 })
