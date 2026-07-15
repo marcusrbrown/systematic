@@ -42,9 +42,19 @@ const reportPiDelegateCatalogFailure = (error: unknown): void => {
   )
 }
 
+type PiExtensionDependencies = {
+  buildAgentCatalog?: typeof buildAgentCatalog
+}
+
+const defaultPiExtensionDependencies = {
+  buildAgentCatalog,
+} satisfies PiExtensionDependencies
+
 export default async function systematicPiExtension(
   pi: ExtensionAPI,
+  deps: PiExtensionDependencies = defaultPiExtensionDependencies,
 ): Promise<void> {
+  const { buildAgentCatalog: buildAgentCatalogFn = buildAgentCatalog } = deps
   const disabledSkills: string[] = []
   const resolverOptions = { bundledSkillsDir, disabledSkills }
 
@@ -73,6 +83,7 @@ export default async function systematicPiExtension(
     name: 'systematic_skill',
     label: 'Systematic Skill',
     description: buildSkillToolDescription(resolverOptions),
+    promptSnippet: 'Use `systematic_skill` to load Systematic skills.',
     parameters: Type.Object({
       name: Type.String({
         description: buildSkillToolParameterHint(resolverOptions),
@@ -90,7 +101,7 @@ export default async function systematicPiExtension(
   })
 
   try {
-    const catalog = buildAgentCatalog(bundledAgentsDir)
+    const catalog = buildAgentCatalogFn(bundledAgentsDir)
     pi.registerTool(
       createPiDelegateTool({
         catalog,

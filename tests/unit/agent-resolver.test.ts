@@ -8,7 +8,6 @@ import {
   renderAgentCatalogCompact,
   resolveAgent,
   resolveToolAllowlist,
-  UnknownDeclaredToolError,
 } from '../../src/lib/agent-resolver.js'
 
 function makeTempAgentsDir(files: Record<string, string>): string {
@@ -135,6 +134,48 @@ tools: this is body prose, not frontmatter, and must not be read as a policy.`,
     })
     expect(() => buildAgentCatalog(dir)).toThrow(/emptybody\.md.*body/s)
   })
+
+  test('fails closed on an unknown declared tool, naming the source file', () => {
+    const dir = makeTempAgentsDir({
+      'a/bad-tool.md':
+        '---\nname: bad-tool\ndescription: D\ntools: Read, Frobnicate\n---\nBody',
+    })
+    expect(() => buildAgentCatalog(dir)).toThrow(/bad-tool\.md/)
+    expect(() => buildAgentCatalog(dir)).toThrow(/Frobnicate/)
+  })
+
+  test('fails closed on a Task declaration, naming the source file', () => {
+    const dir = makeTempAgentsDir({
+      'a/self-delegating.md':
+        '---\nname: self-delegating\ndescription: D\ntools: Read, Task\n---\nBody',
+    })
+    expect(() => buildAgentCatalog(dir)).toThrow(/self-delegating\.md/)
+    expect(() => buildAgentCatalog(dir)).toThrow(/Task/)
+  })
+
+  test('fails closed on an unsupported tools YAML shape (map), naming the source file', () => {
+    const dir = makeTempAgentsDir({
+      'a/map-tools.md':
+        '---\nname: map-tools\ndescription: D\ntools:\n  Read: true\n---\nBody',
+    })
+    expect(() => buildAgentCatalog(dir)).toThrow(/map-tools\.md/)
+  })
+
+  test('fails closed on an unsupported tools YAML shape (array), naming the source file', () => {
+    const dir = makeTempAgentsDir({
+      'a/array-tools.md':
+        '---\nname: array-tools\ndescription: D\ntools:\n  - Read\n  - Grep\n---\nBody',
+    })
+    expect(() => buildAgentCatalog(dir)).toThrow(/array-tools\.md/)
+  })
+
+  test('fails closed on an empty tools declaration, naming the source file', () => {
+    const dir = makeTempAgentsDir({
+      'a/empty-tools.md':
+        '---\nname: empty-tools\ndescription: D\ntools: ""\n---\nBody',
+    })
+    expect(() => buildAgentCatalog(dir)).toThrow(/empty-tools\.md/)
+  })
 })
 
 describe('renderAgentCatalogCompact', () => {
@@ -164,9 +205,11 @@ describe('resolveToolAllowlist', () => {
   })
 
   test('maps known declared OpenCode tool names to Pi built-ins', () => {
-    expect(resolveToolAllowlist('Read, Grep, Glob, Bash')).toEqual({
-      tools: ['read', 'grep', 'find', 'bash'],
-    })
+    expect(resolveToolAllowlist('Read, Grep, Glob, Edit, Write, Bash')).toEqual(
+      {
+        tools: ['read', 'grep', 'find', 'edit', 'write', 'bash'],
+      },
+    )
   })
 
   test('maps Edit and Write defensively when declared', () => {
@@ -177,13 +220,20 @@ describe('resolveToolAllowlist', () => {
 
   test('fails closed on an unknown declared tool name', () => {
     expect(() => resolveToolAllowlist('Read, Frobnicate')).toThrow(
-      UnknownDeclaredToolError,
+      /Unknown declared tool "Frobnicate"/,
     )
+    try {
+      resolveToolAllowlist('Read, Frobnicate')
+      throw new Error('expected resolveToolAllowlist to throw')
+    } catch (error) {
+      expect(error instanceof Error).toBe(true)
+      expect((error as Error).name).toBe('UnknownDeclaredToolError')
+    }
   })
 
   test('fails closed on Task; delegation must never map into the child', () => {
     expect(() => resolveToolAllowlist('Read, Task')).toThrow(
-      UnknownDeclaredToolError,
+      /Unknown declared tool "Task"/,
     )
   })
 })
@@ -203,5 +253,32 @@ describe('real bundled agents catalog', () => {
     for (const entry of catalog) {
       expect(() => resolveToolAllowlist(entry.toolsSource)).not.toThrow()
     }
+  })
+
+  test('real write personas resolve Edit/Write-capable allowlists and undeclared personas stay read-only', () => {
+    const agentsDir = path.resolve(import.meta.dirname, '../../agents')
+    const catalog = buildAgentCatalog(agentsDir)
+
+    expect(
+      resolveToolAllowlist(
+        resolveAgent(catalog, 'systematic-implementer')?.toolsSource,
+      ),
+    ).toEqual({
+      tools: ['read', 'grep', 'find', 'edit', 'write', 'bash'],
+    })
+    expect(
+      resolveToolAllowlist(
+        resolveAgent(catalog, 'design-iterator')?.toolsSource,
+      ),
+    ).toEqual({
+      tools: ['read', 'grep', 'find', 'edit', 'write', 'bash'],
+    })
+    expect(
+      resolveToolAllowlist(
+        resolveAgent(catalog, 'git-history-analyzer')?.toolsSource,
+      ),
+    ).toEqual({
+      tools: [...DEFAULT_READONLY_TOOLS],
+    })
   })
 })

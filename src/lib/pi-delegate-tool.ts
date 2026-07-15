@@ -7,7 +7,6 @@ import type {
 import { Type } from 'typebox'
 import {
   type AgentCatalogEntry,
-  renderAgentCatalogCompact,
   resolveAgent,
   resolveToolAllowlist,
 } from './agent-resolver.js'
@@ -16,6 +15,7 @@ import {
 export const MAX_DELEGATE_TURNS = 20
 export const DELEGATE_TOOL_NAME = 'systematic_delegate'
 export const DELEGATE_EXECUTION_MODE = 'sequential' as const
+const MAX_DELEGATE_DESCRIPTION_CHARS = 6000
 
 export type DelegateOutcome = 'completed' | 'turn_limit' | 'aborted' | 'failed'
 
@@ -48,13 +48,23 @@ export interface PiDelegateToolDeps {
 }
 
 function buildDescription(catalog: AgentCatalogEntry[]): string {
-  return `Delegate a task to one of Systematic's specialist personas, running as an ephemeral in-process subagent.
+  const intro = [
+    `Delegate a task to one of Systematic's specialist personas.`,
+    '',
+    'Routing guidelines:',
+    '- Use the narrowest persona that fits the task.',
+    "- Send one concrete task plus constraints; don't ask the child to delegate again.",
+    '- The child is in-process, sequential, capped at 20 turns, and inherits your model and working directory.',
+    '',
+    '## Available Personas',
+    '',
+  ].join('\n')
 
-The child runs with no project/user extensions, a fixed 20-turn cap, and a least-privilege tool allowlist derived from the persona's declared tools. It inherits your model and working directory.
-
-## Available Personas
-
-${renderAgentCatalogCompact(catalog)}`
+  const catalogText = renderDelegateCatalogCompact(
+    catalog,
+    MAX_DELEGATE_DESCRIPTION_CHARS - intro.length,
+  )
+  return `${intro}${catalogText}`
 }
 
 function buildAgentParameterHint(catalog: AgentCatalogEntry[]): string {
@@ -65,6 +75,56 @@ function buildAgentParameterHint(catalog: AgentCatalogEntry[]): string {
   const hint = examples.length > 0 ? ` (e.g., ${examples}, ...)` : ''
   return `Name of the Systematic persona to delegate to${hint}`
 }
+
+function compactText(text: string, maxChars: number): string {
+  if (maxChars <= 0) return ''
+
+  const normalized = text.replace(/\s+/g, ' ').trim()
+  if (normalized.length <= maxChars) return normalized
+  if (maxChars === 1) return normalized.slice(0, 1)
+  return `${normalized.slice(0, maxChars - 1).trimEnd()}…`
+}
+
+function buildPromptSnippet(body: string): string {
+  const firstParagraph = body.split(/\n\s*\n/u, 1)[0] ?? body
+  return compactText(firstParagraph, 96)
+}
+
+function renderDelegateCatalogCompact(
+  catalog: AgentCatalogEntry[],
+  budget: number,
+): string {
+  if (catalog.length === 0) {
+    return 'No Systematic personas are currently available.'
+  }
+
+  const fixedOverhead =
+    catalog.reduce(
+      (total, entry) => total + `- ${entry.name}:  — promptSnippet: `.length,
+      0,
+    ) +
+    (catalog.length - 1)
+
+  if (budget <= fixedOverhead) {
+    return catalog.map((entry) => `- ${entry.name}:`).join('\n')
+  }
+
+  const perEntryBudget = Math.floor((budget - fixedOverhead) / catalog.length)
+  const descriptionBudget = Math.max(1, Math.floor(perEntryBudget * 0.6))
+  const promptSnippetBudget = Math.max(1, perEntryBudget - descriptionBudget)
+
+  return catalog
+    .map((entry) => {
+      const description = compactText(entry.description, descriptionBudget)
+      const promptSnippet = compactText(
+        buildPromptSnippet(entry.body),
+        promptSnippetBudget,
+      )
+      return `- ${entry.name}: ${description} — promptSnippet: ${promptSnippet}`
+    })
+    .join('\n')
+}
+
 export function createPiDelegateTool(
   deps: PiDelegateToolDeps,
 ): ToolDefinition<
@@ -77,6 +137,8 @@ export function createPiDelegateTool(
     name: DELEGATE_TOOL_NAME,
     label: 'Systematic Delegate',
     description: buildDescription(catalog),
+    promptSnippet:
+      'Use the narrowest persona that fits the task, and delegate one concrete job.',
     parameters: buildDelegateParametersSchema(catalog),
     executionMode: DELEGATE_EXECUTION_MODE,
     async execute(
@@ -103,17 +165,42 @@ function buildDelegateParametersSchema(catalog: AgentCatalogEntry[]) {
   })
 }
 
-function errorResult(
-  persona: string,
-  outcome: DelegateOutcome,
-  message: string,
-  turnCount = 0,
+function buildSuccessResult(
+  agentName: string,
+  turnCount: number,
+  text: string,
 ): AgentToolResult<DelegateToolDetails> {
   return {
-    content: [{ type: 'text', text: message }],
-    details: { persona, turnCount, outcome },
-    isError: true,
-  } as AgentToolResult<DelegateToolDetails>
+    content: [{ type: 'text', text }],
+    details: { persona: agentName, turnCount, outcome: 'completed' },
+  }
+}
+
+function buildAbortError(agentName: string, turnCount: number): Error {
+  const suffix =
+    turnCount > 0
+      ? ` after ${turnCount} turns`
+      : ' before the child session finished starting'
+  return new Error(`Delegation to "${agentName}" was aborted${suffix}.`)
+}
+
+function buildTurnLimitError(agentName: string, turnCount: number): Error {
+  return new Error(
+    `Delegation to "${agentName}" stopped after the ${MAX_DELEGATE_TURNS}-turn limit (${turnCount} turns).`,
+  )
+}
+
+function buildFailureError(
+  agentName: string,
+  turnCount: number,
+  message: string,
+): Error {
+  const suffix = turnCount > 0 ? ` after ${turnCount} turns` : ''
+  return new Error(`Delegation to "${agentName}" failed${suffix}: ${message}`)
+}
+
+function normalizeError(error: unknown): Error {
+  return error instanceof Error ? error : new Error(String(error))
 }
 
 interface ValidatedDelegateRequest {
@@ -124,111 +211,50 @@ interface ValidatedDelegateRequest {
   model: DelegateParentModel
 }
 
-type ValidationResult =
-  | { ok: true; request: ValidatedDelegateRequest }
-  | { ok: false; result: AgentToolResult<DelegateToolDetails> }
 function validateDelegateRequest(
   catalog: AgentCatalogEntry[],
   params: { agent: string; task: string },
   ctx: ExtensionContext,
-): ValidationResult {
+): ValidatedDelegateRequest {
   const { agent: agentName, task } = params
 
   const persona = resolveAgent(catalog, agentName)
   if (!persona) {
-    return {
-      ok: false,
-      result: errorResult(
-        agentName,
-        'failed',
-        `Unknown persona "${agentName}". Available personas: ${catalog
-          .map((e) => e.name)
-          .join(', ')}`,
-      ),
-    }
+    throw new Error(
+      `Unknown persona "${agentName}". Available personas: ${catalog
+        .map((e) => e.name)
+        .join(', ')}`,
+    )
   }
 
   if (ctx.model === undefined) {
-    return {
-      ok: false,
-      result: errorResult(
-        agentName,
-        'failed',
-        'No model is available to inherit from the parent session; refusing to select a default model for the delegated child (fail-closed).',
-      ),
-    }
+    throw new Error(
+      `Delegation to "${agentName}" cannot start because no model is available to inherit from the parent session; refusing to select a default model (fail-closed).`,
+    )
   }
 
   let allowedToolNames: string[]
   try {
     allowedToolNames = resolveToolAllowlist(persona.toolsSource).tools
   } catch (error) {
-    return {
-      ok: false,
-      result: errorResult(
-        agentName,
-        'failed',
-        error instanceof Error ? error.message : String(error),
-      ),
-    }
+    throw new Error(
+      `Delegation to "${agentName}" cannot start because its tool allowlist is invalid: ${normalizeError(error).message}`,
+    )
   }
 
   if (allowedToolNames.includes(DELEGATE_TOOL_NAME)) {
-    return {
-      ok: false,
-      result: errorResult(
-        agentName,
-        'failed',
-        `Internal error: resolved tool allowlist for persona "${agentName}" included ${DELEGATE_TOOL_NAME}; refusing to spawn (fail-closed re-entry guard).`,
-      ),
-    }
+    throw new Error(
+      `Internal error: resolved tool allowlist for persona "${agentName}" included ${DELEGATE_TOOL_NAME}; refusing to spawn (fail-closed re-entry guard).`,
+    )
   }
 
   return {
-    ok: true,
-    request: {
-      agentName,
-      task,
-      personaBody: persona.body,
-      allowedToolNames,
-      model: ctx.model,
-    },
+    agentName,
+    task,
+    personaBody: persona.body,
+    allowedToolNames,
+    model: ctx.model,
   }
-}
-
-function buildOutcomeResult(
-  agentName: string,
-  turnCount: number,
-  outcome: DelegateOutcome,
-  text: string,
-): AgentToolResult<DelegateToolDetails> {
-  if (outcome === 'turn_limit') {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `Delegation to "${agentName}" was stopped after exceeding the ${MAX_DELEGATE_TURNS}-turn limit.`,
-        },
-      ],
-      details: { persona: agentName, turnCount, outcome },
-      isError: true,
-    } as AgentToolResult<DelegateToolDetails>
-  }
-
-  if (outcome === 'aborted') {
-    return {
-      content: [
-        { type: 'text', text: `Delegation to "${agentName}" was aborted.` },
-      ],
-      details: { persona: agentName, turnCount, outcome },
-      isError: true,
-    } as AgentToolResult<DelegateToolDetails>
-  }
-
-  return {
-    content: [{ type: 'text', text }],
-    details: { persona: agentName, turnCount, outcome: 'completed' },
-  } as AgentToolResult<DelegateToolDetails>
 }
 
 type AbortReason = 'turn_limit' | 'external'
@@ -291,7 +317,20 @@ async function runPromptRespectingAbort(
   }
 }
 
-/** Abort promise is awaited before dispose; abort outcome stays authoritative over other failure paths. */
+function cleanUpLateSession(session: DelegateSessionLike): void {
+  void session
+    .abort()
+    .catch(() => {})
+    .finally(() => {
+      try {
+        session.dispose()
+      } catch {
+        // Best-effort cleanup only.
+      }
+    })
+}
+
+/** Abort promise is raced against construction so parent abort can preempt a never-settling child factory. */
 async function runValidatedDelegateSession(
   createDelegateSession: CreateDelegateSession,
   request: ValidatedDelegateRequest,
@@ -301,7 +340,7 @@ async function runValidatedDelegateSession(
   const { agentName, task, personaBody, allowedToolNames, model } = request
 
   if (signal?.aborted) {
-    return buildOutcomeResult(agentName, 0, 'aborted', '')
+    throw buildAbortError(agentName, 0)
   }
 
   const state: DelegateRunState = {
@@ -312,16 +351,52 @@ async function runValidatedDelegateSession(
     abortError: undefined,
   }
   let unsubscribe: (() => void) | undefined
+  let removeExternalAbortListener: (() => void) | undefined
 
   try {
-    state.session = await createDelegateSession({
+    const sessionPromise = createDelegateSession({
       agentName,
       model,
       cwd,
       systemPromptOverride: personaBody,
       allowedToolNames,
     })
-    const activeSession = state.session
+
+    void sessionPromise.then(
+      (session) => {
+        if (signal?.aborted || state.abortReason !== undefined) {
+          cleanUpLateSession(session)
+        }
+      },
+      () => {},
+    )
+
+    const sessionOrAbort = signal
+      ? await Promise.race([
+          sessionPromise.then((session) => ({
+            kind: 'session' as const,
+            session,
+          })),
+          new Promise<'aborted'>((resolve) => {
+            const onAbort = () => {
+              signal.removeEventListener('abort', onAbort)
+              requestAbort(state, 'external')
+              resolve('aborted')
+            }
+            signal.addEventListener('abort', onAbort)
+            removeExternalAbortListener = () => {
+              signal.removeEventListener('abort', onAbort)
+            }
+          }),
+        ])
+      : { kind: 'session' as const, session: await sessionPromise }
+
+    if (sessionOrAbort === 'aborted') {
+      throw buildAbortError(agentName, state.turnCount)
+    }
+
+    const activeSession = sessionOrAbort.session
+    state.session = activeSession
 
     unsubscribe = subscribeTurnCap(activeSession, state)
     await runPromptRespectingAbort(activeSession, task, signal, state)
@@ -329,27 +404,40 @@ async function runValidatedDelegateSession(
     if (state.abortPromise) await state.abortPromise
 
     if (state.abortError !== undefined) {
-      throw state.abortError instanceof Error
-        ? state.abortError
-        : new Error(String(state.abortError))
+      throw buildFailureError(
+        agentName,
+        state.turnCount,
+        normalizeError(state.abortError).message,
+      )
     }
 
-    const outcome: DelegateOutcome =
-      state.abortReason === 'turn_limit'
-        ? 'turn_limit'
-        : state.abortReason === 'external'
-          ? 'aborted'
-          : 'completed'
+    if (state.abortReason === 'turn_limit') {
+      throw buildTurnLimitError(agentName, state.turnCount)
+    }
+
+    if (state.abortReason === 'external') {
+      throw buildAbortError(agentName, state.turnCount)
+    }
+
     const text = activeSession.getLastAssistantText() ?? ''
-    return buildOutcomeResult(agentName, state.turnCount, outcome, text)
+    return buildSuccessResult(agentName, state.turnCount, text)
   } catch (error) {
-    return errorResult(
-      agentName,
-      'failed',
-      error instanceof Error ? error.message : String(error),
-      state.turnCount,
-    )
+    const normalized = normalizeError(error)
+    if (
+      normalized.message.startsWith(
+        `Delegation to "${agentName}" was aborted`,
+      ) ||
+      normalized.message.startsWith(
+        `Delegation to "${agentName}" stopped after`,
+      ) ||
+      normalized.message.startsWith(`Delegation to "${agentName}" failed`)
+    ) {
+      throw normalized
+    }
+
+    throw buildFailureError(agentName, state.turnCount, normalized.message)
   } finally {
+    removeExternalAbortListener?.()
     unsubscribe?.()
     state.session?.dispose()
   }
@@ -361,12 +449,10 @@ async function runDelegateTool(
   signal: AbortSignal | undefined,
   ctx: ExtensionContext,
 ): Promise<AgentToolResult<DelegateToolDetails>> {
-  const validation = validateDelegateRequest(deps.catalog, params, ctx)
-  if (!validation.ok) return validation.result
-
+  const request = validateDelegateRequest(deps.catalog, params, ctx)
   return runValidatedDelegateSession(
     deps.createDelegateSession,
-    validation.request,
+    request,
     signal,
     ctx.cwd,
   )

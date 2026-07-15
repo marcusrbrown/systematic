@@ -1,8 +1,9 @@
 /** Runtime persona catalog for `systematic_delegate`. Pi has no agent-discovery of its own, so category is dropped when flattening `agents/<category>/<name>.md` into this catalog. */
 
 import fs from 'node:fs'
-import { extractAgentFrontmatter, findAgentsInDir } from './agents.js'
+import { findAgentsInDir } from './agents.js'
 import { parseFrontmatter } from './frontmatter.js'
+import { extractString } from './validation.js'
 
 /** A single resolved persona entry in the flattened catalog. */
 export interface AgentCatalogEntry {
@@ -25,6 +26,13 @@ export function buildAgentCatalog(agentsDir: string): AgentCatalogEntry[] {
   for (const info of infos) {
     const content = fs.readFileSync(info.file, 'utf8')
     const entry = parseValidatedAgentEntry(content, info.file)
+
+    try {
+      resolveToolAllowlist(entry.toolsSource)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      throw new Error(`Agent file "${info.file}": ${message}`)
+    }
 
     const existing = byName.get(entry.name)
     if (existing) {
@@ -55,44 +63,62 @@ function parseValidatedAgentEntry(
   content: string,
   sourceFile: string,
 ): AgentCatalogEntry {
-  const { parseError } = parseFrontmatter<Record<string, unknown>>(content)
+  const { data, body, parseError } =
+    parseFrontmatter<Record<string, unknown>>(content)
   if (parseError) {
     throw new Error(
       `Failed to parse YAML frontmatter in agent file "${sourceFile}".`,
     )
   }
 
-  const frontmatter = extractAgentFrontmatter(content)
-
-  if (frontmatter.name.trim() === '') {
+  const name = extractString(data, 'name')
+  if (name.trim() === '') {
     throw new Error(
       `Agent file "${sourceFile}" is missing a non-empty "name" in its frontmatter.`,
     )
   }
-  if (frontmatter.description.trim() === '') {
+
+  const description = extractString(data, 'description')
+  if (description.trim() === '') {
     throw new Error(
       `Agent file "${sourceFile}" is missing a non-empty "description" in its frontmatter.`,
     )
   }
-  if (frontmatter.prompt.trim() === '') {
+
+  const prompt = body.trim()
+  if (prompt === '') {
     throw new Error(
       `Agent file "${sourceFile}" has an empty persona body (system prompt).`,
     )
   }
 
   return {
-    name: frontmatter.name,
-    description: frontmatter.description,
-    body: frontmatter.prompt,
-    toolsSource: extractRawToolsSource(content),
+    name,
+    description,
+    body: prompt,
+    toolsSource: extractRawToolsSource(data, sourceFile),
   }
 }
-function extractRawToolsSource(content: string): string | undefined {
-  const { data } = parseFrontmatter<Record<string, unknown>>(content)
+
+/** Requires a non-empty string when `tools` is declared; unsupported YAML shapes (maps, arrays, numbers) fail closed with source-path context. */
+function extractRawToolsSource(
+  data: Record<string, unknown>,
+  sourceFile: string,
+): string | undefined {
+  if (!('tools' in data)) return undefined
   const value = data.tools
-  if (typeof value !== 'string') return undefined
+  if (typeof value !== 'string') {
+    throw new Error(
+      `Agent file "${sourceFile}" has a "tools" frontmatter value that is not a string; expected a comma-separated list (e.g. "Read, Grep, Glob, Bash").`,
+    )
+  }
   const trimmed = value.trim()
-  return trimmed !== '' ? trimmed : undefined
+  if (trimmed === '') {
+    throw new Error(
+      `Agent file "${sourceFile}" declares an empty "tools" frontmatter value.`,
+    )
+  }
+  return trimmed
 }
 
 /** Resolves a persona by exact flat name from the catalog. */
@@ -135,15 +161,14 @@ export interface ResolvedToolAllowlist {
   tools: string[]
 }
 
-export class UnknownDeclaredToolError extends Error {
-  constructor(public readonly toolName: string) {
-    super(
-      `Unknown declared tool "${toolName}" in persona frontmatter; refusing to map ` +
-        'to a Pi built-in (fail-closed). Known tools: ' +
-        `${Object.keys(OPENCODE_TO_PI_TOOL).join(', ')}.`,
-    )
-    this.name = 'UnknownDeclaredToolError'
-  }
+function unknownDeclaredToolError(toolName: string): Error {
+  const error = new Error(
+    `Unknown declared tool "${toolName}" in persona frontmatter; refusing to map ` +
+      'to a Pi built-in (fail-closed). Known tools: ' +
+      `${Object.keys(OPENCODE_TO_PI_TOOL).join(', ')}.`,
+  )
+  error.name = 'UnknownDeclaredToolError'
+  return error
 }
 
 /** Undeclared tools use the read-only default; unknown or `Task` declarations fail closed. */
@@ -162,11 +187,11 @@ export function resolveToolAllowlist(
   const mapped: string[] = []
   for (const name of declared) {
     if (name === 'Task') {
-      throw new UnknownDeclaredToolError(name)
+      throw unknownDeclaredToolError(name)
     }
     const piName = OPENCODE_TO_PI_TOOL[name]
     if (!piName) {
-      throw new UnknownDeclaredToolError(name)
+      throw unknownDeclaredToolError(name)
     }
     mapped.push(piName)
   }
