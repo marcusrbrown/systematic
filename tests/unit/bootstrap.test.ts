@@ -1,9 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
   applyBootstrapContent,
+  composeSystemPromptWithBootstrap,
+  computeBootstrapContentSafe,
   getBootstrapContent,
   INTERNAL_AGENT_SIGNATURES,
 } from '../../src/lib/bootstrap.ts'
@@ -70,7 +72,31 @@ describe('getBootstrapContent', () => {
     expect(content).toContain('</SYSTEMATIC_WORKFLOWS>')
     expect(content).toContain('Bootstrap body content here.')
     expect(content).toContain('**Skills naming:**')
+    expect(content).toContain('Use the `skill` tool for non-Systematic skills')
     expect(content).not.toContain('**Tool Mapping for OpenCode:**')
+  })
+
+  test('custom usage template is included when provided without changing the default OpenCode template', () => {
+    const bundledSkillsDir = makeBundledSkillsDir(
+      '---\nname: using-systematic\n---\nBootstrap body content here.',
+    )
+    const config = {
+      bootstrap: { enabled: true, file: undefined },
+      disabled_skills: [] as string[],
+      disabled_agents: [] as string[],
+      disabled_commands: [] as string[],
+    }
+
+    const content = getBootstrapContent(config, {
+      bundledSkillsDir,
+      usageTemplate: '**Pi-native guidance:**\n- use systematic_skill\n',
+    })
+
+    expect(content).not.toBeNull()
+    expect(content).toContain('**Pi-native guidance:**')
+    expect(content).not.toContain(
+      'Use the `skill` tool for non-Systematic skills',
+    )
   })
 
   test('config.bootstrap.enabled = false returns null', () => {
@@ -529,5 +555,130 @@ describe('INTERNAL_AGENT_SIGNATURES skip heuristic', () => {
       'Generate layout recommendations.',
     ]
     expect(shouldSkipBootstrap(legitimate)).toBe(true)
+  })
+})
+
+describe('computeBootstrapContentSafe', () => {
+  let testDir: string
+
+  beforeEach(() => {
+    testDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-bootstrap-safe-'),
+    )
+  })
+
+  afterEach(() => {
+    fs.rmSync(testDir, { recursive: true, force: true })
+  })
+
+  function makeBundledSkillsDir(usingSystematicBody?: string): string {
+    const bundledSkillsDir = path.join(testDir, 'skills')
+    fs.mkdirSync(bundledSkillsDir, { recursive: true })
+    if (usingSystematicBody !== undefined) {
+      fs.mkdirSync(path.join(bundledSkillsDir, 'using-systematic'))
+      fs.writeFileSync(
+        path.join(bundledSkillsDir, 'using-systematic', 'SKILL.md'),
+        usingSystematicBody,
+      )
+    }
+    return bundledSkillsDir
+  }
+
+  it('returns bootstrap content string for a valid bundled skills dir', () => {
+    const bundledSkillsDir = makeBundledSkillsDir(
+      '---\nname: using-systematic\n---\nBody content.',
+    )
+    const content = computeBootstrapContentSafe({ bundledSkillsDir })
+    expect(content).not.toBeNull()
+    expect(content).toContain('<SYSTEMATIC_WORKFLOWS>')
+    expect(content).toContain('Body content.')
+  })
+
+  it('returns null (not throws) when using-systematic/SKILL.md is missing', () => {
+    const bundledSkillsDir = makeBundledSkillsDir() // no SKILL.md
+    expect(() =>
+      computeBootstrapContentSafe({ bundledSkillsDir }),
+    ).not.toThrow()
+    expect(computeBootstrapContentSafe({ bundledSkillsDir })).toBeNull()
+  })
+
+  it('returns null (not throws) when bundledSkillsDir itself does not exist', () => {
+    const missingDir = path.join(testDir, 'does-not-exist')
+    expect(() =>
+      computeBootstrapContentSafe({ bundledSkillsDir: missingDir }),
+    ).not.toThrow()
+    expect(
+      computeBootstrapContentSafe({ bundledSkillsDir: missingDir }),
+    ).toBeNull()
+  })
+
+  it('returns null (not throws) for a malformed/unreadable using-systematic SKILL.md fixture', () => {
+    // Real temp-dir fixture: create using-systematic as a directory named
+    // SKILL.md instead of a file, so fs.readFileSync throws EISDIR.
+    const bundledSkillsDir = path.join(testDir, 'skills')
+    fs.mkdirSync(path.join(bundledSkillsDir, 'using-systematic'), {
+      recursive: true,
+    })
+    fs.mkdirSync(path.join(bundledSkillsDir, 'using-systematic', 'SKILL.md'), {
+      recursive: true,
+    })
+    expect(() =>
+      computeBootstrapContentSafe({ bundledSkillsDir }),
+    ).not.toThrow()
+    expect(computeBootstrapContentSafe({ bundledSkillsDir })).toBeNull()
+  })
+
+  it('reports failures once and still returns null when the reporter throws', () => {
+    const bundledSkillsDir = makeBundledSkillsDir()
+    fs.mkdirSync(path.join(bundledSkillsDir, 'using-systematic'), {
+      recursive: true,
+    })
+    fs.mkdirSync(path.join(bundledSkillsDir, 'using-systematic', 'SKILL.md'), {
+      recursive: true,
+    })
+
+    let reportCalls = 0
+
+    const result = computeBootstrapContentSafe({ bundledSkillsDir }, () => {
+      reportCalls++
+      throw new Error('reporter failure')
+    })
+
+    expect(reportCalls).toBe(1)
+    expect(result).toBeNull()
+  })
+})
+
+describe('composeSystemPromptWithBootstrap', () => {
+  it('preserves earlier extension marker bytes exactly when appending the Systematic snapshot', () => {
+    const existing =
+      'You are a primary agent. Earlier extension contribution: <SYSTEMATIC_WORKFLOWS>example</SYSTEMATIC_WORKFLOWS>'
+    const bootstrap = '<SYSTEMATIC_WORKFLOWS>\nContent\n</SYSTEMATIC_WORKFLOWS>'
+
+    const result = composeSystemPromptWithBootstrap(existing, bootstrap)
+
+    expect(result).not.toBeNull()
+    expect(result).toBe(`${existing}\n\n${bootstrap}`)
+  })
+
+  it('returns the existing prompt unchanged when it already ends with the same snapshot', () => {
+    const bootstrap = '<SYSTEMATIC_WORKFLOWS>\nContent\n</SYSTEMATIC_WORKFLOWS>'
+    const existing = `Earlier.\n\n${bootstrap}`
+
+    const result = composeSystemPromptWithBootstrap(existing, bootstrap)
+
+    expect(result).toBe(existing)
+  })
+
+  it('handles an empty existing prompt by using bootstrap content alone', () => {
+    const bootstrap = '<SYSTEMATIC_WORKFLOWS>\nContent\n</SYSTEMATIC_WORKFLOWS>'
+    const result = composeSystemPromptWithBootstrap('', bootstrap)
+    expect(result).toBe(bootstrap)
+  })
+
+  it('returns the existing prompt unchanged when bootstrap content is null', () => {
+    const existing = 'You are a primary agent. Earlier extension contribution.'
+    const result = composeSystemPromptWithBootstrap(existing, null)
+    expect(result).toBeNull()
   })
 })

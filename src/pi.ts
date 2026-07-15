@@ -1,8 +1,16 @@
 // Pi coding-agent extension entry point (built to dist/pi.js via pi.extensions manifest).
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
+import type {
+  BeforeAgentStartEvent,
+  BeforeAgentStartEventResult,
+  ExtensionAPI,
+} from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
+import {
+  composeSystemPromptWithBootstrap,
+  computeBootstrapContentSafe,
+} from './lib/bootstrap.js'
 import {
   buildSkillContentOutput,
   buildSkillToolDescription,
@@ -13,12 +21,42 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const packageRoot = path.resolve(__dirname, '..')
 const bundledSkillsDir = path.join(packageRoot, 'skills')
+const PI_BOOTSTRAP_USAGE_TEMPLATE = `**Skills usage:**
+- Use \`systematic_skill\` for Systematic skills.
+- For non-Systematic skills, follow Pi's native skill instructions and read the listed SKILL.md path.`
+
+const reportPiBootstrapFailure = (): void => {
+  process.stderr.write(
+    '[systematic] Failed to compute Pi bootstrap; continuing without injection.\n',
+  )
+}
 
 export default async function systematicPiExtension(
   pi: ExtensionAPI,
 ): Promise<void> {
   const disabledSkills: string[] = []
   const resolverOptions = { bundledSkillsDir, disabledSkills }
+
+  // Match OpenCode's process-lifetime bootstrap snapshot.
+  const bootstrapContent = computeBootstrapContentSafe(
+    {
+      bundledSkillsDir,
+      usageTemplate: PI_BOOTSTRAP_USAGE_TEMPLATE,
+    },
+    reportPiBootstrapFailure,
+  )
+
+  pi.on(
+    'before_agent_start',
+    (event: BeforeAgentStartEvent): BeforeAgentStartEventResult | undefined => {
+      const systemPrompt = composeSystemPromptWithBootstrap(
+        event.systemPrompt,
+        bootstrapContent,
+      )
+      if (systemPrompt === null) return undefined
+      return { systemPrompt }
+    },
+  )
 
   pi.registerTool({
     name: 'systematic_skill',
