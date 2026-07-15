@@ -1,0 +1,608 @@
+import { describe, expect, test } from 'bun:test'
+import type {
+  ExtensionContext,
+  ToolDefinition,
+} from '@earendil-works/pi-coding-agent'
+import type { AgentCatalogEntry } from '../../src/lib/agent-resolver.js'
+import {
+  createPiDelegateTool,
+  DELEGATE_EXECUTION_MODE,
+  DELEGATE_TOOL_NAME,
+  type DelegateSessionLike,
+  type DelegateToolDetails,
+  MAX_DELEGATE_TURNS,
+} from '../../src/lib/pi-delegate-tool.js'
+
+const catalog: AgentCatalogEntry[] = [
+  {
+    name: 'git-analyzer',
+    description: 'Analyzes git history',
+    body: 'You are a git historian.',
+    toolsSource: undefined,
+  },
+  {
+    name: 'security-reviewer',
+    description: 'Reviews for security issues',
+    body: 'You are a security reviewer.',
+    toolsSource: 'Read, Grep, Glob, Bash',
+  },
+]
+
+interface FakeSessionEvent {
+  type: string
+}
+
+class FakeSession implements DelegateSessionLike {
+  listeners: Array<(event: FakeSessionEvent) => void> = []
+  disposed = false
+  aborted = false
+  abortCalls = 0
+  lastAssistantText = 'final answer text'
+  turnsToEmit: number
+  promptCalls = 0
+  /** When set, prompt() rejects with this error after emitting its turns. */
+  failAfterTurns: Error | undefined
+  /**
+   * When true, prompt() rejects with a generic error the instant abort() is
+   * called on this session — simulating a real session whose prompt()
+   * rejects because it was aborted mid-stream (turn-limit or external).
+   */
+  rejectPromptWhenAborted = false
+  /** When set, abort() itself rejects with this error instead of resolving. */
+  abortShouldFail: Error | undefined
+  private promptRejecter: ((error: unknown) => void) | undefined
+
+  constructor(turnsToEmit: number) {
+    this.turnsToEmit = turnsToEmit
+  }
+
+  subscribe(listener: (event: FakeSessionEvent) => void): () => void {
+    this.listeners.push(listener)
+    return () => {
+      this.listeners = this.listeners.filter((l) => l !== listener)
+    }
+  }
+
+  async prompt(_text: string): Promise<void> {
+    this.promptCalls += 1
+    return new Promise((resolve, reject) => {
+      this.promptRejecter = reject
+      for (let i = 0; i < this.turnsToEmit; i++) {
+        if (this.aborted) break
+        for (const l of this.listeners) l({ type: 'turn_start' })
+      }
+      if (this.aborted && this.rejectPromptWhenAborted) return
+      if (this.failAfterTurns) {
+        reject(this.failAfterTurns)
+        return
+      }
+      resolve()
+    })
+  }
+
+  async abort(): Promise<void> {
+    this.abortCalls += 1
+    this.aborted = true
+    if (this.rejectPromptWhenAborted) {
+      this.promptRejecter?.(new Error('prompt aborted'))
+    }
+    if (this.abortShouldFail) {
+      throw this.abortShouldFail
+    }
+  }
+
+  dispose(): void {
+    this.disposed = true
+  }
+
+  getLastAssistantText(): string | undefined {
+    return this.aborted ? undefined : this.lastAssistantText
+  }
+}
+
+function fakeCtx(
+  model: unknown = { provider: 'p', id: 'm' },
+  hasModel = true,
+): ExtensionContext {
+  return {
+    cwd: '/fake/cwd',
+    model: hasModel ? model : undefined,
+  } as unknown as ExtensionContext
+}
+
+describe('createPiDelegateTool: registration shape', () => {
+  test('registers exactly {agent, task} parameters', () => {
+    let created: FakeSession | undefined
+    const tool = createPiDelegateTool({
+      catalog,
+      createDelegateSession: async () => {
+        created = new FakeSession(1)
+        return created
+      },
+    })
+
+    expect(tool.name).toBe(DELEGATE_TOOL_NAME)
+    expect(tool.name).toBe('systematic_delegate')
+    const schema = tool.parameters as unknown as {
+      type: string
+      required: string[]
+      properties: Record<string, unknown>
+    }
+    expect(schema.type).toBe('object')
+    expect(Object.keys(schema.properties).sort()).toEqual(['agent', 'task'])
+    expect(schema.required.sort()).toEqual(['agent', 'task'])
+    void created
+  })
+
+  test('description includes bounded deterministic persona list', () => {
+    const tool = createPiDelegateTool({
+      catalog,
+      createDelegateSession: async () => new FakeSession(1),
+    })
+    expect(tool.description).toContain('git-analyzer: Analyzes git history')
+    expect(tool.description).toContain(
+      'security-reviewer: Reviews for security issues',
+    )
+  })
+
+  test('execution mode is fixed sequential', () => {
+    const tool = createPiDelegateTool({
+      catalog,
+      createDelegateSession: async () => new FakeSession(1),
+    })
+    expect(tool.executionMode).toBe('sequential')
+    expect(DELEGATE_EXECUTION_MODE).toBe('sequential')
+  })
+})
+
+async function execute(
+  tool: ToolDefinition<never, DelegateToolDetails>,
+  params: { agent: string; task: string },
+  signal: AbortSignal | undefined,
+  ctx: ExtensionContext,
+) {
+  return tool.execute('call-1', params as never, signal, undefined, ctx)
+}
+
+describe('createPiDelegateTool: happy path', () => {
+  test('returns final assistant text and turn count on normal completion', async () => {
+    let capturedCwd: string | undefined
+    let capturedModel: unknown
+    let capturedTools: string[] | undefined
+    let capturedPrompt: string | undefined
+
+    const tool = createPiDelegateTool({
+      catalog,
+      createDelegateSession: async (opts) => {
+        capturedCwd = opts.cwd
+        capturedModel = opts.model
+        capturedTools = opts.allowedToolNames
+        capturedPrompt = opts.systemPromptOverride
+        // CreateDelegateSession must not expose task/signal — the real
+        // constructor never consumes either.
+        expect(opts).not.toHaveProperty('task')
+        expect(opts).not.toHaveProperty('signal')
+        return new FakeSession(3)
+      },
+    })
+
+    const model = { provider: 'anthropic', id: 'claude' }
+    const result = await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'security-reviewer', task: 'find bugs' },
+      undefined,
+      fakeCtx(model),
+    )
+
+    expect(result.content).toEqual([
+      { type: 'text', text: 'final answer text' },
+    ])
+    expect(result.details).toEqual({
+      persona: 'security-reviewer',
+      turnCount: 3,
+      outcome: 'completed',
+    })
+    expect(capturedCwd).toBe('/fake/cwd')
+    expect(capturedModel).toBe(model)
+    expect(capturedTools).toEqual(['read', 'grep', 'find', 'bash'])
+    expect(capturedPrompt).toBe('You are a security reviewer.')
+  })
+
+  test('undeclared persona tools defaults to the read-only allowlist', async () => {
+    let capturedTools: string[] | undefined
+    const tool = createPiDelegateTool({
+      catalog,
+      createDelegateSession: async (opts) => {
+        capturedTools = opts.allowedToolNames
+        return new FakeSession(1)
+      },
+    })
+
+    await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'git-analyzer', task: 'trace history' },
+      undefined,
+      fakeCtx(),
+    )
+
+    expect(capturedTools).toEqual(['read', 'grep', 'find', 'ls'])
+  })
+})
+
+describe('createPiDelegateTool: error paths', () => {
+  test('unknown persona returns isError with available persona names', async () => {
+    const tool = createPiDelegateTool({
+      catalog,
+      createDelegateSession: async () => new FakeSession(1),
+    })
+
+    const result = await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'nonexistent', task: 'x' },
+      undefined,
+      fakeCtx(),
+    )
+
+    expect(result.isError).toBe(true)
+    expect(result.details.outcome).toBe('failed')
+    expect(result.content[0]?.type).toBe('text')
+    const text = (result.content[0] as { type: 'text'; text: string }).text
+    expect(text).toContain('Unknown persona "nonexistent"')
+    expect(text).toContain('git-analyzer')
+  })
+
+  test('undefined parent model fails closed without creating a child session', async () => {
+    let created = false
+    const tool = createPiDelegateTool({
+      catalog,
+      createDelegateSession: async () => {
+        created = true
+        return new FakeSession(1)
+      },
+    })
+
+    const result = await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'git-analyzer', task: 'x' },
+      undefined,
+      fakeCtx(undefined, false),
+    )
+
+    expect(result.isError).toBe(true)
+    expect(result.details.outcome).toBe('failed')
+    expect(created).toBe(false)
+  })
+
+  test('20-turn bound aborts fail-closed before turn 21, reporting exactly turnCount: 20', async () => {
+    let sessionRef: FakeSession | undefined
+    const tool = createPiDelegateTool({
+      catalog,
+      createDelegateSession: async () => {
+        sessionRef = new FakeSession(MAX_DELEGATE_TURNS + 5)
+        return sessionRef
+      },
+    })
+
+    const result = await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'git-analyzer', task: 'loop forever' },
+      undefined,
+      fakeCtx(),
+    )
+
+    expect(result.isError).toBe(true)
+    expect(result.details.outcome).toBe('turn_limit')
+    expect(result.details.turnCount).toBe(MAX_DELEGATE_TURNS)
+    expect(sessionRef?.aborted).toBe(true)
+    expect(sessionRef?.disposed).toBe(true)
+    // abort() must be called at most once even though the turn-cap listener
+    // keeps observing turn_start events on an already-aborting session.
+    expect(sessionRef?.abortCalls).toBe(1)
+  })
+
+  test('a signal already aborted before execution fails closed without constructing a child session', async () => {
+    let created = false
+    const controller = new AbortController()
+    controller.abort()
+    const tool = createPiDelegateTool({
+      catalog,
+      createDelegateSession: async () => {
+        created = true
+        return new FakeSession(1)
+      },
+    })
+
+    const result = await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'git-analyzer', task: 'x' },
+      controller.signal,
+      fakeCtx(),
+    )
+
+    expect(result.isError).toBe(true)
+    expect(result.details.outcome).toBe('aborted')
+    expect(created).toBe(false)
+  })
+
+  test('preserves turnCount when prompt() fails after some turns already ran', async () => {
+    let sessionRef: FakeSession | undefined
+    const tool = createPiDelegateTool({
+      catalog,
+      createDelegateSession: async () => {
+        sessionRef = new FakeSession(5)
+        sessionRef.failAfterTurns = new Error('provider exploded')
+        return sessionRef
+      },
+    })
+
+    const result = await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'git-analyzer', task: 'x' },
+      undefined,
+      fakeCtx(),
+    )
+
+    expect(result.isError).toBe(true)
+    expect(result.details.outcome).toBe('failed')
+    expect(result.details.turnCount).toBe(5)
+    expect(sessionRef?.disposed).toBe(true)
+  })
+
+  test('signal aborting while createDelegateSession() is still pending never calls prompt(), aborts once, and reports aborted', async () => {
+    let sessionRef: FakeSession | undefined
+    const controller = new AbortController()
+    let resolveCreation: (() => void) | undefined
+    const creationGate = new Promise<void>((resolve) => {
+      resolveCreation = resolve
+    })
+
+    const tool = createPiDelegateTool({
+      catalog,
+      createDelegateSession: async () => {
+        await creationGate
+        sessionRef = new FakeSession(3)
+        return sessionRef
+      },
+    })
+
+    const resultPromise = execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'git-analyzer', task: 'x' },
+      controller.signal,
+      fakeCtx(),
+    )
+
+    // Abort while createDelegateSession() is still pending (session doesn't
+    // exist yet, so no abort listener could have been attached to it).
+    controller.abort()
+    resolveCreation?.()
+    const result = await resultPromise
+
+    expect(sessionRef).toBeDefined()
+    expect(sessionRef?.promptCalls).toBe(0)
+    expect(sessionRef?.abortCalls).toBe(1)
+    expect(sessionRef?.disposed).toBe(true)
+    expect(result.details.outcome).toBe('aborted')
+    expect(result.isError).toBe(true)
+  })
+
+  test('turn-limit-triggered prompt() rejection still reports turn_limit, not a generic failure', async () => {
+    let sessionRef: FakeSession | undefined
+    const tool = createPiDelegateTool({
+      catalog,
+      createDelegateSession: async () => {
+        sessionRef = new FakeSession(MAX_DELEGATE_TURNS + 3)
+        sessionRef.rejectPromptWhenAborted = true
+        return sessionRef
+      },
+    })
+
+    const result = await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'git-analyzer', task: 'loop forever' },
+      undefined,
+      fakeCtx(),
+    )
+
+    expect(result.details.outcome).toBe('turn_limit')
+    expect(result.details.turnCount).toBe(MAX_DELEGATE_TURNS)
+    expect(result.isError).toBe(true)
+    expect(sessionRef?.abortCalls).toBe(1)
+    expect(sessionRef?.disposed).toBe(true)
+  })
+
+  test('a rejecting abort() after the turn limit reports failed with the actual turn count, not a false clean abort', async () => {
+    let sessionRef: FakeSession | undefined
+    const tool = createPiDelegateTool({
+      catalog,
+      createDelegateSession: async () => {
+        sessionRef = new FakeSession(MAX_DELEGATE_TURNS + 3)
+        sessionRef.abortShouldFail = new Error('abort() itself failed')
+        return sessionRef
+      },
+    })
+
+    const result = await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'git-analyzer', task: 'loop forever' },
+      undefined,
+      fakeCtx(),
+    )
+
+    expect(result.details.outcome).toBe('failed')
+    expect(result.details.turnCount).toBe(MAX_DELEGATE_TURNS)
+    expect(result.isError).toBe(true)
+    expect(sessionRef?.disposed).toBe(true)
+  })
+
+  test('a rejecting abort() after an external abort request reports failed, not a false clean abort', async () => {
+    let sessionRef: FakeSession | undefined
+    const controller = new AbortController()
+    const tool = createPiDelegateTool({
+      catalog,
+      createDelegateSession: async () => {
+        sessionRef = new FakeSession(0)
+        sessionRef.abortShouldFail = new Error('abort() itself failed')
+        sessionRef.prompt = async () => {
+          await new Promise<void>((resolve) => {
+            controller.signal.addEventListener('abort', () => resolve())
+          })
+        }
+        return sessionRef
+      },
+    })
+
+    const resultPromise = execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'git-analyzer', task: 'x' },
+      controller.signal,
+      fakeCtx(),
+    )
+    await Promise.resolve()
+    await Promise.resolve()
+    controller.abort()
+    const result = await resultPromise
+
+    expect(result.details.outcome).toBe('failed')
+    expect(result.isError).toBe(true)
+    expect(sessionRef?.disposed).toBe(true)
+  })
+
+  test('parent/tool abort signal propagates to child session.abort()', async () => {
+    let sessionRef: FakeSession | undefined
+    const controller = new AbortController()
+    const tool = createPiDelegateTool({
+      catalog,
+      createDelegateSession: async () => {
+        sessionRef = new FakeSession(0)
+        // Simulate a long-running prompt that only resolves once aborted.
+        sessionRef.prompt = async () => {
+          await new Promise<void>((resolve) => {
+            controller.signal.addEventListener('abort', () => resolve())
+          })
+        }
+        return sessionRef
+      },
+    })
+
+    const resultPromise = execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'git-analyzer', task: 'x' },
+      controller.signal,
+      fakeCtx(),
+    )
+    // Let the async session-creation microtasks settle before aborting, so
+    // sessionRef is assigned and the tool's abort listener is registered.
+    await Promise.resolve()
+    await Promise.resolve()
+    controller.abort()
+    const result = await resultPromise
+
+    expect(sessionRef?.aborted).toBe(true)
+    expect(result.details.outcome).toBe('aborted')
+    expect(result.isError).toBe(true)
+  })
+
+  test('dispose() is always called on success and every failure path', async () => {
+    const successSession = new FakeSession(1)
+    const toolSuccess = createPiDelegateTool({
+      catalog,
+      createDelegateSession: async () => successSession,
+    })
+    await execute(
+      toolSuccess as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'git-analyzer', task: 'x' },
+      undefined,
+      fakeCtx(),
+    )
+    expect(successSession.disposed).toBe(true)
+
+    const toolThrows = createPiDelegateTool({
+      catalog,
+      createDelegateSession: async () => {
+        throw new Error('creation failed')
+      },
+    })
+    const failResult = await execute(
+      toolThrows as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'git-analyzer', task: 'x' },
+      undefined,
+      fakeCtx(),
+    )
+    expect(failResult.isError).toBe(true)
+    expect(failResult.details.outcome).toBe('failed')
+  })
+
+  test('unsubscribes the event listener after completion', async () => {
+    const session = new FakeSession(2)
+    const tool = createPiDelegateTool({
+      catalog,
+      createDelegateSession: async () => session,
+    })
+    await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'git-analyzer', task: 'x' },
+      undefined,
+      fakeCtx(),
+    )
+    expect(session.listeners.length).toBe(0)
+  })
+
+  test('declared unknown tool name fails closed without creating a child session', async () => {
+    let created = false
+    const badCatalog: AgentCatalogEntry[] = [
+      {
+        name: 'bad-persona',
+        description: 'Has an unmappable tool',
+        body: 'Body',
+        toolsSource: 'Read, Frobnicate',
+      },
+    ]
+    const tool = createPiDelegateTool({
+      catalog: badCatalog,
+      createDelegateSession: async () => {
+        created = true
+        return new FakeSession(1)
+      },
+    })
+
+    const result = await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'bad-persona', task: 'x' },
+      undefined,
+      fakeCtx(),
+    )
+
+    expect(result.isError).toBe(true)
+    expect(created).toBe(false)
+  })
+
+  test('Task declaration never maps into the child (denylist)', async () => {
+    let created = false
+    const badCatalog: AgentCatalogEntry[] = [
+      {
+        name: 'self-delegating',
+        description: 'Declares Task',
+        body: 'Body',
+        toolsSource: 'Read, Task',
+      },
+    ]
+    const tool = createPiDelegateTool({
+      catalog: badCatalog,
+      createDelegateSession: async () => {
+        created = true
+        return new FakeSession(1)
+      },
+    })
+
+    const result = await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'self-delegating', task: 'x' },
+      undefined,
+      fakeCtx(),
+    )
+
+    expect(result.isError).toBe(true)
+    expect(created).toBe(false)
+  })
+})

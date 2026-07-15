@@ -7,10 +7,13 @@ import type {
   ExtensionAPI,
 } from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
+import { buildAgentCatalog } from './lib/agent-resolver.js'
 import {
   composeSystemPromptWithBootstrap,
   computeBootstrapContentSafe,
 } from './lib/bootstrap.js'
+import { createRealPiDelegateSession } from './lib/pi-delegate-session.js'
+import { createPiDelegateTool } from './lib/pi-delegate-tool.js'
 import {
   buildSkillContentOutput,
   buildSkillToolDescription,
@@ -21,6 +24,7 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const packageRoot = path.resolve(__dirname, '..')
 const bundledSkillsDir = path.join(packageRoot, 'skills')
+const bundledAgentsDir = path.join(packageRoot, 'agents')
 const PI_BOOTSTRAP_USAGE_TEMPLATE = `**Skills usage:**
 - Use \`systematic_skill\` for Systematic skills.
 - For non-Systematic skills, follow Pi's native skill instructions and read the listed SKILL.md path.`
@@ -28,6 +32,13 @@ const PI_BOOTSTRAP_USAGE_TEMPLATE = `**Skills usage:**
 const reportPiBootstrapFailure = (): void => {
   process.stderr.write(
     '[systematic] Failed to compute Pi bootstrap; continuing without injection.\n',
+  )
+}
+
+const reportPiDelegateCatalogFailure = (error: unknown): void => {
+  const message = error instanceof Error ? error.message : String(error)
+  process.stderr.write(
+    `[systematic] Failed to build Pi agent catalog; systematic_delegate will not be registered: ${message}\n`,
   )
 }
 
@@ -77,4 +88,16 @@ export default async function systematicPiExtension(
       }
     },
   })
+
+  try {
+    const catalog = buildAgentCatalog(bundledAgentsDir)
+    pi.registerTool(
+      createPiDelegateTool({
+        catalog,
+        createDelegateSession: createRealPiDelegateSession,
+      }),
+    )
+  } catch (error) {
+    reportPiDelegateCatalogFailure(error)
+  }
 }

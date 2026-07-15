@@ -50,16 +50,22 @@ function createFakeExtensionApi(): ExtensionAPI & RegisterToolSpy & OnSpy {
 const fakeExtensionContext = {} as ExtensionContext
 
 describe('src/pi.ts systematic_skill tool registration', () => {
-  test('registers exactly one tool named systematic_skill with expected label and catalog-derived description', async () => {
+  test('registers exactly two tools: systematic_skill and systematic_delegate', async () => {
     const api = createFakeExtensionApi()
 
     await piExtension(api)
 
-    expect(api.registeredTools).toHaveLength(1)
-    const [registered] = api.registeredTools
-    expect(registered.name).toBe('systematic_skill')
-    expect(registered.label).toBe('Systematic Skill')
-    expect(registered.description).toBe(
+    expect(api.registeredTools).toHaveLength(2)
+    expect(api.registeredTools.map((t) => t.name).sort()).toEqual([
+      'systematic_delegate',
+      'systematic_skill',
+    ])
+    const registered = api.registeredTools.find(
+      (t) => t.name === 'systematic_skill',
+    )
+    expect(registered).toBeDefined()
+    expect(registered?.label).toBe('Systematic Skill')
+    expect(registered?.description).toBe(
       buildSkillToolDescription(resolverOptions),
     )
   })
@@ -239,7 +245,7 @@ describe('src/pi.ts before_agent_start bootstrap injection', () => {
       '[systematic] Failed to compute Pi bootstrap; continuing without injection.\n',
     )
     expect(api.handlers.before_agent_start).toBeDefined()
-    expect(api.registeredTools).toHaveLength(1)
+    expect(api.registeredTools).toHaveLength(2)
 
     readFileSyncSpy.mockRestore()
     stderrSpy.mockRestore()
@@ -306,5 +312,37 @@ describe('src/pi.ts before_agent_start bootstrap injection', () => {
     expect(systemPrompt).not.toContain(
       'Use the skill tool for non-Systematic skills',
     )
+  })
+})
+
+describe('src/pi.ts systematic_delegate tool registration', () => {
+  test('registers systematic_delegate with only {agent, task} parameters', async () => {
+    const api = createFakeExtensionApi()
+    await piExtension(api)
+
+    const delegateTool = api.registeredTools.find(
+      (t) => t.name === 'systematic_delegate',
+    )
+    expect(delegateTool).toBeDefined()
+    expect(delegateTool?.executionMode).toBe('sequential')
+
+    const schema = delegateTool?.parameters as unknown as {
+      type: string
+      required: string[]
+      properties: Record<string, unknown>
+    }
+    expect(schema.type).toBe('object')
+    expect(Object.keys(schema.properties).sort()).toEqual(['agent', 'task'])
+    expect(schema.required.sort()).toEqual(['agent', 'task'])
+  })
+
+  test('description references real bundled persona names', async () => {
+    const api = createFakeExtensionApi()
+    await piExtension(api)
+
+    const delegateTool = api.registeredTools.find(
+      (t) => t.name === 'systematic_delegate',
+    )
+    expect(delegateTool?.description).toContain('git-history-analyzer')
   })
 })
