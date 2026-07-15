@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { DEFAULT_CONFIG, type SystematicConfig } from './config.js'
+import type { SystematicConfig } from './config.js'
 import { parseFrontmatter } from './frontmatter.js'
 import { renderCatalogVerbose } from './skill-catalog.js'
 
@@ -110,13 +110,23 @@ export interface BootstrapDeps {
   usageTemplate?: string
 }
 
+type BootstrapContentConfig = Pick<
+  SystematicConfig,
+  'bootstrap' | 'disabled_skills'
+>
+
+const DEFAULT_BOOTSTRAP_CONFIG: BootstrapContentConfig = {
+  bootstrap: { enabled: true },
+  disabled_skills: [],
+}
+
 /** Safely computes default bootstrap content, returning null instead of throwing. */
 export function computeBootstrapContentSafe(
   deps: BootstrapDeps,
   reportError?: (error: unknown) => void,
 ): string | null {
   try {
-    return getBootstrapContent(DEFAULT_CONFIG, deps)
+    return getBootstrapContent(DEFAULT_BOOTSTRAP_CONFIG, deps)
   } catch (error) {
     if (reportError !== undefined) {
       try {
@@ -163,7 +173,7 @@ Bundled skills ship with the Systematic plugin and are discoverable via \`system
 }
 
 export function getBootstrapContent(
-  config: SystematicConfig,
+  config: BootstrapContentConfig,
   deps: BootstrapDeps,
 ): string | null {
   const { bundledSkillsDir, usageTemplate } = deps
