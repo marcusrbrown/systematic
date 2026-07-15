@@ -11,7 +11,7 @@ loadConfig() → createConfigHandler() → {
   findCommandsInDir() → loadCommandAsConfig() → OpenCode config
 }
 
-createSkillTool() → discoverSkillFiles() → loadSkill() → formatted output
+createSkillTool() → buildSkillToolDescription()/buildSkillToolParameterHint()/buildSkillContentOutput()/resolveSkill() → OpenCode tool
 getBootstrapContent() → reads using-systematic SKILL.md → system prompt
 ```
 
@@ -34,6 +34,7 @@ All discovery follows same pattern: `dir → walkDir() → find files → parseF
 | Module | Key Exports | Role |
 |--------|-------------|------|
 | `skill-loader.ts` | `loadSkill`, `LoadedSkill`, `SKILL_PREFIX` | Loads + wraps skill content in XML template |
+| `skill-resolver.ts` | `resolveSkill`, `buildSkillToolDescription`, `buildSkillToolParameterHint`, `buildSkillContentOutput`, `discoverSkillFiles` | Harness-neutral skill resolution, wrapped output, and catalog helpers shared by both adapters |
 | `validation.ts` | `isAgentMode`, `isPermissionSetting`, `normalizePermission`, `extractString`, `extractBoolean` | Agent config extraction + type guards + safe value extraction |
 
 ### Config & Integration Layer
@@ -44,7 +45,7 @@ All discovery follows same pattern: `dir → walkDir() → find files → parseF
 | `config-schema.ts` | `SystematicConfigSchema`, `validateConfig`, `SECURITY_OVERLAY_FIELDS`, `AgentOverlaySchema`, `CategoryOverlaySchema`, `BootstrapSchema` | Canonical Zod schema for user config; security field list |
 | `agent-colors.ts` | `isValidAgentColor`, `OPENCODE_AGENT_COLOR_TOKENS` | Color validator (hex or named token) + accepted token enum |
 | `config-handler.ts` | `createConfigHandler`, `ConfigHandlerDeps`, `formatAgentDescription`, `toTitleCase` | OpenCode config hook (collects + emits all assets) |
-| `skill-tool.ts` | `createSkillTool`, `SkillToolOptions` | `systematic_skill` tool (XML description, skill execution) |
+| `skill-tool.ts` | `createSkillTool`, `SkillToolOptions` | OpenCode `systematic_skill` adapter (tool wiring, permission/metadata side effects, execution bridging) |
 | `bootstrap.ts` | `getBootstrapContent`, `INTERNAL_AGENT_SIGNATURES`, `BootstrapDeps` | System prompt injection (using-systematic skill) |
 
 ## Key Types
