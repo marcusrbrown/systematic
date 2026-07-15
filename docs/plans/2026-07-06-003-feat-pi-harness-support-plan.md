@@ -242,7 +242,7 @@ Phase 3 — Install, docs, assurance
 
 **Verification:** bootstrap present in a fresh Pi session (Unit 7 assertion); composition preserves other contributions.
 
-- [ ] **Unit 5: Runtime agent catalog + bounded in-process subagent delegation**
+- [x] **Unit 5: Runtime agent catalog + bounded in-process subagent delegation**
 
 **Goal:** Provide Systematic's agents to Pi as real in-process subagents via a runtime, in-memory catalog built from packaged `agents/<category>/<name>.md` (no physical flat tree), and register a single `systematic_delegate` tool that spawns a persona subagent with a structural depth-1 guard, a fixed 20-turn cap, serial execution, and least-privilege tool allowlisting.
 
