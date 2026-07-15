@@ -107,15 +107,24 @@ export const applyBootstrapContent = (
 
 export interface BootstrapDeps {
   bundledSkillsDir: string
+  usageTemplate?: string
 }
 
 /** Safely computes default bootstrap content, returning null instead of throwing. */
 export function computeBootstrapContentSafe(
   deps: BootstrapDeps,
+  reportError?: (error: unknown) => void,
 ): string | null {
   try {
     return getBootstrapContent(DEFAULT_CONFIG, deps)
-  } catch {
+  } catch (error) {
+    if (reportError !== undefined) {
+      try {
+        reportError(error)
+      } catch {
+        // Ignore reporter failures so startup stays non-blocking.
+      }
+    }
     return null
   }
 }
@@ -127,9 +136,16 @@ export function composeSystemPromptWithBootstrap(
 ): string | null {
   if (bootstrapContent === null) return null
 
-  const output = { system: [existingSystemPrompt] }
-  applyBootstrapContent(output, bootstrapContent)
-  return output.system[0]
+  if (
+    existingSystemPrompt === bootstrapContent ||
+    existingSystemPrompt.endsWith(`\n\n${bootstrapContent}`)
+  ) {
+    return existingSystemPrompt
+  }
+
+  return existingSystemPrompt.length > 0
+    ? `${existingSystemPrompt}\n\n${bootstrapContent}`
+    : bootstrapContent
 }
 
 function getSkillUsageTemplate(): string {
@@ -150,7 +166,7 @@ export function getBootstrapContent(
   config: SystematicConfig,
   deps: BootstrapDeps,
 ): string | null {
-  const { bundledSkillsDir } = deps
+  const { bundledSkillsDir, usageTemplate } = deps
 
   if (!config.bootstrap.enabled) return null
 
@@ -172,7 +188,7 @@ export function getBootstrapContent(
   const fullContent = fs.readFileSync(usingSystematicPath, 'utf8')
   const { body } = parseFrontmatter(fullContent)
   const content = body.trim()
-  const skillUsage = getSkillUsageTemplate()
+  const skillUsage = usageTemplate ?? getSkillUsageTemplate()
   const catalog = renderCatalogVerbose({
     bundledSkillsDir,
     disabledSkills: config.disabled_skills,

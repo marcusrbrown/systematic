@@ -21,6 +21,15 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const packageRoot = path.resolve(__dirname, '..')
 const bundledSkillsDir = path.join(packageRoot, 'skills')
+const PI_BOOTSTRAP_USAGE_TEMPLATE = `**Skills usage:**
+- Use \`systematic_skill\` for Systematic skills.
+- For non-Systematic skills, follow Pi's native skill instructions and read the listed SKILL.md path.`
+
+const reportPiBootstrapFailure = (): void => {
+  process.stderr.write(
+    '[systematic] Failed to compute Pi bootstrap; continuing without injection.\n',
+  )
+}
 
 export default async function systematicPiExtension(
   pi: ExtensionAPI,
@@ -29,7 +38,13 @@ export default async function systematicPiExtension(
   const resolverOptions = { bundledSkillsDir, disabledSkills }
 
   // Match OpenCode's process-lifetime bootstrap snapshot.
-  const bootstrapContent = computeBootstrapContentSafe({ bundledSkillsDir })
+  const bootstrapContent = computeBootstrapContentSafe(
+    {
+      bundledSkillsDir,
+      usageTemplate: PI_BOOTSTRAP_USAGE_TEMPLATE,
+    },
+    reportPiBootstrapFailure,
+  )
 
   pi.on(
     'before_agent_start',

@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
+import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import type {
   AgentToolResult,
@@ -217,6 +218,33 @@ describe('src/pi.ts before_agent_start bootstrap injection', () => {
     expect(api.handlers.before_agent_start).toBeDefined()
   })
 
+  test('emits one constant stderr diagnostic and still initializes when bootstrap computation fails', async () => {
+    const api = createFakeExtensionApi()
+    const stderrSpy = spyOn(process.stderr, 'write').mockImplementation(
+      () => true,
+    )
+    const originalReadFileSync = fs.readFileSync
+    const readFileSyncSpy = spyOn(fs, 'readFileSync')
+      .mockImplementationOnce(() => {
+        throw new Error('bootstrap failure')
+      })
+      .mockImplementation((...args) => {
+        return originalReadFileSync(...args)
+      })
+
+    await expect(piExtension(api)).resolves.toBeUndefined()
+
+    expect(stderrSpy).toHaveBeenCalledTimes(1)
+    expect(stderrSpy).toHaveBeenCalledWith(
+      '[systematic] Failed to compute Pi bootstrap; continuing without injection.\n',
+    )
+    expect(api.handlers.before_agent_start).toBeDefined()
+    expect(api.registeredTools).toHaveLength(1)
+
+    readFileSyncSpy.mockRestore()
+    stderrSpy.mockRestore()
+  })
+
   test('an earlier extension contribution remains before exactly one real Systematic bootstrap block', async () => {
     const api = createFakeExtensionApi()
     await piExtension(api)
@@ -247,6 +275,36 @@ describe('src/pi.ts before_agent_start bootstrap injection', () => {
     expect(prompt).toContain('</SYSTEMATIC_WORKFLOWS>')
     expect(prompt.indexOf('<SYSTEMATIC_WORKFLOWS>')).toBeGreaterThan(
       prompt.indexOf(earlierContribution),
+    )
+  })
+
+  test('Pi bootstrap uses native skill guidance and omits the generic skill tool instruction', async () => {
+    const api = createFakeExtensionApi()
+    await piExtension(api)
+    const handler = api.handlers.before_agent_start as ExtensionHandler<
+      BeforeAgentStartEvent,
+      BeforeAgentStartEventResult
+    >
+    const event: BeforeAgentStartEvent = {
+      type: 'before_agent_start',
+      prompt: 'do the thing',
+      systemPrompt: 'Earlier extension prompt contribution.',
+      systemPromptOptions: {} as BeforeAgentStartEvent['systemPromptOptions'],
+    }
+
+    const result = await handler(event, fakeExtensionContext)
+
+    expect(result).toBeDefined()
+    const systemPrompt = (result as BeforeAgentStartEventResult)
+      .systemPrompt as string
+    expect(systemPrompt).toContain(
+      'Use `systematic_skill` for Systematic skills.',
+    )
+    expect(systemPrompt).toContain(
+      "For non-Systematic skills, follow Pi's native skill instructions and read the listed SKILL.md path.",
+    )
+    expect(systemPrompt).not.toContain(
+      'Use the skill tool for non-Systematic skills',
     )
   })
 })
