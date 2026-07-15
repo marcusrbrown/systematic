@@ -2,7 +2,11 @@ import { describe, expect, test } from 'bun:test'
 import { fileURLToPath } from 'node:url'
 import type {
   AgentToolResult,
+  BeforeAgentStartEvent,
+  BeforeAgentStartEventResult,
   ExtensionAPI,
+  ExtensionContext,
+  ExtensionHandler,
   ToolDefinition,
 } from '@earendil-works/pi-coding-agent'
 import {
@@ -21,17 +25,28 @@ interface RegisterToolSpy {
   registeredTools: ToolDefinition[]
 }
 
-/** Captures registerTool() calls; other ExtensionAPI members are unused. */
-function createFakeExtensionApi(): ExtensionAPI & RegisterToolSpy {
+interface OnSpy {
+  handlers: Record<string, ExtensionHandler<unknown, unknown>>
+}
+
+/** Captures registerTool() and on() calls; other ExtensionAPI members are unused. */
+function createFakeExtensionApi(): ExtensionAPI & RegisterToolSpy & OnSpy {
   const registeredTools: ToolDefinition[] = []
+  const handlers: Record<string, ExtensionHandler<unknown, unknown>> = {}
   const fake = {
     registeredTools,
+    handlers,
     registerTool(tool: ToolDefinition) {
       registeredTools.push(tool)
     },
+    on(event: string, handler: ExtensionHandler<unknown, unknown>) {
+      handlers[event] = handler
+    },
   }
-  return fake as unknown as ExtensionAPI & RegisterToolSpy
+  return fake as unknown as ExtensionAPI & RegisterToolSpy & OnSpy
 }
+
+const fakeExtensionContext = {} as ExtensionContext
 
 describe('src/pi.ts systematic_skill tool registration', () => {
   test('registers exactly one tool named systematic_skill with expected label and catalog-derived description', async () => {
@@ -192,5 +207,46 @@ describe('src/pi.ts systematic_skill tool registration', () => {
     })()
 
     expect(piError).toBe(openCodeError)
+  })
+})
+
+describe('src/pi.ts before_agent_start bootstrap injection', () => {
+  test('registers exactly one before_agent_start handler', async () => {
+    const api = createFakeExtensionApi()
+    await piExtension(api)
+    expect(api.handlers.before_agent_start).toBeDefined()
+  })
+
+  test('an earlier extension contribution remains before exactly one real Systematic bootstrap block', async () => {
+    const api = createFakeExtensionApi()
+    await piExtension(api)
+    const handler = api.handlers.before_agent_start as ExtensionHandler<
+      BeforeAgentStartEvent,
+      BeforeAgentStartEventResult
+    >
+    expect(handler).toBeDefined()
+
+    const earlierContribution = 'Earlier extension prompt contribution.'
+    const event: BeforeAgentStartEvent = {
+      type: 'before_agent_start',
+      prompt: 'do the thing',
+      systemPrompt: earlierContribution,
+      systemPromptOptions: {} as BeforeAgentStartEvent['systemPromptOptions'],
+    }
+
+    const result = await handler(event, fakeExtensionContext)
+
+    expect(result).toBeDefined()
+    const systemPrompt = (result as BeforeAgentStartEventResult).systemPrompt
+    expect(systemPrompt).toBeDefined()
+    const prompt = systemPrompt as string
+
+    expect(prompt.indexOf(earlierContribution)).toBe(0)
+    const occurrences = prompt.split('<SYSTEMATIC_WORKFLOWS>').length - 1
+    expect(occurrences).toBe(1)
+    expect(prompt).toContain('</SYSTEMATIC_WORKFLOWS>')
+    expect(prompt.indexOf('<SYSTEMATIC_WORKFLOWS>')).toBeGreaterThan(
+      prompt.indexOf(earlierContribution),
+    )
   })
 })

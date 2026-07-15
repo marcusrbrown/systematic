@@ -1,8 +1,16 @@
 // Pi coding-agent extension entry point (built to dist/pi.js via pi.extensions manifest).
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { ExtensionAPI } from '@earendil-works/pi-coding-agent'
+import type {
+  BeforeAgentStartEvent,
+  BeforeAgentStartEventResult,
+  ExtensionAPI,
+} from '@earendil-works/pi-coding-agent'
 import { Type } from 'typebox'
+import {
+  composeSystemPromptWithBootstrap,
+  computeBootstrapContentSafe,
+} from './lib/bootstrap.js'
 import {
   buildSkillContentOutput,
   buildSkillToolDescription,
@@ -19,6 +27,21 @@ export default async function systematicPiExtension(
 ): Promise<void> {
   const disabledSkills: string[] = []
   const resolverOptions = { bundledSkillsDir, disabledSkills }
+
+  // Match OpenCode's process-lifetime bootstrap snapshot.
+  const bootstrapContent = computeBootstrapContentSafe({ bundledSkillsDir })
+
+  pi.on(
+    'before_agent_start',
+    (event: BeforeAgentStartEvent): BeforeAgentStartEventResult | undefined => {
+      const systemPrompt = composeSystemPromptWithBootstrap(
+        event.systemPrompt,
+        bootstrapContent,
+      )
+      if (systemPrompt === null) return undefined
+      return { systemPrompt }
+    },
+  )
 
   pi.registerTool({
     name: 'systematic_skill',

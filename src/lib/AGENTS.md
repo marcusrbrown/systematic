@@ -46,7 +46,7 @@ All discovery follows same pattern: `dir → walkDir() → find files → parseF
 | `agent-colors.ts` | `isValidAgentColor`, `OPENCODE_AGENT_COLOR_TOKENS` | Color validator (hex or named token) + accepted token enum |
 | `config-handler.ts` | `createConfigHandler`, `ConfigHandlerDeps`, `formatAgentDescription`, `toTitleCase` | OpenCode config hook (collects + emits all assets) |
 | `skill-tool.ts` | `createSkillTool`, `SkillToolOptions` | OpenCode `systematic_skill` adapter (tool wiring, permission/metadata side effects, execution bridging) |
-| `bootstrap.ts` | `getBootstrapContent`, `INTERNAL_AGENT_SIGNATURES`, `BootstrapDeps` | System prompt injection (using-systematic skill) |
+| `bootstrap.ts` | `getBootstrapContent`, `applyBootstrapContent`, `computeBootstrapContentSafe`, `composeSystemPromptWithBootstrap`, `INTERNAL_AGENT_SIGNATURES`, `BootstrapDeps` | System prompt injection (using-systematic skill); harness-neutral safe-compute/compose helpers reused by Pi's `before_agent_start` |
 
 ## Key Types
 

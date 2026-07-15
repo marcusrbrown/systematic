@@ -1,7 +1,7 @@
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import type { SystematicConfig } from './config.js'
+import { DEFAULT_CONFIG, type SystematicConfig } from './config.js'
 import { parseFrontmatter } from './frontmatter.js'
 import { renderCatalogVerbose } from './skill-catalog.js'
 
@@ -107,6 +107,29 @@ export const applyBootstrapContent = (
 
 export interface BootstrapDeps {
   bundledSkillsDir: string
+}
+
+/** Safely computes default bootstrap content, returning null instead of throwing. */
+export function computeBootstrapContentSafe(
+  deps: BootstrapDeps,
+): string | null {
+  try {
+    return getBootstrapContent(DEFAULT_CONFIG, deps)
+  } catch {
+    return null
+  }
+}
+
+/** Composes an existing system prompt with nullable bootstrap content; returns null when bootstrapContent is null. */
+export function composeSystemPromptWithBootstrap(
+  existingSystemPrompt: string,
+  bootstrapContent: string | null,
+): string | null {
+  if (bootstrapContent === null) return null
+
+  const output = { system: [existingSystemPrompt] }
+  applyBootstrapContent(output, bootstrapContent)
+  return output.system[0]
 }
 
 function getSkillUsageTemplate(): string {

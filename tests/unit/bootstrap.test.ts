@@ -4,6 +4,8 @@ import os from 'node:os'
 import path from 'node:path'
 import {
   applyBootstrapContent,
+  composeSystemPromptWithBootstrap,
+  computeBootstrapContentSafe,
   getBootstrapContent,
   INTERNAL_AGENT_SIGNATURES,
 } from '../../src/lib/bootstrap.ts'
@@ -529,5 +531,119 @@ describe('INTERNAL_AGENT_SIGNATURES skip heuristic', () => {
       'Generate layout recommendations.',
     ]
     expect(shouldSkipBootstrap(legitimate)).toBe(true)
+  })
+})
+
+describe('computeBootstrapContentSafe', () => {
+  let testDir: string
+
+  beforeEach(() => {
+    testDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-bootstrap-safe-'),
+    )
+  })
+
+  afterEach(() => {
+    fs.rmSync(testDir, { recursive: true, force: true })
+  })
+
+  function makeBundledSkillsDir(usingSystematicBody?: string): string {
+    const bundledSkillsDir = path.join(testDir, 'skills')
+    fs.mkdirSync(bundledSkillsDir, { recursive: true })
+    if (usingSystematicBody !== undefined) {
+      fs.mkdirSync(path.join(bundledSkillsDir, 'using-systematic'))
+      fs.writeFileSync(
+        path.join(bundledSkillsDir, 'using-systematic', 'SKILL.md'),
+        usingSystematicBody,
+      )
+    }
+    return bundledSkillsDir
+  }
+
+  test('returns bootstrap content string for a valid bundled skills dir', () => {
+    const bundledSkillsDir = makeBundledSkillsDir(
+      '---\nname: using-systematic\n---\nBody content.',
+    )
+    const content = computeBootstrapContentSafe({ bundledSkillsDir })
+    expect(content).not.toBeNull()
+    expect(content).toContain('<SYSTEMATIC_WORKFLOWS>')
+    expect(content).toContain('Body content.')
+  })
+
+  test('returns null (not throws) when using-systematic/SKILL.md is missing', () => {
+    const bundledSkillsDir = makeBundledSkillsDir() // no SKILL.md
+    expect(() =>
+      computeBootstrapContentSafe({ bundledSkillsDir }),
+    ).not.toThrow()
+    expect(computeBootstrapContentSafe({ bundledSkillsDir })).toBeNull()
+  })
+
+  test('returns null (not throws) when bundledSkillsDir itself does not exist', () => {
+    const missingDir = path.join(testDir, 'does-not-exist')
+    expect(() =>
+      computeBootstrapContentSafe({ bundledSkillsDir: missingDir }),
+    ).not.toThrow()
+    expect(
+      computeBootstrapContentSafe({ bundledSkillsDir: missingDir }),
+    ).toBeNull()
+  })
+
+  test('returns null (not throws) for a malformed/unreadable using-systematic SKILL.md fixture', () => {
+    // Real temp-dir fixture: create using-systematic as a directory named
+    // SKILL.md instead of a file, so fs.readFileSync throws EISDIR.
+    const bundledSkillsDir = path.join(testDir, 'skills')
+    fs.mkdirSync(path.join(bundledSkillsDir, 'using-systematic'), {
+      recursive: true,
+    })
+    fs.mkdirSync(path.join(bundledSkillsDir, 'using-systematic', 'SKILL.md'), {
+      recursive: true,
+    })
+    expect(() =>
+      computeBootstrapContentSafe({ bundledSkillsDir }),
+    ).not.toThrow()
+    expect(computeBootstrapContentSafe({ bundledSkillsDir })).toBeNull()
+  })
+})
+
+describe('composeSystemPromptWithBootstrap', () => {
+  test('appends bootstrap content after an existing system prompt contribution', () => {
+    const existing = 'You are a primary agent. Earlier extension contribution.'
+    const bootstrap = '<SYSTEMATIC_WORKFLOWS>\nContent\n</SYSTEMATIC_WORKFLOWS>'
+
+    const result = composeSystemPromptWithBootstrap(existing, bootstrap)
+
+    expect(result).not.toBeNull()
+    const resultStr = result as string
+    expect(resultStr.indexOf(existing)).toBe(0)
+    expect(resultStr.indexOf('<SYSTEMATIC_WORKFLOWS>')).toBeGreaterThan(
+      resultStr.indexOf(existing),
+    )
+  })
+
+  test('handles an empty existing prompt by using bootstrap content alone', () => {
+    const bootstrap = '<SYSTEMATIC_WORKFLOWS>\nContent\n</SYSTEMATIC_WORKFLOWS>'
+    const result = composeSystemPromptWithBootstrap('', bootstrap)
+    expect(result).toBe(bootstrap)
+  })
+
+  test('avoids duplicate <SYSTEMATIC_WORKFLOWS> blocks when the prompt already has one', () => {
+    const existing =
+      'Earlier.\n\n<SYSTEMATIC_WORKFLOWS>\nOld\n</SYSTEMATIC_WORKFLOWS>'
+    const bootstrap = '<SYSTEMATIC_WORKFLOWS>\nNew\n</SYSTEMATIC_WORKFLOWS>'
+
+    const result = composeSystemPromptWithBootstrap(existing, bootstrap)
+
+    expect(result).not.toBeNull()
+    const resultStr = result as string
+    const occurrences = resultStr.split('<SYSTEMATIC_WORKFLOWS>').length - 1
+    expect(occurrences).toBe(1)
+    expect(resultStr).toContain('New')
+    expect(resultStr).not.toContain('Old')
+  })
+
+  test('returns the existing prompt unchanged when bootstrap content is null', () => {
+    const existing = 'You are a primary agent. Earlier extension contribution.'
+    const result = composeSystemPromptWithBootstrap(existing, null)
+    expect(result).toBeNull()
   })
 })
