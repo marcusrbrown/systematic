@@ -109,7 +109,7 @@ Carried from the origin brainstorm (see origin: `docs/brainstorms/2026-07-06-pi-
 - **Exact flat-agent generation mechanism — resolved (Unit 5):** none of the three deferred options. Pi has no agent-discovery surface at all, so there is nothing for a flat tree to satisfy. Resolved to a runtime in-memory catalog (`src/lib/agent-resolver.ts`) built from the existing categorized `agents/<category>/<name>.md` tree at extension-init time — no generated flat tree, no drift surface to check.
 - **typebox-vs-zod drift control** for the `systematic_skill` schema — whether a small shared descriptor generates both, or a parity test pins the two hand-written declarations.
 - **Exact `before_agent_start` composition** with other extensions' system-prompt contributions (chained return).
-- **`setup --harness` Pi mechanics** — manifest edit vs `settings.json` vs `pi install` — reconciled with cleanup `002`'s `src/cli.ts` changes.
+- **`setup --harness` Pi mechanics — resolved (Unit 6):** direct `settings.json` edit (`<cwd>/.pi/settings.json`'s `packages` array), never `pi install`. No `src/cli.ts` conflict with cleanup `002` materialized.
 - **Depth/turn cap defaults — resolved (Unit 5):** structural max depth = 1 (enforced via `DefaultResourceLoader({ noExtensions: true, ... })` in the child, not a counted depth parameter — the child cannot register further extensions or discover further delegation tools at all), max turns = 20 (`MAX_DELEGATE_TURNS`, enforced via `AgentSession.subscribe()` + `abort()`), concurrency = 1 (`ToolDefinition.executionMode: 'sequential'`). None of the three are configurable via tool parameters.
 
 ## High-Level Technical Design
@@ -294,7 +294,7 @@ Phase 3 — Install, docs, assurance
 
 **Verification:** `bun test tests/unit/agent-resolver.test.ts tests/unit/pi-delegate-tool.test.ts tests/unit/pi-delegate-session.test.ts tests/unit/pi.test.ts` green (86/86); full `bun test tests/unit` green (1075/1075); `bun run typecheck`, `bun run lint`, docs build, content-integrity, and registry drift checks clean; `bun run build` succeeds and a plain-Node `import('./dist/pi.js')` registers both tools.
 
-- [ ] **Unit 6: `setup --harness` CLI**
+- [x] **Unit 6: `setup --harness` CLI**
 
 **Goal:** Extend `src/cli.ts` with `setup --harness opencode|pi` that wires each harness's registration safely.
 
@@ -302,22 +302,39 @@ Phase 3 — Install, docs, assurance
 
 **Dependencies:** Unit 1; coordinate with cleanup plan `002` (which removes `convert` from `src/cli.ts`)
 
-**Files:**
-- Modify: `src/cli.ts` — add the `setup` command + `--harness` flag; help text
-- Test: `tests/unit/cli.test.ts` — config-write safety
+**Resolved architecture:**
+- **OpenCode target resolution** is project-local-only, checked in this exact precedence order against the trusted `cwd`: `.opencode/opencode.jsonc`, `.opencode/opencode.json`, `opencode.jsonc`, `opencode.json`. If none exist, a new root `opencode.jsonc` is created. No ancestor-directory walk and no `OPENCODE_CONFIG_DIR` honored.
+- **OpenCode schema is singular-only, matching OpenCode v1.17.6.** Only a top-level `plugin: string[]` is supported; any `plugins` (plural) key present at all — alone or alongside `plugin` — fails closed with zero writes, as does a literal duplicate top-level `plugin` or `plugins` key (detected via `jsonc-parser`'s `parseTree`, before `modify`). `plugin` entries must be strings; no object/tuple entry shapes are accepted. JSONC is parsed via `jsonc-parser`'s authoritative `parse` (`allowTrailingComma: true`, real parse-error collection — never a regex-based comment-strip) for validation, and `modify`/`applyEdits` for comment-preserving mutation. Creates singular `plugin` when missing.
+- **Pi target** is always `<cwd>/.pi/settings.json`, written directly (never via `pi install`). The document is validated with strict `JSON.parse` (Pi does not preserve JSONC comments), but mutation uses `jsonc-parser`'s structural `modify`/`applyEdits` against the original raw text so unrelated formatting and numeric lexemes beyond `Number` precision (e.g. `9007199254740993`) survive byte-for-byte except the structural edit. An absent `packages` array is created; an existing one must be an array of strings or `{source: string}`-tagged objects, else the write fails closed.
+- **Pi tagged-entry matching is filter-aware.** A matching `{source}` object counts as already-configured only when it does not disable or filter out what Systematic needs: `autoload: false`, or a declared `extensions`/`skills` filter list, each fail closed with an actionable message (remove/adjust the flag) rather than silently duplicating an entry. Other filters (`prompts`, `themes`) don't affect Systematic and are left alone.
+- **Identity check is a literal comparison** against the one known package (`@fro.bot/systematic` / Pi's `npm:@fro.bot/systematic`), including a bare-or-`@version` suffix match — not a general dependency-resolution mechanism (R8-style scoping, deliberately narrow).
+- **Trusted single-read via `openTrustedExisting`:** an existing target is opened exactly once with `O_RDONLY | O_NOFOLLOW | O_NONBLOCK` on POSIX, `fstat`'d to reject any non-regular file (directory/FIFO/socket/device) before any blocking read, read once from the descriptor, and closed in `finally`. There is no separate path re-stat/re-read after the trust check; the same bytes and mode feed both parsing and the backup. Windows has no `O_NOFOLLOW`, so a best-effort `lstat` pre-check runs there instead (residual below). The parent directory is independently validated (must be a real, non-symlink directory; realpath stays under `cwd`) before this open.
+- **Atomic, no-clobber backup.** On mutation of an existing target, `<target>.bak` is written via a same-directory temp file + atomic rename (never truncated in place), refusing to clobber ANY pre-existing backup path — regular file, hardlink, symlink (live or dangling), or directory — with a concise fail-closed error. Both the backup temp and target temp are created with `writeFileSync(..., { flag: 'wx', mode })` so an existing/symlinked temp path can't be followed; on mutation of an existing file the temp is then `chmod`'d to the exact original mode before rename (since `writeFileSync`'s `mode` is umask-masked and can't reproduce e.g. `0o666`). Cleaned up on write/rename/chmod failure. If the backup succeeds but the subsequent target rename fails, the backup is deliberately left in place as manual recovery evidence (not rolled back). New targets get no backup and respect umask.
+- **No custom error class.** Per the repo's zero-class-for-errors convention, fail-closed errors are plain `Error` instances carrying a `name` marker, checked via the exported `isSetupError()` type guard rather than `instanceof`.
+- **Result is a discriminated union**, `{status: 'configured' | 'already-configured', targetPath}`, not a boolean pair.
+- **Identity matching excludes a trailing bare `@`** — only the bare package name or `@<nonempty version/tag>` counts as already-configured, for both harnesses.
+- **Residual (accepted, not closable with portable Node/Bun):** Windows has no `O_NOFOLLOW`, so target-level symlink/non-regular-file rejection there relies on a best-effort `lstat` immediately before `openSync` — a real race remains between that check and the open on Windows only; POSIX stays descriptor-authoritative via `fstat`. A parent-directory swap between `assertParentTrusted`'s check and the later open/write calls (TOCTOU) also cannot be fully closed on any platform without a platform-specific `O_DIRECTORY`+`openat`-style primitive, which portable `node:fs` does not expose.
+
+**Files (actual):**
+- Created: `src/lib/setup.ts` — `setupHarness`, `isSetupError`, `Harness`, `SetupResult`, `SetupFsOps` (injectable write/rename/unlink/chmod seam for failure-path tests), `PI_PACKAGE_IDENTIFIER`, `SYSTEMATIC_PACKAGE_NAME`
+- Modified: `src/cli.ts` — added the `setup` command + `--harness` flag parsing/validation, help text/examples for both harness values; invalid-harness usage goes to stderr
+- Modified: `src/lib/AGENTS.md`, `STRUCTURE.md` — module map entry for `setup.ts`
+- Modified: `tests/unit/package-exports.test.ts` — added a built `dist/cli.js setup --harness pi` smoke assertion inside the existing build/pack fixture (no second build)
+- Test: `tests/unit/setup.test.ts` (pure mutation fixtures, trusted-read/atomic-backup safety), `tests/unit/cli.test.ts` (subprocess-level happy/invalid/idempotent/isolation/coexistence cases against real temp dirs)
 
 **Approach:**
-- `--harness opencode` writes/updates the OpenCode `plugin` entry; `--harness pi` writes the Pi registration (mechanism resolved in Deferred).
-- **R20 safety:** atomic writes, backup/rollback marker, idempotency, target-path validation, and a hard guarantee that `--harness pi` never edits OpenCode config and vice versa.
-- Coordinate the diff with cleanup `002` to avoid `src/cli.ts` conflict (rebase order on `v3`).
+- `--harness opencode` resolves the target per the precedence order above and mutates singular `plugin` only (creating it if missing, rejecting `plugins` and duplicate keys); `--harness pi` mutates `.pi/settings.json`'s `packages` array via structural JSONC edit.
+- **R20 safety:** atomic no-clobber backup with `wx`-staged temps and exact mode preservation, single trusted read (no re-stat/re-read), idempotency (identity + filter-aware Pi tagged-entry check short-circuits to zero writes), symlink/non-regular-file/non-directory-parent rejection before any read, and each harness's setup function only ever touches its own target file.
+- No conflict materialized with cleanup `002`'s `convert`-command removal in `src/cli.ts`.
 
-**Test scenarios:**
-- Happy path: `setup --harness pi` produces a working Pi registration; `--harness opencode` produces the OpenCode registration.
-- Edge case (R20): re-running `setup --harness pi` is idempotent (no duplicate entries).
-- Error path (R20): a malformed/unwritable target path fails without corrupting existing config; a backup marker is written before edits.
-- Isolation (R20): `--harness pi` leaves OpenCode config untouched and vice versa.
+**Test scenarios (implemented):**
+- Pure mutation fixtures: JSONC comment preservation, comment-like substrings inside string values surviving parse, a valid trailing-comma document mutating successfully, singular-`plugin`-only creation/mutation, `plugins` (plural) rejected alone and alongside `plugin`, literal duplicate top-level `plugin`/`plugins` key rejected, non-string `plugin` entries rejected, version-preserving no-op, a trailing bare `@` not treated as a match (both harnesses), `.opencode/opencode.jsonc` precedence over a coexisting root `opencode.json`.
+- Pi: creation, append to existing valid `packages`, `packages` added to a settings file that has none, large-integer lexeme preserved byte-for-byte, matching tagged object with no filters (bare `{source}` and an unrelated `prompts` filter) is already-configured, matching tagged object with `autoload: false`/`extensions`/`skills` fails closed, malformed JSON / non-array `packages` / invalid entry shape all fail closed.
+- Atomic writer/trust safety: exact-bytes backup on mutation, no backup for new targets, both temp writes staged with `flag: 'wx'`, an umask-sensitive exact mode (`0o666`) preserved via pre-rename `chmod`, POSIX-gated symlinked parent/target/backup rejection (symlink and hardlink backup variants, each verified against an untouched external sentinel), POSIX-gated dangling-symlink parent/target rejection, a regular-file `.pi` parent rejected, non-regular (directory) target rejected before any blocking read, rename-failure cleanup (target and backup paths independently), backup-succeeds-but-target-rename-fails leaves the backup as recovery evidence, zero-write no-op verified via injected write/rename call counters.
+- CLI: happy path (`opencode` and `pi`), invalid args (missing/unknown/extra, no `--global`) with unknown-harness usage on stderr not stdout, idempotent rerun, harness-isolation, and `.opencode/opencode.jsonc`-wins-over-root coexistence, all against real temp directories.
+- Built-artifact smoke: `dist/cli.js setup --harness pi` inside the existing `package-exports.test.ts` build/pack fixture.
 
-**Verification:** both harness setups work; config writes are atomic/backed-up/idempotent/isolated.
+**Verification:** `bun test tests/unit/setup.test.ts tests/unit/cli.test.ts` green (66/66); `bun test tests/unit/package-exports.test.ts` green (15/15); full `bun test tests/unit` green (1143/1143); `bun run typecheck` clean; `bunx biome check` clean on all touched files; `bun run build` succeeds (all three dist entries); `bun run docs:build` green; `bun run registry:drift` reports up to date; `content-integrity` clean.
 
 - [ ] **Unit 7: Pi-subprocess test harness**
 

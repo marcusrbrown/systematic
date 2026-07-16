@@ -9,8 +9,8 @@
 systematic/
 ├── src/              # TypeScript plugin + CLI source
 │   ├── index.ts      # Plugin entry — default export only
-│   ├── cli.ts        # CLI entry (list / config)
-│   └── lib/          # 20 core modules
+│   ├── cli.ts        # CLI entry (list / config / setup --harness)
+│   └── lib/          # Core modules
 ├── skills/           # 45 bundled skills (one directory per skill, SKILL.md format)
 ├── agents/           # 51 bundled agents (6 category subdirectories)
 ├── docs/             # Starlight/Astro docs workspace (separate bun workspace)
@@ -38,7 +38,8 @@ systematic/
 
 **Key files:**
 - `src/index.ts` — plugin factory (`SystematicPlugin`), registers all three OpenCode hooks
-- `src/cli.ts` — CLI commands: `list`, `config show/path`
+- `src/cli.ts` — CLI commands: `list`, `config show/path`, `setup --harness opencode|pi`
+- `src/lib/setup.ts` — `setupHarness`: atomic/backed-up/idempotent, project-local-only harness config writes
 - `src/lib/config.ts` — JSONC config loading, 3-source merge
 - `src/lib/config-schema.ts` — canonical Zod schema, `validateConfig`, `SECURITY_OVERLAY_FIELDS`
 - `src/lib/config-handler.ts` — `createConfigHandler`: merges bundled assets into OpenCode config
@@ -130,7 +131,7 @@ no mocking libraries.
 | File | Role |
 |------|------|
 | `src/index.ts` | Plugin entry — `SystematicPlugin` default export |
-| `src/cli.ts` | CLI entry — `list`, `config` commands |
+| `src/cli.ts` | CLI entry — `list`, `config`, `setup --harness` commands |
 
 ### Configuration
 
