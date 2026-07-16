@@ -22,6 +22,16 @@ function expectSetupError(fn: () => unknown): void {
   }
 }
 
+function expectSetupErrorMessage(fn: () => unknown, message: string): void {
+  try {
+    fn()
+    throw new Error('expected setupHarness to throw a SetupError')
+  } catch (error) {
+    if (!isSetupError(error)) throw error
+    expect(error.message).toContain(message)
+  }
+}
+
 describe('setupHarness', () => {
   describe('opencode target resolution', () => {
     it('prefers .opencode/opencode.jsonc when present', () => {
@@ -440,7 +450,10 @@ describe('setupHarness', () => {
         const filePath = path.join(cwd, '.pi/settings.json')
         const original = '{"packages": ["a"], "packages": ["b"]}'
         fs.writeFileSync(filePath, original)
-        expectSetupError(() => setupHarness('pi', cwd))
+        expectSetupErrorMessage(
+          () => setupHarness('pi', cwd),
+          'Invalid Pi settings',
+        )
         expect(fs.readFileSync(filePath, 'utf8')).toBe(original)
         expect(fs.existsSync(`${filePath}.bak`)).toBe(false)
         expect(

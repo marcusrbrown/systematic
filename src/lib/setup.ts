@@ -250,6 +250,7 @@ function assertNoDuplicateTopLevelKeys(
   rawText: string,
   targetPath: string,
   names: readonly string[],
+  diagnosticContext: string,
 ): void {
   const root = parseTree(rawText)
   if (!root?.children) return
@@ -260,7 +261,7 @@ function assertNoDuplicateTopLevelKeys(
     if (typeof key !== 'string' || !names.includes(key)) continue
     if (seen.has(key)) {
       throw createSetupError(
-        `Invalid OpenCode config in ${targetPath}: duplicate top-level \`${key}\` key`,
+        `Invalid ${diagnosticContext} in ${targetPath}: duplicate top-level \`${key}\` key`,
       )
     }
     seen.add(key)
@@ -292,7 +293,12 @@ function setupOpenCode(cwd: string, ops: SetupFsOps): SetupResult {
   }
 
   const rawText = existing.bytes.toString('utf8')
-  assertNoDuplicateTopLevelKeys(rawText, targetPath, ['plugin', 'plugins'])
+  assertNoDuplicateTopLevelKeys(
+    rawText,
+    targetPath,
+    ['plugin', 'plugins'],
+    'OpenCode config',
+  )
   const parsed = parseOpenCodeJsonc(rawText, targetPath)
   if (!isRecord(parsed)) {
     throw createSetupError(
@@ -393,7 +399,12 @@ function setupPi(cwd: string, ops: SetupFsOps): SetupResult {
   }
 
   const rawText = existing.bytes.toString('utf8')
-  assertNoDuplicateTopLevelKeys(rawText, targetPath, ['packages'])
+  assertNoDuplicateTopLevelKeys(
+    rawText,
+    targetPath,
+    ['packages'],
+    'Pi settings',
+  )
   let parsed: unknown
   try {
     parsed = JSON.parse(rawText)

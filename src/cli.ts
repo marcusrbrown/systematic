@@ -4,7 +4,7 @@ import path from 'node:path'
 import * as agents from './lib/agents.js'
 import * as commands from './lib/commands.js'
 import { getConfigPaths } from './lib/config.js'
-import { type Harness, isSetupError, setupHarness } from './lib/setup.js'
+import { type Harness, setupHarness } from './lib/setup.js'
 import * as skills from './lib/skills.js'
 
 const getPackageVersion = (): string => {
@@ -77,13 +77,9 @@ function setupCommand(rest: string[]): void {
       console.log(`Configured: ${result.targetPath}`)
     }
   } catch (error) {
-    if (isSetupError(error)) {
-      console.error(`Setup failed: ${error.message}`)
-    } else {
-      console.error(
-        `Setup failed: ${error instanceof Error ? error.message : String(error)}`,
-      )
-    }
+    console.error(
+      `Setup failed: ${error instanceof Error ? error.message : String(error)}`,
+    )
     process.exit(1)
   }
 }
