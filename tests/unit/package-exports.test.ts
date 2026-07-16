@@ -11,6 +11,7 @@ const SRC_DIR = path.join(ROOT_DIR, 'src')
 const DIST_DIR = path.join(ROOT_DIR, 'dist')
 const DIST_INDEX = path.join(DIST_DIR, 'index.js')
 const DIST_PI = path.join(DIST_DIR, 'pi.js')
+const DIST_CLI = path.join(DIST_DIR, 'cli.js')
 
 interface PackageJson {
   main?: string
@@ -190,6 +191,25 @@ describe('build output and packaging', () => {
       }
     } finally {
       fs.rmSync(extractDir, { recursive: true, force: true })
+    }
+  })
+
+  test('built dist/cli.js setup --harness pi configures a project-local .pi/settings.json', () => {
+    const cwd = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-dist-cli-setup-'),
+    )
+    try {
+      const result = Bun.spawnSync(
+        ['bun', DIST_CLI, 'setup', '--harness', 'pi'],
+        { cwd, timeout: 15_000 },
+      )
+      expect(result.exitCode).toBe(0)
+      const written = JSON.parse(
+        fs.readFileSync(path.join(cwd, '.pi/settings.json'), 'utf8'),
+      ) as { packages?: unknown[] }
+      expect(written.packages).toEqual(['npm:@fro.bot/systematic'])
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
     }
   })
 })

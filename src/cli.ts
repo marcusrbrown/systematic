@@ -4,6 +4,7 @@ import path from 'node:path'
 import * as agents from './lib/agents.js'
 import * as commands from './lib/commands.js'
 import { getConfigPaths } from './lib/config.js'
+import { type Harness, setupHarness } from './lib/setup.js'
 import * as skills from './lib/skills.js'
 
 const getPackageVersion = (): string => {
@@ -31,10 +32,11 @@ Usage:
   systematic <command> [options]
 
 Commands:
-  list [type]          List available skills, agents, or commands
-  config [subcommand]  Configuration management
-    show               Show configuration
-    path               Print config file locations
+  list [type]                  List available skills, agents, or commands
+  config [subcommand]          Configuration management
+    show                       Show configuration
+    path                       Print config file locations
+  setup --harness opencode|pi  Configure a harness to load Systematic (project-local only)
 
 Options:
   -h, --help           Show this help message
@@ -44,7 +46,43 @@ Examples:
   systematic list skills
   systematic list agents
   systematic config show
+  systematic setup --harness opencode
+  systematic setup --harness pi
 `
+
+function isHarness(value: string): value is Harness {
+  return value === 'opencode' || value === 'pi'
+}
+
+function setupCommand(rest: string[]): void {
+  if (rest[0] !== '--harness' || rest.length !== 2) {
+    console.error(
+      'Usage: systematic setup --harness opencode|pi (project-local only, no --global)',
+    )
+    process.exit(1)
+  }
+
+  const harnessArg = rest[1]
+  if (!harnessArg || !isHarness(harnessArg)) {
+    console.error(`Unknown or missing --harness value: ${harnessArg ?? ''}`)
+    console.error('Available: opencode, pi')
+    process.exit(1)
+  }
+
+  try {
+    const result = setupHarness(harnessArg, process.cwd())
+    if (result.status === 'already-configured') {
+      console.log(`Already configured: ${result.targetPath}`)
+    } else {
+      console.log(`Configured: ${result.targetPath}`)
+    }
+  } catch (error) {
+    console.error(
+      `Setup failed: ${error instanceof Error ? error.message : String(error)}`,
+    )
+    process.exit(1)
+  }
+}
 
 function listItems(type: string): void {
   const packageRoot = path.resolve(import.meta.dirname, '..')
@@ -116,6 +154,9 @@ const command = args[0]
 switch (command) {
   case 'list':
     listItems(args[1] || 'skills')
+    break
+  case 'setup':
+    setupCommand(args.slice(1))
     break
   case 'config':
     switch (args[1]) {
