@@ -393,6 +393,7 @@ function setupPi(cwd: string, ops: SetupFsOps): SetupResult {
   }
 
   const rawText = existing.bytes.toString('utf8')
+  assertNoDuplicateTopLevelKeys(rawText, targetPath, ['packages'])
   let parsed: unknown
   try {
     parsed = JSON.parse(rawText)

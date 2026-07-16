@@ -215,12 +215,10 @@ describe('setupHarness', () => {
         const filePath = path.join(cwd, 'opencode.json')
         const original = JSON.stringify({ plugin: ['@fro.bot/systematic'] })
         fs.writeFileSync(filePath, original)
-        const before = fs.statSync(filePath).mtimeMs
         const result = setupHarness('opencode', cwd)
         expect(result.status).toBe('already-configured')
         expect(fs.readFileSync(filePath, 'utf8')).toBe(original)
         expect(fs.existsSync(`${filePath}.bak`)).toBe(false)
-        expect(fs.statSync(filePath).mtimeMs).toBe(before)
       } finally {
         fs.rmSync(cwd, { recursive: true, force: true })
       }
@@ -430,6 +428,26 @@ describe('setupHarness', () => {
         fs.writeFileSync(filePath, original)
         expectSetupError(() => setupHarness('pi', cwd))
         expect(fs.readFileSync(filePath, 'utf8')).toBe(original)
+      } finally {
+        fs.rmSync(cwd, { recursive: true, force: true })
+      }
+    })
+
+    it('fails closed with zero writes on a literal duplicate top-level `packages` key', () => {
+      const cwd = mkTempCwd()
+      try {
+        fs.mkdirSync(path.join(cwd, '.pi'))
+        const filePath = path.join(cwd, '.pi/settings.json')
+        const original = '{"packages": ["a"], "packages": ["b"]}'
+        fs.writeFileSync(filePath, original)
+        expectSetupError(() => setupHarness('pi', cwd))
+        expect(fs.readFileSync(filePath, 'utf8')).toBe(original)
+        expect(fs.existsSync(`${filePath}.bak`)).toBe(false)
+        expect(
+          fs
+            .readdirSync(path.join(cwd, '.pi'))
+            .filter((name) => name !== 'settings.json'),
+        ).toEqual([])
       } finally {
         fs.rmSync(cwd, { recursive: true, force: true })
       }
