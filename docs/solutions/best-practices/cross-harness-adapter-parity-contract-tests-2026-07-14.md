@@ -131,6 +131,7 @@ OpenCode and Pi `systematic_skill` adapters in `tests/unit/pi.test.ts` and
 ## Related
 
 - [Isolate OpenCode subprocess fixtures from the real installation](../integration-issues/isolated-opencode-subprocess-fixtures-2026-05-14.md)
+- [Test packaged harness extensions against the real Pi runtime](pi-real-runtime-integration-harness-2026-07-16.md) — the subprocess/package tier of this layer table, implemented for Pi
 - [OpenCode swallows plugin hook defects unless tests force invocation](../integration-issues/opencode-plugin-hook-silent-defect-swallow-2026-05-19.md)
 - [Pi harness support plan](../../plans/2026-07-06-003-feat-pi-harness-support-plan.md)
 - [Pi harness support requirements](../../brainstorms/2026-07-06-pi-harness-support-requirements.md)
