@@ -29,7 +29,7 @@ You want AI that follows your process, not just your prompts. You want repeatabl
 
 ## What You Get
 
-Systematic is an [OpenCode](https://opencode.ai/) plugin that ships 40+ bundled skills covering brainstorming, planning, implementation, review, and knowledge capture. It includes 50+ specialized agents for architecture, security, performance, design, and code review. Installation is zero-configuration — the plugin registers everything via OpenCode's config hooks and works immediately on restart. OCX registry support is available for component-level installs when you only want specific pieces.
+Systematic is an [OpenCode](https://opencode.ai/) plugin — and, from v3, a [Pi coding agent](https://github.com/earendil-works/pi-coding-agent) extension in the same package — that ships 31 bundled skills covering brainstorming, planning, implementation, review, and knowledge capture. It includes 37 specialized agents for architecture, security, performance, design, and code review. Installation is zero-configuration — the plugin registers everything via OpenCode's config hooks and works immediately on restart. OCX registry support is available for component-level installs when you only want specific pieces.
 
 ## Quick Install
 
@@ -41,13 +41,21 @@ Systematic is an [OpenCode](https://opencode.ai/) plugin that ships 40+ bundled 
 
 Add that to `~/.config/opencode/opencode.json` and restart OpenCode.
 
+**Pi coding agent** — same package, second harness (bundled skills, `systematic_skill`, persona delegation via `systematic_delegate`):
+
+```bash
+npx @fro.bot/systematic setup --harness pi
+```
+
+See the [Pi harness guide](https://fro.bot/systematic/guides/pi-harness/) for what carries over and where parity honestly ends.
+
 **`npx skills`** — portable skill content for any AI harness (Claude Code, Cursor, Copilot, …):
 
 ```bash
 npx skills add marcusrbrown/systematic
 ```
 
-Use the plugin if you're on OpenCode and want the complete experience. Use `npx skills` if you want the skill Markdown files dropped into whatever harness you're running.
+Use the plugin if you're on OpenCode and want the complete experience, the Pi setup command if you're on Pi, or `npx skills` if you want the skill Markdown files dropped into whatever harness you're running.
 
 ## First Workflow
 

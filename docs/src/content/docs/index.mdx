@@ -1,6 +1,6 @@
 ---
-title: Structured Engineering Workflows for OpenCode
-description: "Systematic adds structured engineering workflows to OpenCode: brainstorm, plan, work, and review with bundled skills and specialized agents."
+title: Structured Engineering Workflows for OpenCode and Pi
+description: "Systematic adds structured engineering workflows to OpenCode and the Pi coding agent: brainstorm, plan, work, and review with bundled skills and specialized agents."
 template: splash
 ---
 
@@ -11,7 +11,7 @@ import StatsBanner from '../../components/StatsBanner.astro'
   <div class="hero-overlay-inner">
     <p class="hero-eyebrow">@fro.bot/systematic</p>
     <h1 class="hero-title">Your AI writes code.<br />Systematic adds engineering discipline.</h1>
-    <p class="hero-subtagline">Systematic brings structured workflows to OpenCode. Brainstorm, plan, implement, and review with bundled skills and agents.</p>
+    <p class="hero-subtagline">Systematic brings structured workflows to OpenCode and the Pi coding agent. Brainstorm, plan, implement, and review with bundled skills and agents.</p>
     <div class="hero-actions">
       <a href="/systematic/getting-started/installation/" class="sl-link-button primary" data-umami-event="click_install_cta">
         <span>Install the Plugin</span>
@@ -123,6 +123,20 @@ import StatsBanner from '../../components/StatsBanner.astro'
 
   <div class="install-path secondary">
     <div class="install-header">
+      <h3 class="install-title">Pi Extension</h3>
+      <span class="install-cue">Pi coding agent, same package</span>
+    </div>
+    <p>Register Systematic in a Pi project:</p>
+    
+    ```bash
+    npx @fro.bot/systematic setup --harness pi
+    ```
+    
+    <p>Skills, the skill loader, and persona delegation load as a native Pi extension. See <a href="/systematic/guides/pi-harness/">Pi Harness Support</a> for what carries over and where parity ends.</p>
+  </div>
+
+  <div class="install-path secondary">
+    <div class="install-header">
       <h3 class="install-title">CLI Installer</h3>
       <span class="install-cue">Any harness, skills only</span>
     </div>
@@ -143,7 +157,7 @@ import StatsBanner from '../../components/StatsBanner.astro'
     <strong>Not a model wrapper or prompt pack.</strong> Systematic doesn't touch your model selection or inject hidden system prompts into every message. It registers structured skills you invoke explicitly.
   </li>
   <li class="not-item">
-    <strong>Not another chat UI.</strong> It runs inside OpenCode. You keep your existing setup.
+    <strong>Not another chat UI.</strong> It runs inside OpenCode or the Pi coding agent. You keep your existing setup.
   </li>
   <li class="not-item">
     <strong>Not SaaS or telemetry.</strong> Everything is local-first markdown assets bundled with the npm package. Nothing phones home.
