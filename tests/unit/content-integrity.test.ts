@@ -92,7 +92,7 @@ function writeMigratedSkill(root: string, name: string, body: string): void {
 // ---------------------------------------------------------------------------
 
 describe('BANNED_PATTERNS', () => {
-  test('exposes the 8 patterns documented in the plan', () => {
+  test('exposes the 8 global banned patterns documented in the plan', () => {
     expect(BANNED_PATTERNS).toEqual([
       'Claude Code',
       'TaskCreate',
@@ -891,38 +891,45 @@ describe('checkFrontmatter — deprecated block surfaces via unknown-field rule'
 })
 
 describe('checkMigratedSkillIdentifiers', () => {
-  test('flags todowrite in migrated skill prose', () => {
+  test.each([
+    'task(',
+    'subagent_type',
+    'todowrite',
+    'TodoWrite',
+    'request_user_input',
+    'ask_user',
+    'AskUserQuestion',
+    'update_plan',
+    'question',
+  ] as const)('flags %s in migrated skill prose', (identifier) => {
     const root = makeFixtureRepo()
     try {
-      writeMigratedSkill(
-        root,
-        'migrated',
-        'Do not use todowrite in this prose.\n',
-      )
+      const token = identifier === 'question' ? '`question`' : identifier
+      writeMigratedSkill(root, 'migrated', `Use ${token} here.\n`)
       const violations = checkMigratedSkillIdentifiers(
         root,
         collectScanTargets(root).markdown,
       )
-      expect(violations).toHaveLength(1)
-      expect(violations[0]).toMatchObject({
-        file: 'skills/migrated/SKILL.md',
-        identifier: 'todowrite',
-        line: 1,
-      })
+      expect(violations.map((v) => v.identifier)).toEqual([identifier])
+      expect(violations[0]?.line).toBe(7)
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
   })
 
-  test('flags task( inside a migrated skill fence', () => {
+  test('flags the backtick-delimited question token but not plain prose', () => {
     const root = makeFixtureRepo()
     try {
-      writeMigratedSkill(root, 'migrated', '```text\ntask(\n```\n')
+      writeMigratedSkill(
+        root,
+        'migrated',
+        'Use `question` here.\nUse question here.\n',
+      )
       const violations = checkMigratedSkillIdentifiers(
         root,
         collectScanTargets(root).markdown,
       )
-      expect(violations.map((v) => v.identifier)).toEqual(['task('])
+      expect(violations.map((v) => v.identifier)).toEqual(['question'])
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
@@ -960,7 +967,7 @@ describe('checkMigratedSkillIdentifiers', () => {
     }
   })
 
-  test('treats metadata with a non-string value as unmigrated', () => {
+  test('honors the marker when metadata has a boolean sibling value', () => {
     const root = makeFixtureRepo()
     try {
       writeSkill(
@@ -970,7 +977,23 @@ describe('checkMigratedSkillIdentifiers', () => {
       )
       expect(
         checkMigratedSkillIdentifiers(root, collectScanTargets(root).markdown),
-      ).toEqual([])
+      ).toHaveLength(1)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('honors the marker when metadata has an array sibling value', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'array-metadata',
+        '---\nname: array-metadata\ndescription: Test skill\nmetadata:\n  harness-portability: neutral-v1\n  tags: [one, two]\n---\nUse task( here.\n',
+      )
+      expect(
+        checkMigratedSkillIdentifiers(root, collectScanTargets(root).markdown),
+      ).toHaveLength(1)
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
@@ -999,6 +1022,77 @@ describe('checkMigratedSkillIdentifiers', () => {
       expect(
         checkMigratedSkillIdentifiers(root, collectScanTargets(root).markdown),
       ).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('does not exempt non-question identifiers on the sanctioned idiom line', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeMigratedSkill(
+        root,
+        'idiom-with-todo',
+        'Use question in OpenCode and todowrite in Pi.\n',
+      )
+      expect(
+        checkMigratedSkillIdentifiers(
+          root,
+          collectScanTargets(root).markdown,
+        ).map((v) => v.identifier),
+      ).toEqual(['todowrite'])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('exempts backtick-delimited question on the sanctioned idiom line', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeMigratedSkill(
+        root,
+        'idiom-question',
+        'Use `question` in OpenCode and `question` in Pi.\n',
+      )
+      expect(
+        checkMigratedSkillIdentifiers(root, collectScanTargets(root).markdown),
+      ).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags banned identifiers in description frontmatter', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'frontmatter-description',
+        '---\nname: frontmatter-description\ndescription: Use task( here\nmetadata:\n  harness-portability: neutral-v1\n---\nBody\n',
+      )
+      const violations = checkMigratedSkillIdentifiers(
+        root,
+        collectScanTargets(root).markdown,
+      )
+      expect(violations).toMatchObject([{ identifier: 'task(', line: 3 }])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags banned identifiers in argument-hint frontmatter', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'frontmatter-hint',
+        '---\nname: frontmatter-hint\ndescription: Test\nargument-hint: task( input\nmetadata:\n  harness-portability: neutral-v1\n---\nBody\n',
+      )
+      const violations = checkMigratedSkillIdentifiers(
+        root,
+        collectScanTargets(root).markdown,
+      )
+      expect(violations).toMatchObject([{ identifier: 'task(', line: 4 }])
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }

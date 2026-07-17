@@ -1,6 +1,6 @@
 ---
 name: orchestrating-subagents
-description: Use when dispatching parallel or serial subagents in OpenCode, coordinating multi-unit plan execution, synthesizing results from independent subagent runs, or handling subagent failure and retry. Triggers on requests to run tasks in parallel, divide work, orchestrate a pipeline of dependent steps, or coordinate multiple agents without shared-file conflicts.
+description: Use when dispatching parallel or serial subagents, coordinating multi-unit plan execution, synthesizing results from independent subagent runs, or handling subagent failure and retry. Triggers on requests to run tasks in parallel, divide work, orchestrate a pipeline of dependent steps, or coordinate multiple agents without shared-file conflicts.
 metadata:
   harness-portability: neutral-v1
 ---

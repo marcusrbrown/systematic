@@ -29,7 +29,7 @@ task({
 })
 
 // Resume a prior specialist session:
-task({ subagent_type: "fixer", task_id: "<prior-session-id>", prompt: "…" })
+task({ subagent_type: "fixer", task_id: "<prior-session-id>", description: "Resume fixer task", prompt: "…" })
 ```
 
 ### Blocking user interaction

@@ -122,9 +122,11 @@ export function readHarnessProfile(
     `${name}-profile.md`,
   )
   try {
-    if (!fs.existsSync(profilePath)) return null
     return fs.readFileSync(profilePath, 'utf8')
-  } catch {
+  } catch (error) {
+    console.error(
+      `Failed to read harness profile ${profilePath}: ${error instanceof Error ? error.message : String(error)}`,
+    )
     return null
   }
 }

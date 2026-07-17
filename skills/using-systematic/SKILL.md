@@ -110,6 +110,6 @@ Instructions say WHAT, not HOW. "Add X" or "Fix Y" doesn't mean skip workflows.
 
 The four capabilities are subagent delegation, blocking user interaction, task tracking, and skill loading.
 
-The bootstrap inlines the active harness profile naming the exact mechanisms—consult it. See [the OpenCode profile](references/opencode-profile.md) and [the Pi profile](references/pi-profile.md).
+The bootstrap inlines the active harness profile naming the exact mechanisms—consult it. See `references/opencode-profile.md` and `references/pi-profile.md`.
 
 When a mechanism is unavailable, present numbered options in chat and wait for questions, maintain a visible list for task tracking, and dispatch delegation sequentially or do the work inline.

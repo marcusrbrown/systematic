@@ -26,7 +26,8 @@
     "dist",
     "skills",
     "agents",
-    "ATTRIBUTIONS.md"
+    "ATTRIBUTIONS.md",
+    "HARNESSES.md"
   ],
   "workspaces": [
     "docs"

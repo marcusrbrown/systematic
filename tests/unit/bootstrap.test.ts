@@ -175,7 +175,7 @@ describe('getBootstrapContent', () => {
 
       The four capabilities are subagent delegation, blocking user interaction, task tracking, and skill loading.
 
-      The bootstrap inlines the active harness profile naming the exact mechanisms—consult it. See [the OpenCode profile](references/opencode-profile.md) and [the Pi profile](references/pi-profile.md).
+      The bootstrap inlines the active harness profile naming the exact mechanisms—consult it. See \`references/opencode-profile.md\` and \`references/pi-profile.md\`.
 
       When a mechanism is unavailable, present numbered options in chat and wait for questions, maintain a visible list for task tracking, and dispatch delegation sequentially or do the work inline.
 
@@ -274,7 +274,7 @@ describe('getBootstrapContent', () => {
         </skill>
         <skill>
           <name>systematic:orchestrating-subagents</name>
-          <description>Use when dispatching parallel or serial subagents in OpenCode, coordinating multi-unit plan execution, synthesizing results from independent subagent runs, or handling subagent failure and retry. Triggers on requests to run tasks in parallel, divide work, orchestrate a pipeline of dependent steps, or coordinate multiple agents without shared-file conflicts.</description>
+          <description>Use when dispatching parallel or serial subagents, coordinating multi-unit plan execution, synthesizing results from independent subagent runs, or handling subagent failure and retry. Triggers on requests to run tasks in parallel, divide work, orchestrate a pipeline of dependent steps, or coordinate multiple agents without shared-file conflicts.</description>
           <location>file:///Users/mrbrown/src/github.com/marcusrbrown/systematic/skills/orchestrating-subagents</location>
         </skill>
         <skill>
@@ -389,9 +389,77 @@ describe('getBootstrapContent', () => {
     )
   })
 
-  test('reads missing harness profiles as null without throwing', () => {
+  test('reports missing harness profiles to stderr and returns null', () => {
     const bundledSkillsDir = makeBundledSkillsDir()
-    expect(readHarnessProfile(bundledSkillsDir, 'missing')).toBeNull()
+    const errors: unknown[][] = []
+    const originalError = console.error
+    console.error = (...args: unknown[]) => errors.push(args)
+    try {
+      expect(readHarnessProfile(bundledSkillsDir, 'missing')).toBeNull()
+      expect(errors).toHaveLength(1)
+      expect(errors[0]?.join(' ')).toContain('missing-profile.md')
+      expect(errors[0]?.join(' ')).toContain('ENOENT')
+    } finally {
+      console.error = originalError
+    }
+  })
+
+  test('reports profile read failures to stderr and still returns null', () => {
+    const bundledSkillsDir = makeBundledSkillsDir(
+      '---\nname: using-systematic\n---\nBundled body',
+    )
+    const profileDir = path.join(
+      bundledSkillsDir,
+      'using-systematic/references/opencode-profile.md',
+    )
+    fs.mkdirSync(profileDir, { recursive: true })
+    const errors: unknown[][] = []
+    const originalError = console.error
+    console.error = (...args: unknown[]) => errors.push(args)
+    try {
+      expect(readHarnessProfile(bundledSkillsDir, 'opencode')).toBeNull()
+      expect(errors).toHaveLength(1)
+      expect(errors[0]?.join(' ')).toContain(profileDir)
+      expect(errors[0]?.join(' ')).toContain('EISDIR')
+
+      const content = getBootstrapContent(
+        { bootstrap: { enabled: true }, disabled_skills: [] },
+        { bundledSkillsDir },
+      )
+      expect(content).not.toBeNull()
+      expect(content).not.toContain('PROFILE BLOCK')
+    } finally {
+      console.error = originalError
+    }
+  })
+
+  test('real harness profiles do not contain bootstrap replacement sentinels', () => {
+    const profilesDir = path.resolve(
+      process.cwd(),
+      'skills/using-systematic/references',
+    )
+    for (const name of ['opencode', 'pi']) {
+      const profile = fs.readFileSync(
+        path.join(profilesDir, `${name}-profile.md`),
+        'utf8',
+      )
+      expect(profile).not.toContain('<SYSTEMATIC_WORKFLOWS>')
+      expect(profile).not.toContain('</SYSTEMATIC_WORKFLOWS>')
+    }
+  })
+
+  test('pins the production-shaped OpenCode bootstrap with its profile inlined', () => {
+    const bundledSkillsDir = path.resolve(process.cwd(), 'skills')
+    const content = getBootstrapContent(
+      { bootstrap: { enabled: true }, disabled_skills: [] },
+      {
+        bundledSkillsDir,
+        profileBlock:
+          readHarnessProfile(bundledSkillsDir, 'opencode') ?? undefined,
+      },
+    )
+    expect(content).not.toBeNull()
+    expect(content).toMatchSnapshot()
   })
 
   test('preserves marker-shaped profile text during Pi-style composition', () => {

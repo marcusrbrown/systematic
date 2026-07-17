@@ -239,6 +239,7 @@ type MigratedSkillIdentifier =
   | 'ask_user'
   | 'AskUserQuestion'
   | 'update_plan'
+  | 'question'
 
 export interface RemovedNamesOverlapViolation {
   kind: 'skill' | 'agent'
@@ -1164,6 +1165,7 @@ const MIGRATED_SKILL_IDENTIFIER_PATTERNS: ReadonlyArray<{
     identifier: 'update_plan',
     pattern: /(?:^|[^A-Za-z0-9_])update_plan(?:$|[^A-Za-z0-9_])/,
   },
+  { identifier: 'question', pattern: /`question`/ },
 ]
 
 const MIGRATED_IDENTIFIER_REMEDIATION =
@@ -1190,7 +1192,8 @@ export function checkMigratedSkillIdentifiers(
     if (!isSkillEntryFile(relPath)) continue
     const parsed = parseFrontmatter(content)
     if (!isMigratedSkill(parsed.data)) continue
-    scanMigratedIdentifierBody(relPath, parsed.body, violations)
+    scanMigratedIdentifierFrontmatter(relPath, content, parsed.data, violations)
+    scanMigratedIdentifierBody(relPath, content, parsed.body, violations)
   }
 
   return violations
@@ -1205,31 +1208,74 @@ function isHarnessProfileFile(relPath: string): boolean {
 function isMigratedSkill(data: Record<string, unknown>): boolean {
   const metadata = data.metadata
   if (!isRecord(metadata)) return false
-  const entries = Object.entries(metadata)
-  if (!entries.every(([, value]) => typeof value === 'string')) return false
+  // This marker is consumed only by this gate; there is no runtime protection to mirror.
   return metadata['harness-portability'] === 'neutral-v1'
+}
+
+const SANCTIONED_IDIOM_IDENTIFIERS = new Set<MigratedSkillIdentifier>([
+  'question',
+  'request_user_input',
+  'ask_user',
+  'AskUserQuestion',
+])
+
+function scanMigratedIdentifierFrontmatter(
+  relPath: string,
+  content: string,
+  data: Record<string, unknown>,
+  violations: MigratedSkillIdentifierViolation[],
+): void {
+  const rawBlock = extractFrontmatterBlock(content)
+  if (rawBlock === null) return
+  const rawLines = rawBlock.split('\n')
+
+  for (const field of ['description', 'argument-hint'] as const) {
+    const value = data[field]
+    if (typeof value !== 'string') continue
+    const rawLineIndex = rawLines.findIndex((line) =>
+      new RegExp(`^${escapeRegex(field)}:`).test(line),
+    )
+    const lineNumber = rawLineIndex >= 0 ? rawLineIndex + 2 : 2
+    scanMigratedIdentifierLine(relPath, value, lineNumber, violations)
+  }
 }
 
 function scanMigratedIdentifierBody(
   relPath: string,
+  content: string,
   body: string,
   violations: MigratedSkillIdentifierViolation[],
 ): void {
+  const bodyStart = content.length - body.length
+  const lineOffset = content.slice(0, bodyStart).split('\n').length - 1
   for (const [index, line] of body.split('\n').entries()) {
-    // The interaction idiom explicitly binds both harnesses on one line; its
-    // harness-specific identifiers are sanctioned and must not be reported.
-    if (line.includes('in OpenCode') && line.includes('in Pi')) continue
+    scanMigratedIdentifierLine(
+      relPath,
+      line,
+      lineOffset + index + 1,
+      violations,
+    )
+  }
+}
 
-    for (const { identifier, pattern } of MIGRATED_SKILL_IDENTIFIER_PATTERNS) {
-      if (!pattern.test(line)) continue
-      violations.push({
-        file: relPath,
-        line: index + 1,
-        identifier,
-        lineContent: line.trim(),
-        message: `Migrated skill identifier \`${identifier}\` found in ${relPath}: ${MIGRATED_IDENTIFIER_REMEDIATION}`,
-      })
-    }
+function scanMigratedIdentifierLine(
+  relPath: string,
+  line: string,
+  lineNumber: number,
+  violations: MigratedSkillIdentifierViolation[],
+): void {
+  const sanctionedIdiom = line.includes('in OpenCode') && line.includes('in Pi')
+  for (const { identifier, pattern } of MIGRATED_SKILL_IDENTIFIER_PATTERNS) {
+    if (sanctionedIdiom && SANCTIONED_IDIOM_IDENTIFIERS.has(identifier))
+      continue
+    if (!pattern.test(line)) continue
+    violations.push({
+      file: relPath,
+      line: lineNumber,
+      identifier,
+      lineContent: line.trim(),
+      message: `Migrated skill identifier \`${identifier}\` found in ${relPath}: ${MIGRATED_IDENTIFIER_REMEDIATION}`,
+    })
   }
 }
 
