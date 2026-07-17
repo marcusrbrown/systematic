@@ -48,7 +48,7 @@ If not installed, inform the user: "`agent-browser` is not installed. Install it
 
 ### 2. Ask Browser Mode
 
-Ask the user whether to run headed or headless (using the platform's question tool — e.g., `question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini — or present options and wait for a reply):
+Ask the user whether to run headed or headless (using the platform's question tool — e.g., `question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini; in Pi, use the blocking-question extension if available, otherwise present numbered options in chat and wait — or present options and wait for a reply):
 
 ```
 Do you want to watch the browser tests run?

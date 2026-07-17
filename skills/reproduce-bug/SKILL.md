@@ -14,7 +14,7 @@ Fetch and analyze the bug report to extract structured information before touchi
 
 ### Fetch the issue
 
-If no issue number or URL was provided as an argument, ask the user for one before proceeding (using the platform's question tool -- e.g., `question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini -- or present a prompt and wait for a reply).
+If no issue number or URL was provided as an argument, ask the user for one before proceeding (using the platform's question tool -- e.g., `question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini; in Pi, use the blocking-question extension if available, otherwise present numbered options in chat and wait -- or present a prompt and wait for a reply).
 
 ```bash
 gh issue view $ARGUMENTS --json title,body,comments,labels,assignees
@@ -111,7 +111,7 @@ When the bug is reproduced:
 For bugs that require specific data conditions, user roles, external service state, or cannot be automated:
 
 1. Document what conditions are needed
-2. Ask the user (using the platform's question tool -- e.g., `question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini -- or present options and wait for a reply) whether they can set up the required conditions
+2. Ask the user (using the platform's question tool -- e.g., `question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini; in Pi, use the blocking-question extension if available, otherwise present numbered options in chat and wait -- or present options and wait for a reply) whether they can set up the required conditions
 3. Guide them through manual reproduction steps if needed
 
 ### If reproduction fails

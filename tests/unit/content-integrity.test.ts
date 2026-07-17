@@ -16,6 +16,7 @@ import {
   checkContentIntegrity,
   checkFrontmatter,
   checkFrontmatterParseSafety,
+  checkMigratedSkillIdentifiers,
   checkReferenceIntegrity,
   checkRemovedNamesOverlap,
   checkSubfileReferences,
@@ -77,6 +78,14 @@ function writeCompliantSkill(root: string, name: string, body: string): void {
     root,
     name,
     `---\nname: ${name}\ndescription: Test skill\n---\n${body}`,
+  )
+}
+
+function writeMigratedSkill(root: string, name: string, body: string): void {
+  writeSkill(
+    root,
+    name,
+    `---\nname: ${name}\ndescription: Test skill\nmetadata:\n  harness-portability: neutral-v1\n---\n${body}`,
   )
 }
 
@@ -875,6 +884,121 @@ describe('checkFrontmatter — deprecated block surfaces via unknown-field rule'
       )
       expect(match).toHaveLength(1)
       expect(match[0]?.file).toBe('skills/my-skill/SKILL.md')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('checkMigratedSkillIdentifiers', () => {
+  test('flags todowrite in migrated skill prose', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeMigratedSkill(
+        root,
+        'migrated',
+        'Do not use todowrite in this prose.\n',
+      )
+      const violations = checkMigratedSkillIdentifiers(
+        root,
+        collectScanTargets(root).markdown,
+      )
+      expect(violations).toHaveLength(1)
+      expect(violations[0]).toMatchObject({
+        file: 'skills/migrated/SKILL.md',
+        identifier: 'todowrite',
+        line: 1,
+      })
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags task( inside a migrated skill fence', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeMigratedSkill(root, 'migrated', '```text\ntask(\n```\n')
+      const violations = checkMigratedSkillIdentifiers(
+        root,
+        collectScanTargets(root).markdown,
+      )
+      expect(violations.map((v) => v.identifier)).toEqual(['task('])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('allows task( inside a profile fence', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'skills/using-systematic/references/opencode-profile.md',
+        '```text\ntask(\n```\n',
+      )
+      expect(
+        checkMigratedSkillIdentifiers(root, collectScanTargets(root).markdown),
+      ).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('allows identifiers in profile prose', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'skills/using-systematic/references/pi-profile.md',
+        'Do not mention todowrite in prose.\n',
+      )
+      expect(
+        checkMigratedSkillIdentifiers(root, collectScanTargets(root).markdown),
+      ).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('treats metadata with a non-string value as unmigrated', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'malformed-metadata',
+        '---\nname: malformed-metadata\ndescription: Test skill\nmetadata:\n  harness-portability: neutral-v1\n  enabled: true\n---\nUse task( here.\n',
+      )
+      expect(
+        checkMigratedSkillIdentifiers(root, collectScanTargets(root).markdown),
+      ).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('does not scan unmigrated skills', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeCompliantSkill(root, 'unmigrated', 'Use task( here.\n')
+      expect(
+        checkMigratedSkillIdentifiers(root, collectScanTargets(root).markdown),
+      ).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('exempts the sanctioned interaction idiom line', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeMigratedSkill(
+        root,
+        'idiom',
+        'Use request_user_input in OpenCode and ask_user in Pi.\n',
+      )
+      expect(
+        checkMigratedSkillIdentifiers(root, collectScanTargets(root).markdown),
+      ).toEqual([])
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }

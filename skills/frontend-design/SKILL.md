@@ -53,7 +53,7 @@ Based on detected signals, choose a mode:
 
 ### Asking the User
 
-When context is ambiguous, use the platform's blocking question tool (`question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini). If no question tool is available, assume "partial" mode and proceed conservatively.
+When context is ambiguous, use the platform's blocking question tool (`question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini; in Pi, use the blocking-question extension if available, otherwise present numbered options in chat and wait). If no question tool is available, assume "partial" mode and proceed conservatively.
 
 Example question: "I found [detected signals]. Should I follow your existing design patterns or create something distinctive?"
 

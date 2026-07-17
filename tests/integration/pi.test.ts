@@ -732,6 +732,8 @@ describe('Pi subprocess integration', () => {
         )
         .join('\n')
       expect(systemText).toContain('<SYSTEMATIC_WORKFLOWS>')
+      expect(systemText).toContain('# Pi Capability Profile')
+      expect(systemText).not.toContain('# OpenCode Capability Profile')
     },
     TIMEOUT_MS,
   )
@@ -866,6 +868,74 @@ describe('Pi subprocess integration', () => {
       expect(text).toContain(
         '<skill_content name="systematic:test-driven-development">',
       )
+    },
+    TIMEOUT_MS,
+  )
+
+  test(
+    'Pi skill payloads contain neutral orchestrating-subagents instructions',
+    async () => {
+      client = spawnPiRpc({ fixture })
+
+      await client.send({
+        type: 'set_model',
+        provider: MOCK_PROVIDER_ID,
+        modelId: MOCK_MODEL_ID,
+      })
+
+      mockModel.push({
+        toolCalls: [
+          {
+            id: 'call_orchestrating_subagents_1',
+            name: 'systematic_skill',
+            arguments: { name: 'systematic:orchestrating-subagents' },
+          },
+        ],
+      })
+      mockModel.push({ text: 'loaded the skill' })
+
+      const promptResponse = await client.send({
+        type: 'prompt',
+        message:
+          'Use systematic_skill to load systematic:orchestrating-subagents',
+      })
+      expect(promptResponse.success).toBe(true)
+
+      const toolEnd = await client.waitFor(
+        (msg) =>
+          msg.type === 'tool_execution_end' &&
+          (msg as { toolName?: string }).toolName === 'systematic_skill',
+      )
+      await client.waitFor((msg) => msg.type === 'agent_settled')
+
+      const result = (toolEnd as { result?: unknown }).result as
+        | { content?: { type: string; text?: string }[] }
+        | undefined
+      const skillText = result?.content?.[0]?.text ?? ''
+      expect(skillText).toContain(
+        '<skill_content name="systematic:orchestrating-subagents">',
+      )
+
+      for (const bannedToken of [
+        'task(',
+        'subagent_type',
+        'todowrite',
+        'TodoWrite',
+        'request_user_input',
+        'ask_user',
+        'AskUserQuestion',
+        'update_plan',
+      ]) {
+        expect(skillText).not.toContain(bannedToken)
+      }
+
+      const payloadStream = mockModel.requests
+        .map((request) => JSON.stringify(request))
+        .join('\n')
+      expect(payloadStream).not.toContain('task(')
+      expect(payloadStream).not.toContain('todowrite')
+      expect(payloadStream).not.toContain('subagent_type')
+      expect(payloadStream).toContain('execution is sequential only')
     },
     TIMEOUT_MS,
   )

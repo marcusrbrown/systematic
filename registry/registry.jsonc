@@ -457,7 +457,7 @@
     {
       "name": "orchestrating-subagents",
       "type": "skill",
-      "description": "Use when dispatching parallel or serial subagents in OpenCode, coordinating multi-unit plan execution, synthesizing results from independent subagent runs, or handling subagent failure and retry. Triggers on requests to run tasks in parallel, divide work across subagents, orchestrate a pipeline of dependent steps, or coordinate multiple agents without shared-file conflicts.",
+      "description": "Use when dispatching parallel or serial subagents in OpenCode, coordinating multi-unit plan execution, synthesizing results from independent subagent runs, or handling subagent failure and retry. Triggers on requests to run tasks in parallel, divide work, orchestrate a pipeline of dependent steps, or coordinate multiple agents without shared-file conflicts.",
       "files": ["skills/orchestrating-subagents/SKILL.md"]
     },
     {
@@ -515,7 +515,11 @@
       "name": "using-systematic",
       "type": "skill",
       "description": "Use when starting any conversation - establishes how to find and use skills, requiring skill tool invocation before ANY response including clarifying questions",
-      "files": ["skills/using-systematic/SKILL.md"]
+      "files": [
+        "skills/using-systematic/SKILL.md",
+        "skills/using-systematic/references/opencode-profile.md",
+        "skills/using-systematic/references/pi-profile.md"
+      ]
     },
     {
       "name": "writing-skills",

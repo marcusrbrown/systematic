@@ -6,6 +6,7 @@ import {
   applyBootstrapContent,
   getBootstrapContent,
   INTERNAL_AGENT_SIGNATURES,
+  readHarnessProfile,
 } from './lib/bootstrap.js'
 import { loadConfig } from './lib/config.js'
 import { createConfigHandler } from './lib/config-handler.js'
@@ -35,7 +36,11 @@ const initializePlugin = async ({ client, directory }: PluginInput) => {
   const config = loadConfig(directory)
   // Snapshot bootstrap once per plugin init so the cached system prefix stays
   // stable across requests. Custom bootstrap file edits take effect on restart.
-  const bootstrapContent = getBootstrapContent(config, { bundledSkillsDir })
+  // Profile files owned by skills/using-systematic/references/ — Unit 2 of 2026-07-16-001 plan.
+  const bootstrapContent = getBootstrapContent(config, {
+    bundledSkillsDir,
+    profileBlock: readHarnessProfile(bundledSkillsDir, 'opencode') ?? undefined,
+  })
 
   const configHandler = createConfigHandler({
     directory,

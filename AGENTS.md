@@ -17,6 +17,7 @@ Systematic is an OpenCode plugin providing structured engineering workflows for 
 | Where do I put new code? | [`STRUCTURE.md`](STRUCTURE.md) |
 | What does each directory contain? | [`STRUCTURE.md`](STRUCTURE.md) |
 | What are the naming conventions? | [`STRUCTURE.md`](STRUCTURE.md) |
+| What harnesses and compatibility evidence are verified? | [`HARNESSES.md`](HARNESSES.md) |
 | What conventions apply to my code? | This file (Conventions section below) |
 | What patterns should I follow? | This file (Conventions + Anti-Patterns below) |
 

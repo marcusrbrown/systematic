@@ -39,6 +39,7 @@ v3.0.0 made Pi a first-class consumer of `skills/` (`pi.skills` manifest — nat
 
 - Additional harness profiles + remaining-catalog classification: future increment, gated on the proof loop's evidence plus an explicit go decision.
 - New solution docs for the two novel patterns (inlined capability profiles; metadata-marked gate subset): post-merge `ce:compound`.
+- HARNESSES.md maintenance cadence beyond this increment (update when a profile ships or a harness contract changes).
 
 ## Context & Research
 
@@ -70,7 +71,7 @@ v3.0.0 made Pi a first-class consumer of `skills/` (`pi.skills` manifest — nat
 - Profile block rides inside `<SYSTEMATIC_WORKFLOWS>` via a new `BootstrapDeps.profileBlock` field (default absent → OpenCode path unchanged shape): inherits existing marker idempotency; mirrors the proven `usageTemplate` seam. Rejected: a second sentinel zone (new coordination point, new rules).
 - Profiles are pure markdown read from disk, inlined verbatim (no stitching/templating). Owned-by-one-file coupling comment in both consumers.
 - Migration marker is `metadata: { harness-portability: neutral-v1 }` — allowlisted field, string-map, semantically a structural declaration (not a `compatibility` caveat).
-- Gate mechanism is fence-strip + per-scope rule (strict on migrated `SKILL.md` bodies including fences; profile files exempt inside fences, banned in prose). Rejected: drift-allowlist entries (that file's schema keys on known `BannedPattern`s; a parallel mechanism inside the new check is simpler and self-contained).
+- Gate mechanism: strict scan on migrated `SKILL.md` bodies (including fences); profile files under `using-systematic/references/` are FULLY EXEMPT — they are the designated home for harness identifiers (capability tables name tools in prose by design; execution finding 2026-07-17 corrected the earlier fences-only exemption). Rejected: drift-allowlist entries (that file's schema keys on known `BannedPattern`s; a parallel mechanism inside the new check is simpler and self-contained).
 - Banned-identifier list (bounded, honest): `task(`, `subagent_type`, `todowrite`, `TodoWrite`, `` `question` `` tool references, `request_user_input`, `ask_user`, `AskUserQuestion`, `update_plan` — exact tokens, scope limit documented in the check. `systematic_skill`/`systematic_delegate` are NOT banned (they are Systematic's own cross-harness surface).
 - The 13 unmigrated idiom sites get the Pi binding line only — no `metadata` marker, no gate coverage (user-confirmed inclusion).
 
@@ -204,7 +205,7 @@ v3.0.0 made Pi a first-class consumer of `skills/` (`pi.skills` manifest — nat
 - Test: `tests/unit/content-integrity.test.ts` (or the script's existing test home — follow current wiring)
 
 **Approach:**
-- New check `checkMigratedSkillIdentifiers(rootDir, scanFiles)`: for each `skills/*/SKILL.md` (existing `isSkillEntryFile` scope) with `metadata['harness-portability'] === 'neutral-v1'` (read via `parseFrontmatter` + the same drop-rule as `parseMetadata` — mirror-runtime learning), scan the full body INCLUDING fences for the banned list. For `skills/using-systematic/references/*-profile.md`: scan prose only (`stripFencedCodeBlocks` first), identifiers allowed inside fences.
+- New check `checkMigratedSkillIdentifiers(rootDir, scanFiles)`: for each `skills/*/SKILL.md` (existing `isSkillEntryFile` scope) with `metadata['harness-portability'] === 'neutral-v1'` (read via `parseFrontmatter` + the same drop-rule as `parseMetadata` — mirror-runtime learning), scan the full body INCLUDING fences for the banned list. `skills/using-systematic/references/*-profile.md` are fully exempt (designated identifier home). Interaction-idiom lines (containing both `in OpenCode` and `in Pi`) are exempt — the sanctioned multi-harness binding.
 - Wire as check #13: `CheckResult` field, printer, `totalViolations` term, header list — violation-or-nothing (no warning channel).
 - Remediation message: name the identifier, the file, and the one action ("rephrase as a neutral operation; exact syntax belongs in the harness profile"). Document the scope limit in a comment (lexical tokens only, per honest-ban rule).
 
@@ -218,6 +219,28 @@ v3.0.0 made Pi a first-class consumer of `skills/` (`pi.skills` manifest — nat
 - Edge case: unmigrated skill with `task(` → no violation.
 
 **Verification:** gate green on the repo; all seven fixtures pass; `bun scripts/content-integrity.ts` output lists the new check.
+
+- [x] **Unit 7: HARNESSES.md — evidence-backed harness compatibility reference**
+
+**Goal:** A root-level `HARNESSES.md` documents similarities, differences, compatibility, and tools across every harness this feature touches (OpenCode, Pi, Claude Code, Codex, Copilot, Gemini), with EVERY tool mention mapping to verifiable evidence.
+
+**Requirements:** User directive 2026-07-17; extends R9's honesty posture into a standing reference.
+
+**Dependencies:** Units 1, 4 (profiles + idiom bindings are the in-repo ground truth it cites)
+
+**Files:**
+- Create: `HARNESSES.md`
+- Modify: `skills/using-systematic/references/opencode-profile.md`, `skills/using-systematic/references/pi-profile.md`, `AGENTS.md`; root markdown is outside gate skill scope
+
+**Approach:**
+- Structure: per-harness section (role: controlled vs deferred) + a cross-harness capability matrix (the four divergent capabilities × six harnesses) + compatibility notes (what Systematic ships/verifies per harness).
+- Evidence rule (non-negotiable): every named tool carries a citation — in-repo source (`src/pi.ts`, `src/lib/pi-delegate-tool.ts`, profile files, `tests/integration/pi.test.ts`), local installed/cloned source (`node_modules/@earendil-works/pi-coding-agent/`, `.slim/clonedeps/repos/anomalyco__opencode/`), or an external authoritative URL (official docs/repo) gathered by research. Tool names with no verifiable source are listed as UNVERIFIED with the strongest available provenance (e.g., "named in obra/superpowers translation tables") or omitted.
+- Deferred-harness sections state explicitly: prose-level binding only, no Systematic-shipped profile, consume-at-own-risk (mirrors the pi-harness.mdx honesty note).
+
+**Test scenarios:**
+- Test expectation: none automated — documentation; the evidence audit (every tool → citation) is recorded in the PR body as a checklist.
+
+**Verification:** every tool mention has a citation; content-integrity clean (root file outside skill scans, but run anyway); no session/process taxonomy in the text.
 
 - [ ] **Unit 6: Pi harness proof scenario**
 
