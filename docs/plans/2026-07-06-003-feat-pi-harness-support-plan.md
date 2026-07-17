@@ -334,9 +334,9 @@ Phase 3 — Install, docs, assurance
 - CLI: happy path (`opencode` and `pi`), invalid args (missing/unknown/extra, no `--global`) with unknown-harness usage on stderr not stdout, idempotent rerun, harness-isolation, and `.opencode/opencode.jsonc`-wins-over-root coexistence, all against real temp directories.
 - Built-artifact smoke: `dist/cli.js setup --harness pi` inside the existing `package-exports.test.ts` build/pack fixture.
 
-**Verification:** `bun test tests/unit/setup.test.ts tests/unit/cli.test.ts` green (66/66); `bun test tests/unit/package-exports.test.ts` green (15/15); full `bun test tests/unit` green (1143/1143); `bun run typecheck` clean; `bunx biome check` clean on all touched files; `bun run build` succeeds (all three dist entries); `bun run docs:build` green; `bun run registry:drift` reports up to date; `content-integrity` clean.
+**Verification:** `bun test tests/unit/setup.test.ts tests/unit/cli.test.ts` green (67/67); `bun test tests/unit/package-exports.test.ts` green (15/15); full `bun test tests/unit` green (1144/1144); `bun run typecheck` clean; `bunx biome check` clean on all touched files; `bun run build` succeeds (all three dist entries); `bun run docs:build` green; `bun run registry:drift` reports up to date; `content-integrity` clean.
 
-- [ ] **Unit 7: Pi-subprocess test harness**
+- [x] **Unit 7: Pi-subprocess test harness**
 
 **Goal:** An integration harness that spawns the built Pi extension and asserts the four parity capabilities, skipping cleanly where Pi is unavailable.
 
@@ -362,6 +362,8 @@ Phase 3 — Install, docs, assurance
 - Integration (R14): running the Pi suite does not require or perturb the OpenCode suite; both green independently.
 
 **Verification:** Pi harness asserts all four capabilities; skips cleanly without Pi; OpenCode suites unaffected.
+
+**Verification (implemented):** `tests/integration/pi.test.ts` (931 lines, self-contained): real Pi 0.80.6 spawned via `dist/cli.js --mode rpc` against an in-test OpenAI-completions SSE mock (`Bun.serve`, port 0), packaged extension loaded from the `npm pack` tarball through a project-local `.pi/settings.json` relative-path package source (real `pi.extensions`/`pi.skills` manifest resolution, fully offline, `--approve` for non-interactive project trust). Model wiring via `models.json` in the agent dir (`PI_CODING_AGENT_DIR`; project-local `.pi/models.json` is not a Pi scope). All five scenarios green: extension load (no `extension_error` + bootstrap marker in the captured model payload), skill commands (`get_commands` `source: "skill"`), `systematic_skill` resolution (`tool_execution_end` carries `<skill_content>`), bootstrap injection incl. Pi-native usage text (asserted from the mock-model request payload — v0.80.6 RPC exposes no system-prompt command), and `systematic_delegate` child-session completion (`outcome === 'completed'`). Deliberate deviation from the planned skip guard: Pi is an exact devDependency, so the suite hard-fails with an actionable message when the CLI is missing instead of silently skipping (a `PI_AVAILABLE`-style guard could false-green CI). 5/5 integration, 1144/1144 unit, typecheck/lint/content-integrity clean.
 
 - [ ] **Unit 8: Committed Pi install + parity docs**
 
