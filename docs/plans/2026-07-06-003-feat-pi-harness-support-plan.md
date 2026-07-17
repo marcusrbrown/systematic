@@ -1,7 +1,9 @@
 ---
 title: "feat: Pi coding-agent harness support"
 type: feat
-status: active
+status: completed
+completed_at: 2026-07-16
+shipped: "Units 1-6: PRs #623, #624, #626, #627, #629, #633; Unit 7: PR #637; Unit 8: PR #638 (all merged into v3)"
 date: 2026-07-06
 origin: docs/brainstorms/2026-07-06-pi-harness-support-requirements.md
 target_branch: v3
@@ -365,7 +367,7 @@ Phase 3 — Install, docs, assurance
 
 **Verification (implemented):** `tests/integration/pi.test.ts` (931 lines, self-contained): real Pi 0.80.6 spawned via `dist/cli.js --mode rpc` against an in-test OpenAI-completions SSE mock (`Bun.serve`, port 0), packaged extension loaded from the `npm pack` tarball through a project-local `.pi/settings.json` relative-path package source (real `pi.extensions`/`pi.skills` manifest resolution, fully offline, `--approve` for non-interactive project trust). Model wiring via `models.json` in the agent dir (`PI_CODING_AGENT_DIR`; project-local `.pi/models.json` is not a Pi scope). All five scenarios green: extension load (no `extension_error` + bootstrap marker in the captured model payload), skill commands (`get_commands` `source: "skill"`), `systematic_skill` resolution (`tool_execution_end` carries `<skill_content>`), bootstrap injection incl. Pi-native usage text (asserted from the mock-model request payload — v0.80.6 RPC exposes no system-prompt command), and `systematic_delegate` child-session completion (`outcome === 'completed'`). Deliberate deviation from the planned skip guard: Pi is an exact devDependency, so the suite hard-fails with an actionable message when the CLI is missing instead of silently skipping (a `PI_AVAILABLE`-style guard could false-green CI). 5/5 integration, 1144/1144 unit, typecheck/lint/content-integrity clean.
 
-- [ ] **Unit 8: Committed Pi install + parity docs**
+- [x] **Unit 8: Committed Pi install + parity docs**
 
 **Goal:** Ship committed docs covering Pi installation and harness parity/differences, without changing the OpenCode path docs.
 
@@ -385,6 +387,8 @@ Phase 3 — Install, docs, assurance
 - Test expectation: none (docs content) — verified by `bun run docs:build` (MDX parses, links resolve).
 
 **Verification:** `bun run docs:build` green; Pi page reachable from active nav; OpenCode docs unchanged.
+
+**Verification (implemented):** PR #638 — `guides/pi-harness.mdx` (new, sidebar order 8) + a Pi section in `getting-started/installation.mdx` (OpenCode content untouched). Documents install (`setup --harness pi`, manual `.pi/settings.json`, Pi's first-run trust prompt), the four runtime-proven capabilities, and the honest parity boundaries verified against source: the Pi extension reads no `systematic.json` config (`disabled_skills` does not apply) and Pi 0.80.6 has no permission-gate hook (`permission.skill` does not carry over). `docs:build` green (84 pages); content-integrity clean; Fro Bot source-verified every factual claim (PASS, zero NBCs).
 
 ## System-Wide Impact
 

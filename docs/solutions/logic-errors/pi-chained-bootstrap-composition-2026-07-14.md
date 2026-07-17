@@ -114,6 +114,7 @@ A sentinel pattern identifies syntax, not authorship; foreign content can legiti
 ## Related Issues
 
 - [Cross-harness adapter parity contract tests](../best-practices/cross-harness-adapter-parity-contract-tests-2026-07-14.md)
+- [Test packaged harness extensions against the real Pi runtime](../best-practices/pi-real-runtime-integration-harness-2026-07-16.md) — runtime proof of these bootstrap-injection rules against the real spawned Pi
 - [OpenCode plugin factory duplicate registration](../integration-issues/opencode-plugin-factory-duplicate-registration-2026-05-04.md)
 - [OpenCode plugin hook silent defect swallowing](../integration-issues/opencode-plugin-hook-silent-defect-swallow-2026-05-19.md)
 

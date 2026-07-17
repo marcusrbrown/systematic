@@ -202,3 +202,4 @@ Pi splits install from load. A raw tarball can install successfully while persis
 - `docs/solutions/integration-issues/opencode-plugin-named-exports-break-loader-2026-05-11.md`
 - `tests/unit/package-exports.test.ts`
 - [PR #617: Validate the packaged v3 runtime](https://github.com/marcusrbrown/systematic/pull/617)
+- [Test packaged harness extensions against the real Pi runtime](../best-practices/pi-real-runtime-integration-harness-2026-07-16.md) — the Pi sibling of this recipe (RPC/JSONL spawn with a mocked model instead of the OpenCode server+SDK spawn)
