@@ -93,3 +93,4 @@ agent:
 ## Related References
 - `docs/plans/2026-02-15-feat-automated-resync-workflow-plan.md`
 - `docs/solutions/integration-issues/converter-code-block-tool-name-capitalization-20260210.md`
+- `docs/solutions/test-failures/unit-suite-rewrites-repo-file-trap-2026-07-17.md` — sibling verification-side-effect trap: the unit suite itself mutating a committed file during a fix's verification run.

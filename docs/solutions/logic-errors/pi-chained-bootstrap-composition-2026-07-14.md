@@ -12,7 +12,8 @@ symptoms:
 root_cause: logic_error
 resolution_type: code_fix
 severity: medium
-tags: [pi-harness, bootstrap-injection, prompt-composition, idempotency, adapter-parity, graceful-degradation]
+last_updated: 2026-07-17
+tags: [pi-harness, bootstrap-injection, prompt-composition, idempotency, adapter-parity, graceful-degradation, capability-profiles]
 ---
 
 # Preserve foreign content when composing a chained bootstrap prompt
@@ -110,6 +111,35 @@ A sentinel pattern identifies syntax, not authorship; foreign content can legiti
 - Assert Pi output contains Pi-native skill instructions and excludes OpenCode-only tool language.
 - Force bootstrap loading to throw; assert one stderr diagnostic and successful extension registration.
 - Keep OpenCode bootstrap output pinned so Pi dependency injection cannot drift its default text.
+
+## Pattern extension (2026-07-17): capability-profile inlining via BootstrapDeps
+
+The harness-portability increment (PR #653, v3.1.0) widened the same seam this
+doc established. `BootstrapDeps` now carries an optional `profileBlock`
+alongside `usageTemplate`; `getBootstrapContent` appends it inside the
+`<SYSTEMATIC_WORKFLOWS>` zone in fixed order: usage template → profile block →
+skill catalog (`src/lib/bootstrap.ts:108-239`).
+
+- Harness capability profiles are plain markdown under
+  `skills/using-systematic/references/{opencode,pi}-profile.md`, read by
+  `readHarnessProfile(dir, name)` (`src/lib/bootstrap.ts:114-131`).
+- Per-harness population at the entry points: OpenCode passes
+  `readHarnessProfile(..., 'opencode')` (`src/index.ts:40-43`); Pi passes the
+  `'pi'` profile through `computeBootstrapContentSafe` (`src/pi.ts:63-70`).
+- The seam is nullable and fail-soft: any read failure emits one stderr
+  diagnostic and returns `null`, so the bootstrap composes without the profile
+  rather than crashing plugin load — the diagnostic requirement from this
+  doc's Prevention list, applied at the narrower profile scope.
+- Regression guards extend this doc's list: a production-shaped snapshot pin
+  (profile inlined), double-run idempotency for profile injection, and a
+  sentinel-collision guard asserting neither real profile contains the
+  bootstrap markers (`tests/unit/bootstrap.test.ts:449-516`).
+
+When adding a new harness or new per-harness prose, extend `BootstrapDeps`
+with optional, nullable fields consumed inside the existing sentinel zone —
+do not fork the bootstrap or compose outside the markers. The neutral skill
+prose this layer serves is enforced by content-integrity check #13 (see
+[neutral-v1 marker + migrated-set identifier gate](../best-practices/neutral-v1-marker-migrated-set-identifier-gate-2026-07-17.md)).
 
 ## Related Issues
 

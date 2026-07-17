@@ -121,3 +121,5 @@ The remediation is always available and unambiguous: quote the value, or remove 
 
 - `docs/solutions/best-practices/content-integrity-mirror-runtime-drop-rules-2026-05-17.md`
   — companion content-integrity gate-design lesson (mirror runtime rules in the gate).
+- `docs/solutions/best-practices/neutral-v1-marker-migrated-set-identifier-gate-2026-07-17.md`
+  — check #13 applies this honest-ban discipline: nine bounded lexical identifiers, scope stated in-gate, paraphrases declared out of scope.

@@ -76,3 +76,4 @@ primitive you intend to use actually exists before writing units around it.
 - `docs/solutions/best-practices/content-integrity-mirror-runtime-drop-rules-2026-05-17.md` — a runtime drop-rule and its gate check must agree; this doc adds that the gate side has only one enforcement primitive.
 - `docs/solutions/best-practices/undecidable-detection-honest-ban-rule-2026-06-04.md` — another content-integrity check where the honest design was simpler than the first plan assumed.
 - `docs/solutions/best-practices/harden-converter-injected-agent-defaults-2026-06-06.md` — the sibling hardening arc whose gates this check pattern mirrors.
+- `docs/solutions/best-practices/neutral-v1-marker-migrated-set-identifier-gate-2026-07-17.md` — check #13 follows this doc's violation-or-nothing wiring for a metadata-marked subset gate.
