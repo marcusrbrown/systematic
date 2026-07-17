@@ -65,6 +65,13 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
           return cachedParameterHint
         })(),
       ),
+      // Double-cast is required, not stylistic: the SDK types its args
+      // against its own bundled zod, whose Zod types are nominally
+      // incompatible with this package's zod (v4-vs-v1 internal version
+      // brands), so a direct cast fails typecheck. Runtime-safe because the
+      // SDK's `tool()` is an identity function and OpenCode consumes args
+      // structurally. Revisit if the SDK contract gains real behavior
+      // (guarded by the no-runtime-import artifact test in package-exports).
     } as unknown as ToolDefinition['args'],
     async execute(args: { name: string }, context): Promise<string> {
       const requestedName = args.name

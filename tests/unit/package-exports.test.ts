@@ -189,10 +189,10 @@ describe('build output and packaging', () => {
           timeout: 120_000,
         },
       )
-      expect(install.status).toBe(
-        0,
+      expect(
+        install.status,
         `npm install failed (exit ${install.status})\n--- stdout ---\n${install.stdout}\n--- stderr ---\n${install.stderr}`,
-      )
+      ).toBe(0)
       expect(
         fs.existsSync(
           path.join(projectDir, 'node_modules/@opencode-ai/plugin'),
@@ -208,10 +208,10 @@ describe('build output and packaging', () => {
         ],
         { cwd: projectDir, encoding: 'utf8', timeout: 30_000 },
       )
-      expect(load.status).toBe(
-        0,
+      expect(
+        load.status,
         `bare node import failed (exit ${load.status})\n--- stdout ---\n${load.stdout}\n--- stderr ---\n${load.stderr}`,
-      )
+      ).toBe(0)
     } finally {
       fs.rmSync(projectDir, { recursive: true, force: true })
     }
