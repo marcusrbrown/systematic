@@ -1,6 +1,6 @@
 import { pathToFileURL } from 'node:url'
 import type { ToolDefinition } from '@opencode-ai/plugin'
-import { tool } from '@opencode-ai/plugin/tool'
+import { z } from 'zod'
 import { escapeXml } from './skill-catalog.js'
 import { formatSkillCommandName } from './skill-loader.js'
 import {
@@ -49,7 +49,7 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
   let cachedDescription: string | null = null
   let cachedParameterHint: string | null = null
 
-  return tool({
+  return {
     get description() {
       if (cachedDescription == null) {
         cachedDescription = buildDescription()
@@ -57,7 +57,7 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
       return cachedDescription
     },
     args: {
-      name: tool.schema.string().describe(
+      name: z.string().describe(
         (() => {
           if (cachedParameterHint == null) {
             cachedParameterHint = buildParameterHint()
@@ -65,7 +65,7 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
           return cachedParameterHint
         })(),
       ),
-    },
+    } as unknown as ToolDefinition['args'],
     async execute(args: { name: string }, context): Promise<string> {
       const requestedName = args.name
 
@@ -93,5 +93,5 @@ export function createSkillTool(options: SkillToolOptions): ToolDefinition {
 
       return output
     },
-  })
+  }
 }
