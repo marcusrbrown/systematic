@@ -191,17 +191,24 @@ rm -f "${TMPFILE}"
 
 ### Step 13 — Verify and roll back on failure
 
+Re-read the published body and verify it structurally:
+
 ```bash
-NEW_LEN=$(gh release view "${TARGET}" --json body --jq '.body|length')
-PRE_LEN=$(jq -Rs 'length' < ".context/pr-evidence/release-notes-narrative/${TARGET}-before.md")
+PUB=$(gh release view "${TARGET}" --json body --jq .body)
 ```
 
-Both sides measure UTF-8 character count (not byte count). The `jq -Rs 'length'` form reads the snapshot file as a single raw string and reports its character length, matching the units `gh release view --jq '.body|length'` produces on the live body. Using `wc -c` here would compare bytes against characters, producing false-positive failures on bodies containing multibyte characters.
-
 Assert:
-- `NEW_LEN` is greater than `PRE_LEN`
+- The body starts with `## What's new`
 - The body contains at least one expected bucket heading
 - The Compare link is present in the published body
+- The body is non-empty and differs from the pre-edit snapshot (the edit actually applied)
+
+Do NOT compare lengths. A narrative rewrite is routinely SHORTER than the
+auto-generated body it replaces — semantic-release inflates major-release
+bodies by embedding entire squash-commit prose under BREAKING CHANGES
+(v3.0.0: 11,048 chars raw vs 4,394 chars narrative), and a length gate
+rolls back exactly the rewrites that matter most. Structural presence of
+the render contract, not size, is the correctness signal.
 
 If any assertion fails, restore the pre-edit snapshot:
 
@@ -265,7 +272,7 @@ The normalized forms of two runs against the same range must be byte-identical.
 - [ ] The Compare link uses the correct `v<PREV>...v<TARGET>` format and points at `github.com/marcusrbrown/systematic`
 - [ ] No spurious `closes [URL-fragment]` autolinks remain after step 10
 - [ ] The pre-edit snapshot exists at `.context/pr-evidence/release-notes-narrative/${TARGET}-before.md` before `gh release edit` is called
-- [ ] Post-edit verification (step 13) ran and passed; if it failed, the snapshot was restored
+- [ ] Post-edit verification (step 13) ran and passed — structural checks, never length comparison; if it failed, the snapshot was restored
 
 ## Common Mistakes
 
