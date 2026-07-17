@@ -1,7 +1,7 @@
+import fs from 'node:fs'
 import path from 'node:path'
-import { convertFileWithCache } from './converter.js'
 import { parseFrontmatter } from './frontmatter.js'
-import type { SkillDeprecated, SkillInfo } from './skills.js'
+import type { SkillInfo } from './skills.js'
 
 const SKILL_PREFIX = 'systematic:'
 const SKILL_DESCRIPTION_PREFIX = '(Systematic) '
@@ -19,7 +19,6 @@ export interface LoadedSkill {
   agent?: string
   model?: string
   argumentHint?: string
-  deprecated?: SkillDeprecated
 }
 
 export function formatSkillCommandName(name: string): string {
@@ -63,10 +62,8 @@ export function extractSkillBody(wrappedTemplate: string): string {
 
 export function loadSkill(skillInfo: SkillInfo): LoadedSkill | null {
   try {
-    const converted = convertFileWithCache(skillInfo.skillFile, 'skill', {
-      source: 'bundled',
-    })
-    const { body } = parseFrontmatter(converted)
+    const content = fs.readFileSync(skillInfo.skillFile, 'utf8')
+    const { body } = parseFrontmatter(content)
     const wrappedTemplate = wrapSkillTemplate(skillInfo.skillFile, body)
 
     return {
@@ -85,7 +82,6 @@ export function loadSkill(skillInfo: SkillInfo): LoadedSkill | null {
       agent: skillInfo.agent,
       model: skillInfo.model,
       argumentHint: skillInfo.argumentHint,
-      deprecated: skillInfo.deprecated,
     }
   } catch {
     return null

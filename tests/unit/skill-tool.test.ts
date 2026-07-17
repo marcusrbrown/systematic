@@ -373,11 +373,39 @@ description: Test CE skill
         disabledSkills: [],
       })
 
-      const result = await tool.execute({ name: 'ce:plan' }, mockContext)
+      const askCalls: unknown[] = []
+      const metadataCalls: unknown[] = []
+      const context = {
+        ask: async (payload: unknown) => {
+          askCalls.push(payload)
+        },
+        metadata: (payload: unknown) => {
+          metadataCalls.push(payload)
+        },
+      } as never
+
+      const result = await tool.execute({ name: 'ce:plan' }, context)
 
       expect(result).toContain('ce:plan')
       expect(result).toContain('# CE Plan Content')
       expect(result).not.toContain('systematic:ce:plan')
+      expect(askCalls).toEqual([
+        {
+          permission: 'skill',
+          patterns: ['ce:plan'],
+          always: ['ce:plan'],
+          metadata: {},
+        },
+      ])
+      expect(metadataCalls).toEqual([
+        {
+          title: 'Loaded skill: ce:plan',
+          metadata: {
+            name: 'ce:plan',
+            dir: skillDir,
+          },
+        },
+      ])
     })
 
     test('throws error when skill not found', async () => {
@@ -389,6 +417,31 @@ description: Test CE skill
       await expect(
         tool.execute({ name: 'nonexistent' }, mockContext),
       ).rejects.toThrow('Skill "nonexistent" not found')
+    })
+
+    test('does not call ask or metadata when skill not found', async () => {
+      const tool = createSkillTool({
+        bundledSkillsDir: testDir,
+        disabledSkills: [],
+      })
+
+      const askCalls: unknown[] = []
+      const metadataCalls: unknown[] = []
+      const context = {
+        ask: async (payload: unknown) => {
+          askCalls.push(payload)
+        },
+        metadata: (payload: unknown) => {
+          metadataCalls.push(payload)
+        },
+      } as never
+
+      await expect(
+        tool.execute({ name: 'nonexistent' }, context),
+      ).rejects.toThrow('Skill "nonexistent" not found')
+
+      expect(askCalls).toEqual([])
+      expect(metadataCalls).toEqual([])
     })
 
     test('strips frontmatter from loaded skill content', async () => {
@@ -607,31 +660,23 @@ disable-model-invocation: true
     })
   })
 
-  describe('deprecated skill warnings', () => {
-    function makeDeprecatedSkill(
-      dir: string,
-      name: string,
-      extras: string = '',
-    ): void {
-      const skillDir = path.join(dir, name)
+  describe('deprecated skill frontmatter', () => {
+    test('a skill with a deprecated: block gets no special handling — field is ignored', async () => {
+      const skillDir = path.join(testDir, 'old-skill')
       fs.mkdirSync(skillDir, { recursive: true })
       fs.writeFileSync(
         path.join(skillDir, 'SKILL.md'),
         `---
-name: ${name}
+name: old-skill
 description: A deprecated skill
 deprecated:
   since: v2.19.0
   removal: v3.0.0
   replacement: new-skill
   reason: "Old API no longer supported."
-${extras}---
+---
 # Deprecated Skill Content`,
       )
-    }
-
-    test('emits console.warn with full message when invoking a deprecated skill', async () => {
-      makeDeprecatedSkill(testDir, 'old-skill')
 
       const tool = createSkillTool({
         bundledSkillsDir: testDir,
@@ -642,193 +687,11 @@ ${extras}---
 
       await tool.execute({ name: 'old-skill' }, mockContext)
 
-      const warnCalls = warnSpy.mock.calls as unknown[][]
-      const deprecationWarn = warnCalls.find(
-        (args: unknown[]) =>
-          typeof args[0] === 'string' &&
-          args[0].includes('[systematic]') &&
-          args[0].includes('"old-skill"') &&
-          args[0].includes('deprecated'),
-      )
-      expect(deprecationWarn).toBeDefined()
-      const msg = (deprecationWarn as unknown[])[0] as string
-      expect(msg).toBe(
-        '[systematic] skill "old-skill" is deprecated since v2.19.0; will be removed in v3.0.0. Replacement: new-skill. Reason: Old API no longer supported.',
-      )
-
-      warnSpy.mockRestore()
-    })
-
-    test('emits console.warn only once when the same deprecated skill is invoked twice on the same tool instance', async () => {
-      makeDeprecatedSkill(testDir, 'old-skill')
-
-      const tool = createSkillTool({
-        bundledSkillsDir: testDir,
-        disabledSkills: [],
-      })
-
-      const warnSpy = spyOn(console, 'warn')
-
-      await tool.execute({ name: 'old-skill' }, mockContext)
-      await tool.execute({ name: 'old-skill' }, mockContext)
-
       const deprecationWarns = (warnSpy.mock.calls as unknown[][]).filter(
         (args: unknown[]) =>
-          typeof args[0] === 'string' &&
-          args[0].includes('[systematic]') &&
-          args[0].includes('"old-skill"'),
+          typeof args[0] === 'string' && args[0].includes('deprecated'),
       )
-      expect(deprecationWarns.length).toBe(1)
-
-      warnSpy.mockRestore()
-    })
-
-    test('omits Replacement clause when replacement is absent', async () => {
-      const skillDir = path.join(testDir, 'no-replacement')
-      fs.mkdirSync(skillDir)
-      fs.writeFileSync(
-        path.join(skillDir, 'SKILL.md'),
-        `---
-name: no-replacement
-description: Deprecated without replacement
-deprecated:
-  since: v2.19.0
-  removal: v3.0.0
-  reason: "No replacement available."
----
-# Content`,
-      )
-
-      const tool = createSkillTool({
-        bundledSkillsDir: testDir,
-        disabledSkills: [],
-      })
-
-      const warnSpy = spyOn(console, 'warn')
-
-      await tool.execute({ name: 'no-replacement' }, mockContext)
-
-      const deprecationWarns = (warnSpy.mock.calls as unknown[][]).filter(
-        (args: unknown[]) =>
-          typeof args[0] === 'string' && args[0].includes('"no-replacement"'),
-      )
-      expect(deprecationWarns.length).toBe(1)
-      const msg = (deprecationWarns[0] as unknown[])[0] as string
-      expect(msg).not.toContain('Replacement:')
-      expect(msg).toContain('Reason: No replacement available.')
-      // Should not have any double-period artifacts (e.g., ".." at end or ". ." patterns)
-      expect(msg).not.toMatch(/\.\.$|\. \./)
-
-      warnSpy.mockRestore()
-    })
-
-    test('omits Reason clause when reason is absent', async () => {
-      const skillDir = path.join(testDir, 'no-reason')
-      fs.mkdirSync(skillDir)
-      fs.writeFileSync(
-        path.join(skillDir, 'SKILL.md'),
-        `---
-name: no-reason
-description: Deprecated without reason
-deprecated:
-  since: v2.19.0
-  removal: v3.0.0
-  replacement: better-skill
----
-# Content`,
-      )
-
-      const tool = createSkillTool({
-        bundledSkillsDir: testDir,
-        disabledSkills: [],
-      })
-
-      const warnSpy = spyOn(console, 'warn')
-
-      await tool.execute({ name: 'no-reason' }, mockContext)
-
-      const deprecationWarns = (warnSpy.mock.calls as unknown[][]).filter(
-        (args: unknown[]) =>
-          typeof args[0] === 'string' && args[0].includes('"no-reason"'),
-      )
-      expect(deprecationWarns.length).toBe(1)
-      const msg = (deprecationWarns[0] as unknown[])[0] as string
-      expect(msg).not.toContain('Reason:')
-      expect(msg).toContain('Replacement: better-skill.')
-
-      warnSpy.mockRestore()
-    })
-
-    test('does not produce double-dot when replacement already ends with a period', async () => {
-      const skillDir = path.join(testDir, 'trailing-dot-replacement')
-      fs.mkdirSync(skillDir)
-      fs.writeFileSync(
-        path.join(skillDir, 'SKILL.md'),
-        `---
-name: trailing-dot-replacement
-description: Deprecated with trailing-dot replacement
-deprecated:
-  since: v2.19.0
-  removal: v3.0.0
-  replacement: "new-skill."
-  reason: "Old API removed."
----
-# Content`,
-      )
-
-      const tool = createSkillTool({
-        bundledSkillsDir: testDir,
-        disabledSkills: [],
-      })
-
-      const warnSpy = spyOn(console, 'warn')
-
-      await tool.execute({ name: 'trailing-dot-replacement' }, mockContext)
-
-      const deprecationWarns = (warnSpy.mock.calls as unknown[][]).filter(
-        (args: unknown[]) =>
-          typeof args[0] === 'string' &&
-          args[0].includes('"trailing-dot-replacement"'),
-      )
-      expect(deprecationWarns.length).toBe(1)
-      const msg = (deprecationWarns[0] as unknown[])[0] as string
-      expect(msg).not.toMatch(/\.\./u)
-      expect(msg).toContain('Replacement: new-skill.')
-
-      warnSpy.mockRestore()
-    })
-
-    test('a fresh createSkillTool instance re-emits the warning for the same skill', async () => {
-      makeDeprecatedSkill(testDir, 'old-skill')
-
-      const tool1 = createSkillTool({
-        bundledSkillsDir: testDir,
-        disabledSkills: [],
-      })
-
-      const warnSpy = spyOn(console, 'warn')
-
-      await tool1.execute({ name: 'old-skill' }, mockContext)
-
-      const warnsAfterFirst = (warnSpy.mock.calls as unknown[][]).filter(
-        (args: unknown[]) =>
-          typeof args[0] === 'string' && args[0].includes('"old-skill"'),
-      ).length
-      expect(warnsAfterFirst).toBe(1)
-
-      // New instance — dedup set is fresh
-      const tool2 = createSkillTool({
-        bundledSkillsDir: testDir,
-        disabledSkills: [],
-      })
-
-      await tool2.execute({ name: 'old-skill' }, mockContext)
-
-      const warnsAfterSecond = (warnSpy.mock.calls as unknown[][]).filter(
-        (args: unknown[]) =>
-          typeof args[0] === 'string' && args[0].includes('"old-skill"'),
-      ).length
-      expect(warnsAfterSecond).toBe(2)
+      expect(deprecationWarns).toEqual([])
 
       warnSpy.mockRestore()
     })

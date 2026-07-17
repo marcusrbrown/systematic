@@ -224,8 +224,8 @@ Prepare a concise planning context summary (a paragraph or two) to pass as input
 
 Run these agents in parallel:
 
-- Task systematic:research:repo-research-analyst(Scope: technology, architecture, patterns. {planning context summary})
-- Task systematic:research:learnings-researcher(planning context summary)
+- task systematic:research:repo-research-analyst(Scope: technology, architecture, patterns. {planning context summary})
+- task systematic:research:learnings-researcher(planning context summary)
 Collect:
 - Technology stack and versions (used in section 1.2 to make sharper external research decisions)
 - Architectural patterns and conventions to follow
@@ -293,8 +293,8 @@ Announce the decision briefly before continuing. Examples:
 
 If Step 1.2 indicates external research is useful, run these agents in parallel:
 
-- Task systematic:research:best-practices-researcher(planning context summary)
-- Task systematic:research:framework-docs-researcher(planning context summary)
+- task systematic:research:best-practices-researcher(planning context summary)
+- task systematic:research:framework-docs-researcher(planning context summary)
 
 #### 1.4 Consolidate Research
 
@@ -322,7 +322,7 @@ This ensures flow analysis (Phase 1.5) runs and the confidence check (Phase 5.3)
 
 For **Standard** or **Deep** plans, or when user flow completeness is still unclear, run:
 
-- Task systematic:workflow:spec-flow-analyzer(planning context summary, research findings)
+- task systematic:workflow:spec-flow-analyzer(planning context summary, research findings)
 
 Use the output to:
 - Identify missing edge cases, state transitions, or handoff gaps
@@ -790,7 +790,7 @@ Then continue to Phase 5.2 without a blocking question.
 
 **REQUIRED: Write the plan file to disk before presenting any options.**
 
-Use the Write tool to save the complete plan to:
+Use the write tool to save the complete plan to:
 
 ```text
 docs/plans/YYYY-MM-DD-NNN-<type>-<descriptive-name>-plan.md

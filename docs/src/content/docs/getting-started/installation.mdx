@@ -109,6 +109,14 @@ Use `npx skills` to install the skill Markdown files directly. This path works i
   </div>
 </div>
 
+## Install into a Pi coding-agent project
+
+Systematic also ships a [Pi coding-agent](https://github.com/earendil-works/pi-coding-agent) extension from the same package — same `systematic_skill` tool, same bootstrap injection, plus a `systematic_delegate` persona-delegation tool. See [Pi Harness Support](/systematic/guides/pi-harness/) for the full install steps and an honest list of where Pi parity with OpenCode currently ends (config support, permission gating).
+
+```bash
+npx @fro.bot/systematic setup --harness pi
+```
+
 ## Automatic asset discovery
 
 Systematic requires zero manual file copying. When the plugin loads, it automatically:

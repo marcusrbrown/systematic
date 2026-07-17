@@ -93,9 +93,7 @@ Full workflow from plan to execution:
 ## Specialized Agents
 
 ### Design Agents
-- `design-implementation-reviewer` — Verify implementations match design specs
 - `design-iterator` — Iterative UI/UX refinement
-- `figma-design-sync` — Detect visual differences from Figma
 
 ### Research Agents
 - `best-practices-researcher` — External research for any technology
@@ -107,8 +105,8 @@ Full workflow from plan to execution:
 ### Review Agents
 - `architecture-strategist` — Architectural code review
 - `code-simplicity-reviewer` — YAGNI and simplicity enforcement
-- `security-sentinel` — Security audits and vulnerability assessment
-- `performance-oracle` — Performance bottleneck identification
+- `security-reviewer` — Security audits and vulnerability assessment
+- `performance-reviewer` — Performance bottleneck identification
 - Plus 10 more specialized reviewers (Rails, TypeScript, data integrity, deployment, patterns, etc.)
 
 ### Workflow Agents

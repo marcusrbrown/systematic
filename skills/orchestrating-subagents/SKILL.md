@@ -82,8 +82,8 @@ Dispatch multiple foreground subagents in the same turn. OpenCode runs them conc
 
 ```typescript
 // Dispatch independent review subagents together
-task({ subagent_type: "security-sentinel", description: "Security review", prompt: "..." })
-task({ subagent_type: "performance-oracle", description: "Performance review", prompt: "..." })
+task({ subagent_type: "security-reviewer", description: "Security review", prompt: "..." })
+task({ subagent_type: "performance-reviewer", description: "Performance review", prompt: "..." })
 task({ subagent_type: "correctness-reviewer", description: "Correctness review", prompt: "..." })
 // All three run; orchestrator synthesizes results after all complete
 ```

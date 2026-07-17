@@ -6,7 +6,6 @@ import {
   assertSourceCategoryModelCoverage,
   type BundledAgentInventory,
   buildBundledAgentInventory,
-  inferBuiltInTemperature,
   validateAgentOverlays,
 } from '../../src/lib/agent-overlays.js'
 import type { SourcedOverlayConfig } from '../../src/lib/config.js'
@@ -559,22 +558,6 @@ describe('validateAgentOverlays', () => {
         nativeAgents: {},
       }),
     ).not.toThrow()
-  })
-})
-
-describe('inferBuiltInTemperature', () => {
-  test.each([
-    ['correctness-reviewer', 'Reviews code', 0.1],
-    ['security-sentinel', 'Audits risk', 0.1],
-    ['architecture-strategist', 'Plans architecture', 0.2],
-    ['repo-research-analyst', 'Researches repositories', 0.2],
-    ['readme-writer', 'Writes docs', 0.3],
-    ['changelog-editor', 'Edits release notes', 0.3],
-    ['design-iterator', 'Creates visual concepts', 0.6],
-    ['creative-ideator', 'Brainstorms product ideas', 0.6],
-    ['general-helper', 'Handles miscellaneous work', 0.3],
-  ])('returns %p temperature for %s', (name, description, expected) => {
-    expect(inferBuiltInTemperature(name, description)).toBe(expected)
   })
 })
 

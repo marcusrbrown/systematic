@@ -25,8 +25,6 @@ import {
   matchesPathGlob,
   SUBFILE_DIRECTORY_NAMES,
 } from '../../scripts/content-integrity.ts'
-import { convertContent } from '../../src/lib/converter.ts'
-import { parseFrontmatter } from '../../src/lib/frontmatter.ts'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -714,9 +712,7 @@ describe('checkFrontmatter', () => {
         field: 'preconditions',
       })
       expect(violations[0]?.message).toContain('preconditions')
-      expect(violations[0]?.remediation).toContain(
-        'systematic:writing-systematic-skills',
-      )
+      expect(violations[0]?.remediation).toContain('systematic:writing-skills')
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
@@ -853,8 +849,8 @@ describe('checkFrontmatter', () => {
   })
 })
 
-describe('checkFrontmatter — deprecated.reason enforcement', () => {
-  test('bundled skill with deprecated.reason populated passes with no violation', () => {
+describe('checkFrontmatter — deprecated block surfaces via unknown-field rule', () => {
+  test('bundled skill with a deprecated block gets an unknown-field violation', () => {
     const root = makeFixtureRepo()
     try {
       writeSkill(
@@ -874,186 +870,8 @@ describe('checkFrontmatter — deprecated.reason enforcement', () => {
       )
       const targets = collectScanTargets(root)
       const violations = checkFrontmatter(root, targets.markdown)
-      expect(
-        violations.filter((v) => v.rule === 'deprecated-reason-missing'),
-      ).toEqual([])
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true })
-    }
-  })
-
-  test('bundled skill with deprecated block but no reason field fails with structured violation', () => {
-    const root = makeFixtureRepo()
-    try {
-      writeSkill(
-        root,
-        'my-skill',
-        [
-          '---',
-          'name: my-skill',
-          'description: A skill',
-          'deprecated: {}',
-          '---',
-          'body',
-        ].join('\n'),
-      )
-      const targets = collectScanTargets(root)
-      const violations = checkFrontmatter(root, targets.markdown)
       const match = violations.filter(
-        (v) => v.rule === 'deprecated-reason-missing',
-      )
-      expect(match).toHaveLength(1)
-      expect(match[0]?.file).toBe('skills/my-skill/SKILL.md')
-      expect(match[0]?.field).toBe('deprecated.reason')
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true })
-    }
-  })
-
-  test('bundled skill with deprecated.reason as empty string fails with structured violation', () => {
-    const root = makeFixtureRepo()
-    try {
-      writeSkill(
-        root,
-        'my-skill',
-        [
-          '---',
-          'name: my-skill',
-          'description: A skill',
-          'deprecated:',
-          '  reason: ""',
-          '---',
-          'body',
-        ].join('\n'),
-      )
-      const targets = collectScanTargets(root)
-      const violations = checkFrontmatter(root, targets.markdown)
-      const match = violations.filter(
-        (v) => v.rule === 'deprecated-reason-missing',
-      )
-      expect(match).toHaveLength(1)
-      expect(match[0]?.field).toBe('deprecated.reason')
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true })
-    }
-  })
-
-  test('silently accepts non-object deprecated value (consistent with runtime drop behavior)', () => {
-    const root = makeFixtureRepo()
-    try {
-      writeSkill(
-        root,
-        'my-skill',
-        [
-          '---',
-          'name: my-skill',
-          'description: A skill',
-          'deprecated: "malformed"',
-          '---',
-          'body',
-        ].join('\n'),
-      )
-      const targets = collectScanTargets(root)
-      const violations = checkFrontmatter(root, targets.markdown)
-      expect(
-        violations.filter((v) => v.rule === 'deprecated-reason-missing'),
-      ).toEqual([])
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true })
-    }
-  })
-
-  test('integration: real repo skills with deprecated blocks all have non-empty reason', () => {
-    const result = checkFrontmatter(
-      REPO_ROOT,
-      collectScanTargets(REPO_ROOT).markdown,
-    )
-    const deprecatedReasonViolations = result.filter(
-      (v) => v.rule === 'deprecated-reason-missing',
-    )
-    expect(deprecatedReasonViolations).toEqual([])
-  })
-
-  test('bundled skill with deprecated block missing both since and removal emits deprecated-missing-required-fields violation', () => {
-    const root = makeFixtureRepo()
-    try {
-      writeSkill(
-        root,
-        'my-skill',
-        [
-          '---',
-          'name: my-skill',
-          'description: A skill',
-          'deprecated:',
-          '  reason: "Use new-skill instead."',
-          '  replacement: new-skill',
-          '---',
-          'body',
-        ].join('\n'),
-      )
-      const targets = collectScanTargets(root)
-      const violations = checkFrontmatter(root, targets.markdown)
-      const match = violations.filter(
-        (v) => v.rule === 'deprecated-missing-required-fields',
-      )
-      expect(match).toHaveLength(1)
-      expect(match[0]?.file).toBe('skills/my-skill/SKILL.md')
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true })
-    }
-  })
-
-  test('bundled skill with deprecated block missing removal emits deprecated-missing-required-fields violation', () => {
-    const root = makeFixtureRepo()
-    try {
-      writeSkill(
-        root,
-        'my-skill',
-        [
-          '---',
-          'name: my-skill',
-          'description: A skill',
-          'deprecated:',
-          '  since: v2.19.0',
-          '  reason: "Use new-skill instead."',
-          '---',
-          'body',
-        ].join('\n'),
-      )
-      const targets = collectScanTargets(root)
-      const violations = checkFrontmatter(root, targets.markdown)
-      const match = violations.filter(
-        (v) => v.rule === 'deprecated-missing-required-fields',
-      )
-      expect(match).toHaveLength(1)
-      expect(match[0]?.file).toBe('skills/my-skill/SKILL.md')
-    } finally {
-      fs.rmSync(root, { recursive: true, force: true })
-    }
-  })
-
-  test('bundled skill with deprecated block where since is non-string emits deprecated-missing-required-fields violation', () => {
-    const root = makeFixtureRepo()
-    try {
-      writeSkill(
-        root,
-        'my-skill',
-        [
-          '---',
-          'name: my-skill',
-          'description: A skill',
-          'deprecated:',
-          '  since: 42',
-          '  removal: v3.0.0',
-          '  reason: "Use new-skill instead."',
-          '---',
-          'body',
-        ].join('\n'),
-      )
-      const targets = collectScanTargets(root)
-      const violations = checkFrontmatter(root, targets.markdown)
-      const match = violations.filter(
-        (v) => v.rule === 'deprecated-missing-required-fields',
+        (v) => v.rule === 'unknown-field' && v.field === 'deprecated',
       )
       expect(match).toHaveLength(1)
       expect(match[0]?.file).toBe('skills/my-skill/SKILL.md')
@@ -1559,78 +1377,6 @@ describe('printAgentTemperatureViolations — CLI print path', () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
-  })
-})
-
-describe('converter equivalence: explicit mode: subagent is behavior-preserving', () => {
-  test('converting an agent with no mode field produces the same resolved mode as one with explicit mode: subagent', () => {
-    const withoutMode = `---
-name: test-agent
-description: A test agent
----
-Agent body`
-
-    const withExplicitMode = `---
-name: test-agent
-description: A test agent
-mode: subagent
----
-Agent body`
-
-    const convertedWithout = convertContent(withoutMode, 'agent', {
-      agentMode: 'subagent',
-    })
-    const convertedWith = convertContent(withExplicitMode, 'agent', {
-      agentMode: 'subagent',
-    })
-
-    // Both must emit mode: subagent
-    expect(convertedWithout).toContain('mode: subagent')
-    expect(convertedWith).toContain('mode: subagent')
-
-    // Parse both emitted configs and compare resolved field values.
-    // The converter may reorder YAML keys, so we compare parsed objects, not strings.
-    const parsedWithout = parseFrontmatter(convertedWithout)
-    const parsedWith = parseFrontmatter(convertedWith)
-
-    expect(parsedWithout.data).toEqual(parsedWith.data)
-  })
-
-  test('explicit mode: subagent does not alter any other resolved field, including tools, color, and temperature', () => {
-    // Uses a fixture that mirrors a real agent's frontmatter shape to prove
-    // behavior-preservation across the full set of fields, not just the trivial case.
-    const withoutMode = `---
-name: security-sentinel
-description: Security review agent
-tools:
-  - read
-  - grep
-color: red
-temperature: 0.3
----
-Agent body`
-
-    const withExplicitMode = `---
-name: security-sentinel
-description: Security review agent
-tools:
-  - read
-  - grep
-color: red
-temperature: 0.3
-mode: subagent
----
-Agent body`
-
-    const parsedWithout = parseFrontmatter(
-      convertContent(withoutMode, 'agent', { agentMode: 'subagent' }),
-    )
-    const parsedWith = parseFrontmatter(
-      convertContent(withExplicitMode, 'agent', { agentMode: 'subagent' }),
-    )
-
-    // All resolved fields must be identical — adding explicit mode is a no-op.
-    expect(parsedWithout.data).toEqual(parsedWith.data)
   })
 })
 
@@ -3020,7 +2766,7 @@ describe('CLI', () => {
       expect(stderr).toContain('Agent model violations (1)')
       expect(stderr).toContain('preconditions')
       expect(stderr).toContain(
-        'fix: Update frontmatter to match systematic:writing-systematic-skills.',
+        'fix: Update frontmatter to match systematic:writing-skills',
       )
       expect(stderr).toContain('agents/research/a.md')
     } finally {
@@ -3397,5 +3143,32 @@ describe('checkRemovedNamesOverlap', () => {
       ['review/correctness-reviewer'],
     )
     expect(violations).toHaveLength(0)
+  })
+
+  // Regression: v3 cleanup unit 1 populates REMOVED_BUNDLED_SKILL_NAMES with
+  // the two deleted skills. The gate must pass only when those names are
+  // absent from the live bundled skill set and present in the removed set —
+  // and must fail if either name were still shipped as a bundled skill.
+  test('v3 cleanup: removed skill names absent from bundled set passes the gate', () => {
+    const violations = checkRemovedNamesOverlap(
+      ['orchestrating-swarms', 'claude-permissions-optimizer'],
+      [],
+      ['orchestrating-subagents', 'ce:plan', 'ce:review'],
+      [],
+      [],
+    )
+    expect(violations).toHaveLength(0)
+  })
+
+  test('v3 cleanup: a removed name still present as a bundled skill fails the gate', () => {
+    const violations = checkRemovedNamesOverlap(
+      ['orchestrating-swarms', 'claude-permissions-optimizer'],
+      [],
+      ['orchestrating-swarms', 'ce:plan'],
+      [],
+      [],
+    )
+    expect(violations.length).toBeGreaterThan(0)
+    expect(violations.some((v) => v.name === 'orchestrating-swarms')).toBe(true)
   })
 })

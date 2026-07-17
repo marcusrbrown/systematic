@@ -1,0 +1,69 @@
+---
+title: Migrating to v3
+description: What changed in Systematic v3 and how to adapt — removed skills and agents, merged skills, and replacement mappings.
+sidebar:
+  order: 9
+---
+
+Systematic v3 curates the bundled catalog around the compound-engineering workflow core. If your config or muscle memory references a removed asset, this page maps every removal to its replacement.
+
+Stale `disabled_skills` / `disabled_agents` entries for removed names produce a **warning, not an error** — your config keeps working.
+
+## Removed skills
+
+| Removed | Use instead |
+| --- | --- |
+| `orchestrating-swarms` | `orchestrating-subagents` |
+| `claude-permissions-optimizer` | — (no Systematic replacement; configure permissions manually via OpenCode's own `permission` block in `opencode.jsonc`) |
+| `dspy-ruby`, `dhh-rails-style`, `andrew-kane-gem-writer` | — (Ruby/Rails vertical; add project-local skills if needed) |
+| `every-style-editor` | — |
+| `rclone`, `gemini-imagegen`, `test-xcode`, `proof` | — (vendor integrations; add project-local skills if needed) |
+| `feature-video` | — (PR evidence: existing `## Demo` blocks are still preserved by `git-commit-push-pr`) |
+| `changelog`, `generate_command`, `setup` | — |
+| `todo-create`, `todo-triage`, `todo-resolve` | `todos` (Create / Triage / Resolve sections) |
+| `writing-systematic-skills` | `writing-skills` ("Systematic Bundled Skills" section) |
+
+## Removed agents
+
+| Removed | Use instead |
+| --- | --- |
+| `security-sentinel` | `security-reviewer` |
+| `performance-oracle` | `performance-reviewer` |
+| `data-integrity-guardian`, `data-migration-expert` | `data-migrations-reviewer` |
+| `cli-agent-readiness-reviewer` | `cli-readiness-reviewer` |
+| `kieran-rails-reviewer`, `kieran-python-reviewer`, `dhh-rails-reviewer`, `julik-frontend-races-reviewer` | — (stack-specific; `kieran-typescript-reviewer` remains) |
+| `schema-drift-detector`, `lint` | — (Rails/Ruby-specific) |
+| `figma-design-sync`, `design-implementation-reviewer` | `design-iterator` (tool-agnostic) |
+| `ankane-readme-writer` | — |
+
+## Config cleanup (optional)
+
+If your `systematic.json`/`systematic.jsonc` lists a removed name in `disabled_skills` or `disabled_agents`, Systematic does **not** fail to load. It drops the stale entry and logs a warning once per name, per load:
+
+```
+[systematic] "orchestrating-swarms" in `disabled_skills` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning. See https://fro.bot/systematic/guides/v3-migration/ for migration guidance.
+```
+
+Removing the stale entry silences the warning — it's cleanup, not a required fix. A genuinely-unknown name (a typo, or a name that never existed) is still a hard validation error.
+
+## CLI converter removal
+
+The `systematic convert` CLI command (Claude Code → OpenCode skill format) is gone in v3. If you need one-off conversion, pin the last v2 release for that task:
+
+```bash
+npm install @fro.bot/systematic@2
+```
+
+Run the conversion under the pinned v2 install, then upgrade back to the current `@fro.bot/systematic@latest` for day-to-day use.
+
+## Deprecated skill frontmatter
+
+Skill frontmatter no longer recognizes a `deprecated:` block. Any skill still shipping one will surface it as an unrecognized field during content-integrity validation — remove the block.
+
+## Bundled agents: explicit `temperature:` (contributor note)
+
+If you maintain or contribute bundled agents, every bundled agent must declare an explicit `temperature:` in its frontmatter. Runtime inference of a default temperature is no longer supported. This only affects agents shipped inside this repo — it does not affect your project config.
+
+## Why
+
+The v3 bundle is curated to what serves the core loop everywhere it runs — interactive OpenCode sessions and headless harnesses alike: the `ce:*` workflow family, universal review and document-review personas, research agents, and cross-cutting engineering skills. Stack-specific personas and vendor integrations are better served by project-local skills and agents in your own `.opencode/` or `.agents/` directories.

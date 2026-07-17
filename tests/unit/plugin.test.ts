@@ -283,9 +283,15 @@ describe('CLI functionality', () => {
     const output = result.stdout.toString()
     expect(result.exitCode).toBe(0)
     expect(output).toContain('systematic')
-    expect(output).toContain('convert')
     expect(output).toContain('list')
     expect(output).toContain('config')
+  })
+
+  test('cli convert falls through to unknown-command handling', () => {
+    const result = Bun.spawnSync(['bun', CLI_PATH, 'convert', 'agent', 'x'])
+    const stderr = result.stderr.toString()
+    expect(result.exitCode).toBe(1)
+    expect(stderr).toContain('Unknown command: convert')
   })
 
   test('cli --version returns version', () => {

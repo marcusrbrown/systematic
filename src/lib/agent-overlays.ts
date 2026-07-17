@@ -132,31 +132,6 @@ export function resolveAgentOverlaySet(
   }
 }
 
-export function inferBuiltInTemperature(
-  name: string,
-  description?: string,
-): number {
-  const sample = `${name} ${description ?? ''}`.toLowerCase()
-  if (
-    /(review|audit|security|sentinel|oracle|lint|verification|guardian)/.test(
-      sample,
-    )
-  ) {
-    return 0.1
-  }
-  if (
-    /(plan|planning|architecture|strategist|analysis|research)/.test(sample)
-  ) {
-    return 0.2
-  }
-  if (/(doc|readme|changelog|editor|writer)/.test(sample)) {
-    return 0.3
-  }
-  if (/(brainstorm|creative|ideate|design|concept)/.test(sample)) {
-    return 0.6
-  }
-  return 0.3
-}
 export function assertSourceCategoryModelCoverage(categories: string[]): void {
   const missingCategories = categories.filter(
     (category) => !Object.hasOwn(SOURCE_CATEGORY_MODEL_DEFAULTS, category),

@@ -107,11 +107,60 @@ export const applyBootstrapContent = (
 
 export interface BootstrapDeps {
   bundledSkillsDir: string
+  usageTemplate?: string
+}
+
+type BootstrapContentConfig = Pick<
+  SystematicConfig,
+  'bootstrap' | 'disabled_skills'
+>
+
+const DEFAULT_BOOTSTRAP_CONFIG: BootstrapContentConfig = {
+  bootstrap: { enabled: true },
+  disabled_skills: [],
+}
+
+/** Safely computes default bootstrap content, returning null instead of throwing. */
+export function computeBootstrapContentSafe(
+  deps: BootstrapDeps,
+  reportError?: (error: unknown) => void,
+): string | null {
+  try {
+    return getBootstrapContent(DEFAULT_BOOTSTRAP_CONFIG, deps)
+  } catch (error) {
+    if (reportError !== undefined) {
+      try {
+        reportError(error)
+      } catch {
+        // Ignore reporter failures so startup stays non-blocking.
+      }
+    }
+    return null
+  }
+}
+
+/** Composes an existing system prompt with nullable bootstrap content; returns null when bootstrapContent is null. */
+export function composeSystemPromptWithBootstrap(
+  existingSystemPrompt: string,
+  bootstrapContent: string | null,
+): string | null {
+  if (bootstrapContent === null) return null
+
+  if (
+    existingSystemPrompt === bootstrapContent ||
+    existingSystemPrompt.endsWith(`\n\n${bootstrapContent}`)
+  ) {
+    return existingSystemPrompt
+  }
+
+  return existingSystemPrompt.length > 0
+    ? `${existingSystemPrompt}\n\n${bootstrapContent}`
+    : bootstrapContent
 }
 
 function getSkillUsageTemplate(): string {
   return `**Skills naming:**
-- Systematic bundled skills use the \`systematic:\` prefix (e.g., \`systematic:setup\`)
+- Systematic bundled skills use the \`systematic:\` prefix (e.g., \`systematic:onboarding\`)
 - Workflow skills with their own namespace keep it (e.g., \`ce:brainstorm\`)
 - Skills can also be invoked without prefix if unambiguous
 
@@ -124,10 +173,10 @@ Bundled skills ship with the Systematic plugin and are discoverable via \`system
 }
 
 export function getBootstrapContent(
-  config: SystematicConfig,
+  config: BootstrapContentConfig,
   deps: BootstrapDeps,
 ): string | null {
-  const { bundledSkillsDir } = deps
+  const { bundledSkillsDir, usageTemplate } = deps
 
   if (!config.bootstrap.enabled) return null
 
@@ -149,7 +198,7 @@ export function getBootstrapContent(
   const fullContent = fs.readFileSync(usingSystematicPath, 'utf8')
   const { body } = parseFrontmatter(fullContent)
   const content = body.trim()
-  const skillUsage = getSkillUsageTemplate()
+  const skillUsage = usageTemplate ?? getSkillUsageTemplate()
   const catalog = renderCatalogVerbose({
     bundledSkillsDir,
     disabledSkills: config.disabled_skills,

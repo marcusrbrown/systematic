@@ -234,17 +234,16 @@ Use fully-qualified agent names inside Task calls.
 **System-Wide Impact**
 - `systematic:review:architecture-strategist` for cross-boundary effects, interface surfaces, and architectural knock-on impact
 - Add the specific specialist that matches the risk:
-  - `systematic:review:performance-oracle` for scalability, latency, throughput, and resource-risk analysis
-  - `systematic:review:security-sentinel` for auth, validation, exploit surfaces, and security boundary review
-  - `systematic:review:data-integrity-guardian` for migrations, persistent state safety, consistency, and data lifecycle risks
+  - `systematic:review:performance-reviewer` for scalability, latency, throughput, and resource-risk analysis
+  - `systematic:review:security-reviewer` for auth, validation, exploit surfaces, and security boundary review
+  - `systematic:review:data-migrations-reviewer` for migrations, persistent state safety, consistency, and data lifecycle risks
 
 **Risks & Dependencies / Operational Notes**
 - Use the specialist that matches the actual risk:
-  - `systematic:review:security-sentinel` for security, auth, privacy, and exploit risk
-  - `systematic:review:data-integrity-guardian` for persistent data safety, constraints, and transaction boundaries
-  - `systematic:review:data-migration-expert` for migration realism, backfills, and production data transformation risk
+  - `systematic:review:security-reviewer` for security, auth, privacy, and exploit risk
+  - `systematic:review:data-migrations-reviewer` for persistent data safety, constraints, transaction boundaries, and migration realism
   - `systematic:review:deployment-verification-agent` for rollout checklists, rollback planning, and launch verification
-  - `systematic:review:performance-oracle` for capacity, latency, and scaling concerns
+  - `systematic:review:performance-reviewer` for capacity, latency, and scaling concerns
 
 #### 3.2 Agent Prompt Shape
 

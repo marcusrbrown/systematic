@@ -4,9 +4,8 @@ import path from 'node:path'
 import * as agents from './lib/agents.js'
 import * as commands from './lib/commands.js'
 import { getConfigPaths } from './lib/config.js'
-import { type ContentType, convertContent } from './lib/converter.js'
+import { type Harness, setupHarness } from './lib/setup.js'
 import * as skills from './lib/skills.js'
-import type { AgentMode } from './lib/validation.js'
 
 const getPackageVersion = (): string => {
   try {
@@ -33,12 +32,11 @@ Usage:
   systematic <command> [options]
 
 Commands:
-  list [type]          List available skills, agents, or commands
-  convert <type> <file> [--mode=primary|subagent]
-                       Convert and inspect a file (outputs to stdout)
-  config [subcommand]  Configuration management
-    show               Show configuration
-    path               Print config file locations
+  list [type]                  List available skills, agents, or commands
+  config [subcommand]          Configuration management
+    show                       Show configuration
+    path                       Print config file locations
+  setup --harness opencode|pi  Configure a harness to load Systematic (project-local only)
 
 Options:
   -h, --help           Show this help message
@@ -47,11 +45,44 @@ Options:
 Examples:
   systematic list skills
   systematic list agents
-  systematic convert agent ./agents/my-agent.md
-  systematic convert agent ./agents/my-agent.md --mode=primary
-  systematic convert skill ./skills/my-skill/SKILL.md
   systematic config show
+  systematic setup --harness opencode
+  systematic setup --harness pi
 `
+
+function isHarness(value: string): value is Harness {
+  return value === 'opencode' || value === 'pi'
+}
+
+function setupCommand(rest: string[]): void {
+  if (rest[0] !== '--harness' || rest.length !== 2) {
+    console.error(
+      'Usage: systematic setup --harness opencode|pi (project-local only, no --global)',
+    )
+    process.exit(1)
+  }
+
+  const harnessArg = rest[1]
+  if (!harnessArg || !isHarness(harnessArg)) {
+    console.error(`Unknown or missing --harness value: ${harnessArg ?? ''}`)
+    console.error('Available: opencode, pi')
+    process.exit(1)
+  }
+
+  try {
+    const result = setupHarness(harnessArg, process.cwd())
+    if (result.status === 'already-configured') {
+      console.log(`Already configured: ${result.targetPath}`)
+    } else {
+      console.log(`Configured: ${result.targetPath}`)
+    }
+  } catch (error) {
+    console.error(
+      `Setup failed: ${error instanceof Error ? error.message : String(error)}`,
+    )
+    process.exit(1)
+  }
+}
 
 function listItems(type: string): void {
   const packageRoot = path.resolve(import.meta.dirname, '..')
@@ -91,40 +122,6 @@ function listItems(type: string): void {
   }
 }
 
-function runConvert(type: string, filePath: string, modeArg?: string): void {
-  const validTypes = ['skill', 'agent', 'command']
-  if (!validTypes.includes(type)) {
-    console.error(
-      `Invalid type: ${type}. Must be one of: ${validTypes.join(', ')}`,
-    )
-    process.exit(1)
-  }
-
-  const resolvedPath = path.resolve(filePath)
-  if (!fs.existsSync(resolvedPath)) {
-    console.error(`File not found: ${resolvedPath}`)
-    process.exit(1)
-  }
-
-  let agentMode: AgentMode = 'subagent'
-  if (modeArg) {
-    const modeMatch = modeArg.match(/^--mode=(primary|subagent)$/)
-    if (modeMatch) {
-      agentMode = modeMatch[1] as AgentMode
-    } else {
-      console.error(
-        'Invalid --mode flag. Use: --mode=primary or --mode=subagent',
-      )
-      process.exit(1)
-    }
-  }
-
-  const content = fs.readFileSync(resolvedPath, 'utf8')
-  const converted = convertContent(content, type as ContentType, { agentMode })
-
-  console.log(converted)
-}
-
 function configShow(): void {
   const paths = getConfigPaths(process.cwd())
 
@@ -158,15 +155,8 @@ switch (command) {
   case 'list':
     listItems(args[1] || 'skills')
     break
-  case 'convert':
-    if (!args[1] || !args[2]) {
-      console.error(
-        'Usage: systematic convert <type> <file> [--mode=primary|subagent]',
-      )
-      console.error('  type: skill, agent, or command')
-      process.exit(1)
-    }
-    runConvert(args[1], args[2], args[3])
+  case 'setup':
+    setupCommand(args.slice(1))
     break
   case 'config':
     switch (args[1]) {

@@ -125,17 +125,16 @@ Use fully-qualified agent names inside Task calls.
 **System-Wide Impact**
 - `ce-architecture-strategist` for cross-boundary effects, interface surfaces, and architectural knock-on impact
 - Add the specific specialist that matches the risk:
-  - `ce-performance-oracle` for scalability, latency, throughput, and resource-risk analysis
-  - `ce-security-sentinel` for auth, validation, exploit surfaces, and security boundary review
-  - `ce-data-integrity-guardian` for migrations, persistent state safety, consistency, and data lifecycle risks
+  - `ce-performance-reviewer` for scalability, latency, throughput, and resource-risk analysis
+  - `ce-security-reviewer` for auth, validation, exploit surfaces, and security boundary review
+  - `ce-data-migrations-reviewer` for migrations, persistent state safety, consistency, and data lifecycle risks
 
 **Risks & Dependencies / Operational Notes**
 - Use the specialist that matches the actual risk:
-  - `ce-security-sentinel` for security, auth, privacy, and exploit risk
-  - `ce-data-integrity-guardian` for persistent data safety, constraints, and transaction boundaries
-  - `ce-data-migration-expert` for migration realism, backfills, and production data transformation risk
+  - `ce-security-reviewer` for security, auth, privacy, and exploit risk
+  - `ce-data-migrations-reviewer` for persistent data safety, constraints, transaction boundaries, and migration realism
   - `ce-deployment-verification-agent` for rollout checklists, rollback planning, and launch verification
-  - `ce-performance-oracle` for capacity, latency, and scaling concerns
+  - `ce-performance-reviewer` for capacity, latency, and scaling concerns
 
 **Agent Prompt Shape:**
 

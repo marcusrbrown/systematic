@@ -46,7 +46,7 @@ When both `.jsonc` and `.json` exist in the same directory, `.jsonc` takes prece
 ```jsonc
 {
   "agents": {
-    "security-sentinel": {
+    "security-reviewer": {
       // User or custom config only; project config cannot choose model/provider routing.
       "model": "anthropic/claude-sonnet-4-5",
       "variant": "thinking",
@@ -85,7 +85,6 @@ The following source defaults apply to bundled Systematic agents by category whe
 | Category | Chain | Rationale | When to Override |
 | --- | --- | --- | --- |
 | design | github-copilot/gemini-3.1-pro-preview, openai/gpt-5.5+high, anthropic/claude-opus-4-7+max, … | High-judgment UX, product, and design work benefits from a strong general reasoning model with broad creative capability. | Override to a faster/cheaper model when design tasks are primarily templating or low-stakes layout work. |
-| docs | github-copilot/gemini-3.1-pro-preview, openai/gpt-5.4-mini, anthropic/claude-haiku-4-5, … | Documentation and summarization tasks should start cheaper and faster; quality is sufficient at mid-tier models. | — |
 | document-review | anthropic/claude-opus-4-7+max, openai/gpt-5.5+high, github-copilot/gemini-3.1-pro-preview, … | Requirements and plan critique benefit from the strongest nuanced reasoning to surface non-obvious gaps and contradictions. | — |
 | research | openai/gpt-5.4-mini, anthropic/claude-sonnet-4-6, github-copilot/gemini-3.1-pro-preview, … | Tool-heavy synthesis and source evaluation benefit from a strong general reasoning model with broad knowledge. | — |
 | review | anthropic/claude-sonnet-4-6, openai/gpt-5.3-codex, github-copilot/gemini-3.1-pro-preview, … | Code, security, and adversarial review benefits from the strongest reasoning to catch subtle bugs and security issues. | Override to a faster model when review tasks are primarily style or formatting checks rather than correctness or security analysis. |
