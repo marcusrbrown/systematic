@@ -327,7 +327,7 @@ Still pending from a previous run (count):
 
 If a blocking question tool is available, use it to ask about all pending decisions (both new `needs-human` and previous-run pending) together. If there are only pending decisions and no new work was done, the summary is just the pending items.
 
-If a blocking question tool is available (`question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini), use it to present the decisions and wait for the user's response. After they decide, process the remaining items: fix the code, compose the reply, post it, and resolve the thread.
+If a blocking question tool is available (`question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini; in Pi, use the blocking-question extension if available, otherwise present numbered options in chat and wait), use it to present the decisions and wait for the user's response. After they decide, process the remaining items: fix the code, compose the reply, post it, and resolve the thread.
 
 If no question tool is available, present the decisions in the summary output and wait for the user to respond in conversation. If they don't respond, the items remain open on the PR for later handling.
 

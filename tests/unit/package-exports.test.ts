@@ -63,6 +63,7 @@ describe('package.json Pi manifest', () => {
     expect(pkg.files).toContain('skills')
     expect(pkg.files).toContain('agents')
     expect(pkg.files).toContain('dist')
+    expect(pkg.files).toContain('HARNESSES.md')
   })
 
   test('declares @earendil-works/pi-coding-agent and typebox as optional peer deps', () => {

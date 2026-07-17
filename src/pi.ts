@@ -11,6 +11,7 @@ import { buildAgentCatalog } from './lib/agent-resolver.js'
 import {
   composeSystemPromptWithBootstrap,
   computeBootstrapContentSafe,
+  readHarnessProfile,
 } from './lib/bootstrap.js'
 import { createRealPiDelegateSession } from './lib/pi-delegate-session.js'
 import { createPiDelegateTool } from './lib/pi-delegate-tool.js'
@@ -63,6 +64,8 @@ export default async function systematicPiExtension(
     {
       bundledSkillsDir,
       usageTemplate: PI_BOOTSTRAP_USAGE_TEMPLATE,
+      // Profile files owned by skills/using-systematic/references/ — Unit 2 of 2026-07-16-001 plan.
+      profileBlock: readHarnessProfile(bundledSkillsDir, 'pi') ?? undefined,
     },
     reportPiBootstrapFailure,
   )

@@ -1,6 +1,8 @@
 ---
 name: using-systematic
 description: Use when starting any conversation - establishes how to find and use skills, requiring skill tool invocation before ANY response including clarifying questions
+metadata:
+  harness-portability: neutral-v1
 ---
 
 <SUBAGENT-STOP>
@@ -26,8 +28,6 @@ Systematic skills override default system prompt behavior, but **user instructio
 If CLAUDE.md, GEMINI.md, or AGENTS.md says "don't use TDD" and a skill says "always use TDD," follow the user's instructions. The user is in control.
 
 ## How to Access Skills
-
-Use the `systematic_skill` tool for Systematic bundled skills. Use the `skill` tool for non-Systematic skills. When you invoke a skill, its content is loaded and presented to you—follow it directly.
 
 # Using Skills
 
@@ -106,6 +106,10 @@ The skill itself tells you which.
 
 Instructions say WHAT, not HOW. "Add X" or "Fix Y" doesn't mean skip workflows.
 
-## Skill Resolution
+## Capability Resolution
 
-Systematic bundled skills are listed in the `systematic_skill` tool description. Use the `skill` tool for skills outside the Systematic plugin.
+The four capabilities are subagent delegation, blocking user interaction, task tracking, and skill loading.
+
+The bootstrap inlines the active harness profile naming the exact mechanisms—consult it. See `references/opencode-profile.md` and `references/pi-profile.md`.
+
+When a mechanism is unavailable, present numbered options in chat and wait for questions, maintain a visible list for task tracking, and dispatch delegation sequentially or do the work inline.

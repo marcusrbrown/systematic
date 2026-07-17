@@ -242,13 +242,15 @@ describe('src/pi.ts before_agent_start bootstrap injection', () => {
       () => true,
     )
     const originalReadFileSync = fs.readFileSync
-    const readFileSyncSpy = spyOn(fs, 'readFileSync')
-      .mockImplementationOnce(() => {
-        throw new Error('bootstrap failure')
-      })
-      .mockImplementation((...args) => {
+    const readFileSyncSpy = spyOn(fs, 'readFileSync').mockImplementation(
+      (...args) => {
+        const filePath = String(args[0])
+        if (filePath.endsWith('using-systematic/SKILL.md')) {
+          throw new Error('bootstrap failure')
+        }
         return originalReadFileSync(...args)
-      })
+      },
+    )
 
     await expect(piExtension(api)).resolves.toBeUndefined()
 
@@ -359,6 +361,31 @@ describe('src/pi.ts before_agent_start bootstrap injection', () => {
     expect(systemPrompt).not.toContain(
       'Use the skill tool for non-Systematic skills',
     )
+  })
+
+  test('Pi handler composes the capability profile exactly once across double-run', async () => {
+    const api = createFakeExtensionApi()
+    await piExtension(api)
+    const handler = api.handlers.before_agent_start as ExtensionHandler<
+      BeforeAgentStartEvent,
+      BeforeAgentStartEventResult
+    >
+    const event: BeforeAgentStartEvent = {
+      type: 'before_agent_start',
+      prompt: 'do the thing',
+      systemPrompt: 'Earlier extension prompt contribution.',
+      systemPromptOptions: {} as BeforeAgentStartEvent['systemPromptOptions'],
+    }
+
+    const first = (await handler(event, fakeExtensionContext))
+      ?.systemPrompt as string
+    const second = (
+      await handler({ ...event, systemPrompt: first }, fakeExtensionContext)
+    )?.systemPrompt as string
+    const profileMarker = '# Pi Capability Profile'
+
+    expect(second.split(profileMarker)).toHaveLength(2)
+    expect(second).toBe(first)
   })
 })
 

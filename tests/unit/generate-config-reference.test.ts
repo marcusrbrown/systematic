@@ -1,5 +1,7 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 
 const TEMP_ROOTS: string[] = []
 
@@ -375,9 +377,28 @@ describe('error handling', () => {
     const mod = await import('../../docs/scripts/generate-config-reference.js')
     expect(typeof mod.execMain).toBe('function')
 
+    // Run against an isolated copy of the real MDX — execMain writes the
+    // target file, and running it against the repo's configuration.mdx
+    // would silently rewrite the committed $schema example URL to this
+    // test's pinned major version on every unit-suite run.
+    const realMdxPath = path.resolve(
+      import.meta.dir,
+      '../../docs/src/content/docs/reference/configuration.mdx',
+    )
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'exec-main-'))
+    TEMP_ROOTS.push(tmpDir)
+    const tmpMdxPath = path.join(tmpDir, 'configuration.mdx')
+    fs.copyFileSync(realMdxPath, tmpMdxPath)
+
     // execMain should return an exit code (0 for success, non-zero for error)
-    const exitCode = await mod.execMain('2.11.0')
+    const exitCode = await mod.execMain('2.11.0', tmpMdxPath)
     expect(exitCode).toBe(0)
+
+    // The repo file must be untouched; only the temp copy changes.
+    const repoMdx = fs.readFileSync(realMdxPath, 'utf-8')
+    expect(repoMdx).not.toContain('schemas/v2/systematic-config.schema.json')
+    const tmpMdx = fs.readFileSync(tmpMdxPath, 'utf-8')
+    expect(tmpMdx).toContain('schemas/v2/systematic-config.schema.json')
   })
 
   test('generator with real schema: all fields have examples', async () => {

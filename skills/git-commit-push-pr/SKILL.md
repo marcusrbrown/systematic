@@ -7,7 +7,7 @@ description: Commit, push, and open a PR with an adaptive, value-first descripti
 
 Go from working changes to an open pull request, or rewrite an existing PR description.
 
-**Asking the user:** When this skill says "ask the user", use the platform's blocking question tool (`question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini). If unavailable, present the question and wait for a reply.
+**Asking the user:** When this skill says "ask the user", use the platform's blocking question tool (`question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini; in Pi, use the blocking-question extension if available, otherwise present numbered options in chat and wait). If unavailable, present the question and wait for a reply.
 
 ## Mode detection
 

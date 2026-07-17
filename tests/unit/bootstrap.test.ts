@@ -8,6 +8,7 @@ import {
   computeBootstrapContentSafe,
   getBootstrapContent,
   INTERNAL_AGENT_SIGNATURES,
+  readHarnessProfile,
 } from '../../src/lib/bootstrap.ts'
 
 /**
@@ -24,6 +25,16 @@ function shouldSkipBootstrap(system: readonly string[]): boolean {
   return INTERNAL_AGENT_SIGNATURES.some((sig) =>
     existingSystem.includes(sig.toLowerCase()),
   )
+}
+
+function normalizeBootstrapSnapshot(
+  content: string,
+  skillsDir: string,
+): string {
+  const normalized = content.replaceAll(skillsDir, '<SKILLS_DIR>')
+  expect(normalized).toContain('<SKILLS_DIR>')
+  expect(normalized).not.toContain(skillsDir)
+  return normalized
 }
 
 // ---------------------------------------------------------------------------
@@ -53,6 +64,266 @@ describe('getBootstrapContent', () => {
     }
     return bundledSkillsDir
   }
+
+  test('pins the default bootstrap bytes before profile inlining', () => {
+    const skillsDir = path.resolve(process.cwd(), 'skills')
+    const content = getBootstrapContent(
+      {
+        bootstrap: { enabled: true },
+        disabled_skills: [],
+      },
+      { bundledSkillsDir: skillsDir },
+    )
+
+    expect(
+      normalizeBootstrapSnapshot(content as string, skillsDir),
+    ).toMatchInlineSnapshot(`
+      "<SYSTEMATIC_WORKFLOWS>
+      You have access to structured engineering workflows via the Systematic plugin.
+
+      **IMPORTANT: The using-systematic skill content is included below. It is ALREADY LOADED - you are currently following it. Do NOT use the systematic_skill tool to load "using-systematic" again - that would be redundant.**
+
+      <SUBAGENT-STOP>
+      If you were dispatched as a subagent to execute a specific task, skip this skill.
+      </SUBAGENT-STOP>
+
+      <EXTREMELY-IMPORTANT>
+      If you think there is even a 1% chance a skill might apply to what you are doing, you ABSOLUTELY MUST invoke the skill.
+
+      IF A SKILL APPLIES TO YOUR TASK, YOU DO NOT HAVE A CHOICE. YOU MUST USE IT.
+
+      This is not negotiable. This is not optional. You cannot rationalize your way out of this.
+      </EXTREMELY-IMPORTANT>
+
+      ## Instruction Priority
+
+      Systematic skills override default system prompt behavior, but **user instructions always take precedence**:
+
+      1. **User's explicit instructions** (CLAUDE.md, GEMINI.md, AGENTS.md, direct requests) — highest priority
+      2. **Systematic skills** — override default system behavior where they conflict
+      3. **Default system prompt** — lowest priority
+
+      If CLAUDE.md, GEMINI.md, or AGENTS.md says "don't use TDD" and a skill says "always use TDD," follow the user's instructions. The user is in control.
+
+      ## How to Access Skills
+
+      # Using Skills
+
+      ## The Rule
+
+      **Invoke relevant or requested skills BEFORE any response or action.** Even a 1% chance a skill might apply means that you should invoke the skill to check. If an invoked skill turns out to be wrong for the situation, you don't need to use it.
+
+      \`\`\`dot
+      digraph skill_flow {
+          "User message received" [shape=doublecircle];
+          "About to enter Plan mode?" [shape=doublecircle];
+          "Already brainstormed?" [shape=diamond];
+          "Invoke brainstorming skill" [shape=box];
+          "Might any skill apply?" [shape=diamond];
+          "Invoke \`systematic_skill\` tool" [shape=box];
+          "Announce: 'Using [skill] to [purpose]'" [shape=box];
+          "Has checklist?" [shape=diamond];
+          "Create todo per item" [shape=box];
+          "Follow skill exactly" [shape=box];
+          "Respond (including clarifications)" [shape=doublecircle];
+
+          "About to enter Plan mode?" -> "Already brainstormed?";
+          "Already brainstormed?" -> "Invoke brainstorming skill" [label="no"];
+          "Already brainstormed?" -> "Might any skill apply?" [label="yes"];
+          "Invoke brainstorming skill" -> "Might any skill apply?";
+
+          "User message received" -> "Might any skill apply?";
+          "Might any skill apply?" -> "Invoke \`systematic_skill\` tool" [label="yes, even 1%"];
+          "Might any skill apply?" -> "Respond (including clarifications)" [label="definitely not"];
+          "Invoke \`systematic_skill\` tool" -> "Announce: 'Using [skill] to [purpose]'";
+          "Announce: 'Using [skill] to [purpose]'" -> "Has checklist?";
+          "Has checklist?" -> "Create todo per item" [label="yes"];
+          "Has checklist?" -> "Follow skill exactly" [label="no"];
+          "Create todo per item" -> "Follow skill exactly";
+      }
+      \`\`\`
+
+      ## Red Flags
+
+      These thoughts mean STOP—you're rationalizing:
+
+      | Thought | Reality |
+      |---------|---------|
+      | "This is just a simple question" | Questions are tasks. Check for skills. |
+      | "I need more context first" | Skill check comes BEFORE clarifying questions. |
+      | "Let me explore the codebase first" | Skills tell you HOW to explore. Check first. |
+      | "I can check git/files quickly" | Files lack conversation context. Check for skills. |
+      | "Let me gather information first" | Skills tell you HOW to gather information. |
+      | "This doesn't need a formal skill" | If a skill exists, use it. |
+      | "I remember this skill" | Skills evolve. Read current version. |
+      | "This doesn't count as a task" | Action = task. Check for skills. |
+      | "The skill is overkill" | Simple things become complex. Use it. |
+      | "I'll just do this one thing first" | Check BEFORE doing anything. |
+      | "This feels productive" | Undisciplined action wastes time. Skills prevent this. |
+      | "I know what that means" | Knowing the concept != using the skill. Invoke it. |
+
+      ## Skill Priority
+
+      When multiple skills could apply, use this order:
+
+      1. **Process skills first** (brainstorming, debugging) - these determine HOW to approach the task
+      2. **Implementation skills second** (frontend-design, mcp-builder) - these guide execution
+
+      "Let's build X" -> brainstorming first, then implementation skills.
+      "Fix this bug" -> debugging first, then domain-specific skills.
+
+      ## Skill Types
+
+      **Rigid** (TDD, debugging): Follow exactly. Don't adapt away discipline. The canonical bundled Rigid skill is \`test-driven-development\` — load it when implementing any feature or bugfix that requires test-first discipline.
+
+      **Flexible** (patterns): Adapt principles to context.
+
+      The skill itself tells you which.
+
+      ## User Instructions
+
+      Instructions say WHAT, not HOW. "Add X" or "Fix Y" doesn't mean skip workflows.
+
+      ## Capability Resolution
+
+      The four capabilities are subagent delegation, blocking user interaction, task tracking, and skill loading.
+
+      The bootstrap inlines the active harness profile naming the exact mechanisms—consult it. See \`references/opencode-profile.md\` and \`references/pi-profile.md\`.
+
+      When a mechanism is unavailable, present numbered options in chat and wait for questions, maintain a visible list for task tracking, and dispatch delegation sequentially or do the work inline.
+
+      **Skills naming:**
+      - Systematic bundled skills use the \`systematic:\` prefix (e.g., \`systematic:onboarding\`)
+      - Workflow skills with their own namespace keep it (e.g., \`ce:brainstorm\`)
+      - Skills can also be invoked without prefix if unambiguous
+
+      **Skills usage:**
+      - Use \`systematic_skill\` to load Systematic bundled skills
+      - Use the \`skill\` tool for non-Systematic skills
+
+      **Skills location:**
+      Bundled skills ship with the Systematic plugin and are discoverable via \`systematic_skill\`.
+
+      <available_skills>
+        <skill>
+          <name>systematic:agent-browser</name>
+          <description>Browser automation CLI for AI agents. Use when the user needs to interact with websites, including navigating pages, filling forms, clicking buttons, taking screenshots, extracting data, testing web apps, or automating any browser task. Triggers include requests to "open a website", "fill out a form", "click a button", "take a screenshot", "scrape data from a page", "test this web app", "login to a site", "automate browser actions", or any task requiring programmatic web interaction.</description>
+          <location>file://<SKILLS_DIR>/agent-browser</location>
+        </skill>
+        <skill>
+          <name>systematic:agent-native-architecture</name>
+          <description>Build applications where agents are first-class citizens. Use this skill when designing autonomous agents, creating MCP tools, implementing self-modifying systems, or building apps where features are outcomes achieved by agents operating in a loop.</description>
+          <location>file://<SKILLS_DIR>/agent-native-architecture</location>
+        </skill>
+        <skill>
+          <name>ce:brainstorm</name>
+          <description>Explore requirements and approaches through collaborative dialogue before writing a right-sized requirements document and planning implementation. Use for feature ideas, problem framing, when the user says 'let's brainstorm', or when they want to think through options before deciding what to build. Also use when a user describes a vague or ambitious feature request, asks 'what should we build', 'help me think through X', presents a problem with multiple valid solutions, or seems unsure about scope or direction — even if they don't explicitly ask to brainstorm.</description>
+          <location>file://<SKILLS_DIR>/ce-brainstorm</location>
+        </skill>
+        <skill>
+          <name>ce:compound</name>
+          <description>Document a recently solved problem to compound your team's knowledge</description>
+          <location>file://<SKILLS_DIR>/ce-compound</location>
+        </skill>
+        <skill>
+          <name>ce:ideate</name>
+          <description>Generate and critically evaluate grounded improvement ideas for the current project. Use when asking what to improve, requesting idea generation, exploring surprising improvements, or wanting the AI to proactively suggest strong project directions before brainstorming one in depth. Triggers on phrases like 'what should I improve', 'give me ideas', 'ideate on this project', 'surprise me with improvements', 'what would you change', or any request for AI-generated project improvement suggestions rather than refining the user's own idea.</description>
+          <location>file://<SKILLS_DIR>/ce-ideate</location>
+        </skill>
+        <skill>
+          <name>ce:plan</name>
+          <description>Create structured plans for any multi-step task -- software features, research workflows, events, study plans, or any goal that benefits from structured breakdown. Also deepen existing plans with interactive review of sub-agent findings. Use for plan creation when the user says 'plan this', 'create a plan', 'write a tech plan', 'plan the implementation', 'how should we build', 'what's the approach for', 'break this down', 'plan a trip', 'create a study plan', or when a brainstorm/requirements document is ready for planning. Use for plan deepening when the user says 'deepen the plan', 'deepen my plan', 'deepening pass', or uses 'deepen' in reference to a plan.</description>
+          <location>file://<SKILLS_DIR>/ce-plan</location>
+        </skill>
+        <skill>
+          <name>ce:review</name>
+          <description>Structured code review using tiered persona agents, confidence-gated findings, and a merge/dedup pipeline. Use when reviewing code changes before creating a PR.</description>
+          <location>file://<SKILLS_DIR>/ce-review</location>
+        </skill>
+        <skill>
+          <name>ce:work</name>
+          <description>Execute work efficiently while maintaining quality and finishing features</description>
+          <location>file://<SKILLS_DIR>/ce-work</location>
+        </skill>
+        <skill>
+          <name>systematic:deepen-plan</name>
+          <description>Stress-test an existing implementation plan and selectively strengthen weak sections with targeted research. Use when a plan needs more confidence around decisions, sequencing, system-wide impact, risks, or verification. Best for Standard or Deep plans, or high-risk topics such as auth, payments, migrations, external APIs, and security. For structural or clarity improvements, prefer document-review instead.</description>
+          <location>file://<SKILLS_DIR>/deepen-plan</location>
+        </skill>
+        <skill>
+          <name>systematic:document-review</name>
+          <description>Review requirements or plan documents using parallel persona agents that surface role-specific issues. Use when a requirements document or plan document exists and the user wants to improve it.</description>
+          <location>file://<SKILLS_DIR>/document-review</location>
+        </skill>
+        <skill>
+          <name>systematic:frontend-design</name>
+          <description>Use when building or reviewing any frontend interface. Covers the full design lifecycle: context detection, pre-build planning, design laws (OKLCH color, theme forcing function, layout rhythm, absolute bans on AI-slop patterns), implementation guidance, and visual verification. Use for landing pages, dashboards, components, or any web UI where design quality matters.</description>
+          <location>file://<SKILLS_DIR>/frontend-design</location>
+        </skill>
+        <skill>
+          <name>systematic:git-clean-gone-branches</name>
+          <description>Clean up local branches whose remote tracking branch is gone. Use when the user says "clean up branches", "delete gone branches", "prune local branches", "clean gone", or wants to remove stale local branches that no longer exist on the remote. Also handles removing associated worktrees for branches that have them.</description>
+          <location>file://<SKILLS_DIR>/git-clean-gone-branches</location>
+        </skill>
+        <skill>
+          <name>systematic:git-commit</name>
+          <description>Create a git commit with a clear, value-communicating message. Use when the user says "commit", "commit this", "save my changes", "create a commit", or wants to commit staged or unstaged work. Produces well-structured commit messages that follow repo conventions when they exist, and defaults to conventional commit format otherwise.</description>
+          <location>file://<SKILLS_DIR>/git-commit</location>
+        </skill>
+        <skill>
+          <name>systematic:git-commit-push-pr</name>
+          <description>Commit, push, and open a PR with an adaptive, value-first description. Use when the user says "commit and PR", "push and open a PR", "ship this", "create a PR", "open a pull request", "commit push PR", or wants to go from working changes to an open pull request in one step. Also use when the user says "update the PR description", "refresh the PR description", "freshen the PR", or wants to rewrite an existing PR description. Produces PR descriptions that scale in depth with the complexity of the change, avoiding cookie-cutter templates.</description>
+          <location>file://<SKILLS_DIR>/git-commit-push-pr</location>
+        </skill>
+        <skill>
+          <name>systematic:git-worktree</name>
+          <description>This skill manages Git worktrees for isolated parallel development. It handles creating, listing, switching, and cleaning up worktrees with a simple interactive interface, following KISS principles.</description>
+          <location>file://<SKILLS_DIR>/git-worktree</location>
+        </skill>
+        <skill>
+          <name>systematic:onboarding</name>
+          <description>Generate or regenerate ONBOARDING.md to help new contributors understand a codebase. Use when the user asks to 'create onboarding docs', 'generate ONBOARDING.md', 'document this project for new developers', 'write onboarding documentation', 'vonboard', 'vonboarding', 'prepare this repo for a new contributor', 'refresh the onboarding doc', or 'update ONBOARDING.md'. Also use when someone needs to onboard a new team member and wants a written artifact, or when a codebase lacks onboarding documentation and the user wants to generate one.</description>
+          <location>file://<SKILLS_DIR>/onboarding</location>
+        </skill>
+        <skill>
+          <name>systematic:orchestrating-subagents</name>
+          <description>Use when dispatching parallel or serial subagents, coordinating multi-unit plan execution, synthesizing results from independent subagent runs, or handling subagent failure and retry. Triggers on requests to run tasks in parallel, divide work, orchestrate a pipeline of dependent steps, or coordinate multiple agents without shared-file conflicts.</description>
+          <location>file://<SKILLS_DIR>/orchestrating-subagents</location>
+        </skill>
+        <skill>
+          <name>systematic:reproduce-bug</name>
+          <description>Systematically reproduce and investigate a bug from a GitHub issue. Use when the user provides a GitHub issue number or URL for a bug they want reproduced or investigated.</description>
+          <location>file://<SKILLS_DIR>/reproduce-bug</location>
+        </skill>
+        <skill>
+          <name>systematic:resolve-pr-feedback</name>
+          <description>Resolve PR review feedback by evaluating validity and fixing issues in parallel. Use when addressing PR review comments, resolving review threads, or fixing code review feedback.</description>
+          <location>file://<SKILLS_DIR>/resolve-pr-feedback</location>
+        </skill>
+        <skill>
+          <name>systematic:test-browser</name>
+          <description>Run browser tests on pages affected by current PR or branch</description>
+          <location>file://<SKILLS_DIR>/test-browser</location>
+        </skill>
+        <skill>
+          <name>systematic:test-driven-development</name>
+          <description>Use when implementing any feature or bugfix, before writing implementation code</description>
+          <location>file://<SKILLS_DIR>/test-driven-development</location>
+        </skill>
+        <skill>
+          <name>systematic:using-systematic</name>
+          <description>Use when starting any conversation - establishes how to find and use skills, requiring skill tool invocation before ANY response including clarifying questions</description>
+          <location>file://<SKILLS_DIR>/using-systematic</location>
+        </skill>
+        <skill>
+          <name>systematic:writing-skills</name>
+          <description>Use when creating new skills, editing existing skills, or verifying skills work before deployment</description>
+          <location>file://<SKILLS_DIR>/writing-skills</location>
+        </skill>
+      </available_skills>
+      </SYSTEMATIC_WORKFLOWS>"
+    `)
+  })
 
   test('default config returns content with SYSTEMATIC_WORKFLOWS wrapper', () => {
     const bundledSkillsDir = makeBundledSkillsDir(
@@ -97,6 +368,151 @@ describe('getBootstrapContent', () => {
     expect(content).not.toContain(
       'Use the `skill` tool for non-Systematic skills',
     )
+  })
+
+  test('inlines a profile after usage guidance and before the catalog', () => {
+    const bundledSkillsDir = makeBundledSkillsDir(
+      '---\nname: using-systematic\n---\nBootstrap body content here.',
+    )
+    fs.mkdirSync(path.join(bundledSkillsDir, 'catalog-skill'))
+    fs.writeFileSync(
+      path.join(bundledSkillsDir, 'catalog-skill', 'SKILL.md'),
+      '---\nname: catalog-skill\ndescription: Catalog entry\n---\nBody.',
+    )
+    const profile = 'PROFILE BLOCK'
+    const content = getBootstrapContent(
+      { bootstrap: { enabled: true }, disabled_skills: [] },
+      {
+        bundledSkillsDir,
+        usageTemplate: 'USAGE TEMPLATE',
+        profileBlock: profile,
+      },
+    )
+
+    expect(content).not.toBeNull()
+    const output = content as string
+    expect(output.indexOf('USAGE TEMPLATE')).toBeLessThan(
+      output.indexOf(profile),
+    )
+    expect(output.indexOf(profile)).toBeLessThan(
+      output.indexOf('<available_skills>'),
+    )
+    expect(output.indexOf(profile)).toBeLessThan(
+      output.indexOf('</SYSTEMATIC_WORKFLOWS>'),
+    )
+  })
+
+  test('reports missing harness profiles to stderr and returns null', () => {
+    const bundledSkillsDir = makeBundledSkillsDir()
+    const errors: unknown[][] = []
+    const originalError = console.error
+    console.error = (...args: unknown[]) => errors.push(args)
+    try {
+      expect(readHarnessProfile(bundledSkillsDir, 'missing')).toBeNull()
+      expect(errors).toHaveLength(1)
+      expect(errors[0]?.join(' ')).toContain('missing-profile.md')
+      expect(errors[0]?.join(' ')).toContain('ENOENT')
+    } finally {
+      console.error = originalError
+    }
+  })
+
+  test('reports profile read failures to stderr and still returns null', () => {
+    const bundledSkillsDir = makeBundledSkillsDir(
+      '---\nname: using-systematic\n---\nBundled body',
+    )
+    const profileDir = path.join(
+      bundledSkillsDir,
+      'using-systematic/references/opencode-profile.md',
+    )
+    fs.mkdirSync(profileDir, { recursive: true })
+    const errors: unknown[][] = []
+    const originalError = console.error
+    console.error = (...args: unknown[]) => errors.push(args)
+    try {
+      expect(readHarnessProfile(bundledSkillsDir, 'opencode')).toBeNull()
+      expect(errors).toHaveLength(1)
+      expect(errors[0]?.join(' ')).toContain(profileDir)
+      expect(errors[0]?.join(' ')).toContain('EISDIR')
+
+      const content = getBootstrapContent(
+        { bootstrap: { enabled: true }, disabled_skills: [] },
+        { bundledSkillsDir },
+      )
+      expect(content).not.toBeNull()
+      expect(content).not.toContain('PROFILE BLOCK')
+    } finally {
+      console.error = originalError
+    }
+  })
+
+  test('real harness profiles do not contain bootstrap replacement sentinels', () => {
+    const profilesDir = path.resolve(
+      process.cwd(),
+      'skills/using-systematic/references',
+    )
+    for (const name of ['opencode', 'pi']) {
+      const profile = fs.readFileSync(
+        path.join(profilesDir, `${name}-profile.md`),
+        'utf8',
+      )
+      expect(profile).not.toContain('<SYSTEMATIC_WORKFLOWS>')
+      expect(profile).not.toContain('</SYSTEMATIC_WORKFLOWS>')
+    }
+  })
+
+  test('pins the production-shaped OpenCode bootstrap with its profile inlined', () => {
+    const bundledSkillsDir = path.resolve(process.cwd(), 'skills')
+    const content = getBootstrapContent(
+      { bootstrap: { enabled: true }, disabled_skills: [] },
+      {
+        bundledSkillsDir,
+        profileBlock:
+          readHarnessProfile(bundledSkillsDir, 'opencode') ?? undefined,
+      },
+    )
+    expect(content).not.toBeNull()
+    expect(
+      normalizeBootstrapSnapshot(content as string, bundledSkillsDir),
+    ).toMatchSnapshot()
+  })
+
+  test('preserves marker-shaped profile text during Pi-style composition', () => {
+    const bundledSkillsDir = makeBundledSkillsDir(
+      '---\nname: using-systematic\n---\nBootstrap body content here.',
+    )
+    const profile = 'literal <SYSTEMATIC_WORKFLOWS> marker text'
+    const bootstrap = getBootstrapContent(
+      { bootstrap: { enabled: true }, disabled_skills: [] },
+      { bundledSkillsDir, profileBlock: profile },
+    ) as string
+
+    const composed = composeSystemPromptWithBootstrap(
+      'Earlier prompt',
+      bootstrap,
+    )
+    expect(composed).toContain(profile)
+    expect(
+      composeSystemPromptWithBootstrap(composed as string, bootstrap),
+    ).toBe(composed)
+  })
+
+  test('applyBootstrapContent does not duplicate an inlined profile on rerun', () => {
+    const bundledSkillsDir = makeBundledSkillsDir(
+      '---\nname: using-systematic\n---\nBootstrap body content here.',
+    )
+    const profile = 'PROFILE BLOCK'
+    const bootstrap = getBootstrapContent(
+      { bootstrap: { enabled: true }, disabled_skills: [] },
+      { bundledSkillsDir, profileBlock: profile },
+    ) as string
+    const output = { system: ['Earlier prompt'] }
+
+    applyBootstrapContent(output, bootstrap)
+    applyBootstrapContent(output, bootstrap)
+
+    expect(output.system[0].split(profile)).toHaveLength(2)
+    expect(output.system[0].split('<SYSTEMATIC_WORKFLOWS>')).toHaveLength(2)
   })
 
   test('config.bootstrap.enabled = false returns null', () => {
@@ -227,6 +643,28 @@ describe('getBootstrapContent', () => {
     expect(content).toContain(
       'Bundled skills ship with the Systematic plugin and are discoverable via `systematic_skill`.',
     )
+  })
+})
+
+describe('harness profile size budget', () => {
+  test('keeps both inlined profiles below the compact bootstrap budget', () => {
+    const profilesDir = path.resolve(
+      process.cwd(),
+      'skills/using-systematic/references',
+    )
+    const sizes = ['opencode', 'pi'].map((name) => {
+      const contents = fs.readFileSync(
+        path.join(profilesDir, `${name}-profile.md`),
+        'utf8',
+      )
+      return { name, size: contents.length }
+    })
+
+    // Keep each profile under ~600 tokens so every session gets capability
+    // routing without making the bootstrap disproportionately large.
+    for (const { name, size } of sizes) {
+      expect(size, `${name} profile size`).toBeLessThan(4000)
+    }
   })
 })
 

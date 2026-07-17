@@ -2,6 +2,8 @@
 name: ce:brainstorm
 description: 'Explore requirements and approaches through collaborative dialogue before writing a right-sized requirements document and planning implementation. Use for feature ideas, problem framing, when the user says ''let''s brainstorm'', or when they want to think through options before deciding what to build. Also use when a user describes a vague or ambitious feature request, asks ''what should we build'', ''help me think through X'', presents a problem with multiple valid solutions, or seems unsure about scope or direction — even if they don''t explicitly ask to brainstorm.'
 argument-hint: "[feature idea or problem to explore]"
+metadata:
+  harness-portability: neutral-v1
 ---
 
 # Brainstorm a Feature or Improvement
@@ -30,7 +32,7 @@ This skill does not implement code. It explores, clarifies, and documents decisi
 1. **Ask one question at a time** - Do not batch several unrelated questions into one message.
 2. **Prefer single-select multiple choice** - Use single-select when choosing one direction, one priority, or one next step.
 3. **Use multi-select rarely and intentionally** - Use it only for compatible sets such as goals, constraints, non-goals, or success criteria that can all coexist. If prioritization matters, follow up by asking which selected item is primary.
-4. **Use the platform's question tool when available** - When asking the user a question, prefer the platform's blocking question tool if one exists (`question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini). Otherwise, present numbered options in chat and wait for the user's reply before proceeding.
+4. **Use the platform's question tool when available** - When asking the user a question, prefer the platform's blocking question tool if one exists (`question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini; in Pi, use the blocking-question extension if available, otherwise present numbered options in chat and wait). Otherwise, present numbered options in chat and wait for the user's reply before proceeding.
 
 ## Output Guidance
 

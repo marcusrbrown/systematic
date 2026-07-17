@@ -608,13 +608,16 @@ export function injectSourceDefaultsTable(mdxPath: string): string {
  * Run the generator and return an exit code (0 = success, 1 = error).
  * Replaces `process.exit(1)` with a return value for testability.
  */
-export async function execMain(version?: string): Promise<number> {
+export async function execMain(
+  version?: string,
+  mdxPath: string = CONFIG_MDX_PATH,
+): Promise<number> {
   try {
     const fieldRef = generateConfigReference(version)
-    const withFieldRef = injectFieldReference(CONFIG_MDX_PATH, fieldRef)
-    fs.writeFileSync(CONFIG_MDX_PATH, withFieldRef, 'utf-8')
-    const withDefaults = injectSourceDefaultsTable(CONFIG_MDX_PATH)
-    fs.writeFileSync(CONFIG_MDX_PATH, withDefaults, 'utf-8')
+    const withFieldRef = injectFieldReference(mdxPath, fieldRef)
+    fs.writeFileSync(mdxPath, withFieldRef, 'utf-8')
+    const withDefaults = injectSourceDefaultsTable(mdxPath)
+    fs.writeFileSync(mdxPath, withDefaults, 'utf-8')
     return 0
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)

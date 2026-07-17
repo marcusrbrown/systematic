@@ -40,6 +40,8 @@ Once loaded, Systematic's Pi extension registers the same underlying capabilitie
 
 Pi support is real and runtime-tested, but it is not a byte-for-byte clone of the OpenCode integration. Two differences are worth knowing before you rely on it:
 
+Bundled skill prose targets OpenCode and Pi this release; other harnesses (Claude Code, Codex, Copilot, Gemini) consume the markdown at their own risk pending dedicated profiles.
+
 1. **Pi does not read `disabled_skills` (or any `systematic.json` config) today.** `src/pi.ts` constructs its skill resolver with a hardcoded empty disabled-skills list — the Pi extension does not load or consult OpenCode's `systematic.json` at all. Every bundled skill is available through `systematic_skill` in Pi regardless of what you have disabled for OpenCode. A Pi-native config namespace is a separate, not-yet-built decision — do not assume `.opencode` config applies to Pi sessions.
 
 2. **`systematic_skill` loads are not permission-gated in Pi.** OpenCode's `skill-tool.ts` calls `context.ask({ permission: 'skill', ... })` before returning skill content, so OpenCode's `permission.skill` config can prompt or block a load. Pi 0.80.6's extension API has no equivalent permission-gate hook, and Systematic's Pi tool implementation does not call one. `permission.skill` settings you rely on in OpenCode do not carry over — treat any skill reachable through `systematic_skill` in Pi as always-loadable.

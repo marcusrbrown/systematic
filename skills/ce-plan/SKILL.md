@@ -2,6 +2,8 @@
 name: ce:plan
 description: "Create structured plans for any multi-step task -- software features, research workflows, events, study plans, or any goal that benefits from structured breakdown. Also deepen existing plans with interactive review of sub-agent findings. Use for plan creation when the user says 'plan this', 'create a plan', 'write a tech plan', 'plan the implementation', 'how should we build', 'what's the approach for', 'break this down', 'plan a trip', 'create a study plan', or when a brainstorm/requirements document is ready for planning. Use for plan deepening when the user says 'deepen the plan', 'deepen my plan', 'deepening pass', or uses 'deepen' in reference to a plan."
 argument-hint: "[optional: feature description, requirements doc path, plan path to deepen, or any task to plan]"
+metadata:
+  harness-portability: neutral-v1
 ---
 
 # Create Technical Plan
@@ -16,7 +18,7 @@ This workflow produces a durable implementation plan. It does **not** implement 
 
 ## Interaction Method
 
-Use the platform's question tool when available. When asking the user a question, prefer the platform's blocking question tool if one exists (`question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini). Otherwise, present numbered options in chat and wait for the user's reply before proceeding.
+Use the platform's question tool when available. When asking the user a question, prefer the platform's blocking question tool if one exists (`question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini; in Pi, use the blocking-question extension if available, otherwise present numbered options in chat and wait). Otherwise, present numbered options in chat and wait for the user's reply before proceeding.
 
 Ask one question at a time. Prefer a concise single-select choice when natural options exist.
 

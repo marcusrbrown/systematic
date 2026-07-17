@@ -40,6 +40,10 @@
  *    `argument-hint` field in frontmatter. Fenced code blocks are stripped before
  *    scanning so skills that only document the placeholder are not flagged.
  *
+ * 13. **Migrated skill identifiers** — skills marked
+ *     `metadata['harness-portability'] === 'neutral-v1'` must use neutral
+ *     lexical vocabulary; exact harness syntax belongs in the harness profiles.
+ *
  * Scope is narrow by design: `skills/**\/*.md`, `agents/**\/*.md`, and
  * `src/**\/*.ts` for the full invariant suite. Additionally, `docs/solutions/**\/*.md`
  * is scanned for frontmatter parse-safety only (flags any unquoted inline comment —
@@ -218,6 +222,25 @@ export interface ArgumentHintViolation {
   message: string
 }
 
+export interface MigratedSkillIdentifierViolation {
+  file: string
+  line: number
+  identifier: MigratedSkillIdentifier
+  lineContent: string
+  message: string
+}
+
+type MigratedSkillIdentifier =
+  | 'task('
+  | 'subagent_type'
+  | 'todowrite'
+  | 'TodoWrite'
+  | 'request_user_input'
+  | 'ask_user'
+  | 'AskUserQuestion'
+  | 'update_plan'
+  | 'question'
+
 export interface RemovedNamesOverlapViolation {
   kind: 'skill' | 'agent'
   name: string
@@ -239,6 +262,7 @@ export interface CheckResult {
   agentStemViolations: AgentStemViolation[]
   agentTemperatureViolations: AgentTemperatureViolation[]
   argumentHintViolations: ArgumentHintViolation[]
+  migratedSkillIdentifierViolations: MigratedSkillIdentifierViolation[]
   removedNamesOverlapViolations: RemovedNamesOverlapViolation[]
   exemptHits: ExemptHit[]
   scanStats: {
@@ -1106,6 +1130,155 @@ export function checkArgumentHint(
   return violations
 }
 
+// These are deliberately lexical tokens only; the gate does not attempt to
+// detect paraphrases of harness-specific instructions.
+const MIGRATED_SKILL_IDENTIFIER_PATTERNS: ReadonlyArray<{
+  identifier: MigratedSkillIdentifier
+  pattern: RegExp
+}> = [
+  { identifier: 'task(', pattern: /(?:^|[^A-Za-z0-9_])task\(/ },
+  {
+    identifier: 'subagent_type',
+    pattern: /(?:^|[^A-Za-z0-9_])subagent_type(?:$|[^A-Za-z0-9_])/,
+  },
+  {
+    identifier: 'todowrite',
+    pattern: /(?:^|[^A-Za-z0-9_])todowrite(?:$|[^A-Za-z0-9_])/,
+  },
+  {
+    identifier: 'TodoWrite',
+    pattern: /(?:^|[^A-Za-z0-9_])TodoWrite(?:$|[^A-Za-z0-9_])/,
+  },
+  {
+    identifier: 'request_user_input',
+    pattern: /(?:^|[^A-Za-z0-9_])request_user_input(?:$|[^A-Za-z0-9_])/,
+  },
+  {
+    identifier: 'ask_user',
+    pattern: /(?:^|[^A-Za-z0-9_])ask_user(?:$|[^A-Za-z0-9_])/,
+  },
+  {
+    identifier: 'AskUserQuestion',
+    pattern: /(?:^|[^A-Za-z0-9_])AskUserQuestion(?:$|[^A-Za-z0-9_])/,
+  },
+  {
+    identifier: 'update_plan',
+    pattern: /(?:^|[^A-Za-z0-9_])update_plan(?:$|[^A-Za-z0-9_])/,
+  },
+  { identifier: 'question', pattern: /`question`/ },
+]
+
+const MIGRATED_IDENTIFIER_REMEDIATION =
+  'rephrase as a neutral operation; exact syntax belongs in the harness profile (skills/using-systematic/references/)'
+
+/**
+ * Scan migrated skill bodies strictly, including fenced code. Harness profile
+ * files are the designated home for these identifiers and are fully exempt;
+ * this gate protects migrated skill bodies only. A line containing both
+ * `in OpenCode` and `in Pi` is the sanctioned interaction idiom and is exempt.
+ * The scope is intentionally lexical: paraphrases are not detected.
+ */
+export function checkMigratedSkillIdentifiers(
+  rootDir: string,
+  scanFiles: readonly string[],
+): MigratedSkillIdentifierViolation[] {
+  const violations: MigratedSkillIdentifierViolation[] = []
+
+  for (const relPath of scanFiles) {
+    if (isHarnessProfileFile(relPath)) continue
+    const content = readFileSafe(path.join(rootDir, relPath))
+    if (content === null) continue
+
+    if (!isSkillEntryFile(relPath)) continue
+    const parsed = parseFrontmatter(content)
+    if (!isMigratedSkill(parsed.data)) continue
+    scanMigratedIdentifierFrontmatter(relPath, content, parsed.data, violations)
+    scanMigratedIdentifierBody(relPath, content, parsed.body, violations)
+  }
+
+  return violations
+}
+
+function isHarnessProfileFile(relPath: string): boolean {
+  return /^skills\/using-systematic\/references\/[^/]+-profile\.md$/.test(
+    relPath,
+  )
+}
+
+function isMigratedSkill(data: Record<string, unknown>): boolean {
+  const metadata = data.metadata
+  if (!isRecord(metadata)) return false
+  // This marker is consumed only by this gate; there is no runtime protection to mirror.
+  return metadata['harness-portability'] === 'neutral-v1'
+}
+
+const SANCTIONED_IDIOM_IDENTIFIERS = new Set<MigratedSkillIdentifier>([
+  'question',
+  'request_user_input',
+  'ask_user',
+  'AskUserQuestion',
+])
+
+function scanMigratedIdentifierFrontmatter(
+  relPath: string,
+  content: string,
+  data: Record<string, unknown>,
+  violations: MigratedSkillIdentifierViolation[],
+): void {
+  const rawBlock = extractFrontmatterBlock(content)
+  if (rawBlock === null) return
+  const rawLines = rawBlock.split('\n')
+
+  for (const field of ['description', 'argument-hint'] as const) {
+    const value = data[field]
+    if (typeof value !== 'string') continue
+    const rawLineIndex = rawLines.findIndex((line) =>
+      new RegExp(`^${escapeRegex(field)}:`).test(line),
+    )
+    const lineNumber = rawLineIndex >= 0 ? rawLineIndex + 2 : 2
+    scanMigratedIdentifierLine(relPath, value, lineNumber, violations)
+  }
+}
+
+function scanMigratedIdentifierBody(
+  relPath: string,
+  content: string,
+  body: string,
+  violations: MigratedSkillIdentifierViolation[],
+): void {
+  const bodyStart = content.length - body.length
+  const lineOffset = content.slice(0, bodyStart).split('\n').length - 1
+  for (const [index, line] of body.split('\n').entries()) {
+    scanMigratedIdentifierLine(
+      relPath,
+      line,
+      lineOffset + index + 1,
+      violations,
+    )
+  }
+}
+
+function scanMigratedIdentifierLine(
+  relPath: string,
+  line: string,
+  lineNumber: number,
+  violations: MigratedSkillIdentifierViolation[],
+): void {
+  const sanctionedIdiom = line.includes('in OpenCode') && line.includes('in Pi')
+  for (const { identifier, pattern } of MIGRATED_SKILL_IDENTIFIER_PATTERNS) {
+    if (sanctionedIdiom && SANCTIONED_IDIOM_IDENTIFIERS.has(identifier))
+      continue
+    if (!pattern.test(line)) continue
+    violations.push({
+      file: relPath,
+      line: lineNumber,
+      identifier,
+      lineContent: line.trim(),
+      message: `Migrated skill identifier \`${identifier}\` found in ${relPath}: ${MIGRATED_IDENTIFIER_REMEDIATION}`,
+    })
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Removed-names overlap gate
 // ---------------------------------------------------------------------------
@@ -1294,6 +1467,10 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     targets.markdown,
   )
   const argumentHintViolations = checkArgumentHint(rootDir, targets.markdown)
+  const migratedSkillIdentifierViolations = checkMigratedSkillIdentifiers(
+    rootDir,
+    targets.markdown,
+  )
   const removedNamesOverlapViolations = checkRemovedNamesOverlap(
     REMOVED_BUNDLED_SKILL_NAMES,
     REMOVED_BUNDLED_AGENT_NAMES,
@@ -1322,6 +1499,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     agentStemViolations,
     agentTemperatureViolations,
     argumentHintViolations,
+    migratedSkillIdentifierViolations,
     removedNamesOverlapViolations,
     exemptHits,
     scanStats: {
@@ -1372,6 +1550,9 @@ function printResult(result: CheckResult, verbose: boolean): void {
   printAgentStemViolations(result.agentStemViolations)
   printAgentTemperatureViolations(result.agentTemperatureViolations)
   printArgumentHintViolations(result.argumentHintViolations)
+  printMigratedSkillIdentifierViolations(
+    result.migratedSkillIdentifierViolations,
+  )
   printRemovedNamesOverlapViolations(result.removedNamesOverlapViolations)
 
   if (totalViolations(result) === 0) {
@@ -1511,6 +1692,20 @@ function printArgumentHintViolations(
   }
 }
 
+function printMigratedSkillIdentifierViolations(
+  violations: readonly MigratedSkillIdentifierViolation[],
+): void {
+  if (violations.length === 0) return
+  process.stderr.write(
+    `\nMigrated skill identifier violations (${violations.length}):\n`,
+  )
+  for (const v of violations) {
+    process.stderr.write(
+      `  ${v.file}:${v.line}  ${v.identifier}  ${v.message}\n`,
+    )
+  }
+}
+
 function printRemovedNamesOverlapViolations(
   violations: readonly RemovedNamesOverlapViolation[],
 ): void {
@@ -1536,6 +1731,7 @@ function totalViolations(result: CheckResult): number {
     result.agentStemViolations.length +
     result.agentTemperatureViolations.length +
     result.argumentHintViolations.length +
+    result.migratedSkillIdentifierViolations.length +
     result.removedNamesOverlapViolations.length
   )
 }

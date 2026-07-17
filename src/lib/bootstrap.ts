@@ -108,6 +108,27 @@ export const applyBootstrapContent = (
 export interface BootstrapDeps {
   bundledSkillsDir: string
   usageTemplate?: string
+  profileBlock?: string
+}
+
+/** Reads a harness capability profile from the packaged using-systematic references. */
+export function readHarnessProfile(
+  bundledSkillsDir: string,
+  name: string,
+): string | null {
+  const profilePath = path.join(
+    bundledSkillsDir,
+    'using-systematic/references',
+    `${name}-profile.md`,
+  )
+  try {
+    return fs.readFileSync(profilePath, 'utf8')
+  } catch (error) {
+    console.error(
+      `Failed to read harness profile ${profilePath}: ${error instanceof Error ? error.message : String(error)}`,
+    )
+    return null
+  }
 }
 
 type BootstrapContentConfig = Pick<
@@ -176,7 +197,7 @@ export function getBootstrapContent(
   config: BootstrapContentConfig,
   deps: BootstrapDeps,
 ): string | null {
-  const { bundledSkillsDir, usageTemplate } = deps
+  const { bundledSkillsDir, usageTemplate, profileBlock } = deps
 
   if (!config.bootstrap.enabled) return null
 
@@ -205,6 +226,8 @@ export function getBootstrapContent(
   })
   const catalogSection = catalog.length > 0 ? `\n\n${catalog}` : ''
 
+  const profileSection = profileBlock === undefined ? '' : `\n\n${profileBlock}`
+
   return `<SYSTEMATIC_WORKFLOWS>
 You have access to structured engineering workflows via the Systematic plugin.
 
@@ -212,6 +235,6 @@ You have access to structured engineering workflows via the Systematic plugin.
 
 ${content}
 
-${skillUsage}${catalogSection}
+${skillUsage}${profileSection}${catalogSection}
 </SYSTEMATIC_WORKFLOWS>`
 }
