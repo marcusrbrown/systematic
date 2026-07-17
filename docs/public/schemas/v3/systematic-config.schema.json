@@ -37,7 +37,7 @@
       }
     }
   ],
-  "$id": "https://fro.bot/systematic/schemas/v2/systematic-config.schema.json",
+  "$id": "https://fro.bot/systematic/schemas/v3/systematic-config.schema.json",
   "definitions": {
     "__schema0": {
       "description": "JSON Schema URL for IDE autocomplete. The value is informational only — the loader does not fetch or validate against it. Add this to enable IDE schema activation and field-level autocomplete in editors that support JSON Schema (VSCode, Zed, IntelliJ).",
