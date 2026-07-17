@@ -31,6 +31,18 @@ This created a silent disconnect: a bundled skill could be authored with `deprec
 
 Fro Bot's review on PR #401 caught the gap before merge.
 
+## Scope limit (2026-07-17)
+
+This rule applies when the gate protects a **runtime behavior** — the mirror
+exists so CI-green implies the runtime effect actually happens. It does NOT
+apply when a frontmatter marker's only consumer is the gate itself: check #13
+(`harness-portability: neutral-v1`, PR #653) deliberately keys off the single
+marker key instead of mirroring `parseMetadata`'s all-string drop rule,
+because mirroring would let one unrelated non-string metadata key silently
+disable the gate with no runtime signal to compensate. Derive the predicate
+from what the marker's consumer needs. See
+[neutral-v1 marker + migrated-set identifier gate](neutral-v1-marker-migrated-set-identifier-gate-2026-07-17.md).
+
 ## Guidance
 
 **When a content-integrity gate validates a field that the runtime parser handles permissively, the gate must enforce the same minimum field set that the runtime requires to NOT silently drop the value. Otherwise the gate gives false confidence — CI passes but the runtime behavior the gate is meant to protect (here: emitting a deprecation warning) doesn't actually happen.**

@@ -138,3 +138,4 @@ npx skills add marcusrbrown/systematic --skill [name]
 - `docs/solutions/best-practices/pre-push-live-server-screenshot-qa-2026-05-22.md` — `docs:build` is necessary but not sufficient; verify the rendered output.
 - `docs/solutions/best-practices/verify-css-liveness-against-rendered-html-2026-06-04.md` — inspect built `docs/dist` HTML rather than trusting source markup.
 - `docs/solutions/best-practices/typed-config-validation-build-time-codegen-2026-05-16.md` — adjacent build-time codegen pattern (generator self-reads, fresh-input boundaries).
+- `docs/solutions/test-failures/unit-suite-rewrites-repo-file-trap-2026-07-17.md` — the docs generator's test suite rewriting the committed configuration.mdx during verification; injectable write target + repo-file-untouched assertion.

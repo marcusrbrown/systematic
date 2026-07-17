@@ -1,8 +1,10 @@
 ---
 title: 'feat: Harness-portable bundled skills (B′-thin)'
 type: feat
-status: active
+status: completed
 date: 2026-07-16
+completed: 2026-07-17
+shipped: PR #653 / v3.1.0
 origin: docs/brainstorms/2026-07-16-harness-portable-skills-requirements.md
 ---
 
@@ -92,7 +94,7 @@ v3.0.0 made Pi a first-class consumer of `skills/` (`pi.skills` manifest — nat
 
 ## Implementation Units
 
-- [ ] **Unit 1: Capability profiles + using-systematic migration**
+- [x] **Unit 1: Capability profiles + using-systematic migration**
 
 **Goal:** The two profile files exist; using-systematic's body becomes harness-neutral discipline that routes the four capabilities through "the active harness profile."
 
@@ -118,7 +120,7 @@ v3.0.0 made Pi a first-class consumer of `skills/` (`pi.skills` manifest — nat
 
 **Verification:** content-integrity clean; unit suite green; both profiles readable as standalone markdown.
 
-- [ ] **Unit 2: Bootstrap profile inlining (both harnesses)**
+- [x] **Unit 2: Bootstrap profile inlining (both harnesses)**
 
 **Goal:** Every OpenCode and Pi session's system prompt carries its harness's compact profile block inside `<SYSTEMATIC_WORKFLOWS>`.
 
@@ -146,7 +148,7 @@ v3.0.0 made Pi a first-class consumer of `skills/` (`pi.skills` manifest — nat
 
 **Verification:** bootstrap + pi unit suites green; measured block sizes recorded in the test (budget guard: warn-comment if OpenCode bootstrap grew >15%).
 
-- [ ] **Unit 3: orchestrating-subagents structural rewrite**
+- [x] **Unit 3: orchestrating-subagents structural rewrite**
 
 **Goal:** The skill teaches delegation discipline in neutral operations; zero banned identifiers in its body; OpenCode invocation syntax lives only in the OpenCode profile.
 
@@ -171,7 +173,7 @@ v3.0.0 made Pi a first-class consumer of `skills/` (`pi.skills` manifest — nat
 
 **Verification:** zero banned identifiers in body (counted); registry drift clean if description changed; content-integrity clean.
 
-- [ ] **Unit 4: Interaction idiom Pi binding — all 19 sites**
+- [x] **Unit 4: Interaction idiom Pi binding — all 19 sites**
 
 **Goal:** Every occurrence of the multi-harness question-tool idiom names Pi's binding; ce-review's internally-drifted site (line 314) is normalized.
 
@@ -192,7 +194,7 @@ v3.0.0 made Pi a first-class consumer of `skills/` (`pi.skills` manifest — nat
 
 **Verification:** 19/19 sites updated (counted); content-integrity + registry drift clean.
 
-- [ ] **Unit 5: Content-integrity gate — migrated-set identifier ban**
+- [x] **Unit 5: Content-integrity gate — migrated-set identifier ban**
 
 **Goal:** CI fails any PR reintroducing a banned identifier into a migrated skill body; profile files may quote identifiers inside fences only.
 
@@ -242,7 +244,7 @@ v3.0.0 made Pi a first-class consumer of `skills/` (`pi.skills` manifest — nat
 
 **Verification:** every tool mention has a citation; content-integrity clean (root file outside skill scans, but run anyway); no session/process taxonomy in the text.
 
-- [ ] **Unit 6: Pi harness proof scenario**
+- [x] **Unit 6: Pi harness proof scenario**
 
 **Goal:** Mechanical evidence: a Pi session with the migrated set active receives no instruction naming absent tools.
 
