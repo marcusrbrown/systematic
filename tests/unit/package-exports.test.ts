@@ -13,6 +13,14 @@ const DIST_INDEX = path.join(DIST_DIR, 'index.js')
 const DIST_PI = path.join(DIST_DIR, 'pi.js')
 const DIST_CLI = path.join(DIST_DIR, 'cli.js')
 
+function listJavaScriptFiles(directory: string): string[] {
+  return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const entryPath = path.join(directory, entry.name)
+    if (entry.isDirectory()) return listJavaScriptFiles(entryPath)
+    return entry.name.endsWith('.js') ? [entryPath] : []
+  })
+}
+
 interface PackageJson {
   main?: string
   exports?: Record<string, unknown>
@@ -144,6 +152,70 @@ describe('build output and packaging', () => {
     expect(Object.keys(mod).sort()).toEqual(['default'])
     expect(typeof mod.default).toBe('function')
   })
+
+  test('emitted JavaScript contains no OpenCode plugin runtime imports', () => {
+    for (const filePath of listJavaScriptFiles(DIST_DIR)) {
+      expect(fs.readFileSync(filePath, 'utf8')).not.toContain(
+        '@opencode-ai/plugin',
+      )
+    }
+  })
+
+  test('loads from an isolated npm install without optional peer dependencies', () => {
+    const projectDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-opencode-load-'),
+    )
+    try {
+      fs.writeFileSync(
+        path.join(projectDir, 'package.json'),
+        JSON.stringify({ type: 'module' }),
+      )
+
+      const install = spawnSync(
+        'npm',
+        [
+          'install',
+          '--omit=dev',
+          '--ignore-scripts',
+          '--no-audit',
+          '--no-fund',
+          '--package-lock=false',
+          packedTarballPath,
+        ],
+        {
+          cwd: projectDir,
+          encoding: 'utf8',
+          env: { ...process.env, npm_config_workspaces: 'false' },
+          timeout: 120_000,
+        },
+      )
+      expect(
+        install.status,
+        `npm install failed (exit ${install.status})\n--- stdout ---\n${install.stdout}\n--- stderr ---\n${install.stderr}`,
+      ).toBe(0)
+      expect(
+        fs.existsSync(
+          path.join(projectDir, 'node_modules/@opencode-ai/plugin'),
+        ),
+      ).toBe(false)
+
+      const load = spawnSync(
+        'node',
+        [
+          '--input-type=module',
+          '-e',
+          "const m = await import('@fro.bot/systematic'); if (typeof m.default !== 'function') process.exit(1); if (Object.keys(m).join(',') !== 'default') process.exit(2)",
+        ],
+        { cwd: projectDir, encoding: 'utf8', timeout: 30_000 },
+      )
+      expect(
+        load.status,
+        `bare node import failed (exit ${load.status})\n--- stdout ---\n${load.stdout}\n--- stderr ---\n${load.stderr}`,
+      ).toBe(0)
+    } finally {
+      fs.rmSync(projectDir, { recursive: true, force: true })
+    }
+  }, 180_000)
 
   test('dist/pi.js default export is a function importable without OpenCode runtime values', async () => {
     const mod = (await import(pathToFileURL(DIST_PI).href)) as Record<
