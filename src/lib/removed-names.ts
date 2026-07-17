@@ -63,3 +63,7 @@ export const REMOVED_BUNDLED_AGENT_NAMES: readonly string[] = [
   'security-sentinel',
   'workflow/lint',
 ] as const
+
+export const REMOVED_BUNDLED_AGENT_CATEGORIES: readonly string[] = [
+  'docs',
+] as const

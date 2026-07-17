@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -1630,6 +1630,81 @@ model: gpt-4
       )
       await expect(handler(config)).rejects.toThrow(expectedConfigPath)
       await expect(handler(config)).rejects.toThrow('disabled_skills')
+    })
+
+    test('removed docs category does not prevent all bundled agents from being emitted', async () => {
+      createCategorizedAgent('review', 'review-agent', {
+        name: 'review-agent',
+        description: 'Review agent',
+      })
+      createCategorizedAgent('workflow', 'workflow-agent', {
+        name: 'workflow-agent',
+        description: 'Workflow agent',
+      })
+      writeCustomSystematicConfig({
+        categories: { docs: { model: 'openai/gpt-4' } },
+      })
+
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+      const config: Config = {}
+
+      await expect(handler(config)).resolves.toBeUndefined()
+      expect(config.agent).toHaveProperty('review-agent')
+      expect(config.agent).toHaveProperty('workflow-agent')
+      expect(warnSpy.mock.calls[0]?.[0]).toMatch(/categories\.docs/)
+      warnSpy.mockRestore()
+    })
+
+    test('never-existed category still fails validation', async () => {
+      createCategorizedAgent('review', 'review-agent', {
+        name: 'review-agent',
+        description: 'Review agent',
+      })
+      writeCustomSystematicConfig({
+        categories: { bogus: { model: 'openai/gpt-4' } },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      await expect(handler({})).rejects.toThrow(
+        /categories\.bogus.*unknown bundled agent category.*Valid categories: review/,
+      )
+    })
+
+    test('valid category model defaults still apply alongside removed docs category', async () => {
+      createCategorizedAgent('review', 'review-agent', {
+        name: 'review-agent',
+        description: 'Review agent',
+      })
+      writeCustomSystematicConfig({
+        categories: {
+          docs: { model: 'openai/gpt-4' },
+          review: { model: 'openai/gpt-4' },
+        },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+      const config: Config = {}
+
+      await handler(config)
+
+      expect(config.agent?.['review-agent']?.model).toBe('openai/gpt-4')
     })
 
     test('explicit frontmatter temperature is preserved', async () => {
