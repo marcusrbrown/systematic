@@ -27,6 +27,16 @@ function shouldSkipBootstrap(system: readonly string[]): boolean {
   )
 }
 
+function normalizeBootstrapSnapshot(
+  content: string,
+  skillsDir: string,
+): string {
+  const normalized = content.replaceAll(skillsDir, '<SKILLS_DIR>')
+  expect(normalized).toContain('<SKILLS_DIR>')
+  expect(normalized).not.toContain(skillsDir)
+  return normalized
+}
+
 // ---------------------------------------------------------------------------
 // getBootstrapContent
 // ---------------------------------------------------------------------------
@@ -56,15 +66,18 @@ describe('getBootstrapContent', () => {
   }
 
   test('pins the default bootstrap bytes before profile inlining', () => {
+    const skillsDir = path.resolve(process.cwd(), 'skills')
     const content = getBootstrapContent(
       {
         bootstrap: { enabled: true },
         disabled_skills: [],
       },
-      { bundledSkillsDir: path.resolve(process.cwd(), 'skills') },
+      { bundledSkillsDir: skillsDir },
     )
 
-    expect(content).toMatchInlineSnapshot(`
+    expect(
+      normalizeBootstrapSnapshot(content as string, skillsDir),
+    ).toMatchInlineSnapshot(`
       "<SYSTEMATIC_WORKFLOWS>
       You have access to structured engineering workflows via the Systematic plugin.
 
@@ -195,117 +208,117 @@ describe('getBootstrapContent', () => {
         <skill>
           <name>systematic:agent-browser</name>
           <description>Browser automation CLI for AI agents. Use when the user needs to interact with websites, including navigating pages, filling forms, clicking buttons, taking screenshots, extracting data, testing web apps, or automating any browser task. Triggers include requests to "open a website", "fill out a form", "click a button", "take a screenshot", "scrape data from a page", "test this web app", "login to a site", "automate browser actions", or any task requiring programmatic web interaction.</description>
-          <location>file:///Users/mrbrown/src/github.com/marcusrbrown/systematic/skills/agent-browser</location>
+          <location>file://<SKILLS_DIR>/agent-browser</location>
         </skill>
         <skill>
           <name>systematic:agent-native-architecture</name>
           <description>Build applications where agents are first-class citizens. Use this skill when designing autonomous agents, creating MCP tools, implementing self-modifying systems, or building apps where features are outcomes achieved by agents operating in a loop.</description>
-          <location>file:///Users/mrbrown/src/github.com/marcusrbrown/systematic/skills/agent-native-architecture</location>
+          <location>file://<SKILLS_DIR>/agent-native-architecture</location>
         </skill>
         <skill>
           <name>ce:brainstorm</name>
           <description>Explore requirements and approaches through collaborative dialogue before writing a right-sized requirements document and planning implementation. Use for feature ideas, problem framing, when the user says 'let's brainstorm', or when they want to think through options before deciding what to build. Also use when a user describes a vague or ambitious feature request, asks 'what should we build', 'help me think through X', presents a problem with multiple valid solutions, or seems unsure about scope or direction — even if they don't explicitly ask to brainstorm.</description>
-          <location>file:///Users/mrbrown/src/github.com/marcusrbrown/systematic/skills/ce-brainstorm</location>
+          <location>file://<SKILLS_DIR>/ce-brainstorm</location>
         </skill>
         <skill>
           <name>ce:compound</name>
           <description>Document a recently solved problem to compound your team's knowledge</description>
-          <location>file:///Users/mrbrown/src/github.com/marcusrbrown/systematic/skills/ce-compound</location>
+          <location>file://<SKILLS_DIR>/ce-compound</location>
         </skill>
         <skill>
           <name>ce:ideate</name>
           <description>Generate and critically evaluate grounded improvement ideas for the current project. Use when asking what to improve, requesting idea generation, exploring surprising improvements, or wanting the AI to proactively suggest strong project directions before brainstorming one in depth. Triggers on phrases like 'what should I improve', 'give me ideas', 'ideate on this project', 'surprise me with improvements', 'what would you change', or any request for AI-generated project improvement suggestions rather than refining the user's own idea.</description>
-          <location>file:///Users/mrbrown/src/github.com/marcusrbrown/systematic/skills/ce-ideate</location>
+          <location>file://<SKILLS_DIR>/ce-ideate</location>
         </skill>
         <skill>
           <name>ce:plan</name>
           <description>Create structured plans for any multi-step task -- software features, research workflows, events, study plans, or any goal that benefits from structured breakdown. Also deepen existing plans with interactive review of sub-agent findings. Use for plan creation when the user says 'plan this', 'create a plan', 'write a tech plan', 'plan the implementation', 'how should we build', 'what's the approach for', 'break this down', 'plan a trip', 'create a study plan', or when a brainstorm/requirements document is ready for planning. Use for plan deepening when the user says 'deepen the plan', 'deepen my plan', 'deepening pass', or uses 'deepen' in reference to a plan.</description>
-          <location>file:///Users/mrbrown/src/github.com/marcusrbrown/systematic/skills/ce-plan</location>
+          <location>file://<SKILLS_DIR>/ce-plan</location>
         </skill>
         <skill>
           <name>ce:review</name>
           <description>Structured code review using tiered persona agents, confidence-gated findings, and a merge/dedup pipeline. Use when reviewing code changes before creating a PR.</description>
-          <location>file:///Users/mrbrown/src/github.com/marcusrbrown/systematic/skills/ce-review</location>
+          <location>file://<SKILLS_DIR>/ce-review</location>
         </skill>
         <skill>
           <name>ce:work</name>
           <description>Execute work efficiently while maintaining quality and finishing features</description>
-          <location>file:///Users/mrbrown/src/github.com/marcusrbrown/systematic/skills/ce-work</location>
+          <location>file://<SKILLS_DIR>/ce-work</location>
         </skill>
         <skill>
           <name>systematic:deepen-plan</name>
           <description>Stress-test an existing implementation plan and selectively strengthen weak sections with targeted research. Use when a plan needs more confidence around decisions, sequencing, system-wide impact, risks, or verification. Best for Standard or Deep plans, or high-risk topics such as auth, payments, migrations, external APIs, and security. For structural or clarity improvements, prefer document-review instead.</description>
-          <location>file:///Users/mrbrown/src/github.com/marcusrbrown/systematic/skills/deepen-plan</location>
+          <location>file://<SKILLS_DIR>/deepen-plan</location>
         </skill>
         <skill>
           <name>systematic:document-review</name>
           <description>Review requirements or plan documents using parallel persona agents that surface role-specific issues. Use when a requirements document or plan document exists and the user wants to improve it.</description>
-          <location>file:///Users/mrbrown/src/github.com/marcusrbrown/systematic/skills/document-review</location>
+          <location>file://<SKILLS_DIR>/document-review</location>
         </skill>
         <skill>
           <name>systematic:frontend-design</name>
           <description>Use when building or reviewing any frontend interface. Covers the full design lifecycle: context detection, pre-build planning, design laws (OKLCH color, theme forcing function, layout rhythm, absolute bans on AI-slop patterns), implementation guidance, and visual verification. Use for landing pages, dashboards, components, or any web UI where design quality matters.</description>
-          <location>file:///Users/mrbrown/src/github.com/marcusrbrown/systematic/skills/frontend-design</location>
+          <location>file://<SKILLS_DIR>/frontend-design</location>
         </skill>
         <skill>
           <name>systematic:git-clean-gone-branches</name>
           <description>Clean up local branches whose remote tracking branch is gone. Use when the user says "clean up branches", "delete gone branches", "prune local branches", "clean gone", or wants to remove stale local branches that no longer exist on the remote. Also handles removing associated worktrees for branches that have them.</description>
-          <location>file:///Users/mrbrown/src/github.com/marcusrbrown/systematic/skills/git-clean-gone-branches</location>
+          <location>file://<SKILLS_DIR>/git-clean-gone-branches</location>
         </skill>
         <skill>
           <name>systematic:git-commit</name>
           <description>Create a git commit with a clear, value-communicating message. Use when the user says "commit", "commit this", "save my changes", "create a commit", or wants to commit staged or unstaged work. Produces well-structured commit messages that follow repo conventions when they exist, and defaults to conventional commit format otherwise.</description>
-          <location>file:///Users/mrbrown/src/github.com/marcusrbrown/systematic/skills/git-commit</location>
+          <location>file://<SKILLS_DIR>/git-commit</location>
         </skill>
         <skill>
           <name>systematic:git-commit-push-pr</name>
           <description>Commit, push, and open a PR with an adaptive, value-first description. Use when the user says "commit and PR", "push and open a PR", "ship this", "create a PR", "open a pull request", "commit push PR", or wants to go from working changes to an open pull request in one step. Also use when the user says "update the PR description", "refresh the PR description", "freshen the PR", or wants to rewrite an existing PR description. Produces PR descriptions that scale in depth with the complexity of the change, avoiding cookie-cutter templates.</description>
-          <location>file:///Users/mrbrown/src/github.com/marcusrbrown/systematic/skills/git-commit-push-pr</location>
+          <location>file://<SKILLS_DIR>/git-commit-push-pr</location>
         </skill>
         <skill>
           <name>systematic:git-worktree</name>
           <description>This skill manages Git worktrees for isolated parallel development. It handles creating, listing, switching, and cleaning up worktrees with a simple interactive interface, following KISS principles.</description>
-          <location>file:///Users/mrbrown/src/github.com/marcusrbrown/systematic/skills/git-worktree</location>
+          <location>file://<SKILLS_DIR>/git-worktree</location>
         </skill>
         <skill>
           <name>systematic:onboarding</name>
           <description>Generate or regenerate ONBOARDING.md to help new contributors understand a codebase. Use when the user asks to 'create onboarding docs', 'generate ONBOARDING.md', 'document this project for new developers', 'write onboarding documentation', 'vonboard', 'vonboarding', 'prepare this repo for a new contributor', 'refresh the onboarding doc', or 'update ONBOARDING.md'. Also use when someone needs to onboard a new team member and wants a written artifact, or when a codebase lacks onboarding documentation and the user wants to generate one.</description>
-          <location>file:///Users/mrbrown/src/github.com/marcusrbrown/systematic/skills/onboarding</location>
+          <location>file://<SKILLS_DIR>/onboarding</location>
         </skill>
         <skill>
           <name>systematic:orchestrating-subagents</name>
           <description>Use when dispatching parallel or serial subagents, coordinating multi-unit plan execution, synthesizing results from independent subagent runs, or handling subagent failure and retry. Triggers on requests to run tasks in parallel, divide work, orchestrate a pipeline of dependent steps, or coordinate multiple agents without shared-file conflicts.</description>
-          <location>file:///Users/mrbrown/src/github.com/marcusrbrown/systematic/skills/orchestrating-subagents</location>
+          <location>file://<SKILLS_DIR>/orchestrating-subagents</location>
         </skill>
         <skill>
           <name>systematic:reproduce-bug</name>
           <description>Systematically reproduce and investigate a bug from a GitHub issue. Use when the user provides a GitHub issue number or URL for a bug they want reproduced or investigated.</description>
-          <location>file:///Users/mrbrown/src/github.com/marcusrbrown/systematic/skills/reproduce-bug</location>
+          <location>file://<SKILLS_DIR>/reproduce-bug</location>
         </skill>
         <skill>
           <name>systematic:resolve-pr-feedback</name>
           <description>Resolve PR review feedback by evaluating validity and fixing issues in parallel. Use when addressing PR review comments, resolving review threads, or fixing code review feedback.</description>
-          <location>file:///Users/mrbrown/src/github.com/marcusrbrown/systematic/skills/resolve-pr-feedback</location>
+          <location>file://<SKILLS_DIR>/resolve-pr-feedback</location>
         </skill>
         <skill>
           <name>systematic:test-browser</name>
           <description>Run browser tests on pages affected by current PR or branch</description>
-          <location>file:///Users/mrbrown/src/github.com/marcusrbrown/systematic/skills/test-browser</location>
+          <location>file://<SKILLS_DIR>/test-browser</location>
         </skill>
         <skill>
           <name>systematic:test-driven-development</name>
           <description>Use when implementing any feature or bugfix, before writing implementation code</description>
-          <location>file:///Users/mrbrown/src/github.com/marcusrbrown/systematic/skills/test-driven-development</location>
+          <location>file://<SKILLS_DIR>/test-driven-development</location>
         </skill>
         <skill>
           <name>systematic:using-systematic</name>
           <description>Use when starting any conversation - establishes how to find and use skills, requiring skill tool invocation before ANY response including clarifying questions</description>
-          <location>file:///Users/mrbrown/src/github.com/marcusrbrown/systematic/skills/using-systematic</location>
+          <location>file://<SKILLS_DIR>/using-systematic</location>
         </skill>
         <skill>
           <name>systematic:writing-skills</name>
           <description>Use when creating new skills, editing existing skills, or verifying skills work before deployment</description>
-          <location>file:///Users/mrbrown/src/github.com/marcusrbrown/systematic/skills/writing-skills</location>
+          <location>file://<SKILLS_DIR>/writing-skills</location>
         </skill>
       </available_skills>
       </SYSTEMATIC_WORKFLOWS>"
@@ -459,7 +472,9 @@ describe('getBootstrapContent', () => {
       },
     )
     expect(content).not.toBeNull()
-    expect(content).toMatchSnapshot()
+    expect(
+      normalizeBootstrapSnapshot(content as string, bundledSkillsDir),
+    ).toMatchSnapshot()
   })
 
   test('preserves marker-shaped profile text during Pi-style composition', () => {
