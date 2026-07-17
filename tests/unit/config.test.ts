@@ -1393,6 +1393,39 @@ describe('config', () => {
     })
   })
 
+  describe('removed bundled agent categories (warn-and-ignore)', () => {
+    test('categories.docs is dropped and warns about its v3.0.0 removal', () => {
+      writeUserConfig({ categories: { docs: { model: 'openai/gpt-4' } } })
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+
+      const result = loadConfig(testDir)
+
+      expect(result.categories).not.toHaveProperty('docs')
+      expect(warnSpy.mock.calls[0]?.[0]).toMatch(
+        /categories\.docs.*removed in v3\.0\.0.*https:\/\/fro\.bot\/systematic\/guides\/v3-migration\//,
+      )
+      warnSpy.mockRestore()
+    })
+
+    test('valid categories remain after removing categories.docs', () => {
+      writeUserConfig({
+        categories: {
+          docs: { model: 'openai/gpt-4' },
+          review: { model: 'anthropic/claude-sonnet-4' },
+        },
+      })
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+
+      const result = loadConfig(testDir)
+
+      expect(result.categories).toEqual({
+        review: { model: 'anthropic/claude-sonnet-4' },
+      })
+      expect(warnSpy).toHaveBeenCalled()
+      warnSpy.mockRestore()
+    })
+  })
+
   describe('JSONC precedence', () => {
     test('only systematic.json exists -- loads it (backward compat)', () => {
       writeUserConfig({ disabled_skills: ['ce:plan'] })

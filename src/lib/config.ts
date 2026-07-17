@@ -16,6 +16,7 @@ import {
   SECURITY_OVERLAY_FIELDS as SCHEMA_SECURITY_OVERLAY_FIELDS,
   SystematicConfigSchema,
 } from './config-schema.js'
+import { REMOVED_BUNDLED_AGENT_CATEGORIES } from './removed-names.js'
 
 export interface BootstrapConfig {
   enabled: boolean
@@ -96,6 +97,10 @@ const CURRENT_AGENT_NAMES_SET: ReadonlySet<string> = new Set([
   ...BUNDLED_AGENT_QUALIFIED_IDS,
 ])
 
+const REMOVED_AGENT_CATEGORIES_SET: ReadonlySet<string> = new Set(
+  REMOVED_BUNDLED_AGENT_CATEGORIES,
+)
+
 /**
  * Return the subset of `names` that are absent from `allowedSet`. These are
  * names that parsed successfully (they are in the removed-names list so the
@@ -121,12 +126,17 @@ export function warnDroppedNames(
   dropped: string[],
   field: string,
   warned: Set<string>,
+  removalVersion?: string,
 ): void {
   for (const name of dropped) {
     if (warned.has(name)) continue
     warned.add(name)
+    const displayName = field === 'categories' ? `${field}.${name}` : name
+    const removalNote = removalVersion
+      ? ` It was removed in ${removalVersion}.`
+      : ''
     console.warn(
-      `[systematic] "${name}" in \`${field}\` is no longer a bundled name and will be ignored. Remove it from your config to silence this warning. See ${MIGRATION_DOCS_URL} for migration guidance.`,
+      `[systematic] "${displayName}" in \`${field}\` is no longer a bundled name and will be ignored.${removalNote} Remove it from your config to silence this warning. See ${MIGRATION_DOCS_URL} for migration guidance.`,
     )
   }
 }
@@ -390,7 +400,24 @@ export function loadConfigWithSources(
     (source): source is ConfigSource => source !== null,
   )
 
-  const overlays = mergeOverlaySources(sources)
+  const mergedOverlays = mergeOverlaySources(sources)
+  const droppedCategories = Object.keys(mergedOverlays.categories).filter(
+    (name) => REMOVED_AGENT_CATEGORIES_SET.has(name),
+  )
+  const warned = new Set<string>()
+  warnDroppedNames(droppedCategories, 'categories', warned, 'v3.0.0')
+  const droppedCategorySet = new Set(droppedCategories)
+  const overlays: SourcedOverlayConfigMap =
+    droppedCategorySet.size === 0
+      ? mergedOverlays
+      : {
+          ...mergedOverlays,
+          categories: Object.fromEntries(
+            Object.entries(mergedOverlays.categories).filter(
+              ([key]) => !droppedCategorySet.has(key),
+            ),
+          ),
+        }
   const userConfig = userSource?.config
   const projectConfig = projectSource?.config
   const customConfig = customSource?.config
@@ -446,7 +473,6 @@ export function loadConfigWithSources(
   // precedence and raw-config preservation are both unaffected. A local Set
   // deduplicates warnings within this single load invocation without any
   // sticky module-global state that could suppress unrelated later warnings.
-  const warned = new Set<string>()
   const droppedSkills = computeDroppedNames(
     result.disabled_skills,
     CURRENT_SKILL_NAMES_SET,
