@@ -517,6 +517,7 @@
       "description": "Use when starting any conversation - establishes how to find and use skills, requiring skill tool invocation before ANY response including clarifying questions",
       "files": [
         "skills/using-systematic/SKILL.md",
+        "skills/using-systematic/references/claude-code-profile.md",
         "skills/using-systematic/references/opencode-profile.md",
         "skills/using-systematic/references/pi-profile.md"
       ]
