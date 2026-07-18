@@ -2,19 +2,19 @@
 
 This is the evidence registry for Systematic's harness-portability work. **Every tool or mechanism named here is backed by an in-repo path with line numbers, installed or cloned source, or an authoritative URL.** If the supplied research did not verify a capability, it is explicitly marked **UNVERIFIED**; absence of evidence is not evidence of absence.
 
-**Tiers.** Tier 1 means Systematic ships a controlled adapter: OpenCode and Pi. Tier 2 means the harness is documented for portability but has no Systematic adapter: Claude Code, Codex CLI, Gemini CLI, and GitHub Copilot.
+**Tiers.** Tier 1 means Systematic ships a controlled adapter: OpenCode, Pi, and Claude Code. Tier 2 means the harness is documented for portability but has no Systematic adapter: Codex CLI, Gemini CLI, and GitHub Copilot.
 
 ## Capability matrix
 
-The four capability rows use the vocabulary in the [OpenCode profile](skills/using-systematic/references/opencode-profile.md#L3-L8) and [Pi profile](skills/using-systematic/references/pi-profile.md#L3-L8).
+The four capability rows use the vocabulary in the [OpenCode profile](skills/using-systematic/references/opencode-profile.md#L3-L8), [Pi profile](skills/using-systematic/references/pi-profile.md#L3-L8), and [Claude Code profile](skills/using-systematic/references/claude-code-profile.md#L5-L10).
 
-| Capability | OpenCode (Tier 1) | Pi (Tier 1) | Claude Code (Tier 2) | Codex CLI (Tier 2) | Gemini CLI (Tier 2) | GitHub Copilot (Tier 2) |
+| Capability | OpenCode (Tier 1) | Pi (Tier 1) | Claude Code (Tier 1) | Codex CLI (Tier 2) | Gemini CLI (Tier 2) | GitHub Copilot (Tier 2) |
 |---|---|---|---|---|---|---|
-| Subagent delegation | `task`, including `subagent_type`, resume, and background execution [OC-1] | `systematic_delegate({agent, task})`; sequential, capped at 20 turns [PI-1] | `context: fork` for skills; `subagent_type` is **UNVERIFIED** [CC-1] | **UNVERIFIED** [U] | **UNVERIFIED** [U] | Built-in/custom agents [GH-1][GH-2] |
+| Subagent delegation | `task`, including `subagent_type`, resume, and background execution [OC-1] | `systematic_delegate({agent, task})`; sequential, capped at 20 turns [PI-1] | Name-based subagent dispatch (invoke a subagent by name in the prompt text); `context: fork` for skill-scoped forks; plugin agents ship in `agents/` [CC-1][CC-9] | **UNVERIFIED** [U] | **UNVERIFIED** [U] | Built-in/custom agents [GH-1][GH-2] |
 | Blocking user interaction | `question` [OC-2] | No native blocking tool; numbered-chat fallback [PI-2] | `AskUserQuestion` [CC-2] | `request_user_input`; blocking and root-thread-only [CX-1][CX-2] | `ask_user`; pauses until answers [GE-1][GE-2] | No dedicated tool name verified; plan-mode clarification and `--no-ask-user` are documented [GH-3][GH-4] |
 | Task tracking | `todowrite` [OC-3] | No native mechanism; visible list fallback [PI-2] | `TodoWrite` is deprecated/disabled by default; `TaskCreate`/`TaskGet`/`TaskList`/`TaskUpdate` replace it [CC-3][CC-4] | **UNVERIFIED** [U] | **UNVERIFIED** [U] | No `TodoWrite` equivalent verified; cloud-agent tasks/sessions API is documented [GH-5] |
-| Skill loading | Skills become commands and `systematic_skill` is registered [OC-4][OC-5] | `systematic_skill` adapter and Pi-native activation [PI-3][PI-4] | Skill tool, `SKILL.md`, and `.claude/skills/` [CC-5][CC-6] | **UNVERIFIED** [U] | **UNVERIFIED** [U] | `SKILL.md` skills [GH-6] |
-| Skills-file support | `SKILL.md` is loaded by the Systematic skill path [OC-4] | `pi.skills` ships `./skills`, including `SKILL.md` discovery [PI-4][PI-5] | `SKILL.md` and `.claude/skills/` [CC-5][CC-6] | **UNVERIFIED** [U] | **UNVERIFIED** [U] | `SKILL.md` [GH-6] |
+| Skill loading | Skills become commands and `systematic_skill` is registered [OC-4][OC-5] | `systematic_skill` adapter and Pi-native activation [PI-3][PI-4] | Native Skill tool with `SKILL.md` discovery (`~/.claude/skills/`, `.claude/skills/`, plugin `skills/`); Systematic ships no `systematic_skill` tool on Claude Code [CC-5][CC-6][CC-9] | **UNVERIFIED** [U] | **UNVERIFIED** [U] | `SKILL.md` skills [GH-6] |
+| Skills-file support | `SKILL.md` is loaded by the Systematic skill path [OC-4] | `pi.skills` ships `./skills`, including `SKILL.md` discovery [PI-4][PI-5] | `SKILL.md` and `.claude/skills/`, copied verbatim into the plugin bundle [CC-5][CC-6][CC-9] | **UNVERIFIED** [U] | **UNVERIFIED** [U] | `SKILL.md` [GH-6] |
 
 `[U]` means the capability was not checked in the supplied research pack. It is not a claim that the capability does not exist.
 
@@ -32,9 +32,13 @@ The package manifest exposes the extension and skills at `package.json:17-23`, w
 
 Pi does not consume `disabled_skills` or Systematic's OpenCode configuration, and its skill loading has no OpenCode-style permission gate `docs/src/content/docs/guides/pi-harness.mdx:39-47` [PI-6]. Those are deliberate honesty boundaries, not implied parity.
 
-## Claude Code — Tier 2 documented portability target
+## Claude Code — Tier 1 shipped adapter
 
-Claude Code documents `AskUserQuestion` [CC-2], current task tracking through `TaskCreate`/`TaskGet`/`TaskList`/`TaskUpdate`, and the deprecated `TodoWrite` [CC-3][CC-4]. Its skill model includes the skill tool, `SKILL.md`, `~/.claude/skills/`, and `.claude/skills/` [CC-5][CC-6]. Skills may run with `context: fork`; a public-docs verification of a `subagent_type` parameter was not found, so that name remains **UNVERIFIED** [CC-1]. Systematic ships no Claude Code adapter or profile.
+Claude Code's profile records name-based subagent dispatch, `AskUserQuestion`, task tracking through `TaskCreate`/`TaskGet`/`TaskList`/`TaskUpdate`, and native Skill/`SKILL.md` discovery [CC-P]. Systematic ships a self-contained plugin bundle generated by `scripts/build-claude-code-plugin.ts` into `claude-code/`: a hand-written manifest at `claude-code/.claude-plugin/plugin.json`, bundled skills copied verbatim under `claude-code/skills/`, flattened agent personas under `claude-code/agents/`, an output style at `claude-code/output-styles/systematic.md` composed from the using-systematic body plus the Claude Code profile and skill catalog, and a declarative `SessionStart` hook at `claude-code/hooks/hooks.json` [CC-9].
+
+Delegation is name-based: a prompt invokes a subagent by name (for example, "Use the systematic-implementer subagent to …") and Claude Code resolves it against the plugin's `agents/` directory; skills may additionally run scoped subagent forks via `context: fork` [CC-1]. `AskUserQuestion` is the blocking-interaction tool [CC-2]. `TodoWrite` is deprecated and disabled by default; `TaskCreate`/`TaskGet`/`TaskList`/`TaskUpdate` are the current task-tracking tools [CC-3][CC-4]. Skills are discovered natively from `SKILL.md` under `~/.claude/skills/`, `.claude/skills/`, and the plugin's own `skills/` directory through the built-in Skill tool; Systematic registers no `systematic_skill` tool on Claude Code, unlike its OpenCode and Pi adapters [CC-5][CC-6][CC-9].
+
+Behavioral enforcement rides a plugin output style (`force-for-plugin: true`), which is the documented plugin-native channel that modifies the system prompt directly and auto-applies when the plugin is enabled. The `SessionStart` hook carries declarative session state only (a static skill/agent count and catalog) — imperative hook content is refused as prompt injection, so the hook does not attempt to inject behavioral instructions. Workflow content ships as native skills; agents ship as native subagents. Integration coverage lives in `tests/integration/claude-code.test.ts` [CC-10].
 
 ## Codex CLI — Tier 2 documented portability target
 
@@ -50,9 +54,9 @@ Copilot documents built-in agents and custom-agent invocation [GH-1][GH-2]. Its 
 
 ## Similarities and differences
 
-`SKILL.md` is the clearest cross-harness convergence: it is documented for Claude Code and Copilot, consumed by OpenCode's Systematic skill path, and shipped through Systematic-on-Pi [OC-4][PI-4][CC-5][GH-6]. `AGENTS.md` is also converging as an instruction-file convention: this repository uses it (`AGENTS.md:1-7`), and Copilot documents it [GH-7][GH-8].
+`SKILL.md` is the clearest cross-harness convergence: it is documented for Claude Code and Copilot, consumed by OpenCode's Systematic skill path, and shipped through Systematic's adapters for both Pi and Claude Code [OC-4][PI-4][CC-5][CC-9][GH-6]. `AGENTS.md` is also converging as an instruction-file convention: this repository uses it (`AGENTS.md:1-7`), and Copilot documents it [GH-7][GH-8].
 
-Delegation semantics diverge materially: OpenCode supports parallel/background dispatch [OC-1], Pi's adapter is sequential-only [PI-1], Claude's `context: fork` is skill-scoped [CC-1], and the remaining Tier 2 delegation claims are **UNVERIFIED**. Blocking input likewise ranges from native tools (`question`, `request_user_input`, `ask_user`, `AskUserQuestion`) to Pi's numbered-chat fallback and Copilot's plan-mode clarification [OC-2][PI-2][CC-2][CX-1][GE-1][GH-3].
+Delegation semantics diverge materially: OpenCode supports parallel/background dispatch [OC-1], Pi's adapter is sequential-only [PI-1], Claude Code dispatches subagents by name and additionally supports skill-scoped `context: fork` [CC-1], and the remaining Tier 2 delegation claims are **UNVERIFIED**. Blocking input likewise ranges from native tools (`question`, `request_user_input`, `ask_user`, `AskUserQuestion`) to Pi's numbered-chat fallback and Copilot's plan-mode clarification [OC-2][PI-2][CC-2][CX-1][GE-1][GH-3].
 
 ## Maintenance
 
@@ -77,12 +81,15 @@ Migrated-skill discipline is enforced by the [content-integrity gate](scripts/co
 - **PI-4** — `package.json:17-23`; `tests/unit/package-exports.test.ts:42-66,241-267`.
 - **PI-5** — `tests/integration/pi.test.ts:349-388`; installed Pi source `node_modules/@earendil-works/pi-coding-agent/dist/config.js:396-398`.
 - **PI-6** — `docs/src/content/docs/guides/pi-harness.mdx:39-47`.
-- **CC-1** — [Claude Code skills](https://code.claude.com/docs/en/skills) (`context: fork`); public-docs `subagent_type` verification is **UNVERIFIED**.
+- **CC-P** — [Claude Code profile](skills/using-systematic/references/claude-code-profile.md#L5-L10).
+- **CC-1** — [Claude Code skills](https://code.claude.com/docs/en/skills) (`context: fork`); name-based subagent dispatch verified via `claude-code/agents/` and the plugin's invocation convention [CC-9].
 - **CC-2** — [Claude Code tools reference](https://code.claude.com/docs/en/tools-reference).
 - **CC-3** — [Claude Code tools reference](https://code.claude.com/docs/en/tools-reference).
 - **CC-4** — [Claude Code todo tracking](https://code.claude.com/docs/en/agent-sdk/todo-tracking.md).
 - **CC-5** — [Claude Code skills](https://code.claude.com/docs/en/skills).
 - **CC-6** — [Claude Code Agent SDK skills](https://code.claude.com/docs/en/agent-sdk/skills.md).
+- **CC-9** — `scripts/build-claude-code-plugin.ts:5-23`; generated bundle `claude-code/.claude-plugin/plugin.json`, `claude-code/skills/`, `claude-code/agents/`, `claude-code/output-styles/systematic.md`, `claude-code/hooks/hooks.json`.
+- **CC-10** — `tests/integration/claude-code.test.ts`.
 - **CX-1** — [Codex request_user_input definition](https://github.com/openai/codex/blob/35aaa5d9/codex-rs/tools/src/request_user_input_tool.rs).
 - **CX-2** — [Codex request_user_input handler](https://github.com/openai/codex/blob/d47b755a/codex-rs/core/src/tools/handlers/request_user_input.rs).
 - **GE-1** — [Gemini ask-user documentation](https://github.com/google-gemini/gemini-cli/blob/main/docs/tools/ask-user.md).
