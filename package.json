@@ -110,6 +110,9 @@
     "jsonc-parser": "^3.3.0",
     "zod": "4.4.3"
   },
+  "overrides": {
+    "@earendil-works/pi-ai": "0.80.7"
+  },
   "publishConfig": {
     "access": "public",
     "provenance": true
