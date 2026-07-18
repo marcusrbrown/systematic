@@ -218,7 +218,7 @@ What survived: three real forks where another reasonable agent might choose diff
 
 Fires only when:
 - Phase 0.2 found no upstream brainstorm doc
-- AND Phase 0.4 stayed in ce:plan (did not route to ce:debug, ce:work, or universal-planning)
+- AND Phase 0.4 stayed in ce:plan (did not route to ce:work or universal-planning)
 - AND Phase 0.5 cleared (no unresolved blockers)
 - AND not on Phase 0.1 fast paths (resume normal, deepen-intent)
 
@@ -361,7 +361,7 @@ This restores the audit visibility the original design intended (un-validated be
 
 If the user response indicates they're in the wrong skill or want a different workflow:
 
-- **Solo variant**: common redirects include "this is bigger than I thought — let me brainstorm first" (suggest `ce:brainstorm`), "this is just a fix, no plan needed" (suggest `ce:work`), or "I need to investigate first" (suggest `ce:debug`).
+- **Solo variant**: common redirects include "this is bigger than I thought — let me brainstorm first" (suggest `ce:brainstorm`), "this is just a fix, no plan needed" (suggest `ce:work`), or "I need to investigate first" (route to root-cause investigation before planning).
 - **Brainstorm-sourced variant**: less common, but possible — "actually this scope is wrong, take it back to brainstorm" (suggest `ce:brainstorm` to revise the upstream doc).
 
 In either case: stop ce:plan, suggest the alternative skill, offer to load it in-session. Don't push back or argue — the user's redirect signal is the deliberate choice.
