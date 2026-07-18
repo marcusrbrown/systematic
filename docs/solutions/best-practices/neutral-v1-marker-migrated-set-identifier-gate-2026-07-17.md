@@ -12,6 +12,7 @@ tags:
   - bundled-skills
   - gate-discipline
   - lexical-ban
+last_updated: 2026-07-17
 applies_when:
   - Migrating bundled skill prose to harness-neutral capability language
   - Adding a CI gate over a subset of assets marked via frontmatter metadata
@@ -51,6 +52,12 @@ metadata:
   regexes prevent prose false positives ("task" as an English word passes;
   `task(` fails). The scope is intentionally lexical — paraphrases are not
   detected, and the gate says so in its doc comment (honest-ban rule).
+- **Boundary: this ban must NOT be extended to qualified persona IDs.**
+  `systematic:<category>:<name>` IDs are the canonical, phantom-validated
+  cross-reference form (validated by `checkReferenceIntegrity`), not
+  harness-specific tool syntax. Adding them to this vocabulary would collide
+  with that reference-integrity check. See
+  `docs/solutions/best-practices/qualified-persona-ids-are-canonical-validated-references-2026-07-17.md`.
 - **Zones, not blanket rules:**
   - Harness profile files (`skills/using-systematic/references/*-profile.md`)
     are fully exempt — they are the designated home for exact syntax.

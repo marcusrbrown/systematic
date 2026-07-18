@@ -23,6 +23,7 @@ confidence: verified
 related:
   - docs/solutions/integration-issues/zsh-for-loop-word-splitting-silent-failure-20260417.md
   - docs/solutions/workflow-patterns/truth-reset-scope-split-20260417.md
+  - docs/solutions/best-practices/qualified-persona-ids-are-canonical-validated-references-2026-07-17.md
 ---
 
 # Reconciliation-Only Sync Creates Phantom References When Upstream Adds New Agents
@@ -106,3 +107,5 @@ This logic is now implemented in `scripts/content-integrity.ts` (the `checkRefer
 - Scrub the reference from the updated content
 
 Leaving a dangling reference and hoping runtime catches it is the failure mode this doc exists to prevent.
+
+**Corollary — the qualified form is the form to preserve.** Because `checkReferenceIntegrity` validates `systematic:<category>:<name>` against real agent files, that qualified form must not be "cleaned up" to bare names during unrelated refactors — doing so silently removes the validation coverage this doc established. See `docs/solutions/best-practices/qualified-persona-ids-are-canonical-validated-references-2026-07-17.md`.
