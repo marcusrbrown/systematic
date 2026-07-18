@@ -135,3 +135,7 @@ Wrong change — strips phantom-validation coverage and breaks corpus convention
   ban-rule case.
 - `docs/solutions/logic-errors/pi-chained-bootstrap-composition-2026-07-14.md`
   — the harness-portability/profile context this increment grew out of.
+- `docs/solutions/best-practices/claude-code-plugin-build-and-publish-architecture-2026-07-18.md`
+  — the Claude Code build translates the qualified form to `systematic:<name>` in
+  *generated output only*; source keeps the canonical, phantom-validated form, so
+  validation coverage is preserved on both sides.

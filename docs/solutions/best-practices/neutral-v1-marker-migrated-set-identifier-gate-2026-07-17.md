@@ -123,3 +123,8 @@ sanctioned idiom line passes while `todowrite` on the same line fails;
   no runtime consumer.
 - `docs/solutions/logic-errors/pi-chained-bootstrap-composition-2026-07-14.md`
   — the bootstrap/profile composition layer this gate protects.
+- `docs/solutions/best-practices/claude-code-plugin-build-and-publish-architecture-2026-07-18.md`
+  — a sibling generated-namespace gate (`checkGeneratedNamespace`). Boundary: it
+  operates on *generated* plugin output (translating source IDs to the host
+  namespace); this gate operates on source marked `neutral-v1`. Neither rewrites
+  canonical source IDs.
