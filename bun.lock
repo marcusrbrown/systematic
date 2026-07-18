@@ -12,8 +12,8 @@
       "devDependencies": {
         "@biomejs/biome": "2.5.4",
         "@earendil-works/pi-coding-agent": "0.80.7",
-        "@opencode-ai/plugin": "1.18.1",
-        "@opencode-ai/sdk": "1.18.1",
+        "@opencode-ai/plugin": "1.18.2",
+        "@opencode-ai/sdk": "1.18.2",
         "@semantic-release/exec": "7.1.0",
         "@types/bun": "latest",
         "@types/js-yaml": "4.0.9",
@@ -381,9 +381,9 @@
 
     "@octokit/types": ["@octokit/types@16.0.0", "", { "dependencies": { "@octokit/openapi-types": "^27.0.0" } }, "sha512-sKq+9r1Mm4efXW1FCk7hFSeJo4QKreL/tTbR0rz/qx/r1Oa2VV83LTA/H/MuCOX7uCIJmQVRKBcbmWoySjAnSg=="],
 
-    "@opencode-ai/plugin": ["@opencode-ai/plugin@1.18.1", "", { "dependencies": { "@ai-sdk/provider": "3.0.8", "@opencode-ai/sdk": "1.18.1", "effect": "4.0.0-beta.83", "zod": "4.1.8" }, "peerDependencies": { "@opentui/core": ">=0.4.3", "@opentui/keymap": ">=0.4.3", "@opentui/solid": ">=0.4.3" }, "optionalPeers": ["@opentui/core", "@opentui/keymap", "@opentui/solid"] }, "sha512-qE2Jg4Jh7NU18Wl69zoCz7fOvHQxKmUXkSq4akAqCixYDrGO7heYG/wfvafVSsx0n6jWhCdIN8cToNU6G4lKfw=="],
+    "@opencode-ai/plugin": ["@opencode-ai/plugin@1.18.2", "", { "dependencies": { "@ai-sdk/provider": "3.0.8", "@opencode-ai/sdk": "1.18.2", "effect": "4.0.0-beta.83", "zod": "4.1.8" }, "peerDependencies": { "@opentui/core": ">=0.4.3", "@opentui/keymap": ">=0.4.3", "@opentui/solid": ">=0.4.3" }, "optionalPeers": ["@opentui/core", "@opentui/keymap", "@opentui/solid"] }, "sha512-h0N1mShfSfaI0pMHXCAdEevF5fVZ+u+F8B4/PDEurpFIk7n/mSjYkgjVvekIR3Z4SJkApkVlwekctIPO7JhLvg=="],
 
-    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.18.1", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-2mX9SXSDVtZ9i2yCOiXDXKx981EJp/ObUtaThUNn16jkjfwX/1j8r+UR/BKUmBLYq+zle7TtpXreXuO+gtVjKA=="],
+    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.18.2", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-40DIMMrl2W0TMFKtTnrYKed3ElXhqEkP0oLahQEd6Mm9mTdu/B2Bc9A19++IkKKFIxbxKFaUhik+vBUiNBrFtA=="],
 
     "@opentelemetry/api": ["@opentelemetry/api@1.9.0", "", {}, "sha512-3giAOQvZiH5F9bMlMiv8+GSPMeqg0dbaeo58/0SlA9sxSqZhnUtxzX9/2FzyhS9sWQf5S0GJE0AKBrFqjpeYcg=="],
 
