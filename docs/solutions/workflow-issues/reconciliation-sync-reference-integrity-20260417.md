@@ -109,3 +109,5 @@ This logic is now implemented in `scripts/content-integrity.ts` (the `checkRefer
 Leaving a dangling reference and hoping runtime catches it is the failure mode this doc exists to prevent.
 
 **Corollary — the qualified form is the form to preserve.** Because `checkReferenceIntegrity` validates `systematic:<category>:<name>` against real agent files, that qualified form must not be "cleaned up" to bare names during unrelated refactors — doing so silently removes the validation coverage this doc established. See `docs/solutions/best-practices/qualified-persona-ids-are-canonical-validated-references-2026-07-17.md`.
+
+**Descendant — skill-reference integrity.** The same reference-integrity discipline was extended to skill references: `checkSkillReferenceIntegrity` asserts every `ce:<name>` reference resolves to a real `skills/ce-<name>/` directory, catching phantom refs (`ce:debug`, `ce:polish-beta`) that had dangled on every harness. See `docs/solutions/best-practices/claude-code-plugin-build-and-publish-architecture-2026-07-18.md` for the build that surfaced them.
