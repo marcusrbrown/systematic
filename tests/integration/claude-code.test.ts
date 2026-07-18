@@ -208,16 +208,21 @@ describe('claude-code bundle — shared-core content fidelity', () => {
 // ---------------------------------------------------------------------------
 
 describe('claude-code bundle — artifact self-containment', () => {
-  test('.claude-plugin/plugin.json exists, is valid JSON, has a name and static version', () => {
+  test('.claude-plugin/plugin.json exists, is valid JSON, has a name, no version, and author object', () => {
     const manifestPath = path.join(BUILD_DIR, '.claude-plugin/plugin.json')
     expect(fs.existsSync(manifestPath)).toBe(true)
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {
       name?: string
       version?: string
+      author?: { name?: string; email?: string }
     }
     expect(typeof manifest.name).toBe('string')
     expect(manifest.name?.length).toBeGreaterThan(0)
-    expect(manifest.version).toBe('0.1.0')
+    expect(manifest.version).toBeUndefined()
+    expect(manifest.author).toEqual({
+      name: 'Marcus R. Brown',
+      email: 'human@fro.bot',
+    })
   })
 
   test('no symlinks anywhere under the built bundle — must not point back to repo skills/', () => {

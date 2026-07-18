@@ -203,11 +203,15 @@ describe('generatePluginFiles — happy path', () => {
     expect(contentA).not.toContain('file://')
   })
 
-  test('plugin manifest has required name field and a static version', () => {
+  test('plugin manifest has required name field, no version, and author object', () => {
     const root = makeFixtureRepo()
     const manifest = buildPluginManifest(root)
     expect(manifest.name).toBe('systematic')
-    expect(manifest.version).toBe('0.1.0')
+    expect(manifest).not.toHaveProperty('version')
+    expect(manifest.author).toEqual({
+      name: 'Marcus R. Brown',
+      email: 'human@fro.bot',
+    })
   })
 
   test('writePluginFiles produces the file tree on disk deterministically (run twice, no diff)', () => {

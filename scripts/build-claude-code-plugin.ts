@@ -68,18 +68,21 @@ function toPosixPath(relPath: string): string {
 
 export interface ClaudePluginManifest {
   name: string
-  version: string
   description: string
-  author: string
+  author: { name: string; email: string }
 }
 
-/** Hand-written plugin manifest — only `name` is strictly required by CC. */
+/**
+ * Hand-written plugin manifest — only `name` is strictly required by CC.
+ * No `version` field: Claude Code resolves plugin version by source commit
+ * SHA when plugin.json omits it, so every artifact-branch commit is a new
+ * version without npm coupling.
+ */
 export function buildPluginManifest(_rootDir: string): ClaudePluginManifest {
   return {
     name: 'systematic',
-    version: '0.1.0',
     description: 'Structured engineering workflows for Claude Code.',
-    author: 'Marcus R. Brown <human@fro.bot>',
+    author: { name: 'Marcus R. Brown', email: 'human@fro.bot' },
   }
 }
 
