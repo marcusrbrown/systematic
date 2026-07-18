@@ -2,10 +2,14 @@
 /**
  * Build Claude Code Plugin Bundle
  *
- * Generates a self-contained `claude-code/` plugin bundle from the existing
- * `skills/` + `agents/` source, mirroring the `build-registry.ts` /
- * `generate-registry.ts` codegen precedent: walk source, emit a self-contained
- * artifact, gate with a `--check` drift mode.
+ * Generates a self-contained, EPHEMERAL `claude-code/` plugin bundle from the
+ * existing `skills/` + `agents/` source. The bundle is a gitignored build
+ * artifact — never committed, always regenerated. Source stays canonical and
+ * phantom-validated (scripts/content-integrity.ts); this build applies a
+ * build-time identifier translation so generated skill/agent bodies reference
+ * Claude Code's real plugin-namespaced identifiers (`systematic:<skill-dir>`,
+ * `systematic:<agent-stem>`) instead of Systematic's internal `ce:<name>` /
+ * `systematic:<category>:<name>` source forms.
  *
  * The bundle is a STATIC artifact — no runtime TypeScript ships inside it.
  * CC copies plugins to a per-session cache, so every file must be
@@ -13,14 +17,18 @@
  *
  * Output structure:
  *   claude-code/.claude-plugin/plugin.json   — hand-written manifest
- *   claude-code/output-styles/systematic.md  — using-systematic body + CC profile
+ *   claude-code/output-styles/systematic.md  — using-systematic body + CC profile (translated)
  *   claude-code/hooks/hooks.json             — declarative SessionStart state (static printf)
- *   claude-code/skills/<name>/SKILL.md(+subfiles) — copied verbatim from skills/
- *   claude-code/agents/<name>.md             — flattened from agents/<category>/<name>.md
+ *   claude-code/skills/<name>/SKILL.md(+subfiles) — copied + translated from skills/
+ *   claude-code/agents/<name>.md             — flattened + translated from agents/<category>/<name>.md
+ *
+ * After translation, `checkGeneratedNamespace` validates the built bundle
+ * contains no leftover source-namespace forms and every bare
+ * `systematic:<name>` resolves to a bundled skill or agent — failing the
+ * build (BuildError) rather than shipping a dangling reference.
  *
  * Usage:
- *   bun scripts/build-claude-code-plugin.ts             # Full build, writes claude-code/
- *   bun scripts/build-claude-code-plugin.ts --check     # Drift check, exits non-zero on divergence
+ *   bun scripts/build-claude-code-plugin.ts   # Full build, writes claude-code/ (gitignored staging dir)
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -217,6 +225,170 @@ export interface FlattenedAgent {
 }
 
 /**
+ * Symbol table of Claude Code (CC) identifiers derivable from source: every
+ * bundled skill directory name and every flattened agent stem. Built fresh
+ * per build from the same discovery functions used to emit the bundle, so it
+ * can never drift from what actually ships.
+ */
+export interface SourceInventory {
+  skillDirs: Set<string>
+  agentStems: Set<string>
+}
+
+export function buildSourceInventory(rootDir: string): SourceInventory {
+  const skills = findSkillsInDir(path.join(rootDir, 'skills'))
+  const agents = findAgentsInDir(path.join(rootDir, 'agents'))
+
+  return {
+    skillDirs: new Set(skills.map((s) => path.basename(s.path))),
+    agentStems: new Set(agents.map((a) => a.name)),
+  }
+}
+
+/**
+ * Candidate identifier tokens in generated bodies: bare `ce:<x>` source refs,
+ * qualified `systematic:<category>:<name>` agent refs, and bare
+ * `systematic:<name>` refs. Boundary-aware (word boundaries only) so partial
+ * matches inside unrelated words are never touched.
+ */
+const IDENTIFIER_TOKEN_RE =
+  /\b(?:ce:[a-z0-9-]+|systematic:[a-z0-9-]+(?::[a-z0-9-]+)?)\b/g
+
+/**
+ * Rewrites source identifier tokens to their Claude Code plugin-namespaced
+ * form, one pass, inventory-verified — never a blind string replace.
+ *
+ *   ce:<x>                          -> systematic:ce-<x>   (iff skills/ce-<x>/ exists)
+ *   systematic:<category>:<name>    -> systematic:<name>   (iff agent stem exists)
+ *   systematic:<name>                (bare, left as-is; validated by
+ *                                     checkGeneratedNamespace, not rewritten here)
+ *
+ * Unknown/unresolvable candidates are left untouched deliberately — rewriting
+ * to a guess would fabricate an identifier that doesn't exist in the bundle.
+ * `checkGeneratedNamespace` catches anything left unresolved.
+ */
+export function translateIdentifiers(
+  content: string,
+  inventory: SourceInventory,
+): string {
+  return content.replace(IDENTIFIER_TOKEN_RE, (match) => {
+    if (match.startsWith('ce:')) {
+      const suffix = match.slice('ce:'.length)
+      const dir = `ce-${suffix}`
+      return inventory.skillDirs.has(dir) ? `systematic:${dir}` : match
+    }
+
+    const rest = match.slice('systematic:'.length)
+    const parts = rest.split(':')
+    if (parts.length === 2) {
+      const name = parts[1] as string
+      return inventory.agentStems.has(name) ? `systematic:${name}` : match
+    }
+
+    // Bare systematic:<name> — membership validated by checkGeneratedNamespace.
+    return match
+  })
+}
+
+/** Files whose bodies carry identifier refs subject to translation + the integrity gate. */
+function isTranslatableFile(relPath: string): boolean {
+  return (
+    /^skills\/[^/]+\/.*\.md$/.test(relPath) ||
+    /^agents\/[^/]+\.md$/.test(relPath) ||
+    relPath === 'output-styles/systematic.md'
+  )
+}
+
+/**
+ * Applies identifier translation to every translatable generated file, plus
+ * normalizes each SKILL.md's frontmatter `name` to the skill directory
+ * basename (CC derives invocation from the dir name; the frontmatter `name`
+ * is only a display label, so misalignment would show `ce:brainstorm` while
+ * requiring `/systematic:ce-brainstorm`). Non-translatable/binary files pass
+ * through byte-for-byte.
+ */
+export function translateBundle(
+  files: Map<string, Buffer>,
+  inventory: SourceInventory,
+): Map<string, Buffer> {
+  const result = new Map<string, Buffer>()
+
+  for (const [relPath, content] of files) {
+    if (!isTranslatableFile(relPath)) {
+      result.set(relPath, content)
+      continue
+    }
+
+    let text = content.toString('utf8')
+
+    const skillMatch = relPath.match(/^skills\/([^/]+)\/SKILL\.md$/)
+    if (skillMatch) {
+      const dirName = skillMatch[1] as string
+      const { data, body, hadFrontmatter } =
+        parseFrontmatter<Record<string, unknown>>(text)
+      if (hadFrontmatter) {
+        text = `${formatFrontmatter({ ...data, name: dirName })}\n\n${body.trim()}\n`
+      }
+    }
+
+    text = translateIdentifiers(text, inventory)
+    result.set(relPath, Buffer.from(text))
+  }
+
+  return result
+}
+
+const CE_FORM_RE = /\bce:[a-z0-9-]+\b/g
+const QUALIFIED_RE = /\bsystematic:[a-z0-9-]+:[a-z0-9-]+\b/g
+const BARE_RE = /\bsystematic:[a-z0-9-]+\b/g
+
+/**
+ * Post-translation integrity gate — the CC equivalent of
+ * `checkReferenceIntegrity` in scripts/content-integrity.ts. Fails the build
+ * (never emits a bundle with a dangling/untranslated reference) when:
+ *   - a source `ce:<name>` form survived translation,
+ *   - a qualified `systematic:<category>:<name>` form survived translation,
+ *   - a bare `systematic:<name>` doesn't resolve to a bundled skill or agent.
+ */
+export function checkGeneratedNamespace(
+  files: Map<string, Buffer>,
+  inventory: SourceInventory,
+): void {
+  const validTargets = new Set<string>([
+    ...[...inventory.skillDirs].map((d) => `systematic:${d}`),
+    ...[...inventory.agentStems].map((s) => `systematic:${s}`),
+  ])
+
+  for (const [relPath, content] of files) {
+    if (!isTranslatableFile(relPath)) continue
+    const text = content.toString('utf8')
+
+    const ceMatch = text.match(CE_FORM_RE)
+    if (ceMatch) {
+      throw buildError(
+        `${relPath}: untranslated source identifier "${ceMatch[0]}" leaked into the generated bundle.`,
+      )
+    }
+
+    const qualifiedMatch = text.match(QUALIFIED_RE)
+    if (qualifiedMatch) {
+      throw buildError(
+        `${relPath}: untranslated qualified identifier "${qualifiedMatch[0]}" leaked into the generated bundle.`,
+      )
+    }
+
+    for (const match of text.matchAll(BARE_RE)) {
+      const id = match[0]
+      if (!validTargets.has(id)) {
+        throw buildError(
+          `${relPath}: identifier "${id}" does not resolve to any bundled skill or agent.`,
+        )
+      }
+    }
+  }
+}
+
+/**
  * Flattens `agents/<category>/<name>.md` → a stem-keyed list, enforcing
  * global stem uniqueness (mirrors `checkAgentStemUniqueness` in
  * scripts/content-integrity.ts). Claude Code accepts Systematic's agent
@@ -287,7 +459,11 @@ export function generatePluginFiles(rootDir: string): Map<string, Buffer> {
     files.set(`agents/${agent.stem}.md`, agent.content)
   }
 
-  return files
+  const inventory = buildSourceInventory(rootDir)
+  const translated = translateBundle(files, inventory)
+  checkGeneratedNamespace(translated, inventory)
+
+  return translated
 }
 
 /** Writes a generated file map to `outDir`, clearing any prior contents first. */
@@ -305,112 +481,8 @@ export function writePluginFiles(
   }
 }
 
-export interface DriftResult {
-  inSync: boolean
-  missing: string[]
-  extra: string[]
-  differing: string[]
-}
-
-/**
- * Regenerates the bundle in memory and diffs it against the committed
- * `claudeCodeDir` — mirrors `generate-registry.ts --check` semantics.
- */
-export function checkDrift(
-  rootDir: string,
-  claudeCodeDir: string,
-): DriftResult {
-  const generated = generatePluginFiles(rootDir)
-
-  const onDisk = new Map<string, Buffer>()
-  if (fs.existsSync(claudeCodeDir)) {
-    const entries = walkDir(claudeCodeDir, {
-      maxDepth: 20,
-      filter: (e) => !e.isDirectory,
-    })
-    for (const entry of entries) {
-      const rel = toPosixPath(path.relative(claudeCodeDir, entry.path))
-      onDisk.set(rel, fs.readFileSync(entry.path))
-    }
-  }
-
-  const missing: string[] = []
-  const differing: string[] = []
-  for (const [relPath, content] of generated) {
-    const existing = onDisk.get(relPath)
-    if (existing === undefined) {
-      missing.push(relPath)
-      continue
-    }
-    if (!existing.equals(content)) {
-      differing.push(relPath)
-    }
-  }
-
-  const generatedPaths = new Set(generated.keys())
-  const extra = [...onDisk.keys()].filter((p) => !generatedPaths.has(p))
-
-  return {
-    inSync:
-      missing.length === 0 && extra.length === 0 && differing.length === 0,
-    missing: missing.sort((a, b) => a.localeCompare(b)),
-    extra: extra.sort((a, b) => a.localeCompare(b)),
-    differing: differing.sort((a, b) => a.localeCompare(b)),
-  }
-}
-
-function parseArgs(argv: string[]): { check: boolean } {
-  return { check: argv.slice(2).includes('--check') }
-}
-
-function reportDriftResult(
-  result: DriftResult,
-  claudeCodeDir: string,
-  rootDir: string,
-): never {
-  console.error(
-    `Error: ${path.relative(rootDir, claudeCodeDir)}/ is out of date. Run \`bun scripts/build-claude-code-plugin.ts\` to regenerate it.`,
-  )
-  if (result.missing.length > 0) {
-    console.error(`  Missing: ${result.missing.join(', ')}`)
-  }
-  if (result.extra.length > 0) {
-    console.error(`  Extra (stale): ${result.extra.join(', ')}`)
-  }
-  if (result.differing.length > 0) {
-    console.error(`  Differing: ${result.differing.join(', ')}`)
-  }
-  process.exit(1)
-}
-
-function runCheck(rootDir: string, claudeCodeDir: string): void {
-  let result: DriftResult
-  try {
-    result = checkDrift(rootDir, claudeCodeDir)
-  } catch (err) {
-    if (isBuildError(err)) {
-      console.error(`Error: ${err.message}`)
-      process.exit(1)
-    }
-    throw err
-  }
-
-  if (result.inSync) {
-    console.log(`${path.relative(rootDir, claudeCodeDir)}/ is up to date.`)
-    process.exit(0)
-  }
-
-  reportDriftResult(result, claudeCodeDir, rootDir)
-}
-
 function main(rootDir: string): void {
-  const { check } = parseArgs(process.argv)
   const claudeCodeDir = path.join(rootDir, 'claude-code')
-
-  if (check) {
-    runCheck(rootDir, claudeCodeDir)
-    return
-  }
 
   let files: Map<string, Buffer>
   try {

@@ -7,11 +7,13 @@ import {
   buildHookFacts,
   buildOutputStyleContent,
   buildPluginManifest,
-  checkDrift,
+  buildSourceInventory,
+  checkGeneratedNamespace,
   collectSkillFiles,
   flattenAgents,
   generatePluginFiles,
   HOOK_PAYLOAD_CAP,
+  translateIdentifiers,
   writePluginFiles,
 } from '../../scripts/build-claude-code-plugin.ts'
 
@@ -291,56 +293,181 @@ describe('buildOutputStyleContent — error paths', () => {
 })
 
 // ---------------------------------------------------------------------------
-// Integration: drift check
+// Identifier translation
 
-describe('checkDrift — integration', () => {
-  test('passes when claude-code/ is in sync with source', () => {
-    const root = makeFixtureRepo()
-    writeUsingSystematicAndProfile(root)
-    writeSkill(root, 'foo', 'Foo skill.')
-    writeAgent(root, 'review', 'bar', 'Bar agent.')
-
-    const claudeCodeDir = path.join(root, 'claude-code')
-    writePluginFiles(generatePluginFiles(root), claudeCodeDir)
-
-    const result = checkDrift(root, claudeCodeDir)
-    expect(result.inSync).toBe(true)
-    expect(result.missing).toEqual([])
-    expect(result.extra).toEqual([])
-    expect(result.differing).toEqual([])
-  })
-
-  test('fails when a source file changed without rebuild', () => {
-    const root = makeFixtureRepo()
-    writeUsingSystematicAndProfile(root)
-    writeSkill(root, 'foo', 'Foo skill.')
-    writeAgent(root, 'review', 'bar', 'Bar agent.')
-
-    const claudeCodeDir = path.join(root, 'claude-code')
-    writePluginFiles(generatePluginFiles(root), claudeCodeDir)
-
-    // Mutate source after the build without regenerating claude-code/.
-    writeFile(
-      root,
-      'skills/foo/SKILL.md',
-      '---\nname: foo\ndescription: Foo skill (changed).\n---\n# foo changed\n',
+describe('translateIdentifiers — inventory-driven rewrite', () => {
+  test('ce:<x> rewrites to systematic:ce-<x> when skills/ce-<x>/ exists', () => {
+    const inventory = {
+      skillDirs: new Set(['ce-brainstorm']),
+      agentStems: new Set<string>(),
+    }
+    expect(translateIdentifiers('Use ce:brainstorm now.', inventory)).toBe(
+      'Use systematic:ce-brainstorm now.',
     )
-
-    const result = checkDrift(root, claudeCodeDir)
-    expect(result.inSync).toBe(false)
-    expect(result.differing).toContain('skills/foo/SKILL.md')
   })
 
-  test('--check passes against the real repo committed claude-code/', () => {
-    const result = Bun.spawnSync(
+  test('a leading-slash invocation form is translated, preserving the slash', () => {
+    const inventory = {
+      skillDirs: new Set(['ce-plan']),
+      agentStems: new Set<string>(),
+    }
+    expect(translateIdentifiers('Run /ce:plan to start.', inventory)).toBe(
+      'Run /systematic:ce-plan to start.',
+    )
+  })
+
+  test('qualified systematic:<category>:<name> rewrites to systematic:<name>', () => {
+    const inventory = {
+      skillDirs: new Set<string>(),
+      agentStems: new Set(['correctness-reviewer']),
+    }
+    expect(
+      translateIdentifiers(
+        'Dispatch systematic:review:correctness-reviewer.',
+        inventory,
+      ),
+    ).toBe('Dispatch systematic:correctness-reviewer.')
+  })
+
+  test('bare systematic:<name> that resolves to a bundled skill is left unchanged', () => {
+    const inventory = {
+      skillDirs: new Set(['frontend-design']),
+      agentStems: new Set<string>(),
+    }
+    expect(
+      translateIdentifiers('Load systematic:frontend-design.', inventory),
+    ).toBe('Load systematic:frontend-design.')
+  })
+
+  test('a reference inside a fenced code block is still translated (no fence exemption)', () => {
+    const inventory = {
+      skillDirs: new Set(['ce-brainstorm']),
+      agentStems: new Set<string>(),
+    }
+    const content = '```\nce:brainstorm\n```\n'
+    expect(translateIdentifiers(content, inventory)).toBe(
+      '```\nsystematic:ce-brainstorm\n```\n',
+    )
+  })
+
+  test('an unknown ce:<name> with no matching skill dir is left untouched (not fabricated)', () => {
+    const inventory = {
+      skillDirs: new Set(['ce-brainstorm']),
+      agentStems: new Set<string>(),
+    }
+    expect(translateIdentifiers('See ce:nonexistent.', inventory)).toBe(
+      'See ce:nonexistent.',
+    )
+  })
+})
+
+describe('buildSourceInventory', () => {
+  test('collects skill dir names and agent stems from a fixture repo', () => {
+    const root = makeFixtureRepo()
+    writeSkill(root, 'foo', 'Foo skill.')
+    writeAgent(root, 'review', 'bar', 'Bar agent.')
+
+    const inventory = buildSourceInventory(root)
+    expect(inventory.skillDirs.has('foo')).toBe(true)
+    expect(inventory.agentStems.has('bar')).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Generated-namespace integrity gate
+
+describe('checkGeneratedNamespace — integrity gate', () => {
+  test('passes on a clean, fully-translated bundle', () => {
+    const inventory = {
+      skillDirs: new Set(['foo']),
+      agentStems: new Set(['bar']),
+    }
+    const files = new Map<string, Buffer>([
       [
-        'bun',
-        path.join(REPO_ROOT, 'scripts/build-claude-code-plugin.ts'),
-        '--check',
+        'skills/foo/SKILL.md',
+        Buffer.from('---\nname: foo\n---\nDispatch systematic:bar.\n'),
       ],
-      { cwd: REPO_ROOT, stdout: 'pipe', stderr: 'pipe' },
+      ['agents/bar.md', Buffer.from('Agent body referencing systematic:foo.')],
+    ])
+    expect(() => checkGeneratedNamespace(files, inventory)).not.toThrow()
+  })
+
+  test('fails when a leftover qualified systematic:<category>:<name> ref remains', () => {
+    const inventory = {
+      skillDirs: new Set(['foo']),
+      agentStems: new Set(['bar']),
+    }
+    const files = new Map<string, Buffer>([
+      [
+        'skills/foo/SKILL.md',
+        Buffer.from('---\nname: foo\n---\nDispatch systematic:review:bar.\n'),
+      ],
+    ])
+    expect(() => checkGeneratedNamespace(files, inventory)).toThrow(
+      /untranslated qualified identifier/,
     )
-    expect(result.exitCode).toBe(0)
-    expect(result.stdout.toString()).toContain('up to date')
+  })
+
+  test('fails when a leftover source ce:<name> form remains', () => {
+    const inventory = {
+      skillDirs: new Set(['ce-brainstorm']),
+      agentStems: new Set<string>(),
+    }
+    const files = new Map<string, Buffer>([
+      [
+        'skills/ce-brainstorm/SKILL.md',
+        Buffer.from('---\nname: ce-brainstorm\n---\nSee ce:brainstorm.\n'),
+      ],
+    ])
+    expect(() => checkGeneratedNamespace(files, inventory)).toThrow(
+      /untranslated source identifier/,
+    )
+  })
+
+  test('fails when a bare systematic:<name> does not resolve to any bundled skill or agent', () => {
+    const inventory = {
+      skillDirs: new Set(['foo']),
+      agentStems: new Set<string>(),
+    }
+    const files = new Map<string, Buffer>([
+      [
+        'skills/foo/SKILL.md',
+        Buffer.from('---\nname: foo\n---\nSee systematic:nonexistent.\n'),
+      ],
+    ])
+    expect(() => checkGeneratedNamespace(files, inventory)).toThrow(
+      /does not resolve to any bundled skill or agent/,
+    )
+  })
+
+  test('generatePluginFiles throws when a fixture body contains an unresolvable ce:<name> ref', () => {
+    const root = makeFixtureRepo()
+    writeUsingSystematicAndProfile(root)
+    writeSkill(root, 'foo', 'Foo skill referencing ce:nonexistent for context.')
+    writeAgent(root, 'review', 'bar', 'Bar agent.')
+
+    expect(() => generatePluginFiles(root)).toThrow(
+      /untranslated source identifier/,
+    )
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Real repo build (temp dir — the bundle is never committed)
+
+describe('build — real repo, temp dir', () => {
+  test('building the real repo into a temp dir succeeds and passes the integrity gate', () => {
+    const tempOut = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'claude-code-real-build-'),
+    )
+    try {
+      const files = generatePluginFiles(REPO_ROOT)
+      writePluginFiles(files, tempOut)
+      expect(
+        fs.existsSync(path.join(tempOut, '.claude-plugin/plugin.json')),
+      ).toBe(true)
+    } finally {
+      fs.rmSync(tempOut, { recursive: true, force: true })
+    }
   })
 })

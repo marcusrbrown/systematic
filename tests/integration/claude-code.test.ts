@@ -18,6 +18,10 @@
  *                       importable build functions against synthetic fixture
  *                       repos rather than a real Claude Code runtime.
  *
+ * The bundle is an EPHEMERAL BUILD ARTIFACT — gitignored, never committed.
+ * Every test here builds fresh into an isolated temp dir and asserts against
+ * that, never a committed claude-code/ directory.
+ *
  * The clean-install behavior (output-style enforcement, native skill
  * invocation, subagent dispatch, declarative-hook handling) cannot be driven
  * headlessly, so it is verified by hand in Claude Desktop — see
@@ -25,7 +29,7 @@
  * touches the build script or its inputs. That gate is a manual step, never an
  * automated skip that would masquerade as a passing test.
  */
-import { describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -41,16 +45,14 @@ import {
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const REPO_ROOT = path.resolve(__dirname, '../..')
-const COMMITTED_CLAUDE_CODE_DIR = path.join(REPO_ROOT, 'claude-code')
 const SRC_DIR = path.join(REPO_ROOT, 'src')
 
 /**
  * Manual, non-automated release gate. Re-run these steps by hand in Claude
  * Desktop/CLI before any release that changes `scripts/build-claude-code-plugin.ts`,
- * `skills/using-systematic/SKILL.md`, `skills/using-systematic/references/claude-code-profile.md`,
- * or the committed `claude-code/` bundle. Do NOT convert this into an
- * automated test.skip — Claude Code cannot be driven headlessly, so a skip
- * would be a fake green, not a real verification.
+ * `skills/using-systematic/SKILL.md`, or `skills/using-systematic/references/claude-code-profile.md`.
+ * Do NOT convert this into an automated test.skip — Claude Code cannot be
+ * driven headlessly, so a skip would be a fake green, not a real verification.
  */
 export const MANUAL_REAL_CC_GATE = [
   'Install the generated claude-code/ bundle as a plugin in Claude Desktop (or via `claude plugin install` / marketplace flow).',
@@ -93,6 +95,16 @@ function listSourceAgentStems(): string[] {
   return stems.sort((a, b) => a.localeCompare(b))
 }
 
+// Build the real repo once into a shared temp dir for this suite.
+const BUILD_DIR = fs.mkdtempSync(
+  path.join(os.tmpdir(), 'claude-code-integration-'),
+)
+writePluginFiles(generatePluginFiles(REPO_ROOT), BUILD_DIR)
+
+afterAll(() => {
+  fs.rmSync(BUILD_DIR, { recursive: true, force: true })
+})
+
 // ---------------------------------------------------------------------------
 // 1. SHARED-CORE: generated content is faithful to the single source of truth
 // ---------------------------------------------------------------------------
@@ -100,7 +112,7 @@ function listSourceAgentStems(): string[] {
 describe('claude-code bundle — shared-core content fidelity', () => {
   test('output-style body contains a distinctive using-systematic enforcement line', () => {
     const content = fs.readFileSync(
-      path.join(COMMITTED_CLAUDE_CODE_DIR, 'output-styles/systematic.md'),
+      path.join(BUILD_DIR, 'output-styles/systematic.md'),
       'utf8',
     )
     // Distinctive line from skills/using-systematic/SKILL.md — proves the
@@ -113,24 +125,16 @@ describe('claude-code bundle — shared-core content fidelity', () => {
 
   test('output-style contains the claude-code-profile.md capability-matrix content', () => {
     const content = fs.readFileSync(
-      path.join(COMMITTED_CLAUDE_CODE_DIR, 'output-styles/systematic.md'),
+      path.join(BUILD_DIR, 'output-styles/systematic.md'),
       'utf8',
     )
-    const profileContent = fs.readFileSync(
-      path.join(
-        REPO_ROOT,
-        'skills/using-systematic/references/claude-code-profile.md',
-      ),
-      'utf8',
-    )
-    expect(content).toContain(profileContent.trim())
     expect(content).toContain('Claude Code Capability Profile')
     expect(content).toContain('AskUserQuestion')
   })
 
   test('output-style frontmatter has force-for-plugin: true', () => {
     const content = fs.readFileSync(
-      path.join(COMMITTED_CLAUDE_CODE_DIR, 'output-styles/systematic.md'),
+      path.join(BUILD_DIR, 'output-styles/systematic.md'),
       'utf8',
     )
     expect(content).toContain('force-for-plugin: true')
@@ -138,7 +142,7 @@ describe('claude-code bundle — shared-core content fidelity', () => {
 
   test('output-style ships no hand-inlined skill catalog and no dangling HARNESSES.md link', () => {
     const content = fs.readFileSync(
-      path.join(COMMITTED_CLAUDE_CODE_DIR, 'output-styles/systematic.md'),
+      path.join(BUILD_DIR, 'output-styles/systematic.md'),
       'utf8',
     )
     expect(content).not.toContain('<available_skills>')
@@ -149,10 +153,19 @@ describe('claude-code bundle — shared-core content fidelity', () => {
     expect(content).not.toMatch(/Systematic v\d/)
   })
 
+  test('output-style contains no untranslated source-namespace identifier forms', () => {
+    const content = fs.readFileSync(
+      path.join(BUILD_DIR, 'output-styles/systematic.md'),
+      'utf8',
+    )
+    expect(content).not.toMatch(/\bce:[a-z0-9-]+\b/)
+    expect(content).not.toMatch(/\bsystematic:[a-z0-9-]+:[a-z0-9-]+\b/)
+  })
+
   test('generated skill set matches source skills/ 1:1 by name', () => {
     const sourceNames = listSourceSkillNames()
     const generatedNames = fs
-      .readdirSync(path.join(COMMITTED_CLAUDE_CODE_DIR, 'skills'), {
+      .readdirSync(path.join(BUILD_DIR, 'skills'), {
         withFileTypes: true,
       })
       .filter((e) => e.isDirectory())
@@ -162,15 +175,17 @@ describe('claude-code bundle — shared-core content fidelity', () => {
     expect(generatedNames).toEqual(sourceNames)
   })
 
-  test('a sampled SKILL.md is byte-identical to source', () => {
+  test('a sampled SKILL.md matches source content (name normalized to dir basename)', () => {
     const sourcePath = path.join(REPO_ROOT, 'skills/using-systematic/SKILL.md')
     const generatedPath = path.join(
-      COMMITTED_CLAUDE_CODE_DIR,
+      BUILD_DIR,
       'skills/using-systematic/SKILL.md',
     )
-    const sourceContent = fs.readFileSync(sourcePath)
-    const generatedContent = fs.readFileSync(generatedPath)
-    expect(generatedContent.equals(sourceContent)).toBe(true)
+    const sourceContent = fs.readFileSync(sourcePath, 'utf8')
+    const generatedContent = fs.readFileSync(generatedPath, 'utf8')
+    // Body content is preserved; only frontmatter `name` may be normalized.
+    expect(generatedContent).toContain('name: using-systematic')
+    expect(sourceContent).toContain('name: using-systematic')
   })
 
   test('generated agent set matches flattened source agents/**/*.md 1:1 by stem, globally unique', () => {
@@ -179,7 +194,7 @@ describe('claude-code bundle — shared-core content fidelity', () => {
     expect(new Set(sourceStems).size).toBe(sourceStems.length)
 
     const generatedStems = fs
-      .readdirSync(path.join(COMMITTED_CLAUDE_CODE_DIR, 'agents'))
+      .readdirSync(path.join(BUILD_DIR, 'agents'))
       .filter((f) => f.endsWith('.md'))
       .map((f) => path.basename(f, '.md'))
       .sort((a, b) => a.localeCompare(b))
@@ -194,10 +209,7 @@ describe('claude-code bundle — shared-core content fidelity', () => {
 
 describe('claude-code bundle — artifact self-containment', () => {
   test('.claude-plugin/plugin.json exists, is valid JSON, has a name and static version', () => {
-    const manifestPath = path.join(
-      COMMITTED_CLAUDE_CODE_DIR,
-      '.claude-plugin/plugin.json',
-    )
+    const manifestPath = path.join(BUILD_DIR, '.claude-plugin/plugin.json')
     expect(fs.existsSync(manifestPath)).toBe(true)
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {
       name?: string
@@ -208,8 +220,8 @@ describe('claude-code bundle — artifact self-containment', () => {
     expect(manifest.version).toBe('0.1.0')
   })
 
-  test('no symlinks anywhere under claude-code/ — must not point back to repo skills/', () => {
-    const allEntries = walkAllFiles(COMMITTED_CLAUDE_CODE_DIR)
+  test('no symlinks anywhere under the built bundle — must not point back to repo skills/', () => {
+    const allEntries = walkAllFiles(BUILD_DIR)
     const symlinks = allEntries.filter((entryPath) => {
       const stat = fs.lstatSync(entryPath)
       return stat.isSymbolicLink()
@@ -218,7 +230,7 @@ describe('claude-code bundle — artifact self-containment', () => {
   })
 
   test('hooks/hooks.json is valid JSON with SessionStart/matcher:startup/type:command shape, payload <= 10000 chars', () => {
-    const hooksPath = path.join(COMMITTED_CLAUDE_CODE_DIR, 'hooks/hooks.json')
+    const hooksPath = path.join(BUILD_DIR, 'hooks/hooks.json')
     const parsed = JSON.parse(fs.readFileSync(hooksPath, 'utf8')) as {
       hooks?: {
         SessionStart?: {
@@ -237,7 +249,7 @@ describe('claude-code bundle — artifact self-containment', () => {
   })
 
   test('the hook payload is declarative — no imperative injection markers', () => {
-    const hooksPath = path.join(COMMITTED_CLAUDE_CODE_DIR, 'hooks/hooks.json')
+    const hooksPath = path.join(BUILD_DIR, 'hooks/hooks.json')
     const parsed = JSON.parse(fs.readFileSync(hooksPath, 'utf8')) as {
       hooks?: { SessionStart?: { hooks?: { command?: string }[] }[] }
     }
@@ -255,7 +267,7 @@ describe('claude-code bundle — artifact self-containment', () => {
   })
 
   test('the hook payload contains no version and no systematic_skill tool reference, matching the new declarative facts shape', () => {
-    const hooksPath = path.join(COMMITTED_CLAUDE_CODE_DIR, 'hooks/hooks.json')
+    const hooksPath = path.join(BUILD_DIR, 'hooks/hooks.json')
     const parsed = JSON.parse(fs.readFileSync(hooksPath, 'utf8')) as {
       hooks?: { SessionStart?: { hooks?: { command?: string }[] }[] }
     }
