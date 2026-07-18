@@ -226,8 +226,8 @@ Prepare a concise planning context summary (a paragraph or two) to pass as input
 
 Run these agents in parallel:
 
-- task systematic:research:repo-research-analyst(Scope: technology, architecture, patterns. {planning context summary})
-- task systematic:research:learnings-researcher(planning context summary)
+- Dispatch `systematic:research:repo-research-analyst` — scope: technology, architecture, patterns; pass the planning context summary.
+- Dispatch `systematic:research:learnings-researcher` — pass the planning context summary.
 Collect:
 - Technology stack and versions (used in section 1.2 to make sharper external research decisions)
 - Architectural patterns and conventions to follow
@@ -295,8 +295,8 @@ Announce the decision briefly before continuing. Examples:
 
 If Step 1.2 indicates external research is useful, run these agents in parallel:
 
-- task systematic:research:best-practices-researcher(planning context summary)
-- task systematic:research:framework-docs-researcher(planning context summary)
+- Dispatch `systematic:research:best-practices-researcher` — pass the planning context summary.
+- Dispatch `systematic:research:framework-docs-researcher` — pass the planning context summary.
 
 #### 1.4 Consolidate Research
 
@@ -324,7 +324,7 @@ This ensures flow analysis (Phase 1.5) runs and the confidence check (Phase 5.3)
 
 For **Standard** or **Deep** plans, or when user flow completeness is still unclear, run:
 
-- task systematic:workflow:spec-flow-analyzer(planning context summary, research findings)
+- Dispatch `systematic:workflow:spec-flow-analyzer` — pass the planning context summary and research findings.
 
 Use the output to:
 - Identify missing edge cases, state transitions, or handoff gaps
