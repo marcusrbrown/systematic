@@ -86,6 +86,9 @@ jobs:
       - name: Registry drift check
         run: bun run registry:drift
 
+      - name: Claude Code plugin drift check
+        run: bun run claude-code:drift
+
       - name: Schema drift check
         run: bun run schema:drift
 

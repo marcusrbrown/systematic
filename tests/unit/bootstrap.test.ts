@@ -81,7 +81,7 @@ describe('getBootstrapContent', () => {
       "<SYSTEMATIC_WORKFLOWS>
       You have access to structured engineering workflows via the Systematic plugin.
 
-      **IMPORTANT: The using-systematic skill content is included below. It is ALREADY LOADED - you are currently following it. Do NOT use the systematic_skill tool to load "using-systematic" again - that would be redundant.**
+      **IMPORTANT: The using-systematic skill content is included below. It is ALREADY LOADED - you are currently following it. Do not load "using-systematic" again - that would be redundant.**
 
       <SUBAGENT-STOP>
       If you were dispatched as a subagent to execute a specific task, skip this skill.
@@ -120,7 +120,7 @@ describe('getBootstrapContent', () => {
           "Already brainstormed?" [shape=diamond];
           "Invoke brainstorming skill" [shape=box];
           "Might any skill apply?" [shape=diamond];
-          "Invoke \`systematic_skill\` tool" [shape=box];
+          "Invoke the relevant skill via the active harness's skill-loading mechanism" [shape=box];
           "Announce: 'Using [skill] to [purpose]'" [shape=box];
           "Has checklist?" [shape=diamond];
           "Create todo per item" [shape=box];
@@ -133,9 +133,9 @@ describe('getBootstrapContent', () => {
           "Invoke brainstorming skill" -> "Might any skill apply?";
 
           "User message received" -> "Might any skill apply?";
-          "Might any skill apply?" -> "Invoke \`systematic_skill\` tool" [label="yes, even 1%"];
+          "Might any skill apply?" -> "Invoke the relevant skill via the active harness's skill-loading mechanism" [label="yes, even 1%"];
           "Might any skill apply?" -> "Respond (including clarifications)" [label="definitely not"];
-          "Invoke \`systematic_skill\` tool" -> "Announce: 'Using [skill] to [purpose]'";
+          "Invoke the relevant skill via the active harness's skill-loading mechanism" -> "Announce: 'Using [skill] to [purpose]'";
           "Announce: 'Using [skill] to [purpose]'" -> "Has checklist?";
           "Has checklist?" -> "Create todo per item" [label="yes"];
           "Has checklist?" -> "Follow skill exactly" [label="no"];
@@ -188,7 +188,7 @@ describe('getBootstrapContent', () => {
 
       The four capabilities are subagent delegation, blocking user interaction, task tracking, and skill loading.
 
-      The bootstrap inlines the active harness profile naming the exact mechanisms—consult it. See \`references/opencode-profile.md\` and \`references/pi-profile.md\`.
+      The bootstrap inlines the active harness profile naming the exact mechanisms for this session—consult it.
 
       When a mechanism is unavailable, present numbered options in chat and wait for questions, maintain a visible list for task tracking, and dispatch delegation sequentially or do the work inline.
 
@@ -449,8 +449,10 @@ describe('getBootstrapContent', () => {
   test('resolves the claude-code harness profile', () => {
     const bundledSkillsDir = path.resolve(process.cwd(), 'skills')
     const profile = readHarnessProfile(bundledSkillsDir, 'claude-code')
-    expect(profile).not.toBeNull()
-    expect(profile as string).toContain('Claude Code Capability Profile')
+    if (profile === null) {
+      throw new Error('Expected claude-code harness profile to be found')
+    }
+    expect(profile).toContain('Claude Code Capability Profile')
   })
 
   test('real harness profiles do not contain bootstrap replacement sentinels', () => {

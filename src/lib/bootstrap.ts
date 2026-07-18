@@ -231,7 +231,7 @@ export function getBootstrapContent(
   return `<SYSTEMATIC_WORKFLOWS>
 You have access to structured engineering workflows via the Systematic plugin.
 
-**IMPORTANT: The using-systematic skill content is included below. It is ALREADY LOADED - you are currently following it. Do NOT use the systematic_skill tool to load "using-systematic" again - that would be redundant.**
+**IMPORTANT: The using-systematic skill content is included below. It is ALREADY LOADED - you are currently following it. Do not load "using-systematic" again - that would be redundant.**
 
 ${content}
 

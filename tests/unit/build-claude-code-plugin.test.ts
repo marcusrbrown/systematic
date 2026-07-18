@@ -149,6 +149,46 @@ describe('generatePluginFiles — happy path', () => {
     expect(content).not.toContain('<SYSTEMATIC_WORKFLOWS>')
   })
 
+  test('output-style contains no <location> tag (absolute machine paths must not leak into the bundle)', () => {
+    const root = makeFixtureRepo()
+    writeUsingSystematicAndProfile(root)
+    writeSkill(root, 'foo', 'Foo skill.')
+
+    const content = buildOutputStyleContent(root)
+
+    expect(content).not.toContain('<location>')
+  })
+
+  test('output-style contains no harness-specific skill-loading tool phrasing', () => {
+    const root = makeFixtureRepo()
+    writeUsingSystematicAndProfile(root)
+    writeSkill(root, 'foo', 'Foo skill.')
+
+    const content = buildOutputStyleContent(root)
+
+    expect(content).not.toContain('Invoke `systematic_skill` tool')
+    expect(content).not.toContain('systematic_skill tool to load')
+  })
+
+  test('output-style is byte-identical regardless of the absolute rootDir path', () => {
+    const rootA = makeFixtureRepo()
+    writeUsingSystematicAndProfile(rootA)
+    writeSkill(rootA, 'foo', 'Foo skill.')
+
+    const rootB = makeFixtureRepo()
+    writeUsingSystematicAndProfile(rootB)
+    writeSkill(rootB, 'foo', 'Foo skill.')
+
+    expect(rootA).not.toBe(rootB)
+
+    const contentA = buildOutputStyleContent(rootA)
+    const contentB = buildOutputStyleContent(rootB)
+
+    expect(contentA).toBe(contentB)
+    expect(contentA).not.toContain('/Users/')
+    expect(contentA).not.toContain('file://')
+  })
+
   test('plugin manifest has required name field', () => {
     const root = makeFixtureRepo()
     const manifest = buildPluginManifest(root)

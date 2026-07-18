@@ -24,6 +24,11 @@ export interface CatalogOptions {
   disabledSkills: string[]
 }
 
+export interface RenderCatalogVerboseOptions extends CatalogOptions {
+  /** Whether to include `<location>` file URLs in the rendered catalog. Defaults to true. */
+  includeLocations?: boolean
+}
+
 /**
  * Discovers and filters bundled Systematic skills into catalog entries.
  * Excludes disabled skills and skills with disableModelInvocation === true.
@@ -49,7 +54,10 @@ export function buildCatalogEntries(options: CatalogOptions): CatalogEntry[] {
  * Renders discoverable skills as native-style verbose XML for bootstrap content.
  * Returns empty string when no skills are available.
  */
-export function renderCatalogVerbose(options: CatalogOptions): string {
+export function renderCatalogVerbose(
+  options: RenderCatalogVerboseOptions,
+): string {
+  const { includeLocations = true } = options
   const entries = buildCatalogEntries(options)
 
   if (entries.length === 0) return ''
@@ -58,7 +66,9 @@ export function renderCatalogVerbose(options: CatalogOptions): string {
     '  <skill>',
     `    <name>${escapeXml(entry.prefixedName)}</name>`,
     `    <description>${escapeXml(entry.description)}</description>`,
-    `    <location>${pathToFileURL(entry.path).href}</location>`,
+    ...(includeLocations
+      ? [`    <location>${pathToFileURL(entry.path).href}</location>`]
+      : []),
     '  </skill>',
   ])
 

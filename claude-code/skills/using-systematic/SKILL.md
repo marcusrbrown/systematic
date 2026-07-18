@@ -42,7 +42,7 @@ digraph skill_flow {
     "Already brainstormed?" [shape=diamond];
     "Invoke brainstorming skill" [shape=box];
     "Might any skill apply?" [shape=diamond];
-    "Invoke `systematic_skill` tool" [shape=box];
+    "Invoke the relevant skill via the active harness's skill-loading mechanism" [shape=box];
     "Announce: 'Using [skill] to [purpose]'" [shape=box];
     "Has checklist?" [shape=diamond];
     "Create todo per item" [shape=box];
@@ -55,9 +55,9 @@ digraph skill_flow {
     "Invoke brainstorming skill" -> "Might any skill apply?";
 
     "User message received" -> "Might any skill apply?";
-    "Might any skill apply?" -> "Invoke `systematic_skill` tool" [label="yes, even 1%"];
+    "Might any skill apply?" -> "Invoke the relevant skill via the active harness's skill-loading mechanism" [label="yes, even 1%"];
     "Might any skill apply?" -> "Respond (including clarifications)" [label="definitely not"];
-    "Invoke `systematic_skill` tool" -> "Announce: 'Using [skill] to [purpose]'";
+    "Invoke the relevant skill via the active harness's skill-loading mechanism" -> "Announce: 'Using [skill] to [purpose]'";
     "Announce: 'Using [skill] to [purpose]'" -> "Has checklist?";
     "Has checklist?" -> "Create todo per item" [label="yes"];
     "Has checklist?" -> "Follow skill exactly" [label="no"];
@@ -110,6 +110,6 @@ Instructions say WHAT, not HOW. "Add X" or "Fix Y" doesn't mean skip workflows.
 
 The four capabilities are subagent delegation, blocking user interaction, task tracking, and skill loading.
 
-The bootstrap inlines the active harness profile naming the exact mechanisms—consult it. See `references/opencode-profile.md` and `references/pi-profile.md`.
+The bootstrap inlines the active harness profile naming the exact mechanisms for this session—consult it.
 
 When a mechanism is unavailable, present numbered options in chat and wait for questions, maintain a visible list for task tracking, and dispatch delegation sequentially or do the work inline.

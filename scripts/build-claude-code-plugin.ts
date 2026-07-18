@@ -61,15 +61,19 @@ function toPosixPath(relPath: string): string {
 
 function readPackageVersion(rootDir: string): string {
   try {
-    const pkg = JSON.parse(
+    const parsed: unknown = JSON.parse(
       fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8'),
-    ) as { version?: string }
+    )
     if (
-      typeof pkg.version === 'string' &&
-      pkg.version.length > 0 &&
-      !pkg.version.includes('semantic-release')
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      'version' in parsed &&
+      typeof (parsed as { version: unknown }).version === 'string'
     ) {
-      return pkg.version
+      const version = (parsed as { version: string }).version
+      if (version.length > 0 && !version.includes('semantic-release')) {
+        return version
+      }
     }
   } catch {
     // fall through to default
@@ -77,8 +81,15 @@ function readPackageVersion(rootDir: string): string {
   return '0.0.1'
 }
 
+export interface ClaudePluginManifest {
+  name: string
+  version: string
+  description: string
+  author: string
+}
+
 /** Hand-written plugin manifest — only `name` is strictly required by CC. */
-export function buildPluginManifest(rootDir: string): Record<string, unknown> {
+export function buildPluginManifest(rootDir: string): ClaudePluginManifest {
   return {
     name: 'systematic',
     version: readPackageVersion(rootDir),
@@ -127,12 +138,13 @@ export function buildOutputStyleContent(rootDir: string): string {
   const catalog = renderCatalogVerbose({
     bundledSkillsDir: path.join(rootDir, 'skills'),
     disabledSkills: [],
+    includeLocations: false,
   })
   const catalogSection = catalog.length > 0 ? `\n\n${catalog}` : ''
 
   const body_ = `You have access to structured engineering workflows via the Systematic plugin.
 
-**IMPORTANT: The using-systematic skill content is included below. It is ALREADY LOADED - you are currently following it. Do NOT use the systematic_skill tool to load "using-systematic" again - that would be redundant.**
+**IMPORTANT: The using-systematic skill content is included below. It is ALREADY LOADED - you are currently following it. Do not load "using-systematic" again - that would be redundant.**
 
 ${usingSystematicBody}
 
@@ -180,11 +192,20 @@ function shellSingleQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
+export interface ClaudeHooksJson {
+  hooks: {
+    SessionStart: Array<{
+      matcher: string
+      hooks: Array<{ type: 'command'; command: string }>
+    }>
+  }
+}
+
 /**
  * Declarative SessionStart command hook. Static `printf` of facts — no
  * runtime JS in the bundle, sidestepping the hook-throw-swallowing failure mode.
  */
-export function buildHooksJson(rootDir: string): Record<string, unknown> {
+export function buildHooksJson(rootDir: string): ClaudeHooksJson {
   const facts = buildHookFacts(rootDir)
   const command = `printf '%s' ${shellSingleQuote(facts)}`
 
