@@ -188,6 +188,9 @@ jobs:
       DRY_RUN: ${{ github.event_name == 'pull_request' || github.event.inputs.dry-run && 'true' || 'false' }}
     name: Release
     needs: [build, typecheck, lint, test]
+    outputs:
+      new-release-published: ${{ steps.semantic-release.outputs.new-release-published }}
+      new-release-version: ${{ steps.semantic-release.outputs.new-release-version }}
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -262,8 +265,11 @@ jobs:
 
   publish-claude-code-plugin:
     name: Publish Claude Code Plugin
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    needs: [build, typecheck, lint, test]
+    # Publish in lockstep with npm releases: only after the release job cuts a
+    # new version, so the plugin branch never ships a non-released or
+    # release-failed state. The plugin is still versioned by source commit SHA.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.release.outputs.new-release-published == 'true'
+    needs: [build, typecheck, lint, test, release]
     runs-on: ubuntu-latest
     permissions:
       contents: write
