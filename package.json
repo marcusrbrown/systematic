@@ -88,7 +88,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.3",
-    "@earendil-works/pi-coding-agent": "0.80.6",
+    "@earendil-works/pi-coding-agent": "0.80.7",
     "@opencode-ai/plugin": "1.18.1",
     "@opencode-ai/sdk": "1.18.1",
     "@semantic-release/exec": "7.1.0",
@@ -109,6 +109,9 @@
     "js-yaml": "^4.1.1",
     "jsonc-parser": "^3.3.0",
     "zod": "4.4.3"
+  },
+  "overrides": {
+    "@earendil-works/pi-ai": "0.80.7"
   },
   "publishConfig": {
     "access": "public",

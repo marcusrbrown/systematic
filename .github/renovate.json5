@@ -33,6 +33,11 @@
       groupName: 'OpenCode',
       semanticCommitType: 'build',
     },
+    {
+      matchPackageNames: ['@earendil-works/{/,}**'],
+      groupName: 'Pi',
+      semanticCommitType: 'build',
+    },
   ],
   postUpgradeTasks: {
     commands: ['bun install', 'bun run fix'],
