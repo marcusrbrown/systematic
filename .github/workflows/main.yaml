@@ -83,6 +83,9 @@ jobs:
       - name: Content integrity gate
         run: bun scripts/content-integrity.ts
 
+      - name: Claude Code plugin build + integrity
+        run: bun run claude-code:build
+
       - name: Registry drift check
         run: bun run registry:drift
 
@@ -256,3 +259,80 @@ jobs:
         run: |
           npx semantic-release --dry-run ${{ env.DRY_RUN }} --ci ${{ env.CI_FLAG }}
         shell: 'bash -Eeuxo pipefail {0}'
+
+  publish-claude-code-plugin:
+    name: Publish Claude Code Plugin
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: [build, typecheck, lint, test]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
+        with:
+          fetch-depth: 0
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build Claude Code plugin
+        run: bun run claude-code:build
+
+      - name: Guard built bundle before publish
+        run: |
+          set -euo pipefail
+          required=(
+            "claude-code/.claude-plugin/plugin.json"
+            "claude-code/skills/using-systematic/SKILL.md"
+            "claude-code/output-styles/systematic.md"
+            "claude-code/hooks/hooks.json"
+          )
+          for f in "${required[@]}"; do
+            if [[ ! -f "$f" ]]; then
+              echo "::error::Missing required artifact: $f"
+              exit 1
+            fi
+          done
+          if ! find claude-code/agents -mindepth 1 -type f | grep -q .; then
+            echo "::error::No files found under claude-code/agents/"
+            exit 1
+          fi
+          echo "Guard passed: built bundle looks complete."
+
+      - name: Configure git user
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Publish bundle to claude-code-plugin branch
+        run: |
+          set -euo pipefail
+
+          WORKTREE_DIR="$(mktemp -d)"
+          rm -rf "$WORKTREE_DIR"
+
+          git fetch origin claude-code-plugin || true
+
+          if git show-ref --verify --quiet refs/remotes/origin/claude-code-plugin; then
+            git worktree add "$WORKTREE_DIR" claude-code-plugin
+          else
+            git worktree add --orphan -b claude-code-plugin "$WORKTREE_DIR"
+          fi
+
+          # Clear the worktree contents (keep .git) then copy in the fresh build.
+          find "$WORKTREE_DIR" -mindepth 1 -maxdepth 1 ! -name '.git' -exec rm -rf {} +
+          cp -a claude-code/. "$WORKTREE_DIR/"
+
+          cd "$WORKTREE_DIR"
+          git add -A
+
+          if git diff --cached --quiet; then
+            echo "No changes to publish."
+            exit 0
+          fi
+
+          git commit -m "build(claude-code): publish marcusrbrown/systematic@${GITHUB_SHA}"
+          git push origin claude-code-plugin

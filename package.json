@@ -52,6 +52,7 @@
     "registry:build": "bun scripts/build-registry.ts",
     "registry:drift": "bun scripts/generate-registry.ts --check",
     "registry:validate": "bun scripts/build-registry.ts --validate-only",
+    "claude-code:build": "bun scripts/build-claude-code-plugin.ts",
     "prepublishOnly": "bun run build && bun run schema:generate"
   },
   "keywords": [

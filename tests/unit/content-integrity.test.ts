@@ -19,6 +19,7 @@ import {
   checkMigratedSkillIdentifiers,
   checkReferenceIntegrity,
   checkRemovedNamesOverlap,
+  checkSkillReferenceIntegrity,
   checkSubfileReferences,
   collectScanTargets,
   discoverCategories,
@@ -510,6 +511,44 @@ describe('checkReferenceIntegrity', () => {
         targets.markdown,
         categories,
       )
+      expect(phantoms).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('checkSkillReferenceIntegrity', () => {
+  test('flags a phantom ce:<name> reference with no matching skills/ce-<name>/ dir', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'foo',
+        'Route to ce:debug for investigation before planning.\n',
+      )
+      const targets = collectScanTargets(root)
+      const phantoms = checkSkillReferenceIntegrity(root, targets.markdown)
+
+      expect(phantoms).toHaveLength(1)
+      expect(phantoms[0]).toMatchObject({
+        file: 'skills/foo/SKILL.md',
+        line: 1,
+        reference: 'ce:debug',
+        name: 'debug',
+      })
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('does not flag a real ce:<name> reference with a matching skill dir', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(root, 'ce-work', 'body')
+      writeSkill(root, 'foo', 'See ce:work for execution.\n')
+      const targets = collectScanTargets(root)
+      const phantoms = checkSkillReferenceIntegrity(root, targets.markdown)
       expect(phantoms).toEqual([])
     } finally {
       fs.rmSync(root, { recursive: true, force: true })

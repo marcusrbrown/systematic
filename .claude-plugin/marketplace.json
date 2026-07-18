@@ -1,0 +1,18 @@
+{
+  "name": "systematic",
+  "owner": {
+    "name": "Marcus R. Brown",
+    "email": "human@fro.bot"
+  },
+  "plugins": [
+    {
+      "name": "systematic",
+      "description": "Structured engineering workflows for Claude Code.",
+      "source": {
+        "source": "github",
+        "repo": "marcusrbrown/systematic",
+        "ref": "claude-code-plugin"
+      }
+    }
+  ]
+}

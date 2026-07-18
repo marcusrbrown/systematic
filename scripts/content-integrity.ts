@@ -154,6 +154,13 @@ export interface PhantomRef {
   name: string
 }
 
+export interface PhantomSkillRef {
+  file: string
+  line: number
+  reference: string
+  name: string
+}
+
 export interface BrokenSubfileRef {
   file: string
   line: number
@@ -252,6 +259,7 @@ export interface CheckResult {
   categories: string[]
   allowlistWarnings: AllowlistWarning[]
   phantomRefs: PhantomRef[]
+  phantomSkillRefs: PhantomSkillRef[]
   brokenSubfileRefs: BrokenSubfileRef[]
   bannedPatterns: BannedPatternHit[]
   frontmatterViolations: FrontmatterViolation[]
@@ -612,6 +620,45 @@ export function checkReferenceIntegrity(
             line: i + 1,
             reference: ref,
             category,
+            name,
+          })
+        }
+      }
+    }
+  }
+
+  return phantoms
+}
+
+/**
+ * Match `ce:<name>` skill references (e.g. `ce:brainstorm`, `` `ce:work` ``).
+ * Word-boundary + kebab-case name only, to avoid flagging incidental "ce:"
+ * prose that isn't a skill reference.
+ */
+const SKILL_REF_REGEX = /\bce:([a-z0-9-]+)\b/g
+
+export function checkSkillReferenceIntegrity(
+  rootDir: string,
+  markdownFiles: readonly string[],
+): PhantomSkillRef[] {
+  const phantoms: PhantomSkillRef[] = []
+
+  for (const relPath of markdownFiles) {
+    const absPath = path.join(rootDir, relPath)
+    const content = readFileSafe(absPath)
+    if (content === null) continue
+
+    const lines = content.split('\n')
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i] ?? ''
+      for (const match of line.matchAll(SKILL_REF_REGEX)) {
+        const [ref, name] = match as unknown as [string, string]
+        const targetPath = path.join(rootDir, 'skills', `ce-${name}`)
+        if (!fs.existsSync(targetPath)) {
+          phantoms.push({
+            file: relPath,
+            line: i + 1,
+            reference: ref,
             name,
           })
         }
@@ -1449,6 +1496,10 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     targets.markdown,
     categories,
   )
+  const phantomSkillRefs = checkSkillReferenceIntegrity(
+    rootDir,
+    targets.markdown,
+  )
   const brokenSubfileRefs = checkSubfileReferences(rootDir, targets.markdown)
   const frontmatterViolations = checkFrontmatter(rootDir, targets.markdown)
   const parseSafetyViolations = checkFrontmatterParseSafety(
@@ -1489,6 +1540,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     categories,
     allowlistWarnings,
     phantomRefs,
+    phantomSkillRefs,
     brokenSubfileRefs,
     bannedPatterns,
     frontmatterViolations,
@@ -1537,6 +1589,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
   }
 
   printPhantomRefs(result.phantomRefs)
+  printPhantomSkillRefs(result.phantomSkillRefs)
   printBrokenSubfileRefs(result.brokenSubfileRefs)
   printBannedPatterns(result.bannedPatterns)
   printFrontmatterViolations(result.frontmatterViolations)
@@ -1586,6 +1639,20 @@ function printPhantomRefs(phantomRefs: readonly PhantomRef[]): void {
   for (const p of phantomRefs) {
     process.stderr.write(
       `  ${p.file}:${p.line}  ${p.reference}  (no such agent: agents/${p.category}/${p.name}.md)\n`,
+    )
+  }
+}
+
+function printPhantomSkillRefs(
+  phantomSkillRefs: readonly PhantomSkillRef[],
+): void {
+  if (phantomSkillRefs.length === 0) return
+  process.stderr.write(
+    `\nPhantom skill references (${phantomSkillRefs.length}):\n`,
+  )
+  for (const p of phantomSkillRefs) {
+    process.stderr.write(
+      `  ${p.file}:${p.line}  ${p.reference}  (no such skill: skills/ce-${p.name}/)\n`,
     )
   }
 }
@@ -1721,6 +1788,7 @@ function printRemovedNamesOverlapViolations(
 function totalViolations(result: CheckResult): number {
   return (
     result.phantomRefs.length +
+    result.phantomSkillRefs.length +
     result.brokenSubfileRefs.length +
     result.bannedPatterns.length +
     result.frontmatterViolations.length +
