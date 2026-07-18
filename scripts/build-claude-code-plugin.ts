@@ -13,7 +13,7 @@
  *
  * Output structure:
  *   claude-code/.claude-plugin/plugin.json   — hand-written manifest
- *   claude-code/output-styles/systematic.md  — using-systematic body + CC profile + skill catalog
+ *   claude-code/output-styles/systematic.md  — using-systematic body + CC profile
  *   claude-code/hooks/hooks.json             — declarative SessionStart state (static printf)
  *   claude-code/skills/<name>/SKILL.md(+subfiles) — copied verbatim from skills/
  *   claude-code/agents/<name>.md             — flattened from agents/<category>/<name>.md
@@ -27,7 +27,6 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { findAgentsInDir } from '../src/lib/agents.js'
 import { formatFrontmatter, parseFrontmatter } from '../src/lib/frontmatter.js'
-import { renderCatalogVerbose } from '../src/lib/skill-catalog.js'
 import { findSkillsInDir } from '../src/lib/skills.js'
 import { walkDir } from '../src/lib/walk-dir.js'
 import { isExcludedFile } from './generate-registry.js'
@@ -59,28 +58,6 @@ function toPosixPath(relPath: string): string {
   return relPath.split(path.sep).join('/')
 }
 
-function readPackageVersion(rootDir: string): string {
-  try {
-    const parsed: unknown = JSON.parse(
-      fs.readFileSync(path.join(rootDir, 'package.json'), 'utf8'),
-    )
-    if (
-      typeof parsed === 'object' &&
-      parsed !== null &&
-      'version' in parsed &&
-      typeof (parsed as { version: unknown }).version === 'string'
-    ) {
-      const version = (parsed as { version: string }).version
-      if (version.length > 0 && !version.includes('semantic-release')) {
-        return version
-      }
-    }
-  } catch {
-    // fall through to default
-  }
-  return '0.0.1'
-}
-
 export interface ClaudePluginManifest {
   name: string
   version: string
@@ -89,10 +66,10 @@ export interface ClaudePluginManifest {
 }
 
 /** Hand-written plugin manifest — only `name` is strictly required by CC. */
-export function buildPluginManifest(rootDir: string): ClaudePluginManifest {
+export function buildPluginManifest(_rootDir: string): ClaudePluginManifest {
   return {
     name: 'systematic',
-    version: readPackageVersion(rootDir),
+    version: '0.1.0',
     description: 'Structured engineering workflows for Claude Code.',
     author: 'Marcus R. Brown <human@fro.bot>',
   }
@@ -100,10 +77,14 @@ export function buildPluginManifest(rootDir: string): ClaudePluginManifest {
 
 /**
  * Composes the output-style body: using-systematic SKILL.md body + the CC
- * capability profile + the rendered skill catalog. Same composition as
- * `getBootstrapContent` (src/lib/bootstrap.ts) minus the `<SYSTEMATIC_WORKFLOWS>`
- * XML wrapper and minus the generic skill-usage template (CC ships no
- * `systematic_skill` tool, so that OpenCode/Pi-specific template does not apply).
+ * capability profile. No hand-inlined skill catalog — Claude Code's native
+ * Skill tool discovers bundled skills at runtime and exposes their real,
+ * plugin-namespaced names, so a generated catalog here would only drift and
+ * mislead (see docs/plans/2026-07-17-002 corrective rework). Same composition
+ * as `getBootstrapContent` (src/lib/bootstrap.ts) minus the
+ * `<SYSTEMATIC_WORKFLOWS>` XML wrapper and minus the generic skill-usage
+ * template (CC ships no `systematic_skill` tool, so that OpenCode/Pi-specific
+ * template does not apply).
  *
  * The enforcement text is read from `skills/using-systematic/SKILL.md` directly
  * (not duplicated) so it cannot drift from the single source of truth.
@@ -135,20 +116,13 @@ export function buildOutputStyleContent(rootDir: string): string {
 
   const profileContent = fs.readFileSync(profilePath, 'utf8').trim()
 
-  const catalog = renderCatalogVerbose({
-    bundledSkillsDir: path.join(rootDir, 'skills'),
-    disabledSkills: [],
-    includeLocations: false,
-  })
-  const catalogSection = catalog.length > 0 ? `\n\n${catalog}` : ''
-
   const body_ = `You have access to structured engineering workflows via the Systematic plugin.
 
 **IMPORTANT: The using-systematic skill content is included below. It is ALREADY LOADED - you are currently following it. Do not load "using-systematic" again - that would be redundant.**
 
 ${usingSystematicBody}
 
-${profileContent}${catalogSection}`
+${profileContent}`
 
   const frontmatter = formatFrontmatter({
     name: 'systematic',
@@ -161,29 +135,21 @@ ${profileContent}${catalogSection}`
 }
 
 /**
- * Declarative SessionStart facts: Systematic active, version, skill/agent
- * counts and names. Facts only — no imperative directives (Claude Code
- * refuses imperative hook content as prompt injection). Falls back to
- * counts-only when the full name list would exceed the cap, rather than
- * truncating mid-string.
+ * Declarative SessionStart facts: Systematic active, skill/agent counts.
+ * No version (package.json has no real version pre-publish) and no
+ * enumerated name lists (names drift; counts don't). Facts only — no
+ * imperative directives (Claude Code refuses imperative hook content as
+ * prompt injection).
  */
 export function buildHookFacts(rootDir: string): string {
-  const version = readPackageVersion(rootDir)
-  const skillNames = findSkillsInDir(path.join(rootDir, 'skills'))
-    .map((s) => s.name)
-    .sort((a, b) => a.localeCompare(b))
-  const agentNames = findAgentsInDir(path.join(rootDir, 'agents'))
-    .map((a) => a.name)
-    .sort((a, b) => a.localeCompare(b))
+  const skillCount = findSkillsInDir(path.join(rootDir, 'skills')).length
+  const agentCount = findAgentsInDir(path.join(rootDir, 'agents')).length
 
-  const full = `Systematic v${version} active. ${skillNames.length} skills available: ${skillNames.join(', ')}. ${agentNames.length} agents available: ${agentNames.join(', ')}.`
-  if (full.length <= HOOK_PAYLOAD_CAP) return full
-
-  const reduced = `Systematic v${version} active. ${skillNames.length} skills available. ${agentNames.length} agents available.`
-  if (reduced.length <= HOOK_PAYLOAD_CAP) return reduced
+  const facts = `Systematic active. ${skillCount} skills and ${agentCount} subagents are available via Claude Code's native Skill and subagent tools; the "systematic" output style carries workflow-enforcement discipline.`
+  if (facts.length <= HOOK_PAYLOAD_CAP) return facts
 
   throw buildError(
-    `Declarative hook payload exceeds ${HOOK_PAYLOAD_CAP} chars even after reducing to counts-only (${reduced.length} chars).`,
+    `Declarative hook payload exceeds ${HOOK_PAYLOAD_CAP} chars (${facts.length} chars).`,
   )
 }
 

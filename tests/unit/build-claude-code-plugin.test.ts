@@ -135,7 +135,7 @@ describe('generatePluginFiles — happy path', () => {
     expect(stems).toEqual(['bar', 'baz'])
   })
 
-  test('output-style contains using-systematic body + CC profile content + catalog, with force-for-plugin: true', () => {
+  test('output-style contains using-systematic body + CC profile content, with force-for-plugin: true, no catalog', () => {
     const root = makeFixtureRepo()
     writeUsingSystematicAndProfile(root)
     writeSkill(root, 'foo', 'Foo skill.')
@@ -145,8 +145,9 @@ describe('generatePluginFiles — happy path', () => {
     expect(content).toContain('force-for-plugin: true')
     expect(content).toContain('Using-systematic body content.')
     expect(content).toContain('Profile body content.')
-    expect(content).toContain('foo') // catalog entry for the fixture skill
     expect(content).not.toContain('<SYSTEMATIC_WORKFLOWS>')
+    expect(content).not.toContain('<available_skills>')
+    expect(content).not.toContain('<skill>')
   })
 
   test('output-style contains no <location> tag (absolute machine paths must not leak into the bundle)', () => {
@@ -157,6 +158,17 @@ describe('generatePluginFiles — happy path', () => {
     const content = buildOutputStyleContent(root)
 
     expect(content).not.toContain('<location>')
+  })
+
+  test('output-style contains no dangling repo-internal HARNESSES.md link', () => {
+    const root = makeFixtureRepo()
+    writeUsingSystematicAndProfile(root)
+    writeSkill(root, 'foo', 'Foo skill.')
+
+    const content = buildOutputStyleContent(root)
+
+    expect(content).not.toContain('HARNESSES.md')
+    expect(content).not.toContain('../../../')
   })
 
   test('output-style contains no harness-specific skill-loading tool phrasing', () => {
@@ -189,11 +201,11 @@ describe('generatePluginFiles — happy path', () => {
     expect(contentA).not.toContain('file://')
   })
 
-  test('plugin manifest has required name field', () => {
+  test('plugin manifest has required name field and a static version', () => {
     const root = makeFixtureRepo()
     const manifest = buildPluginManifest(root)
     expect(manifest.name).toBe('systematic')
-    expect(typeof manifest.version).toBe('string')
+    expect(manifest.version).toBe('0.1.0')
   })
 
   test('writePluginFiles produces the file tree on disk deterministically (run twice, no diff)', () => {
@@ -242,6 +254,13 @@ describe('buildHookFacts — payload cap edge case', () => {
     const facts = buildHookFacts(REPO_ROOT)
     expect(facts.toLowerCase()).not.toContain('you must')
     expect(facts.toLowerCase()).not.toContain('you should')
+  })
+
+  test('facts contain no version and no enumerated skill/agent names', () => {
+    const facts = buildHookFacts(REPO_ROOT)
+    expect(facts).not.toContain('v0.0.1')
+    expect(facts.toLowerCase()).not.toContain('version')
+    expect(facts).toContain('native Skill and subagent tools')
   })
 })
 

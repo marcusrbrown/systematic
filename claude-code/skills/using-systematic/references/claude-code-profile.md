@@ -1,7 +1,5 @@
 # Claude Code Capability Profile
 
-Evidence registry: see [`HARNESSES.md`](../../../HARNESSES.md).
-
 | Capability | Mechanism | Status | Fallback |
 |---|---|---|---|
 | Subagent delegation | Name-based subagent dispatch; plugin agents ship in `agents/`; `context: fork` for skill-scoped forks | supported | Dispatch in the foreground, serially or in small batches |

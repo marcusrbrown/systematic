@@ -136,6 +136,19 @@ describe('claude-code bundle — shared-core content fidelity', () => {
     expect(content).toContain('force-for-plugin: true')
   })
 
+  test('output-style ships no hand-inlined skill catalog and no dangling HARNESSES.md link', () => {
+    const content = fs.readFileSync(
+      path.join(COMMITTED_CLAUDE_CODE_DIR, 'output-styles/systematic.md'),
+      'utf8',
+    )
+    expect(content).not.toContain('<available_skills>')
+    expect(content).not.toContain('<skill>')
+    expect(content).not.toContain('HARNESSES.md')
+    expect(content).not.toContain('../../../')
+    expect(content).not.toContain('v0.0.1')
+    expect(content).not.toMatch(/Systematic v\d/)
+  })
+
   test('generated skill set matches source skills/ 1:1 by name', () => {
     const sourceNames = listSourceSkillNames()
     const generatedNames = fs
@@ -180,7 +193,7 @@ describe('claude-code bundle — shared-core content fidelity', () => {
 // ---------------------------------------------------------------------------
 
 describe('claude-code bundle — artifact self-containment', () => {
-  test('.claude-plugin/plugin.json exists, is valid JSON, has a name', () => {
+  test('.claude-plugin/plugin.json exists, is valid JSON, has a name and static version', () => {
     const manifestPath = path.join(
       COMMITTED_CLAUDE_CODE_DIR,
       '.claude-plugin/plugin.json',
@@ -188,9 +201,11 @@ describe('claude-code bundle — artifact self-containment', () => {
     expect(fs.existsSync(manifestPath)).toBe(true)
     const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8')) as {
       name?: string
+      version?: string
     }
     expect(typeof manifest.name).toBe('string')
     expect(manifest.name?.length).toBeGreaterThan(0)
+    expect(manifest.version).toBe('0.1.0')
   })
 
   test('no symlinks anywhere under claude-code/ — must not point back to repo skills/', () => {
@@ -237,6 +252,18 @@ describe('claude-code bundle — artifact self-containment', () => {
     ]) {
       expect(command).not.toContain(imperativeMarker)
     }
+  })
+
+  test('the hook payload contains no version and no systematic_skill tool reference, matching the new declarative facts shape', () => {
+    const hooksPath = path.join(COMMITTED_CLAUDE_CODE_DIR, 'hooks/hooks.json')
+    const parsed = JSON.parse(fs.readFileSync(hooksPath, 'utf8')) as {
+      hooks?: { SessionStart?: { hooks?: { command?: string }[] }[] }
+    }
+    const command = parsed.hooks?.SessionStart?.[0]?.hooks?.[0]?.command ?? ''
+    expect(command).not.toContain('v0.0.1')
+    expect(command.toLowerCase()).not.toContain('version')
+    expect(command).not.toContain('systematic_skill')
+    expect(command).toContain('native Skill and subagent tools')
   })
 })
 
@@ -296,15 +323,12 @@ function writeFixtureFile(root: string, relPath: string, content: string) {
 }
 
 describe('claude-code bundle — shadow paths (over-cap + missing-source)', () => {
-  test('an over-cap synthetic skill/agent set triggers the reduce-to-counts-only fallback rather than emitting >10000 chars', () => {
+  test('a large synthetic skill/agent set still stays within the 10000 char cap (counts-only facts never enumerate names)', () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-code-overcap-'))
     try {
       fs.mkdirSync(path.join(root, 'skills'), { recursive: true })
       fs.mkdirSync(path.join(root, 'agents/review'), { recursive: true })
 
-      // Enough long-named synthetic skills/agents to push the full
-      // (names-included) payload past HOOK_PAYLOAD_CAP, forcing
-      // buildHookFacts' counts-only fallback branch.
       for (let i = 0; i < 400; i++) {
         const name = `synthetic-skill-with-a-fairly-long-descriptive-name-${i}`
         writeFixtureFile(
@@ -316,8 +340,7 @@ describe('claude-code bundle — shadow paths (over-cap + missing-source)', () =
 
       const facts = buildHookFacts(root)
       expect(facts.length).toBeLessThanOrEqual(HOOK_PAYLOAD_CAP)
-      // The reduced fallback shape omits the enumerated name list entirely.
-      expect(facts).toContain('skills available.')
+      // Counts-only facts never enumerate skill/agent names.
       expect(facts).not.toContain('synthetic-skill-with-a-fairly-long')
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
