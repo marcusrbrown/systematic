@@ -5,17 +5,18 @@ sidebar:
   order: 9
 ---
 
-Systematic ships a self-contained Claude Code plugin bundle, generated from the same skills and agents that power the OpenCode and Pi integrations. The bundle lives at `claude-code/` in the package and targets Claude Desktop's embedded Claude Code (the Code tab) and Cowork.
+Systematic ships a self-contained Claude Code plugin, built and identifier-translated in CI from the same skills and agents that power the OpenCode and Pi integrations. The plugin is never committed to `main` — it's built fresh on every push and published to a dedicated `claude-code-plugin` branch — and it targets Claude Desktop's embedded Claude Code (the Code tab) and Cowork.
 
 ## Install
 
-The plugin is distributed through the Claude Code plugin marketplace flow. In Claude Desktop:
+The plugin is distributed through the Claude Code plugin marketplace flow, using the marketplace catalog checked into this repository at `.claude-plugin/marketplace.json`:
 
-1. Open **Cowork → Customize → Plugins** (or the equivalent plugin management surface in the Code tab).
-2. Install the `systematic` plugin.
-3. Enable it for the project or workspace you want it active in.
+```
+claude plugin marketplace add marcusrbrown/systematic
+claude plugin install systematic@systematic
+```
 
-You can also install from the command line using Claude Code's plugin install flow, pointing at the marketplace entry or a local path to the `claude-code/` bundle for testing.
+The catalog points the `systematic` plugin entry at the `claude-code-plugin` branch, so `claude plugin install` always pulls the latest published build. There's no manual version to bump — the plugin has no version field and is versioned by the source commit SHA baked into each publish.
 
 Installing the plugin does not require or touch an existing OpenCode or Pi setup in the same project — the three integrations are independent.
 
@@ -23,10 +24,12 @@ Installing the plugin does not require or touch an existing OpenCode or Pi setup
 
 Once installed and enabled, the plugin registers:
 
-- **Bundled skills as native Claude Code skills** — every skill under `claude-code/skills/` ships as a `SKILL.md` (with subfiles) copied verbatim from the source skill directory, so Claude Code's own Skill tool discovers and invokes them the same way it would any other skill.
-- **Bundled agent personas as native subagents** — persona files are flattened into `claude-code/agents/`, one Markdown file per agent, and dispatched by name in a prompt (for example, "Use the systematic-implementer subagent to implement the auth module").
-- **Behavioral enforcement via a plugin output style** — `claude-code/output-styles/systematic.md` composes the using-systematic discipline (invoke skills before responding, plan before multi-step changes) with the Claude Code capability profile and a full skill catalog. Output styles with `force-for-plugin: true` modify the system prompt directly and auto-apply as soon as the plugin is enabled — this is the mechanism that makes enforcement install-alone rather than something you have to separately configure.
-- **Declarative session state via a `SessionStart` hook** — `claude-code/hooks/hooks.json` runs a static command that reports the active Systematic version and the full skill/agent catalog into session context. This hook carries state only; it does not attempt to inject behavioral instructions, because imperative hook content is treated as prompt injection and refused.
+- **Bundled skills as native Claude Code skills** — every skill is copied and identifier-translated from the source `skills/` directory into a `SKILL.md` (with subfiles), so Claude Code's own Skill tool discovers and invokes them the same way it would any other skill. Invoke them as `systematic:<skill-name>`.
+- **Bundled agent personas as native subagents** — persona files are flattened from `agents/` into one Markdown file per agent and dispatched by name in a prompt (for example, "Use the systematic-implementer subagent to implement the auth module"), addressed as `systematic:<agent-name>`.
+- **Behavioral enforcement via a plugin output style** — a generated output style composes the using-systematic discipline (invoke skills before responding, plan before multi-step changes) with the Claude Code capability profile and a full skill catalog. Output styles with `force-for-plugin: true` modify the system prompt directly and auto-apply as soon as the plugin is enabled — this is the mechanism that makes enforcement install-alone rather than something you have to separately configure.
+- **Declarative session state via a `SessionStart` hook** — a generated hook runs a static command that reports the active skill/agent catalog into session context. This hook carries state only; it does not attempt to inject behavioral instructions, because imperative hook content is treated as prompt injection and refused.
+
+Every identifier in the bundle — skill references, agent references — is rewritten at build time from Systematic's internal source form (`ce:<name>`, `systematic:<category>:<name>`) to Claude Code's plugin-namespaced form (`systematic:<skill-dir>`, `systematic:<agent-stem>`). A build-time integrity check fails the build if any source-namespace form or unresolved reference leaks into the published bundle, so what installs is guaranteed self-consistent.
 
 ## The layered model
 
