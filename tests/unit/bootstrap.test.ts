@@ -446,12 +446,19 @@ describe('getBootstrapContent', () => {
     }
   })
 
+  test('resolves the claude-code harness profile', () => {
+    const bundledSkillsDir = path.resolve(process.cwd(), 'skills')
+    const profile = readHarnessProfile(bundledSkillsDir, 'claude-code')
+    expect(profile).not.toBeNull()
+    expect(profile as string).toContain('Claude Code Capability Profile')
+  })
+
   test('real harness profiles do not contain bootstrap replacement sentinels', () => {
     const profilesDir = path.resolve(
       process.cwd(),
       'skills/using-systematic/references',
     )
-    for (const name of ['opencode', 'pi']) {
+    for (const name of ['opencode', 'pi', 'claude-code']) {
       const profile = fs.readFileSync(
         path.join(profilesDir, `${name}-profile.md`),
         'utf8',
