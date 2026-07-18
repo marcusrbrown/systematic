@@ -11,7 +11,7 @@
  * CC copies plugins to a per-session cache, so every file must be
  * self-contained (content copies, never symlinks back to skills/).
  *
- * Output structure (see docs/plans/2026-07-17-002-feat-claude-code-plugin-support-plan.md):
+ * Output structure:
  *   claude-code/.claude-plugin/plugin.json   — hand-written manifest
  *   claude-code/output-styles/systematic.md  — using-systematic body + CC profile + skill catalog
  *   claude-code/hooks/hooks.json             — declarative SessionStart state (static printf)
@@ -36,7 +36,7 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const PROJECT_ROOT = path.resolve(__dirname, '..')
 
-/** SessionStart `additionalContext` cap per CC hooks docs (R6). */
+/** SessionStart `additionalContext` cap per Claude Code hooks docs. */
 export const HOOK_PAYLOAD_CAP = 10000
 
 /**
@@ -92,7 +92,7 @@ export function buildPluginManifest(rootDir: string): Record<string, unknown> {
  * capability profile + the rendered skill catalog. Same composition as
  * `getBootstrapContent` (src/lib/bootstrap.ts) minus the `<SYSTEMATIC_WORKFLOWS>`
  * XML wrapper and minus the generic skill-usage template (CC ships no
- * `systematic_skill` tool — R8 — so that OpenCode/Pi-specific template does not apply).
+ * `systematic_skill` tool, so that OpenCode/Pi-specific template does not apply).
  *
  * The enforcement text is read from `skills/using-systematic/SKILL.md` directly
  * (not duplicated) so it cannot drift from the single source of truth.
@@ -150,9 +150,10 @@ ${profileContent}${catalogSection}`
 
 /**
  * Declarative SessionStart facts: Systematic active, version, skill/agent
- * counts and names. Facts only — no imperative directives (R5). Falls back
- * to counts-only when the full name list would exceed the 10K cap (R6),
- * rather than truncating mid-string.
+ * counts and names. Facts only — no imperative directives (Claude Code
+ * refuses imperative hook content as prompt injection). Falls back to
+ * counts-only when the full name list would exceed the cap, rather than
+ * truncating mid-string.
  */
 export function buildHookFacts(rootDir: string): string {
   const version = readPackageVersion(rootDir)
@@ -231,8 +232,8 @@ export interface FlattenedAgent {
 /**
  * Flattens `agents/<category>/<name>.md` → a stem-keyed list, enforcing
  * global stem uniqueness (mirrors `checkAgentStemUniqueness` in
- * scripts/content-integrity.ts). Unit 1 verified CC accepts Systematic's
- * agent frontmatter as-is, so this is a pure hierarchy move — no frontmatter
+ * scripts/content-integrity.ts). Claude Code accepts Systematic's agent
+ * frontmatter as-is, so this is a pure hierarchy move — no frontmatter
  * injection or stripping.
  */
 export function flattenAgents(rootDir: string): FlattenedAgent[] {
