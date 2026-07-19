@@ -13,6 +13,10 @@ export default defineConfig({
     // Quick Start merged into Installation; keep the old URL alive.
     '/getting-started/quick-start/':
       '/systematic/getting-started/installation/',
+    // Pi and Claude Code harness guides folded into Installation.
+    '/guides/pi-harness/': '/systematic/getting-started/installation/',
+    '/guides/claude-code-harness/':
+      '/systematic/getting-started/installation/',
   },
   markdown: {
     remarkPlugins: [remarkGfm],
@@ -41,7 +45,7 @@ export default defineConfig({
       title: 'Systematic',
       favicon: '/favicon.svg',
       description:
-        'Systematic is an OpenCode plugin that brings structure to AI-assisted development — brainstorm, plan, implement, and review with bundled skills and agents that encode proven engineering workflows.',
+        'Systematic is a compound-engineering workflow — brainstorm, plan, work, and review — delivered as bundled skills and agents for OpenCode, Pi, and Claude Code.',
       head: [
         {
           tag: 'meta',
@@ -100,7 +104,7 @@ export default defineConfig({
             '@type': 'SoftwareSourceCode',
             name: 'Systematic',
             description:
-              'An OpenCode plugin that brings structure to AI-assisted development with bundled skills and agents encoding proven engineering workflows.',
+              'A compound-engineering workflow — brainstorm, plan, work, and review — delivered as bundled skills and agents for OpenCode, Pi, and Claude Code.',
             codeRepository: 'https://github.com/marcusrbrown/systematic',
             license: 'https://opensource.org/licenses/MIT',
             programmingLanguage: 'TypeScript',
