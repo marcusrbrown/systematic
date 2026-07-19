@@ -15,8 +15,7 @@ export default defineConfig({
       '/systematic/getting-started/installation/',
     // Pi and Claude Code harness guides folded into Installation.
     '/guides/pi-harness/': '/systematic/getting-started/installation/',
-    '/guides/claude-code-harness/':
-      '/systematic/getting-started/installation/',
+    '/guides/claude-code-harness/': '/systematic/getting-started/installation/',
   },
   markdown: {
     remarkPlugins: [remarkGfm],
