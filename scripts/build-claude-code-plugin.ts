@@ -551,15 +551,18 @@ export function generatePluginFiles(rootDir: string): Map<string, Buffer> {
  *   4. On success, delete the aside backup.
  *
  * Guarantee this actually provides: the prior bundle is preserved until the
- * moment the new one lands, so a crash during steps 1 leaves the old bundle
- * (if any) completely untouched, and a crash during steps 2-3 is caught and
- * rolled back (the aside backup is renamed back to `outDir`) so the old
- * bundle is restored. There is no window where neither bundle exists except
- * a crash the process cannot catch (e.g. SIGKILL) between the aside-rename
- * and the swap-rename — an extremely narrow window, and even then the aside
- * backup remains on disk for manual recovery. `outDir` is gitignored and
- * fully rebuilt on the next run regardless, so recovery is also just
- * "re-run the build."
+ * moment the new one lands, so a crash while writing the new bundle (step 1)
+ * leaves the old bundle (if any) completely untouched, and a crash during
+ * the rename-aside setup or the final swap (steps 2-3) is caught and rolled
+ * back (the aside backup is renamed back to `outDir`) so the old bundle is
+ * restored. Every failure path — including a failure while setting up the
+ * rename-aside itself — also removes the temp staging dir, so no failure
+ * mode leaks a stray `.<outDir>-staging-*` directory. There is no window
+ * where neither bundle exists except a crash the process cannot catch (e.g.
+ * SIGKILL) between the aside-rename and the swap-rename — an extremely
+ * narrow window, and even then the aside backup remains on disk for manual
+ * recovery. `outDir` is gitignored and fully rebuilt on the next run
+ * regardless, so recovery is also just "re-run the build."
  */
 export function writePluginFiles(
   files: Map<string, Buffer>,
@@ -580,19 +583,22 @@ export function writePluginFiles(
     throw err
   }
 
-  const priorExisted = fs.existsSync(outDir)
+  // From here on, tempDir cleanup on any failure is guaranteed by this
+  // single try/catch — including a failure during the rename-aside setup
+  // itself, not just the final swap-rename.
   let asideDir: string | undefined
-  if (priorExisted) {
-    asideDir = fs.mkdtempSync(path.join(parentDir, `.${baseName}-old-`))
-    fs.rmdirSync(asideDir) // renameSync requires the destination not exist
-    fs.renameSync(outDir, asideDir)
-  }
-
   try {
+    const priorExisted = fs.existsSync(outDir)
+    if (priorExisted) {
+      asideDir = fs.mkdtempSync(path.join(parentDir, `.${baseName}-old-`))
+      fs.rmdirSync(asideDir) // renameSync requires the destination not exist
+      fs.renameSync(outDir, asideDir)
+    }
+
     fs.renameSync(tempDir, outDir)
   } catch (err) {
-    // Swap failed after the prior bundle was moved aside — restore it so
-    // outDir never ends up empty/missing, then clean up the temp dir.
+    // If the prior bundle was already moved aside, restore it so outDir
+    // never ends up empty/missing.
     if (asideDir && !fs.existsSync(outDir) && fs.existsSync(asideDir)) {
       fs.renameSync(asideDir, outDir)
     }

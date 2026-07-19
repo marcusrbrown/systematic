@@ -730,6 +730,59 @@ describe('writePluginFiles — atomic staging write', () => {
     expect(strayDirs).toEqual([])
   })
 
+  test('a rename-aside failure (renameSync(outDir, asideDir) throws) leaves the prior bundle intact and cleans up both tempDir and any partial aside dir', () => {
+    const root = makeFixtureRepo()
+    const outDir = path.join(root, 'out')
+    fs.mkdirSync(outDir, { recursive: true })
+    fs.writeFileSync(path.join(outDir, 'sentinel.txt'), 'prior bundle\n')
+
+    const files = new Map<string, Buffer>([
+      ['agents/new.md', Buffer.from('new bundle content\n')],
+    ])
+
+    const originalRenameSync = fs.renameSync.bind(fs)
+    let renameCallCount = 0
+    const renameSpy = spyOn(fs, 'renameSync').mockImplementation(
+      (src: fs.PathLike, dest: fs.PathLike) => {
+        renameCallCount += 1
+        // The rename-aside step (outDir -> asideDir) is always the FIRST
+        // renameSync call when outDir pre-exists — fail it to simulate a
+        // permission error or similar mid-setup crash, before the swap
+        // rename is ever attempted.
+        if (renameCallCount === 1) {
+          throw new Error('simulated rename-aside failure')
+        }
+        return originalRenameSync(src, dest)
+      },
+    )
+
+    try {
+      expect(() => writePluginFiles(files, outDir)).toThrow(
+        /simulated rename-aside failure/,
+      )
+    } finally {
+      renameSpy.mockRestore()
+    }
+
+    // The prior bundle must still exist, untouched — the aside-rename never
+    // completed, so outDir was never moved.
+    expect(fs.existsSync(path.join(outDir, 'sentinel.txt'))).toBe(true)
+    expect(fs.readFileSync(path.join(outDir, 'sentinel.txt'), 'utf8')).toBe(
+      'prior bundle\n',
+    )
+    expect(fs.existsSync(path.join(outDir, 'agents/new.md'))).toBe(false)
+
+    // No leftover staging temp dir and no stray aside dir — this is the
+    // exact cleanup gap being closed: a throw during rename-aside setup
+    // must still clean up the already-populated tempDir.
+    const siblingEntries = fs.readdirSync(root)
+    const strayDirs = siblingEntries.filter(
+      (name) =>
+        name.startsWith('.out-staging-') || name.startsWith('.out-old-'),
+    )
+    expect(strayDirs).toEqual([])
+  })
+
   test('checkGeneratedNamespace gate failure prevents any claude-code/ output (gate runs before swap)', () => {
     const root = makeFixtureRepo()
     writeUsingSystematicAndProfile(root)
