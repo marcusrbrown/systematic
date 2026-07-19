@@ -435,10 +435,18 @@ export function flattenAgents(rootDir: string): FlattenedAgent[] {
       content.toString('utf8'),
     )
     const rawName = data.name
+    const relFile = path.relative(rootDir, agent.file)
+
+    if (rawName !== undefined && typeof rawName !== 'string') {
+      throw buildError(
+        `Agent "${relFile}" has a frontmatter "name" of type ${typeof rawName} (expected a non-empty string) — Claude Code dispatches agents by this identity, so the build fails closed rather than shipping an undispatchable agent.`,
+      )
+    }
+
     const name = typeof rawName === 'string' ? rawName.trim() : ''
     if (name === '') {
       throw buildError(
-        `Agent "${path.relative(rootDir, agent.file)}" is missing a non-empty frontmatter "name" — Claude Code dispatches agents by this identity, so the build fails closed rather than shipping an undispatchable agent.`,
+        `Agent "${relFile}" is missing a non-empty frontmatter "name" — Claude Code dispatches agents by this identity, so the build fails closed rather than shipping an undispatchable agent.`,
       )
     }
     return { agent, content, name }
@@ -531,21 +539,35 @@ export function generatePluginFiles(rootDir: string): Map<string, Buffer> {
 }
 
 /**
- * Writes a generated file map to `outDir` atomically: files are written to a
- * temp sibling directory first, then the temp dir is renamed into `outDir`
- * only after every file has been written successfully. `outDir`'s prior
- * contents are replaced only at the final rename, so a build interrupted
- * mid-write never leaves a partial `outDir` — either the old bundle stays
- * intact or the new one lands whole. The temp dir is cleaned up on failure.
+ * Writes a generated file map to `outDir` via rename-aside, so the prior
+ * bundle is never destroyed before the new one is safely in place:
+ *
+ *   1. Write the new bundle to a temp sibling dir (all files must succeed).
+ *   2. If `outDir` already exists, rename it aside to a backup sibling path
+ *      (not deleted) — `renameSync` can't land the temp dir directly onto an
+ *      existing non-empty dir on POSIX, which is exactly why the aside step
+ *      exists.
+ *   3. Rename the temp dir into `outDir`.
+ *   4. On success, delete the aside backup.
+ *
+ * Guarantee this actually provides: the prior bundle is preserved until the
+ * moment the new one lands, so a crash during steps 1 leaves the old bundle
+ * (if any) completely untouched, and a crash during steps 2-3 is caught and
+ * rolled back (the aside backup is renamed back to `outDir`) so the old
+ * bundle is restored. There is no window where neither bundle exists except
+ * a crash the process cannot catch (e.g. SIGKILL) between the aside-rename
+ * and the swap-rename — an extremely narrow window, and even then the aside
+ * backup remains on disk for manual recovery. `outDir` is gitignored and
+ * fully rebuilt on the next run regardless, so recovery is also just
+ * "re-run the build."
  */
 export function writePluginFiles(
   files: Map<string, Buffer>,
   outDir: string,
 ): void {
   const parentDir = path.dirname(outDir)
-  const tempDir = fs.mkdtempSync(
-    path.join(parentDir, `.${path.basename(outDir)}-staging-`),
-  )
+  const baseName = path.basename(outDir)
+  const tempDir = fs.mkdtempSync(path.join(parentDir, `.${baseName}-staging-`))
 
   try {
     for (const [relPath, content] of files) {
@@ -553,14 +575,33 @@ export function writePluginFiles(
       fs.mkdirSync(path.dirname(outPath), { recursive: true })
       fs.writeFileSync(outPath, content)
     }
-
-    if (fs.existsSync(outDir)) {
-      fs.rmSync(outDir, { recursive: true, force: true })
-    }
-    fs.renameSync(tempDir, outDir)
   } catch (err) {
     fs.rmSync(tempDir, { recursive: true, force: true })
     throw err
+  }
+
+  const priorExisted = fs.existsSync(outDir)
+  let asideDir: string | undefined
+  if (priorExisted) {
+    asideDir = fs.mkdtempSync(path.join(parentDir, `.${baseName}-old-`))
+    fs.rmdirSync(asideDir) // renameSync requires the destination not exist
+    fs.renameSync(outDir, asideDir)
+  }
+
+  try {
+    fs.renameSync(tempDir, outDir)
+  } catch (err) {
+    // Swap failed after the prior bundle was moved aside — restore it so
+    // outDir never ends up empty/missing, then clean up the temp dir.
+    if (asideDir && !fs.existsSync(outDir) && fs.existsSync(asideDir)) {
+      fs.renameSync(asideDir, outDir)
+    }
+    fs.rmSync(tempDir, { recursive: true, force: true })
+    throw err
+  }
+
+  if (asideDir) {
+    fs.rmSync(asideDir, { recursive: true, force: true })
   }
 }
 

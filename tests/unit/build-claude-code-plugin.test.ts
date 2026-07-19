@@ -1,4 +1,4 @@
-import { afterAll, describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -324,6 +324,34 @@ describe('flattenAgents — hardened collision detection (frontmatter name, fold
     const flattened = flattenAgents(root)
     expect(flattened.map((a) => a.stem).sort()).toEqual(['bar', 'baz'])
   })
+
+  test('a numeric frontmatter name fails the build fail-closed with a wrong-type message (not "missing")', () => {
+    const root = makeFixtureRepo()
+    writeFile(
+      root,
+      'agents/review/numeric-name.md',
+      '---\nname: 123\ndescription: Numeric name agent.\nmode: subagent\ntemperature: 0.1\n---\nAgent body.\n',
+    )
+
+    expect(() => flattenAgents(root)).toThrow(
+      /frontmatter "name" of type number/i,
+    )
+    expect(() => flattenAgents(root)).not.toThrow(/missing a non-empty/i)
+  })
+
+  test('a boolean frontmatter name fails the build fail-closed with a wrong-type message (not "missing")', () => {
+    const root = makeFixtureRepo()
+    writeFile(
+      root,
+      'agents/review/boolean-name.md',
+      '---\nname: true\ndescription: Boolean name agent.\nmode: subagent\ntemperature: 0.1\n---\nAgent body.\n',
+    )
+
+    expect(() => flattenAgents(root)).toThrow(
+      /frontmatter "name" of type boolean/i,
+    )
+    expect(() => flattenAgents(root)).not.toThrow(/missing a non-empty/i)
+  })
 })
 
 describe('buildHooksJson — SessionStart matcher omission', () => {
@@ -574,7 +602,7 @@ describe('writePluginFiles — atomic staging write', () => {
     expect(fs.existsSync(path.join(outDir, 'agents/bar.md'))).toBe(true)
   })
 
-  test('leaves no stray staging temp dir behind after a successful write', () => {
+  test('leaves no stray staging temp dir or backup dir behind after a successful write', () => {
     const root = makeFixtureRepo()
     writeUsingSystematicAndProfile(root)
     writeSkill(root, 'foo', 'Foo skill.')
@@ -584,10 +612,32 @@ describe('writePluginFiles — atomic staging write', () => {
     writePluginFiles(files, outDir)
 
     const siblingEntries = fs.readdirSync(root)
-    const strayStagingDirs = siblingEntries.filter((name) =>
-      name.startsWith('.out-staging-'),
+    const strayDirs = siblingEntries.filter(
+      (name) =>
+        name.startsWith('.out-staging-') || name.startsWith('.out-old-'),
     )
-    expect(strayStagingDirs).toEqual([])
+    expect(strayDirs).toEqual([])
+  })
+
+  test('leaves no stray staging or backup dir after a second successful write over a prior bundle', () => {
+    const root = makeFixtureRepo()
+    writeUsingSystematicAndProfile(root)
+    writeSkill(root, 'foo', 'Foo skill.')
+
+    const outDir = path.join(root, 'out')
+    const files = generatePluginFiles(root)
+    writePluginFiles(files, outDir) // first write (outDir does not yet exist)
+    writePluginFiles(files, outDir) // second write (outDir exists — exercises rename-aside)
+
+    expect(fs.existsSync(path.join(outDir, '.claude-plugin/plugin.json'))).toBe(
+      true,
+    )
+    const siblingEntries = fs.readdirSync(root)
+    const strayDirs = siblingEntries.filter(
+      (name) =>
+        name.startsWith('.out-staging-') || name.startsWith('.out-old-'),
+    )
+    expect(strayDirs).toEqual([])
   })
 
   test('a pre-swap failure (simulated by an unwritable temp path) leaves the prior outDir untouched and cleans up the temp dir', () => {
@@ -612,18 +662,72 @@ describe('writePluginFiles — atomic staging write', () => {
     expect(() => writePluginFiles(badFiles, outDir)).toThrow()
 
     // outDir (the prior bundle) must still exist and be untouched — the
-    // rename never happened because the write loop failed first.
+    // rename never happened because the write loop failed first (before
+    // outDir was ever renamed aside).
     expect(fs.existsSync(path.join(outDir, 'sentinel.txt'))).toBe(true)
     expect(fs.readFileSync(path.join(outDir, 'sentinel.txt'), 'utf8')).toBe(
       'prior bundle\n',
     )
 
-    // No leftover staging temp dir.
+    // No leftover staging temp dir or aside backup.
     const siblingEntries = fs.readdirSync(root)
-    const strayStagingDirs = siblingEntries.filter((name) =>
-      name.startsWith('.out-staging-'),
+    const strayDirs = siblingEntries.filter(
+      (name) =>
+        name.startsWith('.out-staging-') || name.startsWith('.out-old-'),
     )
-    expect(strayStagingDirs).toEqual([])
+    expect(strayDirs).toEqual([])
+  })
+
+  test('a swap-rename failure (renameSync(tempDir, outDir) throws) restores the prior bundle and leaves no stray dirs', () => {
+    const root = makeFixtureRepo()
+    const outDir = path.join(root, 'out')
+    fs.mkdirSync(outDir, { recursive: true })
+    fs.writeFileSync(path.join(outDir, 'sentinel.txt'), 'prior bundle\n')
+
+    const files = new Map<string, Buffer>([
+      ['agents/new.md', Buffer.from('new bundle content\n')],
+    ])
+
+    const originalRenameSync = fs.renameSync.bind(fs)
+    let swapAttempts = 0
+    const renameSpy = spyOn(fs, 'renameSync').mockImplementation(
+      (src: fs.PathLike, dest: fs.PathLike) => {
+        // Let the aside-rename (outDir -> backup) succeed. Fail only the
+        // FIRST swap-rename (tempDir -> outDir) to simulate a crash
+        // mid-swap; the subsequent restore-rename (backup -> outDir) must
+        // still succeed so the prior bundle actually comes back.
+        if (String(dest) === outDir) {
+          swapAttempts += 1
+          if (swapAttempts === 1) {
+            throw new Error('simulated swap-rename failure')
+          }
+        }
+        return originalRenameSync(src, dest)
+      },
+    )
+
+    try {
+      expect(() => writePluginFiles(files, outDir)).toThrow(
+        /simulated swap-rename failure/,
+      )
+    } finally {
+      renameSpy.mockRestore()
+    }
+
+    // The prior bundle must be restored intact at outDir.
+    expect(fs.existsSync(path.join(outDir, 'sentinel.txt'))).toBe(true)
+    expect(fs.readFileSync(path.join(outDir, 'sentinel.txt'), 'utf8')).toBe(
+      'prior bundle\n',
+    )
+    expect(fs.existsSync(path.join(outDir, 'agents/new.md'))).toBe(false)
+
+    // No leftover staging temp dir or aside backup dir.
+    const siblingEntries = fs.readdirSync(root)
+    const strayDirs = siblingEntries.filter(
+      (name) =>
+        name.startsWith('.out-staging-') || name.startsWith('.out-old-'),
+    )
+    expect(strayDirs).toEqual([])
   })
 
   test('checkGeneratedNamespace gate failure prevents any claude-code/ output (gate runs before swap)', () => {
