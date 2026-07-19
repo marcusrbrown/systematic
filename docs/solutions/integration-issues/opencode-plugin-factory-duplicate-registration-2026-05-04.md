@@ -215,6 +215,9 @@ node -e "import('./dist/index.js').then(m => console.log(Object.keys(m)))"
   orthogonal export-shape contract at the same plugin boundary
 - `docs/solutions/developer-experience/local-systematic-overrides-global-2026-05-14.md` — applies the
   per-load registration model to the project-overrides-user case
+- `docs/solutions/documentation-gaps/opencode-plugin-config-key-is-singular-plugin-not-plugins-2026-07-18.md` —
+  the config key that feeds this loader is singular `plugin`; docs/registry that used plural `plugins`
+  silently failed to load the plugin at all
 - `docs/brainstorms/2026-05-10-multi-load-plugin-registration-requirements.md` — design rationale
   (per-load registration; bootstrap idempotency via `<SYSTEMATIC_WORKFLOWS>` marker; system prompt array
   as coordination point; no global state)
