@@ -45,6 +45,16 @@ The OpenCode plugin is the recommended installation path. It provides the full e
    If the skill loads and displays usage instructions, the installation succeeded.
 </Steps>
 
+## Harness compatibility at a glance
+
+| Harness | Install | Skill loading |
+|---|---|---|
+| OpenCode | `opencode.json` plugins array | `systematic_skill` tool + skills-as-commands |
+| Pi | `setup --harness pi` | `systematic_skill` tool |
+| Claude Code | plugin marketplace | native Skill tool |
+
+See [HARNESSES.md](https://github.com/marcusrbrown/systematic/blob/main/HARNESSES.md) for the full capability matrix and per-harness boundaries.
+
 ## Or install skill content with `npx skills`
 
 Use `npx skills` to install the skill Markdown files directly. This path works in any AI harness (OpenCode, Claude Code, Cursor, Copilot) but installs the content only. It does not include slash-command registration, the `systematic_skill` tool, or automatic bootstrap.
@@ -111,11 +121,28 @@ Use `npx skills` to install the skill Markdown files directly. This path works i
 
 ## Install into a Pi coding-agent project
 
-Systematic also ships a [Pi coding-agent](https://github.com/earendil-works/pi-coding-agent) extension from the same package — same `systematic_skill` tool, same bootstrap injection, plus a `systematic_delegate` persona-delegation tool. See [Pi Harness Support](/systematic/guides/pi-harness/) for the full install steps and an honest list of where Pi parity with OpenCode currently ends (config support, permission gating).
+Systematic also ships a [Pi coding-agent](https://github.com/earendil-works/pi-coding-agent) extension from the same package — same `systematic_skill` tool, same bootstrap injection, plus a `systematic_delegate` persona-delegation tool.
 
 ```bash
 npx @fro.bot/systematic setup --harness pi
 ```
+
+This atomically writes the plugin entry into `.pi/settings.json`. It is idempotent — running it again is safe and will not duplicate the entry. Pi trust-gates the extension at first use, so expect a trust prompt the first time it loads.
+
+See [HARNESSES.md](https://github.com/marcusrbrown/systematic/blob/main/HARNESSES.md) for an honest list of where Pi parity with OpenCode currently ends (config support, permission gating).
+
+## Install into a Claude Code project
+
+Systematic is also built and published as a Claude Code plugin (from a dedicated `claude-code-plugin` branch) and installed through Claude Code's plugin marketplace.
+
+```bash
+claude plugin marketplace add marcusrbrown/systematic
+claude plugin install systematic@systematic
+```
+
+In Claude Desktop's GUI, the equivalent path is **+ → Plugins → Add plugin**. Once installed, skills are available through Claude Code's native Skill tool rather than the `systematic_skill` tool.
+
+See [HARNESSES.md](https://github.com/marcusrbrown/systematic/blob/main/HARNESSES.md) for the full capability matrix and per-harness boundaries.
 
 ## Automatic asset discovery
 
