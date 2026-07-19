@@ -1,6 +1,7 @@
 # Architecture
 
-> Systematic is an OpenCode plugin providing structured engineering workflows for AI-powered development.
+> Systematic provides structured engineering workflows for AI-powered development, delivered natively
+> to three harnesses — OpenCode, Pi, and Claude Code — from one source tree.
 > This document describes the high-level structure; for file locations and naming conventions see `STRUCTURE.md`,
 > and for contributor guidelines see `AGENTS.md`.
 
@@ -20,8 +21,25 @@ three hooks:
 - **`experimental.chat.system.transform`** — injects a bootstrap prompt into the system message and
   suppresses title generation for internal agents.
 
-The CLI (`src/cli.ts`) is a separate entry point exposing `list` and `config` subcommands.
-It does not participate in the plugin hook lifecycle.
+The CLI (`src/cli.ts`) is a separate entry point exposing `list`, `config`, and `setup --harness`
+subcommands. It does not participate in the plugin hook lifecycle. `setup --harness opencode|pi`
+performs project-local, atomic, idempotent config writes for those two harnesses; Claude Code has no
+equivalent CLI setup step because it is delivered as a prebuilt plugin (see below), not a runtime
+config write.
+
+Systematic is delivered to three harnesses from this same source tree, with different packaging per
+harness:
+
+- **OpenCode** — the npm package itself is the OpenCode plugin, loaded directly via its default export.
+- **Pi** — the same npm package, loaded as a Pi extension via `setup --harness pi`, which writes an
+  entry into `.pi/settings.json`.
+- **Claude Code** — a separate, self-contained plugin bundle built in CI from `skills/` and `agents/`
+  by `scripts/build-claude-code-plugin.ts`. The build flattens agent personas, composes an output
+  style from the using-systematic skill body, emits a declarative `SessionStart` hook, and translates
+  internal identifiers (`ce:<name>`, `systematic:<category>:<name>`) into Claude Code's
+  plugin-namespaced form. The generated bundle is never committed to `main` — CI publishes it to the
+  orphan `claude-code-plugin` branch on every push to `main`. Users install it through Claude Code's
+  plugin marketplace, pointed at `.claude-plugin/marketplace.json`.
 
 ## Codemap
 
@@ -122,6 +140,10 @@ patterns. Must pass before any release.
 
 **Registry drift detection** (`scripts/build-registry.ts --check`) — verifies that the OCX registry
 config stays in sync with the generated bundled assets. Run via `bun run registry:drift`.
+
+**Claude Code plugin build** (`scripts/build-claude-code-plugin.ts`) — generates the CC bundle from
+`skills/` and `agents/` on every CI run; the build fails on any leftover source-namespace identifier
+or unresolved bare reference. Output is gitignored build staging (`claude-code/`), never committed.
 
 **Typed config validation** (`src/lib/config-schema.ts`) — all user-supplied config passes through
 `validateConfig` before use. `SECURITY_OVERLAY_FIELDS` are stripped from project-level config

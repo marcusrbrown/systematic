@@ -3,7 +3,7 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./assets/banner.svg">
   <source media="(prefers-color-scheme: light)" srcset="./assets/banner.svg">
-  <img alt="Systematic - Structured Engineering Workflows for OpenCode" src="./assets/banner.svg" width="100%">
+  <img alt="Systematic - Structured Engineering Workflows for AI Coding Agents" src="./assets/banner.svg" width="100%">
 </picture>
 
 <br><br>
@@ -29,11 +29,13 @@ You want AI that follows your process, not just your prompts. You want repeatabl
 
 ## What You Get
 
-Systematic is an [OpenCode](https://opencode.ai/) plugin — and, from v3, a [Pi coding agent](https://github.com/earendil-works/pi-coding-agent) extension in the same package — that ships 31 bundled skills covering brainstorming, planning, implementation, review, and knowledge capture. It includes 37 specialized agents for architecture, security, performance, design, and code review. Installation is zero-configuration — the plugin registers everything via OpenCode's config hooks and works immediately on restart. OCX registry support is available for component-level installs when you only want specific pieces.
+Systematic is a compound-engineering workflow: brainstorm, plan, work, review — each phase a structured skill that guides the AI through requirements exploration, implementation planning, execution, and code review, capturing what was learned along the way. It ships 31 bundled skills and 37 specialized agents for architecture, security, performance, design, and code review.
+
+The workflow runs on three harnesses from one source: [OpenCode](https://opencode.ai/), [Pi](https://github.com/earendil-works/pi-coding-agent), and Claude Code. Each gets a native install path; skill and agent content is identical across all three.
 
 ## Quick Install
 
-**OpenCode plugin** — full integration (slash commands, `systematic_skill` tool, agent registration):
+**OpenCode**:
 
 ```json
 { "plugin": ["@fro.bot/systematic@latest"] }
@@ -41,21 +43,26 @@ Systematic is an [OpenCode](https://opencode.ai/) plugin — and, from v3, a [Pi
 
 Add that to `~/.config/opencode/opencode.json` and restart OpenCode.
 
-**Pi coding agent** — same package, second harness (bundled skills, `systematic_skill`, persona delegation via `systematic_delegate`):
+**Pi**:
 
 ```bash
 npx @fro.bot/systematic setup --harness pi
 ```
 
-See the [Pi harness guide](https://fro.bot/systematic/guides/pi-harness/) for what carries over and where parity honestly ends.
+**Claude Code**:
 
-**`npx skills`** — portable skill content for any AI harness (Claude Code, Cursor, Copilot, …):
+```bash
+claude plugin marketplace add marcusrbrown/systematic
+claude plugin install systematic@systematic
+```
+
+See the [installation guide](https://fro.bot/systematic/getting-started/installation/) for what carries over per harness and where parity honestly ends.
+
+**`npx skills`** — portable skill content for any AI harness (Cursor, Copilot, …), content only, no tool registration:
 
 ```bash
 npx skills add marcusrbrown/systematic
 ```
-
-Use the plugin if you're on OpenCode and want the complete experience, the Pi setup command if you're on Pi, or `npx skills` if you want the skill Markdown files dropped into whatever harness you're running.
 
 ## First Workflow
 
@@ -72,11 +79,11 @@ Each step invokes a structured skill that guides the AI through the appropriate 
 
 ## First-Run Checklist
 
-- [ ] [OpenCode](https://opencode.ai/) installed
-- [ ] Add `@fro.bot/systematic@latest` to your `opencode.json` plugins list
-- [ ] Restart OpenCode
+- [ ] Your harness (OpenCode, Pi, or Claude Code) installed
+- [ ] Systematic installed via the harness's path above
+- [ ] Restart the harness
 - [ ] Run `/ce:brainstorm` on something you're building
-- [ ] Verify: the `systematic_skill` tool appears in your tool list
+- [ ] Verify: the skill loads and displays usage instructions
 
 ## Learn More
 
