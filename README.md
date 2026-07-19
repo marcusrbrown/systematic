@@ -36,7 +36,7 @@ Systematic is an [OpenCode](https://opencode.ai/) plugin — and, from v3, a [Pi
 **OpenCode plugin** — full integration (slash commands, `systematic_skill` tool, agent registration):
 
 ```json
-{ "plugins": ["@fro.bot/systematic@latest"] }
+{ "plugin": ["@fro.bot/systematic@latest"] }
 ```
 
 Add that to `~/.config/opencode/opencode.json` and restart OpenCode.
