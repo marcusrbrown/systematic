@@ -1,6 +1,7 @@
 import starlight from '@astrojs/starlight'
 import { defineConfig } from 'astro/config'
 import rehypeMermaid from 'rehype-mermaid'
+import remarkGfm from 'remark-gfm'
 
 export default defineConfig({
   site: 'https://fro.bot',
@@ -14,6 +15,7 @@ export default defineConfig({
       '/systematic/getting-started/installation/',
   },
   markdown: {
+    remarkPlugins: [remarkGfm],
     rehypePlugins: [
       [
         rehypeMermaid,
