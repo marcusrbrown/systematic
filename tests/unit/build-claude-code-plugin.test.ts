@@ -1,10 +1,11 @@
-import { afterAll, describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import {
   buildHookFacts,
+  buildHooksJson,
   buildOutputStyleContent,
   buildPluginManifest,
   buildSourceInventory,
@@ -250,6 +251,131 @@ describe('flattenAgents — stem-uniqueness edge case', () => {
   })
 })
 
+describe('flattenAgents — hardened collision detection (frontmatter name, fold, fail-closed)', () => {
+  test('two agents with distinct stems but colliding frontmatter name fail the build', () => {
+    const root = makeFixtureRepo()
+    writeFile(
+      root,
+      'agents/review/alpha.md',
+      '---\nname: shared-dispatch\ndescription: Alpha agent.\nmode: subagent\ntemperature: 0.1\n---\nAgent body.\n',
+    )
+    writeFile(
+      root,
+      'agents/workflow/beta.md',
+      '---\nname: shared-dispatch\ndescription: Beta agent.\nmode: subagent\ntemperature: 0.1\n---\nAgent body.\n',
+    )
+
+    expect(() => flattenAgents(root)).toThrow(/frontmatter "name" collision/i)
+  })
+
+  test('two agent stems differing only by case fail the build (case-fold collision)', () => {
+    const root = makeFixtureRepo()
+    writeAgent(root, 'review', 'Reviewer', 'Reviewer agent.')
+    writeAgent(root, 'workflow', 'reviewer', 'reviewer agent (lowercase).')
+
+    expect(() => flattenAgents(root)).toThrow(/stem collision/i)
+  })
+
+  test('two agent stems differing only by Unicode normalization form fail the build (NFC-fold collision)', () => {
+    const root = makeFixtureRepo()
+    // "café" as precomposed NFC (é = U+00E9) vs decomposed NFD (e + combining acute U+0301).
+    const nfc = 'caf\u00e9'
+    const nfd = 'cafe\u0301'
+    expect(nfc).not.toBe(nfd)
+    expect(nfc.normalize('NFC')).toBe(nfd.normalize('NFC'))
+
+    writeAgent(root, 'review', nfc, 'NFC agent.')
+    writeAgent(root, 'workflow', nfd, 'NFD agent.')
+
+    expect(() => flattenAgents(root)).toThrow(/stem collision/i)
+  })
+
+  test('missing frontmatter name fails the build closed', () => {
+    const root = makeFixtureRepo()
+    writeFile(
+      root,
+      'agents/review/no-name.md',
+      '---\ndescription: No name agent.\nmode: subagent\ntemperature: 0.1\n---\nAgent body.\n',
+    )
+
+    expect(() => flattenAgents(root)).toThrow(
+      /missing a non-empty frontmatter "name"/i,
+    )
+  })
+
+  test('empty frontmatter name fails the build closed', () => {
+    const root = makeFixtureRepo()
+    writeFile(
+      root,
+      'agents/review/blank-name.md',
+      '---\nname: "  "\ndescription: Blank name agent.\nmode: subagent\ntemperature: 0.1\n---\nAgent body.\n',
+    )
+
+    expect(() => flattenAgents(root)).toThrow(
+      /missing a non-empty frontmatter "name"/i,
+    )
+  })
+
+  test('two agents with distinct stems and distinct names still flatten cleanly (no false positive)', () => {
+    const root = makeFixtureRepo()
+    writeAgent(root, 'review', 'bar', 'Bar agent.')
+    writeAgent(root, 'workflow', 'baz', 'Baz agent.')
+
+    const flattened = flattenAgents(root)
+    expect(flattened.map((a) => a.stem).sort()).toEqual(['bar', 'baz'])
+  })
+
+  test('a numeric frontmatter name fails the build fail-closed with a wrong-type message (not "missing")', () => {
+    const root = makeFixtureRepo()
+    writeFile(
+      root,
+      'agents/review/numeric-name.md',
+      '---\nname: 123\ndescription: Numeric name agent.\nmode: subagent\ntemperature: 0.1\n---\nAgent body.\n',
+    )
+
+    expect(() => flattenAgents(root)).toThrow(
+      /frontmatter "name" of type number/i,
+    )
+    expect(() => flattenAgents(root)).not.toThrow(/missing a non-empty/i)
+  })
+
+  test('a boolean frontmatter name fails the build fail-closed with a wrong-type message (not "missing")', () => {
+    const root = makeFixtureRepo()
+    writeFile(
+      root,
+      'agents/review/boolean-name.md',
+      '---\nname: true\ndescription: Boolean name agent.\nmode: subagent\ntemperature: 0.1\n---\nAgent body.\n',
+    )
+
+    expect(() => flattenAgents(root)).toThrow(
+      /frontmatter "name" of type boolean/i,
+    )
+    expect(() => flattenAgents(root)).not.toThrow(/missing a non-empty/i)
+  })
+})
+
+describe('buildHooksJson — SessionStart matcher omission', () => {
+  test('the SessionStart entry has no "matcher" field (matches all sources: startup, resume, clear, compact)', () => {
+    const root = makeFixtureRepo()
+    const hooksJson = buildHooksJson(root)
+
+    const [sessionStartEntry] = hooksJson.hooks.SessionStart
+    expect(sessionStartEntry).toBeDefined()
+    expect(sessionStartEntry).not.toHaveProperty('matcher')
+    expect(Object.keys(sessionStartEntry ?? {})).toEqual(['hooks'])
+  })
+
+  test('the SessionStart command hook array is unchanged in shape', () => {
+    const root = makeFixtureRepo()
+    const hooksJson = buildHooksJson(root)
+
+    const [sessionStartEntry] = hooksJson.hooks.SessionStart
+    expect(sessionStartEntry?.hooks).toHaveLength(1)
+    expect(sessionStartEntry?.hooks[0]?.type).toBe('command')
+    expect(sessionStartEntry?.hooks[0]?.command).toContain('printf')
+  })
+})
+
 describe('buildHookFacts — payload cap edge case', () => {
   test('declarative hook payload is within the 10000 char cap for the real repo', () => {
     const facts = buildHookFacts(REPO_ROOT)
@@ -458,6 +584,221 @@ describe('checkGeneratedNamespace — integrity gate', () => {
 
 // ---------------------------------------------------------------------------
 // Real repo build (temp dir — the bundle is never committed)
+
+describe('writePluginFiles — atomic staging write', () => {
+  test('produces the full expected tree in outDir on success', () => {
+    const root = makeFixtureRepo()
+    writeUsingSystematicAndProfile(root)
+    writeSkill(root, 'foo', 'Foo skill.')
+    writeAgent(root, 'review', 'bar', 'Bar agent.')
+
+    const outDir = path.join(root, 'out')
+    const files = generatePluginFiles(root)
+    writePluginFiles(files, outDir)
+
+    expect(fs.existsSync(path.join(outDir, '.claude-plugin/plugin.json'))).toBe(
+      true,
+    )
+    expect(fs.existsSync(path.join(outDir, 'agents/bar.md'))).toBe(true)
+  })
+
+  test('leaves no stray staging temp dir or backup dir behind after a successful write', () => {
+    const root = makeFixtureRepo()
+    writeUsingSystematicAndProfile(root)
+    writeSkill(root, 'foo', 'Foo skill.')
+
+    const outDir = path.join(root, 'out')
+    const files = generatePluginFiles(root)
+    writePluginFiles(files, outDir)
+
+    const siblingEntries = fs.readdirSync(root)
+    const strayDirs = siblingEntries.filter(
+      (name) =>
+        name.startsWith('.out-staging-') || name.startsWith('.out-old-'),
+    )
+    expect(strayDirs).toEqual([])
+  })
+
+  test('leaves no stray staging or backup dir after a second successful write over a prior bundle', () => {
+    const root = makeFixtureRepo()
+    writeUsingSystematicAndProfile(root)
+    writeSkill(root, 'foo', 'Foo skill.')
+
+    const outDir = path.join(root, 'out')
+    const files = generatePluginFiles(root)
+    writePluginFiles(files, outDir) // first write (outDir does not yet exist)
+    writePluginFiles(files, outDir) // second write (outDir exists — exercises rename-aside)
+
+    expect(fs.existsSync(path.join(outDir, '.claude-plugin/plugin.json'))).toBe(
+      true,
+    )
+    const siblingEntries = fs.readdirSync(root)
+    const strayDirs = siblingEntries.filter(
+      (name) =>
+        name.startsWith('.out-staging-') || name.startsWith('.out-old-'),
+    )
+    expect(strayDirs).toEqual([])
+  })
+
+  test('a pre-swap failure (simulated by an unwritable temp path) leaves the prior outDir untouched and cleans up the temp dir', () => {
+    const root = makeFixtureRepo()
+    const outDir = path.join(root, 'out')
+    fs.mkdirSync(outDir, { recursive: true })
+    fs.writeFileSync(path.join(outDir, 'sentinel.txt'), 'prior bundle\n')
+
+    // Force a write failure by including a file path with a bad relative
+    // path outside a plausible bundle shape is hard to trigger generically,
+    // so instead we assert the ordering contract directly: a thrown error
+    // during the write loop must not have already removed outDir, and must
+    // not leave a temp staging dir behind.
+    const badFiles = new Map<string, Buffer>([
+      // A relPath that collides with a directory-vs-file conflict forces
+      // fs.writeFileSync to throw after mkdirSync succeeds for the first
+      // entry, simulating a mid-build failure.
+      ['a', Buffer.from('first')],
+      ['a/b.md', Buffer.from('second')],
+    ])
+
+    expect(() => writePluginFiles(badFiles, outDir)).toThrow()
+
+    // outDir (the prior bundle) must still exist and be untouched — the
+    // rename never happened because the write loop failed first (before
+    // outDir was ever renamed aside).
+    expect(fs.existsSync(path.join(outDir, 'sentinel.txt'))).toBe(true)
+    expect(fs.readFileSync(path.join(outDir, 'sentinel.txt'), 'utf8')).toBe(
+      'prior bundle\n',
+    )
+
+    // No leftover staging temp dir or aside backup.
+    const siblingEntries = fs.readdirSync(root)
+    const strayDirs = siblingEntries.filter(
+      (name) =>
+        name.startsWith('.out-staging-') || name.startsWith('.out-old-'),
+    )
+    expect(strayDirs).toEqual([])
+  })
+
+  test('a swap-rename failure (renameSync(tempDir, outDir) throws) restores the prior bundle and leaves no stray dirs', () => {
+    const root = makeFixtureRepo()
+    const outDir = path.join(root, 'out')
+    fs.mkdirSync(outDir, { recursive: true })
+    fs.writeFileSync(path.join(outDir, 'sentinel.txt'), 'prior bundle\n')
+
+    const files = new Map<string, Buffer>([
+      ['agents/new.md', Buffer.from('new bundle content\n')],
+    ])
+
+    const originalRenameSync = fs.renameSync.bind(fs)
+    let swapAttempts = 0
+    const renameSpy = spyOn(fs, 'renameSync').mockImplementation(
+      (src: fs.PathLike, dest: fs.PathLike) => {
+        // Let the aside-rename (outDir -> backup) succeed. Fail only the
+        // FIRST swap-rename (tempDir -> outDir) to simulate a crash
+        // mid-swap; the subsequent restore-rename (backup -> outDir) must
+        // still succeed so the prior bundle actually comes back.
+        if (String(dest) === outDir) {
+          swapAttempts += 1
+          if (swapAttempts === 1) {
+            throw new Error('simulated swap-rename failure')
+          }
+        }
+        return originalRenameSync(src, dest)
+      },
+    )
+
+    try {
+      expect(() => writePluginFiles(files, outDir)).toThrow(
+        /simulated swap-rename failure/,
+      )
+    } finally {
+      renameSpy.mockRestore()
+    }
+
+    // The prior bundle must be restored intact at outDir.
+    expect(fs.existsSync(path.join(outDir, 'sentinel.txt'))).toBe(true)
+    expect(fs.readFileSync(path.join(outDir, 'sentinel.txt'), 'utf8')).toBe(
+      'prior bundle\n',
+    )
+    expect(fs.existsSync(path.join(outDir, 'agents/new.md'))).toBe(false)
+
+    // No leftover staging temp dir or aside backup dir.
+    const siblingEntries = fs.readdirSync(root)
+    const strayDirs = siblingEntries.filter(
+      (name) =>
+        name.startsWith('.out-staging-') || name.startsWith('.out-old-'),
+    )
+    expect(strayDirs).toEqual([])
+  })
+
+  test('a rename-aside failure (renameSync(outDir, asideDir) throws) leaves the prior bundle intact and cleans up both tempDir and any partial aside dir', () => {
+    const root = makeFixtureRepo()
+    const outDir = path.join(root, 'out')
+    fs.mkdirSync(outDir, { recursive: true })
+    fs.writeFileSync(path.join(outDir, 'sentinel.txt'), 'prior bundle\n')
+
+    const files = new Map<string, Buffer>([
+      ['agents/new.md', Buffer.from('new bundle content\n')],
+    ])
+
+    const originalRenameSync = fs.renameSync.bind(fs)
+    let renameCallCount = 0
+    const renameSpy = spyOn(fs, 'renameSync').mockImplementation(
+      (src: fs.PathLike, dest: fs.PathLike) => {
+        renameCallCount += 1
+        // The rename-aside step (outDir -> asideDir) is always the FIRST
+        // renameSync call when outDir pre-exists — fail it to simulate a
+        // permission error or similar mid-setup crash, before the swap
+        // rename is ever attempted.
+        if (renameCallCount === 1) {
+          throw new Error('simulated rename-aside failure')
+        }
+        return originalRenameSync(src, dest)
+      },
+    )
+
+    try {
+      expect(() => writePluginFiles(files, outDir)).toThrow(
+        /simulated rename-aside failure/,
+      )
+    } finally {
+      renameSpy.mockRestore()
+    }
+
+    // The prior bundle must still exist, untouched — the aside-rename never
+    // completed, so outDir was never moved.
+    expect(fs.existsSync(path.join(outDir, 'sentinel.txt'))).toBe(true)
+    expect(fs.readFileSync(path.join(outDir, 'sentinel.txt'), 'utf8')).toBe(
+      'prior bundle\n',
+    )
+    expect(fs.existsSync(path.join(outDir, 'agents/new.md'))).toBe(false)
+
+    // No leftover staging temp dir and no stray aside dir — this is the
+    // exact cleanup gap being closed: a throw during rename-aside setup
+    // must still clean up the already-populated tempDir.
+    const siblingEntries = fs.readdirSync(root)
+    const strayDirs = siblingEntries.filter(
+      (name) =>
+        name.startsWith('.out-staging-') || name.startsWith('.out-old-'),
+    )
+    expect(strayDirs).toEqual([])
+  })
+
+  test('checkGeneratedNamespace gate failure prevents any claude-code/ output (gate runs before swap)', () => {
+    const root = makeFixtureRepo()
+    writeUsingSystematicAndProfile(root)
+    writeSkill(root, 'foo', 'Foo skill referencing ce:nonexistent for context.')
+    writeAgent(root, 'review', 'bar', 'Bar agent.')
+
+    const outDir = path.join(root, 'claude-code')
+
+    expect(() => generatePluginFiles(root)).toThrow(
+      /untranslated source identifier/,
+    )
+    // generatePluginFiles throws before writePluginFiles is ever called in
+    // the real main() flow — assert the outDir was never created.
+    expect(fs.existsSync(outDir)).toBe(false)
+  })
+})
 
 describe('build — real repo, temp dir', () => {
   test('building the real repo into a temp dir succeeds and passes the integrity gate', () => {

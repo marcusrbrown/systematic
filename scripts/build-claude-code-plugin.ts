@@ -172,7 +172,6 @@ function shellSingleQuote(value: string): string {
 export interface ClaudeHooksJson {
   hooks: {
     SessionStart: Array<{
-      matcher: string
       hooks: Array<{ type: 'command'; command: string }>
     }>
   }
@@ -181,6 +180,13 @@ export interface ClaudeHooksJson {
 /**
  * Declarative SessionStart command hook. Static `printf` of facts — no
  * runtime JS in the bundle, sidestepping the hook-throw-swallowing failure mode.
+ *
+ * The SessionStart entry omits `matcher` entirely — per Claude Code docs
+ * (code.claude.com/docs/en/hooks#sessionstart), the four source values
+ * (startup/resume/clear/compact) are exact-string matchers with no
+ * documented alternation form; omitting `matcher` is the canonical way to
+ * match all sources, so the hook fires on startup, resume, clear, and
+ * compact alike.
  */
 export function buildHooksJson(rootDir: string): ClaudeHooksJson {
   const facts = buildHookFacts(rootDir)
@@ -190,7 +196,6 @@ export function buildHooksJson(rootDir: string): ClaudeHooksJson {
     hooks: {
       SessionStart: [
         {
-          matcher: 'startup',
           hooks: [{ type: 'command', command }],
         },
       ],
@@ -392,42 +397,106 @@ export function checkGeneratedNamespace(
 }
 
 /**
+ * Canonicalizes an identity string (agent stem or frontmatter `name`) for
+ * collision detection: NFC-normalized + case-folded so two stems/names
+ * differing only by case or Unicode normalization form collide loudly here
+ * instead of silently overwriting each other on a case-insensitive output
+ * filesystem (macOS).
+ */
+function foldIdentity(value: string): string {
+  return value.normalize('NFC').toLowerCase()
+}
+
+/**
  * Flattens `agents/<category>/<name>.md` → a stem-keyed list, enforcing
- * global stem uniqueness (mirrors `checkAgentStemUniqueness` in
- * scripts/content-integrity.ts). Claude Code accepts Systematic's agent
- * frontmatter as-is, so this is a pure hierarchy move — no frontmatter
- * injection or stripping.
+ * global uniqueness on two independent identities (mirrors
+ * `checkAgentStemUniqueness` in scripts/content-integrity.ts, hardened
+ * beyond stems):
+ *
+ *   - file-stem identity (the flattened output filename)
+ *   - frontmatter `name` identity (what Claude Code actually dispatches by)
+ *
+ * Both identities are canonicalized via `foldIdentity` before comparison, so
+ * case-/Unicode-fold-only differences collide here rather than surviving to
+ * overwrite each other on disk. Missing/empty frontmatter `name` fails the
+ * build closed — an agent Claude Code cannot dispatch by identity is a build
+ * error, not a silent pass-through.
+ *
+ * Claude Code accepts Systematic's agent frontmatter as-is, so this is a
+ * pure hierarchy move — no frontmatter injection or stripping.
  */
 export function flattenAgents(rootDir: string): FlattenedAgent[] {
   const agentsDir = path.join(rootDir, 'agents')
   const agents = findAgentsInDir(agentsDir)
 
-  const byStem = new Map<string, string[]>()
-  for (const agent of agents) {
-    const files = byStem.get(agent.name) ?? []
-    files.push(agent.file)
-    byStem.set(agent.name, files)
+  const parsed = agents.map((agent) => {
+    const content = fs.readFileSync(agent.file)
+    const { data } = parseFrontmatter<Record<string, unknown>>(
+      content.toString('utf8'),
+    )
+    const rawName = data.name
+    const relFile = path.relative(rootDir, agent.file)
+
+    if (rawName !== undefined && typeof rawName !== 'string') {
+      throw buildError(
+        `Agent "${relFile}" has a frontmatter "name" of type ${typeof rawName} (expected a non-empty string) — Claude Code dispatches agents by this identity, so the build fails closed rather than shipping an undispatchable agent.`,
+      )
+    }
+
+    const name = typeof rawName === 'string' ? rawName.trim() : ''
+    if (name === '') {
+      throw buildError(
+        `Agent "${relFile}" is missing a non-empty frontmatter "name" — Claude Code dispatches agents by this identity, so the build fails closed rather than shipping an undispatchable agent.`,
+      )
+    }
+    return { agent, content, name }
+  })
+
+  const byFoldedStem = new Map<string, string[]>()
+  const byFoldedName = new Map<string, string[]>()
+
+  for (const { agent, name } of parsed) {
+    const foldedStem = foldIdentity(agent.name)
+    const stemFiles = byFoldedStem.get(foldedStem) ?? []
+    stemFiles.push(agent.file)
+    byFoldedStem.set(foldedStem, stemFiles)
+
+    const foldedName = foldIdentity(name)
+    const nameFiles = byFoldedName.get(foldedName) ?? []
+    nameFiles.push(agent.file)
+    byFoldedName.set(foldedName, nameFiles)
   }
 
-  const collisions = [...byStem.entries()].filter(
-    ([, files]) => files.length > 1,
-  )
-  if (collisions.length > 0) {
-    const detail = collisions
+  const formatCollisions = (collisions: [string, string[]][]): string =>
+    collisions
       .map(
-        ([stem, files]) =>
-          `  - "${stem}": ${files.map((f) => path.relative(rootDir, f)).join(', ')}`,
+        ([key, files]) =>
+          `  - "${key}": ${files.map((f) => path.relative(rootDir, f)).join(', ')}`,
       )
       .join('\n')
+
+  const stemCollisions = [...byFoldedStem.entries()].filter(
+    ([, files]) => files.length > 1,
+  )
+  if (stemCollisions.length > 0) {
     throw buildError(
-      `Agent stem collision(s) detected — the flatten step requires globally unique stems:\n${detail}`,
+      `Agent stem collision(s) detected — the flatten step requires globally unique stems (case-/Unicode-fold aware):\n${formatCollisions(stemCollisions)}`,
     )
   }
 
-  return agents.map((agent) => ({
+  const nameCollisions = [...byFoldedName.entries()].filter(
+    ([, files]) => files.length > 1,
+  )
+  if (nameCollisions.length > 0) {
+    throw buildError(
+      `Agent frontmatter "name" collision(s) detected — Claude Code dispatches by frontmatter "name", so it must be globally unique (case-/Unicode-fold aware):\n${formatCollisions(nameCollisions)}`,
+    )
+  }
+
+  return parsed.map(({ agent, content }) => ({
     stem: agent.name,
     sourceFile: agent.file,
-    content: fs.readFileSync(agent.file),
+    content,
   }))
 }
 
@@ -469,18 +538,76 @@ export function generatePluginFiles(rootDir: string): Map<string, Buffer> {
   return translated
 }
 
-/** Writes a generated file map to `outDir`, clearing any prior contents first. */
+/**
+ * Writes a generated file map to `outDir` via rename-aside, so the prior
+ * bundle is never destroyed before the new one is safely in place:
+ *
+ *   1. Write the new bundle to a temp sibling dir (all files must succeed).
+ *   2. If `outDir` already exists, rename it aside to a backup sibling path
+ *      (not deleted) — `renameSync` can't land the temp dir directly onto an
+ *      existing non-empty dir on POSIX, which is exactly why the aside step
+ *      exists.
+ *   3. Rename the temp dir into `outDir`.
+ *   4. On success, delete the aside backup.
+ *
+ * Guarantee this actually provides: the prior bundle is preserved until the
+ * moment the new one lands, so a crash while writing the new bundle (step 1)
+ * leaves the old bundle (if any) completely untouched, and a crash during
+ * the rename-aside setup or the final swap (steps 2-3) is caught and rolled
+ * back (the aside backup is renamed back to `outDir`) so the old bundle is
+ * restored. Every failure path — including a failure while setting up the
+ * rename-aside itself — also removes the temp staging dir, so no failure
+ * mode leaks a stray `.<outDir>-staging-*` directory. There is no window
+ * where neither bundle exists except a crash the process cannot catch (e.g.
+ * SIGKILL) between the aside-rename and the swap-rename — an extremely
+ * narrow window, and even then the aside backup remains on disk for manual
+ * recovery. `outDir` is gitignored and fully rebuilt on the next run
+ * regardless, so recovery is also just "re-run the build."
+ */
 export function writePluginFiles(
   files: Map<string, Buffer>,
   outDir: string,
 ): void {
-  if (fs.existsSync(outDir)) {
-    fs.rmSync(outDir, { recursive: true, force: true })
+  const parentDir = path.dirname(outDir)
+  const baseName = path.basename(outDir)
+  const tempDir = fs.mkdtempSync(path.join(parentDir, `.${baseName}-staging-`))
+
+  try {
+    for (const [relPath, content] of files) {
+      const outPath = path.join(tempDir, relPath)
+      fs.mkdirSync(path.dirname(outPath), { recursive: true })
+      fs.writeFileSync(outPath, content)
+    }
+  } catch (err) {
+    fs.rmSync(tempDir, { recursive: true, force: true })
+    throw err
   }
-  for (const [relPath, content] of files) {
-    const outPath = path.join(outDir, relPath)
-    fs.mkdirSync(path.dirname(outPath), { recursive: true })
-    fs.writeFileSync(outPath, content)
+
+  // From here on, tempDir cleanup on any failure is guaranteed by this
+  // single try/catch — including a failure during the rename-aside setup
+  // itself, not just the final swap-rename.
+  let asideDir: string | undefined
+  try {
+    const priorExisted = fs.existsSync(outDir)
+    if (priorExisted) {
+      asideDir = fs.mkdtempSync(path.join(parentDir, `.${baseName}-old-`))
+      fs.rmdirSync(asideDir) // renameSync requires the destination not exist
+      fs.renameSync(outDir, asideDir)
+    }
+
+    fs.renameSync(tempDir, outDir)
+  } catch (err) {
+    // If the prior bundle was already moved aside, restore it so outDir
+    // never ends up empty/missing.
+    if (asideDir && !fs.existsSync(outDir) && fs.existsSync(asideDir)) {
+      fs.renameSync(asideDir, outDir)
+    }
+    fs.rmSync(tempDir, { recursive: true, force: true })
+    throw err
+  }
+
+  if (asideDir) {
+    fs.rmSync(asideDir, { recursive: true, force: true })
   }
 }
 
