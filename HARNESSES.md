@@ -30,7 +30,7 @@ Pi's profile records degraded or unavailable native capabilities and explicit fa
 
 The package manifest exposes the extension and skills at `package.json:17-23`, with tests verifying both manifest entries and their packaged paths `tests/unit/package-exports.test.ts:42-66,241-267` [PI-4]. Pi's RPC/JSONL test fixture isolates its environment (`tests/integration/pi.test.ts:349-388`), and the installed runtime exposes environment-specific agent/session directories `node_modules/@earendil-works/pi-coding-agent/dist/config.js:396-398` [PI-5].
 
-Pi does not consume `disabled_skills` or Systematic's OpenCode configuration, and its skill loading has no OpenCode-style permission gate `docs/src/content/docs/guides/pi-harness.mdx:39-47` [PI-6]. Those are deliberate honesty boundaries, not implied parity.
+Pi does not consume `disabled_skills` or Systematic's OpenCode configuration: `src/pi.ts` constructs its skill resolver with a hardcoded empty disabled-skills list, so every bundled skill is available through `systematic_skill` regardless of what is disabled for OpenCode. Pi's skill loading also has no OpenCode-style permission gate — OpenCode's `skill-tool.ts` calls `context.ask({ permission: 'skill', ... })` before returning skill content, but Pi 0.80.6's extension API has no equivalent hook and Systematic's Pi tool implementation does not call one `src/pi.ts` [PI-6]. Those are deliberate honesty boundaries, not implied parity.
 
 ## Claude Code — Tier 1 shipped adapter
 
@@ -38,7 +38,16 @@ Claude Code's profile records name-based subagent dispatch, `AskUserQuestion`, t
 
 Delegation is name-based: a prompt invokes a subagent by name (for example, "Use the systematic-implementer subagent to …") and Claude Code resolves it against the plugin's `agents/` directory; skills may additionally run scoped subagent forks via `context: fork` [CC-1]. `AskUserQuestion` is the blocking-interaction tool [CC-2]. `TodoWrite` is deprecated and disabled by default; `TaskCreate`/`TaskGet`/`TaskList`/`TaskUpdate` are the current task-tracking tools [CC-3][CC-4]. Skills are discovered natively from `SKILL.md` under `~/.claude/skills/`, `.claude/skills/`, and the plugin's own `skills/` directory through the built-in Skill tool; Systematic registers no `systematic_skill` tool on Claude Code, unlike its OpenCode and Pi adapters [CC-5][CC-6][CC-9].
 
-Behavioral enforcement rides a plugin output style (`force-for-plugin: true`), which is the documented plugin-native channel that modifies the system prompt directly and auto-applies when the plugin is enabled. The `SessionStart` hook carries declarative session state only (a static skill/agent count and catalog) — imperative hook content is refused as prompt injection, so the hook does not attempt to inject behavioral instructions. Workflow content ships as native skills; agents ship as native subagents. Integration coverage lives in `tests/integration/claude-code.test.ts` [CC-10].
+Behavioral enforcement rides a plugin output style (`force-for-plugin: true`), which is the documented plugin-native channel that modifies the system prompt directly and auto-applies when the plugin is enabled. The `SessionStart` hook carries declarative session state only (a static skill/agent count and catalog) — imperative hook content is refused as prompt injection, so the hook does not attempt to inject behavioral instructions. Workflow content ships as native skills; agents ship as native subagents. The integration is deliberately layered rather than relying on one mechanism to do everything:
+
+| Layer | Mechanism | Role |
+|---|---|---|
+| Enforcement | Plugin output style (`force-for-plugin: true`) | Authoritative, install-alone behavioral discipline |
+| State | `SessionStart` hook | Declarative session facts (skill/subagent availability) only |
+| Workflow | Native skills | Skill content and instructions, discovered natively |
+| Agents | Native subagents | Persona dispatch by name |
+
+Honest capability boundary: output-style enforcement is real and applies automatically on install, but it operates at the system-prompt level — the same layer as any other instruction the model receives — so it is strong guidance, not a hard gate the model cannot violate. Coverage also differs by surface: plugin-bundled hooks fire app-wide, including in Cowork, while a project-local `.claude/settings.json` hook fires in the Code tab but not in Cowork — state or enforcement reaching Cowork sessions has to come through the plugin, not a project-local hook. Integration coverage lives in `tests/integration/claude-code.test.ts` [CC-10].
 
 ## Codex CLI — Tier 2 documented portability target
 
@@ -80,7 +89,7 @@ Migrated-skill discipline is enforced by the [content-integrity gate](scripts/co
 - **PI-3** — `src/pi.ts:85-113`.
 - **PI-4** — `package.json:17-23`; `tests/unit/package-exports.test.ts:42-66,241-267`.
 - **PI-5** — `tests/integration/pi.test.ts:349-388`; installed Pi source `node_modules/@earendil-works/pi-coding-agent/dist/config.js:396-398`.
-- **PI-6** — `docs/src/content/docs/guides/pi-harness.mdx:39-47`.
+- **PI-6** — `src/pi.ts` (hardcoded empty disabled-skills list; no permission-gate call before returning skill content).
 - **CC-P** — [Claude Code profile](skills/using-systematic/references/claude-code-profile.md#L5-L10).
 - **CC-1** — [Claude Code skills](https://code.claude.com/docs/en/skills) (`context: fork`); name-based subagent dispatch verified via `claude-code/agents/` and the plugin's invocation convention [CC-9].
 - **CC-2** — [Claude Code tools reference](https://code.claude.com/docs/en/tools-reference).
