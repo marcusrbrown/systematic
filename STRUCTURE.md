@@ -18,13 +18,14 @@ systematic/
 │   ├── src/content/  # Manual guides + generated reference pages
 │   └── solutions/    # Documented solutions to past problems
 ├── registry/         # OCX registry config + omo/standalone profiles
-├── scripts/          # Build-time + CI scripts (integrity, schema codegen, registry)
+├── scripts/          # Build-time + CI scripts (integrity, schema codegen, registry, CC plugin build)
 ├── assets/           # Static assets (banner SVG)
 ├── tests/
 │   ├── unit/         # 20 unit test files
 │   └── integration/  # 2 integration test files
 ├── .opencode/        # Project-specific OpenCode config + commands
 │   └── commands/     # Project-only commands (not shipped in npm package)
+├── .claude-plugin/   # marketplace.json — Claude Code marketplace catalog entry
 └── dist/             # Compiled output (generated, not committed)
 ```
 
@@ -38,7 +39,8 @@ systematic/
 
 **Key files:**
 - `src/index.ts` — plugin factory (`SystematicPlugin`), registers all three OpenCode hooks
-- `src/cli.ts` — CLI commands: `list`, `config show/path`, `setup --harness opencode|pi`
+- `src/cli.ts` — CLI commands: `list`, `config show/path`, `setup --harness opencode|pi` (Claude Code
+  has no CLI setup step — it installs as a prebuilt plugin via marketplace, see `scripts/`)
 - `src/lib/setup.ts` — `setupHarness`: atomic/backed-up/idempotent, project-local-only harness config writes
 - `src/lib/config.ts` — JSONC config loading, 3-source merge
 - `src/lib/config-schema.ts` — canonical Zod schema, `validateConfig`, `SECURITY_OVERLAY_FIELDS`
@@ -104,6 +106,9 @@ bundled assets before editing or building the docs site.
 - `scripts/content-integrity.ts` — CI gate: validates frontmatter contracts, catches phantom refs
 - `scripts/build-registry.ts` — OCX registry builder (pass `--check` for drift detection)
 - `scripts/generate-config-schema.ts` — JSON Schema codegen + drift check
+- `scripts/build-claude-code-plugin.ts` — generates the self-contained Claude Code plugin bundle
+  (`claude-code/`, gitignored staging) from `skills/` and `agents/`; CI publishes the output to the
+  orphan `claude-code-plugin` branch, never committed to `main`
 
 ### `tests/`
 
@@ -123,6 +128,14 @@ no mocking libraries.
 **Contains:**
 - `.opencode/commands/` — project-only commands (e.g., `generate-readme`). These are not bundled;
   they exist only for contributors working in this repo.
+
+### `.claude-plugin/`
+
+**Purpose:** Claude Code marketplace catalog, committed to `main`.
+
+**Contains:** `marketplace.json` — points the `systematic` plugin entry at the `claude-code-plugin`
+branch ref. Users install via `claude plugin marketplace add marcusrbrown/systematic` then
+`claude plugin install systematic@systematic`.
 
 ## Key File Locations
 
@@ -163,6 +176,8 @@ no mocking libraries.
 | `scripts/content-integrity.ts` | CI content-integrity gate |
 | `scripts/build-registry.ts` | OCX registry builder + drift check |
 | `scripts/generate-config-schema.ts` | JSON Schema codegen |
+| `scripts/build-claude-code-plugin.ts` | Claude Code plugin bundle builder |
+| `.claude-plugin/marketplace.json` | Claude Code marketplace catalog entry |
 | `docs/scripts/transform-content.ts` | Docs reference content generation |
 | `docs/scripts/generate-config-reference.ts` | Docs config reference page codegen |
 
