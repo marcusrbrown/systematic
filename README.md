@@ -3,7 +3,7 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./assets/banner.svg">
   <source media="(prefers-color-scheme: light)" srcset="./assets/banner.svg">
-  <img alt="Systematic - Structured Engineering Workflows for AI Coding Agents" src="./assets/banner.svg" width="100%">
+  <img alt="Systematic — Compound-Engineering Workflows for OpenCode, Pi, and Claude Code" src="./assets/banner.svg" width="100%">
 </picture>
 
 <br><br>
