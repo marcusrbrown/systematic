@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640">
-  <title>Systematic - Structured Engineering Workflows for OpenCode</title>
-  <desc>Banner for the Systematic OpenCode plugin featuring Skills, Agents, and Commands for disciplined AI-assisted engineering.</desc>
+  <title>Systematic — Compound-Engineering Workflows for OpenCode, Pi, and Claude Code</title>
+  <desc>Banner for Systematic featuring compound-engineering workflows (brainstorm, plan, work, review) delivered as skills and agents for OpenCode, Pi, and Claude Code.</desc>
   
   <defs>
     <!-- Gradient inspired by Fro Bot's afro (blue-purple) -->
@@ -110,7 +110,7 @@
       fill="#B2F5EA" 
       text-anchor="middle"
     >
-      Structured Engineering Workflows for OpenCode
+      Compound-Engineering Workflows for OpenCode, Pi, and Claude Code
     </text>
     
     <!-- Feature pills (tighter grouping: -140, 0, 140) -->
@@ -129,11 +129,11 @@
         <text x="0" y="5" font-family="'SF Pro Text', 'Helvetica Neue', sans-serif" font-size="14" font-weight="500" letter-spacing="0.5" fill="#E91E8C" text-anchor="middle">Agents</text>
       </g>
       
-      <!-- Commands pill -->
+      <!-- Workflows pill -->
       <g transform="translate(150, 0)">
         <rect x="-60" y="-16" width="120" height="32" rx="16" fill="#F5A623" opacity="0.15"/>
         <rect x="-60" y="-16" width="120" height="32" rx="16" fill="none" stroke="#F5A623" stroke-width="1"/>
-        <text x="0" y="5" font-family="'SF Pro Text', 'Helvetica Neue', sans-serif" font-size="14" font-weight="500" letter-spacing="0.5" fill="#F5A623" text-anchor="middle">Commands</text>
+        <text x="0" y="5" font-family="'SF Pro Text', 'Helvetica Neue', sans-serif" font-size="14" font-weight="500" letter-spacing="0.5" fill="#F5A623" text-anchor="middle">Workflows</text>
       </g>
     </g>
   </g>
