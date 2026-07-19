@@ -11,7 +11,7 @@ This page gets you from zero to your first Systematic workflow in under five min
 
 ## Prerequisites
 
-You need [OpenCode](https://opencode.ai) installed and running, plus **Node.js 18+** or the **Bun** runtime. That is it. No API keys, no accounts, no extra tooling.
+You need the harness you are installing into — [OpenCode](https://opencode.ai), [Pi](https://github.com/earendil-works/pi-coding-agent), or Claude Code — installed and running. The OpenCode and Pi package also needs **Node.js 18+** or the **Bun** runtime. No API keys, no accounts, no extra tooling.
 
 ## Install the OpenCode plugin
 
@@ -146,11 +146,13 @@ See [HARNESSES.md](https://github.com/marcusrbrown/systematic/blob/main/HARNESSE
 
 ## Automatic asset discovery
 
-Systematic requires zero manual file copying. When the plugin loads, it automatically:
+Systematic requires zero manual file copying. When the OpenCode plugin loads, it automatically:
 
 - Discovers all bundled **skills** and makes them available via the `systematic_skill` tool.
 - Registers bundled **agents** so you can @mention them immediately.
 - Exposes bundled skills as slash-invokable workflows (for example, `/ce:plan`).
+
+Pi and Claude Code surface the same skills and agents through their own discovery — Pi via the `systematic_skill` tool, Claude Code via its native Skill tool. See [HARNESSES.md](https://github.com/marcusrbrown/systematic/blob/main/HARNESSES.md) for how discovery differs per harness.
 
 ## Recommended: enable background subagents
 
@@ -166,7 +168,7 @@ This flag is experimental but stable in recent OpenCode versions. It is optional
 
 ## Your first workflow
 
-Systematic is built around a four-step loop. Here is what it looks like in practice, using a concrete task: adding a dark mode toggle.
+Systematic is built around a four-step loop. Here is what it looks like in practice, using a concrete task: adding a dark mode toggle. The commands below use OpenCode's slash-command form; Pi and Claude Code run the same workflows through their native skill invocation (see [HARNESSES.md](https://github.com/marcusrbrown/systematic/blob/main/HARNESSES.md) for the per-harness equivalents).
 
 <Steps>
 1. **Brainstorm** — explore the problem before writing code
