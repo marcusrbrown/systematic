@@ -1,17 +1,17 @@
 ---
 title: Installation
-description: Install Systematic and run your first workflow in under five minutes. Add one line to opencode.json, restart, and start your first brainstorm.
+description: Install Systematic and run your first workflow in under five minutes on OpenCode, Pi, or Claude Code.
 sidebar:
   order: 1
 ---
 
 import { Steps } from '@astrojs/starlight/components'
 
-This page gets you from zero to your first Systematic workflow in under five minutes. Add one line to your OpenCode config, restart, and you are ready.
+This page gets you from zero to your first Systematic workflow in under five minutes, on OpenCode, Pi, or Claude Code. Most setups are one line of config and a restart away.
 
 ## Prerequisites
 
-You need [OpenCode](https://opencode.ai) installed and running, plus **Node.js 18+** or the **Bun** runtime. That is it. No API keys, no accounts, no extra tooling.
+You need the harness you are installing into — [OpenCode](https://opencode.ai), [Pi](https://github.com/earendil-works/pi-coding-agent), or Claude Code — installed and running. The OpenCode and Pi package also needs **Node.js 18+** or the **Bun** runtime. No API keys, no accounts, no extra tooling.
 
 ## Install the OpenCode plugin
 
@@ -44,6 +44,16 @@ The OpenCode plugin is the recommended installation path. It provides the full e
 
    If the skill loads and displays usage instructions, the installation succeeded.
 </Steps>
+
+## Harness compatibility at a glance
+
+| Harness | Install | Skill loading |
+|---|---|---|
+| OpenCode | `opencode.json` plugins array | `systematic_skill` tool + skills-as-commands |
+| Pi | `setup --harness pi` | `systematic_skill` tool |
+| Claude Code | plugin marketplace | native Skill tool |
+
+See [HARNESSES.md](https://github.com/marcusrbrown/systematic/blob/main/HARNESSES.md) for the full capability matrix and per-harness boundaries.
 
 ## Or install skill content with `npx skills`
 
@@ -111,19 +121,38 @@ Use `npx skills` to install the skill Markdown files directly. This path works i
 
 ## Install into a Pi coding-agent project
 
-Systematic also ships a [Pi coding-agent](https://github.com/earendil-works/pi-coding-agent) extension from the same package — same `systematic_skill` tool, same bootstrap injection, plus a `systematic_delegate` persona-delegation tool. See [Pi Harness Support](/systematic/guides/pi-harness/) for the full install steps and an honest list of where Pi parity with OpenCode currently ends (config support, permission gating).
+Systematic also ships a [Pi coding-agent](https://github.com/earendil-works/pi-coding-agent) extension from the same package — same `systematic_skill` tool, same bootstrap injection, plus a `systematic_delegate` persona-delegation tool.
 
 ```bash
 npx @fro.bot/systematic setup --harness pi
 ```
 
+This atomically writes the plugin entry into `.pi/settings.json`. It is idempotent — running it again is safe and will not duplicate the entry. Pi trust-gates the extension at first use, so expect a trust prompt the first time it loads.
+
+See [HARNESSES.md](https://github.com/marcusrbrown/systematic/blob/main/HARNESSES.md) for an honest list of where Pi parity with OpenCode currently ends (config support, permission gating).
+
+## Install into a Claude Code project
+
+Systematic is also built and published as a Claude Code plugin (from a dedicated `claude-code-plugin` branch) and installed through Claude Code's plugin marketplace.
+
+```bash
+claude plugin marketplace add marcusrbrown/systematic
+claude plugin install systematic@systematic
+```
+
+In Claude Desktop's GUI, the equivalent path is **+ → Plugins → Add plugin**. Once installed, skills are available through Claude Code's native Skill tool rather than the `systematic_skill` tool.
+
+See [HARNESSES.md](https://github.com/marcusrbrown/systematic/blob/main/HARNESSES.md) for the full capability matrix and per-harness boundaries.
+
 ## Automatic asset discovery
 
-Systematic requires zero manual file copying. When the plugin loads, it automatically:
+Systematic requires zero manual file copying. When the OpenCode plugin loads, it automatically:
 
 - Discovers all bundled **skills** and makes them available via the `systematic_skill` tool.
 - Registers bundled **agents** so you can @mention them immediately.
 - Exposes bundled skills as slash-invokable workflows (for example, `/ce:plan`).
+
+Pi and Claude Code surface the same skills and agents through their own discovery — Pi via the `systematic_skill` tool, Claude Code via its native Skill tool. See [HARNESSES.md](https://github.com/marcusrbrown/systematic/blob/main/HARNESSES.md) for how discovery differs per harness.
 
 ## Recommended: enable background subagents
 
@@ -139,7 +168,7 @@ This flag is experimental but stable in recent OpenCode versions. It is optional
 
 ## Your first workflow
 
-Systematic is built around a four-step loop. Here is what it looks like in practice, using a concrete task: adding a dark mode toggle.
+Systematic is built around a four-step loop. Here is what it looks like in practice, using a concrete task: adding a dark mode toggle. The commands below use OpenCode's slash-command form; Pi and Claude Code run the same workflows through their native skill invocation (see [HARNESSES.md](https://github.com/marcusrbrown/systematic/blob/main/HARNESSES.md) for the per-harness equivalents).
 
 <Steps>
 1. **Brainstorm** — explore the problem before writing code

@@ -51,4 +51,34 @@ describe('astro.config.mjs redirects', () => {
       '/systematic/reference/configuration/',
     )
   })
+
+  test('/guides/pi-harness/ redirects to /systematic/getting-started/installation/', () => {
+    const source = fs.readFileSync(ASTRO_CONFIG_PATH, 'utf-8')
+    const r = extractRedirects(source)
+    expect(r['/guides/pi-harness/']).toBe(
+      '/systematic/getting-started/installation/',
+    )
+  })
+
+  test('/guides/claude-code-harness/ redirects to /systematic/getting-started/installation/', () => {
+    const source = fs.readFileSync(ASTRO_CONFIG_PATH, 'utf-8')
+    const r = extractRedirects(source)
+    expect(r['/guides/claude-code-harness/']).toBe(
+      '/systematic/getting-started/installation/',
+    )
+  })
+
+  test('every redirect destination starts with /systematic/ (base prefix is not auto-added)', () => {
+    const source = fs.readFileSync(ASTRO_CONFIG_PATH, 'utf-8')
+    const r = extractRedirects(source)
+    for (const [from, to] of Object.entries(r)) {
+      expect(to.startsWith('/systematic/')).toBe(true)
+      // sanity: keep the failure message actionable if this ever regresses
+      if (!to.startsWith('/systematic/')) {
+        throw new Error(
+          `Redirect destination for "${from}" ("${to}") is missing the /systematic/ base prefix`,
+        )
+      }
+    }
+  })
 })
