@@ -30,7 +30,7 @@ Pi's profile records degraded or unavailable native capabilities and explicit fa
 
 The package manifest exposes the extension and skills at `package.json:17-23`, with tests verifying both manifest entries and their packaged paths `tests/unit/package-exports.test.ts:42-66,241-267` [PI-4]. Pi's RPC/JSONL test fixture isolates its environment (`tests/integration/pi.test.ts:349-388`), and the installed runtime exposes environment-specific agent/session directories `node_modules/@earendil-works/pi-coding-agent/dist/config.js:396-398` [PI-5].
 
-Pi does not consume `disabled_skills` or Systematic's OpenCode configuration: `src/pi.ts` constructs its skill resolver with a hardcoded empty disabled-skills list, so every bundled skill is available through `systematic_skill` regardless of what is disabled for OpenCode. Pi's skill loading also has no OpenCode-style permission gate — OpenCode's `skill-tool.ts` calls `context.ask({ permission: 'skill', ... })` before returning skill content, but Pi 0.80.6's extension API has no equivalent hook and Systematic's Pi tool implementation does not call one `src/pi.ts` [PI-6]. Those are deliberate honesty boundaries, not implied parity.
+Pi does not consume `disabled_skills` or Systematic's OpenCode configuration: `src/pi.ts` constructs its skill resolver with a hardcoded empty disabled-skills list, so every bundled skill is available through `systematic_skill` regardless of what is disabled for OpenCode. Pi's skill loading also has no OpenCode-style permission gate — OpenCode's `skill-tool.ts` calls `context.ask({ permission: 'skill', ... })` before returning skill content, but Pi 0.80.6's extension API has no equivalent hook and Systematic's Pi tool implementation does not call one [PI-6]. Those are deliberate honesty boundaries, not implied parity.
 
 ## Claude Code — Tier 1 shipped adapter
 
@@ -89,7 +89,7 @@ Migrated-skill discipline is enforced by the [content-integrity gate](scripts/co
 - **PI-3** — `src/pi.ts:85-113`.
 - **PI-4** — `package.json:17-23`; `tests/unit/package-exports.test.ts:42-66,241-267`.
 - **PI-5** — `tests/integration/pi.test.ts:349-388`; installed Pi source `node_modules/@earendil-works/pi-coding-agent/dist/config.js:396-398`.
-- **PI-6** — `src/pi.ts` (hardcoded empty disabled-skills list; no permission-gate call before returning skill content).
+- **PI-6** — `src/pi.ts:59-60` (hardcoded empty disabled-skills list); OpenCode's contrasting permission gate at `src/lib/skill-tool.ts:86-87`.
 - **CC-P** — [Claude Code profile](skills/using-systematic/references/claude-code-profile.md#L5-L10).
 - **CC-1** — [Claude Code skills](https://code.claude.com/docs/en/skills) (`context: fork`); name-based subagent dispatch verified via `claude-code/agents/` and the plugin's invocation convention [CC-9].
 - **CC-2** — [Claude Code tools reference](https://code.claude.com/docs/en/tools-reference).
