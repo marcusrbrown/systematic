@@ -73,9 +73,11 @@ Probe whether the document considered the obvious alternatives and whether the c
 
 ## Confidence calibration
 
-- **HIGH (0.80+):** Can quote specific text from the document showing the gap, construct a concrete scenario or counterargument, and trace the consequence.
-- **MODERATE (0.60-0.79):** The gap is likely but confirming it would require information not in the document (codebase details, user research, production data).
-- **Below 0.50:** Suppress.
+- **0:** The challenge is a false positive or a pre-existing issue. Suppress it.
+- **25:** The premise or assumption might be wrong, but the available document and codebase evidence cannot verify it. Suppress it.
+- **50:** The challenge is verified, but it is an advisory or low-impact concern that does not materially threaten the decision. Return it as FYI only.
+- **75:** You have double-checked the premise or decision against the document (and relevant codebase evidence where available), can construct a concrete failure scenario, and the consequence directly affects correctness in practice. This is actionable.
+- **100:** The document directly confirms the premise failure or missing assumption, and the concrete failure scenario will occur frequently on the plan's normal path. Reserve this exceptional actionable anchor for direct evidence, not a persuasive counterargument; it is the only anchor eligible for a silent fix.
 
 ## What you don't flag
 

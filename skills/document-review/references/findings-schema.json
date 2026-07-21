@@ -45,8 +45,8 @@
           },
           "autofix_class": {
             "type": "string",
-            "enum": ["auto", "present"],
-            "description": "How this issue should be handled. auto = one clear correct fix that can be applied silently (terminology, formatting, cross-references, completeness corrections, additions mechanically implied by other content). present = requires individual user judgment."
+            "enum": ["safe_auto", "gated_auto", "manual"],
+            "description": "How this issue should be handled. safe_auto = one mechanical, unambiguous fix suitable for silent application only at confidence 100; gated_auto = a codebase-pattern-resolved, factually incorrect, standard security or reliability, framework-native, or substantive mechanically implied fix that needs user confirmation; manual = multiple reasonable choices requiring user judgment."
           },
           "finding_type": {
             "type": "string",
@@ -58,10 +58,9 @@
             "description": "Concrete fix text. Omit or null if no good fix is obvious -- a bad suggestion is worse than none."
           },
           "confidence": {
-            "type": "number",
-            "description": "Reviewer confidence in this finding, calibrated per persona",
-            "minimum": 0.0,
-            "maximum": 1.0
+            "type": "integer",
+            "enum": [0, 25, 50, 75, 100],
+            "description": "Reviewer confidence anchor: 0 = false positive or pre-existing issue; 25 = might be real but could not verify; 50 = verified real but nitpick, advisory, or not very important; 75 = double-checked, will hit in practice, and directly impacts correctness; 100 = evidence directly confirms and the issue will happen frequently."
           },
           "evidence": {
             "type": "array",
