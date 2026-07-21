@@ -156,7 +156,7 @@ Test scenarios:
 
 Verification: The real schema compiles, canonical representative objects pass, malformed legacy/decimal objects fail, and no new contract abstraction is introduced.
 
-- [ ] **U2. Consumer and presentation convergence**
+- [x] **U2. Consumer and presentation convergence**
 
 Goal: Align synthesis guidance and the complete review-output template with existing anchor routing, user-facing buckets, and post-synthesis coverage semantics without changing the lifecycle.
 
