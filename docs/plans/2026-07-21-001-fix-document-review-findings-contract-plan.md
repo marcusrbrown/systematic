@@ -121,7 +121,7 @@ Issue #677 is a reproducible producer/consumer contract failure: the shipped sch
 
 ## Implementation Units
 
-- [ ] **U1. Canonical producer contract**
+- [x] **U1. Canonical producer contract**
 
 Goal: Make the schema, producer template, and main skill teach exactly the contract that synthesis currently consumes, including anchor meanings, autofix semantics, suggested-fix obligations, and corrected headless wording.
 

@@ -6,7 +6,7 @@ argument-hint: "[mode:headless] [path/to/document.md]"
 
 # Document Review
 
-Review requirements or plan documents through multi-persona analysis. Dispatches specialized reviewer agents in parallel, auto-fixes quality issues, and presents strategic questions for user decision.
+Review requirements or plan documents through multi-persona analysis. Dispatches specialized reviewer agents in parallel, applies clear fixes, and presents proposed fixes and decisions for user input.
 
 ## Phase 0: Detect Mode
 
@@ -14,12 +14,13 @@ Check the skill arguments for `mode:headless`. Arguments may contain a document 
 
 If `mode:headless` is present, set **headless mode** for the rest of the workflow.
 
-**Headless mode** changes the interaction model, not the classification boundaries. Document-review still applies the same judgment about what has one clear correct fix vs. what needs user judgment. The only difference is how non-auto findings are delivered:
-- `auto` fixes are applied silently (same as interactive)
-- `present` findings are returned as structured text for the caller to handle -- no question prompts, no interactive approval
+**Headless mode** changes the interaction model, not the classification boundaries. Document-review still applies the same judgment about what has one clear correct fix vs. what needs user judgment. The only difference is how findings are delivered:
+- `safe_auto` fixes at confidence anchor `100` are applied silently (same as interactive)
+- `gated_auto` proposed fixes and `manual` decisions are returned as structured text for the caller to handle -- no question prompts, no interactive approval
+- Findings at confidence anchor `50` are returned as FYI observations only -- no interaction or action
 - Phase 5 returns immediately with "Review complete" (no refine/complete question)
 
-The caller receives findings with their original classifications intact and decides what to do with them.
+The caller receives applied fixes, proposed fixes, decisions, and FYI observations with their original classifications intact; proposed fixes and decisions remain for the caller to handle.
 
 Callers invoke headless mode by including `mode:headless` in the skill arguments, e.g.:
 ```
@@ -133,7 +134,7 @@ Pass each agent the **full document** -- do not split into sections.
 
 ## Phases 3-5: Synthesis, Presentation, and Next Action
 
-After all dispatched agents return, read `references/synthesis-and-presentation.md` for the synthesis pipeline (validate, gate, dedup, promote, resolve contradictions, route by autofix class), auto-fix application, finding presentation, and next-action menu. Do not load this file before agent dispatch completes.
+After all dispatched agents return, read `references/synthesis-and-presentation.md` for the synthesis pipeline (validate, gate, dedup, promote, resolve contradictions, route by autofix class), fix application, finding presentation, and next-action menu. Do not load this file before agent dispatch completes.
 
 ---
 
