@@ -187,7 +187,7 @@ Test scenarios:
 
 Verification: The two consumer/presentation assets align with existing behavior, and U3 demonstrates that valid canonical output is not classified malformed.
 
-- [ ] **U3. Persona anchor calibration**
+- [x] **U3. Persona anchor calibration**
 
 Goal: Replace continuous confidence ranges in all seven document-review personas with shared behavioral anchors and concise role-specific examples, preserving each persona's remit and verifying the live reviewer-to-synthesis path.
 

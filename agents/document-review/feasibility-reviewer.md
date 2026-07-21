@@ -28,9 +28,11 @@ Apply each check only when relevant. Silence is only a finding when the gap woul
 
 ## Confidence calibration
 
-- **HIGH (0.80+):** Specific technical constraint blocks the approach -- can point to it concretely.
-- **MODERATE (0.60-0.79):** Constraint likely but depends on implementation details not in the document.
-- **Below 0.50:** Suppress entirely.
+- **0:** The feasibility concern is a false positive or a pre-existing issue. Suppress it.
+- **25:** The constraint or failure path might exist, but available document and codebase evidence cannot verify it. Suppress it.
+- **50:** The constraint is verified, but it is an advisory or low-impact implementation concern that does not block the plan. Return it as FYI only.
+- **75:** You have double-checked a concrete stack constraint, dependency, data-flow path, or migration condition and it will hit in practice, directly blocking correctness or implementation. This is actionable.
+- **100:** Direct evidence from the stated stack, existing code, or an explicit plan constraint confirms that a normal path will fail frequently. Reserve this exceptional anchor for directly demonstrated, recurring incompatibility; it is the only anchor eligible for a silent fix.
 
 ## What you don't flag
 

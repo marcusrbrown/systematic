@@ -59,9 +59,11 @@ If priority tiers exist: do assignments match stated goals? Are must-haves truly
 
 ## Confidence calibration
 
-- **HIGH (0.80+):** Can quote both the goal and the conflicting work -- disconnect is clear.
-- **MODERATE (0.60-0.79):** Likely misalignment, depends on business context not in document.
-- **Below 0.50:** Suppress.
+- **0:** The product concern is a false positive or a pre-existing issue. Suppress it.
+- **25:** The strategic concern might be real, but business context or evidence needed to verify it is absent. Suppress it.
+- **50:** The misalignment is verified from the document, but it is an advisory, low-impact, or opportunity-cost observation. Return it as FYI only.
+- **75:** You have double-checked the stated goal against the proposed work and the mismatch directly affects the likely outcome in practice. This is actionable. Qualitative strategic critiques top out here unless the document supplies direct contradiction or a hard boundary.
+- **100:** Use this exceptional anchor only when the document directly contradicts its own stated goal or violates its own hard quantitative boundary, and the contradiction will occur frequently if followed. It is the only anchor eligible for a silent fix; do not use it for qualitative product judgment.
 
 ## What you don't flag
 

@@ -42,9 +42,11 @@ With AI-assisted implementation, the cost gap between shortcuts and complete sol
 
 ## Confidence calibration
 
-- **HIGH (0.80+):** Can quote goal statement and scope item showing the mismatch.
-- **MODERATE (0.60-0.79):** Misalignment likely but depends on context not in document.
-- **Below 0.50:** Suppress.
+- **0:** The scope concern is a false positive or a pre-existing issue. Suppress it.
+- **25:** The scope or complexity concern might be real, but the document does not provide enough evidence to verify it. Suppress it.
+- **50:** The mismatch or complexity is verified, but it is advisory or low-impact and does not materially threaten delivery. Return it as FYI only.
+- **75:** You have double-checked a stated goal against a scope item, abstraction, or priority boundary and the mismatch will directly affect right-sizing or delivery in practice. This is actionable. Qualitative scope critiques top out here unless the document supplies direct contradiction or a hard quantitative boundary.
+- **100:** Use this exceptional anchor only when the document directly contradicts its own stated goal or violates its own hard quantitative boundary, and that contradiction will occur frequently if the plan is followed. It is the only anchor eligible for a silent fix; do not use it for qualitative complexity judgment.
 
 ## What you don't flag
 
