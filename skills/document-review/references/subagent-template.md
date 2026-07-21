@@ -26,18 +26,18 @@ Rules:
 - Set `finding_type` for every finding:
   - `error`: Something the document says that is wrong -- contradictions, incorrect statements, design tensions, incoherent tradeoffs.
   - `omission`: Something the document forgot to say -- missing mechanical steps, absent list entries, undefined thresholds, forgotten cross-references.
+- Set `confidence` to exactly one anchor from the schema, based on the evidence available:
+  - `0`: False positive or pre-existing issue. Suppress the finding.
+  - `25`: Might be real but could not verify. Suppress the finding.
+  - `50`: Verified real but nitpick, advisory, or not very important. This becomes an FYI observation.
+  - `75`: Double-checked, will hit in practice, and directly impacts correctness. This is actionable.
+  - `100`: Evidence directly confirms the issue and it will happen frequently. This is actionable and is the only anchor eligible for silent fixes.
 - Set `autofix_class` based on whether there is one clear correct fix, not on severity or importance:
-  - `auto`: One clear correct fix, applied silently. This includes trivial fixes AND substantive ones:
-    - Internal reconciliation -- one document part authoritative over another (summary/detail mismatches, wrong counts, stale cross-references, terminology drift)
-    - Implied additions -- correct content mechanically obvious from the document (missing steps, unstated thresholds, completeness gaps)
-    - Codebase-pattern-resolved -- an established codebase pattern resolves ambiguity (cite the specific file/function in `why_it_matters`)
-    - Incorrect behavior -- the document describes behavior that is factually wrong, and the correct behavior is obvious from context or the codebase
-    - Missing standard security measures -- HTTPS enforcement, checksum verification, input sanitization, private IP rejection, or other controls with known implementations where omission is clearly a bug
-    - Incomplete technical descriptions -- the accurate/complete version is directly derivable from the codebase
-    - Missing requirements that follow mechanically from the document's own explicit, concrete decisions (not high-level goals -- a goal can be satisfied by multiple valid requirements)
-    The test is not "is this fix important?" but "is there more than one reasonable way to fix this?" If a competent implementer would arrive at the same fix independently, it is auto -- even if the fix is substantive. Always include `suggested_fix`. NOT auto if more than one reasonable fix exists or if scope/priority judgment is involved.
-  - `present`: Requires user judgment -- genuinely multiple valid approaches where the right choice depends on priorities, tradeoffs, or context the reviewer does not have. Examples: architectural choices with real tradeoffs, scope decisions, feature prioritization, UX design choices.
-- `suggested_fix` is required for `auto` findings. For `present` findings, include only when the fix is obvious.
+  - `safe_auto`: A truly mechanical one-correct-fix case suitable for silent application only at anchor `100`: summary/detail mismatches, wrong counts, stale internal references, terminology drift, or additions mechanically implied by explicit content. Do not use this for codebase-pattern, factual, security/reliability, framework-native, or substantive completeness cases.
+  - `gated_auto`: A concrete fix resolved by an existing codebase pattern, factually incorrect behavior, a missing standard security or reliability control, a framework-native substitution, or a substantive mechanically implied completeness addition. The user confirms before applying it.
+  - `manual`: Multiple reasonable choices require user judgment, such as architectural tradeoffs, scope or priority decisions, feature prioritization, or UX choices.
+  The test is not "is this fix important?" but "is there more than one reasonable way to fix this?" If a competent implementer would arrive at the same fix independently, use `safe_auto` only for the truly mechanical cases above; use `gated_auto` when codebase or factual evidence resolves the choice but the fix is substantive. Do not classify a judgment call as automatic.
+- `suggested_fix` is required for `safe_auto` and `gated_auto` findings. For `manual` findings, include it only when the fix is obvious.
 - If you find no issues, return an empty findings array. Still populate residual_risks and deferred_questions if applicable.
 - Use your suppress conditions. Do not flag issues that belong to other personas.
 </output-contract>

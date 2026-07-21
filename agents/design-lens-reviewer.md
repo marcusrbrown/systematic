@@ -35,9 +35,11 @@ Explain what's missing: the functional design thinking that makes the interface 
 
 ## Confidence calibration
 
-- **HIGH (0.80+):** Missing states/flows that will clearly cause UX problems during implementation.
-- **MODERATE (0.60-0.79):** Gap exists but a skilled designer could resolve from context.
-- **Below 0.50:** Suppress.
+- **0:** The design concern is a false positive or a pre-existing issue. Suppress it.
+- **25:** A state, flow, or interaction might be missing, but the document does not let you verify the gap. Suppress it.
+- **50:** The gap is verified, but it is advisory or low-impact and a reasonable implementation can proceed without resolving it. Return it as FYI only.
+- **75:** You have double-checked a specific missing state, flow, or interaction against the document, and it will cause a practical implementation or user-flow failure. This is actionable.
+- **100:** The document directly confirms a missing state or flow on a normal, frequently encountered interaction path, and the omission will repeatedly cause users to fail or implementers to block. Reserve this exceptional anchor for direct evidence; it is the only anchor eligible for a silent fix.
 
 ## What you don't flag
 

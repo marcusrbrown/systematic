@@ -26,9 +26,11 @@ Skip areas not relevant to the document's scope.
 
 ## Confidence calibration
 
-- **HIGH (0.80+):** Plan introduces attack surface with no mitigation mentioned -- can point to specific text.
-- **MODERATE (0.60-0.79):** Concern likely but plan may address implicitly or in a later phase.
-- **Below 0.50:** Suppress.
+- **0:** The security concern is a false positive or a pre-existing issue. Suppress it.
+- **25:** The threat might exist, but the plan and available context do not let you verify the exposure or missing control. Suppress it.
+- **50:** The security gap is verified, but its impact is advisory or low and does not materially affect the described attack surface. Return it as FYI only.
+- **75:** You have double-checked a concrete endpoint, trust boundary, input, secret, or data path against the plan and the missing control will directly affect security in practice. This is actionable.
+- **100:** The plan directly confirms an unmitigated attack surface on a normal path, and the resulting exposure or exploit will occur frequently if implemented as written. Reserve this exceptional anchor for direct evidence and recurring impact; it is the only anchor eligible for a silent fix.
 
 ## What you don't flag
 
