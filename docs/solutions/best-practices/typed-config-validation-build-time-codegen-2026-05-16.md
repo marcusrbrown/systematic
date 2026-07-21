@@ -376,6 +376,7 @@ This shape is integration-flavored — it runs against the live filesystem and a
 - [OpenCode /config HttpApi rejects ad-hoc bundled agent color names](../integration-issues/opencode-config-schema-rejects-ad-hoc-agent-colors-2026-05-09.md) — strict-schema migration on the downstream consumer side. Same "inventory the runtime-emitted surface before tightening" lesson, mirrored upstream.
 - [Trust-sensitive overlay fields in plugin configuration](./layered-trust-boundaries-overlay-config-2026-05-09.md) — companion guidance for `SECURITY_OVERLAY_FIELDS` allowlisting. Typed validation preserves the trust boundary by rejecting typos at parse time before the overlay-application phase.
 - [Plugin provider availability discovery and source-default resolution](./provider-availability-source-defaults-2026-05-12.md) — generator-owned dual outputs pattern. Useful precedent for runtime discovery driving generated artifacts.
+- [Behavior-first AJV contract verification for agent outputs](behavior-first-ajv-contract-verification-2026-07-21.md) — extends schema-authoritative validation to emitted agent objects and their live consumer boundary.
 - [Code Review Fixes for OCX Registry Support](../code-quality/ocx-registry-review-fixes.md) — earlier codegen + drift-gate work. The current doc formalizes the parity rule that registry codegen implicitly relied on.
 - PR #384 — implementation reference for all three lessons.
 - PR #393 — refactored the generator to remove the cache-bust workaround entirely; introduced `createSystematicConfigSchema` factory.

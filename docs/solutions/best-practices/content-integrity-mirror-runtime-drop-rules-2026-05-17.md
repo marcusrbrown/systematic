@@ -167,5 +167,6 @@ test('deprecated block missing since+removal triggers deprecated-missing-require
 ## Related
 
 - `docs/solutions/best-practices/typed-config-validation-build-time-codegen-2026-05-16.md` — adjacent precedent for build-time codegen + runtime validation alignment
+- [Behavior-first AJV contract verification for agent outputs](behavior-first-ajv-contract-verification-2026-07-21.md) — applies the same consumer-semantic rule to schema-governed agent outputs.
 - `docs/solutions/workflow-issues/reconciliation-sync-reference-integrity-20260417.md` — moderate adjacency on the broader theme of CI catching post-write integrity gaps
 - PR #401 — v2.19.0 deprecation surface where this lesson surfaced

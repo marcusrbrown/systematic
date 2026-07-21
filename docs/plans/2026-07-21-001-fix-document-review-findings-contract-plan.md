@@ -1,9 +1,10 @@
 ---
 title: "fix: Align document-review findings contract"
 type: fix
-status: active
+status: completed
 date: 2026-07-21
 origin: docs/brainstorms/2026-07-21-document-review-findings-contract-alignment-requirements.md
+shipped: "PR #679 / v3.2.4"
 ---
 
 # fix: Align document-review findings contract
