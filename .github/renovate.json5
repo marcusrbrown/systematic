@@ -9,6 +9,14 @@
   ignorePaths: ['**/node_modules/**', '**/bower_components/**', 'tests/**'],
   packageRules: [
     {
+      // bfra-me/renovate-action sets RENOVATE_BINARY_SOURCE=install, so
+      // Renovate's built-in artifact update path calls `install-tool bun <ver>`
+      // before regenerating bun.lock. That fails in this environment; the
+      // postUpgradeTasks `bun install` below regenerates bun.lock instead.
+      matchManagers: ['bun', 'npm'],
+      skipArtifactsUpdate: true,
+    },
+    {
       description: 'Only allow LTS versions of @types/node (even major versions)',
       matchPackageNames: ['@types/node'],
       allowedVersions: '/^v?([0-9]*[02468])\\./',
