@@ -109,6 +109,8 @@
   "dependencies": {
     "js-yaml": "^4.1.1",
     "jsonc-parser": "^3.3.0",
+    "tree-sitter-bash": "0.25.1",
+    "web-tree-sitter": "0.25.10",
     "zod": "4.4.3"
   },
   "overrides": {
