@@ -112,7 +112,8 @@
     "zod": "4.4.3"
   },
   "overrides": {
-    "@earendil-works/pi-ai": "0.80.10"
+    "@earendil-works/pi-ai": "0.80.10",
+    "brace-expansion": "^5.0.8"
   },
   "publishConfig": {
     "access": "public",
