@@ -683,6 +683,13 @@ describe('config', () => {
     test('has bootstrap.file undefined by default', () => {
       expect(DEFAULT_CONFIG.bootstrap.file).toBeUndefined()
     })
+
+    test('has workflow_guard observe mode and debug disabled by default', () => {
+      expect(DEFAULT_CONFIG.workflow_guard).toEqual({
+        mode: 'observe',
+        debug: false,
+      })
+    })
   })
 
   describe('OPENCODE_CONFIG_DIR environment variable', () => {
@@ -864,6 +871,18 @@ describe('config', () => {
       const configPath = writeProjectConfig({ agnts: {} })
       expect(() => loadConfig(testDir)).toThrow(configPath)
       expect(() => loadConfig(testDir)).toThrow('agnts')
+    })
+
+    test('project workflow_guard is rejected by the trust boundary', () => {
+      const configPath = writeProjectConfig({
+        workflow_guard: { mode: 'disabled', debug: true },
+      })
+
+      expect(() => loadConfig(testDir)).toThrow(configPath)
+      expect(() => loadConfig(testDir)).toThrow('workflow_guard')
+      expect(() => loadConfig(testDir)).toThrow(
+        /only valid in user config or OPENCODE_CONFIG_DIR config/,
+      )
     })
 
     test('malformed agents.<key>.model is rejected with nested field path in error', () => {
@@ -1166,6 +1185,62 @@ describe('config', () => {
 
         const result = loadConfig(testDir)
         expect(result.bootstrap.enabled).toBe(false)
+      } finally {
+        delete process.env.OPENCODE_CONFIG_DIR
+        fs.rmSync(customDir, { recursive: true, force: true })
+      }
+    })
+
+    test('user workflow_guard values survive empty project and custom configs', () => {
+      const customDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'systematic-custom-'),
+      )
+      process.env.OPENCODE_CONFIG_DIR = customDir
+
+      try {
+        writeUserConfig({
+          workflow_guard: { mode: 'protected', debug: true },
+        })
+        writeProjectConfig({})
+        fs.writeFileSync(
+          path.join(customDir, 'systematic.json'),
+          JSON.stringify({}),
+        )
+
+        const result = loadConfig(testDir)
+
+        expect(result.workflow_guard).toEqual({
+          mode: 'protected',
+          debug: true,
+        })
+      } finally {
+        delete process.env.OPENCODE_CONFIG_DIR
+        fs.rmSync(customDir, { recursive: true, force: true })
+      }
+    })
+
+    test('custom workflow_guard partially overrides only the specified fields', () => {
+      const customDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'systematic-custom-'),
+      )
+      process.env.OPENCODE_CONFIG_DIR = customDir
+
+      try {
+        writeUserConfig({
+          workflow_guard: { mode: 'protected', debug: true },
+        })
+        writeProjectConfig({})
+        fs.writeFileSync(
+          path.join(customDir, 'systematic.json'),
+          JSON.stringify({ workflow_guard: { mode: 'disabled' } }),
+        )
+
+        const result = loadConfig(testDir)
+
+        expect(result.workflow_guard).toEqual({
+          mode: 'disabled',
+          debug: true,
+        })
       } finally {
         delete process.env.OPENCODE_CONFIG_DIR
         fs.rmSync(customDir, { recursive: true, force: true })

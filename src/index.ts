@@ -10,6 +10,10 @@ import {
 } from './lib/bootstrap.js'
 import { loadConfig } from './lib/config.js'
 import { createConfigHandler } from './lib/config-handler.js'
+import {
+  createOpencodeWorkflowGuard,
+  isWorkflowGuardBlockedError,
+} from './lib/opencode-workflow-guard.js'
 import { createSkillTool } from './lib/skill-tool.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -31,7 +35,11 @@ const getPackageVersion = (): string => {
   }
 }
 
-const initializePlugin = async ({ client, directory }: PluginInput) => {
+const initializePlugin = async ({
+  client,
+  directory,
+  worktree,
+}: PluginInput) => {
   let hasLoggedInit = false
   const config = loadConfig(directory)
   // Snapshot bootstrap once per plugin init so the cached system prefix stays
@@ -49,6 +57,12 @@ const initializePlugin = async ({ client, directory }: PluginInput) => {
     bundledCommandsDir,
     client,
   })
+  const workflowGuard = createOpencodeWorkflowGuard({
+    config: config.workflow_guard,
+    workspaceIdentity: directory,
+    repositoryIdentity: directory,
+    worktreeIdentity: typeof worktree === 'string' ? worktree : directory,
+  })
 
   return {
     config: configHandler,
@@ -58,6 +72,23 @@ const initializePlugin = async ({ client, directory }: PluginInput) => {
         bundledSkillsDir,
         disabledSkills: config.disabled_skills,
       }),
+      ...workflowGuard.tools,
+    },
+
+    'tool.execute.before': async (input: unknown, output: unknown) => {
+      try {
+        await workflowGuard.hooks['tool.execute.before'](input, output)
+      } catch (error) {
+        if (isWorkflowGuardBlockedError(error)) throw error
+      }
+    },
+
+    'tool.execute.after': async (input: unknown, output: unknown) => {
+      try {
+        await workflowGuard.hooks['tool.execute.after'](input, output)
+      } catch {
+        // Adapter after hooks are fail-closed and never block the host.
+      }
     },
 
     'experimental.chat.system.transform': async (
@@ -111,6 +142,10 @@ const initializePlugin = async ({ client, directory }: PluginInput) => {
       if (bootstrapContent) {
         applyBootstrapContent(output, bootstrapContent)
       }
+      await workflowGuard.hooks['experimental.chat.system.transform'](
+        _input,
+        output,
+      )
     },
   }
 }

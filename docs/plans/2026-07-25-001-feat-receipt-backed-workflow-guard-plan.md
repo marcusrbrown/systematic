@@ -301,7 +301,7 @@ flowchart TB
 
 **Verification:** The portable guard can advance only through current, operation-specific receipts after the host transition boundary; all incomplete and failure states remain visible; repeated calls are idempotent per registration with one host-visible transition; and ordinary todos/unguarded work do not enter the guarded state machine.
 
-- [ ] **U3. Trust-sensitive config, per-registration OpenCode adapter, activation, markers, and capability errors**
+- [x] **U3. Trust-sensitive config, per-registration OpenCode adapter, activation, markers, and capability errors**
 
 **Goal:** Compose the portable guard into the OpenCode plugin without violating per-source registration, add observe/disabled/protected configuration with trust boundaries, activate epochs only from successful guarded skill tool events, and expose bounded status outside assistant text. U3's shipped default is observe; protected mode is selectable for tests but is not the final default until U8.
 
