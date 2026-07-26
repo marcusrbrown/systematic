@@ -393,13 +393,48 @@ flowchart TB
 
 **Verification:** Every guarded operation has a positive and negative adapter path, no-op-safe write/commit/push/PR handling, digest-based staleness, a final compare-and-consume readback that rejects TOCTOU changes without consuming receipts, and no raw command/result persistence.
 
+- [ ] **U4.5. OpenCode production operation observation adapter**
+
+**Goal:** Feed real OpenCode write/edit/apply-patch/Bash results into U4's host-neutral operation APIs so production receipts are actually minted before U5 persists or recovers them.
+
+**Requirements:** R2, R5-R10, R16, R19, R22.
+
+**Dependencies:** U3 and U4. U5's end-to-end persistence/recovery and U7/U8 enforcement gates depend on this unit.
+
+**Files:**
+- Create: `src/lib/opencode-operation-observer.ts`
+- Modify: `src/lib/opencode-workflow-guard.ts`
+- Modify: `src/index.ts`
+- Test: `tests/unit/opencode-operation-observer.test.ts`
+- Test: `tests/unit/opencode-workflow-guard.test.ts`
+- Test: `tests/integration/receipt-workflow-recovery.test.ts`
+
+**Approach:**
+- Keep `opencode-workflow-guard.ts` thin. Put bounded local Git/workspace/resource observation and host-result normalization in `opencode-operation-observer.ts`; keep classification and state decisions in the existing classifier and guard modules.
+- Use one honest identity model: `workspaceIdentity` is a stable target/provenance digest derived from the active project/worktree identity and does not change on ordinary edits or HEAD movement. `repositoryIdentity`, `worktreeIdentity`, and operation-specific resource revision identities are mutable revision digests. Stable-target mismatch is cross-workspace replay; mutable revision mismatch is stale evidence requiring fresh readback.
+- In `tool.execute.before`, recognize only `write`, `edit`, `apply_patch`, and `bash`; bind one pending baseline to session/call/tool/intent and capture only bounded target plus operation-relevant revision digests. Never mint, consume, or advance in before.
+- In `tool.execute.after`, require the matching intent fingerprint and a successful host result. Route write/edit/apply-patch to implementation observation; route Bash through the tree-sitter classifier for verification, commit, push, PR creation, check readback, and review readback. `gh` has no separate host tool and is observed only through Bash. Failed, cancelled, running, malformed, no-op, unrelated, or ambiguous calls mint nothing.
+- Require actual before/after revision change for implementation, commit, push, and PR creation; require recognized successful result plus exact current revision/resource state for verification/check/review readbacks. Obtain remote/PR/check/review state only through narrow structured local `git`/`gh` readbacks; generic successful output is not evidence.
+- After a receipt is minted, merge one nested immutable mint marker into the existing tool-result metadata without replacing host metadata. Raw commands, args, outputs, paths, diffs, environment values, branch names, PR bodies, and user prose never enter retained receipt/status metadata.
+- Abandon unmatched pending baselines at the next readback/turn boundary. Capability or observation failure marks only the affected registration unavailable and does not break unrelated unguarded tools in observe mode.
+
+**Test scenarios:**
+- Happy path — changed write/edit/apply-patch operations mint one implementation receipt; unchanged/no-op results mint none.
+- Happy path — accepted Bash verification and changed commit/push/PR operations mint only their classified receipt; exact check/review readbacks mint only their own operation.
+- Edge case — intent mutation, duplicate after delivery, missing after, and failed observation are idempotent/fail-closed per registration.
+- Edge case — normal workspace/HEAD drift stales mutable evidence and offers fresh readback; a different stable target digest rejects as foreign workspace.
+- Error path — echo, pipelines, dynamic shell, wrapper commands, failed exits, generic `gh` success, missing resource revisions, and no-op git/PR operations mint nothing.
+- Integration — real host ToolPart metadata contains the nested mint marker while preserving built-in metadata, and restart readback sees the same marker.
+
+**Verification:** Production OpenCode calls reach U4's operation classifier/guard exactly once per registration after successful host execution; stable target and mutable revision semantics are distinct; every operation class has positive/no-op/failure coverage; persisted metadata is bounded; and U5 has real receipts to recover.
+
 - [ ] **U5. ToolPart persistence/readback, restart/fork recovery, and foreground child rollup**
 
 **Goal:** Persist privacy-safe receipt-mint metadata in host-owned ToolParts, recover exact receipts after restart/fork when durable evidence is valid, fold later consumption/progression markers without mutating history, require fresh readback when evidence is not valid, and roll up foreground child receipts only with exact host lineage and matching workspace identity.
 
 **Requirements:** R2-R4, R13, R19, R22.
 
-**Dependencies:** U3, U4. U3 supplies the thin host adapter seam; U4 supplies operation/readback contracts.
+**Dependencies:** U3, U4, U4.5. U3 supplies the thin host adapter seam; U4 supplies operation/readback contracts; U4.5 supplies production receipt minting.
 
 **Files:**
 - Modify: `src/lib/receipt-ledger.ts`
@@ -407,34 +442,36 @@ flowchart TB
 - Modify: `src/lib/workflow-guard.ts`
 - Modify: `src/lib/opencode-workflow-guard.ts`
 - Test: `tests/unit/receipt-ledger-persistence.test.ts`
+- Create: `tests/integration/fixtures/receipt-workflow-host.ts`
+- Modify: `tests/integration/opencode.test.ts`
 - Test: `tests/integration/receipt-workflow-recovery.test.ts`
 
 **Approach:**
-- Project immutable receipt-mint metadata into operation ToolParts. Later completion/control ToolParts carry consumption/progression markers; neither kind is edited after persistence.
-- On restart, read back operation and control ToolParts in order, fold immutable mint metadata with later consumption/progression markers, and validate the compatibility envelope, integrity, epoch, unit, operation, salted workspace/resource digest, and per-registration consumption state. Never mutate historical ToolParts, recover from summaries/notifications/prose, or claim a durable Systematic event database.
+- Project immutable receipt-mint metadata through tool-result metadata, which the host persists as operation ToolPart metadata. Progression markers also carry the original random internal epoch/unit IDs, epoch family, unit policy, opaque resource scopes, and session salt required to restore exact active state; their salted digests remain verification fields. Later completion/control tool-result metadata carries consumption/progression markers; neither kind is edited after persistence.
+- On restart, use the v2 `session.messages` surface to read message-plus-part arrays. Preflight the immutable markers to recover one agreeing session salt, create the ledger with a deterministic source-scoped registration identity, then fold operation and control metadata in order. Validate the compatibility envelope, integrity, exact opaque epoch/unit IDs against their salted digests, epoch family, unit policy, operation, stable target digest, and per-registration consumption state. A stable-target mismatch is cross-workspace replay; repository/worktree/resource revision drift makes evidence stale and requires fresh readback rather than rejecting the session as foreign. Never mutate historical ToolParts, recover from summaries/notifications/prose, or claim a durable Systematic event database.
 - Keep readback/reconstruction in `receipt-readback.ts`; keep `opencode-workflow-guard.ts` limited to bounded adapter composition. Unknown/incompatible schema, source digest disagreement, missing capability flags, or missing markers require `unavailable`/fresh operation-specific readback.
 - Immediately before consuming receipts for a transition recovered from host metadata, repeat the bounded compare-and-consume workspace/repository/resource readback. Interleaving changes leave receipts unconsumed/stale.
 - Preserve the capability boundary: compaction is unavailable; if compaction removes or obscures receipt evidence, status becomes `unavailable`/`waiting` and the operation requires fresh readback.
 - Classify missing, pruned, malformed, or unrecoverable evidence with one bounded repair path in canonical status metadata: fresh operation-specific readback, rerun of the exact operation, or Question attestation only when the transition already satisfies the existing attestation eligibility boundary. If none is supported, report `unavailable` with a bounded no-repair reason; never leave a unit waiting indefinitely.
-- For fork, require a new child identity, explicit source linkage known by the probe/adapter, preserved operation fields, and reassigned child identity. Do not infer execution from a duplicated call identifier alone.
-- For child rollup, require host-observed parent/child lineage, matching repository/worktree and workspace digests, foreground completion, and once-only consumption. Ignore worker summaries and synthetic notifications.
+- For fork, copied ToolPart metadata is non-authoritative history unless the host exposes durable source linkage. OpenCode 1.18.5 preserves call ID/tool/status/metadata while reassigning message/part IDs, but exposes no fork `parentID` and omits forks from `session.children`; therefore copied fork receipts cannot satisfy completion in V1 and require fresh child readback/execution. Never infer execution from duplicated metadata or call identity alone.
+- For child rollup, require the characterized foreground lineage (`output.metadata.sessionId`, parent/child call binding, `session.children`, child `parentID`, and completion ordering), matching stable target digest, compatible current revisions, and once-only rollup. Child receipts are never inserted directly into the parent ledger: the parent mints a new parent-scoped receipt from verified child metadata. V1 rollup supports implementation, verification, and commit only when exact current revision mapping is proven; push/PR/check/review remain missing evidence unless exact parent resource mapping is available. Ignore worker summaries and synthetic notifications.
 - Keep recovery and rollup local to each registration. Before hooks never consume recovered receipts; after finalization folds consumption idempotently per registration, and any divergence becomes `unavailable`/`rejected` rather than false completion.
 
-**Execution note:** Add recovery characterization tests against current host ToolPart shapes before changing persistence or readback behavior.
+**Execution note:** Host characterization on OpenCode 1.18.5 proved that successful built-in-tool `tool.execute.after` metadata persists through restart; forked parts preserve call ID but have no durable parent linkage; and foreground `task` lineage is proven by `output.metadata.sessionId`, `session.children`, child `parentID`, and child completion before parent after-hook. Revalidate these contracts on the exact supported-host matrix in U7.
 
 **Patterns to follow:** capability-plan restart/fork evidence; `tests/integration/opencode.test.ts` isolated host roots and repository immutability; U1 once-only ledger semantics; per-source registration guidance in the integration learning.
 
 **Test scenarios:**
 - Happy path — valid persisted receipt metadata reconstructs the same operation and allows one matching completion after restart readback.
-- Happy path — foreground child receipt with exact host lineage and matching workspace digest rolls up once to the parent.
-- Edge case — forked child reassignment preserves operation/status/metadata/result digests while refusing source-linkage inference from call identity alone.
+- Happy path — foreground child implementation/verification/commit receipt with exact host lineage and matching target/current revision rolls up once as a new parent-scoped receipt.
+- Edge case — forked child reassignment preserves operation/status/metadata/result digests as non-authoritative copied history while refusing completion without durable source linkage and fresh child evidence.
 - Edge case — duplicate child delivery, repeated readback, and already-consumed child receipt do not advance a parent twice within a registration or create a second host-visible transition.
 - Edge case — restart folds an immutable operation ToolPart followed by completion/control markers in order without mutating historical parts or creating a durable Systematic event record.
 - Error path — missing, malformed, pruned, compacted, or tampered ToolPart metadata requires fresh operation-specific readback and cannot satisfy completion.
 - Error path — unknown/incompatible compatibility envelope, cross-registration metadata disagreement, missing progression marker, or compare-and-consume mismatch requires fresh readback and cannot satisfy completion.
 - Error path — missing/pruned/malformed/unrecoverable evidence classifies as fresh-readback, exact-operation-rerun, eligible-Question-attestation, or no-repair `unavailable`; summaries/prose never provide a repair path.
 - Error path — a no-repair classification does not remain `waiting`, and no Question path is offered when the transition is outside the existing attestation eligibility boundary.
-- Error path — worker summary text, notification text, mismatched workspace, mismatched parent, background-only lineage, or foreign registration is rejected.
+- Error path — worker summary text, notification text, mismatched stable target, mismatched parent, background-only lineage, foreign registration, or unsupported child resource operation is rejected.
 - Integration — restart/fork readback, ordered ToolPart marker folding, per-registration ledger consumption, operation staleness, and U3 read-time projection agree on the same final state.
 
 **Verification:** Exact receipts survive supported restart/fork readback without raw data; immutable mint metadata and later progression markers fold in order; compatibility/salt boundaries fail closed; missing/pruned/malformed/unrecoverable evidence exposes exactly one bounded repair path or no-repair `unavailable`; final compare-and-consume readback rejects interleaving changes without consuming; unsupported history fails closed; foreground child rollup is host-proven and once-only within each registration with one host-visible transition; and compaction never receives a fabricated recovery path.
@@ -479,11 +516,11 @@ flowchart TB
 
 - [ ] **U7. Packaged runtime, exact-version host integration, duplicate-source safety, privacy controls, and observe-mode dogfood**
 
-**Goal:** Prove the assembled guard in the npm-packed runtime and on exact OpenCode `1.18.3` and `1.18.4` hosts, including dual-source registration, privacy controls, and an adapted 40-run dogfood corpus while the final default remains observe.
+**Goal:** Prove the assembled guard in the npm-packed runtime and on exact OpenCode `1.18.3`, `1.18.4`, and currently characterized `1.18.5` hosts, including dual-source registration, privacy controls, and an adapted 40-run dogfood corpus while the final default remains observe.
 
 **Requirements:** R1-R22, with R3/R22 deterministic ledger coverage and R20/R21 compatibility behavior explicitly included.
 
-**Dependencies:** U5, U6; approved parser dependency and package asset strategy; current OpenCode SDK types; exact-version acquisition capable of detecting unsupported capabilities without a permanent version allowlist. U1-U4 interfaces arrive transitively through U5/U6.
+**Dependencies:** U4.5, U5, U6; approved parser dependency and package asset strategy; current OpenCode SDK types; exact-version acquisition capable of detecting unsupported capabilities without a permanent version allowlist. U1-U4.5 interfaces arrive transitively through U5/U6.
 
 **Files:**
 - Create: `tests/integration/receipt-workflow-guard-real-host.test.ts`
@@ -506,7 +543,7 @@ flowchart TB
 
 **Approach:**
 - Exercise the npm-packed install, not only source imports. Verify parser assets resolve from the packed package using `package.json`, `tests/unit/package-exports.test.ts`, and `tests/integration/opencode.test.ts`; preserve exactly one default plugin export and no optional-peer runtime import.
-- Acquire and validate exact OpenCode `1.18.3` and `1.18.4` cells. Detect capabilities from the host at runtime; do not encode a permanent version allowlist or extrapolate one cell's unsupported result to another.
+- Acquire and validate exact OpenCode `1.18.3`, `1.18.4`, and `1.18.5` cells. Detect capabilities from the host at runtime; do not encode a permanent version allowlist or extrapolate one cell's unsupported result to another.
 - Treat any change to Systematic's OpenCode compatibility floor or current supported/tested OpenCode version as a revalidation trigger: rerun the exact-host selected-tool, hook-delivery, transform-composition, and Question matrix plus the explicit protected-mode corpus before claiming the changed host supported. A new or unproven host behavior remains `unavailable`.
 - Extract bounded exact-version, mock-model, disposable-root, and host-readback primitives from the real seams in `tests/integration/opencode.test.ts` into `tests/integration/fixtures/receipt-workflow-host.ts`. Consume that helper from existing integration coverage and the new guard tests; do not recreate removed manual probes, invent manual consumers, or copy-paste a second large harness.
 - Exercise single-source and dual-source plugin loading. Characterize duplicate tool catalog/selection, transform ordering, and hook delivery; assert independent closures, all before hooks prepare/allow before one selected host execution, one host-visible transition, at most one receipt per host call per registration, worst-state marker aggregation, non-throwing after finalization, no singleton/registry behavior, and no unrelated tool breakage.
@@ -535,7 +572,7 @@ flowchart TB
 - Error path — protected-mode Question challenge replay/substitution, duplicate-source disagreement, marker worst-state loss, selected-tool ambiguity, after-finalization failure, or ordinary-tool interference fails the gate.
 - Integration — packed exact-host cases cover fresh operation-specific readback, exact-operation rerun, eligible Question attestation, and no-repair `unavailable` as distinct bounded repair classifications.
 - Integration — all adapted 40-run dogfood cases complete with zero unexplained false rejections before enforcement is eligible.
-- Integration — exact `1.18.3` and `1.18.4` results are reported independently; no permanent version allowlist or unsupported-host claim is synthesized.
+- Integration — exact `1.18.3`, `1.18.4`, and `1.18.5` results are reported independently; no permanent version allowlist or unsupported-host claim is synthesized.
 
 **Verification:** The packed artifact behaves like the source runtime, both exact hosts are classified independently, the extracted shared fixture is consumed by integration coverage without manual consumers or copy-paste harnesses, selected-tool catalog/selection and hook delivery are safe, dual-source before/after and worst-state marker aggregation are proven, each registration permits at most one receipt per host call and one host-visible transition occurs, after finalization does not throw, missing-evidence repair classifications and no-repair `unavailable` are behavior-tested, observe and explicit protected corpus runs have zero unexplained false rejections, privacy controls hold, and the shipped default remains observe until U8. Any later compatibility-floor or supported-version change reruns the full exact-host matrix and protected corpus before support is claimed.
 
@@ -627,7 +664,7 @@ flowchart TB
 | Child summaries or duplicated call identities bypass lineage. | Require exact host-observed foreground lineage, workspace matching, and once-only child consumption; ignore summary text and do not implement background fallback. |
 | Config overlay lets assistant or project content disable protection. | Mark workflow-guard fields through `SECURITY_OVERLAY_FIELDS`; static disablement is user/config-dir controlled and session disablement is Question-gated. |
 | Observe-mode corpus passes but enforce mode breaks ordinary workflows. | U3 introduces observe as the default, U7 verifies observe and explicit protected mode without changing the shipped default, and U8 alone flips enforcement after zero unexplained false rejections. |
-| OpenCode version drift invalidates assumptions. | Acquire exact `1.18.3` and `1.18.4` cells, detect capabilities at runtime, and report `unavailable` rather than maintaining a permanent version allowlist. |
+| OpenCode version drift invalidates assumptions. | Acquire exact `1.18.3`, `1.18.4`, and `1.18.5` cells, detect capabilities at runtime, and report `unavailable` rather than maintaining a permanent version allowlist. |
 | Parser dependency approval or packed asset resolution is incomplete. | Keep the dependency change approval-gated, test npm-packed asset resolution, and leave enforcement observe-only until the prerequisite is verified. |
 | Unkeyed hashes are mistaken for authenticity or a keyed secret is added as security theater. | Treat hashes as correlation/privacy identifiers only; trust host-owned metadata/events against the assistant and keep local host/DB compromise, keyed MACs, durable secrets, and durable Systematic stores outside V1. |
 
@@ -682,7 +719,7 @@ flowchart TB
 ## Dependencies / Prerequisites
 
 - Marcus explicitly approves adding the parser pair to root production dependencies. Candidate pins are `web-tree-sitter@0.25.10` and `tree-sitter-bash@0.25.1`; approval is a prerequisite, not assumed authorization.
-- The implementation uses current OpenCode SDK/plugin types while validating runtime behavior against exact `1.18.3` and `1.18.4` hosts. Capability detection, not a permanent version allowlist, determines enforcement availability.
+- The implementation uses current OpenCode SDK/plugin types while validating runtime behavior against exact `1.18.3`, `1.18.4`, and `1.18.5` hosts. Capability detection, not a permanent version allowlist, determines enforcement availability.
 - The packaged runtime must include parser assets and resolve them without importing optional peers. The npm-packed install is a release gate, not an optional smoke test.
 - The existing config schema/source-precedence and `SECURITY_OVERLAY_FIELDS` mechanisms remain the trust boundary for workflow-guard configuration.
 - The existing `ce:work`, `git-commit`, and `git-commit-push-pr` skills remain the activation names. Their prose is context, never receipt evidence.
@@ -701,7 +738,7 @@ flowchart TB
 
 ### Phase 2 — OpenCode enforcement seams
 
-- Complete U3 per-source adapter/config/activation/markers for both skill-load surfaces and U4 operation adapters/staleness in parallel after U1/U2 interfaces are stable. Then complete U5 persistence/recovery/foreground lineage, U6 Question attestation/disablement, and their exact-host composition gates.
+- Complete U3 per-source adapter/config/activation/markers and U4 host-neutral operation/staleness semantics, then U4.5 production OpenCode operation observation. Only after real receipts are minted should U5 persistence/recovery/foreground lineage and U6 Question attestation/disablement proceed to their exact-host composition gates.
 - Keep the shipped default observe, prove before/after duplicate-registration safety, and surface unavailable capability states. Protected mode is selectable only as an explicit test configuration.
 
 ### Phase 3 — Evidence gate

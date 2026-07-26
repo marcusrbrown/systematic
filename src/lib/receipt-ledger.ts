@@ -1,4 +1,16 @@
-import { createHash, randomBytes } from 'node:crypto'
+import { randomBytes } from 'node:crypto'
+import type {
+  ReceiptDigestDomain,
+  ReceiptMintMarker,
+  ReceiptReadbackFailureCategory,
+  ReceiptReadbackProgression,
+} from './receipt-readback.js'
+import {
+  digestReceiptIdentity,
+  foldReceiptReadback,
+  receiptReadbackExpectationFromMetadata,
+  validateReceiptMarker,
+} from './receipt-readback.js'
 
 export const RECEIPT_SCHEMA_VERSION = 1 as const
 export const RECEIPT_PROTOCOL_VERSION = 1 as const
@@ -26,15 +38,7 @@ export type TerminalStatus =
   | 'running'
   | 'unknown'
 export type TerminalOutput = 'empty' | 'non-empty' | 'unknown'
-export type DigestDomain =
-  | 'repository'
-  | 'worktree'
-  | 'resource'
-  | 'workspace'
-  | 'epoch'
-  | 'unit'
-  | 'call'
-  | 'registration'
+export type DigestDomain = ReceiptDigestDomain
 
 export type ReceiptReasonCode =
   | 'already-consumed'
@@ -181,6 +185,27 @@ export type ConsumeReceiptResult =
       reasonCode: ReceiptReasonCode
     }
 
+export type RecoverReceiptResult =
+  | {
+      status: 'recovered' | 'duplicate'
+      receipt: ReceiptEnvelope
+    }
+  | {
+      status: 'rejected'
+      category: ReceiptReadbackFailureCategory
+    }
+
+export type RecoverReadbackResult =
+  | {
+      status: 'recovered' | 'duplicate'
+      receipts: readonly ReceiptEnvelope[]
+      progression: ReceiptReadbackProgression
+    }
+  | {
+      status: 'rejected'
+      category: ReceiptReadbackFailureCategory
+    }
+
 export type EnvelopeValidationResult =
   | {
       compatibility: 'compatible'
@@ -198,6 +223,9 @@ export interface ReceiptLedger {
   finalizeObservation(input: unknown): FinalizeObservationResult
   abandonObservation(input: unknown): AbandonObservationResult
   consumeReceipt(receiptId: unknown, context: unknown): ConsumeReceiptResult
+  recoverReceipt(input: unknown): RecoverReceiptResult
+  recoverReadback(input: readonly unknown[]): RecoverReadbackResult
+  getProgressionState(): ReceiptReadbackProgression
   validateEnvelope(input: unknown): EnvelopeValidationResult
   getEnvelope(receiptId: unknown): ReceiptEnvelope | undefined
   listReceipts(): readonly ReceiptEnvelope[]
@@ -366,6 +394,320 @@ function cloneEnvelope(envelope: ReceiptEnvelope): ReceiptEnvelope {
     capabilityFlags: [...envelope.capabilityFlags],
     canonical: { ...envelope.canonical },
   }
+}
+
+function envelopesEqual(
+  first: ReceiptEnvelope,
+  second: ReceiptEnvelope,
+): boolean {
+  return (
+    first.schemaVersion === second.schemaVersion &&
+    first.protocolVersion === second.protocolVersion &&
+    first.registrationDigest === second.registrationDigest &&
+    capabilityListsEqual(first.capabilityFlags, second.capabilityFlags) &&
+    first.compatibility === second.compatibility &&
+    first.canonical.receiptId === second.canonical.receiptId &&
+    first.canonical.registrationDigest ===
+      second.canonical.registrationDigest &&
+    first.canonical.callDigest === second.canonical.callDigest &&
+    first.canonical.epochDigest === second.canonical.epochDigest &&
+    first.canonical.unitDigest === second.canonical.unitDigest &&
+    first.canonical.workspaceDigest === second.canonical.workspaceDigest &&
+    first.canonical.repositoryDigest === second.canonical.repositoryDigest &&
+    first.canonical.worktreeDigest === second.canonical.worktreeDigest &&
+    first.canonical.resourceDigest === second.canonical.resourceDigest &&
+    first.canonical.operation === second.canonical.operation &&
+    first.canonical.result === second.canonical.result &&
+    first.canonical.source === second.canonical.source &&
+    first.canonical.consumption === second.canonical.consumption &&
+    first.canonical.timestamp === second.canonical.timestamp
+  )
+}
+
+function cloneProgressionState(
+  progression: ReceiptReadbackProgression,
+): ReceiptReadbackProgression {
+  return {
+    epoch: progression.epoch
+      ? cloneProgressionSnapshot(progression.epoch)
+      : null,
+    unit: progression.unit ? cloneProgressionSnapshot(progression.unit) : null,
+  }
+}
+
+function cloneProgressionSnapshot(
+  snapshot: NonNullable<ReceiptReadbackProgression['epoch']>,
+): NonNullable<ReceiptReadbackProgression['epoch']>
+function cloneProgressionSnapshot(
+  snapshot: NonNullable<ReceiptReadbackProgression['unit']>,
+): NonNullable<ReceiptReadbackProgression['unit']>
+function cloneProgressionSnapshot(
+  snapshot:
+    | NonNullable<ReceiptReadbackProgression['epoch']>
+    | NonNullable<ReceiptReadbackProgression['unit']>,
+):
+  | NonNullable<ReceiptReadbackProgression['epoch']>
+  | NonNullable<ReceiptReadbackProgression['unit']> {
+  if (snapshot.target === 'epoch') return { ...snapshot }
+  return {
+    ...snapshot,
+    requiredOperations: [...snapshot.requiredOperations],
+    resourceScopes: snapshot.resourceScopes.map((scope) => ({ ...scope })),
+  }
+}
+
+function progressionStatesEqual(
+  first: ReceiptReadbackProgression,
+  second: ReceiptReadbackProgression,
+): boolean {
+  return JSON.stringify(first) === JSON.stringify(second)
+}
+
+function getMintMarker(
+  input: unknown,
+):
+  | { status: 'valid'; marker: ReceiptMintMarker }
+  | { status: 'rejected'; category: ReceiptReadbackFailureCategory } {
+  const validation = validateReceiptMarker(input)
+  if (validation.status !== 'valid') {
+    return { status: 'rejected', category: validation.category }
+  }
+  if (validation.marker.kind !== 'mint') {
+    return { status: 'rejected', category: 'unknown-kind' }
+  }
+  return { status: 'valid', marker: validation.marker }
+}
+
+function recoveryEnvelopeCategory(
+  result: EnvelopeValidationResult,
+): ReceiptReadbackFailureCategory | undefined {
+  if (result.compatibility === 'compatible') return undefined
+  if (result.reasonCode === 'cross-registration-disputed')
+    return 'cross-registration'
+  if (result.reasonCode === 'capability-mismatch') return 'capability-mismatch'
+  return 'malformed'
+}
+
+function storedReceiptFromEnvelope(envelope: ReceiptEnvelope): StoredReceipt {
+  return {
+    envelope: cloneEnvelope(envelope),
+    context: {
+      epochDigest: envelope.canonical.epochDigest,
+      unitDigest: envelope.canonical.unitDigest,
+      workspaceDigest: envelope.canonical.workspaceDigest,
+      repositoryDigest: envelope.canonical.repositoryDigest,
+      worktreeDigest: envelope.canonical.worktreeDigest,
+      resourceDigest: envelope.canonical.resourceDigest,
+    },
+  }
+}
+
+function sameRecoverableEnvelope(
+  existing: ReceiptEnvelope,
+  incoming: ReceiptEnvelope,
+): boolean {
+  if (envelopesEqual(existing, incoming)) return true
+  if (
+    existing.canonical.consumption !== 'consumed' ||
+    incoming.canonical.consumption !== 'available'
+  ) {
+    return false
+  }
+  return envelopesEqual(
+    existing,
+    cloneEnvelope({
+      ...incoming,
+      canonical: { ...incoming.canonical, consumption: 'consumed' },
+    }),
+  )
+}
+
+function hasCallDigest(
+  receipts: ReadonlyMap<string, StoredReceipt>,
+  envelope: ReceiptEnvelope,
+): boolean {
+  for (const stored of receipts.values()) {
+    if (stored.envelope.canonical.callDigest === envelope.canonical.callDigest)
+      return true
+  }
+  return false
+}
+
+function stageRecoveredEnvelope(
+  receipts: Map<string, StoredReceipt>,
+  envelope: ReceiptEnvelope,
+  validate: (input: unknown) => EnvelopeValidationResult,
+): ReceiptReadbackFailureCategory | undefined {
+  const envelopeValidation = validate(envelope)
+  if (envelopeValidation.compatibility !== 'compatible') return 'malformed'
+  const receiptId = envelope.canonical.receiptId
+  const existing = receipts.get(receiptId)
+  if (existing) {
+    if (envelopesEqual(existing.envelope, envelope)) return undefined
+    if (!sameReceiptContent(existing.envelope, envelope))
+      return 'conflicting-marker'
+    if (
+      existing.envelope.canonical.consumption === 'consumed' ||
+      envelope.canonical.consumption === 'available'
+    ) {
+      return undefined
+    }
+    receipts.set(receiptId, storedReceiptFromEnvelope(envelope))
+    return undefined
+  }
+  if (hasCallDigest(receipts, envelope)) return 'conflicting-marker'
+  receipts.set(receiptId, storedReceiptFromEnvelope(envelope))
+  return undefined
+}
+
+function sameReceiptContent(
+  first: ReceiptEnvelope,
+  second: ReceiptEnvelope,
+): boolean {
+  return envelopesEqual(
+    first,
+    cloneEnvelope({
+      ...second,
+      canonical: {
+        ...second.canonical,
+        consumption: first.canonical.consumption,
+      },
+    }),
+  )
+}
+
+function stageReadbackEnvelopes(
+  receipts: Map<string, StoredReceipt>,
+  envelopes: readonly ReceiptEnvelope[],
+  validate: (input: unknown) => EnvelopeValidationResult,
+): ReceiptReadbackFailureCategory | undefined {
+  for (const envelope of envelopes) {
+    const failure = stageRecoveredEnvelope(receipts, envelope, validate)
+    if (failure) return failure
+  }
+  return undefined
+}
+
+function progressionSnapshotFailure(
+  current:
+    | NonNullable<ReceiptReadbackProgression['epoch']>
+    | NonNullable<ReceiptReadbackProgression['unit']>,
+  incoming:
+    | NonNullable<ReceiptReadbackProgression['epoch']>
+    | NonNullable<ReceiptReadbackProgression['unit']>,
+): ReceiptReadbackFailureCategory | undefined {
+  if (current.target !== incoming.target) return 'out-of-order'
+  if (!sameProgressionIdentity(current, incoming))
+    return canAdvanceProgression(current, incoming) ? undefined : 'out-of-order'
+  const declarationFailure = progressionDeclarationFailure(current, incoming)
+  if (declarationFailure) return declarationFailure
+  if (current.state === 'started' && incoming.state === 'completed') {
+    return undefined
+  }
+  if (current.state !== incoming.state) return 'out-of-order'
+  return current.transitionDigest === incoming.transitionDigest
+    ? undefined
+    : 'conflicting-marker'
+}
+
+function sameProgressionIdentity(
+  current:
+    | NonNullable<ReceiptReadbackProgression['epoch']>
+    | NonNullable<ReceiptReadbackProgression['unit']>,
+  incoming:
+    | NonNullable<ReceiptReadbackProgression['epoch']>
+    | NonNullable<ReceiptReadbackProgression['unit']>,
+): boolean {
+  return (
+    current.epochId === incoming.epochId &&
+    ((current.target === 'epoch' && incoming.target === 'epoch') ||
+      (current.target === 'unit' &&
+        incoming.target === 'unit' &&
+        current.unitId === incoming.unitId))
+  )
+}
+
+function canAdvanceProgression(
+  current:
+    | NonNullable<ReceiptReadbackProgression['epoch']>
+    | NonNullable<ReceiptReadbackProgression['unit']>,
+  incoming:
+    | NonNullable<ReceiptReadbackProgression['epoch']>
+    | NonNullable<ReceiptReadbackProgression['unit']>,
+): boolean {
+  return current.state === 'completed' && incoming.state === 'started'
+}
+
+function progressionDeclarationFailure(
+  current:
+    | NonNullable<ReceiptReadbackProgression['epoch']>
+    | NonNullable<ReceiptReadbackProgression['unit']>,
+  incoming:
+    | NonNullable<ReceiptReadbackProgression['epoch']>
+    | NonNullable<ReceiptReadbackProgression['unit']>,
+): ReceiptReadbackFailureCategory | undefined {
+  if (current.target === 'epoch' && incoming.target === 'epoch') {
+    return current.epochDigest === incoming.epochDigest &&
+      current.family === incoming.family
+      ? undefined
+      : 'conflicting-marker'
+  }
+  if (current.target !== 'unit' || incoming.target !== 'unit')
+    return 'conflicting-marker'
+  return current.epochDigest === incoming.epochDigest &&
+    current.unitDigest === incoming.unitDigest &&
+    current.family === incoming.family &&
+    JSON.stringify(current.requiredOperations) ===
+      JSON.stringify(incoming.requiredOperations) &&
+    JSON.stringify(current.resourceScopes) ===
+      JSON.stringify(incoming.resourceScopes)
+    ? undefined
+    : 'conflicting-marker'
+}
+
+function progressionRecoveryFailure(
+  current: ReceiptReadbackProgression,
+  incoming: ReceiptReadbackProgression,
+): ReceiptReadbackFailureCategory | undefined {
+  if (current.epoch === null) return undefined
+  if (incoming.epoch === null) return 'progression-mismatch'
+  const epochFailure = progressionSnapshotFailure(current.epoch, incoming.epoch)
+  if (epochFailure) return epochFailure
+  if (current.epoch.epochId !== incoming.epoch.epochId) return undefined
+  if (current.unit === null) return undefined
+  if (incoming.unit === null) return 'progression-mismatch'
+  return progressionSnapshotFailure(current.unit, incoming.unit)
+}
+
+function cloneStoredReceipts(
+  receipts: ReadonlyMap<string, StoredReceipt>,
+): Map<string, StoredReceipt> {
+  const clone = new Map<string, StoredReceipt>()
+  for (const [receiptId, stored] of receipts) {
+    clone.set(receiptId, storedReceiptFromEnvelope(stored.envelope))
+  }
+  return clone
+}
+
+function storedReceiptsEqual(
+  first: ReadonlyMap<string, StoredReceipt>,
+  second: ReadonlyMap<string, StoredReceipt>,
+): boolean {
+  if (first.size !== second.size) return false
+  for (const [receiptId, stored] of first) {
+    const other = second.get(receiptId)
+    if (!other || !envelopesEqual(stored.envelope, other.envelope)) return false
+  }
+  return true
+}
+
+function foldForLedgerRecovery(
+  input: readonly unknown[],
+  expectation: Parameters<typeof foldReceiptReadback>[1],
+): ReturnType<typeof foldReceiptReadback> {
+  if (!Array.isArray(input))
+    return { status: 'rejected', category: 'malformed' }
+  return foldReceiptReadback(input, expectation)
 }
 
 function parseContext(value: unknown): ReceiptContext | undefined {
@@ -697,10 +1039,10 @@ export function createReceiptLedger(
   const registrationInput =
     normalizedIdentity(options.registrationIdentity) ??
     randomBytes(16).toString('hex')
-  const registrationDigest = digest(
+  const registrationDigest = digestReceiptIdentity(
     'registration',
     registrationInput,
-    sessionSalt,
+    sessionSaltBytes,
   )
   validateConfiguredCapabilities(options.capabilityFlags)
   const capabilityFlags = Object.freeze(
@@ -715,13 +1057,17 @@ export function createReceiptLedger(
 
   const lifecycleByCall = new Map<string, PreparedEntry>()
   const receipts = new Map<string, StoredReceipt>()
+  let progressionState: ReceiptReadbackProgression = {
+    epoch: null,
+    unit: null,
+  }
 
   function digestIdentity(domain: DigestDomain, identity: string): string {
     const normalized = normalizedIdentity(identity)
     if (!normalized || !DIGEST_DOMAIN_SET.has(domain)) {
-      return digest(domain, 'invalid', sessionSalt)
+      return digestReceiptIdentity(domain, 'invalid', sessionSaltBytes)
     }
-    return digest(domain, normalized, sessionSalt)
+    return digestReceiptIdentity(domain, normalized, sessionSaltBytes)
   }
 
   function digestContext(context: ReceiptContext): DigestedContext {
@@ -988,6 +1334,86 @@ export function createReceiptLedger(
     return { status: 'consumed', receipt: cloneEnvelope(stored.envelope) }
   }
 
+  function recoverReceipt(input: unknown): RecoverReceiptResult {
+    const markerResult = getMintMarker(input)
+    if (markerResult.status !== 'valid') return markerResult
+    const marker = markerResult.marker
+    if (marker.sessionSalt !== sessionSalt)
+      return { status: 'rejected', category: 'salt-mismatch' }
+
+    const envelopeValidation = validateEnvelope(marker.envelope)
+    const envelopeFailure = recoveryEnvelopeCategory(envelopeValidation)
+    if (envelopeFailure) {
+      return {
+        status: 'rejected',
+        category: envelopeFailure,
+      }
+    }
+
+    if (envelopeValidation.compatibility !== 'compatible')
+      return { status: 'rejected', category: 'malformed' }
+    const envelope = envelopeValidation.envelope
+    const receiptId = envelope.canonical.receiptId
+    const existing = receipts.get(receiptId)
+    if (existing) {
+      if (!sameRecoverableEnvelope(existing.envelope, envelope)) {
+        return { status: 'rejected', category: 'conflicting-marker' }
+      }
+      return { status: 'duplicate', receipt: cloneEnvelope(existing.envelope) }
+    }
+
+    if (hasCallDigest(receipts, envelope))
+      return { status: 'rejected', category: 'conflicting-marker' }
+    receipts.set(receiptId, storedReceiptFromEnvelope(envelope))
+    return { status: 'recovered', receipt: cloneEnvelope(envelope) }
+  }
+
+  function recoverReadback(input: readonly unknown[]): RecoverReadbackResult {
+    const folded = foldForLedgerRecovery(
+      input,
+      receiptReadbackExpectationFromMetadata(metadata, sessionSaltBytes),
+    )
+    if (folded.status !== 'reconstructed') {
+      return { status: 'rejected', category: folded.category }
+    }
+    const progressionFailure = progressionRecoveryFailure(
+      progressionState,
+      folded.state.progression,
+    )
+    if (progressionFailure)
+      return { status: 'rejected', category: progressionFailure }
+
+    const replacementReceipts = cloneStoredReceipts(receipts)
+    const stagingFailure = stageReadbackEnvelopes(
+      replacementReceipts,
+      folded.state.receipts,
+      validateEnvelope,
+    )
+    if (stagingFailure) return { status: 'rejected', category: stagingFailure }
+
+    const duplicate =
+      storedReceiptsEqual(receipts, replacementReceipts) &&
+      progressionStatesEqual(progressionState, folded.state.progression)
+
+    receipts.clear()
+    for (const [receiptId, stored] of replacementReceipts) {
+      receipts.set(receiptId, stored)
+    }
+    progressionState = cloneProgressionState(folded.state.progression)
+    const recoveredReceipts = [...receipts.values()].map(({ envelope }) =>
+      cloneEnvelope(envelope),
+    )
+    return {
+      status: duplicate ? 'duplicate' : 'recovered',
+      receipts: recoveredReceipts,
+      progression: cloneProgressionState(progressionState),
+    }
+  }
+
+  function getProgressionState(): ReceiptReadbackProgression {
+    return cloneProgressionState(progressionState)
+  }
+
   function validateEnvelope(input: unknown): EnvelopeValidationResult {
     if (!isRecord(input))
       return { compatibility: 'unavailable', reasonCode: 'incomplete-envelope' }
@@ -1035,6 +1461,9 @@ export function createReceiptLedger(
     finalizeObservation,
     abandonObservation,
     consumeReceipt,
+    recoverReceipt,
+    recoverReadback,
+    getProgressionState,
     validateEnvelope,
     getEnvelope,
     listReceipts,
@@ -1047,14 +1476,4 @@ function normalizeCapabilities(
 ): readonly string[] {
   const candidates = input ?? DEFAULT_CAPABILITIES
   return [...new Set(candidates)].sort()
-}
-
-function digest(
-  domain: DigestDomain,
-  value: string,
-  sessionSalt: string,
-): string {
-  return createHash('sha256')
-    .update(`systematic/receipt-ledger/${domain}/v1/${sessionSalt}/${value}`)
-    .digest('hex')
 }

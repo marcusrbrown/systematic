@@ -17,6 +17,12 @@ import type {
   ReceiptOperation,
   ReceiptReasonCode,
 } from './receipt-ledger.js'
+import type {
+  ReceiptEpochProgressionSnapshot,
+  ReceiptReadbackProgression,
+  ReceiptResourceScope,
+  ReceiptUnitProgressionSnapshot,
+} from './receipt-readback.js'
 
 export type WorkflowMode = 'protected' | 'disabled' | 'unavailable'
 export type WorkflowState =
@@ -73,6 +79,9 @@ export type WorkflowReasonCode =
   | 'unit-ready'
   | 'workspace-mismatch'
   | 'runtime-scope-conflict'
+  | 'invalid-recovery'
+  | 'recovery-conflict'
+  | 'fork-copy-not-lineage'
 
 export interface WorkflowGuardOptions {
   ledger: ReceiptLedger
@@ -163,6 +172,15 @@ export type ControlResult =
   | { status: 'changed' | 'unchanged'; mode: WorkflowMode }
   | { status: 'rejected'; reasonCode: WorkflowReasonCode }
 
+export type WorkflowRecoveryResult =
+  | {
+      status: 'restored' | 'duplicate'
+      provenance: 'restart'
+      epoch: EpochSnapshot
+      unit: UnitSnapshot | null
+    }
+  | { status: 'rejected'; reasonCode: WorkflowReasonCode }
+
 export interface WorkflowGuard {
   activate(input: unknown): ActivationResult
   startUnit(input: unknown, policy?: RuntimeUnitPolicy): StartUnitResult
@@ -174,6 +192,7 @@ export interface WorkflowGuard {
   prepareTransition(input: unknown): TransitionPrepareResult
   finalizeTransition(input: unknown): TransitionFinalizeResult
   abandonTransition(input: unknown): AbandonTransitionResult
+  restore(input: unknown): WorkflowRecoveryResult
   setMode(input: unknown): ControlResult
 }
 
@@ -242,6 +261,73 @@ interface ParsedControl {
   mode: WorkflowMode
 }
 
+interface ParsedRecoveryInput {
+  provenance: 'restart' | 'fork-copy'
+  state: ParsedRecoveryState
+}
+
+interface ParsedRecoveryState {
+  registrationDigest: string
+  receipts: readonly unknown[]
+  progression: ReceiptReadbackProgression
+}
+
+interface RecoveryCandidate {
+  epoch: EpochState
+  resourceIdentities: Map<ReceiptOperation, string>
+  fingerprint: string
+}
+
+interface RecoveryParts {
+  resources: {
+    resourceScopes: Map<ReceiptOperation, string>
+    current: Map<ReceiptOperation, string>
+  }
+  receiptSet: {
+    receipts: readonly ReceiptEnvelope[]
+    matching: readonly ReceiptEnvelope[]
+  }
+}
+
+const RECOVERY_EPOCH_KEYS = new Set([
+  'target',
+  'state',
+  'epochId',
+  'epochDigest',
+  'family',
+  'transitionDigest',
+])
+const RECOVERY_UNIT_KEYS = new Set([
+  'target',
+  'state',
+  'epochId',
+  'epochDigest',
+  'unitId',
+  'unitDigest',
+  'family',
+  'requiredOperations',
+  'resourceScopes',
+  'transitionDigest',
+])
+const RECOVERY_STATE_KEYS = new Set([
+  'registrationDigest',
+  'receipts',
+  'progression',
+])
+const RECOVERY_INPUT_KEYS = new Set(['provenance', 'state'])
+const RECOVERY_OPERATION_ORDER: readonly ReceiptOperation[] = [
+  'implementation',
+  'verification',
+  'commit',
+  'push',
+  'pr-creation',
+  'check-readback',
+  'review-readback',
+]
+const RECOVERY_ID_PATTERN = /^[0-9a-f]{32}$/
+const RECOVERY_DIGEST_PATTERN = /^[0-9a-f]{64}$/
+const MAX_RECOVERY_RECEIPTS = 128
+
 interface EpochState {
   epochId: string
   family: EpochFamily
@@ -253,10 +339,12 @@ interface UnitState {
   unitId: string
   status: 'active' | 'completed'
   requiredOperations: readonly ReceiptOperation[]
+  declaredResourceOperations: readonly ReceiptOperation[]
   resourceScopes: ReadonlyMap<ReceiptOperation, string>
   evidence: Map<ReceiptOperation, ReceiptEnvelope>
   issues: Map<ReceiptOperation, Issue>
   staleReceiptIds: Set<string>
+  recoveredReceiptIds: Set<string>
   operationStates: Map<ReceiptOperation, OperationState>
   ledgerContexts: Map<string, ReceiptContext>
 }
@@ -376,11 +464,174 @@ function isMode(value: unknown): value is WorkflowMode {
   return typeof value === 'string' && MODE_SET.has(value)
 }
 
+function isFamily(value: unknown): value is EpochFamily {
+  return value === 'work' || value === 'shipping'
+}
+
 function hasOnlyFields(
   input: Record<string, unknown>,
   allowed: ReadonlySet<string>,
 ): boolean {
   return Object.keys(input).every((field) => allowed.has(field))
+}
+
+function isRecoveryId(value: unknown): value is string {
+  return typeof value === 'string' && RECOVERY_ID_PATTERN.test(value)
+}
+
+function isRecoveryDigest(value: unknown): value is string {
+  return typeof value === 'string' && RECOVERY_DIGEST_PATTERN.test(value)
+}
+
+function parseRecoveryOperations(
+  value: unknown,
+): readonly ReceiptOperation[] | undefined {
+  if (!Array.isArray(value) || value.length > MAX_OPERATIONS) return undefined
+  const operations = value.filter(isOperation)
+  if (operations.length !== value.length) return undefined
+  if (new Set(operations).size !== operations.length) return undefined
+  const canonical = RECOVERY_OPERATION_ORDER.filter((operation) =>
+    operations.includes(operation),
+  )
+  return canonical.length === operations.length &&
+    canonical.every((operation, index) => operation === operations[index])
+    ? Object.freeze([...canonical])
+    : undefined
+}
+
+function parseRecoveryResourceScopes(
+  value: unknown,
+): readonly ReceiptResourceScope[] | undefined {
+  if (!Array.isArray(value) || value.length > MAX_OPERATIONS) return undefined
+  const scopes: ReceiptResourceScope[] = []
+  const identities = new Set<string>()
+  for (const item of value) {
+    if (
+      !isRecord(item) ||
+      !hasOnlyFields(item, new Set(['operation', 'resourceIdentity'])) ||
+      !isOperation(item.operation) ||
+      !isRecoveryDigest(item.resourceIdentity)
+    ) {
+      return undefined
+    }
+    const key = `${item.operation}/${item.resourceIdentity}`
+    if (identities.has(key)) return undefined
+    identities.add(key)
+    scopes.push({
+      operation: item.operation,
+      resourceIdentity: item.resourceIdentity,
+    })
+  }
+  const canonical = [...scopes].sort((first, second) => {
+    const firstIndex = RECOVERY_OPERATION_ORDER.indexOf(first.operation)
+    const secondIndex = RECOVERY_OPERATION_ORDER.indexOf(second.operation)
+    return (
+      firstIndex - secondIndex ||
+      first.resourceIdentity.localeCompare(second.resourceIdentity)
+    )
+  })
+  return canonical.every((scope, index) => {
+    const original = scopes[index]
+    return (
+      original?.operation === scope.operation &&
+      original.resourceIdentity === scope.resourceIdentity
+    )
+  })
+    ? Object.freeze(canonical.map((scope) => ({ ...scope })))
+    : undefined
+}
+
+function parseRecoveryEpoch(
+  value: unknown,
+): ReceiptEpochProgressionSnapshot | null | undefined {
+  if (value === null) return null
+  if (!isRecord(value) || !hasOnlyFields(value, RECOVERY_EPOCH_KEYS))
+    return undefined
+  if (
+    value.target !== 'epoch' ||
+    (value.state !== 'started' && value.state !== 'completed') ||
+    !isRecoveryId(value.epochId) ||
+    !isRecoveryDigest(value.epochDigest) ||
+    !isFamily(value.family) ||
+    !isRecoveryDigest(value.transitionDigest)
+  ) {
+    return undefined
+  }
+  return {
+    target: 'epoch',
+    state: value.state,
+    epochId: value.epochId,
+    epochDigest: value.epochDigest,
+    family: value.family,
+    transitionDigest: value.transitionDigest,
+  }
+}
+
+function parseRecoveryUnit(
+  value: unknown,
+): ReceiptUnitProgressionSnapshot | null | undefined {
+  if (value === null) return null
+  if (!isRecord(value) || !hasOnlyFields(value, RECOVERY_UNIT_KEYS))
+    return undefined
+  const requiredOperations = parseRecoveryOperations(value.requiredOperations)
+  const resourceScopes = parseRecoveryResourceScopes(value.resourceScopes)
+  if (
+    value.target !== 'unit' ||
+    (value.state !== 'started' && value.state !== 'completed') ||
+    !isRecoveryId(value.epochId) ||
+    !isRecoveryDigest(value.epochDigest) ||
+    !isRecoveryId(value.unitId) ||
+    !isRecoveryDigest(value.unitDigest) ||
+    !isFamily(value.family) ||
+    !requiredOperations ||
+    !resourceScopes ||
+    !isRecoveryDigest(value.transitionDigest)
+  ) {
+    return undefined
+  }
+  return {
+    target: 'unit',
+    state: value.state,
+    epochId: value.epochId,
+    epochDigest: value.epochDigest,
+    unitId: value.unitId,
+    unitDigest: value.unitDigest,
+    family: value.family,
+    requiredOperations,
+    resourceScopes,
+    transitionDigest: value.transitionDigest,
+  }
+}
+
+function parseRecoveryState(value: unknown): ParsedRecoveryState | undefined {
+  if (!isRecord(value) || !hasOnlyFields(value, RECOVERY_STATE_KEYS))
+    return undefined
+  if (
+    !isRecoveryDigest(value.registrationDigest) ||
+    !Array.isArray(value.receipts) ||
+    value.receipts.length > MAX_RECOVERY_RECEIPTS ||
+    !isRecord(value.progression) ||
+    !hasOnlyFields(value.progression, new Set(['epoch', 'unit']))
+  ) {
+    return undefined
+  }
+  const epoch = parseRecoveryEpoch(value.progression.epoch)
+  const unit = parseRecoveryUnit(value.progression.unit)
+  if (epoch === undefined || unit === undefined) return undefined
+  return {
+    registrationDigest: value.registrationDigest,
+    receipts: [...value.receipts],
+    progression: { epoch, unit },
+  }
+}
+
+function parseRecoveryInput(input: unknown): ParsedRecoveryInput | undefined {
+  if (!isRecord(input) || !hasOnlyFields(input, RECOVERY_INPUT_KEYS))
+    return undefined
+  if (input.provenance !== 'restart' && input.provenance !== 'fork-copy')
+    return undefined
+  const state = parseRecoveryState(input.state)
+  return state ? { provenance: input.provenance, state } : undefined
 }
 
 function hasForbiddenField(
@@ -407,11 +658,9 @@ function cloneUnit(unit: UnitState): UnitSnapshot {
     unitId: unit.unitId,
     status: unit.status,
     requiredOperations: unit.requiredOperations,
-    requiredResourceOperations: Object.freeze(
-      unit.requiredOperations.filter((operation) =>
-        unit.resourceScopes.has(operation),
-      ),
-    ),
+    requiredResourceOperations: Object.freeze([
+      ...unit.declaredResourceOperations,
+    ]),
   })
 }
 
@@ -965,7 +1214,12 @@ export function createWorkflowGuard(
     ReceiptOperation,
     string | undefined
   >()
+  const initialResourceIdentities = new Map(currentResourceIdentities)
+  const initialWorkspaceIdentity = currentWorkspaceIdentity
+  const initialRepositoryIdentity = currentRepositoryIdentity
+  const initialWorktreeIdentity = currentWorktreeIdentity
   const clock = options.clock ?? Date.now
+  let recoveryFingerprint: string | undefined
 
   function currentResource(
     unit: UnitState,
@@ -1290,6 +1544,60 @@ export function createWorkflowGuard(
     if (unit) markStaleReceipts(unit, changes)
   }
 
+  function clearRecoveredResourceStale(
+    readback: ParsedReadback,
+    unit: UnitState | undefined,
+  ): void {
+    if (!unit || !readback.operation || readback.resourceIdentity === undefined)
+      return
+    if (unit.resourceScopes.has(readback.operation)) return
+    const envelope = unit.evidence.get(readback.operation)
+    if (!envelope) return
+    if (!unit.recoveredReceiptIds.has(envelope.canonical.receiptId)) return
+    const expected = ledgerResourceIdentity(
+      readback.operation,
+      readback.resourceIdentity,
+      readback.resourceRevisionIdentity,
+    )
+    if (
+      expected &&
+      envelope.canonical.resourceDigest ===
+        options.ledger.digestIdentity('resource', expected)
+    ) {
+      unit.staleReceiptIds.delete(envelope.canonical.receiptId)
+    }
+    const context = unit.ledgerContexts.get(envelope.canonical.receiptId)
+    if (context) {
+      unit.ledgerContexts.set(envelope.canonical.receiptId, {
+        ...context,
+        resourceIdentity: expected,
+      })
+    }
+  }
+
+  function clearRecoveredRevisionStale(
+    readback: ParsedReadback,
+    unit: UnitState | undefined,
+  ): void {
+    if (!unit) return
+    const expectedRepositoryDigest = readback.repositoryIdentity
+      ? options.ledger.digestIdentity('repository', readback.repositoryIdentity)
+      : undefined
+    const expectedWorktreeDigest = readback.worktreeIdentity
+      ? options.ledger.digestIdentity('worktree', readback.worktreeIdentity)
+      : undefined
+    for (const [operation, envelope] of unit.evidence) {
+      if (!unit.recoveredReceiptIds.has(envelope.canonical.receiptId)) continue
+      if (
+        envelope.canonical.repositoryDigest === expectedRepositoryDigest &&
+        envelope.canonical.worktreeDigest === expectedWorktreeDigest
+      ) {
+        unit.staleReceiptIds.delete(envelope.canonical.receiptId)
+        clearIssue(unit, operation)
+      }
+    }
+  }
+
   function updateCurrentIdentities(
     readback: ParsedReadback,
     nextPullRequestFingerprint: string | undefined,
@@ -1342,6 +1650,8 @@ export function createWorkflowGuard(
       resourceOperation: readback.operation,
       changedPullRequest,
     })
+    clearRecoveredResourceStale(readback, unit)
+    clearRecoveredRevisionStale(readback, unit)
     updateCurrentIdentities(readback, nextPullRequestFingerprint)
     storeOperationState(readback, unit)
     return {
@@ -1369,6 +1679,7 @@ export function createWorkflowGuard(
       return kinds
     }
     if (reasonCode === 'running-operation') return ['fresh-readback']
+    if (reasonCode === 'consumed-receipt') return ['fresh-readback']
     if (
       reasonCode === 'incompatible-receipt' ||
       reasonCode === 'foreign-registration' ||
@@ -2137,10 +2448,12 @@ export function createWorkflowGuard(
       unitId: randomId(),
       status: 'active',
       requiredOperations,
+      declaredResourceOperations: Object.freeze([...resourceScopes.keys()]),
       resourceScopes,
       evidence: new Map(),
       issues: new Map(),
       staleReceiptIds: new Set(),
+      recoveredReceiptIds: new Set(),
       operationStates: new Map(),
       ledgerContexts: new Map(),
     }
@@ -2469,6 +2782,418 @@ export function createWorkflowGuard(
     return result
   }
 
+  function isFreshForRecovery(): boolean {
+    if (
+      epoch ||
+      globalIssue ||
+      transitionsByCall.size > 0 ||
+      terminalOperationCalls.size > 0 ||
+      currentResourceRevisionIdentities.size > 0 ||
+      currentPullRequestFingerprint !== undefined ||
+      currentWorkspaceIdentity !== initialWorkspaceIdentity ||
+      currentRepositoryIdentity !== initialRepositoryIdentity ||
+      currentWorktreeIdentity !== initialWorktreeIdentity ||
+      currentResourceIdentities.size !== initialResourceIdentities.size
+    ) {
+      return false
+    }
+    for (const [operation, resource] of initialResourceIdentities) {
+      if (currentResourceIdentities.get(operation) !== resource) return false
+    }
+    return true
+  }
+
+  function recoveryProgressionReason(
+    state: ParsedRecoveryState,
+  ): WorkflowReasonCode | undefined {
+    const progression = state.progression
+    const current = options.ledger.getProgressionState()
+    if (JSON.stringify(current) !== JSON.stringify(progression))
+      return 'invalid-recovery'
+    if (!progression.epoch) return 'invalid-recovery'
+    if (
+      progression.epoch.epochDigest !==
+      options.ledger.digestIdentity('epoch', progression.epoch.epochId)
+    ) {
+      return 'invalid-recovery'
+    }
+    return recoveryUnitProgressionReason(progression)
+  }
+
+  function recoveryUnitProgressionReason(
+    progression: ReceiptReadbackProgression,
+  ): WorkflowReasonCode | undefined {
+    const epoch = progression.epoch
+    const unit = progression.unit
+    if (!epoch) return 'invalid-recovery'
+    if (!unit) {
+      return epoch.state === 'completed' ? 'invalid-recovery' : undefined
+    }
+    const declarationFailure = recoveryUnitDeclarationReason(epoch, unit)
+    if (declarationFailure) return declarationFailure
+    return unit.resourceScopes.some(
+      (scope) => !unit.requiredOperations.includes(scope.operation),
+    )
+      ? 'invalid-recovery'
+      : recoveryCompletedPairReason(epoch, unit)
+  }
+
+  function recoveryUnitDeclarationReason(
+    epoch: ReceiptEpochProgressionSnapshot,
+    unit: ReceiptUnitProgressionSnapshot,
+  ): WorkflowReasonCode | undefined {
+    return unit.epochId === epoch.epochId &&
+      unit.epochDigest === epoch.epochDigest &&
+      unit.unitDigest === options.ledger.digestIdentity('unit', unit.unitId) &&
+      unit.family === epoch.family
+      ? undefined
+      : 'invalid-recovery'
+  }
+
+  function recoveryCompletedPairReason(
+    epoch: ReceiptEpochProgressionSnapshot,
+    unit: ReceiptUnitProgressionSnapshot,
+  ): WorkflowReasonCode | undefined {
+    return epoch.state === 'completed' && unit.state !== 'completed'
+      ? 'invalid-recovery'
+      : undefined
+  }
+
+  function recoveryBoundaryReason(
+    envelope: ReceiptEnvelope,
+  ): WorkflowReasonCode | undefined {
+    if (
+      envelope.canonical.workspaceDigest !==
+      options.ledger.digestIdentity('workspace', currentWorkspaceIdentity)
+    ) {
+      return 'workspace-mismatch'
+    }
+    return undefined
+  }
+
+  function resourceScopeMatches(
+    operation: ReceiptOperation,
+    persisted: string,
+    trusted: string,
+  ): boolean {
+    return (
+      persisted === trusted ||
+      persisted === options.ledger.digestIdentity('resource', trusted) ||
+      persisted ===
+        options.ledger.digestIdentity(
+          'resource',
+          ledgerResourceIdentity(
+            operation,
+            trusted,
+            currentResourceRevisionIdentities.get(operation),
+          ) ?? trusted,
+        )
+    )
+  }
+
+  function recoveryResourceIdentities(progression: ReceiptReadbackProgression):
+    | {
+        resourceScopes: Map<ReceiptOperation, string>
+        current: Map<ReceiptOperation, string>
+      }
+    | undefined {
+    const current = new Map(initialResourceIdentities)
+    const resourceScopes = new Map<ReceiptOperation, string>()
+    const unit = progression.unit
+    if (!unit) return { resourceScopes, current }
+    for (const scope of unit.resourceScopes) {
+      const trusted = current.get(scope.operation)
+      if (!trusted) continue
+      if (
+        !resourceScopeMatches(scope.operation, scope.resourceIdentity, trusted)
+      )
+        return undefined
+      resourceScopes.set(scope.operation, trusted)
+      current.set(scope.operation, trusted)
+    }
+    return { resourceScopes, current }
+  }
+
+  function recoveryContext(
+    progression: ReceiptReadbackProgression,
+    envelope: ReceiptEnvelope,
+    resourceScopes: ReadonlyMap<ReceiptOperation, string>,
+  ): ReceiptContext {
+    const epochState = progression.epoch
+    const unitState = progression.unit
+    return {
+      epochId: epochState?.epochId ?? '',
+      unitId: unitState?.unitId ?? '',
+      workspaceIdentity: currentWorkspaceIdentity,
+      repositoryIdentity: currentRepositoryIdentity,
+      worktreeIdentity: currentWorktreeIdentity,
+      resourceIdentity: resourceScopes.get(envelope.canonical.operation),
+    }
+  }
+
+  function recoveryReceiptSet(state: ParsedRecoveryState):
+    | {
+        receipts: readonly ReceiptEnvelope[]
+        matching: readonly ReceiptEnvelope[]
+      }
+    | undefined {
+    const ledgerReceipts = options.ledger.listReceipts()
+    const byId = new Map(
+      ledgerReceipts.map((envelope) => [
+        envelope.canonical.receiptId,
+        envelope,
+      ]),
+    )
+    const stateReceipts = recoveryStateReceipts(state.receipts, byId)
+    if (!stateReceipts) return undefined
+    const progression = state.progression
+    if (!progression.epoch) return undefined
+    const matching = ledgerReceipts.filter(
+      (envelope) =>
+        envelope.canonical.epochDigest === progression.epoch?.epochDigest &&
+        (progression.unit === null ||
+          envelope.canonical.unitDigest === progression.unit.unitDigest),
+    )
+    return matching.every((envelope) =>
+      stateReceipts.ids.has(envelope.canonical.receiptId),
+    )
+      ? { receipts: stateReceipts.receipts, matching }
+      : undefined
+  }
+
+  function recoveryStateReceipts(
+    inputs: readonly unknown[],
+    byId: ReadonlyMap<string, ReceiptEnvelope>,
+  ):
+    | { receipts: readonly ReceiptEnvelope[]; ids: ReadonlySet<string> }
+    | undefined {
+    const receipts: ReceiptEnvelope[] = []
+    const ids = new Set<string>()
+    for (const input of inputs) {
+      const validation = options.ledger.validateEnvelope(input)
+      if (validation.compatibility !== 'compatible') return undefined
+      const envelope = byId.get(validation.envelope.canonical.receiptId)
+      if (
+        !envelope ||
+        JSON.stringify(envelope) !== JSON.stringify(validation.envelope)
+      )
+        return undefined
+      if (ids.has(envelope.canonical.receiptId)) return undefined
+      ids.add(envelope.canonical.receiptId)
+      receipts.push(envelope)
+    }
+    return { receipts, ids }
+  }
+
+  function recoveryCompletionReason(
+    progression: ReceiptReadbackProgression,
+    matching: readonly ReceiptEnvelope[],
+  ): WorkflowReasonCode | undefined {
+    return (
+      recoveryUnitCompletionReason(progression.unit, matching) ??
+      recoveryEpochCompletionReason(progression.epoch, matching)
+    )
+  }
+
+  function recoveryUnitCompletionReason(
+    unit: ReceiptUnitProgressionSnapshot | null,
+    matching: readonly ReceiptEnvelope[],
+  ): WorkflowReasonCode | undefined {
+    if (unit?.state !== 'completed') return undefined
+    for (const operation of unit.requiredOperations) {
+      const receipts = matching.filter(
+        (envelope) => envelope.canonical.operation === operation,
+      )
+      if (
+        receipts.length === 0 ||
+        receipts.some(
+          (envelope) => envelope.canonical.consumption !== 'consumed',
+        )
+      ) {
+        return 'invalid-recovery'
+      }
+    }
+    return undefined
+  }
+
+  function recoveryEpochCompletionReason(
+    epoch: ReceiptEpochProgressionSnapshot | null,
+    matching: readonly ReceiptEnvelope[],
+  ): WorkflowReasonCode | undefined {
+    if (epoch?.state !== 'completed') return undefined
+    return matching.length > 0 &&
+      matching.every(
+        (envelope) => envelope.canonical.consumption === 'consumed',
+      )
+      ? undefined
+      : 'invalid-recovery'
+  }
+
+  function buildRecoveryCandidate(
+    state: ParsedRecoveryState,
+  ): RecoveryCandidate | WorkflowRecoveryResult {
+    if (state.registrationDigest !== options.ledger.metadata.registrationDigest)
+      return { status: 'rejected', reasonCode: 'foreign-registration' }
+    const progressionFailure = recoveryProgressionReason(state)
+    if (progressionFailure)
+      return { status: 'rejected', reasonCode: progressionFailure }
+    const parts = validateRecoveryParts(state)
+    if ('status' in parts) return parts
+
+    const progression = state.progression
+    if (!progression.epoch)
+      return { status: 'rejected', reasonCode: 'invalid-recovery' }
+    const recoveredUnit = progression.unit
+      ? recoveredUnitState(
+          progression,
+          parts.receiptSet.matching,
+          parts.resources.resourceScopes,
+        )
+      : undefined
+    const recoveredEpoch: EpochState = {
+      epochId: progression.epoch.epochId,
+      family: progression.epoch.family,
+      status: progression.epoch.state === 'completed' ? 'completed' : 'active',
+      unit: recoveredUnit,
+    }
+    return {
+      epoch: recoveredEpoch,
+      resourceIdentities: parts.resources.current,
+      fingerprint: JSON.stringify({
+        registrationDigest: state.registrationDigest,
+        receipts: parts.receiptSet.receipts,
+        progression,
+      }),
+    }
+  }
+
+  function validateRecoveryParts(
+    state: ParsedRecoveryState,
+  ): RecoveryParts | WorkflowRecoveryResult {
+    const resources = recoveryResourceIdentities(state.progression)
+    if (!resources)
+      return { status: 'rejected', reasonCode: 'resource-mismatch' }
+    const receiptSet = recoveryReceiptSet(state)
+    if (!receiptSet)
+      return { status: 'rejected', reasonCode: 'invalid-recovery' }
+    const boundaryFailure = receiptSet.matching
+      .map(recoveryBoundaryReason)
+      .find((reason): reason is WorkflowReasonCode => reason !== undefined)
+    if (boundaryFailure)
+      return { status: 'rejected', reasonCode: boundaryFailure }
+    const completionFailure = recoveryCompletionReason(
+      state.progression,
+      receiptSet.matching,
+    )
+    if (completionFailure)
+      return { status: 'rejected', reasonCode: completionFailure }
+    return { resources, receiptSet }
+  }
+
+  function recoveredUnitState(
+    progression: ReceiptReadbackProgression,
+    matching: readonly ReceiptEnvelope[],
+    resourceScopes: ReadonlyMap<ReceiptOperation, string>,
+  ): UnitState | undefined {
+    const snapshot = progression.unit
+    if (!snapshot) return undefined
+    const unit: UnitState = {
+      unitId: snapshot.unitId,
+      status: snapshot.state === 'completed' ? 'completed' : 'active',
+      requiredOperations: Object.freeze([...snapshot.requiredOperations]),
+      declaredResourceOperations: Object.freeze(
+        snapshot.resourceScopes.map((scope) => scope.operation),
+      ),
+      resourceScopes: new Map(resourceScopes),
+      evidence: new Map(),
+      issues: new Map(),
+      staleReceiptIds: new Set(),
+      recoveredReceiptIds: new Set(
+        matching.map((envelope) => envelope.canonical.receiptId),
+      ),
+      operationStates: new Map(),
+      ledgerContexts: new Map(),
+    }
+    for (const envelope of matching) {
+      if (!unit.requiredOperations.includes(envelope.canonical.operation))
+        continue
+      unit.evidence.set(envelope.canonical.operation, envelope)
+      unit.ledgerContexts.set(
+        envelope.canonical.receiptId,
+        recoveryContext(progression, envelope, resourceScopes),
+      )
+      if (
+        unit.status === 'active' &&
+        envelope.canonical.consumption === 'consumed'
+      ) {
+        unit.evidence.delete(envelope.canonical.operation)
+        unit.issues.set(envelope.canonical.operation, {
+          kind: 'rejected',
+          reasonCode: 'consumed-receipt',
+          repair: repairFor(envelope.canonical.operation, 'consumed-receipt'),
+        })
+      }
+    }
+    return unit
+  }
+
+  function duplicateRecovery(
+    state: ParsedRecoveryState,
+  ): WorkflowRecoveryResult | undefined {
+    if (recoveryFingerprint === undefined) return undefined
+    const repeated = buildRecoveryCandidate(state)
+    if (
+      !('status' in repeated) &&
+      repeated.fingerprint === recoveryFingerprint
+    ) {
+      return {
+        status: 'duplicate',
+        provenance: 'restart',
+        epoch: cloneEpoch(repeated.epoch),
+        unit: repeated.epoch.unit ? cloneUnit(repeated.epoch.unit) : null,
+      }
+    }
+    return { status: 'rejected', reasonCode: 'recovery-conflict' }
+  }
+
+  function commitRecovery(
+    candidate: RecoveryCandidate,
+  ): WorkflowRecoveryResult {
+    epoch = candidate.epoch
+    globalIssue = undefined
+    currentResourceIdentities.clear()
+    for (const [operation, resource] of candidate.resourceIdentities) {
+      currentResourceIdentities.set(operation, resource)
+    }
+    currentResourceRevisionIdentities.clear()
+    currentPullRequestFingerprint = undefined
+    recoveryFingerprint = candidate.fingerprint
+    return {
+      status: 'restored',
+      provenance: 'restart',
+      epoch: cloneEpoch(candidate.epoch),
+      unit: candidate.epoch.unit ? cloneUnit(candidate.epoch.unit) : null,
+    }
+  }
+
+  function restore(input: unknown): WorkflowRecoveryResult {
+    if (mode === 'disabled')
+      return { status: 'rejected', reasonCode: 'disabled' }
+    if (mode === 'unavailable')
+      return { status: 'rejected', reasonCode: 'guard-unavailable' }
+    const parsed = parseRecoveryInput(input)
+    if (!parsed) return { status: 'rejected', reasonCode: 'invalid-recovery' }
+    if (parsed.provenance === 'fork-copy')
+      return { status: 'rejected', reasonCode: 'fork-copy-not-lineage' }
+    const duplicate = duplicateRecovery(parsed.state)
+    if (duplicate) return duplicate
+    if (!isFreshForRecovery())
+      return { status: 'rejected', reasonCode: 'recovery-conflict' }
+    const candidate = buildRecoveryCandidate(parsed.state)
+    if ('status' in candidate) return candidate
+    return commitRecovery(candidate)
+  }
+
   return {
     activate(input: unknown): ActivationResult {
       const modeResult = activationModeResult()
@@ -2615,6 +3340,8 @@ export function createWorkflowGuard(
       lifecycle.state = 'abandoned'
       return { status: 'abandoned' }
     },
+
+    restore,
 
     setMode(input: unknown): ControlResult {
       const parsed = parseControl(input)
