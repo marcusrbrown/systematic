@@ -9,7 +9,9 @@ export const OPENCODE_AVAILABLE = (() => {
   return result.exitCode === 0
 })()
 
-export const TIMEOUT_MS = 90_000
+export const TIMEOUT_MS = 180_000
+const EXACT_OPENCODE_VERSION = '1.18.5'
+let exactNpmCacheDir: string | undefined
 export const MAX_RETRIES = 1
 export const RETRY_DELAY_MS = 3_000
 export const OPENCODE_TEST_MODEL = 'opencode/big-pickle'
@@ -154,6 +156,34 @@ export function buildIsolatedOpencodeEnv(
     OPENCODE_CONFIG_DIR: fixture.configDir,
     OPENCODE_CONFIG_CONTENT: configContent,
   })
+}
+
+function getExactNpmCacheDir(): string {
+  exactNpmCacheDir ??= fs.mkdtempSync(
+    path.join(os.tmpdir(), 'systematic-opencode-npm-cache-'),
+  )
+  return exactNpmCacheDir
+}
+
+export function prewarmExactOpencode(
+  version = EXACT_OPENCODE_VERSION,
+  timeoutMs = 300_000,
+): OpencodeResult {
+  const result = Bun.spawnSync(
+    ['npx', '--yes', `opencode-ai@${version}`, '--version'],
+    {
+      env: buildChildEnv({
+        NPM_CONFIG_CACHE: getExactNpmCacheDir(),
+        npm_config_update_notifier: 'false',
+      }),
+      timeout: timeoutMs,
+    },
+  )
+  return {
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+    exitCode: result.exitCode ?? -1,
+  }
 }
 
 export interface RunOpencodeOptions {
@@ -434,6 +464,7 @@ async function startOpencodeProcess(
   command: string,
   args: readonly string[],
   env: Record<string, string>,
+  timeoutMs = TIMEOUT_MS,
 ): Promise<OpencodeServer> {
   const server = spawn(command, [...args], {
     env,
@@ -449,7 +480,7 @@ async function startOpencodeProcess(
       reject(
         new Error(`OpenCode server start timed out: ${buffer.slice(-500)}`),
       )
-    }, TIMEOUT_MS)
+    }, timeoutMs)
 
     const onChunk = (chunk: Buffer): void => {
       buffer += chunk.toString()
@@ -503,16 +534,18 @@ export async function startExactOpencodeServer(
   configContent: string,
   version: string,
   extraEnv?: Record<string, string>,
+  timeoutMs = TIMEOUT_MS,
 ): Promise<OpencodeServer> {
   return startOpencodeProcess(
     fixture,
     'npx',
     ['--yes', `opencode-ai@${version}`, 'serve', '--port', '0', '--print-logs'],
     buildIsolatedOpencodeEnv(fixture, configContent, {
-      NPM_CONFIG_CACHE: path.join(fixture.tempRoot, 'npm-cache'),
+      NPM_CONFIG_CACHE: getExactNpmCacheDir(),
       npm_config_update_notifier: 'false',
       ...extraEnv,
     }),
+    timeoutMs,
   )
 }
 
