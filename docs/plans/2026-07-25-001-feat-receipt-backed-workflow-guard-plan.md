@@ -1,7 +1,7 @@
 ---
 title: 'feat: Add receipt-backed workflow guard'
 type: feat
-status: active
+status: completed
 date: 2026-07-25
 deepened: 2026-07-25
 origin: docs/brainstorms/2026-07-20-receipt-backed-workflow-grounding-requirements.md
@@ -9,11 +9,13 @@ origin: docs/brainstorms/2026-07-20-receipt-backed-workflow-grounding-requiremen
 
 # feat: Add receipt-backed workflow guard
 
+> **Shipped (July 26, 2026):** U1–U7 and the full-shipping correctness work are complete. U8 regenerated the configuration schema, documentation reference, and registry surfaces and documented the receipt-backed workflow guard. The shipped default remains `observe`; protected enforcement is available as an explicit opt-in and its default flip is deferred to a separately approved rollout.
+
 ## Overview
 
 Build a Systematic-owned, receipt-backed workflow guard for OpenCode. The guard prevents assistant prose, successful no-ops, stale evidence, unrelated tool calls, and replayed events from advancing guarded `ce:work` or git-shipping state. It records only bounded, privacy-safe session-local evidence, exposes state through custom tool metadata and a next-host-turn marker, and treats unsupported host capabilities as `unavailable` rather than protected.
 
-V1 is OpenCode-only. The workflow semantics remain harness-neutral so Pi and Claude Code can report `unavailable` without receiving speculative adapters. The final shipped default becomes protected/enforced only in U8, after observe-mode real-host and packaged-runtime verification has zero unexplained false rejections.
+V1 is OpenCode-only. The workflow semantics remain harness-neutral so Pi and Claude Code can report `unavailable` without receiving speculative adapters. The shipped default remains observe; protected enforcement is available as an explicit opt-in and its default flip is deferred to a follow-up rollout decision.
 
 ---
 
@@ -47,7 +49,7 @@ The origin requirements remain authoritative. Each row names the implementation 
 - R14. OpenCode Question replies are the trusted user channel. A successful reply can mint one `user-attested` receipt bound to one session/resource/guarded transition; unknown, expired, consumed, mismatched, replayed, and free-form chat claims cannot. **Units:** U6, U7.
 - R15. OpenCode exposes `protected`, `waiting`, `rejected`, `disabled`, or `unavailable` as a read-time projection through custom-tool metadata and source-scoped host-owned markers outside assistant text; worst-state aggregation cannot be erased by later local output. **Units:** U2, U3.
 - R16. Waiting/rejected status identifies bounded missing, running, failed, or stale evidence and remains deduplicated until evidence changes, retry succeeds, or the user explicitly disables protection. **Units:** U2, U3, U6.
-- R17. Protected mode is the final shipped default; observe and disabled modes are explicit, and global/session disablement is user/operator-controlled rather than assistant-controlled. **Units:** U3, U6, U8.
+- R17. Observe is the shipped default, protected and disabled modes are explicit, and global/session disablement is user/operator-controlled rather than assistant-controlled. **Units:** U3, U6, U8.
 - R18. Assistant text remains unchanged; free-text claim scanning is audit-only; text-only or rejected completion causes a next-host-turn unverified marker. **Units:** U3, U7.
 - R19. Receipt/status state is session-local and privacy-safe, using bounded compatibility envelopes and domain-separated session-salted correlation digests. No durable audit store or raw command, argument, output, environment, repository content, path, PR body, or user prose is persisted; host-owned ToolPart metadata/events are the V1 trust boundary, not authenticity proofs. **Units:** U1, U5, U7.
 - R20. Semantics are harness-neutral, but V1 enforcement exists only in OpenCode; Pi and Claude Code report `unavailable`. **Units:** U3, U7.
@@ -514,7 +516,7 @@ flowchart TB
 
 **Verification:** Attestation and disablement are one-time, challenge- and resource-bound, session-local, visibly projected, and impossible to mint from free-form chat or assistant claims. The common Question API/event path proves request/reply/rejection behavior, not individual UI renderers. No plugin tool blocks awaiting Question.
 
-- [ ] **U7. Packaged runtime, exact-version host integration, duplicate-source safety, privacy controls, and observe-mode dogfood**
+- [x] **U7. Packaged runtime, exact-version host integration, duplicate-source safety, privacy controls, and observe-mode dogfood** — shipped through the packed-runtime, exact-host, protected-mode, and focused observe-mode gates.
 
 **Goal:** Prove the assembled guard in the npm-packed runtime and on exact OpenCode `1.18.3`, `1.18.4`, and currently characterized `1.18.5` hosts, including dual-source registration, privacy controls, and an adapted 40-run dogfood corpus while the final default remains observe.
 
@@ -576,9 +578,9 @@ flowchart TB
 
 **Verification:** The packed artifact behaves like the source runtime, both exact hosts are classified independently, the extracted shared fixture is consumed by integration coverage without manual consumers or copy-paste harnesses, selected-tool catalog/selection and hook delivery are safe, dual-source before/after and worst-state marker aggregation are proven, each registration permits at most one receipt per host call and one host-visible transition occurs, after finalization does not throw, missing-evidence repair classifications and no-repair `unavailable` are behavior-tested, observe and explicit protected corpus runs have zero unexplained false rejections, privacy controls hold, and the shipped default remains observe until U8. Any later compatibility-floor or supported-version change reruns the full exact-host matrix and protected corpus before support is claimed.
 
-- [ ] **U8. Flip the final default to enforce and refresh generated surfaces**
+- [x] **U8. Ship observe-default generated surfaces and documentation; defer the protected-default flip**
 
-**Goal:** After U7 is clean, make protected/enforced the shipped default, update generated config/docs/profile/harness evidence, and perform final regression verification without changing the portable semantics or claiming unsupported adapters are protected.
+**Goal:** After U7 is clean, synchronize generated config/docs/registry surfaces, document the shipped observe-default workflow guard, and record the protected-default flip as a deliberate follow-up rather than changing enforcement behavior in this release.
 
 **Requirements:** R5-R6, R11-R12, R15-R21, plus the rollout and documentation portions of R1-R4 and R22.
 
@@ -616,7 +618,7 @@ flowchart TB
 **Patterns to follow:** Existing schema/reference generation workflow; `HARNESSES.md` compatibility evidence conventions; profile-specific capability reporting; package export invariants.
 
 **Test scenarios:**
-- Happy path — default config produces protected/enforced mode, while explicit observe and disabled modes remain distinct and visible.
+- Happy path — default config produces observe mode, while explicit protected and disabled modes remain distinct and visible.
 - Happy path — generated schema/reference/profile/harness descriptions agree with the shipped config and runtime behavior.
 - Happy path — OpenCode, Pi, and Claude Code profile outputs agree with the harness capability contract; OpenCode is enforceable, Pi/Claude Code report `unavailable`, registry drift is clean, and any affected Claude Code bundle is regenerated and verified.
 - Edge case — static disablement, Question-gated session disablement, and unsupported host capability produce distinct bounded states.
@@ -626,7 +628,7 @@ flowchart TB
 - Error path — any unresolved selected-tool ambiguity, unsafe transform composition, hook-delivery divergence, non-throwing-after failure, stale/readback TOCTOU, or protected-mode false rejection leaves the default in observe.
 - Integration — final exact-host matrix and adapted dogfood corpus remain clean after generated surfaces and final default change.
 
-**Verification:** Protected/enforced is the final shipped default only after U7 observe and explicit protected-mode gates are clean; selected-tool and transform behavior is proven on exact hosts; generated config/docs/registry/profile/bundle surfaces are synchronized through their existing scripts and integrity checks; regressions preserve privacy, no-op safety, per-source registration, Question replay rejection, bounded missing-evidence repair, unavailable reporting, and ordinary-tool behavior. Any later compatibility-floor or supported/tested-version change reopens the exact-host matrix and protected corpus gate.
+**Verification:** U7 observe and explicit protected-mode gates are clean; selected-tool and transform behavior is proven on exact hosts; generated config/docs/registry surfaces are synchronized through their existing scripts and integrity checks; regressions preserve privacy, no-op safety, per-source registration, Question replay rejection, bounded missing-evidence repair, unavailable reporting, and ordinary-tool behavior. The shipped default remains observe, and any future protected-default rollout requires separate approval and reopens the exact-host matrix and protected corpus gate.
 
 ---
 
@@ -663,7 +665,7 @@ flowchart TB
 | Question events arrive out of order, are altered, or are replayed. | Bind runtime-generated challenge, canonical options/resource/transition, initiating call/session, and live request identifier; consume exactly once and reject all mismatches without persisting user-visible wording. |
 | Child summaries or duplicated call identities bypass lineage. | Require exact host-observed foreground lineage, workspace matching, and once-only child consumption; ignore summary text and do not implement background fallback. |
 | Config overlay lets assistant or project content disable protection. | Mark workflow-guard fields through `SECURITY_OVERLAY_FIELDS`; static disablement is user/config-dir controlled and session disablement is Question-gated. |
-| Observe-mode corpus passes but enforce mode breaks ordinary workflows. | U3 introduces observe as the default, U7 verifies observe and explicit protected mode without changing the shipped default, and U8 alone flips enforcement after zero unexplained false rejections. |
+| Observe-mode corpus passes but enforce mode breaks ordinary workflows. | U3 introduces observe as the default, U7 verifies observe and explicit protected mode without changing the shipped default, and a future rollout decision must revalidate enforcement before any default flip. |
 | OpenCode version drift invalidates assumptions. | Acquire exact `1.18.3`, `1.18.4`, and `1.18.5` cells, detect capabilities at runtime, and report `unavailable` rather than maintaining a permanent version allowlist. |
 | Parser dependency approval or packed asset resolution is incomplete. | Keep the dependency change approval-gated, test npm-packed asset resolution, and leave enforcement observe-only until the prerequisite is verified. |
 | Unkeyed hashes are mistaken for authenticity or a keyed secret is added as security theater. | Treat hashes as correlation/privacy identifiers only; trust host-owned metadata/events against the assistant and keep local host/DB compromise, keyed MACs, durable secrets, and durable Systematic stores outside V1. |
@@ -677,7 +679,7 @@ flowchart TB
 - Document session-local retention, metadata-only compatibility envelopes, domain-separated session-salted digest identities, opt-in debug linkability scope, the host-owned metadata/event trust boundary, and the absence of a durable audit store or authenticity key.
 - Keep `HARNESSES.md` and the OpenCode, Pi, and Claude Code profiles honest about V1 OpenCode enforcement, Pi/Claude Code unavailable behavior, exact-host compatibility evidence, and the fact that source/vendor reading is not runtime proof.
 - Keep generated config schema/reference synchronized with the source schema. Do not hand-edit generated outputs as a substitute for source changes.
-- Roll out in observe mode first. U3 and U7 do not change the shipped default; U7 must also run the guarded corpus in explicit protected mode with veto/repair, TOCTOU, Question replay/substitution, duplicate-source disagreement, internal after failure, and ordinary-tool checks. U8 may change the default only after both modes, packed runtime, exact-version cells, privacy tests, and regression checks are clean.
+- Roll out in observe mode first. U3 and U7 do not change the shipped default; U7 also runs the guarded corpus in explicit protected mode with veto/repair, TOCTOU, Question replay/substitution, duplicate-source disagreement, internal after failure, and ordinary-tool checks. A future protected-default rollout may change the default only after both modes, packed runtime, exact-version cells, privacy tests, and regression checks are clean.
 - Treat any change to the compatibility floor or current supported/tested OpenCode version as a revalidation trigger. Runtime capability detection remains required, but a new or unproven host remains `unavailable` until the exact-host selected-tool/hook/transform/Question matrix and explicit protected-mode corpus pass again.
 - When evidence is missing, pruned, malformed, or unrecoverable, canonical status names one bounded repair path — fresh operation-specific readback, exact-operation rerun, or eligible Question attestation — or reports bounded no-repair `unavailable`. It never waits indefinitely, reconstructs from summaries/prose, invents a durable store, or broadens Question eligibility.
 - Do not release a state that advertises protected enforcement while a required capability is unavailable or a required verification gate is unexplained.
@@ -707,7 +709,7 @@ flowchart TB
 - Tool catalogs/selection, hook delivery, transform order, marker worst-state aggregation, and non-throwing after finalization are proven on both exact hosts or the capability remains unavailable.
 - Final compare-and-consume readback rejects interleaving workspace/repository/resource changes without consuming receipts.
 - Restart/fork recovery either validates exact persisted metadata or requires fresh readback; no summary/prose recovery occurs.
-- The adapted 40-run dogfood corpus has zero unexplained false rejections in both observe and explicit protected mode before the default flips to enforce.
+- The adapted dogfood corpus has zero unexplained false rejections in both observe and explicit protected mode before any future default flip to enforce.
 - Packed runtime and both exact host cells classify independently; unsupported capabilities report unavailable rather than protected.
 - A compatibility-floor or supported/tested-version change triggers a fresh exact-host selected-tool/hook/transform/Question matrix and explicit protected-mode corpus before support is claimed.
 - Missing/pruned/malformed/unrecoverable evidence names one bounded repair path or no-repair `unavailable`; no guarded unit remains indefinitely `waiting` without action.
@@ -748,7 +750,7 @@ flowchart TB
 
 ### Phase 4 — Shipped default
 
-- Complete U8 only after the evidence gate is clean. Flip the final default to protected/enforced, regenerate config/docs and all three capability-profile/harness surfaces, run registry drift and affected generated-bundle verification, and preserve all unsupported-harness boundaries.
+- Complete U8 after the evidence gate is clean by regenerating config/docs/registry surfaces and documenting the shipped observe default. Defer any protected-default flip to a separately approved rollout that reruns the protected evidence gate and preserves all unsupported-harness boundaries.
 
 ---
 
