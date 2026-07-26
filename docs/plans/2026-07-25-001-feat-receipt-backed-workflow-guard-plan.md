@@ -476,7 +476,7 @@ flowchart TB
 
 **Verification:** Exact receipts survive supported restart/fork readback without raw data; immutable mint metadata and later progression markers fold in order; compatibility/salt boundaries fail closed; missing/pruned/malformed/unrecoverable evidence exposes exactly one bounded repair path or no-repair `unavailable`; final compare-and-consume readback rejects interleaving changes without consuming; unsupported history fails closed; foreground child rollup is host-proven and once-only within each registration with one host-visible transition; and compaction never receives a fabricated recovery path.
 
-- [ ] **U6. Question-backed attestation and per-session disablement**
+- [x] **U6. Question-backed attestation and per-session disablement**
 
 **Goal:** Implement the non-blocking trusted-user flow for one-time attestation and per-session disablement without treating arbitrary chat messages or assistant attribution as evidence.
 

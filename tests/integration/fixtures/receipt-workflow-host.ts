@@ -429,13 +429,13 @@ export function assertMixedVersionProbeEvents(events: ProbeEvent[]): void {
   }
 }
 
-export async function startOpencodeServer(
+async function startOpencodeProcess(
   fixture: IsolatedFixture,
-  configContent: string,
-  extraEnv?: Record<string, string>,
+  command: string,
+  args: readonly string[],
+  env: Record<string, string>,
 ): Promise<OpencodeServer> {
-  const env = buildIsolatedOpencodeEnv(fixture, configContent, extraEnv)
-  const server = spawn('opencode', ['serve', '--port', '0', '--print-logs'], {
+  const server = spawn(command, [...args], {
     env,
     cwd: fixture.projectDir,
   })
@@ -483,6 +483,37 @@ export async function startOpencodeServer(
       await stopOpencodeProcess(server)
     },
   }
+}
+
+export async function startOpencodeServer(
+  fixture: IsolatedFixture,
+  configContent: string,
+  extraEnv?: Record<string, string>,
+): Promise<OpencodeServer> {
+  return startOpencodeProcess(
+    fixture,
+    'opencode',
+    ['serve', '--port', '0', '--print-logs'],
+    buildIsolatedOpencodeEnv(fixture, configContent, extraEnv),
+  )
+}
+
+export async function startExactOpencodeServer(
+  fixture: IsolatedFixture,
+  configContent: string,
+  version: string,
+  extraEnv?: Record<string, string>,
+): Promise<OpencodeServer> {
+  return startOpencodeProcess(
+    fixture,
+    'npx',
+    ['--yes', `opencode-ai@${version}`, 'serve', '--port', '0', '--print-logs'],
+    buildIsolatedOpencodeEnv(fixture, configContent, {
+      NPM_CONFIG_CACHE: path.join(fixture.tempRoot, 'npm-cache'),
+      npm_config_update_notifier: 'false',
+      ...extraEnv,
+    }),
+  )
 }
 
 export interface OpencodeServer {
