@@ -54,6 +54,7 @@ export interface ReceiptOperationContext extends ReceiptContext {
 }
 
 export interface ReceiptOperationAfter extends ReceiptObservationAfter {
+  commitClosure?: boolean
   pullRequest?: {
     identity: string
     state: PullRequestObservationState
@@ -447,6 +448,12 @@ function parseOperationAfter(
   const pullRequest = parseOptionalPullRequest(value.pullRequest)
   if (pullRequest === null) return undefined
   if (
+    value.commitClosure !== undefined &&
+    typeof value.commitClosure !== 'boolean'
+  ) {
+    return undefined
+  }
+  if (
     !isCheckState(value.checkState) ||
     !isReviewDecision(value.reviewDecision)
   ) {
@@ -460,6 +467,9 @@ function parseOperationAfter(
     ...(value.reviewDecision !== undefined
       ? { reviewDecision: value.reviewDecision }
       : {}),
+    ...(value.commitClosure !== undefined
+      ? { commitClosure: value.commitClosure }
+      : {}),
   }
 }
 
@@ -472,6 +482,7 @@ const OPERATION_AFTER_FIELDS = new Set([
   'pullRequest',
   'checkState',
   'reviewDecision',
+  'commitClosure',
 ])
 
 function parseOptionalPullRequest(
@@ -797,6 +808,9 @@ function validateCommit(
 ): ReceiptClassification {
   const workspaceReason = validateWorkspaceIdentity(context, after, 'commit')
   if (workspaceReason) return workspaceReason
+  if (after.commitClosure !== true) {
+    return rejected('commit', 'success', 'no-op-resource', 'required')
+  }
   return changedIdentity(context.repositoryIdentity, after.repositoryIdentity)
     ? classification
     : rejected('commit', 'success', 'no-op-resource', 'required')

@@ -73,6 +73,8 @@ describe('OpenCode operation observer', () => {
       expect(edited.snapshot.worktreeRevisionDigest).not.toBe(
         initial.snapshot.worktreeRevisionDigest,
       )
+      expect(initial.snapshot.commitClosure).toBe(true)
+      expect(edited.snapshot.commitClosure).toBe(false)
 
       runGit(fixture.root, ['add', 'tracked.txt'])
       runGit(fixture.root, ['commit', '--quiet', '-m', 'edited'])
@@ -85,6 +87,35 @@ describe('OpenCode operation observer', () => {
       expect(committed.snapshot.repositoryRevisionDigest).not.toBe(
         initial.snapshot.repositoryRevisionDigest,
       )
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('reports partial-stage commit closure as open and full closure as closed', async () => {
+    const fixture = createGitFixture()
+    try {
+      fs.writeFileSync(path.join(fixture.root, 'second.txt'), 'initial\n')
+      runGit(fixture.root, ['add', 'second.txt'])
+      runGit(fixture.root, ['commit', '--quiet', '-m', 'second'])
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      fs.writeFileSync(path.join(fixture.root, 'tracked.txt'), 'changed\n')
+      fs.writeFileSync(path.join(fixture.root, 'second.txt'), 'also changed\n')
+      runGit(fixture.root, ['add', 'tracked.txt'])
+      runGit(fixture.root, ['commit', '--quiet', '-m', 'partial'])
+      const partial = await observer.snapshot()
+      expect(partial.status).toBe('available')
+      if (partial.status !== 'available') return
+      expect(partial.snapshot.commitClosure).toBe(false)
+
+      runGit(fixture.root, ['add', 'second.txt'])
+      runGit(fixture.root, ['commit', '--quiet', '-m', 'close'])
+      const closed = await observer.snapshot()
+      expect(closed.status).toBe('available')
+      if (closed.status !== 'available') return
+      expect(closed.snapshot.commitClosure).toBe(true)
     } finally {
       fixture.cleanup()
     }
@@ -112,7 +143,7 @@ describe('OpenCode operation observer', () => {
       const staged = await observer.snapshot()
       expect(staged.status).toBe('available')
       if (staged.status !== 'available') return
-      expect(staged.snapshot.worktreeRevisionDigest).not.toBe(
+      expect(staged.snapshot.worktreeRevisionDigest).toBe(
         unstaged.snapshot.worktreeRevisionDigest,
       )
 
@@ -127,6 +158,91 @@ describe('OpenCode operation observer', () => {
       if (rewritten.status !== 'available') return
       expect(rewritten.snapshot.worktreeRevisionDigest).not.toBe(
         untracked.snapshot.worktreeRevisionDigest,
+      )
+
+      runGit(fixture.root, ['add', 'tracked.txt', 'untracked.txt'])
+      runGit(fixture.root, ['commit', '--quiet', '-m', 'staged-content'])
+      const committed = await observer.snapshot()
+      expect(committed.status).toBe('available')
+      if (committed.status !== 'available') return
+      expect(committed.snapshot.worktreeRevisionDigest).not.toBe(
+        staged.snapshot.worktreeRevisionDigest,
+      )
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('keeps unchanged committed content stable through add and commit', async () => {
+    const fixture = createGitFixture()
+    try {
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      const initial = await observer.snapshot()
+      expect(initial.status).toBe('available')
+      if (initial.status !== 'available') return
+
+      runGit(fixture.root, ['add', 'tracked.txt'])
+      const staged = await observer.snapshot()
+      expect(staged.status).toBe('available')
+      if (staged.status !== 'available') return
+      runGit(fixture.root, ['commit', '--quiet', '-m', 'unchanged'])
+      const committed = await observer.snapshot()
+      expect(committed.status).toBe('available')
+      if (committed.status !== 'available') return
+      expect(staged.snapshot.worktreeRevisionDigest).toBe(
+        initial.snapshot.worktreeRevisionDigest,
+      )
+      expect(committed.snapshot.worktreeRevisionDigest).toBe(
+        initial.snapshot.worktreeRevisionDigest,
+      )
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('changes once for deletion, CRLF bytes, and executable-bit changes', async () => {
+    const fixture = createGitFixture()
+    try {
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+      const initial = await observer.snapshot()
+      expect(initial.status).toBe('available')
+      if (initial.status !== 'available') return
+
+      fs.unlinkSync(path.join(fixture.root, 'tracked.txt'))
+      const deleted = await observer.snapshot()
+      expect(deleted.status).toBe('available')
+      if (deleted.status !== 'available') return
+      expect(deleted.snapshot.worktreeRevisionDigest).not.toBe(
+        initial.snapshot.worktreeRevisionDigest,
+      )
+      runGit(fixture.root, ['add', '-u'])
+      runGit(fixture.root, ['commit', '--quiet', '-m', 'delete'])
+      const deletedCommitted = await observer.snapshot()
+      expect(deletedCommitted.status).toBe('available')
+      if (deletedCommitted.status !== 'available') return
+      expect(deletedCommitted.snapshot.worktreeRevisionDigest).toBe(
+        deleted.snapshot.worktreeRevisionDigest,
+      )
+
+      fs.writeFileSync(path.join(fixture.root, 'tracked.txt'), 'line\r\n')
+      const crlf = await observer.snapshot()
+      expect(crlf.status).toBe('available')
+      if (crlf.status !== 'available') return
+      expect(crlf.snapshot.worktreeRevisionDigest).not.toBe(
+        deletedCommitted.snapshot.worktreeRevisionDigest,
+      )
+
+      fs.writeFileSync(path.join(fixture.root, 'tracked.txt'), 'line\n')
+      fs.chmodSync(path.join(fixture.root, 'tracked.txt'), 0o755)
+      const executable = await observer.snapshot()
+      expect(executable.status).toBe('available')
+      if (executable.status !== 'available') return
+      expect(executable.snapshot.worktreeRevisionDigest).not.toBe(
+        crlf.snapshot.worktreeRevisionDigest,
       )
     } finally {
       fixture.cleanup()
@@ -155,7 +271,7 @@ describe('OpenCode operation observer', () => {
         secondResult.snapshot.targetDigest,
       )
       for (const digest of Object.values(firstResult.snapshot)) {
-        expect(digest).toMatch(/^[0-9a-f]{64}$/)
+        if (typeof digest === 'string') expect(digest).toMatch(/^[0-9a-f]{64}$/)
       }
     } finally {
       first.cleanup()
@@ -216,6 +332,46 @@ describe('OpenCode operation observer', () => {
         status: 'unavailable',
         reasonCode: 'file-output-limit',
       })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('fails closed on permission reads and checks size before reading content', async () => {
+    const fixture = createGitFixture()
+    try {
+      const permission = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        statReader: () => {
+          throw Object.assign(new Error('permission'), { code: 'EACCES' })
+        },
+      })
+      await expect(permission.snapshot()).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'file-read-failed',
+      })
+
+      let opened = false
+      const bounded = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        statReader: (filePath) => ({
+          isFile: filePath.endsWith('tracked.txt'),
+          isSymbolicLink: false,
+          isDirectory: false,
+          mode: 0o100644,
+          size: 99,
+        }),
+        fileReader: () => {
+          opened = true
+          return new Uint8Array(99)
+        },
+        limits: { maxTotalFileBytes: 1 },
+      })
+      await expect(bounded.snapshot()).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'file-output-limit',
+      })
+      expect(opened).toBe(false)
     } finally {
       fixture.cleanup()
     }
@@ -362,6 +518,45 @@ describe('OpenCode operation observer', () => {
         reasonCode: 'remote-invalid-json',
       })
       expect(JSON.stringify(malformedResult)).not.toContain('bad')
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('requires an advanced upstream that equals local HEAD for push readback', async () => {
+    const fixture = createGitFixture()
+    let upstream = 'a'.repeat(40)
+    const localHead = 'b'.repeat(40)
+    try {
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        remoteCommandRunner: (_executable, args) => {
+          if (args[0] === 'rev-parse' && args[1] === '--abbrev-ref') {
+            return { status: 0, stdout: 'origin/main\n', stderr: '' }
+          }
+          if (args[0] === 'rev-parse' && args[1] === 'HEAD') {
+            return { status: 0, stdout: `${localHead}\n`, stderr: '' }
+          }
+          return { status: 0, stdout: `${upstream}\n`, stderr: '' }
+        },
+      })
+      const before = await observer.remoteSnapshot?.('push', 'before')
+      expect(before?.status).toBe('available')
+      upstream = localHead
+      const after = await observer.remoteSnapshot?.('push', 'after')
+      expect(after?.status).toBe('available')
+      if (before?.status !== 'available' || after?.status !== 'available')
+        return
+      expect(after.snapshot.resourceRevisionIdentity).not.toBe(
+        before.snapshot.resourceRevisionIdentity,
+      )
+
+      upstream = 'a'.repeat(40)
+      const notAdvanced = await observer.remoteSnapshot?.('push', 'after')
+      expect(notAdvanced).toEqual({
+        status: 'unavailable',
+        reasonCode: 'remote-not-advanced',
+      })
     } finally {
       fixture.cleanup()
     }

@@ -2365,6 +2365,7 @@ function createSessionRuntime(
         workspaceIdentity: options.workspaceIdentity,
         repositoryIdentity: after.repositoryRevisionDigest,
         worktreeIdentity: after.worktreeRevisionDigest,
+        commitClosure: after.commitClosure,
         ...(remoteAfter
           ? {
               resourceIdentity: remoteAfter.resourceIdentity,

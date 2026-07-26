@@ -22,6 +22,8 @@ export type OperationObserverReasonCode =
   | 'remote-invalid-json'
   | 'remote-missing-field'
   | 'remote-item-limit'
+  | 'remote-not-advanced'
+  | 'commit-not-closed'
 
 export type RemoteOperation =
   | 'push'
@@ -34,6 +36,7 @@ export interface OperationObserverSnapshot {
   readonly targetDigest: string
   readonly repositoryRevisionDigest: string
   readonly worktreeRevisionDigest: string
+  readonly commitClosure?: boolean
 }
 
 export type OperationObserverResult =
@@ -104,12 +107,21 @@ export interface OperationObserverLimits {
   readonly maxPathBytes?: number
 }
 
+export interface OperationObserverFileStat {
+  readonly isFile: boolean
+  readonly isSymbolicLink: boolean
+  readonly isDirectory: boolean
+  readonly mode: number
+  readonly size: number
+}
+
 export interface OpencodeOperationObserverOptions {
   readonly targetDirectory: string
   readonly commandRunner?: OperationObserverCommandRunner
   readonly remoteCommandRunner?: OperationObserverRemoteCommandRunner
   readonly fileReader?: (filePath: string) => Uint8Array
   readonly symlinkReader?: (filePath: string) => string
+  readonly statReader?: (filePath: string) => OperationObserverFileStat
   readonly realPath?: (filePath: string) => string
   readonly limits?: OperationObserverLimits
 }
@@ -322,10 +334,121 @@ function readRevision(
   }
 }
 
-function appendFileFact(
+function isEnoent(error: unknown): boolean {
+  return (
+    error !== null &&
+    typeof error === 'object' &&
+    'code' in error &&
+    error.code === 'ENOENT'
+  )
+}
+
+function appendSubmoduleFact(
+  hash: ReturnType<typeof createHash>,
+  runner: OperationObserverCommandRunner,
+  root: string,
+  relativePath: string,
+  limits: Limits,
+  totalBytes: number,
+):
+  | { status: 'ok'; totalBytes: number }
+  | { status: 'error'; reasonCode: OperationObserverReasonCode } {
+  const submodule = runCommand(
+    runner,
+    ['-C', relativePath, 'rev-parse', '--verify', 'HEAD'],
+    root,
+    limits,
+  )
+  if (submodule.status === 'error') return submodule
+  const revision = submodule.output.stdout.trim()
+  if (!/^[0-9a-f]{40}$/i.test(revision)) {
+    return { status: 'error', reasonCode: 'file-read-failed' }
+  }
+  hash.update('gitlink\0')
+  hash.update(relativePath)
+  hash.update('\0')
+  hash.update(revision.toLowerCase())
+  hash.update('\0')
+  return { status: 'ok', totalBytes }
+}
+
+function appendSymlinkFact(
+  hash: ReturnType<typeof createHash>,
+  symlinkReader: (filePath: string) => string,
+  absolutePath: string,
+  relativePath: string,
+  limits: Limits,
+  totalBytes: number,
+):
+  | { status: 'ok'; totalBytes: number }
+  | { status: 'error'; reasonCode: OperationObserverReasonCode } {
+  let target: string
+  try {
+    target = symlinkReader(absolutePath)
+  } catch (error) {
+    return isEnoent(error)
+      ? { status: 'ok', totalBytes }
+      : { status: 'error', reasonCode: 'file-read-failed' }
+  }
+  const targetBytes = Buffer.from(target, 'utf8')
+  const nextTotalBytes = totalBytes + targetBytes.byteLength
+  if (
+    targetBytes.byteLength > limits.maxPathBytes ||
+    nextTotalBytes > limits.maxTotalFileBytes
+  ) {
+    return { status: 'error', reasonCode: 'file-output-limit' }
+  }
+  hash.update('symlink\0')
+  hash.update(relativePath)
+  hash.update('\0')
+  hash.update(targetBytes)
+  hash.update('\0')
+  return { status: 'ok', totalBytes: nextTotalBytes }
+}
+
+function appendRegularFact(
   hash: ReturnType<typeof createHash>,
   fileReader: (filePath: string) => Uint8Array,
+  absolutePath: string,
+  relativePath: string,
+  stat: OperationObserverFileStat,
+  limits: Limits,
+  totalBytes: number,
+):
+  | { status: 'ok'; totalBytes: number }
+  | { status: 'error'; reasonCode: OperationObserverReasonCode } {
+  if (!stat.isFile || !Number.isSafeInteger(stat.size) || stat.size < 0) {
+    return { status: 'error', reasonCode: 'file-read-failed' }
+  }
+  if (totalBytes + stat.size > limits.maxTotalFileBytes) {
+    return { status: 'error', reasonCode: 'file-output-limit' }
+  }
+  let content: Uint8Array
+  try {
+    content = fileReader(absolutePath)
+  } catch (error) {
+    return isEnoent(error)
+      ? { status: 'ok', totalBytes }
+      : { status: 'error', reasonCode: 'file-read-failed' }
+  }
+  if (totalBytes + content.byteLength > limits.maxTotalFileBytes) {
+    return { status: 'error', reasonCode: 'file-output-limit' }
+  }
+  hash.update('regular\0')
+  hash.update(relativePath)
+  hash.update('\0')
+  hash.update((stat.mode & 0o111) !== 0 ? 'executable\0' : 'non-executable\0')
+  hash.update(content)
+  hash.update('\0')
+  return { status: 'ok', totalBytes: totalBytes + content.byteLength }
+}
+
+function appendFileFactV2(
+  hash: ReturnType<typeof createHash>,
+  runner: OperationObserverCommandRunner,
+  fileReader: (filePath: string) => Uint8Array,
   symlinkReader: (filePath: string) => string,
+  statReader: (filePath: string) => OperationObserverFileStat,
   root: string,
   entry: Pick<StageEntry, 'mode' | 'relativePath'>,
   limits: Limits,
@@ -338,66 +461,56 @@ function appendFileFact(
   if (!absolutePath || outputBytes(relativePath) > limits.maxPathBytes) {
     return { status: 'error', reasonCode: 'file-read-failed' }
   }
-  if (mode === '120000') {
-    let linkTarget: string
-    try {
-      linkTarget = symlinkReader(absolutePath)
-    } catch {
-      hash.update('deleted\0')
-      hash.update(relativePath)
-      hash.update('\0')
-      return { status: 'ok', totalBytes }
-    }
-    const linkBytes = Buffer.byteLength(linkTarget, 'utf8')
-    if (linkBytes > limits.maxPathBytes) {
-      return { status: 'error', reasonCode: 'file-output-limit' }
-    }
-    const nextTotalBytes = totalBytes + linkBytes
-    if (nextTotalBytes > limits.maxTotalFileBytes) {
-      return { status: 'error', reasonCode: 'file-output-limit' }
-    }
-    const linkContentDigest = createHash('sha256')
-      .update(linkTarget)
-      .digest('hex')
-    hash.update('symlink\0')
-    hash.update(relativePath)
-    hash.update('\0')
-    hash.update(linkContentDigest)
-    hash.update('\0')
-    return { status: 'ok', totalBytes: nextTotalBytes }
-  }
-  let content: Uint8Array
+  let stat: OperationObserverFileStat
   try {
-    content = fileReader(absolutePath)
-  } catch {
-    if (mode === '160000') return { status: 'ok', totalBytes }
-    hash.update('deleted\0')
-    hash.update(relativePath)
-    hash.update('\0')
-    return { status: 'ok', totalBytes }
+    stat = statReader(absolutePath)
+  } catch (error) {
+    return isEnoent(error)
+      ? { status: 'ok', totalBytes }
+      : { status: 'error', reasonCode: 'file-read-failed' }
   }
-  const nextTotalBytes = totalBytes + content.byteLength
-  if (nextTotalBytes > limits.maxTotalFileBytes) {
-    return { status: 'error', reasonCode: 'file-output-limit' }
+  if (mode === '160000')
+    return appendSubmoduleFact(
+      hash,
+      runner,
+      root,
+      relativePath,
+      limits,
+      totalBytes,
+    )
+  if (stat.isSymbolicLink) {
+    return appendSymlinkFact(
+      hash,
+      symlinkReader,
+      absolutePath,
+      relativePath,
+      limits,
+      totalBytes,
+    )
   }
-  const contentDigest = createHash('sha256').update(content).digest('hex')
-  hash.update(mode === '' ? 'untracked\0' : 'tracked\0')
-  hash.update(relativePath)
-  hash.update('\0')
-  hash.update(contentDigest)
-  hash.update('\0')
-  return { status: 'ok', totalBytes: nextTotalBytes }
+  return appendRegularFact(
+    hash,
+    fileReader,
+    absolutePath,
+    relativePath,
+    stat,
+    limits,
+    totalBytes,
+  )
 }
 
-function readWorktreeRevision(
+function readWorktreeRevisionV2(
   runner: OperationObserverCommandRunner,
   fileReader: (filePath: string) => Uint8Array,
   symlinkReader: (filePath: string) => string,
+  statReader: (filePath: string) => OperationObserverFileStat,
   root: string,
   limits: Limits,
 ):
   | { status: 'ok'; digest: string }
   | { status: 'error'; reasonCode: OperationObserverReasonCode } {
+  const tracked = runCommand(runner, ['ls-files', '-z'], root, limits)
+  if (tracked.status === 'error') return tracked
   const staged = runCommand(runner, ['ls-files', '--stage', '-z'], root, limits)
   if (staged.status === 'error') return staged
   const untracked = runCommand(
@@ -412,38 +525,71 @@ function readWorktreeRevision(
     limits.maxPathBytes,
   )
   if (!stageEntries) return { status: 'error', reasonCode: 'file-read-failed' }
-  const untrackedPaths = splitRecords(untracked.output.stdout).sort()
-  if (stageEntries.length + untrackedPaths.length > limits.maxFiles) {
+  const modes = new Map(
+    stageEntries.map((entry) => [entry.relativePath, entry.mode]),
+  )
+  const paths = [
+    ...new Set([
+      ...splitRecords(tracked.output.stdout),
+      ...splitRecords(untracked.output.stdout),
+    ]),
+  ].sort((left, right) => Buffer.from(left).compare(Buffer.from(right)))
+  if (paths.length > limits.maxFiles) {
     return { status: 'error', reasonCode: 'file-limit' }
   }
-
   const hash = createHash('sha256')
-  hash.update('systematic:opencode-observer:worktree:v1\0')
-  for (const entry of stageEntries) {
-    hash.update('index\0')
-    hash.update(entry.record)
-    hash.update('\0')
-  }
-
+  hash.update('systematic:opencode-observer:worktree:v2\0')
   let totalBytes = 0
-  const entries = [
-    ...stageEntries,
-    ...untrackedPaths.map((relativePath) => ({ relativePath, mode: '' })),
-  ]
-  for (const entry of entries) {
-    const fileResult = appendFileFact(
+  for (const relativePath of paths) {
+    const result = appendFileFactV2(
       hash,
+      runner,
       fileReader,
       symlinkReader,
+      statReader,
       root,
-      entry,
+      { relativePath, mode: modes.get(relativePath) ?? '' },
       limits,
       totalBytes,
     )
-    if (fileResult.status === 'error') return fileResult
-    totalBytes = fileResult.totalBytes
+    if (result.status === 'error') return result
+    totalBytes = result.totalBytes
   }
   return { status: 'ok', digest: hash.digest('hex') }
+}
+
+function readCommitClosure(
+  runner: OperationObserverCommandRunner,
+  root: string,
+  limits: Limits,
+):
+  | { status: 'ok'; closed: boolean }
+  | { status: 'error'; reasonCode: OperationObserverReasonCode } {
+  const diff = runner(
+    ['diff', '--quiet', 'HEAD', '--', '.'],
+    root,
+    limits.maxCommandOutputBytes,
+  )
+  if (
+    outputBytes(diff.stdout) > limits.maxCommandOutputBytes ||
+    outputBytes(diff.stderr) > limits.maxCommandOutputBytes
+  ) {
+    return { status: 'error', reasonCode: 'command-output-limit' }
+  }
+  if (diff.status !== 0 && diff.status !== 1) {
+    return { status: 'error', reasonCode: 'command-failed' }
+  }
+  const untracked = runCommand(
+    runner,
+    ['ls-files', '--others', '--exclude-standard', '-z'],
+    root,
+    limits,
+  )
+  if (untracked.status === 'error') return untracked
+  return {
+    status: 'ok',
+    closed: diff.status === 0 && untracked.output.stdout.length === 0,
+  }
 }
 
 function runRemoteCommand(
@@ -646,7 +792,7 @@ function readPushRemoteSnapshot(
   }
   const revision = readRemoteGitValue(
     runner,
-    ['rev-parse', phase === 'before' ? '@{upstream}' : 'HEAD'],
+    ['rev-parse', '@{upstream}'],
     root,
     limits,
   )
@@ -654,6 +800,22 @@ function readPushRemoteSnapshot(
     return revision.status === 'missing-resource'
       ? revision
       : { status: 'unavailable', reasonCode: revision.reasonCode }
+  }
+  if (phase === 'after') {
+    const localHead = readRemoteGitValue(
+      runner,
+      ['rev-parse', 'HEAD'],
+      root,
+      limits,
+    )
+    if (localHead.status !== 'ok') {
+      return localHead.status === 'missing-resource'
+        ? localHead
+        : { status: 'unavailable', reasonCode: localHead.reasonCode }
+    }
+    if (revision.value !== localHead.value) {
+      return { status: 'unavailable', reasonCode: 'remote-not-advanced' }
+    }
   }
   return {
     status: 'available',
@@ -766,6 +928,18 @@ export function createOpencodeOperationObserver(
   const remoteRunner = options.remoteCommandRunner ?? defaultRemoteCommandRunner
   const fileReader = options.fileReader ?? fs.readFileSync
   const symlinkReader = options.symlinkReader ?? fs.readlinkSync
+  const statReader =
+    options.statReader ??
+    ((filePath: string): OperationObserverFileStat => {
+      const stat = fs.lstatSync(filePath)
+      return {
+        isFile: stat.isFile(),
+        isSymbolicLink: stat.isSymbolicLink(),
+        isDirectory: stat.isDirectory(),
+        mode: stat.mode,
+        size: stat.size,
+      }
+    })
 
   return {
     targetDigest,
@@ -783,20 +957,24 @@ export function createOpencodeOperationObserver(
       }
       const repository = readRevision(runner, root, limits)
       if (repository.status === 'error') return unavailable(repository)
-      const worktree = readWorktreeRevision(
+      const worktree = readWorktreeRevisionV2(
         runner,
         fileReader,
         symlinkReader,
+        statReader,
         root,
         limits,
       )
       if (worktree.status === 'error') return unavailable(worktree)
+      const closure = readCommitClosure(runner, root, limits)
+      if (closure.status === 'error') return unavailable(closure)
       return {
         status: 'available',
         snapshot: {
           targetDigest,
           repositoryRevisionDigest: repository.digest,
           worktreeRevisionDigest: worktree.digest,
+          commitClosure: closure.closed,
         },
       }
     },

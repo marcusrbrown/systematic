@@ -143,11 +143,13 @@ function createAdapter(
 function operationSnapshot(
   repositoryIdentity = OPERATION_SCOPE.repositoryIdentity,
   worktreeIdentity = OPERATION_SCOPE.worktreeIdentity,
+  commitClosure?: boolean,
 ): OperationObserverSnapshot {
   return {
     targetDigest: OPERATION_SCOPE.workspaceIdentity,
     repositoryRevisionDigest: repositoryIdentity,
     worktreeRevisionDigest: worktreeIdentity,
+    ...(commitClosure === undefined ? {} : { commitClosure }),
   }
 }
 
@@ -1263,6 +1265,35 @@ describe('OpenCode workflow guard adapter', () => {
     })
   }
 
+  test('projects observer commitClosure through the operation observation', async () => {
+    const observations: ReceiptOperationObservation[] = []
+    const adapter = createAdapter(
+      'observe',
+      false,
+      sequenceObserver([
+        operationSnapshot(
+          OPERATION_SCOPE.repositoryIdentity,
+          OPERATION_SCOPE.worktreeIdentity,
+          true,
+        ),
+        operationSnapshot('b'.repeat(64), 'd'.repeat(64), true),
+        operationSnapshot('e'.repeat(64), 'f'.repeat(64), true),
+      ]),
+      ['commit'],
+      observations,
+    )
+    await observeSkill(adapter, 'systematic_skill', 'ce:work')
+    await observeOperationTool(
+      adapter,
+      'bash',
+      { command: 'git commit -m "closed"' },
+      { title: 'commit', output: 'committed', metadata: { exit: 0 } },
+      'commit-closure-projection',
+    )
+    const observation = observations.find((entry) => entry.tool === 'bash')
+    expect(observation?.after?.commitClosure).toBe(true)
+  })
+
   test('no-op local edits do not mint implementation evidence', async () => {
     for (const [index, tool] of (
       ['write', 'edit', 'apply_patch'] as const
@@ -1423,11 +1454,29 @@ describe('OpenCode workflow guard adapter', () => {
       false,
       sequenceObserver([
         operationSnapshot(),
-        operationSnapshot('d'.repeat(64), OPERATION_SCOPE.worktreeIdentity),
+        operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+        operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+        operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+        operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+        operationSnapshot('e'.repeat(64), 'd'.repeat(64), true),
       ]),
       ['commit'],
     )
     await observeSkill(changed, 'systematic_skill', 'ce:work')
+    await observeOperationTool(
+      changed,
+      'write',
+      { filePath: 'commit.ts', content: 'verified' },
+      { title: 'write', output: 'changed', metadata: {} },
+      'commit-implementation',
+    )
+    await observeOperationTool(
+      changed,
+      'bash',
+      { command: 'bun test tests/unit/example.test.ts' },
+      { title: 'tests', output: 'pass', metadata: { exit: 0 } },
+      'commit-verification',
+    )
     await observeOperationTool(
       changed,
       'bash',
@@ -1435,17 +1484,40 @@ describe('OpenCode workflow guard adapter', () => {
       { title: 'commit', output: 'committed', metadata: { exit: 0 } },
       'git-commit-changed',
     )
-    expect(ledger(changed).listReceipts()[0]?.canonical.operation).toBe(
-      'commit',
-    )
+    expect(
+      ledger(changed)
+        .listReceipts()
+        .some((receipt) => receipt.canonical.operation === 'commit'),
+    ).toBe(true)
 
     const unchanged = createAdapter(
       'observe',
       false,
-      sequenceObserver([operationSnapshot(), operationSnapshot()]),
+      sequenceObserver([
+        operationSnapshot(),
+        operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+        operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+        operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+        operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+        operationSnapshot('b'.repeat(64), 'd'.repeat(64), true),
+      ]),
       ['commit'],
     )
     await observeSkill(unchanged, 'systematic_skill', 'ce:work')
+    await observeOperationTool(
+      unchanged,
+      'write',
+      { filePath: 'commit.ts', content: 'verified' },
+      { title: 'write', output: 'changed', metadata: {} },
+      'no-op-implementation',
+    )
+    await observeOperationTool(
+      unchanged,
+      'bash',
+      { command: 'bun test tests/unit/example.test.ts' },
+      { title: 'tests', output: 'pass', metadata: { exit: 0 } },
+      'no-op-verification',
+    )
     await observeOperationTool(
       unchanged,
       'bash',
@@ -1453,7 +1525,11 @@ describe('OpenCode workflow guard adapter', () => {
       { title: 'commit', output: 'nothing to commit', metadata: { exit: 0 } },
       'git-commit-no-op',
     )
-    expect(ledger(unchanged).listReceipts()).toHaveLength(0)
+    expect(
+      ledger(unchanged)
+        .listReceipts()
+        .some((receipt) => receipt.canonical.operation === 'commit'),
+    ).toBe(false)
   })
 
   test('successful push mints remote evidence when the upstream revision changes', async () => {
@@ -1729,6 +1805,8 @@ describe('OpenCode workflow guard adapter', () => {
       operationSnapshot(),
       operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
       operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+      operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+      operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
       operationSnapshot('b'.repeat(64), 'e'.repeat(64)),
     ])
     const adapter = createAdapter('observe', false, observer)
@@ -1917,7 +1995,7 @@ describe('OpenCode workflow guard adapter', () => {
       'observe',
       false,
       sequenceObserver([
-        operationSnapshot(undefined, 'e'.repeat(64)),
+        operationSnapshot(undefined, 'd'.repeat(64)),
         operationSnapshot(undefined, 'd'.repeat(64)),
       ]),
       [],

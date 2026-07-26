@@ -1399,20 +1399,26 @@ export function createWorkflowGuard(
     operation: ReceiptOperation,
     changes: RevisionChanges,
   ): boolean {
-    if (operation === 'implementation') return false
     if (changes.changedWorkspace || changes.changedWorktree) return true
     if (changes.changedRepository) {
       return operation === 'commit' || operationUsesResource(operation)
     }
-    if (changes.changedStableResource && operationUsesResource(operation))
+    if (
+      changes.changedStableResource &&
+      resourceRevisionAffects(operation, changes.resourceOperation)
+    ) {
       return true
+    }
     if (
       changes.changedResourceRevision &&
       resourceRevisionAffects(operation, changes.resourceOperation)
     ) {
       return true
     }
-    return changes.changedPullRequest && operationUsesResource(operation)
+    return (
+      changes.changedPullRequest &&
+      resourceRevisionAffects(operation, 'pr-creation')
+    )
   }
 
   function markStaleReceipts(unit: UnitState, changes: RevisionChanges): void {

@@ -166,6 +166,83 @@ describe('receipt classifier', () => {
     await classifier.close()
   })
 
+  test('requires commit closure in operation observations', async () => {
+    const classifier = createReceiptClassifier()
+    const identity = 'a'.repeat(64)
+    const base = {
+      callId: 'commit-closure',
+      operation: 'commit' as const,
+      tool: 'bash' as const,
+      command: 'git commit -m "closed"',
+      context: {
+        epochId: 'epoch-1',
+        unitId: 'unit-1',
+        workspaceIdentity: identity,
+        repositoryIdentity: 'b'.repeat(64),
+        worktreeIdentity: 'c'.repeat(64),
+      },
+      terminal: successfulTerminal,
+    }
+    const open = await classifier.classifyOperation({
+      ...base,
+      after: {
+        workspaceIdentity: identity,
+        repositoryIdentity: 'd'.repeat(64),
+        worktreeIdentity: 'e'.repeat(64),
+        commitClosure: false,
+      },
+    })
+    expect(open).toMatchObject({
+      outcome: 'rejected',
+      category: 'commit',
+      reasonCode: 'no-op-resource',
+    })
+
+    const closed = await classifier.classifyOperation({
+      ...base,
+      after: {
+        workspaceIdentity: identity,
+        repositoryIdentity: 'd'.repeat(64),
+        worktreeIdentity: 'e'.repeat(64),
+        commitClosure: true,
+      },
+    })
+    expect(closed).toMatchObject({
+      outcome: 'accepted',
+      category: 'commit',
+    })
+    await classifier.close()
+  })
+
+  test('accepts implementation observations with the optional closure field', async () => {
+    const classifier = createReceiptClassifier()
+    const identity = 'a'.repeat(64)
+    const result = await classifier.classifyOperation({
+      callId: 'implementation-closure-field',
+      operation: 'implementation',
+      tool: 'write',
+      context: {
+        epochId: 'epoch-1',
+        unitId: 'unit-1',
+        workspaceIdentity: identity,
+        repositoryIdentity: 'b'.repeat(64),
+        worktreeIdentity: 'c'.repeat(64),
+      },
+      after: {
+        workspaceIdentity: identity,
+        repositoryIdentity: 'b'.repeat(64),
+        worktreeIdentity: 'd'.repeat(64),
+        commitClosure: true,
+      },
+      terminal: successfulTerminal,
+    })
+    expect(result).toMatchObject({
+      outcome: 'accepted',
+      category: 'implementation',
+    })
+    await classifier.close()
+  })
+
   test('rejects prohibited shell shapes without a string fallback', async () => {
     const classifier = createReceiptClassifier()
     const prohibited = [

@@ -7,6 +7,8 @@ import {
 import {
   createReceiptLedger,
   type ReceiptClassification,
+  type ReceiptContext,
+  type ReceiptEnvelope,
 } from '../../src/lib/receipt-ledger.js'
 import {
   createWorkflowGuard,
@@ -27,6 +29,8 @@ const REVISION_B =
   'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
 const REVISION_C =
   'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc'
+const REVISION_D =
+  'dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd'
 const RESOURCE_BEFORE =
   '1111111111111111111111111111111111111111111111111111111111111111'
 const RESOURCE_AFTER =
@@ -66,6 +70,8 @@ const WORKTREE_ZERO =
 const WORKTREE_AFTER =
   '1616161616161616161616161616161616161616161616161616161616161616'
 const WORKTREE_INITIAL = WORKTREE_ZERO
+
+let syntheticSequence = 0
 
 const baseContext = {
   epochId: 'epoch-1',
@@ -118,6 +124,7 @@ function operationInput(
     repositoryIdentity: REPOSITORY_CURRENT,
     worktreeIdentity:
       operation === 'implementation' ? WORKTREE_AFTER : WORKTREE_CURRENT,
+    ...(operation === 'commit' ? { commitClosure: true } : {}),
     ...(operation === 'push'
       ? {
           resourceIdentity: RESOURCE_AFTER,
@@ -241,6 +248,47 @@ function bindOperation(
       unitId: status.unit.unitId,
     },
   }
+}
+
+function mintSyntheticReceipt(
+  guard: OperationWorkflowGuard,
+  ledger: ReturnType<typeof createReceiptLedger>,
+  operation: ReceiptOperation,
+): ReceiptEnvelope {
+  const status = guard.status()
+  if (!status.epoch || !status.unit) throw new Error('workflow scope missing')
+  const callId = `synthetic-receipt-${operation}-${++syntheticSequence}`
+  const context: ReceiptContext = {
+    epochId: status.epoch.epochId,
+    unitId: status.unit.unitId,
+    workspaceIdentity: WORKSPACE_CURRENT,
+    repositoryIdentity: REPOSITORY_CURRENT,
+    worktreeIdentity: WORKTREE_CURRENT,
+  }
+  expect(
+    ledger.prepareObservation({ callId, operation, context }),
+  ).toMatchObject({ status: 'prepared' })
+  const result = ledger.finalizeObservation({
+    callId,
+    context,
+    after: {
+      workspaceIdentity: WORKSPACE_CURRENT,
+      repositoryIdentity: REPOSITORY_CURRENT,
+      worktreeIdentity: WORKTREE_ZERO,
+    },
+    classification: {
+      outcome: 'accepted',
+      category: operation,
+      attribution: 'runtime-verified',
+      result: 'success',
+      sideEffect: 'required',
+      reasonCode: 'recognized-command',
+    } satisfies ReceiptClassification,
+    terminal: successTerminal,
+  })
+  if (result.status !== 'finalized')
+    throw new Error('synthetic receipt did not finalize')
+  return result.receipt
 }
 
 function operationWithRevision(
@@ -1371,9 +1419,9 @@ describe('receipt operation adapters', () => {
     }
   })
 
-  test('marks verification and dependent evidence stale after a later revision change, but not after a no-op readback', async () => {
+  test('marks all evidence stale after a later content change, but not after a no-op readback', async () => {
     const classifier = createReceiptClassifier()
-    const { guard } = createScenario(classifier)
+    const { guard, ledger } = createScenario(classifier)
     const implementation = operationInput('implementation', {
       after: {
         ...operationInput('implementation').after,
@@ -1415,7 +1463,19 @@ describe('receipt operation adapters', () => {
         repositoryIdentity: REPOSITORY_CURRENT,
         worktreeIdentity: WORKTREE_ZERO,
       }),
-    ).toMatchObject({ status: 'accepted', changed: true })
+    ).toMatchObject({ status: 'accepted' })
+    expect(guard.status()).toMatchObject({
+      state: 'rejected',
+      reasonCode: 'stale-receipt',
+      satisfiedOperations: [],
+      missingOperations: ['implementation', 'verification'],
+    })
+
+    expect(
+      guard.observeReceipt(
+        mintSyntheticReceipt(guard, ledger, 'implementation'),
+      ),
+    ).toMatchObject({ status: 'accepted', operation: 'implementation' })
     expect(guard.status()).toMatchObject({
       state: 'rejected',
       reasonCode: 'stale-receipt',
@@ -1443,6 +1503,322 @@ describe('receipt operation adapters', () => {
       'implementation',
       'verification',
     ])
+    await classifier.close()
+  })
+
+  test('applies remote changes to their dependency suffix only', async () => {
+    const cases: Array<{
+      name: string
+      readback: Record<string, unknown>
+      satisfied: ReceiptOperation[]
+    }> = [
+      {
+        name: 'push',
+        readback: {
+          operation: 'push',
+          workspaceIdentity: WORKSPACE_CURRENT,
+          repositoryIdentity: REPOSITORY_AFTER,
+          worktreeIdentity: WORKTREE_AFTER,
+          resourceIdentity: RESOURCE_AFTER,
+          resourceRevisionIdentity: REVISION_C,
+        },
+        satisfied: ['implementation', 'verification', 'commit'],
+      },
+      {
+        name: 'pr-creation',
+        readback: {
+          operation: 'pr-creation',
+          workspaceIdentity: WORKSPACE_CURRENT,
+          repositoryIdentity: REPOSITORY_AFTER,
+          worktreeIdentity: WORKTREE_AFTER,
+          resourceIdentity: RESOURCE_PR,
+          resourceRevisionIdentity: REVISION_D,
+          pullRequest: { identity: RESOURCE_PR, state: 'open' },
+        },
+        satisfied: ['implementation', 'verification', 'commit', 'push'],
+      },
+      {
+        name: 'check-readback',
+        readback: {
+          operation: 'check-readback',
+          workspaceIdentity: WORKSPACE_CURRENT,
+          repositoryIdentity: REPOSITORY_AFTER,
+          worktreeIdentity: WORKTREE_AFTER,
+          resourceIdentity: RESOURCE_PR,
+          resourceRevisionIdentity: REVISION_D,
+          pullRequest: { identity: RESOURCE_PR, state: 'open' },
+          checkState: 'completed-success',
+        },
+        satisfied: [
+          'implementation',
+          'verification',
+          'commit',
+          'push',
+          'pr-creation',
+        ],
+      },
+      {
+        name: 'review-readback',
+        readback: {
+          operation: 'review-readback',
+          workspaceIdentity: WORKSPACE_CURRENT,
+          repositoryIdentity: REPOSITORY_AFTER,
+          worktreeIdentity: WORKTREE_AFTER,
+          resourceIdentity: RESOURCE_PR,
+          resourceRevisionIdentity: REVISION_D,
+          pullRequest: { identity: RESOURCE_PR, state: 'open' },
+          reviewDecision: 'approved',
+        },
+        satisfied: [
+          'implementation',
+          'verification',
+          'commit',
+          'push',
+          'pr-creation',
+          'check-readback',
+        ],
+      },
+    ]
+
+    for (const item of cases) {
+      const scenario = await buildFullOperationScenario()
+      expect(
+        scenario.guard.observeReadback(item.readback),
+        item.name,
+      ).toMatchObject({ status: 'accepted', changed: true })
+      expect(scenario.guard.status().satisfiedOperations, item.name).toEqual(
+        item.satisfied,
+      )
+      await scenario.classifier.close()
+    }
+  })
+
+  test('keeps implementation and verification evidence across a HEAD-only repository change', async () => {
+    const classifier = createReceiptClassifier()
+    const { guard } = createScenario(classifier)
+    const implementation = operationInput('implementation', {
+      after: {
+        ...operationInput('implementation').after,
+        workspaceIdentity: WORKSPACE_CURRENT,
+      },
+    })
+    const verification = operationInput('verification', {
+      context: {
+        ...operationInput('verification').context,
+        workspaceIdentity: WORKSPACE_CURRENT,
+        worktreeIdentity: WORKTREE_AFTER,
+      },
+      after: {
+        ...operationInput('verification').after,
+        workspaceIdentity: WORKSPACE_CURRENT,
+        worktreeIdentity: WORKTREE_AFTER,
+      },
+    })
+    expect(
+      await guard.observeOperation(bindOperation(guard, implementation)),
+    ).toMatchObject({ status: 'accepted' })
+    expect(
+      await guard.observeOperation(bindOperation(guard, verification)),
+    ).toMatchObject({ status: 'accepted' })
+
+    expect(
+      guard.observeReadback({
+        workspaceIdentity: WORKSPACE_CURRENT,
+        repositoryIdentity: REPOSITORY_AFTER,
+        worktreeIdentity: WORKTREE_AFTER,
+      }),
+    ).toMatchObject({ status: 'accepted', changed: true })
+    expect(guard.status()).toMatchObject({
+      state: 'protected',
+      satisfiedOperations: ['implementation', 'verification'],
+      missingOperations: [],
+    })
+    await classifier.close()
+  })
+
+  test('ordered full-git shipping completes after PR drift repairs only the downstream suffix', async () => {
+    const { guard, classifier } = await buildFullOperationScenario()
+    expect(guard.status()).toMatchObject({
+      state: 'protected',
+      satisfiedOperations: [
+        'implementation',
+        'verification',
+        'commit',
+        'push',
+        'pr-creation',
+        'check-readback',
+        'review-readback',
+      ],
+    })
+
+    expect(
+      guard.observeReadback({
+        operation: 'check-readback',
+        workspaceIdentity: WORKSPACE_CURRENT,
+        repositoryIdentity: REPOSITORY_AFTER,
+        worktreeIdentity: WORKTREE_AFTER,
+        resourceIdentity: RESOURCE_PR,
+        resourceRevisionIdentity: REVISION_B,
+        pullRequest: { identity: RESOURCE_PR, state: 'closed' },
+        checkState: 'pending',
+      }),
+    ).toMatchObject({ status: 'accepted', changed: true })
+    expect(guard.status()).toMatchObject({
+      state: 'rejected',
+      reasonCode: 'stale-receipt',
+      satisfiedOperations: ['implementation', 'verification', 'commit', 'push'],
+      missingOperations: ['pr-creation', 'check-readback', 'review-readback'],
+    })
+
+    expect(
+      guard.observeReadback({
+        operation: 'pr-creation',
+        workspaceIdentity: WORKSPACE_CURRENT,
+        repositoryIdentity: REPOSITORY_AFTER,
+        worktreeIdentity: WORKTREE_AFTER,
+        resourceIdentity: RESOURCE_PR,
+        resourceRevisionIdentity: REVISION_B,
+        pullRequest: { identity: RESOURCE_PR, state: 'open' },
+      }),
+    ).toMatchObject({ status: 'accepted' })
+
+    const repairedOperations = [
+      operationWithRevision(
+        'pr-creation',
+        RESOURCE_PR,
+        REVISION_B,
+        REVISION_D,
+        {
+          callId: 'ordered-full-git-pr-repair',
+          context: {
+            ...baseContext,
+            workspaceIdentity: WORKSPACE_CURRENT,
+            repositoryIdentity: REPOSITORY_AFTER,
+            worktreeIdentity: WORKTREE_AFTER,
+          },
+          after: {
+            ...operationInput('pr-creation').after,
+            workspaceIdentity: WORKSPACE_CURRENT,
+            repositoryIdentity: REPOSITORY_AFTER,
+            worktreeIdentity: WORKTREE_AFTER,
+          },
+        },
+      ),
+      operationWithRevision(
+        'check-readback',
+        RESOURCE_PR,
+        REVISION_B,
+        REVISION_B,
+        {
+          callId: 'ordered-full-git-check-repair',
+          context: {
+            ...baseContext,
+            workspaceIdentity: WORKSPACE_CURRENT,
+            repositoryIdentity: REPOSITORY_AFTER,
+            worktreeIdentity: WORKTREE_AFTER,
+          },
+          after: {
+            ...operationInput('check-readback').after,
+            workspaceIdentity: WORKSPACE_CURRENT,
+            repositoryIdentity: REPOSITORY_AFTER,
+            worktreeIdentity: WORKTREE_AFTER,
+          },
+        },
+      ),
+      operationWithRevision(
+        'review-readback',
+        RESOURCE_PR,
+        REVISION_C,
+        REVISION_C,
+        {
+          callId: 'ordered-full-git-review-repair',
+          context: {
+            ...baseContext,
+            workspaceIdentity: WORKSPACE_CURRENT,
+            repositoryIdentity: REPOSITORY_AFTER,
+            worktreeIdentity: WORKTREE_AFTER,
+          },
+          after: {
+            ...operationInput('review-readback').after,
+            workspaceIdentity: WORKSPACE_CURRENT,
+            repositoryIdentity: REPOSITORY_AFTER,
+            worktreeIdentity: WORKTREE_AFTER,
+          },
+        },
+      ),
+    ]
+    for (const input of repairedOperations) {
+      expect(
+        await guard.observeOperation(bindOperation(guard, input)),
+      ).toMatchObject({ status: 'accepted' })
+    }
+    expect(guard.status().satisfiedOperations).toEqual([
+      'implementation',
+      'verification',
+      'commit',
+      'push',
+      'pr-creation',
+      'check-readback',
+      'review-readback',
+    ])
+
+    const prepared = guard.prepareTransition({
+      callId: 'ordered-full-git-transition',
+      target: 'unit',
+    })
+    expect(prepared).toMatchObject({ status: 'allowed' })
+    if (prepared.status !== 'allowed')
+      throw new Error('ordered full-git transition did not prepare')
+    expect(
+      guard.finalizeTransition({
+        callId: 'ordered-full-git-transition',
+        transitionId: prepared.transitionId,
+        readbacks: [
+          {
+            workspaceIdentity: WORKSPACE_CURRENT,
+            repositoryIdentity: REPOSITORY_AFTER,
+            worktreeIdentity: WORKTREE_AFTER,
+          },
+          {
+            operation: 'push',
+            workspaceIdentity: WORKSPACE_CURRENT,
+            repositoryIdentity: REPOSITORY_AFTER,
+            worktreeIdentity: WORKTREE_AFTER,
+            resourceIdentity: RESOURCE_AFTER,
+            resourceRevisionIdentity: REVISION_B,
+          },
+          {
+            operation: 'pr-creation',
+            workspaceIdentity: WORKSPACE_CURRENT,
+            repositoryIdentity: REPOSITORY_AFTER,
+            worktreeIdentity: WORKTREE_AFTER,
+            resourceIdentity: RESOURCE_PR,
+            resourceRevisionIdentity: REVISION_D,
+            pullRequest: { identity: RESOURCE_PR, state: 'open' },
+          },
+          {
+            operation: 'check-readback',
+            workspaceIdentity: WORKSPACE_CURRENT,
+            repositoryIdentity: REPOSITORY_AFTER,
+            worktreeIdentity: WORKTREE_AFTER,
+            resourceIdentity: RESOURCE_PR,
+            resourceRevisionIdentity: REVISION_B,
+            pullRequest: { identity: RESOURCE_PR, state: 'open' },
+            checkState: 'completed-success',
+          },
+          {
+            operation: 'review-readback',
+            workspaceIdentity: WORKSPACE_CURRENT,
+            repositoryIdentity: REPOSITORY_AFTER,
+            worktreeIdentity: WORKTREE_AFTER,
+            resourceIdentity: RESOURCE_PR,
+            resourceRevisionIdentity: REVISION_C,
+            pullRequest: { identity: RESOURCE_PR, state: 'open' },
+            reviewDecision: 'approved',
+          },
+        ],
+      }),
+    ).toMatchObject({ status: 'completed', target: 'unit' })
     await classifier.close()
   })
 
