@@ -284,7 +284,11 @@ describe('OpenCode workflow guard adapter', () => {
             callID: `call-${index}`,
             args: event.args,
           },
-          event.output ?? { title: 'Loaded skill', output: '', metadata: {} },
+          event.output ?? {
+            title: '',
+            output: '',
+            metadata: { status: 'failure' },
+          },
         )
       }
     }
@@ -1216,6 +1220,60 @@ describe('OpenCode workflow guard adapter', () => {
     }
   })
 
+  test('accepts real OpenCode empty-title and empty-output success shapes', async () => {
+    const observations: ReceiptOperationObservation[] = []
+    const adapter = createAdapter(
+      'observe',
+      false,
+      sequenceObserver([
+        operationSnapshot(),
+        operationSnapshot(undefined, 'd'.repeat(64)),
+        operationSnapshot(undefined, 'd'.repeat(64)),
+      ]),
+      ['implementation', 'verification'],
+      observations,
+    )
+    await observeSkill(
+      adapter,
+      'systematic_skill',
+      'ce:work',
+      'real-shaped-skill',
+      SESSION_A,
+      { title: '', output: '', metadata: { truncated: false } },
+    )
+    expect(status(adapter).epoch).not.toBeNull()
+
+    await observeOperationTool(
+      adapter,
+      'write',
+      { filePath: 'real-shaped.txt', content: 'changed' },
+      { metadata: { diagnostics: {}, exists: false, truncated: false } },
+      'real-shaped-write',
+    )
+    expect(ledger(adapter).listReceipts()).toHaveLength(1)
+    await observeOperationTool(
+      adapter,
+      'bash',
+      { command: 'bun test tests/unit/example.test.ts' },
+      { output: '1 pass', metadata: { exit: 0 } },
+      'real-shaped-bash',
+    )
+    expect(ledger(adapter).listReceipts()).toHaveLength(2)
+  })
+
+  test('rejects host results beyond the bounded output limit', async () => {
+    const adapter = createAdapter()
+    await observeSkill(
+      adapter,
+      'systematic_skill',
+      'ce:work',
+      'overlong-host-result',
+      SESSION_A,
+      { title: '', output: 'x'.repeat(32_769), metadata: {} },
+    )
+    expect(status(adapter).epoch).toBeNull()
+  })
+
   test('changed git commit mints commit evidence while unchanged HEAD does not', async () => {
     const changed = createAdapter(
       'observe',
@@ -1657,9 +1715,9 @@ describe('OpenCode workflow guard adapter', () => {
       SESSION_A,
     )
     expect(ledger(first, SESSION_A).listReceipts()).toHaveLength(1)
-    expect(ledger(first, SESSION_B).listReceipts()).toHaveLength(0)
     expect(ledger(second, SESSION_B).listReceipts()).toHaveLength(0)
     expect(status(second, SESSION_B).epoch).not.toBeNull()
+    expect(first.ledger(SESSION_B)).toBeUndefined()
   })
 
   test('recovers persisted receipt markers once and restores the workflow state', async () => {
@@ -1700,8 +1758,17 @@ describe('OpenCode workflow guard adapter', () => {
     expect(marker).toBeDefined()
 
     const parts = [
-      { metadata: skillOutput.metadata },
-      { metadata: { [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: marker } },
+      { info: {}, parts: [{ state: { metadata: skillOutput.metadata } }] },
+      {
+        info: {},
+        parts: [
+          {
+            state: {
+              metadata: { [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: marker },
+            },
+          },
+        ],
+      },
     ]
     const restored = createAdapter(
       'observe',

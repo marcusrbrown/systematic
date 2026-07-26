@@ -22,6 +22,7 @@ import {
   type ReceiptOperation,
 } from './receipt-ledger.js'
 import {
+  extractReceiptReadbackSeed,
   projectReceiptMintMarker,
   projectReceiptProgressionMarker,
 } from './receipt-readback.js'
@@ -46,6 +47,7 @@ const MAX_MARKER_SOURCES = 8
 const MAX_CALL_ID_LENGTH = 256
 const MAX_SKILL_LENGTH = 128
 const MAX_STATUS_LENGTH = 128
+const MAX_HOST_OUTPUT_LENGTH = 32_768
 export const SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY =
   'systematic_workflow_receipt'
 
@@ -176,7 +178,8 @@ export interface OpencodeWorkflowGuard {
 }
 
 interface SessionRuntime {
-  readonly ledger: ReceiptLedger
+  readonly ledger?: ReceiptLedger
+  initialize(sessionID: string, allowFresh?: boolean): Promise<void>
   readonly hooks: OpencodeWorkflowGuardHooks
   status(): WorkflowStatus
   readStatus(): WorkflowStatus
@@ -186,7 +189,7 @@ interface SessionRuntime {
   startUnit(input: unknown, policy?: RuntimeUnitPolicy): unknown
   markUnavailable(): void
   metadata(): Record<string, unknown>
-  recover(sessionID: string): Promise<void>
+  recover(sessionID: string, allowFresh?: boolean): Promise<void>
 }
 
 interface HostToolBefore {
@@ -324,11 +327,13 @@ function parseHostAfter(input: unknown): HostToolAfter | undefined {
 
 function parseHostOutput(output: unknown): HostOutput | undefined {
   if (!isRecord(output)) return undefined
+  const title = output.title === undefined ? '' : output.title
+  const result = output.output === undefined ? '' : output.output
   if (
-    typeof output.title !== 'string' ||
-    output.title.length > MAX_STATUS_LENGTH ||
-    typeof output.output !== 'string' ||
-    output.output.length > 1024 ||
+    typeof title !== 'string' ||
+    title.length > MAX_STATUS_LENGTH ||
+    typeof result !== 'string' ||
+    result.length > MAX_HOST_OUTPUT_LENGTH ||
     !('metadata' in output)
   ) {
     return undefined
@@ -339,10 +344,9 @@ function parseHostOutput(output: unknown): HostOutput | undefined {
       return undefined
     }
   }
-  if (output.output.length === 0) return undefined
   return {
-    title: output.title,
-    output: output.output,
+    title,
+    output: result,
     metadata: output.metadata,
   }
 }
@@ -502,7 +506,7 @@ function terminalForOutput(
   }
   return {
     status: 'success',
-    output: output.output.length === 0 ? 'empty' : 'non-empty',
+    output: 'non-empty',
     noOp: false,
   }
 }
@@ -808,20 +812,11 @@ function buildMarker(
 function createSessionRuntime(
   options: OpencodeWorkflowGuardOptions,
 ): SessionRuntime {
-  const ledger = createReceiptLedger({
-    capabilityFlags: ['workflow-guard'],
-    registrationIdentity: options.registrationIdentity,
-    sessionSalt: options.sessionSalt,
-  })
-  const guard: WorkflowGuard = createWorkflowGuard({
-    ledger,
-    classifier: options.classifier,
-    workspaceIdentity: options.workspaceIdentity,
-    repositoryIdentity: options.repositoryIdentity,
-    worktreeIdentity: options.worktreeIdentity,
-    runtimeRequiredOperations: options.runtimeRequiredOperations,
-    mode: options.config.mode === 'disabled' ? 'disabled' : 'protected',
-  })
+  let ledger!: ReceiptLedger
+  let guard!: WorkflowGuard
+  let initialized = false
+  let initializationPromise: Promise<void> | undefined
+  let retryableEmptyHistory = false
   const pendingSkills = new Map<string, PendingSkill>()
   const completedSkillCalls = new Map<string, string>()
   const pendingStarts = new Map<string, PendingStart>()
@@ -835,57 +830,177 @@ function createSessionRuntime(
   const sealedOperations = new Map<string, SealedOperation>()
   const abandonedOperations = new Map<string, SealedOperation>()
   const rolledUpChildren = new Set<string>()
-  let recoveryAttempted = false
-  let recoveryPromise: Promise<void> | undefined
+
+  function appendReceiptMarkers(value: unknown, markers: unknown[]): void {
+    if (!isRecord(value)) return
+    const marker = value[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]
+    if (Array.isArray(marker)) markers.push(...marker)
+    else if (marker !== undefined) markers.push(marker)
+  }
 
   function collectReceiptMarkers(value: unknown, markers: unknown[]): void {
     if (!isRecord(value)) return
-    if (isRecord(value.metadata)) {
-      const marker = value.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]
-      if (Array.isArray(marker)) markers.push(...marker)
-      else if (marker !== undefined) markers.push(marker)
-    }
+    appendReceiptMarkers(value.metadata, markers)
+    if (isRecord(value.state))
+      appendReceiptMarkers(value.state.metadata, markers)
     if (Array.isArray(value.parts)) {
       for (const part of value.parts) collectReceiptMarkers(part, markers)
     }
   }
 
-  async function performRecovery(sessionID: string): Promise<void> {
-    const reader = options.hostReadback?.readSessionParts
-    if (!reader) return
-    let parts: ReadonlyArray<unknown>
+  function containsGuardHistory(value: unknown): boolean {
+    if (!isRecord(value)) return false
+    if (
+      value.tool === 'systematic_workflow_start' ||
+      value.tool === 'systematic_workflow_status' ||
+      value.tool === 'systematic_workflow_complete' ||
+      value.tool === 'systematic_workflow_control'
+    ) {
+      return true
+    }
+    return (
+      Array.isArray(value.parts) &&
+      value.parts.some((part) => containsGuardHistory(part))
+    )
+  }
+
+  function createGuard(nextLedger: ReceiptLedger): WorkflowGuard {
+    return createWorkflowGuard({
+      ledger: nextLedger,
+      classifier: options.classifier,
+      workspaceIdentity: options.workspaceIdentity,
+      repositoryIdentity: options.repositoryIdentity,
+      worktreeIdentity: options.worktreeIdentity,
+      runtimeRequiredOperations: options.runtimeRequiredOperations,
+      mode: options.config.mode === 'disabled' ? 'disabled' : 'protected',
+    })
+  }
+
+  function publishUnavailable(): void {
+    ledger = createReceiptLedger({
+      capabilityFlags: ['workflow-guard'],
+      registrationIdentity: options.registrationIdentity,
+      sessionSalt: options.sessionSalt
+        ? new Uint8Array(options.sessionSalt)
+        : randomBytes(32),
+    })
+    guard = createGuard(ledger)
+    if (options.config.mode !== 'disabled')
+      guard.setMode({ mode: 'unavailable' })
+    initialized = true
+  }
+
+  function publishFresh(): void {
+    ledger = createReceiptLedger({
+      capabilityFlags: ['workflow-guard'],
+      registrationIdentity: options.registrationIdentity,
+      sessionSalt: options.sessionSalt
+        ? new Uint8Array(options.sessionSalt)
+        : randomBytes(32),
+    })
+    guard = createGuard(ledger)
+    initialized = true
+  }
+
+  function ensureSynchronousRuntime(): void {
+    if (!initialized && !options.hostReadback) publishFresh()
+  }
+
+  function seedAgrees(
+    nextLedger: ReceiptLedger,
+    seed: Extract<
+      ReturnType<typeof extractReceiptReadbackSeed>,
+      { status: 'ready' }
+    >,
+  ): boolean {
+    return (
+      nextLedger.metadata.registrationDigest === seed.registrationDigest &&
+      JSON.stringify(nextLedger.metadata.capabilityFlags) ===
+        JSON.stringify(['workflow-guard'])
+    )
+  }
+
+  function recoverPersistedMarkers(markers: readonly unknown[]): boolean {
+    const seed = extractReceiptReadbackSeed(markers)
+    if (seed.status !== 'ready') return false
+    let recoveredLedger: ReceiptLedger
     try {
-      parts = await reader(sessionID)
+      recoveredLedger = createReceiptLedger({
+        capabilityFlags: ['workflow-guard'],
+        registrationIdentity: options.registrationIdentity,
+        sessionSalt: seed.sessionSalt,
+      })
     } catch {
-      return
+      return false
     }
-    const markers: unknown[] = []
-    for (const part of parts) collectReceiptMarkers(part, markers)
-    if (markers.length === 0) return
-    const recovered = ledger.recoverReadback(markers)
+    if (!seedAgrees(recoveredLedger, seed)) {
+      return false
+    }
+    const recovered = recoveredLedger.recoverReadback(markers)
     if (recovered.status === 'rejected') {
-      markUnavailable()
-      return
+      return false
     }
-    const restored = guard.restore({
+    const recoveredGuard = createGuard(recoveredLedger)
+    const restored = recoveredGuard.restore({
       provenance: 'restart',
       state: {
-        registrationDigest: ledger.metadata.registrationDigest,
+        registrationDigest: recoveredLedger.metadata.registrationDigest,
         receipts: recovered.receipts,
         progression: recovered.progression,
       },
     })
-    if (restored.status === 'rejected') markUnavailable()
+    if (restored.status === 'rejected') {
+      return false
+    }
+    ledger = recoveredLedger
+    guard = recoveredGuard
+    initialized = true
+    return true
   }
 
-  async function recoverFromHost(sessionID: string): Promise<void> {
-    if (recoveryAttempted) {
-      await recoveryPromise
+  async function initializeSession(
+    sessionID: string,
+    allowFresh: boolean,
+  ): Promise<void> {
+    const reader = options.hostReadback?.readSessionParts
+    if (!reader) {
+      publishFresh()
       return
     }
-    recoveryAttempted = true
-    recoveryPromise = performRecovery(sessionID)
-    await recoveryPromise
+    let parts: ReadonlyArray<unknown>
+    try {
+      parts = await reader(sessionID)
+    } catch {
+      publishUnavailable()
+      return
+    }
+    const markers: unknown[] = []
+    for (const part of parts) collectReceiptMarkers(part, markers)
+    if (markers.length === 0) {
+      if (allowFresh && !parts.some((part) => containsGuardHistory(part))) {
+        publishFresh()
+      } else {
+        retryableEmptyHistory = true
+        publishUnavailable()
+      }
+      return
+    }
+    if (!recoverPersistedMarkers(markers)) publishUnavailable()
+  }
+
+  async function recoverFromHost(
+    sessionID: string,
+    allowFresh = true,
+  ): Promise<void> {
+    if (initializationPromise) {
+      await initializationPromise
+      if (!retryableEmptyHistory || !allowFresh) return
+      initializationPromise = undefined
+      initialized = false
+    }
+    retryableEmptyHistory = false
+    initializationPromise = initializeSession(sessionID, allowFresh)
+    await initializationPromise
   }
 
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: lineage verification and parent minting must remain atomic
@@ -924,11 +1039,20 @@ function createSessionRuntime(
     const markers: unknown[] = []
     for (const part of parts) collectReceiptMarkers(part, markers)
     if (markers.length === 0) return
+    const seed = extractReceiptReadbackSeed(markers)
+    if (seed.status !== 'ready') {
+      markUnavailable()
+      return
+    }
     const childLedger = createReceiptLedger({
       capabilityFlags: ['workflow-guard'],
       registrationIdentity: options.registrationIdentity,
-      sessionSalt: options.sessionSalt,
+      sessionSalt: seed.sessionSalt,
     })
+    if (!seedAgrees(childLedger, seed)) {
+      markUnavailable()
+      return
+    }
     const recovered = childLedger.recoverReadback(markers)
     if (recovered.status === 'rejected') {
       markUnavailable()
@@ -2109,13 +2233,14 @@ function createSessionRuntime(
   }
 
   async function transform(input: unknown, output: unknown): Promise<void> {
+    if (!isRecord(input) || !boundedString(input.sessionID, 256)) return
+    await recoverFromHost(input.sessionID, false)
     abandonPending()
     if (!isRecord(output) || !Array.isArray(output.system)) return
     const existingSystem = output.system.filter(
       (entry): entry is string => typeof entry === 'string',
     )
     if (isInternalSystem(existingSystem)) return
-    if (!isRecord(input) || !boundedString(input.sessionID, 256)) return
     const parsed = extractMarkerSources(existingSystem)
     const current = currentMarkerSource()
     const marker = buildMarker(parsed.sources, parsed.malformed, current)
@@ -2126,18 +2251,39 @@ function createSessionRuntime(
   }
 
   return {
-    ledger,
+    get ledger() {
+      return initialized ? ledger : undefined
+    },
+    initialize: recoverFromHost,
     hooks: {
       'tool.execute.before': before,
       'tool.execute.after': after,
       'experimental.chat.system.transform': transform,
     },
-    status: () => guard.status(),
+    status: () => {
+      ensureSynchronousRuntime()
+      return initialized ? guard.status() : unavailableWorkflowStatus()
+    },
     readStatus,
     refreshReadback,
-    observeReceipt: (input) => guard.observeReceipt(input),
-    prepareTransition: (input) => guard.prepareTransition(input),
-    startUnit: (input, policy) => guard.startUnit(input, policy),
+    observeReceipt: (input) => {
+      ensureSynchronousRuntime()
+      return initialized
+        ? guard.observeReceipt(input)
+        : { status: 'unavailable', reasonCode: 'guard-unavailable' }
+    },
+    prepareTransition: (input) => {
+      ensureSynchronousRuntime()
+      return initialized
+        ? guard.prepareTransition(input)
+        : { status: 'unavailable', reasonCode: 'guard-unavailable' }
+    },
+    startUnit: (input, policy) => {
+      ensureSynchronousRuntime()
+      return initialized
+        ? guard.startUnit(input, policy)
+        : { status: 'rejected', reasonCode: 'guard-unavailable' }
+    },
     markUnavailable,
     metadata,
     recover: recoverFromHost,
@@ -2147,6 +2293,18 @@ function createSessionRuntime(
 function parseExecutionSession(context: unknown): string | undefined {
   if (!isRecord(context)) return undefined
   return boundedString(context.sessionID, 256) ? context.sessionID : undefined
+}
+
+function unavailableWorkflowStatus(): WorkflowStatus {
+  return {
+    state: 'unavailable',
+    reasonCode: 'guard-unavailable',
+    statusKey: 'unavailable:guard-unavailable',
+    epoch: null,
+    unit: null,
+    satisfiedOperations: [],
+    missingOperations: [],
+  }
 }
 
 function unavailableToolResult(): string {
@@ -2218,17 +2376,14 @@ export function createOpencodeWorkflowGuard(
   options: OpencodeWorkflowGuardOptions,
 ): OpencodeWorkflowGuard {
   const sessions = new Map<string, SessionRuntime>()
-  const sessionSalt = options.sessionSalt ?? randomBytes(32)
-  const registrationIdentity =
-    options.registrationIdentity ?? randomBytes(16).toString('hex')
 
   function sessionRuntimeFor(sessionID: string): SessionRuntime {
     const existing = sessions.get(sessionID)
     if (existing) return existing
     const runtime = createSessionRuntime({
       ...options,
-      registrationIdentity,
-      sessionSalt,
+      registrationIdentity: options.registrationIdentity,
+      sessionSalt: options.sessionSalt,
     })
     sessions.set(sessionID, runtime)
     return runtime

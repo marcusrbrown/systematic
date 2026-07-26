@@ -1,6 +1,7 @@
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { Plugin, PluginInput } from '@opencode-ai/plugin'
 import {
   applyBootstrapContent,
@@ -28,6 +29,12 @@ const bundledSkillsDir = path.join(packageRoot, 'skills')
 const bundledAgentsDir = path.join(packageRoot, 'agents')
 const bundledCommandsDir = path.join(packageRoot, 'commands')
 const packageJsonPath = path.join(packageRoot, 'package.json')
+const canonicalPackageSource = pathToFileURL(fs.realpathSync(packageRoot)).href
+const registrationSourceIdentity = createHash('sha256')
+  .update(
+    `systematic/opencode-registration-source/v1/${canonicalPackageSource}`,
+  )
+  .digest('hex')
 
 const getPackageVersion = (): string => {
   try {
@@ -87,28 +94,33 @@ const initializePlugin = async ({
     workspaceIdentity: initialIdentities.targetDigest,
     repositoryIdentity: initialIdentities.repositoryRevisionDigest,
     worktreeIdentity: initialIdentities.worktreeRevisionDigest,
+    registrationIdentity: registrationSourceIdentity,
     observer,
     classifier: createReceiptClassifier(),
     hostReadback: {
       readSessionParts: async (sessionID) => {
-        const messages = client.session.messages as unknown as (input: {
-          sessionID: string
-          directory?: string
+        const messages = client.session.messages.bind(
+          client.session,
+        ) as unknown as (input: {
+          path: { id: string }
+          query?: { directory?: string }
         }) => Promise<{ data?: unknown }>
         const response = await messages({
-          sessionID,
-          directory,
+          path: { id: sessionID },
+          query: { directory },
         })
         return Array.isArray(response.data) ? response.data : []
       },
       listChildren: async (sessionID) => {
-        const children = client.session.children as unknown as (input: {
-          sessionID: string
-          directory?: string
+        const children = client.session.children.bind(
+          client.session,
+        ) as unknown as (input: {
+          path: { id: string }
+          query?: { directory?: string }
         }) => Promise<{ data?: unknown }>
         const response = await children({
-          sessionID,
-          directory,
+          path: { id: sessionID },
+          query: { directory },
         })
         if (!Array.isArray(response.data)) return []
         return response.data.flatMap((entry) => {

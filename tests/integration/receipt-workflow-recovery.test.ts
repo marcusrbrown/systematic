@@ -241,10 +241,48 @@ function append(entry) {
   fs.appendFileSync(capturePath, JSON.stringify(entry) + '\\n')
 }
 
+function outputShape(tool, output) {
+  const metadata = output && typeof output.metadata === 'object' && output.metadata !== null
+    ? output.metadata
+    : undefined
+  return {
+    type: 'after-shape',
+    tool,
+    outputKeys: output && typeof output === 'object' ? Object.keys(output).sort() : [],
+    title: {
+      present: Boolean(output && Object.prototype.hasOwnProperty.call(output, 'title')),
+      type: typeof output?.title,
+      empty: output?.title === '',
+    },
+    output: {
+      present: Boolean(output && Object.prototype.hasOwnProperty.call(output, 'output')),
+      type: typeof output?.output,
+      empty: output?.output === '',
+      length: typeof output?.output === 'string' ? output.output.length : null,
+    },
+    metadata: {
+      present: Boolean(output && Object.prototype.hasOwnProperty.call(output, 'metadata')),
+      type: typeof output?.metadata,
+      keys: metadata ? Object.keys(metadata).sort() : [],
+      status: metadata?.status ?? null,
+    },
+  }
+}
+
 export default async function receiptProbe() {
   append({ type: 'loaded', pid: process.pid })
   return {
+    'tool.execute.before': async (input, output) => {
+      append({
+        type: 'hook-call',
+        phase: 'before',
+        tool: input.tool,
+        callID: input.callID,
+        name: output.args && typeof output.args === 'object' ? output.args.name ?? null : null,
+      })
+    },
     'tool.execute.after': async (input, output) => {
+      append(outputShape(input.tool, output))
       if (input.tool !== 'bash') return
       output.metadata = { ...(output.metadata ?? {}), [markerKey]: markerValue }
       append({ type: 'bash-after', sessionID: input.sessionID, callID: input.callID })
@@ -416,6 +454,79 @@ function completedToolParts(
   })
 }
 
+function systematicMarkers(messages: unknown[]): unknown[] {
+  return messages.flatMap((message) => {
+    if (!message || typeof message !== 'object') return []
+    const parts = (message as { parts?: unknown }).parts
+    if (!Array.isArray(parts)) return []
+    return parts.flatMap((part) => {
+      if (!part || typeof part !== 'object') return []
+      const state = (part as { state?: unknown }).state
+      if (!state || typeof state !== 'object') return []
+      const metadata = (state as { metadata?: unknown }).metadata
+      if (!metadata || typeof metadata !== 'object') return []
+      const marker = (metadata as Record<string, unknown>)
+        .systematic_workflow_receipt
+      return marker === undefined ? [] : [marker]
+    })
+  })
+}
+
+function assertPrivacySafeMarkers(messages: unknown[]): void {
+  const serialized = JSON.stringify(systematicMarkers(messages))
+  expect(serialized).not.toContain('u5-recovery.txt')
+  expect(serialized).not.toContain('u5-child.txt')
+  expect(serialized).not.toContain('opaque integration content')
+  expect(serialized).not.toContain('Run the guarded workflow')
+  expect(serialized).not.toContain('Use systematic tools in the child')
+  for (const match of serialized.matchAll(/[a-f0-9]{64}/g)) {
+    expect(match[0]).toMatch(/^[a-f0-9]{64}$/)
+  }
+}
+
+async function createSession(
+  client: ReturnType<typeof createOpencodeClient>,
+  directory: string,
+  title: string,
+): Promise<string> {
+  const created = await client.session.create({
+    directory,
+    title,
+    permission: [{ permission: '*', pattern: '*', action: 'allow' }],
+  })
+  return created.data.id
+}
+
+function initializeIsolatedRepository(fixture: IsolatedFixture): void {
+  const commands = [
+    ['git', 'init', '-b', 'main'],
+    ['git', 'config', 'user.email', 'u5-integration@example.invalid'],
+    ['git', 'config', 'user.name', 'U5 Integration'],
+    ['git', 'add', 'package.json'],
+    ['git', 'commit', '-m', 'initial fixture'],
+  ]
+  for (const command of commands) {
+    const result = Bun.spawnSync(command, { cwd: fixture.projectDir })
+    if (result.exitCode !== 0) {
+      throw new Error(`isolated git setup failed: ${command[1] ?? command[0]}`)
+    }
+  }
+}
+
+async function promptSession(
+  client: ReturnType<typeof createOpencodeClient>,
+  sessionID: string,
+  directory: string,
+  text: string,
+): Promise<void> {
+  await client.session.prompt({
+    sessionID,
+    directory,
+    model: { providerID: MOCK_PROVIDER_ID, modelID: MOCK_MODEL_ID },
+    parts: [{ type: 'text', text }],
+  })
+}
+
 describe.skipIf(!OPENCODE_AVAILABLE)(
   'receipt workflow host characterization',
   () => {
@@ -480,6 +591,25 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
         const firstState = firstBashParts[0]?.state as Record<string, unknown>
         const firstMetadata = firstState.metadata as Record<string, unknown>
         expect(firstMetadata[RECEIPT_MARKER_KEY]).toBe(RECEIPT_MARKER_VALUE)
+        expect(
+          readProbeEvents(probe.capturePath).filter(
+            (event) => event.type === 'after-shape',
+          ),
+        ).toEqual([
+          {
+            type: 'after-shape',
+            tool: 'bash',
+            outputKeys: ['attachments', 'metadata', 'output', 'title'],
+            title: { present: true, type: 'string', empty: false },
+            output: { present: true, type: 'string', empty: false, length: 13 },
+            metadata: {
+              present: true,
+              type: 'object',
+              keys: ['exit', 'output', 'truncated'],
+              status: null,
+            },
+          },
+        ])
         const firstPid = firstHost.pid
         await firstHost.stop()
 
@@ -810,6 +940,480 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
         )
       },
       TIMEOUT_MS * 2,
+    )
+
+    test(
+      'recovers persisted workflow state across a real host restart',
+      async () => {
+        const localFixture = createIsolatedFixture()
+        initializeIsolatedRepository(localFixture)
+        const hookProbe = writeReceiptProbePlugin(localFixture)
+        const localPackagedPluginUrl =
+          extractPackagedPlugin(localFixture).pluginUrl
+        const model = startMockModelServer([
+          {
+            toolCalls: [
+              {
+                id: 'u5-recovery-skill',
+                name: 'systematic_skill',
+                arguments: { name: 'ce:work' },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5-recovery-start',
+                name: 'systematic_workflow_start',
+                arguments: { expected_operations: ['implementation'] },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5-recovery-write',
+                name: 'write',
+                arguments: {
+                  filePath: 'u5-recovery.txt',
+                  content: 'opaque integration content',
+                },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5-recovery-verification',
+                name: 'bash',
+                arguments: { command: 'git status --short' },
+              },
+            ],
+          },
+          { text: 'first workflow turn complete' },
+          {
+            toolCalls: [
+              {
+                id: 'u5-recovery-status',
+                name: 'systematic_workflow_status',
+                arguments: {},
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5-recovery-complete',
+                name: 'systematic_workflow_complete',
+                arguments: { target: 'unit' },
+              },
+            ],
+          },
+          { text: 'recovered workflow turn complete' },
+        ])
+        const configContent = buildProviderConfig(
+          [hookProbe.url, localPackagedPluginUrl],
+          model.url,
+        )
+        let firstHost:
+          | Awaited<ReturnType<typeof startOpencodeServer>>
+          | undefined
+        let secondHost:
+          | Awaited<ReturnType<typeof startOpencodeServer>>
+          | undefined
+
+        try {
+          firstHost = await startOpencodeServer(localFixture, configContent)
+          const firstClient = createOpencodeClient({
+            baseUrl: firstHost.url,
+            directory: localFixture.projectDir,
+          })
+          const sessionID = await createSession(
+            firstClient,
+            localFixture.projectDir,
+            'u5 restart recovery',
+          )
+          await promptSession(
+            firstClient,
+            sessionID,
+            localFixture.projectDir,
+            'Run the guarded workflow and make one implementation change.',
+          )
+
+          const beforeRestart = await firstClient.session.messages({
+            sessionID,
+            directory: localFixture.projectDir,
+          })
+          const beforeMarkers = systematicMarkers(beforeRestart.data)
+          expect(
+            readProbeEvents(hookProbe.capturePath).filter(
+              (event) => event.type === 'after-shape',
+            ),
+          ).toEqual([
+            {
+              type: 'after-shape',
+              tool: 'systematic_skill',
+              outputKeys: ['attachments', 'metadata', 'output', 'title'],
+              title: { present: true, type: 'string', empty: true },
+              output: {
+                present: true,
+                type: 'string',
+                empty: false,
+                length: 23518,
+              },
+              metadata: {
+                present: true,
+                type: 'object',
+                keys: ['truncated'],
+                status: null,
+              },
+            },
+            {
+              type: 'after-shape',
+              tool: 'systematic_workflow_start',
+              outputKeys: ['attachments', 'metadata', 'output', 'title'],
+              title: { present: true, type: 'string', empty: false },
+              output: {
+                present: true,
+                type: 'string',
+                empty: false,
+                length: 40,
+              },
+              metadata: {
+                present: true,
+                type: 'object',
+                keys: [
+                  'enforcement',
+                  'protocolVersion',
+                  'reasonCode',
+                  'sourceDigest',
+                  'state',
+                  'statusDigest',
+                  'truncated',
+                ],
+                status: null,
+              },
+            },
+            {
+              type: 'after-shape',
+              tool: 'write',
+              outputKeys: ['attachments', 'metadata', 'output', 'title'],
+              title: { present: true, type: 'string', empty: false },
+              output: {
+                present: true,
+                type: 'string',
+                empty: false,
+                length: 24,
+              },
+              metadata: {
+                present: true,
+                type: 'object',
+                keys: ['diagnostics', 'exists', 'filepath', 'truncated'],
+                status: null,
+              },
+            },
+            {
+              type: 'after-shape',
+              tool: 'bash',
+              outputKeys: ['attachments', 'metadata', 'output', 'title'],
+              title: { present: true, type: 'string', empty: false },
+              output: {
+                present: true,
+                type: 'string',
+                empty: false,
+                length: 36,
+              },
+              metadata: {
+                present: true,
+                type: 'object',
+                keys: ['exit', 'output', 'truncated'],
+                status: null,
+              },
+            },
+          ])
+          expect(beforeMarkers.length).toBeGreaterThan(0)
+          assertPrivacySafeMarkers(beforeRestart.data)
+          const firstPID = firstHost.pid
+          await firstHost.stop()
+          firstHost = undefined
+
+          secondHost = await startOpencodeServer(localFixture, configContent)
+          expect(secondHost.pid).not.toBe(firstPID)
+          const secondClient = createOpencodeClient({
+            baseUrl: secondHost.url,
+            directory: localFixture.projectDir,
+          })
+          const persisted = await secondClient.session.messages({
+            sessionID,
+            directory: localFixture.projectDir,
+          })
+          expect(systematicMarkers(persisted.data).length).toBe(
+            beforeMarkers.length,
+          )
+          await promptSession(
+            secondClient,
+            sessionID,
+            localFixture.projectDir,
+            'Read the recovered workflow status, then complete the unit.',
+          )
+          const afterRecovery = await secondClient.session.messages({
+            sessionID,
+            directory: localFixture.projectDir,
+          })
+          const completionParts = completedToolParts(
+            afterRecovery.data,
+            'systematic_workflow_complete',
+          )
+          expect(completionParts.length).toBeGreaterThan(0)
+          const completionSucceeded = completionParts.some((part) => {
+            const state = part.state
+            if (!state || typeof state !== 'object') return false
+            const output = (state as { output?: unknown }).output
+            return typeof output === 'string' && output.includes('completed')
+          })
+          expect(completionSucceeded).toBe(true)
+          assertPrivacySafeMarkers(afterRecovery.data)
+        } finally {
+          if (firstHost) await firstHost.stop()
+          if (secondHost) await secondHost.stop()
+          model.stop()
+          destroyIsolatedFixture(localFixture)
+        }
+      },
+      TIMEOUT_MS * 3,
+    )
+
+    test(
+      'does not recover a satisfied workflow from a session without markers',
+      async () => {
+        const localFixture = createIsolatedFixture()
+        const localPackagedPluginUrl =
+          extractPackagedPlugin(localFixture).pluginUrl
+        const model = startMockModelServer([
+          { text: 'no persisted workflow state' },
+          {
+            toolCalls: [
+              {
+                id: 'u5-empty-status',
+                name: 'systematic_workflow_status',
+                arguments: {},
+              },
+            ],
+          },
+          { text: 'status checked' },
+        ])
+        const configContent = buildProviderConfig(
+          [localPackagedPluginUrl],
+          model.url,
+        )
+        let firstHost:
+          | Awaited<ReturnType<typeof startOpencodeServer>>
+          | undefined
+        let secondHost:
+          | Awaited<ReturnType<typeof startOpencodeServer>>
+          | undefined
+        try {
+          firstHost = await startOpencodeServer(localFixture, configContent)
+          const firstClient = createOpencodeClient({
+            baseUrl: firstHost.url,
+            directory: localFixture.projectDir,
+          })
+          const sessionID = await createSession(
+            firstClient,
+            localFixture.projectDir,
+            'u5 empty recovery',
+          )
+          await promptSession(
+            firstClient,
+            sessionID,
+            localFixture.projectDir,
+            'Reply without using workflow tools.',
+          )
+          await firstHost.stop()
+          firstHost = undefined
+          secondHost = await startOpencodeServer(localFixture, configContent)
+          const secondClient = createOpencodeClient({
+            baseUrl: secondHost.url,
+            directory: localFixture.projectDir,
+          })
+          await promptSession(
+            secondClient,
+            sessionID,
+            localFixture.projectDir,
+            'Check workflow status only.',
+          )
+          const messages = await secondClient.session.messages({
+            sessionID,
+            directory: localFixture.projectDir,
+          })
+          const statusParts = completedToolParts(
+            messages.data,
+            'systematic_workflow_status',
+          )
+          expect(statusParts.length).toBeGreaterThan(0)
+          expect(
+            statusParts.some((part) => {
+              const state = part.state
+              if (!state || typeof state !== 'object') return false
+              const output = (state as { output?: unknown }).output
+              return (
+                typeof output === 'string' &&
+                output.includes('"state":"completed"')
+              )
+            }),
+          ).toBe(false)
+        } finally {
+          if (firstHost) await firstHost.stop()
+          if (secondHost) await secondHost.stop()
+          model.stop()
+          destroyIsolatedFixture(localFixture)
+        }
+      },
+      TIMEOUT_MS * 3,
+    )
+
+    test(
+      'observes a real foreground child lineage and parent rollup marker',
+      async () => {
+        const localFixture = createIsolatedFixture()
+        initializeIsolatedRepository(localFixture)
+        const localPackagedPluginUrl =
+          extractPackagedPlugin(localFixture).pluginUrl
+        const model = startMockModelServer([
+          {
+            toolCalls: [
+              {
+                id: 'u5-parent-skill',
+                name: 'systematic_skill',
+                arguments: { name: 'ce:work' },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5-parent-start',
+                name: 'systematic_workflow_start',
+                arguments: { expected_operations: ['implementation'] },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5-parent-task',
+                name: 'task',
+                arguments: {
+                  description: 'foreground child receipt lane',
+                  prompt:
+                    'Use systematic tools in the child and make one change.',
+                  subagent_type: 'systematic-implementer',
+                },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5-child-skill',
+                name: 'systematic_skill',
+                arguments: { name: 'ce:work' },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5-child-start',
+                name: 'systematic_workflow_start',
+                arguments: { expected_operations: ['implementation'] },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5-child-write',
+                name: 'write',
+                arguments: {
+                  filePath: 'u5-child.txt',
+                  content: 'opaque integration content',
+                },
+              },
+            ],
+          },
+          { text: 'child finished' },
+          { text: 'parent finished' },
+        ])
+        const configContent = buildProviderConfig(
+          [localPackagedPluginUrl],
+          model.url,
+        )
+        let host: Awaited<ReturnType<typeof startOpencodeServer>> | undefined
+        try {
+          host = await startOpencodeServer(localFixture, configContent)
+          const client = createOpencodeClient({
+            baseUrl: host.url,
+            directory: localFixture.projectDir,
+          })
+          const parentSessionID = await createSession(
+            client,
+            localFixture.projectDir,
+            'u5 foreground child rollup',
+          )
+          await promptSession(
+            client,
+            parentSessionID,
+            localFixture.projectDir,
+            'Start a guarded unit and run one foreground child.',
+          )
+
+          const parentMessages = await client.session.messages({
+            sessionID: parentSessionID,
+            directory: localFixture.projectDir,
+          })
+          const taskParts = completedToolParts(parentMessages.data, 'task')
+          expect(taskParts).toHaveLength(1)
+          const taskState = taskParts[0]?.state as Record<string, unknown>
+          const taskMetadata = taskState.metadata as Record<string, unknown>
+          const childSessionID = taskMetadata.sessionId
+          expect(typeof childSessionID).toBe('string')
+
+          const children = await client.session.children({
+            sessionID: parentSessionID,
+            directory: localFixture.projectDir,
+          })
+          const child = children.data.find(
+            (entry) => entry.id === childSessionID,
+          )
+          expect(child).toBeDefined()
+          expect(child?.parentID).toBe(parentSessionID)
+
+          const childMessages = await client.session.messages({
+            sessionID: childSessionID as string,
+            directory: localFixture.projectDir,
+          })
+          const childMarkers = systematicMarkers(childMessages.data)
+          expect(childMarkers.length).toBeGreaterThan(0)
+          assertPrivacySafeMarkers(childMessages.data)
+
+          const parentMarkers = systematicMarkers(parentMessages.data)
+          expect(parentMarkers).toHaveLength(1)
+          const repeatedParentMessages = await client.session.messages({
+            sessionID: parentSessionID,
+            directory: localFixture.projectDir,
+          })
+          expect(systematicMarkers(repeatedParentMessages.data).length).toBe(
+            parentMarkers.length,
+          )
+          assertPrivacySafeMarkers(parentMessages.data)
+        } finally {
+          if (host) await host.stop()
+          model.stop()
+          destroyIsolatedFixture(localFixture)
+        }
+      },
+      TIMEOUT_MS * 4,
     )
   },
 )
