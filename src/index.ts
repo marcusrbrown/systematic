@@ -164,6 +164,14 @@ const initializePlugin = async ({
       }
     },
 
+    event: async (input: unknown) => {
+      try {
+        await workflowGuard.hooks.event(input)
+      } catch {
+        // Event observation is fail-closed and never blocks the host.
+      }
+    },
+
     'experimental.chat.system.transform': async (
       _input: unknown,
       output: { system: string[] },

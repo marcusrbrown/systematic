@@ -10,6 +10,12 @@ import type {
   OperationObserverSnapshot,
   RemoteOperation,
 } from './opencode-operation-observer.js'
+import {
+  classifyQuestionAnswer,
+  createQuestionAttestation,
+  type QuestionAttestationProjection,
+  type QuestionChallengeRecord,
+} from './question-attestation.js'
 import type {
   ReceiptClassifier,
   ReceiptOperationObservation,
@@ -157,6 +163,7 @@ export interface OpencodeWorkflowHostReadback {
 export interface OpencodeWorkflowGuardHooks {
   'tool.execute.before': (input: unknown, output: unknown) => Promise<void>
   'tool.execute.after': (input: unknown, output: unknown) => Promise<void>
+  event: (input: unknown) => Promise<void>
   'experimental.chat.system.transform': (
     input: unknown,
     output: unknown,
@@ -187,6 +194,7 @@ interface SessionRuntime {
   observeReceipt(input: unknown): EvidenceObservationResult
   prepareTransition(input: unknown): TransitionPrepareResult
   startUnit(input: unknown, policy?: RuntimeUnitPolicy): unknown
+  control(sessionID: string, input: unknown): ToolResultContent
   markUnavailable(): void
   metadata(): Record<string, unknown>
   recover(sessionID: string, allowFresh?: boolean): Promise<void>
@@ -232,6 +240,15 @@ interface PendingOperation {
   before: OperationObserverSnapshot
   remoteOperation?: RemoteOperation
   remoteBefore?: OperationObserverRemoteResult
+}
+
+interface PendingQuestionChallenge {
+  readonly challenge: QuestionChallengeRecord
+  readonly purpose: 'transition' | 'session-disablement'
+  readonly resource: string
+  readonly transition: string
+  questionCallID?: string
+  requestID?: string
 }
 
 interface SealedOperation {
@@ -579,6 +596,7 @@ interface ToolResult {
 interface ToolResultContent {
   title: string
   output: string
+  metadata?: Record<string, unknown>
 }
 
 function markerStatusRank(state: WorkflowStatus['state']): number {
@@ -830,6 +848,131 @@ function createSessionRuntime(
   const sealedOperations = new Map<string, SealedOperation>()
   const abandonedOperations = new Map<string, SealedOperation>()
   const rolledUpChildren = new Set<string>()
+  const questionAttestation = createQuestionAttestation()
+  const pendingQuestionChallenges = new Map<string, PendingQuestionChallenge>()
+  const blockedQuestionCalls = new Map<string, string>()
+  const consumedQuestionTargets = new Set<TransitionTarget>()
+
+  function questionResource(target: TransitionTarget): string {
+    const status = guard.status()
+    return `workflow/${target}/${status.unit?.unitId ?? status.epoch?.epochId ?? 'unknown'}`
+  }
+
+  function questionProjection(): QuestionAttestationProjection {
+    const pending = [...pendingQuestionChallenges.values()][0]
+    if (!pending) return { status: 'unknown', reasonCode: 'unknown-challenge' }
+    return questionAttestation.status({
+      challengeId: pending.challenge.challengeId,
+    })
+  }
+
+  function strictQuestionAnswer(value: unknown): 'yes' | 'confirm' | 'no' {
+    if (!Array.isArray(value) || value.length !== 1) return 'no'
+    const answerSet = value[0]
+    if (!Array.isArray(answerSet) || answerSet.length !== 1) return 'no'
+    const answer = answerSet[0]
+    return classifyQuestionAnswer(answer) === 'affirmative'
+      ? (answer as 'yes' | 'confirm')
+      : 'no'
+  }
+
+  function challengeForTransition(
+    sessionID: string,
+    target: TransitionTarget,
+  ): PendingQuestionChallenge | undefined {
+    const existing = [...pendingQuestionChallenges.values()].find(
+      (pending) =>
+        pending.purpose === 'transition' && pending.transition === target,
+    )
+    if (existing) return existing
+    const resource = questionResource(target)
+    const result = questionAttestation.challenge({
+      sessionId: sessionID,
+      resource,
+      transition: target,
+      purpose: 'transition',
+    })
+    if (result.status !== 'pending') return undefined
+    const pending: PendingQuestionChallenge = {
+      challenge: result.challenge,
+      purpose: 'transition',
+      resource,
+      transition: target,
+    }
+    pendingQuestionChallenges.set(result.challenge.challengeId, pending)
+    return pending
+  }
+
+  function challengeForDisablement(
+    sessionID: string,
+  ): PendingQuestionChallenge | undefined {
+    const existing = [...pendingQuestionChallenges.values()].find(
+      (pending) => pending.purpose === 'session-disablement',
+    )
+    if (existing) return existing
+    const resource = `session/${sessionID}`
+    const result = questionAttestation.challenge({
+      sessionId: sessionID,
+      resource,
+      transition: 'disable',
+      purpose: 'session-disablement',
+    })
+    if (result.status !== 'pending') return undefined
+    const pending: PendingQuestionChallenge = {
+      challenge: result.challenge,
+      purpose: 'session-disablement',
+      resource,
+      transition: 'disable',
+    }
+    pendingQuestionChallenges.set(result.challenge.challengeId, pending)
+    return pending
+  }
+
+  function questionInstruction(
+    pending: PendingQuestionChallenge,
+  ): ToolResultContent {
+    return {
+      title: 'Workflow guard confirmation required',
+      output: JSON.stringify({
+        status: 'rejected',
+        reasonCode: 'question-attestation',
+        action: 'invoke-native-question',
+        challengeId: pending.challenge.challengeId,
+        purpose: pending.purpose,
+        question: pending.challenge.question.wording,
+      }),
+      metadata: {
+        ...metadata(),
+        questionAttestation: {
+          status: 'pending',
+          challengeId: pending.challenge.challengeId,
+          purpose: pending.purpose,
+          resourceDigest: pending.challenge.resourceDigest,
+          transitionKey: pending.challenge.transitionKey,
+        },
+      },
+    }
+  }
+
+  function writeToolResult(output: unknown, result: ToolResultContent): void {
+    if (!isRecord(output)) return
+    output.title = result.title
+    output.output = result.output
+    if (result.metadata !== undefined) output.metadata = result.metadata
+  }
+
+  function consumeQuestion(pending: PendingQuestionChallenge): boolean {
+    if (!pending.requestID) return false
+    return (
+      questionAttestation.consumeAttestation({
+        purpose: pending.purpose,
+        sessionId: pending.challenge.sessionId,
+        resource: pending.resource,
+        transition: pending.transition,
+        requestId: pending.requestID,
+      }).status === 'consumed'
+    )
+  }
 
   function appendReceiptMarkers(value: unknown, markers: unknown[]): void {
     if (!isRecord(value)) return
@@ -871,6 +1014,20 @@ function createSessionRuntime(
       workspaceIdentity: options.workspaceIdentity,
       repositoryIdentity: options.repositoryIdentity,
       worktreeIdentity: options.worktreeIdentity,
+      supportedRepairs: [
+        'fresh-readback',
+        'rerun-operation',
+        'question-attestation',
+      ],
+      questionEligibleOperations: [
+        'implementation',
+        'verification',
+        'commit',
+        'push',
+        'pr-creation',
+        'check-readback',
+        'review-readback',
+      ],
       runtimeRequiredOperations: options.runtimeRequiredOperations,
       mode: options.config.mode === 'disabled' ? 'disabled' : 'protected',
     })
@@ -1182,6 +1339,46 @@ function createSessionRuntime(
     return guard.status()
   }
 
+  function control(sessionID: string, input: unknown): ToolResultContent {
+    if (!isRecord(input) || input.mode !== 'disabled') {
+      return {
+        title: 'Workflow guard control unavailable',
+        output: JSON.stringify({
+          status: 'unavailable',
+          reasonCode: 'control-not-enabled',
+        }),
+      }
+    }
+    if (options.config.mode === 'disabled') {
+      return {
+        title: 'Workflow guard disabled',
+        output: JSON.stringify({ status: 'disabled' }),
+      }
+    }
+    const pending = challengeForDisablement(sessionID)
+    if (!pending) return questionUnavailableResult()
+    if (pending.requestID && questionProjection().status === 'attested') {
+      if (consumeQuestion(pending)) {
+        guard.setMode({ mode: 'disabled' })
+        return {
+          title: 'Workflow guard disabled',
+          output: JSON.stringify({ status: 'disabled' }),
+        }
+      }
+    }
+    return questionInstruction(pending)
+  }
+
+  function questionUnavailableResult(): ToolResultContent {
+    return {
+      title: 'Workflow guard unavailable',
+      output: JSON.stringify({
+        status: 'unavailable',
+        reasonCode: 'question-attestation',
+      }),
+    }
+  }
+
   async function refreshReadback(): Promise<void> {
     abandonPending()
     if (!options.observer) return
@@ -1281,6 +1478,20 @@ function createSessionRuntime(
       reasonCode: source.reasonCode,
       enforcement: source.enforcement,
     }
+    const attestation = questionProjection()
+    if (attestation.status !== 'unknown') {
+      result.questionAttestation = {
+        status: attestation.status,
+        challengeId: attestation.challengeId,
+        purpose: attestation.purpose,
+        resourceDigest: attestation.resourceDigest,
+        transitionKey: attestation.transitionKey,
+        ...(attestation.requestId ? { requestId: attestation.requestId } : {}),
+        ...(attestation.consumption
+          ? { consumption: attestation.consumption }
+          : {}),
+      }
+    }
     if (options.config.debug && source.debug) {
       result.operations = source.debug.operations
       result.satisfiedCount = source.debug.satisfiedCount
@@ -1373,6 +1584,43 @@ function createSessionRuntime(
     })
   }
 
+  function gateCompleteWithQuestion(
+    host: HostToolBefore,
+    target: TransitionTarget,
+    callDigest: string,
+    status: WorkflowStatus,
+  ): boolean {
+    const transitionChallenge = [...pendingQuestionChallenges.values()].find(
+      (pending) =>
+        pending.purpose === 'transition' && pending.transition === target,
+    )
+    if (
+      transitionChallenge &&
+      questionProjection().status === 'attested' &&
+      consumeQuestion(transitionChallenge)
+    ) {
+      consumedQuestionTargets.add(target)
+    }
+    if (
+      status.reasonCode !== 'missing-evidence' ||
+      status.missingOperations.length === 0 ||
+      consumedQuestionTargets.has(target)
+    ) {
+      return false
+    }
+    const challenge = challengeForTransition(host.sessionID, target)
+    if (!challenge) {
+      markUnavailable()
+      return true
+    }
+    if (options.config.mode === 'protected') {
+      throw new WorkflowGuardBlockedError('guard-unavailable')
+    }
+    blockedCompletes.set(callDigest, target)
+    blockedQuestionCalls.set(callDigest, challenge.challenge.challengeId)
+    return true
+  }
+
   function prepareComplete(host: HostToolBefore, args: unknown): void {
     const target = normalizeTarget(args)
     if (!target) return
@@ -1383,6 +1631,8 @@ function createSessionRuntime(
       }
       return
     }
+    const status = guard.status()
+    if (gateCompleteWithQuestion(host, target, callDigest, status)) return
     const prepared = guard.prepareTransition({ callId: host.callID, target })
     if (prepared.status === 'allowed') {
       pendingCompletes.set(callDigest, {
@@ -1487,11 +1737,122 @@ function createSessionRuntime(
     }
   }
 
+  function interceptQuestion(host: HostToolBefore, output: unknown): void {
+    if (!isRecord(output)) return
+    const pending = [...pendingQuestionChallenges.values()].find(
+      (candidate) => candidate.questionCallID === undefined,
+    )
+    if (!pending) return
+    pending.questionCallID = host.callID
+    output.args = {
+      questions: [
+        {
+          question: pending.challenge.question.wording,
+          header: 'Confirm',
+          options: [
+            { label: 'yes', description: 'Confirm the guarded transition.' },
+            { label: 'no', description: 'Decline the guarded transition.' },
+          ],
+        },
+      ],
+    }
+  }
+
+  async function handleQuestionAsked(
+    properties: Record<string, unknown>,
+  ): Promise<void> {
+    const tool = isRecord(properties.tool) ? properties.tool : undefined
+    const callID =
+      tool && boundedString(tool.callID, MAX_CALL_ID_LENGTH)
+        ? tool.callID
+        : undefined
+    const requestID = boundedString(properties.id, MAX_CALL_ID_LENGTH)
+      ? properties.id
+      : undefined
+    if (!callID || !requestID) return
+    const pending = [...pendingQuestionChallenges.values()].find(
+      (candidate) => candidate.questionCallID === callID,
+    )
+    if (!pending) return
+    const result = questionAttestation.bindAsked({
+      challengeId: pending.challenge.challengeId,
+      callId: callID,
+      requestId: requestID,
+    })
+    if (result.status === 'bound') pending.requestID = requestID
+  }
+
+  function handleQuestionReplied(
+    sessionID: string,
+    properties: Record<string, unknown>,
+  ): void {
+    const requestID = boundedString(properties.requestID, MAX_CALL_ID_LENGTH)
+      ? properties.requestID
+      : undefined
+    if (!requestID) return
+    questionAttestation.observeReply({
+      sessionId: sessionID,
+      requestId: requestID,
+      answer: strictQuestionAnswer(properties.answers),
+    })
+  }
+
+  function handleQuestionRejected(
+    sessionID: string,
+    properties: Record<string, unknown>,
+  ): void {
+    const requestID = boundedString(properties.requestID, MAX_CALL_ID_LENGTH)
+      ? properties.requestID
+      : undefined
+    if (!requestID) return
+    questionAttestation.observeReject({
+      sessionId: sessionID,
+      requestId: requestID,
+    })
+  }
+
+  async function routeQuestionEvent(
+    eventType: string,
+    sessionID: string,
+    properties: Record<string, unknown>,
+  ): Promise<void> {
+    if (eventType === 'question.asked') {
+      await handleQuestionAsked(properties)
+      return
+    }
+    if (eventType === 'question.replied') {
+      handleQuestionReplied(sessionID, properties)
+      return
+    }
+    if (eventType === 'question.rejected') {
+      handleQuestionRejected(sessionID, properties)
+    }
+  }
+
+  async function event(input: unknown): Promise<void> {
+    if (!isRecord(input) || !isRecord(input.event)) return
+    const hostEvent = input.event
+    const eventType = boundedString(hostEvent.type, 128)
+      ? hostEvent.type
+      : undefined
+    const properties = isRecord(hostEvent.properties)
+      ? hostEvent.properties
+      : undefined
+    const sessionID =
+      properties && boundedString(properties.sessionID, 256)
+        ? properties.sessionID
+        : undefined
+    if (!eventType || !sessionID || !properties) return
+    await recoverFromHost(sessionID)
+    await routeQuestionEvent(eventType, sessionID, properties)
+  }
+
   async function before(input: unknown, output: unknown): Promise<void> {
     try {
       const host = parseHostBefore(input)
       if (!host || !isRecord(output)) return
       await recoverFromHost(host.sessionID)
+      if (host.tool === 'question') interceptQuestion(host, output)
       await prepareHostCall(host, output.args)
     } catch (error) {
       if (isWorkflowGuardBlockedError(error)) throw error
@@ -1724,6 +2085,14 @@ function createSessionRuntime(
     finalTarget: TransitionTarget | undefined,
     output: unknown,
   ): boolean {
+    const questionChallengeID = blockedQuestionCalls.get(callDigest)
+    if (questionChallengeID) {
+      const pending = pendingQuestionChallenges.get(questionChallengeID)
+      if (pending) {
+        writeToolResult(output, questionInstruction(pending))
+        return true
+      }
+    }
     const replay = finalizedCompletes.get(callDigest)
     const abandonedTarget = abandonedCompletes.get(callDigest)
     const blockedTarget = blockedCompletes.get(callDigest)
@@ -2258,6 +2627,7 @@ function createSessionRuntime(
     hooks: {
       'tool.execute.before': before,
       'tool.execute.after': after,
+      event,
       'experimental.chat.system.transform': transform,
     },
     status: () => {
@@ -2284,6 +2654,7 @@ function createSessionRuntime(
         ? guard.startUnit(input, policy)
         : { status: 'rejected', reasonCode: 'guard-unavailable' }
     },
+    control,
     markUnavailable,
     metadata,
     recover: recoverFromHost,
@@ -2321,6 +2692,7 @@ function makeWorkflowTool(
   execute: (
     runtime: SessionRuntime,
     input: unknown,
+    sessionID: string,
   ) => ToolResultContent | Promise<ToolResultContent>,
 ): ToolDefinition {
   return {
@@ -2341,7 +2713,7 @@ function makeWorkflowTool(
       }
       const runtime = getRuntime(sessionID)
       await runtime.recover(sessionID)
-      let content = await execute(runtime, input)
+      let content = await execute(runtime, input, sessionID)
       let metadata: Record<string, unknown>
       if (isRecord(context) && typeof context.metadata === 'function') {
         try {
@@ -2441,15 +2813,9 @@ export function createOpencodeWorkflowGuard(
       'Report the future trusted workflow control surface.',
       controlToolShape,
       sessionRuntimeFor,
-      (_runtime, input) =>
+      (runtime, input, sessionID) =>
         controlToolSchema.safeParse(input).success
-          ? {
-              title: 'Workflow guard control unavailable',
-              output: JSON.stringify({
-                status: 'unavailable',
-                reasonCode: 'control-not-enabled',
-              }),
-            }
+          ? runtime.control(sessionID, input)
           : {
               title: 'Workflow guard unavailable',
               output: unavailableToolResult(),
@@ -2480,6 +2846,24 @@ export function createOpencodeWorkflowGuard(
     }
   }
 
+  async function event(input: unknown): Promise<void> {
+    if (!isRecord(input) || !isRecord(input.event)) return
+    const properties = isRecord(input.event.properties)
+      ? input.event.properties
+      : undefined
+    const sessionID =
+      properties && boundedString(properties.sessionID, 256)
+        ? properties.sessionID
+        : undefined
+    if (!sessionID) return
+    const runtime = sessionRuntimeFor(sessionID)
+    try {
+      await runtime.hooks.event(input)
+    } catch {
+      runtime.markUnavailable()
+    }
+  }
+
   async function transform(input: unknown, output: unknown): Promise<void> {
     if (!isRecord(input) || !boundedString(input.sessionID, 256)) return
     const runtime = sessionRuntimeFor(input.sessionID)
@@ -2495,6 +2879,7 @@ export function createOpencodeWorkflowGuard(
     hooks: {
       'tool.execute.before': before,
       'tool.execute.after': after,
+      event,
       'experimental.chat.system.transform': transform,
     },
     status(sessionID: unknown): WorkflowStatus {

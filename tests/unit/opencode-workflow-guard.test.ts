@@ -191,6 +191,14 @@ async function observeSkill(
   )
 }
 
+async function observeQuestionEvent(
+  adapter: OpencodeWorkflowGuard,
+  type: 'question.asked' | 'question.replied' | 'question.rejected',
+  properties: Record<string, unknown>,
+): Promise<void> {
+  await adapter.hooks.event({ event: { type, properties } })
+}
+
 function mintReceipt(
   adapter: OpencodeWorkflowGuard,
   operation: 'implementation' | 'verification',
@@ -377,7 +385,7 @@ describe('OpenCode workflow guard adapter', () => {
     })
   })
 
-  test('start and status tools are non-authoritative while control is unavailable', async () => {
+  test('start and status tools are non-authoritative while control requires attestation', async () => {
     const adapter = createAdapter()
     const start = await adapter.tools.systematic_workflow_start.execute(
       { expected_operations: ['commit'] },
@@ -395,7 +403,7 @@ describe('OpenCode workflow guard adapter', () => {
 
     expect(start.output).toContain('pending')
     expect(statusOutput.output).toContain(statusBefore.state)
-    expect(control.output).toContain('unavailable')
+    expect(control.output).toContain('question-attestation')
     expect(status(adapter).epoch).toBeNull()
   })
 
@@ -435,6 +443,131 @@ describe('OpenCode workflow guard adapter', () => {
       { title: 'complete', output: 'selected result', metadata: {} },
     )
     expect(status(observeAdapter).state).toBe('waiting')
+  })
+
+  test('native question flow binds and accepts only a correlated affirmative reply', async () => {
+    const adapter = createAdapter('observe')
+    await observeSkill(adapter, 'systematic_skill', 'ce:work')
+    expect(adapter.status(SESSION_A).repair).toBe('fresh-readback')
+
+    const completeOutput = {
+      title: 'complete',
+      output: 'complete',
+      metadata: {},
+    }
+    await adapter.hooks['tool.execute.before'](
+      {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'complete-question',
+      },
+      { args: { target: 'unit' } },
+    )
+    await adapter.hooks['tool.execute.after'](
+      {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'complete-question',
+        args: { target: 'unit' },
+      },
+      completeOutput,
+    )
+    expect(completeOutput.output).toContain('question-attestation')
+
+    const questionOutput = { args: {} as Record<string, unknown> }
+    await adapter.hooks['tool.execute.before'](
+      { tool: 'question', sessionID: SESSION_A, callID: 'question-call' },
+      questionOutput,
+    )
+    expect(questionOutput.args).toMatchObject({
+      questions: [
+        {
+          question: 'Confirm the requested guarded transition.',
+          options: [{ label: 'yes' }, { label: 'no' }],
+        },
+      ],
+    })
+    await observeQuestionEvent(adapter, 'question.asked', {
+      id: 'request-1',
+      sessionID: SESSION_A,
+      questions: [],
+      tool: { messageID: 'message-1', callID: 'question-call' },
+    })
+    await observeQuestionEvent(adapter, 'question.replied', {
+      sessionID: SESSION_A,
+      requestID: 'request-1',
+      answers: [['yes']],
+    })
+
+    const status = await adapter.tools.systematic_workflow_status.execute(
+      {},
+      toolContext(),
+    )
+    expect(status.metadata).toMatchObject({
+      questionAttestation: { status: 'attested', requestId: 'request-1' },
+    })
+  })
+
+  test('ambiguous question replies and uncorrelated replies never attest', async () => {
+    const adapter = createAdapter('observe')
+    await observeSkill(adapter, 'systematic_skill', 'ce:work')
+    const output = { args: {} as Record<string, unknown> }
+    await adapter.hooks['tool.execute.before'](
+      { tool: 'question', sessionID: SESSION_A, callID: 'question-call' },
+      output,
+    )
+    await observeQuestionEvent(adapter, 'question.asked', {
+      id: 'request-1',
+      sessionID: SESSION_A,
+      questions: [],
+      tool: { callID: 'question-call' },
+    })
+    await observeQuestionEvent(adapter, 'question.replied', {
+      sessionID: SESSION_B,
+      requestID: 'request-1',
+      answers: [['yes']],
+    })
+    await observeQuestionEvent(adapter, 'question.replied', {
+      sessionID: SESSION_A,
+      requestID: 'request-1',
+      answers: [['maybe']],
+    })
+    const status = adapter.status(SESSION_A)
+    expect(status.reasonCode).not.toBe('unit-ready')
+    expect(JSON.stringify(status)).not.toContain('maybe')
+  })
+
+  test('session disablement requires the native question reply', async () => {
+    const adapter = createAdapter('observe')
+    const first = await adapter.tools.systematic_workflow_control.execute(
+      { mode: 'disabled' },
+      toolContext(),
+    )
+    expect(first.output).toContain('question-attestation')
+    expect(adapter.status(SESSION_A).state).not.toBe('disabled')
+
+    const questionOutput = { args: {} as Record<string, unknown> }
+    await adapter.hooks['tool.execute.before'](
+      { tool: 'question', sessionID: SESSION_A, callID: 'disable-question' },
+      questionOutput,
+    )
+    await observeQuestionEvent(adapter, 'question.asked', {
+      id: 'disable-request',
+      sessionID: SESSION_A,
+      questions: [],
+      tool: { callID: 'disable-question' },
+    })
+    await observeQuestionEvent(adapter, 'question.replied', {
+      sessionID: SESSION_A,
+      requestID: 'disable-request',
+      answers: [['confirm']],
+    })
+    const second = await adapter.tools.systematic_workflow_control.execute(
+      { mode: 'disabled' },
+      toolContext(),
+    )
+    expect(second.output).toContain('disabled')
+    expect(adapter.status(SESSION_A).state).toBe('disabled')
   })
 
   test('independent registrations finalize the same selected transition idempotently', async () => {
