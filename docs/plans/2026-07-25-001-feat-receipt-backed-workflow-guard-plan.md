@@ -428,7 +428,7 @@ flowchart TB
 
 **Verification:** Production OpenCode calls reach U4's operation classifier/guard exactly once per registration after successful host execution; stable target and mutable revision semantics are distinct; every operation class has positive/no-op/failure coverage; persisted metadata is bounded; and U5 has real receipts to recover.
 
-- [ ] **U5. ToolPart persistence/readback, restart/fork recovery, and foreground child rollup**
+- [x] **U5. ToolPart persistence/readback, restart/fork recovery, and foreground child rollup**
 
 **Goal:** Persist privacy-safe receipt-mint metadata in host-owned ToolParts, recover exact receipts after restart/fork when durable evidence is valid, fold later consumption/progression markers without mutating history, require fresh readback when evidence is not valid, and roll up foreground child receipts only with exact host lineage and matching workspace identity.
 
