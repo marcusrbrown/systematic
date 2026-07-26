@@ -3,8 +3,11 @@ import { z } from 'zod'
 import { INTERNAL_AGENT_SIGNATURES } from './bootstrap.js'
 import type {
   OpencodeOperationObserver,
+  OperationObserverRemoteResult,
+  OperationObserverRemoteSnapshot,
   OperationObserverResult,
   OperationObserverSnapshot,
+  RemoteOperation,
 } from './opencode-operation-observer.js'
 import type {
   ReceiptClassifier,
@@ -204,6 +207,8 @@ interface PendingOperation {
   tool: 'write' | 'edit' | 'apply_patch' | 'bash'
   argsFingerprint: string
   before: OperationObserverSnapshot
+  remoteOperation?: RemoteOperation
+  remoteBefore?: OperationObserverRemoteResult
 }
 
 interface SealedOperation {
@@ -443,6 +448,21 @@ function operationCandidate(tool: LocalOperationTool): ReceiptOperation {
   return tool === 'bash' ? 'verification' : 'implementation'
 }
 
+async function classifyCommandIntent(
+  classifier: ReceiptClassifier | undefined,
+  command: string,
+): Promise<ReceiptClassification | undefined> {
+  if (!classifier) return undefined
+  try {
+    return await classifier.classify({
+      command,
+      terminal: { status: 'success', output: 'non-empty', noOp: false },
+    })
+  } catch {
+    return undefined
+  }
+}
+
 function terminalForOutput(
   tool: LocalOperationTool,
   output: HostOutput,
@@ -475,6 +495,41 @@ function localOperation(
     operation === 'verification' ||
     operation === 'commit'
   )
+}
+
+function remoteOperation(
+  operation: ReceiptOperation | null,
+): operation is RemoteOperation {
+  return (
+    operation === 'push' ||
+    operation === 'pr-creation' ||
+    operation === 'check-readback' ||
+    operation === 'review-readback'
+  )
+}
+
+function remoteReadbackInput(
+  operation: RemoteOperation,
+  local: OperationObserverSnapshot,
+  workspaceIdentity: string,
+  snapshot: OperationObserverRemoteSnapshot,
+  includeRevision = true,
+): Record<string, unknown> {
+  return {
+    operation,
+    workspaceIdentity,
+    repositoryIdentity: local.repositoryRevisionDigest,
+    worktreeIdentity: local.worktreeRevisionDigest,
+    resourceIdentity: snapshot.resourceIdentity,
+    ...(includeRevision
+      ? { resourceRevisionIdentity: snapshot.resourceRevisionIdentity }
+      : {}),
+    ...(snapshot.pullRequest ? { pullRequest: snapshot.pullRequest } : {}),
+    ...(snapshot.checkState ? { checkState: snapshot.checkState } : {}),
+    ...(snapshot.reviewDecision
+      ? { reviewDecision: snapshot.reviewDecision }
+      : {}),
+  }
 }
 
 function isSuccessfulAfter(output: unknown): output is HostOutput {
@@ -831,7 +886,37 @@ function createSessionRuntime(
       repositoryIdentity: result.snapshot.repositoryRevisionDigest,
       worktreeIdentity: result.snapshot.worktreeRevisionDigest,
     })
-    if (observed.status === 'rejected') markUnavailable()
+    if (
+      observed.status === 'rejected' ||
+      !(await refreshRemoteReadbacks(result.snapshot))
+    ) {
+      markUnavailable()
+    }
+  }
+
+  async function refreshRemoteReadbacks(
+    local: OperationObserverSnapshot,
+  ): Promise<boolean> {
+    const remoteOperations = guard
+      .status()
+      .satisfiedOperations.filter(remoteOperation)
+    if (remoteOperations.length === 0) return true
+    const remoteSnapshot = options.observer?.remoteSnapshot
+    if (!remoteSnapshot) return false
+    for (const operation of remoteOperations) {
+      const result = await readRemoteScope(remoteSnapshot, operation)
+      if (result?.status !== 'available') return false
+      const observed = guard.observeReadback(
+        remoteReadbackInput(
+          operation,
+          local,
+          options.workspaceIdentity,
+          result.snapshot,
+        ),
+      )
+      if (observed.status === 'rejected') return false
+    }
+    return true
   }
 
   function currentMarkerSource(): MarkerSource {
@@ -993,6 +1078,37 @@ function createSessionRuntime(
     blockedCompletes.set(callDigest, target)
   }
 
+  async function remoteIntentForOperation(
+    host: HostToolBefore,
+    args: unknown,
+  ): Promise<
+    | {
+        operation: RemoteOperation
+        before?: OperationObserverRemoteResult
+      }
+    | undefined
+  > {
+    if (host.tool !== 'bash' || !isRecord(args)) return undefined
+    const command = bashCommand(args)
+    if (!command) return undefined
+    const classification = await classifyCommandIntent(
+      options.classifier,
+      command,
+    )
+    if (!classification || !remoteOperation(classification.category))
+      return undefined
+    const remoteSnapshot = options.observer?.remoteSnapshot
+    if (!remoteSnapshot) return { operation: classification.category }
+    try {
+      return {
+        operation: classification.category,
+        before: await remoteSnapshot(classification.category, 'before'),
+      }
+    } catch {
+      return { operation: classification.category }
+    }
+  }
+
   async function prepareOperation(
     host: HostToolBefore,
     args: unknown,
@@ -1024,11 +1140,15 @@ function createSessionRuntime(
       markUnavailable()
       return
     }
+    const remote = await remoteIntentForOperation(host, args)
     pendingOperations.set(callDigest, {
       callID: host.callID,
       tool: host.tool,
       argsFingerprint: fingerprint,
       before: result.snapshot,
+      ...(remote
+        ? { remoteOperation: remote.operation, remoteBefore: remote.before }
+        : {}),
     })
   }
 
@@ -1058,7 +1178,53 @@ function createSessionRuntime(
     }
   }
 
-  function finishSkill(host: HostToolAfter, output: unknown): void {
+  async function seedRemoteScopes(
+    operations: readonly ReceiptOperation[],
+  ): Promise<boolean> {
+    const remoteOperations = operations.filter(remoteOperation)
+    if (remoteOperations.length === 0) return true
+    const remoteSnapshot = options.observer?.remoteSnapshot
+    if (!remoteSnapshot || !options.observer) return false
+    let local: OperationObserverResult
+    try {
+      local = await options.observer.snapshot()
+    } catch {
+      return false
+    }
+    if (local.status === 'unavailable') return false
+    for (const operation of remoteOperations) {
+      if (!(await seedRemoteScope(remoteSnapshot, operation, local.snapshot))) {
+        return false
+      }
+    }
+    return true
+  }
+
+  async function seedRemoteScope(
+    reader: NonNullable<OpencodeOperationObserver['remoteSnapshot']>,
+    operation: RemoteOperation,
+    local: OperationObserverSnapshot,
+  ): Promise<boolean> {
+    const result = await readRemoteScope(reader, operation, 'before')
+    if (!result) return false
+    if (result.status === 'missing-resource') return operation === 'pr-creation'
+    if (result.status !== 'available') return false
+    const observed = guard.observeReadback(
+      remoteReadbackInput(
+        operation,
+        local,
+        options.workspaceIdentity,
+        result.snapshot,
+        operation !== 'pr-creation',
+      ),
+    )
+    return observed.status !== 'rejected'
+  }
+
+  async function finishSkill(
+    host: HostToolAfter,
+    output: unknown,
+  ): Promise<void> {
     const callDigest = digestCall(ledger, host.callID)
     const finalSkill = normalizeSkill(host.tool, host.args)
     const completedSkill = completedSkillCalls.get(callDigest)
@@ -1075,10 +1241,10 @@ function createSessionRuntime(
     }
     if (!isSuccessfulAfter(output)) return
     completedSkillCalls.set(callDigest, pending.skill)
-    activateCompletedSkill(pending.skill)
+    await activateCompletedSkill(pending.skill)
   }
 
-  function activateCompletedSkill(skill: string): void {
+  async function activateCompletedSkill(skill: string): Promise<void> {
     const activation = guard.activate({
       event: 'guarded-skill',
       skill,
@@ -1092,11 +1258,17 @@ function createSessionRuntime(
       const status = guard.status()
       if (!status.unit || status.unit.status === 'completed') {
         guard.startUnit({}, runtimePolicy)
+        if (!(await seedRemoteScopes(runtimePolicy.requiredOperations ?? []))) {
+          markUnavailable()
+        }
       }
     }
   }
 
-  function finishStart(host: HostToolAfter, output: unknown): void {
+  async function finishStart(
+    host: HostToolAfter,
+    output: unknown,
+  ): Promise<void> {
     const callDigest = digestCall(ledger, host.callID)
     const pending = pendingStarts.get(callDigest)
     pendingStarts.delete(callDigest)
@@ -1118,6 +1290,12 @@ function createSessionRuntime(
       result.status === 'rejected' &&
       (result.reasonCode === 'guard-unavailable' ||
         result.reasonCode === 'invalid-configuration')
+    ) {
+      markUnavailable()
+    }
+    if (
+      result.status === 'started' &&
+      !(await seedRemoteScopes(runtimePolicy.requiredOperations ?? []))
     ) {
       markUnavailable()
     }
@@ -1223,6 +1401,8 @@ function createSessionRuntime(
     ) {
       return { status: 'unavailable' }
     }
+    const remoteReadbacks = await completionRemoteReadbacks(result.snapshot)
+    if (!remoteReadbacks) return { status: 'unavailable' }
     return {
       status: 'ready',
       readbacks: [
@@ -1231,8 +1411,34 @@ function createSessionRuntime(
           repositoryIdentity: result.snapshot.repositoryRevisionDigest,
           worktreeIdentity: result.snapshot.worktreeRevisionDigest,
         },
+        ...remoteReadbacks,
       ],
     }
+  }
+
+  async function completionRemoteReadbacks(
+    local: OperationObserverSnapshot,
+  ): Promise<readonly unknown[] | undefined> {
+    const remoteOperations = guard
+      .status()
+      .satisfiedOperations.filter(remoteOperation)
+    if (remoteOperations.length === 0) return []
+    const remoteSnapshot = options.observer?.remoteSnapshot
+    if (!remoteSnapshot) return undefined
+    const readbacks: unknown[] = []
+    for (const operation of remoteOperations) {
+      const result = await readRemoteScope(remoteSnapshot, operation)
+      if (result?.status !== 'available') return undefined
+      readbacks.push(
+        remoteReadbackInput(
+          operation,
+          local,
+          options.workspaceIdentity,
+          result.snapshot,
+        ),
+      )
+    }
+    return readbacks
   }
 
   async function finishComplete(
@@ -1338,12 +1544,41 @@ function createSessionRuntime(
       : undefined
   }
 
+  async function captureRemoteAfter(
+    operation: RemoteOperation,
+  ): Promise<OperationObserverRemoteSnapshot | undefined> {
+    const remoteSnapshot = options.observer?.remoteSnapshot
+    if (!remoteSnapshot) return undefined
+    let result: OperationObserverRemoteResult
+    try {
+      result = await remoteSnapshot(operation, 'after')
+    } catch {
+      return undefined
+    }
+    return result.status === 'available' ? result.snapshot : undefined
+  }
+
+  async function readRemoteScope(
+    reader: NonNullable<OpencodeOperationObserver['remoteSnapshot']>,
+    operation: RemoteOperation,
+    phase: 'before' | 'after' = 'after',
+  ): Promise<OperationObserverRemoteResult | undefined> {
+    try {
+      return await reader(operation, phase)
+    } catch {
+      return undefined
+    }
+  }
+
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: field projection is kept centralized for fail-closed observation construction
   function buildOperationObservation(
     host: HostToolAfter,
     pending: PendingOperation,
     after: OperationObserverSnapshot,
     current: WorkflowStatus,
     output: HostOutput,
+    operation = operationCandidate(host.tool as LocalOperationTool),
+    remoteAfter?: OperationObserverRemoteSnapshot,
   ): ReceiptOperationObservation | undefined {
     if (!current.epoch || !current.unit || !isLocalOperationTool(host.tool)) {
       return undefined
@@ -1351,7 +1586,7 @@ function createSessionRuntime(
     const command = host.tool === 'bash' ? bashCommand(host.args) : undefined
     return {
       callId: host.callID,
-      operation: operationCandidate(host.tool),
+      operation,
       tool: host.tool,
       ...(command ? { command } : {}),
       context: {
@@ -1360,11 +1595,35 @@ function createSessionRuntime(
         workspaceIdentity: options.workspaceIdentity,
         repositoryIdentity: pending.before.repositoryRevisionDigest,
         worktreeIdentity: pending.before.worktreeRevisionDigest,
+        ...(pending.remoteBefore?.status === 'available'
+          ? {
+              resourceIdentity: pending.remoteBefore.snapshot.resourceIdentity,
+              resourceRevisionIdentity:
+                pending.remoteBefore.snapshot.resourceRevisionIdentity,
+            }
+          : operation === 'pr-creation' && remoteAfter
+            ? { resourceIdentity: remoteAfter.resourceIdentity }
+            : {}),
       },
       after: {
         workspaceIdentity: options.workspaceIdentity,
         repositoryIdentity: after.repositoryRevisionDigest,
         worktreeIdentity: after.worktreeRevisionDigest,
+        ...(remoteAfter
+          ? {
+              resourceIdentity: remoteAfter.resourceIdentity,
+              resourceRevisionIdentity: remoteAfter.resourceRevisionIdentity,
+              ...(remoteAfter.pullRequest
+                ? { pullRequest: remoteAfter.pullRequest }
+                : {}),
+              ...(remoteAfter.checkState
+                ? { checkState: remoteAfter.checkState }
+                : {}),
+              ...(remoteAfter.reviewDecision
+                ? { reviewDecision: remoteAfter.reviewDecision }
+                : {}),
+            }
+          : {}),
       },
       terminal: terminalForOutput(host.tool, output),
     }
@@ -1386,6 +1645,15 @@ function createSessionRuntime(
       return { status: 'unavailable' }
     }
     if (!localOperation(classification.category)) {
+      if (remoteOperation(classification.category)) {
+        return {
+          status: 'ready',
+          observation: {
+            ...observation,
+            operation: classification.category,
+          },
+        }
+      }
       return classification.category === null
         ? { status: 'deferred' }
         : { status: 'unavailable' }
@@ -1406,6 +1674,7 @@ function createSessionRuntime(
     }
   }
 
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: the ordered fail-closed pipeline must remain atomic
   async function completeOperationObservation(
     callDigest: string,
     host: HostToolAfter,
@@ -1438,9 +1707,48 @@ function createSessionRuntime(
       sealOperation(callDigest, pending, true)
       return { status: classification.status }
     }
-    const observed = await observeClassifiedOperation(
-      classification.observation,
-    )
+    let finalObservation = classification.observation
+    if (remoteOperation(finalObservation.operation)) {
+      const remoteAfter = await captureRemoteAfter(finalObservation.operation)
+      if (!remoteAfter) {
+        sealOperation(callDigest, pending, true)
+        return { status: 'unavailable' }
+      }
+      const rebuilt = buildOperationObservation(
+        host,
+        pending,
+        afterSnapshot,
+        guard.status(),
+        parsedOutput,
+        finalObservation.operation,
+        remoteAfter,
+      )
+      if (!rebuilt) {
+        sealOperation(callDigest, pending, true)
+        return { status: 'ignored' }
+      }
+      finalObservation = rebuilt
+      if (
+        finalObservation.operation === 'pr-creation' &&
+        pending.remoteBefore?.status !== 'available'
+      ) {
+        const seeded = guard.observeReadback({
+          operation: 'pr-creation',
+          workspaceIdentity: options.workspaceIdentity,
+          repositoryIdentity: afterSnapshot.repositoryRevisionDigest,
+          worktreeIdentity: afterSnapshot.worktreeRevisionDigest,
+          resourceIdentity: remoteAfter.resourceIdentity,
+          ...(remoteAfter.pullRequest
+            ? { pullRequest: remoteAfter.pullRequest }
+            : {}),
+        })
+        if (seeded.status === 'rejected') {
+          sealOperation(callDigest, pending, true)
+          return { status: 'unavailable' }
+        }
+      }
+    }
+    const observed = await observeClassifiedOperation(finalObservation)
     if (!observed) {
       sealOperation(callDigest, pending, true)
       return { status: 'unavailable' }
@@ -1506,9 +1814,9 @@ function createSessionRuntime(
       const host = parseHostAfter(input)
       if (!host) return
       if (host.tool === 'systematic_skill' || host.tool === 'skill') {
-        finishSkill(host, output)
+        await finishSkill(host, output)
       } else if (host.tool === 'systematic_workflow_start') {
-        finishStart(host, output)
+        await finishStart(host, output)
       } else if (host.tool === 'systematic_workflow_complete') {
         await finishComplete(host, output)
       } else if (isLocalOperationTool(host.tool)) {

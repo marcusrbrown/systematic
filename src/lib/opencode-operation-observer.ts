@@ -17,6 +17,18 @@ export type OperationObserverReasonCode =
   | 'file-limit'
   | 'file-output-limit'
   | 'file-read-failed'
+  | 'remote-command-failed'
+  | 'remote-command-output-limit'
+  | 'remote-invalid-json'
+  | 'remote-missing-field'
+  | 'remote-item-limit'
+
+export type RemoteOperation =
+  | 'push'
+  | 'pr-creation'
+  | 'check-readback'
+  | 'review-readback'
+export type RemoteReadbackPhase = 'before' | 'after'
 
 export interface OperationObserverSnapshot {
   readonly targetDigest: string
@@ -40,11 +52,50 @@ export interface OperationObserverCommandResult {
   readonly stderr: string
 }
 
+export interface OperationObserverRemoteCommandResult {
+  readonly status: number
+  readonly stdout: string
+  readonly stderr: string
+}
+
 export type OperationObserverCommandRunner = (
   args: readonly string[],
   cwd: string,
   maxOutputBytes: number,
 ) => OperationObserverCommandResult
+
+export type OperationObserverRemoteCommandRunner = (
+  executable: 'git' | 'gh',
+  args: readonly string[],
+  cwd: string,
+  maxOutputBytes: number,
+) => OperationObserverRemoteCommandResult
+
+export interface OperationObserverRemoteSnapshot {
+  readonly resourceIdentity: string
+  readonly resourceRevisionIdentity: string
+  readonly pullRequest?: {
+    readonly identity: string
+    readonly state: 'open' | 'closed' | 'merged'
+  }
+  readonly checkState?: 'completed-success' | 'completed-failure' | 'pending'
+  readonly reviewDecision?:
+    | 'approved'
+    | 'changes-requested'
+    | 'commented'
+    | 'pending'
+}
+
+export type OperationObserverRemoteResult =
+  | {
+      readonly status: 'available'
+      readonly snapshot: OperationObserverRemoteSnapshot
+    }
+  | { readonly status: 'missing-resource' }
+  | {
+      readonly status: 'unavailable'
+      readonly reasonCode: OperationObserverReasonCode
+    }
 
 export interface OperationObserverLimits {
   readonly maxCommandOutputBytes?: number
@@ -56,6 +107,7 @@ export interface OperationObserverLimits {
 export interface OpencodeOperationObserverOptions {
   readonly targetDirectory: string
   readonly commandRunner?: OperationObserverCommandRunner
+  readonly remoteCommandRunner?: OperationObserverRemoteCommandRunner
   readonly fileReader?: (filePath: string) => Uint8Array
   readonly symlinkReader?: (filePath: string) => string
   readonly realPath?: (filePath: string) => string
@@ -65,6 +117,10 @@ export interface OpencodeOperationObserverOptions {
 export interface OpencodeOperationObserver {
   readonly targetDigest: string
   snapshot(): Promise<OperationObserverResult>
+  remoteSnapshot?(
+    operation: RemoteOperation,
+    phase: RemoteReadbackPhase,
+  ): Promise<OperationObserverRemoteResult>
 }
 
 interface Limits {
@@ -108,6 +164,28 @@ function defaultCommandRunner(
 ): OperationObserverCommandResult {
   try {
     const result = spawnSync('git', [...args], {
+      cwd,
+      encoding: 'utf8',
+      maxBuffer: maxOutputBytes,
+    })
+    return {
+      status: result.status ?? -1,
+      stdout: typeof result.stdout === 'string' ? result.stdout : '',
+      stderr: typeof result.stderr === 'string' ? result.stderr : '',
+    }
+  } catch {
+    return { status: -1, stdout: '', stderr: '' }
+  }
+}
+
+function defaultRemoteCommandRunner(
+  executable: 'git' | 'gh',
+  args: readonly string[],
+  cwd: string,
+  maxOutputBytes: number,
+): OperationObserverRemoteCommandResult {
+  try {
+    const result = spawnSync(executable, [...args], {
       cwd,
       encoding: 'utf8',
       maxBuffer: maxOutputBytes,
@@ -368,6 +446,309 @@ function readWorktreeRevision(
   return { status: 'ok', digest: hash.digest('hex') }
 }
 
+function runRemoteCommand(
+  runner: OperationObserverRemoteCommandRunner,
+  executable: 'git' | 'gh',
+  args: readonly string[],
+  root: string,
+  limits: Limits,
+):
+  | { status: 'ok'; stdout: string }
+  | { status: 'error'; reasonCode: OperationObserverReasonCode } {
+  const result = runner(executable, args, root, limits.maxCommandOutputBytes)
+  if (
+    outputBytes(result.stdout) > limits.maxCommandOutputBytes ||
+    outputBytes(result.stderr) > limits.maxCommandOutputBytes
+  ) {
+    return { status: 'error', reasonCode: 'remote-command-output-limit' }
+  }
+  if (result.status !== 0) {
+    return { status: 'error', reasonCode: 'remote-command-failed' }
+  }
+  return { status: 'ok', stdout: result.stdout }
+}
+
+function readRemoteGitValue(
+  runner: OperationObserverRemoteCommandRunner,
+  args: readonly string[],
+  root: string,
+  limits: Limits,
+):
+  | { status: 'ok'; value: string }
+  | { status: 'missing-resource' }
+  | { status: 'unavailable'; reasonCode: OperationObserverReasonCode } {
+  const result = runRemoteCommand(runner, 'git', args, root, limits)
+  if (result.status === 'error') {
+    return result.reasonCode === 'remote-command-failed'
+      ? { status: 'missing-resource' }
+      : { status: 'unavailable', reasonCode: result.reasonCode }
+  }
+  const value = result.stdout.trim()
+  return value.length > 0
+    ? { status: 'ok', value }
+    : { status: 'unavailable', reasonCode: 'remote-missing-field' }
+}
+
+function parseRemoteJson(
+  result:
+    | { status: 'ok'; stdout: string }
+    | { status: 'error'; reasonCode: OperationObserverReasonCode },
+):
+  | { status: 'ok'; value: unknown }
+  | { status: 'error'; reasonCode: OperationObserverReasonCode } {
+  if (result.status === 'error') return result
+  try {
+    return { status: 'ok', value: JSON.parse(result.stdout) as unknown }
+  } catch {
+    return { status: 'error', reasonCode: 'remote-invalid-json' }
+  }
+}
+
+function isHexRevision(value: string): boolean {
+  return /^[0-9a-fA-F]{40}$/.test(value)
+}
+
+function remoteState(value: unknown): 'open' | 'closed' | 'merged' | undefined {
+  if (value === 'OPEN') return 'open'
+  if (value === 'CLOSED') return 'closed'
+  if (value === 'MERGED') return 'merged'
+  return undefined
+}
+
+function parsePullRequest(
+  value: unknown,
+  limits: Limits,
+):
+  | {
+      status: 'ok'
+      number: number
+      state: 'open' | 'closed' | 'merged'
+      headRefOid: string
+      reviewDecision?: unknown
+    }
+  | { status: 'error'; reasonCode: OperationObserverReasonCode } {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return { status: 'error', reasonCode: 'remote-missing-field' }
+  }
+  const record = value as Record<string, unknown>
+  const number = record.number
+  const state = remoteState(record.state)
+  const headRefOid = record.headRefOid
+  if (
+    typeof number !== 'number' ||
+    !Number.isSafeInteger(number) ||
+    number <= 0 ||
+    state === undefined ||
+    typeof headRefOid !== 'string' ||
+    !isHexRevision(headRefOid) ||
+    Object.keys(record).length > limits.maxFiles
+  ) {
+    return { status: 'error', reasonCode: 'remote-missing-field' }
+  }
+  return {
+    status: 'ok',
+    number,
+    state,
+    headRefOid,
+    reviewDecision: record.reviewDecision,
+  }
+}
+
+function reviewState(
+  value: unknown,
+): 'approved' | 'changes-requested' | 'commented' | 'pending' | undefined {
+  if (value === null || value === 'REVIEW_REQUIRED') return 'pending'
+  if (value === 'APPROVED') return 'approved'
+  if (value === 'CHANGES_REQUESTED') return 'changes-requested'
+  if (value === 'COMMENTED') return 'commented'
+  return undefined
+}
+
+function checkState(
+  value: unknown,
+  limits: Limits,
+): 'completed-success' | 'completed-failure' | 'pending' | undefined {
+  if (
+    !Array.isArray(value) ||
+    value.length === 0 ||
+    value.length > limits.maxFiles
+  )
+    return undefined
+  let pending = false
+  let failed = false
+  for (const entry of value) {
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry))
+      return undefined
+    const state = (entry as Record<string, unknown>).state
+    if (state === 'SUCCESS') continue
+    if (
+      state === 'PENDING' ||
+      state === 'QUEUED' ||
+      state === 'IN_PROGRESS' ||
+      state === 'EXPECTED'
+    ) {
+      pending = true
+      continue
+    }
+    failed = true
+  }
+  if (pending) return 'pending'
+  return failed ? 'completed-failure' : 'completed-success'
+}
+
+function remoteResultFromPullRequest(
+  pullRequest: {
+    number: number
+    state: 'open' | 'closed' | 'merged'
+    headRefOid: string
+  },
+  extra: {
+    checkState?: OperationObserverRemoteSnapshot['checkState']
+    reviewDecision?: OperationObserverRemoteSnapshot['reviewDecision']
+  } = {},
+): OperationObserverRemoteResult {
+  const resourceIdentity = digest('remote-resource', [
+    String(pullRequest.number),
+  ])
+  const resourceRevisionIdentity = digest('remote-resource-revision', [
+    pullRequest.headRefOid.toLowerCase(),
+  ])
+  return {
+    status: 'available',
+    snapshot: {
+      resourceIdentity,
+      resourceRevisionIdentity,
+      pullRequest: {
+        identity: resourceIdentity,
+        state: pullRequest.state,
+      },
+      ...extra,
+    },
+  }
+}
+
+function readPushRemoteSnapshot(
+  runner: OperationObserverRemoteCommandRunner,
+  phase: RemoteReadbackPhase,
+  root: string,
+  limits: Limits,
+): OperationObserverRemoteResult {
+  const upstream = readRemoteGitValue(
+    runner,
+    ['rev-parse', '--abbrev-ref', '@{upstream}'],
+    root,
+    limits,
+  )
+  if (upstream.status !== 'ok') {
+    return upstream.status === 'missing-resource'
+      ? upstream
+      : { status: 'unavailable', reasonCode: upstream.reasonCode }
+  }
+  const revision = readRemoteGitValue(
+    runner,
+    ['rev-parse', phase === 'before' ? '@{upstream}' : 'HEAD'],
+    root,
+    limits,
+  )
+  if (revision.status !== 'ok') {
+    return revision.status === 'missing-resource'
+      ? revision
+      : { status: 'unavailable', reasonCode: revision.reasonCode }
+  }
+  return {
+    status: 'available',
+    snapshot: {
+      resourceIdentity: digest('remote-resource', [upstream.value]),
+      resourceRevisionIdentity: digest('remote-resource-revision', [
+        revision.value,
+      ]),
+    },
+  }
+}
+
+function readRemotePullRequest(
+  runner: OperationObserverRemoteCommandRunner,
+  operation: Exclude<RemoteOperation, 'push'>,
+  root: string,
+  limits: Limits,
+): OperationObserverRemoteResult {
+  const viewArgs =
+    operation === 'review-readback'
+      ? ['pr', 'view', '--json', 'number,state,headRefOid,reviewDecision']
+      : ['pr', 'view', '--json', 'number,state,headRefOid']
+  const view = runRemoteCommand(runner, 'gh', viewArgs, root, limits)
+  if (view.status === 'error') {
+    return view.reasonCode === 'remote-command-failed'
+      ? { status: 'missing-resource' }
+      : { status: 'unavailable', reasonCode: view.reasonCode }
+  }
+  const parsed = parseRemoteJson(view)
+  if (parsed.status === 'error')
+    return { status: 'unavailable', reasonCode: parsed.reasonCode }
+  const pullRequest = parsePullRequest(parsed.value, limits)
+  if (pullRequest.status === 'error')
+    return { status: 'unavailable', reasonCode: pullRequest.reasonCode }
+  return operation === 'review-readback'
+    ? readReviewReadback(pullRequest)
+    : readCheckReadback(runner, root, limits, pullRequest)
+}
+
+function readReviewReadback(pullRequest: {
+  number: number
+  state: 'open' | 'closed' | 'merged'
+  headRefOid: string
+  reviewDecision?: unknown
+}): OperationObserverRemoteResult {
+  const decision = reviewState(pullRequest.reviewDecision)
+  return decision === undefined
+    ? { status: 'unavailable', reasonCode: 'remote-missing-field' }
+    : remoteResultFromPullRequest(pullRequest, { reviewDecision: decision })
+}
+
+function readCheckReadback(
+  runner: OperationObserverRemoteCommandRunner,
+  root: string,
+  limits: Limits,
+  pullRequest: {
+    number: number
+    state: 'open' | 'closed' | 'merged'
+    headRefOid: string
+  },
+): OperationObserverRemoteResult {
+  const checks = runRemoteCommand(
+    runner,
+    'gh',
+    ['pr', 'checks', '--json', 'state'],
+    root,
+    limits,
+  )
+  if (checks.status === 'error') {
+    return checks.reasonCode === 'remote-command-failed'
+      ? { status: 'missing-resource' }
+      : { status: 'unavailable', reasonCode: checks.reasonCode }
+  }
+  const parsedChecks = parseRemoteJson(checks)
+  if (parsedChecks.status === 'error') {
+    return { status: 'unavailable', reasonCode: parsedChecks.reasonCode }
+  }
+  const state = checkState(parsedChecks.value, limits)
+  return state === undefined
+    ? { status: 'unavailable', reasonCode: 'remote-missing-field' }
+    : remoteResultFromPullRequest(pullRequest, { checkState: state })
+}
+
+function readRemoteSnapshot(
+  runner: OperationObserverRemoteCommandRunner,
+  operation: RemoteOperation,
+  phase: RemoteReadbackPhase,
+  root: string,
+  limits: Limits,
+): OperationObserverRemoteResult {
+  return operation === 'push'
+    ? readPushRemoteSnapshot(runner, phase, root, limits)
+    : readRemotePullRequest(runner, operation, root, limits)
+}
+
 export function createOpencodeOperationObserver(
   options: OpencodeOperationObserverOptions,
 ): OpencodeOperationObserver {
@@ -382,6 +763,7 @@ export function createOpencodeOperationObserver(
   }
   const targetDigest = digest('target', [targetDirectory])
   const runner = options.commandRunner ?? defaultCommandRunner
+  const remoteRunner = options.remoteCommandRunner ?? defaultRemoteCommandRunner
   const fileReader = options.fileReader ?? fs.readFileSync
   const symlinkReader = options.symlinkReader ?? fs.readlinkSync
 
@@ -417,6 +799,22 @@ export function createOpencodeOperationObserver(
           worktreeRevisionDigest: worktree.digest,
         },
       }
+    },
+    async remoteSnapshot(operation, phase) {
+      const rootResult = runCommand(
+        runner,
+        ['rev-parse', '--show-toplevel'],
+        targetDirectory,
+        limits,
+      )
+      if (rootResult.status === 'error') {
+        return { status: 'unavailable', reasonCode: rootResult.reasonCode }
+      }
+      const root = rootResult.output.stdout.trim()
+      if (root.length === 0 || outputBytes(root) > limits.maxPathBytes) {
+        return { status: 'unavailable', reasonCode: 'target-unavailable' }
+      }
+      return readRemoteSnapshot(remoteRunner, operation, phase, root, limits)
     },
   }
 }

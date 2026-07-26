@@ -6,6 +6,7 @@ import path from 'node:path'
 import {
   createOpencodeOperationObserver,
   type OperationObserverCommandResult,
+  type OperationObserverRemoteCommandResult,
 } from '../../src/lib/opencode-operation-observer.js'
 
 interface GitFixture {
@@ -262,6 +263,106 @@ describe('OpenCode operation observer', () => {
     } finally {
       fs.rmSync(outsideTarget, { force: true })
       fs.rmSync(secondOutsideTarget, { force: true })
+      fixture.cleanup()
+    }
+  })
+
+  test('returns bounded remote readbacks with digest-only retained identities', async () => {
+    const fixture = createGitFixture()
+    const remoteCommandRunner = (
+      executable: 'git' | 'gh',
+      args: readonly string[],
+      _cwd: string,
+      _maxOutputBytes: number,
+    ): OperationObserverRemoteCommandResult => {
+      if (executable === 'git') {
+        return {
+          status: 0,
+          stdout:
+            args[0] === 'rev-parse' && args[1] === 'HEAD'
+              ? 'a'.repeat(40)
+              : 'origin/main\n',
+          stderr: '',
+        }
+      }
+      if (args[0] === 'pr' && args[1] === 'view') {
+        return {
+          status: 0,
+          stdout: JSON.stringify({
+            number: 42,
+            state: 'OPEN',
+            headRefOid: 'b'.repeat(40),
+          }),
+          stderr: '',
+        }
+      }
+      return {
+        status: 0,
+        stdout: JSON.stringify([{ state: 'SUCCESS' }]),
+        stderr: '',
+      }
+    }
+    try {
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        remoteCommandRunner,
+      })
+      const result = await observer.remoteSnapshot('check-readback', 'after')
+      expect(result.status).toBe('available')
+      if (result.status !== 'available') return
+      expect(result.snapshot.resourceIdentity).toMatch(/^[0-9a-f]{64}$/)
+      expect(result.snapshot.resourceRevisionIdentity).toMatch(/^[0-9a-f]{64}$/)
+      expect(result.snapshot.pullRequest).toEqual({
+        identity: expect.stringMatching(/^[0-9a-f]{64}$/),
+        state: 'open',
+      })
+      expect(result.snapshot.checkState).toBe('completed-success')
+      expect(JSON.stringify(result)).not.toContain('"number"')
+      expect(JSON.stringify(result)).not.toContain('OPEN')
+      expect(JSON.stringify(result)).not.toContain('b'.repeat(40))
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('fails closed on bounded or malformed remote readbacks', async () => {
+    const fixture = createGitFixture()
+    try {
+      const oversized = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        remoteCommandRunner: () => ({
+          status: 0,
+          stdout: 'x'.repeat(8192),
+          stderr: '',
+        }),
+        limits: { maxCommandOutputBytes: 4096 },
+      })
+      await expect(
+        oversized.remoteSnapshot('review-readback', 'after'),
+      ).resolves.toEqual({
+        status: 'unavailable',
+        reasonCode: 'remote-command-output-limit',
+      })
+
+      const malformed = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        remoteCommandRunner: (
+          _executable: 'git' | 'gh',
+          _args: readonly string[],
+          _cwd: string,
+          _maxOutputBytes: number,
+        ) => ({ status: 0, stdout: '{bad', stderr: '' }),
+      })
+      const malformedResult = await malformed.remoteSnapshot(
+        'pr-creation',
+        'after',
+      )
+      expect(malformedResult).toEqual({
+        status: 'unavailable',
+        reasonCode: 'remote-invalid-json',
+      })
+      expect(JSON.stringify(malformedResult)).not.toContain('bad')
+    } finally {
       fixture.cleanup()
     }
   })

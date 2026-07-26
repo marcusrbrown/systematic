@@ -3,6 +3,7 @@ import { z } from 'zod'
 
 import type {
   OpencodeOperationObserver,
+  OperationObserverRemoteResult,
   OperationObserverSnapshot,
 } from '../../src/lib/opencode-operation-observer.js'
 import {
@@ -57,8 +58,12 @@ const OPERATION_SCOPE = {
 
 function sequenceObserver(
   snapshots: readonly OperationObserverSnapshot[],
+  remoteResults: Readonly<
+    Record<string, readonly OperationObserverRemoteResult[]>
+  > = {},
 ): OpencodeOperationObserver {
   let index = 0
+  const remoteIndexes = new Map<string, number>()
   return {
     targetDigest: snapshots[0]?.targetDigest ?? 'a'.repeat(64),
     async snapshot() {
@@ -67,6 +72,31 @@ function sequenceObserver(
         return { status: 'unavailable', reasonCode: 'target-unavailable' }
       }
       return { status: 'available', snapshot }
+    },
+    async remoteSnapshot(operation, phase) {
+      const key = `${operation}:${phase}`
+      const values = remoteResults[key]
+      if (!values || values.length === 0) {
+        return { status: 'unavailable', reasonCode: 'remote-missing-field' }
+      }
+      const current = remoteIndexes.get(key) ?? 0
+      remoteIndexes.set(key, current + 1)
+      return values[Math.min(current, values.length - 1)]
+    },
+  }
+}
+
+function remoteAvailable(
+  resourceIdentity = 'd'.repeat(64),
+  resourceRevisionIdentity = 'e'.repeat(64),
+  extras: Record<string, unknown> = {},
+): OperationObserverRemoteResult {
+  return {
+    status: 'available',
+    snapshot: {
+      resourceIdentity,
+      resourceRevisionIdentity,
+      ...extras,
     },
   }
 }
@@ -1215,31 +1245,150 @@ describe('OpenCode workflow guard adapter', () => {
     expect(ledger(unchanged).listReceipts()).toHaveLength(0)
   })
 
-  test('push, PR, check, and review commands do not mint in this slice', async () => {
-    for (const command of [
-      'git push origin main',
-      'gh pr create --title receipt-test',
-      'gh pr checks 42',
-      'gh pr view 42 --json reviewDecision',
-    ]) {
+  test('successful push mints remote evidence when the upstream revision changes', async () => {
+    const observations: ReceiptOperationObservation[] = []
+    const adapter = createAdapter(
+      'observe',
+      false,
+      sequenceObserver([operationSnapshot(), operationSnapshot()], {
+        'push:before': [remoteAvailable('d'.repeat(64), 'e'.repeat(64))],
+        'push:after': [remoteAvailable('d'.repeat(64), 'f'.repeat(64))],
+      }),
+      ['push'],
+      observations,
+    )
+    await observeSkill(adapter, 'systematic_skill', 'ce:work')
+    const output = {
+      title: 'push',
+      output: 'pushed',
+      metadata: { hostMetadata: 'preserved', exit: 0 },
+    }
+    await observeOperationTool(
+      adapter,
+      'bash',
+      { command: 'git push origin main' },
+      output,
+      'remote-push',
+    )
+    expect(ledger(adapter).listReceipts()[0]?.canonical.operation).toBe('push')
+    expect(output.metadata.hostMetadata).toBe('preserved')
+    expect(
+      output.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY],
+    ).toBeDefined()
+  })
+
+  test('remote PR, check, and review readbacks mint their accepted classes', async () => {
+    const cases = [
+      {
+        operation: 'pr-creation' as const,
+        command: 'gh pr create --title "Receipt guard" --body "Details"',
+        before: { status: 'missing-resource' as const },
+        after: remoteAvailable('d'.repeat(64), 'f'.repeat(64), {
+          pullRequest: { identity: 'd'.repeat(64), state: 'open' },
+        }),
+      },
+      {
+        operation: 'check-readback' as const,
+        command: 'gh pr checks 42',
+        before: remoteAvailable('d'.repeat(64), 'f'.repeat(64), {
+          pullRequest: { identity: 'd'.repeat(64), state: 'open' },
+          checkState: 'pending',
+        }),
+        after: remoteAvailable('d'.repeat(64), 'f'.repeat(64), {
+          pullRequest: { identity: 'd'.repeat(64), state: 'open' },
+          checkState: 'completed-success',
+        }),
+      },
+      {
+        operation: 'review-readback' as const,
+        command: 'gh pr view 42 --json reviewDecision',
+        before: remoteAvailable('d'.repeat(64), 'f'.repeat(64), {
+          pullRequest: { identity: 'd'.repeat(64), state: 'open' },
+          reviewDecision: 'pending',
+        }),
+        after: remoteAvailable('d'.repeat(64), 'f'.repeat(64), {
+          pullRequest: { identity: 'd'.repeat(64), state: 'open' },
+          reviewDecision: 'approved',
+        }),
+      },
+    ]
+    for (const testCase of cases) {
+      const observations: ReceiptOperationObservation[] = []
       const adapter = createAdapter(
         'observe',
         false,
-        sequenceObserver([
-          operationSnapshot(),
-          operationSnapshot('d'.repeat(64), 'd'.repeat(64)),
-        ]),
+        sequenceObserver([operationSnapshot(), operationSnapshot()], {
+          [`${testCase.operation}:before`]: [testCase.before],
+          [`${testCase.operation}:after`]: [testCase.after],
+        }),
+        [testCase.operation],
+        observations,
       )
       await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      const output = {
+        title: testCase.operation,
+        output: 'remote result',
+        metadata: { exit: 0 },
+      }
       await observeOperationTool(
         adapter,
         'bash',
-        { command },
-        { title: 'command', output: 'result', metadata: { exit: 0 } },
-        `unsupported-${command}`,
+        { command: testCase.command },
+        output,
+        `remote-${testCase.operation}`,
       )
-      expect(ledger(adapter).listReceipts()).toHaveLength(0)
+      expect(ledger(adapter).listReceipts()[0]?.canonical.operation).toBe(
+        testCase.operation,
+      )
     }
+  })
+
+  test('remote no-op and unavailable readbacks mint nothing', async () => {
+    const unchanged = createAdapter(
+      'observe',
+      false,
+      sequenceObserver([operationSnapshot(), operationSnapshot()], {
+        'push:before': [remoteAvailable('d'.repeat(64), 'e'.repeat(64))],
+        'push:after': [remoteAvailable('d'.repeat(64), 'e'.repeat(64))],
+      }),
+      ['push'],
+    )
+    await observeSkill(unchanged, 'systematic_skill', 'ce:work')
+    await observeOperationTool(
+      unchanged,
+      'bash',
+      { command: 'git push origin main' },
+      { title: 'push', output: 'pushed', metadata: { exit: 0 } },
+      'remote-push-no-op',
+    )
+    expect(ledger(unchanged).listReceipts()).toHaveLength(0)
+
+    const unavailable = createAdapter(
+      'observe',
+      false,
+      sequenceObserver([operationSnapshot(), operationSnapshot()], {
+        'check-readback:before': [
+          remoteAvailable('d'.repeat(64), 'f'.repeat(64), {
+            pullRequest: { identity: 'd'.repeat(64), state: 'open' },
+            checkState: 'pending',
+          }),
+        ],
+        'check-readback:after': [
+          { status: 'unavailable', reasonCode: 'remote-missing-field' },
+        ],
+      }),
+      ['check-readback'],
+    )
+    await observeSkill(unavailable, 'systematic_skill', 'ce:work')
+    await observeOperationTool(
+      unavailable,
+      'bash',
+      { command: 'gh pr checks 42' },
+      { title: 'checks', output: 'unavailable', metadata: { exit: 0 } },
+      'remote-checks-unavailable',
+    )
+    expect(ledger(unavailable).listReceipts()).toHaveLength(0)
+    expect(status(unavailable).state).toBe('unavailable')
   })
 
   test('before-only operation is abandoned at the next status boundary', async () => {
