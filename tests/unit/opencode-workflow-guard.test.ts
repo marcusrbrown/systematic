@@ -3,6 +3,7 @@ import { z } from 'zod'
 
 import type {
   OpencodeOperationObserver,
+  OpencodeWorkflowHostReadback,
   OperationObserverRemoteResult,
   OperationObserverSnapshot,
 } from '../../src/lib/opencode-operation-observer.js'
@@ -107,11 +108,19 @@ function createAdapter(
   observer?: OpencodeOperationObserver,
   runtimeRequiredOperations: readonly string[] = [],
   observations?: ReceiptOperationObservation[],
+  hostReadback?: OpencodeWorkflowHostReadback,
+  sharedRecovery = false,
 ): OpencodeWorkflowGuard {
   const classifier = createReceiptClassifier()
   return createOpencodeWorkflowGuard({
     config: { mode, debug },
     ...(observer ? OPERATION_SCOPE : SCOPE),
+    ...(sharedRecovery
+      ? {
+          registrationIdentity: 'adapter-test-registration',
+          sessionSalt: new Uint8Array(32).fill(7),
+        }
+      : {}),
     ...(observer
       ? {
           observer,
@@ -125,6 +134,7 @@ function createAdapter(
               }
             : classifier,
           runtimeRequiredOperations,
+          hostReadback,
         }
       : {}),
   })
@@ -1650,5 +1660,69 @@ describe('OpenCode workflow guard adapter', () => {
     expect(ledger(first, SESSION_B).listReceipts()).toHaveLength(0)
     expect(ledger(second, SESSION_B).listReceipts()).toHaveLength(0)
     expect(status(second, SESSION_B).epoch).not.toBeNull()
+  })
+
+  test('recovers persisted receipt markers once and restores the workflow state', async () => {
+    const source = createAdapter(
+      'observe',
+      false,
+      sequenceObserver([
+        operationSnapshot(),
+        operationSnapshot(undefined, 'd'.repeat(64)),
+      ]),
+      [],
+      [],
+      undefined,
+      true,
+    )
+    const skillOutput = { title: 'skill', output: 'loaded', metadata: {} }
+    await observeSkill(
+      source,
+      'systematic_skill',
+      'ce:work',
+      'skill-recovery',
+      SESSION_A,
+      skillOutput,
+    )
+    const output = {
+      title: 'write',
+      output: 'changed',
+      metadata: {},
+    }
+    await observeOperationTool(
+      source,
+      'write',
+      { filePath: 'recovered.ts', content: 'x' },
+      output,
+      'recovery-source',
+    )
+    const marker = output.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]
+    expect(marker).toBeDefined()
+
+    const parts = [
+      { metadata: skillOutput.metadata },
+      { metadata: { [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: marker } },
+    ]
+    const restored = createAdapter(
+      'observe',
+      false,
+      sequenceObserver([
+        operationSnapshot(undefined, 'e'.repeat(64)),
+        operationSnapshot(undefined, 'd'.repeat(64)),
+      ]),
+      [],
+      [],
+      {
+        readSessionParts: async () => parts,
+        listChildren: async () => [],
+      },
+      true,
+    )
+    await restored.tools.systematic_workflow_status.execute({}, toolContext())
+    expect(status(restored).epoch).not.toBeNull()
+    expect(status(restored).unit).not.toBeNull()
+    expect(status(restored).satisfiedOperations).toContain('implementation')
+    await restored.tools.systematic_workflow_status.execute({}, toolContext())
+    expect(status(restored).epoch).not.toBeNull()
   })
 })

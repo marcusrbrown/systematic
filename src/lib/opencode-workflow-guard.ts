@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto'
 import type { ToolDefinition } from '@opencode-ai/plugin'
 import { z } from 'zod'
 import { INTERNAL_AGENT_SIGNATURES } from './bootstrap.js'
@@ -20,7 +21,10 @@ import {
   type ReceiptLedger,
   type ReceiptOperation,
 } from './receipt-ledger.js'
-import { projectReceiptMintMarker } from './receipt-readback.js'
+import {
+  projectReceiptMintMarker,
+  projectReceiptProgressionMarker,
+} from './receipt-readback.js'
 import {
   createWorkflowGuard,
   type EvidenceObservationResult,
@@ -131,6 +135,21 @@ export interface OpencodeWorkflowGuardOptions {
   observer?: OpencodeOperationObserver
   classifier?: ReceiptClassifier
   runtimeRequiredOperations?: readonly ReceiptOperation[]
+  hostReadback?: OpencodeWorkflowHostReadback
+  readonly registrationIdentity?: string
+  readonly sessionSalt?: Uint8Array
+}
+
+export interface OpencodeWorkflowChildSession {
+  readonly sessionId: string
+  readonly parentID?: string
+}
+
+export interface OpencodeWorkflowHostReadback {
+  readSessionParts(sessionID: string): Promise<ReadonlyArray<unknown>>
+  listChildren(
+    sessionID: string,
+  ): Promise<ReadonlyArray<OpencodeWorkflowChildSession>>
 }
 
 export interface OpencodeWorkflowGuardHooks {
@@ -167,6 +186,7 @@ interface SessionRuntime {
   startUnit(input: unknown, policy?: RuntimeUnitPolicy): unknown
   markUnavailable(): void
   metadata(): Record<string, unknown>
+  recover(sessionID: string): Promise<void>
 }
 
 interface HostToolBefore {
@@ -788,7 +808,11 @@ function buildMarker(
 function createSessionRuntime(
   options: OpencodeWorkflowGuardOptions,
 ): SessionRuntime {
-  const ledger = createReceiptLedger({ capabilityFlags: ['workflow-guard'] })
+  const ledger = createReceiptLedger({
+    capabilityFlags: ['workflow-guard'],
+    registrationIdentity: options.registrationIdentity,
+    sessionSalt: options.sessionSalt,
+  })
   const guard: WorkflowGuard = createWorkflowGuard({
     ledger,
     classifier: options.classifier,
@@ -810,6 +834,177 @@ function createSessionRuntime(
   const pendingOperations = new Map<string, PendingOperation>()
   const sealedOperations = new Map<string, SealedOperation>()
   const abandonedOperations = new Map<string, SealedOperation>()
+  const rolledUpChildren = new Set<string>()
+  let recoveryAttempted = false
+  let recoveryPromise: Promise<void> | undefined
+
+  function collectReceiptMarkers(value: unknown, markers: unknown[]): void {
+    if (!isRecord(value)) return
+    if (isRecord(value.metadata)) {
+      const marker = value.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]
+      if (Array.isArray(marker)) markers.push(...marker)
+      else if (marker !== undefined) markers.push(marker)
+    }
+    if (Array.isArray(value.parts)) {
+      for (const part of value.parts) collectReceiptMarkers(part, markers)
+    }
+  }
+
+  async function performRecovery(sessionID: string): Promise<void> {
+    const reader = options.hostReadback?.readSessionParts
+    if (!reader) return
+    let parts: ReadonlyArray<unknown>
+    try {
+      parts = await reader(sessionID)
+    } catch {
+      return
+    }
+    const markers: unknown[] = []
+    for (const part of parts) collectReceiptMarkers(part, markers)
+    if (markers.length === 0) return
+    const recovered = ledger.recoverReadback(markers)
+    if (recovered.status === 'rejected') {
+      markUnavailable()
+      return
+    }
+    const restored = guard.restore({
+      provenance: 'restart',
+      state: {
+        registrationDigest: ledger.metadata.registrationDigest,
+        receipts: recovered.receipts,
+        progression: recovered.progression,
+      },
+    })
+    if (restored.status === 'rejected') markUnavailable()
+  }
+
+  async function recoverFromHost(sessionID: string): Promise<void> {
+    if (recoveryAttempted) {
+      await recoveryPromise
+      return
+    }
+    recoveryAttempted = true
+    recoveryPromise = performRecovery(sessionID)
+    await recoveryPromise
+  }
+
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: lineage verification and parent minting must remain atomic
+  async function rollupForegroundTask(
+    host: HostToolAfter,
+    output: unknown,
+  ): Promise<void> {
+    if (!options.hostReadback || !isRecord(output)) return
+    if (!isRecord(output.metadata)) return
+    const childSessionID =
+      typeof output.metadata.sessionId === 'string' &&
+      output.metadata.sessionId.length <= 256
+        ? output.metadata.sessionId
+        : undefined
+    if (!childSessionID) return
+    const rollupKey = `${host.sessionID}:${host.callID}:${childSessionID}`
+    if (rolledUpChildren.has(rollupKey)) return
+    const children = await options.hostReadback.listChildren(host.sessionID)
+    if (
+      !children.some(
+        (child) =>
+          child.sessionId === childSessionID &&
+          child.parentID === host.sessionID,
+      )
+    ) {
+      markUnavailable()
+      return
+    }
+    let parts: ReadonlyArray<unknown>
+    try {
+      parts = await options.hostReadback.readSessionParts(childSessionID)
+    } catch {
+      markUnavailable()
+      return
+    }
+    const markers: unknown[] = []
+    for (const part of parts) collectReceiptMarkers(part, markers)
+    if (markers.length === 0) return
+    const childLedger = createReceiptLedger({
+      capabilityFlags: ['workflow-guard'],
+      registrationIdentity: options.registrationIdentity,
+      sessionSalt: options.sessionSalt,
+    })
+    const recovered = childLedger.recoverReadback(markers)
+    if (recovered.status === 'rejected') {
+      markUnavailable()
+      return
+    }
+    const current = await options.observer?.snapshot()
+    if (!current || current.status === 'unavailable') {
+      markUnavailable()
+      return
+    }
+    const currentStatus = guard.status()
+    if (!currentStatus.epoch || !currentStatus.unit) return
+    const expectedWorkspace = ledger.digestIdentity(
+      'workspace',
+      options.workspaceIdentity,
+    )
+    const expectedRepository = ledger.digestIdentity(
+      'repository',
+      options.repositoryIdentity ?? current.snapshot.repositoryRevisionDigest,
+    )
+    const expectedWorktree = ledger.digestIdentity(
+      'worktree',
+      options.worktreeIdentity ?? current.snapshot.worktreeRevisionDigest,
+    )
+    let minted = false
+    for (const childReceipt of recovered.receipts) {
+      const operation = childReceipt.canonical.operation
+      if (!localOperation(operation)) continue
+      if (
+        childReceipt.canonical.workspaceDigest !== expectedWorkspace ||
+        childReceipt.canonical.repositoryDigest !== expectedRepository ||
+        childReceipt.canonical.worktreeDigest !== expectedWorktree
+      ) {
+        markUnavailable()
+        return
+      }
+      const callID = `task-${host.callID}-${childReceipt.canonical.receiptId}`
+      const observation = {
+        callId: callID,
+        operation,
+        tool: 'write' as const,
+        context: {
+          epochId: currentStatus.epoch.epochId,
+          unitId: currentStatus.unit.unitId,
+          workspaceIdentity: options.workspaceIdentity,
+          repositoryIdentity:
+            operation === 'commit'
+              ? (options.repositoryIdentity ??
+                current.snapshot.repositoryRevisionDigest)
+              : current.snapshot.repositoryRevisionDigest,
+          worktreeIdentity:
+            operation === 'implementation'
+              ? (options.worktreeIdentity ??
+                current.snapshot.worktreeRevisionDigest)
+              : current.snapshot.worktreeRevisionDigest,
+        },
+        after: {
+          workspaceIdentity: options.workspaceIdentity,
+          repositoryIdentity: current.snapshot.repositoryRevisionDigest,
+          worktreeIdentity: current.snapshot.worktreeRevisionDigest,
+        },
+        terminal: {
+          status: 'success' as const,
+          output: 'non-empty' as const,
+          noOp: false,
+        },
+      }
+      const result = await guard.observeOperation(observation)
+      if (result.status === 'accepted') {
+        const receipt = receiptForOperation(callID, operation)
+        if (receipt) mergeReceiptMarker(output, receipt)
+        minted = true
+      }
+    }
+    if (minted) rolledUpChildren.add(rollupKey)
+  }
 
   const runtimePolicy: RuntimeUnitPolicy = {
     requiredOperations: options.runtimeRequiredOperations ?? [],
@@ -887,7 +1082,8 @@ function createSessionRuntime(
       worktreeIdentity: result.snapshot.worktreeRevisionDigest,
     })
     if (
-      observed.status === 'rejected' ||
+      (observed.status === 'rejected' &&
+        observed.reasonCode === 'workspace-mismatch') ||
       !(await refreshRemoteReadbacks(result.snapshot))
     ) {
       markUnavailable()
@@ -1171,6 +1367,7 @@ function createSessionRuntime(
     try {
       const host = parseHostBefore(input)
       if (!host || !isRecord(output)) return
+      await recoverFromHost(host.sessionID)
       await prepareHostCall(host, output.args)
     } catch (error) {
       if (isWorkflowGuardBlockedError(error)) throw error
@@ -1221,6 +1418,7 @@ function createSessionRuntime(
     return observed.status !== 'rejected'
   }
 
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: host skill completion preserves ordering and marker projection
   async function finishSkill(
     host: HostToolAfter,
     output: unknown,
@@ -1242,6 +1440,34 @@ function createSessionRuntime(
     if (!isSuccessfulAfter(output)) return
     completedSkillCalls.set(callDigest, pending.skill)
     await activateCompletedSkill(pending.skill)
+    const status = guard.status()
+    if (status.epoch) {
+      mergeProgressionMarker(
+        output,
+        projectReceiptProgressionMarker(ledger, {
+          target: 'epoch',
+          epochId: status.epoch.epochId,
+          family: status.epoch.family,
+          state: 'started',
+          transitionDigest: ledger.digestIdentity('call', host.callID),
+        }),
+      )
+    }
+    if (status.epoch && status.unit) {
+      mergeProgressionMarker(
+        output,
+        projectReceiptProgressionMarker(ledger, {
+          target: 'unit',
+          epochId: status.epoch.epochId,
+          unitId: status.unit.unitId,
+          family: status.epoch.family,
+          requiredOperations: status.unit.requiredOperations,
+          resourceScopes: [],
+          state: 'started',
+          transitionDigest: ledger.digestIdentity('call', host.callID),
+        }),
+      )
+    }
   }
 
   async function activateCompletedSkill(skill: string): Promise<void> {
@@ -1265,6 +1491,7 @@ function createSessionRuntime(
     }
   }
 
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: host start completion preserves ordering and marker projection
   async function finishStart(
     host: HostToolAfter,
     output: unknown,
@@ -1298,6 +1525,25 @@ function createSessionRuntime(
       !(await seedRemoteScopes(runtimePolicy.requiredOperations ?? []))
     ) {
       markUnavailable()
+    }
+    if (result.status === 'started') {
+      const startedStatus = guard.status()
+      const epoch = startedStatus.epoch
+      const unit = startedStatus.unit
+      if (!epoch || !unit) return
+      mergeProgressionMarker(
+        output,
+        projectReceiptProgressionMarker(ledger, {
+          target: 'unit',
+          epochId: epoch.epochId,
+          unitId: unit.unitId,
+          family: epoch.family,
+          requiredOperations: unit.requiredOperations,
+          resourceScopes: [],
+          state: 'started',
+          transitionDigest: ledger.digestIdentity('call', host.callID),
+        }),
+      )
     }
     writeStartResult(output, result)
   }
@@ -1783,6 +2029,19 @@ function createSessionRuntime(
     }
   }
 
+  function mergeProgressionMarker(output: unknown, marker: unknown): void {
+    if (!isRecord(output) || !isRecord(output.metadata) || !marker) return
+    const existing = output.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]
+    output.metadata = {
+      ...output.metadata,
+      [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: existing
+        ? Array.isArray(existing)
+          ? [...existing, marker]
+          : [existing, marker]
+        : marker,
+    }
+  }
+
   async function finishOperation(
     host: HostToolAfter,
     output: unknown,
@@ -1813,12 +2072,15 @@ function createSessionRuntime(
     try {
       const host = parseHostAfter(input)
       if (!host) return
+      await recoverFromHost(host.sessionID)
       if (host.tool === 'systematic_skill' || host.tool === 'skill') {
         await finishSkill(host, output)
       } else if (host.tool === 'systematic_workflow_start') {
         await finishStart(host, output)
       } else if (host.tool === 'systematic_workflow_complete') {
         await finishComplete(host, output)
+      } else if (host.tool === 'task') {
+        await rollupForegroundTask(host, output)
       } else if (isLocalOperationTool(host.tool)) {
         await finishOperation(host, output)
       }
@@ -1878,6 +2140,7 @@ function createSessionRuntime(
     startUnit: (input, policy) => guard.startUnit(input, policy),
     markUnavailable,
     metadata,
+    recover: recoverFromHost,
   }
 }
 
@@ -1919,6 +2182,7 @@ function makeWorkflowTool(
         }
       }
       const runtime = getRuntime(sessionID)
+      await runtime.recover(sessionID)
       let content = await execute(runtime, input)
       let metadata: Record<string, unknown>
       if (isRecord(context) && typeof context.metadata === 'function') {
@@ -1954,11 +2218,18 @@ export function createOpencodeWorkflowGuard(
   options: OpencodeWorkflowGuardOptions,
 ): OpencodeWorkflowGuard {
   const sessions = new Map<string, SessionRuntime>()
+  const sessionSalt = options.sessionSalt ?? randomBytes(32)
+  const registrationIdentity =
+    options.registrationIdentity ?? randomBytes(16).toString('hex')
 
   function sessionRuntimeFor(sessionID: string): SessionRuntime {
     const existing = sessions.get(sessionID)
     if (existing) return existing
-    const runtime = createSessionRuntime(options)
+    const runtime = createSessionRuntime({
+      ...options,
+      registrationIdentity,
+      sessionSalt,
+    })
     sessions.set(sessionID, runtime)
     return runtime
   }

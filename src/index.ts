@@ -89,6 +89,40 @@ const initializePlugin = async ({
     worktreeIdentity: initialIdentities.worktreeRevisionDigest,
     observer,
     classifier: createReceiptClassifier(),
+    hostReadback: {
+      readSessionParts: async (sessionID) => {
+        const messages = client.session.messages as unknown as (input: {
+          sessionID: string
+          directory?: string
+        }) => Promise<{ data?: unknown }>
+        const response = await messages({
+          sessionID,
+          directory,
+        })
+        return Array.isArray(response.data) ? response.data : []
+      },
+      listChildren: async (sessionID) => {
+        const children = client.session.children as unknown as (input: {
+          sessionID: string
+          directory?: string
+        }) => Promise<{ data?: unknown }>
+        const response = await children({
+          sessionID,
+          directory,
+        })
+        if (!Array.isArray(response.data)) return []
+        return response.data.flatMap((entry) => {
+          if (
+            typeof entry !== 'object' ||
+            entry === null ||
+            typeof entry.id !== 'string'
+          ) {
+            return []
+          }
+          return [{ sessionId: entry.id, parentID: entry.parentID }]
+        })
+      },
+    },
   })
 
   return {

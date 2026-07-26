@@ -393,7 +393,7 @@ flowchart TB
 
 **Verification:** Every guarded operation has a positive and negative adapter path, no-op-safe write/commit/push/PR handling, digest-based staleness, a final compare-and-consume readback that rejects TOCTOU changes without consuming receipts, and no raw command/result persistence.
 
-- [ ] **U4.5. OpenCode production operation observation adapter**
+- [x] **U4.5. OpenCode production operation observation adapter** — shipped: local ops `4748030`, remote ops `722bdaf`
 
 **Goal:** Feed real OpenCode write/edit/apply-patch/Bash results into U4's host-neutral operation APIs so production receipts are actually minted before U5 persists or recovers them.
 
