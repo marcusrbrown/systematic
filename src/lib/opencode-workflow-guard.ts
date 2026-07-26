@@ -67,6 +67,26 @@ const OPERATIONS: readonly ReceiptOperation[] = [
   'review-readback',
 ]
 
+const MANDATORY_REQUIRED_OPERATIONS: readonly ReceiptOperation[] = [
+  'implementation',
+  'verification',
+]
+
+const TRUSTED_SKILL_POLICIES: Readonly<
+  Record<string, readonly ReceiptOperation[]>
+> = Object.freeze({
+  'ce-work': MANDATORY_REQUIRED_OPERATIONS,
+  'git-commit': [...MANDATORY_REQUIRED_OPERATIONS, 'commit'],
+  'git-commit-push-pr': [
+    ...MANDATORY_REQUIRED_OPERATIONS,
+    'commit',
+    'push',
+    'pr-creation',
+    'check-readback',
+    'review-readback',
+  ],
+})
+
 const REPAIR_KINDS = new Set([
   'fresh-readback',
   'rerun-operation',
@@ -380,7 +400,21 @@ function normalizeSkill(tool: string, args: unknown): string | undefined {
     'git-commit-push-pr': 'git-commit-push-pr',
     'systematic:git-commit-push-pr': 'git-commit-push-pr',
   }
-  return names[args.name]
+  return names[args.name] ?? 'ce-work'
+}
+
+function trustedSkillPolicy(
+  skill: string,
+  additional: readonly ReceiptOperation[] = [],
+): RuntimeUnitPolicy {
+  const requiredOperations = [
+    ...(TRUSTED_SKILL_POLICIES[skill] ?? MANDATORY_REQUIRED_OPERATIONS),
+    ...additional,
+  ]
+  return {
+    requiredOperations: [...new Set(requiredOperations)],
+    resourceScopes: {},
+  }
 }
 
 function normalizeStartInput(args: unknown): unknown {
@@ -1315,10 +1349,10 @@ function createSessionRuntime(
     if (minted) rolledUpChildren.add(rollupKey)
   }
 
-  const runtimePolicy: RuntimeUnitPolicy = {
-    requiredOperations: options.runtimeRequiredOperations ?? [],
-    resourceScopes: {},
-  }
+  let runtimePolicy = trustedSkillPolicy(
+    'unknown',
+    options.runtimeRequiredOperations ?? [],
+  )
 
   function markUnavailable(): void {
     if (options.config.mode === 'disabled') return
@@ -1906,7 +1940,13 @@ function createSessionRuntime(
   ): Promise<boolean> {
     const result = await readRemoteScope(reader, operation, 'before')
     if (!result) return false
-    if (result.status === 'missing-resource') return operation === 'pr-creation'
+    if (result.status === 'missing-resource') {
+      return (
+        operation === 'pr-creation' ||
+        operation === 'check-readback' ||
+        operation === 'review-readback'
+      )
+    }
     if (result.status !== 'available') return false
     const observed = guard.observeReadback(
       remoteReadbackInput(
@@ -1983,6 +2023,10 @@ function createSessionRuntime(
       activation.status === 'reused' ||
       activation.status === 'attached'
     ) {
+      runtimePolicy = trustedSkillPolicy(
+        skill,
+        options.runtimeRequiredOperations ?? [],
+      )
       const status = guard.status()
       if (!status.unit || status.unit.status === 'completed') {
         guard.startUnit({}, runtimePolicy)
@@ -2157,42 +2201,65 @@ function createSessionRuntime(
     ) {
       return { status: 'unavailable' }
     }
-    const remoteReadbacks = await completionRemoteReadbacks(result.snapshot)
+    const remoteReadbacks = await completionRemoteReadbacks()
     if (!remoteReadbacks) return { status: 'unavailable' }
+    let finalResult: OperationObserverResult
+    try {
+      finalResult = await options.observer.snapshot()
+    } catch {
+      return { status: 'unavailable' }
+    }
+    if (
+      finalResult.status === 'unavailable' ||
+      finalResult.snapshot.targetDigest !== result.snapshot.targetDigest ||
+      finalResult.snapshot.repositoryRevisionDigest !==
+        result.snapshot.repositoryRevisionDigest ||
+      finalResult.snapshot.worktreeRevisionDigest !==
+        result.snapshot.worktreeRevisionDigest
+    ) {
+      return { status: 'unavailable' }
+    }
     return {
       status: 'ready',
       readbacks: [
         {
           workspaceIdentity: options.workspaceIdentity,
-          repositoryIdentity: result.snapshot.repositoryRevisionDigest,
-          worktreeIdentity: result.snapshot.worktreeRevisionDigest,
+          repositoryIdentity: finalResult.snapshot.repositoryRevisionDigest,
+          worktreeIdentity: finalResult.snapshot.worktreeRevisionDigest,
         },
-        ...remoteReadbacks,
+        ...remoteReadbacks.map(({ operation, snapshot }) =>
+          remoteReadbackInput(
+            operation,
+            finalResult.snapshot,
+            options.workspaceIdentity,
+            snapshot,
+          ),
+        ),
       ],
     }
   }
 
-  async function completionRemoteReadbacks(
-    local: OperationObserverSnapshot,
-  ): Promise<readonly unknown[] | undefined> {
+  async function completionRemoteReadbacks(): Promise<
+    | readonly {
+        operation: RemoteOperation
+        snapshot: OperationObserverRemoteSnapshot
+      }[]
+    | undefined
+  > {
     const remoteOperations = guard
       .status()
       .satisfiedOperations.filter(remoteOperation)
     if (remoteOperations.length === 0) return []
     const remoteSnapshot = options.observer?.remoteSnapshot
     if (!remoteSnapshot) return undefined
-    const readbacks: unknown[] = []
+    const readbacks: Array<{
+      operation: RemoteOperation
+      snapshot: OperationObserverRemoteSnapshot
+    }> = []
     for (const operation of remoteOperations) {
       const result = await readRemoteScope(remoteSnapshot, operation)
       if (result?.status !== 'available') return undefined
-      readbacks.push(
-        remoteReadbackInput(
-          operation,
-          local,
-          options.workspaceIdentity,
-          result.snapshot,
-        ),
-      )
+      readbacks.push({ operation, snapshot: result.snapshot })
     }
     return readbacks
   }

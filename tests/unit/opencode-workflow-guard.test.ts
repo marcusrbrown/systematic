@@ -253,6 +253,25 @@ function mintReceipt(
 }
 
 describe('OpenCode workflow guard adapter', () => {
+  test('selects trusted required operations from the activated skill', async () => {
+    const adapter = createAdapter('observe')
+    await observeSkill(adapter, 'systematic_skill', 'git-commit')
+    expect(status(adapter).unit?.requiredOperations).toEqual([
+      'implementation',
+      'verification',
+      'commit',
+    ])
+  })
+
+  test('falls back to the mandatory floor for unknown guarded skills', async () => {
+    const adapter = createAdapter('observe')
+    await observeSkill(adapter, 'systematic_skill', 'ce:brainstorm')
+    expect(status(adapter).unit?.requiredOperations).toEqual([
+      'implementation',
+      'verification',
+    ])
+  })
+
   test('activates from successful systematic and native skill after events only', async () => {
     const systematic = createAdapter()
     await observeSkill(systematic, 'systematic_skill', 'ce:work')
@@ -1807,7 +1826,7 @@ describe('OpenCode workflow guard adapter', () => {
       operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
       operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
       operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
-      operationSnapshot('b'.repeat(64), 'e'.repeat(64)),
+      operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
     ])
     const adapter = createAdapter('observe', false, observer)
     await observeSkill(adapter, 'systematic_skill', 'ce:work')
