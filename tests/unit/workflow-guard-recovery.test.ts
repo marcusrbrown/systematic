@@ -40,15 +40,14 @@ function createRecoveredFixture(
   const context = {
     epochId: EPOCH_ID,
     unitId: UNIT_ID,
-    workspaceIdentity: 'workspace-before',
+    workspaceIdentity: WORKSPACE_ID,
     ...(includeRepositoryBoundary
       ? {
           repositoryIdentity:
             operation === 'implementation'
               ? REPOSITORY_ID
               : 'repository-before',
-          worktreeIdentity:
-            operation === 'implementation' ? WORKTREE_ID : 'worktree-before',
+          worktreeIdentity: 'worktree-before',
         }
       : {}),
   }
@@ -475,7 +474,7 @@ describe('workflow guard recovery', () => {
   })
 
   test('does not classify repository/worktree revision drift as foreign replay', () => {
-    const omitted = createRecoveredFixture('active', false)
+    const omitted = createRecoveredFixture('active', false, 'verification')
     const omittedGuard = createGuard(omitted.ledger)
     expect(
       omittedGuard.restore({ provenance: 'restart', state: omitted.state }),

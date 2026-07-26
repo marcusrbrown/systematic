@@ -82,7 +82,7 @@ function receiptContext(
   return {
     epochId,
     unitId,
-    workspaceIdentity: 'workspace-before',
+    workspaceIdentity: SCOPE.workspaceIdentity,
     repositoryIdentity: 'repository-before',
     worktreeIdentity: 'worktree-before',
     ...(operation === 'push' || operation === 'pr-creation'
@@ -546,11 +546,32 @@ describe('workflow guard', () => {
       reasonCode: 'foreign-registration',
     })
 
-    const wrongWorkspace = mintReceipt(guard, ledger, 'implementation', {
-      ...SCOPE,
-      workspaceIdentity: 'workspace-other',
+    const wrongWorkspaceContext = receiptContext(guard)
+    expect(
+      ledger.prepareObservation({
+        callId: 'wrong-workspace-call',
+        operation: 'implementation',
+        context: wrongWorkspaceContext,
+      }),
+    ).toMatchObject({ status: 'prepared' })
+    const wrongWorkspace = ledger.finalizeObservation({
+      callId: 'wrong-workspace-call',
+      context: wrongWorkspaceContext,
+      after: {
+        ...SCOPE,
+        workspaceIdentity: 'workspace-other',
+      },
+      classification: {
+        outcome: 'accepted',
+        category: 'implementation',
+        attribution: 'runtime-verified',
+        result: 'success',
+        sideEffect: 'required',
+        reasonCode: 'recognized-command',
+      },
+      terminal: { status: 'success', output: 'non-empty', noOp: false },
     })
-    expect(guard.observeReceipt(wrongWorkspace)).toMatchObject({
+    expect(wrongWorkspace).toMatchObject({
       status: 'rejected',
       reasonCode: 'workspace-mismatch',
     })

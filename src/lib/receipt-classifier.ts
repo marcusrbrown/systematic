@@ -767,9 +767,17 @@ function validateImplementation(
   after: ReceiptOperationAfter,
   classification: ReceiptClassification,
 ): ReceiptClassification {
-  return after.workspaceIdentity === context.workspaceIdentity
-    ? rejected('implementation', 'success', 'unchanged-workspace', 'required')
-    : classification
+  const workspaceReason = validateWorkspaceIdentity(
+    context,
+    after,
+    'implementation',
+  )
+  if (workspaceReason) return workspaceReason
+  return context.worktreeIdentity &&
+    after.worktreeIdentity &&
+    context.worktreeIdentity !== after.worktreeIdentity
+    ? classification
+    : rejected('implementation', 'success', 'unchanged-worktree', 'required')
 }
 
 function validateVerification(
@@ -777,9 +785,9 @@ function validateVerification(
   after: ReceiptOperationAfter,
   classification: ReceiptClassification,
 ): ReceiptClassification {
-  return after.workspaceIdentity === context.workspaceIdentity
-    ? classification
-    : rejected('verification', 'success', 'workspace-mismatch', 'not-required')
+  return (
+    validateWorkspaceIdentity(context, after, 'verification') ?? classification
+  )
 }
 
 function validateCommit(
@@ -787,6 +795,8 @@ function validateCommit(
   after: ReceiptOperationAfter,
   classification: ReceiptClassification,
 ): ReceiptClassification {
+  const workspaceReason = validateWorkspaceIdentity(context, after, 'commit')
+  if (workspaceReason) return workspaceReason
   return changedIdentity(context.repositoryIdentity, after.repositoryIdentity)
     ? classification
     : rejected('commit', 'success', 'no-op-resource', 'required')
@@ -797,6 +807,8 @@ function validatePush(
   after: ReceiptOperationAfter,
   classification: ReceiptClassification,
 ): ReceiptClassification {
+  const workspaceReason = validateWorkspaceIdentity(context, after, 'push')
+  if (workspaceReason) return workspaceReason
   return sameResourceScope(context, after) &&
     changedIdentity(
       context.resourceRevisionIdentity,
@@ -811,6 +823,12 @@ function validatePrCreation(
   after: ReceiptOperationAfter,
   classification: ReceiptClassification,
 ): ReceiptClassification {
+  const workspaceReason = validateWorkspaceIdentity(
+    context,
+    after,
+    'pr-creation',
+  )
+  if (workspaceReason) return workspaceReason
   const pullRequest = after.pullRequest
   return sameResourceScope(context, after) &&
     resourceRevisionChanged(context, after, true) &&
@@ -826,6 +844,12 @@ function validateCheck(
   context: ReceiptOperationContext,
   classification: ReceiptClassification,
 ): ReceiptClassification {
+  const workspaceReason = validateWorkspaceIdentity(
+    context,
+    after,
+    'check-readback',
+  )
+  if (workspaceReason) return workspaceReason
   const pullRequest = after.pullRequest
   return sameResourceScope(context, after) &&
     after.resourceRevisionIdentity !== undefined &&
@@ -842,6 +866,12 @@ function validateReview(
   context: ReceiptOperationContext,
   classification: ReceiptClassification,
 ): ReceiptClassification {
+  const workspaceReason = validateWorkspaceIdentity(
+    context,
+    after,
+    'review-readback',
+  )
+  if (workspaceReason) return workspaceReason
   const pullRequest = after.pullRequest
   return sameResourceScope(context, after) &&
     after.resourceRevisionIdentity !== undefined &&
@@ -861,6 +891,21 @@ function sameResourceScope(
     context.resourceIdentity !== undefined &&
     context.resourceIdentity === after.resourceIdentity
   )
+}
+
+function validateWorkspaceIdentity(
+  context: ReceiptOperationContext,
+  after: ReceiptOperationAfter,
+  operation: ReceiptOperation,
+): ReceiptClassification | undefined {
+  return after.workspaceIdentity === context.workspaceIdentity
+    ? undefined
+    : rejected(
+        operation,
+        'success',
+        'workspace-mismatch',
+        sideEffectFor(operation),
+      )
 }
 
 function resourceRevisionChanged(

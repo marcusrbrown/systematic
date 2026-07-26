@@ -58,12 +58,14 @@ function createMintedReceipt(
   const beforeContext: ReceiptContext = {
     epochId: opaqueIdentity(epochId),
     unitId: opaqueIdentity(unitId),
-    workspaceIdentity: 'workspace-before',
+    workspaceIdentity: 'workspace-current',
+    worktreeIdentity: 'worktree-before',
   }
   const afterContext: ReceiptContext = {
     epochId: opaqueIdentity(epochId),
     unitId: opaqueIdentity(unitId),
-    workspaceIdentity: 'workspace-after',
+    workspaceIdentity: 'workspace-current',
+    worktreeIdentity: 'worktree-after',
   }
   const classification: ReceiptClassification = {
     outcome: 'accepted',
@@ -84,7 +86,10 @@ function createMintedReceipt(
   const finalized = ledger.finalizeObservation({
     callId,
     context: beforeContext,
-    after: { workspaceIdentity: afterContext.workspaceIdentity },
+    after: {
+      workspaceIdentity: afterContext.workspaceIdentity,
+      worktreeIdentity: afterContext.worktreeIdentity,
+    },
     classification,
     terminal: { status: 'success', output: 'non-empty', noOp: false },
   })

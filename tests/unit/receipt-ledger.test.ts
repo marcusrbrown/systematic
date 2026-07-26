@@ -83,7 +83,8 @@ function finalizeLedgerObservation(
   ledger: ReturnType<typeof createReceiptLedger>,
   callId = 'call-1',
   observationContext = context(),
-  afterWorkspaceIdentity = RAW_WORKSPACE_AFTER,
+  afterWorkspaceIdentity = RAW_WORKSPACE_BEFORE,
+  afterWorktreeIdentity = 'worktree-after',
   operation: ReceiptOperation = 'implementation',
 ) {
   return ledger.finalizeObservation({
@@ -92,7 +93,7 @@ function finalizeLedgerObservation(
     after: {
       workspaceIdentity: afterWorkspaceIdentity,
       repositoryIdentity: 'repository-after',
-      worktreeIdentity: 'worktree-after',
+      worktreeIdentity: afterWorktreeIdentity,
       resourceIdentity: 'resource-after',
     },
     classification: classification(operation),
@@ -154,7 +155,7 @@ describe('receipt ledger', () => {
       ledger.consumeReceipt(receiptId ?? '', {
         epochId: 'epoch-1',
         unitId: 'unit-1',
-        workspaceIdentity: RAW_WORKSPACE_AFTER,
+        workspaceIdentity: RAW_WORKSPACE_BEFORE,
         repositoryIdentity: 'repository-after',
         worktreeIdentity: 'worktree-after',
         resourceIdentity: 'resource-after',
@@ -164,7 +165,7 @@ describe('receipt ledger', () => {
       ledger.consumeReceipt(receiptId ?? '', {
         epochId: 'epoch-1',
         unitId: 'unit-1',
-        workspaceIdentity: RAW_WORKSPACE_AFTER,
+        workspaceIdentity: RAW_WORKSPACE_BEFORE,
         repositoryIdentity: 'repository-after',
         worktreeIdentity: 'worktree-after',
         resourceIdentity: 'resource-after',
@@ -241,7 +242,7 @@ describe('receipt ledger', () => {
     }
   })
 
-  test('does not mint implementation evidence for an unchanged workspace', () => {
+  test('does not mint implementation evidence for an unchanged worktree', () => {
     const ledger = createReceiptLedger({
       registrationIdentity: 'registration-a',
     })
@@ -252,12 +253,73 @@ describe('receipt ledger', () => {
       'call-1',
       context(),
       RAW_WORKSPACE_BEFORE,
+      RAW_WORKTREE,
     )
 
     expect(result).toMatchObject({
       status: 'rejected',
-      reasonCode: 'unchanged-workspace',
+      reasonCode: 'unchanged-worktree',
     })
+  })
+
+  test('binds implementation receipts to stable workspace and after worktree identities', () => {
+    const ledger = createReceiptLedger({
+      registrationIdentity: 'registration-identity-model',
+    })
+    const before = context()
+    expect(
+      ledger.prepareObservation({
+        callId: 'identity-model-call',
+        operation: 'implementation',
+        context: before,
+      }),
+    ).toMatchObject({ status: 'prepared' })
+
+    const result = ledger.finalizeObservation({
+      callId: 'identity-model-call',
+      context: before,
+      after: {
+        workspaceIdentity: RAW_WORKSPACE_BEFORE,
+        repositoryIdentity: 'repository-after',
+        worktreeIdentity: 'worktree-after',
+      },
+      classification: classification(),
+      terminal: { status: 'success', output: 'non-empty', noOp: false },
+    })
+    expect(result).toMatchObject({ status: 'finalized' })
+    expect(result.receipt?.canonical.workspaceDigest).toBe(
+      ledger.digestIdentity('workspace', RAW_WORKSPACE_BEFORE),
+    )
+    expect(result.receipt?.canonical.worktreeDigest).toBe(
+      ledger.digestIdentity('worktree', 'worktree-after'),
+    )
+  })
+
+  test('rejects implementation workspace drift even when worktree changes', () => {
+    const ledger = createReceiptLedger({
+      registrationIdentity: 'registration-workspace-drift',
+    })
+    const before = context()
+    expect(
+      ledger.prepareObservation({
+        callId: 'workspace-drift-call',
+        operation: 'implementation',
+        context: before,
+      }),
+    ).toMatchObject({ status: 'prepared' })
+    expect(
+      ledger.finalizeObservation({
+        callId: 'workspace-drift-call',
+        context: before,
+        after: {
+          workspaceIdentity: 'workspace-foreign',
+          repositoryIdentity: 'repository-after',
+          worktreeIdentity: 'worktree-after',
+        },
+        classification: classification(),
+        terminal: { status: 'success', output: 'non-empty', noOp: false },
+      }),
+    ).toMatchObject({ status: 'rejected', reasonCode: 'workspace-mismatch' })
   })
 
   test('does not mint evidence for empty or successful no-op results', () => {
@@ -427,10 +489,11 @@ describe('receipt ledger', () => {
         'call-1',
         context(),
         RAW_WORKSPACE_BEFORE,
+        RAW_WORKTREE,
       ),
     ).toMatchObject({
       status: 'rejected',
-      reasonCode: 'unchanged-workspace',
+      reasonCode: 'unchanged-worktree',
     })
     expect(finalizeLedgerObservation(unchangedLedger)).toMatchObject({
       status: 'rejected',
@@ -455,7 +518,7 @@ describe('receipt ledger', () => {
         callId: 'resource-call',
         context: resourceContext,
         after: {
-          workspaceIdentity: RAW_WORKSPACE_AFTER,
+          workspaceIdentity: RAW_WORKSPACE_BEFORE,
           repositoryIdentity: 'repository-after',
           resourceIdentity: 'remote-before',
         },
@@ -827,7 +890,7 @@ describe('receipt ledger', () => {
       ledger.consumeReceipt(first.receipt?.canonical.receiptId ?? '', {
         epochId: 'epoch-1',
         unitId: 'unit-1',
-        workspaceIdentity: RAW_WORKSPACE_AFTER,
+        workspaceIdentity: RAW_WORKSPACE_BEFORE,
         repositoryIdentity: 'repository-after',
         worktreeIdentity: 'worktree-after',
         resourceIdentity: 'resource-after',
@@ -837,7 +900,7 @@ describe('receipt ledger', () => {
       ledger.consumeReceipt(second.receipt?.canonical.receiptId ?? '', {
         epochId: 'epoch-2',
         unitId: 'unit-1',
-        workspaceIdentity: RAW_WORKSPACE_AFTER,
+        workspaceIdentity: RAW_WORKSPACE_BEFORE,
         repositoryIdentity: 'repository-after',
         worktreeIdentity: 'worktree-after',
         resourceIdentity: 'resource-after',

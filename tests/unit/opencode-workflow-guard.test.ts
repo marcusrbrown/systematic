@@ -1,10 +1,19 @@
 import { describe, expect, test } from 'bun:test'
 import { z } from 'zod'
 
+import type {
+  OpencodeOperationObserver,
+  OperationObserverSnapshot,
+} from '../../src/lib/opencode-operation-observer.js'
 import {
   createOpencodeWorkflowGuard,
   type OpencodeWorkflowGuard,
+  SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY,
 } from '../../src/lib/opencode-workflow-guard.js'
+import {
+  createReceiptClassifier,
+  type ReceiptOperationObservation,
+} from '../../src/lib/receipt-classifier.js'
 import type { ReceiptLedger } from '../../src/lib/receipt-ledger.js'
 import type { WorkflowStatus } from '../../src/lib/workflow-guard.js'
 
@@ -40,14 +49,84 @@ const SCOPE = {
   worktreeIdentity: 'worktree-current',
 }
 
+const OPERATION_SCOPE = {
+  workspaceIdentity: 'a'.repeat(64),
+  repositoryIdentity: 'b'.repeat(64),
+  worktreeIdentity: 'c'.repeat(64),
+}
+
+function sequenceObserver(
+  snapshots: readonly OperationObserverSnapshot[],
+): OpencodeOperationObserver {
+  let index = 0
+  return {
+    targetDigest: snapshots[0]?.targetDigest ?? 'a'.repeat(64),
+    async snapshot() {
+      const snapshot = snapshots[Math.min(index++, snapshots.length - 1)]
+      if (!snapshot) {
+        return { status: 'unavailable', reasonCode: 'target-unavailable' }
+      }
+      return { status: 'available', snapshot }
+    },
+  }
+}
+
 function createAdapter(
   mode: 'observe' | 'protected' | 'disabled' = 'protected',
   debug = false,
+  observer?: OpencodeOperationObserver,
+  runtimeRequiredOperations: readonly string[] = [],
+  observations?: ReceiptOperationObservation[],
 ): OpencodeWorkflowGuard {
+  const classifier = createReceiptClassifier()
   return createOpencodeWorkflowGuard({
     config: { mode, debug },
-    ...SCOPE,
+    ...(observer ? OPERATION_SCOPE : SCOPE),
+    ...(observer
+      ? {
+          observer,
+          classifier: observations
+            ? {
+                ...classifier,
+                classifyOperation: async (input: unknown) => {
+                  observations.push(input as ReceiptOperationObservation)
+                  return classifier.classifyOperation?.(input)
+                },
+              }
+            : classifier,
+          runtimeRequiredOperations,
+        }
+      : {}),
   })
+}
+
+function operationSnapshot(
+  repositoryIdentity = OPERATION_SCOPE.repositoryIdentity,
+  worktreeIdentity = OPERATION_SCOPE.worktreeIdentity,
+): OperationObserverSnapshot {
+  return {
+    targetDigest: OPERATION_SCOPE.workspaceIdentity,
+    repositoryRevisionDigest: repositoryIdentity,
+    worktreeRevisionDigest: worktreeIdentity,
+  }
+}
+
+async function observeOperationTool(
+  adapter: OpencodeWorkflowGuard,
+  tool: 'write' | 'edit' | 'apply_patch' | 'bash',
+  args: Record<string, unknown>,
+  output: Record<string, unknown>,
+  callID = `${tool}-operation`,
+  sessionID = SESSION_A,
+): Promise<void> {
+  await adapter.hooks['tool.execute.before'](
+    { tool, sessionID, callID },
+    { args },
+  )
+  await adapter.hooks['tool.execute.after'](
+    { tool, sessionID, callID, args },
+    output,
+  )
 }
 
 async function observeSkill(
@@ -76,6 +155,7 @@ function mintReceipt(
   adapter: OpencodeWorkflowGuard,
   operation: 'implementation' | 'verification',
   sessionID = SESSION_A,
+  scope = SCOPE,
 ): void {
   const currentStatus = status(adapter, sessionID)
   if (!currentStatus.epoch || !currentStatus.unit) {
@@ -85,9 +165,12 @@ function mintReceipt(
   const context = {
     epochId: currentStatus.epoch.epochId,
     unitId: currentStatus.unit.unitId,
-    workspaceIdentity: 'workspace-before',
-    repositoryIdentity: SCOPE.repositoryIdentity,
-    worktreeIdentity: SCOPE.worktreeIdentity,
+    workspaceIdentity: scope.workspaceIdentity,
+    repositoryIdentity: scope.repositoryIdentity,
+    worktreeIdentity:
+      operation === 'implementation'
+        ? 'worktree-before'
+        : scope.worktreeIdentity,
   }
   const receiptLedger = ledger(adapter, sessionID)
   const prepared = receiptLedger.prepareObservation({
@@ -100,9 +183,9 @@ function mintReceipt(
     callId: callID,
     context,
     after: {
-      workspaceIdentity: SCOPE.workspaceIdentity,
-      repositoryIdentity: SCOPE.repositoryIdentity,
-      worktreeIdentity: SCOPE.worktreeIdentity,
+      workspaceIdentity: scope.workspaceIdentity,
+      repositoryIdentity: scope.repositoryIdentity,
+      worktreeIdentity: scope.worktreeIdentity,
     },
     classification: {
       outcome: 'accepted',
@@ -926,5 +1009,497 @@ describe('OpenCode workflow guard adapter', () => {
       { title: 'start', output: 'selected', metadata: {} },
     )
     expect(status(adapter).state).toBe('unavailable')
+  })
+
+  for (const tool of ['write', 'edit', 'apply_patch'] as const) {
+    test(`changed ${tool} mints one implementation receipt and preserves host metadata`, async () => {
+      const observations: ReceiptOperationObservation[] = []
+      const adapter = createAdapter(
+        'observe',
+        false,
+        sequenceObserver([
+          operationSnapshot(),
+          operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+        ]),
+        [],
+        observations,
+      )
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      const output = {
+        title: `${tool} complete`,
+        output: 'local result',
+        metadata: { hostMetadata: 'preserved' },
+      }
+      await observeOperationTool(
+        adapter,
+        tool,
+        { filePath: 'src/example.ts', content: 'new content' },
+        output,
+        `${tool}-changed`,
+      )
+
+      expect(ledger(adapter).listReceipts()).toHaveLength(1)
+      expect(ledger(adapter).listReceipts()[0]?.canonical.operation).toBe(
+        'implementation',
+      )
+      expect(observations.length).toBeGreaterThan(0)
+      for (const observation of observations) {
+        expect(observation.context.workspaceIdentity).toBe(
+          OPERATION_SCOPE.workspaceIdentity,
+        )
+        expect(observation.after?.workspaceIdentity).toBe(
+          OPERATION_SCOPE.workspaceIdentity,
+        )
+      }
+      expect(output.metadata.hostMetadata).toBe('preserved')
+      const marker = output.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]
+      expect(marker).toMatchObject({
+        envelope: {
+          canonical: {
+            workspaceDigest: ledger(adapter).digestIdentity(
+              'workspace',
+              OPERATION_SCOPE.workspaceIdentity,
+            ),
+          },
+        },
+      })
+      expect(
+        JSON.stringify(
+          output.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY],
+        ),
+      ).not.toContain('src/example.ts')
+      expect(
+        JSON.stringify(
+          output.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY],
+        ),
+      ).not.toContain('new content')
+    })
+  }
+
+  test('no-op local edits do not mint implementation evidence', async () => {
+    for (const [index, tool] of (
+      ['write', 'edit', 'apply_patch'] as const
+    ).entries()) {
+      const adapter = createAdapter(
+        'observe',
+        false,
+        sequenceObserver([operationSnapshot(), operationSnapshot()]),
+      )
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      await observeOperationTool(
+        adapter,
+        tool,
+        { filePath: 'same.ts', content: 'same' },
+        { title: `${tool} complete`, output: 'local result', metadata: {} },
+        `${tool}-no-op-${index}`,
+      )
+      expect(ledger(adapter).listReceipts()).toHaveLength(0)
+      expect(status(adapter).missingOperations).toContain('implementation')
+    }
+  })
+
+  test('revision drift is reported as stale/receipt mismatch with fresh readback repair', async () => {
+    const adapter = createAdapter(
+      'observe',
+      false,
+      sequenceObserver([
+        operationSnapshot(),
+        operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+        operationSnapshot('e'.repeat(64), 'f'.repeat(64)),
+      ]),
+      ['implementation'],
+    )
+    await observeSkill(adapter, 'systematic_skill', 'ce:work')
+    await observeOperationTool(
+      adapter,
+      'write',
+      { filePath: 'drift.ts', content: 'changed' },
+      { title: 'write', output: 'changed', metadata: {} },
+      'drift-operation',
+    )
+    mintReceipt(adapter, 'verification', SESSION_A, {
+      ...OPERATION_SCOPE,
+      worktreeIdentity: 'd'.repeat(64),
+    })
+
+    await adapter.tools.systematic_workflow_status.execute({}, toolContext())
+    const current = status(adapter)
+    expect(['stale-receipt', 'receipt-mismatch']).toContain(current.reasonCode)
+    expect(current.reasonCode).not.toBe('workspace-mismatch')
+    expect(current.repair).toBe('fresh-readback')
+  })
+
+  test('successful verification bash mints only for supported commands and exit zero', async () => {
+    const accepted = createAdapter(
+      'observe',
+      false,
+      sequenceObserver([
+        operationSnapshot(),
+        operationSnapshot(undefined, 'd'.repeat(64)),
+      ]),
+    )
+    await observeSkill(accepted, 'systematic_skill', 'ce:work')
+    await observeOperationTool(
+      accepted,
+      'bash',
+      { command: 'bun test tests/unit/example.test.ts' },
+      { title: 'tests', output: '1 pass', metadata: { exit: 0 } },
+      'bun-test',
+    )
+    expect(ledger(accepted).listReceipts()[0]?.canonical.operation).toBe(
+      'verification',
+    )
+
+    for (const [command, metadata] of [
+      ['bun test tests/unit/example.test.ts', { exit: 1 }],
+      ['bun test tests/unit/example.test.ts', { exit: '0' }],
+      ['echo done', { exit: 0 }],
+      ['bun test tests/unit/example.test.ts | tee result', { exit: 0 }],
+    ] as const) {
+      const adapter = createAdapter(
+        'observe',
+        false,
+        sequenceObserver([
+          operationSnapshot(),
+          operationSnapshot(undefined, 'd'.repeat(64)),
+        ]),
+      )
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      await observeOperationTool(
+        adapter,
+        'bash',
+        { command },
+        { title: 'tests', output: 'result', metadata },
+        `bash-${command}-${String(metadata.exit)}`,
+      )
+      expect(ledger(adapter).listReceipts()).toHaveLength(0)
+    }
+  })
+
+  test('changed git commit mints commit evidence while unchanged HEAD does not', async () => {
+    const changed = createAdapter(
+      'observe',
+      false,
+      sequenceObserver([
+        operationSnapshot(),
+        operationSnapshot('d'.repeat(64), OPERATION_SCOPE.worktreeIdentity),
+      ]),
+      ['commit'],
+    )
+    await observeSkill(changed, 'systematic_skill', 'ce:work')
+    await observeOperationTool(
+      changed,
+      'bash',
+      { command: 'git commit -m receipt-test' },
+      { title: 'commit', output: 'committed', metadata: { exit: 0 } },
+      'git-commit-changed',
+    )
+    expect(ledger(changed).listReceipts()[0]?.canonical.operation).toBe(
+      'commit',
+    )
+
+    const unchanged = createAdapter(
+      'observe',
+      false,
+      sequenceObserver([operationSnapshot(), operationSnapshot()]),
+      ['commit'],
+    )
+    await observeSkill(unchanged, 'systematic_skill', 'ce:work')
+    await observeOperationTool(
+      unchanged,
+      'bash',
+      { command: 'git commit -m receipt-test' },
+      { title: 'commit', output: 'nothing to commit', metadata: { exit: 0 } },
+      'git-commit-no-op',
+    )
+    expect(ledger(unchanged).listReceipts()).toHaveLength(0)
+  })
+
+  test('push, PR, check, and review commands do not mint in this slice', async () => {
+    for (const command of [
+      'git push origin main',
+      'gh pr create --title receipt-test',
+      'gh pr checks 42',
+      'gh pr view 42 --json reviewDecision',
+    ]) {
+      const adapter = createAdapter(
+        'observe',
+        false,
+        sequenceObserver([
+          operationSnapshot(),
+          operationSnapshot('d'.repeat(64), 'd'.repeat(64)),
+        ]),
+      )
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      await observeOperationTool(
+        adapter,
+        'bash',
+        { command },
+        { title: 'command', output: 'result', metadata: { exit: 0 } },
+        `unsupported-${command}`,
+      )
+      expect(ledger(adapter).listReceipts()).toHaveLength(0)
+    }
+  })
+
+  test('before-only operation is abandoned at the next status boundary', async () => {
+    const adapter = createAdapter(
+      'observe',
+      false,
+      sequenceObserver([
+        operationSnapshot(),
+        operationSnapshot('d'.repeat(64), 'd'.repeat(64)),
+      ]),
+    )
+    await observeSkill(adapter, 'systematic_skill', 'ce:work')
+    await adapter.hooks['tool.execute.before'](
+      { tool: 'write', sessionID: SESSION_A, callID: 'before-only' },
+      { args: { filePath: 'pending.ts', content: 'pending' } },
+    )
+    await adapter.tools.systematic_workflow_status.execute({}, toolContext())
+    await adapter.hooks['tool.execute.after'](
+      {
+        tool: 'write',
+        sessionID: SESSION_A,
+        callID: 'before-only',
+        args: { filePath: 'pending.ts', content: 'pending' },
+      },
+      { title: 'late', output: 'late', metadata: {} },
+    )
+    expect(ledger(adapter).listReceipts()).toHaveLength(0)
+  })
+
+  test('mutated, missing, and duplicate after events fail closed without double minting', async () => {
+    const mutated = createAdapter(
+      'observe',
+      false,
+      sequenceObserver([
+        operationSnapshot(),
+        operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+      ]),
+    )
+    await observeSkill(mutated, 'systematic_skill', 'ce:work')
+    await mutated.hooks['tool.execute.before'](
+      { tool: 'write', sessionID: SESSION_A, callID: 'mutated' },
+      { args: { filePath: 'a.ts', content: 'a' } },
+    )
+    await mutated.hooks['tool.execute.after'](
+      {
+        tool: 'write',
+        sessionID: SESSION_A,
+        callID: 'mutated',
+        args: { filePath: 'b.ts', content: 'a' },
+      },
+      { title: 'write', output: 'changed', metadata: {} },
+    )
+    expect(ledger(mutated).listReceipts()).toHaveLength(0)
+    expect(status(mutated).state).toBe('unavailable')
+
+    const missing = createAdapter(
+      'observe',
+      false,
+      sequenceObserver([operationSnapshot()]),
+    )
+    await observeSkill(missing, 'systematic_skill', 'ce:work')
+    await missing.hooks['tool.execute.after'](
+      {
+        tool: 'write',
+        sessionID: SESSION_A,
+        callID: 'missing-baseline',
+        args: { filePath: 'a.ts', content: 'a' },
+      },
+      { title: 'write', output: 'changed', metadata: {} },
+    )
+    expect(ledger(missing).listReceipts()).toHaveLength(0)
+    expect(status(missing).state).toBe('unavailable')
+
+    const foreign = createAdapter(
+      'observe',
+      false,
+      sequenceObserver([
+        operationSnapshot(),
+        {
+          ...operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+          targetDigest: 'e'.repeat(64),
+        },
+      ]),
+    )
+    await observeSkill(foreign, 'systematic_skill', 'ce:work')
+    await observeOperationTool(
+      foreign,
+      'write',
+      { filePath: 'a.ts', content: 'a' },
+      { title: 'write', output: 'changed', metadata: {} },
+      'foreign-target',
+    )
+    expect(ledger(foreign).listReceipts()).toHaveLength(0)
+    expect(status(foreign).state).toBe('unavailable')
+
+    const duplicate = createAdapter(
+      'observe',
+      false,
+      sequenceObserver([
+        operationSnapshot(),
+        operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+      ]),
+    )
+    await observeSkill(duplicate, 'systematic_skill', 'ce:work')
+    const output = { title: 'write', output: 'changed', metadata: {} }
+    await observeOperationTool(
+      duplicate,
+      'write',
+      { filePath: 'a.ts', content: 'a' },
+      output,
+      'duplicate',
+    )
+    await duplicate.hooks['tool.execute.after'](
+      {
+        tool: 'write',
+        sessionID: SESSION_A,
+        callID: 'duplicate',
+        args: { filePath: 'a.ts', content: 'a' },
+      },
+      output,
+    )
+    expect(ledger(duplicate).listReceipts()).toHaveLength(1)
+  })
+
+  test('fresh completion readback completes once and interleaving changes reject without consumption', async () => {
+    const observer = sequenceObserver([
+      operationSnapshot(),
+      operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+      operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+      operationSnapshot('b'.repeat(64), 'e'.repeat(64)),
+    ])
+    const adapter = createAdapter('observe', false, observer)
+    await observeSkill(adapter, 'systematic_skill', 'ce:work')
+    await observeOperationTool(
+      adapter,
+      'write',
+      { filePath: 'a.ts', content: 'a' },
+      { title: 'write', output: 'changed', metadata: {} },
+      'completion-implementation',
+    )
+    await observeOperationTool(
+      adapter,
+      'bash',
+      { command: 'bun test tests/unit/example.test.ts' },
+      { title: 'tests', output: 'pass', metadata: { exit: 0 } },
+      'completion-verification',
+    )
+    const input = {
+      tool: 'systematic_workflow_complete',
+      sessionID: SESSION_A,
+      callID: 'completion',
+    }
+    await adapter.hooks['tool.execute.before'](input, {
+      args: { target: 'unit' },
+    })
+    const output = { title: 'complete', output: 'done', metadata: {} }
+    await adapter.hooks['tool.execute.after'](
+      { ...input, args: { target: 'unit' } },
+      output,
+    )
+    expect(status(adapter).unit?.status).toBe('completed')
+    expect(
+      ledger(adapter)
+        .listReceipts()
+        .every((receipt) => receipt.canonical.consumption === 'consumed'),
+    ).toBe(true)
+
+    const interleaved = createAdapter(
+      'observe',
+      false,
+      sequenceObserver([
+        operationSnapshot(),
+        operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+        operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+        operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+        operationSnapshot('b'.repeat(64), 'f'.repeat(64)),
+      ]),
+    )
+    await observeSkill(interleaved, 'systematic_skill', 'ce:work')
+    await observeOperationTool(
+      interleaved,
+      'write',
+      { filePath: 'a.ts', content: 'a' },
+      { title: 'write', output: 'changed', metadata: {} },
+      'interleaved-implementation',
+    )
+    await observeOperationTool(
+      interleaved,
+      'bash',
+      { command: 'bun test tests/unit/example.test.ts' },
+      { title: 'tests', output: 'pass', metadata: { exit: 0 } },
+      'interleaved-verification',
+    )
+    const interleavedInput = {
+      tool: 'systematic_workflow_complete',
+      sessionID: SESSION_A,
+      callID: 'interleaved-completion',
+    }
+    await interleaved.hooks['tool.execute.before'](interleavedInput, {
+      args: { target: 'unit' },
+    })
+    const interleavedOutput = {
+      title: 'complete',
+      output: 'done',
+      metadata: {},
+    }
+    await interleaved.hooks['tool.execute.after'](
+      { ...interleavedInput, args: { target: 'unit' } },
+      interleavedOutput,
+    )
+    expect(status(interleaved).unit?.status).toBe('active')
+    expect(
+      ledger(interleaved)
+        .listReceipts()
+        .some((receipt) => receipt.canonical.consumption === 'consumed'),
+    ).toBe(false)
+  })
+
+  test('operation evidence remains isolated across sessions and registrations', async () => {
+    const first = createAdapter(
+      'observe',
+      false,
+      sequenceObserver([
+        operationSnapshot(),
+        operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+      ]),
+    )
+    const second = createAdapter(
+      'observe',
+      false,
+      sequenceObserver([
+        operationSnapshot(),
+        operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+      ]),
+    )
+    await observeSkill(
+      first,
+      'systematic_skill',
+      'ce:work',
+      'first-skill',
+      SESSION_A,
+    )
+    await observeSkill(
+      second,
+      'systematic_skill',
+      'ce:work',
+      'second-skill',
+      SESSION_B,
+    )
+    await observeOperationTool(
+      first,
+      'write',
+      { filePath: 'a.ts', content: 'a' },
+      { title: 'write', output: 'changed', metadata: {} },
+      'isolated-first',
+      SESSION_A,
+    )
+    expect(ledger(first, SESSION_A).listReceipts()).toHaveLength(1)
+    expect(ledger(first, SESSION_B).listReceipts()).toHaveLength(0)
+    expect(ledger(second, SESSION_B).listReceipts()).toHaveLength(0)
+    expect(status(second, SESSION_B).epoch).not.toBeNull()
   })
 })

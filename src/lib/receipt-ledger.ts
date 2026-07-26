@@ -71,7 +71,8 @@ export type ReceiptReasonCode =
   | 'unknown-envelope'
   | 'unknown-receipt'
   | 'unit-mismatch'
-  | 'unchanged-workspace'
+  | 'unchanged-worktree'
+  | 'unchanged-worktree'
   | 'unsupported-command'
   | 'workspace-mismatch'
   | 'recognized-command'
@@ -365,7 +366,7 @@ function isReceiptReasonCode(value: unknown): value is ReceiptReasonCode {
       'unknown-envelope',
       'unknown-receipt',
       'unit-mismatch',
-      'unchanged-workspace',
+      'unchanged-worktree',
       'unsupported-command',
       'workspace-mismatch',
       'recognized-command',
@@ -1217,29 +1218,49 @@ export function createReceiptLedger(
     entry: PreparedEntry,
     after: DigestedContext,
   ): ReceiptReasonCode | undefined {
-    if (
-      entry.operation === 'implementation' &&
-      after.workspaceDigest === entry.context.workspaceDigest
-    ) {
-      return 'unchanged-workspace'
+    if (after.workspaceDigest !== entry.context.workspaceDigest) {
+      return 'workspace-mismatch'
     }
-    if (
-      entry.operation === 'commit' &&
-      (!entry.context.repositoryDigest ||
-        !after.repositoryDigest ||
-        after.repositoryDigest === entry.context.repositoryDigest)
-    ) {
-      return 'no-op-resource'
-    }
-    if (
-      (entry.operation === 'push' || entry.operation === 'pr-creation') &&
-      (!entry.context.resourceDigest ||
-        !after.resourceDigest ||
-        after.resourceDigest === entry.context.resourceDigest)
-    ) {
-      return 'no-op-resource'
-    }
-    return undefined
+    if (entry.operation === 'implementation')
+      return implementationNoOpReason(entry.context, after)
+    if (entry.operation === 'commit')
+      return commitNoOpReason(entry.context, after)
+    return resourceNoOpReason(entry, after)
+  }
+
+  function implementationNoOpReason(
+    context: DigestedContext,
+    after: DigestedContext,
+  ): ReceiptReasonCode | undefined {
+    return !context.worktreeDigest ||
+      !after.worktreeDigest ||
+      after.worktreeDigest === context.worktreeDigest
+      ? 'unchanged-worktree'
+      : undefined
+  }
+
+  function commitNoOpReason(
+    context: DigestedContext,
+    after: DigestedContext,
+  ): ReceiptReasonCode | undefined {
+    return !context.repositoryDigest ||
+      !after.repositoryDigest ||
+      after.repositoryDigest === context.repositoryDigest
+      ? 'no-op-resource'
+      : undefined
+  }
+
+  function resourceNoOpReason(
+    entry: PreparedEntry,
+    after: DigestedContext,
+  ): ReceiptReasonCode | undefined {
+    if (entry.operation !== 'push' && entry.operation !== 'pr-creation')
+      return undefined
+    return !entry.context.resourceDigest ||
+      !after.resourceDigest ||
+      after.resourceDigest === entry.context.resourceDigest
+      ? 'no-op-resource'
+      : undefined
   }
 
   function mintReceipt(
@@ -1254,7 +1275,7 @@ export function createReceiptLedger(
       callDigest,
       epochDigest: entry.context.epochDigest,
       unitDigest: entry.context.unitDigest,
-      workspaceDigest: after.workspaceDigest,
+      workspaceDigest: entry.context.workspaceDigest,
       repositoryDigest: after.repositoryDigest,
       worktreeDigest: after.worktreeDigest,
       resourceDigest: after.resourceDigest,
@@ -1278,7 +1299,7 @@ export function createReceiptLedger(
       envelope,
       context: {
         ...entry.context,
-        workspaceDigest: after.workspaceDigest,
+        workspaceDigest: entry.context.workspaceDigest,
         repositoryDigest: after.repositoryDigest,
         worktreeDigest: after.worktreeDigest,
         resourceDigest: after.resourceDigest,

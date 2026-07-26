@@ -1,11 +1,23 @@
 import type { ToolDefinition } from '@opencode-ai/plugin'
 import { z } from 'zod'
 import { INTERNAL_AGENT_SIGNATURES } from './bootstrap.js'
+import type {
+  OpencodeOperationObserver,
+  OperationObserverResult,
+  OperationObserverSnapshot,
+} from './opencode-operation-observer.js'
+import type {
+  ReceiptClassifier,
+  ReceiptOperationObservation,
+} from './receipt-classifier.js'
 import {
   createReceiptLedger,
+  type ReceiptClassification,
+  type ReceiptEnvelope,
   type ReceiptLedger,
   type ReceiptOperation,
 } from './receipt-ledger.js'
+import { projectReceiptMintMarker } from './receipt-readback.js'
 import {
   createWorkflowGuard,
   type EvidenceObservationResult,
@@ -27,6 +39,8 @@ const MAX_MARKER_SOURCES = 8
 const MAX_CALL_ID_LENGTH = 256
 const MAX_SKILL_LENGTH = 128
 const MAX_STATUS_LENGTH = 128
+export const SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY =
+  'systematic_workflow_receipt'
 
 const OPERATIONS: readonly ReceiptOperation[] = [
   'implementation',
@@ -111,6 +125,9 @@ export interface OpencodeWorkflowGuardOptions {
   workspaceIdentity: string
   repositoryIdentity?: string
   worktreeIdentity?: string
+  observer?: OpencodeOperationObserver
+  classifier?: ReceiptClassifier
+  runtimeRequiredOperations?: readonly ReceiptOperation[]
 }
 
 export interface OpencodeWorkflowGuardHooks {
@@ -141,6 +158,7 @@ interface SessionRuntime {
   readonly hooks: OpencodeWorkflowGuardHooks
   status(): WorkflowStatus
   readStatus(): WorkflowStatus
+  refreshReadback(): Promise<void>
   observeReceipt(input: unknown): EvidenceObservationResult
   prepareTransition(input: unknown): TransitionPrepareResult
   startUnit(input: unknown, policy?: RuntimeUnitPolicy): unknown
@@ -181,11 +199,27 @@ interface PendingComplete {
   transitionId: string
 }
 
+interface PendingOperation {
+  callID: string
+  tool: 'write' | 'edit' | 'apply_patch' | 'bash'
+  argsFingerprint: string
+  before: OperationObserverSnapshot
+}
+
+interface SealedOperation {
+  tool: PendingOperation['tool']
+  argsFingerprint: string
+}
+
 interface TerminalComplete {
   target: TransitionTarget
   status: 'rejected' | 'unavailable'
   reasonCode: WorkflowReasonCode
 }
+
+type OperationCompletionResult =
+  | { status: 'accepted'; operation: ReceiptOperation }
+  | { status: 'deferred' | 'ignored' | 'unavailable' }
 
 interface MarkerSource {
   source: string
@@ -322,6 +356,125 @@ function digestCall(
   callID: string,
 ): string {
   return ledger.digestIdentity('call', callID)
+}
+
+type LocalOperationTool = 'write' | 'edit' | 'apply_patch' | 'bash'
+
+function isLocalOperationTool(tool: string): tool is LocalOperationTool {
+  return (
+    tool === 'write' ||
+    tool === 'edit' ||
+    tool === 'apply_patch' ||
+    tool === 'bash'
+  )
+}
+
+function serializeStableArray(
+  value: readonly unknown[],
+  depth: number,
+  budget: number,
+): string | undefined {
+  const entries: string[] = []
+  let remaining = budget
+  for (const entry of value) {
+    const serialized = stableSerialize(entry, depth + 1, remaining)
+    if (serialized === undefined) return undefined
+    entries.push(serialized)
+    remaining -= serialized.length
+  }
+  return `[${entries.join(',')}]`
+}
+
+function serializeStableRecord(
+  value: Record<string, unknown>,
+  depth: number,
+  budget: number,
+): string | undefined {
+  const entries: string[] = []
+  let remaining = budget
+  for (const key of Object.keys(value).sort()) {
+    const serialized = stableSerialize(value[key], depth + 1, remaining)
+    if (serialized === undefined) return undefined
+    const entry = `${JSON.stringify(key)}:${serialized}`
+    entries.push(entry)
+    remaining -= entry.length
+  }
+  return `{${entries.join(',')}}`
+}
+
+function stableSerialize(
+  value: unknown,
+  depth = 0,
+  budget = 8192,
+): string | undefined {
+  if (budget <= 0 || depth > 8) return undefined
+  if (value === null) return 'null'
+  if (typeof value === 'string') {
+    if (value.length > budget) return undefined
+    return JSON.stringify(value)
+  }
+  if (typeof value === 'number' || typeof value === 'boolean') {
+    return JSON.stringify(value)
+  }
+  if (Array.isArray(value)) return serializeStableArray(value, depth, budget)
+  if (!isRecord(value)) return undefined
+  return serializeStableRecord(value, depth, budget)
+}
+
+function argsFingerprint(
+  ledger: ReturnType<typeof createReceiptLedger>,
+  args: unknown,
+): string | undefined {
+  const serialized = stableSerialize(args)
+  return serialized === undefined
+    ? undefined
+    : ledger.digestIdentity('call', serialized)
+}
+
+function bashCommand(args: unknown): string | undefined {
+  return isRecord(args) &&
+    typeof args.command === 'string' &&
+    args.command.length > 0
+    ? args.command
+    : undefined
+}
+
+function operationCandidate(tool: LocalOperationTool): ReceiptOperation {
+  return tool === 'bash' ? 'verification' : 'implementation'
+}
+
+function terminalForOutput(
+  tool: LocalOperationTool,
+  output: HostOutput,
+): ReceiptOperationObservation['terminal'] {
+  if (tool === 'bash') {
+    const exit = isRecord(output.metadata) ? output.metadata.exit : undefined
+    return {
+      status:
+        typeof exit === 'number'
+          ? exit === 0
+            ? 'success'
+            : 'failure'
+          : 'unknown',
+      output: output.output.length === 0 ? 'empty' : 'non-empty',
+      noOp: false,
+    }
+  }
+  return {
+    status: 'success',
+    output: output.output.length === 0 ? 'empty' : 'non-empty',
+    noOp: false,
+  }
+}
+
+function localOperation(
+  operation: ReceiptOperation | null,
+): operation is 'implementation' | 'verification' | 'commit' {
+  return (
+    operation === 'implementation' ||
+    operation === 'verification' ||
+    operation === 'commit'
+  )
 }
 
 function isSuccessfulAfter(output: unknown): output is HostOutput {
@@ -583,9 +736,11 @@ function createSessionRuntime(
   const ledger = createReceiptLedger({ capabilityFlags: ['workflow-guard'] })
   const guard: WorkflowGuard = createWorkflowGuard({
     ledger,
+    classifier: options.classifier,
     workspaceIdentity: options.workspaceIdentity,
     repositoryIdentity: options.repositoryIdentity,
     worktreeIdentity: options.worktreeIdentity,
+    runtimeRequiredOperations: options.runtimeRequiredOperations,
     mode: options.config.mode === 'disabled' ? 'disabled' : 'protected',
   })
   const pendingSkills = new Map<string, PendingSkill>()
@@ -597,9 +752,12 @@ function createSessionRuntime(
   const blockedCompletes = new Map<string, TransitionTarget>()
   const terminalCompletes = new Map<string, TerminalComplete>()
   const callBindings = new Map<string, { kind: string; fingerprint: string }>()
+  const pendingOperations = new Map<string, PendingOperation>()
+  const sealedOperations = new Map<string, SealedOperation>()
+  const abandonedOperations = new Map<string, SealedOperation>()
 
   const runtimePolicy: RuntimeUnitPolicy = {
-    requiredOperations: [],
+    requiredOperations: options.runtimeRequiredOperations ?? [],
     resourceScopes: {},
   }
 
@@ -636,11 +794,44 @@ function createSessionRuntime(
     }
     pendingStarts.clear()
     pendingSkills.clear()
+    for (const [callDigest, pending] of pendingOperations) {
+      abandonedOperations.set(callDigest, {
+        tool: pending.tool,
+        argsFingerprint: pending.argsFingerprint,
+      })
+      pendingOperations.delete(callDigest)
+    }
   }
 
   function readStatus(): WorkflowStatus {
     abandonPending()
     return guard.status()
+  }
+
+  async function refreshReadback(): Promise<void> {
+    abandonPending()
+    if (!options.observer) return
+    let result: OperationObserverResult
+    try {
+      result = await options.observer.snapshot()
+    } catch {
+      markUnavailable()
+      return
+    }
+    if (result.status === 'unavailable') {
+      markUnavailable()
+      return
+    }
+    if (result.snapshot.targetDigest !== options.workspaceIdentity) {
+      markUnavailable()
+      return
+    }
+    const observed = guard.observeReadback({
+      workspaceIdentity: options.workspaceIdentity,
+      repositoryIdentity: result.snapshot.repositoryRevisionDigest,
+      worktreeIdentity: result.snapshot.worktreeRevisionDigest,
+    })
+    if (observed.status === 'rejected') markUnavailable()
   }
 
   function currentMarkerSource(): MarkerSource {
@@ -802,17 +993,65 @@ function createSessionRuntime(
     blockedCompletes.set(callDigest, target)
   }
 
+  async function prepareOperation(
+    host: HostToolBefore,
+    args: unknown,
+  ): Promise<void> {
+    if (!options.observer || !isLocalOperationTool(host.tool)) return
+    const fingerprint = argsFingerprint(ledger, args)
+    if (!fingerprint) {
+      markUnavailable()
+      return
+    }
+    const callDigest = digestCall(ledger, host.callID)
+    if (
+      bindCall(callDigest, 'operation', `${host.tool}:${fingerprint}`) !== 'new'
+    ) {
+      return
+    }
+    let result: OperationObserverResult
+    try {
+      result = await options.observer.snapshot()
+    } catch {
+      markUnavailable()
+      return
+    }
+    if (result.status === 'unavailable') {
+      markUnavailable()
+      return
+    }
+    if (result.snapshot.targetDigest !== options.workspaceIdentity) {
+      markUnavailable()
+      return
+    }
+    pendingOperations.set(callDigest, {
+      callID: host.callID,
+      tool: host.tool,
+      argsFingerprint: fingerprint,
+      before: result.snapshot,
+    })
+  }
+
+  async function prepareHostCall(
+    host: HostToolBefore,
+    args: unknown,
+  ): Promise<void> {
+    if (host.tool === 'systematic_skill' || host.tool === 'skill') {
+      prepareSkill(host, args)
+    } else if (host.tool === 'systematic_workflow_start') {
+      prepareStart(host, args)
+    } else if (host.tool === 'systematic_workflow_complete') {
+      prepareComplete(host, args)
+    } else if (isLocalOperationTool(host.tool)) {
+      await prepareOperation(host, args)
+    }
+  }
+
   async function before(input: unknown, output: unknown): Promise<void> {
     try {
       const host = parseHostBefore(input)
       if (!host || !isRecord(output)) return
-      if (host.tool === 'systematic_skill' || host.tool === 'skill') {
-        prepareSkill(host, output.args)
-      } else if (host.tool === 'systematic_workflow_start') {
-        prepareStart(host, output.args)
-      } else if (host.tool === 'systematic_workflow_complete') {
-        prepareComplete(host, output.args)
-      }
+      await prepareHostCall(host, output.args)
     } catch (error) {
       if (isWorkflowGuardBlockedError(error)) throw error
       markUnavailable()
@@ -899,6 +1138,7 @@ function createSessionRuntime(
     callDigest: string,
     pending: PendingComplete,
     output: unknown,
+    readbacks?: readonly unknown[],
   ): void {
     pendingCompletes.delete(callDigest)
     if (!isSuccessfulAfter(output)) {
@@ -911,6 +1151,7 @@ function createSessionRuntime(
     const result = guard.finalizeTransition({
       callId: pending.callID,
       transitionId: pending.transitionId,
+      ...(readbacks ? { readbacks } : {}),
     })
     if (result.status === 'completed' || result.status === 'duplicate') {
       finalizedCompletes.set(callDigest, pending)
@@ -951,16 +1192,58 @@ function createSessionRuntime(
     return true
   }
 
-  function finishComplete(host: HostToolAfter, output: unknown): void {
+  function abandonComplete(
+    callDigest: string,
+    pending: PendingComplete,
+    remember: boolean,
+  ): void {
+    pendingCompletes.delete(callDigest)
+    guard.abandonTransition({
+      callId: pending.callID,
+      transitionId: pending.transitionId,
+    })
+    if (remember) abandonedCompletes.set(callDigest, pending.target)
+  }
+
+  async function completionReadbacks(): Promise<
+    | { status: 'none' }
+    | { status: 'unavailable' }
+    | { status: 'ready'; readbacks: readonly unknown[] }
+  > {
+    if (!options.observer) return { status: 'none' }
+    let result: OperationObserverResult
+    try {
+      result = await options.observer.snapshot()
+    } catch {
+      return { status: 'unavailable' }
+    }
+    if (
+      result.status === 'unavailable' ||
+      result.snapshot.targetDigest !== options.workspaceIdentity
+    ) {
+      return { status: 'unavailable' }
+    }
+    return {
+      status: 'ready',
+      readbacks: [
+        {
+          workspaceIdentity: options.workspaceIdentity,
+          repositoryIdentity: result.snapshot.repositoryRevisionDigest,
+          worktreeIdentity: result.snapshot.worktreeRevisionDigest,
+        },
+      ],
+    }
+  }
+
+  async function finishComplete(
+    host: HostToolAfter,
+    output: unknown,
+  ): Promise<void> {
     const callDigest = digestCall(ledger, host.callID)
     const pending = pendingCompletes.get(callDigest)
     const finalTarget = normalizeTarget(host.args)
     if (pending && (!finalTarget || finalTarget !== pending.target)) {
-      pendingCompletes.delete(callDigest)
-      guard.abandonTransition({
-        callId: pending.callID,
-        transitionId: pending.transitionId,
-      })
+      abandonComplete(callDigest, pending, false)
       markUnavailable()
       return
     }
@@ -969,7 +1252,253 @@ function createSessionRuntime(
       markUnavailable()
       return
     }
-    finalizeComplete(callDigest, pending, output)
+    if (!options.observer) {
+      finalizeComplete(callDigest, pending, output)
+      return
+    }
+    const readbacks = await completionReadbacks()
+    if (readbacks.status === 'unavailable') {
+      abandonComplete(callDigest, pending, true)
+      markUnavailable()
+      return
+    }
+    finalizeComplete(
+      callDigest,
+      pending,
+      output,
+      readbacks.status === 'ready' ? readbacks.readbacks : undefined,
+    )
+  }
+
+  function sealOperation(
+    callDigest: string,
+    operation: PendingOperation,
+    abandoned = false,
+  ): void {
+    const sealed = {
+      tool: operation.tool,
+      argsFingerprint: operation.argsFingerprint,
+    }
+    if (abandoned) abandonedOperations.set(callDigest, sealed)
+    else sealedOperations.set(callDigest, sealed)
+  }
+
+  function isSealedOperationReplay(
+    callDigest: string,
+    host: HostToolAfter,
+    fingerprint: string | undefined,
+  ): boolean {
+    const sealed = sealedOperations.get(callDigest)
+    const abandoned = abandonedOperations.get(callDigest)
+    const prior = sealed ?? abandoned
+    return (
+      prior !== undefined &&
+      fingerprint !== undefined &&
+      prior.tool === host.tool &&
+      prior.argsFingerprint === fingerprint
+    )
+  }
+
+  function takePendingOperation(
+    callDigest: string,
+    host: HostToolAfter,
+    fingerprint: string | undefined,
+  ): PendingOperation | undefined {
+    const pending = pendingOperations.get(callDigest)
+    if (!pending) {
+      markUnavailable()
+      return undefined
+    }
+    pendingOperations.delete(callDigest)
+    if (
+      pending.tool !== host.tool ||
+      fingerprint === undefined ||
+      fingerprint !== pending.argsFingerprint
+    ) {
+      sealOperation(callDigest, pending, true)
+      markUnavailable()
+      return undefined
+    }
+    return pending
+  }
+
+  async function captureAfterOperation(): Promise<
+    OperationObserverSnapshot | undefined
+  > {
+    if (!options.observer) return undefined
+    let result: OperationObserverResult
+    try {
+      result = await options.observer.snapshot()
+    } catch {
+      return undefined
+    }
+    return result.status === 'available' &&
+      result.snapshot.targetDigest === options.workspaceIdentity
+      ? result.snapshot
+      : undefined
+  }
+
+  function buildOperationObservation(
+    host: HostToolAfter,
+    pending: PendingOperation,
+    after: OperationObserverSnapshot,
+    current: WorkflowStatus,
+    output: HostOutput,
+  ): ReceiptOperationObservation | undefined {
+    if (!current.epoch || !current.unit || !isLocalOperationTool(host.tool)) {
+      return undefined
+    }
+    const command = host.tool === 'bash' ? bashCommand(host.args) : undefined
+    return {
+      callId: host.callID,
+      operation: operationCandidate(host.tool),
+      tool: host.tool,
+      ...(command ? { command } : {}),
+      context: {
+        epochId: current.epoch.epochId,
+        unitId: current.unit.unitId,
+        workspaceIdentity: options.workspaceIdentity,
+        repositoryIdentity: pending.before.repositoryRevisionDigest,
+        worktreeIdentity: pending.before.worktreeRevisionDigest,
+      },
+      after: {
+        workspaceIdentity: options.workspaceIdentity,
+        repositoryIdentity: after.repositoryRevisionDigest,
+        worktreeIdentity: after.worktreeRevisionDigest,
+      },
+      terminal: terminalForOutput(host.tool, output),
+    }
+  }
+
+  async function classifyLocalObservation(
+    observation: ReceiptOperationObservation,
+  ): Promise<
+    | { status: 'unavailable' }
+    | { status: 'deferred' }
+    | { status: 'ready'; observation: ReceiptOperationObservation }
+  > {
+    const classify = options.classifier?.classifyOperation
+    if (!classify) return { status: 'unavailable' }
+    let classification: ReceiptClassification
+    try {
+      classification = await classify(observation)
+    } catch {
+      return { status: 'unavailable' }
+    }
+    if (!localOperation(classification.category)) {
+      return classification.category === null
+        ? { status: 'deferred' }
+        : { status: 'unavailable' }
+    }
+    return {
+      status: 'ready',
+      observation: { ...observation, operation: classification.category },
+    }
+  }
+
+  async function observeClassifiedOperation(
+    observation: ReceiptOperationObservation,
+  ): Promise<EvidenceObservationResult | undefined> {
+    try {
+      return await guard.observeOperation(observation)
+    } catch {
+      return undefined
+    }
+  }
+
+  async function completeOperationObservation(
+    callDigest: string,
+    host: HostToolAfter,
+    pending: PendingOperation,
+    output: unknown,
+  ): Promise<OperationCompletionResult> {
+    const parsedOutput = parseHostOutput(output)
+    if (!parsedOutput) {
+      sealOperation(callDigest, pending, true)
+      return { status: 'unavailable' }
+    }
+    const afterSnapshot = await captureAfterOperation()
+    if (!afterSnapshot) {
+      sealOperation(callDigest, pending, true)
+      return { status: 'unavailable' }
+    }
+    const observation = buildOperationObservation(
+      host,
+      pending,
+      afterSnapshot,
+      guard.status(),
+      parsedOutput,
+    )
+    if (!observation) {
+      sealOperation(callDigest, pending, true)
+      return { status: 'ignored' }
+    }
+    const classification = await classifyLocalObservation(observation)
+    if (classification.status !== 'ready') {
+      sealOperation(callDigest, pending, true)
+      return { status: classification.status }
+    }
+    const observed = await observeClassifiedOperation(
+      classification.observation,
+    )
+    if (!observed) {
+      sealOperation(callDigest, pending, true)
+      return { status: 'unavailable' }
+    }
+    sealOperation(callDigest, pending, observed.status !== 'accepted')
+    if (observed.status === 'unavailable') {
+      return { status: 'unavailable' }
+    }
+    if (observed.status !== 'accepted') return { status: 'ignored' }
+    return { status: 'accepted', operation: observed.operation }
+  }
+
+  function receiptForOperation(callID: string, operation: ReceiptOperation) {
+    const callDigest = digestCall(ledger, callID)
+    return ledger
+      .listReceipts()
+      .find(
+        (receipt) =>
+          receipt.canonical.callDigest === callDigest &&
+          receipt.canonical.operation === operation &&
+          receipt.canonical.consumption === 'available',
+      )
+  }
+
+  function mergeReceiptMarker(output: unknown, receipt: ReceiptEnvelope): void {
+    if (!isRecord(output) || !isRecord(output.metadata)) return
+    const marker = projectReceiptMintMarker(receipt, ledger.getSessionSalt())
+    if (!marker) return
+    output.metadata = {
+      ...output.metadata,
+      [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: marker,
+    }
+  }
+
+  async function finishOperation(
+    host: HostToolAfter,
+    output: unknown,
+  ): Promise<void> {
+    if (!options.observer || !isLocalOperationTool(host.tool)) return
+    const callDigest = digestCall(ledger, host.callID)
+    const fingerprint = argsFingerprint(ledger, host.args)
+    if (isSealedOperationReplay(callDigest, host, fingerprint)) return
+    const pending = takePendingOperation(callDigest, host, fingerprint)
+    if (!pending) return
+    const result = await completeOperationObservation(
+      callDigest,
+      host,
+      pending,
+      output,
+    )
+    if (result.status === 'unavailable') {
+      markUnavailable()
+      return
+    }
+    if (result.status === 'accepted') {
+      const receipt = receiptForOperation(host.callID, result.operation)
+      if (receipt) mergeReceiptMarker(output, receipt)
+    }
   }
 
   async function after(input: unknown, output: unknown): Promise<void> {
@@ -981,7 +1510,9 @@ function createSessionRuntime(
       } else if (host.tool === 'systematic_workflow_start') {
         finishStart(host, output)
       } else if (host.tool === 'systematic_workflow_complete') {
-        finishComplete(host, output)
+        await finishComplete(host, output)
+      } else if (isLocalOperationTool(host.tool)) {
+        await finishOperation(host, output)
       }
     } catch {
       markUnavailable()
@@ -1033,6 +1564,7 @@ function createSessionRuntime(
     },
     status: () => guard.status(),
     readStatus,
+    refreshReadback,
     observeReceipt: (input) => guard.observeReceipt(input),
     prepareTransition: (input) => guard.prepareTransition(input),
     startUnit: (input, policy) => guard.startUnit(input, policy),
@@ -1057,7 +1589,10 @@ function makeWorkflowTool(
   description: string,
   args: unknown,
   getRuntime: (sessionID: string) => SessionRuntime,
-  execute: (runtime: SessionRuntime, input: unknown) => ToolResultContent,
+  execute: (
+    runtime: SessionRuntime,
+    input: unknown,
+  ) => ToolResultContent | Promise<ToolResultContent>,
 ): ToolDefinition {
   return {
     description,
@@ -1076,7 +1611,7 @@ function makeWorkflowTool(
         }
       }
       const runtime = getRuntime(sessionID)
-      let content = execute(runtime, input)
+      let content = await execute(runtime, input)
       let metadata: Record<string, unknown>
       if (isRecord(context) && typeof context.metadata === 'function') {
         try {
@@ -1140,12 +1675,15 @@ export function createOpencodeWorkflowGuard(
       'Read the bounded guarded workflow status.',
       statusToolShape,
       sessionRuntimeFor,
-      (runtime, input) => ({
-        title: 'Workflow guard status',
-        output: statusToolSchema.safeParse(input).success
-          ? statusForTool(runtime.readStatus())
-          : unavailableToolResult(),
-      }),
+      async (runtime, input) => {
+        await runtime.refreshReadback()
+        return {
+          title: 'Workflow guard status',
+          output: statusToolSchema.safeParse(input).success
+            ? statusForTool(runtime.readStatus())
+            : unavailableToolResult(),
+        }
+      },
     ),
     systematic_workflow_complete: makeWorkflowTool(
       'Request completion of a guarded workflow unit or epoch.',

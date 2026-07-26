@@ -55,8 +55,6 @@ const WORKSPACE_OTHER =
   'eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee'
 const WORKSPACE_ZERO =
   'ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff'
-const WORKSPACE_ONE =
-  '0000000000000000000000000000000000000000000000000000000000000001'
 const REPOSITORY_ZERO =
   '1212121212121212121212121212121212121212121212121212121212121212'
 const REPOSITORY_ONE =
@@ -65,6 +63,9 @@ const REPOSITORY_NEW =
   '1515151515151515151515151515151515151515151515151515151515151515'
 const WORKTREE_ZERO =
   '1414141414141414141414141414141414141414141414141414141414141414'
+const WORKTREE_AFTER =
+  '1616161616161616161616161616161616161616161616161616161616161616'
+const WORKTREE_INITIAL = WORKTREE_ZERO
 
 const baseContext = {
   epochId: 'epoch-1',
@@ -113,10 +114,10 @@ function operationInput(
     'review-readback': 'gh',
   }
   const after = {
-    workspaceIdentity:
-      operation === 'implementation' ? WORKSPACE_AFTER : WORKSPACE_CURRENT,
+    workspaceIdentity: WORKSPACE_CURRENT,
     repositoryIdentity: REPOSITORY_CURRENT,
-    worktreeIdentity: WORKTREE_CURRENT,
+    worktreeIdentity:
+      operation === 'implementation' ? WORKTREE_AFTER : WORKTREE_CURRENT,
     ...(operation === 'push'
       ? {
           resourceIdentity: RESOURCE_AFTER,
@@ -267,9 +268,9 @@ function operationWithRevision(
 
 function coherentFinalReadbacks(
   pushResourceIdentity = RESOURCE_REMOTE,
-  workspaceIdentity = WORKSPACE_ONE,
+  workspaceIdentity = WORKSPACE_ZERO,
   repositoryIdentity = REPOSITORY_ONE,
-  worktreeIdentity = WORKTREE_ZERO,
+  worktreeIdentity = WORKTREE_CURRENT,
 ): Array<Record<string, unknown>> {
   return [
     {
@@ -332,51 +333,68 @@ async function buildFullOperationScenario(): Promise<{
   ]
   const { guard, ledger } = createScenario(classifier, operations)
   const inputs = [
-    operationInput('implementation', { callId: 'bundle-implementation' }),
+    operationInput('implementation', {
+      callId: 'bundle-implementation',
+      after: {
+        ...operationInput('implementation').after,
+        worktreeIdentity: WORKTREE_AFTER,
+      },
+    }),
     operationInput('verification', {
       callId: 'bundle-verification',
-      context: { ...baseContext, workspaceIdentity: WORKSPACE_AFTER },
+      context: {
+        ...baseContext,
+        workspaceIdentity: WORKSPACE_CURRENT,
+        worktreeIdentity: WORKTREE_AFTER,
+      },
       after: {
         ...operationInput('verification').after,
-        workspaceIdentity: WORKSPACE_AFTER,
+        workspaceIdentity: WORKSPACE_CURRENT,
+        worktreeIdentity: WORKTREE_AFTER,
       },
     }),
     operationInput('commit', {
       callId: 'bundle-commit',
       context: {
         ...baseContext,
-        workspaceIdentity: WORKSPACE_AFTER,
+        workspaceIdentity: WORKSPACE_CURRENT,
+        worktreeIdentity: WORKTREE_AFTER,
       },
       after: {
         ...operationInput('commit').after,
-        workspaceIdentity: WORKSPACE_AFTER,
+        workspaceIdentity: WORKSPACE_CURRENT,
         repositoryIdentity: REPOSITORY_AFTER,
+        worktreeIdentity: WORKTREE_AFTER,
       },
     }),
     operationWithRevision('push', RESOURCE_AFTER, REVISION_A, REVISION_B, {
       callId: 'bundle-push',
       context: {
         ...baseContext,
-        workspaceIdentity: WORKSPACE_AFTER,
+        workspaceIdentity: WORKSPACE_CURRENT,
         repositoryIdentity: REPOSITORY_AFTER,
+        worktreeIdentity: WORKTREE_AFTER,
       },
       after: {
         ...operationInput('push').after,
-        workspaceIdentity: WORKSPACE_AFTER,
+        workspaceIdentity: WORKSPACE_CURRENT,
         repositoryIdentity: REPOSITORY_AFTER,
+        worktreeIdentity: WORKTREE_AFTER,
       },
     }),
     operationWithRevision('pr-creation', RESOURCE_PR, undefined, REVISION_B, {
       callId: 'bundle-pr',
       context: {
         ...baseContext,
-        workspaceIdentity: WORKSPACE_AFTER,
+        workspaceIdentity: WORKSPACE_CURRENT,
         repositoryIdentity: REPOSITORY_AFTER,
+        worktreeIdentity: WORKTREE_AFTER,
       },
       after: {
         ...operationInput('pr-creation').after,
-        workspaceIdentity: WORKSPACE_AFTER,
+        workspaceIdentity: WORKSPACE_CURRENT,
         repositoryIdentity: REPOSITORY_AFTER,
+        worktreeIdentity: WORKTREE_AFTER,
       },
     }),
     operationWithRevision(
@@ -388,13 +406,15 @@ async function buildFullOperationScenario(): Promise<{
         callId: 'bundle-check',
         context: {
           ...baseContext,
-          workspaceIdentity: WORKSPACE_AFTER,
+          workspaceIdentity: WORKSPACE_CURRENT,
           repositoryIdentity: REPOSITORY_AFTER,
+          worktreeIdentity: WORKTREE_AFTER,
         },
         after: {
           ...operationInput('check-readback').after,
-          workspaceIdentity: WORKSPACE_AFTER,
+          workspaceIdentity: WORKSPACE_CURRENT,
           repositoryIdentity: REPOSITORY_AFTER,
+          worktreeIdentity: WORKTREE_AFTER,
         },
       },
     ),
@@ -407,13 +427,15 @@ async function buildFullOperationScenario(): Promise<{
         callId: 'bundle-review',
         context: {
           ...baseContext,
-          workspaceIdentity: WORKSPACE_AFTER,
+          workspaceIdentity: WORKSPACE_CURRENT,
           repositoryIdentity: REPOSITORY_AFTER,
+          worktreeIdentity: WORKTREE_AFTER,
         },
         after: {
           ...operationInput('review-readback').after,
-          workspaceIdentity: WORKSPACE_AFTER,
+          workspaceIdentity: WORKSPACE_CURRENT,
           repositoryIdentity: REPOSITORY_AFTER,
+          worktreeIdentity: WORKTREE_AFTER,
         },
       },
     ),
@@ -500,6 +522,80 @@ describe('receipt operation adapters', () => {
       expect(result.outcome).toBe('rejected')
       expect(result.reasonCode).not.toBe('recognized-command')
     }
+  })
+
+  test('separates stable workspace targets from mutable implementation revisions', async () => {
+    const classifier =
+      createReceiptClassifier() as unknown as OperationClassifier
+    const changedWorktree = await classifier.classifyOperation(
+      operationInput('implementation', {
+        after: {
+          ...operationInput('implementation').after,
+          workspaceIdentity: WORKSPACE_CURRENT,
+          worktreeIdentity: WORKTREE_AFTER,
+        },
+        terminal: successTerminal,
+      }),
+    )
+    expect(changedWorktree).toMatchObject({
+      outcome: 'accepted',
+      category: 'implementation',
+    })
+
+    for (const after of [
+      {
+        ...operationInput('implementation').after,
+        workspaceIdentity: WORKSPACE_CURRENT,
+        worktreeIdentity: WORKTREE_CURRENT,
+      },
+      {
+        ...operationInput('implementation').after,
+        workspaceIdentity: WORKSPACE_CURRENT,
+        worktreeIdentity: undefined,
+      },
+    ]) {
+      expect(
+        await classifier.classifyOperation(
+          operationInput('implementation', { after }),
+        ),
+      ).toMatchObject({
+        outcome: 'rejected',
+        reasonCode: 'unchanged-worktree',
+      })
+    }
+
+    expect(
+      await classifier.classifyOperation(
+        operationInput('implementation', {
+          after: {
+            ...operationInput('implementation').after,
+            workspaceIdentity: WORKSPACE_OTHER,
+            worktreeIdentity: WORKTREE_AFTER,
+          },
+        }),
+      ),
+    ).toMatchObject({
+      outcome: 'rejected',
+      reasonCode: 'workspace-mismatch',
+    })
+
+    expect(
+      await classifier.classifyOperation(operationInput('verification')),
+    ).toMatchObject({ outcome: 'accepted', category: 'verification' })
+    expect(
+      await classifier.classifyOperation(
+        operationInput('verification', {
+          after: {
+            ...operationInput('verification').after,
+            workspaceIdentity: WORKSPACE_OTHER,
+            worktreeIdentity: WORKTREE_AFTER,
+          },
+        }),
+      ),
+    ).toMatchObject({
+      outcome: 'rejected',
+      reasonCode: 'workspace-mismatch',
+    })
   })
 
   test('rejects failures, cancellation, command/class mismatch, and privacy-bearing fields', async () => {
@@ -615,6 +711,26 @@ describe('receipt operation adapters', () => {
         }),
       ),
     ).toMatchObject({ status: 'rejected' })
+    expect(ledger.listReceipts()).toHaveLength(0)
+    await classifier.close()
+  })
+
+  test('reports repository/worktree precondition drift as current-revision mismatch', async () => {
+    const classifier = createReceiptClassifier()
+    const { guard, ledger } = createScenario(classifier, ['implementation'])
+    const drifted = operationInput('implementation', {
+      context: {
+        ...operationInput('implementation').context,
+        repositoryIdentity: REPOSITORY_BEFORE,
+        worktreeIdentity: WORKTREE_CURRENT,
+      },
+    })
+    expect(
+      await guard.observeOperation(bindOperation(guard, drifted)),
+    ).toMatchObject({
+      status: 'rejected',
+      reasonCode: 'receipt-mismatch',
+    })
     expect(ledger.listReceipts()).toHaveLength(0)
     await classifier.close()
   })
@@ -932,73 +1048,73 @@ describe('receipt operation adapters', () => {
           unitId: 'unit-placeholder',
           workspaceIdentity: WORKSPACE_ZERO,
           repositoryIdentity: REPOSITORY_ZERO,
-          worktreeIdentity: WORKTREE_ZERO,
+          worktreeIdentity: WORKTREE_INITIAL,
         },
         after: {
           ...operationInput('implementation').after,
-          workspaceIdentity: WORKSPACE_ONE,
+          workspaceIdentity: WORKSPACE_ZERO,
           repositoryIdentity: REPOSITORY_ZERO,
-          worktreeIdentity: WORKTREE_ZERO,
+          worktreeIdentity: WORKTREE_CURRENT,
         },
       }),
       operationInput('verification', {
         callId: 'chain-verification',
         context: {
           ...baseContext,
-          workspaceIdentity: WORKSPACE_ONE,
+          workspaceIdentity: WORKSPACE_ZERO,
           repositoryIdentity: REPOSITORY_ZERO,
-          worktreeIdentity: WORKTREE_ZERO,
+          worktreeIdentity: WORKTREE_CURRENT,
         },
         after: {
           ...operationInput('verification').after,
-          workspaceIdentity: WORKSPACE_ONE,
+          workspaceIdentity: WORKSPACE_ZERO,
           repositoryIdentity: REPOSITORY_ZERO,
-          worktreeIdentity: WORKTREE_ZERO,
+          worktreeIdentity: WORKTREE_CURRENT,
         },
       }),
       operationInput('commit', {
         callId: 'chain-commit',
         context: {
           ...baseContext,
-          workspaceIdentity: WORKSPACE_ONE,
+          workspaceIdentity: WORKSPACE_ZERO,
           repositoryIdentity: REPOSITORY_ZERO,
-          worktreeIdentity: WORKTREE_ZERO,
+          worktreeIdentity: WORKTREE_CURRENT,
         },
         after: {
           ...operationInput('commit').after,
-          workspaceIdentity: WORKSPACE_ONE,
+          workspaceIdentity: WORKSPACE_ZERO,
           repositoryIdentity: REPOSITORY_ONE,
-          worktreeIdentity: WORKTREE_ZERO,
+          worktreeIdentity: WORKTREE_CURRENT,
         },
       }),
       operationWithRevision('push', RESOURCE_REMOTE, REVISION_A, REVISION_B, {
         callId: 'chain-push',
         context: {
           ...baseContext,
-          workspaceIdentity: WORKSPACE_ONE,
+          workspaceIdentity: WORKSPACE_ZERO,
           repositoryIdentity: REPOSITORY_ONE,
-          worktreeIdentity: WORKTREE_ZERO,
+          worktreeIdentity: WORKTREE_CURRENT,
         },
         after: {
           ...operationInput('push').after,
-          workspaceIdentity: WORKSPACE_ONE,
+          workspaceIdentity: WORKSPACE_ZERO,
           repositoryIdentity: REPOSITORY_ONE,
-          worktreeIdentity: WORKTREE_ZERO,
+          worktreeIdentity: WORKTREE_CURRENT,
         },
       }),
       operationWithRevision('pr-creation', RESOURCE_PR, undefined, REVISION_B, {
         callId: 'chain-pr',
         context: {
           ...baseContext,
-          workspaceIdentity: WORKSPACE_ONE,
+          workspaceIdentity: WORKSPACE_ZERO,
           repositoryIdentity: REPOSITORY_ONE,
-          worktreeIdentity: WORKTREE_ZERO,
+          worktreeIdentity: WORKTREE_CURRENT,
         },
         after: {
           ...operationInput('pr-creation').after,
-          workspaceIdentity: WORKSPACE_ONE,
+          workspaceIdentity: WORKSPACE_ZERO,
           repositoryIdentity: REPOSITORY_ONE,
-          worktreeIdentity: WORKTREE_ZERO,
+          worktreeIdentity: WORKTREE_CURRENT,
         },
       }),
       operationWithRevision(
@@ -1010,16 +1126,16 @@ describe('receipt operation adapters', () => {
           callId: 'chain-check',
           context: {
             ...baseContext,
-            workspaceIdentity: WORKSPACE_ONE,
+            workspaceIdentity: WORKSPACE_ZERO,
             repositoryIdentity: REPOSITORY_ONE,
-            worktreeIdentity: WORKTREE_ZERO,
+            worktreeIdentity: WORKTREE_CURRENT,
             resourceIdentity: RESOURCE_PR,
           },
           after: {
             ...operationInput('check-readback').after,
-            workspaceIdentity: WORKSPACE_ONE,
+            workspaceIdentity: WORKSPACE_ZERO,
             repositoryIdentity: REPOSITORY_ONE,
-            worktreeIdentity: WORKTREE_ZERO,
+            worktreeIdentity: WORKTREE_CURRENT,
           },
         },
       ),
@@ -1032,16 +1148,16 @@ describe('receipt operation adapters', () => {
           callId: 'chain-review',
           context: {
             ...baseContext,
-            workspaceIdentity: WORKSPACE_ONE,
+            workspaceIdentity: WORKSPACE_ZERO,
             repositoryIdentity: REPOSITORY_ONE,
-            worktreeIdentity: WORKTREE_ZERO,
+            worktreeIdentity: WORKTREE_CURRENT,
             resourceIdentity: RESOURCE_PR,
           },
           after: {
             ...operationInput('review-readback').after,
-            workspaceIdentity: WORKSPACE_ONE,
+            workspaceIdentity: WORKSPACE_ZERO,
             repositoryIdentity: REPOSITORY_ONE,
-            worktreeIdentity: WORKTREE_ZERO,
+            worktreeIdentity: WORKTREE_CURRENT,
           },
         },
       ),
@@ -1124,9 +1240,9 @@ describe('receipt operation adapters', () => {
         transitionId: prepared.transitionId,
         readbacks: coherentFinalReadbacks(
           RESOURCE_AFTER,
-          WORKSPACE_AFTER,
+          WORKSPACE_CURRENT,
           REPOSITORY_AFTER,
-          WORKTREE_CURRENT,
+          WORKTREE_AFTER,
         ),
       }),
     ).toMatchObject({ status: 'completed' })
@@ -1261,17 +1377,19 @@ describe('receipt operation adapters', () => {
     const implementation = operationInput('implementation', {
       after: {
         ...operationInput('implementation').after,
-        workspaceIdentity: WORKSPACE_AFTER,
+        workspaceIdentity: WORKSPACE_CURRENT,
       },
     })
     const verification = operationInput('verification', {
       context: {
         ...operationInput('verification').context,
-        workspaceIdentity: WORKSPACE_AFTER,
+        workspaceIdentity: WORKSPACE_CURRENT,
+        worktreeIdentity: WORKTREE_AFTER,
       },
       after: {
         ...operationInput('verification').after,
-        workspaceIdentity: WORKSPACE_AFTER,
+        workspaceIdentity: WORKSPACE_CURRENT,
+        worktreeIdentity: WORKTREE_AFTER,
       },
     })
     expect(
@@ -1284,18 +1402,18 @@ describe('receipt operation adapters', () => {
 
     expect(
       guard.observeReadback({
-        workspaceIdentity: WORKSPACE_AFTER,
+        workspaceIdentity: WORKSPACE_CURRENT,
         repositoryIdentity: REPOSITORY_CURRENT,
-        worktreeIdentity: WORKTREE_CURRENT,
+        worktreeIdentity: WORKTREE_AFTER,
       }),
     ).toMatchObject({ status: 'accepted', changed: false })
     expect(guard.status()).toMatchObject({ state: 'protected' })
 
     expect(
       guard.observeReadback({
-        workspaceIdentity: WORKSPACE_NEXT,
+        workspaceIdentity: WORKSPACE_CURRENT,
         repositoryIdentity: REPOSITORY_CURRENT,
-        worktreeIdentity: WORKTREE_CURRENT,
+        worktreeIdentity: WORKTREE_ZERO,
       }),
     ).toMatchObject({ status: 'accepted', changed: true })
     expect(guard.status()).toMatchObject({
@@ -1309,11 +1427,13 @@ describe('receipt operation adapters', () => {
       callId: 'fresh-verification',
       context: {
         ...operationInput('verification').context,
-        workspaceIdentity: WORKSPACE_NEXT,
+        workspaceIdentity: WORKSPACE_CURRENT,
+        worktreeIdentity: WORKTREE_ZERO,
       },
       after: {
         ...operationInput('verification').after,
-        workspaceIdentity: WORKSPACE_NEXT,
+        workspaceIdentity: WORKSPACE_CURRENT,
+        worktreeIdentity: WORKTREE_ZERO,
       },
     })
     expect(
@@ -1332,17 +1452,19 @@ describe('receipt operation adapters', () => {
     const implementation = operationInput('implementation', {
       after: {
         ...operationInput('implementation').after,
-        workspaceIdentity: WORKSPACE_AFTER,
+        workspaceIdentity: WORKSPACE_CURRENT,
       },
     })
     const verification = operationInput('verification', {
       context: {
         ...operationInput('verification').context,
-        workspaceIdentity: WORKSPACE_AFTER,
+        workspaceIdentity: WORKSPACE_CURRENT,
+        worktreeIdentity: WORKTREE_AFTER,
       },
       after: {
         ...operationInput('verification').after,
-        workspaceIdentity: WORKSPACE_AFTER,
+        workspaceIdentity: WORKSPACE_CURRENT,
+        worktreeIdentity: WORKTREE_AFTER,
       },
     })
     expect(
@@ -1364,9 +1486,9 @@ describe('receipt operation adapters', () => {
       transitionId: prepared.transitionId,
       readbacks: [
         {
-          workspaceIdentity: WORKSPACE_NEXT,
+          workspaceIdentity: WORKSPACE_CURRENT,
           repositoryIdentity: REPOSITORY_CURRENT,
-          worktreeIdentity: WORKTREE_CURRENT,
+          worktreeIdentity: WORKTREE_ZERO,
         },
       ],
     })
@@ -1389,29 +1511,33 @@ describe('receipt operation adapters', () => {
       operationInput('implementation', {
         after: {
           ...operationInput('implementation').after,
-          workspaceIdentity: WORKSPACE_AFTER,
+          workspaceIdentity: WORKSPACE_CURRENT,
         },
       }),
       operationInput('verification', {
         context: {
           ...operationInput('verification').context,
-          workspaceIdentity: WORKSPACE_AFTER,
+          workspaceIdentity: WORKSPACE_CURRENT,
+          worktreeIdentity: WORKTREE_AFTER,
         },
         after: {
           ...operationInput('verification').after,
-          workspaceIdentity: WORKSPACE_AFTER,
+          workspaceIdentity: WORKSPACE_CURRENT,
+          worktreeIdentity: WORKTREE_AFTER,
         },
       }),
       operationInput('pr-creation', {
         callId: 'pr-state-change',
         context: {
           ...operationInput('pr-creation').context,
-          workspaceIdentity: WORKSPACE_AFTER,
+          workspaceIdentity: WORKSPACE_CURRENT,
+          worktreeIdentity: WORKTREE_AFTER,
         },
         after: {
           ...operationInput('pr-creation').after,
-          workspaceIdentity: WORKSPACE_AFTER,
+          workspaceIdentity: WORKSPACE_CURRENT,
           repositoryIdentity: REPOSITORY_CURRENT,
+          worktreeIdentity: WORKTREE_AFTER,
         },
       }),
     ]) {

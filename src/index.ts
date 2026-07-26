@@ -11,9 +11,14 @@ import {
 import { loadConfig } from './lib/config.js'
 import { createConfigHandler } from './lib/config-handler.js'
 import {
+  createOpencodeOperationObserver,
+  type OperationObserverResult,
+} from './lib/opencode-operation-observer.js'
+import {
   createOpencodeWorkflowGuard,
   isWorkflowGuardBlockedError,
 } from './lib/opencode-workflow-guard.js'
+import { createReceiptClassifier } from './lib/receipt-classifier.js'
 import { createSkillTool } from './lib/skill-tool.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -57,11 +62,33 @@ const initializePlugin = async ({
     bundledCommandsDir,
     client,
   })
+  const observer = createOpencodeOperationObserver({
+    targetDirectory: typeof worktree === 'string' ? worktree : directory,
+  })
+  let initialSnapshot: OperationObserverResult
+  try {
+    initialSnapshot = await observer.snapshot()
+  } catch {
+    initialSnapshot = {
+      status: 'unavailable' as const,
+      reasonCode: 'target-unavailable' as const,
+    }
+  }
+  const initialIdentities =
+    initialSnapshot.status === 'available'
+      ? initialSnapshot.snapshot
+      : {
+          targetDigest: observer.targetDigest,
+          repositoryRevisionDigest: observer.targetDigest,
+          worktreeRevisionDigest: observer.targetDigest,
+        }
   const workflowGuard = createOpencodeWorkflowGuard({
     config: config.workflow_guard,
-    workspaceIdentity: directory,
-    repositoryIdentity: directory,
-    worktreeIdentity: typeof worktree === 'string' ? worktree : directory,
+    workspaceIdentity: initialIdentities.targetDigest,
+    repositoryIdentity: initialIdentities.repositoryRevisionDigest,
+    worktreeIdentity: initialIdentities.worktreeRevisionDigest,
+    observer,
+    classifier: createReceiptClassifier(),
   })
 
   return {

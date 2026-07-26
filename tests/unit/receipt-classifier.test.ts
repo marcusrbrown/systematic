@@ -281,7 +281,7 @@ describe('receipt classifier', () => {
       callId: 'push-call',
       context: prepareInput.context,
       after: {
-        workspaceIdentity: 'workspace-after',
+        workspaceIdentity: 'workspace-before',
         repositoryIdentity: 'repository-after',
         worktreeIdentity: 'worktree-after',
         resourceIdentity: 'remote-after',

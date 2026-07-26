@@ -1277,9 +1277,9 @@ export function createWorkflowGuard(
     if (context.workspaceIdentity !== currentWorkspaceIdentity)
       return 'workspace-mismatch'
     if (context.repositoryIdentity !== currentRepositoryIdentity)
-      return 'workspace-mismatch'
+      return 'receipt-mismatch'
     return context.worktreeIdentity !== currentWorktreeIdentity
-      ? 'workspace-mismatch'
+      ? 'receipt-mismatch'
       : undefined
   }
 
@@ -1310,6 +1310,9 @@ export function createWorkflowGuard(
     unit: UnitState,
   ): WorkflowReasonCode | undefined {
     if (!input.after) return 'invalid-receipt'
+    if (input.after.workspaceIdentity !== input.context.workspaceIdentity) {
+      return 'workspace-mismatch'
+    }
     return resourceAfterReason(input, unit)
   }
 
@@ -2303,7 +2306,7 @@ export function createWorkflowGuard(
       case 'terminal-running':
         return 'running-operation'
       case 'successful-no-op':
-      case 'unchanged-workspace':
+      case 'unchanged-worktree':
       case 'no-op-resource':
         return 'no-op-operation'
       case 'parser-asset-unavailable':
