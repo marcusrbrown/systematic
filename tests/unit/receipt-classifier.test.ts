@@ -46,6 +46,37 @@ describe('receipt classifier', () => {
     await classifier.close()
   })
 
+  test('accepts safe git push forms and rejects ambiguous push flags', async () => {
+    const classifier = createReceiptClassifier()
+    const accepted = [
+      'git push',
+      'git push origin',
+      'git push origin HEAD',
+      'git push -u origin main',
+      'git push --set-upstream origin main',
+      'git push origin HEAD:main',
+    ]
+    for (const command of accepted) {
+      await expect(
+        classifier.classify({ command, terminal: successfulTerminal }),
+      ).resolves.toMatchObject({
+        outcome: 'accepted',
+        category: 'push',
+      })
+    }
+    for (const command of [
+      'git push --mirror',
+      'git push --force origin main',
+      'git push -- origin main',
+      'git push origin main; rm -rf /',
+    ]) {
+      await expect(
+        classifier.classify({ command, terminal: successfulTerminal }),
+      ).resolves.toMatchObject({ outcome: 'rejected' })
+    }
+    await classifier.close()
+  })
+
   test('accepts an allowed environment and cwd prefix in an ordered && chain', async () => {
     const classifier = createReceiptClassifier()
     const result = await classifier.classify({

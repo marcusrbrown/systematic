@@ -1197,15 +1197,19 @@ function classifyGitCommand(
   ) {
     return 'commit'
   }
-  if (
-    args.length === 3 &&
-    args[0] === 'push' &&
-    isSafePathArgument(args[1]) &&
-    isSafePathArgument(args[2])
-  ) {
-    return 'push'
-  }
+  if (classifySafePushCommand(args)) return 'push'
   return undefined
+}
+
+function classifySafePushCommand(args: readonly string[]): boolean {
+  if (args[0] !== 'push') return false
+  const rest = args.slice(1)
+  if (rest.length === 0) return true
+  const hasUpstreamFlag = rest[0] === '-u' || rest[0] === '--set-upstream'
+  const offset = hasUpstreamFlag ? 1 : 0
+  const positional = rest.slice(offset)
+  if (positional.length === 0 || positional.length > 2) return false
+  return positional.every((value) => isSafePathArgument(value))
 }
 
 function classifyGhCommand(
