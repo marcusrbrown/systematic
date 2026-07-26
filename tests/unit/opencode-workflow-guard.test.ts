@@ -473,6 +473,16 @@ describe('OpenCode workflow guard adapter', () => {
       completeOutput,
     )
     expect(completeOutput.output).toContain('question-attestation')
+    expect(JSON.parse(completeOutput.output).questions).toEqual([
+      {
+        header: 'Confirm',
+        question: 'Confirm the requested guarded transition.',
+        options: [
+          { label: 'yes', description: 'Confirm the guarded transition.' },
+          { label: 'no', description: 'Decline the guarded transition.' },
+        ],
+      },
+    ])
 
     const questionOutput = { args: {} as Record<string, unknown> }
     await adapter.hooks['tool.execute.before'](

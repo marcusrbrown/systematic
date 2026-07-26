@@ -931,6 +931,7 @@ function createSessionRuntime(
   function questionInstruction(
     pending: PendingQuestionChallenge,
   ): ToolResultContent {
+    const questions = canonicalQuestionArgs(pending).questions
     return {
       title: 'Workflow guard confirmation required',
       output: JSON.stringify({
@@ -940,6 +941,7 @@ function createSessionRuntime(
         challengeId: pending.challenge.challengeId,
         purpose: pending.purpose,
         question: pending.challenge.question.wording,
+        questions,
       }),
       metadata: {
         ...metadata(),
@@ -951,6 +953,32 @@ function createSessionRuntime(
           transitionKey: pending.challenge.transitionKey,
         },
       },
+    }
+  }
+
+  function canonicalQuestionArgs(pending: PendingQuestionChallenge): {
+    questions: readonly [
+      {
+        header: 'Confirm'
+        question: string
+        options: readonly [
+          { label: 'yes'; description: 'Confirm the guarded transition.' },
+          { label: 'no'; description: 'Decline the guarded transition.' },
+        ]
+      },
+    ]
+  } {
+    return {
+      questions: [
+        {
+          question: pending.challenge.question.wording,
+          header: 'Confirm',
+          options: [
+            { label: 'yes', description: 'Confirm the guarded transition.' },
+            { label: 'no', description: 'Decline the guarded transition.' },
+          ],
+        },
+      ],
     }
   }
 
@@ -1744,18 +1772,7 @@ function createSessionRuntime(
     )
     if (!pending) return
     pending.questionCallID = host.callID
-    output.args = {
-      questions: [
-        {
-          question: pending.challenge.question.wording,
-          header: 'Confirm',
-          options: [
-            { label: 'yes', description: 'Confirm the guarded transition.' },
-            { label: 'no', description: 'Decline the guarded transition.' },
-          ],
-        },
-      ],
-    }
+    output.args = canonicalQuestionArgs(pending)
   }
 
   async function handleQuestionAsked(
