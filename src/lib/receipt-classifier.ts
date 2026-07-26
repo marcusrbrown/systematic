@@ -4,6 +4,8 @@ import { Language, type Node, Parser } from 'web-tree-sitter'
 
 import type {
   ReceiptClassification,
+  ReceiptContext,
+  ReceiptObservationAfter,
   ReceiptOperation,
   ReceiptReasonCode,
   TerminalObservation,
@@ -21,12 +23,93 @@ export interface ReceiptClassifierOptions {
 
 export interface ReceiptClassifier {
   classify(input: unknown): Promise<ReceiptClassification>
+  classifyOperation?(input: unknown): Promise<ReceiptClassification>
   close(): Promise<void>
+}
+
+export type ReceiptOperationTool =
+  | 'edit'
+  | 'write'
+  | 'apply-patch'
+  | 'apply_patch'
+  | 'bash'
+  | 'git'
+  | 'gh'
+  | 'bun'
+  | 'npm'
+
+export type PullRequestObservationState = 'open' | 'closed' | 'merged'
+export type CheckObservationState =
+  | 'completed-success'
+  | 'completed-failure'
+  | 'pending'
+export type ReviewObservationDecision =
+  | 'approved'
+  | 'changes-requested'
+  | 'commented'
+  | 'pending'
+
+export interface ReceiptOperationContext extends ReceiptContext {
+  resourceRevisionIdentity?: string
+}
+
+export interface ReceiptOperationAfter extends ReceiptObservationAfter {
+  pullRequest?: {
+    identity: string
+    state: PullRequestObservationState
+  }
+  resourceRevisionIdentity?: string
+  checkState?: CheckObservationState
+  reviewDecision?: ReviewObservationDecision
+}
+
+export interface ReceiptOperationObservation {
+  callId: string
+  operation: ReceiptOperation
+  tool: ReceiptOperationTool
+  command?: string
+  context: ReceiptOperationContext
+  after?: ReceiptOperationAfter
+  terminal: TerminalObservation
+}
+
+export function parseReceiptOperationAfter(
+  input: unknown,
+): ReceiptOperationAfter | undefined {
+  return parseOperationAfter(input)
+}
+
+export function parseReceiptOperationObservation(
+  input: unknown,
+): ReceiptOperationObservation | undefined {
+  return parseOperationInput(input)
 }
 
 interface ParsedCommand {
   executable: string
   arguments: string[]
+}
+
+interface ParsedOperationInput {
+  callId: string
+  operation: ReceiptOperation
+  tool: ReceiptOperationTool
+  command?: string
+  context: ReceiptOperationContext
+  after?: ReceiptOperationAfter
+  terminal: TerminalObservation
+}
+
+interface ParserClassification {
+  classification: ReceiptClassification
+  executable?: string
+}
+
+interface ParsedOperationStateFields {
+  repositoryIdentity?: string
+  worktreeIdentity?: string
+  resourceIdentity?: string
+  resourceRevisionIdentity?: string
 }
 
 interface ParserAssets {
@@ -41,6 +124,7 @@ type ParserFailure =
 const SUPPORTED_ABI_MINIMUM = 13
 const SUPPORTED_ABI_MAXIMUM = 15
 const MAX_COMMAND_LENGTH = 4096
+const DIGEST_IDENTITY_PATTERN = /^[0-9a-f]{64}$/
 const PROHIBITED_NODE_TYPES = new Set([
   'arithmetic_expansion',
   'case_statement',
@@ -96,6 +180,16 @@ export function createReceiptClassifier(
 
       return classifyWithParser(assets, parsedInput)
     },
+    async classifyOperation(input: unknown): Promise<ReceiptClassification> {
+      if (closed) return unavailable('classifier-closed')
+
+      const parsedInput = parseOperationInput(input)
+      if (!parsedInput)
+        return rejected(null, 'unknown', 'invalid-terminal-result')
+      if (isShellTool(parsedInput.tool))
+        return classifyShellOperation(parsedInput, loadAssets)
+      return classifyNonShellOperation(parsedInput)
+    },
     async close(): Promise<void> {
       closed = true
       parserAssets = undefined
@@ -104,6 +198,63 @@ export function createReceiptClassifier(
 }
 
 export type { ReceiptOperation }
+
+async function classifyShellOperation(
+  input: ParsedOperationInput,
+  loadAssets: () => Promise<ParserAssets>,
+): Promise<ReceiptClassification> {
+  if (!input.command) return invalidOperationClassification(input.operation)
+  let assets: ParserAssets
+  try {
+    assets = await loadAssets()
+  } catch (error) {
+    return unavailable(classifyParserFailure(error))
+  }
+  const parsed = classifyWithParserDetails(assets, {
+    command: input.command,
+    terminal: input.terminal,
+  })
+  if (
+    parsed.executable &&
+    !matchesToolIdentity(input.tool, parsed.executable)
+  ) {
+    return rejected(
+      parsed.classification.category,
+      parsed.classification.result,
+      'classification-rejected',
+      sideEffectFor(input.operation),
+    )
+  }
+  return validateOperationEvidence(input, parsed.classification)
+}
+
+function classifyNonShellOperation(
+  input: ParsedOperationInput,
+): ReceiptClassification {
+  if (input.command !== undefined)
+    return invalidOperationClassification(input.operation)
+  return validateOperationEvidence(
+    input,
+    terminalClassification('implementation', input.terminal),
+  )
+}
+
+function invalidOperationClassification(
+  operation: ReceiptOperation,
+): ReceiptClassification {
+  return rejected(
+    operation,
+    'unknown',
+    'invalid-terminal-result',
+    sideEffectFor(operation),
+  )
+}
+
+function sideEffectFor(
+  operation: ReceiptOperation,
+): 'required' | 'not-required' {
+  return operationNeedsSideEffect(operation) ? 'required' : 'not-required'
+}
 
 function parseInput(value: unknown): ReceiptClassificationInput | undefined {
   if (typeof value !== 'object' || value === null || Array.isArray(value))
@@ -141,6 +292,320 @@ function parseInput(value: unknown): ReceiptClassificationInput | undefined {
       noOp: terminal.noOp,
     },
   }
+}
+
+const OPERATION_SET: ReadonlySet<string> = new Set([
+  'implementation',
+  'verification',
+  'commit',
+  'push',
+  'pr-creation',
+  'check-readback',
+  'review-readback',
+])
+
+const OPERATION_TOOL_SET: ReadonlySet<string> = new Set([
+  'edit',
+  'write',
+  'apply-patch',
+  'apply_patch',
+  'bash',
+  'git',
+  'gh',
+  'bun',
+  'npm',
+])
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+function hasOnlyFields(
+  value: Record<string, unknown>,
+  fields: ReadonlySet<string>,
+): boolean {
+  return Object.keys(value).every((field) => fields.has(field))
+}
+
+function isBoundedIdentity(value: unknown): value is string {
+  return (
+    typeof value === 'string' &&
+    value.length > 0 &&
+    value.length <= 1024 &&
+    value.trim().length > 0
+  )
+}
+
+function isDigestIdentity(value: unknown): value is string {
+  return typeof value === 'string' && DIGEST_IDENTITY_PATTERN.test(value)
+}
+
+function isOperation(value: unknown): value is ReceiptOperation {
+  return typeof value === 'string' && OPERATION_SET.has(value)
+}
+
+function isOperationTool(value: unknown): value is ReceiptOperationTool {
+  return typeof value === 'string' && OPERATION_TOOL_SET.has(value)
+}
+
+function parseOperationContext(
+  value: unknown,
+): ReceiptOperationContext | undefined {
+  if (!isRecord(value)) return undefined
+  if (
+    !hasOnlyFields(
+      value,
+      new Set([
+        'epochId',
+        'unitId',
+        'workspaceIdentity',
+        'repositoryIdentity',
+        'worktreeIdentity',
+        'resourceIdentity',
+        'resourceRevisionIdentity',
+      ]),
+    )
+  ) {
+    return undefined
+  }
+  if (!hasRequiredOperationIdentities(value)) return undefined
+  const fields = parseOperationStateFields(value)
+  if (!fields) return undefined
+  return {
+    epochId: value.epochId,
+    unitId: value.unitId,
+    workspaceIdentity: value.workspaceIdentity,
+    ...fields,
+  }
+}
+
+function hasRequiredOperationIdentities(
+  value: Record<string, unknown>,
+): value is Record<string, string | undefined> & {
+  epochId: string
+  unitId: string
+  workspaceIdentity: string
+} {
+  return (
+    isBoundedIdentity(value.epochId) &&
+    isBoundedIdentity(value.unitId) &&
+    isDigestIdentity(value.workspaceIdentity)
+  )
+}
+
+function parseOperationStateFields(
+  value: Record<string, unknown>,
+): ParsedOperationStateFields | undefined {
+  const repositoryIdentity = parseOptionalDigestIdentity(
+    value.repositoryIdentity,
+  )
+  const worktreeIdentity = parseOptionalDigestIdentity(value.worktreeIdentity)
+  const resourceIdentity = parseOptionalDigestIdentity(value.resourceIdentity)
+  const resourceRevisionIdentity = parseOptionalDigestIdentity(
+    value.resourceRevisionIdentity,
+  )
+  if (
+    !validOptionalIdentity(value.repositoryIdentity, repositoryIdentity) ||
+    !validOptionalIdentity(value.worktreeIdentity, worktreeIdentity) ||
+    !validOptionalIdentity(value.resourceIdentity, resourceIdentity) ||
+    !validOptionalIdentity(
+      value.resourceRevisionIdentity,
+      resourceRevisionIdentity,
+    )
+  ) {
+    return undefined
+  }
+  return {
+    repositoryIdentity,
+    worktreeIdentity,
+    resourceIdentity,
+    resourceRevisionIdentity,
+  }
+}
+
+function parseOptionalDigestIdentity(value: unknown): string | undefined {
+  return value === undefined || !isDigestIdentity(value) ? undefined : value
+}
+
+function validOptionalIdentity(
+  input: unknown,
+  parsed: string | undefined,
+): boolean {
+  return input === undefined || parsed !== undefined
+}
+
+function parseOperationAfter(
+  value: unknown,
+): ReceiptOperationAfter | undefined {
+  if (!isRecord(value)) return undefined
+  if (!hasOnlyFields(value, OPERATION_AFTER_FIELDS)) {
+    return undefined
+  }
+  if (!isDigestIdentity(value.workspaceIdentity)) return undefined
+  const fields = parseOperationStateFields(value)
+  if (!fields) return undefined
+  const pullRequest = parseOptionalPullRequest(value.pullRequest)
+  if (pullRequest === null) return undefined
+  if (
+    !isCheckState(value.checkState) ||
+    !isReviewDecision(value.reviewDecision)
+  ) {
+    return undefined
+  }
+  return {
+    workspaceIdentity: value.workspaceIdentity,
+    ...fields,
+    ...(pullRequest ? { pullRequest } : {}),
+    ...(value.checkState !== undefined ? { checkState: value.checkState } : {}),
+    ...(value.reviewDecision !== undefined
+      ? { reviewDecision: value.reviewDecision }
+      : {}),
+  }
+}
+
+const OPERATION_AFTER_FIELDS = new Set([
+  'workspaceIdentity',
+  'repositoryIdentity',
+  'worktreeIdentity',
+  'resourceIdentity',
+  'resourceRevisionIdentity',
+  'pullRequest',
+  'checkState',
+  'reviewDecision',
+])
+
+function parseOptionalPullRequest(
+  value: unknown,
+): ReceiptOperationAfter['pullRequest'] | null | undefined {
+  if (value === undefined) return undefined
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, new Set(['identity', 'state'])) ||
+    !isDigestIdentity(value.identity) ||
+    !isPullRequestState(value.state)
+  ) {
+    return null
+  }
+  return { identity: value.identity, state: value.state }
+}
+
+function isPullRequestState(
+  value: unknown,
+): value is PullRequestObservationState {
+  return value === 'open' || value === 'closed' || value === 'merged'
+}
+
+function isCheckState(
+  value: unknown,
+): value is CheckObservationState | undefined {
+  return (
+    value === undefined ||
+    value === 'completed-success' ||
+    value === 'completed-failure' ||
+    value === 'pending'
+  )
+}
+
+function isReviewDecision(
+  value: unknown,
+): value is ReviewObservationDecision | undefined {
+  return (
+    value === undefined ||
+    value === 'approved' ||
+    value === 'changes-requested' ||
+    value === 'commented' ||
+    value === 'pending'
+  )
+}
+
+function parseOperationTerminal(
+  value: unknown,
+): TerminalObservation | undefined {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, new Set(['status', 'output', 'noOp']))
+  ) {
+    return undefined
+  }
+  if (
+    (value.status !== 'success' &&
+      value.status !== 'failure' &&
+      value.status !== 'cancelled' &&
+      value.status !== 'running' &&
+      value.status !== 'unknown') ||
+    (value.output !== 'empty' &&
+      value.output !== 'non-empty' &&
+      value.output !== 'unknown') ||
+    typeof value.noOp !== 'boolean'
+  ) {
+    return undefined
+  }
+  return {
+    status: value.status,
+    output: value.output,
+    noOp: value.noOp,
+  }
+}
+
+function parseOperationInput(value: unknown): ParsedOperationInput | undefined {
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(
+      value,
+      new Set([
+        'callId',
+        'operation',
+        'tool',
+        'command',
+        'context',
+        'after',
+        'terminal',
+      ]),
+    ) ||
+    !isBoundedIdentity(value.callId) ||
+    !isOperation(value.operation) ||
+    !isOperationTool(value.tool)
+  ) {
+    return undefined
+  }
+  if (
+    value.command !== undefined &&
+    (typeof value.command !== 'string' ||
+      value.command.length === 0 ||
+      value.command.length > MAX_COMMAND_LENGTH)
+  ) {
+    return undefined
+  }
+  const context = parseOperationContext(value.context)
+  const terminal = parseOperationTerminal(value.terminal)
+  if (!context || !terminal) return undefined
+  return {
+    callId: value.callId,
+    operation: value.operation,
+    tool: value.tool,
+    command: value.command,
+    context,
+    after:
+      value.after === undefined ? undefined : parseOperationAfter(value.after),
+    terminal,
+  }
+}
+
+function isShellTool(tool: ReceiptOperationTool): boolean {
+  return (
+    tool === 'bash' ||
+    tool === 'git' ||
+    tool === 'gh' ||
+    tool === 'bun' ||
+    tool === 'npm'
+  )
+}
+
+function matchesToolIdentity(
+  tool: ReceiptOperationTool,
+  executable: string,
+): boolean {
+  return tool === 'bash' || tool === executable
 }
 
 async function initializeParserAssets(
@@ -257,6 +722,164 @@ function terminalClassification(
   return accepted(operation)
 }
 
+function validateOperationEvidence(
+  input: ParsedOperationInput,
+  classification: ReceiptClassification,
+): ReceiptClassification {
+  if (classification.category !== input.operation)
+    return rejectedClassification(input, classification)
+  if (classification.outcome !== 'accepted') return classification
+  if (!input.after) return invalidOperationClassification(input.operation)
+
+  const { context, after } = input
+  switch (input.operation) {
+    case 'implementation':
+      return validateImplementation(context, after, classification)
+    case 'verification':
+      return validateVerification(context, after, classification)
+    case 'commit':
+      return validateCommit(context, after, classification)
+    case 'push':
+      return validatePush(context, after, classification)
+    case 'pr-creation':
+      return validatePrCreation(context, after, classification)
+    case 'check-readback':
+      return validateCheck(after, context, classification)
+    case 'review-readback':
+      return validateReview(after, context, classification)
+  }
+}
+
+function rejectedClassification(
+  input: ParsedOperationInput,
+  classification: ReceiptClassification,
+): ReceiptClassification {
+  return rejected(
+    classification.category,
+    classification.result,
+    'classification-rejected',
+    sideEffectFor(input.operation),
+  )
+}
+
+function validateImplementation(
+  context: ReceiptOperationContext,
+  after: ReceiptOperationAfter,
+  classification: ReceiptClassification,
+): ReceiptClassification {
+  return after.workspaceIdentity === context.workspaceIdentity
+    ? rejected('implementation', 'success', 'unchanged-workspace', 'required')
+    : classification
+}
+
+function validateVerification(
+  context: ReceiptOperationContext,
+  after: ReceiptOperationAfter,
+  classification: ReceiptClassification,
+): ReceiptClassification {
+  return after.workspaceIdentity === context.workspaceIdentity
+    ? classification
+    : rejected('verification', 'success', 'workspace-mismatch', 'not-required')
+}
+
+function validateCommit(
+  context: ReceiptOperationContext,
+  after: ReceiptOperationAfter,
+  classification: ReceiptClassification,
+): ReceiptClassification {
+  return changedIdentity(context.repositoryIdentity, after.repositoryIdentity)
+    ? classification
+    : rejected('commit', 'success', 'no-op-resource', 'required')
+}
+
+function validatePush(
+  context: ReceiptOperationContext,
+  after: ReceiptOperationAfter,
+  classification: ReceiptClassification,
+): ReceiptClassification {
+  return sameResourceScope(context, after) &&
+    changedIdentity(
+      context.resourceRevisionIdentity,
+      after.resourceRevisionIdentity,
+    )
+    ? classification
+    : rejected('push', 'success', 'no-op-resource', 'required')
+}
+
+function validatePrCreation(
+  context: ReceiptOperationContext,
+  after: ReceiptOperationAfter,
+  classification: ReceiptClassification,
+): ReceiptClassification {
+  const pullRequest = after.pullRequest
+  return sameResourceScope(context, after) &&
+    resourceRevisionChanged(context, after, true) &&
+    pullRequest !== undefined &&
+    pullRequest.identity === after.resourceIdentity &&
+    pullRequest.state === 'open'
+    ? classification
+    : rejected('pr-creation', 'success', 'no-op-resource', 'required')
+}
+
+function validateCheck(
+  after: ReceiptOperationAfter,
+  context: ReceiptOperationContext,
+  classification: ReceiptClassification,
+): ReceiptClassification {
+  const pullRequest = after.pullRequest
+  return sameResourceScope(context, after) &&
+    after.resourceRevisionIdentity !== undefined &&
+    pullRequest !== undefined &&
+    pullRequest.identity === after.resourceIdentity &&
+    pullRequest.state === 'open' &&
+    after.checkState === 'completed-success'
+    ? classification
+    : rejected('check-readback', 'success', 'no-op-resource', 'not-required')
+}
+
+function validateReview(
+  after: ReceiptOperationAfter,
+  context: ReceiptOperationContext,
+  classification: ReceiptClassification,
+): ReceiptClassification {
+  const pullRequest = after.pullRequest
+  return sameResourceScope(context, after) &&
+    after.resourceRevisionIdentity !== undefined &&
+    pullRequest !== undefined &&
+    pullRequest.identity === after.resourceIdentity &&
+    pullRequest.state === 'open' &&
+    after.reviewDecision === 'approved'
+    ? classification
+    : rejected('review-readback', 'success', 'no-op-resource', 'not-required')
+}
+
+function sameResourceScope(
+  context: ReceiptOperationContext,
+  after: ReceiptOperationAfter,
+): boolean {
+  return (
+    context.resourceIdentity !== undefined &&
+    context.resourceIdentity === after.resourceIdentity
+  )
+}
+
+function resourceRevisionChanged(
+  context: ReceiptOperationContext,
+  after: ReceiptOperationAfter,
+  allowMissingBefore: boolean,
+): boolean {
+  if (after.resourceRevisionIdentity === undefined) return false
+  if (context.resourceRevisionIdentity === undefined) return allowMissingBefore
+  return context.resourceRevisionIdentity !== after.resourceRevisionIdentity
+}
+
+function changedIdentity(
+  before: string | undefined,
+  after: string | undefined,
+): boolean {
+  return before !== undefined && after !== undefined && before !== after
+}
+
 function operationNeedsSideEffect(operation: ReceiptOperation): boolean {
   return (
     operation === 'implementation' ||
@@ -270,31 +893,42 @@ async function classifyWithParser(
   assets: ParserAssets,
   input: ReceiptClassificationInput,
 ): Promise<ReceiptClassification> {
+  return classifyWithParserDetails(assets, input).classification
+}
+
+function classifyWithParserDetails(
+  assets: ParserAssets,
+  input: ReceiptClassificationInput,
+): ParserClassification {
   const parser = new Parser()
   let tree = null
   try {
     parser.setLanguage(assets.language)
     tree = parser.parse(input.command)
     if (!tree || tree.rootNode.hasError)
-      return rejected(null, 'unknown', 'parser-failure')
-    return classifyParsedShape(tree.rootNode, input.terminal)
+      return { classification: rejected(null, 'unknown', 'parser-failure') }
+    const shape = parseCommandShape(tree.rootNode)
+    if (!shape) {
+      return {
+        classification: rejected(null, 'unknown', 'prohibited-shell-shape'),
+      }
+    }
+    const operation = classifyCommands(shape)
+    if (!operation) {
+      return {
+        classification: rejected(null, 'unknown', 'unsupported-command'),
+      }
+    }
+    return {
+      classification: terminalClassification(operation, input.terminal),
+      executable: shape[shape.length - 1]?.executable,
+    }
   } catch {
-    return unavailable('parser-failure')
+    return { classification: unavailable('parser-failure') }
   } finally {
     tree?.delete()
     parser.delete()
   }
-}
-
-function classifyParsedShape(
-  root: Node,
-  terminal: TerminalObservation,
-): ReceiptClassification {
-  const shape = parseCommandShape(root)
-  if (!shape) return rejected(null, 'unknown', 'prohibited-shell-shape')
-  const operation = classifyCommands(shape)
-  if (!operation) return rejected(null, 'unknown', 'unsupported-command')
-  return terminalClassification(operation, terminal)
 }
 
 function parseCommandShape(root: Node): ParsedCommand[] | undefined {

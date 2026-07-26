@@ -1,8 +1,19 @@
 import { randomBytes } from 'node:crypto'
 
+import {
+  parseReceiptOperationAfter,
+  parseReceiptOperationObservation,
+  type ReceiptClassifier,
+  type ReceiptOperationAfter,
+  type ReceiptOperationContext,
+  type ReceiptOperationObservation,
+} from './receipt-classifier.js'
 import type {
+  ReceiptClassification,
+  ReceiptContext,
   ReceiptEnvelope,
   ReceiptLedger,
+  ReceiptObservationAfter,
   ReceiptOperation,
   ReceiptReasonCode,
 } from './receipt-ledger.js'
@@ -28,6 +39,7 @@ export type WorkflowReasonCode =
   | 'consumed-receipt'
   | 'disabled'
   | 'epoch-completed'
+  | 'epoch-mismatch'
   | 'failed-operation'
   | 'family-conflict'
   | 'finalization-failed'
@@ -57,12 +69,14 @@ export type WorkflowReasonCode =
   | 'unit-active'
   | 'unit-completed'
   | 'unit-incomplete'
+  | 'unit-mismatch'
   | 'unit-ready'
   | 'workspace-mismatch'
   | 'runtime-scope-conflict'
 
 export interface WorkflowGuardOptions {
   ledger: ReceiptLedger
+  classifier?: ReceiptClassifier
   workspaceIdentity: string
   repositoryIdentity?: string
   worktreeIdentity?: string
@@ -118,6 +132,10 @@ export type EvidenceObservationResult =
   | { status: 'rejected'; reasonCode: WorkflowReasonCode }
   | { status: 'unavailable'; reasonCode: WorkflowReasonCode }
 
+export type ReadbackObservationResult =
+  | { status: 'accepted'; changed: boolean }
+  | { status: 'rejected'; reasonCode: WorkflowReasonCode }
+
 export type TransitionPrepareResult =
   | { status: 'allowed'; transitionId: string }
   | {
@@ -150,6 +168,8 @@ export interface WorkflowGuard {
   startUnit(input: unknown, policy?: RuntimeUnitPolicy): StartUnitResult
   observeReceipt(input: unknown): EvidenceObservationResult
   observeAttempt(input: unknown): EvidenceObservationResult
+  observeOperation(input: unknown): Promise<EvidenceObservationResult>
+  observeReadback(input: unknown): ReadbackObservationResult
   status(): WorkflowStatus
   prepareTransition(input: unknown): TransitionPrepareResult
   finalizeTransition(input: unknown): TransitionFinalizeResult
@@ -180,6 +200,24 @@ interface ParsedAttempt {
   outcome: AttemptOutcome
 }
 
+type ParsedOperationObservation = ReceiptOperationObservation
+
+interface ParsedReadback {
+  operation?: ReceiptOperation
+  workspaceIdentity: string
+  repositoryIdentity?: string
+  worktreeIdentity?: string
+  resourceIdentity?: string
+  resourceRevisionIdentity?: string
+  pullRequest?: ReceiptOperationAfter['pullRequest']
+  checkState?: ReceiptOperationAfter['checkState']
+  reviewDecision?: ReceiptOperationAfter['reviewDecision']
+}
+
+interface OperationState {
+  fingerprint: string
+}
+
 interface ParsedTransition {
   callId: string
   target: TransitionTarget
@@ -188,7 +226,17 @@ interface ParsedTransition {
 interface ParsedFinalization {
   callId: string
   transitionId: string
+  readback?: ParsedReadback
+  readbacks?: readonly ParsedReadback[]
 }
+
+const MAX_FINAL_READBACKS = 8
+const RESOURCE_FINAL_READBACK_OPERATIONS = [
+  'push',
+  'pr-creation',
+  'check-readback',
+  'review-readback',
+] as const
 
 interface ParsedControl {
   mode: WorkflowMode
@@ -208,6 +256,9 @@ interface UnitState {
   resourceScopes: ReadonlyMap<ReceiptOperation, string>
   evidence: Map<ReceiptOperation, ReceiptEnvelope>
   issues: Map<ReceiptOperation, Issue>
+  staleReceiptIds: Set<string>
+  operationStates: Map<ReceiptOperation, OperationState>
+  ledgerContexts: Map<string, ReceiptContext>
 }
 
 interface Issue {
@@ -295,6 +346,7 @@ const OPTION_KEYS = new Set([
   'questionEligibleOperations',
   'runtimeRequiredOperations',
   'runtimeResourceScopes',
+  'classifier',
   'mode',
   'maxReceiptAgeMs',
   'clock',
@@ -461,6 +513,204 @@ function parseAttempt(input: unknown): ParsedAttempt | undefined {
     : undefined
 }
 
+function parseReadback(input: unknown): ParsedReadback | undefined {
+  if (
+    !isRecord(input) ||
+    !hasOnlyFields(
+      input,
+      new Set([
+        'operation',
+        'workspaceIdentity',
+        'repositoryIdentity',
+        'worktreeIdentity',
+        'resourceIdentity',
+        'resourceRevisionIdentity',
+        'pullRequest',
+        'checkState',
+        'reviewDecision',
+      ]),
+    ) ||
+    !isBoundedString(input.workspaceIdentity) ||
+    (input.operation !== undefined && !isOperation(input.operation))
+  ) {
+    return undefined
+  }
+  const after = parseLegacyReadbackAfter({
+    workspaceIdentity: input.workspaceIdentity,
+    repositoryIdentity: input.repositoryIdentity,
+    worktreeIdentity: input.worktreeIdentity,
+    resourceIdentity: input.resourceIdentity,
+    resourceRevisionIdentity: input.resourceRevisionIdentity,
+    pullRequest: input.pullRequest,
+    checkState: input.checkState,
+    reviewDecision: input.reviewDecision,
+  })
+  if (!after) return undefined
+  return {
+    operation: input.operation,
+    workspaceIdentity: after.workspaceIdentity,
+    repositoryIdentity: after.repositoryIdentity,
+    worktreeIdentity: after.worktreeIdentity,
+    resourceIdentity: after.resourceIdentity,
+    resourceRevisionIdentity: after.resourceRevisionIdentity,
+    pullRequest: after.pullRequest,
+    checkState: after.checkState,
+    reviewDecision: after.reviewDecision,
+  }
+}
+
+function parseLegacyReadbackAfter(
+  input: unknown,
+): ReceiptOperationAfter | undefined {
+  if (!isRecord(input) || !isBoundedString(input.workspaceIdentity)) {
+    return undefined
+  }
+  const repositoryIdentity = parseOptionalReadbackIdentity(
+    input.repositoryIdentity,
+  )
+  const worktreeIdentity = parseOptionalReadbackIdentity(input.worktreeIdentity)
+  const resourceIdentity = parseOptionalReadbackIdentity(input.resourceIdentity)
+  const resourceRevisionIdentity = parseOptionalReadbackIdentity(
+    input.resourceRevisionIdentity,
+  )
+  if (
+    !isOptionalReadbackIdentity(input.repositoryIdentity, repositoryIdentity) ||
+    !isOptionalReadbackIdentity(input.worktreeIdentity, worktreeIdentity) ||
+    !isOptionalReadbackIdentity(input.resourceIdentity, resourceIdentity) ||
+    !isOptionalReadbackIdentity(
+      input.resourceRevisionIdentity,
+      resourceRevisionIdentity,
+    )
+  ) {
+    return undefined
+  }
+  const pullRequest = parseLegacyPullRequest(input.pullRequest)
+  if (pullRequest === null) return undefined
+  if (!isReadbackCheckState(input.checkState)) return undefined
+  if (!isReadbackReviewDecision(input.reviewDecision)) return undefined
+  return {
+    workspaceIdentity: input.workspaceIdentity,
+    ...(repositoryIdentity ? { repositoryIdentity } : {}),
+    ...(worktreeIdentity ? { worktreeIdentity } : {}),
+    ...(resourceIdentity ? { resourceIdentity } : {}),
+    ...(resourceRevisionIdentity ? { resourceRevisionIdentity } : {}),
+    ...(pullRequest ? { pullRequest } : {}),
+    ...(input.checkState !== undefined ? { checkState: input.checkState } : {}),
+    ...(input.reviewDecision !== undefined
+      ? { reviewDecision: input.reviewDecision }
+      : {}),
+  }
+}
+
+function parseOptionalReadbackIdentity(value: unknown): string | undefined {
+  return value === undefined || !isBoundedString(value) ? undefined : value
+}
+
+function isOptionalReadbackIdentity(
+  input: unknown,
+  parsed: string | undefined,
+): boolean {
+  return input === undefined || parsed !== undefined
+}
+
+function parseLegacyPullRequest(
+  value: unknown,
+): ReceiptOperationAfter['pullRequest'] | null | undefined {
+  if (value === undefined) return undefined
+  if (
+    !isRecord(value) ||
+    !hasOnlyFields(value, new Set(['identity', 'state'])) ||
+    !isBoundedString(value.identity) ||
+    !isReadbackPullRequestState(value.state)
+  ) {
+    return null
+  }
+  return { identity: value.identity, state: value.state }
+}
+
+function isReadbackPullRequestState(
+  value: unknown,
+): value is NonNullable<ReceiptOperationAfter['pullRequest']>['state'] {
+  return value === 'open' || value === 'closed' || value === 'merged'
+}
+
+function isReadbackCheckState(
+  value: unknown,
+): value is ReceiptOperationAfter['checkState'] {
+  return (
+    value === undefined ||
+    value === 'completed-success' ||
+    value === 'completed-failure' ||
+    value === 'pending'
+  )
+}
+
+function isReadbackReviewDecision(
+  value: unknown,
+): value is ReceiptOperationAfter['reviewDecision'] {
+  return (
+    value === undefined ||
+    value === 'approved' ||
+    value === 'changes-requested' ||
+    value === 'commented' ||
+    value === 'pending'
+  )
+}
+
+function ledgerResourceIdentity(
+  operation: ReceiptOperation,
+  resourceIdentity: string | undefined,
+  resourceRevisionIdentity: string | undefined,
+): string | undefined {
+  if (
+    (operation !== 'push' && operation !== 'pr-creation') ||
+    resourceIdentity === undefined ||
+    resourceRevisionIdentity === undefined
+  ) {
+    return resourceIdentity
+  }
+  return `${resourceIdentity}:${resourceRevisionIdentity}`
+}
+
+function toLedgerContext(
+  operation: ReceiptOperation,
+  context: ReceiptOperationContext,
+): ReceiptContext {
+  const {
+    resourceRevisionIdentity: _resourceRevisionIdentity,
+    ...ledgerContext
+  } = context
+  return {
+    ...ledgerContext,
+    resourceIdentity: ledgerResourceIdentity(
+      operation,
+      context.resourceIdentity,
+      context.resourceRevisionIdentity,
+    ),
+  }
+}
+
+function toLedgerAfter(
+  operation: ReceiptOperation,
+  after: ReceiptOperationAfter,
+): ReceiptObservationAfter {
+  const {
+    resourceRevisionIdentity: _resourceRevisionIdentity,
+    pullRequest: _pullRequest,
+    checkState: _checkState,
+    reviewDecision: _reviewDecision,
+    ...ledgerAfter
+  } = after
+  return {
+    ...ledgerAfter,
+    resourceIdentity: ledgerResourceIdentity(
+      operation,
+      after.resourceIdentity,
+      after.resourceRevisionIdentity,
+    ),
+  }
+}
+
 function parseTransition(input: unknown): ParsedTransition | undefined {
   if (
     !isRecord(input) ||
@@ -477,13 +727,88 @@ function parseTransition(input: unknown): ParsedTransition | undefined {
 function parseFinalization(input: unknown): ParsedFinalization | undefined {
   if (
     !isRecord(input) ||
-    !hasOnlyFields(input, new Set(['callId', 'transitionId'])) ||
+    !hasOnlyFields(
+      input,
+      new Set(['callId', 'transitionId', 'readback', 'readbacks']),
+    ) ||
     !isBoundedString(input.callId) ||
     !isBoundedString(input.transitionId)
   ) {
     return undefined
   }
-  return { callId: input.callId, transitionId: input.transitionId }
+  if (input.readback !== undefined && input.readbacks !== undefined) {
+    return undefined
+  }
+  const readback =
+    input.readback === undefined ? undefined : parseReadback(input.readback)
+  if (input.readback !== undefined && !readback) return undefined
+  const readbacks =
+    input.readbacks === undefined
+      ? undefined
+      : parseFinalReadbackBundle(input.readbacks)
+  if (input.readbacks !== undefined && !readbacks) return undefined
+  return {
+    callId: input.callId,
+    transitionId: input.transitionId,
+    ...(readback ? { readback } : {}),
+    ...(readbacks ? { readbacks } : {}),
+  }
+}
+
+function parseFinalReadbackBundle(
+  input: unknown,
+): readonly ParsedReadback[] | undefined {
+  if (!Array.isArray(input) || input.length > MAX_FINAL_READBACKS) {
+    return undefined
+  }
+  const seen = new Set<string>()
+  const readbacks: ParsedReadback[] = []
+  for (const item of input) {
+    const parsed = parseU4Readback(item)
+    if (!parsed) return undefined
+    const key = parsed.operation ?? 'global'
+    if (seen.has(key)) return undefined
+    seen.add(key)
+    readbacks.push(parsed)
+  }
+  return readbacks
+}
+
+function parseU4Readback(input: unknown): ParsedReadback | undefined {
+  if (
+    !isRecord(input) ||
+    !hasOnlyFields(
+      input,
+      new Set([
+        'operation',
+        'workspaceIdentity',
+        'repositoryIdentity',
+        'worktreeIdentity',
+        'resourceIdentity',
+        'resourceRevisionIdentity',
+        'pullRequest',
+        'checkState',
+        'reviewDecision',
+      ]),
+    ) ||
+    (input.operation !== undefined && !isOperation(input.operation))
+  ) {
+    return undefined
+  }
+  const { operation: _operation, ...afterInput } = input
+  const after = parseReceiptOperationAfter(afterInput)
+  if (!after) return undefined
+  return {
+    operation: input.operation,
+    workspaceIdentity: after.workspaceIdentity,
+    repositoryIdentity: after.repositoryIdentity,
+    worktreeIdentity: after.worktreeIdentity,
+    resourceIdentity: after.resourceIdentity,
+    resourceRevisionIdentity: after.resourceRevisionIdentity,
+    pullRequest: after.pullRequest,
+    checkState: after.checkState,
+    reviewDecision: after.reviewDecision,
+  }
 }
 
 function parseControl(input: unknown): ParsedControl | undefined {
@@ -535,6 +860,12 @@ function validateOptions(
     throw new Error('invalid-workflow-options')
   }
   if (!options.ledger || typeof options.ledger !== 'object') {
+    throw new Error('invalid-workflow-options')
+  }
+  if (
+    options.classifier !== undefined &&
+    (!options.classifier || typeof options.classifier !== 'object')
+  ) {
     throw new Error('invalid-workflow-options')
   }
   if (!isBoundedString(options.workspaceIdentity)) {
@@ -624,13 +955,405 @@ export function createWorkflowGuard(
   let epoch: EpochState | undefined
   let globalIssue: Issue | undefined
   const transitionsByCall = new Map<string, PreparedTransition>()
+  const terminalOperationCalls = new Map<string, ReceiptOperation | undefined>()
+  let currentWorkspaceIdentity = options.workspaceIdentity
+  let currentRepositoryIdentity = options.repositoryIdentity
+  let currentWorktreeIdentity = options.worktreeIdentity
+  let currentPullRequestFingerprint: string | undefined
+  const currentResourceIdentities = new Map(runtimeScopes)
+  const currentResourceRevisionIdentities = new Map<
+    ReceiptOperation,
+    string | undefined
+  >()
   const clock = options.clock ?? Date.now
 
   function currentResource(
     unit: UnitState,
     operation: ReceiptOperation,
   ): string | undefined {
-    return unit.resourceScopes.get(operation)
+    return (
+      unit.resourceScopes.get(operation) ??
+      currentResourceIdentities.get(operation)
+    )
+  }
+
+  function operationUsesResource(operation: ReceiptOperation): boolean {
+    return (
+      operation === 'push' ||
+      operation === 'pr-creation' ||
+      operation === 'check-readback' ||
+      operation === 'review-readback'
+    )
+  }
+
+  function stateFingerprint(
+    operation: ReceiptOperation,
+    state: ReceiptOperationAfter,
+  ): string {
+    const value = [
+      operation,
+      state.workspaceIdentity,
+      state.repositoryIdentity ?? '-',
+      state.worktreeIdentity ?? '-',
+      state.resourceIdentity ?? '-',
+      state.resourceRevisionIdentity ?? '-',
+      state.pullRequest?.identity ?? '-',
+      state.pullRequest?.state ?? '-',
+      state.checkState ?? '-',
+      state.reviewDecision ?? '-',
+    ].join('|')
+    return options.ledger.digestIdentity('resource', value)
+  }
+
+  function operationBeforeReason(
+    input: ParsedOperationObservation,
+    unit: UnitState,
+  ): WorkflowReasonCode | undefined {
+    if (!epoch || input.context.epochId !== epoch.epochId)
+      return 'epoch-mismatch'
+    if (input.context.unitId !== unit.unitId) return 'unit-mismatch'
+    return (
+      currentIdentityReason(input.context) ?? resourceBeforeReason(input, unit)
+    )
+  }
+
+  function currentIdentityReason(
+    context: ReceiptOperationContext,
+  ): WorkflowReasonCode | undefined {
+    if (context.workspaceIdentity !== currentWorkspaceIdentity)
+      return 'workspace-mismatch'
+    if (context.repositoryIdentity !== currentRepositoryIdentity)
+      return 'workspace-mismatch'
+    return context.worktreeIdentity !== currentWorktreeIdentity
+      ? 'workspace-mismatch'
+      : undefined
+  }
+
+  function resourceBeforeReason(
+    input: ParsedOperationObservation,
+    unit: UnitState,
+  ): WorkflowReasonCode | undefined {
+    if (!operationUsesResource(input.operation)) return undefined
+    const expected = currentResource(unit, input.operation)
+    if (!expected || input.context.resourceIdentity !== expected) {
+      return 'resource-mismatch'
+    }
+    return resourceRevisionBeforeReason(input)
+  }
+
+  function resourceRevisionBeforeReason(
+    input: ParsedOperationObservation,
+  ): WorkflowReasonCode | undefined {
+    const expected = currentResourceRevisionIdentities.get(input.operation)
+    return expected === undefined ||
+      input.context.resourceRevisionIdentity === expected
+      ? undefined
+      : 'resource-mismatch'
+  }
+
+  function operationAfterReason(
+    input: ParsedOperationObservation,
+    unit: UnitState,
+  ): WorkflowReasonCode | undefined {
+    if (!input.after) return 'invalid-receipt'
+    return resourceAfterReason(input, unit)
+  }
+
+  function resourceAfterReason(
+    input: ParsedOperationObservation,
+    unit: UnitState,
+  ): WorkflowReasonCode | undefined {
+    if (!operationUsesResource(input.operation)) return undefined
+    const expected = currentResource(unit, input.operation)
+    if (
+      !expected ||
+      input.after?.resourceIdentity !== input.context.resourceIdentity ||
+      input.after?.resourceIdentity !== expected
+    ) {
+      return 'resource-mismatch'
+    }
+    return revisionAfterReason(input)
+  }
+
+  function revisionAfterReason(
+    input: ParsedOperationObservation,
+  ): WorkflowReasonCode | undefined {
+    if (!input.after) return 'invalid-receipt'
+    const revision = input.after.resourceRevisionIdentity
+    if (input.operation === 'push')
+      return pushRevisionReason(
+        input.context.resourceRevisionIdentity,
+        revision,
+      )
+    if (input.operation === 'pr-creation')
+      return prRevisionReason(input.context.resourceRevisionIdentity, revision)
+    return revision ? undefined : 'resource-mismatch'
+  }
+
+  function pushRevisionReason(
+    before: string | undefined,
+    after: string | undefined,
+  ): WorkflowReasonCode | undefined {
+    return before && after && before !== after ? undefined : 'no-op-operation'
+  }
+
+  function prRevisionReason(
+    before: string | undefined,
+    after: string | undefined,
+  ): WorkflowReasonCode | undefined {
+    return after && (before === undefined || before !== after)
+      ? undefined
+      : 'no-op-operation'
+  }
+
+  interface RevisionChanges {
+    changedWorkspace: boolean
+    changedRepository: boolean
+    changedWorktree: boolean
+    changedStableResource: boolean
+    changedResourceRevision: boolean
+    resourceOperation?: ReceiptOperation
+    changedPullRequest: boolean
+  }
+
+  function resourceRevisionAffects(
+    operation: ReceiptOperation,
+    source: ReceiptOperation | undefined,
+  ): boolean {
+    if (!source) return operationUsesResource(operation)
+    if (source === 'push') {
+      return operation === 'push' || operationUsesResource(operation)
+    }
+    if (source === 'pr-creation') {
+      return (
+        operation === 'pr-creation' ||
+        operation === 'check-readback' ||
+        operation === 'review-readback'
+      )
+    }
+    if (source === 'check-readback') {
+      return operation === 'check-readback' || operation === 'review-readback'
+    }
+    if (source === 'review-readback') return operation === 'review-readback'
+    return false
+  }
+
+  function staleForChange(
+    operation: ReceiptOperation,
+    changes: RevisionChanges,
+  ): boolean {
+    if (operation === 'implementation') return false
+    if (changes.changedWorkspace || changes.changedWorktree) return true
+    if (changes.changedRepository) {
+      return operation === 'commit' || operationUsesResource(operation)
+    }
+    if (changes.changedStableResource && operationUsesResource(operation))
+      return true
+    if (
+      changes.changedResourceRevision &&
+      resourceRevisionAffects(operation, changes.resourceOperation)
+    ) {
+      return true
+    }
+    return changes.changedPullRequest && operationUsesResource(operation)
+  }
+
+  function markStaleReceipts(unit: UnitState, changes: RevisionChanges): void {
+    for (const [operation, envelope] of unit.evidence) {
+      if (staleForChange(operation, changes)) {
+        unit.staleReceiptIds.add(envelope.canonical.receiptId)
+      }
+    }
+  }
+
+  interface ResourceChanges {
+    changedStableResource: boolean
+    changedResourceRevision: boolean
+  }
+
+  function observeResource(
+    readback: ParsedReadback,
+    unit: UnitState | undefined,
+  ): ResourceChanges {
+    if (readback.resourceIdentity === undefined) {
+      return { changedStableResource: false, changedResourceRevision: false }
+    }
+    const changedStableResource = readback.operation
+      ? observeOperationResource(readback, unit)
+      : observeGlobalResource(readback.resourceIdentity)
+    if (
+      !readback.operation ||
+      readback.resourceRevisionIdentity === undefined
+    ) {
+      return { changedStableResource, changedResourceRevision: false }
+    }
+    const previous = currentResourceRevisionIdentities.get(readback.operation)
+    const changedResourceRevision =
+      previous !== undefined && previous !== readback.resourceRevisionIdentity
+    currentResourceRevisionIdentities.set(
+      readback.operation,
+      readback.resourceRevisionIdentity,
+    )
+    return { changedStableResource, changedResourceRevision }
+  }
+
+  function observeOperationResource(
+    readback: ParsedReadback,
+    unit: UnitState | undefined,
+  ): boolean {
+    if (!readback.operation || !readback.resourceIdentity) return false
+    const expected = unit
+      ? currentResource(unit, readback.operation)
+      : currentResourceIdentities.get(readback.operation)
+    const changed = readback.resourceIdentity !== expected
+    currentResourceIdentities.set(readback.operation, readback.resourceIdentity)
+    if (readback.operation === 'pr-creation' && unit) {
+      propagatePullRequestScope(unit, readback.resourceIdentity)
+    }
+    return changed
+  }
+
+  function propagatePullRequestScope(
+    unit: UnitState,
+    resourceIdentity: string,
+  ): void {
+    for (const operation of ['check-readback', 'review-readback'] as const) {
+      if (
+        !unit.resourceScopes.has(operation) &&
+        !currentResourceIdentities.has(operation)
+      ) {
+        currentResourceIdentities.set(operation, resourceIdentity)
+      }
+    }
+  }
+
+  function observeGlobalResource(resourceIdentity: string): boolean {
+    let changed = false
+    for (const [operation, current] of currentResourceIdentities) {
+      changed ||= current !== resourceIdentity
+      currentResourceIdentities.set(operation, resourceIdentity)
+    }
+    return changed
+  }
+
+  function observeState(
+    readback: ParsedReadback,
+    unit: UnitState | undefined,
+  ): boolean {
+    if (!unit || !readback.operation || !hasMutableReadbackState(readback))
+      return false
+    return (
+      unit.operationStates.get(readback.operation)?.fingerprint !==
+      stateFingerprint(readback.operation, readback)
+    )
+  }
+
+  function hasMutableReadbackState(readback: ParsedReadback): boolean {
+    return (
+      readback.checkState !== undefined ||
+      readback.reviewDecision !== undefined ||
+      readback.pullRequest !== undefined
+    )
+  }
+
+  function pullRequestFingerprint(
+    readback: ParsedReadback,
+  ): string | undefined {
+    return readback.pullRequest
+      ? options.ledger.digestIdentity(
+          'resource',
+          `${readback.pullRequest.identity}|${readback.pullRequest.state}`,
+        )
+      : undefined
+  }
+
+  function revisionIdentityChanges(readback: ParsedReadback): {
+    changedWorkspace: boolean
+    changedRepository: boolean
+    changedWorktree: boolean
+  } {
+    return {
+      changedWorkspace: readback.workspaceIdentity !== currentWorkspaceIdentity,
+      changedRepository:
+        readback.repositoryIdentity !== undefined &&
+        readback.repositoryIdentity !== currentRepositoryIdentity,
+      changedWorktree:
+        readback.worktreeIdentity !== undefined &&
+        readback.worktreeIdentity !== currentWorktreeIdentity,
+    }
+  }
+
+  function applyRevisionChanges(
+    unit: UnitState | undefined,
+    changes: RevisionChanges,
+  ): void {
+    if (unit) markStaleReceipts(unit, changes)
+  }
+
+  function updateCurrentIdentities(
+    readback: ParsedReadback,
+    nextPullRequestFingerprint: string | undefined,
+  ): void {
+    currentWorkspaceIdentity = readback.workspaceIdentity
+    if (readback.repositoryIdentity !== undefined) {
+      currentRepositoryIdentity = readback.repositoryIdentity
+    }
+    if (readback.worktreeIdentity !== undefined) {
+      currentWorktreeIdentity = readback.worktreeIdentity
+    }
+    if (nextPullRequestFingerprint !== undefined) {
+      currentPullRequestFingerprint = nextPullRequestFingerprint
+    }
+  }
+
+  function storeOperationState(
+    readback: ParsedReadback,
+    unit: UnitState | undefined,
+  ): void {
+    if (unit && readback.operation) {
+      unit.operationStates.set(readback.operation, {
+        fingerprint: stateFingerprint(readback.operation, readback),
+      })
+    }
+  }
+
+  function pullRequestChanged(next: string | undefined): boolean {
+    return (
+      next !== undefined &&
+      currentPullRequestFingerprint !== undefined &&
+      next !== currentPullRequestFingerprint
+    )
+  }
+
+  function observeRevision(
+    readback: ParsedReadback,
+    unit: UnitState | undefined,
+  ): ReadbackObservationResult {
+    const identityChanges = revisionIdentityChanges(readback)
+    const resourceChanges = observeResource(readback, unit)
+    const changedState = observeState(readback, unit)
+    const nextPullRequestFingerprint = pullRequestFingerprint(readback)
+    const changedPullRequest = pullRequestChanged(nextPullRequestFingerprint)
+    applyRevisionChanges(unit, {
+      ...identityChanges,
+      changedStableResource: resourceChanges.changedStableResource,
+      changedResourceRevision:
+        resourceChanges.changedResourceRevision || changedState,
+      resourceOperation: readback.operation,
+      changedPullRequest,
+    })
+    updateCurrentIdentities(readback, nextPullRequestFingerprint)
+    storeOperationState(readback, unit)
+    return {
+      status: 'accepted',
+      changed:
+        identityChanges.changedWorkspace ||
+        identityChanges.changedRepository ||
+        identityChanges.changedWorktree ||
+        resourceChanges.changedStableResource ||
+        resourceChanges.changedResourceRevision ||
+        changedState,
+    }
   }
 
   function eligibleRepairKinds(
@@ -734,11 +1457,17 @@ export function createWorkflowGuard(
     ) {
       return 'receipt-mismatch'
     }
-    if (
-      envelope.canonical.workspaceDigest !==
-      options.ledger.digestIdentity('workspace', options.workspaceIdentity)
-    ) {
-      return 'workspace-mismatch'
+    const historicalImplementation =
+      envelope.canonical.operation === 'implementation' &&
+      unit.evidence.get('implementation')?.canonical.receiptId ===
+        envelope.canonical.receiptId
+    if (!historicalImplementation) {
+      if (
+        envelope.canonical.workspaceDigest !==
+        options.ledger.digestIdentity('workspace', currentWorkspaceIdentity)
+      ) {
+        return 'workspace-mismatch'
+      }
     }
     return compareReceiptResources(envelope, unit)
   }
@@ -747,26 +1476,52 @@ export function createWorkflowGuard(
     envelope: ReceiptEnvelope,
     unit: UnitState,
   ): WorkflowReasonCode | undefined {
-    const expectedRepository = options.repositoryIdentity
-      ? options.ledger.digestIdentity('repository', options.repositoryIdentity)
+    const scopeReason = compareReceiptRepositoryScope(envelope)
+    if (scopeReason) return scopeReason
+    return compareReceiptResourceDigest(envelope, unit)
+  }
+
+  function compareReceiptRepositoryScope(
+    envelope: ReceiptEnvelope,
+  ): WorkflowReasonCode | undefined {
+    const operation = envelope.canonical.operation
+    const expectedRepository = currentRepositoryIdentity
+      ? options.ledger.digestIdentity('repository', currentRepositoryIdentity)
       : undefined
-    const expectedWorktree = options.worktreeIdentity
-      ? options.ledger.digestIdentity('worktree', options.worktreeIdentity)
-      : undefined
-    if (envelope.canonical.repositoryDigest !== expectedRepository) {
+    if (
+      operation !== 'implementation' &&
+      operation !== 'verification' &&
+      envelope.canonical.repositoryDigest !== expectedRepository
+    ) {
       return 'receipt-mismatch'
     }
-    if (envelope.canonical.worktreeDigest !== expectedWorktree) {
-      return 'receipt-mismatch'
-    }
+    const expectedWorktree = currentWorktreeIdentity
+      ? options.ledger.digestIdentity('worktree', currentWorktreeIdentity)
+      : undefined
+    return operation !== 'implementation' &&
+      envelope.canonical.worktreeDigest !== expectedWorktree
+      ? 'receipt-mismatch'
+      : undefined
+  }
+
+  function compareReceiptResourceDigest(
+    envelope: ReceiptEnvelope,
+    unit: UnitState,
+  ): WorkflowReasonCode | undefined {
     const resourceIdentity = currentResource(unit, envelope.canonical.operation)
     if (!resourceIdentity) {
       return envelope.canonical.resourceDigest === undefined
         ? undefined
         : 'resource-mismatch'
     }
+    const expectedResource = ledgerResourceIdentity(
+      envelope.canonical.operation,
+      resourceIdentity,
+      currentResourceRevisionIdentities.get(envelope.canonical.operation),
+    )
+    if (!expectedResource) return 'resource-mismatch'
     return envelope.canonical.resourceDigest ===
-      options.ledger.digestIdentity('resource', resourceIdentity)
+      options.ledger.digestIdentity('resource', expectedResource)
       ? undefined
       : 'resource-mismatch'
   }
@@ -807,6 +1562,9 @@ export function createWorkflowGuard(
     const operation = envelope.canonical.operation
     if (!unit.requiredOperations.includes(operation)) {
       return { operation, reasonCode: 'operation-not-required' }
+    }
+    if (unit.staleReceiptIds.has(envelope.canonical.receiptId)) {
+      return { operation, reasonCode: 'stale-receipt' }
     }
     const scopeReason = compareReceiptScope(envelope, unit)
     if (scopeReason) return { operation, reasonCode: scopeReason }
@@ -1086,6 +1844,7 @@ export function createWorkflowGuard(
   function consumeContext(
     unit: UnitState,
     operation: ReceiptOperation,
+    envelope: ReceiptEnvelope,
   ): {
     epochId: string
     unitId: string
@@ -1094,14 +1853,20 @@ export function createWorkflowGuard(
     worktreeIdentity?: string
     resourceIdentity?: string
   } {
+    const storedContext = unit.ledgerContexts.get(envelope.canonical.receiptId)
+    if (storedContext) return storedContext
     if (!epoch) throw new Error('missing-epoch')
     return {
       epochId: epoch.epochId,
       unitId: unit.unitId,
-      workspaceIdentity: options.workspaceIdentity,
-      repositoryIdentity: options.repositoryIdentity,
-      worktreeIdentity: options.worktreeIdentity,
-      resourceIdentity: currentResource(unit, operation),
+      workspaceIdentity: currentWorkspaceIdentity,
+      repositoryIdentity: currentRepositoryIdentity,
+      worktreeIdentity: currentWorktreeIdentity,
+      resourceIdentity: ledgerResourceIdentity(
+        operation,
+        currentResource(unit, operation),
+        currentResourceRevisionIdentities.get(operation),
+      ),
     }
   }
 
@@ -1127,7 +1892,7 @@ export function createWorkflowGuard(
     for (const envelope of decision.envelopes) {
       const result = options.ledger.consumeReceipt(
         envelope.canonical.receiptId,
-        consumeContext(epoch.unit, envelope.canonical.operation),
+        consumeContext(epoch.unit, envelope.canonical.operation, envelope),
       )
       if (result.status !== 'consumed') {
         return { status: 'unavailable', reasonCode: 'finalization-failed' }
@@ -1197,6 +1962,89 @@ export function createWorkflowGuard(
     clearIssue(unit, operation)
     globalIssue = undefined
     return { status: 'accepted', operation }
+  }
+
+  function operationReadback(
+    operation: ReceiptOperation,
+    after: ReceiptOperationAfter,
+  ): ParsedReadback {
+    return {
+      operation,
+      workspaceIdentity: after.workspaceIdentity,
+      repositoryIdentity: after.repositoryIdentity,
+      worktreeIdentity: after.worktreeIdentity,
+      resourceIdentity: after.resourceIdentity,
+      resourceRevisionIdentity: after.resourceRevisionIdentity,
+      pullRequest: after.pullRequest,
+      checkState: after.checkState,
+      reviewDecision: after.reviewDecision,
+    }
+  }
+
+  function operationFailureReason(
+    classification: ReceiptClassification,
+  ): WorkflowReasonCode {
+    switch (classification.reasonCode) {
+      case 'terminal-cancelled':
+        return 'cancelled-operation'
+      case 'terminal-failure':
+        return 'failed-operation'
+      case 'terminal-running':
+        return 'running-operation'
+      case 'successful-no-op':
+      case 'unchanged-workspace':
+      case 'no-op-resource':
+        return 'no-op-operation'
+      case 'parser-asset-unavailable':
+      case 'grammar-incompatible':
+      case 'parser-failure':
+        return 'guard-unavailable'
+      case 'workspace-mismatch':
+        return 'workspace-mismatch'
+      case 'cross-registration-disputed':
+        return 'foreign-registration'
+      default:
+        return classification.outcome === 'unavailable'
+          ? 'guard-unavailable'
+          : 'rejected-operation'
+    }
+  }
+
+  function markTerminalOperation(
+    parsed: ParsedOperationObservation | undefined,
+    input: unknown,
+  ): void {
+    if (parsed) {
+      terminalOperationCalls.set(
+        options.ledger.digestIdentity('call', parsed.callId),
+        parsed.operation,
+      )
+      return
+    }
+    if (!isRecord(input) || !isBoundedString(input.callId)) return
+    terminalOperationCalls.set(
+      options.ledger.digestIdentity('call', input.callId),
+      isOperation(input.operation) ? input.operation : undefined,
+    )
+  }
+
+  function terminalOperationResult(
+    input: unknown,
+  ): EvidenceObservationResult | undefined {
+    if (!isRecord(input) || !isBoundedString(input.callId)) return undefined
+    const callDigest = options.ledger.digestIdentity('call', input.callId)
+    const existing = terminalOperationCalls.get(callDigest)
+    if (existing === undefined && !terminalOperationCalls.has(callDigest)) {
+      return undefined
+    }
+    if (
+      existing !== undefined &&
+      isOperation(input.operation) &&
+      existing !== input.operation
+    ) {
+      return { status: 'rejected', reasonCode: 'call-context-conflict' }
+    }
+    return { status: 'rejected', reasonCode: 'rejected-operation' }
   }
 
   function activationModeResult(): ActivationResult | undefined {
@@ -1279,6 +2127,12 @@ export function createWorkflowGuard(
       parsed,
       resourceScopes,
     )
+    currentResourceIdentities.clear()
+    for (const [operation, resource] of resourceScopes) {
+      currentResourceIdentities.set(operation, resource)
+    }
+    currentResourceRevisionIdentities.clear()
+    currentPullRequestFingerprint = undefined
     epoch.unit = {
       unitId: randomId(),
       status: 'active',
@@ -1286,6 +2140,9 @@ export function createWorkflowGuard(
       resourceScopes,
       evidence: new Map(),
       issues: new Map(),
+      staleReceiptIds: new Set(),
+      operationStates: new Map(),
+      ledgerContexts: new Map(),
     }
     return { status: 'started', unit: cloneUnit(epoch.unit) }
   }
@@ -1359,6 +2216,259 @@ export function createWorkflowGuard(
     }
   }
 
+  async function processOperation(
+    input: unknown,
+    parsed: ParsedOperationObservation,
+    unit: UnitState,
+  ): Promise<EvidenceObservationResult> {
+    if (!unit.requiredOperations.includes(parsed.operation)) {
+      markTerminalOperation(parsed, input)
+      return { status: 'rejected', reasonCode: 'operation-not-required' }
+    }
+    const beforeReason = operationBeforeReason(parsed, unit)
+    if (beforeReason)
+      return rejectParsedOperation(parsed, input, unit, beforeReason)
+    const afterReason = operationAfterReason(parsed, unit)
+    if (afterReason)
+      return rejectParsedOperation(parsed, input, unit, afterReason)
+    const prepared = options.ledger.prepareObservation({
+      callId: parsed.callId,
+      operation: parsed.operation,
+      context: toLedgerContext(parsed.operation, parsed.context),
+    })
+    if (prepared.status !== 'prepared') {
+      return prepared.reasonCode === 'call-context-conflict'
+        ? { status: 'rejected', reasonCode: 'call-context-conflict' }
+        : { status: 'rejected', reasonCode: 'rejected-operation' }
+    }
+    const classification = await classifyPreparedOperation(parsed, input, unit)
+    return classification
+      ? finalizeOperation(parsed, input, unit, classification)
+      : { status: 'rejected', reasonCode: 'guard-unavailable' }
+  }
+
+  function rejectParsedOperation(
+    parsed: ParsedOperationObservation,
+    input: unknown,
+    unit: UnitState,
+    reasonCode: WorkflowReasonCode,
+  ): EvidenceObservationResult {
+    markTerminalOperation(parsed, input)
+    return recordUnitEvidenceIssue(unit, parsed.operation, reasonCode)
+  }
+
+  async function classifyPreparedOperation(
+    parsed: ParsedOperationObservation,
+    input: unknown,
+    unit: UnitState,
+  ): Promise<ReceiptClassification | undefined> {
+    const classifyOperation = options.classifier?.classifyOperation
+    if (!classifyOperation) {
+      abandonPreparedOperation(parsed)
+      markTerminalOperation(parsed, input)
+      recordUnitEvidenceIssue(unit, parsed.operation, 'guard-unavailable')
+      return undefined
+    }
+    try {
+      return await classifyOperation(input)
+    } catch {
+      abandonPreparedOperation(parsed)
+      markTerminalOperation(parsed, input)
+      recordUnitEvidenceIssue(unit, parsed.operation, 'guard-unavailable')
+      return undefined
+    }
+  }
+
+  function abandonPreparedOperation(parsed: ParsedOperationObservation): void {
+    options.ledger.abandonObservation({
+      callId: parsed.callId,
+      context: toLedgerContext(parsed.operation, parsed.context),
+    })
+  }
+
+  function finalizeOperation(
+    parsed: ParsedOperationObservation,
+    input: unknown,
+    unit: UnitState,
+    classification: ReceiptClassification,
+  ): EvidenceObservationResult {
+    if (!parsed.after) {
+      abandonPreparedOperation(parsed)
+      markTerminalOperation(parsed, input)
+      return recordUnitEvidenceIssue(unit, parsed.operation, 'invalid-receipt')
+    }
+    const finalized = options.ledger.finalizeObservation({
+      callId: parsed.callId,
+      context: toLedgerContext(parsed.operation, parsed.context),
+      after: toLedgerAfter(parsed.operation, parsed.after),
+      classification,
+      terminal: parsed.terminal,
+    })
+    if (finalized.status !== 'finalized') {
+      markTerminalOperation(parsed, input)
+      return recordUnitEvidenceIssue(
+        unit,
+        parsed.operation,
+        operationFailureReason(classification),
+      )
+    }
+    storeOperationLedgerContext(parsed, finalized.receipt, unit)
+    observeRevision(operationReadback(parsed.operation, parsed.after), unit)
+    markTerminalOperation(parsed, input)
+    return observeReceiptForUnit(finalized.receipt, unit)
+  }
+
+  function storeOperationLedgerContext(
+    parsed: ParsedOperationObservation,
+    envelope: ReceiptEnvelope,
+    unit: UnitState,
+  ): void {
+    if (!parsed.after) return
+    unit.ledgerContexts.set(
+      envelope.canonical.receiptId,
+      toLedgerContext(parsed.operation, {
+        ...parsed.context,
+        workspaceIdentity: parsed.after.workspaceIdentity,
+        repositoryIdentity: parsed.after.repositoryIdentity,
+        worktreeIdentity: parsed.after.worktreeIdentity,
+        resourceIdentity: parsed.after.resourceIdentity,
+        resourceRevisionIdentity: parsed.after.resourceRevisionIdentity,
+      }),
+    )
+  }
+
+  function requiresFreshFinalReadbacks(unit: UnitState): boolean {
+    return unit.ledgerContexts.size > 0
+  }
+
+  function finalReadbackReason(
+    parsed: ParsedFinalization,
+    unit: UnitState | undefined,
+  ): WorkflowReasonCode | undefined {
+    if (!unit || !requiresFreshFinalReadbacks(unit)) {
+      return parsed.readback
+        ? observeFinalReadback(parsed.readback, unit)
+        : undefined
+    }
+    if (!parsed.readbacks) return 'missing-evidence'
+    const coverageReason = validateFinalReadbackCoverage(parsed.readbacks, unit)
+    if (coverageReason) return coverageReason
+    return applyFinalReadbackBundle(parsed.readbacks, unit)
+  }
+
+  function validateFinalReadbackCoverage(
+    readbacks: readonly ParsedReadback[],
+    unit: UnitState,
+  ): WorkflowReasonCode | undefined {
+    const global = readbacks.find((readback) => !readback.operation)
+    if (!global?.repositoryIdentity || !global.worktreeIdentity) {
+      return 'invalid-receipt'
+    }
+    const required = RESOURCE_FINAL_READBACK_OPERATIONS.filter((operation) =>
+      unit.evidence.has(operation),
+    )
+    for (const operation of required) {
+      const readback = readbacks.find((item) => item.operation === operation)
+      const reason = validateResourceFinalReadback(readback, global, unit)
+      if (reason) return reason
+    }
+    return undefined
+  }
+
+  function validateResourceFinalReadback(
+    readback: ParsedReadback | undefined,
+    global: ParsedReadback,
+    unit: UnitState,
+  ): WorkflowReasonCode | undefined {
+    if (!readback?.operation) return 'missing-evidence'
+    if (!sameRevisionScope(readback, global)) return 'workspace-mismatch'
+    const expected = currentResource(unit, readback.operation)
+    return readback.resourceIdentity === expected
+      ? undefined
+      : 'resource-mismatch'
+  }
+
+  function sameRevisionScope(
+    readback: ParsedReadback,
+    global: ParsedReadback,
+  ): boolean {
+    return (
+      readback.workspaceIdentity === global.workspaceIdentity &&
+      readback.repositoryIdentity === global.repositoryIdentity &&
+      readback.worktreeIdentity === global.worktreeIdentity
+    )
+  }
+
+  function applyFinalReadbackBundle(
+    readbacks: readonly ParsedReadback[],
+    unit: UnitState,
+  ): WorkflowReasonCode | undefined {
+    const global = readbacks.find((readback) => !readback.operation)
+    if (!global) return 'invalid-receipt'
+    const globalReason = observeFinalReadback(global, unit)
+    if (globalReason) return globalReason
+    for (const readback of readbacks) {
+      if (readback.operation) {
+        const reason = observeFinalReadback(readback, unit)
+        if (reason) return reason
+      }
+    }
+    return undefined
+  }
+
+  function observeFinalReadback(
+    readback: ParsedReadback,
+    unit: UnitState | undefined,
+  ): WorkflowReasonCode | undefined {
+    const result = observeRevision(readback, unit)
+    return result.status === 'rejected' ? result.reasonCode : undefined
+  }
+
+  function finalizeTransitionCall(
+    parsed: ParsedFinalization,
+    lifecycle: PreparedTransition,
+  ): TransitionFinalizeResult {
+    if (lifecycle.state === 'abandoned') {
+      return { status: 'rejected', reasonCode: 'abandoned-transition' }
+    }
+    if (lifecycle.state === 'terminal' && lifecycle.terminalResult) {
+      return lifecycle.terminalResult.status === 'completed'
+        ? {
+            status: 'duplicate',
+            target: lifecycle.terminalResult.target,
+            transitionId: lifecycle.terminalResult.transitionId,
+          }
+        : lifecycle.terminalResult
+    }
+    const readbackReason = finalReadbackReason(parsed, epoch?.unit)
+    if (readbackReason) {
+      return terminalizeTransition(lifecycle, {
+        status: 'rejected',
+        reasonCode: readbackReason,
+      })
+    }
+    const decision = transitionDecision(lifecycle.target)
+    if (!decision.ready) {
+      return terminalizeTransition(lifecycle, {
+        status: decision.status,
+        reasonCode: decision.reasonCode,
+      })
+    }
+    return terminalizeTransition(
+      lifecycle,
+      finalizePrepared(lifecycle, decision),
+    )
+  }
+
+  function terminalizeTransition(
+    lifecycle: PreparedTransition,
+    result: TransitionFinalizeResult,
+  ): TransitionFinalizeResult {
+    lifecycle.state = 'terminal'
+    lifecycle.terminalResult = result
+    return result
+  }
+
   return {
     activate(input: unknown): ActivationResult {
       const modeResult = activationModeResult()
@@ -1430,6 +2540,33 @@ export function createWorkflowGuard(
       return observeParsedAttempt(parsed, epoch.unit)
     },
 
+    async observeOperation(input: unknown): Promise<EvidenceObservationResult> {
+      const modeResult = evidenceModeResult()
+      if (modeResult) return modeResult
+      if (!epoch) return { status: 'rejected', reasonCode: 'no-active-epoch' }
+      if (!epoch.unit)
+        return { status: 'rejected', reasonCode: 'no-active-unit' }
+      if (epoch.unit.status === 'completed') {
+        return { status: 'rejected', reasonCode: 'unit-completed' }
+      }
+
+      const terminalResult = terminalOperationResult(input)
+      if (terminalResult) return terminalResult
+
+      const parsed = parseReceiptOperationObservation(input)
+      if (!parsed) {
+        markTerminalOperation(undefined, input)
+        return recordGlobalEvidenceIssue('invalid-receipt')
+      }
+      return processOperation(input, parsed, epoch.unit)
+    },
+
+    observeReadback(input: unknown): ReadbackObservationResult {
+      const parsed = parseReadback(input)
+      if (!parsed) return { status: 'rejected', reasonCode: 'invalid-receipt' }
+      return observeRevision(parsed, epoch?.unit)
+    },
+
     status(): WorkflowStatus {
       return projection()
     },
@@ -1452,33 +2589,7 @@ export function createWorkflowGuard(
       if (!lifecycle || lifecycle.transitionId !== parsed.transitionId) {
         return { status: 'rejected', reasonCode: 'invalid-transition' }
       }
-      if (lifecycle.state === 'abandoned') {
-        return { status: 'rejected', reasonCode: 'abandoned-transition' }
-      }
-      if (lifecycle.state === 'terminal' && lifecycle.terminalResult) {
-        if (lifecycle.terminalResult.status === 'completed') {
-          return {
-            status: 'duplicate',
-            target: lifecycle.terminalResult.target,
-            transitionId: lifecycle.terminalResult.transitionId,
-          }
-        }
-        return lifecycle.terminalResult
-      }
-      const decision = transitionDecision(lifecycle.target)
-      if (!decision.ready) {
-        const result: TransitionFinalizeResult = {
-          status: decision.status,
-          reasonCode: decision.reasonCode,
-        }
-        lifecycle.state = 'terminal'
-        lifecycle.terminalResult = result
-        return result
-      }
-      const result = finalizePrepared(lifecycle, decision)
-      lifecycle.state = 'terminal'
-      lifecycle.terminalResult = result
-      return result
+      return finalizeTransitionCall(parsed, lifecycle)
     },
 
     abandonTransition(input: unknown): AbandonTransitionResult {

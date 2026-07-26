@@ -352,7 +352,7 @@ flowchart TB
 
 **Verification:** Per-source registrations remain independent and idempotent, both skill-load surfaces are observed through the general adapter, selected-tool catalog/selection behavior and hook delivery are characterized, before hooks cannot consume or advance state, one selected host execution/result follows all allows, after finalization is idempotent per registration and non-throwing, marker aggregation uses worst-state precedence, partial finalization is unavailable/rejected, config trust rules are enforced, observe is the default until U8, all five states are projected at read time, and capability failure is explicit rather than a false protected state.
 
-- [ ] **U4. No-op-safe write, Bash, git, and GitHub operation adapters with workspace staleness**
+- [x] **U4. No-op-safe write, Bash, git, and GitHub operation adapters with workspace staleness**
 
 **Goal:** Turn observed writes, verification, commit, push, pull-request creation, and check/review readback into operation-specific receipts only when attribution, result, and side effect/resource change are proven.
 
