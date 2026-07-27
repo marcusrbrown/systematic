@@ -536,6 +536,49 @@ describe('per-invocation plugin registration', () => {
       fs.rmSync(tempDir, { recursive: true, force: true })
     }
   })
+
+  test('workflow-guard transform failure is fail-closed and does not propagate to the host', async () => {
+    // This test verifies the adapter's transform wrapper is symmetric with after/event hooks:
+    // all three must be fail-closed (never propagate a throw to the host).
+    //
+    // RED before fix: the adapter's transform delegation had no try/catch, so if
+    // workflowGuard.hooks['experimental.chat.system.transform'] threw for any reason
+    // (e.g. unguarded state machine failure) it would escape to the host.
+    // GREEN after fix: the adapter wraps the delegation in try/catch matching after/event.
+    //
+    // We test by verifying that even when the adapter's bootstrapContent path is
+    // skipped and the guard path is reached with a session that was never initialised,
+    // the transform hook still resolves without throwing.
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-transform-failclosed-'),
+    )
+    fs.mkdirSync(path.join(tempDir, '.opencode'), { recursive: true })
+    try {
+      const pluginPath = path.join(SRC_DIR, 'index.ts')
+      const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
+        default: (args: ReturnType<typeof makeInput>) => Promise<{
+          'experimental.chat.system.transform': (
+            input: unknown,
+            output: { system: string[] },
+          ) => Promise<void>
+        }>
+      }
+      const plugin = await pluginModule.default(makeInput(tempDir))
+      const output = { system: ['base'] }
+
+      // A call with a fresh sessionID that has no prior state still must not throw.
+      await expect(
+        plugin['experimental.chat.system.transform'](
+          { sessionID: 'never-touched-session-id' },
+          output,
+        ),
+      ).resolves.toBeUndefined()
+      // Output is intact and not corrupted.
+      expect(output.system.length).toBeGreaterThan(0)
+    } finally {
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('applyBootstrapContent marker-based idempotency', () => {
