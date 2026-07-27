@@ -46,11 +46,12 @@ describe('receipt classifier', () => {
     await classifier.close()
   })
 
-  test('accepts safe git push forms and rejects ambiguous push flags', async () => {
+  test('accepts non-destructive git push forms and rejects destructive push intents', async () => {
     const classifier = createReceiptClassifier()
     const accepted = [
       'git push',
       'git push origin',
+      'git push origin main',
       'git push origin HEAD',
       'git push -u origin main',
       'git push --set-upstream origin main',
@@ -65,14 +66,27 @@ describe('receipt classifier', () => {
       })
     }
     for (const command of [
-      'git push --mirror',
+      'git push origin +HEAD:main',
+      'git push origin +refs/heads/main:main',
+      'git push origin :branch',
+      'git push --delete origin branch',
+      'git push -d origin branch',
       'git push --force origin main',
+      'git push --force=if-stale origin main',
+      'git push -f origin main',
+      'git push --force-with-lease origin main',
+      'git push --force-with-lease=origin/main origin main',
+      'git push --mirror origin',
+      'git push --prune origin main',
       'git push -- origin main',
       'git push origin main; rm -rf /',
     ]) {
-      await expect(
-        classifier.classify({ command, terminal: successfulTerminal }),
-      ).resolves.toMatchObject({ outcome: 'rejected' })
+      const result = await classifier.classify({
+        command,
+        terminal: successfulTerminal,
+      })
+      expect(result).toMatchObject({ outcome: 'rejected' })
+      expect(result.category).not.toBe('push')
     }
     await classifier.close()
   })

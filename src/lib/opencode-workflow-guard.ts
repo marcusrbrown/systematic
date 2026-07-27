@@ -138,21 +138,40 @@ export interface OpencodeWorkflowGuardConfig {
   debug: boolean
 }
 
-export class WorkflowGuardBlockedError extends Error {
-  readonly code = 'workflow-guard-blocked' as const
-  readonly reasonCode: WorkflowReasonCode
+const WORKFLOW_GUARD_BLOCKED_ERROR_NAME = 'WorkflowGuardBlockedError'
+const WORKFLOW_GUARD_BLOCKED_ERROR_CODE = 'workflow-guard-blocked'
 
-  constructor(reasonCode: WorkflowReasonCode) {
-    super('workflow guard blocked')
-    this.name = 'WorkflowGuardBlockedError'
-    this.reasonCode = reasonCode
-  }
+export type WorkflowGuardBlockedError = Error & {
+  readonly code: typeof WORKFLOW_GUARD_BLOCKED_ERROR_CODE
+  readonly reasonCode: WorkflowReasonCode
+}
+
+export function createWorkflowGuardBlockedError(
+  reasonCode: WorkflowReasonCode,
+): WorkflowGuardBlockedError {
+  const error = new Error('workflow guard blocked') as WorkflowGuardBlockedError
+  error.name = WORKFLOW_GUARD_BLOCKED_ERROR_NAME
+  Object.assign(error, {
+    code: WORKFLOW_GUARD_BLOCKED_ERROR_CODE,
+    reasonCode,
+  })
+  return error
 }
 
 export function isWorkflowGuardBlockedError(
   value: unknown,
 ): value is WorkflowGuardBlockedError {
-  return value instanceof WorkflowGuardBlockedError
+  if (!(value instanceof Error)) return false
+  if (value.name !== WORKFLOW_GUARD_BLOCKED_ERROR_NAME) return false
+  const candidate = value as Error & {
+    code?: unknown
+    reasonCode?: unknown
+  }
+  if (candidate.code !== WORKFLOW_GUARD_BLOCKED_ERROR_CODE) return false
+  return (
+    typeof candidate.reasonCode === 'string' &&
+    REASON_CODES.has(candidate.reasonCode)
+  )
 }
 
 export interface OpencodeWorkflowGuardOptions {
@@ -1676,7 +1695,7 @@ function createSessionRuntime(
       return true
     }
     if (options.config.mode === 'protected') {
-      throw new WorkflowGuardBlockedError('guard-unavailable')
+      throw createWorkflowGuardBlockedError('guard-unavailable')
     }
     blockedCompletes.set(callDigest, target)
     blockedQuestionCalls.set(callDigest, challenge.challenge.challengeId)
@@ -1689,7 +1708,7 @@ function createSessionRuntime(
     const callDigest = digestCall(ledger, host.callID)
     if (bindCall(callDigest, 'complete', target) === 'conflict') {
       if (options.config.mode === 'protected') {
-        throw new WorkflowGuardBlockedError('guard-unavailable')
+        throw createWorkflowGuardBlockedError('guard-unavailable')
       }
       return
     }
@@ -1705,7 +1724,7 @@ function createSessionRuntime(
       return
     }
     if (options.config.mode === 'protected') {
-      throw new WorkflowGuardBlockedError(prepared.reasonCode)
+      throw createWorkflowGuardBlockedError(prepared.reasonCode)
     }
     blockedCompletes.set(callDigest, target)
   }

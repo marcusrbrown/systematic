@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -6,6 +7,7 @@ import path from 'node:path'
 import {
   createOpencodeOperationObserver,
   type OperationObserverCommandResult,
+  type OperationObserverLimits,
   type OperationObserverRemoteCommandResult,
 } from '../../src/lib/opencode-operation-observer.js'
 
@@ -332,6 +334,150 @@ describe('OpenCode operation observer', () => {
         status: 'unavailable',
         reasonCode: 'file-output-limit',
       })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('times out slow commands, kills the child, and fails closed without raw facts', async () => {
+    const fixture = createGitFixture()
+    const secret = `${fixture.root}/raw-timeout-secret`
+    try {
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        limits: { maxCommandTimeoutMs: 10 } satisfies OperationObserverLimits,
+        commandRunner: (
+          _args,
+          cwd,
+          maxOutputBytes,
+          timeoutMs,
+        ): OperationObserverCommandResult => {
+          const child = spawnSync(
+            process.execPath,
+            [
+              '-e',
+              `process.stdout.write(${JSON.stringify(`${secret}\n`)})\nsetTimeout(() => {}, 500)`,
+            ],
+            {
+              cwd,
+              encoding: 'utf8',
+              maxBuffer: maxOutputBytes,
+              timeout: timeoutMs,
+            },
+          )
+          const timedOut = child.error?.code === 'ETIMEDOUT'
+          return {
+            status: child.status ?? -1,
+            stdout: secret,
+            stderr: timedOut ? secret : '',
+            timedOut,
+          } as OperationObserverCommandResult
+        },
+      })
+      const started = Date.now()
+      const result = await observer.snapshot()
+      expect(Date.now() - started).toBeLessThan(250)
+      expect(result).toEqual({
+        status: 'unavailable',
+        reasonCode: 'command-timeout',
+      })
+      expect(JSON.stringify(result)).not.toContain(secret)
+      expect(JSON.stringify(result)).not.toContain('setTimeout')
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('allows fast commands within the configured timeout bound', async () => {
+    const fixture = createGitFixture()
+    try {
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        limits: {
+          maxCommandTimeoutMs: 1_000,
+        } satisfies OperationObserverLimits,
+      })
+      await expect(observer.snapshot()).resolves.toMatchObject({
+        status: 'available',
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('defaults and injects the timeout bound for local and remote runners', async () => {
+    const fixture = createGitFixture()
+    try {
+      const defaultTimeouts: number[] = []
+      const defaulted = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        commandRunner: (args, cwd, _maxOutputBytes, timeoutMs) => {
+          defaultTimeouts.push(timeoutMs)
+          return runGit(cwd, args)
+        },
+      })
+      await expect(defaulted.snapshot()).resolves.toMatchObject({
+        status: 'available',
+      })
+      expect(defaultTimeouts.length).toBeGreaterThan(0)
+      expect(new Set(defaultTimeouts)).toEqual(new Set([5_000]))
+
+      const configuredTimeouts: number[] = []
+      const configured = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        limits: { maxCommandTimeoutMs: 7 } satisfies OperationObserverLimits,
+        commandRunner: (args, cwd, _maxOutputBytes, timeoutMs) => {
+          configuredTimeouts.push(timeoutMs)
+          return runGit(cwd, args)
+        },
+      })
+      await expect(configured.snapshot()).resolves.toMatchObject({
+        status: 'available',
+      })
+      expect(configuredTimeouts.length).toBeGreaterThan(0)
+      expect(new Set(configuredTimeouts)).toEqual(new Set([7]))
+
+      const remoteTimeouts: number[] = []
+      const remote = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+        limits: { maxCommandTimeoutMs: 7 } satisfies OperationObserverLimits,
+        remoteCommandRunner: (
+          executable,
+          args,
+          _cwd,
+          _maxOutputBytes,
+          timeoutMs,
+        ): OperationObserverRemoteCommandResult => {
+          remoteTimeouts.push(timeoutMs)
+          if (executable === 'git') {
+            return {
+              status: 0,
+              stdout: 'origin/main\n',
+              stderr: '',
+            }
+          }
+          return args[1] === 'checks'
+            ? {
+                status: 0,
+                stdout: JSON.stringify([{ state: 'SUCCESS' }]),
+                stderr: '',
+              }
+            : {
+                status: 0,
+                stdout: JSON.stringify({
+                  number: 42,
+                  state: 'OPEN',
+                  headRefOid: 'b'.repeat(40),
+                }),
+                stderr: '',
+              }
+        },
+      })
+      await expect(
+        remote.remoteSnapshot('pr-creation', 'after'),
+      ).resolves.toMatchObject({ status: 'available' })
+      expect(remoteTimeouts.length).toBeGreaterThan(0)
+      expect(new Set(remoteTimeouts)).toEqual(new Set([7]))
     } finally {
       fixture.cleanup()
     }

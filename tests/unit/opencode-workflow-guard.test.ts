@@ -9,6 +9,8 @@ import type {
 } from '../../src/lib/opencode-operation-observer.js'
 import {
   createOpencodeWorkflowGuard,
+  createWorkflowGuardBlockedError,
+  isWorkflowGuardBlockedError,
   type OpencodeWorkflowGuard,
   SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY,
 } from '../../src/lib/opencode-workflow-guard.js'
@@ -464,6 +466,46 @@ describe('OpenCode workflow guard adapter', () => {
       { title: 'complete', output: 'selected result', metadata: {} },
     )
     expect(status(observeAdapter).state).toBe('waiting')
+  })
+
+  test('uses a tagged plain Error for protected vetoes', async () => {
+    const protectedAdapter = createAdapter('protected')
+    await observeSkill(protectedAdapter, 'systematic_skill', 'ce:work')
+
+    let caught: unknown
+    try {
+      await protectedAdapter.hooks['tool.execute.before'](
+        {
+          tool: 'systematic_workflow_complete',
+          sessionID: SESSION_A,
+          callID: 'tagged-block',
+        },
+        { args: { target: 'unit' } },
+      )
+    } catch (error) {
+      caught = error
+    }
+
+    expect(caught).toBeInstanceOf(Error)
+    expect(isWorkflowGuardBlockedError(caught)).toBe(true)
+    const tagged = caught as {
+      code: string
+      reasonCode: string
+      message: string
+      name: string
+    }
+    expect(tagged.code).toBe('workflow-guard-blocked')
+    expect(tagged.reasonCode).toBe('guard-unavailable')
+    expect(tagged.message).toBe('workflow guard blocked')
+    expect(tagged.name).toBe('WorkflowGuardBlockedError')
+    expect(isWorkflowGuardBlockedError(new Error('ordinary failure'))).toBe(
+      false,
+    )
+    expect(
+      isWorkflowGuardBlockedError(
+        createWorkflowGuardBlockedError('missing-evidence'),
+      ),
+    ).toBe(true)
   })
 
   test('native question flow binds and accepts only a correlated affirmative reply', async () => {

@@ -873,15 +873,14 @@ describe('config', () => {
       expect(() => loadConfig(testDir)).toThrow('agnts')
     })
 
-    test('project workflow_guard is rejected by the trust boundary', () => {
-      const configPath = writeProjectConfig({
+    test('project workflow_guard is stripped by the trust boundary', () => {
+      writeProjectConfig({
         workflow_guard: { mode: 'disabled', debug: true },
       })
 
-      expect(() => loadConfig(testDir)).toThrow(configPath)
-      expect(() => loadConfig(testDir)).toThrow('workflow_guard')
-      expect(() => loadConfig(testDir)).toThrow(
-        /only valid in user config or OPENCODE_CONFIG_DIR config/,
+      expect(() => loadConfig(testDir)).not.toThrow()
+      expect(loadConfig(testDir).workflow_guard).toEqual(
+        DEFAULT_CONFIG.workflow_guard,
       )
     })
 

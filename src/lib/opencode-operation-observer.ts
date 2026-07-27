@@ -5,6 +5,7 @@ import path from 'node:path'
 
 const DEFAULT_LIMITS = {
   maxCommandOutputBytes: 1_048_576,
+  maxCommandTimeoutMs: 5_000,
   maxFiles: 4096,
   maxTotalFileBytes: 16_777_216,
   maxPathBytes: 4096,
@@ -13,6 +14,7 @@ const DEFAULT_LIMITS = {
 export type OperationObserverReasonCode =
   | 'target-unavailable'
   | 'command-failed'
+  | 'command-timeout'
   | 'command-output-limit'
   | 'file-limit'
   | 'file-output-limit'
@@ -53,18 +55,21 @@ export interface OperationObserverCommandResult {
   readonly status: number
   readonly stdout: string
   readonly stderr: string
+  readonly timedOut?: boolean
 }
 
 export interface OperationObserverRemoteCommandResult {
   readonly status: number
   readonly stdout: string
   readonly stderr: string
+  readonly timedOut?: boolean
 }
 
 export type OperationObserverCommandRunner = (
   args: readonly string[],
   cwd: string,
   maxOutputBytes: number,
+  timeoutMs: number,
 ) => OperationObserverCommandResult
 
 export type OperationObserverRemoteCommandRunner = (
@@ -72,6 +77,7 @@ export type OperationObserverRemoteCommandRunner = (
   args: readonly string[],
   cwd: string,
   maxOutputBytes: number,
+  timeoutMs: number,
 ) => OperationObserverRemoteCommandResult
 
 export interface OperationObserverRemoteSnapshot {
@@ -102,6 +108,7 @@ export type OperationObserverRemoteResult =
 
 export interface OperationObserverLimits {
   readonly maxCommandOutputBytes?: number
+  readonly maxCommandTimeoutMs?: number
   readonly maxFiles?: number
   readonly maxTotalFileBytes?: number
   readonly maxPathBytes?: number
@@ -137,6 +144,7 @@ export interface OpencodeOperationObserver {
 
 interface Limits {
   readonly maxCommandOutputBytes: number
+  readonly maxCommandTimeoutMs: number
   readonly maxFiles: number
   readonly maxTotalFileBytes: number
   readonly maxPathBytes: number
@@ -169,21 +177,33 @@ function digest(domain: string, facts: readonly string[]): string {
   return hash.digest('hex')
 }
 
+function isCommandTimeout(error: unknown): boolean {
+  return (
+    error !== null &&
+    typeof error === 'object' &&
+    'code' in error &&
+    error.code === 'ETIMEDOUT'
+  )
+}
+
 function defaultCommandRunner(
   args: readonly string[],
   cwd: string,
   maxOutputBytes: number,
+  timeoutMs: number,
 ): OperationObserverCommandResult {
   try {
     const result = spawnSync('git', [...args], {
       cwd,
       encoding: 'utf8',
       maxBuffer: maxOutputBytes,
+      timeout: timeoutMs,
     })
     return {
       status: result.status ?? -1,
       stdout: typeof result.stdout === 'string' ? result.stdout : '',
       stderr: typeof result.stderr === 'string' ? result.stderr : '',
+      timedOut: isCommandTimeout(result.error),
     }
   } catch {
     return { status: -1, stdout: '', stderr: '' }
@@ -195,17 +215,20 @@ function defaultRemoteCommandRunner(
   args: readonly string[],
   cwd: string,
   maxOutputBytes: number,
+  timeoutMs: number,
 ): OperationObserverRemoteCommandResult {
   try {
     const result = spawnSync(executable, [...args], {
       cwd,
       encoding: 'utf8',
       maxBuffer: maxOutputBytes,
+      timeout: timeoutMs,
     })
     return {
       status: result.status ?? -1,
       stdout: typeof result.stdout === 'string' ? result.stdout : '',
       stderr: typeof result.stderr === 'string' ? result.stderr : '',
+      timedOut: isCommandTimeout(result.error),
     }
   } catch {
     return { status: -1, stdout: '', stderr: '' }
@@ -216,6 +239,8 @@ function mergeLimits(input?: OperationObserverLimits): Limits {
   return {
     maxCommandOutputBytes:
       input?.maxCommandOutputBytes ?? DEFAULT_LIMITS.maxCommandOutputBytes,
+    maxCommandTimeoutMs:
+      input?.maxCommandTimeoutMs ?? DEFAULT_LIMITS.maxCommandTimeoutMs,
     maxFiles: input?.maxFiles ?? DEFAULT_LIMITS.maxFiles,
     maxTotalFileBytes:
       input?.maxTotalFileBytes ?? DEFAULT_LIMITS.maxTotalFileBytes,
@@ -273,7 +298,20 @@ function runCommand(
 ):
   | { status: 'ok'; output: GitCommandOutput }
   | { status: 'error'; reasonCode: OperationObserverReasonCode } {
-  const result = runner(args, cwd, limits.maxCommandOutputBytes)
+  let result: OperationObserverCommandResult
+  try {
+    result = runner(
+      args,
+      cwd,
+      limits.maxCommandOutputBytes,
+      limits.maxCommandTimeoutMs,
+    )
+  } catch {
+    return { status: 'error', reasonCode: 'command-failed' }
+  }
+  if (result.timedOut) {
+    return { status: 'error', reasonCode: 'command-timeout' }
+  }
   if (
     outputBytes(result.stdout) > limits.maxCommandOutputBytes ||
     outputBytes(result.stderr) > limits.maxCommandOutputBytes
@@ -305,11 +343,20 @@ function readRevision(
   const branchValue =
     branch.status === 'ok' ? branch.output.stdout.trim() : 'detached'
 
-  const head = runner(
-    ['rev-parse', '--verify', 'HEAD'],
-    root,
-    limits.maxCommandOutputBytes,
-  )
+  let head: OperationObserverCommandResult
+  try {
+    head = runner(
+      ['rev-parse', '--verify', 'HEAD'],
+      root,
+      limits.maxCommandOutputBytes,
+      limits.maxCommandTimeoutMs,
+    )
+  } catch {
+    return { status: 'error', reasonCode: 'command-failed' }
+  }
+  if (head.timedOut) {
+    return { status: 'error', reasonCode: 'command-timeout' }
+  }
   if (
     outputBytes(head.stdout) > limits.maxCommandOutputBytes ||
     outputBytes(head.stderr) > limits.maxCommandOutputBytes
@@ -565,11 +612,20 @@ function readCommitClosure(
 ):
   | { status: 'ok'; closed: boolean }
   | { status: 'error'; reasonCode: OperationObserverReasonCode } {
-  const diff = runner(
-    ['diff', '--quiet', 'HEAD', '--', '.'],
-    root,
-    limits.maxCommandOutputBytes,
-  )
+  let diff: OperationObserverCommandResult
+  try {
+    diff = runner(
+      ['diff', '--quiet', 'HEAD', '--', '.'],
+      root,
+      limits.maxCommandOutputBytes,
+      limits.maxCommandTimeoutMs,
+    )
+  } catch {
+    return { status: 'error', reasonCode: 'command-failed' }
+  }
+  if (diff.timedOut) {
+    return { status: 'error', reasonCode: 'command-timeout' }
+  }
   if (
     outputBytes(diff.stdout) > limits.maxCommandOutputBytes ||
     outputBytes(diff.stderr) > limits.maxCommandOutputBytes
@@ -601,7 +657,21 @@ function runRemoteCommand(
 ):
   | { status: 'ok'; stdout: string }
   | { status: 'error'; reasonCode: OperationObserverReasonCode } {
-  const result = runner(executable, args, root, limits.maxCommandOutputBytes)
+  let result: OperationObserverRemoteCommandResult
+  try {
+    result = runner(
+      executable,
+      args,
+      root,
+      limits.maxCommandOutputBytes,
+      limits.maxCommandTimeoutMs,
+    )
+  } catch {
+    return { status: 'error', reasonCode: 'remote-command-failed' }
+  }
+  if (result.timedOut) {
+    return { status: 'error', reasonCode: 'command-timeout' }
+  }
   if (
     outputBytes(result.stdout) > limits.maxCommandOutputBytes ||
     outputBytes(result.stderr) > limits.maxCommandOutputBytes

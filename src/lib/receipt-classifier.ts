@@ -1205,11 +1205,24 @@ function classifySafePushCommand(args: readonly string[]): boolean {
   if (args[0] !== 'push') return false
   const rest = args.slice(1)
   if (rest.length === 0) return true
+  if (rest.some(isDestructivePushArgument)) return false
   const hasUpstreamFlag = rest[0] === '-u' || rest[0] === '--set-upstream'
   const offset = hasUpstreamFlag ? 1 : 0
   const positional = rest.slice(offset)
   if (positional.length === 0 || positional.length > 2) return false
   return positional.every((value) => isSafePathArgument(value))
+}
+
+function isDestructivePushArgument(value: string): boolean {
+  if (value.startsWith('+') || value.startsWith(':')) return true
+  if (value === '-f' || value === '-d') return true
+  return [
+    '--force',
+    '--force-with-lease',
+    '--delete',
+    '--mirror',
+    '--prune',
+  ].some((option) => value === option || value.startsWith(`${option}=`))
 }
 
 function classifyGhCommand(

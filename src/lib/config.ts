@@ -373,24 +373,12 @@ function loadConfigSource(
   const rawConfig = loadJsoncFile(filePath)
   if (!rawConfig) return null
 
-  if (trust === 'project') {
-    for (const field of PROJECT_PROTECTED_FIELDS) {
-      if (Object.hasOwn(rawConfig, field)) {
-        throw new Error(
-          `Invalid Systematic config in ${filePath}: ${field} is only valid in user config or OPENCODE_CONFIG_DIR config`,
-        )
-      }
-    }
-  }
+  const config =
+    trust === 'project' ? stripProjectProtectedFields(rawConfig) : rawConfig
 
-  const result = SystematicConfigSchema.safeParse(rawConfig)
+  const result = SystematicConfigSchema.safeParse(config)
   if (!result.success) {
-    throwTopLevelConfigSchemaError(
-      filePath,
-      trust,
-      result.error.issues,
-      rawConfig,
-    )
+    throwTopLevelConfigSchemaError(filePath, trust, result.error.issues, config)
   }
 
   // Validation succeeded; propagate raw parsed JSONC so the merge layer
@@ -398,7 +386,17 @@ function loadConfigSource(
   // higher-priority empty config does NOT override a lower-priority explicit
   // setting). The schema's defaults are applied by the merge layer via
   // DEFAULT_CONFIG at the top of the spread chain.
-  return { path: filePath, config: rawConfig, trust }
+  return { path: filePath, config, trust }
+}
+
+function stripProjectProtectedFields(
+  rawConfig: RawSystematicConfig,
+): RawSystematicConfig {
+  const config = { ...rawConfig }
+  for (const field of PROJECT_PROTECTED_FIELDS) {
+    delete (config as Record<string, unknown>)[field]
+  }
+  return config
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
