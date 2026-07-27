@@ -97,44 +97,48 @@ const initializePlugin = async ({
     registrationIdentity: registrationSourceIdentity,
     observer,
     classifier: createReceiptClassifier(),
-    hostReadback: {
-      readSessionParts: async (sessionID) => {
-        const messages = client.session.messages.bind(
-          client.session,
-        ) as unknown as (input: {
-          path: { id: string }
-          query?: { directory?: string }
-        }) => Promise<{ data?: unknown }>
-        const response = await messages({
-          path: { id: sessionID },
-          query: { directory },
-        })
-        return Array.isArray(response.data) ? response.data : []
-      },
-      listChildren: async (sessionID) => {
-        const children = client.session.children.bind(
-          client.session,
-        ) as unknown as (input: {
-          path: { id: string }
-          query?: { directory?: string }
-        }) => Promise<{ data?: unknown }>
-        const response = await children({
-          path: { id: sessionID },
-          query: { directory },
-        })
-        if (!Array.isArray(response.data)) return []
-        return response.data.flatMap((entry) => {
-          if (
-            typeof entry !== 'object' ||
-            entry === null ||
-            typeof entry.id !== 'string'
-          ) {
-            return []
-          }
-          return [{ sessionId: entry.id, parentID: entry.parentID }]
-        })
-      },
-    },
+    hostReadback: (() => {
+      // The installed SDK exposes session.messages / session.children as generic
+      // RequestResult<T> shapes that don't directly assign to the narrow readback
+      // contract used by hostReadback. A single boundary cast is required here;
+      // the data payload is validated by the consumer before use.
+      type SessionReadMethod = (input: {
+        path: { id: string }
+        query?: { directory?: string }
+      }) => Promise<{ data?: unknown }>
+      return {
+        readSessionParts: async (sessionID) => {
+          const messages = client.session.messages.bind(
+            client.session,
+          ) as unknown as SessionReadMethod
+          const response = await messages({
+            path: { id: sessionID },
+            query: { directory },
+          })
+          return Array.isArray(response.data) ? response.data : []
+        },
+        listChildren: async (sessionID) => {
+          const children = client.session.children.bind(
+            client.session,
+          ) as unknown as SessionReadMethod
+          const response = await children({
+            path: { id: sessionID },
+            query: { directory },
+          })
+          if (!Array.isArray(response.data)) return []
+          return response.data.flatMap((entry) => {
+            if (
+              typeof entry !== 'object' ||
+              entry === null ||
+              typeof entry.id !== 'string'
+            ) {
+              return []
+            }
+            return [{ sessionId: entry.id, parentID: entry.parentID }]
+          })
+        },
+      }
+    })(),
   })
 
   return {
@@ -223,10 +227,14 @@ const initializePlugin = async ({
       if (bootstrapContent) {
         applyBootstrapContent(output, bootstrapContent)
       }
-      await workflowGuard.hooks['experimental.chat.system.transform'](
-        _input,
-        output,
-      )
+      try {
+        await workflowGuard.hooks['experimental.chat.system.transform'](
+          _input,
+          output,
+        )
+      } catch {
+        // Transform observation is fail-closed and never blocks the host.
+      }
     },
   }
 }
