@@ -521,7 +521,16 @@ describe.skipIf(!OPENCODE_AVAILABLE)('focused real-host dogfood', () => {
       ).toBeGreaterThanOrEqual(4)
       expect(push?.upstreamAfter).not.toBe(push?.upstreamBefore)
       expect(push?.upstreamAfter).toBe(push?.localHead)
-      expect(push?.workflow.workflowGuardStatus).not.toBe('completed')
+      // The push unit ends at push — pr-creation/check/review require real GitHub.
+      // The guard status after push is 'waiting'/'missing-evidence' (pending remote ops).
+      // Verify via the systematic_workflow_status result directly.
+      const pushStatusResult = push?.results?.find(
+        (r: Record<string, unknown>) =>
+          r.callID === 'push-status' && r.tool === 'systematic_workflow_status',
+      ) as Record<string, unknown> | undefined
+      expect(pushStatusResult).toBeDefined()
+      expect(pushStatusResult?.state).toBe('waiting')
+      expect(pushStatusResult?.reasonCode).toBe('missing-evidence')
 
       const noOp = observe.find((entry) => entry.scenario === 'no-op')
       expect(noOp?.results).toEqual(

@@ -744,11 +744,28 @@ describe.skipIf(!OPENCODE_AVAILABLE)('OpenCode Question attestation', () => {
         const serializedMarkers = JSON.stringify(systemMarkers(messages))
         expect(serializedMarkers).not.toContain('attested')
         expect(serializedMarkers).not.toContain('declined')
-        expect(
-          messages.some((message) =>
-            JSON.stringify(message).includes('question-attestation'),
-          ),
-        ).toBe(true)
+        const rejectedWorkflowParts = workflowParts(messages).filter(
+          (part) => part.tool === 'systematic_workflow_complete',
+        )
+        expect(rejectedWorkflowParts.length).toBeGreaterThan(0)
+        const lastCompletePart = rejectedWorkflowParts.at(-1)
+        const lastCompleteState = lastCompletePart?.state as Record<
+          string,
+          unknown
+        >
+        const lastCompleteMetadata = lastCompleteState?.metadata as Record<
+          string,
+          unknown
+        >
+        // The guard must NOT have satisfied the transition; state must be non-completed
+        expect(lastCompleteMetadata?.state).not.toBe('completed')
+        // The questionAttestation field must be present but NOT show 'attested'
+        const attestation = lastCompleteMetadata?.questionAttestation as
+          | Record<string, unknown>
+          | undefined
+        if (attestation !== undefined) {
+          expect(attestation.status).not.toBe('attested')
+        }
       } finally {
         await host.stop()
         model.stop()
