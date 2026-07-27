@@ -12,6 +12,11 @@ const DIST_DIR = path.join(ROOT_DIR, 'dist')
 const DIST_INDEX = path.join(DIST_DIR, 'index.js')
 const DIST_PI = path.join(DIST_DIR, 'pi.js')
 const DIST_CLI = path.join(DIST_DIR, 'cli.js')
+const OPTIONAL_PEERS = [
+  '@opencode-ai/plugin',
+  '@earendil-works/pi-coding-agent',
+  'typebox',
+] as const
 
 function listJavaScriptFiles(directory: string): string[] {
   return fs.readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
@@ -199,6 +204,12 @@ describe('build output and packaging', () => {
           path.join(projectDir, 'node_modules/@opencode-ai/plugin'),
         ),
       ).toBe(false)
+      for (const peer of OPTIONAL_PEERS) {
+        expect(
+          fs.existsSync(path.join(projectDir, 'node_modules', peer)),
+          `${peer} should remain an optional peer in the isolated install`,
+        ).toBe(false)
+      }
 
       const load = spawnSync(
         'node',
@@ -212,6 +223,40 @@ describe('build output and packaging', () => {
       expect(
         load.status,
         `bare node import failed (exit ${load.status})\n--- stdout ---\n${load.stdout}\n--- stderr ---\n${load.stderr}`,
+      ).toBe(0)
+
+      for (const filePath of listJavaScriptFiles(
+        path.join(projectDir, 'node_modules/@fro.bot/systematic/dist'),
+      )) {
+        expect(fs.readFileSync(filePath, 'utf8')).not.toContain(
+          '@opencode-ai/plugin',
+        )
+      }
+
+      const entryPath = path.join(
+        projectDir,
+        'node_modules/@fro.bot/systematic/dist/index.js',
+      )
+      const assetCheck = spawnSync(
+        'node',
+        [
+          '--input-type=module',
+          '-e',
+          `
+            import fs from 'node:fs'
+            import { fileURLToPath } from 'node:url'
+            const entryUrl = ${JSON.stringify(pathToFileURL(entryPath).href)}
+            const treeSitterUrl = import.meta.resolve('web-tree-sitter/tree-sitter.wasm', entryUrl)
+            const bashUrl = import.meta.resolve('tree-sitter-bash/tree-sitter-bash.wasm', entryUrl)
+            if (!treeSitterUrl.startsWith('file:') || !bashUrl.startsWith('file:')) process.exit(1)
+            if (!fs.existsSync(fileURLToPath(treeSitterUrl)) || !fs.existsSync(fileURLToPath(bashUrl))) process.exit(2)
+          `,
+        ],
+        { cwd: projectDir, encoding: 'utf8', timeout: 30_000 },
+      )
+      expect(
+        assetCheck.status,
+        `packed parser asset check failed (exit ${assetCheck.status})\n--- stdout ---\n${assetCheck.stdout}\n--- stderr ---\n${assetCheck.stderr}`,
       ).toBe(0)
     } finally {
       fs.rmSync(projectDir, { recursive: true, force: true })

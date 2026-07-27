@@ -23,6 +23,13 @@ export interface BootstrapConfig {
   file?: string
 }
 
+export type WorkflowGuardMode = 'observe' | 'protected' | 'disabled'
+
+export interface WorkflowGuardConfig {
+  mode: WorkflowGuardMode
+  debug: boolean
+}
+
 export type OverlayConfig = Record<string, unknown>
 
 export type OverlayConfigMap = Record<string, OverlayConfig>
@@ -48,6 +55,7 @@ export interface SystematicConfig {
   disabled_agents: string[]
   disabled_commands: string[]
   bootstrap: BootstrapConfig
+  workflow_guard: WorkflowGuardConfig
   agents?: OverlayConfigMap
   categories?: OverlayConfigMap
   skills_as_commands: boolean
@@ -60,15 +68,28 @@ export const DEFAULT_CONFIG: SystematicConfig = {
   bootstrap: {
     enabled: true,
   },
+  workflow_guard: {
+    mode: 'observe',
+    debug: false,
+  },
   agents: {},
   categories: {},
   skills_as_commands: true,
 }
 
+interface RawWorkflowGuardConfig {
+  mode?: WorkflowGuardMode
+  debug?: boolean
+}
+
 interface RawSystematicConfig
-  extends Omit<Partial<SystematicConfig>, 'agents' | 'categories'> {
+  extends Omit<
+    Partial<SystematicConfig>,
+    'agents' | 'categories' | 'workflow_guard'
+  > {
   agents?: unknown
   categories?: unknown
+  workflow_guard?: RawWorkflowGuardConfig
 }
 
 interface ConfigSource {
@@ -78,6 +99,8 @@ interface ConfigSource {
 }
 
 const SECURITY_OVERLAY_FIELDS = new Set(SCHEMA_SECURITY_OVERLAY_FIELDS)
+
+const PROJECT_PROTECTED_FIELDS = new Set(['workflow_guard'])
 
 /**
  * The set of currently-bundled skill names. Used to identify removed names
@@ -350,14 +373,12 @@ function loadConfigSource(
   const rawConfig = loadJsoncFile(filePath)
   if (!rawConfig) return null
 
-  const result = SystematicConfigSchema.safeParse(rawConfig)
+  const config =
+    trust === 'project' ? stripProjectProtectedFields(rawConfig) : rawConfig
+
+  const result = SystematicConfigSchema.safeParse(config)
   if (!result.success) {
-    throwTopLevelConfigSchemaError(
-      filePath,
-      trust,
-      result.error.issues,
-      rawConfig,
-    )
+    throwTopLevelConfigSchemaError(filePath, trust, result.error.issues, config)
   }
 
   // Validation succeeded; propagate raw parsed JSONC so the merge layer
@@ -365,7 +386,17 @@ function loadConfigSource(
   // higher-priority empty config does NOT override a lower-priority explicit
   // setting). The schema's defaults are applied by the merge layer via
   // DEFAULT_CONFIG at the top of the spread chain.
-  return { path: filePath, config: rawConfig, trust }
+  return { path: filePath, config, trust }
+}
+
+function stripProjectProtectedFields(
+  rawConfig: RawSystematicConfig,
+): RawSystematicConfig {
+  const config = { ...rawConfig }
+  for (const field of PROJECT_PROTECTED_FIELDS) {
+    delete (config as Record<string, unknown>)[field]
+  }
+  return config
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -458,6 +489,11 @@ export function loadConfigWithSources(
       ...userConfig?.bootstrap,
       ...projectConfig?.bootstrap,
       ...customConfig?.bootstrap,
+    },
+    workflow_guard: {
+      ...DEFAULT_CONFIG.workflow_guard,
+      ...userConfig?.workflow_guard,
+      ...customConfig?.workflow_guard,
     },
     agents: overlayValues(overlays.agents),
     categories: overlayValues(overlays.categories),

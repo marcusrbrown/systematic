@@ -63,6 +63,23 @@ Fields that control provider routing or capability policy — `model`, `variant`
 
 A typo in `agents.<key>`, `disabled_agents`, or `disabled_skills` fails loudly with a clear error that names the offending key — no silent misconfiguration.
 
+## Workflow Guard
+
+The workflow guard records privacy-safe receipts for supported engineering operations and surfaces whether guarded workflow requirements are satisfied. It covers local implementation and verification work, commits, pushes, and GitHub pull-request, check, and review readback when the required Git and GitHub environment is available.
+
+The guard ships in **observe** mode by default. It records and reports workflow state without blocking operations. **Protected** mode is opt-in; it can reject a guarded transition when required evidence is missing or stale. **Disabled** mode turns the guard off for the configured scope.
+
+```json
+{
+  "workflow_guard": {
+    "mode": "observe",
+    "debug": false
+  }
+}
+```
+
+`workflow_guard` is trust-protected. Set it in user configuration (`~/.config/opencode/systematic.json`) or `$OPENCODE_CONFIG_DIR/systematic.json`; project-level `.opencode/systematic.json` cannot set this field.
+
 ## Agent and Category Overlays
 
 Use top-level `agents` and `categories` maps to tune bundled Systematic agents without copying their markdown files into native OpenCode agent definitions.
@@ -490,6 +507,22 @@ Path to a custom bootstrap prompt file
 
 ```json
 ~/.config/opencode/bootstrap.md
+```
+
+
+## workflow_guard
+
+Workflow guard configuration
+
+**Type:** `object`
+**Default:** `{"mode":"observe","debug":false}`
+**Examples:**
+
+```json
+{
+  "mode": "observe",
+  "debug": false
+}
 ```
 
 

@@ -1,6 +1,7 @@
+import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import type { Plugin, PluginInput } from '@opencode-ai/plugin'
 import {
   applyBootstrapContent,
@@ -10,6 +11,15 @@ import {
 } from './lib/bootstrap.js'
 import { loadConfig } from './lib/config.js'
 import { createConfigHandler } from './lib/config-handler.js'
+import {
+  createOpencodeOperationObserver,
+  type OperationObserverResult,
+} from './lib/opencode-operation-observer.js'
+import {
+  createOpencodeWorkflowGuard,
+  isWorkflowGuardBlockedError,
+} from './lib/opencode-workflow-guard.js'
+import { createReceiptClassifier } from './lib/receipt-classifier.js'
 import { createSkillTool } from './lib/skill-tool.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
@@ -19,6 +29,12 @@ const bundledSkillsDir = path.join(packageRoot, 'skills')
 const bundledAgentsDir = path.join(packageRoot, 'agents')
 const bundledCommandsDir = path.join(packageRoot, 'commands')
 const packageJsonPath = path.join(packageRoot, 'package.json')
+const canonicalPackageSource = pathToFileURL(fs.realpathSync(packageRoot)).href
+const registrationSourceIdentity = createHash('sha256')
+  .update(
+    `systematic/opencode-registration-source/v1/${canonicalPackageSource}`,
+  )
+  .digest('hex')
 
 const getPackageVersion = (): string => {
   try {
@@ -31,7 +47,11 @@ const getPackageVersion = (): string => {
   }
 }
 
-const initializePlugin = async ({ client, directory }: PluginInput) => {
+const initializePlugin = async ({
+  client,
+  directory,
+  worktree,
+}: PluginInput) => {
   let hasLoggedInit = false
   const config = loadConfig(directory)
   // Snapshot bootstrap once per plugin init so the cached system prefix stays
@@ -49,6 +69,73 @@ const initializePlugin = async ({ client, directory }: PluginInput) => {
     bundledCommandsDir,
     client,
   })
+  const observer = createOpencodeOperationObserver({
+    targetDirectory: typeof worktree === 'string' ? worktree : directory,
+  })
+  let initialSnapshot: OperationObserverResult
+  try {
+    initialSnapshot = await observer.snapshot()
+  } catch {
+    initialSnapshot = {
+      status: 'unavailable' as const,
+      reasonCode: 'target-unavailable' as const,
+    }
+  }
+  const initialIdentities =
+    initialSnapshot.status === 'available'
+      ? initialSnapshot.snapshot
+      : {
+          targetDigest: observer.targetDigest,
+          repositoryRevisionDigest: observer.targetDigest,
+          worktreeRevisionDigest: observer.targetDigest,
+        }
+  const workflowGuard = createOpencodeWorkflowGuard({
+    config: config.workflow_guard,
+    workspaceIdentity: initialIdentities.targetDigest,
+    repositoryIdentity: initialIdentities.repositoryRevisionDigest,
+    worktreeIdentity: initialIdentities.worktreeRevisionDigest,
+    registrationIdentity: registrationSourceIdentity,
+    observer,
+    classifier: createReceiptClassifier(),
+    hostReadback: {
+      readSessionParts: async (sessionID) => {
+        const messages = client.session.messages.bind(
+          client.session,
+        ) as unknown as (input: {
+          path: { id: string }
+          query?: { directory?: string }
+        }) => Promise<{ data?: unknown }>
+        const response = await messages({
+          path: { id: sessionID },
+          query: { directory },
+        })
+        return Array.isArray(response.data) ? response.data : []
+      },
+      listChildren: async (sessionID) => {
+        const children = client.session.children.bind(
+          client.session,
+        ) as unknown as (input: {
+          path: { id: string }
+          query?: { directory?: string }
+        }) => Promise<{ data?: unknown }>
+        const response = await children({
+          path: { id: sessionID },
+          query: { directory },
+        })
+        if (!Array.isArray(response.data)) return []
+        return response.data.flatMap((entry) => {
+          if (
+            typeof entry !== 'object' ||
+            entry === null ||
+            typeof entry.id !== 'string'
+          ) {
+            return []
+          }
+          return [{ sessionId: entry.id, parentID: entry.parentID }]
+        })
+      },
+    },
+  })
 
   return {
     config: configHandler,
@@ -58,6 +145,31 @@ const initializePlugin = async ({ client, directory }: PluginInput) => {
         bundledSkillsDir,
         disabledSkills: config.disabled_skills,
       }),
+      ...workflowGuard.tools,
+    },
+
+    'tool.execute.before': async (input: unknown, output: unknown) => {
+      try {
+        await workflowGuard.hooks['tool.execute.before'](input, output)
+      } catch (error) {
+        if (isWorkflowGuardBlockedError(error)) throw error
+      }
+    },
+
+    'tool.execute.after': async (input: unknown, output: unknown) => {
+      try {
+        await workflowGuard.hooks['tool.execute.after'](input, output)
+      } catch {
+        // Adapter after hooks are fail-closed and never block the host.
+      }
+    },
+
+    event: async (input: unknown) => {
+      try {
+        await workflowGuard.hooks.event(input)
+      } catch {
+        // Event observation is fail-closed and never blocks the host.
+      }
     },
 
     'experimental.chat.system.transform': async (
@@ -111,6 +223,10 @@ const initializePlugin = async ({ client, directory }: PluginInput) => {
       if (bootstrapContent) {
         applyBootstrapContent(output, bootstrapContent)
       }
+      await workflowGuard.hooks['experimental.chat.system.transform'](
+        _input,
+        output,
+      )
     },
   }
 }

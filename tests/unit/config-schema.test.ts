@@ -60,6 +60,10 @@ describe('SystematicConfigSchema', () => {
         enabled: false,
         file: '/tmp/prompt.md',
       },
+      workflow_guard: {
+        mode: 'protected' as const,
+        debug: true,
+      },
     }
 
     const result = SystematicConfigSchema.safeParse(input)
@@ -76,6 +80,10 @@ describe('SystematicConfigSchema', () => {
       expect(result.data.disabled_commands).toEqual(['cmd-1'])
       expect(result.data.bootstrap.enabled).toBe(false)
       expect(result.data.bootstrap.file).toBe('/tmp/prompt.md')
+      expect(result.data.workflow_guard).toEqual({
+        mode: 'protected',
+        debug: true,
+      })
     }
   })
 
@@ -90,7 +98,11 @@ describe('SystematicConfigSchema', () => {
       expect(result.data.agents).toEqual({})
       expect(result.data.categories).toEqual({})
       expect(result.data.skills_as_commands).toBe(true)
-      // Verify all seven top-level keys exist
+      expect(result.data.workflow_guard).toEqual({
+        mode: 'observe',
+        debug: false,
+      })
+      // Verify all eight top-level keys exist
       expect(Object.keys(result.data).sort()).toEqual([
         'agents',
         'bootstrap',
@@ -99,8 +111,76 @@ describe('SystematicConfigSchema', () => {
         'disabled_commands',
         'disabled_skills',
         'skills_as_commands',
+        'workflow_guard',
       ])
     }
+  })
+
+  describe('workflow_guard', () => {
+    test('defaults mode to observe and debug to false', () => {
+      const result = SystematicConfigSchema.safeParse({})
+      expect(result.success).toBe(true)
+      if (result.success) {
+        expect(result.data.workflow_guard).toEqual({
+          mode: 'observe',
+          debug: false,
+        })
+      }
+    })
+
+    test.each(['observe', 'protected', 'disabled'] as const)(
+      'accepts explicit mode %s',
+      (mode) => {
+        const result = SystematicConfigSchema.safeParse({
+          workflow_guard: { mode },
+        })
+        expect(result.success).toBe(true)
+        if (result.success) {
+          expect(result.data.workflow_guard.mode).toBe(mode)
+          expect(result.data.workflow_guard.debug).toBe(false)
+        }
+      },
+    )
+
+    test('rejects an invalid mode', () => {
+      const result = SystematicConfigSchema.safeParse({
+        workflow_guard: { mode: 'enforced' },
+      })
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        expect(result.error.issues[0]?.path).toEqual(['workflow_guard', 'mode'])
+      }
+    })
+
+    test('rejects a non-boolean debug value', () => {
+      const result = SystematicConfigSchema.safeParse({
+        workflow_guard: { debug: 'yes' },
+      })
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        expect(result.error.issues[0]?.path).toEqual([
+          'workflow_guard',
+          'debug',
+        ])
+      }
+    })
+
+    test('rejects unknown workflow_guard fields', () => {
+      const result = SystematicConfigSchema.safeParse({
+        workflow_guard: { telemetry: true },
+      })
+      expect(result.success).toBe(false)
+      if (!result.success) {
+        const issue = result.error.issues[0] as {
+          code: string
+          keys?: string[]
+          path: (string | number)[]
+        }
+        expect(issue.code).toBe('unrecognized_keys')
+        expect(issue.keys).toContain('telemetry')
+        expect(issue.path).toEqual(['workflow_guard'])
+      }
+    })
   })
 
   describe('skills_as_commands', () => {

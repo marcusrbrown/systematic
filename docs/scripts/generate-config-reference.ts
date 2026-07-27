@@ -43,6 +43,7 @@ const TOP_LEVEL_KEYS = [
   'disabled_agents',
   'disabled_commands',
   'bootstrap',
+  'workflow_guard',
   'skills_as_commands',
 ] as const
 

@@ -385,6 +385,22 @@ describe('per-invocation plugin registration', () => {
       expect(result1.tool.systematic_skill).not.toBe(
         result2.tool.systematic_skill,
       )
+      expect(Object.keys(result1.tool).sort()).toEqual([
+        'systematic_skill',
+        'systematic_workflow_complete',
+        'systematic_workflow_control',
+        'systematic_workflow_start',
+        'systematic_workflow_status',
+      ])
+      expect(result1.tool.systematic_workflow_start).not.toBe(
+        result2.tool.systematic_workflow_start,
+      )
+      expect(result1['tool.execute.before']).not.toBe(
+        result2['tool.execute.before'],
+      )
+      expect(result1['tool.execute.after']).not.toBe(
+        result2['tool.execute.after'],
+      )
       expect(result1.config).not.toBe(result2.config)
       expect(result1['experimental.chat.system.transform']).not.toBe(
         result2['experimental.chat.system.transform'],
@@ -414,13 +430,26 @@ describe('per-invocation plugin registration', () => {
       const plugin2 = await pluginModule.default(input)
 
       const output = { system: ['base system prompt'] }
-      await plugin1['experimental.chat.system.transform']({}, output)
-      await plugin2['experimental.chat.system.transform']({}, output)
+      await plugin1['experimental.chat.system.transform'](
+        { sessionID: 'plugin-session' },
+        output,
+      )
+      await plugin2['experimental.chat.system.transform'](
+        { sessionID: 'plugin-session' },
+        output,
+      )
 
       const joined = output.system.join('\n')
-      const openTagCount = (joined.match(/<SYSTEMATIC_WORKFLOWS>/g) ?? [])
-        .length
-      expect(openTagCount).toBe(1)
+      expect((joined.match(/<SYSTEMATIC_WORKFLOWS>/g) ?? []).length).toBe(1)
+      expect((joined.match(/<SYSTEMATIC_WORKFLOW_GUARD>/g) ?? []).length).toBe(
+        1,
+      )
+      const markerBody = joined.match(
+        /<SYSTEMATIC_WORKFLOW_GUARD>(.*?)<\/SYSTEMATIC_WORKFLOW_GUARD>/s,
+      )?.[1]
+      if (!markerBody) throw new Error('workflow guard marker missing')
+      const marker = JSON.parse(markerBody) as { sources: unknown[] }
+      expect(marker.sources).toHaveLength(2)
     } finally {
       fs.rmSync(tempDir, { recursive: true, force: true })
     }

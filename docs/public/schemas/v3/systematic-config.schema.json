@@ -23,8 +23,11 @@
     "bootstrap": {
       "$ref": "#/definitions/__schema51"
     },
-    "skills_as_commands": {
+    "workflow_guard": {
       "$ref": "#/definitions/__schema57"
+    },
+    "skills_as_commands": {
+      "$ref": "#/definitions/__schema61"
     }
   },
   "additionalProperties": false,
@@ -1314,9 +1317,17 @@
       "type": "string"
     },
     "__schema57": {
-      "default": true,
-      "description": "Register skills discovered from user/project skill directories (OpenCode config and other agent-harness-standard locations) as slash commands. Default true.",
-      "examples": [true, false],
+      "default": {
+        "mode": "observe",
+        "debug": false
+      },
+      "description": "Workflow guard configuration",
+      "examples": [
+        {
+          "mode": "observe",
+          "debug": false
+        }
+      ],
       "allOf": [
         {
           "$ref": "#/definitions/__schema58"
@@ -1324,6 +1335,49 @@
       ]
     },
     "__schema58": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "default": "observe",
+          "description": "Workflow guard mode",
+          "examples": ["observe", "protected", "disabled"],
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema59"
+            }
+          ]
+        },
+        "debug": {
+          "default": false,
+          "description": "Enable workflow guard debugging",
+          "examples": [false, true],
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "__schema59": {
+      "type": "string",
+      "enum": ["observe", "protected", "disabled"]
+    },
+    "__schema60": {
+      "type": "boolean"
+    },
+    "__schema61": {
+      "default": true,
+      "description": "Register skills discovered from user/project skill directories (OpenCode config and other agent-harness-standard locations) as slash commands. Default true.",
+      "examples": [true, false],
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema62"
+        }
+      ]
+    },
+    "__schema62": {
       "type": "boolean"
     }
   }

@@ -11,22 +11,31 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { pathToFileURL } from 'node:url'
 import type { Config, PluginInput } from '@opencode-ai/plugin'
 
 import SystematicPlugin from '../../src/index.js'
-
-const OPENCODE_AVAILABLE = (() => {
-  const result = Bun.spawnSync(['which', 'opencode'])
-  return result.exitCode === 0
-})()
-
-const TIMEOUT_MS = 90_000
-const MAX_RETRIES = 1
-const RETRY_DELAY_MS = 3_000
-const OPENCODE_TEST_MODEL = 'opencode/big-pickle'
-
-const REPO_ROOT = path.resolve(import.meta.dirname, '../..')
+import {
+  assertMixedVersionProbeEvents,
+  assertOk,
+  assertProbeCapturedEvents,
+  buildChildEnv,
+  buildIsolatedOpencodeEnv,
+  cleanupPackedTarball,
+  createIsolatedFixture,
+  createProbePlugin,
+  destroyIsolatedFixture,
+  extractPackagedPlugin,
+  type IsolatedFixture,
+  isProbeToolEvent,
+  MAX_RETRIES,
+  OPENCODE_AVAILABLE,
+  type OpencodeResult,
+  packTarballOnce,
+  parseProbeEvent,
+  REPO_ROOT,
+  runOpencode,
+  TIMEOUT_MS,
+} from './fixtures/receipt-workflow-host.js'
 
 // Snapshot the repo's .opencode tree at module load so tests can assert that
 // live OpenCode subprocesses do not mutate the real repository state.
@@ -42,12 +51,6 @@ type AgentConfig = NonNullable<Config['agent']>[string]
 
 function skillPermission(agent: AgentConfig | undefined): unknown {
   return (agent?.permission as { skill?: unknown } | undefined)?.skill
-}
-
-interface OpencodeResult {
-  stdout: string
-  stderr: string
-  exitCode: number
 }
 
 function snapshotDirectoryTree(rootDir: string): OpencodeTreeSnapshot {
@@ -135,229 +138,6 @@ test('assertTreeUnchanged ignores snapshot entry order', () => {
   }
 })
 
-// Environment variable name patterns whose values must not appear in
-// diagnostic output because they may carry credentials.
-const REDACT_PATTERNS = [/TOKEN/i, /KEY/i, /SECRET/i, /PAT/i, /AUTH/i]
-
-// Variables forwarded from the parent process into isolated OpenCode child
-// processes. Everything else is either overridden by the fixture or dropped.
-const ENV_ALLOWLIST = new Set([
-  'PATH',
-  'HOME',
-  'USER',
-  'LOGNAME',
-  'SHELL',
-  'LANG',
-  'LC_ALL',
-  'LC_CTYPE',
-  'TERM',
-  'TMPDIR',
-  'TMP',
-  'TEMP',
-  // Node/Bun resolution
-  'NODE_PATH',
-  // OpenCode model auth — forwarded so the test model can authenticate.
-  // Token values are redacted from failure diagnostics before surfacing.
-  'ANTHROPIC_API_KEY',
-  'OPENAI_API_KEY',
-  'OPENROUTER_API_KEY',
-  'GOOGLE_API_KEY',
-  'GEMINI_API_KEY',
-  'MISTRAL_API_KEY',
-  'GROQ_API_KEY',
-  'COHERE_API_KEY',
-  'TOGETHER_API_KEY',
-  'FIREWORKS_API_KEY',
-  'PERPLEXITY_API_KEY',
-  'XAI_API_KEY',
-  'DEEPSEEK_API_KEY',
-  'OPENCODE_API_KEY',
-])
-
-function redactSensitive(text: string): string {
-  let result = text
-  for (const [key, value] of Object.entries(process.env)) {
-    if (!value || value.length < 8) continue
-    if (REDACT_PATTERNS.some((pattern) => pattern.test(key))) {
-      result = result.replaceAll(value, '[REDACTED]')
-    }
-  }
-  return result
-}
-
-function buildChildEnv(
-  overrides: Record<string, string>,
-): Record<string, string> {
-  const base: Record<string, string> = {}
-  for (const key of ENV_ALLOWLIST) {
-    const value = process.env[key]
-    if (value !== undefined) {
-      base[key] = value
-    }
-  }
-  return { ...base, ...overrides }
-}
-
-/*
- * Isolation rationale for live OpenCode subprocess tests:
- *
- * OPENCODE_CONFIG_DIR alone is not enough. OpenCode and its plugins resolve
- * config, cache, data, and state through multiple root paths — including HOME
- * (~/.config/opencode, ~/.local/share, etc.) and the XDG base directories.
- * Without overriding all of them, a test process can silently read the
- * developer's real user config or write sessions into the real TUI session
- * list. Each test therefore gets its own temp root with isolated HOME,
- * XDG_CONFIG_HOME, XDG_DATA_HOME, XDG_CACHE_HOME, and XDG_STATE_HOME so
- * OpenCode has no path back to the real user environment.
- */
-interface IsolatedFixture {
-  tempRoot: string
-  projectDir: string
-  configDir: string
-  homeDir: string
-  xdgConfigHome: string
-  xdgDataHome: string
-  xdgCacheHome: string
-  xdgStateHome: string
-}
-
-function createIsolatedFixture(): IsolatedFixture {
-  const tempRoot = fs.mkdtempSync(
-    path.join(os.tmpdir(), 'systematic-opencode-'),
-  )
-  const projectDir = path.join(tempRoot, 'project')
-  const configDir = path.join(tempRoot, 'opencode-config')
-  const homeDir = path.join(tempRoot, 'home')
-  const xdgConfigHome = path.join(tempRoot, 'xdg-config')
-  const xdgDataHome = path.join(tempRoot, 'xdg-data')
-  const xdgCacheHome = path.join(tempRoot, 'xdg-cache')
-  const xdgStateHome = path.join(tempRoot, 'xdg-state')
-
-  for (const dir of [
-    projectDir,
-    configDir,
-    homeDir,
-    xdgConfigHome,
-    xdgDataHome,
-    xdgCacheHome,
-    xdgStateHome,
-  ]) {
-    fs.mkdirSync(dir, { recursive: true })
-  }
-
-  // A minimal package.json makes OpenCode treat this directory as an isolated
-  // project root rather than walking up into the real repository.
-  fs.writeFileSync(
-    path.join(projectDir, 'package.json'),
-    JSON.stringify({
-      name: 'systematic-integration-fixture',
-      private: true,
-      type: 'module',
-    }),
-  )
-
-  return {
-    tempRoot,
-    projectDir,
-    configDir,
-    homeDir,
-    xdgConfigHome,
-    xdgDataHome,
-    xdgCacheHome,
-    xdgStateHome,
-  }
-}
-
-function destroyIsolatedFixture(fixture: IsolatedFixture): void {
-  fs.rmSync(fixture.tempRoot, { recursive: true, force: true })
-}
-
-interface RunOpencodeOptions {
-  fixture: IsolatedFixture
-  configContent: string
-  extraEnv?: Record<string, string>
-}
-
-type ProbeTransformKind = 'chat' | 'title' | 'unknown'
-
-interface ProbeLoadedEvent {
-  type: 'loaded'
-}
-
-interface ProbeSystemEvent {
-  type: 'system'
-  kind: ProbeTransformKind
-  input: Record<string, unknown>
-  system: string[]
-}
-
-interface ProbeToolEvent {
-  type: 'tool'
-  description: string
-  parameters: unknown
-}
-
-type ProbeEvent = ProbeLoadedEvent | ProbeSystemEvent | ProbeToolEvent
-const PROBE_SYSTEM_KINDS = new Set<ProbeTransformKind>([
-  'chat',
-  'title',
-  'unknown',
-])
-
-function isProbeSystemEvent(value: ProbeEvent): value is ProbeSystemEvent {
-  return value.type === 'system'
-}
-
-function isProbeToolEvent(value: ProbeEvent): value is ProbeToolEvent {
-  return value.type === 'tool'
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
-}
-
-function isStringArray(value: unknown): value is string[] {
-  return (
-    Array.isArray(value) && value.every((entry) => typeof entry === 'string')
-  )
-}
-
-function isProbeEvent(value: unknown): value is ProbeEvent {
-  if (!isRecord(value) || typeof value.type !== 'string') return false
-
-  if (value.type === 'loaded') return Object.keys(value).length === 1
-
-  if (value.type === 'system') {
-    return (
-      typeof value.kind === 'string' &&
-      PROBE_SYSTEM_KINDS.has(value.kind as ProbeTransformKind) &&
-      isRecord(value.input) &&
-      isStringArray(value.system)
-    )
-  }
-
-  if (value.type === 'tool') {
-    return typeof value.description === 'string' && 'parameters' in value
-  }
-
-  return false
-}
-
-function parseProbeEvent(line: string, index: number): ProbeEvent {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(line) as unknown
-  } catch (error) {
-    throw new Error(`invalid JSONL capture line ${index + 1}: ${String(error)}`)
-  }
-
-  if (!isProbeEvent(parsed)) {
-    throw new Error(`malformed probe event at line ${index + 1}: ${line}`)
-  }
-
-  return parsed
-}
-
 test('parseProbeEvent rejects invalid system transform kind', () => {
   expect(() =>
     parseProbeEvent(
@@ -371,133 +151,6 @@ test('parseProbeEvent rejects invalid system transform kind', () => {
     ),
   ).toThrow(/malformed probe event/i)
 })
-
-function countWorkflowBlocks(system: readonly string[]): number {
-  return system.reduce(
-    (count, entry) => count + entry.split('<SYSTEMATIC_WORKFLOWS>').length - 1,
-    0,
-  )
-}
-
-function createProbePlugin(fixture: IsolatedFixture): {
-  url: string
-  capturePath: string
-} {
-  const probeDir = path.join(fixture.tempRoot, 'probe-plugin')
-  const probePath = path.join(probeDir, 'index.mjs')
-  const capturePath = path.join(fixture.tempRoot, 'probe-capture.jsonl')
-  fs.mkdirSync(probeDir, { recursive: true })
-  fs.writeFileSync(
-    path.join(probeDir, 'package.json'),
-    JSON.stringify({
-      name: 'systematic-integration-probe',
-      type: 'module',
-      main: './index.mjs',
-    }),
-  )
-  fs.writeFileSync(
-    probePath,
-    `import fs from 'node:fs'
-
-const capturePath = ${JSON.stringify(capturePath)}
-
-function append(entry) {
-  fs.appendFileSync(capturePath, JSON.stringify(entry) + '\\n')
-}
-
-function classifyTransformInput(input) {
-  if (!input || typeof input !== 'object') return 'unknown'
-  if (typeof input.sessionID === 'string' && 'model' in input) return 'chat'
-  if ('model' in input && !('sessionID' in input)) return 'title'
-  return 'unknown'
-}
-
-export default async function probe() {
-  append({ type: 'loaded' })
-  return {
-    'tool.definition': async (input, output) => {
-      if (input.toolID !== 'systematic_skill') return
-      append({
-        type: 'tool',
-        description: output.description,
-        parameters: output.parameters,
-      })
-    },
-    'experimental.chat.system.transform': async (input, output) => {
-      append({ type: 'system', kind: classifyTransformInput(input), input, system: output.system })
-    },
-  }
-}
-`,
-  )
-
-  return { url: pathToFileURL(probeDir).href, capturePath }
-}
-
-function readProbeEvents(capturePath: string): ProbeEvent[] {
-  if (!fs.existsSync(capturePath)) return []
-  const content = fs.readFileSync(capturePath, 'utf8').trim()
-  if (content === '') return []
-  return content
-    .split('\n')
-    .map((line: string, index: number) => parseProbeEvent(line, index))
-}
-
-function assertProbeCapturedEvents(probe: {
-  capturePath: string
-}): ProbeEvent[] {
-  const events = readProbeEvents(probe.capturePath)
-  if (events.length > 0) return events
-
-  throw new Error(
-    `probe plugin did not capture any events at ${probe.capturePath}`,
-  )
-}
-
-function assertOk(result: OpencodeResult): void {
-  if (result.exitCode === 0) return
-  const stdoutTail = redactSensitive(result.stdout.slice(-2000))
-  const stderrTail = redactSensitive(result.stderr.slice(-2000))
-  throw new Error(
-    `opencode exited with code ${result.exitCode}\n` +
-      `--- stdout (tail) ---\n${stdoutTail}\n` +
-      `--- stderr (tail) ---\n${stderrTail}`,
-  )
-}
-
-function assertMixedVersionProbeEvents(events: ProbeEvent[]): void {
-  const systemEvents = events.filter(isProbeSystemEvent)
-  const chatSystemEvents = systemEvents.filter((event) => event.kind === 'chat')
-  const titleSystemEvents = systemEvents.filter(
-    (event) => event.kind === 'title',
-  )
-  expect(chatSystemEvents.length).toBeGreaterThan(0)
-
-  const workflowSystems = chatSystemEvents
-    .map((event) => event.system)
-    .filter((system) => countWorkflowBlocks(system) > 0)
-  expect(workflowSystems.length).toBeGreaterThan(0)
-
-  for (const system of workflowSystems) {
-    expect(countWorkflowBlocks(system)).toBe(1)
-    expect(system[0]).toContain('<SYSTEMATIC_WORKFLOWS>')
-    for (const [index, entry] of system.entries()) {
-      if (index > 0) {
-        expect(entry).not.toContain('<SYSTEMATIC_WORKFLOWS>')
-      }
-    }
-    expect(system[0]).toContain('<available_skills>')
-    expect(system[0]).toMatch(
-      /ce:brainstorm|systematic:git-clean-gone-branches/,
-    )
-  }
-
-  if (titleSystemEvents.length > 0) {
-    for (const event of titleSystemEvents) {
-      expect(countWorkflowBlocks(event.system)).toBe(0)
-    }
-  }
-}
 
 test('assertOk redacts token-like diagnostics while keeping context', () => {
   const originalAnthropicKey = process.env.ANTHROPIC_API_KEY
@@ -672,82 +325,6 @@ test('buildChildEnv ignores parent npm_config env unless explicitly overridden',
   }
 })
 
-/**
- * Narrow child environment shared by every isolated OpenCode subprocess
- * invocation. Overrides all OpenCode config/state paths so the subprocess
- * cannot read or write the real user environment. Security/isolation
- * sensitive -- keep exact variable set and precedence when reusing.
- *
- * Suppresses first-boot side effects irrelevant to plugin tests:
- * autoupdate, LSP download, provider model-list fetch, session-storage
- * prune.
- */
-function buildIsolatedOpencodeEnv(
-  fixture: IsolatedFixture,
-  configContent: string,
-  overrides?: Record<string, string>,
-): Record<string, string> {
-  return buildChildEnv({
-    OPENCODE_DISABLE_AUTOUPDATE: '1',
-    OPENCODE_DISABLE_LSP_DOWNLOAD: '1',
-    OPENCODE_DISABLE_MODELS_FETCH: '1',
-    OPENCODE_DISABLE_PRUNE: '1',
-    ...overrides,
-    HOME: fixture.homeDir,
-    XDG_CONFIG_HOME: fixture.xdgConfigHome,
-    XDG_DATA_HOME: fixture.xdgDataHome,
-    XDG_CACHE_HOME: fixture.xdgCacheHome,
-    XDG_STATE_HOME: fixture.xdgStateHome,
-    OPENCODE_CONFIG_DIR: fixture.configDir,
-    OPENCODE_CONFIG_CONTENT: configContent,
-  })
-}
-
-async function runOpencode(
-  prompt: string,
-  options: RunOpencodeOptions,
-): Promise<OpencodeResult> {
-  const { fixture, configContent, extraEnv } = options
-  const childEnv = buildIsolatedOpencodeEnv(fixture, configContent, extraEnv)
-
-  let lastResult: OpencodeResult = { stdout: '', stderr: '', exitCode: -1 }
-
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    const args = ['opencode', 'run', '--model', OPENCODE_TEST_MODEL, prompt]
-    const result = Bun.spawnSync(args, {
-      cwd: fixture.projectDir,
-      env: childEnv,
-      timeout: TIMEOUT_MS,
-    })
-
-    lastResult = {
-      stdout: result.stdout.toString(),
-      stderr: result.stderr.toString(),
-      exitCode: result.exitCode ?? -1,
-    }
-
-    const isTimeout =
-      lastResult.exitCode === -1 || lastResult.stderr.includes('ETIMEDOUT')
-    const isRateLimit =
-      lastResult.stderr.includes('rate limit') ||
-      lastResult.stderr.includes('429')
-
-    if (!isTimeout && !isRateLimit && lastResult.exitCode === 0) {
-      return lastResult
-    }
-
-    if (attempt < MAX_RETRIES) {
-      const delay = RETRY_DELAY_MS * attempt
-      console.log(
-        `Attempt ${attempt}/${MAX_RETRIES} failed, retrying in ${delay}ms...`,
-      )
-      await Bun.sleep(delay)
-    }
-  }
-
-  return lastResult
-}
-
 function buildSourceLocalConfig(): string {
   const pluginPath = `file://${path.join(REPO_ROOT, 'src/index.ts')}`
   return JSON.stringify({ plugin: [pluginPath] })
@@ -760,102 +337,6 @@ function buildDistLocalConfig(): string {
 
 const DIST_INDEX = path.join(REPO_ROOT, 'dist/index.js')
 const DIST_LOCAL_AVAILABLE = fs.existsSync(DIST_INDEX)
-
-// Suite-scoped: built and packed once in beforeAll, reused by every fixture
-// in the packaged-runtime describe block, removed in afterAll.
-let packedTarballPath: string | null = null
-let packTempDir: string | null = null
-
-/** Build the repo and run `npm pack` exactly once. Throws with build/pack output on failure. */
-function packTarballOnce(): void {
-  const build = Bun.spawnSync(['bun', 'run', 'build'], {
-    cwd: REPO_ROOT,
-    timeout: 120_000,
-  })
-  if (build.exitCode !== 0) {
-    throw new Error(
-      `bun run build failed (exit ${build.exitCode})\n--- stdout ---\n${build.stdout.toString()}\n--- stderr ---\n${build.stderr.toString()}`,
-    )
-  }
-
-  packTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-pack-'))
-  const pack = Bun.spawnSync(
-    ['npm', 'pack', '--pack-destination', packTempDir, '--silent'],
-    { cwd: REPO_ROOT, timeout: 60_000 },
-  )
-  if (pack.exitCode !== 0) {
-    throw new Error(
-      `npm pack failed (exit ${pack.exitCode})\n--- stdout ---\n${pack.stdout.toString()}\n--- stderr ---\n${pack.stderr.toString()}`,
-    )
-  }
-  const tarballName = pack.stdout.toString().trim().split('\n').at(-1)
-  if (!tarballName) throw new Error('npm pack produced no tarball filename')
-
-  packedTarballPath = path.join(packTempDir, tarballName)
-}
-
-function cleanupPackedTarball(): void {
-  if (packTempDir) fs.rmSync(packTempDir, { recursive: true, force: true })
-  packedTarballPath = null
-  packTempDir = null
-}
-
-/** Symlink `packageName` from the repo's resolved `node_modules` into the fixture's. */
-function linkRuntimeDependency(
-  fixture: IsolatedFixture,
-  packageName: string,
-): void {
-  const source = path.join(REPO_ROOT, 'node_modules', packageName)
-  const target = path.join(fixture.projectDir, 'node_modules', packageName)
-  if (!fs.existsSync(source)) {
-    throw new Error(
-      `runtime dependency "${packageName}" declared by the packaged plugin is missing from ${source}`,
-    )
-  }
-  if (fs.existsSync(target)) return
-  fs.mkdirSync(path.dirname(target), { recursive: true })
-  fs.symlinkSync(source, target, 'dir')
-}
-
-/**
- * Extract the suite-scoped tarball into `fixture.projectDir/node_modules/@fro.bot/systematic`
- * and symlink runtime dependencies read from the *extracted* package.json in from the repo's
- * own resolved `node_modules`. No network install.
- */
-function extractPackagedPlugin(fixture: IsolatedFixture): {
-  packageDir: string
-  pluginUrl: string
-} {
-  if (!packedTarballPath) throw new Error('packTarballOnce() has not run')
-
-  const scopeDir = path.join(fixture.projectDir, 'node_modules/@fro.bot')
-  const packageDir = path.join(scopeDir, 'systematic')
-  fs.mkdirSync(scopeDir, { recursive: true })
-
-  const extract = Bun.spawnSync(
-    ['tar', 'xzf', packedTarballPath, '-C', scopeDir],
-    { timeout: 30_000 },
-  )
-  if (extract.exitCode !== 0) {
-    throw new Error(
-      `tar extraction failed (exit ${extract.exitCode}): ${extract.stderr.toString()}`,
-    )
-  }
-  fs.renameSync(path.join(scopeDir, 'package'), packageDir)
-
-  const extractedPackageJson = JSON.parse(
-    fs.readFileSync(path.join(packageDir, 'package.json'), 'utf8'),
-  ) as { dependencies?: Record<string, string> }
-  for (const depName of Object.keys(extractedPackageJson.dependencies ?? {})) {
-    linkRuntimeDependency(fixture, depName)
-  }
-  // @opencode-ai/plugin is a peerDependency, not listed in `dependencies`.
-  linkRuntimeDependency(fixture, '@opencode-ai/plugin')
-
-  // Point at the package root (not dist/index.js directly) so package.json
-  // `main` resolution is exercised, matching a real npm-spec plugin load.
-  return { packageDir, pluginUrl: pathToFileURL(packageDir).href }
-}
 
 function expectSetupSkillLoaded(result: OpencodeResult): void {
   assertOk(result)

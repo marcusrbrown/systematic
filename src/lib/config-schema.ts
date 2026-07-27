@@ -97,6 +97,33 @@ const modeSchema = z.enum(['subagent', 'primary', 'all'] as const).meta({
   examples: ['subagent', 'primary', 'all'],
 })
 
+const workflowGuardModeSchema = z.enum([
+  'observe',
+  'protected',
+  'disabled',
+] as const)
+
+export const WorkflowGuardSchema = z
+  .object({
+    mode: workflowGuardModeSchema.default('observe').meta({
+      description: 'Workflow guard mode',
+      examples: ['observe', 'protected', 'disabled'],
+    }),
+    debug: z
+      .boolean()
+      .default(false)
+      .meta({
+        description: 'Enable workflow guard debugging',
+        examples: [false, true],
+      }),
+  })
+  .strict()
+  .default({ mode: 'observe', debug: false })
+  .meta({
+    description: 'Workflow guard configuration',
+    examples: [{ mode: 'observe', debug: false }],
+  })
+
 /**
  * Color schema as a union of named tokens and hex literals.
  * Using z.union() + z.enum() + .regex() instead of .refine() so both branches
@@ -376,6 +403,7 @@ export function createSystematicConfigSchema(
           { enabled: false, file: '.opencode/custom-prompt.md' },
         ],
       }),
+      workflow_guard: WorkflowGuardSchema,
       skills_as_commands: z
         .boolean()
         .default(true)
