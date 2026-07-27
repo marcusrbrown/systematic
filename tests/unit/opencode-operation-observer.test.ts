@@ -527,11 +527,13 @@ describe('OpenCode operation observer', () => {
     const fixture = createGitFixture()
     const realRoot = fs.realpathSync(fixture.root)
     const linkPath = path.join(realRoot, 'link.txt')
-    const outsideTarget = path.join(
-      os.tmpdir(),
-      `systematic-observer-link-target-${Date.now()}.txt`,
+    // Use mkdtempSync for a unique, randomly-named temp directory to avoid
+    // insecure predictable temp-file creation flagged by CodeQL.
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-observer-symlink-'),
     )
-    const secondOutsideTarget = `${outsideTarget}.second`
+    const outsideTarget = path.join(tempDir, 'link-target-one.txt')
+    const secondOutsideTarget = path.join(tempDir, 'link-target-two.txt')
     const opened: string[] = []
     try {
       fs.writeFileSync(outsideTarget, 'one\n')
@@ -563,8 +565,7 @@ describe('OpenCode operation observer', () => {
         initial.snapshot.worktreeRevisionDigest,
       )
     } finally {
-      fs.rmSync(outsideTarget, { force: true })
-      fs.rmSync(secondOutsideTarget, { force: true })
+      fs.rmSync(tempDir, { recursive: true, force: true })
       fixture.cleanup()
     }
   })

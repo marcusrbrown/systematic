@@ -56,12 +56,17 @@ function snapshotRepositoryTree(): RepositorySnapshot {
   const tracked = new Map<string, string>()
   for (const filePath of trackedOutput.split('\0').filter(Boolean)) {
     const absolutePath = path.join(REPO_ROOT, filePath)
-    const stat = fs.lstatSync(absolutePath)
-    const value = stat.isSymbolicLink()
-      ? `symlink:${fs.readlinkSync(absolutePath)}`
-      : `file:${createHash('sha256')
-          .update(fs.readFileSync(absolutePath))
-          .digest('hex')}:${stat.size}`
+    // Use readlinkSync to detect symlinks without a separate lstatSync, avoiding
+    // a TOCTOU race between stat and read that CodeQL flags as a security issue.
+    let value: string
+    try {
+      const linkTarget = fs.readlinkSync(absolutePath)
+      value = `symlink:${linkTarget}`
+    } catch {
+      // Not a symlink — read file content directly (single atomic operation)
+      const content = fs.readFileSync(absolutePath)
+      value = `file:${createHash('sha256').update(content).digest('hex')}:${content.byteLength}`
+    }
     tracked.set(filePath, value)
   }
   return { status, tracked }
