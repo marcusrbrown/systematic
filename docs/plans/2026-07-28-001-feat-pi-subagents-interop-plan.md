@@ -140,7 +140,7 @@ Increment 2 (runtime detection) — src/pi.ts, best-effort/non-fatal:
 
 ### Phase 1 — Opt-in export + setup + docs (shippable increment)
 
-- [ ] **Unit 1: Persona export generator (pure core)**
+- [x] **Unit 1: Persona export generator (pure core)**
 
 **Goal:** A pure generator that reads a curated persona subset from `agents/`, runs compatibility screening (info/warning/critical), excludes critical-coupled personas, lightly adapts only surface token references, and produces sanitized, namespaced, model-free `systematic-<name>.md` content + a manifest recording per-persona compatibility status — with a `--check` drift mode. No writes to user dirs yet (returns content/structures).
 
