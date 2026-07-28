@@ -59,17 +59,16 @@ const PACKAGE_JSON_PATH = path.join(PROJECT_ROOT, 'package.json')
  * range specifier (`^`, `~`). An exact pin (no specifier) is expected and
  * validated; a range specifier produces a warning but does not fail.
  */
-function readPinnedVersion(): string {
+export function readPinnedVersion(packageJsonPath?: string): string {
+  const pkgPath = packageJsonPath ?? PACKAGE_JSON_PATH
   let pkg: Record<string, unknown>
   try {
-    pkg = JSON.parse(fs.readFileSync(PACKAGE_JSON_PATH, 'utf-8')) as Record<
+    pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf-8')) as Record<
       string,
       unknown
     >
   } catch (err) {
-    throw new Error(
-      `Failed to read ${PACKAGE_JSON_PATH}: ${(err as Error).message}`,
-    )
+    throw new Error(`Failed to read ${pkgPath}: ${(err as Error).message}`)
   }
 
   const devDeps = pkg.devDependencies
@@ -131,7 +130,7 @@ function generateSkillContent(): string {
  * Returns the content unchanged if no frontmatter block is found or if
  * `hidden: true` is not present.
  */
-function stripHiddenFromFrontmatter(content: string): string {
+export function stripHiddenFromFrontmatter(content: string): string {
   const FRONTMATTER_REGEX = /^---\n([\s\S]*?\n)---\n/
 
   const match = content.match(FRONTMATTER_REGEX)
@@ -167,7 +166,10 @@ const ATTRIBUTIONS_SECTION_HEADING = '## vercel-labs/agent-browser — Apache-2.
  * No other text is altered. The Apache license body is untouched (it uses
  * "Version 2.0" without backticks and without the semver `vX.Y.Z` form).
  */
-function applyVersionToAttributions(content: string, version: string): string {
+export function applyVersionToAttributions(
+  content: string,
+  version: string,
+): string {
   const startIdx = content.indexOf(ATTRIBUTIONS_SECTION_HEADING)
   if (startIdx === -1) {
     throw new Error(
@@ -198,7 +200,7 @@ function applyVersionToAttributions(content: string, version: string): string {
 /**
  * Normalize content for comparison: collapse CRLF and trim trailing whitespace.
  */
-function normalizeForCompare(content: string): string {
+export function normalizeForCompare(content: string): string {
   return content.replace(/\r\n/g, '\n').replace(/\s+$/, '')
 }
 
