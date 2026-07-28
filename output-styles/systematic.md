@@ -1,6 +1,6 @@
 ---
 name: systematic
-description: Structured engineering workflows for Claude Code via the Systematic plugin.
+description: Compound-engineering loops (brainstorm, plan, work, review) via the Systematic plugin.
 force-for-plugin: true
 ---
 
