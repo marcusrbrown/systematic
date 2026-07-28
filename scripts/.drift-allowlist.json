@@ -30,6 +30,11 @@
       "pathGlob": "skills/using-systematic/references/claude-code-profile.md",
       "patterns": ["Claude Code", "AskUserQuestion", "TaskCreate", ".claude/"],
       "reason": "Harness-native identifiers verified in HARNESSES.md [CC-2][CC-3][CC-4][CC-5][CC-6]; profile files under skills/using-systematic/references/*-profile.md are the designated home for exact harness capability names."
+    },
+    {
+      "pathGlob": "skills/agent-browser/SKILL.md",
+      "patterns": ["Claude Code"],
+      "reason": "Upstream agent-browser package lists 'Claude Code' as one of many AI agents it supports (alongside Cursor, Codex, Continue, Windsurf). This is vendored third-party content copied verbatim from agent-browser@0.33.0 — not an intentional reintroduction of CC coupling. Regenerated automatically from the pinned package; see ATTRIBUTIONS.md."
     }
   ]
 }
