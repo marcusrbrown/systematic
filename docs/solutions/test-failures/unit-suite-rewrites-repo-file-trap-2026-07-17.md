@@ -93,3 +93,5 @@ into a test failure instead of a silent flip-flop.
   — generator self-write / stale-read boundaries for build-time codegen.
 - `docs/solutions/best-practices/auto-generated-install-commands-mdx-pitfalls-2026-06-06.md`
   — docs-generator + MDX unit-testability adjacency.
+- `docs/solutions/test-failures/unguarded-generator-main-repairs-drift-when-imported-by-tests-2026-07-28.md`
+  — sibling variant: same "tests mutate committed files" family, but the write is an import-time side effect of a missing `import.meta.main` guard (not an explicit invocation against the real path).

@@ -212,3 +212,4 @@ Draft #1 came back at 6,490 bytes (490 over the 6,000-byte ceiling), all other c
 - [`docs/solutions/integration-issues/converter-code-block-tool-name-capitalization-20260210.md`](../integration-issues/converter-code-block-tool-name-capitalization-20260210.md) — manual audit backstop after mechanical conversion.
 - [`ATTRIBUTIONS.md`](../../../ATTRIBUTIONS.md) — the canonical attribution surface in this repo, structured per this guidance.
 - PR [#394](https://github.com/marcusrbrown/systematic/pull/394) — the merge that landed both bundled skills + the distilled CC-BY-4.0 reference + ATTRIBUTIONS.md.
+- [`docs/solutions/best-practices/vendor-npm-packaged-skill-as-generated-artifact-2026-07-28.md`](vendor-npm-packaged-skill-as-generated-artifact-2026-07-28.md) — the automatic counterpart to this manual model: when upstream ships the asset in its npm tarball, vendor it as a generated, drift-gated artifact instead of hand-adapting on each refresh.
