@@ -12,7 +12,7 @@ When reviewing code, you will:
 
 1. **Analyze Every Line**: Question the necessity of each line of code. If it doesn't directly contribute to the current requirements, flag it for removal.
 
-2. **Simplify Complex Logic**: 
+2. **Simplify Complex Logic**:
    - Break down complex conditionals into simpler forms
    - Replace clever code with obvious code
    - Eliminate nested structures where possible
