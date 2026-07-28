@@ -3,7 +3,7 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="./assets/banner.svg">
   <source media="(prefers-color-scheme: light)" srcset="./assets/banner.svg">
-  <img alt="Systematic — Compound-Engineering Workflows for OpenCode, Pi, and Claude Code" src="./assets/banner.svg" width="100%">
+  <img alt="Systematic — Compound-Engineering Loops for OpenCode, Pi, and Claude Code" src="./assets/banner.svg" width="100%">
 </picture>
 
 <br><br>
@@ -29,7 +29,7 @@ You want AI that follows your process, not just your prompts. You want repeatabl
 
 ## What You Get
 
-Systematic is a compound-engineering workflow: brainstorm, plan, work, review — each phase a structured skill that guides the AI through requirements exploration, implementation planning, execution, and code review, capturing what was learned along the way. It ships 31 bundled skills and 37 specialized agents for architecture, security, performance, design, and code review.
+Systematic is a compound-engineering loop: brainstorm, plan, work, review — each phase a structured skill that guides the AI through requirements exploration, implementation planning, execution, and code review, capturing what was learned along the way. It ships 31 bundled skills and 37 specialized agents for architecture, security, performance, design, and code review.
 
 The workflow runs on three harnesses from one source: [OpenCode](https://opencode.ai/), [Pi](https://github.com/earendil-works/pi-coding-agent), and Claude Code. Each gets a native install path; skill and agent content is identical across all three.
 

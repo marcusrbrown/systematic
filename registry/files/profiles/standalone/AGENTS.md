@@ -1,6 +1,6 @@
 # Standalone Systematic Profile
 
-This profile provides **Systematic's structured engineering workflows** — brainstorming, planning, code review, and disciplined execution — without additional agents or plugins.
+This profile provides **Systematic's compound-engineering loops** — brainstorming, planning, code review, and disciplined execution — without additional agents or plugins.
 
 ## What's Included
 

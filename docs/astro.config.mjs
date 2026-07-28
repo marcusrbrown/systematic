@@ -44,7 +44,7 @@ export default defineConfig({
       title: 'Systematic',
       favicon: '/favicon.svg',
       description:
-        'Systematic is a compound-engineering workflow — brainstorm, plan, work, and review — delivered as bundled skills and agents for OpenCode, Pi, and Claude Code.',
+        'Systematic is a compound-engineering loop — brainstorm, plan, work, and review — delivered as bundled skills and agents for OpenCode, Pi, and Claude Code.',
       head: [
         {
           tag: 'meta',
@@ -103,7 +103,7 @@ export default defineConfig({
             '@type': 'SoftwareSourceCode',
             name: 'Systematic',
             description:
-              'A compound-engineering workflow — brainstorm, plan, work, and review — delivered as bundled skills and agents for OpenCode, Pi, and Claude Code.',
+              'A compound-engineering loop — brainstorm, plan, work, and review — delivered as bundled skills and agents for OpenCode, Pi, and Claude Code.',
             codeRepository: 'https://github.com/marcusrbrown/systematic',
             license: 'https://opensource.org/licenses/MIT',
             programmingLanguage: 'TypeScript',

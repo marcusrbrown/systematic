@@ -7,7 +7,7 @@
   "plugins": [
     {
       "name": "systematic",
-      "description": "Structured engineering workflows for Claude Code.",
+      "description": "Compound-engineering loops for OpenCode, Pi, and Claude Code",
       "source": {
         "source": "github",
         "repo": "marcusrbrown/systematic",

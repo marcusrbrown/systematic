@@ -1,6 +1,6 @@
 # Architecture
 
-> Systematic provides structured engineering workflows for AI-powered development, delivered natively
+> Systematic provides compound-engineering loops (brainstorm, plan, work, review) for AI-powered development, delivered natively
 > to three harnesses — OpenCode, Pi, and Claude Code — from one source tree.
 > This document describes the high-level structure; for file locations and naming conventions see `STRUCTURE.md`,
 > and for contributor guidelines see `AGENTS.md`.

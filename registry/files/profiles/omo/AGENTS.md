@@ -2,7 +2,7 @@
 
 This profile provides a **powerful combined system** that brings together:
 - **Oh My OpenAgent (OMO)** — Multi-agent orchestration, parallel research, and advanced tooling
-- **Systematic** — Structured engineering workflows for disciplined execution
+- **Systematic** — Compound-engineering loops for disciplined execution
 
 Best for engineers who want both raw agent power AND enforced process discipline.
 

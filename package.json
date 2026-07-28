@@ -1,7 +1,7 @@
 {
   "name": "@fro.bot/systematic",
   "version": "0.0.0-semantic-release",
-  "description": "Structured engineering workflows for OpenCode",
+  "description": "Compound-engineering loops for OpenCode, Pi, and Claude Code",
   "type": "module",
   "homepage": "https://fro.bot/systematic",
   "main": "./dist/index.js",
