@@ -81,7 +81,7 @@ export interface ClaudePluginManifest {
 export function buildPluginManifest(_rootDir: string): ClaudePluginManifest {
   return {
     name: 'systematic',
-    description: 'Structured engineering workflows for Claude Code.',
+    description: 'Compound-engineering loops for OpenCode, Pi, and Claude Code',
     author: { name: 'Marcus R. Brown', email: 'human@fro.bot' },
   }
 }
@@ -138,7 +138,7 @@ ${profileContent}`
   const frontmatter = formatFrontmatter({
     name: 'systematic',
     description:
-      'Structured engineering workflows for Claude Code via the Systematic plugin.',
+      'Compound-engineering loops (brainstorm, plan, work, review) via the Systematic plugin.',
     'force-for-plugin': true,
   })
 

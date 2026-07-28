@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640">
-  <title>Systematic — Compound-Engineering Workflows for OpenCode, Pi, and Claude Code</title>
-  <desc>Banner for Systematic featuring compound-engineering workflows (brainstorm, plan, work, review) delivered as skills and agents for OpenCode, Pi, and Claude Code.</desc>
+  <title>Systematic — Compound-Engineering Loops for OpenCode, Pi, and Claude Code</title>
+  <desc>Banner for Systematic featuring compound-engineering loops (brainstorm, plan, work, review) delivered as skills and agents for OpenCode, Pi, and Claude Code.</desc>
   
   <defs>
     <!-- Gradient inspired by Fro Bot's afro (blue-purple) -->
@@ -110,7 +110,7 @@
       fill="#B2F5EA" 
       text-anchor="middle"
     >
-      Compound-Engineering Workflows for OpenCode, Pi, and Claude Code
+      Compound-Engineering Loops for OpenCode, Pi, and Claude Code
     </text>
     
     <!-- Feature pills (tighter grouping: -140, 0, 140) -->

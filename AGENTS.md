@@ -4,7 +4,7 @@
 
 ## Overview
 
-Systematic is an OpenCode plugin providing structured engineering workflows for AI-powered development. It ships as an npm package with two distinct parts: TypeScript source (`src/`) for plugin logic and bundled Markdown assets (`skills/`, `agents/`) for content. Full architectural detail lives in [`ARCHITECTURE.md`](ARCHITECTURE.md); directory layout and where to add new code lives in [`STRUCTURE.md`](STRUCTURE.md). This file covers contributor conventions, commands, and anti-patterns.
+Systematic is a plugin providing compound-engineering loops (brainstorm, plan, work, review) for OpenCode, Pi, and Claude Code. It ships as an npm package with two distinct parts: TypeScript source (`src/`) for plugin logic and bundled Markdown assets (`skills/`, `agents/`) for content. Full architectural detail lives in [`ARCHITECTURE.md`](ARCHITECTURE.md); directory layout and where to add new code lives in [`STRUCTURE.md`](STRUCTURE.md). This file covers contributor conventions, commands, and anti-patterns.
 
 ## For Architecture Questions
 

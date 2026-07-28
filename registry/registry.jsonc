@@ -612,7 +612,7 @@
     {
       "name": "standalone",
       "type": "profile",
-      "description": "Standalone Systematic profile — structured engineering workflows with zero extra configuration",
+      "description": "Standalone Systematic profile — compound-engineering loops with zero extra configuration",
       "files": [
         {
           "path": "registry/files/profiles/standalone/opencode.jsonc",
@@ -654,7 +654,7 @@
     {
       "name": "plugin",
       "type": "plugin",
-      "description": "Systematic OpenCode plugin — registers skills, agents, commands, and bootstrap prompt",
+      "description": "Systematic plugin — registers skills, agents, commands, and bootstrap prompt",
       "files": [],
       "opencode": {
         "plugins": {
