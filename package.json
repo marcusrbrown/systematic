@@ -49,6 +49,8 @@
     "docs:generate": "bun docs/scripts/generate-stats.ts && bun docs/scripts/transform-content.ts && bun scripts/generate-config-schema.ts && bun docs/scripts/generate-config-reference.ts",
     "schema:generate": "bun scripts/generate-config-schema.ts",
     "schema:drift": "bun scripts/generate-config-schema.ts --check",
+    "agent-browser:build": "bun scripts/generate-agent-browser-skill.ts",
+    "agent-browser:drift": "bun scripts/generate-agent-browser-skill.ts --check",
     "registry:build": "bun scripts/build-registry.ts",
     "registry:drift": "bun scripts/generate-registry.ts --check",
     "registry:validate": "bun scripts/build-registry.ts --validate-only",
@@ -88,6 +90,7 @@
     }
   },
   "devDependencies": {
+    "agent-browser": "0.33.0",
     "@biomejs/biome": "2.5.5",
     "@earendil-works/pi-coding-agent": "0.80.10",
     "@opencode-ai/plugin": "1.18.5",

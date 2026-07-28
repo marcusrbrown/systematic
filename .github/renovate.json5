@@ -48,7 +48,13 @@
     },
   ],
   postUpgradeTasks: {
-    commands: ['bun install', 'bun run fix'],
+    // `bun run fix` runs Biome lint --fix to auto-correct formatting drift.
+    // `bun run agent-browser:build` regenerates skills/agent-browser/SKILL.md from the
+    // pinned package so an agent-browser bump lands the new stub in the same Renovate PR.
+    // Note: if the Renovate runner's postUpgrade allowlist does not permit
+    // `bun run agent-browser:build`, the CI `agent-browser:drift` gate is the backstop
+    // and will fail the PR until the skill is regenerated manually.
+    commands: ['bun install', 'bun run agent-browser:build', 'bun run fix'],
     executionMode: 'branch',
   },
 }

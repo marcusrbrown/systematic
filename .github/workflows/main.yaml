@@ -86,6 +86,9 @@ jobs:
       - name: Claude Code plugin build + integrity
         run: bun run claude-code:build
 
+      - name: agent-browser skill drift check
+        run: bun run agent-browser:drift
+
       - name: Registry drift check
         run: bun run registry:drift
 
