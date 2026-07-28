@@ -29,8 +29,10 @@ import {
 } from './receipt-ledger.js'
 import {
   extractReceiptReadbackSeed,
+  filterMarkersByRegistration,
   projectReceiptMintMarker,
   projectReceiptProgressionMarker,
+  validateReceiptMarker,
 } from './receipt-readback.js'
 import {
   createWorkflowGuard,
@@ -351,6 +353,13 @@ const statusToolSchema = z.object(statusToolShape).strict()
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** Decodes a 64-char lowercase hex session salt string to Uint8Array. */
+function decodeSessionSaltBytes(hex: string): Uint8Array | undefined {
+  if (typeof hex !== 'string' || hex.length !== 64 || !/^[0-9a-f]+$/.test(hex))
+    return undefined
+  return Uint8Array.from(Buffer.from(hex, 'hex'))
 }
 
 function boundedString(value: unknown, maxLength: number): value is string {
@@ -1158,7 +1167,74 @@ function createSessionRuntime(
     )
   }
 
+  /** Extract a candidate { salt, digest } from a seeded marker, or undefined. */
+  function candidateSeedFromMarker(
+    input: unknown,
+  ): { salt: Uint8Array; digest: string } | undefined {
+    const validation = validateReceiptMarker(input)
+    if (validation.status !== 'valid') return undefined
+    const marker = validation.marker
+    if (marker.kind === 'mint') {
+      const salt = decodeSessionSaltBytes(marker.sessionSalt)
+      return salt
+        ? { salt, digest: marker.envelope.registrationDigest }
+        : undefined
+    }
+    if (marker.kind === 'control' && marker.control === 'progression') {
+      const salt = decodeSessionSaltBytes(marker.sessionSalt)
+      return salt ? { salt, digest: marker.registrationDigest } : undefined
+    }
+    return undefined
+  }
+
+  /** Test whether a candidate salt agrees with this registration's identity. */
+  function candidateAgreesWithOwnIdentity(
+    salt: Uint8Array,
+    digest: string,
+  ): boolean {
+    try {
+      const probe = createReceiptLedger({
+        capabilityFlags: ['workflow-guard'],
+        registrationIdentity: options.registrationIdentity,
+        sessionSalt: salt,
+      })
+      return probe.metadata.registrationDigest === digest
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * Finds the registrationDigest that belongs to THIS registration by scanning
+   * validated markers for candidate seeds and checking which one agrees with
+   * options.registrationIdentity. Returns undefined if no own seed is found.
+   *
+   * Known limitation: if the same canonical plugin source registers twice with
+   * different session salts (producing two distinct (identity, salt) → digest pairs
+   * for the same registrationIdentity string), this function picks whichever seed
+   * appears first in the markers array. This is sound for the primary dual-registration
+   * scenario where the two registrations have distinct canonical identities (different
+   * `options.registrationIdentity` values, e.g. published package vs repo path).
+   * Multiple-salt registration from a single canonical identity is a known limitation
+   * of this design and is not addressed here.
+   */
+  function resolveOwnRegistrationDigest(
+    markers: readonly unknown[],
+  ): string | undefined {
+    const seenDigests = new Set<string>()
+    for (const input of markers) {
+      const candidate = candidateSeedFromMarker(input)
+      if (!candidate || seenDigests.has(candidate.digest)) continue
+      seenDigests.add(candidate.digest)
+      if (candidateAgreesWithOwnIdentity(candidate.salt, candidate.digest)) {
+        return candidate.digest
+      }
+    }
+    return undefined
+  }
+
   function recoverPersistedMarkers(markers: readonly unknown[]): boolean {
+    // Callers must pass pre-filtered (own-registration) markers.
     const seed = extractReceiptReadbackSeed(markers)
     if (seed.status !== 'ready') return false
     let recoveredLedger: ReceiptLedger
@@ -1196,6 +1272,84 @@ function createSessionRuntime(
     return true
   }
 
+  type OwnMarkersClassification =
+    | { readonly kind: 'own'; readonly markers: readonly unknown[] }
+    | { readonly kind: 'foreign-empty' }
+    | { readonly kind: 'ambiguous' }
+
+  /**
+   * Classifies markers collected from session parts into three outcomes:
+   *
+   * - 'own': at least one valid own seed marker found; contains filtered own markers.
+   * - 'foreign-empty': every marker is a valid, salt-bearing marker that does NOT
+   *   agree with this registration's identity. Safe to treat as empty history.
+   * - 'ambiguous': own digest unresolvable AND ≥1 marker is malformed/invalid OR
+   *   seedless (consume). Cannot prove the markers don't include corrupted own state.
+   *   Must fail closed — never degrade to publishFresh / benign no-op.
+   *
+   * This correctly distinguishes genuinely-foreign marker arrays (safe → fresh) from
+   * own-state-loss / corruption scenarios (unsafe → fail closed).
+   */
+  function classifyMarkersFromParts(
+    parts: ReadonlyArray<unknown>,
+  ): OwnMarkersClassification {
+    const allMarkers: unknown[] = []
+    for (const part of parts) collectReceiptMarkers(part, allMarkers)
+    if (allMarkers.length === 0) return { kind: 'foreign-empty' }
+
+    const ownDigest = resolveOwnRegistrationDigest(allMarkers)
+    if (ownDigest !== undefined) {
+      return {
+        kind: 'own',
+        markers: filterMarkersByRegistration(allMarkers, ownDigest),
+      }
+    }
+
+    // Own digest not resolvable. Determine if every marker is provably foreign, or
+    // if any is ambiguous (malformed or seedless) and therefore could be corrupted own.
+    //
+    // Provably foreign: passes validateReceiptMarker AND is seed-bearing (mint or
+    //   progression — has a sessionSalt) AND candidateAgreesWithOwnIdentity is false.
+    //   Since resolveOwnRegistrationDigest found no match, every valid seed-bearing
+    //   marker already failed the agreement check.
+    //
+    // Ambiguous: malformed/invalid (cannot read) OR valid but seedless (consume
+    //   marker — carries registrationDigest but no sessionSalt, so we cannot run
+    //   the identity agreement check). Ambiguous markers MUST trigger fail-closed.
+    for (const input of allMarkers) {
+      const validation = validateReceiptMarker(input)
+      if (validation.status !== 'valid') {
+        // Malformed/invalid: could be a corrupted own marker → fail closed
+        return { kind: 'ambiguous' }
+      }
+      const candidate = candidateSeedFromMarker(input)
+      if (candidate === undefined) {
+        // Valid but seedless (consume marker, kind='control' control='consume'):
+        // registrationDigest is present but sessionSalt is absent — cannot verify
+        // ownership without a salt → fail closed
+        return { kind: 'ambiguous' }
+      }
+      // Valid seed-bearing (mint/progression): since resolveOwnRegistrationDigest
+      // returned undefined, this marker's (salt, digest) does not agree with our
+      // identity → provably foreign. Continue scanning.
+    }
+
+    // Every marker was valid, seed-bearing, and provably foreign.
+    return { kind: 'foreign-empty' }
+  }
+
+  function publishEmptyMarkers(
+    parts: ReadonlyArray<unknown>,
+    allowFresh: boolean,
+  ): void {
+    if (allowFresh && !parts.some((part) => containsGuardHistory(part))) {
+      publishFresh()
+    } else {
+      retryableEmptyHistory = true
+      publishUnavailable()
+    }
+  }
+
   async function initializeSession(
     sessionID: string,
     allowFresh: boolean,
@@ -1212,18 +1366,23 @@ function createSessionRuntime(
       publishUnavailable()
       return
     }
-    const markers: unknown[] = []
-    for (const part of parts) collectReceiptMarkers(part, markers)
-    if (markers.length === 0) {
-      if (allowFresh && !parts.some((part) => containsGuardHistory(part))) {
-        publishFresh()
-      } else {
-        retryableEmptyHistory = true
-        publishUnavailable()
-      }
+    const classification = classifyMarkersFromParts(parts)
+    if (classification.kind === 'ambiguous') {
+      // Cannot determine whether markers include corrupted own state → fail closed.
+      // Do NOT use retryableEmptyHistory here; this is a corruption signal, not a
+      // transient empty-history state.
+      publishUnavailable()
       return
     }
-    if (!recoverPersistedMarkers(markers)) publishUnavailable()
+    if (classification.kind === 'foreign-empty') {
+      // No own markers: either no history at all, or all markers are provably
+      // foreign (dual-registration, other registrations only). Use the normal
+      // empty-history path (publishFresh or publishUnavailable based on history check).
+      publishEmptyMarkers(parts, allowFresh)
+      return
+    }
+    // kind === 'own': recover from filtered own markers.
+    if (!recoverPersistedMarkers(classification.markers)) publishUnavailable()
   }
 
   async function recoverFromHost(
@@ -1274,10 +1433,17 @@ function createSessionRuntime(
       markUnavailable()
       return
     }
-    const markers: unknown[] = []
-    for (const part of parts) collectReceiptMarkers(part, markers)
-    if (markers.length === 0) return
-    const seed = extractReceiptReadbackSeed(markers)
+    // Classify child session markers: own (filter and recover), foreign-empty
+    // (benign no-op — no receipts to roll up), or ambiguous (corrupted/seedless
+    // markers that cannot be verified as foreign → fail closed).
+    const classification = classifyMarkersFromParts(parts)
+    if (classification.kind === 'foreign-empty') return
+    if (classification.kind === 'ambiguous') {
+      markUnavailable()
+      return
+    }
+    const ownMarkers = classification.markers
+    const seed = extractReceiptReadbackSeed(ownMarkers)
     if (seed.status !== 'ready') {
       markUnavailable()
       return
@@ -1291,7 +1457,7 @@ function createSessionRuntime(
       markUnavailable()
       return
     }
-    const recovered = childLedger.recoverReadback(markers)
+    const recovered = childLedger.recoverReadback(ownMarkers)
     if (recovered.status === 'rejected') {
       markUnavailable()
       return

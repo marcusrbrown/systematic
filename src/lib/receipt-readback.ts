@@ -985,6 +985,38 @@ function seedFromMarker(marker: ReceiptMarker):
   }
 }
 
+/**
+ * Extracts the registrationDigest from a validated marker.
+ * Returns undefined for unknown/malformed shapes.
+ */
+function registrationDigestFromMarker(marker: ReceiptMarker): string {
+  if (marker.kind === 'mint') return marker.envelope.registrationDigest
+  return marker.registrationDigest
+}
+
+/**
+ * Filters a raw marker array, retaining only markers that belong to the given
+ * registrationDigest. Markers that cannot be parsed (malformed, unknown schema,
+ * etc.) are retained as-is so that downstream callers can fail-closed on them.
+ *
+ * Use this before extractReceiptReadbackSeed / foldReceiptReadback when the
+ * shared metadata array may contain markers from multiple concurrent
+ * registrations (e.g. dual-registration in a single OpenCode session).
+ */
+export function filterMarkersByRegistration(
+  markers: readonly unknown[],
+  ownRegistrationDigest: string,
+): unknown[] {
+  return markers.filter((input) => {
+    const validation = validateReceiptMarker(input)
+    // Cannot parse → retain fail-closed (caller will reject it)
+    if (validation.status !== 'valid') return true
+    return (
+      registrationDigestFromMarker(validation.marker) === ownRegistrationDigest
+    )
+  })
+}
+
 export function extractReceiptReadbackSeed(
   inputs: readonly unknown[],
 ): ReceiptReadbackSeedResult {
