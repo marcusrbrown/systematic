@@ -70,3 +70,4 @@ The registry is the source of truth for OCX component installation. A stale desc
 - `scripts/generate-registry.ts` — the generator script
 - `registry/registry.jsonc` — the generated output
 - PR #418 — where this gap was caught
+- [`docs/solutions/best-practices/vendor-npm-packaged-skill-as-generated-artifact-2026-07-28.md`](../best-practices/vendor-npm-packaged-skill-as-generated-artifact-2026-07-28.md) — the same generate-and-drift discipline applied to an npm-packaged vendored skill, with a second drift signal on the attribution version
