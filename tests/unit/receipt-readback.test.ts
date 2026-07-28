@@ -7,6 +7,7 @@ import {
 import {
   digestReceiptIdentity,
   extractReceiptReadbackSeed,
+  filterMarkersByRegistration,
   foldReceiptReadback,
   projectReceiptConsumptionMarker,
   projectReceiptMintMarker,
@@ -548,5 +549,138 @@ describe('receipt readback', () => {
       expect(result.state.progression.epoch?.epochId).toMatch(/^[0-9a-f]{32}$/)
       expect(result.state.progression.unit?.unitId).toMatch(/^[0-9a-f]{32}$/)
     }
+  })
+
+  describe('filterMarkersByRegistration', () => {
+    test('keeps only markers belonging to the given registrationDigest', () => {
+      const own = createFixture()
+      const foreign = createFixture({
+        registrationIdentity: 'foreign-registration',
+        sessionSalt: Uint8Array.from({ length: 32 }, (_, i) => i + 100),
+      })
+      const ownDigest = own.ledger.metadata.registrationDigest
+      const foreignDigest = foreign.ledger.metadata.registrationDigest
+
+      // Sanity: digests must differ
+      expect(ownDigest).not.toBe(foreignDigest)
+
+      const mixed: unknown[] = [
+        own.mint,
+        own.epochStart,
+        own.unitStart,
+        own.consume,
+        own.unitComplete,
+        own.epochComplete,
+        foreign.mint,
+        foreign.epochStart,
+        foreign.unitStart,
+        foreign.consume,
+      ]
+
+      const filtered = filterMarkersByRegistration(mixed, ownDigest)
+      // All own markers retained
+      expect(filtered).toHaveLength(6)
+      // All foreign markers stripped
+      for (const item of filtered) {
+        const result = validateReceiptMarker(item)
+        expect(result.status).toBe('valid')
+        if (result.status === 'valid') {
+          const marker = result.marker
+          if (marker.kind === 'mint') {
+            expect(marker.envelope.registrationDigest).toBe(ownDigest)
+          } else {
+            expect(marker.registrationDigest).toBe(ownDigest)
+          }
+        }
+      }
+    })
+
+    test('passes through malformed/unreadable markers fail-closed (does not silently drop)', () => {
+      const own = createFixture()
+      const ownDigest = own.ledger.metadata.registrationDigest
+
+      // A malformed entry: must be retained (fail-closed — caller will reject it)
+      const malformed: unknown = { kind: 'mint', schemaVersion: 999 }
+      const result = filterMarkersByRegistration(
+        [own.mint, malformed, own.epochStart],
+        ownDigest,
+      )
+      // malformed marker must be retained so extractReceiptReadbackSeed can fail-close on it
+      expect(result).toHaveLength(3)
+      expect(result[1]).toBe(malformed)
+    })
+
+    test('returns empty array when all markers are from a foreign registration', () => {
+      const own = createFixture()
+      const foreign = createFixture({
+        registrationIdentity: 'entirely-foreign',
+        sessionSalt: Uint8Array.from({ length: 32 }, (_, i) => i + 77),
+      })
+      const ownDigest = own.ledger.metadata.registrationDigest
+
+      const result = filterMarkersByRegistration(
+        [foreign.mint, foreign.epochStart, foreign.unitStart],
+        ownDigest,
+      )
+      expect(result).toHaveLength(0)
+    })
+
+    test('is a no-op when all markers already belong to own registration', () => {
+      const own = createFixture()
+      const ownDigest = own.ledger.metadata.registrationDigest
+      const ownMarkers: unknown[] = [
+        own.epochStart,
+        own.unitStart,
+        own.mint,
+        own.consume,
+        own.unitComplete,
+        own.epochComplete,
+      ]
+
+      const result = filterMarkersByRegistration(ownMarkers, ownDigest)
+      expect(result).toHaveLength(ownMarkers.length)
+      expect(result).toEqual(ownMarkers)
+    })
+
+    test('retain consume markers (no seed, but carry registrationDigest) for own registration', () => {
+      const own = createFixture()
+      const foreign = createFixture({
+        registrationIdentity: 'another-registration',
+        sessionSalt: Uint8Array.from({ length: 32 }, (_, i) => i + 55),
+      })
+      const ownDigest = own.ledger.metadata.registrationDigest
+
+      // consume markers are "seedless" (no sessionSalt) but have registrationDigest
+      const filtered = filterMarkersByRegistration(
+        [own.consume, foreign.consume],
+        ownDigest,
+      )
+      expect(filtered).toHaveLength(1)
+      const only = validateReceiptMarker(filtered[0])
+      expect(only.status).toBe('valid')
+      if (only.status === 'valid' && only.marker.kind === 'control') {
+        expect(only.marker.registrationDigest).toBe(ownDigest)
+      }
+    })
+
+    test('progression markers (epoch + unit) are filtered by registrationDigest correctly', () => {
+      const own = createFixture()
+      const foreign = createFixture({
+        registrationIdentity: 'progression-foreign',
+        sessionSalt: Uint8Array.from({ length: 32 }, (_, i) => i + 200),
+      })
+      const ownDigest = own.ledger.metadata.registrationDigest
+
+      const mixed: unknown[] = [
+        own.epochStart,
+        foreign.epochStart,
+        own.unitStart,
+        foreign.unitStart,
+        own.epochComplete,
+        foreign.epochComplete,
+      ]
+      const filtered = filterMarkersByRegistration(mixed, ownDigest)
+      expect(filtered).toHaveLength(3)
+    })
   })
 })

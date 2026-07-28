@@ -19,6 +19,12 @@ import {
   type ReceiptOperationObservation,
 } from '../../src/lib/receipt-classifier.js'
 import type { ReceiptLedger } from '../../src/lib/receipt-ledger.js'
+import { createReceiptLedger } from '../../src/lib/receipt-ledger.js'
+import {
+  projectReceiptConsumptionMarker,
+  projectReceiptMintMarker,
+  projectReceiptProgressionMarker,
+} from '../../src/lib/receipt-readback.js'
 import type { WorkflowStatus } from '../../src/lib/workflow-guard.js'
 
 const SESSION_A = 'session-1'
@@ -2073,5 +2079,1396 @@ describe('OpenCode workflow guard adapter', () => {
     expect(status(restored).satisfiedOperations).toContain('implementation')
     await restored.tools.systematic_workflow_status.execute({}, toolContext())
     expect(status(restored).epoch).not.toBeNull()
+  })
+
+  describe('dual-registration restart recovery (fix/workflow-guard-dual-registration-recovery)', () => {
+    // Helper: build a minimal marker array for a registration with a known sessionSalt
+    function buildMarkersForRegistration(
+      registrationIdentity: string,
+      sessionSalt: Uint8Array,
+    ): unknown[] {
+      const ledgerA = createReceiptLedger({
+        capabilityFlags: ['workflow-guard'],
+        registrationIdentity,
+        sessionSalt,
+      })
+      const EPOCH_ID_A = 'a'.repeat(32)
+      const UNIT_ID_A = 'b'.repeat(32)
+      const transitionDigest = (tag: string) =>
+        ledgerA.digestIdentity('call', tag)
+
+      const epochStart = projectReceiptProgressionMarker(ledgerA, {
+        target: 'epoch',
+        state: 'started',
+        epochId: EPOCH_ID_A,
+        family: 'work',
+        transitionDigest: transitionDigest('epoch-start'),
+        timestamp: 1,
+      })
+      const unitStart = projectReceiptProgressionMarker(ledgerA, {
+        target: 'unit',
+        state: 'started',
+        epochId: EPOCH_ID_A,
+        unitId: UNIT_ID_A,
+        family: 'work',
+        requiredOperations: ['implementation'],
+        resourceScopes: [],
+        transitionDigest: transitionDigest('unit-start'),
+        timestamp: 2,
+      })
+
+      // Create a receipt
+      ledgerA.prepareObservation({
+        callId: 'impl-call',
+        operation: 'implementation',
+        context: {
+          epochId: EPOCH_ID_A,
+          unitId: UNIT_ID_A,
+          workspaceIdentity: 'workspace-a',
+          worktreeIdentity: 'worktree-before',
+        },
+      })
+      const finalized = ledgerA.finalizeObservation({
+        callId: 'impl-call',
+        context: {
+          epochId: EPOCH_ID_A,
+          unitId: UNIT_ID_A,
+          workspaceIdentity: 'workspace-a',
+          worktreeIdentity: 'worktree-before',
+        },
+        after: {
+          workspaceIdentity: 'workspace-a',
+          worktreeIdentity: 'worktree-after',
+        },
+        classification: {
+          outcome: 'accepted',
+          category: 'implementation',
+          attribution: 'runtime-verified',
+          result: 'success',
+          sideEffect: 'required',
+          reasonCode: 'recognized-command',
+        },
+        terminal: { status: 'success', output: 'non-empty', noOp: false },
+      })
+      if (finalized.status !== 'finalized') throw new Error('finalize failed')
+      const mint = projectReceiptMintMarker(finalized.receipt, sessionSalt)
+      if (!mint || !epochStart || !unitStart)
+        throw new Error('marker projection failed')
+      return [epochStart, unitStart, mint]
+    }
+
+    test('RED: recovery with mixed-registration markers previously returned unavailable (bug reproduction)', async () => {
+      // Registration A: our "known" registration (matching what the guard uses)
+      const ownIdentity = 'own-registration-identity'
+      const ownSalt = new Uint8Array(32).fill(42)
+
+      // Registration B: a foreign/second registration in the same session
+      const foreignIdentity = 'foreign-registration-identity'
+      const foreignSalt = new Uint8Array(32).fill(99)
+
+      // Build markers from both registrations — this is what the shared metadata array contains
+      const ownMarkers = buildMarkersForRegistration(ownIdentity, ownSalt)
+      const foreignMarkers = buildMarkersForRegistration(
+        foreignIdentity,
+        foreignSalt,
+      )
+
+      // Combined marker array (shared metadata.systematic_workflow_receipt from both registrations)
+      const combinedMarkers = [...ownMarkers, ...foreignMarkers]
+
+      // Build a parts array that simulates what OpenCode persists
+      const parts = [
+        {
+          info: {},
+          parts: [
+            {
+              state: {
+                metadata: {
+                  [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: combinedMarkers,
+                },
+              },
+            },
+          ],
+        },
+      ]
+
+      const restored = createOpencodeWorkflowGuard({
+        config: { mode: 'protected', debug: false },
+        workspaceIdentity: 'workspace-a',
+        registrationIdentity: ownIdentity,
+        sessionSalt: ownSalt,
+        hostReadback: {
+          readSessionParts: async () => parts,
+          listChildren: async () => [],
+        },
+      })
+
+      await restored.tools.systematic_workflow_status.execute(
+        {},
+        { sessionID: SESSION_A, metadata: () => {} },
+      )
+
+      // BEFORE FIX: guard would be 'unavailable' due to conflicting-seed
+      // AFTER FIX: guard should have recovered its own markers (epoch/unit not null)
+      const s = restored.status(SESSION_A)
+      expect(s.state).not.toBe('unavailable')
+      expect(s.epoch).not.toBeNull()
+    })
+
+    test('foreign-only marker array → fresh start, not unavailable', async () => {
+      const ownIdentity = 'my-registration'
+      const ownSalt = new Uint8Array(32).fill(11)
+
+      const foreignIdentity = 'foreign-only-registration'
+      const foreignSalt = new Uint8Array(32).fill(88)
+
+      const foreignMarkers = buildMarkersForRegistration(
+        foreignIdentity,
+        foreignSalt,
+      )
+
+      const parts = [
+        {
+          info: {},
+          parts: [
+            {
+              state: {
+                metadata: {
+                  [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: foreignMarkers,
+                },
+              },
+            },
+          ],
+        },
+      ]
+
+      const restored = createOpencodeWorkflowGuard({
+        config: { mode: 'protected', debug: false },
+        workspaceIdentity: 'workspace-a',
+        registrationIdentity: ownIdentity,
+        sessionSalt: ownSalt,
+        hostReadback: {
+          readSessionParts: async () => parts,
+          listChildren: async () => [],
+        },
+      })
+
+      // Trigger initialize (simulated by observing a skill to force status evaluation)
+      const skillOutput = { title: 'loaded', output: 'ok', metadata: {} }
+      await restored.hooks['tool.execute.before'](
+        {
+          tool: 'systematic_skill',
+          sessionID: SESSION_A,
+          callID: 'skill-foreign-only',
+        },
+        { args: { name: 'ce:work' } },
+      )
+      await restored.hooks['tool.execute.after'](
+        {
+          tool: 'systematic_skill',
+          sessionID: SESSION_A,
+          callID: 'skill-foreign-only',
+          args: { name: 'ce:work' },
+        },
+        skillOutput,
+      )
+
+      // Should have recovered fresh (not unavailable), so skill can activate epoch
+      const s = restored.status(SESSION_A)
+      // After fresh start + skill, epoch should be active
+      expect(s.state).not.toBe('unavailable')
+    })
+
+    test('single-registration array is unchanged by filter (regression guard)', async () => {
+      // The existing 'recovers persisted receipt markers once and restores the workflow state'
+      // test covers this, but we add an explicit filter regression test here.
+      const ownIdentity = 'single-reg-identity'
+      const ownSalt = new Uint8Array(32).fill(33)
+      const ownMarkers = buildMarkersForRegistration(ownIdentity, ownSalt)
+
+      const parts = [
+        {
+          info: {},
+          parts: [
+            {
+              state: {
+                metadata: {
+                  [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: ownMarkers,
+                },
+              },
+            },
+          ],
+        },
+      ]
+
+      const restored = createOpencodeWorkflowGuard({
+        config: { mode: 'protected', debug: false },
+        workspaceIdentity: 'workspace-a',
+        registrationIdentity: ownIdentity,
+        sessionSalt: ownSalt,
+        hostReadback: {
+          readSessionParts: async () => parts,
+          listChildren: async () => [],
+        },
+      })
+
+      await restored.tools.systematic_workflow_status.execute(
+        {},
+        { sessionID: SESSION_A, metadata: () => {} },
+      )
+
+      const s = restored.status(SESSION_A)
+      // Single-registration: should recover successfully (not unavailable)
+      expect(s.state).not.toBe('unavailable')
+      expect(s.epoch).not.toBeNull()
+    })
+
+    test('genuinely corrupt marker for own registration still fails closed', async () => {
+      const ownIdentity = 'corrupt-test-registration'
+      const ownSalt = new Uint8Array(32).fill(77)
+      const ownMarkers = buildMarkersForRegistration(ownIdentity, ownSalt)
+
+      // Corrupt first marker (integrity mismatch)
+      const corruptedMarker = {
+        ...(ownMarkers[0] as Record<string, unknown>),
+        integrity: 'a'.repeat(64),
+      }
+
+      const parts = [
+        {
+          info: {},
+          parts: [
+            {
+              state: {
+                metadata: {
+                  [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: [
+                    corruptedMarker,
+                    ...ownMarkers.slice(1),
+                  ],
+                },
+              },
+            },
+          ],
+        },
+      ]
+
+      const restored = createOpencodeWorkflowGuard({
+        config: { mode: 'protected', debug: false },
+        workspaceIdentity: 'workspace-a',
+        registrationIdentity: ownIdentity,
+        sessionSalt: ownSalt,
+        hostReadback: {
+          readSessionParts: async () => parts,
+          listChildren: async () => [],
+        },
+      })
+
+      await restored.tools.systematic_workflow_status.execute(
+        {},
+        { sessionID: SESSION_A, metadata: () => {} },
+      )
+
+      const s = restored.status(SESSION_A)
+      // Genuine corruption → still fails closed → unavailable
+      expect(s.state).toBe('unavailable')
+    })
+
+    test('empty array after filter → fresh start, not guard-unavailable', async () => {
+      // This is effectively the foreign-only case: after filtering there are no own markers.
+      // The guard should treat this as a fresh start (allowFresh path in initializeSession),
+      // NOT as guard-unavailable. A fresh guard without an active epoch has state
+      // 'unavailable' with reasonCode 'no-active-epoch' — distinct from 'guard-unavailable'.
+      const ownIdentity = 'empty-after-filter-reg'
+      const ownSalt = new Uint8Array(32).fill(55)
+      const foreignIdentity = 'unrelated-foreign-reg'
+      const foreignSalt = new Uint8Array(32).fill(66)
+
+      const foreignMarkers = buildMarkersForRegistration(
+        foreignIdentity,
+        foreignSalt,
+      )
+
+      const parts = [
+        {
+          info: {},
+          parts: [
+            {
+              state: {
+                metadata: {
+                  [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: foreignMarkers,
+                },
+              },
+            },
+          ],
+        },
+      ]
+
+      const restored = createOpencodeWorkflowGuard({
+        config: { mode: 'protected', debug: false },
+        workspaceIdentity: 'workspace-a',
+        registrationIdentity: ownIdentity,
+        sessionSalt: ownSalt,
+        hostReadback: {
+          readSessionParts: async () => parts,
+          listChildren: async () => [],
+        },
+      })
+
+      await restored.tools.systematic_workflow_status.execute(
+        {},
+        { sessionID: SESSION_A, metadata: () => {} },
+      )
+
+      // A fresh guard (no epoch activated yet) has state 'unavailable' / 'no-active-epoch'.
+      // The key invariant: it must NOT be 'guard-unavailable' (which publishUnavailable sets).
+      const s = restored.status(SESSION_A)
+      expect(s.reasonCode).not.toBe('guard-unavailable')
+      expect(s.reasonCode).toBe('no-active-epoch')
+    })
+
+    // ── Ambiguity fail-closed tests (Oracle-identified defect) ──────────────────
+    //
+    // These are RED before the fix: ambiguous markers currently collapse to the
+    // foreign-empty path (publishFresh → no-active-epoch) instead of failing closed
+    // (publishUnavailable → guard-unavailable).
+    //
+    // Distinguisher: publishUnavailable produces 'guard-unavailable';
+    //                publishFresh produces 'no-active-epoch'. Both have epoch=null.
+
+    // Helper: wrap markers in the parts structure used by readSessionParts
+    function wrapMarkers(markers: unknown[]): readonly unknown[] {
+      return [
+        {
+          info: {},
+          parts: [
+            {
+              state: {
+                metadata: {
+                  [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: markers,
+                },
+              },
+            },
+          ],
+        },
+      ]
+    }
+
+    // Helper: build an own guard-capable ledger for the ambiguity tests
+    function buildOwnLedger(
+      registrationIdentity: string,
+      sessionSalt: Uint8Array,
+    ) {
+      return createReceiptLedger({
+        capabilityFlags: ['workflow-guard'],
+        registrationIdentity,
+        sessionSalt,
+      })
+    }
+
+    test('RED main: all own seed-bearing markers corrupted → fail-closed guard-unavailable, not fresh', async () => {
+      // Scenario: all own mint/progression markers have corrupted integrity.
+      // resolveOwnRegistrationDigest can't find a valid own seed (validation fails
+      // for every candidate). The corrupted marker is ambiguous (could be ours) →
+      // must publishUnavailable(), NOT publishFresh().
+      const ownIdentity = 'ambig-all-corrupted'
+      const ownSalt = new Uint8Array(32).fill(11)
+      const ledger = buildOwnLedger(ownIdentity, ownSalt)
+      const EPOCH_ID = 'a'.repeat(32)
+
+      const validMarker = projectReceiptProgressionMarker(ledger, {
+        target: 'epoch',
+        state: 'started',
+        epochId: EPOCH_ID,
+        family: 'work',
+        transitionDigest: ledger.digestIdentity('call', 'ep'),
+        timestamp: 1,
+      })
+      if (!validMarker) throw new Error('marker projection failed')
+      // Corrupt the integrity so validateReceiptMarker → integrity-mismatch → rejected
+      const corruptedMarker = { ...validMarker, integrity: 'f'.repeat(64) }
+
+      const adapter = createOpencodeWorkflowGuard({
+        config: { mode: 'protected', debug: false },
+        workspaceIdentity: 'workspace',
+        registrationIdentity: ownIdentity,
+        sessionSalt: ownSalt,
+        hostReadback: {
+          readSessionParts: async () => wrapMarkers([corruptedMarker]),
+          listChildren: async () => [],
+        },
+      })
+
+      await adapter.tools.systematic_workflow_status.execute(
+        {},
+        { sessionID: SESSION_A, metadata: () => {} },
+      )
+
+      const s = adapter.status(SESSION_A)
+      // BEFORE FIX: 'no-active-epoch' (wrong — publishFresh was called).
+      // AFTER FIX:  'guard-unavailable' (correct — publishUnavailable was called).
+      expect(s.reasonCode).toBe('guard-unavailable')
+      expect(s.epoch).toBeNull() // fresh guard, no epoch started
+    })
+
+    test('RED main: consume-only markers (no salt/seed) → fail-closed guard-unavailable, not fresh', async () => {
+      // Scenario: parts contain only a valid consume marker carrying the own
+      // registrationDigest but no sessionSalt. candidateSeedFromMarker returns
+      // undefined for consume markers (no sessionSalt field on consume). We cannot
+      // verify ownership without a salt → ambiguous → must fail closed.
+      const ownIdentity = 'ambig-consume-only'
+      const ownSalt = new Uint8Array(32).fill(22)
+      const ownLedger = buildOwnLedger(ownIdentity, ownSalt)
+      const EPOCH_ID = 'a'.repeat(32)
+      const UNIT_ID = 'b'.repeat(32)
+
+      // Build an own receipt via prepare+finalize, then project ONLY the consume marker
+      ownLedger.prepareObservation({
+        callId: 'impl',
+        operation: 'implementation',
+        context: {
+          epochId: EPOCH_ID,
+          unitId: UNIT_ID,
+          workspaceIdentity: 'ws',
+          worktreeIdentity: 'before',
+        },
+      })
+      const finalized = ownLedger.finalizeObservation({
+        callId: 'impl',
+        context: {
+          epochId: EPOCH_ID,
+          unitId: UNIT_ID,
+          workspaceIdentity: 'ws',
+          worktreeIdentity: 'before',
+        },
+        after: { workspaceIdentity: 'ws', worktreeIdentity: 'after' },
+        classification: {
+          outcome: 'accepted',
+          category: 'implementation',
+          attribution: 'runtime-verified',
+          result: 'success',
+          sideEffect: 'required',
+          reasonCode: 'recognized-command',
+        },
+        terminal: { status: 'success', output: 'non-empty', noOp: false },
+      })
+      if (finalized.status !== 'finalized') throw new Error('finalize failed')
+
+      const consumeMarker = projectReceiptConsumptionMarker(
+        finalized.receipt,
+        ownLedger.digestIdentity('call', 'transition'),
+        Date.now(),
+      )
+      if (!consumeMarker) throw new Error('consume marker projection failed')
+
+      // Parts contain ONLY the consume marker: no mint/progression seed markers
+      const adapter = createOpencodeWorkflowGuard({
+        config: { mode: 'protected', debug: false },
+        workspaceIdentity: 'workspace',
+        registrationIdentity: ownIdentity,
+        sessionSalt: ownSalt,
+        hostReadback: {
+          readSessionParts: async () => wrapMarkers([consumeMarker]),
+          listChildren: async () => [],
+        },
+      })
+
+      await adapter.tools.systematic_workflow_status.execute(
+        {},
+        { sessionID: SESSION_A, metadata: () => {} },
+      )
+
+      const s = adapter.status(SESSION_A)
+      // BEFORE FIX: 'no-active-epoch' (wrong — consume is seedless, treated as empty).
+      // AFTER FIX:  'guard-unavailable' (correct — consume is ambiguous → fail closed).
+      expect(s.reasonCode).toBe('guard-unavailable')
+      expect(s.epoch).toBeNull()
+    })
+
+    test('RED main: valid foreign markers + malformed marker → fail-closed, not fresh', async () => {
+      // Scenario: valid provably-foreign seed-bearing markers PLUS one malformed
+      // marker (own markers removed, unknown corruption). The malformed marker is
+      // ambiguous (could be a corrupted own marker) → must fail closed.
+      const ownIdentity = 'ambig-foreign-plus-malformed'
+      const ownSalt = new Uint8Array(32).fill(33)
+      const foreignIdentity = 'provably-foreign-reg'
+      const foreignSalt = new Uint8Array(32).fill(44)
+
+      // Valid provably-foreign markers (buildMarkersForRegistration uses the SAME helper
+      // defined in the dual-registration restart recovery describe block above)
+      const foreignMarkers = buildMarkersForRegistration(
+        foreignIdentity,
+        foreignSalt,
+      )
+      // Malformed: not a valid marker shape → validateReceiptMarker → unknown-kind
+      const malformedMarker = { kind: 'corrupt-unknown', data: 'x' }
+
+      const adapter = createOpencodeWorkflowGuard({
+        config: { mode: 'protected', debug: false },
+        workspaceIdentity: 'workspace',
+        registrationIdentity: ownIdentity,
+        sessionSalt: ownSalt,
+        hostReadback: {
+          readSessionParts: async () =>
+            wrapMarkers([...foreignMarkers, malformedMarker]),
+          listChildren: async () => [],
+        },
+      })
+
+      await adapter.tools.systematic_workflow_status.execute(
+        {},
+        { sessionID: SESSION_A, metadata: () => {} },
+      )
+
+      const s = adapter.status(SESSION_A)
+      // BEFORE FIX: 'no-active-epoch' (wrong — malformed marker silently ignored).
+      // AFTER FIX:  'guard-unavailable' (correct — malformed is ambiguous → fail closed).
+      expect(s.reasonCode).toBe('guard-unavailable')
+      expect(s.epoch).toBeNull()
+    })
+
+    test('regression guard main: all provably-foreign valid markers → fresh start, NOT fail-closed', async () => {
+      // This must pass BOTH before and after the fix. Genuinely foreign-only markers
+      // (valid, salt-bearing, none agree with own identity) → foreign-empty → publishFresh.
+      // Verifies the true-foreign case is never regressed to fail-closed.
+      const ownIdentity = 'provably-foreign-only'
+      const ownSalt = new Uint8Array(32).fill(55)
+      const foreignIdentity = 'all-foreign-reg'
+      const foreignSalt = new Uint8Array(32).fill(66)
+
+      const foreignMarkers = buildMarkersForRegistration(
+        foreignIdentity,
+        foreignSalt,
+      )
+
+      const adapter = createOpencodeWorkflowGuard({
+        config: { mode: 'protected', debug: false },
+        workspaceIdentity: 'workspace',
+        registrationIdentity: ownIdentity,
+        sessionSalt: ownSalt,
+        hostReadback: {
+          readSessionParts: async () => wrapMarkers(foreignMarkers),
+          listChildren: async () => [],
+        },
+      })
+
+      await adapter.tools.systematic_workflow_status.execute(
+        {},
+        { sessionID: SESSION_A, metadata: () => {} },
+      )
+
+      const s = adapter.status(SESSION_A)
+      // Foreign-only → publishFresh → no-active-epoch (NOT guard-unavailable).
+      expect(s.reasonCode).toBe('no-active-epoch')
+      expect(s.epoch).toBeNull()
+    })
+  })
+
+  describe('dual-registration rollupForegroundTask recovery (fix/workflow-guard-dual-registration-recovery)', () => {
+    // Re-usable: build a mint marker array for a guard-capable ledger.
+    // These are the markers that appear in a child session's parts when that
+    // child session ran under a given registration.
+    function buildChildMarkers(
+      registrationIdentity: string,
+      sessionSalt: Uint8Array,
+      workspaceIdentity: string,
+      repositoryIdentity: string,
+      worktreeBeforeIdentity: string,
+      worktreeAfterIdentity: string,
+    ): unknown[] {
+      const childLedger = createReceiptLedger({
+        capabilityFlags: ['workflow-guard'],
+        registrationIdentity,
+        sessionSalt,
+      })
+      const EPOCH_ID = 'c'.repeat(32)
+      const UNIT_ID = 'd'.repeat(32)
+      const td = (tag: string) => childLedger.digestIdentity('call', tag)
+
+      const epochStart = projectReceiptProgressionMarker(childLedger, {
+        target: 'epoch',
+        state: 'started',
+        epochId: EPOCH_ID,
+        family: 'work',
+        transitionDigest: td('epoch-start'),
+        timestamp: 10,
+      })
+      const unitStart = projectReceiptProgressionMarker(childLedger, {
+        target: 'unit',
+        state: 'started',
+        epochId: EPOCH_ID,
+        unitId: UNIT_ID,
+        family: 'work',
+        requiredOperations: ['implementation'],
+        resourceScopes: [],
+        transitionDigest: td('unit-start'),
+        timestamp: 11,
+      })
+
+      childLedger.prepareObservation({
+        callId: 'child-impl',
+        operation: 'implementation',
+        context: {
+          epochId: EPOCH_ID,
+          unitId: UNIT_ID,
+          workspaceIdentity,
+          repositoryIdentity,
+          worktreeIdentity: worktreeBeforeIdentity,
+        },
+      })
+      const finalized = childLedger.finalizeObservation({
+        callId: 'child-impl',
+        context: {
+          epochId: EPOCH_ID,
+          unitId: UNIT_ID,
+          workspaceIdentity,
+          repositoryIdentity,
+          worktreeIdentity: worktreeBeforeIdentity,
+        },
+        after: {
+          workspaceIdentity,
+          repositoryIdentity,
+          worktreeIdentity: worktreeAfterIdentity,
+        },
+        classification: {
+          outcome: 'accepted',
+          category: 'implementation',
+          attribution: 'runtime-verified',
+          result: 'success',
+          sideEffect: 'required',
+          reasonCode: 'recognized-command',
+        },
+        terminal: { status: 'success', output: 'non-empty', noOp: false },
+      })
+      if (finalized.status !== 'finalized')
+        throw new Error('child finalize failed')
+      const mint = projectReceiptMintMarker(finalized.receipt, sessionSalt)
+      if (!mint || !epochStart || !unitStart)
+        throw new Error('child marker projection failed')
+      return [epochStart, unitStart, mint]
+    }
+
+    // Helper: fire the task after hook with a given child session's parts
+    async function fireTaskAfter(
+      adapter: OpencodeWorkflowGuard,
+      childSessionID: string,
+      sessionID = SESSION_A,
+    ): Promise<void> {
+      await adapter.hooks['tool.execute.after'](
+        {
+          tool: 'task',
+          sessionID,
+          callID: 'task-call-1',
+          args: {},
+        },
+        {
+          title: 'task result',
+          output: 'done',
+          metadata: { sessionId: childSessionID },
+        },
+      )
+    }
+
+    test('RED: mixed-registration child markers must not mark parent unavailable (rollup bug reproduction)', async () => {
+      // Setup: own registration
+      const ownIdentity = 'rollup-own-registration'
+      const ownSalt = new Uint8Array(32).fill(13)
+      const foreignIdentity = 'rollup-foreign-registration'
+      const foreignSalt = new Uint8Array(32).fill(14)
+      const childSessionID = 'child-session-mixed'
+      const parentSessionID = SESSION_A
+
+      const ownChildMarkers = buildChildMarkers(
+        ownIdentity,
+        ownSalt,
+        OPERATION_SCOPE.workspaceIdentity,
+        OPERATION_SCOPE.repositoryIdentity,
+        'worktree-before',
+        OPERATION_SCOPE.worktreeIdentity,
+      )
+      const foreignChildMarkers = buildChildMarkers(
+        foreignIdentity,
+        foreignSalt,
+        OPERATION_SCOPE.workspaceIdentity,
+        OPERATION_SCOPE.repositoryIdentity,
+        'worktree-before',
+        OPERATION_SCOPE.worktreeIdentity,
+      )
+      // Combined: both registrations' markers in the same child session parts
+      const combinedMarkers = [...ownChildMarkers, ...foreignChildMarkers]
+      const childParts = [
+        {
+          info: {},
+          parts: [
+            {
+              state: {
+                metadata: {
+                  [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: combinedMarkers,
+                },
+              },
+            },
+          ],
+        },
+      ]
+
+      // Track whether observer.snapshot() was called during rollup.
+      // BEFORE FIX: conflicting-seed → markUnavailable() BEFORE snapshot call → snapshotCalled stays false.
+      // AFTER FIX: own markers filtered → seed extracted → snapshot IS called.
+      let snapshotCalled = false
+      const ownAdapter = createOpencodeWorkflowGuard({
+        config: { mode: 'observe', debug: false },
+        ...OPERATION_SCOPE,
+        registrationIdentity: ownIdentity,
+        sessionSalt: ownSalt,
+        observer: {
+          targetDigest: OPERATION_SCOPE.workspaceIdentity,
+          async snapshot() {
+            snapshotCalled = true
+            return {
+              status: 'available' as const,
+              snapshot: operationSnapshot(),
+            }
+          },
+          async remoteSnapshot() {
+            return {
+              status: 'unavailable' as const,
+              reasonCode: 'remote-missing-field' as const,
+            }
+          },
+        },
+        hostReadback: {
+          readSessionParts: async (sid) => {
+            if (sid === parentSessionID) return []
+            return childParts
+          },
+          listChildren: async (sid) =>
+            sid === parentSessionID
+              ? [{ sessionId: childSessionID, parentID: parentSessionID }]
+              : [],
+        },
+      })
+
+      // Activate epoch via skill
+      await observeSkill(
+        ownAdapter,
+        'systematic_skill',
+        'ce:work',
+        'rollup-skill',
+        parentSessionID,
+      )
+
+      // Confirm epoch is active before rollup
+      expect(ownAdapter.status(parentSessionID).epoch).not.toBeNull()
+
+      // Fire task after hook → triggers rollupForegroundTask
+      // BEFORE FIX: extractReceiptReadbackSeed sees two differing seeds → conflicting-seed → markUnavailable
+      //   before snapshot is ever called → snapshotCalled stays false.
+      // AFTER FIX: foreign markers filtered out → own markers only → seed ready → snapshot called.
+      await fireTaskAfter(ownAdapter, childSessionID, parentSessionID)
+
+      // Key assertion: snapshot must have been called, proving rollup got past the conflicting-seed gate.
+      // Before the fix, markUnavailable() fires at the seed check, BEFORE the observer snapshot call.
+      expect(snapshotCalled).toBe(true)
+    })
+
+    test('foreign-only child markers → benign no-op, session not marked unavailable', async () => {
+      const ownIdentity = 'rollup-own-foreign-only'
+      const ownSalt = new Uint8Array(32).fill(21)
+      const foreignIdentity = 'rollup-foreign-only'
+      const foreignSalt = new Uint8Array(32).fill(22)
+      const childSessionID = 'child-session-foreign-only'
+      const parentSessionID = SESSION_A
+
+      const foreignChildMarkers = buildChildMarkers(
+        foreignIdentity,
+        foreignSalt,
+        OPERATION_SCOPE.workspaceIdentity,
+        OPERATION_SCOPE.repositoryIdentity,
+        'worktree-before',
+        OPERATION_SCOPE.worktreeIdentity,
+      )
+      const childParts = [
+        {
+          info: {},
+          parts: [
+            {
+              state: {
+                metadata: {
+                  [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]:
+                    foreignChildMarkers,
+                },
+              },
+            },
+          ],
+        },
+      ]
+
+      const ownAdapter = createOpencodeWorkflowGuard({
+        config: { mode: 'observe', debug: false },
+        ...OPERATION_SCOPE,
+        registrationIdentity: ownIdentity,
+        sessionSalt: ownSalt,
+        observer: sequenceObserver([operationSnapshot(), operationSnapshot()]),
+        hostReadback: {
+          readSessionParts: async (sid) => {
+            if (sid === parentSessionID) return []
+            return childParts
+          },
+          listChildren: async (sid) =>
+            sid === parentSessionID
+              ? [{ sessionId: childSessionID, parentID: parentSessionID }]
+              : [],
+        },
+      })
+
+      await observeSkill(
+        ownAdapter,
+        'systematic_skill',
+        'ce:work',
+        'foreign-only-skill',
+        parentSessionID,
+      )
+      const beforeState = ownAdapter.status(parentSessionID).reasonCode
+
+      // All child markers are foreign → benign no-op after filtering
+      await fireTaskAfter(ownAdapter, childSessionID, parentSessionID)
+
+      const s = ownAdapter.status(parentSessionID)
+      expect(s.reasonCode).not.toBe('guard-unavailable')
+      // State should be unchanged (epoch still active, not marked unavailable)
+      expect(s.reasonCode).toBe(beforeState)
+    })
+
+    test('genuine corruption in own child markers still fails closed (markUnavailable)', async () => {
+      const ownIdentity = 'rollup-corrupt-test'
+      const ownSalt = new Uint8Array(32).fill(33)
+      const childSessionID = 'child-session-corrupt'
+      const parentSessionID = SESSION_A
+
+      const ownChildMarkers = buildChildMarkers(
+        ownIdentity,
+        ownSalt,
+        OPERATION_SCOPE.workspaceIdentity,
+        OPERATION_SCOPE.repositoryIdentity,
+        'worktree-before',
+        OPERATION_SCOPE.worktreeIdentity,
+      )
+      // Corrupt the first marker's integrity
+      const corruptedMarker = {
+        ...(ownChildMarkers[0] as Record<string, unknown>),
+        integrity: 'b'.repeat(64),
+      }
+      const corruptedMarkers = [corruptedMarker, ...ownChildMarkers.slice(1)]
+
+      const childParts = [
+        {
+          info: {},
+          parts: [
+            {
+              state: {
+                metadata: {
+                  [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: corruptedMarkers,
+                },
+              },
+            },
+          ],
+        },
+      ]
+
+      const ownAdapter = createOpencodeWorkflowGuard({
+        config: { mode: 'observe', debug: false },
+        ...OPERATION_SCOPE,
+        registrationIdentity: ownIdentity,
+        sessionSalt: ownSalt,
+        observer: sequenceObserver([operationSnapshot(), operationSnapshot()]),
+        hostReadback: {
+          readSessionParts: async (sid) => {
+            if (sid === parentSessionID) return []
+            return childParts
+          },
+          listChildren: async (sid) =>
+            sid === parentSessionID
+              ? [{ sessionId: childSessionID, parentID: parentSessionID }]
+              : [],
+        },
+      })
+
+      await observeSkill(
+        ownAdapter,
+        'systematic_skill',
+        'ce:work',
+        'corrupt-skill',
+        parentSessionID,
+      )
+      expect(ownAdapter.status(parentSessionID).state).not.toBe('unavailable')
+
+      // Corrupt own marker → filter retains it → extractReceiptReadbackSeed fails on integrity → markUnavailable
+      await fireTaskAfter(ownAdapter, childSessionID, parentSessionID)
+
+      // Must still fail closed
+      expect(ownAdapter.status(parentSessionID).reasonCode).toBe(
+        'guard-unavailable',
+      )
+    })
+
+    test('own-only child markers → regression guard (seed extraction and observer reach identical to before fix)', async () => {
+      // Verify that when only own markers are present, the rollup path reaches
+      // observer.snapshot() — which is the same behavior as before the fix
+      // (filter is a no-op, seed is found cleanly, flow continues normally).
+      const ownIdentity = 'rollup-own-only'
+      const ownSalt = new Uint8Array(32).fill(44)
+      const childSessionID = 'child-session-own-only'
+      const parentSessionID = SESSION_A
+
+      const ownChildMarkers = buildChildMarkers(
+        ownIdentity,
+        ownSalt,
+        OPERATION_SCOPE.workspaceIdentity,
+        OPERATION_SCOPE.repositoryIdentity,
+        'worktree-before',
+        OPERATION_SCOPE.worktreeIdentity,
+      )
+      const childParts = [
+        {
+          info: {},
+          parts: [
+            {
+              state: {
+                metadata: {
+                  [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: ownChildMarkers,
+                },
+              },
+            },
+          ],
+        },
+      ]
+
+      let snapshotCalled = false
+      const ownAdapter = createOpencodeWorkflowGuard({
+        config: { mode: 'observe', debug: false },
+        ...OPERATION_SCOPE,
+        registrationIdentity: ownIdentity,
+        sessionSalt: ownSalt,
+        observer: {
+          targetDigest: OPERATION_SCOPE.workspaceIdentity,
+          async snapshot() {
+            snapshotCalled = true
+            return {
+              status: 'available' as const,
+              snapshot: operationSnapshot(),
+            }
+          },
+          async remoteSnapshot() {
+            return {
+              status: 'unavailable' as const,
+              reasonCode: 'remote-missing-field' as const,
+            }
+          },
+        },
+        hostReadback: {
+          readSessionParts: async (sid) => {
+            if (sid === parentSessionID) return []
+            return childParts
+          },
+          listChildren: async (sid) =>
+            sid === parentSessionID
+              ? [{ sessionId: childSessionID, parentID: parentSessionID }]
+              : [],
+        },
+      })
+
+      await observeSkill(
+        ownAdapter,
+        'systematic_skill',
+        'ce:work',
+        'own-only-skill',
+        parentSessionID,
+      )
+      expect(ownAdapter.status(parentSessionID).epoch).not.toBeNull()
+
+      // Own-only: filter is a no-op → same behavior as before fix → reaches observer snapshot
+      await fireTaskAfter(ownAdapter, childSessionID, parentSessionID)
+
+      // Regression guard: seed extraction succeeds, rollup reaches the observer snapshot call.
+      // This proves the single-registration path is unaffected by the filter change.
+      expect(snapshotCalled).toBe(true)
+    })
+
+    // ── Rollup ambiguity fail-closed tests (Oracle-identified defect) ─────────
+    //
+    // Signal: snapshotCalled === false means markUnavailable() fired BEFORE the
+    // observer snapshot call (mode-level unavailable). If snapshot was called but
+    // reasonCode is still guard-unavailable, it came from a unit-level issue (no
+    // classifier), not from our new ambiguity guard.
+    //
+    // Assertion pattern for ambiguous rollup:
+    //   snapshotCalled === false  (rollup bailed before observer)
+    //   AND reasonCode === 'guard-unavailable' (mode-level, from markUnavailable)
+    //
+    // Assertion pattern for benign foreign-only rollup:
+    //   snapshotCalled === false  (early return before observer)
+    //   AND reasonCode !== 'guard-unavailable' (epoch still active as before)
+
+    function buildCorruptedChildParts(
+      registrationIdentity: string,
+      sessionSalt: Uint8Array,
+    ): readonly unknown[] {
+      const ledger = createReceiptLedger({
+        capabilityFlags: ['workflow-guard'],
+        registrationIdentity,
+        sessionSalt,
+      })
+      const EPOCH_ID = 'e'.repeat(32)
+      const validMarker = projectReceiptProgressionMarker(ledger, {
+        target: 'epoch',
+        state: 'started',
+        epochId: EPOCH_ID,
+        family: 'work',
+        transitionDigest: ledger.digestIdentity('call', 'ep'),
+        timestamp: 1,
+      })
+      if (!validMarker) throw new Error('marker projection failed')
+      const corruptedMarker = { ...validMarker, integrity: 'e'.repeat(64) }
+      return [
+        {
+          info: {},
+          parts: [
+            {
+              state: {
+                metadata: {
+                  [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: [corruptedMarker],
+                },
+              },
+            },
+          ],
+        },
+      ]
+    }
+
+    function buildConsumeOnlyChildParts(
+      registrationIdentity: string,
+      sessionSalt: Uint8Array,
+    ): readonly unknown[] {
+      const ownLedger = createReceiptLedger({
+        capabilityFlags: ['workflow-guard'],
+        registrationIdentity,
+        sessionSalt,
+      })
+      const EPOCH_ID = 'f'.repeat(32)
+      const UNIT_ID = '0'.repeat(32)
+      ownLedger.prepareObservation({
+        callId: 'ci',
+        operation: 'implementation',
+        context: {
+          epochId: EPOCH_ID,
+          unitId: UNIT_ID,
+          workspaceIdentity: 'ws',
+          worktreeIdentity: 'b',
+        },
+      })
+      const finalized = ownLedger.finalizeObservation({
+        callId: 'ci',
+        context: {
+          epochId: EPOCH_ID,
+          unitId: UNIT_ID,
+          workspaceIdentity: 'ws',
+          worktreeIdentity: 'b',
+        },
+        after: { workspaceIdentity: 'ws', worktreeIdentity: 'a' },
+        classification: {
+          outcome: 'accepted',
+          category: 'implementation',
+          attribution: 'runtime-verified',
+          result: 'success',
+          sideEffect: 'required',
+          reasonCode: 'recognized-command',
+        },
+        terminal: { status: 'success', output: 'non-empty', noOp: false },
+      })
+      if (finalized.status !== 'finalized')
+        throw new Error('child finalize failed')
+      const consumeMarker = projectReceiptConsumptionMarker(
+        finalized.receipt,
+        ownLedger.digestIdentity('call', 'tr'),
+        1,
+      )
+      if (!consumeMarker) throw new Error('consume marker projection failed')
+      return [
+        {
+          info: {},
+          parts: [
+            {
+              state: {
+                metadata: {
+                  [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: [consumeMarker],
+                },
+              },
+            },
+          ],
+        },
+      ]
+    }
+
+    function makeRollupAdapter(
+      ownIdentity: string,
+      ownSalt: Uint8Array,
+      snapshotRef: { called: boolean },
+      childSessionID: string,
+      childPartsFactory: () => readonly unknown[],
+      parentSessionID: string,
+    ): OpencodeWorkflowGuard {
+      return createOpencodeWorkflowGuard({
+        config: { mode: 'observe', debug: false },
+        ...OPERATION_SCOPE,
+        registrationIdentity: ownIdentity,
+        sessionSalt: ownSalt,
+        observer: {
+          targetDigest: OPERATION_SCOPE.workspaceIdentity,
+          async snapshot() {
+            snapshotRef.called = true
+            return {
+              status: 'available' as const,
+              snapshot: operationSnapshot(),
+            }
+          },
+          async remoteSnapshot() {
+            return {
+              status: 'unavailable' as const,
+              reasonCode: 'remote-missing-field' as const,
+            }
+          },
+        },
+        hostReadback: {
+          readSessionParts: async (sid) => {
+            if (sid === parentSessionID) return []
+            return childPartsFactory()
+          },
+          listChildren: async (sid) =>
+            sid === parentSessionID
+              ? [{ sessionId: childSessionID, parentID: parentSessionID }]
+              : [],
+        },
+      })
+    }
+
+    test('RED rollup: all own child seed markers corrupted → markUnavailable before snapshot', async () => {
+      // BEFORE FIX: corrupted marker → ownMarkersFromParts returns [] → benign return.
+      //   snapshotCalled stays false AND reasonCode stays 'missing-evidence' (active epoch).
+      // AFTER FIX:  corrupted marker → ambiguous → markUnavailable() before snapshot.
+      //   snapshotCalled stays false AND reasonCode becomes 'guard-unavailable'.
+      const ownIdentity = 'rollup-corrupt-seed'
+      const ownSalt = new Uint8Array(32).fill(77)
+      const childSessionID = 'child-corrupt-seed'
+      const parentSessionID = SESSION_A
+
+      const snapshotRef = { called: false }
+      const ownAdapter = makeRollupAdapter(
+        ownIdentity,
+        ownSalt,
+        snapshotRef,
+        childSessionID,
+        () => buildCorruptedChildParts(ownIdentity, ownSalt),
+        parentSessionID,
+      )
+
+      await observeSkill(
+        ownAdapter,
+        'systematic_skill',
+        'ce:work',
+        'corrupt-seed-skill',
+        parentSessionID,
+      )
+      expect(ownAdapter.status(parentSessionID).epoch).not.toBeNull()
+
+      await fireTaskAfter(ownAdapter, childSessionID, parentSessionID)
+
+      // BEFORE FIX: snapshotRef.called === false (early return) but reasonCode ≠ 'guard-unavailable'
+      // AFTER FIX:  snapshotRef.called === false (markUnavailable fires) + reasonCode = 'guard-unavailable'
+      expect(snapshotRef.called).toBe(false)
+      expect(ownAdapter.status(parentSessionID).reasonCode).toBe(
+        'guard-unavailable',
+      )
+    })
+
+    test('RED rollup: consume-only child markers (no salt) → markUnavailable before snapshot', async () => {
+      // BEFORE FIX: consume-only → ownMarkersFromParts returns [] → benign return.
+      // AFTER FIX:  consume-only → ambiguous → markUnavailable().
+      const ownIdentity = 'rollup-consume-only'
+      const ownSalt = new Uint8Array(32).fill(88)
+      const childSessionID = 'child-consume-only'
+      const parentSessionID = SESSION_A
+
+      const snapshotRef = { called: false }
+      const ownAdapter = makeRollupAdapter(
+        ownIdentity,
+        ownSalt,
+        snapshotRef,
+        childSessionID,
+        () => buildConsumeOnlyChildParts(ownIdentity, ownSalt),
+        parentSessionID,
+      )
+
+      await observeSkill(
+        ownAdapter,
+        'systematic_skill',
+        'ce:work',
+        'consume-only-skill',
+        parentSessionID,
+      )
+      expect(ownAdapter.status(parentSessionID).epoch).not.toBeNull()
+
+      await fireTaskAfter(ownAdapter, childSessionID, parentSessionID)
+
+      expect(snapshotRef.called).toBe(false)
+      expect(ownAdapter.status(parentSessionID).reasonCode).toBe(
+        'guard-unavailable',
+      )
+    })
+
+    test('rollup: valid foreign marker + malformed marker → ambiguous → markUnavailable before snapshot', async () => {
+      // Child session parts contain one valid provably-foreign seed-bearing marker
+      // (different registrationDigest that does NOT agree with our identity) PLUS one
+      // malformed/invalid marker. classifyMarkersFromParts → ambiguous (malformed is
+      // not provably foreign) → rollupForegroundTask → markUnavailable() before snapshot.
+      const ownIdentity = 'rollup-foreign-plus-malformed'
+      const ownSalt = new Uint8Array(32).fill(111)
+      const foreignIdentity = 'rollup-provably-foreign-reg'
+      const foreignSalt = new Uint8Array(32).fill(112)
+      const childSessionID = 'child-foreign-plus-malformed'
+      const parentSessionID = SESSION_A
+
+      // Build one valid foreign seed marker (provably foreign: valid + seed-bearing + ≠ own identity)
+      const foreignLedger = createReceiptLedger({
+        capabilityFlags: ['workflow-guard'],
+        registrationIdentity: foreignIdentity,
+        sessionSalt: foreignSalt,
+      })
+      const foreignEpochMarker = projectReceiptProgressionMarker(
+        foreignLedger,
+        {
+          target: 'epoch',
+          state: 'started',
+          epochId: '1'.repeat(32),
+          family: 'work',
+          transitionDigest: foreignLedger.digestIdentity('call', 'ep'),
+          timestamp: 1,
+        },
+      )
+      if (!foreignEpochMarker)
+        throw new Error('foreign marker projection failed')
+
+      // Malformed marker: unparseable shape → validateReceiptMarker → unknown-kind → ambiguous
+      const malformedMarker = { kind: 'corrupt-unknown', payload: 'x' }
+
+      const childParts = [
+        {
+          info: {},
+          parts: [
+            {
+              state: {
+                metadata: {
+                  [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: [
+                    foreignEpochMarker,
+                    malformedMarker,
+                  ],
+                },
+              },
+            },
+          ],
+        },
+      ]
+
+      const snapshotRef = { called: false }
+      const ownAdapter = makeRollupAdapter(
+        ownIdentity,
+        ownSalt,
+        snapshotRef,
+        childSessionID,
+        () => childParts,
+        parentSessionID,
+      )
+
+      await observeSkill(
+        ownAdapter,
+        'systematic_skill',
+        'ce:work',
+        'foreign-malformed-skill',
+        parentSessionID,
+      )
+      expect(ownAdapter.status(parentSessionID).epoch).not.toBeNull()
+
+      await fireTaskAfter(ownAdapter, childSessionID, parentSessionID)
+
+      // Ambiguous (malformed marker present) → markUnavailable() fires before snapshot.
+      expect(snapshotRef.called).toBe(false)
+      expect(ownAdapter.status(parentSessionID).reasonCode).toBe(
+        'guard-unavailable',
+      )
+    })
+
+    test('regression guard rollup: genuinely foreign-only child → benign no-op, NOT markUnavailable', async () => {
+      // All valid, salt-bearing, provably-foreign child markers → foreign-empty → early return.
+      // Must NOT regress to markUnavailable. Passes both before and after the fix.
+      const ownIdentity = 'rollup-foreign-regression'
+      const ownSalt = new Uint8Array(32).fill(99)
+      const foreignIdentity = 'rollup-foreign-valid-only'
+      const foreignSalt = new Uint8Array(32).fill(100)
+      const childSessionID = 'child-foreign-valid-only'
+      const parentSessionID = SESSION_A
+
+      const foreignChildMarkers = buildChildMarkers(
+        foreignIdentity,
+        foreignSalt,
+        OPERATION_SCOPE.workspaceIdentity,
+        OPERATION_SCOPE.repositoryIdentity,
+        'worktree-b',
+        OPERATION_SCOPE.worktreeIdentity,
+      )
+      const childParts = [
+        {
+          info: {},
+          parts: [
+            {
+              state: {
+                metadata: {
+                  [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]:
+                    foreignChildMarkers,
+                },
+              },
+            },
+          ],
+        },
+      ]
+
+      const snapshotRef = { called: false }
+      const ownAdapter = makeRollupAdapter(
+        ownIdentity,
+        ownSalt,
+        snapshotRef,
+        childSessionID,
+        () => childParts,
+        parentSessionID,
+      )
+
+      await observeSkill(
+        ownAdapter,
+        'systematic_skill',
+        'ce:work',
+        'foreign-regression-skill',
+        parentSessionID,
+      )
+      const beforeReasonCode = ownAdapter.status(parentSessionID).reasonCode
+      expect(ownAdapter.status(parentSessionID).epoch).not.toBeNull()
+
+      await fireTaskAfter(ownAdapter, childSessionID, parentSessionID)
+
+      // Benign no-op: snapshot not called, guard not marked unavailable
+      expect(snapshotRef.called).toBe(false)
+      expect(ownAdapter.status(parentSessionID).reasonCode).not.toBe(
+        'guard-unavailable',
+      )
+      expect(ownAdapter.status(parentSessionID).reasonCode).toBe(
+        beforeReasonCode,
+      )
+    })
   })
 })
