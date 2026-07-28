@@ -654,7 +654,7 @@
     {
       "name": "plugin",
       "type": "plugin",
-      "description": "Systematic — compound-engineering loops for OpenCode, Pi, and Claude Code; registers skills, agents, commands, and bootstrap prompt",
+      "description": "Systematic plugin — registers skills, agents, commands, and bootstrap prompt",
       "files": [],
       "opencode": {
         "plugins": {
