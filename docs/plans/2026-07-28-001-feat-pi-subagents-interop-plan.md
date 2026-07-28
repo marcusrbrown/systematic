@@ -179,7 +179,7 @@ Increment 2 (runtime detection) — src/pi.ts, best-effort/non-fatal:
 
 **Verification:** Unit tests green including golden + false-positive/negative + critical-exclusion fixtures; `--check` correctly passes/fails and flags new critical coupling; importing the module writes nothing.
 
-- [ ] **Unit 2: Export command + safe user-dir writes**
+- [x] **Unit 2: Export command + safe user-dir writes**
 
 **Goal:** Wire the generator into an explicit opt-in CLI surface that previews target dir + files, refuses to overwrite user files by default, writes atomically under the user-chosen root, and supports cleanup + re-export/refresh.
 

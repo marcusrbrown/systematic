@@ -24,15 +24,19 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
+// Unit 1 tests: pure generation logic (now in src/lib)
 import {
   CURATED_PERSONAS,
-  checkDrift,
   classifyCompatibility,
   generatePersonaContent,
   generatePersonaManifest,
   type ManifestEntry,
-  type PersonaManifest,
   sanitizeName,
+} from '../../src/lib/pi-subagents-personas.ts'
+// Drift-check types and helpers live in the script (fixture management)
+import {
+  checkDrift,
+  type PersonaManifest,
 } from '../../scripts/generate-pi-subagents-personas.ts'
 
 const __filename = fileURLToPath(import.meta.url)
