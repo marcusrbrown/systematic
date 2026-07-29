@@ -256,7 +256,7 @@ Increment 2 (runtime detection) — src/pi.ts, best-effort/non-fatal:
 - Integration: export → edit a generated file → refresh detects drift and reports it; config change → refresh reports config hash mismatch.
 - Config example: generated config example (canonical public JSONC) is repo-portable (no absolute paths), includes category model overrides for research/review, per-agent `repo-research-analyst` model, and `pi_subagents.thinking`/`max_turns` examples.
 
-**Verification:** Config schema validates correctly; trust stripping fires on project-sourced `thinking`/`tools`/`skills`; `max_turns` always retained; `variant` never emitted as `thinking`; `temperature`/`top_p` never emitted; invalid field shapes and unknown `pi_subagents` fields fail validation before any write; global scope never absorbs cwd project config; drift hash is the full normalized rendered artifact; files land only under the chosen root; user files never clobbered; cleanup/refresh behave per manifest (no config needed for cleanup); no writes without the explicit command. Unit 2 checkbox remains unchecked (not yet implemented).
+**Verification:** Config schema validates correctly; trust stripping fires on project-sourced `thinking`/`tools`/`skills`; `max_turns` always retained; `variant` never emitted as `thinking`; `temperature`/`top_p` never emitted; invalid field shapes and unknown `pi_subagents` fields fail validation before any write; global scope never absorbs cwd project config; drift hash is the full normalized rendered artifact; files land only under the chosen root; user files never clobbered; cleanup/refresh behave per manifest (no config needed for cleanup); no writes without the explicit command.
 
 - [x] **Unit 3: Docs + capability profile + delegation-boundary test**
 
@@ -289,7 +289,7 @@ Increment 2 (runtime detection) — src/pi.ts, best-effort/non-fatal:
 - Integration: `systematic_delegate` child cannot load an extension or re-enter the delegate tool (boundary holds).
 - Integration (combined-path, real package): top-level pi-subagents (pinned `0.14.3` devDependency, actually installed and invoked — not a stand-in or optional skip) with a nested Systematic persona — record depth behavior; no false global-bound assertion.
 
-**Verification:** Docs build + content-integrity green; boundary test passes; combined-path test runs against the real pinned `pi-subagents@0.14.3` devDependency (from the approved `package.json`/`bun.lock` changes) and documents actual behavior; config example is repo-portable JSONC and matches the canonical schema from Unit 2. Unit 3 checkbox stays unchecked until the orchestrator runs final required verification.
+**Verification:** Docs build + content-integrity green; boundary test passes; combined-path test runs against the real pinned `pi-subagents@0.14.3` devDependency (from the approved `package.json`/`bun.lock` changes) and documents actual behavior; config example is repo-portable JSONC and matches the canonical schema from Unit 2.
 
 ### Phase 2 — Runtime detection + conditional guidance
 
