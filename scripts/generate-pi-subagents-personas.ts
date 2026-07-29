@@ -3,7 +3,7 @@
  * Generate pi-subagents-compatible persona files from a curated subset of
  * Systematic's `agents/` source.
  *
- * Contract (v0.14.1 pi-subagents):
+ * Contract (v0.14.3 pi-subagents):
  *   - Flat .md filename is the agent identity.
  *   - Frontmatter fields are optional.
  *   - Omit tools, skills, model for maximum compatibility/inheritance.

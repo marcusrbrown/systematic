@@ -1,0 +1,172 @@
+---
+title: Pi + pi-subagents Pairing Guide
+description: Export Systematic personas for use with pi-subagents — parallel and multi-model delegation as an optional complement to systematic_delegate.
+sidebar:
+  order: 7
+---
+
+[pi-subagents](https://github.com/tintinweb/pi-subagents) is a third-party Pi extension that adds parallel dispatch, per-subagent model selection, and worktree isolation. Systematic can export a curated subset of its bundled personas as flat agent files that pi-subagents reads directly.
+
+This is an **opt-in complement** to `systematic_delegate`. The bounded built-in delegate stays the default — sequential, capped at 20 turns, depth-1, re-entry guarded. pi-subagents is the power-user path for users who need parallel or multi-model delegation and have already installed and configured pi-subagents separately.
+
+Tested interop contract: **pi-subagents v0.14.3** (verified as of July 29, 2026). Versions outside the tested range are unsupported but nonfatal — the export will still produce valid files; only the guidance contract is unverified.
+
+## Prerequisites
+
+- Systematic installed as a Pi extension (`npx @fro.bot/systematic setup --harness pi`)
+- pi-subagents installed and configured separately (see its own docs)
+- Node.js 18+ or Bun in your path
+
+## Commands
+
+All commands use the form `systematic pi-subagents <subcommand> [--scope project|global]`.
+
+**Default scope is `project`.**
+
+| Subcommand | What it does |
+|---|---|
+| `preview` | Show what would be exported — files to create, update, refuse, or remove. **No writes.** |
+| `export` | Write persona files to the agents dir. Refuses to overwrite non-Systematic files. |
+| `refresh` | Re-export owned files that have drifted from current source. Ignores files not in the manifest. |
+| `cleanup` | Remove all Systematic-generated files and the manifest. |
+
+## Scope and target directories
+
+| Scope | Target directory |
+|---|---|
+| `project` (default) | `<cwd>/.pi/agents/` |
+| `global` | `$PI_CODING_AGENT_DIR/agents/` or `~/.pi/agent/agents/` if `$PI_CODING_AGENT_DIR` is unset |
+
+## Usage walkthrough
+
+```bash
+# 1. See what would be written before committing
+npx @fro.bot/systematic pi-subagents preview
+
+# 2. Export personas to the project agents dir
+npx @fro.bot/systematic pi-subagents export
+
+# 3. After a Systematic update, pull in changes to owned files
+npx @fro.bot/systematic pi-subagents refresh
+
+# 4. Remove all generated files when you're done
+npx @fro.bot/systematic pi-subagents cleanup
+```
+
+Use `--scope global` on any subcommand to target the global agents directory instead:
+
+```bash
+npx @fro.bot/systematic pi-subagents export --scope global
+npx @fro.bot/systematic pi-subagents refresh --scope global
+npx @fro.bot/systematic pi-subagents cleanup --scope global
+```
+
+## Configuration precedence
+
+**Your Systematic config (`systematic.json`/`.jsonc`) is the durable source of truth.** The generated persona files and their manifest are a disposable projection of that config — safe to delete and regenerate at any time with `export` or `refresh`.
+
+Two independent overlay namespaces feed the export, resolved per-agent-beats-category in both:
+
+- **`categories`/`agents`** — the existing portable overlay. Only its `model` field is applied to exported personas (per-agent overlay wins over category overlay; `model: null` on the winning overlay omits the field entirely rather than falling through).
+- **`pi_subagents.categories`/`pi_subagents.agents`** — a Pi-native overlay for fields pi-subagents understands natively: `thinking`, `max_turns`, `tools`, `skills`. Category values apply first; per-agent values override field-by-field. There is no `model` field in this namespace — `model` always comes from `categories`/`agents`.
+
+Config source chain depends on export scope:
+
+- **`--scope project`** (default) loads `user → project → custom`, in increasing priority.
+- **`--scope global`** loads `user → custom` only — it never absorbs the current working directory's project config, even when one exists.
+
+### Trust boundaries
+
+Project-level config (`.opencode/systematic.json`) is the least-trusted source. In the existing `categories`/`agents` overlay, a project-sourced `model` is **rejected outright** — config validation throws, it is not silently dropped. In the `pi_subagents.categories`/`pi_subagents.agents` overlay, project-sourced `thinking`, `tools`, and `skills` are **silently stripped** before merge — project config simply cannot grant them. `max_turns` is trust-any and passes through from any source, including project config. User config (`~/.config/opencode/systematic.json`) and custom config (`$OPENCODE_CONFIG_DIR/systematic.json`) may set all supported fields.
+
+### Canonical example
+
+This is a sanitized, repo-portable example — public model identifiers only, no local paths or secrets:
+
+```jsonc
+{
+  "$schema": "https://fro.bot/systematic/schemas/v3/systematic-config.schema.json",
+  "categories": {
+    "research": {
+      "model": "github-copilot/gpt-5.4-mini"
+    },
+    "review": {
+      "model": "openai/gpt-5.5"
+    }
+  },
+  "agents": {
+    "repo-research-analyst": {
+      "model": "github-copilot/gpt-5.4-mini"
+    }
+  },
+  "pi_subagents": {
+    "categories": {
+      "research": {
+        "thinking": "medium"
+      }
+    },
+    "agents": {
+      "repo-research-analyst": {
+        "max_turns": 10,
+        "tools": "read,bash",
+        "skills": true
+      }
+    }
+  }
+}
+```
+
+Named `tools`/`skills` values must be discoverable by the user's own Pi installation — pi-subagents does not know about Systematic's bundled `ce:*` skill names, so don't reference them here; use `true` to enable all skills, or a comma-separated list of skills the target Pi environment actually has installed.
+
+Here, every exported persona in the `research` category picks up `model: github-copilot/gpt-5.4-mini` and `thinking: medium`, except `repo-research-analyst`, whose exact-agent overlay wins for both `model` and `max_turns`/`tools`/`skills`. Every persona in the `review` category picks up `model: openai/gpt-5.5`.
+
+### Pi-native field values
+
+| Field | Type | Values |
+|---|---|---|
+| `thinking` | enum | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` |
+| `max_turns` | nonnegative integer | `0` means unlimited |
+| `tools` | comma-selector string | built-in tool names, `*`/`all`/`none`, or extension selectors (e.g. `"read,grep,glob"`) |
+| `skills` | `true` or comma-separated string | `true` enables all skills; a string of skill names installed in the target Pi environment selects specific skills |
+
+### What's not configurable
+
+pi-subagents v0.14.3 has no equivalent frontmatter fields for `temperature`, `top_p`, or `variant`. Systematic never emits them into exported persona files — they are intentionally omitted, not silently discarded. `variant` (OpenCode's reasoning-effort concept) is also never mapped onto `thinking` (pi-subagents' own reasoning-effort field); they are distinct contracts and must be configured independently through `pi_subagents.thinking` if you want equivalent behavior.
+
+### Manual edits are not durable
+
+Editing an exported persona file directly works, but it is not the durable configuration path. Running `pi-subagents refresh` re-renders every manifest-owned file from current Systematic config and source, and **will overwrite your manual edits** if the regenerated content differs from what's on disk. Run `pi-subagents preview` first if you want to see what would change before committing to `refresh`. To make a change stick permanently, set it in your Systematic config instead of editing the generated file.
+
+
+## What gets exported
+
+Systematic exports a curated subset of personas — those that are self-contained and do not depend on Systematic's own orchestration machinery, skill-loading tool, or environment-specific tooling. Personas that require the Systematic orchestration loop (e.g. `systematic-implementer`), Slack MCP access, or the agent-browser extension are excluded, not adapted.
+
+Exported files are named `systematic-<sanitized-name>.md`. Source persona files stay model-free — consistent with Systematic's bundled-agent invariant. Exported files carry a `model` field only when you set one via the `categories`/`agents` config overlay described below; otherwise they stay model-free too.
+
+The full curated include/exclude rationale lives in `src/lib/pi-subagents-personas.ts`.
+
+## Ownership model and drift
+
+A manifest file (`.systematic-pi-subagents-manifest.json`) in the agents dir tracks which files Systematic generated and their content hashes.
+
+- **Export** refuses to overwrite any file not in the manifest (user files are never touched).
+- **Refresh** updates only manifest-owned files whose content has drifted from current source. It leaves your edits to non-owned files alone.
+- **Cleanup** removes only files listed in the manifest, then removes the manifest itself.
+
+Exported files are yours. You can edit them. `refresh` will detect drift between your copy and the current source and overwrite — only files it previously generated and owns.
+
+## Delegation boundaries
+
+`systematic_delegate` is the bounded built-in delegate:
+- Sequential, capped at 20 turns, same model, depth-1
+- Child spawned with `noExtensions: true`
+- Re-entry guarded
+
+**The `noExtensions` / depth-1 guarantee applies only to `systematic_delegate`'s own child.** It does not bound end-to-end depth across a combined pi-subagents + Systematic path. That combined path is outside Systematic's bounded-delegate guarantees and governed by pi-subagents' own configuration.
+
+If you need the safety guarantees — predictable cost, bounded recursion, no extension side-effects — use `systematic_delegate`. If you need parallel dispatch or per-subagent model control and understand pi-subagents' own limits, use the exported personas via pi-subagents.
+
+## No automatic writes
+
+Nothing is exported, detected, or written at extension load time. Systematic does not auto-detect whether pi-subagents is installed or active. All writes require an explicit `systematic pi-subagents export` command.
