@@ -391,4 +391,58 @@ describe('cli pi-subagents', () => {
       fs.rmSync(globalBase, { recursive: true, force: true })
     }
   })
+
+  it('export applies trusted custom-config-dir model overlay to matching exported persona', () => {
+    const cwd = mkTempCwd()
+    const customConfigDir = mkTempCwd()
+    try {
+      fs.writeFileSync(
+        path.join(customConfigDir, 'systematic.json'),
+        JSON.stringify({
+          agents: { 'repo-research-analyst': { model: 'openai/gpt-5' } },
+        }),
+      )
+
+      const result = runCli(['pi-subagents', 'export'], cwd, {
+        OPENCODE_CONFIG_DIR: customConfigDir,
+      })
+      expect(result.exitCode).toBe(0)
+
+      const target = path.join(
+        cwd,
+        '.pi',
+        'agents',
+        'systematic-repo-research-analyst.md',
+      )
+      expect(fs.existsSync(target)).toBe(true)
+      expect(fs.readFileSync(target, 'utf-8')).toMatch(
+        /^model: "openai\/gpt-5"$/m,
+      )
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+      fs.rmSync(customConfigDir, { recursive: true, force: true })
+    }
+  })
+
+  it('export fails closed on malformed pi_subagents config before writing anything', () => {
+    const cwd = mkTempCwd()
+    const customConfigDir = mkTempCwd()
+    try {
+      fs.writeFileSync(
+        path.join(customConfigDir, 'systematic.json'),
+        JSON.stringify({
+          pi_subagents: { agents: { x: { thinking: 'turbo' } } },
+        }),
+      )
+
+      const result = runCli(['pi-subagents', 'export'], cwd, {
+        OPENCODE_CONFIG_DIR: customConfigDir,
+      })
+      expect(result.exitCode).not.toBe(0)
+      expect(fs.existsSync(path.join(cwd, '.pi', 'agents'))).toBe(false)
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+      fs.rmSync(customConfigDir, { recursive: true, force: true })
+    }
+  })
 })

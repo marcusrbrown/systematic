@@ -18,7 +18,7 @@
 import { afterAll, describe, expect, test } from 'bun:test'
 import * as crypto from 'node:crypto'
 import * as fs from 'node:fs'
-import * as os from 'node:os'
+import os from 'node:os'
 import * as path from 'node:path'
 import {
   cleanup,
@@ -1249,5 +1249,364 @@ describe('import side-effect guard', () => {
     expect(typeof readManifest).toBe('function')
     expect(typeof writeManifest).toBe('function')
     expect(typeof MANIFEST_FILENAME).toBe('string')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Config-aware frontmatter (Unit 2: model + pi_subagents field resolution)
+// ---------------------------------------------------------------------------
+
+describe('config-aware export: model + pi_subagents field application', () => {
+  let originalOsHomedir: (() => string) | undefined
+  let fakeHome: string
+
+  function setupFakeHome(): string {
+    fakeHome = mkTmp('pi-export-config-home-')
+    originalOsHomedir = os.homedir
+    os.homedir = () => fakeHome
+    return fakeHome
+  }
+
+  function restoreHome(): void {
+    if (originalOsHomedir) os.homedir = originalOsHomedir
+    delete process.env.OPENCODE_CONFIG_DIR
+  }
+
+  function writeUserConfig(config: Record<string, unknown>): void {
+    const dir = path.join(fakeHome, '.config', 'opencode')
+    fs.mkdirSync(dir, { recursive: true })
+    fs.writeFileSync(path.join(dir, 'systematic.json'), JSON.stringify(config))
+  }
+
+  test('no configOptions: export stays model-free (backward compatible default)', () => {
+    const cwd = mkTmp()
+    const agentsRoot = path.join(cwd, '.pi', 'agents')
+    const result = exportPersonas(agentsRoot)
+    expect(result.status).toBe('ok')
+    const target = path.join(agentsRoot, 'systematic-repo-research-analyst.md')
+    expect(fs.existsSync(target)).toBe(true)
+    expect(fs.readFileSync(target, 'utf-8')).not.toMatch(/^model:/m)
+  })
+
+  test('per-agent model overlay is emitted for the matching persona only', () => {
+    setupFakeHome()
+    try {
+      writeUserConfig({
+        agents: { 'repo-research-analyst': { model: 'openai/gpt-5' } },
+      })
+      const cwd = mkTmp()
+      const agentsRoot = path.join(cwd, '.pi', 'agents')
+      const result = exportPersonas(agentsRoot, {
+        scope: 'project',
+        cwd,
+      })
+      expect(result.status).toBe('ok')
+      const target = path.join(
+        agentsRoot,
+        'systematic-repo-research-analyst.md',
+      )
+      const content = fs.readFileSync(target, 'utf-8')
+      expect(content).toMatch(/^model: "openai\/gpt-5"$/m)
+
+      // A different persona in the same category is unaffected (no category model set)
+      const other = path.join(
+        agentsRoot,
+        'systematic-best-practices-researcher.md',
+      )
+      expect(fs.readFileSync(other, 'utf-8')).not.toMatch(/^model:/m)
+    } finally {
+      restoreHome()
+    }
+  })
+
+  test('category model applies to personas without a per-agent override', () => {
+    setupFakeHome()
+    try {
+      writeUserConfig({
+        categories: { research: { model: 'anthropic/claude-sonnet-4' } },
+      })
+      const cwd = mkTmp()
+      const agentsRoot = path.join(cwd, '.pi', 'agents')
+      exportPersonas(agentsRoot, { scope: 'project', cwd })
+      const target = path.join(
+        agentsRoot,
+        'systematic-best-practices-researcher.md',
+      )
+      expect(fs.readFileSync(target, 'utf-8')).toMatch(
+        /^model: "anthropic\/claude-sonnet-4"$/m,
+      )
+    } finally {
+      restoreHome()
+    }
+  })
+
+  test('per-agent model wins over category model', () => {
+    setupFakeHome()
+    try {
+      writeUserConfig({
+        categories: { research: { model: 'anthropic/claude-sonnet-4' } },
+        agents: { 'repo-research-analyst': { model: 'openai/gpt-5' } },
+      })
+      const cwd = mkTmp()
+      const agentsRoot = path.join(cwd, '.pi', 'agents')
+      exportPersonas(agentsRoot, { scope: 'project', cwd })
+      const target = path.join(
+        agentsRoot,
+        'systematic-repo-research-analyst.md',
+      )
+      expect(fs.readFileSync(target, 'utf-8')).toMatch(
+        /^model: "openai\/gpt-5"$/m,
+      )
+    } finally {
+      restoreHome()
+    }
+  })
+
+  test('per-agent model: null omits model even when category sets one', () => {
+    setupFakeHome()
+    try {
+      writeUserConfig({
+        categories: { research: { model: 'anthropic/claude-sonnet-4' } },
+        agents: { 'repo-research-analyst': { model: null } },
+      })
+      const cwd = mkTmp()
+      const agentsRoot = path.join(cwd, '.pi', 'agents')
+      exportPersonas(agentsRoot, { scope: 'project', cwd })
+      const target = path.join(
+        agentsRoot,
+        'systematic-repo-research-analyst.md',
+      )
+      expect(fs.readFileSync(target, 'utf-8')).not.toMatch(/^model:/m)
+    } finally {
+      restoreHome()
+    }
+  })
+
+  test('pi_subagents.categories applies thinking/max_turns; per-agent overrides field-by-field', () => {
+    setupFakeHome()
+    try {
+      writeUserConfig({
+        pi_subagents: {
+          categories: { research: { thinking: 'high', max_turns: 10 } },
+          agents: { 'repo-research-analyst': { thinking: 'medium' } },
+        },
+      })
+      const cwd = mkTmp()
+      const agentsRoot = path.join(cwd, '.pi', 'agents')
+      exportPersonas(agentsRoot, { scope: 'project', cwd })
+
+      const overridden = fs.readFileSync(
+        path.join(agentsRoot, 'systematic-repo-research-analyst.md'),
+        'utf-8',
+      )
+      expect(overridden).toMatch(/^thinking: "medium"$/m)
+      expect(overridden).toMatch(/^max_turns: 10$/m)
+
+      const categoryOnly = fs.readFileSync(
+        path.join(agentsRoot, 'systematic-best-practices-researcher.md'),
+        'utf-8',
+      )
+      expect(categoryOnly).toMatch(/^thinking: "high"$/m)
+      expect(categoryOnly).toMatch(/^max_turns: 10$/m)
+    } finally {
+      restoreHome()
+    }
+  })
+
+  test('variant in config is never emitted as thinking, and temperature/top_p are never emitted', () => {
+    setupFakeHome()
+    try {
+      writeUserConfig({
+        agents: {
+          'repo-research-analyst': {
+            model: 'openai/gpt-5',
+            variant: 'v2',
+            temperature: 0.5,
+            top_p: 0.9,
+          },
+        },
+      })
+      const cwd = mkTmp()
+      const agentsRoot = path.join(cwd, '.pi', 'agents')
+      exportPersonas(agentsRoot, { scope: 'project', cwd })
+      const content = fs.readFileSync(
+        path.join(agentsRoot, 'systematic-repo-research-analyst.md'),
+        'utf-8',
+      )
+      expect(content).not.toMatch(/^variant:/m)
+      expect(content).not.toMatch(/^thinking:/m)
+      expect(content).not.toMatch(/^temperature:/m)
+      expect(content).not.toMatch(/^top_p:/m)
+    } finally {
+      restoreHome()
+    }
+  })
+
+  test('global scope does not absorb cwd project config', () => {
+    setupFakeHome()
+    try {
+      writeUserConfig({
+        agents: { 'repo-research-analyst': { model: 'openai/gpt-5' } },
+      })
+      const cwd = mkTmp()
+      const projectConfigDir = path.join(cwd, '.opencode')
+      fs.mkdirSync(projectConfigDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(projectConfigDir, 'systematic.json'),
+        JSON.stringify({
+          agents: { 'repo-research-analyst': { model: 'openai/gpt-4' } },
+        }),
+      )
+
+      const globalRoot = mkTmp('pi-export-global-')
+      const agentsRoot = path.join(globalRoot, 'agents')
+      exportPersonas(agentsRoot, { scope: 'global', cwd })
+      const content = fs.readFileSync(
+        path.join(agentsRoot, 'systematic-repo-research-analyst.md'),
+        'utf-8',
+      )
+      // user model wins; project model must be entirely absent (not even stripped-merged)
+      expect(content).toMatch(/^model: "openai\/gpt-5"$/m)
+    } finally {
+      restoreHome()
+    }
+  })
+
+  test('project scope loads project config alongside user config', () => {
+    setupFakeHome()
+    try {
+      const cwd = mkTmp()
+      const projectConfigDir = path.join(cwd, '.opencode')
+      fs.mkdirSync(projectConfigDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(projectConfigDir, 'systematic.json'),
+        JSON.stringify({
+          pi_subagents: {
+            agents: { 'repo-research-analyst': { max_turns: 3 } },
+          },
+        }),
+      )
+
+      const agentsRoot = path.join(cwd, '.pi', 'agents')
+      exportPersonas(agentsRoot, { scope: 'project', cwd })
+      const content = fs.readFileSync(
+        path.join(agentsRoot, 'systematic-repo-research-analyst.md'),
+        'utf-8',
+      )
+      expect(content).toMatch(/^max_turns: 3$/m)
+    } finally {
+      restoreHome()
+    }
+  })
+
+  test('project config cannot grant thinking/tools/skills for the exported persona (trust stripping applies through export)', () => {
+    setupFakeHome()
+    try {
+      const cwd = mkTmp()
+      const projectConfigDir = path.join(cwd, '.opencode')
+      fs.mkdirSync(projectConfigDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(projectConfigDir, 'systematic.json'),
+        JSON.stringify({
+          pi_subagents: {
+            agents: {
+              'repo-research-analyst': {
+                thinking: 'high',
+                tools: '*',
+                skills: true,
+                max_turns: 5,
+              },
+            },
+          },
+        }),
+      )
+
+      const agentsRoot = path.join(cwd, '.pi', 'agents')
+      exportPersonas(agentsRoot, { scope: 'project', cwd })
+      const content = fs.readFileSync(
+        path.join(agentsRoot, 'systematic-repo-research-analyst.md'),
+        'utf-8',
+      )
+      expect(content).not.toMatch(/^thinking:/m)
+      expect(content).not.toMatch(/^tools:/m)
+      expect(content).not.toMatch(/^skills:/m)
+      expect(content).toMatch(/^max_turns: 5$/m)
+    } finally {
+      restoreHome()
+    }
+  })
+
+  test('malformed project config fails export before any write (fail closed)', () => {
+    setupFakeHome()
+    try {
+      const cwd = mkTmp()
+      const projectConfigDir = path.join(cwd, '.opencode')
+      fs.mkdirSync(projectConfigDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(projectConfigDir, 'systematic.json'),
+        JSON.stringify({
+          pi_subagents: { agents: { x: { thinking: 'turbo' } } },
+        }),
+      )
+
+      const agentsRoot = path.join(cwd, '.pi', 'agents')
+      const result = exportPersonas(agentsRoot, { scope: 'project', cwd })
+      expect(result.status).toBe('error')
+      expect(fs.existsSync(agentsRoot)).toBe(false)
+    } finally {
+      restoreHome()
+    }
+  })
+
+  test('malformed config fails preview before returning ok', () => {
+    setupFakeHome()
+    try {
+      const cwd = mkTmp()
+      const projectConfigDir = path.join(cwd, '.opencode')
+      fs.mkdirSync(projectConfigDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(projectConfigDir, 'systematic.json'),
+        JSON.stringify({
+          pi_subagents: { agents: { x: { max_turns: -1 } } },
+        }),
+      )
+
+      const agentsRoot = path.join(cwd, '.pi', 'agents')
+      const result = preview(agentsRoot, { scope: 'project', cwd })
+      expect(result.status).toBe('error')
+    } finally {
+      restoreHome()
+    }
+  })
+
+  test('config-driven content change is reflected in the drift hash (refresh detects it)', () => {
+    setupFakeHome()
+    try {
+      const cwd = mkTmp()
+      const agentsRoot = path.join(cwd, '.pi', 'agents')
+      // First export with no model config
+      exportPersonas(agentsRoot, { scope: 'project', cwd })
+      const before = fs.readFileSync(
+        path.join(agentsRoot, 'systematic-repo-research-analyst.md'),
+        'utf-8',
+      )
+      expect(before).not.toMatch(/^model:/m)
+
+      // Now add a model overlay and refresh with the same scope/cwd
+      writeUserConfig({
+        agents: { 'repo-research-analyst': { model: 'openai/gpt-5' } },
+      })
+      const result = refresh(agentsRoot, { scope: 'project', cwd })
+      expect(result.status).toBe('ok')
+      expect(result.updated).toBeGreaterThan(0)
+
+      const after = fs.readFileSync(
+        path.join(agentsRoot, 'systematic-repo-research-analyst.md'),
+        'utf-8',
+      )
+      expect(after).toMatch(/^model: "openai\/gpt-5"$/m)
+    } finally {
+      restoreHome()
+    }
   })
 })

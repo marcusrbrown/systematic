@@ -102,7 +102,11 @@ describe('SystematicConfigSchema', () => {
         mode: 'observe',
         debug: false,
       })
-      // Verify all eight top-level keys exist
+      expect(result.data.pi_subagents).toEqual({
+        categories: {},
+        agents: {},
+      })
+      // Verify all top-level keys exist
       expect(Object.keys(result.data).sort()).toEqual([
         'agents',
         'bootstrap',
@@ -110,6 +114,7 @@ describe('SystematicConfigSchema', () => {
         'disabled_agents',
         'disabled_commands',
         'disabled_skills',
+        'pi_subagents',
         'skills_as_commands',
         'workflow_guard',
       ])
@@ -710,6 +715,144 @@ describe('SECURITY_OVERLAY_FIELDS parity (9c)', () => {
       if (meta?.trust === 'project-or-higher') {
         expect(securitySet.has(key)).toBe(true)
       }
+    }
+  })
+})
+
+describe('pi_subagents schema', () => {
+  test('accepts a fully populated category and agent overlay', () => {
+    const result = SystematicConfigSchema.safeParse({
+      pi_subagents: {
+        categories: {
+          research: {
+            thinking: 'high',
+            max_turns: 10,
+            tools: '*',
+            skills: true,
+          },
+        },
+        agents: {
+          'repo-research-analyst': {
+            thinking: 'medium',
+            max_turns: 0,
+            tools: 'read,grep',
+            skills: 'ce:plan,ce:review',
+          },
+        },
+      },
+    })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.pi_subagents.categories.research).toEqual({
+        thinking: 'high',
+        max_turns: 10,
+        tools: '*',
+        skills: true,
+      })
+      expect(result.data.pi_subagents.agents['repo-research-analyst']).toEqual({
+        thinking: 'medium',
+        max_turns: 0,
+        tools: 'read,grep',
+        skills: 'ce:plan,ce:review',
+      })
+    }
+  })
+
+  test('defaults to empty categories and agents maps', () => {
+    const result = SystematicConfigSchema.safeParse({})
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.pi_subagents).toEqual({ categories: {}, agents: {} })
+    }
+  })
+
+  test('rejects an unknown thinking enum value', () => {
+    const result = SystematicConfigSchema.safeParse({
+      pi_subagents: { agents: { x: { thinking: 'turbo' } } },
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('rejects a negative max_turns', () => {
+    const result = SystematicConfigSchema.safeParse({
+      pi_subagents: { agents: { x: { max_turns: -1 } } },
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('rejects a non-integer max_turns', () => {
+    const result = SystematicConfigSchema.safeParse({
+      pi_subagents: { agents: { x: { max_turns: 1.5 } } },
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('accepts max_turns: 0 as unlimited', () => {
+    const result = SystematicConfigSchema.safeParse({
+      pi_subagents: { agents: { x: { max_turns: 0 } } },
+    })
+    expect(result.success).toBe(true)
+  })
+
+  test('rejects a non-string tools value', () => {
+    const result = SystematicConfigSchema.safeParse({
+      pi_subagents: { agents: { x: { tools: 123 } } },
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('accepts skills as boolean true', () => {
+    const result = SystematicConfigSchema.safeParse({
+      pi_subagents: { agents: { x: { skills: true } } },
+    })
+    expect(result.success).toBe(true)
+  })
+
+  test('accepts skills as a comma-separated string', () => {
+    const result = SystematicConfigSchema.safeParse({
+      pi_subagents: { agents: { x: { skills: 'ce:plan,ce:review' } } },
+    })
+    expect(result.success).toBe(true)
+  })
+
+  test('rejects skills as false (only true or string accepted)', () => {
+    const result = SystematicConfigSchema.safeParse({
+      pi_subagents: { agents: { x: { skills: false } } },
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('rejects an unknown field on a pi_subagents agent overlay', () => {
+    const result = SystematicConfigSchema.safeParse({
+      pi_subagents: { agents: { x: { model: 'anthropic/claude-sonnet-4' } } },
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('rejects an unknown field on a pi_subagents category overlay', () => {
+    const result = SystematicConfigSchema.safeParse({
+      pi_subagents: { categories: { research: { bogus: true } } },
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('rejects an unknown top-level key inside pi_subagents', () => {
+    const result = SystematicConfigSchema.safeParse({
+      pi_subagents: { bogus: {} },
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('pi_subagents overlay fields are not present in AgentOverlaySchema or CategoryOverlaySchema', () => {
+    // model must never leak into the pi_subagents namespace (KD7)
+    const agentResult = SystematicConfigSchema.safeParse({
+      pi_subagents: { agents: { x: { thinking: 'low' } } },
+    })
+    expect(agentResult.success).toBe(true)
+    if (agentResult.success) {
+      expect(
+        Object.hasOwn(agentResult.data.pi_subagents.agents.x ?? {}, 'model'),
+      ).toBe(false)
     }
   })
 })

@@ -15,10 +15,29 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import type { OverlayConfig, SystematicConfig } from './config.js'
+import { loadConfigWithSources } from './config.js'
+import { parseFrontmatter } from './frontmatter.js'
 import type { ManifestEntry } from './pi-subagents-personas.js'
 import { generateAll } from './pi-subagents-personas.js'
 
 export type ExportScope = 'project' | 'global'
+
+/**
+ * Scope-appropriate config resolution for export/preview/refresh. When
+ * provided, the effective config (`user → project → custom` for project
+ * scope; `user → custom` for global scope — never absorbing cwd project
+ * overlays) is applied to each exported persona's frontmatter: `model`
+ * resolved from the `categories`/`agents` overlay (per-agent beats category;
+ * `model: null` omits) and Pi-native `pi_subagents` fields (`thinking`,
+ * `max_turns`, `tools`, `skills`) resolved from the `pi_subagents`
+ * namespace after trust filtering. Omitting `configOptions` preserves the
+ * model-free, config-neutral export (backward compatible default).
+ */
+export interface ExportConfigOptions {
+  scope: ExportScope
+  cwd: string
+}
 
 // ── Manifest types ────────────────────────────────────────────────────────────
 
@@ -326,6 +345,182 @@ export interface ExportPlan {
   actions: PlanAction[]
 }
 
+// ── Config-aware frontmatter application ────────────────────────────────────────
+
+/** Extract `{ category, agentKey }` from a curated persona's `agents/<category>/<name>.md` source path. */
+function parseSourceCategoryAndKey(sourceRelPath: string): {
+  category: string | undefined
+  agentKey: string
+} {
+  const parts = sourceRelPath.split('/')
+  // agents/<category>/<name>.md
+  if (parts.length >= 3 && parts[0] === 'agents') {
+    const fileName = parts.at(-1) ?? ''
+    return {
+      category: parts[1],
+      agentKey: fileName.replace(/\.md$/, ''),
+    }
+  }
+  const fileName = parts.at(-1) ?? sourceRelPath
+  return { category: undefined, agentKey: fileName.replace(/\.md$/, '') }
+}
+
+/** Look up an overlay by bare key or `category/key` qualified id. */
+function lookupOverlay(
+  map: Record<string, OverlayConfig> | undefined,
+  category: string | undefined,
+  agentKey: string,
+): OverlayConfig | undefined {
+  if (!map) return undefined
+  if (category) {
+    const qualified = map[`${category}/${agentKey}`]
+    if (qualified) return qualified
+  }
+  return map[agentKey]
+}
+
+/**
+ * Resolve the effective `model` value for a persona: per-agent overlay beats
+ * category overlay; explicit `model: null` on the winning overlay means
+ * "omit" (never fall through to a lower-precedence value).
+ */
+function resolveModel(
+  config: SystematicConfig,
+  category: string | undefined,
+  agentKey: string,
+): string | undefined {
+  const agentOverlay = lookupOverlay(config.agents, category, agentKey)
+  if (agentOverlay && Object.hasOwn(agentOverlay, 'model')) {
+    const value = agentOverlay.model
+    return typeof value === 'string' ? value : undefined
+  }
+  const categoryOverlay = category ? config.categories?.[category] : undefined
+  if (categoryOverlay && Object.hasOwn(categoryOverlay, 'model')) {
+    const value = categoryOverlay.model
+    return typeof value === 'string' ? value : undefined
+  }
+  return undefined
+}
+
+const PI_SUBAGENTS_FRONTMATTER_FIELDS = [
+  'thinking',
+  'max_turns',
+  'tools',
+  'skills',
+] as const
+
+/**
+ * Resolve the effective `pi_subagents` fields for a persona: category
+ * values apply first, per-agent values override field-by-field (not
+ * whole-object replacement).
+ */
+function resolvePiSubagentsFields(
+  config: SystematicConfig,
+  category: string | undefined,
+  agentKey: string,
+): Record<string, unknown> {
+  const categoryOverlay = category
+    ? config.pi_subagents?.categories?.[category]
+    : undefined
+  const agentOverlay = lookupOverlay(
+    config.pi_subagents?.agents,
+    category,
+    agentKey,
+  )
+  const result: Record<string, unknown> = {}
+  for (const field of PI_SUBAGENTS_FRONTMATTER_FIELDS) {
+    if (agentOverlay && Object.hasOwn(agentOverlay, field)) {
+      result[field] = agentOverlay[field]
+    } else if (categoryOverlay && Object.hasOwn(categoryOverlay, field)) {
+      result[field] = categoryOverlay[field]
+    }
+  }
+  return result
+}
+
+/**
+ * Re-render a generated persona's frontmatter with config-resolved `model`
+ * and `pi_subagents` fields, preserving stable field order: description,
+ * model, thinking, max_turns, tools, skills. `variant`/`temperature`/`top_p`
+ * are never emitted (pi-subagents v0.14.1 has no equivalent fields).
+ */
+function applyConfigToContent(
+  content: string,
+  config: SystematicConfig,
+  category: string | undefined,
+  agentKey: string,
+): string {
+  const { data, body } = parseFrontmatter<Record<string, unknown>>(content)
+  const model = resolveModel(config, category, agentKey)
+  const piSubagentsFields = resolvePiSubagentsFields(config, category, agentKey)
+
+  const frontmatter: Record<string, unknown> = {}
+  if (typeof data.description === 'string') {
+    frontmatter.description = data.description
+  }
+  if (model !== undefined) frontmatter.model = model
+  for (const field of PI_SUBAGENTS_FRONTMATTER_FIELDS) {
+    if (Object.hasOwn(piSubagentsFields, field)) {
+      frontmatter[field] = piSubagentsFields[field]
+    }
+  }
+
+  let frontmatterBlock: string
+  if (Object.keys(frontmatter).length === 0) {
+    frontmatterBlock = '---\n---'
+  } else {
+    const lines = Object.entries(frontmatter)
+      .map(([k, v]) => `${k}: ${JSON.stringify(v)}`)
+      .join('\n')
+    frontmatterBlock = `---\n${lines}\n---`
+  }
+
+  const trimmedBody = body.replace(/^\n+/, '')
+  return `${frontmatterBlock}\n\n${trimmedBody}`
+}
+
+/**
+ * Apply scope-appropriate effective config to every entry's rendered
+ * content and recompute its hash. Pure — does not mutate the input array.
+ */
+function applyConfigToEntries(
+  entries: ManifestEntry[],
+  config: SystematicConfig,
+): ManifestEntry[] {
+  return entries.map((entry) => {
+    if (entry.status === 'excluded-critical' || !entry.content) return entry
+    const { category, agentKey } = parseSourceCategoryAndKey(
+      entry.sourceRelPath,
+    )
+    const content = applyConfigToContent(
+      entry.content,
+      config,
+      category,
+      agentKey,
+    )
+    const hash = crypto.createHash('sha256').update(content).digest('hex')
+    return { ...entry, content, hash }
+  })
+}
+
+/**
+ * Generate the curated persona set and, when `configOptions` is provided,
+ * apply the scope-appropriate effective config to each entry's frontmatter.
+ * Throws (schema/config errors) or generator errors propagate to the caller,
+ * which must fail closed before any write.
+ */
+function generateEntries(
+  repoRoot: string,
+  configOptions: ExportConfigOptions | undefined,
+): ManifestEntry[] {
+  const entries = generateAll(repoRoot)
+  if (!configOptions) return entries
+  const config = loadConfigWithSources(configOptions.cwd, {
+    includeProject: configOptions.scope === 'project',
+  }).config
+  return applyConfigToEntries(entries, config)
+}
+
 // ── Package root discovery ─────────────────────────────────────────────────────
 
 function findPackageRoot(): string {
@@ -400,7 +595,10 @@ function planRemoveActions(
 
 // ── Preview ───────────────────────────────────────────────────────────────────
 
-export function preview(agentsRoot: string): ExportPlan {
+export function preview(
+  agentsRoot: string,
+  configOptions?: ExportConfigOptions,
+): ExportPlan {
   const absRoot = path.resolve(agentsRoot)
 
   // Check manifest first — malformed manifest is an error
@@ -417,7 +615,7 @@ export function preview(agentsRoot: string): ExportPlan {
 
   let entries: ManifestEntry[]
   try {
-    entries = generateAll(findPackageRoot())
+    entries = generateEntries(findPackageRoot(), configOptions)
   } catch (err) {
     return {
       status: 'error',
@@ -574,7 +772,20 @@ function findStalePaths(
 
 // ── exportPersonas ────────────────────────────────────────────────────────────
 
-export function exportPersonas(agentsRoot: string): ExportResult {
+export function exportPersonas(
+  agentsRoot: string,
+  configOptions?: ExportConfigOptions,
+): ExportResult {
+  // Resolve config first (fail closed before any mutation, including mkdir).
+  let entries: ManifestEntry[]
+  try {
+    entries = generateEntries(findPackageRoot(), configOptions)
+  } catch (err) {
+    return makeExportError(
+      `Failed to generate personas: ${err instanceof Error ? err.message : String(err)}`,
+    )
+  }
+
   const rootOrErr = prepareExportRoot(agentsRoot)
   if (typeof rootOrErr !== 'string') return rootOrErr
   const absRoot = rootOrErr
@@ -587,15 +798,6 @@ export function exportPersonas(agentsRoot: string): ExportResult {
     )
   const prevManifest =
     manifestResult.kind === 'ok' ? manifestResult.manifest : null
-
-  let entries: ManifestEntry[]
-  try {
-    entries = generateAll(findPackageRoot())
-  } catch (err) {
-    return makeExportError(
-      `Failed to generate personas: ${err instanceof Error ? err.message : String(err)}`,
-    )
-  }
 
   const owned = ownedFilenames(prevManifest)
   const { toWrite, toSkip, refused, currentFilenames } = classifyExportEntries(
@@ -742,7 +944,23 @@ function validateRefreshRoot(agentsRoot: string): string | RefreshResult {
 
 // ── refresh ───────────────────────────────────────────────────────────────────
 
-export function refresh(agentsRoot: string): RefreshResult {
+export function refresh(
+  agentsRoot: string,
+  configOptions?: ExportConfigOptions,
+): RefreshResult {
+  // Resolve config first (fail closed before any mutation).
+  let entries: ManifestEntry[]
+  try {
+    entries = generateEntries(findPackageRoot(), configOptions)
+  } catch (err) {
+    return {
+      status: 'error',
+      updated: 0,
+      skippedUnowned: 0,
+      error: `Failed to generate personas: ${err instanceof Error ? err.message : String(err)}`,
+    }
+  }
+
   const rootOrErr = validateRefreshRoot(agentsRoot)
   if (typeof rootOrErr !== 'string') return rootOrErr
   const absRoot = rootOrErr
@@ -757,18 +975,6 @@ export function refresh(agentsRoot: string): RefreshResult {
       error: `Malformed manifest — refusing to refresh: ${manifestResult.error}`,
     }
   const manifest = manifestResult.kind === 'ok' ? manifestResult.manifest : null
-
-  let entries: ManifestEntry[]
-  try {
-    entries = generateAll(findPackageRoot())
-  } catch (err) {
-    return {
-      status: 'error',
-      updated: 0,
-      skippedUnowned: 0,
-      error: `Failed to generate personas: ${err instanceof Error ? err.message : String(err)}`,
-    }
-  }
 
   const { toUpdate, toKeep, skippedUnowned } = classifyRefreshEntries(
     absRoot,

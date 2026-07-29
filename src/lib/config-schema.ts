@@ -252,6 +252,109 @@ export const CategoryOverlaySchema = z
     examples: [{ model: 'anthropic/claude-opus-4-7', temperature: 0.1 }],
   })
 
+// ── pi_subagents overlay (Pi-native export fields; see pi-subagents-export.ts) ──
+
+const piSubagentsThinkingSchema = z
+  .enum(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const)
+  .meta({
+    description:
+      'pi-subagents reasoning effort level for exported persona frontmatter',
+    examples: ['off', 'medium', 'high'],
+  })
+
+const piSubagentsMaxTurnsSchema = z
+  .number()
+  .int()
+  .nonnegative()
+  .meta({
+    description:
+      'pi-subagents maximum turns for a delegated persona (0 = unlimited)',
+    examples: [0, 10, 25],
+  })
+
+const piSubagentsToolsSchema = z
+  .string()
+  .min(1)
+  .meta({
+    description:
+      'pi-subagents comma-selector tool string (built-ins, */all/none, or extension selectors)',
+    examples: ['*', 'read,grep,glob', 'none'],
+  })
+
+const piSubagentsSkillsSchema = z
+  .union([z.literal(true), z.string().min(1)])
+  .meta({
+    description:
+      'pi-subagents skills selector: true (all) or a comma-separated list of skill names',
+    examples: [true, 'ce:plan,ce:review'],
+  })
+
+export const PiSubagentsAgentOverlaySchema = z
+  .object({
+    thinking: trustProtected(piSubagentsThinkingSchema).optional(),
+    max_turns: trustAny(piSubagentsMaxTurnsSchema).optional(),
+    tools: trustProtected(piSubagentsToolsSchema).optional(),
+    skills: trustProtected(piSubagentsSkillsSchema).optional(),
+  })
+  .strict()
+  .meta({
+    description:
+      'Per-agent pi-subagents export overlay (Pi-native fields only; no model)',
+    examples: [{ thinking: 'high', max_turns: 10 }],
+  })
+
+export const PiSubagentsCategoryOverlaySchema =
+  PiSubagentsAgentOverlaySchema.meta({
+    description:
+      'Per-category pi-subagents export overlay (Pi-native fields only; no model)',
+    examples: [{ thinking: 'medium' }],
+  })
+
+export const PiSubagentsSchema = z
+  .object({
+    categories: z
+      .record(z.string(), PiSubagentsCategoryOverlaySchema)
+      .default({})
+      .meta({
+        description:
+          'Per-category pi-subagents export overlays keyed by category name',
+        examples: [{ research: { thinking: 'high' } }, {}],
+      }),
+    agents: z
+      .record(z.string(), PiSubagentsAgentOverlaySchema)
+      .default({})
+      .meta({
+        description:
+          'Per-agent pi-subagents export overlays keyed by bundled agent name',
+        examples: [{ 'repo-research-analyst': { max_turns: 10 } }, {}],
+      }),
+  })
+  .strict()
+  .default({ categories: {}, agents: {} })
+  .meta({
+    description:
+      'Pi-native pi-subagents export field overlays (thinking, max_turns, tools, skills). Category values apply first; per-agent values override. No model field — model stays in the categories/agents overlay.',
+    examples: [
+      {
+        categories: { research: { thinking: 'high' } },
+        agents: { 'repo-research-analyst': { max_turns: 10 } },
+      },
+    ],
+  })
+
+/**
+ * Fields in PiSubagentsAgentOverlaySchema/PiSubagentsCategoryOverlaySchema that
+ * require a project-or-higher trust source. Project config cannot grant
+ * `thinking`, `tools`, or `skills` to an exported persona; `max_turns` is
+ * trust-any. Mirrors the hand-coded `PI_SUBAGENTS_PROTECTED_FIELDS` set in
+ * `src/lib/config.ts`.
+ */
+export const PI_SUBAGENTS_PROTECTED_FIELDS: readonly string[] = [
+  'thinking',
+  'tools',
+  'skills',
+] as const
+
 export const BootstrapSchema = z
   .object({
     enabled: z
@@ -404,6 +507,7 @@ export function createSystematicConfigSchema(
         ],
       }),
       workflow_guard: WorkflowGuardSchema,
+      pi_subagents: PiSubagentsSchema,
       skills_as_commands: z
         .boolean()
         .default(true)

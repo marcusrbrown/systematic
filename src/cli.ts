@@ -226,8 +226,8 @@ function printActionLine(
   else console.log(`  = ${a.filename}  (up to date)`)
 }
 
-function runPreview(agentsRoot: string): void {
-  const plan = preview(agentsRoot)
+function runPreview(agentsRoot: string, scope: 'project' | 'global'): void {
+  const plan = preview(agentsRoot, { scope, cwd: process.cwd() })
   if (plan.status === 'error') {
     console.error(`Preview failed: ${plan.error ?? 'unknown error'}`)
     process.exit(1)
@@ -250,8 +250,9 @@ function runPreview(agentsRoot: string): void {
   )
 }
 
-function runExport(agentsRoot: string): void {
-  const plan = preview(agentsRoot)
+function runExport(agentsRoot: string, scope: 'project' | 'global'): void {
+  const configOptions = { scope, cwd: process.cwd() }
+  const plan = preview(agentsRoot, configOptions)
   if (plan.status === 'error') {
     console.error(
       `Export failed (preview step): ${plan.error ?? 'unknown error'}`,
@@ -266,7 +267,7 @@ function runExport(agentsRoot: string): void {
     console.log('All persona files are already up to date. No changes.')
     return
   }
-  const result = exportPersonas(agentsRoot)
+  const result = exportPersonas(agentsRoot, configOptions)
   if (result.status === 'error') {
     console.error(`Export failed: ${result.error ?? 'unknown error'}`)
     process.exit(1)
@@ -285,8 +286,8 @@ function runExport(agentsRoot: string): void {
   }
 }
 
-function runRefresh(agentsRoot: string): void {
-  const result = refresh(agentsRoot)
+function runRefresh(agentsRoot: string, scope: 'project' | 'global'): void {
+  const result = refresh(agentsRoot, { scope, cwd: process.cwd() })
   if (result.status === 'error') {
     console.error(`Refresh failed: ${result.error ?? 'unknown error'}`)
     process.exit(1)
@@ -333,13 +334,13 @@ function piSubagentsCommand(rest: string[]): void {
   const agentsRoot = resolveAgentsRoot(scope, process.cwd())
   switch (subcommand) {
     case 'preview':
-      runPreview(agentsRoot)
+      runPreview(agentsRoot, scope)
       break
     case 'export':
-      runExport(agentsRoot)
+      runExport(agentsRoot, scope)
       break
     case 'refresh':
-      runRefresh(agentsRoot)
+      runRefresh(agentsRoot, scope)
       break
     case 'cleanup':
       runCleanup(agentsRoot)

@@ -26,8 +26,11 @@
     "workflow_guard": {
       "$ref": "#/definitions/__schema57"
     },
-    "skills_as_commands": {
+    "pi_subagents": {
       "$ref": "#/definitions/__schema61"
+    },
+    "skills_as_commands": {
+      "$ref": "#/definitions/__schema72"
     }
   },
   "additionalProperties": false,
@@ -1368,9 +1371,25 @@
       "type": "boolean"
     },
     "__schema61": {
-      "default": true,
-      "description": "Register skills discovered from user/project skill directories (OpenCode config and other agent-harness-standard locations) as slash commands. Default true.",
-      "examples": [true, false],
+      "default": {
+        "categories": {},
+        "agents": {}
+      },
+      "description": "Pi-native pi-subagents export field overlays (thinking, max_turns, tools, skills). Category values apply first; per-agent values override. No model field — model stays in the categories/agents overlay.",
+      "examples": [
+        {
+          "categories": {
+            "research": {
+              "thinking": "high"
+            }
+          },
+          "agents": {
+            "repo-research-analyst": {
+              "max_turns": 10
+            }
+          }
+        }
+      ],
       "allOf": [
         {
           "$ref": "#/definitions/__schema62"
@@ -1378,6 +1397,152 @@
       ]
     },
     "__schema62": {
+      "type": "object",
+      "properties": {
+        "categories": {
+          "default": {},
+          "description": "Per-category pi-subagents export overlays keyed by category name",
+          "examples": [
+            {
+              "research": {
+                "thinking": "high"
+              }
+            },
+            {}
+          ],
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema63"
+            }
+          ]
+        },
+        "agents": {
+          "default": {},
+          "description": "Per-agent pi-subagents export overlays keyed by bundled agent name",
+          "examples": [
+            {
+              "repo-research-analyst": {
+                "max_turns": 10
+              }
+            },
+            {}
+          ],
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema71"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "__schema63": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "description": "Per-category pi-subagents export overlay (Pi-native fields only; no model)",
+        "examples": [
+          {
+            "thinking": "medium"
+          }
+        ],
+        "allOf": [
+          {
+            "$ref": "#/definitions/__schema70"
+          }
+        ]
+      }
+    },
+    "__schema64": {
+      "type": "string",
+      "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+      "description": "pi-subagents reasoning effort level for exported persona frontmatter",
+      "examples": ["off", "medium", "high"],
+      "trust": "project-or-higher"
+    },
+    "__schema65": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991,
+      "description": "pi-subagents maximum turns for a delegated persona (0 = unlimited)",
+      "examples": [0, 10, 25],
+      "trust": "any"
+    },
+    "__schema66": {
+      "type": "string",
+      "minLength": 1,
+      "description": "pi-subagents comma-selector tool string (built-ins, */all/none, or extension selectors)",
+      "examples": ["*", "read,grep,glob", "none"],
+      "trust": "project-or-higher"
+    },
+    "__schema67": {
+      "anyOf": [
+        {
+          "$ref": "#/definitions/__schema68"
+        },
+        {
+          "$ref": "#/definitions/__schema69"
+        }
+      ],
+      "description": "pi-subagents skills selector: true (all) or a comma-separated list of skill names",
+      "examples": [true, "ce:plan,ce:review"],
+      "trust": "project-or-higher"
+    },
+    "__schema68": {
+      "type": "boolean",
+      "const": true
+    },
+    "__schema69": {
+      "type": "string",
+      "minLength": 1
+    },
+    "__schema70": {
+      "type": "object",
+      "properties": {
+        "thinking": {
+          "$ref": "#/definitions/__schema64"
+        },
+        "max_turns": {
+          "$ref": "#/definitions/__schema65"
+        },
+        "tools": {
+          "$ref": "#/definitions/__schema66"
+        },
+        "skills": {
+          "$ref": "#/definitions/__schema67"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Per-agent pi-subagents export overlay (Pi-native fields only; no model)",
+      "examples": [
+        {
+          "thinking": "high",
+          "max_turns": 10
+        }
+      ]
+    },
+    "__schema71": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "$ref": "#/definitions/__schema70"
+      }
+    },
+    "__schema72": {
+      "default": true,
+      "description": "Register skills discovered from user/project skill directories (OpenCode config and other agent-harness-standard locations) as slash commands. Default true.",
+      "examples": [true, false],
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema73"
+        }
+      ]
+    },
+    "__schema73": {
       "type": "boolean"
     }
   }

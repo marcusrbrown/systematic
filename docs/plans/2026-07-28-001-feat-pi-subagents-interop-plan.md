@@ -21,11 +21,11 @@ On OpenCode, Systematic delegates via the host `task()` tool (parallel + backgro
 
 - R1. `systematic_delegate` and all its bounds/tests remain unchanged; this plan only adds interop (origin R1).
 - R2. Export a **curated subset** of personas as `pi-subagents`-compatible flat `systematic-<name>.md` files, generated from `agents/` source (origin R2).
-- R3. Exported files are model-free, consistent with the bundled-agent invariant (origin R3).
+- R3. Bundled source personas, committed fixtures, and the generator's model-free invariant are preserved in source. User-exported persona files emit `model` when resolved from the `categories`→`agents` overlay: per-agent beats category; `model: null` removes an inherited category model and falls back to Pi/pi-subagents defaults. Source fixtures remain model-free (origin R3 + R13).
 - R4. Export is opt-in only via an explicit command/flag; no write is triggered by detection, `.pi/agents/` existence, or extension load (origin R4).
 - R5. Filenames are namespaced and sanitized to a strict safe charset; the resolved write target must stay under the user-selected root (no traversal, no symlink escape) (origin R5).
-- R6. Export writes a manifest, is idempotent, and provides cleanup + a re-export/refresh command that detects drift between a user's exported copy and current source; exported files are user-owned and may drift until re-exported (origin R6).
-- R7. Export scope (project `.pi/agents/` vs global `$PI_CODING_AGENT_DIR/agents/`) is user-chosen; target dir + files to create/overwrite are shown before writing (origin R7).
+- R6. Export writes a manifest (`.systematic-personas.json`), is idempotent, and provides cleanup + a re-export/refresh command that detects drift. Drift detection uses the full normalized rendered artifact hash (frontmatter + body + compatibility note/classification as rendered) — not a separate raw-config hash. Manifest hash is drift metadata only, not integrity/authenticity. Exported files are user-owned and may drift until re-exported; cleanup is manifest-only and does not require config. Every manifest path is revalidated under the current root before mutation; malformed manifest or config fails closed before any mutation (origin R6 + R18).
+- R7. Export scope (project `.pi/agents/` vs global `$PI_CODING_AGENT_DIR/agents/`, fallback `~/.pi/agent/agents/`) is user-chosen; target dir + files to create/overwrite are shown before writing. CLI: `systematic pi-subagents <preview|export|refresh|cleanup> --scope <project|global>`. Project export loads `user → project → custom`; global export loads `user → custom` only, never absorbing cwd project overlays. Cleanup is config-independent (origin R7).
 - R8. Personas pass **compatibility screening** before export: each candidate is classified info / warning / critical by its dependence on Systematic-only tooling and orchestration. Critical-coupled personas are **excluded** from the export set, not rewritten; warning personas may export with a generated compatibility note; only surface token-level references (e.g. `ce:*` mentions in policy prose) are lightly adapted. The generator does not rewrite orchestration semantics (origin R2 + deepening findings).
 - R9. Runtime detection subscribes to `subagents:ready` and verifies via `subagents:rpc:ping`, used only to nudge + adjust guidance; never authorizes writes (origin R8).
 - R10. Guidance advertises the `pi-subagents` path only in the `present-supported` state (detection + ping version mapping to a tested guidance template); all other states get no operational Agent-tool instructions. When absent, degrade with no error (origin R9, R10 + version-drift finding).
@@ -33,6 +33,13 @@ On OpenCode, Systematic delegates via the host `task()` tool (parallel + backgro
 - R12. The `systematic_delegate` re-entry boundary (`noExtensions` depth-1) is verified by an explicit test; the plan states narrowly that this bounds `systematic_delegate`'s own recursion, not global end-to-end depth (origin R11 + adversarial finding).
 - R13. Docs + `HARNESSES.md` + the Pi capability profile reflect "bounded built-in delegate + optional mature delegation via pi-subagents", the export/setup pairing, a documented **tested pi-subagents version range**, and that the combined delegation path is outside Systematic's bounded-delegate guarantees (origin R12 + deepening).
 - R14. Personas that critically depend on Systematic-only orchestration/tooling are excluded from the export set by default; the curated include list carries a per-persona compatibility rationale, and the generator check-fails if a curated persona gains a new critical incompatibility (deepening finding).
+- R15. OpenCode `variant` is not mapped to pi-subagents `thinking`; they are distinct contracts. `thinking` is supplied only via `pi_subagents` config (origin R14).
+- R16. pi-subagents v0.14.1 does not support `temperature` or `top_p` in persona frontmatter. These fields are documented as intentionally non-portable and omitted from export — not silently discarded (origin R15).
+- R17. A top-level `pi_subagents` config section with `categories` and `agents` sub-keys provides Pi-native export fields. Exact v0.14.1 field schemas: `thinking` (enum: `off|minimal|low|medium|high|xhigh|max`); `max_turns` (nonneg integer; 0 = unlimited); `tools` (comma-selector string: built-ins, `*/all/none`, ext selectors); `skills` (`true` or comma-separated names). Category-level values apply first; per-agent values override. No `model` field in this namespace. Invalid shapes and unknown `pi_subagents` fields fail config validation before preview/export/refresh (origin R16).
+- R18. Trust lattice for `pi_subagents` config fields: user config and custom config-dir are trusted; project config is untrusted — `thinking`, `tools`, `skills` stripped from project-sourced config before merge (project cannot grant tools/skills). `max_turns` = trust-any. Portable `model` protection via existing `SECURITY_OVERLAY_FIELDS`, unchanged. No allowlist beyond pi-subagents' accepted selector syntax. Tests must cover project-level stripping and merge precedence for all four fields (origin R17).
+- R19. Export, preview, and refresh load scope-appropriate config: project-scoped = `user → project → custom` for cwd; global-scoped = `user → custom` only (never absorbing cwd project overlays). Source fixtures remain config-neutral/model-free (origin R18, R19).
+- R20. The canonical public config example is user-global JSONC (repo-portable, no absolute paths): category model overrides for research/review, per-agent `repo-research-analyst` model override, and `pi_subagents.thinking`/`max_turns` examples (origin R20).
+- R21. Docs must state that manually editing exported files is not the durable config mechanism; `refresh` may overwrite any generated file that diverges from source (origin R21).
 
 ## Scope Boundaries
 
@@ -85,6 +92,10 @@ On OpenCode, Systematic delegates via the host `task()` tool (parallel + backgro
 - **Version-template guidance, not a boolean**: model-facing guidance is selected from a source-controlled compatibility table (tested pi-subagents version/protocol → supported guidance template). Unknown/incompatible versions get no operational Agent-tool instructions — stale guidance that mis-describes the `Agent` tool is worse than none.
 - **Detection is best-effort and non-fatal**: `pi.events` coupling wrapped in explicit try/catch, observable, never blocking (plugin-hook-silent-swallow learning).
 - **Drift is source-side only**: exported files become user-owned; a re-export/refresh command surfaces drift — the export is not "drift-locked" on the user's machine (adversarial correction).
+- **Config-driven export: categories-then-agents overlay for portable model** (KD6): The existing config overlay precedence (`categories` → `agents`) is reused for `model` only. `variant` is not mapped to `thinking`; they are distinct contracts. Unsupported fields (`temperature`, `top_p`) are documented as omitted from pi-subagents v0.14.1 export — not silently dropped. Field schemas: `thinking` enum `off|minimal|low|medium|high|xhigh|max`; `max_turns` nonneg int (0=unlimited); `tools` comma-selector string; `skills` `true` or comma names.
+- **`pi_subagents` config namespace for Pi-native fields** (KD7): A dedicated `pi_subagents: { categories, agents }` section owns Pi-native export fields (`thinking`, `max_turns`, `tools`, `skills`). `model` stays in the existing overlay. Trust lattice: user/custom-dir trusted; project untrusted (`thinking`/`tools`/`skills` stripped; `max_turns` retained). `SECURITY_OVERLAY_FIELDS` guards portable `model` unchanged.
+- **Config chain drives export; fixtures stay config-neutral** (KD8): Project-scoped export loads `user → project → custom` for cwd; global-scoped export loads `user → custom` only (never absorbs cwd project overlays). Drift uses the full normalized rendered artifact hash, not a separate raw-config hash. Source fixtures are config-free. Manual edits are not durable; refresh may overwrite them.
+- **Architecture: extend existing config modules, not a parallel loader.** `pi_subagents` schema and loading are added to `src/lib/config-schema.ts`, `src/lib/config.ts`, and the schema-generation tests. Do NOT create a separate `src/lib/pi-subagents-config.ts` loader. Export lifecycle goes into `src/lib/pi-subagents-export.ts`. `src/lib/setup.ts` stays out of the export lifecycle (only provides write helpers). CLI is `systematic pi-subagents <preview|export|refresh|cleanup> --scope <project|global>`. Manifest filename is `.systematic-personas.json`.
 
 ## Open Questions
 
@@ -95,14 +106,20 @@ On OpenCode, Systematic delegates via the host `task()` tool (parallel + backgro
 - Verbatim vs transform? Neither — compatibility screening + light adaptation + exclude-on-critical (deepening correction to the brainstorm's "compat-transform").
 - Guidance trigger? `present-supported` only, via a version-template compatibility table (not a boolean known-good).
 
+### Resolved During Planning (Increment 1)
+
+- **CLI command:** `systematic pi-subagents <preview|export|refresh|cleanup> --scope <project|global>` — dedicated subcommand under `src/cli.ts`.
+- **Manifest filename:** `.systematic-personas.json` at the export root.
+- **Emitted baseline fields:** `description` (always) + config-resolved `model` (when set in overlay) + `pi_subagents` fields (when trusted and set); `temperature`/`top_p` omitted and documented.
+- **Curated list:** implemented at Unit 1; self-contained research/review/document-review + select workflow personas; orchestration/skill/env-coupled excluded. Final membership from `agents/` at implementation.
+- **Config architecture:** extend `src/lib/config-schema.ts` + `src/lib/config.ts` + schema-generation tests + `src/lib/pi-subagents-export.ts`. No separate `pi-subagents-config.ts`.
+
 ### Deferred to Implementation
 
-- Exact CLI surface: widen `setup --harness pi --with-subagents` vs a dedicated `pi export-agents` command — decide against `src/cli.ts` arg-parser shape during implementation.
 - Exact curated persona list membership (which workflow/review/research agents) — finalize from `agents/` during implementation.
-- Manifest file location + format (project vs global; JSON shape) — mirror the agent-browser/registry manifest shape.
-- Exact pi-subagents frontmatter fields to emit beyond `description` (whether to set `tools`/`skills`) — determine from a concrete one-persona export validated against pi-subagents parsing.
-- Known-good version predicate + tested version range — the compatibility table (tested pi-subagents version/protocol → guidance template) is populated and documented at implementation from the observed pi-subagents version; versions outside the range are unsupported-but-nonfatal.
-- Exact `tools` frontmatter mapping for exported personas (pi-subagents supports a `tools` field; whether to emit it or omit) — decide from a concrete one-persona export validated against pi-subagents parsing.
+- Exact pi-subagents frontmatter `tools` field mapping — determine from a concrete one-persona export validated against pi-subagents parsing.
+- Known-good version predicate + tested version range (Increment 2) — compatibility table populated at implementation.
+- Drift gating in CI — decide during implementation.
 
 ## High-Level Technical Design
 
@@ -179,43 +196,73 @@ Increment 2 (runtime detection) — src/pi.ts, best-effort/non-fatal:
 
 **Verification:** Unit tests green including golden + false-positive/negative + critical-exclusion fixtures; `--check` correctly passes/fails and flags new critical coupling; importing the module writes nothing.
 
-- [x] **Unit 2: Export command + safe user-dir writes**
+- [x] **Unit 2: Export command + safe user-dir writes + config-aware frontmatter**
 
-**Goal:** Wire the generator into an explicit opt-in CLI surface that previews target dir + files, refuses to overwrite user files by default, writes atomically under the user-chosen root, and supports cleanup + re-export/refresh.
+**Goal:** Wire the generator into an explicit opt-in CLI surface (`systematic pi-subagents <preview|export|refresh|cleanup> --scope <project|global>`) that previews target dir + files, refuses to overwrite user files by default, writes atomically under the user-chosen root, and supports cleanup + re-export/refresh. Config loading is scope-appropriate (`user → project → custom` for project; `user → custom` for global) and applied to the generated frontmatter. Drift detection uses the full normalized rendered artifact hash. Source fixtures and generator core remain config-neutral.
 
-**Requirements:** R4, R5, R6, R7, R11
+**Requirements:** R4, R5, R6, R7, R11, R15–R21
 
 **Dependencies:** Unit 1
 
 **Files:**
-- Modify: `src/cli.ts` (opt-in surface), `src/lib/setup.ts` (write/cleanup helpers)
-- Create: `tests/unit/pi-subagents-export.test.ts` (or extend `tests/unit/setup.test.ts`)
+- Modify: `src/cli.ts` (opt-in surface — `systematic pi-subagents <preview|export|refresh|cleanup> --scope <project|global>`)
+- Modify: `src/lib/config-schema.ts` (add `pi_subagents` schema + v0.14.1 field shapes + strict unknown-field rejection)
+- Modify: `src/lib/config.ts` (extend load/merge to handle `pi_subagents` namespace, trust filtering, scope-aware config chain)
+- Modify: schema-generation tests (cover `pi_subagents` fields, trust stripping, invalid shape rejection)
+- Create: `src/lib/pi-subagents-export.ts` (export lifecycle: preview/export/refresh/cleanup, write helpers, manifest `.systematic-personas.json`)
+- Create: `tests/unit/pi-subagents-export.test.ts`
+- Do NOT create: `src/lib/pi-subagents-config.ts` — schema and loading go into the existing config modules.
+- Do NOT modify: `src/lib/setup.ts` beyond providing write helpers already there; setup.ts stays out of the export lifecycle.
 
 **Approach:**
+
+*Config schema and loading (extends `src/lib/config-schema.ts` + `src/lib/config.ts`):*
+- Add `pi_subagents` JSON schema: `thinking` enum (`off|minimal|low|medium|high|xhigh|max`), `max_turns` nonneg integer (0=unlimited), `tools` string (comma-selector), `skills` `true`|string. Unknown `pi_subagents` fields reject under strict schema. Invalid shapes fail before preview/export/refresh.
+- Extend config load/merge in `src/lib/config.ts` to handle scope-appropriate chain: project-scoped = `user → project → custom` for cwd; global-scoped = `user → custom` only (never absorbs cwd project overlays). Per-agent beats category for both `categories`/`agents` and `pi_subagents.categories`/`pi_subagents.agents` namespaces.
+- Trust enforcement at merge time: `pi_subagents.thinking`, `pi_subagents.tools`, and `pi_subagents.skills` are stripped when the config source is project-level (project-protected); `pi_subagents.max_turns` is accepted from any trust level (trust-any). Portable `model` continues through existing `SECURITY_OVERLAY_FIELDS` — no change.
+- Frontmatter application (in `pi-subagents-export.ts`): resolve effective `model` from `categories`/`agents` overlay (per-agent beats category; `model: null` omits); resolve `pi_subagents` fields after trust filtering; `variant` is never mapped to `thinking`; `temperature` and `top_p` are not emitted (document as unsupported in pi-subagents v0.14.1). The drift hash covers the full normalized rendered artifact (frontmatter + body + compatibility note/classification) — not a separate config hash field.
+
+*Write path:*
 - Reuse `atomicWrite()`/`writeTempAndRename()` from `src/lib/setup.ts`.
 - Resolve + validate the write target stays under the selected root (project `.pi/agents/` or global `$PI_CODING_AGENT_DIR/agents/`); reject traversal/symlink escape before writing.
 - Preview: list files to be created/overwritten; default refuse-overwrite of existing files (esp. non-Systematic ones).
-- Cleanup uses the manifest to remove only Systematic-generated files; re-export/refresh regenerates and reports drift vs the user's copies.
+- Cleanup uses the manifest to remove only Systematic-generated files (no config needed); re-export/refresh regenerates with current effective config, reports drift vs the user's copies (full normalized rendered artifact hash — frontmatter + body + compat note).
 - Opt-in only: nothing here runs at extension load or on detection.
 
-**Execution note:** Test-first on the path-safety + refuse-overwrite + idempotency behaviors.
+**Execution note:** Test-first on config load/merge/trust, path-safety, refuse-overwrite, and idempotency behaviors.
 
-**Patterns to follow:** `src/lib/setup.ts` `setupPi()` idempotent update; `local-systematic-overrides-global` (generated-vs-user-owned distinction).
+**Patterns to follow:** `src/lib/setup.ts` `setupPi()` idempotent update; `local-systematic-overrides-global` (generated-vs-user-owned distinction); `layered-trust-boundaries-overlay-config` (trust scoping).
 
 **Test scenarios:**
-- Happy path: export to a temp project `.pi/agents/` → namespaced files written; manifest recorded; re-run is idempotent (no changes).
+
+*Config schema/load/merge/trust (in config-schema and config.ts tests):*
+- Happy path: user config with `categories.research.model` and `agents.repo-research-analyst.model` → per-agent model wins in exported frontmatter; category model applied to other research personas.
+- Happy path: `model: null` on an agent → model field omitted from that persona's exported frontmatter.
+- Happy path: `pi_subagents.categories.research.thinking: "high"` and `pi_subagents.agents.repo-research-analyst.max_turns: 10` in user config → applied to matching exported personas.
+- Trust stripping: project config containing `pi_subagents.thinking`, `pi_subagents.tools`, or `pi_subagents.skills` → all three stripped from merged result; `max_turns` from project config is retained.
+- Merge precedence: per-agent `pi_subagents` value overrides category value; category overrides nothing (baseline).
+- `variant` field in config or source frontmatter → not emitted as `thinking`.
+- `temperature`/`top_p` in source frontmatter → not emitted; presence is not an error.
+- Invalid `pi_subagents` field shape (e.g. `thinking: "turbo"`, `max_turns: -1`) → schema validation rejects before export.
+- Unknown `pi_subagents` config field → schema validation rejects under strict mode.
+- Scope: global export does NOT load project-level config even when cwd has one; project export does load it.
+- Artifact hash: two personas with identical rendered output (frontmatter + body + compat note) produce the same hash; any rendered change (including config effect) changes the hash; no separate raw-config hash column.
+
+*Write path:*
+- Happy path: export to a temp project `.pi/agents/` → namespaced files written with config-applied frontmatter; manifest records config hash; re-run is idempotent (no changes).
 - Edge case: pre-existing user file `reviewer.md` → not overwritten; a stale `systematic-*.md` from a removed persona → cleanup removes it, user files untouched.
 - Error path: computed target escapes the selected root (traversal/symlink) → refused, nothing written.
 - Error path: unwritable dir → fails cleanly, no partial state (atomic).
-- Integration: export → edit a generated file → refresh detects drift and reports it.
+- Integration: export → edit a generated file → refresh detects drift and reports it; config change → refresh reports config hash mismatch.
+- Config example: generated config example (canonical public JSONC) is repo-portable (no absolute paths), includes category model overrides for research/review, per-agent `repo-research-analyst` model, and `pi_subagents.thinking`/`max_turns` examples.
 
-**Verification:** Files land only under the chosen root; user files never clobbered; cleanup/refresh behave per manifest; no writes without the explicit command.
+**Verification:** Config schema validates correctly; trust stripping fires on project-sourced `thinking`/`tools`/`skills`; `max_turns` always retained; `variant` never emitted as `thinking`; `temperature`/`top_p` never emitted; invalid field shapes and unknown `pi_subagents` fields fail validation before any write; global scope never absorbs cwd project config; drift hash is the full normalized rendered artifact; files land only under the chosen root; user files never clobbered; cleanup/refresh behave per manifest (no config needed for cleanup); no writes without the explicit command. Unit 2 checkbox remains unchecked (not yet implemented).
 
 - [ ] **Unit 3: Docs + capability profile + delegation-boundary test**
 
 **Goal:** Document the recommended pairing and update capability surfaces; add the explicit `noExtensions` boundary test and the combined-path characterization.
 
-**Requirements:** R12, R13
+**Requirements:** R12, R13, R16, R20, R21
 
 **Dependencies:** Unit 2
 
@@ -228,17 +275,20 @@ Increment 2 (runtime detection) — src/pi.ts, best-effort/non-fatal:
 - Update delegation-capability wording to "bounded built-in delegate + optional mature delegation via pi-subagents"; document opt-in export, ownership/drift of exported files, and the safe-provisioning model.
 - Boundary test: assert a `systematic_delegate` child (built `noExtensions: true`) cannot resolve extensions or re-enter `systematic_delegate` (strengthen existing coverage; state the guarantee narrowly).
 - Combined-path characterization: extend the parent→child integration pattern to characterize top-level pi-subagents + a nested Systematic persona (document that end-to-end depth is not globally bounded by this boundary).
+- Config example in docs: use the canonical public JSONC from Unit 2 (repo-portable, no absolute paths) as the config reference example; it must show category research/review model overrides, per-agent `repo-research-analyst` model, and `pi_subagents.thinking`/`max_turns`. Document `temperature`/`top_p` as unsupported/omitted in pi-subagents v0.14.1 (not silently dropped). Document that `variant` does not map to `thinking`.
+- Manual-edit caveat: docs must include a clear statement that manually editing exported persona files is not the durable config mechanism; `refresh` may overwrite generated files that diverge from source.
 
 **Execution note:** Characterization-first for the combined-path test (capture observed behavior; do not assert a global bound the code doesn't enforce).
 
 **Patterns to follow:** `tests/unit/pi-delegate-session.test.ts:14-34` (boundary), `tests/integration/pi.test.ts:943-995` (parent→child).
 
 **Test scenarios:**
-- Happy path (docs): profile/HARNESSES/install/index render the new wording; content-integrity clean.
+- Happy path (docs): profile/HARNESSES/install/index render the new wording; content-integrity clean; config example is valid JSONC and repo-portable.
+- Docs acceptance: `temperature`/`top_p` documented as unsupported/omitted (not silently dropped); `variant`→`thinking` mapping is explicitly absent; manual-edit warning present.
 - Integration: `systematic_delegate` child cannot load an extension or re-enter the delegate tool (boundary holds).
 - Integration (characterization): top-level pi-subagents with a nested Systematic persona — record depth behavior; no false global-bound assertion.
 
-**Verification:** Docs build + content-integrity green; boundary test passes; combined-path test documents actual behavior.
+**Verification:** Docs build + content-integrity green; boundary test passes; combined-path test documents actual behavior; config example is repo-portable JSONC and matches the canonical schema from Unit 2.
 
 ### Phase 2 — Runtime detection + conditional guidance
 
