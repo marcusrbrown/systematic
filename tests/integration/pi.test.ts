@@ -61,6 +61,7 @@ import fs from 'node:fs'
 import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
+import { exportPersonas } from '../../src/lib/pi-subagents-export.js'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..')
 const PI_CLI = path.join(
@@ -1285,6 +1286,146 @@ describe('Combined-path bounded execution: real pi-subagents top-level + nested 
       // two-level call graph (pi-subagents Agent → nested session →
       // systematic_delegate) completes, and that the nested delegate call was
       // itself constructed with noExtensions: true.
+    },
+    TIMEOUT_MS,
+  )
+
+  /**
+   * Real export-to-discovery path: Systematic's own public export API
+   * (`exportPersonas` from `src/lib/pi-subagents-export.js`) writes a real
+   * `systematic-*` persona file into the fixture's `.pi/agents` — the exact
+   * discovery directory pi-subagents' `loadCustomAgents()` reads
+   * (`custom-agents.ts`: `join(cwd, ".pi", "agents")`, highest-priority
+   * project source). No stand-in/mocked persona content: the exported file
+   * is byte-identical to what `systematic pi-subagents export` would write
+   * for a real user (curated source: agents/research/repo-research-analyst.md
+   * — see CURATED_PERSONAS in src/lib/pi-subagents-personas.ts).
+   *
+   * This proves the REAL, installed `@tintinweb/pi-subagents` (v0.14.3):
+   *   1. discovers the exported `systematic-repo-research-analyst` custom
+   *      agent type via its own real `loadCustomAgents()`/`getAvailableTypes()`
+   *      (not `general-purpose` — a `subagent_type` that only exists because
+   *      the export API wrote it is accepted and resolved to itself, not
+   *      silently falling back);
+   *   2. builds the child session's system prompt via its own real
+   *      `buildAgentPrompt()` from that persona's frontmatter-derived
+   *      config — `promptMode: "replace"` (no `prompt_mode:` frontmatter
+   *      field emitted by the exporter, so pi-subagents' own default
+   *      applies) means the exported persona's body appears verbatim,
+   *      proving the exported content — not a hardcoded/general prompt —
+   *      drove the child request.
+   */
+  test(
+    'real exported systematic-repo-research-analyst persona is discovered and used by the real pi-subagents Agent tool',
+    async () => {
+      // Export a real Systematic persona into the fixture's .pi/agents via
+      // the public export API — the same code path `systematic
+      // pi-subagents export` runs, writing to the same directory
+      // pi-subagents' loadCustomAgents() reads.
+      const agentsRoot = path.join(fixture.projectDir, '.pi', 'agents')
+      const exportResult = exportPersonas(agentsRoot)
+      if (exportResult.status !== 'ok') {
+        throw new Error(
+          `exportPersonas failed: ${exportResult.error ?? 'unknown error'}`,
+        )
+      }
+      const exportedPersonaPath = path.join(
+        agentsRoot,
+        'systematic-repo-research-analyst.md',
+      )
+      if (!fs.existsSync(exportedPersonaPath)) {
+        throw new Error(
+          `Expected export to write ${exportedPersonaPath}, but it is absent. ` +
+            `Exported: ${exportResult.written}, skipped: ${exportResult.skipped}.`,
+        )
+      }
+
+      client = spawnPiRpc({ fixture })
+
+      await client.send({
+        type: 'set_model',
+        provider: MOCK_PROVIDER_ID,
+        modelId: MOCK_MODEL_ID,
+      })
+
+      // Turn 1 (top-level session): model invokes the real pi-subagents
+      // `Agent` tool directly with the exported systematic-* persona as
+      // subagent_type — no systematic_delegate involved, exercising
+      // pi-subagents' own custom-agent discovery/acceptance of a
+      // Systematic-exported persona.
+      mockModel.push({
+        toolCalls: [
+          {
+            id: 'call_agent_exported_persona_1',
+            name: 'Agent',
+            arguments: {
+              prompt: 'Give a one-sentence summary of this repository.',
+              description: 'Repo research via exported persona',
+              subagent_type: 'systematic-repo-research-analyst',
+            },
+          },
+        ],
+      })
+      // Turn 2 (nested session spawned for the exported persona): completes
+      // the delegated turn.
+      mockModel.push({ text: 'This repo is a Pi/OpenCode plugin.' })
+      // Turn 3 (top-level session): acknowledges the Agent tool result.
+      mockModel.push({ text: 'done' })
+
+      const promptResponse = await client.send({
+        type: 'prompt',
+        message:
+          'Use the Agent tool with subagent_type systematic-repo-research-analyst to summarize this repo.',
+      })
+      expect(promptResponse.success).toBe(true)
+
+      const outerToolEnd = await client.waitFor(
+        (msg) =>
+          msg.type === 'tool_execution_end' &&
+          (msg as { toolName?: string }).toolName === 'Agent',
+        TIMEOUT_MS,
+      )
+      expect((outerToolEnd as { isError?: boolean }).isError).not.toBe(true)
+
+      await client.waitFor((msg) => msg.type === 'agent_settled')
+
+      // Ground truth: the real pi-subagents Agent tool did NOT fall back to
+      // "general-purpose" — the AgentDetails on the tool result report the
+      // resolved subagentType verbatim.
+      const outerResult = (outerToolEnd as { result?: unknown }).result as
+        | { details?: { subagentType?: string } }
+        | undefined
+      expect(outerResult?.details?.subagentType).toBe(
+        'systematic-repo-research-analyst',
+      )
+
+      // Exactly 3 requests: top-level turn 1 (emits Agent call), nested
+      // child turn 1 (completes), top-level turn 2 (acknowledges) — bounded,
+      // no unexpected fallback/retry loop.
+      expect(mockModel.requests.length).toBe(3)
+
+      const nestedRequest = mockModel.requests[1] as {
+        messages: { role: string; content: unknown }[]
+      }
+      const nestedSystemText = nestedRequest.messages
+        .filter((m) => m.role === 'system' || m.role === 'developer')
+        .map((m) =>
+          typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+        )
+        .join('\n')
+
+      // The exported persona's frontmatter-derived description drives the
+      // real pi-subagents Agent tool's parameter description (proves
+      // discovery/acceptance), and the child's system prompt is the
+      // exported persona's body verbatim (promptMode: "replace" — no
+      // prompt_mode: frontmatter field in the exporter's output, so
+      // pi-subagents' own default applies), proving the exported
+      // frontmatter/body — not a hardcoded persona — drove the real child
+      // request.
+      expect(nestedSystemText).toContain(
+        'You are an expert repository research analyst specializing in understanding codebases',
+      )
+      expect(nestedSystemText).toContain('**Scoped Invocation**')
     },
     TIMEOUT_MS,
   )

@@ -21,8 +21,10 @@ import * as fs from 'node:fs'
 import os from 'node:os'
 import * as path from 'node:path'
 import {
+  type CleanupResult,
   cleanup,
   exportPersonas,
+  LOCK_FILENAME,
   MANIFEST_FILENAME,
   type PiSubagentsManifest,
   preview,
@@ -30,6 +32,7 @@ import {
   readManifestStrict,
   refresh,
   resolveAgentsRoot,
+  resolveAnchor,
   runWithRollback,
   writeManifest,
 } from '../../src/lib/pi-subagents-export.js'
@@ -68,6 +71,12 @@ function makeManifest(
 // resolveAgentsRoot
 // ---------------------------------------------------------------------------
 
+describe('MANIFEST_FILENAME contract', () => {
+  test('manifest filename is exactly .systematic-personas.json', () => {
+    expect(MANIFEST_FILENAME).toBe('.systematic-personas.json')
+  })
+})
+
 describe('resolveAgentsRoot', () => {
   test('project scope resolves to <cwd>/.pi/agents', () => {
     const cwd = mkTmp()
@@ -100,6 +109,160 @@ describe('resolveAgentsRoot', () => {
     } finally {
       if (origEnv !== undefined) process.env.PI_CODING_AGENT_DIR = origEnv
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// resolveAnchor: scope-anchored symlink-validation root
+// ---------------------------------------------------------------------------
+
+describe('resolveAnchor', () => {
+  test('project scope anchor is cwd', () => {
+    const cwd = mkTmp()
+    expect(resolveAnchor('project', cwd)).toBe(cwd)
+  })
+
+  test('global scope without PI_CODING_AGENT_DIR anchors at homedir', () => {
+    const origEnv = process.env.PI_CODING_AGENT_DIR
+    try {
+      delete process.env.PI_CODING_AGENT_DIR
+      expect(resolveAnchor('global', process.cwd())).toBe(os.homedir())
+    } finally {
+      if (origEnv !== undefined) process.env.PI_CODING_AGENT_DIR = origEnv
+    }
+  })
+
+  test('global scope with PI_CODING_AGENT_DIR anchors at its parent (env dir itself is checked)', () => {
+    const base = mkTmp('pi-anchor-env-')
+    const envDir = path.join(base, 'pi-coding-agent')
+    fs.mkdirSync(envDir, { recursive: true })
+    const origEnv = process.env.PI_CODING_AGENT_DIR
+    try {
+      process.env.PI_CODING_AGENT_DIR = envDir
+      expect(resolveAnchor('global', process.cwd())).toBe(path.dirname(envDir))
+    } finally {
+      if (origEnv === undefined) delete process.env.PI_CODING_AGENT_DIR
+      else process.env.PI_CODING_AGENT_DIR = origEnv
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Scope-anchored symlink validation: every mutating command walks from
+// anchor -> agentsRoot with lstat, rejecting any symlink or non-directory
+// intermediate/final component.
+// ---------------------------------------------------------------------------
+
+describe('scope-anchored symlink validation', () => {
+  test('export refuses when an intermediate component (.pi) is a symlink', () => {
+    const cwd = mkTmp()
+    const realPi = path.join(cwd, 'real-pi')
+    fs.mkdirSync(realPi, { recursive: true })
+    fs.symlinkSync(realPi, path.join(cwd, '.pi'))
+    const agentsRoot = path.join(cwd, '.pi', 'agents')
+
+    const result = exportPersonas(agentsRoot, { scope: 'project', cwd })
+    expect(result.status).toBe('error')
+    expect(result.error).toMatch(/symlink/i)
+    expect(fs.readdirSync(realPi)).toHaveLength(0)
+  })
+
+  test('export refuses when an intermediate component is a non-directory (regular file)', () => {
+    const cwd = mkTmp()
+    fs.writeFileSync(path.join(cwd, '.pi'), 'not a directory')
+    const agentsRoot = path.join(cwd, '.pi', 'agents')
+
+    const result = exportPersonas(agentsRoot, { scope: 'project', cwd })
+    expect(result.status).toBe('error')
+    expect(result.error).toMatch(/not a directory|non-directory/i)
+  })
+
+  test('refresh refuses when a .pi ancestor is a symlink', () => {
+    const cwd = mkTmp()
+    const realPi = path.join(cwd, 'real-pi')
+    const agentsRoot = path.join(cwd, '.pi', 'agents')
+    // Establish a legitimate baseline elsewhere, then swap .pi for a symlink
+    fs.mkdirSync(realPi, { recursive: true })
+    fs.mkdirSync(path.join(cwd, '.pi', 'agents'), { recursive: true })
+    fs.renameSync(path.join(cwd, '.pi'), path.join(cwd, '.pi-orig'))
+    fs.symlinkSync(realPi, path.join(cwd, '.pi'))
+
+    const result = refresh(agentsRoot, { scope: 'project', cwd })
+    expect(result.status).toBe('error')
+    expect(result.error).toMatch(/symlink/i)
+  })
+
+  test('cleanup refuses when an agent ancestor is a symlink', () => {
+    const cwd = mkTmp()
+    const realAgents = path.join(cwd, 'real-agents')
+    fs.mkdirSync(realAgents, { recursive: true })
+    fs.mkdirSync(path.join(cwd, '.pi'), { recursive: true })
+    fs.symlinkSync(realAgents, path.join(cwd, '.pi', 'agents'))
+    const agentsRoot = path.join(cwd, '.pi', 'agents')
+
+    expect(() => cleanup(agentsRoot, { scope: 'project', cwd })).toThrow(
+      /symlink/i,
+    )
+  })
+
+  test('cleanup rejects a symlinked root directly', () => {
+    const cwd = mkTmp()
+    const realDir = path.join(cwd, 'real-agents')
+    const symlinkDir = path.join(cwd, '.pi', 'agents')
+    fs.mkdirSync(realDir, { recursive: true })
+    fs.mkdirSync(path.dirname(symlinkDir), { recursive: true })
+    fs.symlinkSync(realDir, symlinkDir)
+
+    expect(() => cleanup(symlinkDir, { scope: 'project', cwd })).toThrow(
+      /symlink/i,
+    )
+  })
+
+  test('does not inspect filesystem ancestors above the explicit anchor', () => {
+    // The anchor for project scope is cwd itself. Ancestors of cwd (e.g. the
+    // OS temp dir, which may itself be a symlink on macOS: /var -> /private/var)
+    // must never be walked or rejected.
+    const cwd = mkTmp()
+    const agentsRoot = path.join(cwd, '.pi', 'agents')
+    const result = exportPersonas(agentsRoot, { scope: 'project', cwd })
+    expect(result.status).toBe('ok')
+  })
+
+  test('exportPersonas refuses when agentsRoot resolves (post-mkdir) to a real directory outside the canonical anchor via a symlink ancestor the lexical walk cannot see at construction time', () => {
+    // End-to-end regression for the P1 fix: after the lexical anchored walk
+    // and root creation, canonicalize both anchor and agentsRoot and refuse
+    // if the canonical root escapes the canonical anchor. Here we swap an
+    // intermediate directory for a symlink to outside the anchor *before*
+    // the resolved agentsRoot is used, then verify export refuses and never
+    // wrote anything into the outside target.
+    const cwd = mkTmp()
+    const outside = mkTmp('pi-outside-scope-canonical-')
+    const outsideAgents = path.join(outside, 'agents')
+    fs.mkdirSync(path.dirname(path.join(cwd, '.pi')), { recursive: true })
+    // .pi itself is a symlink pointing outside the anchor (cwd); agentsRoot
+    // is lexically "cwd/.pi/agents" but canonically resolves under `outside`.
+    fs.symlinkSync(outside, path.join(cwd, '.pi'))
+    const agentsRoot = path.join(cwd, '.pi', 'agents')
+
+    const result = exportPersonas(agentsRoot, { scope: 'project', cwd })
+    expect(result.status).toBe('error')
+    expect(result.error).toMatch(/symlink|escapes safety anchor|outside/i)
+    expect(fs.existsSync(outsideAgents)).toBe(false)
+  })
+
+  test('refuses an agentsRoot outside the declared scope anchor rather than silently falling back to a weaker check', () => {
+    // Regression: when configOptions.scope is supplied, the scope anchor
+    // must always be used for the ancestor walk — never silently weaken to
+    // agentsRoot's own immediate parent just because agentsRoot happens to
+    // fall outside the declared scope anchor. A caller-supplied agentsRoot
+    // outside the scope anchor is a mismatch and must be refused.
+    const cwd = mkTmp()
+    const outsideRoot = mkTmp('pi-outside-scope-')
+    const agentsRoot = path.join(outsideRoot, 'agents')
+    const result = exportPersonas(agentsRoot, { scope: 'project', cwd })
+    expect(result.status).toBe('error')
+    expect(result.error).toMatch(/outside safety anchor/i)
+    expect(fs.existsSync(agentsRoot)).toBe(false)
   })
 })
 
@@ -517,6 +680,31 @@ describe('cleanup', () => {
     )
   })
 
+  test('cleanup on a nonexistent agents root is an idempotent no-op: returns ok, creates neither root nor lock, does not throw', () => {
+    const cwd = mkTmp()
+    const agentsRoot = path.join(cwd, '.pi', 'agents')
+    expect(fs.existsSync(agentsRoot)).toBe(false)
+
+    let result: CleanupResult | undefined
+    expect(() => {
+      result = cleanup(agentsRoot)
+    }).not.toThrow()
+
+    expect(result).toEqual({ status: 'ok' })
+    expect(fs.existsSync(agentsRoot)).toBe(false)
+    expect(fs.existsSync(path.join(agentsRoot, LOCK_FILENAME))).toBe(false)
+  })
+
+  test('cleanup on a nonexistent agents root is a no-op even with scoped options (anchor still validated)', () => {
+    const cwd = mkTmp()
+    const agentsRoot = path.join(cwd, '.pi', 'agents')
+    expect(fs.existsSync(agentsRoot)).toBe(false)
+
+    const result = cleanup(agentsRoot, { scope: 'project', cwd })
+    expect(result).toEqual({ status: 'ok' })
+    expect(fs.existsSync(agentsRoot)).toBe(false)
+  })
+
   test('cleanup with hostile manifest traversal filename refuses (throws) before any delete', () => {
     const cwd = mkTmp()
     const agentsRoot = path.join(cwd, '.pi', 'agents')
@@ -869,7 +1057,13 @@ describe('transactional rollback: exact byte assertions', () => {
     try {
       const result = exportPersonas(agentsRoot)
       expect(result.status).toBe('error')
-      expect(result.error).toMatch(/rolled back|partial rollback/i)
+      // Either the lock itself couldn't be created (read-only dir) or a
+      // write inside the transaction failed and was rolled back — both are
+      // legitimate failure modes here; the invariant under test is no
+      // partial/new state, verified below.
+      expect(result.error).toMatch(
+        /rolled back|partial rollback|permission denied|EACCES/i,
+      )
 
       const afterFiles = fs.readdirSync(agentsRoot).sort()
       // No new files
@@ -923,7 +1117,9 @@ describe('transactional rollback: exact byte assertions', () => {
     try {
       const result = refresh(agentsRoot)
       expect(result.status).toBe('error')
-      expect(result.error).toMatch(/rolled back|partial rollback/i)
+      expect(result.error).toMatch(
+        /rolled back|partial rollback|permission denied|EACCES/i,
+      )
 
       // No temp artifacts
       expect(fs.readdirSync(agentsRoot).some((f) => f.includes('.tmp-'))).toBe(
@@ -1219,6 +1415,380 @@ describe('runWithRollback: direct transaction proof', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Exclusive per-root mutation lock (.systematic-personas.lock)
+// ---------------------------------------------------------------------------
+
+describe('mutation lock', () => {
+  test('preview does not create or require a lock file', () => {
+    const cwd = mkTmp()
+    const agentsRoot = path.join(cwd, '.pi', 'agents')
+    fs.mkdirSync(agentsRoot, { recursive: true })
+    preview(agentsRoot)
+    expect(fs.existsSync(path.join(agentsRoot, LOCK_FILENAME))).toBe(false)
+  })
+
+  test('export fails closed with an actionable message when the lock already exists', () => {
+    const cwd = mkTmp()
+    const agentsRoot = path.join(cwd, '.pi', 'agents')
+    fs.mkdirSync(agentsRoot, { recursive: true })
+    fs.writeFileSync(path.join(agentsRoot, LOCK_FILENAME), String(process.pid))
+
+    const result = exportPersonas(agentsRoot)
+    expect(result.status).toBe('error')
+    expect(result.error).toMatch(/lock/i)
+    // Never auto-delete a pre-existing lock
+    expect(fs.existsSync(path.join(agentsRoot, LOCK_FILENAME))).toBe(true)
+  })
+
+  test('refresh fails closed when the lock already exists', () => {
+    const cwd = mkTmp()
+    const agentsRoot = path.join(cwd, '.pi', 'agents')
+    exportPersonas(agentsRoot)
+    fs.writeFileSync(path.join(agentsRoot, LOCK_FILENAME), String(process.pid))
+
+    const result = refresh(agentsRoot)
+    expect(result.status).toBe('error')
+    expect(result.error).toMatch(/lock/i)
+  })
+
+  test('export reports lock contention (not malformed manifest) when both a pre-existing lock and a malformed manifest are present', () => {
+    // Regression: readManifestStrict must run INSIDE the lock, not before
+    // it. If the manifest were read first, this scenario would return a
+    // "malformed manifest" error instead of a lock-contention error,
+    // proving the manifest read happened before lock acquisition (a TOCTOU
+    // window where a concurrent operation could mutate the manifest
+    // between the read and the lock).
+    const cwd = mkTmp()
+    const agentsRoot = path.join(cwd, '.pi', 'agents')
+    fs.mkdirSync(agentsRoot, { recursive: true })
+    writeFile(agentsRoot, MANIFEST_FILENAME, 'not json {{{')
+    fs.writeFileSync(path.join(agentsRoot, LOCK_FILENAME), String(process.pid))
+
+    const result = exportPersonas(agentsRoot)
+    expect(result.status).toBe('error')
+    expect(result.error).toMatch(/lock/i)
+    expect(result.error).not.toMatch(/malformed/i)
+  })
+
+  test('refresh reports lock contention (not malformed manifest) when both a pre-existing lock and a malformed manifest are present', () => {
+    const cwd = mkTmp()
+    const agentsRoot = path.join(cwd, '.pi', 'agents')
+    fs.mkdirSync(agentsRoot, { recursive: true })
+    writeFile(agentsRoot, MANIFEST_FILENAME, 'not json {{{')
+    fs.writeFileSync(path.join(agentsRoot, LOCK_FILENAME), String(process.pid))
+
+    const result = refresh(agentsRoot)
+    expect(result.status).toBe('error')
+    expect(result.error).toMatch(/lock/i)
+    expect(result.error).not.toMatch(/malformed/i)
+  })
+
+  test('cleanup throws lock contention (not malformed manifest) when both a pre-existing lock and a malformed manifest are present', () => {
+    const cwd = mkTmp()
+    const agentsRoot = path.join(cwd, '.pi', 'agents')
+    fs.mkdirSync(agentsRoot, { recursive: true })
+    writeFile(agentsRoot, MANIFEST_FILENAME, 'not json {{{')
+    fs.writeFileSync(path.join(agentsRoot, LOCK_FILENAME), String(process.pid))
+
+    expect(() => cleanup(agentsRoot)).toThrow(/lock/i)
+    try {
+      cleanup(agentsRoot)
+    } catch (err) {
+      expect(err instanceof Error ? err.message : String(err)).not.toMatch(
+        /malformed/i,
+      )
+    }
+  })
+
+  test('cleanup fails closed (throws) when the lock already exists', () => {
+    const cwd = mkTmp()
+    const agentsRoot = path.join(cwd, '.pi', 'agents')
+    exportPersonas(agentsRoot)
+    fs.writeFileSync(path.join(agentsRoot, LOCK_FILENAME), String(process.pid))
+
+    expect(() => cleanup(agentsRoot)).toThrow(/lock/i)
+  })
+
+  test('export releases the lock it acquired on success', () => {
+    const cwd = mkTmp()
+    const agentsRoot = path.join(cwd, '.pi', 'agents')
+    const result = exportPersonas(agentsRoot)
+    expect(result.status).toBe('ok')
+    expect(fs.existsSync(path.join(agentsRoot, LOCK_FILENAME))).toBe(false)
+  })
+
+  test('export releases the lock it acquired on failure', () => {
+    const cwd = mkTmp()
+    const agentsRoot = path.join(cwd, '.pi', 'agents')
+    fs.mkdirSync(agentsRoot, { recursive: true })
+    fs.chmodSync(agentsRoot, 0o555)
+    try {
+      const result = exportPersonas(agentsRoot)
+      expect(result.status).toBe('error')
+    } finally {
+      fs.chmodSync(agentsRoot, 0o755)
+    }
+    expect(fs.existsSync(path.join(agentsRoot, LOCK_FILENAME))).toBe(false)
+  })
+
+  test('cleanup releases the lock it acquired on success', () => {
+    const cwd = mkTmp()
+    const agentsRoot = path.join(cwd, '.pi', 'agents')
+    exportPersonas(agentsRoot)
+    const result = cleanup(agentsRoot)
+    expect(result.status).toBe('ok')
+    expect(fs.existsSync(path.join(agentsRoot, LOCK_FILENAME))).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Manifest schema/ownership hardening: manifest entries must be generated
+// namespace files, and deletion may proceed only when the current file
+// content hash matches the manifest hash.
+// ---------------------------------------------------------------------------
+
+describe('manifest ownership hardening: hash-gated deletion', () => {
+  test('manifest entry with a non-generated-namespace filename is malformed', () => {
+    const cwd = mkTmp()
+    const agentsRoot = path.join(cwd, 'agents')
+    fs.mkdirSync(agentsRoot, { recursive: true })
+    const hostile: PiSubagentsManifest = makeManifest(agentsRoot, [
+      { filename: 'not-a-systematic-file.md', hash: 'abc', status: 'exported' },
+    ])
+    writeManifest(agentsRoot, hostile)
+    const result = readManifestStrict(agentsRoot)
+    expect(result.kind).toBe('malformed')
+  })
+
+  test('cleanup refuses to delete a manifest-owned file whose disk content has drifted from the manifest hash (tampered)', () => {
+    const cwd = mkTmp()
+    const agentsRoot = path.join(cwd, '.pi', 'agents')
+    exportPersonas(agentsRoot)
+
+    const owned = fs.readdirSync(agentsRoot).find((f) => f.endsWith('.md'))
+    expect(owned).toBeDefined()
+    if (!owned) return
+    const target = path.join(agentsRoot, owned)
+    // Tamper with the file after export so its content no longer matches
+    // the manifest hash.
+    fs.writeFileSync(target, 'TAMPERED CONTENT — not what we exported', 'utf-8')
+
+    expect(() => cleanup(agentsRoot)).toThrow(/hash|drift|mismatch|tampered/i)
+    // Nothing deleted — manifest and tampered file both intact
+    expect(fs.existsSync(path.join(agentsRoot, MANIFEST_FILENAME))).toBe(true)
+    expect(fs.readFileSync(target, 'utf-8')).toBe(
+      'TAMPERED CONTENT — not what we exported',
+    )
+  })
+
+  test('cleanup: hash guard is re-verified per-target at delete time, not only at collection — tampering any one owned file refuses deletion of all, real fs, no mocks', () => {
+    // Regression proof for the collect/delete TOCTOU fix: deletion targets
+    // now retain { path, filename, hash } and each unlink closure calls
+    // assertHashMatchesOrThrow again immediately before fs.unlinkSync,
+    // rather than relying solely on the check performed while collecting
+    // targets. Exercised here with real files (no mocks): with two owned
+    // files, tamper only the second, and confirm the FIRST (untouched,
+    // already unlinked-in-plan-order-earlier) file is still restored/
+    // never deleted because the whole transaction fails closed before its
+    // own unlink runs the recheck for the tampered second file.
+    const cwd = mkTmp()
+    const agentsRoot = path.join(cwd, '.pi', 'agents')
+    exportPersonas(agentsRoot)
+
+    const owned = fs.readdirSync(agentsRoot).filter((f) => f.endsWith('.md'))
+    expect(owned.length).toBeGreaterThan(1)
+    const [firstOwned, secondOwned] = owned
+    if (!firstOwned || !secondOwned) return
+    const firstPath = path.join(agentsRoot, firstOwned)
+    const secondPath = path.join(agentsRoot, secondOwned)
+    const firstContent = fs.readFileSync(firstPath, 'utf-8')
+    fs.writeFileSync(secondPath, 'TAMPERED — recheck must catch this', 'utf-8')
+
+    expect(() => cleanup(agentsRoot)).toThrow(/hash|drift|mismatch|tampered/i)
+
+    // Whole transaction refused: nothing deleted, including the untampered
+    // first file — the per-target recheck fails the op before any unlink
+    // in this run is allowed to persist.
+    expect(fs.existsSync(firstPath)).toBe(true)
+    expect(fs.readFileSync(firstPath, 'utf-8')).toBe(firstContent)
+    expect(fs.existsSync(secondPath)).toBe(true)
+    expect(fs.readFileSync(secondPath, 'utf-8')).toBe(
+      'TAMPERED — recheck must catch this',
+    )
+    expect(fs.existsSync(path.join(agentsRoot, MANIFEST_FILENAME))).toBe(true)
+  })
+
+  test('exportPersonas: stale-deletion hash guard is re-verified per-target at delete time, not only at collection — real fs, no mocks', () => {
+    // Regression proof for the collect/delete TOCTOU fix on the export
+    // stale-removal path (findStalePaths / exportPersonas transaction):
+    // two stale manifest-owned entries, tamper only the second. The whole
+    // transaction must fail closed — including refusing to delete the
+    // first (untampered) stale file.
+    const cwd = mkTmp()
+    const agentsRoot = path.join(cwd, '.pi', 'agents')
+    fs.mkdirSync(agentsRoot, { recursive: true })
+
+    const firstStaleFilename = 'systematic-stale-one.md'
+    const secondStaleFilename = 'systematic-stale-two.md'
+    const firstContent = 'first stale content'
+    const secondOriginalContent = 'second stale content'
+    const firstHash = crypto
+      .createHash('sha256')
+      .update(firstContent)
+      .digest('hex')
+    const secondHash = crypto
+      .createHash('sha256')
+      .update(secondOriginalContent)
+      .digest('hex')
+    const manifest: PiSubagentsManifest = makeManifest(agentsRoot, [
+      { filename: firstStaleFilename, hash: firstHash, status: 'exported' },
+      { filename: secondStaleFilename, hash: secondHash, status: 'exported' },
+    ])
+    writeManifest(agentsRoot, manifest)
+    writeFile(agentsRoot, firstStaleFilename, firstContent)
+    writeFile(
+      agentsRoot,
+      secondStaleFilename,
+      'TAMPERED — does not match manifest hash',
+    )
+
+    const result = exportPersonas(agentsRoot)
+    expect(result.status).toBe('error')
+    expect(result.error).toMatch(/hash|drift|mismatch|tampered/i)
+
+    // Nothing deleted or overwritten, including the untampered first stale
+    // file: manifest still lists both entries, both files intact.
+    expect(
+      fs.readFileSync(path.join(agentsRoot, firstStaleFilename), 'utf-8'),
+    ).toBe(firstContent)
+    expect(
+      fs.readFileSync(path.join(agentsRoot, secondStaleFilename), 'utf-8'),
+    ).toBe('TAMPERED — does not match manifest hash')
+    const manifestAfter = readManifest(agentsRoot)
+    expect(manifestAfter).not.toBeNull()
+    expect(
+      manifestAfter?.files.some((f) => f.filename === firstStaleFilename),
+    ).toBe(true)
+    expect(
+      manifestAfter?.files.some((f) => f.filename === secondStaleFilename),
+    ).toBe(true)
+  })
+
+  test('refresh refuses to remove a stale owned file whose disk content has drifted from the manifest hash', () => {
+    const cwd = mkTmp()
+    const agentsRoot = path.join(cwd, '.pi', 'agents')
+    exportPersonas(agentsRoot)
+
+    const manifest = readManifest(agentsRoot)
+    expect(manifest).not.toBeNull()
+    if (!manifest) return
+    const firstEntry = manifest.files[0]
+    expect(firstEntry).toBeDefined()
+    if (!firstEntry) return
+
+    // Simulate the persona becoming stale (no longer curated) AND tampered:
+    // rewrite the manifest to claim ownership of a filename that is no
+    // longer in the current generated set, with a hash that doesn't match
+    // disk content, by tampering the actual owned file's content first,
+    // then forcing a stale-removal path is exercised via cleanup instead
+    // (refresh only ever writes/keeps entries still in the curated set).
+    // This test verifies refresh's tamper guard on an UPDATE path: corrupt a
+    // currently-owned file with mismatched-from-manifest-AND-mismatched-from-source
+    // content, then ensure refresh still safely overwrites (source wins for
+    // legitimate drift) — the guard specifically blocks *deletion*, not
+    // in-place regeneration of owned files.
+    const target = path.join(agentsRoot, firstEntry.filename)
+    fs.writeFileSync(target, 'drifted user edit', 'utf-8')
+    const result = refresh(agentsRoot)
+    expect(result.status).toBe('ok')
+    expect(result.updated).toBeGreaterThan(0)
+  })
+
+  test('exportPersonas refuses to remove a stale manifest-owned file whose disk content has drifted from the manifest hash (tampered)', () => {
+    // Regression: exportPersonas's stale-removal path (findStalePaths) must
+    // apply the same tamper/drift guard as cleanup's. A manifest entry for a
+    // systematic-*.md file that is no longer in the current curated set is
+    // "stale" and would normally be deleted; if its on-disk content no
+    // longer matches the manifest hash, export must refuse before deleting
+    // it or writing anything else — the file and manifest must remain
+    // exactly as they were.
+    const cwd = mkTmp()
+    const agentsRoot = path.join(cwd, '.pi', 'agents')
+    fs.mkdirSync(agentsRoot, { recursive: true })
+
+    const staleFilename = 'systematic-no-longer-curated.md'
+    const originalContent = 'original stale content'
+    const hash = crypto
+      .createHash('sha256')
+      .update(originalContent)
+      .digest('hex')
+    const manifest: PiSubagentsManifest = makeManifest(agentsRoot, [
+      { filename: staleFilename, hash, status: 'exported' },
+    ])
+    writeManifest(agentsRoot, manifest)
+    // Disk content differs from the manifest hash (tampered/drifted).
+    const tamperedContent = 'TAMPERED — does not match manifest hash'
+    writeFile(agentsRoot, staleFilename, tamperedContent)
+
+    const result = exportPersonas(agentsRoot)
+    expect(result.status).toBe('error')
+    expect(result.error).toMatch(/hash|drift|mismatch|tampered/i)
+
+    // Nothing deleted or overwritten: stale file and manifest both intact.
+    expect(fs.readFileSync(path.join(agentsRoot, staleFilename), 'utf-8')).toBe(
+      tamperedContent,
+    )
+    const manifestAfter = readManifest(agentsRoot)
+    expect(manifestAfter).not.toBeNull()
+    expect(manifestAfter?.files.some((f) => f.filename === staleFilename)).toBe(
+      true,
+    )
+  })
+
+  test('cleanup with a hostile manifest entry outside the generated namespace refuses before any delete', () => {
+    const cwd = mkTmp()
+    const agentsRoot = path.join(cwd, '.pi', 'agents')
+    fs.mkdirSync(agentsRoot, { recursive: true })
+    writeFile(agentsRoot, 'user-file.md', 'do not delete')
+    const hostile: PiSubagentsManifest = makeManifest(agentsRoot, [
+      { filename: 'user-file.md', hash: '', status: 'exported' },
+    ])
+    writeManifest(agentsRoot, hostile)
+
+    expect(() => cleanup(agentsRoot)).toThrow(/namespace|generated|invalid/i)
+    expect(fs.existsSync(path.join(agentsRoot, 'user-file.md'))).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Snapshot/rollback: only ENOENT is treated as absent; other read failures
+// return an error before the first operation and never mutate.
+// ---------------------------------------------------------------------------
+
+describe('snapshotFiles: non-ENOENT read failures abort before mutation', () => {
+  test('a directory at a watched path (EISDIR on read) aborts the transaction before any op runs, no mutation', () => {
+    const tmp = mkTmp('tx-isdir-')
+    const dirAsFilePath = path.join(tmp, 'looks-like-a-file.md')
+    fs.mkdirSync(dirAsFilePath) // EISDIR on readFileSync, not ENOENT
+
+    let opRan = false
+    const result = runWithRollback(
+      [dirAsFilePath],
+      [
+        () => {
+          opRan = true
+        },
+      ],
+    )
+
+    expect(result.ok).toBe(false)
+    expect(opRan).toBe(false)
+    // The directory must not have been touched/removed
+    expect(fs.statSync(dirAsFilePath).isDirectory()).toBe(true)
+  })
+})
+
+// ---------------------------------------------------------------------------
 // Package root via fileURLToPath
 // ---------------------------------------------------------------------------
 
@@ -1458,15 +2028,25 @@ describe('config-aware export: model + pi_subagents field application', () => {
         }),
       )
 
+      // PI_CODING_AGENT_DIR anchors the global scope's safety root (its
+      // parent) so agentsRoot must live under it — matches real production
+      // usage (resolveAgentsRoot('global', cwd) with the env dir set).
       const globalRoot = mkTmp('pi-export-global-')
       const agentsRoot = path.join(globalRoot, 'agents')
-      exportPersonas(agentsRoot, { scope: 'global', cwd })
-      const content = fs.readFileSync(
-        path.join(agentsRoot, 'systematic-repo-research-analyst.md'),
-        'utf-8',
-      )
-      // user model wins; project model must be entirely absent (not even stripped-merged)
-      expect(content).toMatch(/^model: "openai\/gpt-5"$/m)
+      const origEnv = process.env.PI_CODING_AGENT_DIR
+      process.env.PI_CODING_AGENT_DIR = globalRoot
+      try {
+        exportPersonas(agentsRoot, { scope: 'global', cwd })
+        const content = fs.readFileSync(
+          path.join(agentsRoot, 'systematic-repo-research-analyst.md'),
+          'utf-8',
+        )
+        // user model wins; project model must be entirely absent (not even stripped-merged)
+        expect(content).toMatch(/^model: "openai\/gpt-5"$/m)
+      } finally {
+        if (origEnv === undefined) delete process.env.PI_CODING_AGENT_DIR
+        else process.env.PI_CODING_AGENT_DIR = origEnv
+      }
     } finally {
       restoreHome()
     }

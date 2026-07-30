@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'bun:test'
 import { spawnSync } from 'node:child_process'
+import * as crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { MANIFEST_FILENAME } from '../../src/lib/pi-subagents-export.js'
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
 const CLI_PATH = path.join(ROOT_DIR, 'src/cli.ts')
@@ -279,6 +281,31 @@ describe('cli pi-subagents', () => {
     }
   })
 
+  it('export: prints per-file preview action lines before the mutation summary', () => {
+    const cwd = mkTempCwd()
+    try {
+      const result = runCli(['pi-subagents', 'export'], cwd)
+      expect(result.exitCode).toBe(0)
+
+      const targetIdx = result.stdout.indexOf('Target:')
+      const createIdx = result.stdout.indexOf('(create)')
+      const summaryIdx = result.stdout.indexOf('Summary:')
+      const exportedIdx = result.stdout.indexOf('Exported')
+
+      // Preview renders per-file action lines (e.g. "+ foo.md  (create)")
+      expect(createIdx).toBeGreaterThan(-1)
+      // Preview renders a Summary line before the export mutates anything
+      expect(summaryIdx).toBeGreaterThan(-1)
+      // Ordering: target, then action lines, then summary, then mutation result
+      expect(targetIdx).toBeGreaterThan(-1)
+      expect(createIdx).toBeGreaterThan(targetIdx)
+      expect(summaryIdx).toBeGreaterThan(createIdx)
+      expect(exportedIdx).toBeGreaterThan(summaryIdx)
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
   it('export idempotent: second run reports no changes', () => {
     const cwd = mkTempCwd()
     try {
@@ -443,6 +470,58 @@ describe('cli pi-subagents', () => {
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true })
       fs.rmSync(customConfigDir, { recursive: true, force: true })
+    }
+  })
+
+  it('export with a remove-only plan (stale manifest-owned file, nothing to create/update) still invokes exportPersonas and removes the stale file', () => {
+    const cwd = mkTempCwd()
+    try {
+      // Populate the manifest-owned persona set first via a real export.
+      const first = runCli(['pi-subagents', 'export'], cwd)
+      expect(first.exitCode).toBe(0)
+      const agentsDir = path.join(cwd, '.pi', 'agents')
+
+      // Inject a stale manifest entry (no longer curated) for a file that
+      // exists on disk with a hash matching the manifest — this makes the
+      // plan remove-only: no create/update/refuse actions, only `remove`.
+      const manifestPath = path.join(agentsDir, MANIFEST_FILENAME)
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')) as {
+        generatedAt: string
+        agentsRoot: string
+        files: { filename: string; hash: string; status: string }[]
+      }
+      const staleFilename = 'systematic-no-longer-curated.md'
+      const staleContent = 'stale content'
+      fs.writeFileSync(
+        path.join(agentsDir, staleFilename),
+        staleContent,
+        'utf-8',
+      )
+      manifest.files.push({
+        filename: staleFilename,
+        hash: crypto.createHash('sha256').update(staleContent).digest('hex'),
+        status: 'exported',
+      })
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2))
+
+      // Second export: every curated persona is already up to date (skip),
+      // and the only action in the plan is the `remove` of the stale file.
+      const result = runCli(['pi-subagents', 'export'], cwd)
+      expect(result.exitCode).toBe(0)
+
+      // The stale file must actually be removed — proves exportPersonas ran
+      // rather than short-circuiting on "no create/update/refuse" work.
+      expect(fs.existsSync(path.join(agentsDir, staleFilename))).toBe(false)
+
+      // The final mutation-result line must not claim "no changes", since a
+      // removal did happen (per-file preview lines legitimately say
+      // "(up to date)" for the still-current personas — only the terminal
+      // summary sentence is under test here).
+      expect(result.stdout).not.toContain(
+        'All persona files are already up to date. No changes.',
+      )
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
     }
   })
 })

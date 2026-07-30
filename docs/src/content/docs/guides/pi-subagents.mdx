@@ -148,13 +148,29 @@ The full curated include/exclude rationale lives in `src/lib/pi-subagents-person
 
 ## Ownership model and drift
 
-A manifest file (`.systematic-pi-subagents-manifest.json`) in the agents dir tracks which files Systematic generated and their content hashes.
+A manifest file (`.systematic-personas.json`) in the agents dir tracks which files Systematic generated and their content hashes.
 
 - **Export** refuses to overwrite any file not in the manifest (user files are never touched).
 - **Refresh** updates only manifest-owned files whose content has drifted from current source. It leaves your edits to non-owned files alone.
 - **Cleanup** removes only files listed in the manifest, then removes the manifest itself.
 
 Exported files are yours. You can edit them. `refresh` will detect drift between your copy and the current source and overwrite — only files it previously generated and owns.
+
+### Locking
+
+`export`, `refresh`, and `cleanup` each hold an exclusive per-root mutation lock (`.systematic-personas.lock`) for the duration of the operation, so concurrent invocations against the same agents dir refuse cleanly instead of racing. A pre-existing lock file is never auto-deleted by Systematic — if you see a lock-contention error, manually verify no other export/refresh/cleanup is actually running before removing the lock file yourself.
+
+### Path safety
+
+Every operation walks the path from the scope anchor (the project cwd, or the resolved global anchor) down to the target agents directory and refuses if any intermediate component — or the agents directory itself — is a symlink or not a real directory. This anchored validation runs before the locked mutation, and every file path written, updated, or deleted is constructed via safe, root-bounded path resolution — but the validation walk and the mutation are not part of the same atomic step, so this does not eliminate every validation/write race.
+
+### Hash-gated deletion
+
+`cleanup` and stale-file removal during `export` only delete a manifest-owned file whose on-disk content hash still matches the hash recorded in the manifest. If a file has drifted from what the manifest recorded, deletion refuses and leaves both the file and the manifest untouched — you resolve the conflict manually or re-run `export`/`refresh` first. `refresh` intentionally overwrites current manifest-owned generated files and never deletes stale ones. Manifest content hashes are drift/ownership evidence, not a cryptographic integrity or authenticity guarantee.
+
+### Tested runtime contract
+
+Systematic's tested interop contract targets `@tintinweb/pi-subagents@0.14.3`. Exported `systematic-*` personas — including `systematic-repo-research-analyst` — are accepted and executed by that pi-subagents version through its Agent tool, with the exported file's own content driving the child request rather than a hardcoded prompt. The combined path — a top-level pi-subagents call invoking a nested `systematic_delegate` — is supported end-to-end on this pinned version, consistent with the documented nested delegation boundary above.
 
 ## Delegation boundaries
 

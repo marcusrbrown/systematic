@@ -260,9 +260,26 @@ function runExport(agentsRoot: string, scope: 'project' | 'global'): void {
     process.exit(1)
   }
   console.log(`Target: ${plan.agentsRoot}`)
-  const hasWork =
-    plan.actions.some((a) => a.action === 'create' || a.action === 'update') ||
-    plan.actions.some((a) => a.action === 'refuse')
+  const hasWork = plan.actions.some(
+    (a) =>
+      a.action === 'create' ||
+      a.action === 'update' ||
+      a.action === 'refuse' ||
+      a.action === 'remove',
+  )
+  if (plan.actions.length > 0) {
+    console.log('')
+    const counts = { create: 0, update: 0, refuse: 0, remove: 0, skip: 0 }
+    for (const a of plan.actions) {
+      counts[a.action]++
+      printActionLine(a)
+    }
+    console.log('')
+    console.log(
+      `Summary: ${counts.create} create, ${counts.update} update, ` +
+        `${counts.skip} skip, ${counts.refuse} refuse, ${counts.remove} remove`,
+    )
+  }
   if (!hasWork) {
     console.log('All persona files are already up to date. No changes.')
     return
@@ -272,7 +289,8 @@ function runExport(agentsRoot: string, scope: 'project' | 'global'): void {
     console.error(`Export failed: ${result.error ?? 'unknown error'}`)
     process.exit(1)
   }
-  if (result.written === 0 && result.refused.length === 0) {
+  const hadRemovals = plan.actions.some((a) => a.action === 'remove')
+  if (result.written === 0 && result.refused.length === 0 && !hadRemovals) {
     console.log('All persona files are already up to date. No changes.')
   } else {
     console.log(
@@ -305,10 +323,10 @@ function runRefresh(agentsRoot: string, scope: 'project' | 'global'): void {
     )
 }
 
-function runCleanup(agentsRoot: string): void {
+function runCleanup(agentsRoot: string, scope: 'project' | 'global'): void {
   let result: ReturnType<typeof cleanup>
   try {
-    result = cleanup(agentsRoot)
+    result = cleanup(agentsRoot, { scope, cwd: process.cwd() })
   } catch (err) {
     console.error(
       `Cleanup failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -343,7 +361,7 @@ function piSubagentsCommand(rest: string[]): void {
       runRefresh(agentsRoot, scope)
       break
     case 'cleanup':
-      runCleanup(agentsRoot)
+      runCleanup(agentsRoot, scope)
       break
     default:
       console.error(`Unknown pi-subagents subcommand: ${subcommand}`)

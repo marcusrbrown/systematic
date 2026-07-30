@@ -1917,13 +1917,20 @@ describe('pi_subagents merge and trust', () => {
     writeProjectConfig({
       pi_subagents: {
         categories: {
-          research: { thinking: 'medium', tools: 'read', skills: 'ce:plan' },
+          research: {
+            thinking: 'medium',
+            tools: 'read',
+            skills: 'ce:plan',
+            max_turns: 5,
+          },
         },
       },
     })
 
     const result = loadConfigWithSources(testDir)
-    expect(result.config.pi_subagents?.categories?.research).toEqual({})
+    expect(result.config.pi_subagents?.categories?.research).toEqual({
+      max_turns: 5,
+    })
   })
 
   test('project cannot resurrect a stripped field by omission when user set it', () => {

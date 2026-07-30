@@ -41,7 +41,13 @@ export interface ExportConfigOptions {
 
 // ── Manifest types ────────────────────────────────────────────────────────────
 
-export const MANIFEST_FILENAME = '.systematic-pi-subagents-manifest.json'
+export const MANIFEST_FILENAME = '.systematic-personas.json'
+
+/** Exclusive per-root mutation lock. Guards export/refresh/cleanup; preview is lock-free. */
+export const LOCK_FILENAME = '.systematic-personas.lock'
+
+/** Generated persona namespace filename pattern — manifest entries must match this. */
+const GENERATED_NAMESPACE_PATTERN = /^systematic-[a-z0-9-]+\.md$/
 
 export interface ManifestFileEntry {
   filename: string
@@ -77,6 +83,125 @@ export function resolveAgentsRoot(scope: ExportScope, cwd: string): string {
   return path.join(base, 'agents')
 }
 
+// ── Scope-anchored symlink safety ───────────────────────────────────────────
+
+/**
+ * Resolve the safety anchor for a scope: the topmost directory whose
+ * descendants (down to agentsRoot) are walked and lstat-checked for
+ * symlinks/non-directories. Never inspects ancestors above this anchor
+ * (avoids false positives from OS-level ancestor symlinks, e.g. macOS
+ * `/var` -> `/private/var`).
+ *
+ * - project: cwd
+ * - global with PI_CODING_AGENT_DIR set: the env dir's PARENT (so the env
+ *   dir itself is included in the walk and checked)
+ * - global without PI_CODING_AGENT_DIR: homedir
+ */
+export function resolveAnchor(scope: ExportScope, cwd: string): string {
+  if (scope === 'project') return path.resolve(cwd)
+  const envDir = process.env.PI_CODING_AGENT_DIR
+  if (envDir) return path.resolve(path.dirname(envDir))
+  return path.resolve(os.homedir())
+}
+
+function anchorForScope(
+  configOptions: ExportConfigOptions | undefined,
+  agentsRootFallback: string,
+): string {
+  const resolvedAgentsRoot = path.resolve(agentsRootFallback)
+  if (configOptions) {
+    // Scope context is known: always validate against the scope's real
+    // safety anchor. Never weaken to agentsRoot's own immediate parent —
+    // a caller-supplied agentsRoot that falls outside the declared scope's
+    // anchor is a mismatch that must be refused (via assertAnchoredPathSafe),
+    // not silently accepted under a shallower single-level check.
+    return resolveAnchor(configOptions.scope, configOptions.cwd)
+  }
+  // No scope context supplied — fall back to validating agentsRoot itself
+  // against its immediate parent only (preserves single-level symlink-root
+  // rejection for legacy config-neutral callers).
+  return path.dirname(resolvedAgentsRoot)
+}
+
+/**
+ * Walk every path component from `anchor` down to `targetPath` (inclusive),
+ * lstat-ing each. Rejects any symlink or non-directory intermediate/final
+ * component. Missing components are fine (not yet created — nothing to
+ * reject). Never inspects filesystem ancestors above `anchor`.
+ */
+function assertAnchoredPathSafe(anchor: string, targetPath: string): void {
+  const resolvedAnchor = path.resolve(anchor)
+  const resolvedTarget = path.resolve(targetPath)
+  if (
+    resolvedTarget !== resolvedAnchor &&
+    !resolvedTarget.startsWith(resolvedAnchor + path.sep)
+  ) {
+    throw new Error(
+      `Refusing to operate on ${resolvedTarget}: outside safety anchor ${resolvedAnchor}`,
+    )
+  }
+  const rel = path.relative(resolvedAnchor, resolvedTarget)
+  const parts = rel === '' ? [] : rel.split(path.sep)
+  let current = resolvedAnchor
+  for (const part of parts) {
+    current = path.join(current, part)
+    let stat: fs.Stats
+    try {
+      stat = fs.lstatSync(current)
+    } catch {
+      continue // not yet created — nothing to reject
+    }
+    if (stat.isSymbolicLink())
+      throw new Error(
+        `Refusing to operate through ${current}: symlink detected`,
+      )
+    if (!stat.isDirectory())
+      throw new Error(`Refusing to operate through ${current}: not a directory`)
+  }
+}
+
+/**
+ * After the lexical anchored walk (`assertAnchoredPathSafe`) and root
+ * creation/existence checks have passed, canonicalize both the anchor and
+ * the agents root with `fs.realpathSync` and require the canonical root to
+ * remain within (or equal to) the canonical anchor.
+ *
+ * This closes a raced-symlink window the lexical walk cannot: `lstat`-based
+ * component checks and the eventual `mkdir`/open are not atomic, so an
+ * attacker able to swap a real ancestor directory for a symlink in between
+ * could make the physically-resolved root land outside the anchor even
+ * though every lexical component looked clean at check time. Comparing
+ * canonical (fully-resolved) paths after the target exists detects that.
+ *
+ * This is a best-effort narrowing of the race window, not an atomic
+ * openat-relative guarantee — a symlink swap occurring after this
+ * canonicalization but before the caller's subsequent lock/read/mutation
+ * (which is the very next thing every caller does) is not defended against
+ * by userspace `realpath` + compare alone. `root` must already exist when
+ * this is called (callers create/validate existence first).
+ */
+function assertCanonicalRootWithinAnchor(anchor: string, root: string): string {
+  let canonicalAnchor: string
+  try {
+    canonicalAnchor = fs.realpathSync(anchor)
+  } catch (err) {
+    throw new Error(
+      `Cannot resolve safety anchor ${anchor}: ${err instanceof Error ? err.message : String(err)}`,
+    )
+  }
+  const canonicalRoot = fs.realpathSync(root)
+  if (
+    canonicalRoot !== canonicalAnchor &&
+    !canonicalRoot.startsWith(canonicalAnchor + path.sep)
+  ) {
+    throw new Error(
+      `Refusing to operate on ${canonicalRoot}: canonical path escapes safety anchor ` +
+        `${canonicalAnchor} (raced-symlink ancestor detected after resolution)`,
+    )
+  }
+  return canonicalRoot
+}
+
 // ── Manifest I/O ──────────────────────────────────────────────────────────────
 
 /**
@@ -84,6 +209,26 @@ export function resolveAgentsRoot(scope: ExportScope, cwd: string): string {
  * distinguishes absent (no file), ok (valid manifest), and malformed
  * (invalid JSON, wrong schema, duplicates, unsafe filenames).
  */
+/** Validate a single manifest files entry. Returns an error string or null if valid. */
+function validateManifestEntry(
+  entry: unknown,
+  seenFilenames: Set<string>,
+): string | null {
+  if (typeof entry !== 'object' || entry === null)
+    return 'Manifest files entry must be an object'
+  const e = entry as Record<string, unknown>
+  if (typeof e.filename !== 'string' || typeof e.hash !== 'string')
+    return 'Manifest files entry missing required string fields'
+  if (seenFilenames.has(e.filename))
+    return `Manifest contains duplicate filename: "${e.filename}"`
+  seenFilenames.add(e.filename)
+  if (path.basename(e.filename) !== e.filename || path.isAbsolute(e.filename))
+    return `Unsafe filename in manifest: "${e.filename}" — contains traversal or path separators (invalid filename)`
+  if (!GENERATED_NAMESPACE_PATTERN.test(e.filename))
+    return `Manifest entry "${e.filename}" is not a generated namespace file (must match systematic-*.md; invalid filename)`
+  return null
+}
+
 /** Validate a parsed manifest object. Returns an error string or null if valid. */
 function validateManifestObject(parsed: unknown): string | null {
   if (typeof parsed !== 'object' || parsed === null)
@@ -93,16 +238,8 @@ function validateManifestObject(parsed: unknown): string | null {
     return 'Manifest "files" field must be an array'
   const seenFilenames = new Set<string>()
   for (const entry of obj.files as unknown[]) {
-    if (typeof entry !== 'object' || entry === null)
-      return 'Manifest files entry must be an object'
-    const e = entry as Record<string, unknown>
-    if (typeof e.filename !== 'string' || typeof e.hash !== 'string')
-      return 'Manifest files entry missing required string fields'
-    if (seenFilenames.has(e.filename))
-      return `Manifest contains duplicate filename: "${e.filename}"`
-    seenFilenames.add(e.filename)
-    if (path.basename(e.filename) !== e.filename || path.isAbsolute(e.filename))
-      return `Unsafe filename in manifest: "${e.filename}" — contains traversal or path separators (invalid filename)`
+    const error = validateManifestEntry(entry, seenFilenames)
+    if (error !== null) return error
   }
   return null
 }
@@ -173,6 +310,14 @@ export function writeManifest(
 
 // ── Path safety ───────────────────────────────────────────────────────────────
 
+function statOrNull(p: string): fs.Stats | null {
+  try {
+    return fs.lstatSync(p)
+  } catch {
+    return null
+  }
+}
+
 function assertRealAgentsRoot(agentsRoot: string): string {
   let stat: fs.Stats | null = null
   try {
@@ -214,6 +359,84 @@ function safeFilePath(agentsRoot: string, filename: string): string | null {
   }
 }
 
+// ── Exclusive per-root mutation lock ────────────────────────────────────────
+
+/**
+ * Acquire the exclusive per-root mutation lock via `openSync` with exclusive
+ * creation ('wx'). Fails closed with an actionable message if the lock
+ * already exists — never auto-deletes a pre-existing lock (it may belong to
+ * a concurrently running process, or indicate a prior crash that needs
+ * manual inspection). Returns a discriminated result rather than throwing a
+ * dedicated error class (this repo requires zero classes); the `contention`
+ * tag distinguishes lock contention from other operational open failures.
+ */
+type LockAcquireResult =
+  | { ok: true; fd: number }
+  | { ok: false; contention: boolean; error: string }
+
+function acquireLock(agentsRoot: string): LockAcquireResult {
+  const lockPath = path.join(agentsRoot, LOCK_FILENAME)
+  try {
+    return { ok: true, fd: fs.openSync(lockPath, 'wx') }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'EEXIST') {
+      return {
+        ok: false,
+        contention: true,
+        error:
+          `Another export/refresh/cleanup operation appears to be in progress ` +
+          `(lock file exists: ${lockPath}). If no other operation is running ` +
+          `(e.g. after a crash), verify manually and remove the lock file yourself.`,
+      }
+    }
+    return {
+      ok: false,
+      contention: false,
+      error: err instanceof Error ? err.message : String(err),
+    }
+  }
+}
+
+/** Release a lock acquired by this process. Always call from a finally block. */
+function releaseLock(agentsRoot: string, fd: number): void {
+  try {
+    fs.closeSync(fd)
+  } catch {
+    /* best effort */
+  }
+  try {
+    fs.unlinkSync(path.join(agentsRoot, LOCK_FILENAME))
+  } catch {
+    /* best effort */
+  }
+}
+
+/**
+ * Run `fn` under the exclusive per-root mutation lock. On lock contention,
+ * returns `{ locked: false, error }` without running `fn`. On success or
+ * failure of `fn`, the lock is always released.
+ */
+function withLock<T>(
+  agentsRoot: string,
+  fn: () => T,
+):
+  | { locked: true; result: T }
+  | { locked: false; error: string; isContention: boolean } {
+  const acquired = acquireLock(agentsRoot)
+  if (!acquired.ok) {
+    return {
+      locked: false,
+      error: acquired.error,
+      isContention: acquired.contention,
+    }
+  }
+  try {
+    return { locked: true, result: fn() }
+  } finally {
+    releaseLock(agentsRoot, acquired.fd)
+  }
+}
+
 // ── Atomic write ──────────────────────────────────────────────────────────────
 
 function atomicWriteString(destPath: string, content: string): void {
@@ -240,16 +463,33 @@ function atomicWriteString(destPath: string, content: string): void {
 /** Backup record: path → pre-operation content (undefined = was absent). */
 type Backup = Map<string, string | undefined>
 
-function snapshotFiles(filePaths: string[]): Backup {
+type SnapshotResult =
+  | { ok: true; backup: Backup }
+  | { ok: false; error: string }
+
+/**
+ * Snapshot each path's current content. Only ENOENT (absent) is treated as
+ * "no prior content" — any other read failure (permission denied, EISDIR,
+ * etc.) is a real problem and aborts the snapshot entirely so the caller
+ * can refuse before the first mutating operation runs.
+ */
+function snapshotFiles(filePaths: string[]): SnapshotResult {
   const backup: Backup = new Map()
   for (const p of filePaths) {
     try {
       backup.set(p, fs.readFileSync(p, 'utf-8'))
-    } catch {
-      backup.set(p, undefined)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+        backup.set(p, undefined)
+        continue
+      }
+      return {
+        ok: false,
+        error: `Cannot snapshot ${p}: ${err instanceof Error ? err.message : String(err)}`,
+      }
     }
   }
-  return backup
+  return { ok: true, backup }
 }
 
 /** Restore each path to its pre-operation state. Returns paths that failed to restore. */
@@ -297,7 +537,11 @@ export function runWithRollback(
   pathsToWatch: string[],
   ops: Array<() => void>,
 ): TxResult {
-  const backup = snapshotFiles(pathsToWatch)
+  const snapshot = snapshotFiles(pathsToWatch)
+  if (!snapshot.ok) {
+    return { ok: false, error: snapshot.error, rollbackFailed: [] }
+  }
+  const backup = snapshot.backup
   for (const op of ops) {
     try {
       op()
@@ -755,17 +999,48 @@ function prepareExportRoot(agentsRoot: string): string | ExportResult {
   }
 }
 
+/** Throws if disk content at `filePath` does not match `expectedHash` (tamper/drift guard). */
+function assertHashMatchesOrThrow(
+  filePath: string,
+  expectedHash: string,
+  filename: string,
+  verb: string,
+): void {
+  const diskContent = fs.readFileSync(filePath, 'utf-8')
+  const diskHash = crypto.createHash('sha256').update(diskContent).digest('hex')
+  if (diskHash !== expectedHash) {
+    throw new Error(
+      `Refusing to ${verb} "${filename}": content on disk does not match the ` +
+        `manifest hash (drifted or tampered). Resolve manually or re-export/refresh first.`,
+    )
+  }
+}
+
+/** A deletion target with the manifest metadata needed to recheck its hash immediately before unlink. */
+interface DeletionTarget {
+  path: string
+  filename: string
+  hash: string
+}
+
 function findStalePaths(
   absRoot: string,
   prevManifest: PiSubagentsManifest | null,
   currentFilenames: Set<string>,
-): string[] {
+): DeletionTarget[] {
   if (!prevManifest) return []
-  const stale: string[] = []
+  const stale: DeletionTarget[] = []
   for (const mEntry of prevManifest.files) {
     if (currentFilenames.has(mEntry.filename)) continue
     const safe = safeFilePath(absRoot, mEntry.filename)
-    if (safe !== null && fs.existsSync(safe)) stale.push(safe)
+    if (safe === null || !fs.existsSync(safe)) continue
+    assertHashMatchesOrThrow(
+      safe,
+      mEntry.hash,
+      mEntry.filename,
+      'remove stale file',
+    )
+    stale.push({ path: safe, filename: mEntry.filename, hash: mEntry.hash })
   }
   return stale
 }
@@ -786,66 +1061,100 @@ export function exportPersonas(
     )
   }
 
+  // Scope-anchored lexical ancestor walk before any mutation (including mkdir).
+  const anchor = anchorForScope(configOptions, agentsRoot)
+  try {
+    assertAnchoredPathSafe(anchor, path.resolve(agentsRoot))
+  } catch (err) {
+    return makeExportError(err instanceof Error ? err.message : String(err))
+  }
+
   const rootOrErr = prepareExportRoot(agentsRoot)
   if (typeof rootOrErr !== 'string') return rootOrErr
-  const absRoot = rootOrErr
 
-  // Refuse on malformed manifest before any mutation
-  const manifestResult = readManifestStrict(absRoot)
-  if (manifestResult.kind === 'malformed')
-    return makeExportError(
-      `Malformed manifest — refusing to export: ${manifestResult.error}`,
+  // Canonicalize anchor and root and require the root to remain within the
+  // canonical anchor before any lock/read/mutation. Closes the raced-symlink
+  // ancestor window the lexical walk above cannot (see doc comment).
+  let absRoot: string
+  try {
+    absRoot = assertCanonicalRootWithinAnchor(anchor, rootOrErr)
+  } catch (err) {
+    return makeExportError(err instanceof Error ? err.message : String(err))
+  }
+
+  // Manifest read happens INSIDE the lock (below), not here: reading it
+  // before acquiring the exclusive mutation lock would leave a TOCTOU
+  // window where a concurrent operation could mutate the manifest between
+  // this read and lock acquisition, making the read stale by the time
+  // mutation actually happens.
+  const lockResult = withLock(absRoot, (): ExportResult => {
+    const manifestResult = readManifestStrict(absRoot)
+    if (manifestResult.kind === 'malformed')
+      return makeExportError(
+        `Malformed manifest — refusing to export: ${manifestResult.error}`,
+      )
+    const prevManifest =
+      manifestResult.kind === 'ok' ? manifestResult.manifest : null
+
+    const owned = ownedFilenames(prevManifest)
+    const { toWrite, toSkip, refused, currentFilenames } =
+      classifyExportEntries(absRoot, entries, owned)
+    let staleOwned: DeletionTarget[]
+    try {
+      staleOwned = findStalePaths(absRoot, prevManifest, currentFilenames)
+    } catch (err) {
+      return makeExportError(err instanceof Error ? err.message : String(err))
+    }
+    const newManifest = (): PiSubagentsManifest => ({
+      generatedAt: new Date().toISOString(),
+      agentsRoot: absRoot,
+      files: buildNewManifestFiles(toWrite, toSkip),
+    })
+
+    const tx = runWithRollback(
+      [
+        ...toWrite.map((x) => x.safePath),
+        ...staleOwned.map((x) => x.path),
+        path.join(absRoot, MANIFEST_FILENAME),
+      ],
+      [
+        ...toWrite.map(
+          ({ entry, safePath }) =>
+            () =>
+              atomicWriteString(safePath, entry.content ?? ''),
+        ),
+        ...staleOwned.map(({ path: p, filename, hash }) => () => {
+          if (fs.existsSync(p)) {
+            // Recheck immediately before unlink: closes the TOCTOU window
+            // between collection (findStalePaths, above) and this delete —
+            // a writer could have replaced the file's content in between.
+            assertHashMatchesOrThrow(p, hash, filename, 'remove stale file')
+            fs.unlinkSync(p)
+          }
+        }),
+        () => writeManifest(absRoot, newManifest()),
+      ],
     )
-  const prevManifest =
-    manifestResult.kind === 'ok' ? manifestResult.manifest : null
 
-  const owned = ownedFilenames(prevManifest)
-  const { toWrite, toSkip, refused, currentFilenames } = classifyExportEntries(
-    absRoot,
-    entries,
-    owned,
-  )
-  const staleOwned = findStalePaths(absRoot, prevManifest, currentFilenames)
-  const newManifest = (): PiSubagentsManifest => ({
-    generatedAt: new Date().toISOString(),
-    agentsRoot: absRoot,
-    files: buildNewManifestFiles(toWrite, toSkip),
-  })
+    if (!tx.ok)
+      return {
+        status: 'error',
+        written: 0,
+        skipped: toSkip.length,
+        refused,
+        error: tx.error,
+      }
 
-  const tx = runWithRollback(
-    [
-      ...toWrite.map((x) => x.safePath),
-      ...staleOwned,
-      path.join(absRoot, MANIFEST_FILENAME),
-    ],
-    [
-      ...toWrite.map(
-        ({ entry, safePath }) =>
-          () =>
-            atomicWriteString(safePath, entry.content ?? ''),
-      ),
-      ...staleOwned.map((p) => () => {
-        if (fs.existsSync(p)) fs.unlinkSync(p)
-      }),
-      () => writeManifest(absRoot, newManifest()),
-    ],
-  )
-
-  if (!tx.ok)
     return {
-      status: 'error',
-      written: 0,
+      status: 'ok',
+      written: toWrite.length,
       skipped: toSkip.length,
       refused,
-      error: tx.error,
     }
+  })
 
-  return {
-    status: 'ok',
-    written: toWrite.length,
-    skipped: toSkip.length,
-    refused,
-  }
+  if (!lockResult.locked) return makeExportError(lockResult.error)
+  return lockResult.result
 }
 
 // ── RefreshResult ─────────────────────────────────────────────────────────────
@@ -961,49 +1270,100 @@ export function refresh(
     }
   }
 
-  const rootOrErr = validateRefreshRoot(agentsRoot)
-  if (typeof rootOrErr !== 'string') return rootOrErr
-  const absRoot = rootOrErr
+  const absRootCandidate = path.resolve(agentsRoot)
 
-  // Refuse on malformed manifest before any mutation
-  const manifestResult = readManifestStrict(absRoot)
-  if (manifestResult.kind === 'malformed')
+  // Scope-anchored lexical ancestor walk before any mutation (and before
+  // existence checks, so a symlinked ancestor is rejected even if the
+  // resolved target doesn't itself exist).
+  const anchor = anchorForScope(configOptions, absRootCandidate)
+  try {
+    assertAnchoredPathSafe(anchor, absRootCandidate)
+  } catch (err) {
     return {
       status: 'error',
       updated: 0,
       skippedUnowned: 0,
-      error: `Malformed manifest — refusing to refresh: ${manifestResult.error}`,
+      error: err instanceof Error ? err.message : String(err),
     }
-  const manifest = manifestResult.kind === 'ok' ? manifestResult.manifest : null
+  }
 
-  const { toUpdate, toKeep, skippedUnowned } = classifyRefreshEntries(
-    absRoot,
-    entries,
-    ownedFilenames(manifest),
-  )
-  const needsManifest = manifest !== null || toUpdate.length + toKeep.length > 0
-  const newManifest = (): PiSubagentsManifest => ({
-    generatedAt: new Date().toISOString(),
-    agentsRoot: absRoot,
-    files: buildNewManifestFiles(toUpdate, toKeep),
+  const rootOrErr = validateRefreshRoot(agentsRoot)
+  if (typeof rootOrErr !== 'string') return rootOrErr
+
+  // Canonicalize anchor and root and require the root to remain within the
+  // canonical anchor before any lock/read/mutation. Closes the raced-symlink
+  // ancestor window the lexical walk above cannot (see doc comment).
+  let absRoot: string
+  try {
+    absRoot = assertCanonicalRootWithinAnchor(anchor, rootOrErr)
+  } catch (err) {
+    return {
+      status: 'error',
+      updated: 0,
+      skippedUnowned: 0,
+      error: err instanceof Error ? err.message : String(err),
+    }
+  }
+
+  // Manifest read happens INSIDE the lock (below), not here: reading it
+  // before acquiring the exclusive mutation lock would leave a TOCTOU
+  // window where a concurrent operation could mutate the manifest between
+  // this read and lock acquisition, making the read stale by the time
+  // mutation actually happens.
+  const lockResult = withLock(absRoot, (): RefreshResult => {
+    const manifestResult = readManifestStrict(absRoot)
+    if (manifestResult.kind === 'malformed')
+      return {
+        status: 'error',
+        updated: 0,
+        skippedUnowned: 0,
+        error: `Malformed manifest — refusing to refresh: ${manifestResult.error}`,
+      }
+    const manifest =
+      manifestResult.kind === 'ok' ? manifestResult.manifest : null
+
+    const { toUpdate, toKeep, skippedUnowned } = classifyRefreshEntries(
+      absRoot,
+      entries,
+      ownedFilenames(manifest),
+    )
+    const needsManifest =
+      manifest !== null || toUpdate.length + toKeep.length > 0
+    const newManifest = (): PiSubagentsManifest => ({
+      generatedAt: new Date().toISOString(),
+      agentsRoot: absRoot,
+      files: buildNewManifestFiles(toUpdate, toKeep),
+    })
+
+    const tx = runWithRollback(
+      [
+        ...toUpdate.map((x) => x.safePath),
+        path.join(absRoot, MANIFEST_FILENAME),
+      ],
+      [
+        ...toUpdate.map(
+          ({ entry, safePath }) =>
+            () =>
+              atomicWriteString(safePath, entry.content ?? ''),
+        ),
+        ...(needsManifest ? [() => writeManifest(absRoot, newManifest())] : []),
+      ],
+    )
+
+    if (!tx.ok)
+      return { status: 'error', updated: 0, skippedUnowned, error: tx.error }
+
+    return { status: 'ok', updated: toUpdate.length, skippedUnowned }
   })
 
-  const tx = runWithRollback(
-    [...toUpdate.map((x) => x.safePath), path.join(absRoot, MANIFEST_FILENAME)],
-    [
-      ...toUpdate.map(
-        ({ entry, safePath }) =>
-          () =>
-            atomicWriteString(safePath, entry.content ?? ''),
-      ),
-      ...(needsManifest ? [() => writeManifest(absRoot, newManifest())] : []),
-    ],
-  )
-
-  if (!tx.ok)
-    return { status: 'error', updated: 0, skippedUnowned, error: tx.error }
-
-  return { status: 'ok', updated: toUpdate.length, skippedUnowned }
+  if (!lockResult.locked)
+    return {
+      status: 'error',
+      updated: 0,
+      skippedUnowned: 0,
+      error: lockResult.error,
+    }
+  return lockResult.result
 }
 
 // ── CleanupResult ─────────────────────────────────────────────────────────────
@@ -1022,38 +1382,113 @@ export interface CleanupResult {
  * If any unlink fails, rolls back all deletions and returns error result.
  * Reports rollback partial failures honestly.
  */
-/** Collect existing file paths to delete during cleanup. */
+/** Collect existing hash-checked deletion targets and the manifest path (if present) for cleanup. */
 function collectCleanupPaths(
   absRoot: string,
   manifest: PiSubagentsManifest,
-): string[] {
-  const paths: string[] = []
+): { targets: DeletionTarget[]; manifestPath: string | null } {
+  const targets: DeletionTarget[] = []
   for (const entry of manifest.files) {
     const safe = safeFilePath(absRoot, entry.filename)
-    if (safe !== null && fs.existsSync(safe)) paths.push(safe)
+    if (safe === null || !fs.existsSync(safe)) continue
+    assertHashMatchesOrThrow(safe, entry.hash, entry.filename, 'delete')
+    targets.push({ path: safe, filename: entry.filename, hash: entry.hash })
   }
   const manifestPath = path.join(absRoot, MANIFEST_FILENAME)
-  if (fs.existsSync(manifestPath)) paths.push(manifestPath)
-  return paths
+  return {
+    targets,
+    manifestPath: fs.existsSync(manifestPath) ? manifestPath : null,
+  }
 }
 
-export function cleanup(agentsRoot: string): CleanupResult {
-  const absRoot = path.resolve(agentsRoot)
-  const manifestResult = readManifestStrict(absRoot)
-  if (manifestResult.kind === 'absent') return { status: 'ok' }
-  if (manifestResult.kind === 'malformed')
-    throw new Error(
-      `Malformed manifest — refusing to cleanup: ${manifestResult.error}`,
-    )
-  const manifest = manifestResult.manifest
+export function cleanup(
+  agentsRoot: string,
+  configOptions?: ExportConfigOptions,
+): CleanupResult {
+  const absRootCandidate = path.resolve(agentsRoot)
 
-  const pathsToDelete = collectCleanupPaths(absRoot, manifest)
-  const tx = runWithRollback(
-    pathsToDelete,
-    pathsToDelete.map((p) => () => {
-      if (fs.existsSync(p)) fs.unlinkSync(p)
-    }),
-  )
+  // Symlink-root rejection first (before any manifest read).
+  const preStat = statOrNull(absRootCandidate)
+  if (preStat?.isSymbolicLink())
+    throw new Error(
+      `Refusing to operate on ${absRootCandidate}: not a real directory (symlink detected)`,
+    )
+
+  // Scope-anchored lexical ancestor walk.
+  const anchor = anchorForScope(configOptions, absRootCandidate)
+  assertAnchoredPathSafe(anchor, absRootCandidate)
+
+  // Idempotent no-op: an absent agents root has nothing to clean up. Short-
+  // circuit before lock acquisition — the lock file lives inside agentsRoot,
+  // so attempting to acquire it here would fail ENOENT and break the
+  // established idempotent-no-op contract for a nonexistent root. Symlink
+  // and non-directory roots were already refused above/remain refused by
+  // the canonicalization below when the root does exist.
+  if (!fs.existsSync(absRootCandidate)) return { status: 'ok' }
+
+  // Canonicalize anchor and root and require the root to remain within the
+  // canonical anchor before any lock/read/mutation. Closes the raced-symlink
+  // ancestor window the lexical walk above cannot (see doc comment).
+  const absRoot = assertCanonicalRootWithinAnchor(anchor, absRootCandidate)
+
+  // Manifest read happens INSIDE the lock (below), not here: reading it
+  // before acquiring the exclusive mutation lock would leave a TOCTOU
+  // window where a concurrent operation could mutate the manifest between
+  // this read and lock acquisition, making the read stale by the time
+  // deletion actually happens. A malformed-manifest throw from inside the
+  // locked callback propagates straight out of withLock (its `finally`
+  // still releases the lock first) — no separate rethrow plumbing needed.
+  type CleanupInner = { kind: 'absent' } | { kind: 'tx'; tx: TxResult }
+
+  const lockResult = withLock(absRoot, (): CleanupInner => {
+    const manifestResult = readManifestStrict(absRoot)
+    if (manifestResult.kind === 'absent') return { kind: 'absent' }
+    if (manifestResult.kind === 'malformed')
+      throw new Error(
+        `Malformed manifest — refusing to cleanup: ${manifestResult.error}`,
+      )
+    const manifest = manifestResult.manifest
+
+    const { targets, manifestPath } = collectCleanupPaths(absRoot, manifest)
+    const pathsToWatch = [
+      ...targets.map((t) => t.path),
+      ...(manifestPath ? [manifestPath] : []),
+    ]
+    const tx = runWithRollback(pathsToWatch, [
+      ...targets.map(({ path: p, filename, hash }) => () => {
+        if (fs.existsSync(p)) {
+          // Recheck immediately before unlink: closes the TOCTOU window
+          // between collection (collectCleanupPaths, above) and this
+          // delete — a writer could have replaced the file's content in
+          // between.
+          assertHashMatchesOrThrow(p, hash, filename, 'delete')
+          fs.unlinkSync(p)
+        }
+      }),
+      ...(manifestPath
+        ? [
+            () => {
+              if (fs.existsSync(manifestPath)) fs.unlinkSync(manifestPath)
+            },
+          ]
+        : []),
+    ])
+    return { kind: 'tx', tx }
+  })
+
+  if (!lockResult.locked) {
+    // cleanup's established contract throws for fail-closed refusals
+    // (malformed manifest, hostile filenames, symlinked root/ancestors);
+    // lock contention is the same class of refusal-before-mutation, so it
+    // throws too. A lock-file-creation failure for an unrelated reason
+    // (e.g. permission denied on the directory) is an operational failure
+    // like any other write failure, and returns a structured error result.
+    if (lockResult.isContention) throw new Error(lockResult.error)
+    return { status: 'error', error: lockResult.error }
+  }
+
+  if (lockResult.result.kind === 'absent') return { status: 'ok' }
+  const tx = lockResult.result.tx
 
   if (!tx.ok) return { status: 'error', error: tx.error }
   return { status: 'ok' }

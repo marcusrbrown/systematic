@@ -42,7 +42,9 @@ systematic pi-subagents cleanup [--scope project|global]
 
 The pi-subagents delegation path is **outside Systematic's bounded-delegate guarantees** and governed by pi-subagents' own configuration. `systematic_delegate` remains the bounded default.
 
-Systematic's own config (`systematic.json`/`.jsonc`) is the durable source of truth for exported personas; the generated files and their manifest are a disposable projection that `export`/`refresh`/`cleanup` regenerate or remove, and `refresh` may overwrite manual edits that diverge from current config. See the [pi-subagents pairing guide](https://fro.bot/systematic/guides/pi-subagents/) for the config precedence, trust boundaries, and a canonical example.
+`export`/`refresh`/`cleanup` hold an exclusive per-root mutation lock and fail closed if any path component between the selected scope's anchor and the agents directory is a symlink or not a directory. A manifest (`.systematic-personas.json`) tracks ownership by filename and content hash; cleanup and stale-file removal only delete a file whose on-disk content still matches its recorded hash, refusing otherwise. Manifest hashes are drift evidence, not a cryptographic authenticity guarantee.
+
+Systematic's own config (`systematic.json`/`.jsonc`) is the durable source of truth for exported personas; the generated files and their manifest are a disposable projection that `export`/`refresh`/`cleanup` regenerate or remove, and `refresh` intentionally overwrites manifest-owned generated files that diverge from current config — run `preview` first to see what would change. See the [pi-subagents pairing guide](https://fro.bot/systematic/guides/pi-subagents/) for the config precedence, trust boundaries, and a canonical example.
 
 ### Blocking user interaction
 
