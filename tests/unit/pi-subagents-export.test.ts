@@ -762,6 +762,28 @@ describe('readManifest / writeManifest', () => {
     writeFile(agentsRoot, MANIFEST_FILENAME, 'not json {{{')
     expect(readManifest(agentsRoot)).toBeNull()
   })
+
+  test('readManifestStrict refuses a symlinked manifest instead of following it', () => {
+    if (process.platform === 'win32') return // symlink creation requires elevated privileges on Windows CI
+
+    const cwd = mkTmp()
+    const agentsRoot = path.join(cwd, 'agents')
+    fs.mkdirSync(agentsRoot, { recursive: true })
+
+    const manifest: PiSubagentsManifest = makeManifest(agentsRoot, [
+      { filename: 'systematic-foo.md', hash: 'abc123', status: 'exported' },
+    ])
+    const realManifestPath = path.join(cwd, 'real-manifest.json')
+    fs.writeFileSync(realManifestPath, `${JSON.stringify(manifest)}\n`, 'utf-8')
+
+    const manifestPath = path.join(agentsRoot, MANIFEST_FILENAME)
+    fs.symlinkSync(realManifestPath, manifestPath)
+
+    const result = readManifestStrict(agentsRoot)
+    expect(result.kind).toBe('malformed')
+    if (result.kind === 'malformed') expect(result.error).toMatch(/symlink/i)
+    expect(readManifest(agentsRoot)).toBeNull()
+  })
 })
 
 // ---------------------------------------------------------------------------

@@ -244,32 +244,63 @@ function validateManifestObject(parsed: unknown): string | null {
   return null
 }
 
-export function readManifestStrict(agentsRoot: string): ManifestReadResult {
-  const manifestPath = path.join(agentsRoot, MANIFEST_FILENAME)
+const HAS_O_NOFOLLOW = typeof fs.constants.O_NOFOLLOW === 'number'
 
-  // Distinguish absent from read-error
-  let stat: fs.Stats | null = null
+/**
+ * Manual symlink refusal for platforms without O_NOFOLLOW (notably
+ * Windows), where the open() call itself cannot refuse a symlinked
+ * manifest path. lstat the path (never open/read through it) and require
+ * it to still identify the exact file already opened (same device/inode).
+ * Any mismatch — the path is now a symlink, or it was replaced between
+ * open and this check — fails closed without reading a replacement.
+ * Returns an error string, or null if the path checks out.
+ */
+function verifyManifestPathIdentity(
+  manifestPath: string,
+  openedStat: fs.Stats,
+): string | null {
+  let linkStat: fs.Stats
   try {
-    stat = fs.lstatSync(manifestPath)
-  } catch {
-    return { kind: 'absent' }
-  }
-  if (!stat.isFile())
-    return {
-      kind: 'malformed',
-      error: `Manifest path exists but is not a regular file: ${manifestPath}`,
-    }
-
-  let raw: string
-  try {
-    raw = fs.readFileSync(manifestPath, 'utf-8')
+    linkStat = fs.lstatSync(manifestPath)
   } catch (err) {
+    return `Cannot verify manifest path after open: ${err instanceof Error ? err.message : String(err)}`
+  }
+  if (linkStat.isSymbolicLink())
+    return `Refusing to read manifest through symlink: ${manifestPath}`
+  if (linkStat.dev !== openedStat.dev || linkStat.ino !== openedStat.ino)
+    return `Manifest path identity changed during read (possible tamper): ${manifestPath}`
+  return null
+}
+
+function openManifestFd(
+  manifestPath: string,
+): { kind: 'fd'; fd: number } | { kind: 'result'; result: ManifestReadResult } {
+  const openFlags =
+    fs.constants.O_RDONLY | (HAS_O_NOFOLLOW ? fs.constants.O_NOFOLLOW : 0)
+  try {
+    return { kind: 'fd', fd: fs.openSync(manifestPath, openFlags) }
+  } catch (err) {
+    if ((err as { code?: string }).code === 'ENOENT')
+      return { kind: 'result', result: { kind: 'absent' } }
+    if ((err as { code?: string }).code === 'ELOOP')
+      return {
+        kind: 'result',
+        result: {
+          kind: 'malformed',
+          error: `Refusing to read manifest through symlink: ${manifestPath}`,
+        },
+      }
     return {
-      kind: 'malformed',
-      error: `Cannot read manifest: ${err instanceof Error ? err.message : String(err)}`,
+      kind: 'result',
+      result: {
+        kind: 'malformed',
+        error: `Cannot read manifest: ${err instanceof Error ? err.message : String(err)}`,
+      },
     }
   }
+}
 
+function parseManifestContents(raw: string): ManifestReadResult {
   let parsed: unknown
   try {
     parsed = JSON.parse(raw)
@@ -279,12 +310,42 @@ export function readManifestStrict(agentsRoot: string): ManifestReadResult {
       error: `Manifest JSON parse error: ${err instanceof Error ? err.message : String(err)}`,
     }
   }
-
   const validationError = validateManifestObject(parsed)
   if (validationError !== null)
     return { kind: 'malformed', error: validationError }
-
   return { kind: 'ok', manifest: parsed as PiSubagentsManifest }
+}
+
+export function readManifestStrict(agentsRoot: string): ManifestReadResult {
+  const manifestPath = path.join(agentsRoot, MANIFEST_FILENAME)
+
+  const opened = openManifestFd(manifestPath)
+  if (opened.kind === 'result') return opened.result
+  const { fd } = opened
+
+  try {
+    const stat = fs.fstatSync(fd)
+    if (!stat.isFile())
+      return {
+        kind: 'malformed',
+        error: `Manifest path exists but is not a regular file: ${manifestPath}`,
+      }
+
+    if (!HAS_O_NOFOLLOW) {
+      const identityError = verifyManifestPathIdentity(manifestPath, stat)
+      if (identityError !== null)
+        return { kind: 'malformed', error: identityError }
+    }
+
+    return parseManifestContents(fs.readFileSync(fd, 'utf-8'))
+  } catch (err) {
+    return {
+      kind: 'malformed',
+      error: `Cannot read manifest: ${err instanceof Error ? err.message : String(err)}`,
+    }
+  } finally {
+    fs.closeSync(fd)
+  }
 }
 
 /**
