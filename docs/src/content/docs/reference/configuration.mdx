@@ -526,6 +526,74 @@ Workflow guard configuration
 ```
 
 
+## pi_subagents
+
+Pi-native pi-subagents export field overlays (thinking, max_turns, tools, skills). Category values apply first; per-agent values override. No model field — model stays in the categories/agents overlay.
+
+**Type:** `object`
+**Default:** `{"categories":{},"agents":{}}`
+**Examples:**
+
+```json
+{
+  "categories": {
+    "research": {
+      "thinking": "high"
+    }
+  },
+  "agents": {
+    "repo-research-analyst": {
+      "max_turns": 10
+    }
+  }
+}
+```
+
+
+### categories
+
+Per-category pi-subagents export overlays keyed by category name
+
+**Type:** `object`
+**Default:** `{}`
+
+**Examples:**
+
+```json
+{
+  "research": {
+    "thinking": "high"
+  }
+}
+```
+
+```json
+{}
+```
+
+### agents
+
+Per-agent pi-subagents export overlays keyed by bundled agent name
+
+**Type:** `object`
+**Default:** `{}`
+
+**Examples:**
+
+```json
+{
+  "repo-research-analyst": {
+    "max_turns": 10
+  }
+}
+```
+
+```json
+{}
+```
+
+Per-entry overlay fields are documented in the [Pi-subagents Overlay Fields](#pi-subagents-overlay-fields) section below.
+
 ## skills_as_commands
 
 Register skills discovered from user/project skill directories (OpenCode config and other agent-harness-standard locations) as slash commands. Default true.
@@ -540,6 +608,90 @@ true
 
 ```json
 false
+```
+
+
+## Pi-subagents Overlay Fields
+
+The `pi_subagents.categories` and `pi_subagents.agents` sections share the same set of per-entry overlay fields.
+Each key under `pi_subagents.categories` or `pi_subagents.agents` is an object with the following fields.
+
+### thinking
+
+pi-subagents reasoning effort level for exported persona frontmatter
+
+**Type:** `string`
+
+**Valid values:** `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`
+
+**Examples:**
+
+```json
+off
+```
+
+```json
+medium
+```
+
+```json
+high
+```
+
+### max_turns
+
+pi-subagents maximum turns for a delegated persona (0 = unlimited)
+
+**Type:** `integer`
+
+**Examples:**
+
+```json
+0
+```
+
+```json
+10
+```
+
+```json
+25
+```
+
+### tools
+
+pi-subagents comma-selector tool string (built-ins, */all/none, or extension selectors)
+
+**Type:** `string`
+
+**Examples:**
+
+```json
+*
+```
+
+```json
+read,grep,glob
+```
+
+```json
+none
+```
+
+### skills
+
+pi-subagents skills selector: true (all) or a comma-separated list of skill names
+
+**Type:** `boolean` | `string`
+
+**Examples:**
+
+```json
+true
+```
+
+```json
+ce:plan,ce:review
 ```
 
 
