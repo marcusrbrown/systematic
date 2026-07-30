@@ -234,7 +234,7 @@ describe('claude-code bundle — artifact self-containment', () => {
     expect(symlinks).toEqual([])
   })
 
-  test('hooks/hooks.json is valid JSON with SessionStart/matcher:startup/type:command shape, payload <= 10000 chars', () => {
+  test('hooks/hooks.json is valid JSON with SessionStart/no-matcher (all sources)/type:command shape, payload <= 10000 chars', () => {
     const hooksPath = path.join(BUILD_DIR, 'hooks/hooks.json')
     const parsed = JSON.parse(fs.readFileSync(hooksPath, 'utf8')) as {
       hooks?: {
@@ -246,7 +246,10 @@ describe('claude-code bundle — artifact self-containment', () => {
     }
     const sessionStart = parsed.hooks?.SessionStart
     expect(Array.isArray(sessionStart)).toBe(true)
-    expect(sessionStart?.[0]?.matcher).toBe('startup')
+    // No `matcher` is intentional: it's the canonical way to match all
+    // SessionStart sources (startup/resume/clear/compact) per Claude Code
+    // hooks docs — see buildHooksJson in build-claude-code-plugin.ts.
+    expect(sessionStart?.[0]?.matcher).toBeUndefined()
     const innerHook = sessionStart?.[0]?.hooks?.[0]
     expect(innerHook?.type).toBe('command')
     expect(typeof innerHook?.command).toBe('string')
