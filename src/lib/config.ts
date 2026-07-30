@@ -13,6 +13,7 @@ import {
   BUNDLED_SKILL_NAMES,
 } from './bundled-names.js'
 import {
+  PI_SUBAGENTS_PROTECTED_FIELDS,
   SECURITY_OVERLAY_FIELDS as SCHEMA_SECURITY_OVERLAY_FIELDS,
   SystematicConfigSchema,
 } from './config-schema.js'
@@ -50,6 +51,11 @@ export interface SourceAwareConfigResult {
   overlays: SourcedOverlayConfigMap
 }
 
+export interface PiSubagentsOverlayMap {
+  categories?: OverlayConfigMap
+  agents?: OverlayConfigMap
+}
+
 export interface SystematicConfig {
   disabled_skills: string[]
   disabled_agents: string[]
@@ -58,6 +64,7 @@ export interface SystematicConfig {
   workflow_guard: WorkflowGuardConfig
   agents?: OverlayConfigMap
   categories?: OverlayConfigMap
+  pi_subagents?: PiSubagentsOverlayMap
   skills_as_commands: boolean
 }
 
@@ -74,6 +81,7 @@ export const DEFAULT_CONFIG: SystematicConfig = {
   },
   agents: {},
   categories: {},
+  pi_subagents: { categories: {}, agents: {} },
   skills_as_commands: true,
 }
 
@@ -85,10 +93,11 @@ interface RawWorkflowGuardConfig {
 interface RawSystematicConfig
   extends Omit<
     Partial<SystematicConfig>,
-    'agents' | 'categories' | 'workflow_guard'
+    'agents' | 'categories' | 'pi_subagents' | 'workflow_guard'
   > {
   agents?: unknown
   categories?: unknown
+  pi_subagents?: { categories?: unknown; agents?: unknown }
   workflow_guard?: RawWorkflowGuardConfig
 }
 
@@ -413,17 +422,34 @@ function mergeArraysUnique<T>(
   return Array.from(set)
 }
 
-export function loadConfig(projectDir: string): SystematicConfig {
-  return loadConfigWithSources(projectDir).config
+export interface LoadConfigOptions {
+  /**
+   * When false, the project-level config source (`<cwd>/.opencode/systematic.json`)
+   * is not loaded at all — not merged, not trust-stripped, entirely absent from
+   * the source chain. Used by global-scoped pi-subagents export so it never
+   * absorbs cwd project overlays (plan R7/R19). Defaults to true.
+   */
+  includeProject?: boolean
+}
+
+export function loadConfig(
+  projectDir: string,
+  options?: LoadConfigOptions,
+): SystematicConfig {
+  return loadConfigWithSources(projectDir, options).config
 }
 
 export function loadConfigWithSources(
   projectDir: string,
+  options?: LoadConfigOptions,
 ): SourceAwareConfigResult {
+  const includeProject = options?.includeProject ?? true
   const paths = getConfigPaths(projectDir)
 
   const userSource = loadConfigSource(paths.userConfig, 'user')
-  const projectSource = loadConfigSource(paths.projectConfig, 'project')
+  const projectSource = includeProject
+    ? loadConfigSource(paths.projectConfig, 'project')
+    : null
   const customSource = paths.customConfig
     ? loadConfigSource(paths.customConfig, 'custom')
     : null
@@ -432,6 +458,7 @@ export function loadConfigWithSources(
   )
 
   const mergedOverlays = mergeOverlaySources(sources)
+  const mergedPiSubagentsOverlays = mergePiSubagentsOverlaySources(sources)
   const droppedCategories = Object.keys(mergedOverlays.categories).filter(
     (name) => REMOVED_AGENT_CATEGORIES_SET.has(name),
   )
@@ -497,6 +524,10 @@ export function loadConfigWithSources(
     },
     agents: overlayValues(overlays.agents),
     categories: overlayValues(overlays.categories),
+    pi_subagents: {
+      categories: overlayValues(mergedPiSubagentsOverlays.categories),
+      agents: overlayValues(mergedPiSubagentsOverlays.agents),
+    },
     skills_as_commands:
       customConfig?.skills_as_commands ??
       projectConfig?.skills_as_commands ??
@@ -615,6 +646,100 @@ function preserveSecurityFields(
     }
   }
   return result
+}
+
+const PI_SUBAGENTS_PROTECTED_FIELD_SET = new Set(PI_SUBAGENTS_PROTECTED_FIELDS)
+
+/**
+ * Merge `pi_subagents.categories`/`pi_subagents.agents` overlays across
+ * config sources, in trust order. Unlike the portable `SECURITY_OVERLAY_FIELDS`
+ * (model/variant/skills/permission on `agents`/`categories`), which reject a
+ * project-sourced attempt outright, the pi_subagents-protected fields
+ * (`thinking`, `tools`, `skills`) are silently stripped from project-sourced
+ * config before merge — project config simply cannot grant them. `max_turns`
+ * is trust-any and passes through unchanged. This mirrors the plan's R18
+ * trust lattice: project cannot grant tools/skills to an exported persona.
+ */
+function mergePiSubagentsOverlaySources(
+  sources: ConfigSource[],
+): SourcedOverlayConfigMap {
+  const result: SourcedOverlayConfigMap = {
+    agents: {},
+    categories: {},
+  }
+
+  for (const source of sources) {
+    mergePiSubagentsOverlayMap(result.agents, source, 'agents')
+    mergePiSubagentsOverlayMap(result.categories, source, 'categories')
+  }
+
+  return result
+}
+
+function stripPiSubagentsProtectedFields(
+  value: Record<string, unknown>,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = {}
+  for (const [field, fieldValue] of Object.entries(value)) {
+    if (PI_SUBAGENTS_PROTECTED_FIELD_SET.has(field)) continue
+    result[field] = fieldValue
+  }
+  return result
+}
+
+/**
+ * Preserve protected fields from a higher-trust previous value when a
+ * project-sourced overlay replaces the same key wholesale. Mirrors
+ * `preserveSecurityFields` for the portable `agents`/`categories` overlay —
+ * a project same-key overlay must not silently erase a user-set
+ * `thinking`/`tools`/`skills` value.
+ */
+function preservePiSubagentsProtectedFields(
+  previous: OverlayConfig,
+  next: OverlayConfig,
+): OverlayConfig {
+  const result: OverlayConfig = { ...next }
+  for (const field of PI_SUBAGENTS_PROTECTED_FIELD_SET) {
+    if (Object.hasOwn(previous, field)) {
+      result[field] = previous[field]
+    }
+  }
+  return result
+}
+
+function mergePiSubagentsOverlayMap(
+  target: Record<string, SourcedOverlayConfig>,
+  source: ConfigSource,
+  mapKey: 'agents' | 'categories',
+): void {
+  const overlayMap = source.config.pi_subagents?.[mapKey]
+  if (overlayMap === undefined) return
+
+  if (!isRecord(overlayMap)) {
+    throwInvalidOverlay(source.path, `pi_subagents.${mapKey}`)
+  }
+
+  for (const [key, rawValue] of Object.entries(overlayMap)) {
+    const keyPath = `pi_subagents.${mapKey}.${key}`
+    if (!isRecord(rawValue)) {
+      throwInvalidOverlay(source.path, keyPath)
+    }
+
+    const previous = target[key]
+    const value =
+      source.trust === 'project'
+        ? preservePiSubagentsProtectedFields(
+            previous?.value ?? {},
+            stripPiSubagentsProtectedFields(rawValue),
+          )
+        : rawValue
+
+    target[key] = {
+      value,
+      sourcePath: source.path,
+      keyPath,
+    }
+  }
 }
 
 function overlayValues(

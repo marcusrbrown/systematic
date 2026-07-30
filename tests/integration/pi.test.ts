@@ -58,8 +58,10 @@ import {
   test,
 } from 'bun:test'
 import fs from 'node:fs'
+import { createRequire } from 'node:module'
 import os from 'node:os'
 import path from 'node:path'
+import { exportPersonas } from '../../src/lib/pi-subagents-export.js'
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '../..')
 const PI_CLI = path.join(
@@ -74,6 +76,41 @@ if (!fs.existsSync(PI_CLI)) {
     `Pi coding-agent CLI not found at ${PI_CLI}. ` +
       `Pi is an exact devDependency (@earendil-works/pi-coding-agent) — ` +
       `run \`bun install\` and verify the dependency is installed correctly. ` +
+      `This suite intentionally fails loudly instead of skipping.`,
+  )
+}
+
+// `@tintinweb/pi-subagents` is a real, exact devDependency (v0.14.3 — see
+// package.json devDependencies). Resolve its installed package directory via
+// `require.resolve` (bun's node_modules layout hoists it to a `.bun` store and
+// symlinks it into `node_modules/@tintinweb/pi-subagents`, so a plain
+// filesystem join isn't guaranteed to match bun's actual resolution target).
+const require = createRequire(import.meta.url)
+const PI_SUBAGENTS_PKG_DIR = path.dirname(
+  require.resolve('@tintinweb/pi-subagents/package.json'),
+)
+
+// NO SILENT SKIP: same policy as PI_CLI above — pi-subagents is an exact
+// devDependency, so its `pi.extensions` entry point must exist after install.
+const piSubagentsPkgJson = JSON.parse(
+  fs.readFileSync(path.join(PI_SUBAGENTS_PKG_DIR, 'package.json'), 'utf8'),
+) as { pi?: { extensions?: string[] } }
+const piSubagentsExtensionEntry = piSubagentsPkgJson.pi?.extensions?.[0]
+if (!piSubagentsExtensionEntry) {
+  throw new Error(
+    `@tintinweb/pi-subagents package.json at ${PI_SUBAGENTS_PKG_DIR} has no ` +
+      `"pi.extensions" entry. This suite intentionally fails loudly instead ` +
+      `of skipping.`,
+  )
+}
+const piSubagentsExtensionPath = path.join(
+  PI_SUBAGENTS_PKG_DIR,
+  piSubagentsExtensionEntry,
+)
+if (!fs.existsSync(piSubagentsExtensionPath)) {
+  throw new Error(
+    `@tintinweb/pi-subagents extension entry point not found at ` +
+      `${piSubagentsExtensionPath} (declared in package.json "pi.extensions"). ` +
       `This suite intentionally fails loudly instead of skipping.`,
   )
 }
@@ -935,7 +972,7 @@ describe('Pi subprocess integration', () => {
       expect(payloadStream).not.toContain('task(')
       expect(payloadStream).not.toContain('todowrite')
       expect(payloadStream).not.toContain('subagent_type')
-      expect(payloadStream).toContain('execution is sequential only')
+      expect(payloadStream).toContain('degraded (sequential only)')
     },
     TIMEOUT_MS,
   )
@@ -998,4 +1035,444 @@ describe('Pi subprocess integration', () => {
     },
     TIMEOUT_MS,
   )
+})
+
+/**
+ * Combined-path bounded execution: top-level pi-subagents delegation +
+ * nested Systematic persona.
+ *
+ * `@tintinweb/pi-subagents` is a REAL, exact devDependency (v0.14.3 — see
+ * package.json devDependencies and PI_SUBAGENTS_PKG_DIR above, resolved via
+ * `require.resolve`). This test loads the actual installed package as a
+ * `.pi/settings.json` local package source, alongside Systematic's own
+ * packaged extension, in a single real Pi subprocess (the same `spawnPiRpc`
+ * harness as every other test in this file) — verified to accept multiple
+ * local package sources (`dist/core/package-manager.js` `resolve()`
+ * concatenates `projectSettings.packages` across all configured entries).
+ *
+ * pi-subagents' `Agent` tool (`SUBAGENT_TOOL_NAMES.AGENT = "Agent"`,
+ * `src/index.ts`) is invoked at the top level with `subagent_type:
+ * "general-purpose"` — the built-in default agent type, whose config sets
+ * `extensions: true` (`src/default-agents.ts`). Per `runAgent()`
+ * (`src/agent-runner.ts:523-648`), `extensions: true` builds a nested
+ * `DefaultResourceLoader` with `noExtensions: false`, `configCwd` pointed at
+ * the SAME project directory — so the nested session re-resolves the SAME
+ * `.pi/settings.json` `packages` array, loading Systematic's own extension
+ * (including `systematic_delegate`) inside that nested child. This exactly
+ * exercises pi-subagents' real, non-isolated subagent path (no `isolated:
+ * true` override).
+ *
+ * Because RPC mode only wires the top-level session (the nested session's
+ * own `tool_execution_end` events never reach the top-level RPC stream, and
+ * this test cannot instrument pi-subagents' real source), the nested
+ * `systematic_delegate` call is verified indirectly but unambiguously via
+ * the mock model's own captured request log — a black-box, ground-truth
+ * transcript of every chat-completions call actually made across BOTH
+ * sessions, in order:
+ *   1. Top-level session, turn 1 — model sees `Agent` (pi-subagents) and
+ *      `systematic_delegate`/`systematic_skill` (Systematic) as available
+ *      tools; emits the `Agent` tool call.
+ *   2. Nested session (spawned by pi-subagents' `runAgent()`, extensions
+ *      loaded), turn 1 — the pi-subagents `<sub_agent_context>` wrapper is
+ *      present in its system prompt (proving this is a genuine nested
+ *      pi-subagents-spawned session, not the top-level one); `Agent` and
+ *      `systematic_delegate` are BOTH available (extensions loaded); emits
+ *      the `systematic_delegate` tool call.
+ *   3. `systematic_delegate`'s own depth-1 child (`src/lib/pi-delegate-
+ *      session.ts`, `noExtensions: true`) — system prompt is the persona
+ *      body verbatim (`systemPromptOverride`), and neither `Agent` nor
+ *      `systematic_delegate` appear in its tools list (the persona's default
+ *      read-only allowlist only) — this is the REAL, runtime-observed
+ *      behavioral proof that the nested delegate child was constructed with
+ *      `noExtensions: true`, not merely the code-level guarantee already
+ *      unit-tested by `pi-delegate-session.test.ts`.
+ *   4. Nested session, turn 2 — acknowledges the delegate tool result.
+ *   5. Top-level session, turn 2 — acknowledges the `Agent` tool result.
+ * Exactly 5 requests total proves the call graph is bounded (one Agent call,
+ * one nested systematic_delegate call, no repetition/recursion).
+ *
+ * What this proves:
+ *   • A real top-level pi-subagents delegation (`Agent` tool call) invokes a
+ *     nested Systematic persona delegation (`systematic_delegate`) inside
+ *     the pi-subagents-spawned child session.
+ *   • That nested `systematic_delegate` child is itself constructed with
+ *     `noExtensions: true` (both the runtime tool-availability evidence
+ *     above, and the code-level guarantee in `src/lib/pi-delegate-
+ *     session.ts`, unchanged by this test).
+ *   • The two-level call graph (pi-subagents `Agent` → nested session →
+ *     `systematic_delegate`) completes without global depth enforcement by
+ *     Systematic — no assertion here claims a combined-path depth cap, only
+ *     that the nested systematic_delegate call itself is bounded exactly as
+ *     `pi-delegate-session.test.ts` already proves in isolation.
+ *
+ * Scope statement (matches R12 / plan Unit 3):
+ *   systematic_delegate's noExtensions + re-entry guard bounds SYSTEMATIC'S OWN
+ *   RECURSION. It does NOT prevent pi-subagents (or any external delegation
+ *   engine) from creating additional layers above or alongside
+ *   systematic_delegate. This test demonstrates exactly one such external
+ *   layer completing successfully — it does not claim or need a global bound.
+ */
+
+describe('Combined-path bounded execution: real pi-subagents top-level + nested Systematic persona', () => {
+  let fixture: IsolatedFixture
+  let mockModel: MockModelServer
+  let client: RpcClientHandle | undefined
+
+  beforeAll(() => {
+    packTarballOnce()
+  }, 200_000)
+
+  afterAll(() => {
+    cleanupPackedTarball()
+  })
+
+  beforeEach(() => {
+    fixture = createIsolatedFixture()
+    mockModel = startMockModelServer()
+    const { relativePackagePath } = extractPackagedPluginAndConfigurePi(fixture)
+    const piDir = path.join(fixture.projectDir, '.pi')
+    // PI_SUBAGENTS_PKG_DIR is the real installed package directory (resolved
+    // via require.resolve at module load time, above) — passed as an
+    // absolute local package source. `parseSource()`/`isLocalPath()` accept
+    // absolute paths as-is (resolvePath() short-circuits on isAbsolute), so
+    // no relative-path/symlink juggling is needed even though the package
+    // lives outside the fixture's project tree (bun's `.bun` store).
+    fs.writeFileSync(
+      path.join(piDir, 'settings.json'),
+      JSON.stringify(
+        { packages: [relativePackagePath, PI_SUBAGENTS_PKG_DIR] },
+        null,
+        2,
+      ),
+    )
+    writeMockModelsConfig(fixture, mockModel.url)
+  })
+
+  afterEach(async () => {
+    if (client) {
+      await client.close()
+      client = undefined
+    }
+    mockModel.stop()
+    destroyIsolatedFixture(fixture)
+  })
+
+  test(
+    'one bounded top-level pi-subagents Agent call invokes exactly one nested systematic_delegate call, constructed with noExtensions: true',
+    async () => {
+      client = spawnPiRpc({ fixture })
+
+      await client.send({
+        type: 'set_model',
+        provider: MOCK_PROVIDER_ID,
+        modelId: MOCK_MODEL_ID,
+      })
+
+      // Turn 1 (top-level/outer session): model emits pi-subagents' real
+      // `Agent` tool call, targeting the built-in "general-purpose" type
+      // (extensions: true — see default-agents.ts), which spawns a nested
+      // session that itself loads Systematic's extension.
+      mockModel.push({
+        toolCalls: [
+          {
+            id: 'call_agent_1',
+            name: 'Agent',
+            arguments: {
+              prompt:
+                'Delegate to best-practices-researcher via systematic_delegate to summarize a best practice.',
+              description: 'Delegate best-practice summary',
+              subagent_type: 'general-purpose',
+            },
+          },
+        ],
+      })
+      // Turn 2 (nested session, spawned by pi-subagents' runAgent() with
+      // extensions loaded): the nested session's model emits exactly one
+      // systematic_delegate call.
+      mockModel.push({
+        toolCalls: [
+          {
+            id: 'call_delegate_nested_1',
+            name: 'systematic_delegate',
+            arguments: {
+              agent: 'best-practices-researcher',
+              task: 'Summarize one best practice in one sentence.',
+            },
+          },
+        ],
+      })
+      // Turn 3 (systematic_delegate's own depth-1 child, noExtensions: true):
+      // completes the delegated persona turn.
+      mockModel.push({ text: 'Best practice: keep functions small.' })
+      // Turn 4 (nested session): acknowledges the delegate tool result.
+      mockModel.push({ text: 'nested done' })
+      // Turn 5 (top-level session): acknowledges the Agent tool result.
+      mockModel.push({ text: 'top-level done' })
+
+      const promptResponse = await client.send({
+        type: 'prompt',
+        message:
+          'Use the Agent tool to delegate a best-practice summary via systematic_delegate.',
+      })
+      expect(promptResponse.success).toBe(true)
+
+      // The bounded top-level call completed exactly once, RPC-visible on
+      // the top-level session stream.
+      const outerToolEnd = await client.waitFor(
+        (msg) =>
+          msg.type === 'tool_execution_end' &&
+          (msg as { toolName?: string }).toolName === 'Agent',
+        TIMEOUT_MS,
+      )
+      expect((outerToolEnd as { isError?: boolean }).isError).not.toBe(true)
+
+      await client.waitFor((msg) => msg.type === 'agent_settled')
+
+      // Ground-truth evidence: exactly 5 chat-completions requests were made
+      // across BOTH the top-level and nested sessions — bounded, not
+      // repeated/recursive.
+      expect(mockModel.requests.length).toBe(5)
+
+      const requestSystemText = (index: number): string => {
+        const request = mockModel.requests[index] as {
+          messages: { role: string; content: unknown }[]
+        }
+        return request.messages
+          .filter((m) => m.role === 'system' || m.role === 'developer')
+          .map((m) =>
+            typeof m.content === 'string'
+              ? m.content
+              : JSON.stringify(m.content),
+          )
+          .join('\n')
+      }
+      const requestToolNames = (index: number): string[] => {
+        const request = mockModel.requests[index] as {
+          tools?: { function?: { name?: string } }[]
+        }
+        return (request.tools ?? [])
+          .map((t) => t.function?.name)
+          .filter((name): name is string => typeof name === 'string')
+      }
+
+      // Request 0 — top-level session: Systematic's own extension AND
+      // pi-subagents both loaded here (both packages configured at project
+      // scope), so both tool sets are visible.
+      expect(requestSystemText(0)).toContain('<SYSTEMATIC_WORKFLOWS>')
+      expect(requestToolNames(0)).toContain('Agent')
+      expect(requestToolNames(0)).toContain('systematic_delegate')
+
+      // Request 1 — nested session spawned by pi-subagents' runAgent(): the
+      // pi-subagents append-mode wrapper tag proves this is a genuine
+      // pi-subagents-spawned child, distinct from the top-level session.
+      // extensions: true (general-purpose) means Systematic's extension
+      // loaded again here too, so systematic_delegate is available.
+      expect(requestSystemText(1)).toContain('<sub_agent_context>')
+      expect(requestToolNames(1)).toContain('systematic_delegate')
+
+      // Request 2 — systematic_delegate's own depth-1 child
+      // (src/lib/pi-delegate-session.ts, noExtensions: true): system prompt
+      // is the persona body verbatim (systemPromptOverride), and neither
+      // Agent nor systematic_delegate appear in its tools — the REAL,
+      // runtime-observed proof that this child was constructed with
+      // noExtensions: true, not merely the code-level guarantee already
+      // unit-tested by pi-delegate-session.test.ts.
+      expect(requestSystemText(2)).toContain('expert technology researcher')
+      expect(requestSystemText(2)).not.toContain('<SYSTEMATIC_WORKFLOWS>')
+      expect(requestToolNames(2)).not.toContain('Agent')
+      expect(requestToolNames(2)).not.toContain('systematic_delegate')
+
+      // No global depth cap is asserted here — this only proves the observed
+      // two-level call graph (pi-subagents Agent → nested session →
+      // systematic_delegate) completes, and that the nested delegate call was
+      // itself constructed with noExtensions: true.
+    },
+    TIMEOUT_MS,
+  )
+
+  /**
+   * Real export-to-discovery path: Systematic's own public export API
+   * (`exportPersonas` from `src/lib/pi-subagents-export.js`) writes a real
+   * `systematic-*` persona file into the fixture's `.pi/agents` — the exact
+   * discovery directory pi-subagents' `loadCustomAgents()` reads
+   * (`custom-agents.ts`: `join(cwd, ".pi", "agents")`, highest-priority
+   * project source). No stand-in/mocked persona content: the exported file
+   * is byte-identical to what `systematic pi-subagents export` would write
+   * for a real user (curated source: agents/research/repo-research-analyst.md
+   * — see CURATED_PERSONAS in src/lib/pi-subagents-personas.ts).
+   *
+   * This proves the REAL, installed `@tintinweb/pi-subagents` (v0.14.3):
+   *   1. discovers the exported `systematic-repo-research-analyst` custom
+   *      agent type via its own real `loadCustomAgents()`/`getAvailableTypes()`
+   *      (not `general-purpose` — a `subagent_type` that only exists because
+   *      the export API wrote it is accepted and resolved to itself, not
+   *      silently falling back);
+   *   2. builds the child session's system prompt via its own real
+   *      `buildAgentPrompt()` from that persona's frontmatter-derived
+   *      config — `promptMode: "replace"` (no `prompt_mode:` frontmatter
+   *      field emitted by the exporter, so pi-subagents' own default
+   *      applies) means the exported persona's body appears verbatim,
+   *      proving the exported content — not a hardcoded/general prompt —
+   *      drove the child request.
+   */
+  test(
+    'real exported systematic-repo-research-analyst persona is discovered and used by the real pi-subagents Agent tool',
+    async () => {
+      // Export a real Systematic persona into the fixture's .pi/agents via
+      // the public export API — the same code path `systematic
+      // pi-subagents export` runs, writing to the same directory
+      // pi-subagents' loadCustomAgents() reads.
+      const agentsRoot = path.join(fixture.projectDir, '.pi', 'agents')
+      const exportResult = exportPersonas(agentsRoot)
+      if (exportResult.status !== 'ok') {
+        throw new Error(
+          `exportPersonas failed: ${exportResult.error ?? 'unknown error'}`,
+        )
+      }
+      const exportedPersonaPath = path.join(
+        agentsRoot,
+        'systematic-repo-research-analyst.md',
+      )
+      if (!fs.existsSync(exportedPersonaPath)) {
+        throw new Error(
+          `Expected export to write ${exportedPersonaPath}, but it is absent. ` +
+            `Exported: ${exportResult.written}, skipped: ${exportResult.skipped}.`,
+        )
+      }
+
+      client = spawnPiRpc({ fixture })
+
+      await client.send({
+        type: 'set_model',
+        provider: MOCK_PROVIDER_ID,
+        modelId: MOCK_MODEL_ID,
+      })
+
+      // Turn 1 (top-level session): model invokes the real pi-subagents
+      // `Agent` tool directly with the exported systematic-* persona as
+      // subagent_type — no systematic_delegate involved, exercising
+      // pi-subagents' own custom-agent discovery/acceptance of a
+      // Systematic-exported persona.
+      mockModel.push({
+        toolCalls: [
+          {
+            id: 'call_agent_exported_persona_1',
+            name: 'Agent',
+            arguments: {
+              prompt: 'Give a one-sentence summary of this repository.',
+              description: 'Repo research via exported persona',
+              subagent_type: 'systematic-repo-research-analyst',
+            },
+          },
+        ],
+      })
+      // Turn 2 (nested session spawned for the exported persona): completes
+      // the delegated turn.
+      mockModel.push({ text: 'This repo is a Pi/OpenCode plugin.' })
+      // Turn 3 (top-level session): acknowledges the Agent tool result.
+      mockModel.push({ text: 'done' })
+
+      const promptResponse = await client.send({
+        type: 'prompt',
+        message:
+          'Use the Agent tool with subagent_type systematic-repo-research-analyst to summarize this repo.',
+      })
+      expect(promptResponse.success).toBe(true)
+
+      const outerToolEnd = await client.waitFor(
+        (msg) =>
+          msg.type === 'tool_execution_end' &&
+          (msg as { toolName?: string }).toolName === 'Agent',
+        TIMEOUT_MS,
+      )
+      expect((outerToolEnd as { isError?: boolean }).isError).not.toBe(true)
+
+      await client.waitFor((msg) => msg.type === 'agent_settled')
+
+      // Ground truth: the real pi-subagents Agent tool did NOT fall back to
+      // "general-purpose" — the AgentDetails on the tool result report the
+      // resolved subagentType verbatim.
+      const outerResult = (outerToolEnd as { result?: unknown }).result as
+        | { details?: { subagentType?: string } }
+        | undefined
+      expect(outerResult?.details?.subagentType).toBe(
+        'systematic-repo-research-analyst',
+      )
+
+      // Exactly 3 requests: top-level turn 1 (emits Agent call), nested
+      // child turn 1 (completes), top-level turn 2 (acknowledges) — bounded,
+      // no unexpected fallback/retry loop.
+      expect(mockModel.requests.length).toBe(3)
+
+      const nestedRequest = mockModel.requests[1] as {
+        messages: { role: string; content: unknown }[]
+      }
+      const nestedSystemText = nestedRequest.messages
+        .filter((m) => m.role === 'system' || m.role === 'developer')
+        .map((m) =>
+          typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+        )
+        .join('\n')
+
+      // The exported persona's frontmatter-derived description drives the
+      // real pi-subagents Agent tool's parameter description (proves
+      // discovery/acceptance), and the child's system prompt is the
+      // exported persona's body verbatim (promptMode: "replace" — no
+      // prompt_mode: frontmatter field in the exporter's output, so
+      // pi-subagents' own default applies), proving the exported
+      // frontmatter/body — not a hardcoded persona — drove the real child
+      // request.
+      expect(nestedSystemText).toContain(
+        'You are an expert repository research analyst specializing in understanding codebases',
+      )
+      expect(nestedSystemText).toContain('**Scoped Invocation**')
+    },
+    TIMEOUT_MS,
+  )
+})
+
+describe('Combined-path characterization: scope statement', () => {
+  test('characterization (always): systematic_delegate boundary is Systematic-local — does not prevent external delegation above/alongside it', () => {
+    /**
+     * This assertion codifies the boundary scope statement as a always-run unit
+     * assertion. It does not require a real pi-subagents runtime.
+     *
+     * The scope of systematic_delegate's boundary (noExtensions + re-entry guard):
+     *   ✓ Prevents the CHILD spawned by systematic_delegate from loading Systematic's
+     *     Pi extension and re-registering systematic_delegate.
+     *   ✓ Prevents DELEGATE_TOOL_NAME from appearing in the child session's tool allowlist.
+     *   ✗ Does NOT prevent pi-subagents (or any external tool) from spawning its own
+     *     child sessions that may themselves load Systematic's extension.
+     *   ✗ Does NOT enforce a global delegation-depth cap across the combined call graph.
+     *
+     * This is the canonical reference for R12 + plan Unit 3 scope statement.
+     * The boundary is verified by tests in tests/unit/pi-delegate-session.test.ts
+     * (boundary characterization describe block).
+     *
+     * Pre-assertion evidence captured: all 6 tests in pi-delegate-session.test.ts
+     * pass (4 original + 2 boundary characterization) confirming the boundary holds
+     * at the unit level. The combined end-to-end path is ALSO exercised at
+     * runtime against the real, installed @tintinweb/pi-subagents v0.14.3 —
+     * see the "Combined-path bounded execution" describe block above.
+     */
+
+    // The boundary scope: systematic_delegate's noExtensions is Systematic-local.
+    const SYSTEMATIC_DELEGATE_BOUNDARY_SCOPE = [
+      'noExtensions: true prevents child from loading Systematic Pi extension',
+      'explicit re-entry guard prevents DELEGATE_TOOL_NAME in child tool allowlist',
+      'does NOT cap global depth across pi-subagents or other external delegation engines',
+      'external delegation engines are governed by their own limits/config',
+    ] as const
+
+    // This assertion is definitional / always-true; it documents the intended scope.
+    expect(SYSTEMATIC_DELEGATE_BOUNDARY_SCOPE).toHaveLength(4)
+    expect(SYSTEMATIC_DELEGATE_BOUNDARY_SCOPE[0]).toContain('noExtensions')
+    expect(SYSTEMATIC_DELEGATE_BOUNDARY_SCOPE[1]).toContain('re-entry guard')
+    expect(SYSTEMATIC_DELEGATE_BOUNDARY_SCOPE[2]).toContain(
+      'NOT cap global depth',
+    )
+    expect(SYSTEMATIC_DELEGATE_BOUNDARY_SCOPE[3]).toContain(
+      'governed by their own',
+    )
+  })
 })

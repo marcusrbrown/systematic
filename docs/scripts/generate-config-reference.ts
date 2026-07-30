@@ -44,6 +44,7 @@ const TOP_LEVEL_KEYS = [
   'disabled_commands',
   'bootstrap',
   'workflow_guard',
+  'pi_subagents',
   'skills_as_commands',
 ] as const
 
@@ -75,6 +76,20 @@ const OVERLAY_FIELD_KEYS = [
 
 /** Bootstrap sub-fields. */
 const BOOTSTRAP_SUB_FIELDS = ['enabled', 'file'] as const
+
+/** `pi_subagents` sub-keys (both are records of the same overlay shape). */
+const PI_SUBAGENTS_SUB_FIELDS = ['categories', 'agents'] as const
+
+/**
+ * Overlay fields shared by `pi_subagents.categories` and `pi_subagents.agents`
+ * entries. These are the keys under the record's `additionalProperties.properties`.
+ */
+const PI_SUBAGENTS_OVERLAY_FIELD_KEYS = [
+  'thinking',
+  'max_turns',
+  'tools',
+  'skills',
+] as const
 
 /**
  * Format a JSON Schema type annotation for display.
@@ -269,6 +284,24 @@ function renderTopLevelSection(
         .join('\n\n')
   }
 
+  // pi_subagents sub-fields (categories/agents, each a record of the same
+  // Pi-native overlay shape — cross-referenced to the shared overlay block).
+  if (key === 'pi_subagents' && propSchema.properties) {
+    const piProps = propSchema.properties as Record<string, unknown>
+    subFields =
+      '\n\n' +
+      PI_SUBAGENTS_SUB_FIELDS.map((subKey) => {
+        const subSchema = piProps[subKey] as Record<string, unknown> | undefined
+        if (!subSchema) return null
+        const subDesc = getDescription(subSchema)
+        const subDefaultStr = renderDefault(subSchema)
+        const subExamples = renderExamples(subSchema.examples)
+        return `### ${subKey}\n\n${subDesc ? `${subDesc}\n\n` : ''}**Type:** ${formatType(subSchema)}${subDefaultStr}\n${subExamples}`.trimEnd()
+      })
+        .filter(Boolean)
+        .join('\n\n')
+  }
+
   // Cross-reference for agent/category overlay sections.
   // The Overlay Fields block renders before the agents/categories sections in
   // configuration.mdx (around line 120). If that section order ever changes,
@@ -276,7 +309,9 @@ function renderTopLevelSection(
   const crossRef =
     key === 'agents' || key === 'categories'
       ? '\n\nPer-entry overlay fields are documented in the [Agent/Category Overlay Fields](#agentcategory-overlay-fields) section above.'
-      : ''
+      : key === 'pi_subagents'
+        ? '\n\nPer-entry overlay fields are documented in the [Pi-subagents Overlay Fields](#pi-subagents-overlay-fields) section below.'
+        : ''
 
   return `## ${key}\n\n${desc ? `${desc}\n\n` : ''}**Type:** ${formatType(propSchema)}${defaultStr}${examplesBlock}${subFields}${crossRef}`
 }
@@ -296,6 +331,39 @@ export function resolveAgentOverlaySchema(
   properties: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
   const agentsSchema = properties.agents as Record<string, unknown> | undefined
+  const agentsAdditional = agentsSchema?.additionalProperties
+  if (
+    agentsAdditional !== null &&
+    typeof agentsAdditional === 'object' &&
+    !Array.isArray(agentsAdditional)
+  ) {
+    return agentsAdditional as Record<string, unknown>
+  }
+  const agentProperties = agentsSchema?.properties as
+    | Record<string, Record<string, unknown>>
+    | undefined
+  const firstKey = agentProperties ? Object.keys(agentProperties)[0] : undefined
+  return firstKey && agentProperties ? agentProperties[firstKey] : undefined
+}
+
+/**
+ * Resolve the overlay schema object for `pi_subagents.agents` entries from
+ * the top-level JSON Schema properties map. Mirrors
+ * {@link resolveAgentOverlaySchema}'s typed-object/record fallback, scoped
+ * to `pi_subagents.agents` instead of the top-level `agents` field.
+ */
+function resolvePiSubagentsOverlaySchema(
+  properties: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const piSubagentsSchema = properties.pi_subagents as
+    | Record<string, unknown>
+    | undefined
+  const piSubagentsProps = piSubagentsSchema?.properties as
+    | Record<string, unknown>
+    | undefined
+  const agentsSchema = piSubagentsProps?.agents as
+    | Record<string, unknown>
+    | undefined
   const agentsAdditional = agentsSchema?.additionalProperties
   if (
     agentsAdditional !== null &&
@@ -374,9 +442,24 @@ ${renderOverlayFields(agentProps, OVERLAY_FIELD_KEYS, 3)}`
     .filter(Boolean)
     .join('\n\n')
 
+  // Pi-subagents overlay fields section (shared reference for
+  // pi_subagents.categories/pi_subagents.agents entries)
+  const piSubagentsOverlayProps = resolvePiSubagentsOverlaySchema(properties)
+
+  const piSubagentsOverlaySection = piSubagentsOverlayProps?.properties
+    ? `## Pi-subagents Overlay Fields
+
+The \`pi_subagents.categories\` and \`pi_subagents.agents\` sections share the same set of per-entry overlay fields.
+Each key under \`pi_subagents.categories\` or \`pi_subagents.agents\` is an object with the following fields.
+
+${renderOverlayFields(piSubagentsOverlayProps, PI_SUBAGENTS_OVERLAY_FIELD_KEYS, 3)}`
+    : ''
+
   // Return only the field reference content (injected between sentinel markers)
   return `${overlaySection}
 ${sections}
+
+${piSubagentsOverlaySection}
 
 ## Offline IDE behavior
 

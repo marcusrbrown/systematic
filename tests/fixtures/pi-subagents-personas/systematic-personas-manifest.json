@@ -1,0 +1,180 @@
+{
+  "generatedAt": "2026-07-28T18:12:06.195Z",
+  "entries": [
+    {
+      "filename": "systematic-best-practices-researcher.md",
+      "status": "exported",
+      "sourceRelPath": "agents/research/best-practices-researcher.md",
+      "hash": "4555cc7ca37e14d35dfa729191188c2b451df409c8d369db465a5edca7a4c956"
+    },
+    {
+      "filename": "systematic-framework-docs-researcher.md",
+      "status": "exported",
+      "sourceRelPath": "agents/research/framework-docs-researcher.md",
+      "hash": "934007decbc952d6352f567ee01b25b57f3c7c3d5837b143ccfee7a4b0f8b615"
+    },
+    {
+      "filename": "systematic-git-history-analyzer.md",
+      "status": "exported",
+      "sourceRelPath": "agents/research/git-history-analyzer.md",
+      "hash": "0fdb6243d39730ccbaaebf07d426a5c4b8de71c3bb46a191584c88deec258528"
+    },
+    {
+      "filename": "systematic-issue-intelligence-analyst.md",
+      "status": "exported",
+      "sourceRelPath": "agents/research/issue-intelligence-analyst.md",
+      "hash": "8499bea9eb6483f426d4f73c3c2dd4acc8356410207f34bf53b2a5e1181e6225"
+    },
+    {
+      "filename": "systematic-repo-research-analyst.md",
+      "status": "exported",
+      "sourceRelPath": "agents/research/repo-research-analyst.md",
+      "hash": "c5a851c6ea879adb61bbdbcc746ddfdaab966d0b072dd0cad2d1ab50ae3d51b6"
+    },
+    {
+      "filename": "systematic-adversarial-reviewer.md",
+      "status": "exported",
+      "sourceRelPath": "agents/review/adversarial-reviewer.md",
+      "hash": "5e67b9f3c401bb9c05a9021f2b55bdf2ec552d8634278f40d024b7719be68216"
+    },
+    {
+      "filename": "systematic-api-contract-reviewer.md",
+      "status": "exported",
+      "sourceRelPath": "agents/review/api-contract-reviewer.md",
+      "hash": "422de229d91e42fcc12d8497b8ec57598e96ef6dba36c3c793e6c777d67da60b"
+    },
+    {
+      "filename": "systematic-architecture-strategist.md",
+      "status": "exported",
+      "sourceRelPath": "agents/review/architecture-strategist.md",
+      "hash": "f4541a4bfe1f3bad713029e34267aa327740f322594f4f83d2ea1a5870099241"
+    },
+    {
+      "filename": "systematic-cli-readiness-reviewer.md",
+      "status": "exported",
+      "sourceRelPath": "agents/review/cli-readiness-reviewer.md",
+      "hash": "be98563cd6dd4eca24d2e719af32649bd26bd5455404c7288c14d2ee2fed697f"
+    },
+    {
+      "filename": "systematic-code-simplicity-reviewer.md",
+      "status": "exported",
+      "sourceRelPath": "agents/review/code-simplicity-reviewer.md",
+      "hash": "9afa4b84c2421ed6958568f88489d1495a1db02bb3e1b5b9f3150872d7115a13"
+    },
+    {
+      "filename": "systematic-correctness-reviewer.md",
+      "status": "exported",
+      "sourceRelPath": "agents/review/correctness-reviewer.md",
+      "hash": "ea62ca052a0dedfff8f2985be43d6ae68c40290d76b1667a188ee701fc20c1fe"
+    },
+    {
+      "filename": "systematic-data-migrations-reviewer.md",
+      "status": "exported",
+      "sourceRelPath": "agents/review/data-migrations-reviewer.md",
+      "hash": "72cc92a7832ed3074ed6975e7a67a391a7152e1518cf7bcde329f1f6e9a52162"
+    },
+    {
+      "filename": "systematic-deployment-verification-agent.md",
+      "status": "exported",
+      "sourceRelPath": "agents/review/deployment-verification-agent.md",
+      "hash": "ff7a3fad7fabc810eeaebf1dec8556aee04106eb211ea30acc3147d0b2c6ee36"
+    },
+    {
+      "filename": "systematic-maintainability-reviewer.md",
+      "status": "exported",
+      "sourceRelPath": "agents/review/maintainability-reviewer.md",
+      "hash": "eb1b35a808190955009895be01ce7bef63ae4f9bbeff4cb13b43d1e5fe1c0c42"
+    },
+    {
+      "filename": "systematic-pattern-recognition-specialist.md",
+      "status": "exported",
+      "sourceRelPath": "agents/review/pattern-recognition-specialist.md",
+      "hash": "c642aaa1905600d8fcf4a889e707cd6c610a2dacadee80f39c20f52603479bab"
+    },
+    {
+      "filename": "systematic-performance-reviewer.md",
+      "status": "exported",
+      "sourceRelPath": "agents/review/performance-reviewer.md",
+      "hash": "fa8181a83c86ecc1d361f457b9b4dea8eef43ab13619a0a1de77e9ca5441a1cf"
+    },
+    {
+      "filename": "systematic-previous-comments-reviewer.md",
+      "status": "exported",
+      "sourceRelPath": "agents/review/previous-comments-reviewer.md",
+      "hash": "e233bc14086af76e871c0890c33cbf36e1de1c379e55c7c367484579776afd8d"
+    },
+    {
+      "filename": "systematic-reliability-reviewer.md",
+      "status": "exported",
+      "sourceRelPath": "agents/review/reliability-reviewer.md",
+      "hash": "b9073df6a87d20cb5a78ba1c0fccd8fe8a5d5533be76ee7b1325d197abe78f06"
+    },
+    {
+      "filename": "systematic-security-reviewer.md",
+      "status": "exported",
+      "sourceRelPath": "agents/review/security-reviewer.md",
+      "hash": "776307f7b4733f71e1911d47e1c0b35e596269e168656e7c297ec2574cd9cb62"
+    },
+    {
+      "filename": "systematic-testing-reviewer.md",
+      "status": "exported",
+      "sourceRelPath": "agents/review/testing-reviewer.md",
+      "hash": "8dd69a0080bced8ba4a3ff97a4f1d25f500ef974e8f5975c9479a54164d47cf0"
+    },
+    {
+      "filename": "systematic-adversarial-document-reviewer.md",
+      "status": "exported",
+      "sourceRelPath": "agents/document-review/adversarial-document-reviewer.md",
+      "hash": "297335375ed79f746fd11ab384ce1fa7f8978602c33d814e6570b08c64df5123"
+    },
+    {
+      "filename": "systematic-coherence-reviewer.md",
+      "status": "exported",
+      "sourceRelPath": "agents/document-review/coherence-reviewer.md",
+      "hash": "354f5337583a9c324d23a51eb9593648b3f5206c05fe93024f09c31d924adaca"
+    },
+    {
+      "filename": "systematic-design-lens-reviewer.md",
+      "status": "exported",
+      "sourceRelPath": "agents/document-review/design-lens-reviewer.md",
+      "hash": "191356dcfea9b85348aa2942e4b79620e107e9acb33b506d90281a14ef111f2b"
+    },
+    {
+      "filename": "systematic-feasibility-reviewer.md",
+      "status": "exported",
+      "sourceRelPath": "agents/document-review/feasibility-reviewer.md",
+      "hash": "3144c04d9db1c679c5528cd0ffcad7d8c717fb4017d7bb239293056a33910cc0"
+    },
+    {
+      "filename": "systematic-product-lens-reviewer.md",
+      "status": "exported",
+      "sourceRelPath": "agents/document-review/product-lens-reviewer.md",
+      "hash": "e8998764ba18d06b347666a75c04a6eab4448a90f2522549b463790e3a07058a"
+    },
+    {
+      "filename": "systematic-scope-guardian-reviewer.md",
+      "status": "exported",
+      "sourceRelPath": "agents/document-review/scope-guardian-reviewer.md",
+      "hash": "7a1c324f237a6c310bbff1b41dd2030489e3260425c6f3efdcb453a4976d8b04"
+    },
+    {
+      "filename": "systematic-security-lens-reviewer.md",
+      "status": "exported",
+      "sourceRelPath": "agents/document-review/security-lens-reviewer.md",
+      "hash": "4bd8ba4cd600ac9618868c9c1021182ffd8c627527d02192c08bb5178c03ed4c"
+    },
+    {
+      "filename": "systematic-spec-flow-analyzer.md",
+      "status": "exported",
+      "sourceRelPath": "agents/workflow/spec-flow-analyzer.md",
+      "hash": "87a21889d71a1062cc6a4356a11f04fa9b35466e4c8a9083bdf9c4ce106e58f5"
+    },
+    {
+      "filename": "systematic-bug-reproduction-validator.md",
+      "status": "exported-with-warning",
+      "sourceRelPath": "agents/workflow/bug-reproduction-validator.md",
+      "hash": "698bc3727cf99cbcdbc28f1407a0bdba6bf8b3ae2fba33ee00b6f551b88a8e35",
+      "reason": "References agent-browser CLI/skill as an optional tool hint. Behavior may differ if agent-browser is not available, but persona remains operable without it."
+    }
+  ]
+}

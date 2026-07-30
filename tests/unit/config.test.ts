@@ -1838,6 +1838,237 @@ describe('config', () => {
   })
 })
 
+describe('pi_subagents merge and trust', () => {
+  let testDir: string
+  let originalOsHomedir: (() => string) | undefined
+
+  beforeEach(() => {
+    testDir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-pisub-test-'))
+    originalOsHomedir = os.homedir
+    os.homedir = () => path.join(testDir, 'home')
+  })
+
+  afterEach(() => {
+    if (originalOsHomedir) os.homedir = originalOsHomedir
+    fs.rmSync(testDir, { recursive: true, force: true })
+    delete process.env.OPENCODE_CONFIG_DIR
+  })
+
+  function userConfigPath(): string {
+    return path.join(os.homedir(), '.config', 'opencode', 'systematic.json')
+  }
+
+  function writeUserConfig(config: Record<string, unknown>): string {
+    const filePath = userConfigPath()
+    fs.mkdirSync(path.dirname(filePath), { recursive: true })
+    fs.writeFileSync(filePath, JSON.stringify(config))
+    return filePath
+  }
+
+  function writeProjectConfig(config: Record<string, unknown>): string {
+    const projectConfigDir = path.join(testDir, '.opencode')
+    fs.mkdirSync(projectConfigDir, { recursive: true })
+    const filePath = path.join(projectConfigDir, 'systematic.json')
+    fs.writeFileSync(filePath, JSON.stringify(config))
+    return filePath
+  }
+
+  test('user config pi_subagents.categories/agents merge into effective config', () => {
+    writeUserConfig({
+      pi_subagents: {
+        categories: { research: { thinking: 'high' } },
+        agents: { 'repo-research-analyst': { max_turns: 10 } },
+      },
+    })
+
+    const result = loadConfigWithSources(testDir)
+    expect(result.config.pi_subagents).toEqual({
+      categories: { research: { thinking: 'high' } },
+      agents: { 'repo-research-analyst': { max_turns: 10 } },
+    })
+  })
+
+  test('defaults to empty categories/agents maps with no config files', () => {
+    const result = loadConfig(testDir)
+    expect(result.pi_subagents).toEqual({ categories: {}, agents: {} })
+  })
+
+  test('project-sourced thinking/tools/skills are stripped from merged pi_subagents', () => {
+    writeProjectConfig({
+      pi_subagents: {
+        agents: {
+          'repo-research-analyst': {
+            thinking: 'high',
+            tools: '*',
+            skills: true,
+            max_turns: 5,
+          },
+        },
+      },
+    })
+
+    const result = loadConfigWithSources(testDir)
+    expect(
+      result.config.pi_subagents?.agents?.['repo-research-analyst'],
+    ).toEqual({ max_turns: 5 })
+  })
+
+  test('project-sourced category thinking/tools/skills are stripped; max_turns retained', () => {
+    writeProjectConfig({
+      pi_subagents: {
+        categories: {
+          research: {
+            thinking: 'medium',
+            tools: 'read',
+            skills: 'ce:plan',
+            max_turns: 5,
+          },
+        },
+      },
+    })
+
+    const result = loadConfigWithSources(testDir)
+    expect(result.config.pi_subagents?.categories?.research).toEqual({
+      max_turns: 5,
+    })
+  })
+
+  test('project cannot resurrect a stripped field by omission when user set it', () => {
+    // Project same-key overlay should not erase a higher-trust protected field.
+    writeUserConfig({
+      pi_subagents: {
+        agents: { 'repo-research-analyst': { thinking: 'high', max_turns: 1 } },
+      },
+    })
+    writeProjectConfig({
+      pi_subagents: {
+        agents: { 'repo-research-analyst': { max_turns: 20 } },
+      },
+    })
+
+    const result = loadConfigWithSources(testDir)
+    expect(
+      result.config.pi_subagents?.agents?.['repo-research-analyst'],
+    ).toEqual({ thinking: 'high', max_turns: 20 })
+  })
+
+  test('project config setting only protected fields is stripped down to an empty overlay (no throw)', () => {
+    writeProjectConfig({
+      pi_subagents: { agents: { x: { thinking: 'low' } } },
+    })
+
+    expect(() => loadConfigWithSources(testDir)).not.toThrow()
+    const result = loadConfigWithSources(testDir)
+    expect(result.config.pi_subagents?.agents?.x).toEqual({})
+  })
+
+  test('user/custom config directory may set thinking/tools/skills freely', () => {
+    const customDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-pisub-custom-'),
+    )
+    process.env.OPENCODE_CONFIG_DIR = customDir
+    fs.writeFileSync(
+      path.join(customDir, 'systematic.json'),
+      JSON.stringify({
+        pi_subagents: {
+          agents: { x: { thinking: 'high', tools: '*', skills: true } },
+        },
+      }),
+    )
+
+    const result = loadConfigWithSources(testDir)
+    expect(result.config.pi_subagents?.agents?.x).toEqual({
+      thinking: 'high',
+      tools: '*',
+      skills: true,
+    })
+
+    fs.rmSync(customDir, { recursive: true, force: true })
+  })
+
+  test('per-agent pi_subagents value overrides category value at merge time (both present in effective config)', () => {
+    writeUserConfig({
+      pi_subagents: {
+        categories: { research: { thinking: 'low', max_turns: 3 } },
+        agents: { 'repo-research-analyst': { thinking: 'high' } },
+      },
+    })
+
+    const result = loadConfigWithSources(testDir)
+    expect(result.config.pi_subagents?.categories?.research).toEqual({
+      thinking: 'low',
+      max_turns: 3,
+    })
+    expect(
+      result.config.pi_subagents?.agents?.['repo-research-analyst'],
+    ).toEqual({ thinking: 'high' })
+  })
+
+  test('invalid pi_subagents shape fails validation before merge', () => {
+    const projectConfigPath = writeProjectConfig({
+      pi_subagents: { agents: { x: { thinking: 'turbo' } } },
+    })
+
+    expect(() => loadConfigWithSources(testDir)).toThrow(projectConfigPath)
+  })
+
+  test('unknown pi_subagents field fails validation under strict schema', () => {
+    const projectConfigPath = writeProjectConfig({
+      pi_subagents: { agents: { x: { bogus: true } } },
+    })
+
+    expect(() => loadConfigWithSources(testDir)).toThrow(projectConfigPath)
+  })
+
+  describe('scope-aware config chain (includeProject option)', () => {
+    test('default (no options) includes project config', () => {
+      writeProjectConfig({
+        pi_subagents: { agents: { x: { max_turns: 7 } } },
+      })
+
+      const result = loadConfigWithSources(testDir)
+      expect(result.config.pi_subagents?.agents?.x).toEqual({ max_turns: 7 })
+    })
+
+    test('includeProject: false ignores project config entirely, even when cwd has one', () => {
+      writeUserConfig({
+        pi_subagents: { agents: { x: { thinking: 'high' } } },
+      })
+      writeProjectConfig({
+        pi_subagents: { agents: { x: { max_turns: 99 } } },
+        disabled_skills: ['ce:plan'],
+      })
+
+      const result = loadConfigWithSources(testDir, { includeProject: false })
+      // project-sourced max_turns must be entirely absent — not merged, not stripped-to-empty
+      expect(result.config.pi_subagents?.agents?.x).toEqual({
+        thinking: 'high',
+      })
+      expect(result.config.disabled_skills).not.toContain('ce:plan')
+    })
+
+    test('includeProject: false still loads user and custom config', () => {
+      const customDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'systematic-pisub-scope-'),
+      )
+      process.env.OPENCODE_CONFIG_DIR = customDir
+      writeUserConfig({ disabled_skills: ['ce:brainstorm'] })
+      fs.writeFileSync(
+        path.join(customDir, 'systematic.json'),
+        JSON.stringify({ disabled_skills: ['ce:work'] }),
+      )
+      writeProjectConfig({ disabled_skills: ['ce:plan'] })
+
+      const result = loadConfigWithSources(testDir, { includeProject: false })
+      expect(result.config.disabled_skills).toContain('ce:brainstorm')
+      expect(result.config.disabled_skills).toContain('ce:work')
+      expect(result.config.disabled_skills).not.toContain('ce:plan')
+
+      fs.rmSync(customDir, { recursive: true, force: true })
+    })
+  })
+})
+
 // The TYPED_VALIDATION_DOCS_URL constant in src/lib/config.ts is surfaced
 // directly to end users in validation error messages. These tests catch two
 // classes of drift on that URL: the host and base-path (correct DNS target)
