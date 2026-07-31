@@ -67,7 +67,7 @@ The safe fix could not simply trust the child's completion claim or relax receip
 const seed = extractReceiptReadbackSeed(ownMarkers)
 const childLedger = createReceiptLedger({
   capabilityFlags: ['workflow-guard'],
-  registrationIdentity,
+  registrationIdentity: options.registrationIdentity,
   sessionSalt: seed.sessionSalt,
 })
 const recovered = childLedger.recoverReadback(ownMarkers)
