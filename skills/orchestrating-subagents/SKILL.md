@@ -17,6 +17,7 @@ Every subagent dispatch should carry the same bounded brief, expressed through t
 Specialist: systematic-implementer
 Objective: Implement the auth module
 Scope: Make only the changes needed for the auth module.
+Workspace: /absolute/path/to/expected-repository-or-worktree
 Return: List the changed files and summarize the implementation.
 ```
 
@@ -24,6 +25,7 @@ Return: List the changed files and summarize the implementation.
 - **Specialist** — the registered agent or persona best suited to the work (for example, an implementer or researcher)
 - **Objective** — a concise statement of the outcome
 - **Scope** — full instructions, boundaries, dependencies, and files in scope
+- **Workspace** — for any write-capable dispatch, the explicit expected repository or worktree root
 - **Return** — the result format expected from the specialist
 
 **Optional brief elements:**
@@ -61,6 +63,7 @@ After the first result, dispatch:
   Objective: Implement caching
   Scope: Implement caching based on the research result below.
   Input: Include the first specialist's returned research.
+  Workspace: /absolute/path/to/expected-repository-or-worktree
   Return: List changed files and summarize the implementation.
 ```
 
@@ -110,6 +113,12 @@ When dispatching units in parallel, include these instructions in each specialis
 
 > Do not stage files (`git add`), create commits, or run the project test suite. Leave staging and committing to the orchestrator or caller.
 
+## Workspace Attestation
+
+For every write-capable dispatch, the specialist must verify and return its actual repository or worktree root using available repository tooling (for example, `git rev-parse --show-toplevel` when Git is available) and an inventory of changed files. The orchestrator must independently verify the expected worktree's status and diff, plus the source or primary checkout's status, before accepting the result; a path in the brief or a specialist's self-report is not evidence.
+
+If writes landed in the wrong checkout, stop dependent dispatches, inspect both diffs, transfer only intended changes deliberately, and restore only confirmed accidental agent edits. Do not blindly copy or reset.
+
 ## Result Synthesis
 
 After specialists complete, the orchestrator synthesizes results:
@@ -138,6 +147,7 @@ After specialists complete, the orchestrator synthesizes results:
 | Background unavailable | Foreground only — serial or batched |
 | Specialist fails | Diagnose, correct the brief, then re-dispatch or resume the prior session where supported |
 | File collision detected post-parallel | Stage non-colliding files (if workflow owns git ops), re-run colliding units serially |
+| Write-capable dispatch | Include the expected root; require actual-root and changed-file attestation; independently verify both worktrees before acceptance |
 
 ## Common Mistakes
 

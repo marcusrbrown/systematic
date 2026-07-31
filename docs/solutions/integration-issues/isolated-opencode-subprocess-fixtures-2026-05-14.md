@@ -1,7 +1,7 @@
 ---
 title: Isolate harness subprocess and packaged-runtime fixtures
 date: 2026-05-14
-last_updated: 2026-07-14
+last_updated: 2026-07-31
 category: integration-issues
 module: harness integration tests
 problem_type: integration_issue
@@ -12,6 +12,7 @@ symptoms:
   - Pi can accept a raw tarball during install but fail when the next process tries to load it as an extension
   - Packaged-runtime tests can exercise stale `dist` output when `npm pack` runs without an explicit build
   - OpenCode can catch a plugin initialization failure and exit successfully, making exit code alone a false success signal
+  - Rebuilding the plugin and restarting OpenCode can still reproduce a persisted `guard-unavailable` transition when the same conversation is resumed
 root_cause: test_isolation
 resolution_type: test_fix
 severity: medium
@@ -40,6 +41,7 @@ Live harness tests need to verify the current checkout, not whatever Systematic 
 - Running `npm pack` without first building can package stale `dist` files; this repository's `prepublishOnly` script is not an `npm pack` build guarantee.
 - Loading `dist/index.js` directly does not exercise package-root resolution or prove that the expected files reached the tarball.
 - Requiring a nonzero child-process exit for invalid plugin config does not match OpenCode 1.17.18. The host catches plugin-factory failures, logs them, omits the hooks, and exits zero.
+- Restarting OpenCode alone is not a clean validation step: it reloads plugin code in a fresh process, but resuming the same conversation replays persisted message and tool metadata, including a pre-fix `guard-unavailable` transition.
 - For Pi 0.80.6, `pi install <raw-tarball.tgz> -l --approve` exits successfully but records the tarball as an extension path. The next Pi process then fails with `Failed to load extension` because a bare `.tgz` is not a managed package spec.
 - Checking `pi.extensions` paths or directly importing `dist/pi.js` proves package shape and module validity, but bypasses Pi's package installer and manifest-driven extension loader.
 
@@ -168,7 +170,7 @@ Explicit source-local and mixed-version scenarios keep the test's claim honest. 
 
 The packaged-artifact scenario closes a different gap: it validates the output of the real build-and-pack pipeline through package-root resolution. Building before packing prevents stale `dist` state from masquerading as a passing package test. Reusing one tarball controls setup cost, while per-test extraction preserves runtime isolation.
 
-OpenCode's successful process exit only describes the host process. It does not prove that a plugin factory or hook completed. Exact loader diagnostics plus positive registration probes distinguish a healthy plugin from a caught-and-logged failure. Each probe starts a fresh OpenCode process because active processes cache loaded plugin instances.
+OpenCode's successful process exit only describes the host process. It does not prove that a plugin factory or hook completed. Exact loader diagnostics plus positive registration probes distinguish a healthy plugin from a caught-and-logged failure. Each probe starts a fresh OpenCode process because active processes cache loaded plugin instances, so rebuilt plugin behavior is not observed reliably until the process is restarted. A process restart does not create a new conversation or session: resuming the same conversation replays persisted message and tool metadata. A conversation that already persisted a pre-fix `guard-unavailable` transition is therefore not a clean acceptance baseline; restarting alone correctly continues that contaminated state.
 
 Pi splits install from load. A raw tarball can install successfully while persisting the wrong resource kind and fail only in the next process. The managed npm spec drives package installation and manifest discovery; the isolated Node 24 RPC probe supplies observable extension-execution evidence.
 
@@ -184,6 +186,9 @@ Pi splits install from load. A raw tarball can install successfully while persis
 - Pack once per suite, but extract into a fresh fixture for each test.
 - Load the package root so package metadata participates in resolution.
 - Assert a positive registration marker such as `tool.definition`; process exit zero is not proof that plugin initialization succeeded.
+- For clean-start acceptance, start a brand-new conversation under the updated plugin; do not use a resumed pre-fix conversation as the baseline.
+- For restart-recovery acceptance, start that brand-new post-fix conversation, execute enough protected workflow activity to persist valid receipts and progression, restart OpenCode, then resume the same post-fix conversation and verify recovery.
+- Do not require a new conversation for every recovery test: distinguish the clean baseline from same-session restart recovery.
 - Keep the offline dependency-linking boundary explicit: it validates the packed plugin, not registry installation behavior.
 - Use a fresh OpenCode process when validating a rebuilt plugin.
 - Drive third-party package tests through the tool's real installer and loader; direct imports prove only module validity.
