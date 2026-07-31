@@ -49,7 +49,7 @@
   ],
   postUpgradeTasks: {
     // `bun run fix` runs Biome lint --fix to auto-correct formatting drift.
-    // `bun run build` regenerates all necessary build artifacts, including
+    // `bun run postupgrade` regenerates all necessary build artifacts, including
     // skills/agent-browser/SKILL.md from the pinned package so an agent-browser
     // bump lands the new stub in the same Renovate PR.
     commands: ['bun install', 'bun run fix', 'bun run postupgrade'],
