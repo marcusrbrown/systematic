@@ -71,10 +71,10 @@ SOFTWARE.
 
 ## pbakaus/impeccable — Apache 2.0
 
-**Source repository:** [https://github.com/pbakaus/impeccable](https://github.com/pbakaus/impeccable)  
-**Pinned commit:** `642f03d5a10eb3deb91bd511241e387e23b9aa39`  
-**License:** Apache 2.0  
-**Copyright:** Paul Bakaus  
+**Source repository:** [https://github.com/pbakaus/impeccable](https://github.com/pbakaus/impeccable)
+**Pinned commit:** `642f03d5a10eb3deb91bd511241e387e23b9aa39`
+**License:** Apache 2.0
+**Copyright:** Paul Bakaus
 
 ### Files derived
 
@@ -289,7 +289,7 @@ Vendored verbatim from the pinned npm package (`node_modules/agent-browser/skill
 Refresh is **automated** via the pinned `devDependency` + `agent-browser:build` regeneration + `agent-browser:drift` CI gate:
 
 1. Renovate opens a version-bump PR when upstream releases a new `agent-browser` version.
-2. The `postUpgradeTasks` in `renovate.json5` runs `bun run agent-browser:build`, which regenerates `skills/agent-browser/SKILL.md` from the newly pinned version and lands the updated stub in the same PR.
+2. The `postUpgradeTasks` in `renovate.json5` runs `bun run postupgrade` (which runs `bun run agent-browser:build`), which regenerates `skills/agent-browser/SKILL.md` from the newly pinned version and lands the updated stub in the same PR.
 3. The CI `agent-browser:drift` step verifies the committed file matches the pinned package and fails the PR if it does not.
 
 This is fully automated — no human adaptation pass is required, in contrast to `obra/superpowers` which is manually refreshed because its content is hand-adapted on each bump.
