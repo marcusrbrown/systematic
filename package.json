@@ -34,7 +34,7 @@
   ],
   "scripts": {
     "clean": "rimraf dist",
-    "build": "bun run clean && bun build src/index.ts src/cli.ts --outdir dist --target bun --splitting --external @opencode-ai/plugin --external js-yaml && bun build src/pi.ts --outdir dist --target node --external @earendil-works/pi-coding-agent --external typebox && tsc --emitDeclarationOnly && bun run agent-browser:build && bun run registry:build && bun run claude-code:build",
+    "build": "bun run clean && bun build src/index.ts src/cli.ts --outdir dist --target bun --splitting --external @opencode-ai/plugin --external js-yaml && bun build src/pi.ts --outdir dist --target node --external @earendil-works/pi-coding-agent --external typebox && tsc --emitDeclarationOnly",
     "dev": "bun --watch src/index.ts",
     "test": "bun test tests/unit",
     "test:integration": "bun test tests/integration",
@@ -55,6 +55,7 @@
     "registry:drift": "bun scripts/generate-registry.ts --check",
     "registry:validate": "bun scripts/build-registry.ts --validate-only",
     "claude-code:build": "bun scripts/build-claude-code-plugin.ts",
+    "postupgrade": "bun run build && bun run agent-browser:build",
     "prepublishOnly": "bun run build && bun run schema:generate"
   },
   "keywords": [
