@@ -1415,6 +1415,9 @@ function createSessionRuntime(
     if (!childSessionID) return
     const rollupKey = `${host.sessionID}:${host.callID}:${childSessionID}`
     if (rolledUpChildren.has(rollupKey)) return
+    // Capture the parent's operation-before identities before reading child
+    // history. These are guard-owned digests, not boot-time path values.
+    const parentBefore = guard.currentOperationContext()
     const children = await options.hostReadback.listChildren(host.sessionID)
     if (
       !children.some(
@@ -1469,30 +1472,43 @@ function createSessionRuntime(
     }
     const currentStatus = guard.status()
     if (!currentStatus.epoch || !currentStatus.unit) return
-    const expectedWorkspace = ledger.digestIdentity(
+    const expectedWorkspace = childLedger.digestIdentity(
       'workspace',
-      options.workspaceIdentity,
+      parentBefore.workspaceIdentity,
     )
-    const expectedRepository = ledger.digestIdentity(
+    const expectedRepository = childLedger.digestIdentity(
       'repository',
-      options.repositoryIdentity ?? current.snapshot.repositoryRevisionDigest,
+      current.snapshot.repositoryRevisionDigest,
     )
-    const expectedWorktree = ledger.digestIdentity(
+    const expectedWorktree = childLedger.digestIdentity(
       'worktree',
-      options.worktreeIdentity ?? current.snapshot.worktreeRevisionDigest,
+      current.snapshot.worktreeRevisionDigest,
     )
-    let minted = false
+    const candidates: Array<(typeof recovered.receipts)[number]> = []
     for (const childReceipt of recovered.receipts) {
       const operation = childReceipt.canonical.operation
       if (!localOperation(operation)) continue
-      if (
-        childReceipt.canonical.workspaceDigest !== expectedWorkspace ||
-        childReceipt.canonical.repositoryDigest !== expectedRepository ||
-        childReceipt.canonical.worktreeDigest !== expectedWorktree
-      ) {
+      if (childReceipt.canonical.workspaceDigest !== expectedWorkspace) {
         markUnavailable()
         return
       }
+      if (
+        childReceipt.canonical.repositoryDigest !== expectedRepository ||
+        childReceipt.canonical.worktreeDigest !== expectedWorktree
+      ) {
+        // Stale relative to the current single observer snapshot (repository
+        // or worktree revision has moved since this receipt was minted) —
+        // skip this receipt without minting it, but keep evaluating later
+        // chronological receipts from the same child rollup.
+        continue
+      }
+      candidates.push(childReceipt)
+    }
+
+    let minted = false
+    for (const childReceipt of candidates) {
+      const operation = childReceipt.canonical.operation
+      const parentContext = guard.currentOperationContext()
       const callID = `task-${host.callID}-${childReceipt.canonical.receiptId}`
       const observation = {
         callId: callID,
@@ -1501,20 +1517,16 @@ function createSessionRuntime(
         context: {
           epochId: currentStatus.epoch.epochId,
           unitId: currentStatus.unit.unitId,
-          workspaceIdentity: options.workspaceIdentity,
-          repositoryIdentity:
-            operation === 'commit'
-              ? (options.repositoryIdentity ??
-                current.snapshot.repositoryRevisionDigest)
-              : current.snapshot.repositoryRevisionDigest,
-          worktreeIdentity:
-            operation === 'implementation'
-              ? (options.worktreeIdentity ??
-                current.snapshot.worktreeRevisionDigest)
-              : current.snapshot.worktreeRevisionDigest,
+          workspaceIdentity: parentContext.workspaceIdentity,
+          ...(parentContext.repositoryIdentity
+            ? { repositoryIdentity: parentContext.repositoryIdentity }
+            : {}),
+          ...(parentContext.worktreeIdentity
+            ? { worktreeIdentity: parentContext.worktreeIdentity }
+            : {}),
         },
         after: {
-          workspaceIdentity: options.workspaceIdentity,
+          workspaceIdentity: parentContext.workspaceIdentity,
           repositoryIdentity: current.snapshot.repositoryRevisionDigest,
           worktreeIdentity: current.snapshot.worktreeRevisionDigest,
         },
@@ -1524,7 +1536,7 @@ function createSessionRuntime(
           noOp: false,
         },
       }
-      const result = await guard.observeOperation(observation)
+      const result = await guard.observeTrustedRecoveredOperation(observation)
       if (result.status === 'accepted') {
         const receipt = receiptForOperation(callID, operation)
         if (receipt) mergeReceiptMarker(output, receipt)
@@ -1749,12 +1761,28 @@ function createSessionRuntime(
     return result
   }
 
+  function progressionResourceScopes(
+    unit: NonNullable<WorkflowStatus['unit']>,
+  ): readonly { operation: ReceiptOperation; resourceIdentity: string }[] {
+    return [...unit.resourceScopes]
+      .sort((first, second) => first.operation.localeCompare(second.operation))
+      .map((scope) => ({
+        operation: scope.operation,
+        resourceIdentity: ledger.digestIdentity(
+          'resource',
+          scope.resourceIdentity,
+        ),
+      }))
+  }
+
   function writeStartResult(output: unknown, result: StartUnitResult): void {
     if (!isRecord(output)) return
+    const existingMetadata = isRecord(output.metadata) ? output.metadata : {}
     if (result.status === 'started') {
       output.title = 'Workflow unit started'
       output.output = JSON.stringify({ status: 'started' })
       output.metadata = {
+        ...existingMetadata,
         ...metadata(),
         workflowGuard: { status: 'started' },
       }
@@ -1768,6 +1796,7 @@ function createSessionRuntime(
       reasonCode,
     })
     output.metadata = {
+      ...existingMetadata,
       ...metadata(),
       workflowGuard: {
         status: 'rejected',
@@ -2189,7 +2218,7 @@ function createSessionRuntime(
           unitId: status.unit.unitId,
           family: status.epoch.family,
           requiredOperations: status.unit.requiredOperations,
-          resourceScopes: [],
+          resourceScopes: progressionResourceScopes(status.unit),
           state: 'started',
           transitionDigest: ledger.digestIdentity('call', host.callID),
         }),
@@ -2270,7 +2299,7 @@ function createSessionRuntime(
           unitId: unit.unitId,
           family: epoch.family,
           requiredOperations: unit.requiredOperations,
-          resourceScopes: [],
+          resourceScopes: progressionResourceScopes(unit),
           state: 'started',
           transitionDigest: ledger.digestIdentity('call', host.callID),
         }),
@@ -2786,9 +2815,14 @@ function createSessionRuntime(
     if (!isRecord(output) || !isRecord(output.metadata)) return
     const marker = projectReceiptMintMarker(receipt, ledger.getSessionSalt())
     if (!marker) return
+    const existing = output.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]
     output.metadata = {
       ...output.metadata,
-      [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: marker,
+      [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: existing
+        ? Array.isArray(existing)
+          ? [...existing, marker]
+          : [existing, marker]
+        : marker,
     }
   }
 

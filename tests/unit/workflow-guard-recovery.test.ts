@@ -191,12 +191,14 @@ function createProgressionMarkers(
 
 function createGuard(
   ledger: ReturnType<typeof createReceiptLedger>,
+  runtimeResourceScopes: Readonly<Record<string, string>> = {},
 ): WorkflowGuard {
   return createWorkflowGuard({
     ledger,
     workspaceIdentity: WORKSPACE_ID,
     repositoryIdentity: REPOSITORY_ID,
     worktreeIdentity: WORKTREE_ID,
+    runtimeResourceScopes,
     mode: 'protected',
   })
 }
@@ -624,8 +626,22 @@ describe('workflow guard recovery', () => {
       reasonCode: 'resource-mismatch',
       repair: 'fresh-readback',
       missingOperations: ['push'],
-      unit: { requiredResourceOperations: ['push'] },
+      unit: {
+        requiredResourceOperations: ['push'],
+        resourceScopes: [],
+      },
     })
+
+    const trustedGuard = createGuard(fixture.ledger, {
+      push: 'remote-current',
+    })
+    expect(
+      trustedGuard.restore({ provenance: 'restart', state: fixture.state }),
+    ).toMatchObject({ status: 'restored' })
+    expect(trustedGuard.status().unit?.resourceScopes).toEqual([
+      { operation: 'push', resourceIdentity: 'remote-current' },
+    ])
+
     expect(
       guard.observeReadback({
         operation: 'push',
@@ -641,5 +657,129 @@ describe('workflow guard recovery', () => {
       satisfiedOperations: ['push'],
       missingOperations: [],
     })
+
+    const conflictingGuard = createGuard(fixture.ledger, {
+      push: 'remote-before',
+    })
+    expect(
+      conflictingGuard.restore({
+        provenance: 'restart',
+        state: fixture.state,
+      }),
+    ).toEqual({ status: 'rejected', reasonCode: 'resource-mismatch' })
+  })
+
+  test('recovers a monotonic declaration extension with its added resource scope', () => {
+    const sourceLedger = createReceiptLedger({
+      registrationIdentity: 'registration-a',
+      sessionSalt: SESSION_SALT,
+    })
+    const epochStart = projectReceiptProgressionMarker(sourceLedger, {
+      target: 'epoch',
+      state: 'started',
+      epochId: EPOCH_ID,
+      family: 'shipping',
+      transitionDigest: sourceLedger.digestIdentity('call', 'epoch-start'),
+      timestamp: 1,
+    })
+    const unitStart = projectReceiptProgressionMarker(sourceLedger, {
+      target: 'unit',
+      state: 'started',
+      epochId: EPOCH_ID,
+      unitId: UNIT_ID,
+      family: 'shipping',
+      requiredOperations: ['implementation'],
+      resourceScopes: [],
+      transitionDigest: sourceLedger.digestIdentity('call', 'unit-start'),
+      timestamp: 2,
+    })
+    const expanded = projectReceiptProgressionMarker(sourceLedger, {
+      target: 'unit',
+      state: 'started',
+      epochId: EPOCH_ID,
+      unitId: UNIT_ID,
+      family: 'shipping',
+      requiredOperations: ['implementation', 'push'],
+      resourceScopes: [
+        {
+          operation: 'push',
+          resourceIdentity: sourceLedger.digestIdentity(
+            'resource',
+            'remote-resource',
+          ),
+        },
+      ],
+      transitionDigest: sourceLedger.digestIdentity(
+        'call',
+        'unit-start-expanded',
+      ),
+      timestamp: 3,
+    })
+    expect(epochStart && unitStart && expanded).toBeTruthy()
+    if (!epochStart || !unitStart || !expanded)
+      throw new Error('declaration-marker-not-projected')
+
+    const recoveredLedger = createReceiptLedger({
+      registrationIdentity: 'registration-a',
+      sessionSalt: SESSION_SALT,
+    })
+    const markers = [epochStart, unitStart, expanded]
+    expect(recoveredLedger.recoverReadback(markers)).toMatchObject({
+      status: 'recovered',
+    })
+    const folded = foldReceiptReadback(markers, {
+      registrationDigest: recoveredLedger.metadata.registrationDigest,
+      capabilityFlags: recoveredLedger.metadata.capabilityFlags,
+      expectedSource: 'runtime-verified',
+      sessionSalt: SESSION_SALT,
+    })
+    expect(folded.status).toBe('reconstructed')
+    if (folded.status !== 'reconstructed')
+      throw new Error('declaration-state-not-folded')
+
+    const guard = createGuard(recoveredLedger, { push: 'remote-resource' })
+    expect(
+      guard.restore({ provenance: 'restart', state: folded.state }),
+    ).toMatchObject({ status: 'restored' })
+    expect(guard.status()).toMatchObject({
+      unit: {
+        unitId: UNIT_ID,
+        requiredOperations: ['implementation', 'push'],
+        requiredResourceOperations: ['push'],
+        resourceScopes: [
+          { operation: 'push', resourceIdentity: 'remote-resource' },
+        ],
+      },
+    })
+
+    const conflictingState = {
+      ...folded.state,
+      progression: {
+        ...folded.state.progression,
+        unit: folded.state.progression.unit
+          ? {
+              ...folded.state.progression.unit,
+              resourceScopes: [
+                {
+                  operation: 'push' as const,
+                  resourceIdentity: recoveredLedger.digestIdentity(
+                    'resource',
+                    'other-resource',
+                  ),
+                },
+              ],
+            }
+          : null,
+      },
+    }
+    const conflictingGuard = createGuard(recoveredLedger, {
+      push: 'remote-resource',
+    })
+    expect(
+      conflictingGuard.restore({
+        provenance: 'restart',
+        state: conflictingState,
+      }),
+    ).toEqual({ status: 'rejected', reasonCode: 'invalid-recovery' })
   })
 })

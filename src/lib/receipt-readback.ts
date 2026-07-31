@@ -1620,8 +1620,23 @@ function applyUnitStart(
     return undefined
   }
   if (current.unitId === marker.unitId) {
-    if (!sameUnitDeclaration(current, marker)) return 'conflicting-marker'
-    return current.state === 'completed' ? 'out-of-order' : 'conflicting-marker'
+    if (current.state === 'completed') return 'out-of-order'
+    if (
+      !sameUnitDeclaration(current, marker) &&
+      unitHasMintedEvidence(current, context)
+    ) {
+      return 'out-of-order'
+    }
+    if (
+      sameUnitDeclaration(current, marker) &&
+      current.transitionDigest !== marker.transitionDigest
+    ) {
+      return 'conflicting-marker'
+    }
+    if (!unitDeclarationExtends(current, marker)) return 'conflicting-marker'
+    if (sameUnitDeclaration(current, marker)) return undefined
+    context.progression = { epoch, unit: snapshot }
+    return undefined
   }
   if (current.state !== 'completed') return 'out-of-order'
   context.progression = { epoch, unit: snapshot }
@@ -1646,6 +1661,17 @@ function applyUnitComplete(
   return undefined
 }
 
+function unitHasMintedEvidence(
+  current: ReceiptUnitProgressionSnapshot,
+  context: FoldContext,
+): boolean {
+  return [...context.mintByReceipt.values()].some(
+    (envelope) =>
+      envelope.canonical.epochDigest === current.epochDigest &&
+      envelope.canonical.unitDigest === current.unitDigest,
+  )
+}
+
 function sameUnitDeclaration(
   current: ReceiptUnitProgressionSnapshot,
   marker: ReceiptUnitProgressionMarker,
@@ -1658,6 +1684,36 @@ function sameUnitDeclaration(
       JSON.stringify(marker.requiredOperations) &&
     JSON.stringify(current.resourceScopes) ===
       JSON.stringify(marker.resourceScopes)
+  )
+}
+
+function unitDeclarationExtends(
+  current: ReceiptUnitProgressionSnapshot,
+  marker: ReceiptUnitProgressionMarker,
+): boolean {
+  if (
+    current.epochDigest !== marker.epochDigest ||
+    current.unitDigest !== marker.unitDigest ||
+    current.family !== marker.family
+  ) {
+    return false
+  }
+  const nextOperations = new Set(marker.requiredOperations)
+  if (
+    current.requiredOperations.some(
+      (operation) => !nextOperations.has(operation),
+    )
+  ) {
+    return false
+  }
+  const nextScopes = new Map(
+    marker.resourceScopes.map((scope) => [
+      scope.operation,
+      scope.resourceIdentity,
+    ]),
+  )
+  return [...current.resourceScopes].every(
+    (scope) => nextScopes.get(scope.operation) === scope.resourceIdentity,
   )
 }
 

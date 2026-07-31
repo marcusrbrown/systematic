@@ -173,6 +173,30 @@ function guardWithReceipts(
 }
 
 describe('workflow guard', () => {
+  test('exposes a frozen current operation context without mutable state', () => {
+    const { guard } = createGuard()
+
+    expect(guard.currentOperationContext()).toEqual({
+      workspaceIdentity: SCOPE.workspaceIdentity,
+      repositoryIdentity: SCOPE.repositoryIdentity,
+      worktreeIdentity: SCOPE.worktreeIdentity,
+    })
+    expect(Object.isFrozen(guard.currentOperationContext())).toBe(true)
+
+    expect(
+      guard.observeReadback({
+        workspaceIdentity: 'workspace-next',
+        repositoryIdentity: 'repository-next',
+        worktreeIdentity: 'worktree-next',
+      }),
+    ).toMatchObject({ status: 'accepted' })
+    expect(guard.currentOperationContext()).toEqual({
+      workspaceIdentity: 'workspace-next',
+      repositoryIdentity: 'repository-next',
+      worktreeIdentity: 'worktree-next',
+    })
+  })
+
   test('activates on successful guarded skills, reuses work, and attaches nested shipping', () => {
     const { guard } = createGuard()
 
@@ -1173,6 +1197,102 @@ describe('workflow guard', () => {
       status: 'rejected',
       reasonCode: 'runtime-scope-conflict',
     })
+  })
+
+  test('upgrades a pristine active unit monotonically without changing its identity', () => {
+    const { guard } = createGuard()
+    activateWork(guard)
+    startUnit(guard)
+    const before = guard.status()
+    const epochId = before.epoch?.epochId
+    const unitId = before.unit?.unitId
+
+    const result = guard.startUnit({
+      expectedOperations: ['commit'],
+      resourceScopes: { push: 'remote-resource' },
+    })
+
+    expect(result).toMatchObject({
+      status: 'started',
+      unit: {
+        unitId,
+        requiredOperations: [
+          'implementation',
+          'verification',
+          'commit',
+          'push',
+        ],
+        requiredResourceOperations: ['push'],
+      },
+    })
+    expect(guard.status()).toMatchObject({
+      epoch: { epochId },
+      unit: { unitId, requiredResourceOperations: ['push'] },
+      missingOperations: ['implementation', 'verification', 'commit', 'push'],
+    })
+  })
+
+  test('rejects a no-growth redeclaration without changing the active declaration', () => {
+    const { guard } = createGuard()
+    activateWork(guard)
+    startUnit(guard)
+    const before = guard.status()
+
+    expect(
+      guard.startUnit({
+        expectedOperations: [],
+        resourceScopes: {},
+      }),
+    ).toEqual({ status: 'rejected', reasonCode: 'unit-active' })
+    expect(guard.status()).toEqual(before)
+  })
+
+  test('rejects declaration expansion after evidence or attempt state exists', () => {
+    const withAttempt = createGuard()
+    activateWork(withAttempt.guard)
+    startUnit(withAttempt.guard)
+    expect(
+      withAttempt.guard.observeAttempt({
+        operation: 'implementation',
+        outcome: 'running',
+      }),
+    ).toMatchObject({ status: 'rejected' })
+    expect(
+      withAttempt.guard.startUnit({ expectedOperations: ['commit'] }),
+    ).toEqual({ status: 'rejected', reasonCode: 'unit-active' })
+
+    const withEvidence = createGuard()
+    activateWork(withEvidence.guard)
+    startUnit(withEvidence.guard)
+    expect(
+      withEvidence.guard.observeReceipt(
+        mintReceipt(withEvidence.guard, withEvidence.ledger, 'implementation'),
+      ),
+    ).toMatchObject({ status: 'accepted', operation: 'implementation' })
+    expect(
+      withEvidence.guard.startUnit({ expectedOperations: ['commit'] }),
+    ).toEqual({ status: 'rejected', reasonCode: 'unit-active' })
+  })
+
+  test('persists added resource scopes and rejects conflicting redeclarations', () => {
+    const { guard } = createGuard()
+    activateWork(guard)
+    startUnit(guard)
+    const upgraded = guard.startUnit({
+      expectedOperations: [],
+      resourceScopes: { push: 'remote-resource' },
+    })
+    expect(upgraded).toMatchObject({
+      status: 'started',
+      unit: { requiredResourceOperations: ['push'] },
+    })
+    expect(
+      guard.startUnit({
+        expectedOperations: [],
+        resourceScopes: { push: 'other-resource' },
+      }),
+    ).toEqual({ status: 'rejected', reasonCode: 'runtime-scope-conflict' })
+    expect(guard.status().unit?.requiredResourceOperations).toEqual(['push'])
   })
 
   test('status counts only currently qualified available evidence', () => {

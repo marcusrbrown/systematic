@@ -288,6 +288,34 @@ describe('receipt classifier', () => {
     await classifier.close()
   })
 
+  test('does not let a non-shell write claim a commit operation', async () => {
+    const classifier = createReceiptClassifier()
+    const identity = 'a'.repeat(64)
+    const result = await classifier.classifyOperation({
+      callId: 'non-shell-commit-claim',
+      operation: 'commit',
+      tool: 'write',
+      context: {
+        epochId: 'epoch-1',
+        unitId: 'unit-1',
+        workspaceIdentity: identity,
+        repositoryIdentity: 'b'.repeat(64),
+        worktreeIdentity: 'c'.repeat(64),
+      },
+      after: {
+        workspaceIdentity: identity,
+        repositoryIdentity: 'd'.repeat(64),
+        worktreeIdentity: 'e'.repeat(64),
+        commitClosure: true,
+      },
+      terminal: successfulTerminal,
+    })
+
+    expect(result.outcome).toBe('rejected')
+    expect(result.category).not.toBe('commit')
+    await classifier.close()
+  })
+
   test('rejects prohibited shell shapes without a string fallback', async () => {
     const classifier = createReceiptClassifier()
     const prohibited = [

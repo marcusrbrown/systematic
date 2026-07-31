@@ -40,8 +40,21 @@ interface HostEvidence {
   pid: number
   markerKinds: string[]
   registrationDigests: string[]
+  mintEvidence: RegistrationMintEvidence[]
   operations: string[]
   workflow: Record<string, unknown>
+}
+
+interface RegistrationMintEvidence {
+  registrationDigest: string
+  operations: string[]
+  receiptIds: string[]
+}
+
+interface MintMarkerEvidence {
+  registrationDigest: string
+  operation: string
+  receiptId: string
 }
 
 function sseChunk(value: unknown): string {
@@ -300,6 +313,55 @@ function registrationDigests(messages: unknown[]): string[] {
   })
 }
 
+function registrationMintEvidence(
+  messages: unknown[],
+): RegistrationMintEvidence[] {
+  const groups = new Map<
+    string,
+    { operations: string[]; receiptIds: string[] }
+  >()
+  for (const marker of persistedMarkers(messages)) {
+    const evidence = parseMintMarkerEvidence(marker)
+    if (!evidence) continue
+    const group = groups.get(evidence.registrationDigest) ?? {
+      operations: [],
+      receiptIds: [],
+    }
+    group.operations.push(evidence.operation)
+    group.receiptIds.push(evidence.receiptId)
+    groups.set(evidence.registrationDigest, group)
+  }
+  return [...groups].map(([registrationDigest, evidence]) => ({
+    registrationDigest,
+    ...evidence,
+  }))
+}
+
+function parseMintMarkerEvidence(
+  marker: unknown,
+): MintMarkerEvidence | undefined {
+  if (!marker || typeof marker !== 'object') return undefined
+  const value = marker as Record<string, unknown>
+  if (value.kind !== 'mint') return undefined
+  const envelope = value.envelope
+  if (!envelope || typeof envelope !== 'object') return undefined
+  const envelopeValue = envelope as Record<string, unknown>
+  const canonical = envelopeValue.canonical
+  if (!canonical || typeof canonical !== 'object') return undefined
+  const canonicalValue = canonical as Record<string, unknown>
+  const registrationDigest = envelopeValue.registrationDigest
+  const operation = canonicalValue.operation
+  const receiptId = canonicalValue.receiptId
+  if (
+    typeof registrationDigest !== 'string' ||
+    typeof operation !== 'string' ||
+    typeof receiptId !== 'string'
+  ) {
+    return undefined
+  }
+  return { registrationDigest, operation, receiptId }
+}
+
 function workflowEvidence(messages: unknown[]): Record<string, unknown> {
   const workflows = toolParts(messages).filter(
     (part) => part.tool === 'systematic_workflow_complete',
@@ -433,6 +495,7 @@ async function runObserveCell(
         markers,
         markerSummary: markerSummary(messages),
         registrationDigests: registrationDigests(messages),
+        mintEvidence: registrationMintEvidence(messages),
         operations: toolParts(messages).map((part) => part.tool),
         workflow: workflowEvidence(messages),
       })}`,
@@ -447,6 +510,7 @@ async function runObserveCell(
       pid: host.pid,
       markerKinds: markers,
       registrationDigests: registrationDigests(messages),
+      mintEvidence: registrationMintEvidence(messages),
       operations: toolParts(messages)
         .map((part) => part.tool)
         .filter((tool): tool is string => typeof tool === 'string'),
@@ -549,10 +613,15 @@ describe.skipIf(!OPENCODE_AVAILABLE)('U7a real host', () => {
         expect(
           evidence.operations.filter((tool) => tool === 'write'),
         ).toHaveLength(1)
-        expect(
-          evidence.markerKinds.filter((kind) => kind === 'mint').length,
-        ).toBeLessThanOrEqual(2)
-        expect(evidence.registrationDigests).toHaveLength(2)
+        expect(new Set(evidence.registrationDigests)).toHaveLength(2)
+        expect(evidence.mintEvidence).toHaveLength(2)
+        for (const registration of evidence.mintEvidence) {
+          expect([...registration.operations].sort()).toEqual([
+            'implementation',
+            'verification',
+          ])
+          expect(new Set(registration.receiptIds)).toHaveLength(2)
+        }
         expect(
           evidence.registrationDigests.every((digest) =>
             /^[a-f0-9]{64}$/.test(digest),
