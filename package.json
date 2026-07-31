@@ -92,8 +92,8 @@
   "devDependencies": {
     "@biomejs/biome": "2.5.5",
     "@earendil-works/pi-coding-agent": "0.80.10",
-    "@opencode-ai/plugin": "1.18.7",
-    "@opencode-ai/sdk": "1.18.7",
+    "@opencode-ai/plugin": "1.18.8",
+    "@opencode-ai/sdk": "1.18.8",
     "@semantic-release/exec": "7.1.0",
     "@tintinweb/pi-subagents": "0.14.3",
     "@types/bun": "latest",
