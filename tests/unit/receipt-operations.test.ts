@@ -94,6 +94,9 @@ interface ReadbackResult {
 
 interface OperationWorkflowGuard extends WorkflowGuard {
   observeOperation(input: unknown): Promise<EvidenceObservationResult>
+  observeTrustedRecoveredOperation(
+    input: unknown,
+  ): Promise<EvidenceObservationResult>
   observeReadback(input: unknown): ReadbackResult
 }
 
@@ -248,6 +251,16 @@ function bindOperation(
       unitId: status.unit.unitId,
     },
   }
+}
+
+async function observeTrustedRecoveredOperation(
+  guard: OperationWorkflowGuard,
+  input: Record<string, unknown>,
+): Promise<EvidenceObservationResult> {
+  if (typeof guard.observeTrustedRecoveredOperation !== 'function') {
+    return { status: 'rejected', reasonCode: 'guard-unavailable' }
+  }
+  return guard.observeTrustedRecoveredOperation(bindOperation(guard, input))
 }
 
 function mintSyntheticReceipt(
@@ -496,6 +509,113 @@ async function buildFullOperationScenario(): Promise<{
 }
 
 describe('receipt operation adapters', () => {
+  test('observes a trusted recovered commit without invoking command classification', async () => {
+    const scenario = createScenario(
+      {
+        classifyOperation: async () => {
+          throw new Error('trusted recovery must bypass classification')
+        },
+      },
+      ['commit'],
+    )
+    const input = operationInput('commit', {
+      tool: 'write',
+      command: undefined,
+      context: {
+        ...baseContext,
+        repositoryIdentity: REPOSITORY_CURRENT,
+      },
+      after: {
+        workspaceIdentity: WORKSPACE_CURRENT,
+        repositoryIdentity: REPOSITORY_AFTER,
+        worktreeIdentity: WORKTREE_CURRENT,
+      },
+    })
+
+    await expect(
+      observeTrustedRecoveredOperation(scenario.guard, input),
+    ).resolves.toEqual({
+      status: 'accepted',
+      operation: 'commit',
+    })
+    expect(scenario.guard.status().satisfiedOperations).toContain('commit')
+  })
+
+  test('ordinary write-to-commit observation remains classifier-rejected', async () => {
+    const classifier = createReceiptClassifier()
+    const scenario = createScenario(classifier, ['commit'])
+    const input = operationInput('commit', {
+      tool: 'write',
+      command: undefined,
+      context: {
+        ...baseContext,
+        repositoryIdentity: REPOSITORY_CURRENT,
+      },
+      after: {
+        workspaceIdentity: WORKSPACE_CURRENT,
+        repositoryIdentity: REPOSITORY_AFTER,
+        worktreeIdentity: WORKTREE_CURRENT,
+      },
+    })
+
+    await expect(
+      scenario.guard.observeOperation(bindOperation(scenario.guard, input)),
+    ).resolves.toMatchObject({ status: 'rejected' })
+    expect(scenario.guard.status().satisfiedOperations).not.toContain('commit')
+    await classifier.close()
+  })
+
+  test('keeps required-operation and identity checks on trusted recovered operations', async () => {
+    const scenario = createScenario({
+      classifyOperation: async () => {
+        throw new Error('trusted recovery must bypass classification')
+      },
+    })
+    const commit = operationInput('commit', {
+      tool: 'write',
+      command: undefined,
+      context: {
+        ...baseContext,
+        repositoryIdentity: REPOSITORY_CURRENT,
+      },
+    })
+
+    await expect(
+      observeTrustedRecoveredOperation(scenario.guard, commit),
+    ).resolves.toEqual({
+      status: 'rejected',
+      reasonCode: 'operation-not-required',
+    })
+
+    const requiredScenario = createScenario(
+      {
+        classifyOperation: async () => {
+          throw new Error('trusted recovery must bypass classification')
+        },
+      },
+      ['implementation'],
+    )
+    const wrongWorkspace = operationInput('implementation', {
+      tool: 'write',
+      command: undefined,
+      context: {
+        ...baseContext,
+        workspaceIdentity: WORKSPACE_OTHER,
+      },
+      after: {
+        ...operationInput('implementation').after,
+        workspaceIdentity: WORKSPACE_OTHER,
+        worktreeIdentity: WORKTREE_AFTER,
+      },
+    })
+    await expect(
+      observeTrustedRecoveredOperation(requiredScenario.guard, wrongWorkspace),
+    ).resolves.toEqual({
+      status: 'rejected',
+      reasonCode: 'workspace-mismatch',
+    })
+  })
+
   test('recognizes all seven operation classes without returning command or resource data', async () => {
     const classifier =
       createReceiptClassifier() as unknown as OperationClassifier

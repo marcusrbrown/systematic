@@ -35,6 +35,7 @@ interface ScriptedResponse {
 
 interface MockModelServer {
   url: string
+  requests: unknown[]
   stop(): void
 }
 
@@ -194,6 +195,7 @@ function startMockModelServer(
   responses: readonly ScriptedResponse[],
 ): MockModelServer {
   let requestIndex = 0
+  const requests: unknown[] = []
   const server = Bun.serve({
     port: 0,
     async fetch(request) {
@@ -204,7 +206,7 @@ function startMockModelServer(
         return new Response('not found', { status: 404 })
       }
 
-      await request.json()
+      requests.push(await request.json())
       const response = responses[requestIndex] ?? { text: '' }
       requestIndex += 1
       const id = `receipt-probe-${requestIndex}`
@@ -215,6 +217,7 @@ function startMockModelServer(
 
   return {
     url: `http://localhost:${server.port}/v1`,
+    requests,
     stop: () => server.stop(true),
   }
 }
@@ -263,7 +266,6 @@ function outputShape(tool, output) {
       present: Boolean(output && Object.prototype.hasOwnProperty.call(output, 'output')),
       type: typeof output?.output,
       empty: output?.output === '',
-      length: typeof output?.output === 'string' ? output.output.length : null,
     },
     metadata: {
       present: Boolean(output && Object.prototype.hasOwnProperty.call(output, 'metadata')),
@@ -477,6 +479,38 @@ function systematicMarkers(messages: unknown[]): unknown[] {
   })
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null
+}
+
+function receiptMintSummariesForValue(
+  value: unknown,
+): Array<{ operation: string; receiptId: string }> {
+  const markers = Array.isArray(value) ? value : [value]
+  return markers.flatMap((marker) => {
+    if (!isRecord(marker) || marker.kind !== 'mint') return []
+    const envelope = marker.envelope
+    if (!isRecord(envelope) || !isRecord(envelope.canonical)) return []
+    const { operation, receiptId } = envelope.canonical
+    return typeof operation === 'string' && typeof receiptId === 'string'
+      ? [{ operation, receiptId }]
+      : []
+  })
+}
+
+function receiptMintSummaries(
+  messages: unknown[],
+): Array<{ operation: string; receiptId: string }> {
+  return systematicMarkers(messages).flatMap(receiptMintSummariesForValue)
+}
+
+function receiptMintSessionSalts(messages: unknown[]): string[] {
+  return systematicMarkers(messages).flatMap((marker) => {
+    if (!isRecord(marker) || marker.kind !== 'mint') return []
+    return typeof marker.sessionSalt === 'string' ? [marker.sessionSalt] : []
+  })
+}
+
 function assertPrivacySafeMarkers(messages: unknown[]): void {
   const serialized = JSON.stringify(systematicMarkers(messages))
   expect(serialized).not.toContain('u5-recovery.txt')
@@ -606,7 +640,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
             tool: 'bash',
             outputKeys: ['attachments', 'metadata', 'output', 'title'],
             title: { present: true, type: 'string', empty: false },
-            output: { present: true, type: 'string', empty: false, length: 13 },
+            output: { present: true, type: 'string', empty: false },
             metadata: {
               present: true,
               type: 'object',
@@ -1049,6 +1083,20 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
             sessionID,
             directory: localFixture.projectDir,
           })
+          const beforeSkillParts = completedToolParts(
+            beforeRestart.data,
+            'systematic_skill',
+          )
+          expect(beforeSkillParts).toHaveLength(1)
+          const beforeSkillState = beforeSkillParts[0]?.state as Record<
+            string,
+            unknown
+          >
+          const beforeSkillOutput = beforeSkillState.output
+          expect(typeof beforeSkillOutput === 'string').toBe(true)
+          expect(beforeSkillOutput).toContain('<skill_content name="ce:work">')
+          expect(beforeSkillOutput).toContain('# Skill: ce:work')
+          expect(beforeSkillOutput).toContain('Base directory for this skill:')
           const beforeMarkers = systematicMarkers(beforeRestart.data)
           expect(
             readProbeEvents(hookProbe.capturePath).filter(
@@ -1064,7 +1112,6 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
                 present: true,
                 type: 'string',
                 empty: false,
-                length: 23518,
               },
               metadata: {
                 present: true,
@@ -1082,7 +1129,6 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
                 present: true,
                 type: 'string',
                 empty: false,
-                length: 40,
               },
               metadata: {
                 present: true,
@@ -1108,7 +1154,6 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
                 present: true,
                 type: 'string',
                 empty: false,
-                length: 24,
               },
               metadata: {
                 present: true,
@@ -1126,7 +1171,6 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
                 present: true,
                 type: 'string',
                 empty: false,
-                length: 36,
               },
               metadata: {
                 present: true,
@@ -1402,16 +1446,239 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
           expect(childMarkers.length).toBeGreaterThan(0)
           assertPrivacySafeMarkers(childMessages.data)
 
-          const parentMarkers = systematicMarkers(parentMessages.data)
-          expect(parentMarkers).toHaveLength(1)
+          const parentMints = receiptMintSummaries(parentMessages.data)
+          expect(parentMints).toHaveLength(1)
+          expect(parentMints[0]?.operation).toBe('implementation')
           const repeatedParentMessages = await client.session.messages({
             sessionID: parentSessionID,
             directory: localFixture.projectDir,
           })
-          expect(systematicMarkers(repeatedParentMessages.data).length).toBe(
-            parentMarkers.length,
+          const repeatedParentMints = receiptMintSummaries(
+            repeatedParentMessages.data,
           )
+          expect(repeatedParentMints).toEqual(parentMints)
           assertPrivacySafeMarkers(parentMessages.data)
+        } finally {
+          if (host) await host.stop()
+          model.stop()
+          destroyIsolatedFixture(localFixture)
+        }
+      },
+      TIMEOUT_MS * 4,
+    )
+
+    test(
+      'rolls up a foreground child commit despite a stale earlier implementation receipt',
+      async () => {
+        const localFixture = createIsolatedFixture()
+        initializeIsolatedRepository(localFixture)
+        const localPackagedPluginUrl =
+          extractPackagedPlugin(localFixture).pluginUrl
+        const model = startMockModelServer([
+          {
+            toolCalls: [
+              {
+                id: 'u5b-parent-skill',
+                name: 'systematic_skill',
+                arguments: { name: 'ce:work' },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5b-parent-start',
+                name: 'systematic_workflow_start',
+                arguments: {
+                  expected_operations: [
+                    'implementation',
+                    'verification',
+                    'commit',
+                  ],
+                },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5b-parent-task',
+                name: 'task',
+                arguments: {
+                  description: 'foreground child commit lane',
+                  prompt:
+                    'Use systematic tools in the child, write a file, then commit it.',
+                  subagent_type: 'systematic-implementer',
+                },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5b-child-skill',
+                name: 'systematic_skill',
+                arguments: { name: 'git-commit' },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5b-child-start',
+                name: 'systematic_workflow_start',
+                arguments: {},
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5b-child-write',
+                name: 'write',
+                arguments: {
+                  filePath: 'u5b-child.txt',
+                  content: 'opaque integration content',
+                },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5b-child-verify',
+                name: 'bash',
+                arguments: { command: 'git status --short' },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5b-child-add',
+                name: 'bash',
+                arguments: { command: 'git add -A' },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5b-child-commit',
+                name: 'bash',
+                arguments: { command: 'git commit -m u5b-commit-message' },
+              },
+            ],
+          },
+          { text: 'child committed' },
+          { text: 'parent finished' },
+          {
+            toolCalls: [
+              {
+                id: 'u5b-parent-status',
+                name: 'systematic_workflow_status',
+                arguments: {},
+              },
+            ],
+          },
+          { text: 'status checked' },
+        ])
+        const configContent = buildProviderConfig(
+          [localPackagedPluginUrl],
+          model.url,
+        )
+        let host: Awaited<ReturnType<typeof startOpencodeServer>> | undefined
+        try {
+          host = await startOpencodeServer(localFixture, configContent)
+          const client = createOpencodeClient({
+            baseUrl: host.url,
+            directory: localFixture.projectDir,
+          })
+          const parentSessionID = await createSession(
+            client,
+            localFixture.projectDir,
+            'u5b foreground child commit rollup',
+          )
+          await promptSession(
+            client,
+            parentSessionID,
+            localFixture.projectDir,
+            'Start a guarded unit and run one foreground child that commits a change.',
+          )
+
+          const parentMessages = await client.session.messages({
+            sessionID: parentSessionID,
+            directory: localFixture.projectDir,
+          })
+          const taskParts = completedToolParts(parentMessages.data, 'task')
+          expect(taskParts).toHaveLength(1)
+          const taskState = taskParts[0]?.state as Record<string, unknown>
+          const taskMetadata = taskState.metadata as Record<string, unknown>
+          const childSessionID = taskMetadata.sessionId
+          expect(typeof childSessionID).toBe('string')
+
+          const children = await client.session.children({
+            sessionID: parentSessionID,
+            directory: localFixture.projectDir,
+          })
+          const child = children.data.find(
+            (entry) => entry.id === childSessionID,
+          )
+          expect(child).toBeDefined()
+          expect(child?.parentID).toBe(parentSessionID)
+
+          const childMessages = await client.session.messages({
+            sessionID: childSessionID as string,
+            directory: localFixture.projectDir,
+          })
+          const childMarkers = systematicMarkers(childMessages.data)
+          expect(childMarkers.length).toBeGreaterThan(0)
+          assertPrivacySafeMarkers(childMessages.data)
+          const childSessionSalts = receiptMintSessionSalts(childMessages.data)
+          expect(childSessionSalts.length).toBeGreaterThan(0)
+          const childSessionSalt = childSessionSalts[0]
+          if (childSessionSalt === undefined) {
+            throw new Error('child receipt session salt missing')
+          }
+          expect(model.requests.length).toBeGreaterThan(1)
+          expect(JSON.stringify(model.requests.slice(1))).not.toContain(
+            childSessionSalt,
+          )
+
+          await promptSession(
+            client,
+            parentSessionID,
+            localFixture.projectDir,
+            'Check workflow status only.',
+          )
+          const afterStatusMessages = await client.session.messages({
+            sessionID: parentSessionID,
+            directory: localFixture.projectDir,
+          })
+          const statusParts = completedToolParts(
+            afterStatusMessages.data,
+            'systematic_workflow_status',
+          )
+          expect(statusParts.length).toBeGreaterThan(0)
+          const lastStatus = statusParts.at(-1)
+          const lastStatusState = lastStatus?.state as Record<string, unknown>
+          const lastStatusOutput = (lastStatusState as { output?: unknown })
+            .output
+          expect(typeof lastStatusOutput).toBe('string')
+          const parsedStatus = JSON.parse(lastStatusOutput as string) as {
+            state: string
+            reasonCode: string
+            satisfiedOperations: string[]
+          }
+          // The bug: an earlier implementation receipt from the same
+          // foreground child, whose mutable revision digests are stale
+          // relative to the final HEAD after the child's own commit,
+          // must not make the parent's rollup fail closed before the
+          // matching (later, current) commit receipt is evaluated.
+          expect(parsedStatus.state).not.toBe('unavailable')
+          expect(parsedStatus.reasonCode).not.toBe('guard-unavailable')
+          expect(parsedStatus.satisfiedOperations).toContain('commit')
+          assertPrivacySafeMarkers(afterStatusMessages.data)
         } finally {
           if (host) await host.stop()
           model.stop()

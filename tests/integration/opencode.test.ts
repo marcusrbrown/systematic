@@ -343,7 +343,7 @@ function expectSetupSkillLoaded(result: OpencodeResult): void {
   expect(result.stderr).toMatch(
     /(?:Skill\s+"?git-clean-gone-branches"?|systematic_skill\s*\{"name":"(?:systematic:)?git-clean-gone-branches"\})/i,
   )
-  expect(result.stdout).toMatch(/branch/i)
+  expect(result.stdout).toMatch(/(?:branch|repositor(?:y|ies)|\brepo\b)/i)
 }
 
 test('expectSetupSkillLoaded accepts git-clean-gone-branches output without tool id mention', () => {

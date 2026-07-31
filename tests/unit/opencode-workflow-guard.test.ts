@@ -18,7 +18,10 @@ import {
   createReceiptClassifier,
   type ReceiptOperationObservation,
 } from '../../src/lib/receipt-classifier.js'
-import type { ReceiptLedger } from '../../src/lib/receipt-ledger.js'
+import type {
+  ReceiptLedger,
+  ReceiptOperation,
+} from '../../src/lib/receipt-ledger.js'
 import { createReceiptLedger } from '../../src/lib/receipt-ledger.js'
 import {
   projectReceiptConsumptionMarker,
@@ -261,6 +264,14 @@ function mintReceipt(
 }
 
 describe('OpenCode workflow guard adapter', () => {
+  test('does not expose the trusted recovery seam as a host/model tool', () => {
+    const adapter = createAdapter('observe')
+
+    expect(Object.keys(adapter.tools)).not.toContain(
+      'observeTrustedRecoveredOperation',
+    )
+  })
+
   test('selects trusted required operations from the activated skill', async () => {
     const adapter = createAdapter('observe')
     await observeSkill(adapter, 'systematic_skill', 'git-commit')
@@ -269,6 +280,203 @@ describe('OpenCode workflow guard adapter', () => {
       'verification',
       'commit',
     ])
+  })
+
+  test('projects the upgraded declaration with its actual operations and resource scopes', async () => {
+    const adapter = createAdapter('observe')
+    await observeSkill(adapter, 'systematic_skill', 'ce:work')
+    const output = {
+      title: 'pending',
+      output: 'start complete',
+      metadata: {},
+    }
+    const args = {
+      expected_operations: ['commit'],
+      resource_scopes: {
+        'review-readback': 'review-resource',
+        push: 'remote-resource',
+      },
+    }
+    await adapter.hooks['tool.execute.before'](
+      {
+        tool: 'systematic_workflow_start',
+        sessionID: SESSION_A,
+        callID: 'expanded-start',
+      },
+      { args },
+    )
+    await adapter.hooks['tool.execute.after'](
+      {
+        tool: 'systematic_workflow_start',
+        sessionID: SESSION_A,
+        callID: 'expanded-start',
+        args,
+      },
+      output,
+    )
+
+    const markers = output.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]
+    expect(markers).toBeDefined()
+    const unitMarker = Array.isArray(markers)
+      ? markers.find(
+          (marker): marker is Record<string, unknown> =>
+            typeof marker === 'object' &&
+            marker !== null &&
+            (marker as Record<string, unknown>).target === 'unit',
+        )
+      : markers
+    expect(unitMarker).toMatchObject({
+      target: 'unit',
+      state: 'started',
+      requiredOperations: [
+        'implementation',
+        'verification',
+        'commit',
+        'push',
+        'review-readback',
+      ],
+      resourceScopes: [
+        {
+          operation: 'push',
+          resourceIdentity: ledger(adapter).digestIdentity(
+            'resource',
+            'remote-resource',
+          ),
+        },
+        {
+          operation: 'review-readback',
+          resourceIdentity: ledger(adapter).digestIdentity(
+            'resource',
+            'review-resource',
+          ),
+        },
+      ],
+    })
+    expect(status(adapter)).toMatchObject({
+      state: 'waiting',
+      missingOperations: [
+        'implementation',
+        'verification',
+        'commit',
+        'review-readback',
+        'push',
+      ],
+    })
+  })
+
+  test('does not emit a second progression marker for a no-growth start', async () => {
+    const adapter = createAdapter('observe')
+    await observeSkill(adapter, 'systematic_skill', 'ce:work')
+    const output = {
+      title: 'pending',
+      output: 'start complete',
+      metadata: {},
+    }
+    const args = { expected_operations: [] }
+    await adapter.hooks['tool.execute.before'](
+      {
+        tool: 'systematic_workflow_start',
+        sessionID: SESSION_A,
+        callID: 'no-growth-start',
+      },
+      { args },
+    )
+    await adapter.hooks['tool.execute.after'](
+      {
+        tool: 'systematic_workflow_start',
+        sessionID: SESSION_A,
+        callID: 'no-growth-start',
+        args,
+      },
+      output,
+    )
+
+    expect(output.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]).toBe(
+      undefined,
+    )
+    expect(output.output).toContain('unit-active')
+  })
+
+  test('replays an expanded parent declaration without becoming unavailable', async () => {
+    const source = createAdapter(
+      'observe',
+      false,
+      sequenceObserver([{ targetDigest: 'a'.repeat(64) }]),
+      [],
+      undefined,
+      undefined,
+      true,
+    )
+    const skillOutput = { title: 'skill', output: 'loaded', metadata: {} }
+    await observeSkill(
+      source,
+      'systematic_skill',
+      'ce:work',
+      'replay-skill',
+      SESSION_A,
+      skillOutput,
+    )
+    const startOutput = {
+      title: 'start',
+      output: 'started',
+      metadata: {},
+    }
+    const startArgs = { expected_operations: ['commit'] }
+    await source.hooks['tool.execute.before'](
+      {
+        tool: 'systematic_workflow_start',
+        sessionID: SESSION_A,
+        callID: 'replay-start',
+      },
+      { args: startArgs },
+    )
+    await source.hooks['tool.execute.after'](
+      {
+        tool: 'systematic_workflow_start',
+        sessionID: SESSION_A,
+        callID: 'replay-start',
+        args: startArgs,
+      },
+      startOutput,
+    )
+
+    const markers = [
+      skillOutput.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY],
+      startOutput.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY],
+    ].flatMap((value) => (Array.isArray(value) ? value : [value]))
+    const parts = [
+      {
+        info: {},
+        parts: [
+          {
+            state: {
+              metadata: {
+                [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: markers,
+              },
+            },
+          },
+        ],
+      },
+    ]
+    const restored = createAdapter(
+      'observe',
+      false,
+      sequenceObserver([{ targetDigest: 'a'.repeat(64) }]),
+      [],
+      undefined,
+      {
+        readSessionParts: async () => parts,
+        listChildren: async () => [],
+      },
+      true,
+    )
+    await restored.tools.systematic_workflow_status.execute({}, toolContext())
+
+    expect(status(restored)).toMatchObject({
+      state: 'waiting',
+      missingOperations: ['implementation', 'verification', 'commit'],
+    })
+    expect(status(restored).reasonCode).not.toBe('guard-unavailable')
   })
 
   test('falls back to the mandatory floor for unknown guarded skills', async () => {
@@ -1309,6 +1517,7 @@ describe('OpenCode workflow guard adapter', () => {
       }
       expect(output.metadata.hostMetadata).toBe('preserved')
       const marker = output.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]
+      expect(Array.isArray(marker)).toBe(false)
       expect(marker).toMatchObject({
         envelope: {
           canonical: {
@@ -1329,6 +1538,33 @@ describe('OpenCode workflow guard adapter', () => {
           output.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY],
         ),
       ).not.toContain('new content')
+    })
+
+    test('appends progression markers in order while preserving unrelated metadata', async () => {
+      const adapter = createAdapter('observe')
+      const output = {
+        title: 'Loaded skill',
+        output: 'skill result',
+        metadata: { hostMetadata: 'preserved' },
+      }
+
+      await observeSkill(
+        adapter,
+        'systematic_skill',
+        'ce:work',
+        'progression-markers',
+        SESSION_A,
+        output,
+      )
+
+      expect(output.metadata.hostMetadata).toBe('preserved')
+      const marker = output.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]
+      expect(Array.isArray(marker)).toBe(true)
+      expect(marker).toHaveLength(2)
+      expect(marker).toEqual([
+        expect.objectContaining({ control: 'progression', target: 'epoch' }),
+        expect.objectContaining({ control: 'progression', target: 'unit' }),
+      ])
     })
   }
 
@@ -2747,12 +2983,122 @@ describe('OpenCode workflow guard adapter', () => {
       return [epochStart, unitStart, mint]
     }
 
+    function buildChildMarkersWithReceipts(
+      registrationIdentity: string,
+      sessionSalt: Uint8Array,
+      workspaceIdentity: string,
+      receipts: readonly {
+        operation: 'implementation' | 'verification' | 'commit'
+        workspaceIdentity?: string
+        repositoryBeforeIdentity: string
+        repositoryAfterIdentity: string
+        worktreeBeforeIdentity: string
+        worktreeAfterIdentity: string
+      }[],
+    ): unknown[] {
+      const childLedger = createReceiptLedger({
+        capabilityFlags: ['workflow-guard'],
+        registrationIdentity,
+        sessionSalt,
+      })
+      const epochId = '8'.repeat(32)
+      const unitId = '9'.repeat(32)
+      const digestCall = (tag: string) =>
+        childLedger.digestIdentity('call', tag)
+      const epochStart = projectReceiptProgressionMarker(childLedger, {
+        target: 'epoch',
+        state: 'started',
+        epochId,
+        family: 'work',
+        transitionDigest: digestCall('epoch-start'),
+        timestamp: 10,
+      })
+      const unitStart = projectReceiptProgressionMarker(childLedger, {
+        target: 'unit',
+        state: 'started',
+        epochId,
+        unitId,
+        family: 'work',
+        requiredOperations: receipts.map(({ operation }) => operation),
+        resourceScopes: [],
+        transitionDigest: digestCall('unit-start'),
+        timestamp: 11,
+      })
+      if (!epochStart || !unitStart)
+        throw new Error('progression marker failed')
+
+      const mints = receipts.map((receipt, index) => {
+        const callId = `child-${receipt.operation}-${index}`
+        const receiptWorkspaceIdentity =
+          receipt.workspaceIdentity ?? workspaceIdentity
+        const context = {
+          epochId,
+          unitId,
+          workspaceIdentity: receiptWorkspaceIdentity,
+          repositoryIdentity: receipt.repositoryBeforeIdentity,
+          worktreeIdentity: receipt.worktreeBeforeIdentity,
+        }
+        expect(
+          childLedger.prepareObservation({
+            callId,
+            operation: receipt.operation,
+            context,
+          }).status,
+        ).toBe('prepared')
+        const finalized = childLedger.finalizeObservation({
+          callId,
+          context,
+          after: {
+            workspaceIdentity: receiptWorkspaceIdentity,
+            repositoryIdentity: receipt.repositoryAfterIdentity,
+            worktreeIdentity: receipt.worktreeAfterIdentity,
+            ...(receipt.operation === 'commit' ? { commitClosure: true } : {}),
+          },
+          classification: {
+            outcome: 'accepted',
+            category: receipt.operation,
+            attribution: 'runtime-verified',
+            result: 'success',
+            sideEffect: 'required',
+            reasonCode: 'recognized-command',
+          },
+          terminal: { status: 'success', output: 'non-empty', noOp: false },
+        })
+        if (finalized.status !== 'finalized')
+          throw new Error('child receipt did not finalize')
+        const mint = projectReceiptMintMarker(finalized.receipt, sessionSalt)
+        if (!mint) throw new Error('child mint marker failed')
+        return mint
+      })
+
+      return [epochStart, unitStart, ...mints]
+    }
+
     // Helper: fire the task after hook with a given child session's parts
     async function fireTaskAfter(
       adapter: OpencodeWorkflowGuard,
       childSessionID: string,
       sessionID = SESSION_A,
-    ): Promise<void> {
+    ): Promise<{
+      title: string
+      output: string
+      metadata: Record<string, unknown>
+    }> {
+      const output: {
+        title: string
+        output: string
+        metadata: Record<string, unknown>
+      } = {
+        title: 'task result',
+        output: 'done',
+        metadata: { sessionId: childSessionID },
+      }
+      await adapter.hooks['tool.execute.before']({
+        tool: 'task',
+        sessionID,
+        callID: 'task-call-1',
+        args: {},
+      })
       await adapter.hooks['tool.execute.after'](
         {
           tool: 'task',
@@ -2760,12 +3106,9 @@ describe('OpenCode workflow guard adapter', () => {
           callID: 'task-call-1',
           args: {},
         },
-        {
-          title: 'task result',
-          output: 'done',
-          metadata: { sessionId: childSessionID },
-        },
+        output,
       )
+      return output
     }
 
     test('RED: mixed-registration child markers must not mark parent unavailable (rollup bug reproduction)', async () => {
@@ -3215,19 +3558,28 @@ describe('OpenCode workflow guard adapter', () => {
       childSessionID: string,
       childPartsFactory: () => readonly unknown[],
       parentSessionID: string,
+      runtimeRequiredOperations: readonly ReceiptOperation[] = [],
+      repositoryIdentity = OPERATION_SCOPE.repositoryIdentity,
+      snapshotRepositoryIdentity = OPERATION_SCOPE.repositoryIdentity,
+      snapshotWorktreeIdentity = OPERATION_SCOPE.worktreeIdentity,
     ): OpencodeWorkflowGuard {
       return createOpencodeWorkflowGuard({
         config: { mode: 'observe', debug: false },
         ...OPERATION_SCOPE,
+        repositoryIdentity,
         registrationIdentity: ownIdentity,
         sessionSalt: ownSalt,
+        runtimeRequiredOperations,
         observer: {
           targetDigest: OPERATION_SCOPE.workspaceIdentity,
           async snapshot() {
             snapshotRef.called = true
             return {
               status: 'available' as const,
-              snapshot: operationSnapshot(),
+              snapshot: operationSnapshot(
+                snapshotRepositoryIdentity,
+                snapshotWorktreeIdentity,
+              ),
             }
           },
           async remoteSnapshot() {
@@ -3468,6 +3820,581 @@ describe('OpenCode workflow guard adapter', () => {
       )
       expect(ownAdapter.status(parentSessionID).reasonCode).toBe(
         beforeReasonCode,
+      )
+    })
+
+    test('foreign workspace child receipt still makes the parent unavailable', async () => {
+      const ownIdentity = 'rollup-foreign-workspace'
+      const ownSalt = new Uint8Array(32).fill(121)
+      const childSessionID = 'child-foreign-workspace'
+      const parentSessionID = SESSION_A
+      const childMarkers = buildChildMarkers(
+        ownIdentity,
+        ownSalt,
+        'workspace-other',
+        OPERATION_SCOPE.repositoryIdentity,
+        'worktree-before',
+        OPERATION_SCOPE.worktreeIdentity,
+      )
+      const childParts = [
+        {
+          info: {},
+          parts: [
+            {
+              state: {
+                metadata: {
+                  [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: childMarkers,
+                },
+              },
+            },
+          ],
+        },
+      ]
+      const snapshotRef = { called: false }
+      const adapter = makeRollupAdapter(
+        ownIdentity,
+        ownSalt,
+        snapshotRef,
+        childSessionID,
+        () => childParts,
+        parentSessionID,
+      )
+
+      await observeSkill(
+        adapter,
+        'systematic_skill',
+        'ce:work',
+        'foreign-workspace-skill',
+      )
+      await fireTaskAfter(adapter, childSessionID, parentSessionID)
+
+      expect(snapshotRef.called).toBe(true)
+      expect(adapter.status(parentSessionID).reasonCode).toBe(
+        'guard-unavailable',
+      )
+    })
+
+    test('RED rollup preflights every local child receipt before minting any parent evidence', async () => {
+      const ownIdentity = 'rollup-preflight-before-mint'
+      const ownSalt = new Uint8Array(32).fill(126)
+      const childSessionID = 'child-preflight-before-mint'
+      const parentSessionID = SESSION_A
+      const finalRepository = 'f'.repeat(64)
+      const finalWorktree = '1'.repeat(64)
+      const childMarkers = buildChildMarkersWithReceipts(
+        ownIdentity,
+        ownSalt,
+        OPERATION_SCOPE.workspaceIdentity,
+        [
+          {
+            operation: 'implementation',
+            repositoryBeforeIdentity: OPERATION_SCOPE.repositoryIdentity,
+            repositoryAfterIdentity: finalRepository,
+            worktreeBeforeIdentity: OPERATION_SCOPE.worktreeIdentity,
+            worktreeAfterIdentity: finalWorktree,
+          },
+          {
+            operation: 'verification',
+            workspaceIdentity: 'workspace-other',
+            repositoryBeforeIdentity: finalRepository,
+            repositoryAfterIdentity: finalRepository,
+            worktreeBeforeIdentity: finalWorktree,
+            worktreeAfterIdentity: finalWorktree,
+          },
+        ],
+      )
+      const childParts = [
+        {
+          info: {},
+          parts: [
+            {
+              state: {
+                metadata: {
+                  [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: childMarkers,
+                },
+              },
+            },
+          ],
+        },
+      ]
+      const snapshotRef = { called: false }
+      const adapter = makeRollupAdapter(
+        ownIdentity,
+        ownSalt,
+        snapshotRef,
+        childSessionID,
+        () => childParts,
+        parentSessionID,
+        ['implementation', 'verification'],
+        OPERATION_SCOPE.repositoryIdentity,
+        finalRepository,
+        finalWorktree,
+      )
+
+      await observeSkill(
+        adapter,
+        'systematic_skill',
+        'ce:work',
+        'preflight-before-mint-skill',
+        parentSessionID,
+      )
+      const beforeReceiptCount = ledger(adapter, parentSessionID).listReceipts()
+        .length
+
+      const output = await fireTaskAfter(
+        adapter,
+        childSessionID,
+        parentSessionID,
+      )
+      expect(snapshotRef.called).toBe(true)
+      expect(adapter.status(parentSessionID).reasonCode).toBe(
+        'guard-unavailable',
+      )
+      expect(ledger(adapter, parentSessionID).listReceipts()).toHaveLength(
+        beforeReceiptCount,
+      )
+      expect(
+        output.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY],
+      ).toBeUndefined()
+    })
+
+    test('RED rollup mints implementation and verification from fresh parent context exactly once', async () => {
+      const ownIdentity = 'rollup-fresh-context-per-candidate'
+      const ownSalt = new Uint8Array(32).fill(127)
+      const childSessionID = 'child-fresh-context-per-candidate'
+      const parentSessionID = SESSION_A
+      const finalRepository = 'f'.repeat(64)
+      const finalWorktree = '1'.repeat(64)
+      const childMarkers = buildChildMarkersWithReceipts(
+        ownIdentity,
+        ownSalt,
+        OPERATION_SCOPE.workspaceIdentity,
+        [
+          {
+            operation: 'implementation',
+            repositoryBeforeIdentity: OPERATION_SCOPE.repositoryIdentity,
+            repositoryAfterIdentity: finalRepository,
+            worktreeBeforeIdentity: OPERATION_SCOPE.worktreeIdentity,
+            worktreeAfterIdentity: finalWorktree,
+          },
+          {
+            operation: 'verification',
+            repositoryBeforeIdentity: OPERATION_SCOPE.repositoryIdentity,
+            repositoryAfterIdentity: finalRepository,
+            worktreeBeforeIdentity: OPERATION_SCOPE.worktreeIdentity,
+            worktreeAfterIdentity: finalWorktree,
+          },
+        ],
+      )
+      const childParts = [
+        {
+          info: {},
+          parts: [
+            {
+              state: {
+                metadata: {
+                  [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: childMarkers,
+                },
+              },
+            },
+          ],
+        },
+      ]
+      const snapshotRef = { called: false }
+      const adapter = makeRollupAdapter(
+        ownIdentity,
+        ownSalt,
+        snapshotRef,
+        childSessionID,
+        () => childParts,
+        parentSessionID,
+        ['implementation', 'verification'],
+        OPERATION_SCOPE.repositoryIdentity,
+        finalRepository,
+        finalWorktree,
+      )
+
+      await observeSkill(
+        adapter,
+        'systematic_skill',
+        'ce:work',
+        'fresh-context-per-candidate-skill',
+        parentSessionID,
+      )
+
+      const firstOutput = await fireTaskAfter(
+        adapter,
+        childSessionID,
+        parentSessionID,
+      )
+      const firstReceipts = ledger(adapter, parentSessionID).listReceipts()
+      const firstMarkers = [
+        firstOutput.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY],
+      ].flatMap((value) =>
+        Array.isArray(value) ? value : value ? [value] : [],
+      )
+      const firstMarkerReceiptIDs = firstMarkers.map(
+        (marker) =>
+          (
+            marker as {
+              envelope: { canonical: { receiptId: string } }
+            }
+          ).envelope.canonical.receiptId,
+      )
+
+      expect(snapshotRef.called).toBe(true)
+      expect(firstReceipts).toHaveLength(2)
+      expect(
+        firstReceipts.map((receipt) => receipt.canonical.operation),
+      ).toEqual(['implementation', 'verification'])
+      expect(status(adapter, parentSessionID).satisfiedOperations).toEqual(
+        expect.arrayContaining(['implementation', 'verification']),
+      )
+      expect(status(adapter, parentSessionID).reasonCode).not.toBe(
+        'fresh-readback',
+      )
+      expect(firstMarkers).toHaveLength(2)
+      expect(new Set(firstMarkerReceiptIDs).size).toBe(2)
+
+      const secondOutput = await fireTaskAfter(
+        adapter,
+        childSessionID,
+        parentSessionID,
+      )
+      expect(ledger(adapter, parentSessionID).listReceipts()).toHaveLength(2)
+      expect(
+        secondOutput.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY],
+      ).toBeUndefined()
+    })
+
+    test('skips stale child receipts, mints a later current receipt, and rolls up once', async () => {
+      const ownIdentity = 'rollup-stale-then-current'
+      const ownSalt = new Uint8Array(32).fill(122)
+      const childSessionID = 'child-stale-then-current'
+      const parentSessionID = SESSION_A
+      const childMarkers = buildChildMarkersWithReceipts(
+        ownIdentity,
+        ownSalt,
+        OPERATION_SCOPE.workspaceIdentity,
+        [
+          {
+            operation: 'implementation',
+            repositoryBeforeIdentity: 'd'.repeat(64),
+            repositoryAfterIdentity: 'e'.repeat(64),
+            worktreeBeforeIdentity: 'f'.repeat(64),
+            worktreeAfterIdentity: '1'.repeat(64),
+          },
+          {
+            operation: 'commit',
+            repositoryBeforeIdentity: 'd'.repeat(64),
+            repositoryAfterIdentity: OPERATION_SCOPE.repositoryIdentity,
+            worktreeBeforeIdentity: OPERATION_SCOPE.worktreeIdentity,
+            worktreeAfterIdentity: OPERATION_SCOPE.worktreeIdentity,
+          },
+        ],
+      )
+      const childParts = [
+        {
+          info: {},
+          parts: [
+            {
+              state: {
+                metadata: {
+                  [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: childMarkers,
+                },
+              },
+            },
+          ],
+        },
+      ]
+      const snapshotRef = { called: false }
+      const adapter = makeRollupAdapter(
+        ownIdentity,
+        ownSalt,
+        snapshotRef,
+        childSessionID,
+        () => childParts,
+        parentSessionID,
+        ['commit'],
+        'd'.repeat(64),
+      )
+
+      await observeSkill(
+        adapter,
+        'systematic_skill',
+        'ce:work',
+        'stale-then-current-skill',
+      )
+      await fireTaskAfter(adapter, childSessionID, parentSessionID)
+
+      const firstReceipts = ledger(adapter, parentSessionID).listReceipts()
+      expect(
+        firstReceipts.filter((receipt) => receipt.canonical.operation),
+      ).toHaveLength(1)
+      expect(firstReceipts[0]?.canonical.operation).toBe('commit')
+      expect(status(adapter, parentSessionID).satisfiedOperations).toContain(
+        'commit',
+      )
+
+      await fireTaskAfter(adapter, childSessionID, parentSessionID)
+      const secondReceipts = ledger(adapter, parentSessionID).listReceipts()
+      expect(secondReceipts).toHaveLength(firstReceipts.length)
+      expect(snapshotRef.called).toBe(true)
+    })
+
+    test('does not mark the parent unavailable when every child receipt is stale, and retries fresh evidence', async () => {
+      const ownIdentity = 'rollup-stale-only-retry'
+      const ownSalt = new Uint8Array(32).fill(123)
+      const childSessionID = 'child-stale-only-retry'
+      const parentSessionID = SESSION_A
+      let childMarkers = buildChildMarkersWithReceipts(
+        ownIdentity,
+        ownSalt,
+        OPERATION_SCOPE.workspaceIdentity,
+        [
+          {
+            operation: 'commit',
+            repositoryBeforeIdentity: 'd'.repeat(64),
+            repositoryAfterIdentity: 'e'.repeat(64),
+            worktreeBeforeIdentity: 'f'.repeat(64),
+            worktreeAfterIdentity: '1'.repeat(64),
+          },
+        ],
+      )
+      const childParts = () => [
+        {
+          info: {},
+          parts: [
+            {
+              state: {
+                metadata: {
+                  [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: childMarkers,
+                },
+              },
+            },
+          ],
+        },
+      ]
+      const snapshotRef = { called: false }
+      const adapter = makeRollupAdapter(
+        ownIdentity,
+        ownSalt,
+        snapshotRef,
+        childSessionID,
+        childParts,
+        parentSessionID,
+        ['commit'],
+        'd'.repeat(64),
+      )
+
+      await observeSkill(
+        adapter,
+        'systematic_skill',
+        'ce:work',
+        'stale-only-retry-skill',
+      )
+      await fireTaskAfter(adapter, childSessionID, parentSessionID)
+
+      expect(snapshotRef.called).toBe(true)
+      expect(status(adapter, parentSessionID).reasonCode).not.toBe(
+        'guard-unavailable',
+      )
+      expect(ledger(adapter, parentSessionID).listReceipts()).toHaveLength(0)
+      expect(
+        status(adapter, parentSessionID).satisfiedOperations,
+      ).not.toContain('commit')
+
+      childMarkers = buildChildMarkersWithReceipts(
+        ownIdentity,
+        ownSalt,
+        OPERATION_SCOPE.workspaceIdentity,
+        [
+          {
+            operation: 'commit',
+            repositoryBeforeIdentity: 'd'.repeat(64),
+            repositoryAfterIdentity: OPERATION_SCOPE.repositoryIdentity,
+            worktreeBeforeIdentity: OPERATION_SCOPE.worktreeIdentity,
+            worktreeAfterIdentity: OPERATION_SCOPE.worktreeIdentity,
+          },
+        ],
+      )
+      await fireTaskAfter(adapter, childSessionID, parentSessionID)
+
+      expect(ledger(adapter, parentSessionID).listReceipts()).toHaveLength(1)
+      expect(status(adapter, parentSessionID).satisfiedOperations).toContain(
+        'commit',
+      )
+    })
+
+    test('uses the guard current context after a parent implementation before rolling up a child commit', async () => {
+      const ownIdentity = 'rollup-parent-local-before-child-commit'
+      const ownSalt = new Uint8Array(32).fill(124)
+      const childSessionID = 'child-parent-local-before-commit'
+      const parentSessionID = SESSION_A
+      const parentRepository = 'd'.repeat(64)
+      const parentWorktree = 'e'.repeat(64)
+      const finalRepository = 'f'.repeat(64)
+      const finalWorktree = '1'.repeat(64)
+      const childMarkers = buildChildMarkersWithReceipts(
+        ownIdentity,
+        ownSalt,
+        OPERATION_SCOPE.workspaceIdentity,
+        [
+          {
+            operation: 'commit',
+            repositoryBeforeIdentity: parentRepository,
+            repositoryAfterIdentity: finalRepository,
+            worktreeBeforeIdentity: parentWorktree,
+            worktreeAfterIdentity: finalWorktree,
+          },
+        ],
+      )
+      const snapshot = sequenceObserver([
+        operationSnapshot(),
+        operationSnapshot(parentRepository, parentWorktree),
+        operationSnapshot(finalRepository, finalWorktree),
+      ])
+      const adapter = createOpencodeWorkflowGuard({
+        config: { mode: 'observe', debug: false },
+        ...OPERATION_SCOPE,
+        registrationIdentity: ownIdentity,
+        sessionSalt: ownSalt,
+        runtimeRequiredOperations: ['commit'],
+        classifier: createReceiptClassifier(),
+        observer: snapshot,
+        hostReadback: {
+          readSessionParts: async (sessionID) =>
+            sessionID === parentSessionID
+              ? []
+              : [
+                  {
+                    info: {},
+                    parts: [
+                      {
+                        state: {
+                          metadata: {
+                            [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]:
+                              childMarkers,
+                          },
+                        },
+                      },
+                    ],
+                  },
+                ],
+          listChildren: async (sessionID) =>
+            sessionID === parentSessionID
+              ? [{ sessionId: childSessionID, parentID: parentSessionID }]
+              : [],
+        },
+      })
+
+      await observeSkill(
+        adapter,
+        'systematic_skill',
+        'ce:work',
+        'parent-local-before-child-commit-skill',
+        parentSessionID,
+      )
+      await observeOperationTool(
+        adapter,
+        'write',
+        { filePath: 'parent-local.txt', content: 'parent change' },
+        { title: 'write', output: 'changed', metadata: {} },
+        'parent-local-implementation',
+        parentSessionID,
+      )
+      expect(ledger(adapter, parentSessionID).listReceipts()).toHaveLength(1)
+      expect(status(adapter, parentSessionID).satisfiedOperations).toContain(
+        'implementation',
+      )
+
+      await fireTaskAfter(adapter, childSessionID, parentSessionID)
+
+      const receipts = ledger(adapter, parentSessionID).listReceipts()
+      expect(receipts).toHaveLength(2)
+      expect(receipts.map((receipt) => receipt.canonical.operation)).toEqual([
+        'implementation',
+        'commit',
+      ])
+      expect(status(adapter, parentSessionID).satisfiedOperations).toContain(
+        'commit',
+      )
+      expect(status(adapter, parentSessionID).reasonCode).not.toBe(
+        'guard-unavailable',
+      )
+    })
+
+    test('rolls up a child commit when boot repository and worktree identities are omitted', async () => {
+      const ownIdentity = 'rollup-optional-boot-identities'
+      const ownSalt = new Uint8Array(32).fill(125)
+      const childSessionID = 'child-optional-boot-identities'
+      const parentSessionID = SESSION_A
+      const childMarkers = buildChildMarkersWithReceipts(
+        ownIdentity,
+        ownSalt,
+        OPERATION_SCOPE.workspaceIdentity,
+        [
+          {
+            operation: 'commit',
+            repositoryBeforeIdentity: 'd'.repeat(64),
+            repositoryAfterIdentity: OPERATION_SCOPE.repositoryIdentity,
+            worktreeBeforeIdentity: OPERATION_SCOPE.worktreeIdentity,
+            worktreeAfterIdentity: OPERATION_SCOPE.worktreeIdentity,
+          },
+        ],
+      )
+      const adapter = createOpencodeWorkflowGuard({
+        config: { mode: 'observe', debug: false },
+        workspaceIdentity: OPERATION_SCOPE.workspaceIdentity,
+        registrationIdentity: ownIdentity,
+        sessionSalt: ownSalt,
+        runtimeRequiredOperations: ['commit'],
+        observer: sequenceObserver([
+          operationSnapshot('d'.repeat(64), OPERATION_SCOPE.worktreeIdentity),
+          operationSnapshot(),
+        ]),
+        hostReadback: {
+          readSessionParts: async (sessionID) =>
+            sessionID === parentSessionID
+              ? []
+              : [
+                  {
+                    info: {},
+                    parts: [
+                      {
+                        state: {
+                          metadata: {
+                            [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]:
+                              childMarkers,
+                          },
+                        },
+                      },
+                    ],
+                  },
+                ],
+          listChildren: async (sessionID) =>
+            sessionID === parentSessionID
+              ? [{ sessionId: childSessionID, parentID: parentSessionID }]
+              : [],
+        },
+      })
+
+      await observeSkill(
+        adapter,
+        'systematic_skill',
+        'ce:work',
+        'optional-boot-identities-skill',
+        parentSessionID,
+      )
+      await adapter.tools.systematic_workflow_status.execute(
+        {},
+        toolContext(parentSessionID),
+      )
+      await fireTaskAfter(adapter, childSessionID, parentSessionID)
+
+      expect(ledger(adapter, parentSessionID).listReceipts()).toHaveLength(1)
+      expect(status(adapter, parentSessionID).satisfiedOperations).toContain(
+        'commit',
       )
     })
   })

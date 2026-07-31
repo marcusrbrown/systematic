@@ -369,6 +369,219 @@ describe('receipt readback', () => {
     }
   })
 
+  test('folds a same-unit monotonic started declaration extension', () => {
+    const fixture = createFixture()
+    const expanded = required(
+      projectReceiptProgressionMarker(fixture.ledger, {
+        target: 'unit',
+        state: 'started',
+        epochId: EPOCH_ID,
+        unitId: UNIT_ID,
+        family: 'work',
+        requiredOperations: ['implementation', 'verification'],
+        resourceScopes: [],
+        transitionDigest: fixture.ledger.digestIdentity(
+          'call',
+          'unit-start-expanded',
+        ),
+        timestamp: 6,
+      }),
+      'expanded-unit-start-not-projected',
+    )
+
+    const result = foldReceiptReadback(
+      [fixture.epochStart, fixture.unitStart, expanded, fixture.mint],
+      expectationOf(fixture),
+    )
+
+    expect(result).toMatchObject({
+      status: 'reconstructed',
+      state: {
+        progression: {
+          unit: {
+            state: 'started',
+            requiredOperations: ['implementation', 'verification'],
+          },
+        },
+      },
+    })
+  })
+
+  test('treats identical same-unit declarations as idempotent across marker metadata', () => {
+    const fixture = createFixture()
+    const duplicateDeclaration = required(
+      projectReceiptProgressionMarker(fixture.ledger, {
+        target: 'unit',
+        state: 'started',
+        epochId: EPOCH_ID,
+        unitId: UNIT_ID,
+        family: 'work',
+        requiredOperations: ['implementation'],
+        resourceScopes: [],
+        transitionDigest: fixture.ledger.digestIdentity('call', 'unit-start'),
+        timestamp: 6,
+      }),
+      'duplicate-unit-start-not-projected',
+    )
+
+    expect(
+      foldReceiptReadback(
+        [fixture.epochStart, fixture.unitStart, duplicateDeclaration],
+        expectationOf(fixture),
+      ),
+    ).toMatchObject({ status: 'reconstructed' })
+  })
+
+  test('rejects same-unit declaration growth after evidence has been minted', () => {
+    const fixture = createFixture()
+    const expanded = required(
+      projectReceiptProgressionMarker(fixture.ledger, {
+        target: 'unit',
+        state: 'started',
+        epochId: EPOCH_ID,
+        unitId: UNIT_ID,
+        family: 'work',
+        requiredOperations: ['implementation', 'verification'],
+        resourceScopes: [],
+        transitionDigest: fixture.ledger.digestIdentity(
+          'call',
+          'unit-start-after-evidence',
+        ),
+        timestamp: 6,
+      }),
+      'expanded-unit-start-not-projected',
+    )
+
+    expect(
+      foldReceiptReadback(
+        [fixture.epochStart, fixture.unitStart, fixture.mint, expanded],
+        expectationOf(fixture),
+      ),
+    ).toEqual({ status: 'rejected', category: 'out-of-order' })
+  })
+
+  test('rejects same-unit declaration shrink and changed existing resource scope', () => {
+    const fixture = createFixture()
+    const expanded = required(
+      projectReceiptProgressionMarker(fixture.ledger, {
+        target: 'unit',
+        state: 'started',
+        epochId: EPOCH_ID,
+        unitId: UNIT_ID,
+        family: 'work',
+        requiredOperations: ['implementation', 'verification'],
+        resourceScopes: [
+          {
+            operation: 'push',
+            resourceIdentity: 'c'.repeat(64),
+          },
+        ],
+        transitionDigest: fixture.ledger.digestIdentity(
+          'call',
+          'unit-start-expanded',
+        ),
+        timestamp: 6,
+      }),
+      'expanded-unit-start-not-projected',
+    )
+    const shrink = required(
+      projectReceiptProgressionMarker(fixture.ledger, {
+        target: 'unit',
+        state: 'started',
+        epochId: EPOCH_ID,
+        unitId: UNIT_ID,
+        family: 'work',
+        requiredOperations: ['implementation'],
+        resourceScopes: [],
+        transitionDigest: fixture.ledger.digestIdentity(
+          'call',
+          'unit-start-shrink',
+        ),
+        timestamp: 7,
+      }),
+      'shrink-unit-start-not-projected',
+    )
+    const changedScope = required(
+      projectReceiptProgressionMarker(fixture.ledger, {
+        target: 'unit',
+        state: 'started',
+        epochId: EPOCH_ID,
+        unitId: UNIT_ID,
+        family: 'work',
+        requiredOperations: ['implementation', 'verification'],
+        resourceScopes: [
+          {
+            operation: 'push',
+            resourceIdentity: 'd'.repeat(64),
+          },
+        ],
+        transitionDigest: fixture.ledger.digestIdentity(
+          'call',
+          'unit-start-changed-scope',
+        ),
+        timestamp: 8,
+      }),
+      'changed-scope-unit-start-not-projected',
+    )
+
+    expect(
+      foldReceiptReadback(
+        [fixture.epochStart, fixture.unitStart, expanded, shrink],
+        expectationOf(fixture),
+      ),
+    ).toEqual({ status: 'rejected', category: 'conflicting-marker' })
+    expect(
+      foldReceiptReadback(
+        [fixture.epochStart, fixture.unitStart, expanded, changedScope],
+        expectationOf(fixture),
+      ),
+    ).toEqual({ status: 'rejected', category: 'conflicting-marker' })
+  })
+
+  test('retains added resource scopes in the recovered progression', () => {
+    const fixture = createFixture()
+    const scoped = required(
+      projectReceiptProgressionMarker(fixture.ledger, {
+        target: 'unit',
+        state: 'started',
+        epochId: EPOCH_ID,
+        unitId: UNIT_ID,
+        family: 'work',
+        requiredOperations: ['implementation', 'push'],
+        resourceScopes: [
+          {
+            operation: 'push',
+            resourceIdentity: 'c'.repeat(64),
+          },
+        ],
+        transitionDigest: fixture.ledger.digestIdentity(
+          'call',
+          'unit-start-scoped',
+        ),
+        timestamp: 6,
+      }),
+      'scoped-unit-start-not-projected',
+    )
+
+    const result = foldReceiptReadback(
+      [fixture.epochStart, fixture.unitStart, scoped],
+      expectationOf(fixture),
+    )
+    expect(result).toMatchObject({
+      status: 'reconstructed',
+      state: {
+        progression: {
+          unit: {
+            requiredOperations: ['implementation', 'push'],
+            resourceScopes: [
+              { operation: 'push', resourceIdentity: 'c'.repeat(64) },
+            ],
+          },
+        },
+      },
+    })
+  })
+
   test('extracts an agreeing seed and rejects salt, registration, or capability disagreement', () => {
     const fixture = createFixture()
     const ready = extractReceiptReadbackSeed([

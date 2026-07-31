@@ -114,6 +114,13 @@ export interface UnitSnapshot {
   status: 'active' | 'completed'
   requiredOperations: readonly ReceiptOperation[]
   requiredResourceOperations: readonly ReceiptOperation[]
+  resourceScopes: readonly ReceiptResourceScope[]
+}
+
+export interface CurrentOperationContext {
+  readonly workspaceIdentity: string
+  readonly repositoryIdentity?: string
+  readonly worktreeIdentity?: string
 }
 
 export interface WorkflowStatus {
@@ -187,7 +194,16 @@ export interface WorkflowGuard {
   observeReceipt(input: unknown): EvidenceObservationResult
   observeAttempt(input: unknown): EvidenceObservationResult
   observeOperation(input: unknown): Promise<EvidenceObservationResult>
+  /**
+   * Internal recovery seam. Callers MUST validate host lineage, own
+   * registration/seed/readback, stable workspace, and current mutable
+   * revisions before using this classifier-bypassing path.
+   */
+  observeTrustedRecoveredOperation(
+    input: unknown,
+  ): Promise<EvidenceObservationResult>
   observeReadback(input: unknown): ReadbackObservationResult
+  currentOperationContext(): CurrentOperationContext
   status(): WorkflowStatus
   prepareTransition(input: unknown): TransitionPrepareResult
   finalizeTransition(input: unknown): TransitionFinalizeResult
@@ -661,6 +677,12 @@ function cloneUnit(unit: UnitState): UnitSnapshot {
     requiredResourceOperations: Object.freeze([
       ...unit.declaredResourceOperations,
     ]),
+    resourceScopes: Object.freeze(
+      [...unit.resourceScopes].map(([operation, resourceIdentity]) => ({
+        operation,
+        resourceIdentity,
+      })),
+    ),
   })
 }
 
@@ -1281,6 +1303,18 @@ export function createWorkflowGuard(
     return context.worktreeIdentity !== currentWorktreeIdentity
       ? 'receipt-mismatch'
       : undefined
+  }
+
+  function currentOperationContext(): CurrentOperationContext {
+    return Object.freeze({
+      workspaceIdentity: currentWorkspaceIdentity,
+      ...(currentRepositoryIdentity === undefined
+        ? {}
+        : { repositoryIdentity: currentRepositoryIdentity }),
+      ...(currentWorktreeIdentity === undefined
+        ? {}
+        : { worktreeIdentity: currentWorktreeIdentity }),
+    })
   }
 
   function resourceBeforeReason(
@@ -2399,9 +2433,13 @@ export function createWorkflowGuard(
   function mergeResourceScopes(
     trustedPolicy: ParsedUnitRequest,
     modelScopes: ReadonlyMap<ReceiptOperation, string>,
+    existingScopes?: ReadonlyMap<ReceiptOperation, string>,
   ): ReadonlyMap<ReceiptOperation, string> | undefined {
-    const result = new Map(runtimeScopes)
-    for (const scopes of [trustedPolicy.resourceScopes, modelScopes]) {
+    const result = new Map(existingScopes ?? runtimeScopes)
+    const scopesToMerge = existingScopes
+      ? [runtimeScopes, trustedPolicy.resourceScopes, modelScopes]
+      : [trustedPolicy.resourceScopes, modelScopes]
+    for (const scopes of scopesToMerge) {
       for (const [operation, resource] of scopes) {
         const existing = result.get(operation)
         if (existing && existing !== resource) return undefined
@@ -2415,16 +2453,102 @@ export function createWorkflowGuard(
     trustedPolicy: ParsedUnitRequest,
     model: ParsedUnitRequest,
     resourceScopes: ReadonlyMap<ReceiptOperation, string>,
+    existingOperations: readonly ReceiptOperation[] = [],
   ): readonly ReceiptOperation[] {
     return Object.freeze([
       ...new Set([
         ...MANDATORY_OPERATIONS,
         ...runtimeRequired,
+        ...existingOperations,
         ...trustedPolicy.expectedOperations,
         ...model.expectedOperations,
         ...resourceScopes.keys(),
       ]),
     ])
+  }
+
+  function resourceIdentitiesMatchUnit(unit: UnitState): boolean {
+    const expected = new Map(runtimeScopes)
+    for (const [operation, resource] of unit.resourceScopes) {
+      expected.set(operation, resource)
+    }
+    if (currentResourceIdentities.size !== expected.size) return false
+    for (const [operation, resource] of expected) {
+      if (currentResourceIdentities.get(operation) !== resource) return false
+    }
+    return true
+  }
+
+  function pristineActiveUnit(unit: UnitState): boolean {
+    return (
+      unit.evidence.size === 0 &&
+      unit.issues.size === 0 &&
+      unit.staleReceiptIds.size === 0 &&
+      unit.recoveredReceiptIds.size === 0 &&
+      unit.operationStates.size === 0 &&
+      unit.ledgerContexts.size === 0 &&
+      globalIssue === undefined &&
+      transitionsByCall.size === 0 &&
+      terminalOperationCalls.size === 0 &&
+      currentResourceRevisionIdentities.size === 0 &&
+      currentPullRequestFingerprint === undefined &&
+      currentWorkspaceIdentity === initialWorkspaceIdentity &&
+      currentRepositoryIdentity === initialRepositoryIdentity &&
+      currentWorktreeIdentity === initialWorktreeIdentity &&
+      resourceIdentitiesMatchUnit(unit)
+    )
+  }
+
+  function declarationChanged(
+    unit: UnitState,
+    requiredOperations: readonly ReceiptOperation[],
+    resourceScopes: ReadonlyMap<ReceiptOperation, string>,
+  ): boolean {
+    if (
+      JSON.stringify(unit.requiredOperations) !==
+      JSON.stringify(requiredOperations)
+    ) {
+      return true
+    }
+    if (unit.resourceScopes.size !== resourceScopes.size) return true
+    for (const [operation, resource] of resourceScopes) {
+      if (unit.resourceScopes.get(operation) !== resource) return true
+    }
+    return false
+  }
+
+  function startActiveUnit(
+    parsed: ParsedUnitRequest,
+    trustedPolicy: ParsedUnitRequest,
+    unit: UnitState,
+  ): StartUnitResult {
+    if (!pristineActiveUnit(unit)) {
+      return { status: 'rejected', reasonCode: 'unit-active' }
+    }
+    const resourceScopes = mergeResourceScopes(
+      trustedPolicy,
+      parsed.resourceScopes,
+      unit.resourceScopes,
+    )
+    if (!resourceScopes) {
+      return { status: 'rejected', reasonCode: 'runtime-scope-conflict' }
+    }
+    const requiredOperations = requiredOperationsFor(
+      trustedPolicy,
+      parsed,
+      resourceScopes,
+      unit.requiredOperations,
+    )
+    if (!declarationChanged(unit, requiredOperations, resourceScopes)) {
+      return { status: 'rejected', reasonCode: 'unit-active' }
+    }
+    unit.requiredOperations = requiredOperations
+    unit.declaredResourceOperations = Object.freeze([...resourceScopes.keys()])
+    unit.resourceScopes = resourceScopes
+    for (const [operation, resource] of resourceScopes) {
+      currentResourceIdentities.set(operation, resource)
+    }
+    return { status: 'started', unit: cloneUnit(unit) }
   }
 
   function startParsedUnit(
@@ -2433,7 +2557,7 @@ export function createWorkflowGuard(
   ): StartUnitResult {
     if (!epoch) return { status: 'rejected', reasonCode: 'no-active-epoch' }
     if (epoch.unit?.status === 'active') {
-      return { status: 'rejected', reasonCode: 'unit-active' }
+      return startActiveUnit(parsed, trustedPolicy, epoch.unit)
     }
     const resourceScopes = mergeResourceScopes(
       trustedPolicy,
@@ -2542,6 +2666,7 @@ export function createWorkflowGuard(
     input: unknown,
     parsed: ParsedOperationObservation,
     unit: UnitState,
+    trustedClassification?: ReceiptClassification,
   ): Promise<EvidenceObservationResult> {
     if (!unit.requiredOperations.includes(parsed.operation)) {
       markTerminalOperation(parsed, input)
@@ -2563,7 +2688,9 @@ export function createWorkflowGuard(
         ? { status: 'rejected', reasonCode: 'call-context-conflict' }
         : { status: 'rejected', reasonCode: 'rejected-operation' }
     }
-    const classification = await classifyPreparedOperation(parsed, input, unit)
+    const classification =
+      trustedClassification ??
+      (await classifyPreparedOperation(parsed, input, unit))
     return classification
       ? finalizeOperation(parsed, input, unit, classification)
       : { status: 'rejected', reasonCode: 'guard-unavailable' }
@@ -3295,10 +3422,55 @@ export function createWorkflowGuard(
       return processOperation(input, parsed, epoch.unit)
     },
 
+    /**
+     * Trusted host-recovery callers have already validated lineage, ownership,
+     * seed/readback integrity, stable workspace, and current mutable revisions.
+     * Keep this path internal and do not expose it as a host/model tool.
+     */
+    async observeTrustedRecoveredOperation(
+      input: unknown,
+    ): Promise<EvidenceObservationResult> {
+      const modeResult = evidenceModeResult()
+      if (modeResult) return modeResult
+      if (!epoch) return { status: 'rejected', reasonCode: 'no-active-epoch' }
+      if (!epoch.unit)
+        return { status: 'rejected', reasonCode: 'no-active-unit' }
+      if (epoch.unit.status === 'completed') {
+        return { status: 'rejected', reasonCode: 'unit-completed' }
+      }
+
+      const terminalResult = terminalOperationResult(input)
+      if (terminalResult) return terminalResult
+
+      const parsed = parseReceiptOperationObservation(input)
+      if (!parsed) {
+        markTerminalOperation(undefined, input)
+        return recordGlobalEvidenceIssue('invalid-receipt')
+      }
+      const classification: ReceiptClassification = {
+        outcome: 'accepted',
+        category: parsed.operation,
+        attribution: 'runtime-verified',
+        result: 'success',
+        sideEffect:
+          parsed.operation === 'verification' ||
+          parsed.operation === 'check-readback' ||
+          parsed.operation === 'review-readback'
+            ? 'not-required'
+            : 'required',
+        reasonCode: 'recognized-command',
+      }
+      return processOperation(input, parsed, epoch.unit, classification)
+    },
+
     observeReadback(input: unknown): ReadbackObservationResult {
       const parsed = parseReadback(input)
       if (!parsed) return { status: 'rejected', reasonCode: 'invalid-receipt' }
       return observeRevision(parsed, epoch?.unit)
+    },
+
+    currentOperationContext(): CurrentOperationContext {
+      return currentOperationContext()
     },
 
     status(): WorkflowStatus {
