@@ -272,7 +272,7 @@ The following is the full Apache License, Version 2.0 text, reproduced here in c
 ## vercel-labs/agent-browser — Apache-2.0
 
 **Source repository:** [`vercel-labs/agent-browser`](https://github.com/vercel-labs/agent-browser)
-**Pinned version:** `v0.33.0` (npm `agent-browser@0.33.0`)
+**Pinned version:** `v0.33.1` (npm `agent-browser@0.33.1`)
 **License:** Apache-2.0
 **Copyright:** Copyright 2025 Vercel Inc.
 
@@ -296,7 +296,7 @@ This is fully automated — no human adaptation pass is required, in contrast to
 
 ### Upstream Apache-2.0 license text
 
-The following is the full Apache License, Version 2.0 text from `agent-browser@0.33.0`, reproduced here in compliance with the license's notice requirements:
+The following is the full Apache License, Version 2.0 text from `agent-browser@0.33.1`, reproduced here in compliance with the license's notice requirements:
 
 ```
                                  Apache License
