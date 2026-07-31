@@ -16,6 +16,12 @@ interface GitFixture {
   cleanup(): void
 }
 
+interface SeparatedGitFixture {
+  gitDir: string
+  worktree: string
+  cleanup(): void
+}
+
 function runGit(
   root: string,
   args: readonly string[],
@@ -48,6 +54,72 @@ function createGitFixture(): GitFixture {
     root,
     cleanup: () => fs.rmSync(root, { recursive: true, force: true }),
   }
+}
+
+function createSeparatedGitFixture(): SeparatedGitFixture {
+  const root = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'systematic-observer-separated-'),
+  )
+  const gitDir = path.join(root, 'repo.git')
+  const worktree = path.join(root, 'worktree')
+  fs.mkdirSync(worktree, { recursive: true })
+
+  const init = runGit(root, ['init', '--bare', gitDir])
+  if (init.status !== 0) throw new Error('git setup failed: init')
+
+  const git = (args: readonly string[], cwd = gitDir) => {
+    const result = runGit(cwd, args)
+    if (result.status !== 0) throw new Error(`git setup failed: ${args[0]}`)
+  }
+
+  git(['config', 'core.bare', 'false'])
+  git(['config', 'core.worktree', worktree])
+  git(['config', 'user.email', 'observer@example.invalid'])
+  git(['config', 'user.name', 'Observer Test'])
+  fs.writeFileSync(path.join(worktree, 'tracked.txt'), 'initial\n')
+  git(['--work-tree', worktree, 'add', 'tracked.txt'])
+  git([
+    '--work-tree',
+    worktree,
+    '-c',
+    'user.name=Observer Test',
+    '-c',
+    'user.email=observer@example.invalid',
+    'commit',
+    '-m',
+    'initial',
+  ])
+
+  return {
+    gitDir,
+    worktree,
+    cleanup: () => fs.rmSync(root, { recursive: true, force: true }),
+  }
+}
+
+function createSeparatedGitRemoteFixture(): SeparatedGitFixture {
+  const fixture = createSeparatedGitFixture()
+  const root = path.dirname(fixture.gitDir)
+  const remote = path.join(root, 'remote.git')
+  const init = runGit(root, ['init', '--bare', '--quiet', remote])
+  if (init.status !== 0) throw new Error('git setup failed: remote init')
+
+  const configure = (args: readonly string[]) => {
+    const result = runGit(fixture.gitDir, args)
+    if (result.status !== 0) throw new Error(`git setup failed: ${args[0]}`)
+  }
+  configure(['remote', 'add', 'origin', remote])
+  configure(['branch', '-M', 'main'])
+  configure([
+    '--work-tree',
+    fixture.worktree,
+    'push',
+    '--quiet',
+    '--set-upstream',
+    'origin',
+    'main',
+  ])
+  return fixture
 }
 
 describe('OpenCode operation observer', () => {
@@ -89,6 +161,107 @@ describe('OpenCode operation observer', () => {
       expect(committed.snapshot.repositoryRevisionDigest).not.toBe(
         initial.snapshot.repositoryRevisionDigest,
       )
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('uses repository-root semantics when target is a repository subdirectory', async () => {
+    const fixture = createGitFixture()
+    try {
+      const subdirectory = path.join(fixture.root, 'nested')
+      fs.mkdirSync(subdirectory)
+      fs.writeFileSync(path.join(subdirectory, 'nested.txt'), 'nested\n')
+      runGit(fixture.root, ['add', 'nested/nested.txt'])
+      runGit(fixture.root, ['commit', '--quiet', '-m', 'nested'])
+
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: subdirectory,
+      })
+      const initial = await observer.snapshot()
+      expect(initial.status).toBe('available')
+      if (initial.status !== 'available') return
+      expect(initial.snapshot.commitClosure).toBe(true)
+
+      fs.writeFileSync(path.join(fixture.root, 'tracked.txt'), 'root edited\n')
+      const changed = await observer.snapshot()
+      expect(changed.status).toBe('available')
+      if (changed.status !== 'available') return
+      expect(changed.snapshot.worktreeRevisionDigest).not.toBe(
+        initial.snapshot.worktreeRevisionDigest,
+      )
+      expect(changed.snapshot.commitClosure).toBe(false)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('stays available when the git directory and worktree are separate', async () => {
+    const fixture = createSeparatedGitFixture()
+    try {
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.gitDir,
+      })
+      const result = await observer.snapshot()
+      expect(result.status).toBe('available')
+      if (result.status !== 'available') return
+      expect(result.snapshot.commitClosure).toBe(true)
+      expect(result.snapshot.targetDigest).toMatch(/^[0-9a-f]{64}$/)
+
+      fs.writeFileSync(path.join(fixture.worktree, 'tracked.txt'), 'edited\n')
+      const edited = await observer.snapshot()
+      expect(edited.status).toBe('available')
+      if (edited.status !== 'available') return
+      expect(edited.snapshot.worktreeRevisionDigest).not.toBe(
+        result.snapshot.worktreeRevisionDigest,
+      )
+      expect(edited.snapshot.commitClosure).toBe(false)
+
+      const untrackedPath = path.join(fixture.worktree, 'untracked.txt')
+      fs.writeFileSync(untrackedPath, 'untracked\n')
+      const untracked = await observer.snapshot()
+      expect(untracked.status).toBe('available')
+      if (untracked.status !== 'available') return
+      expect(untracked.snapshot.worktreeRevisionDigest).not.toBe(
+        edited.snapshot.worktreeRevisionDigest,
+      )
+      expect(untracked.snapshot.commitClosure).toBe(false)
+
+      runGit(fixture.gitDir, [
+        '--work-tree',
+        fixture.worktree,
+        'add',
+        'tracked.txt',
+        'untracked.txt',
+      ])
+      runGit(fixture.gitDir, [
+        '--work-tree',
+        fixture.worktree,
+        'commit',
+        '--quiet',
+        '-m',
+        'edited',
+      ])
+      const committed = await observer.snapshot()
+      expect(committed.status).toBe('available')
+      if (committed.status !== 'available') return
+      expect(committed.snapshot.commitClosure).toBe(true)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('stays available for remote readback when the git directory and worktree are separate', async () => {
+    const fixture = createSeparatedGitRemoteFixture()
+    try {
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.gitDir,
+      })
+      const result = await observer.remoteSnapshot?.('push', 'before')
+      expect(result?.status).toBe('available')
+      if (result?.status !== 'available') return
+      expect(result.snapshot.resourceIdentity).toMatch(/^[0-9a-f]{64}$/)
+      expect(result.snapshot.resourceRevisionIdentity).toMatch(/^[0-9a-f]{64}$/)
     } finally {
       fixture.cleanup()
     }
