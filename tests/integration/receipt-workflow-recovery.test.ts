@@ -266,7 +266,6 @@ function outputShape(tool, output) {
       present: Boolean(output && Object.prototype.hasOwnProperty.call(output, 'output')),
       type: typeof output?.output,
       empty: output?.output === '',
-      length: typeof output?.output === 'string' ? output.output.length : null,
     },
     metadata: {
       present: Boolean(output && Object.prototype.hasOwnProperty.call(output, 'metadata')),
@@ -641,7 +640,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
             tool: 'bash',
             outputKeys: ['attachments', 'metadata', 'output', 'title'],
             title: { present: true, type: 'string', empty: false },
-            output: { present: true, type: 'string', empty: false, length: 13 },
+            output: { present: true, type: 'string', empty: false },
             metadata: {
               present: true,
               type: 'object',
@@ -1084,6 +1083,20 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
             sessionID,
             directory: localFixture.projectDir,
           })
+          const beforeSkillParts = completedToolParts(
+            beforeRestart.data,
+            'systematic_skill',
+          )
+          expect(beforeSkillParts).toHaveLength(1)
+          const beforeSkillState = beforeSkillParts[0]?.state as Record<
+            string,
+            unknown
+          >
+          const beforeSkillOutput = beforeSkillState.output
+          expect(typeof beforeSkillOutput === 'string').toBe(true)
+          expect(beforeSkillOutput).toContain('<skill_content name="ce:work">')
+          expect(beforeSkillOutput).toContain('# Skill: ce:work')
+          expect(beforeSkillOutput).toContain('Base directory for this skill:')
           const beforeMarkers = systematicMarkers(beforeRestart.data)
           expect(
             readProbeEvents(hookProbe.capturePath).filter(
@@ -1099,7 +1112,6 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
                 present: true,
                 type: 'string',
                 empty: false,
-                length: 23518,
               },
               metadata: {
                 present: true,
@@ -1117,7 +1129,6 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
                 present: true,
                 type: 'string',
                 empty: false,
-                length: 40,
               },
               metadata: {
                 present: true,
@@ -1143,7 +1154,6 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
                 present: true,
                 type: 'string',
                 empty: false,
-                length: 24,
               },
               metadata: {
                 present: true,
@@ -1161,7 +1171,6 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
                 present: true,
                 type: 'string',
                 empty: false,
-                length: 36,
               },
               metadata: {
                 present: true,

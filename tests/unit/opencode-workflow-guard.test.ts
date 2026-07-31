@@ -1517,6 +1517,7 @@ describe('OpenCode workflow guard adapter', () => {
       }
       expect(output.metadata.hostMetadata).toBe('preserved')
       const marker = output.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]
+      expect(Array.isArray(marker)).toBe(false)
       expect(marker).toMatchObject({
         envelope: {
           canonical: {
@@ -1537,6 +1538,33 @@ describe('OpenCode workflow guard adapter', () => {
           output.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY],
         ),
       ).not.toContain('new content')
+    })
+
+    test('appends progression markers in order while preserving unrelated metadata', async () => {
+      const adapter = createAdapter('observe')
+      const output = {
+        title: 'Loaded skill',
+        output: 'skill result',
+        metadata: { hostMetadata: 'preserved' },
+      }
+
+      await observeSkill(
+        adapter,
+        'systematic_skill',
+        'ce:work',
+        'progression-markers',
+        SESSION_A,
+        output,
+      )
+
+      expect(output.metadata.hostMetadata).toBe('preserved')
+      const marker = output.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]
+      expect(Array.isArray(marker)).toBe(true)
+      expect(marker).toHaveLength(2)
+      expect(marker).toEqual([
+        expect.objectContaining({ control: 'progression', target: 'epoch' }),
+        expect.objectContaining({ control: 'progression', target: 'unit' }),
+      ])
     })
   }
 
