@@ -11,6 +11,16 @@ const DEFAULT_LIMITS = {
   maxPathBytes: 4096,
 } as const
 
+const UNTRACKED_FILES_ARGS = [
+  'ls-files',
+  '--others',
+  '--exclude-standard',
+  '--full-name',
+  '-z',
+  '--',
+  ':/',
+] as const
+
 export type OperationObserverReasonCode =
   | 'target-unavailable'
   | 'command-failed'
@@ -158,6 +168,11 @@ interface StageEntry {
   readonly record: string
   readonly mode: string
   readonly relativePath: string
+}
+
+interface RepositoryContext {
+  readonly commandDirectory: string
+  readonly worktreeRoot: string
 }
 
 function unavailable(result: {
@@ -326,7 +341,7 @@ function runCommand(
 
 function readRevision(
   runner: OperationObserverCommandRunner,
-  root: string,
+  context: RepositoryContext,
   limits: Limits,
 ):
   | { status: 'ok'; digest: string }
@@ -334,7 +349,7 @@ function readRevision(
   const branch = runCommand(
     runner,
     ['symbolic-ref', '--short', 'HEAD'],
-    root,
+    context.commandDirectory,
     limits,
   )
   if (branch.status === 'error' && branch.reasonCode !== 'command-failed') {
@@ -347,7 +362,7 @@ function readRevision(
   try {
     head = runner(
       ['rev-parse', '--verify', 'HEAD'],
-      root,
+      context.commandDirectory,
       limits.maxCommandOutputBytes,
       limits.maxCommandTimeoutMs,
     )
@@ -367,7 +382,7 @@ function readRevision(
   const inside = runCommand(
     runner,
     ['rev-parse', '--is-inside-work-tree'],
-    root,
+    context.commandDirectory,
     limits,
   )
   if (inside.status === 'error') return inside
@@ -393,7 +408,7 @@ function isEnoent(error: unknown): boolean {
 function appendSubmoduleFact(
   hash: ReturnType<typeof createHash>,
   runner: OperationObserverCommandRunner,
-  root: string,
+  submodulePath: string,
   relativePath: string,
   limits: Limits,
   totalBytes: number,
@@ -402,8 +417,8 @@ function appendSubmoduleFact(
   | { status: 'error'; reasonCode: OperationObserverReasonCode } {
   const submodule = runCommand(
     runner,
-    ['-C', relativePath, 'rev-parse', '--verify', 'HEAD'],
-    root,
+    ['rev-parse', '--verify', 'HEAD'],
+    submodulePath,
     limits,
   )
   if (submodule.status === 'error') return submodule
@@ -496,7 +511,7 @@ function appendFileFactV2(
   fileReader: (filePath: string) => Uint8Array,
   symlinkReader: (filePath: string) => string,
   statReader: (filePath: string) => OperationObserverFileStat,
-  root: string,
+  context: RepositoryContext,
   entry: Pick<StageEntry, 'mode' | 'relativePath'>,
   limits: Limits,
   totalBytes: number,
@@ -504,7 +519,7 @@ function appendFileFactV2(
   | { status: 'ok'; totalBytes: number }
   | { status: 'error'; reasonCode: OperationObserverReasonCode } {
   const { mode, relativePath } = entry
-  const absolutePath = safePath(root, relativePath)
+  const absolutePath = safePath(context.worktreeRoot, relativePath)
   if (!absolutePath || outputBytes(relativePath) > limits.maxPathBytes) {
     return { status: 'error', reasonCode: 'file-read-failed' }
   }
@@ -520,7 +535,7 @@ function appendFileFactV2(
     return appendSubmoduleFact(
       hash,
       runner,
-      root,
+      absolutePath,
       relativePath,
       limits,
       totalBytes,
@@ -551,19 +566,29 @@ function readWorktreeRevisionV2(
   fileReader: (filePath: string) => Uint8Array,
   symlinkReader: (filePath: string) => string,
   statReader: (filePath: string) => OperationObserverFileStat,
-  root: string,
+  context: RepositoryContext,
   limits: Limits,
 ):
   | { status: 'ok'; digest: string }
   | { status: 'error'; reasonCode: OperationObserverReasonCode } {
-  const tracked = runCommand(runner, ['ls-files', '-z'], root, limits)
+  const tracked = runCommand(
+    runner,
+    ['ls-files', '--full-name', '-z', '--', ':/'],
+    context.commandDirectory,
+    limits,
+  )
   if (tracked.status === 'error') return tracked
-  const staged = runCommand(runner, ['ls-files', '--stage', '-z'], root, limits)
+  const staged = runCommand(
+    runner,
+    ['ls-files', '--stage', '--full-name', '-z', '--', ':/'],
+    context.commandDirectory,
+    limits,
+  )
   if (staged.status === 'error') return staged
   const untracked = runCommand(
     runner,
-    ['ls-files', '--others', '--exclude-standard', '-z'],
-    root,
+    UNTRACKED_FILES_ARGS,
+    context.commandDirectory,
     limits,
   )
   if (untracked.status === 'error') return untracked
@@ -594,7 +619,7 @@ function readWorktreeRevisionV2(
       fileReader,
       symlinkReader,
       statReader,
-      root,
+      context,
       { relativePath, mode: modes.get(relativePath) ?? '' },
       limits,
       totalBytes,
@@ -607,7 +632,7 @@ function readWorktreeRevisionV2(
 
 function readCommitClosure(
   runner: OperationObserverCommandRunner,
-  root: string,
+  context: RepositoryContext,
   limits: Limits,
 ):
   | { status: 'ok'; closed: boolean }
@@ -615,8 +640,8 @@ function readCommitClosure(
   let diff: OperationObserverCommandResult
   try {
     diff = runner(
-      ['diff', '--quiet', 'HEAD', '--', '.'],
-      root,
+      ['diff', '--quiet', 'HEAD', '--', ':/'],
+      context.commandDirectory,
       limits.maxCommandOutputBytes,
       limits.maxCommandTimeoutMs,
     )
@@ -637,8 +662,8 @@ function readCommitClosure(
   }
   const untracked = runCommand(
     runner,
-    ['ls-files', '--others', '--exclude-standard', '-z'],
-    root,
+    UNTRACKED_FILES_ARGS,
+    context.commandDirectory,
     limits,
   )
   if (untracked.status === 'error') return untracked
@@ -973,12 +998,12 @@ function readRemoteSnapshot(
   runner: OperationObserverRemoteCommandRunner,
   operation: RemoteOperation,
   phase: RemoteReadbackPhase,
-  root: string,
+  commandDirectory: string,
   limits: Limits,
 ): OperationObserverRemoteResult {
   return operation === 'push'
-    ? readPushRemoteSnapshot(runner, phase, root, limits)
-    : readRemotePullRequest(runner, operation, root, limits)
+    ? readPushRemoteSnapshot(runner, phase, commandDirectory, limits)
+    : readRemotePullRequest(runner, operation, commandDirectory, limits)
 }
 
 export function createOpencodeOperationObserver(
@@ -1025,18 +1050,22 @@ export function createOpencodeOperationObserver(
       if (root.length === 0 || outputBytes(root) > limits.maxPathBytes) {
         return { status: 'unavailable', reasonCode: 'target-unavailable' }
       }
-      const repository = readRevision(runner, root, limits)
+      const context: RepositoryContext = {
+        commandDirectory: targetDirectory,
+        worktreeRoot: root,
+      }
+      const repository = readRevision(runner, context, limits)
       if (repository.status === 'error') return unavailable(repository)
       const worktree = readWorktreeRevisionV2(
         runner,
         fileReader,
         symlinkReader,
         statReader,
-        root,
+        context,
         limits,
       )
       if (worktree.status === 'error') return unavailable(worktree)
-      const closure = readCommitClosure(runner, root, limits)
+      const closure = readCommitClosure(runner, context, limits)
       if (closure.status === 'error') return unavailable(closure)
       return {
         status: 'available',
@@ -1062,7 +1091,13 @@ export function createOpencodeOperationObserver(
       if (root.length === 0 || outputBytes(root) > limits.maxPathBytes) {
         return { status: 'unavailable', reasonCode: 'target-unavailable' }
       }
-      return readRemoteSnapshot(remoteRunner, operation, phase, root, limits)
+      return readRemoteSnapshot(
+        remoteRunner,
+        operation,
+        phase,
+        targetDirectory,
+        limits,
+      )
     },
   }
 }
