@@ -556,6 +556,29 @@ describe('checkSkillReferenceIntegrity', () => {
   })
 })
 
+describe('ce-review bounded review prompt contract', () => {
+  test('shared reviewer prompt stays diff-first, bounded, and stop-conditioned', () => {
+    const subagentTemplate = fs.readFileSync(
+      path.join(REPO_ROOT, 'skills/ce-review/references/subagent-template.md'),
+      'utf8',
+    )
+
+    expect(subagentTemplate).toMatch(/diff is the primary source of truth/i)
+    expect(subagentTemplate).toMatch(
+      /read each unresolved surrounding range or symbol once/i,
+    )
+    expect(subagentTemplate).toMatch(
+      /re-read only when a concrete ambiguity remains or the file changed/i,
+    )
+    expect(subagentTemplate).toMatch(
+      /stop and (?:emit|return) (?:a )?(?:finding|verdict).*evidence is sufficient/i,
+    )
+    expect(subagentTemplate).toMatch(
+      /within this bounded pass.*explicit blocker or residual risk/i,
+    )
+  })
+})
+
 describe('checkBannedPatterns', () => {
   test('flags banned patterns in markdown outside the allowlist', () => {
     const root = makeFixtureRepo()
