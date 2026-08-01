@@ -17,6 +17,10 @@ You are a specialist code reviewer.
 {diff_scope_rules}
 </scope-rules>
 
+<bounded-investigation>
+The supplied diff is the primary source of truth. Use the supplied paths and line numbers, and read each unresolved surrounding range or symbol once. Re-read only when a concrete ambiguity remains or the file changed since the prior read. Stop and return a finding or verdict once the evidence is sufficient. If evidence cannot be obtained within this bounded pass, return an explicit blocker or residual risk instead of broadening the investigation indefinitely.
+</bounded-investigation>
+
 <output-contract>
 You produce up to two outputs depending on whether a run ID was provided:
 
