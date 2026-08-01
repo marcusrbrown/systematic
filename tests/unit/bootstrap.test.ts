@@ -192,6 +192,8 @@ describe('getBootstrapContent', () => {
 
       When a mechanism is unavailable, present numbered options in chat and wait for questions, maintain a visible list for task tracking, and dispatch delegation sequentially or do the work inline.
 
+      Check the workflow guard availability once per execution unit. If the guard reports \`unavailable\` or \`guard-unavailable\`, treat it as terminal for that unit: do not retry \`systematic_workflow_start\` or \`systematic_workflow_complete\`. Use the documented unguarded fallback only when authorized, and report the unavailable state once.
+
       **Skills naming:**
       - Systematic bundled skills use the \`systematic:\` prefix (e.g., \`systematic:onboarding\`)
       - Workflow skills with their own namespace keep it (e.g., \`ce:brainstorm\`)
@@ -883,6 +885,17 @@ describe('using-systematic SKILL.md structural invariants', () => {
     expect(instructionPriority).toBeGreaterThan(-1)
     expect(howToAccess).toBeGreaterThan(-1)
     expect(instructionPriority).toBeLessThan(howToAccess)
+  })
+
+  test('bootstrap content tells agents not to retry workflow start or complete after guard-unavailable', () => {
+    const content = getBootstrapContent(defaultConfig, {
+      bundledSkillsDir: realBundledSkillsDir,
+    })
+    expect(content).not.toBeNull()
+    expect(content).toContain('guard reports `unavailable`')
+    expect(content).toContain(
+      'do not retry `systematic_workflow_start` or `systematic_workflow_complete`',
+    )
   })
 
   test('post-injection: applyBootstrapContent preserves SUBAGENT-STOP before EXTREMELY-IMPORTANT in rendered output.system[0]', () => {
