@@ -113,3 +113,5 @@ The four capabilities are subagent delegation, blocking user interaction, task t
 The bootstrap inlines the active harness profile naming the exact mechanisms for this session—consult it.
 
 When a mechanism is unavailable, present numbered options in chat and wait for questions, maintain a visible list for task tracking, and dispatch delegation sequentially or do the work inline.
+
+Check the workflow guard availability once per execution unit. If the guard reports `unavailable` or `guard-unavailable`, treat it as terminal for that unit: do not retry `systematic_workflow_start` or `systematic_workflow_complete`. Use the documented unguarded fallback only when authorized, and report the unavailable state once.
