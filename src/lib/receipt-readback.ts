@@ -6,6 +6,7 @@ import type {
   ReceiptLedgerMetadata,
   ReceiptOperation,
 } from './receipt-ledger.js'
+import { isLocalOperation } from './receipt-ledger.js'
 
 export const RECEIPT_READBACK_SCHEMA_VERSION = 2 as const
 export const RECEIPT_READBACK_PROTOCOL_VERSION = 2 as const
@@ -575,7 +576,9 @@ function cloneCanonical(
     workspaceDigest: canonical.workspaceDigest,
     repositoryDigest: canonical.repositoryDigest,
     worktreeDigest: canonical.worktreeDigest,
-    operationTargetIdentity: canonical.operationTargetIdentity,
+    ...(isLocalOperation(canonical.operation)
+      ? { operationTargetIdentity: canonical.operationTargetIdentity }
+      : {}),
     resourceDigest: canonical.resourceDigest,
     operation: canonical.operation,
     result: 'success',
@@ -617,6 +620,9 @@ function parseEnvelope(value: unknown): ReceiptEnvelope | undefined {
   }
 
   const canonical = value.canonical
+  const operation = isOperation(canonical.operation)
+    ? canonical.operation
+    : undefined
   if (
     !hasExactKeys(
       canonical,
@@ -635,11 +641,16 @@ function parseEnvelope(value: unknown): ReceiptEnvelope | undefined {
       !isDigest(canonical.worktreeDigest)) ||
     (canonical.operationTargetIdentity !== undefined &&
       !isDigest(canonical.operationTargetIdentity)) ||
-    (currentVersion && !Object.hasOwn(canonical, 'operationTargetIdentity')) ||
+    operation === undefined ||
+    (currentVersion &&
+      isLocalOperation(operation) &&
+      !isDigest(canonical.operationTargetIdentity)) ||
+    (currentVersion &&
+      !isLocalOperation(operation) &&
+      Object.hasOwn(canonical, 'operationTargetIdentity')) ||
     (legacyVersion && Object.hasOwn(canonical, 'operationTargetIdentity')) ||
     (canonical.resourceDigest !== undefined &&
       !isDigest(canonical.resourceDigest)) ||
-    !isOperation(canonical.operation) ||
     canonical.result !== 'success' ||
     canonical.source !== 'runtime-verified' ||
     (canonical.consumption !== 'available' &&
@@ -669,9 +680,11 @@ function parseEnvelope(value: unknown): ReceiptEnvelope | undefined {
       workspaceDigest: canonical.workspaceDigest,
       repositoryDigest: canonical.repositoryDigest,
       worktreeDigest: canonical.worktreeDigest,
-      operationTargetIdentity: canonical.operationTargetIdentity,
+      ...(isLocalOperation(operation)
+        ? { operationTargetIdentity: canonical.operationTargetIdentity }
+        : {}),
       resourceDigest: canonical.resourceDigest,
-      operation: canonical.operation,
+      operation,
       result: 'success',
       source: 'runtime-verified',
       consumption: canonical.consumption,

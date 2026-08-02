@@ -26,6 +26,7 @@ import type {
 } from './receipt-classifier.js'
 import {
   createReceiptLedger,
+  isLocalOperation,
   type ReceiptClassification,
   type ReceiptEnvelope,
   type ReceiptLedger,
@@ -1003,11 +1004,7 @@ function terminalForOutput(
 function localOperation(
   operation: ReceiptOperation | null,
 ): operation is 'implementation' | 'verification' | 'commit' {
-  return (
-    operation === 'implementation' ||
-    operation === 'verification' ||
-    operation === 'commit'
-  )
+  return operation !== null && isLocalOperation(operation)
 }
 
 function remoteOperation(
@@ -1033,7 +1030,6 @@ function remoteReadbackInput(
     workspaceIdentity,
     repositoryIdentity: local.repositoryRevisionDigest,
     worktreeIdentity: local.worktreeRevisionDigest,
-    operationTargetIdentity: local.targetDigest,
     resourceIdentity: snapshot.resourceIdentity,
     ...(includeRevision
       ? { resourceRevisionIdentity: snapshot.resourceRevisionIdentity }
@@ -1929,7 +1925,9 @@ function createSessionRuntime(
           epochId: currentStatus.epoch.epochId,
           unitId: currentStatus.unit.unitId,
           workspaceIdentity: parentContext.workspaceIdentity,
-          operationTargetIdentity: current.snapshot.targetDigest,
+          ...(localOperation(operation)
+            ? { operationTargetIdentity: current.snapshot.targetDigest }
+            : {}),
           ...(parentContext.repositoryIdentity
             ? { repositoryIdentity: parentContext.repositoryIdentity }
             : {}),
@@ -1939,7 +1937,9 @@ function createSessionRuntime(
         },
         after: {
           workspaceIdentity: parentContext.workspaceIdentity,
-          operationTargetIdentity: current.snapshot.targetDigest,
+          ...(localOperation(operation)
+            ? { operationTargetIdentity: current.snapshot.targetDigest }
+            : {}),
           repositoryIdentity: current.snapshot.repositoryRevisionDigest,
           worktreeIdentity: current.snapshot.worktreeRevisionDigest,
         },
@@ -3111,7 +3111,9 @@ function createSessionRuntime(
         workspaceIdentity: options.workspaceIdentity,
         repositoryIdentity: pending.before.repositoryRevisionDigest,
         worktreeIdentity: pending.before.worktreeRevisionDigest,
-        operationTargetIdentity: pending.targetIdentity,
+        ...(localOperation(operation)
+          ? { operationTargetIdentity: pending.targetIdentity }
+          : {}),
         ...(pending.remoteBefore?.status === 'available'
           ? {
               resourceIdentity: pending.remoteBefore.snapshot.resourceIdentity,
@@ -3126,7 +3128,9 @@ function createSessionRuntime(
         workspaceIdentity: options.workspaceIdentity,
         repositoryIdentity: after.repositoryRevisionDigest,
         worktreeIdentity: after.worktreeRevisionDigest,
-        operationTargetIdentity: pending.targetIdentity,
+        ...(localOperation(operation)
+          ? { operationTargetIdentity: pending.targetIdentity }
+          : {}),
         commitClosure: after.commitClosure,
         ...(remoteAfter
           ? {

@@ -17,6 +17,7 @@ import type {
   ReceiptOperation,
   ReceiptReasonCode,
 } from './receipt-ledger.js'
+import { isLocalOperation } from './receipt-ledger.js'
 import type {
   ReceiptEpochProgressionSnapshot,
   ReceiptReadbackProgression,
@@ -968,10 +969,14 @@ function toLedgerContext(
 ): ReceiptContext {
   const {
     resourceRevisionIdentity: _resourceRevisionIdentity,
+    operationTargetIdentity: _operationTargetIdentity,
     ...ledgerContext
   } = context
   return {
     ...ledgerContext,
+    ...(isLocalOperation(operation)
+      ? { operationTargetIdentity: context.operationTargetIdentity }
+      : {}),
     resourceIdentity: ledgerResourceIdentity(
       operation,
       context.resourceIdentity,
@@ -989,10 +994,14 @@ function toLedgerAfter(
     pullRequest: _pullRequest,
     checkState: _checkState,
     reviewDecision: _reviewDecision,
+    operationTargetIdentity: _operationTargetIdentity,
     ...ledgerAfter
   } = after
   return {
     ...ledgerAfter,
+    ...(isLocalOperation(operation)
+      ? { operationTargetIdentity: after.operationTargetIdentity }
+      : {}),
     resourceIdentity: ledgerResourceIdentity(
       operation,
       after.resourceIdentity,
@@ -1082,7 +1091,11 @@ function parseU4Readback(input: unknown): ParsedReadback | undefined {
         'reviewDecision',
       ]),
     ) ||
-    (input.operation !== undefined && !isOperation(input.operation))
+    (input.operation !== undefined && !isOperation(input.operation)) ||
+    (input.operation !== undefined &&
+      isOperation(input.operation) &&
+      !isLocalOperation(input.operation) &&
+      Object.hasOwn(input, 'operationTargetIdentity'))
   ) {
     return undefined
   }
@@ -2401,7 +2414,9 @@ export function createWorkflowGuard(
       workspaceIdentity: after.workspaceIdentity,
       repositoryIdentity: after.repositoryIdentity,
       worktreeIdentity: after.worktreeIdentity,
-      operationTargetIdentity: after.operationTargetIdentity,
+      ...(isPinnedLocalOperation(operation)
+        ? { operationTargetIdentity: after.operationTargetIdentity }
+        : {}),
       resourceIdentity: after.resourceIdentity,
       resourceRevisionIdentity: after.resourceRevisionIdentity,
       pullRequest: after.pullRequest,
@@ -2855,6 +2870,7 @@ export function createWorkflowGuard(
         workspaceIdentity: parsed.after.workspaceIdentity,
         repositoryIdentity: parsed.after.repositoryIdentity,
         worktreeIdentity: parsed.after.worktreeIdentity,
+        operationTargetIdentity: parsed.after.operationTargetIdentity,
         resourceIdentity: parsed.after.resourceIdentity,
         resourceRevisionIdentity: parsed.after.resourceRevisionIdentity,
       }),

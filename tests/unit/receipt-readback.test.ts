@@ -529,6 +529,92 @@ describe('receipt readback', () => {
     })
   })
 
+  test('round-trips a v2 remote receipt without a local operation target identity', () => {
+    const ledger = createReceiptLedger({
+      registrationIdentity: 'registration-remote-target',
+      sessionSalt: SESSION_SALT,
+    })
+    const context = {
+      epochId: EPOCH_ID,
+      unitId: UNIT_ID,
+      workspaceIdentity: RAW_PATH,
+      repositoryIdentity: 'repository-before',
+      resourceIdentity: 'remote-before',
+    }
+    expect(
+      ledger.prepareObservation({
+        callId: 'remote-push',
+        operation: 'push',
+        context,
+      }),
+    ).toMatchObject({ status: 'prepared' })
+
+    const finalized = ledger.finalizeObservation({
+      callId: 'remote-push',
+      context,
+      after: {
+        workspaceIdentity: RAW_PATH,
+        repositoryIdentity: 'repository-after',
+        resourceIdentity: 'remote-after',
+      },
+      classification: {
+        outcome: 'accepted',
+        category: 'push',
+        attribution: 'runtime-verified',
+        result: 'success',
+        sideEffect: 'required',
+        reasonCode: 'recognized-command',
+      },
+      terminal: { status: 'success', output: 'non-empty', noOp: false },
+    })
+    expect(finalized.status).toBe('finalized')
+    if (finalized.status !== 'finalized') throw new Error('remote-not-minted')
+    expect(finalized.receipt.schemaVersion).toBe(2)
+    expect(finalized.receipt.canonical.operationTargetIdentity).toBeUndefined()
+
+    const mint = required(
+      projectReceiptMintMarker(finalized.receipt, SESSION_SALT),
+      'remote-mint-marker-not-projected',
+    )
+    const result = foldReceiptReadback(
+      [mint],
+      receiptReadbackExpectationFromMetadata(ledger.metadata, SESSION_SALT),
+    )
+    expect(result).toMatchObject({
+      status: 'reconstructed',
+      state: {
+        receipts: [
+          {
+            canonical: {
+              operation: 'push',
+            },
+          },
+        ],
+      },
+    })
+    if (result.status === 'reconstructed') {
+      expect(result.state.receipts[0]?.canonical).not.toHaveProperty(
+        'operationTargetIdentity',
+      )
+    }
+  })
+
+  test('rejects a v2 local receipt marker when its operation target identity is missing', () => {
+    const fixture = createFixture()
+    const {
+      operationTargetIdentity: _operationTargetIdentity,
+      ...canonicalWithoutTarget
+    } = fixture.receipt.canonical
+    const missingTargetReceipt: ReceiptEnvelope = {
+      ...fixture.receipt,
+      canonical: canonicalWithoutTarget,
+    }
+
+    expect(
+      projectReceiptMintMarker(missingTargetReceipt, SESSION_SALT),
+    ).toBeUndefined()
+  })
+
   test('folds mint, consumption, and progression markers into ordered state', () => {
     const fixture = createFixture()
     const result = foldReceiptReadback(

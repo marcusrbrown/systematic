@@ -348,6 +348,16 @@ function isOperation(value: unknown): value is ReceiptOperation {
   return typeof value === 'string' && OPERATION_SET.has(value)
 }
 
+export function isLocalOperation(
+  operation: ReceiptOperation,
+): operation is 'implementation' | 'verification' | 'commit' {
+  return (
+    operation === 'implementation' ||
+    operation === 'verification' ||
+    operation === 'commit'
+  )
+}
+
 function isReceiptReasonCode(value: unknown): value is ReceiptReasonCode {
   return (
     typeof value === 'string' &&
@@ -975,6 +985,9 @@ function parseEnvelope(value: unknown): ReceiptEnvelope | undefined {
     return undefined
   }
   const canonical = value.canonical
+  const operation = isOperation(canonical.operation)
+    ? canonical.operation
+    : undefined
   if (
     !isReceiptId(canonical.receiptId) ||
     !isDigest(canonical.registrationDigest) ||
@@ -988,10 +1001,15 @@ function parseEnvelope(value: unknown): ReceiptEnvelope | undefined {
       !isDigest(canonical.worktreeDigest)) ||
     (canonical.operationTargetIdentity !== undefined &&
       !isDigest(canonical.operationTargetIdentity)) ||
-    (currentVersion && !isDigest(canonical.operationTargetIdentity)) ||
+    operation === undefined ||
+    (currentVersion &&
+      isLocalOperation(operation) &&
+      !isDigest(canonical.operationTargetIdentity)) ||
+    (currentVersion &&
+      !isLocalOperation(operation) &&
+      Object.hasOwn(canonical, 'operationTargetIdentity')) ||
     (canonical.resourceDigest !== undefined &&
       !isDigest(canonical.resourceDigest)) ||
-    !isOperation(canonical.operation) ||
     canonical.result !== 'success' ||
     canonical.source !== 'runtime-verified' ||
     (canonical.consumption !== 'available' &&
@@ -1020,9 +1038,11 @@ function parseEnvelope(value: unknown): ReceiptEnvelope | undefined {
       workspaceDigest: canonical.workspaceDigest,
       repositoryDigest: canonical.repositoryDigest,
       worktreeDigest: canonical.worktreeDigest,
-      operationTargetIdentity: canonical.operationTargetIdentity,
+      ...(isLocalOperation(operation)
+        ? { operationTargetIdentity: canonical.operationTargetIdentity }
+        : {}),
       resourceDigest: canonical.resourceDigest,
-      operation: canonical.operation,
+      operation,
       result: 'success',
       source: 'runtime-verified',
       consumption: canonical.consumption,
@@ -1116,7 +1136,10 @@ export function createReceiptLedger(
     return digestReceiptIdentity(domain, normalized, sessionSaltBytes)
   }
 
-  function digestContext(context: ReceiptContext): DigestedContext {
+  function digestContext(
+    context: ReceiptContext,
+    operation: ReceiptOperation,
+  ): DigestedContext {
     return {
       epochDigest: digestIdentity('epoch', context.epochId),
       unitDigest: digestIdentity('unit', context.unitId),
@@ -1127,7 +1150,9 @@ export function createReceiptLedger(
       worktreeDigest: context.worktreeIdentity
         ? digestIdentity('worktree', context.worktreeIdentity)
         : undefined,
-      operationTargetIdentity: context.operationTargetIdentity,
+      ...(isLocalOperation(operation)
+        ? { operationTargetIdentity: context.operationTargetIdentity }
+        : {}),
       resourceDigest: context.resourceIdentity
         ? digestIdentity('resource', context.resourceIdentity)
         : undefined,
@@ -1144,7 +1169,7 @@ export function createReceiptLedger(
     if (!parsed) return prepareInvalidObservationResult(input)
 
     const callDigest = digestIdentity('call', parsed.callId)
-    const digested = digestContext(parsed.context)
+    const digested = digestContext(parsed.context, parsed.operation)
     const existing = lifecycleByCall.get(callDigest)
     if (existing) {
       return resolveExistingPrepare(existing, parsed.operation, digested)
@@ -1165,9 +1190,9 @@ export function createReceiptLedger(
     if (!parsed) return invalidObservationResult(input)
 
     const callDigest = digestIdentity('call', parsed.callId)
-    const actualContext = digestContext(parsed.context)
     const matchingEntry = lifecycleByCall.get(callDigest)
     if (!matchingEntry) return invalidObservationResult(input)
+    const actualContext = digestContext(parsed.context, matchingEntry.operation)
     const contextMismatch = compareDigestedContexts(
       matchingEntry.context,
       actualContext,
@@ -1182,7 +1207,7 @@ export function createReceiptLedger(
       return { status: 'rejected', reasonCode: entryRejection }
     }
 
-    const afterDigests = digestAfter(parsed.after)
+    const afterDigests = digestAfter(parsed.after, matchingEntry.operation)
     const noOpReason = getNoOpReason(matchingEntry, afterDigests)
     if (noOpReason) {
       sealEntry(matchingEntry)
@@ -1243,7 +1268,10 @@ export function createReceiptLedger(
     return undefined
   }
 
-  function digestAfter(after: ReceiptObservationAfter): DigestedContext {
+  function digestAfter(
+    after: ReceiptObservationAfter,
+    operation: ReceiptOperation,
+  ): DigestedContext {
     return {
       epochDigest: '',
       unitDigest: '',
@@ -1254,7 +1282,9 @@ export function createReceiptLedger(
       worktreeDigest: after.worktreeIdentity
         ? digestIdentity('worktree', after.worktreeIdentity)
         : undefined,
-      operationTargetIdentity: after.operationTargetIdentity,
+      ...(isLocalOperation(operation)
+        ? { operationTargetIdentity: after.operationTargetIdentity }
+        : {}),
       resourceDigest: after.resourceIdentity
         ? digestIdentity('resource', after.resourceIdentity)
         : undefined,
@@ -1315,7 +1345,7 @@ export function createReceiptLedger(
     callDigest: string,
     after: DigestedContext,
   ): FinalizeObservationResult {
-    if (!after.operationTargetIdentity) {
+    if (isLocalOperation(entry.operation) && !after.operationTargetIdentity) {
       entry.status = 'abandoned'
       return { status: 'rejected', reasonCode: 'invalid-observation' }
     }
@@ -1329,7 +1359,9 @@ export function createReceiptLedger(
       workspaceDigest: entry.context.workspaceDigest,
       repositoryDigest: after.repositoryDigest,
       worktreeDigest: after.worktreeDigest,
-      operationTargetIdentity: after.operationTargetIdentity,
+      ...(isLocalOperation(entry.operation)
+        ? { operationTargetIdentity: after.operationTargetIdentity }
+        : {}),
       resourceDigest: after.resourceDigest,
       operation: entry.operation,
       result: 'success',
@@ -1369,10 +1401,10 @@ export function createReceiptLedger(
     if (!callId || !context)
       return { status: 'rejected', reasonCode: 'invalid-observation' }
     const callDigest = digestIdentity('call', callId)
-    const digested = digestContext(context)
     const matchingEntry = lifecycleByCall.get(callDigest)
     if (!matchingEntry)
       return { status: 'rejected', reasonCode: 'unknown-receipt' }
+    const digested = digestContext(context, matchingEntry.operation)
     const contextMismatch = compareDigestedContexts(
       matchingEntry.context,
       digested,
@@ -1397,7 +1429,7 @@ export function createReceiptLedger(
       return { status: 'rejected', reasonCode: 'invalid-observation' }
     const stored = receipts.get(receiptId)
     if (!stored) return { status: 'rejected', reasonCode: 'unknown-receipt' }
-    const actual = digestContext(context)
+    const actual = digestContext(context, stored.envelope.canonical.operation)
     const contextMismatch = compareDigestedContexts(stored.context, actual)
     if (contextMismatch)
       return { status: 'rejected', reasonCode: contextMismatch }
