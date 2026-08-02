@@ -1,4 +1,6 @@
 import { randomBytes } from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
 import type { ToolDefinition } from '@opencode-ai/plugin'
 import { z } from 'zod'
 import { INTERNAL_AGENT_SIGNATURES } from './bootstrap.js'
@@ -8,6 +10,7 @@ import type {
   OperationObserverRemoteSnapshot,
   OperationObserverResult,
   OperationObserverSnapshot,
+  RegisteredWorktreeValidationResult,
   RemoteOperation,
 } from './opencode-operation-observer.js'
 import {
@@ -466,7 +469,7 @@ function digestCall(
   return ledger.digestIdentity('call', callID)
 }
 
-type LocalOperationTool = 'write' | 'edit' | 'apply_patch' | 'bash'
+export type LocalOperationTool = 'write' | 'edit' | 'apply_patch' | 'bash'
 
 function isLocalOperationTool(tool: string): tool is LocalOperationTool {
   return (
@@ -475,6 +478,398 @@ function isLocalOperationTool(tool: string): tool is LocalOperationTool {
     tool === 'apply_patch' ||
     tool === 'bash'
   )
+}
+
+export interface OpencodeOperationTargetDerivationOptions {
+  readonly parentTargetRoot: string
+  readonly sessionLocation?: string
+  readonly validateRegisteredWorktree: (
+    candidateDirectory: string,
+  ) => RegisteredWorktreeValidationResult
+  readonly realPath?: (filePath: string) => string
+}
+
+export type OpencodeOperationTargetDerivationResult =
+  | { readonly status: 'available'; readonly targetRoot: string }
+  | {
+      readonly status: 'unavailable'
+      readonly reasonCode: 'target-unavailable'
+    }
+
+function unavailableOperationTarget(): OpencodeOperationTargetDerivationResult {
+  return { status: 'unavailable', reasonCode: 'target-unavailable' }
+}
+
+function canonicalExistingPath(
+  filePath: string,
+  realPath: (filePath: string) => string,
+): string | undefined {
+  try {
+    return realPath(filePath)
+  } catch {
+    return undefined
+  }
+}
+
+function canonicalFileTarget(
+  filePath: string,
+  realPath: (filePath: string) => string,
+): string | undefined {
+  const existing = canonicalExistingPath(filePath, realPath)
+  if (existing) return existing
+  const parent = canonicalExistingPath(path.dirname(filePath), realPath)
+  const basename = path.basename(filePath)
+  return parent && basename && basename !== '.' && basename !== '..'
+    ? path.join(parent, basename)
+    : undefined
+}
+
+function pathWithinOrEqual(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate)
+  return (
+    relative === '' ||
+    (relative !== '..' &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative))
+  )
+}
+
+function targetIsGitAdminStorage(
+  targetPath: string,
+  validation: Extract<
+    RegisteredWorktreeValidationResult,
+    { readonly status: 'ok' }
+  >,
+): boolean {
+  return (
+    pathWithinOrEqual(path.join(validation.targetRoot, '.git'), targetPath) ||
+    pathWithinOrEqual(validation.gitDir, targetPath) ||
+    pathWithinOrEqual(validation.commonDir, targetPath)
+  )
+}
+
+function targetResultFromValidation(
+  candidatePath: string,
+  validation: RegisteredWorktreeValidationResult,
+): OpencodeOperationTargetDerivationResult {
+  if (validation.status === 'error') return unavailableOperationTarget()
+  if (!pathWithinOrEqual(validation.targetRoot, candidatePath)) {
+    return unavailableOperationTarget()
+  }
+  if (targetIsGitAdminStorage(candidatePath, validation)) {
+    return unavailableOperationTarget()
+  }
+  return { status: 'available', targetRoot: validation.targetRoot }
+}
+
+function trustedParentTarget(
+  parentTargetRoot: string,
+  candidatePath: string,
+): OpencodeOperationTargetDerivationResult | undefined {
+  if (!pathWithinOrEqual(parentTargetRoot, candidatePath)) return undefined
+  if (pathWithinOrEqual(path.join(parentTargetRoot, '.git'), candidatePath)) {
+    return unavailableOperationTarget()
+  }
+  return { status: 'available', targetRoot: parentTargetRoot }
+}
+
+function validationForCandidate(
+  candidatePath: string,
+  options: OpencodeOperationTargetDerivationOptions,
+  targetPath = candidatePath,
+): OpencodeOperationTargetDerivationResult {
+  try {
+    return targetResultFromValidation(
+      targetPath,
+      options.validateRegisteredWorktree(candidatePath),
+    )
+  } catch {
+    return unavailableOperationTarget()
+  }
+}
+
+function deriveFileTarget(
+  rawPath: string,
+  baseDirectory: string,
+  parentTargetRoot: string,
+  options: OpencodeOperationTargetDerivationOptions,
+  realPath: (filePath: string) => string,
+  allowParentFastPath = true,
+): OpencodeOperationTargetDerivationResult {
+  const resolvedPath = path.resolve(baseDirectory, rawPath)
+  const canonicalPath = canonicalFileTarget(resolvedPath, realPath)
+  if (!canonicalPath) return unavailableOperationTarget()
+  const parentResult =
+    allowParentFastPath && !path.isAbsolute(rawPath)
+      ? trustedParentTarget(parentTargetRoot, canonicalPath)
+      : undefined
+  if (parentResult) return parentResult
+  return validationForCandidate(
+    path.dirname(canonicalPath),
+    options,
+    canonicalPath,
+  )
+}
+
+interface DerivedDirectoryTarget {
+  readonly targetRoot: string
+  readonly resolvedPath: string
+}
+
+function sharedTargetRoot(
+  targets: readonly OpencodeOperationTargetDerivationResult[],
+  extraRoots: readonly string[] = [],
+): string | undefined {
+  const roots = [...extraRoots]
+  for (const target of targets) {
+    if (target.status === 'unavailable') return undefined
+    roots.push(target.targetRoot)
+  }
+  const targetRoot = roots[0]
+  return targetRoot && roots.every((root) => root === targetRoot)
+    ? targetRoot
+    : undefined
+}
+
+function deriveDirectoryTarget(
+  rawPath: string,
+  baseDirectory: string,
+  parentTargetRoot: string,
+  options: OpencodeOperationTargetDerivationOptions,
+  realPath: (filePath: string) => string,
+):
+  | { readonly status: 'available'; readonly target: DerivedDirectoryTarget }
+  | { readonly status: 'unavailable' } {
+  const resolvedPath = canonicalExistingPath(
+    path.resolve(baseDirectory, rawPath),
+    realPath,
+  )
+  if (!resolvedPath) return { status: 'unavailable' }
+  const parentResult = path.isAbsolute(rawPath)
+    ? undefined
+    : trustedParentTarget(parentTargetRoot, resolvedPath)
+  if (parentResult?.status === 'unavailable') {
+    return { status: 'unavailable' }
+  }
+  if (parentResult) {
+    return {
+      status: 'available',
+      target: { targetRoot: parentResult.targetRoot, resolvedPath },
+    }
+  }
+  const validated = validationForCandidate(resolvedPath, options)
+  return validated.status === 'available'
+    ? {
+        status: 'available',
+        target: { targetRoot: validated.targetRoot, resolvedPath },
+      }
+    : { status: 'unavailable' }
+}
+
+const PATCH_FILE_PREFIXES = [
+  '*** Add File:',
+  '*** Delete File:',
+  '*** Update File:',
+  '*** Move to:',
+] as const
+
+function patchTextFileTargets(
+  patchText: string,
+): readonly string[] | undefined {
+  const paths: string[] = []
+  for (const line of patchText.split(/\r?\n/)) {
+    const prefix = PATCH_FILE_PREFIXES.find((candidate) =>
+      line.startsWith(candidate),
+    )
+    if (!prefix) continue
+    const filePath = line.slice(prefix.length).trim()
+    if (!filePath) return undefined
+    paths.push(filePath)
+  }
+  return paths
+}
+
+function hunkFileTargets(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const paths: string[] = []
+  for (const hunk of value) {
+    if (!isRecord(hunk) || typeof hunk.path !== 'string' || !hunk.path) {
+      return undefined
+    }
+    paths.push(hunk.path)
+    if (hunk.move_path === undefined) continue
+    if (typeof hunk.move_path !== 'string' || !hunk.move_path) return undefined
+    paths.push(hunk.move_path)
+  }
+  return paths
+}
+
+function patchFileTargets(
+  args: Record<string, unknown>,
+): readonly string[] | undefined {
+  const patchValue = args.patchText ?? args.patch
+  if (typeof patchValue === 'string') return patchTextFileTargets(patchValue)
+  if (patchValue !== undefined) return undefined
+  return args.hunks === undefined ? [] : hunkFileTargets(args.hunks)
+}
+
+function fileTargetArguments(
+  args: Record<string, unknown>,
+): string[] | undefined {
+  const paths: string[] = []
+  for (const key of ['filePath', 'path'] as const) {
+    if (!(key in args)) continue
+    if (typeof args[key] !== 'string' || args[key].length === 0) {
+      return undefined
+    }
+    paths.push(args[key])
+  }
+  return paths.length > 0 ? paths : undefined
+}
+
+function deriveFileOperationTarget(
+  args: Record<string, unknown>,
+  sessionLocation: string,
+  parentTargetRoot: string,
+  options: OpencodeOperationTargetDerivationOptions,
+  realPath: (filePath: string) => string,
+): OpencodeOperationTargetDerivationResult {
+  const paths = fileTargetArguments(args)
+  if (!paths) return unavailableOperationTarget()
+  const targets = paths.map((rawPath) =>
+    deriveFileTarget(
+      rawPath,
+      sessionLocation,
+      parentTargetRoot,
+      options,
+      realPath,
+    ),
+  )
+  const targetRoot = sharedTargetRoot(targets)
+  return targetRoot
+    ? { status: 'available', targetRoot }
+    : unavailableOperationTarget()
+}
+
+function deriveApplyPatchTarget(
+  args: Record<string, unknown>,
+  sessionLocation: string,
+  parentTargetRoot: string,
+  options: OpencodeOperationTargetDerivationOptions,
+  realPath: (filePath: string) => string,
+): OpencodeOperationTargetDerivationResult {
+  if (
+    args.workdir !== undefined &&
+    (typeof args.workdir !== 'string' || args.workdir.length === 0)
+  ) {
+    return unavailableOperationTarget()
+  }
+  const patchPaths = patchFileTargets(args)
+  if (!patchPaths) return unavailableOperationTarget()
+  const workdir =
+    args.workdir === undefined
+      ? {
+          status: 'available' as const,
+          target: {
+            targetRoot: parentTargetRoot,
+            resolvedPath: sessionLocation,
+          },
+        }
+      : deriveDirectoryTarget(
+          args.workdir,
+          sessionLocation,
+          parentTargetRoot,
+          options,
+          realPath,
+        )
+  if (workdir.status === 'unavailable') return unavailableOperationTarget()
+  const targets = patchPaths.map((rawPath) =>
+    deriveFileTarget(
+      rawPath,
+      workdir.target.resolvedPath,
+      parentTargetRoot,
+      options,
+      realPath,
+      args.workdir === undefined,
+    ),
+  )
+  const targetRoot = sharedTargetRoot(targets, [workdir.target.targetRoot])
+  return targetRoot
+    ? { status: 'available', targetRoot }
+    : unavailableOperationTarget()
+}
+
+function deriveBashTarget(
+  args: Record<string, unknown>,
+  sessionLocation: string,
+  parentTargetRoot: string,
+  options: OpencodeOperationTargetDerivationOptions,
+  realPath: (filePath: string) => string,
+): OpencodeOperationTargetDerivationResult {
+  if (args.workdir === undefined) {
+    return { status: 'available', targetRoot: parentTargetRoot }
+  }
+  if (typeof args.workdir !== 'string' || args.workdir.length === 0) {
+    return unavailableOperationTarget()
+  }
+  const candidatePath = canonicalExistingPath(
+    path.resolve(sessionLocation, args.workdir),
+    realPath,
+  )
+  if (!candidatePath) return unavailableOperationTarget()
+  const parentResult = path.isAbsolute(args.workdir)
+    ? undefined
+    : trustedParentTarget(parentTargetRoot, candidatePath)
+  return parentResult ?? validationForCandidate(candidatePath, options)
+}
+
+export function deriveOpencodeOperationTarget(
+  tool: LocalOperationTool,
+  args: unknown,
+  options: OpencodeOperationTargetDerivationOptions,
+): OpencodeOperationTargetDerivationResult {
+  const realPath = options.realPath ?? fs.realpathSync
+  const parentTargetRoot = canonicalExistingPath(
+    options.parentTargetRoot,
+    realPath,
+  )
+  if (!parentTargetRoot) return unavailableOperationTarget()
+
+  if (!isRecord(args)) return unavailableOperationTarget()
+
+  const sessionLocation = canonicalExistingPath(
+    options.sessionLocation ?? parentTargetRoot,
+    realPath,
+  )
+  if (!sessionLocation) return unavailableOperationTarget()
+
+  if (tool === 'write' || tool === 'edit') {
+    return deriveFileOperationTarget(
+      args,
+      sessionLocation,
+      parentTargetRoot,
+      options,
+      realPath,
+    )
+  }
+  if (tool === 'apply_patch') {
+    return deriveApplyPatchTarget(
+      args,
+      sessionLocation,
+      parentTargetRoot,
+      options,
+      realPath,
+    )
+  }
+  return tool === 'bash'
+    ? deriveBashTarget(
+        args,
+        sessionLocation,
+        parentTargetRoot,
+        options,
+        realPath,
+      )
+    : unavailableOperationTarget()
 }
 
 function serializeStableArray(

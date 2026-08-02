@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { z } from 'zod'
 
 import type {
@@ -7,9 +10,11 @@ import type {
   OperationObserverRemoteResult,
   OperationObserverSnapshot,
 } from '../../src/lib/opencode-operation-observer.js'
+import { createOpencodeOperationObserver } from '../../src/lib/opencode-operation-observer.js'
 import {
   createOpencodeWorkflowGuard,
   createWorkflowGuardBlockedError,
+  deriveOpencodeOperationTarget,
   isWorkflowGuardBlockedError,
   type OpencodeWorkflowGuard,
   SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY,
@@ -66,6 +71,91 @@ const OPERATION_SCOPE = {
   workspaceIdentity: 'a'.repeat(64),
   repositoryIdentity: 'b'.repeat(64),
   worktreeIdentity: 'c'.repeat(64),
+}
+
+interface TargetDerivationFixture {
+  readonly parentRoot: string
+  readonly linkedRoot: string
+  readonly secondLinkedRoot: string
+  readonly unrelatedRoot: string
+  cleanup(): void
+}
+
+function runTargetFixtureGit(
+  cwd: string,
+  args: readonly string[],
+): {
+  readonly status: number
+  readonly stdout: string
+  readonly stderr: string
+} {
+  const result = Bun.spawnSync(['git', ...args], {
+    cwd,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
+  return {
+    status: result.exitCode ?? -1,
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+  }
+}
+
+function createTargetDerivationFixture(): TargetDerivationFixture {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-target-'))
+  const parentRoot = path.join(root, 'parent')
+  const linkedRoot = path.join(root, 'linked')
+  const secondLinkedRoot = path.join(root, 'linked-second')
+  const unrelatedRoot = path.join(root, 'unrelated')
+  fs.mkdirSync(parentRoot)
+  fs.mkdirSync(unrelatedRoot)
+
+  const git = (cwd: string, args: readonly string[]) => {
+    const result = runTargetFixtureGit(cwd, args)
+    if (result.status !== 0) {
+      throw new Error(`target fixture git setup failed: ${args.join(' ')}`)
+    }
+  }
+  git(parentRoot, ['init', '--quiet'])
+  git(parentRoot, ['config', 'user.email', 'target@example.invalid'])
+  git(parentRoot, ['config', 'user.name', 'Target Test'])
+  fs.writeFileSync(path.join(parentRoot, 'tracked.txt'), 'parent\n')
+  fs.mkdirSync(path.join(parentRoot, 'nested'))
+  git(parentRoot, ['add', '.'])
+  git(parentRoot, ['commit', '--quiet', '-m', 'initial'])
+  git(parentRoot, ['worktree', 'add', '--quiet', '-b', 'linked', linkedRoot])
+  git(parentRoot, [
+    'worktree',
+    'add',
+    '--quiet',
+    '-b',
+    'linked-second',
+    secondLinkedRoot,
+  ])
+  git(unrelatedRoot, ['init', '--quiet'])
+
+  return {
+    parentRoot,
+    linkedRoot,
+    secondLinkedRoot,
+    unrelatedRoot,
+    cleanup: () => fs.rmSync(root, { recursive: true, force: true }),
+  }
+}
+
+function deriveWithFixture(
+  fixture: TargetDerivationFixture,
+  tool: 'write' | 'edit' | 'apply_patch' | 'bash',
+  args: Record<string, unknown>,
+) {
+  const observer = createOpencodeOperationObserver({
+    targetDirectory: fixture.parentRoot,
+  })
+  return deriveOpencodeOperationTarget(tool, args, {
+    parentTargetRoot: fixture.parentRoot,
+    sessionLocation: fixture.parentRoot,
+    validateRegisteredWorktree: observer.validateRegisteredWorktree,
+  })
 }
 
 function sequenceObserver(
@@ -264,6 +354,395 @@ function mintReceipt(
 }
 
 describe('OpenCode workflow guard adapter', () => {
+  test('target derivation: registered worktree from bash workdir', () => {
+    const result = deriveOpencodeOperationTarget(
+      'bash',
+      { workdir: '../linked-worktree' },
+      {
+        parentTargetRoot: '/parent',
+        sessionLocation: '/parent',
+        realPath: (value) => value,
+        validateRegisteredWorktree: (candidate) =>
+          candidate === '/linked-worktree'
+            ? {
+                status: 'ok',
+                targetRoot: candidate,
+                gitDir: '/parent/.git/worktrees/linked',
+                commonDir: '/parent/.git',
+              }
+            : { status: 'error', reasonCode: 'target-unavailable' },
+      },
+    )
+
+    expect(result).toEqual({
+      status: 'available',
+      targetRoot: '/linked-worktree',
+    })
+  })
+
+  test('target derivation: worktree from write file path', () => {
+    const result = deriveOpencodeOperationTarget(
+      'write',
+      { path: '/linked-worktree/src/file.ts' },
+      {
+        parentTargetRoot: '/parent',
+        sessionLocation: '/parent',
+        realPath: (value) => value,
+        validateRegisteredWorktree: (candidate) =>
+          candidate === '/linked-worktree/src'
+            ? {
+                status: 'ok',
+                targetRoot: '/linked-worktree',
+                gitDir: '/parent/.git/worktrees/linked',
+                commonDir: '/parent/.git',
+              }
+            : { status: 'error', reasonCode: 'target-unavailable' },
+      },
+    )
+
+    expect(result).toEqual({
+      status: 'available',
+      targetRoot: '/linked-worktree',
+    })
+  })
+
+  test('target derivation: one apply_patch target for every file path', () => {
+    const result = deriveOpencodeOperationTarget(
+      'apply_patch',
+      {
+        workdir: '/linked-worktree',
+        patchText: [
+          '*** Begin Patch',
+          '*** Add File: src/one.ts',
+          '+one',
+          '*** Update File: nested/two.ts',
+          '@@',
+          '-two',
+          '+updated',
+          '*** End Patch',
+        ].join('\n'),
+      },
+      {
+        parentTargetRoot: '/parent',
+        sessionLocation: '/parent',
+        realPath: (value) => value,
+        validateRegisteredWorktree: (candidate) =>
+          candidate === '/linked-worktree' ||
+          candidate === '/linked-worktree/src' ||
+          candidate === '/linked-worktree/nested'
+            ? {
+                status: 'ok',
+                targetRoot: '/linked-worktree',
+                gitDir: '/parent/.git/worktrees/linked',
+                commonDir: '/parent/.git',
+              }
+            : { status: 'error', reasonCode: 'target-unavailable' },
+      },
+    )
+
+    expect(result).toEqual({
+      status: 'available',
+      targetRoot: '/linked-worktree',
+    })
+  })
+
+  test('target derivation: canonical registered worktree for real bash workdir', () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      expect(
+        deriveWithFixture(fixture, 'bash', {
+          command: 'git status --short',
+          workdir: fixture.linkedRoot,
+        }),
+      ).toEqual({
+        status: 'available',
+        targetRoot: fs.realpathSync(fixture.linkedRoot),
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('target derivation: relative bash workdir stays on parent target', () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      expect(
+        deriveWithFixture(fixture, 'bash', {
+          command: 'git status --short',
+          workdir: 'nested',
+        }),
+      ).toEqual({
+        status: 'available',
+        targetRoot: fs.realpathSync(fixture.parentRoot),
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('target derivation: absent bash workdir uses parent target', () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      expect(
+        deriveWithFixture(fixture, 'bash', { command: 'git status --short' }),
+      ).toEqual({
+        status: 'available',
+        targetRoot: fs.realpathSync(fixture.parentRoot),
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('target derivation: write and edit support filePath and path', () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      const expected = {
+        status: 'available' as const,
+        targetRoot: fs.realpathSync(fixture.linkedRoot),
+      }
+      expect(
+        deriveWithFixture(fixture, 'write', {
+          filePath: path.join(fixture.linkedRoot, 'tracked.txt'),
+        }),
+      ).toEqual(expected)
+      expect(
+        deriveWithFixture(fixture, 'edit', {
+          path: path.join(fixture.linkedRoot, 'tracked.txt'),
+        }),
+      ).toEqual(expected)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('target derivation: new write file uses canonical existing parent', () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      const targetDirectory = path.join(fixture.linkedRoot, 'new-files')
+      fs.mkdirSync(targetDirectory)
+      expect(
+        deriveWithFixture(fixture, 'write', {
+          path: path.join(targetDirectory, 'new.ts'),
+        }),
+      ).toEqual({
+        status: 'available',
+        targetRoot: fs.realpathSync(fixture.linkedRoot),
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('target derivation: multiple apply_patch files share one worktree', () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      fs.mkdirSync(path.join(fixture.linkedRoot, 'src'), { recursive: true })
+      fs.mkdirSync(path.join(fixture.linkedRoot, 'nested'), {
+        recursive: true,
+      })
+      fs.writeFileSync(path.join(fixture.linkedRoot, 'src', 'one.ts'), 'one\n')
+      fs.writeFileSync(
+        path.join(fixture.linkedRoot, 'nested', 'two.ts'),
+        'two\n',
+      )
+
+      expect(
+        deriveWithFixture(fixture, 'apply_patch', {
+          workdir: fixture.linkedRoot,
+          patchText: [
+            '*** Begin Patch',
+            '*** Update File: src/one.ts',
+            '*** Update File: nested/two.ts',
+            '*** End Patch',
+          ].join('\n'),
+        }),
+      ).toEqual({
+        status: 'available',
+        targetRoot: fs.realpathSync(fixture.linkedRoot),
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('target derivation: apply_patch spanning worktrees fails closed', () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      expect(
+        deriveWithFixture(fixture, 'apply_patch', {
+          patchText: [
+            '*** Begin Patch',
+            `*** Update File: ${path.join(fixture.linkedRoot, 'tracked.txt')}`,
+            `*** Update File: ${path.join(fixture.secondLinkedRoot, 'tracked.txt')}`,
+            '*** End Patch',
+          ].join('\n'),
+        }),
+      ).toEqual({
+        status: 'unavailable',
+        reasonCode: 'target-unavailable',
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('target derivation: unrelated explicit bash workdir fails closed', () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      expect(
+        deriveWithFixture(fixture, 'bash', {
+          command: 'git status --short',
+          workdir: fixture.unrelatedRoot,
+        }),
+      ).toEqual({
+        status: 'unavailable',
+        reasonCode: 'target-unavailable',
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('target derivation: absolute nested repository is not parent target', () => {
+    const fixture = createTargetDerivationFixture()
+    const nestedRepository = path.join(fixture.parentRoot, 'nested-repo')
+    try {
+      fs.mkdirSync(nestedRepository)
+      const initialized = runTargetFixtureGit(nestedRepository, [
+        'init',
+        '--quiet',
+      ])
+      expect(initialized.status).toBe(0)
+      expect(
+        deriveWithFixture(fixture, 'bash', {
+          command: 'git status --short',
+          workdir: nestedRepository,
+        }),
+      ).toEqual({
+        status: 'unavailable',
+        reasonCode: 'target-unavailable',
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('target derivation: absolute nested repository file fails closed', () => {
+    const fixture = createTargetDerivationFixture()
+    const nestedRepository = path.join(fixture.parentRoot, 'nested-repo')
+    const nestedFile = path.join(nestedRepository, 'nested.ts')
+    try {
+      fs.mkdirSync(nestedRepository)
+      const initialized = runTargetFixtureGit(nestedRepository, [
+        'init',
+        '--quiet',
+      ])
+      expect(initialized.status).toBe(0)
+      fs.writeFileSync(nestedFile, 'nested\n')
+      expect(deriveWithFixture(fixture, 'write', { path: nestedFile })).toEqual(
+        {
+          status: 'unavailable',
+          reasonCode: 'target-unavailable',
+        },
+      )
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('target derivation: explicit apply workdir validates relative files', () => {
+    const fixture = createTargetDerivationFixture()
+    const nestedRepository = path.join(fixture.parentRoot, 'nested-repo')
+    const nestedFile = path.join(nestedRepository, 'nested.ts')
+    try {
+      fs.mkdirSync(nestedRepository)
+      const initialized = runTargetFixtureGit(nestedRepository, [
+        'init',
+        '--quiet',
+      ])
+      expect(initialized.status).toBe(0)
+      fs.writeFileSync(nestedFile, 'nested\n')
+      expect(
+        deriveWithFixture(fixture, 'apply_patch', {
+          workdir: fixture.parentRoot,
+          patchText: [
+            '*** Begin Patch',
+            '*** Update File: nested-repo/nested.ts',
+            '*** End Patch',
+          ].join('\n'),
+        }),
+      ).toEqual({
+        status: 'unavailable',
+        reasonCode: 'target-unavailable',
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('target derivation: invalid explicit apply workdir fails closed', () => {
+    const fixture = createTargetDerivationFixture()
+    const nestedRepository = path.join(fixture.parentRoot, 'nested-repo')
+    try {
+      fs.mkdirSync(nestedRepository)
+      const initialized = runTargetFixtureGit(nestedRepository, [
+        'init',
+        '--quiet',
+      ])
+      expect(initialized.status).toBe(0)
+      expect(
+        deriveWithFixture(fixture, 'apply_patch', {
+          workdir: nestedRepository,
+          patchText: '',
+        }),
+      ).toEqual({
+        status: 'unavailable',
+        reasonCode: 'target-unavailable',
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('target derivation: escaping file symlink is rejected', () => {
+    const fixture = createTargetDerivationFixture()
+    const outsideFile = path.join(
+      path.dirname(fixture.parentRoot),
+      'outside.ts',
+    )
+    const escapedFile = path.join(fixture.linkedRoot, 'escaped.ts')
+    try {
+      fs.writeFileSync(outsideFile, 'outside\n')
+      fs.symlinkSync(outsideFile, escapedFile)
+
+      expect(
+        deriveWithFixture(fixture, 'write', { path: escapedFile }),
+      ).toEqual({
+        status: 'unavailable',
+        reasonCode: 'target-unavailable',
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('target derivation: linked worktree gitfile is rejected', () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      expect(
+        deriveWithFixture(fixture, 'write', {
+          path: path.join(fixture.linkedRoot, '.git'),
+        }),
+      ).toEqual({
+        status: 'unavailable',
+        reasonCode: 'target-unavailable',
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
   test('does not expose the trusted recovery seam as a host/model tool', () => {
     const adapter = createAdapter('observe')
 
