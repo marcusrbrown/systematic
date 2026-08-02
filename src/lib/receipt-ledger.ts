@@ -12,8 +12,10 @@ import {
   validateReceiptMarker,
 } from './receipt-readback.js'
 
-export const RECEIPT_SCHEMA_VERSION = 1 as const
-export const RECEIPT_PROTOCOL_VERSION = 1 as const
+export const RECEIPT_SCHEMA_VERSION = 2 as const
+export const RECEIPT_PROTOCOL_VERSION = 2 as const
+const LEGACY_RECEIPT_SCHEMA_VERSION = 1 as const
+const LEGACY_RECEIPT_PROTOCOL_VERSION = 1 as const
 
 export type ReceiptOperation =
   | 'implementation'
@@ -92,6 +94,7 @@ export interface ReceiptContext {
   workspaceIdentity: string
   repositoryIdentity?: string
   worktreeIdentity?: string
+  operationTargetIdentity?: string
   resourceIdentity?: string
 }
 
@@ -99,6 +102,7 @@ export interface ReceiptObservationAfter {
   workspaceIdentity: string
   repositoryIdentity?: string
   worktreeIdentity?: string
+  operationTargetIdentity?: string
   resourceIdentity?: string
 }
 
@@ -130,6 +134,7 @@ export interface CanonicalReceiptFields {
   workspaceDigest: string
   repositoryDigest?: string
   worktreeDigest?: string
+  operationTargetIdentity?: string
   resourceDigest?: string
   operation: ReceiptOperation
   result: 'success'
@@ -139,8 +144,12 @@ export interface CanonicalReceiptFields {
 }
 
 export interface ReceiptEnvelope {
-  schemaVersion: typeof RECEIPT_SCHEMA_VERSION
-  protocolVersion: typeof RECEIPT_PROTOCOL_VERSION
+  schemaVersion:
+    | typeof RECEIPT_SCHEMA_VERSION
+    | typeof LEGACY_RECEIPT_SCHEMA_VERSION
+  protocolVersion:
+    | typeof RECEIPT_PROTOCOL_VERSION
+    | typeof LEGACY_RECEIPT_PROTOCOL_VERSION
   registrationDigest: string
   capabilityFlags: readonly string[]
   compatibility: 'compatible'
@@ -224,8 +233,14 @@ export interface ReceiptLedger {
   finalizeObservation(input: unknown): FinalizeObservationResult
   abandonObservation(input: unknown): AbandonObservationResult
   consumeReceipt(receiptId: unknown, context: unknown): ConsumeReceiptResult
-  recoverReceipt(input: unknown): RecoverReceiptResult
-  recoverReadback(input: readonly unknown[]): RecoverReadbackResult
+  recoverReceipt(
+    input: unknown,
+    operationTargetIdentity?: string,
+  ): RecoverReceiptResult
+  recoverReadback(
+    input: readonly unknown[],
+    operationTargetIdentity?: string,
+  ): RecoverReadbackResult
   getProgressionState(): ReceiptReadbackProgression
   validateEnvelope(input: unknown): EnvelopeValidationResult
   getEnvelope(receiptId: unknown): ReceiptEnvelope | undefined
@@ -239,6 +254,7 @@ interface DigestedContext {
   workspaceDigest: string
   repositoryDigest?: string
   worktreeDigest?: string
+  operationTargetIdentity?: string
   resourceDigest?: string
 }
 
@@ -416,6 +432,8 @@ function envelopesEqual(
     first.canonical.workspaceDigest === second.canonical.workspaceDigest &&
     first.canonical.repositoryDigest === second.canonical.repositoryDigest &&
     first.canonical.worktreeDigest === second.canonical.worktreeDigest &&
+    first.canonical.operationTargetIdentity ===
+      second.canonical.operationTargetIdentity &&
     first.canonical.resourceDigest === second.canonical.resourceDigest &&
     first.canonical.operation === second.canonical.operation &&
     first.canonical.result === second.canonical.result &&
@@ -498,6 +516,7 @@ function storedReceiptFromEnvelope(envelope: ReceiptEnvelope): StoredReceipt {
       workspaceDigest: envelope.canonical.workspaceDigest,
       repositoryDigest: envelope.canonical.repositoryDigest,
       worktreeDigest: envelope.canonical.worktreeDigest,
+      operationTargetIdentity: envelope.canonical.operationTargetIdentity,
       resourceDigest: envelope.canonical.resourceDigest,
     },
   }
@@ -726,6 +745,10 @@ function parseContext(value: unknown): ReceiptContext | undefined {
     value.worktreeIdentity === undefined
       ? undefined
       : normalizedIdentity(value.worktreeIdentity)
+  const operationTargetIdentity =
+    value.operationTargetIdentity === undefined
+      ? undefined
+      : (value.operationTargetIdentity as string)
   const resourceIdentity =
     value.resourceIdentity === undefined
       ? undefined
@@ -733,6 +756,8 @@ function parseContext(value: unknown): ReceiptContext | undefined {
   if (
     (value.repositoryIdentity !== undefined && !repositoryIdentity) ||
     (value.worktreeIdentity !== undefined && !worktreeIdentity) ||
+    (value.operationTargetIdentity !== undefined &&
+      !isDigest(operationTargetIdentity)) ||
     (value.resourceIdentity !== undefined && !resourceIdentity)
   ) {
     return undefined
@@ -744,6 +769,7 @@ function parseContext(value: unknown): ReceiptContext | undefined {
     workspaceIdentity,
     repositoryIdentity,
     worktreeIdentity,
+    operationTargetIdentity,
     resourceIdentity,
   }
 }
@@ -759,6 +785,7 @@ function parseAfter(value: unknown): ReceiptObservationAfter | undefined {
     workspaceIdentity: context.workspaceIdentity,
     repositoryIdentity: context.repositoryIdentity,
     worktreeIdentity: context.worktreeIdentity,
+    operationTargetIdentity: context.operationTargetIdentity,
     resourceIdentity: context.resourceIdentity,
   }
 }
@@ -871,6 +898,8 @@ function compareDigestedContexts(
     return 'workspace-mismatch'
   if (expected.worktreeDigest !== actual.worktreeDigest)
     return 'workspace-mismatch'
+  if (expected.operationTargetIdentity !== actual.operationTargetIdentity)
+    return 'workspace-mismatch'
   if (expected.resourceDigest !== actual.resourceDigest)
     return 'workspace-mismatch'
   return undefined
@@ -902,10 +931,13 @@ function validateEnvelopeInput(
   if (!('schemaVersion' in input) || !('protocolVersion' in input)) {
     return { compatibility: 'unavailable', reasonCode: 'incomplete-envelope' }
   }
-  if (
-    input.schemaVersion !== RECEIPT_SCHEMA_VERSION ||
-    input.protocolVersion !== RECEIPT_PROTOCOL_VERSION
-  ) {
+  const currentVersion =
+    input.schemaVersion === RECEIPT_SCHEMA_VERSION &&
+    input.protocolVersion === RECEIPT_PROTOCOL_VERSION
+  const legacyVersion =
+    input.schemaVersion === LEGACY_RECEIPT_SCHEMA_VERSION &&
+    input.protocolVersion === LEGACY_RECEIPT_PROTOCOL_VERSION
+  if (!currentVersion && !legacyVersion) {
     return { compatibility: 'unavailable', reasonCode: 'unknown-envelope' }
   }
   if (!('capabilityFlags' in input) || input.capabilityFlags === undefined) {
@@ -927,9 +959,14 @@ function isReceiptId(value: unknown): value is string {
 
 function parseEnvelope(value: unknown): ReceiptEnvelope | undefined {
   if (!isRecord(value)) return undefined
+  const currentVersion =
+    value.schemaVersion === RECEIPT_SCHEMA_VERSION &&
+    value.protocolVersion === RECEIPT_PROTOCOL_VERSION
+  const legacyVersion =
+    value.schemaVersion === LEGACY_RECEIPT_SCHEMA_VERSION &&
+    value.protocolVersion === LEGACY_RECEIPT_PROTOCOL_VERSION
   if (
-    value.schemaVersion !== RECEIPT_SCHEMA_VERSION ||
-    value.protocolVersion !== RECEIPT_PROTOCOL_VERSION ||
+    (!currentVersion && !legacyVersion) ||
     value.compatibility !== 'compatible' ||
     !isDigest(value.registrationDigest) ||
     !isBoundedCapabilityList(value.capabilityFlags) ||
@@ -949,6 +986,9 @@ function parseEnvelope(value: unknown): ReceiptEnvelope | undefined {
       !isDigest(canonical.repositoryDigest)) ||
     (canonical.worktreeDigest !== undefined &&
       !isDigest(canonical.worktreeDigest)) ||
+    (canonical.operationTargetIdentity !== undefined &&
+      !isDigest(canonical.operationTargetIdentity)) ||
+    (currentVersion && !isDigest(canonical.operationTargetIdentity)) ||
     (canonical.resourceDigest !== undefined &&
       !isDigest(canonical.resourceDigest)) ||
     !isOperation(canonical.operation) ||
@@ -962,8 +1002,12 @@ function parseEnvelope(value: unknown): ReceiptEnvelope | undefined {
     return undefined
   }
   return {
-    schemaVersion: RECEIPT_SCHEMA_VERSION,
-    protocolVersion: RECEIPT_PROTOCOL_VERSION,
+    schemaVersion: currentVersion
+      ? RECEIPT_SCHEMA_VERSION
+      : LEGACY_RECEIPT_SCHEMA_VERSION,
+    protocolVersion: currentVersion
+      ? RECEIPT_PROTOCOL_VERSION
+      : LEGACY_RECEIPT_PROTOCOL_VERSION,
     registrationDigest: value.registrationDigest,
     capabilityFlags: [...value.capabilityFlags],
     compatibility: 'compatible',
@@ -976,6 +1020,7 @@ function parseEnvelope(value: unknown): ReceiptEnvelope | undefined {
       workspaceDigest: canonical.workspaceDigest,
       repositoryDigest: canonical.repositoryDigest,
       worktreeDigest: canonical.worktreeDigest,
+      operationTargetIdentity: canonical.operationTargetIdentity,
       resourceDigest: canonical.resourceDigest,
       operation: canonical.operation,
       result: 'success',
@@ -1082,6 +1127,7 @@ export function createReceiptLedger(
       worktreeDigest: context.worktreeIdentity
         ? digestIdentity('worktree', context.worktreeIdentity)
         : undefined,
+      operationTargetIdentity: context.operationTargetIdentity,
       resourceDigest: context.resourceIdentity
         ? digestIdentity('resource', context.resourceIdentity)
         : undefined,
@@ -1208,6 +1254,7 @@ export function createReceiptLedger(
       worktreeDigest: after.worktreeIdentity
         ? digestIdentity('worktree', after.worktreeIdentity)
         : undefined,
+      operationTargetIdentity: after.operationTargetIdentity,
       resourceDigest: after.resourceIdentity
         ? digestIdentity('resource', after.resourceIdentity)
         : undefined,
@@ -1268,6 +1315,10 @@ export function createReceiptLedger(
     callDigest: string,
     after: DigestedContext,
   ): FinalizeObservationResult {
+    if (!after.operationTargetIdentity) {
+      entry.status = 'abandoned'
+      return { status: 'rejected', reasonCode: 'invalid-observation' }
+    }
     const receiptId = randomBytes(16).toString('hex')
     const canonical: CanonicalReceiptFields = {
       receiptId,
@@ -1278,6 +1329,7 @@ export function createReceiptLedger(
       workspaceDigest: entry.context.workspaceDigest,
       repositoryDigest: after.repositoryDigest,
       worktreeDigest: after.worktreeDigest,
+      operationTargetIdentity: after.operationTargetIdentity,
       resourceDigest: after.resourceDigest,
       operation: entry.operation,
       result: 'success',
@@ -1302,6 +1354,7 @@ export function createReceiptLedger(
         workspaceDigest: entry.context.workspaceDigest,
         repositoryDigest: after.repositoryDigest,
         worktreeDigest: after.worktreeDigest,
+        operationTargetIdentity: after.operationTargetIdentity,
         resourceDigest: after.resourceDigest,
       },
     })
@@ -1355,12 +1408,29 @@ export function createReceiptLedger(
     return { status: 'consumed', receipt: cloneEnvelope(stored.envelope) }
   }
 
-  function recoverReceipt(input: unknown): RecoverReceiptResult {
+  function recoverReceipt(
+    input: unknown,
+    operationTargetIdentity?: string,
+  ): RecoverReceiptResult {
     const markerResult = getMintMarker(input)
     if (markerResult.status !== 'valid') return markerResult
     const marker = markerResult.marker
     if (marker.sessionSalt !== sessionSalt)
       return { status: 'rejected', category: 'salt-mismatch' }
+    if (
+      marker.envelope.schemaVersion === 1 &&
+      operationTargetIdentity !== undefined
+    ) {
+      return { status: 'rejected', category: 'identity-digest-mismatch' }
+    }
+    if (
+      marker.envelope.schemaVersion === RECEIPT_SCHEMA_VERSION &&
+      operationTargetIdentity !== undefined &&
+      marker.envelope.canonical.operationTargetIdentity !==
+        operationTargetIdentity
+    ) {
+      return { status: 'rejected', category: 'identity-digest-mismatch' }
+    }
 
     const envelopeValidation = validateEnvelope(marker.envelope)
     const envelopeFailure = recoveryEnvelopeCategory(envelopeValidation)
@@ -1389,10 +1459,17 @@ export function createReceiptLedger(
     return { status: 'recovered', receipt: cloneEnvelope(envelope) }
   }
 
-  function recoverReadback(input: readonly unknown[]): RecoverReadbackResult {
+  function recoverReadback(
+    input: readonly unknown[],
+    operationTargetIdentity?: string,
+  ): RecoverReadbackResult {
     const folded = foldForLedgerRecovery(
       input,
-      receiptReadbackExpectationFromMetadata(metadata, sessionSaltBytes),
+      receiptReadbackExpectationFromMetadata(
+        metadata,
+        sessionSaltBytes,
+        operationTargetIdentity,
+      ),
     )
     if (folded.status !== 'reconstructed') {
       return { status: 'rejected', category: folded.category }

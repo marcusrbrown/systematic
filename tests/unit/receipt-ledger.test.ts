@@ -11,6 +11,7 @@ const RAW_REPOSITORY = '/private/repos/receipt-demo/.git'
 const RAW_WORKTREE = '/private/repos/receipt-demo'
 const RAW_WORKSPACE_BEFORE = 'workspace-before'
 const RAW_WORKSPACE_AFTER = 'workspace-after'
+const OPERATION_TARGET_IDENTITY = 'a'.repeat(64)
 const RAW_COMMAND = 'git apply private.patch'
 const RAW_OUTPUT = 'private terminal output'
 const SUPPLIED_SALT = Uint8Array.from({ length: 32 }, (_, index) => index)
@@ -49,6 +50,7 @@ function context(
     workspaceIdentity,
     repositoryIdentity: RAW_REPOSITORY,
     worktreeIdentity: RAW_WORKTREE,
+    operationTargetIdentity: OPERATION_TARGET_IDENTITY,
     resourceIdentity: 'resource-1',
   }
 }
@@ -94,6 +96,7 @@ function finalizeLedgerObservation(
       workspaceIdentity: afterWorkspaceIdentity,
       repositoryIdentity: 'repository-after',
       worktreeIdentity: afterWorktreeIdentity,
+      operationTargetIdentity: OPERATION_TARGET_IDENTITY,
       resourceIdentity: 'resource-after',
     },
     classification: classification(operation),
@@ -106,6 +109,48 @@ function finalizeLedgerObservation(
 }
 
 describe('receipt ledger', () => {
+  test('mints a v2 receipt with its operation target identity', () => {
+    const ledger = createReceiptLedger({
+      registrationIdentity: 'registration-target-identity',
+    })
+
+    expect(prepareLedgerObservation(ledger).status).toBe('prepared')
+
+    const result = finalizeLedgerObservation(ledger)
+
+    expect(result).toMatchObject({ status: 'finalized' })
+    expect(result.receipt?.schemaVersion).toBe(2)
+    expect(result.receipt?.protocolVersion).toBe(2)
+    expect(result.receipt?.canonical.operationTargetIdentity).toBe(
+      OPERATION_TARGET_IDENTITY,
+    )
+  })
+
+  test('rejects a v2 local receipt when the operation target identity is omitted', () => {
+    const ledger = createReceiptLedger({
+      registrationIdentity: 'registration-missing-target',
+    })
+    const observationContext = context()
+
+    expect(
+      prepareLedgerObservation(ledger, 'missing-target', observationContext),
+    ).toMatchObject({ status: 'prepared' })
+
+    const result = ledger.finalizeObservation({
+      callId: 'missing-target',
+      context: observationContext,
+      after: {
+        workspaceIdentity: RAW_WORKSPACE_BEFORE,
+        repositoryIdentity: 'repository-after',
+        worktreeIdentity: 'worktree-after',
+      },
+      classification: classification(),
+      terminal: { status: 'success', output: 'non-empty', noOp: false },
+    })
+
+    expect(result).toMatchObject({ status: 'rejected' })
+  })
+
   test('mints bounded runtime-owned metadata after a changed workspace observation', () => {
     const ledger = createReceiptLedger({
       registrationIdentity: 'registration-a',
@@ -158,6 +203,7 @@ describe('receipt ledger', () => {
         workspaceIdentity: RAW_WORKSPACE_BEFORE,
         repositoryIdentity: 'repository-after',
         worktreeIdentity: 'worktree-after',
+        operationTargetIdentity: OPERATION_TARGET_IDENTITY,
         resourceIdentity: 'resource-after',
       }).status,
     ).toBe('consumed')
@@ -168,6 +214,7 @@ describe('receipt ledger', () => {
         workspaceIdentity: RAW_WORKSPACE_BEFORE,
         repositoryIdentity: 'repository-after',
         worktreeIdentity: 'worktree-after',
+        operationTargetIdentity: OPERATION_TARGET_IDENTITY,
         resourceIdentity: 'resource-after',
       }),
     ).toMatchObject({ status: 'rejected', reasonCode: 'already-consumed' })
@@ -218,6 +265,7 @@ describe('receipt ledger', () => {
     const fields: Array<keyof ReceiptContext> = [
       'repositoryIdentity',
       'worktreeIdentity',
+      'operationTargetIdentity',
       'resourceIdentity',
     ]
 
@@ -228,7 +276,10 @@ describe('receipt ledger', () => {
       const firstContext = context()
       const secondContext = {
         ...firstContext,
-        [field]: `foreign-${field}`,
+        [field]:
+          field === 'operationTargetIdentity'
+            ? 'b'.repeat(64)
+            : `foreign-${field}`,
       }
       expect(
         prepareLedgerObservation(ledger, 'same-call', firstContext).status,
@@ -282,6 +333,7 @@ describe('receipt ledger', () => {
         workspaceIdentity: RAW_WORKSPACE_BEFORE,
         repositoryIdentity: 'repository-after',
         worktreeIdentity: 'worktree-after',
+        operationTargetIdentity: OPERATION_TARGET_IDENTITY,
       },
       classification: classification(),
       terminal: { status: 'success', output: 'non-empty', noOp: false },
@@ -893,6 +945,7 @@ describe('receipt ledger', () => {
         workspaceIdentity: RAW_WORKSPACE_BEFORE,
         repositoryIdentity: 'repository-after',
         worktreeIdentity: 'worktree-after',
+        operationTargetIdentity: OPERATION_TARGET_IDENTITY,
         resourceIdentity: 'resource-after',
       }).status,
     ).toBe('consumed')
@@ -903,6 +956,7 @@ describe('receipt ledger', () => {
         workspaceIdentity: RAW_WORKSPACE_BEFORE,
         repositoryIdentity: 'repository-after',
         worktreeIdentity: 'worktree-after',
+        operationTargetIdentity: OPERATION_TARGET_IDENTITY,
         resourceIdentity: 'resource-after',
       }).status,
     ).toBe('consumed')

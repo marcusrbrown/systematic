@@ -109,6 +109,7 @@ interface ParserClassification {
 interface ParsedOperationStateFields {
   repositoryIdentity?: string
   worktreeIdentity?: string
+  operationTargetIdentity?: string
   resourceIdentity?: string
   resourceRevisionIdentity?: string
 }
@@ -362,6 +363,7 @@ function parseOperationContext(
         'workspaceIdentity',
         'repositoryIdentity',
         'worktreeIdentity',
+        'operationTargetIdentity',
         'resourceIdentity',
         'resourceRevisionIdentity',
       ]),
@@ -401,6 +403,9 @@ function parseOperationStateFields(
     value.repositoryIdentity,
   )
   const worktreeIdentity = parseOptionalDigestIdentity(value.worktreeIdentity)
+  const operationTargetIdentity = parseOptionalDigestIdentity(
+    value.operationTargetIdentity,
+  )
   const resourceIdentity = parseOptionalDigestIdentity(value.resourceIdentity)
   const resourceRevisionIdentity = parseOptionalDigestIdentity(
     value.resourceRevisionIdentity,
@@ -408,6 +413,10 @@ function parseOperationStateFields(
   if (
     !validOptionalIdentity(value.repositoryIdentity, repositoryIdentity) ||
     !validOptionalIdentity(value.worktreeIdentity, worktreeIdentity) ||
+    !validOptionalIdentity(
+      value.operationTargetIdentity,
+      operationTargetIdentity,
+    ) ||
     !validOptionalIdentity(value.resourceIdentity, resourceIdentity) ||
     !validOptionalIdentity(
       value.resourceRevisionIdentity,
@@ -419,6 +428,7 @@ function parseOperationStateFields(
   return {
     repositoryIdentity,
     worktreeIdentity,
+    operationTargetIdentity,
     resourceIdentity,
     resourceRevisionIdentity,
   }
@@ -477,6 +487,7 @@ const OPERATION_AFTER_FIELDS = new Set([
   'workspaceIdentity',
   'repositoryIdentity',
   'worktreeIdentity',
+  'operationTargetIdentity',
   'resourceIdentity',
   'resourceRevisionIdentity',
   'pullRequest',

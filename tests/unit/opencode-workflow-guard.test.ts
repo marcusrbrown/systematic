@@ -71,6 +71,7 @@ const OPERATION_SCOPE = {
   workspaceIdentity: 'a'.repeat(64),
   repositoryIdentity: 'b'.repeat(64),
   worktreeIdentity: 'c'.repeat(64),
+  operationTargetIdentity: 'a'.repeat(64),
 }
 
 interface TargetDerivationFixture {
@@ -168,6 +169,14 @@ function sequenceObserver(
   const remoteIndexes = new Map<string, number>()
   return {
     targetDigest: snapshots[0]?.targetDigest ?? 'a'.repeat(64),
+    validateRegisteredWorktree(candidateDirectory) {
+      return {
+        status: 'ok',
+        targetRoot: candidateDirectory,
+        gitDir: path.join(candidateDirectory, '.git'),
+        commonDir: path.join(candidateDirectory, '.git'),
+      }
+    },
     async snapshot() {
       const snapshot = snapshots[Math.min(index++, snapshots.length - 1)]
       if (!snapshot) {
@@ -318,6 +327,7 @@ function mintReceipt(
     unitId: currentStatus.unit.unitId,
     workspaceIdentity: scope.workspaceIdentity,
     repositoryIdentity: scope.repositoryIdentity,
+    operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
     worktreeIdentity:
       operation === 'implementation'
         ? 'worktree-before'
@@ -337,6 +347,7 @@ function mintReceipt(
       workspaceIdentity: scope.workspaceIdentity,
       repositoryIdentity: scope.repositoryIdentity,
       worktreeIdentity: scope.worktreeIdentity,
+      operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
     },
     classification: {
       outcome: 'accepted',
@@ -1779,6 +1790,7 @@ describe('OpenCode workflow guard adapter', () => {
       workspaceIdentity: SCOPE.workspaceIdentity,
       repositoryIdentity: SCOPE.repositoryIdentity,
       worktreeIdentity: SCOPE.worktreeIdentity,
+      operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
     })
 
     const sharedOutput = { title: 'pending', output: 'pending', metadata: {} }
@@ -1990,7 +2002,13 @@ describe('OpenCode workflow guard adapter', () => {
         expect(observation.context.workspaceIdentity).toBe(
           OPERATION_SCOPE.workspaceIdentity,
         )
+        expect(observation.context.operationTargetIdentity).toBe(
+          OPERATION_SCOPE.workspaceIdentity,
+        )
         expect(observation.after?.workspaceIdentity).toBe(
+          OPERATION_SCOPE.workspaceIdentity,
+        )
+        expect(observation.after?.operationTargetIdentity).toBe(
           OPERATION_SCOPE.workspaceIdentity,
         )
       }
@@ -2046,6 +2064,173 @@ describe('OpenCode workflow guard adapter', () => {
       ])
     })
   }
+
+  test('mints an implementation receipt for a write targeted at a registered worktree', async () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      const parentObserver = createOpencodeOperationObserver({
+        targetDirectory: fixture.parentRoot,
+      })
+      const initial = await parentObserver.snapshot()
+      if (initial.status !== 'available') throw new Error('parent unavailable')
+      const observations: ReceiptOperationObservation[] = []
+      const classifier = createReceiptClassifier()
+      const adapter = createOpencodeWorkflowGuard({
+        config: { mode: 'observe' },
+        workspaceIdentity: initial.snapshot.targetDigest,
+        repositoryIdentity: initial.snapshot.repositoryRevisionDigest,
+        worktreeIdentity: initial.snapshot.worktreeRevisionDigest,
+        targetDirectory: fixture.parentRoot,
+        observer: parentObserver,
+        classifier: {
+          ...classifier,
+          classifyOperation: async (input: unknown) => {
+            observations.push(input as ReceiptOperationObservation)
+            return classifier.classifyOperation?.(input)
+          },
+        },
+      })
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+
+      const filePath = path.join(fixture.linkedRoot, 'targeted.txt')
+      const input = {
+        tool: 'write',
+        sessionID: SESSION_A,
+        callID: 'worktree-targeted-write',
+        args: { filePath, content: 'changed' },
+      }
+      await adapter.hooks['tool.execute.before'](input, { args: input.args })
+      fs.writeFileSync(filePath, 'changed')
+      await adapter.hooks['tool.execute.after'](input, {
+        title: 'write complete',
+        output: 'changed',
+        metadata: {},
+      })
+
+      const receipts = adapter.ledger(SESSION_A)?.listReceipts() ?? []
+      expect(observations).toHaveLength(2)
+      expect(observations.at(-1)).toMatchObject({
+        operation: 'implementation',
+        context: {
+          operationTargetIdentity: expect.any(String),
+        },
+        after: {
+          operationTargetIdentity: expect.any(String),
+        },
+      })
+      expect(receipts).toHaveLength(1)
+      expect(receipts[0]?.canonical.operation).toBe('implementation')
+      expect(receipts[0]?.canonical.operationTargetIdentity).toBe(
+        createOpencodeOperationObserver({
+          targetDirectory: fixture.linkedRoot,
+        }).targetDigest,
+      )
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('rejects a worktree that is removed and recreated at the same path between hooks', async () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      const parentObserver = createOpencodeOperationObserver({
+        targetDirectory: fixture.parentRoot,
+      })
+      const initial = await parentObserver.snapshot()
+      if (initial.status !== 'available') throw new Error('parent unavailable')
+      const adapter = createOpencodeWorkflowGuard({
+        config: { mode: 'observe' },
+        workspaceIdentity: initial.snapshot.targetDigest,
+        repositoryIdentity: initial.snapshot.repositoryRevisionDigest,
+        worktreeIdentity: initial.snapshot.worktreeRevisionDigest,
+        targetDirectory: fixture.parentRoot,
+        observer: parentObserver,
+        classifier: createReceiptClassifier(),
+      })
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+
+      const input = {
+        tool: 'write',
+        sessionID: SESSION_A,
+        callID: 'recreated-worktree-write',
+        args: {
+          filePath: path.join(fixture.linkedRoot, 'targeted.txt'),
+          content: 'changed',
+        },
+      }
+      await adapter.hooks['tool.execute.before'](input, { args: input.args })
+      runTargetFixtureGit(fixture.parentRoot, [
+        'worktree',
+        'remove',
+        '--force',
+        fixture.linkedRoot,
+      ])
+      runTargetFixtureGit(fixture.parentRoot, [
+        'worktree',
+        'add',
+        '--quiet',
+        '-b',
+        'linked-recreated',
+        fixture.linkedRoot,
+      ])
+      await adapter.hooks['tool.execute.after'](input, {
+        title: 'write complete',
+        output: 'changed',
+        metadata: {},
+      })
+
+      expect(ledger(adapter).listReceipts()).toHaveLength(0)
+      expect(status(adapter).state).toBe('rejected')
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('does not fall back to a parent receipt for an invalid target after a parent change', async () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      const parentObserver = createOpencodeOperationObserver({
+        targetDirectory: fixture.parentRoot,
+      })
+      const initial = await parentObserver.snapshot()
+      if (initial.status !== 'available') throw new Error('parent unavailable')
+      const adapter = createOpencodeWorkflowGuard({
+        config: { mode: 'observe' },
+        workspaceIdentity: initial.snapshot.targetDigest,
+        repositoryIdentity: initial.snapshot.repositoryRevisionDigest,
+        worktreeIdentity: initial.snapshot.worktreeRevisionDigest,
+        targetDirectory: fixture.parentRoot,
+        observer: parentObserver,
+        classifier: createReceiptClassifier(),
+      })
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+
+      const input = {
+        tool: 'write',
+        sessionID: SESSION_A,
+        callID: 'invalid-target-with-parent-change',
+        args: {
+          filePath: path.join(fixture.unrelatedRoot, 'targeted.txt'),
+          content: 'should not mint',
+        },
+      }
+      await adapter.hooks['tool.execute.before'](input, { args: input.args })
+      fs.appendFileSync(
+        path.join(fixture.parentRoot, 'tracked.txt'),
+        'parent\n',
+      )
+      await adapter.hooks['tool.execute.after'](input, {
+        title: 'write complete',
+        output: 'changed',
+        metadata: {},
+      })
+
+      expect(ledger(adapter).listReceipts()).toHaveLength(0)
+      expect(status(adapter).state).toBe('unavailable')
+    } finally {
+      fixture.cleanup()
+    }
+  })
 
   test('projects observer commitClosure through the operation observation', async () => {
     const observations: ReceiptOperationObservation[] = []
@@ -2840,6 +3025,7 @@ describe('OpenCode workflow guard adapter', () => {
           epochId: EPOCH_ID_A,
           unitId: UNIT_ID_A,
           workspaceIdentity: 'workspace-a',
+          operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
           worktreeIdentity: 'worktree-before',
         },
       })
@@ -2849,10 +3035,12 @@ describe('OpenCode workflow guard adapter', () => {
           epochId: EPOCH_ID_A,
           unitId: UNIT_ID_A,
           workspaceIdentity: 'workspace-a',
+          operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
           worktreeIdentity: 'worktree-before',
         },
         after: {
           workspaceIdentity: 'workspace-a',
+          operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
           worktreeIdentity: 'worktree-after',
         },
         classification: {
@@ -3244,6 +3432,7 @@ describe('OpenCode workflow guard adapter', () => {
           epochId: EPOCH_ID,
           unitId: UNIT_ID,
           workspaceIdentity: 'ws',
+          operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
           worktreeIdentity: 'before',
         },
       })
@@ -3253,9 +3442,14 @@ describe('OpenCode workflow guard adapter', () => {
           epochId: EPOCH_ID,
           unitId: UNIT_ID,
           workspaceIdentity: 'ws',
+          operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
           worktreeIdentity: 'before',
         },
-        after: { workspaceIdentity: 'ws', worktreeIdentity: 'after' },
+        after: {
+          workspaceIdentity: 'ws',
+          operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
+          worktreeIdentity: 'after',
+        },
         classification: {
           outcome: 'accepted',
           category: 'implementation',
@@ -3426,6 +3620,7 @@ describe('OpenCode workflow guard adapter', () => {
           epochId: EPOCH_ID,
           unitId: UNIT_ID,
           workspaceIdentity,
+          operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
           repositoryIdentity,
           worktreeIdentity: worktreeBeforeIdentity,
         },
@@ -3436,11 +3631,13 @@ describe('OpenCode workflow guard adapter', () => {
           epochId: EPOCH_ID,
           unitId: UNIT_ID,
           workspaceIdentity,
+          operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
           repositoryIdentity,
           worktreeIdentity: worktreeBeforeIdentity,
         },
         after: {
           workspaceIdentity,
+          operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
           repositoryIdentity,
           worktreeIdentity: worktreeAfterIdentity,
         },
@@ -3514,6 +3711,7 @@ describe('OpenCode workflow guard adapter', () => {
           epochId,
           unitId,
           workspaceIdentity: receiptWorkspaceIdentity,
+          operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
           repositoryIdentity: receipt.repositoryBeforeIdentity,
           worktreeIdentity: receipt.worktreeBeforeIdentity,
         }
@@ -3529,6 +3727,7 @@ describe('OpenCode workflow guard adapter', () => {
           context,
           after: {
             workspaceIdentity: receiptWorkspaceIdentity,
+            operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
             repositoryIdentity: receipt.repositoryAfterIdentity,
             worktreeIdentity: receipt.worktreeAfterIdentity,
             ...(receipt.operation === 'commit' ? { commitClosure: true } : {}),
@@ -3984,6 +4183,7 @@ describe('OpenCode workflow guard adapter', () => {
           epochId: EPOCH_ID,
           unitId: UNIT_ID,
           workspaceIdentity: 'ws',
+          operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
           worktreeIdentity: 'b',
         },
       })
@@ -3993,9 +4193,14 @@ describe('OpenCode workflow guard adapter', () => {
           epochId: EPOCH_ID,
           unitId: UNIT_ID,
           workspaceIdentity: 'ws',
+          operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
           worktreeIdentity: 'b',
         },
-        after: { workspaceIdentity: 'ws', worktreeIdentity: 'a' },
+        after: {
+          workspaceIdentity: 'ws',
+          operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
+          worktreeIdentity: 'a',
+        },
         classification: {
           outcome: 'accepted',
           category: 'implementation',
