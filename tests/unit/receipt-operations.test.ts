@@ -359,6 +359,7 @@ function coherentFinalReadbacks(
       workspaceIdentity,
       repositoryIdentity,
       worktreeIdentity,
+      operationTargetIdentity: OPERATION_TARGET_IDENTITY,
     },
     {
       operation: 'push',
@@ -1931,6 +1932,7 @@ describe('receipt operation adapters', () => {
             workspaceIdentity: WORKSPACE_CURRENT,
             repositoryIdentity: REPOSITORY_AFTER,
             worktreeIdentity: WORKTREE_AFTER,
+            operationTargetIdentity: OPERATION_TARGET_IDENTITY,
           },
           {
             operation: 'push',
@@ -2018,6 +2020,7 @@ describe('receipt operation adapters', () => {
           workspaceIdentity: WORKSPACE_CURRENT,
           repositoryIdentity: REPOSITORY_CURRENT,
           worktreeIdentity: WORKTREE_ZERO,
+          operationTargetIdentity: OPERATION_TARGET_IDENTITY,
         },
       ],
     })
@@ -2093,6 +2096,7 @@ describe('receipt operation adapters', () => {
             workspaceIdentity: WORKSPACE_AFTER,
             repositoryIdentity: REPOSITORY_CURRENT,
             worktreeIdentity: WORKTREE_CURRENT,
+            operationTargetIdentity: OPERATION_TARGET_IDENTITY,
           },
           {
             operation: 'pr-creation',

@@ -760,6 +760,53 @@ describe('OpenCode operation observer', () => {
     }
   })
 
+  test('keeps identical registered worktrees distinct by target digest', async () => {
+    const fixture = createRegisteredWorktreeFixture()
+    const secondLinkedWorktree = path.join(
+      path.dirname(fixture.linkedWorktree),
+      `${path.basename(fixture.linkedWorktree)}-second`,
+    )
+    try {
+      const added = runGit(fixture.parent.root, [
+        'worktree',
+        'add',
+        '--quiet',
+        '-b',
+        'linked-second',
+        secondLinkedWorktree,
+      ])
+      expect(added.status).toBe(0)
+
+      const first = await createOpencodeOperationObserver({
+        targetDirectory: fixture.linkedWorktree,
+      }).snapshot()
+      const second = await createOpencodeOperationObserver({
+        targetDirectory: secondLinkedWorktree,
+      }).snapshot()
+      expect(first.status).toBe('available')
+      expect(second.status).toBe('available')
+      if (first.status !== 'available' || second.status !== 'available') {
+        return
+      }
+
+      expect(
+        runGit(fixture.linkedWorktree, ['rev-parse', 'HEAD']).stdout.trim(),
+      ).toBe(runGit(secondLinkedWorktree, ['rev-parse', 'HEAD']).stdout.trim())
+      expect(
+        fs.readFileSync(
+          path.join(fixture.linkedWorktree, 'tracked.txt'),
+          'utf8',
+        ),
+      ).toBe(
+        fs.readFileSync(path.join(secondLinkedWorktree, 'tracked.txt'), 'utf8'),
+      )
+      expect(first.snapshot.targetDigest).not.toBe(second.snapshot.targetDigest)
+    } finally {
+      fs.rmSync(secondLinkedWorktree, { recursive: true, force: true })
+      fixture.cleanup()
+    }
+  })
+
   test('fails closed on command failure and bounded output without exposing raw facts', async () => {
     const fixture = createGitFixture()
     const secret = 'raw-observer-secret'

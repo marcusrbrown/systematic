@@ -537,12 +537,15 @@ async function createSession(
   return created.data.id
 }
 
-function initializeIsolatedRepository(fixture: IsolatedFixture): void {
+function initializeIsolatedRepository(
+  fixture: IsolatedFixture,
+  additionalTrackedFiles: readonly string[] = [],
+): void {
   const commands = [
     ['git', 'init', '-b', 'main'],
     ['git', 'config', 'user.email', 'u5-integration@example.invalid'],
     ['git', 'config', 'user.name', 'U5 Integration'],
-    ['git', 'add', 'package.json'],
+    ['git', 'add', 'package.json', ...additionalTrackedFiles],
     ['git', 'commit', '-m', 'initial fixture'],
   ]
   for (const command of commands) {
@@ -1690,10 +1693,21 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
     )
 
     test(
-      'rolls up implementation and commit receipts from a registered nested worktree',
+      '#678 reproduction: rolls up parent-rooted child tools targeting a registered nested worktree and completes',
       async () => {
+        // Regression guard for 3420c5c and earlier: the parent-rooted child
+        // remains in the host checkout while its bash tools target the nested
+        // worktree. The former fixed-root observer therefore saw no change,
+        // minted no parent receipts, and blocked completion.
         const localFixture = createIsolatedFixture()
-        initializeIsolatedRepository(localFixture)
+        // Mirror the real repo's gitignored .worktrees/ directory and the
+        // actual #678 dogfood worktree so the parent observer skips nested
+        // worktree contents during its untracked-file walk.
+        fs.writeFileSync(
+          path.join(localFixture.projectDir, '.gitignore'),
+          '.worktrees/\n',
+        )
+        initializeIsolatedRepository(localFixture, ['.gitignore'])
         const nestedWorktree = path.join(
           localFixture.projectDir,
           '.worktrees',
@@ -1737,7 +1751,11 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
                 id: 'u5c-parent-start',
                 name: 'systematic_workflow_start',
                 arguments: {
-                  expected_operations: ['implementation', 'commit'],
+                  expected_operations: [
+                    'implementation',
+                    'verification',
+                    'commit',
+                  ],
                 },
               },
             ],
@@ -1781,6 +1799,18 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
                 name: 'bash',
                 arguments: {
                   command: 'git apply change.patch',
+                  workdir: nestedWorktree,
+                },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5c-child-write-verify',
+                name: 'bash',
+                arguments: {
+                  command: 'git status --short',
                   workdir: nestedWorktree,
                 },
               },
@@ -1856,7 +1886,16 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
             ],
           },
           { text: 'nested worktree commit finished' },
-          { text: 'parent finished' },
+          {
+            toolCalls: [
+              {
+                id: 'u5c-parent-complete',
+                name: 'systematic_workflow_complete',
+                arguments: { target: 'unit' },
+              },
+            ],
+          },
+          { text: 'nested worktree workflow completed' },
         ])
         const configContent = buildProviderConfig(
           [localPackagedPluginUrl],
@@ -1928,8 +1967,22 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
           const parentMints = receiptMintSummaries(parentMessages.data)
           expect(parentMints.map(({ operation }) => operation)).toEqual([
             'implementation',
+            'verification',
             'commit',
           ])
+          const completionParts = completedToolParts(
+            parentMessages.data,
+            'systematic_workflow_complete',
+          )
+          expect(completionParts).toHaveLength(1)
+          const completionState = completionParts[0]?.state as Record<
+            string,
+            unknown
+          >
+          expect(completionState.output).toContain(
+            'workflow guard completed unit',
+          )
+          expect(receiptMintSummaries(parentMessages.data)).toEqual(parentMints)
           assertPrivacySafeMarkers(parentMessages.data)
         } finally {
           if (host) await host.stop()

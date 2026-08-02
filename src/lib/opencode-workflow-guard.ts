@@ -300,6 +300,12 @@ interface OperationObserverRegistration {
   readonly observer: OpencodeOperationObserver
 }
 
+interface EffectiveOperationObserver {
+  readonly observer: OpencodeOperationObserver
+  readonly targetIdentity: string
+  readonly pinned: boolean
+}
+
 type OperationObserverRegistry = Map<string, OperationObserverRegistration>
 
 interface RecoveredOperationContext {
@@ -1393,6 +1399,49 @@ function createSessionRuntime(
     return parentObserverRegistration()
   }
 
+  function effectiveOperationObserver():
+    | EffectiveOperationObserver
+    | undefined {
+    const parentObserver = options.observer
+    if (!parentObserver) return undefined
+    const pinnedTargetIdentity =
+      guard.status().unit?.pinnedOperationTargetIdentity
+    if (
+      pinnedTargetIdentity === undefined ||
+      pinnedTargetIdentity === options.workspaceIdentity
+    ) {
+      return {
+        observer: parentObserver,
+        targetIdentity: options.workspaceIdentity,
+        pinned: false,
+      }
+    }
+    const registration = operationObserverRegistration(pinnedTargetIdentity)
+    if (!registration) return undefined
+    let validation: RegisteredWorktreeValidationResult
+    try {
+      validation = parentObserver.validateRegisteredWorktree(
+        registration.targetRoot,
+      )
+    } catch {
+      return undefined
+    }
+    if (
+      validation.status !== 'ok' ||
+      validation.targetRoot !== registration.targetRoot ||
+      registeredWorktreeIdentity(validation) !==
+        registration.registeredWorktreeIdentity ||
+      registration.observer.targetDigest !== pinnedTargetIdentity
+    ) {
+      return undefined
+    }
+    return {
+      observer: registration.observer,
+      targetIdentity: pinnedTargetIdentity,
+      pinned: true,
+    }
+  }
+
   function questionResource(target: TransitionTarget): string {
     const status = guard.status()
     return `workflow/${target}/${status.unit?.unitId ?? status.epoch?.epochId ?? 'unknown'}`
@@ -2208,18 +2257,22 @@ function createSessionRuntime(
   async function refreshReadback(): Promise<void> {
     abandonPending()
     if (!options.observer) return
+    const effective = effectiveOperationObserver()
+    if (!effective) {
+      markUnavailable()
+      return
+    }
     let result: OperationObserverResult
     try {
-      result = await options.observer.snapshot()
+      result = await effective.observer.snapshot()
     } catch {
       markUnavailable()
       return
     }
-    if (result.status === 'unavailable') {
-      markUnavailable()
-      return
-    }
-    if (result.snapshot.targetDigest !== options.workspaceIdentity) {
+    if (
+      result.status === 'unavailable' ||
+      result.snapshot.targetDigest !== effective.targetIdentity
+    ) {
       markUnavailable()
       return
     }
@@ -2227,24 +2280,28 @@ function createSessionRuntime(
       workspaceIdentity: options.workspaceIdentity,
       repositoryIdentity: result.snapshot.repositoryRevisionDigest,
       worktreeIdentity: result.snapshot.worktreeRevisionDigest,
+      ...(effective.pinned
+        ? { operationTargetIdentity: effective.targetIdentity }
+        : {}),
     })
     if (
       (observed.status === 'rejected' &&
         observed.reasonCode === 'workspace-mismatch') ||
-      !(await refreshRemoteReadbacks(result.snapshot))
+      !(await refreshRemoteReadbacks(effective.observer, result.snapshot))
     ) {
       markUnavailable()
     }
   }
 
   async function refreshRemoteReadbacks(
+    observer: OpencodeOperationObserver,
     local: OperationObserverSnapshot,
   ): Promise<boolean> {
     const remoteOperations = guard
       .status()
       .satisfiedOperations.filter(remoteOperation)
     if (remoteOperations.length === 0) return true
-    const remoteSnapshot = options.observer?.remoteSnapshot
+    const remoteSnapshot = observer.remoteSnapshot
     if (!remoteSnapshot) return false
     for (const operation of remoteOperations) {
       const result = await readRemoteScope(remoteSnapshot, operation)
@@ -3026,49 +3083,105 @@ function createSessionRuntime(
     | { status: 'ready'; readbacks: readonly unknown[] }
   > {
     if (!options.observer) return { status: 'none' }
-    let result: OperationObserverResult
+    let parentResult: OperationObserverResult
     try {
-      result = await options.observer.snapshot()
+      parentResult = await options.observer.snapshot()
     } catch {
       return { status: 'unavailable' }
     }
     if (
-      result.status === 'unavailable' ||
-      result.snapshot.targetDigest !== options.workspaceIdentity
+      parentResult.status === 'unavailable' ||
+      parentResult.snapshot.targetDigest !== options.workspaceIdentity
     ) {
       return { status: 'unavailable' }
     }
-    const remoteReadbacks = await completionRemoteReadbacks()
+    const effective = effectiveOperationObserver()
+    if (!effective) return { status: 'unavailable' }
+    let effectiveSnapshot = parentResult.snapshot
+    if (effective.pinned) {
+      let pinnedResult: OperationObserverResult
+      try {
+        pinnedResult = await effective.observer.snapshot()
+      } catch {
+        return { status: 'unavailable' }
+      }
+      if (
+        pinnedResult.status === 'unavailable' ||
+        pinnedResult.snapshot.targetDigest !== effective.targetIdentity
+      ) {
+        return { status: 'unavailable' }
+      }
+      effectiveSnapshot = pinnedResult.snapshot
+    }
+    const initialEffectiveSnapshot = effectiveSnapshot
+    const remoteReadbacks = await completionRemoteReadbacks(effective.observer)
     if (!remoteReadbacks) return { status: 'unavailable' }
-    let finalResult: OperationObserverResult
+    let finalParentResult: OperationObserverResult
     try {
-      finalResult = await options.observer.snapshot()
+      finalParentResult = await options.observer.snapshot()
     } catch {
       return { status: 'unavailable' }
     }
     if (
-      finalResult.status === 'unavailable' ||
-      finalResult.snapshot.targetDigest !== result.snapshot.targetDigest ||
-      finalResult.snapshot.repositoryRevisionDigest !==
-        result.snapshot.repositoryRevisionDigest ||
-      finalResult.snapshot.worktreeRevisionDigest !==
-        result.snapshot.worktreeRevisionDigest
+      finalParentResult.status === 'unavailable' ||
+      finalParentResult.snapshot.targetDigest !==
+        parentResult.snapshot.targetDigest ||
+      finalParentResult.snapshot.repositoryRevisionDigest !==
+        parentResult.snapshot.repositoryRevisionDigest ||
+      finalParentResult.snapshot.worktreeRevisionDigest !==
+        parentResult.snapshot.worktreeRevisionDigest
     ) {
       return { status: 'unavailable' }
+    }
+    let finalEffective = effective
+    if (effective.pinned) {
+      const revalidated = effectiveOperationObserver()
+      if (!revalidated) return { status: 'unavailable' }
+      finalEffective = revalidated
+      if (
+        finalEffective.observer !== effective.observer ||
+        finalEffective.targetIdentity !== effective.targetIdentity ||
+        !finalEffective.pinned
+      ) {
+        return { status: 'unavailable' }
+      }
+      let pinnedResult: OperationObserverResult
+      try {
+        pinnedResult = await finalEffective.observer.snapshot()
+      } catch {
+        return { status: 'unavailable' }
+      }
+      if (
+        pinnedResult.status === 'unavailable' ||
+        pinnedResult.snapshot.targetDigest !== finalEffective.targetIdentity
+      ) {
+        return { status: 'unavailable' }
+      }
+      effectiveSnapshot = pinnedResult.snapshot
+      if (
+        effectiveSnapshot.repositoryRevisionDigest !==
+          initialEffectiveSnapshot.repositoryRevisionDigest ||
+        effectiveSnapshot.worktreeRevisionDigest !==
+          initialEffectiveSnapshot.worktreeRevisionDigest
+      ) {
+        return { status: 'unavailable' }
+      }
+    } else {
+      effectiveSnapshot = finalParentResult.snapshot
     }
     return {
       status: 'ready',
       readbacks: [
         {
           workspaceIdentity: options.workspaceIdentity,
-          repositoryIdentity: finalResult.snapshot.repositoryRevisionDigest,
-          worktreeIdentity: finalResult.snapshot.worktreeRevisionDigest,
-          operationTargetIdentity: finalResult.snapshot.targetDigest,
+          repositoryIdentity: effectiveSnapshot.repositoryRevisionDigest,
+          worktreeIdentity: effectiveSnapshot.worktreeRevisionDigest,
+          operationTargetIdentity: finalEffective.targetIdentity,
         },
         ...remoteReadbacks.map(({ operation, snapshot }) =>
           remoteReadbackInput(
             operation,
-            finalResult.snapshot,
+            effectiveSnapshot,
             options.workspaceIdentity,
             snapshot,
           ),
@@ -3077,7 +3190,9 @@ function createSessionRuntime(
     }
   }
 
-  async function completionRemoteReadbacks(): Promise<
+  async function completionRemoteReadbacks(
+    observer: OpencodeOperationObserver,
+  ): Promise<
     | readonly {
         operation: RemoteOperation
         snapshot: OperationObserverRemoteSnapshot
@@ -3088,7 +3203,7 @@ function createSessionRuntime(
       .status()
       .satisfiedOperations.filter(remoteOperation)
     if (remoteOperations.length === 0) return []
-    const remoteSnapshot = options.observer?.remoteSnapshot
+    const remoteSnapshot = observer.remoteSnapshot
     if (!remoteSnapshot) return undefined
     const readbacks: Array<{
       operation: RemoteOperation

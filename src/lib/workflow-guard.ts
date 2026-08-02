@@ -2904,6 +2904,12 @@ export function createWorkflowGuard(
     if (!global?.repositoryIdentity || !global.worktreeIdentity) {
       return 'invalid-receipt'
     }
+    if (
+      unit.pinnedOperationTargetIdentity !== undefined &&
+      global.operationTargetIdentity !== unit.pinnedOperationTargetIdentity
+    ) {
+      return 'operation-target-mismatch'
+    }
     const required = RESOURCE_FINAL_READBACK_OPERATIONS.filter((operation) =>
       unit.evidence.has(operation),
     )
