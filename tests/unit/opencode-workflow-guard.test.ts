@@ -4071,6 +4071,14 @@ describe('OpenCode workflow guard adapter', () => {
         sessionSalt: ownSalt,
         observer: {
           targetDigest: OPERATION_SCOPE.workspaceIdentity,
+          validateRegisteredWorktree(candidateDirectory: string) {
+            return {
+              status: 'ok' as const,
+              targetRoot: candidateDirectory,
+              gitDir: `${candidateDirectory}/.git`,
+              commonDir: `${candidateDirectory}/.git`,
+            }
+          },
           async snapshot() {
             snapshotCalled = true
             return {
@@ -4256,6 +4264,14 @@ describe('OpenCode workflow guard adapter', () => {
         runtimeRequiredOperations,
         observer: {
           targetDigest: OPERATION_SCOPE.workspaceIdentity,
+          validateRegisteredWorktree(candidateDirectory: string) {
+            return {
+              status: 'ok' as const,
+              targetRoot: candidateDirectory,
+              gitDir: `${candidateDirectory}/.git`,
+              commonDir: `${candidateDirectory}/.git`,
+            }
+          },
           async snapshot() {
             snapshotRef.called = true
             return {
@@ -4749,6 +4765,124 @@ describe('OpenCode workflow guard adapter', () => {
       expect(
         secondOutput.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY],
       ).toBeUndefined()
+    })
+
+    test('rolls up a child implementation from a registered worktree target', async () => {
+      const fixture = createTargetDerivationFixture()
+      try {
+        const parentObserver = createOpencodeOperationObserver({
+          targetDirectory: fixture.parentRoot,
+        })
+        const initial = await parentObserver.snapshot()
+        if (initial.status !== 'available')
+          throw new Error('parent observer unavailable')
+
+        const ownIdentity = 'rollup-registered-worktree-target'
+        const ownSalt = new Uint8Array(32).fill(128)
+        const childSessionID = 'child-registered-worktree-target'
+        const parentSessionID = SESSION_A
+        let childParts: ReadonlyArray<unknown> = []
+        const adapter = createOpencodeWorkflowGuard({
+          config: { mode: 'observe', debug: false },
+          workspaceIdentity: initial.snapshot.targetDigest,
+          repositoryIdentity: initial.snapshot.repositoryRevisionDigest,
+          worktreeIdentity: initial.snapshot.worktreeRevisionDigest,
+          targetDirectory: fixture.parentRoot,
+          registrationIdentity: ownIdentity,
+          sessionSalt: ownSalt,
+          runtimeRequiredOperations: ['implementation'],
+          observer: parentObserver,
+          classifier: createReceiptClassifier(),
+          hostReadback: {
+            readSessionParts: async (sessionID) =>
+              sessionID === parentSessionID ? [] : childParts,
+            listChildren: async (sessionID) =>
+              sessionID === parentSessionID
+                ? [{ sessionId: childSessionID, parentID: parentSessionID }]
+                : [],
+          },
+        })
+
+        await observeSkill(
+          adapter,
+          'systematic_skill',
+          'ce:work',
+          'registered-worktree-parent-skill',
+          parentSessionID,
+        )
+
+        const childSkillOutput = {
+          title: 'Loaded skill',
+          output: 'child skill result',
+          metadata: {},
+        }
+        await observeSkill(
+          adapter,
+          'systematic_skill',
+          'ce:work',
+          'registered-worktree-child-skill',
+          childSessionID,
+          childSkillOutput,
+        )
+
+        const filePath = path.join(fixture.linkedRoot, 'rollup-targeted.txt')
+        const childWriteInput = {
+          tool: 'write',
+          sessionID: childSessionID,
+          callID: 'registered-worktree-child-write',
+          args: { filePath, content: 'changed' },
+        }
+        const childWriteOutput = {
+          title: 'write complete',
+          output: 'changed',
+          metadata: {},
+        }
+        await adapter.hooks['tool.execute.before'](childWriteInput, {
+          args: childWriteInput.args,
+        })
+        fs.writeFileSync(filePath, 'changed')
+        await adapter.hooks['tool.execute.after'](
+          childWriteInput,
+          childWriteOutput,
+        )
+
+        const childSkillMarkers =
+          childSkillOutput.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]
+        const childWriteMarker =
+          childWriteOutput.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]
+        childParts = [
+          {
+            info: {},
+            parts: [
+              {
+                state: {
+                  metadata: {
+                    [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: [
+                      ...(Array.isArray(childSkillMarkers)
+                        ? childSkillMarkers
+                        : childSkillMarkers
+                          ? [childSkillMarkers]
+                          : []),
+                      ...(childWriteMarker ? [childWriteMarker] : []),
+                    ],
+                  },
+                },
+              },
+            ],
+          },
+        ]
+
+        await fireTaskAfter(adapter, childSessionID, parentSessionID)
+
+        const receipts = ledger(adapter, parentSessionID).listReceipts()
+        expect(receipts).toHaveLength(1)
+        expect(receipts[0]?.canonical.operation).toBe('implementation')
+        expect(status(adapter, parentSessionID).satisfiedOperations).toContain(
+          'implementation',
+        )
+      } finally {
+        fixture.cleanup()
+      }
     })
 
     test('skips stale child receipts, mints a later current receipt, and rolls up once', async () => {

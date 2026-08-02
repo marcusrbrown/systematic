@@ -294,6 +294,22 @@ interface PendingOperation {
   remoteBefore?: OperationObserverRemoteResult
 }
 
+interface OperationObserverRegistration {
+  readonly targetRoot: string
+  readonly registeredWorktreeIdentity: string
+  readonly observer: OpencodeOperationObserver
+}
+
+type OperationObserverRegistry = Map<string, OperationObserverRegistration>
+
+interface RecoveredOperationContext {
+  readonly targetIdentity: string
+  readonly before: OperationObserverSnapshot
+  readonly after: OperationObserverSnapshot
+}
+
+type RecoveredOperationRegistry = Map<string, RecoveredOperationContext>
+
 interface PendingQuestionChallenge {
   readonly challenge: QuestionChallengeRecord
   readonly purpose: 'transition' | 'session-disablement'
@@ -315,7 +331,11 @@ interface TerminalComplete {
 }
 
 type OperationCompletionResult =
-  | { status: 'accepted'; operation: ReceiptOperation }
+  | {
+      status: 'accepted'
+      operation: ReceiptOperation
+      after: OperationObserverSnapshot
+    }
   | { status: 'deferred' | 'ignored' | 'unavailable' }
 
 interface MarkerSource {
@@ -1298,6 +1318,8 @@ function buildMarker(
 
 function createSessionRuntime(
   options: OpencodeWorkflowGuardOptions,
+  operationObservers: OperationObserverRegistry,
+  recoveredOperationContexts: RecoveredOperationRegistry,
 ): SessionRuntime {
   let ledger!: ReceiptLedger
   let guard!: WorkflowGuard
@@ -1321,6 +1343,55 @@ function createSessionRuntime(
   const pendingQuestionChallenges = new Map<string, PendingQuestionChallenge>()
   const blockedQuestionCalls = new Map<string, string>()
   const consumedQuestionTargets = new Set<TransitionTarget>()
+
+  function rememberOperationObserver(
+    registration: OperationObserverRegistration,
+  ): void {
+    const existing = operationObservers.get(registration.observer.targetDigest)
+    if (existing && existing.targetRoot !== registration.targetRoot) return
+    operationObservers.set(registration.observer.targetDigest, registration)
+  }
+
+  function parentObserverRegistration():
+    | OperationObserverRegistration
+    | undefined {
+    if (!options.observer) return undefined
+    const targetRoot = canonicalExistingPath(
+      options.targetDirectory ?? process.cwd(),
+      fs.realpathSync,
+    )
+    if (!targetRoot) return undefined
+    let validation: RegisteredWorktreeValidationResult
+    try {
+      validation = options.observer.validateRegisteredWorktree(targetRoot)
+    } catch {
+      return undefined
+    }
+    const registeredIdentity = registeredWorktreeIdentity(validation)
+    if (
+      validation.status !== 'ok' ||
+      registeredIdentity === undefined ||
+      validation.targetRoot !== targetRoot
+    ) {
+      return undefined
+    }
+    const registration = {
+      targetRoot,
+      registeredWorktreeIdentity: registeredIdentity,
+      observer: options.observer,
+    }
+    rememberOperationObserver(registration)
+    return registration
+  }
+
+  function operationObserverRegistration(
+    targetIdentity: string,
+  ): OperationObserverRegistration | undefined {
+    const existing = operationObservers.get(targetIdentity)
+    if (existing) return existing
+    if (options.observer?.targetDigest !== targetIdentity) return undefined
+    return parentObserverRegistration()
+  }
 
   function questionResource(target: TransitionTarget): string {
     const status = guard.status()
@@ -1872,10 +1943,14 @@ function createSessionRuntime(
       markUnavailable()
       return
     }
-    const current = await options.observer?.snapshot()
-    if (!current || current.status === 'unavailable') {
-      markUnavailable()
-      return
+    // Touch the fixed parent observer for the stable workspace path, but do
+    // not use its mutable repository/worktree revisions for child validation.
+    // A nested worktree can make the parent-root scan unavailable while its
+    // own authenticated target remains valid and independently observable.
+    try {
+      await options.observer?.snapshot()
+    } catch {
+      // Target-specific validation below remains authoritative.
     }
     const currentStatus = guard.status()
     if (!currentStatus.epoch || !currentStatus.unit) return
@@ -1883,15 +1958,12 @@ function createSessionRuntime(
       'workspace',
       parentBefore.workspaceIdentity,
     )
-    const expectedRepository = childLedger.digestIdentity(
-      'repository',
-      current.snapshot.repositoryRevisionDigest,
-    )
-    const expectedWorktree = childLedger.digestIdentity(
-      'worktree',
-      current.snapshot.worktreeRevisionDigest,
-    )
-    const candidates: Array<(typeof recovered.receipts)[number]> = []
+    let batchTargetIdentity = currentStatus.unit.pinnedOperationTargetIdentity
+    const candidates: Array<{
+      readonly receipt: (typeof recovered.receipts)[number]
+      readonly snapshot: OperationObserverSnapshot
+      readonly before?: OperationObserverSnapshot
+    }> = []
     for (const childReceipt of recovered.receipts) {
       const operation = childReceipt.canonical.operation
       if (!localOperation(operation)) continue
@@ -1899,23 +1971,105 @@ function createSessionRuntime(
         markUnavailable()
         return
       }
+
+      const targetIdentity = childReceipt.canonical.operationTargetIdentity
+      if (!targetIdentity) {
+        markUnavailable()
+        return
+      }
+      if (
+        batchTargetIdentity !== undefined &&
+        targetIdentity !== batchTargetIdentity
+      ) {
+        markUnavailable()
+        return
+      }
+      batchTargetIdentity = targetIdentity
+
+      const registration = operationObserverRegistration(targetIdentity)
+      if (!registration || !options.observer) {
+        markUnavailable()
+        return
+      }
+      let validation: RegisteredWorktreeValidationResult
+      try {
+        validation = options.observer.validateRegisteredWorktree(
+          registration.targetRoot,
+        )
+      } catch {
+        markUnavailable()
+        return
+      }
+      if (
+        validation.status === 'error' ||
+        validation.targetRoot !== registration.targetRoot ||
+        registeredWorktreeIdentity(validation) !==
+          registration.registeredWorktreeIdentity ||
+        registration.observer.targetDigest !== targetIdentity
+      ) {
+        markUnavailable()
+        return
+      }
+
+      let targetResult: OperationObserverResult
+      try {
+        targetResult = await registration.observer.snapshot()
+      } catch {
+        markUnavailable()
+        return
+      }
+      if (
+        targetResult.status === 'unavailable' ||
+        targetResult.snapshot.targetDigest !== targetIdentity
+      ) {
+        markUnavailable()
+        return
+      }
+
+      const recoveredContext = recoveredOperationContexts.get(
+        childReceipt.canonical.receiptId,
+      )
+      if (
+        (recoveredContext &&
+          recoveredContext.targetIdentity !== targetIdentity) ||
+        (targetIdentity !== options.observer.targetDigest && !recoveredContext)
+      ) {
+        markUnavailable()
+        return
+      }
+
+      const expectedRepository = childLedger.digestIdentity(
+        'repository',
+        targetResult.snapshot.repositoryRevisionDigest,
+      )
+      const expectedWorktree = childLedger.digestIdentity(
+        'worktree',
+        targetResult.snapshot.worktreeRevisionDigest,
+      )
       if (
         childReceipt.canonical.repositoryDigest !== expectedRepository ||
         childReceipt.canonical.worktreeDigest !== expectedWorktree
       ) {
-        // Stale relative to the current single observer snapshot (repository
-        // or worktree revision has moved since this receipt was minted) —
-        // skip this receipt without minting it, but keep evaluating later
+        // Stale relative to the authenticated target's current snapshot
+        // (repository or worktree revision moved since this receipt was
+        // minted) — skip without minting, but keep evaluating later
         // chronological receipts from the same child rollup.
         continue
       }
-      candidates.push(childReceipt)
+      candidates.push({
+        receipt: childReceipt,
+        snapshot: targetResult.snapshot,
+        before: recoveredContext?.before,
+      })
     }
 
     let minted = false
-    for (const childReceipt of candidates) {
+    for (const candidate of candidates) {
+      const childReceipt = candidate.receipt
+      const targetSnapshot = candidate.snapshot
       const operation = childReceipt.canonical.operation
       const parentContext = guard.currentOperationContext()
+      const beforeSnapshot = candidate.before
       const callID = `task-${host.callID}-${childReceipt.canonical.receiptId}`
       const observation = {
         callId: callID,
@@ -1925,23 +2079,23 @@ function createSessionRuntime(
           epochId: currentStatus.epoch.epochId,
           unitId: currentStatus.unit.unitId,
           workspaceIdentity: parentContext.workspaceIdentity,
-          ...(localOperation(operation)
-            ? { operationTargetIdentity: current.snapshot.targetDigest }
-            : {}),
-          ...(parentContext.repositoryIdentity
-            ? { repositoryIdentity: parentContext.repositoryIdentity }
-            : {}),
-          ...(parentContext.worktreeIdentity
-            ? { worktreeIdentity: parentContext.worktreeIdentity }
-            : {}),
+          operationTargetIdentity:
+            childReceipt.canonical.operationTargetIdentity,
+          repositoryIdentity:
+            beforeSnapshot?.repositoryRevisionDigest ??
+            parentContext.repositoryIdentity ??
+            targetSnapshot.repositoryRevisionDigest,
+          worktreeIdentity:
+            beforeSnapshot?.worktreeRevisionDigest ??
+            parentContext.worktreeIdentity ??
+            targetSnapshot.worktreeRevisionDigest,
         },
         after: {
           workspaceIdentity: parentContext.workspaceIdentity,
-          ...(localOperation(operation)
-            ? { operationTargetIdentity: current.snapshot.targetDigest }
-            : {}),
-          repositoryIdentity: current.snapshot.repositoryRevisionDigest,
-          worktreeIdentity: current.snapshot.worktreeRevisionDigest,
+          operationTargetIdentity:
+            childReceipt.canonical.operationTargetIdentity,
+          repositoryIdentity: targetSnapshot.repositoryRevisionDigest,
+          worktreeIdentity: targetSnapshot.worktreeRevisionDigest,
         },
         terminal: {
           status: 'success' as const,
@@ -2425,9 +2579,12 @@ function createSessionRuntime(
     const operationObserver =
       target.targetRoot === canonicalParentTargetRoot
         ? options.observer
-        : createOpencodeOperationObserver({
+        : ([...operationObservers.values()].find(
+            (registration) => registration.targetRoot === target.targetRoot,
+          )?.observer ??
+          createOpencodeOperationObserver({
             targetDirectory: target.targetRoot,
-          })
+          }))
     let result: OperationObserverResult
     try {
       result = await operationObserver.snapshot()
@@ -2443,6 +2600,11 @@ function createSessionRuntime(
       markUnavailable()
       return
     }
+    rememberOperationObserver({
+      targetRoot: target.targetRoot,
+      registeredWorktreeIdentity: registeredIdentity,
+      observer: operationObserver,
+    })
     const remote = await remoteIntentForOperation(host, args, operationObserver)
     pendingOperations.set(callDigest, {
       callID: host.callID,
@@ -3284,7 +3446,11 @@ function createSessionRuntime(
       return { status: 'unavailable' }
     }
     if (observed.status !== 'accepted') return { status: 'ignored' }
-    return { status: 'accepted', operation: observed.operation }
+    return {
+      status: 'accepted',
+      operation: observed.operation,
+      after: afterSnapshot,
+    }
   }
 
   function receiptForOperation(callID: string, operation: ReceiptOperation) {
@@ -3349,7 +3515,16 @@ function createSessionRuntime(
     }
     if (result.status === 'accepted') {
       const receipt = receiptForOperation(host.callID, result.operation)
-      if (receipt) mergeReceiptMarker(output, receipt)
+      if (receipt) {
+        if (localOperation(result.operation)) {
+          recoveredOperationContexts.set(receipt.canonical.receiptId, {
+            targetIdentity: pending.targetIdentity,
+            before: pending.before,
+            after: result.after,
+          })
+        }
+        mergeReceiptMarker(output, receipt)
+      }
     }
   }
 
@@ -3540,15 +3715,21 @@ export function createOpencodeWorkflowGuard(
   options: OpencodeWorkflowGuardOptions,
 ): OpencodeWorkflowGuard {
   const sessions = new Map<string, SessionRuntime>()
+  const operationObservers: OperationObserverRegistry = new Map()
+  const recoveredOperationContexts: RecoveredOperationRegistry = new Map()
 
   function sessionRuntimeFor(sessionID: string): SessionRuntime {
     const existing = sessions.get(sessionID)
     if (existing) return existing
-    const runtime = createSessionRuntime({
-      ...options,
-      registrationIdentity: options.registrationIdentity,
-      sessionSalt: options.sessionSalt,
-    })
+    const runtime = createSessionRuntime(
+      {
+        ...options,
+        registrationIdentity: options.registrationIdentity,
+        sessionSalt: options.sessionSalt,
+      },
+      operationObservers,
+      recoveredOperationContexts,
+    )
     sessions.set(sessionID, runtime)
     return runtime
   }
