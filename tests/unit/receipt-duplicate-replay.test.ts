@@ -22,6 +22,7 @@ const SCOPE = {
   repositoryIdentity: 'repository-current',
   worktreeIdentity: 'worktree-current',
 }
+const OPERATION_TARGET_IDENTITY = 'd'.repeat(64)
 
 function createMintedReceipt(
   registrationIdentity = 'registration-a',
@@ -41,6 +42,7 @@ function createMintedReceipt(
     workspaceIdentity: SCOPE.workspaceIdentity,
     repositoryIdentity: 'repository-before',
     worktreeIdentity: 'worktree-before',
+    operationTargetIdentity: OPERATION_TARGET_IDENTITY,
   }
   expect(
     ledger.prepareObservation({ callId, operation: 'implementation', context }),
@@ -48,7 +50,7 @@ function createMintedReceipt(
   const finalized = ledger.finalizeObservation({
     callId,
     context,
-    after: SCOPE,
+    after: { ...SCOPE, operationTargetIdentity: OPERATION_TARGET_IDENTITY },
     classification: {
       outcome: 'accepted',
       category: 'implementation',
@@ -106,6 +108,7 @@ function mintWorkflowEvidence(
       operation === 'implementation'
         ? 'worktree-before'
         : SCOPE.worktreeIdentity,
+    operationTargetIdentity: OPERATION_TARGET_IDENTITY,
   }
   const callId = `${operation}-evidence`
   expect(
@@ -114,7 +117,7 @@ function mintWorkflowEvidence(
   const finalized = ledger.finalizeObservation({
     callId,
     context,
-    after: SCOPE,
+    after: { ...SCOPE, operationTargetIdentity: OPERATION_TARGET_IDENTITY },
     classification: {
       outcome: 'accepted',
       category: operation,

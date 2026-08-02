@@ -6,6 +6,7 @@ import {
 } from '../../src/lib/receipt-classifier.js'
 import {
   createReceiptLedger,
+  isLocalOperation,
   type ReceiptClassification,
   type ReceiptContext,
   type ReceiptEnvelope,
@@ -70,6 +71,7 @@ const WORKTREE_ZERO =
 const WORKTREE_AFTER =
   '1616161616161616161616161616161616161616161616161616161616161616'
 const WORKTREE_INITIAL = WORKTREE_ZERO
+const OPERATION_TARGET_IDENTITY = 'd'.repeat(64)
 
 let syntheticSequence = 0
 
@@ -127,6 +129,9 @@ function operationInput(
     repositoryIdentity: REPOSITORY_CURRENT,
     worktreeIdentity:
       operation === 'implementation' ? WORKTREE_AFTER : WORKTREE_CURRENT,
+    ...(isLocalOperation(operation)
+      ? { operationTargetIdentity: OPERATION_TARGET_IDENTITY }
+      : {}),
     ...(operation === 'commit' ? { commitClosure: true } : {}),
     ...(operation === 'push'
       ? {
@@ -178,6 +183,9 @@ function operationInput(
           resourceIdentity: RESOURCE_PR,
           resourceRevisionIdentity: REVISION_B,
         }
+      : {}),
+    ...(isLocalOperation(operation)
+      ? { operationTargetIdentity: OPERATION_TARGET_IDENTITY }
       : {}),
   }
   return {
@@ -243,13 +251,24 @@ function bindOperation(
 ): Record<string, unknown> {
   const status = guard.status()
   if (!status.epoch || !status.unit) throw new Error('workflow scope missing')
+  const operation = input.operation as ReceiptOperation
+  const target = isLocalOperation(operation)
+    ? { operationTargetIdentity: OPERATION_TARGET_IDENTITY }
+    : {}
+  const after = input.after
+  const normalizedAfter =
+    after && typeof after === 'object' && !Array.isArray(after)
+      ? { ...(after as Record<string, unknown>), ...target }
+      : after
   return {
     ...input,
     context: {
       ...(input.context as Record<string, unknown>),
       epochId: status.epoch.epochId,
       unitId: status.unit.unitId,
+      ...target,
     },
+    ...(normalizedAfter !== undefined ? { after: normalizedAfter } : {}),
   }
 }
 
@@ -277,6 +296,7 @@ function mintSyntheticReceipt(
     workspaceIdentity: WORKSPACE_CURRENT,
     repositoryIdentity: REPOSITORY_CURRENT,
     worktreeIdentity: WORKTREE_CURRENT,
+    operationTargetIdentity: OPERATION_TARGET_IDENTITY,
   }
   expect(
     ledger.prepareObservation({ callId, operation, context }),
@@ -288,6 +308,7 @@ function mintSyntheticReceipt(
       workspaceIdentity: WORKSPACE_CURRENT,
       repositoryIdentity: REPOSITORY_CURRENT,
       worktreeIdentity: WORKTREE_ZERO,
+      operationTargetIdentity: OPERATION_TARGET_IDENTITY,
     },
     classification: {
       outcome: 'accepted',
@@ -886,15 +907,27 @@ describe('receipt operation adapters', () => {
   test('reports repository/worktree precondition drift as current-revision mismatch', async () => {
     const classifier = createReceiptClassifier()
     const { guard, ledger } = createScenario(classifier, ['implementation'])
+    const {
+      operationTargetIdentity: _operationTargetIdentity,
+      ...contextWithoutTarget
+    } = operationInput('implementation').context as Record<string, unknown>
     const drifted = operationInput('implementation', {
       context: {
-        ...operationInput('implementation').context,
+        ...contextWithoutTarget,
         repositoryIdentity: REPOSITORY_BEFORE,
         worktreeIdentity: WORKTREE_CURRENT,
       },
     })
+    const boundDrifted = bindOperation(guard, drifted)
+    const {
+      operationTargetIdentity: _boundOperationTargetIdentity,
+      ...boundContextWithoutTarget
+    } = boundDrifted.context as Record<string, unknown>
     expect(
-      await guard.observeOperation(bindOperation(guard, drifted)),
+      await guard.observeOperation({
+        ...boundDrifted,
+        context: boundContextWithoutTarget,
+      }),
     ).toMatchObject({
       status: 'rejected',
       reasonCode: 'receipt-mismatch',

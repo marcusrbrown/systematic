@@ -20,6 +20,7 @@ const SESSION_SALT = Uint8Array.from({ length: 32 }, (_, index) => index)
 const RAW_COMMAND = 'git apply private.patch'
 const RAW_OUTPUT = 'private terminal output'
 const RAW_PATH = '/private/repos/receipt-demo'
+const OPERATION_TARGET_IDENTITY = 'd'.repeat(64)
 
 interface MintedReceipt {
   ledger: ReturnType<typeof createReceiptLedger>
@@ -60,12 +61,14 @@ function createMintedReceipt(
     unitId: opaqueIdentity(unitId),
     workspaceIdentity: 'workspace-current',
     worktreeIdentity: 'worktree-before',
+    operationTargetIdentity: OPERATION_TARGET_IDENTITY,
   }
   const afterContext: ReceiptContext = {
     epochId: opaqueIdentity(epochId),
     unitId: opaqueIdentity(unitId),
     workspaceIdentity: 'workspace-current',
     worktreeIdentity: 'worktree-after',
+    operationTargetIdentity: OPERATION_TARGET_IDENTITY,
   }
   const classification: ReceiptClassification = {
     outcome: 'accepted',
@@ -89,6 +92,7 @@ function createMintedReceipt(
     after: {
       workspaceIdentity: afterContext.workspaceIdentity,
       worktreeIdentity: afterContext.worktreeIdentity,
+      operationTargetIdentity: afterContext.operationTargetIdentity,
     },
     classification,
     terminal: { status: 'success', output: 'non-empty', noOp: false },
