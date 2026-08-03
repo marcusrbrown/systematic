@@ -105,7 +105,7 @@ function sequenceObserver(
   let index = 0
   return {
     targetDigest: snapshots[0]?.targetDigest ?? 'a'.repeat(64),
-    validateRegisteredWorktree(candidateDirectory: string) {
+    validateRegisteredWorktree(_candidateDirectory: string) {
       const targetRoot = process.cwd()
       return {
         status: 'ok' as const,

@@ -1342,7 +1342,7 @@ export function createWorkflowGuard(
     input: ParsedOperationObservation,
     unit: UnitState,
   ): WorkflowReasonCode | undefined {
-    if (!isPinnedLocalOperation(input.operation)) return undefined
+    if (!isLocalOperation(input.operation)) return undefined
     if (
       input.after &&
       input.after.operationTargetIdentity !==
@@ -1879,7 +1879,7 @@ export function createWorkflowGuard(
       return 'receipt-mismatch'
     }
     if (
-      isPinnedLocalOperation(envelope.canonical.operation) &&
+      isLocalOperation(envelope.canonical.operation) &&
       unit.pinnedOperationTargetIdentity !== undefined &&
       envelope.canonical.operationTargetIdentity !==
         unit.pinnedOperationTargetIdentity
@@ -1899,16 +1899,6 @@ export function createWorkflowGuard(
       }
     }
     return compareReceiptResources(envelope, unit)
-  }
-
-  function isPinnedLocalOperation(
-    operation: ReceiptOperation,
-  ): operation is 'implementation' | 'verification' | 'commit' {
-    return (
-      operation === 'implementation' ||
-      operation === 'verification' ||
-      operation === 'commit'
-    )
   }
 
   function compareReceiptResources(
@@ -2402,7 +2392,7 @@ export function createWorkflowGuard(
     }
     unit.evidence.set(operation, read.envelope)
     if (
-      isPinnedLocalOperation(operation) &&
+      isLocalOperation(operation) &&
       unit.pinnedOperationTargetIdentity === undefined &&
       read.envelope.canonical.operationTargetIdentity !== undefined
     ) {
@@ -2423,7 +2413,7 @@ export function createWorkflowGuard(
       workspaceIdentity: after.workspaceIdentity,
       repositoryIdentity: after.repositoryIdentity,
       worktreeIdentity: after.worktreeIdentity,
-      ...(isPinnedLocalOperation(operation)
+      ...(isLocalOperation(operation)
         ? { operationTargetIdentity: after.operationTargetIdentity }
         : {}),
       resourceIdentity: after.resourceIdentity,
@@ -3119,9 +3109,7 @@ export function createWorkflowGuard(
   ): WorkflowReasonCode | undefined {
     if (!unit) return undefined
     const localTargets = matching
-      .filter((envelope) =>
-        isPinnedLocalOperation(envelope.canonical.operation),
-      )
+      .filter((envelope) => isLocalOperation(envelope.canonical.operation))
       .map((envelope) => envelope.canonical.operationTargetIdentity)
     if (unit.pinnedOperationTargetIdentity !== undefined) {
       return localTargets.some(
@@ -3372,7 +3360,7 @@ export function createWorkflowGuard(
     const inferredOperationTargetIdentity =
       snapshot.pinnedOperationTargetIdentity ??
       matching.find((envelope) =>
-        isPinnedLocalOperation(envelope.canonical.operation),
+        isLocalOperation(envelope.canonical.operation),
       )?.canonical.operationTargetIdentity
     const unit: UnitState = {
       unitId: snapshot.unitId,

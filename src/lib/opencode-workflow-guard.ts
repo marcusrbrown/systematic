@@ -2581,6 +2581,7 @@ function createSessionRuntime(
     }
   }
 
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: target derivation, registered-worktree validation, and observer registration must stay atomic on the before hook
   async function prepareOperation(
     host: HostToolBefore,
     args: unknown,
@@ -3078,6 +3079,7 @@ function createSessionRuntime(
     if (remember) abandonedCompletes.set(callDigest, pending.target)
   }
 
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: fail-closed effective-observer selection and readback bundle construction must remain a single ordered pipeline
   async function completionReadbacks(): Promise<
     | { status: 'none' }
     | { status: 'unavailable' }
