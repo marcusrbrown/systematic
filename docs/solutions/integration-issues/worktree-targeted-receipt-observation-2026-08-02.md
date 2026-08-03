@@ -1,7 +1,7 @@
 ---
 title: Receipt guard missed worktree-targeted child operations
 date: 2026-08-02
-category: docs/solutions/integration-issues
+category: integration-issues
 module: workflow-guard
 problem_type: integration_issue
 component: development_workflow
