@@ -902,6 +902,26 @@ describe('OpenCode workflow guard adapter', () => {
     }
   })
 
+  test('target derivation: apply_patch absolute worktree path without workdir resolves to worktree', () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      expect(
+        deriveWithFixture(fixture, 'apply_patch', {
+          patchText: [
+            '*** Begin Patch',
+            `*** Update File: ${path.join(fixture.linkedRoot, 'tracked.txt')}`,
+            '*** End Patch',
+          ].join('\n'),
+        }),
+      ).toEqual({
+        status: 'available',
+        targetRoot: fs.realpathSync(fixture.linkedRoot),
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
   test('target derivation: unrelated explicit bash workdir fails closed', () => {
     const fixture = createTargetDerivationFixture()
     try {
