@@ -1,4 +1,6 @@
 import { randomBytes } from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
 import type { ToolDefinition } from '@opencode-ai/plugin'
 import { z } from 'zod'
 import { INTERNAL_AGENT_SIGNATURES } from './bootstrap.js'
@@ -8,8 +10,10 @@ import type {
   OperationObserverRemoteSnapshot,
   OperationObserverResult,
   OperationObserverSnapshot,
+  RegisteredWorktreeValidationResult,
   RemoteOperation,
 } from './opencode-operation-observer.js'
+import { createOpencodeOperationObserver } from './opencode-operation-observer.js'
 import {
   classifyQuestionAnswer,
   createQuestionAttestation,
@@ -22,6 +26,7 @@ import type {
 } from './receipt-classifier.js'
 import {
   createReceiptLedger,
+  isLocalOperation,
   type ReceiptClassification,
   type ReceiptEnvelope,
   type ReceiptLedger,
@@ -49,7 +54,7 @@ import {
 
 const MARKER_OPEN = '<SYSTEMATIC_WORKFLOW_GUARD>'
 const MARKER_CLOSE = '</SYSTEMATIC_WORKFLOW_GUARD>'
-const MARKER_PROTOCOL_VERSION = 1
+const MARKER_PROTOCOL_VERSION = 2
 const MAX_MARKER_LENGTH = 4096
 const MAX_MARKER_SOURCES = 8
 const MAX_CALL_ID_LENGTH = 256
@@ -118,6 +123,7 @@ const REASON_CODES = new Set([
   'no-active-unit',
   'no-op-operation',
   'operation-not-required',
+  'operation-target-mismatch',
   'receipt-mismatch',
   'rejected-operation',
   'resource-mismatch',
@@ -187,6 +193,8 @@ export interface OpencodeWorkflowGuardOptions {
   hostReadback?: OpencodeWorkflowHostReadback
   readonly registrationIdentity?: string
   readonly sessionSalt?: Uint8Array
+  readonly targetDirectory?: string
+  readonly sessionLocation?: string
 }
 
 export interface OpencodeWorkflowChildSession {
@@ -278,10 +286,36 @@ interface PendingOperation {
   callID: string
   tool: 'write' | 'edit' | 'apply_patch' | 'bash'
   argsFingerprint: string
+  targetRoot: string
+  targetIdentity: string
+  registeredWorktreeIdentity: string
+  observer: OpencodeOperationObserver
   before: OperationObserverSnapshot
   remoteOperation?: RemoteOperation
   remoteBefore?: OperationObserverRemoteResult
 }
+
+interface OperationObserverRegistration {
+  readonly targetRoot: string
+  readonly registeredWorktreeIdentity: string
+  readonly observer: OpencodeOperationObserver
+}
+
+interface EffectiveOperationObserver {
+  readonly observer: OpencodeOperationObserver
+  readonly targetIdentity: string
+  readonly pinned: boolean
+}
+
+type OperationObserverRegistry = Map<string, OperationObserverRegistration>
+
+interface RecoveredOperationContext {
+  readonly targetIdentity: string
+  readonly before: OperationObserverSnapshot
+  readonly after: OperationObserverSnapshot
+}
+
+type RecoveredOperationRegistry = Map<string, RecoveredOperationContext>
 
 interface PendingQuestionChallenge {
   readonly challenge: QuestionChallengeRecord
@@ -304,7 +338,11 @@ interface TerminalComplete {
 }
 
 type OperationCompletionResult =
-  | { status: 'accepted'; operation: ReceiptOperation }
+  | {
+      status: 'accepted'
+      operation: ReceiptOperation
+      after: OperationObserverSnapshot
+    }
   | { status: 'deferred' | 'ignored' | 'unavailable' }
 
 interface MarkerSource {
@@ -466,7 +504,7 @@ function digestCall(
   return ledger.digestIdentity('call', callID)
 }
 
-type LocalOperationTool = 'write' | 'edit' | 'apply_patch' | 'bash'
+export type LocalOperationTool = 'write' | 'edit' | 'apply_patch' | 'bash'
 
 function isLocalOperationTool(tool: string): tool is LocalOperationTool {
   return (
@@ -475,6 +513,406 @@ function isLocalOperationTool(tool: string): tool is LocalOperationTool {
     tool === 'apply_patch' ||
     tool === 'bash'
   )
+}
+
+export interface OpencodeOperationTargetDerivationOptions {
+  readonly parentTargetRoot: string
+  readonly sessionLocation?: string
+  readonly validateRegisteredWorktree: (
+    candidateDirectory: string,
+  ) => RegisteredWorktreeValidationResult
+  readonly realPath?: (filePath: string) => string
+}
+
+export type OpencodeOperationTargetDerivationResult =
+  | { readonly status: 'available'; readonly targetRoot: string }
+  | {
+      readonly status: 'unavailable'
+      readonly reasonCode: 'target-unavailable'
+    }
+
+function unavailableOperationTarget(): OpencodeOperationTargetDerivationResult {
+  return { status: 'unavailable', reasonCode: 'target-unavailable' }
+}
+
+function canonicalExistingPath(
+  filePath: string,
+  realPath: (filePath: string) => string,
+): string | undefined {
+  try {
+    return realPath(filePath)
+  } catch {
+    return undefined
+  }
+}
+
+function registeredWorktreeIdentity(
+  validation: RegisteredWorktreeValidationResult,
+): string | undefined {
+  return validation.status === 'ok'
+    ? `${validation.gitDir}\n${validation.commonDir}`
+    : undefined
+}
+
+function canonicalFileTarget(
+  filePath: string,
+  realPath: (filePath: string) => string,
+): string | undefined {
+  const existing = canonicalExistingPath(filePath, realPath)
+  if (existing) return existing
+  const parent = canonicalExistingPath(path.dirname(filePath), realPath)
+  const basename = path.basename(filePath)
+  return parent && basename && basename !== '.' && basename !== '..'
+    ? path.join(parent, basename)
+    : undefined
+}
+
+function pathWithinOrEqual(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate)
+  return (
+    relative === '' ||
+    (relative !== '..' &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative))
+  )
+}
+
+function targetIsGitAdminStorage(
+  targetPath: string,
+  validation: Extract<
+    RegisteredWorktreeValidationResult,
+    { readonly status: 'ok' }
+  >,
+): boolean {
+  return (
+    pathWithinOrEqual(path.join(validation.targetRoot, '.git'), targetPath) ||
+    pathWithinOrEqual(validation.gitDir, targetPath) ||
+    pathWithinOrEqual(validation.commonDir, targetPath)
+  )
+}
+
+function targetResultFromValidation(
+  candidatePath: string,
+  validation: RegisteredWorktreeValidationResult,
+): OpencodeOperationTargetDerivationResult {
+  if (validation.status === 'error') return unavailableOperationTarget()
+  if (!pathWithinOrEqual(validation.targetRoot, candidatePath)) {
+    return unavailableOperationTarget()
+  }
+  if (targetIsGitAdminStorage(candidatePath, validation)) {
+    return unavailableOperationTarget()
+  }
+  return { status: 'available', targetRoot: validation.targetRoot }
+}
+
+function trustedParentTarget(
+  parentTargetRoot: string,
+  candidatePath: string,
+): OpencodeOperationTargetDerivationResult | undefined {
+  if (!pathWithinOrEqual(parentTargetRoot, candidatePath)) return undefined
+  if (pathWithinOrEqual(path.join(parentTargetRoot, '.git'), candidatePath)) {
+    return unavailableOperationTarget()
+  }
+  return { status: 'available', targetRoot: parentTargetRoot }
+}
+
+function validationForCandidate(
+  candidatePath: string,
+  options: OpencodeOperationTargetDerivationOptions,
+  targetPath = candidatePath,
+): OpencodeOperationTargetDerivationResult {
+  try {
+    return targetResultFromValidation(
+      targetPath,
+      options.validateRegisteredWorktree(candidatePath),
+    )
+  } catch {
+    return unavailableOperationTarget()
+  }
+}
+
+function deriveFileTarget(
+  rawPath: string,
+  baseDirectory: string,
+  parentTargetRoot: string,
+  options: OpencodeOperationTargetDerivationOptions,
+  realPath: (filePath: string) => string,
+  allowParentFastPath = true,
+): OpencodeOperationTargetDerivationResult {
+  const resolvedPath = path.resolve(baseDirectory, rawPath)
+  const canonicalPath = canonicalFileTarget(resolvedPath, realPath)
+  if (!canonicalPath) return unavailableOperationTarget()
+  const parentResult =
+    allowParentFastPath && !path.isAbsolute(rawPath)
+      ? trustedParentTarget(parentTargetRoot, canonicalPath)
+      : undefined
+  if (parentResult) return parentResult
+  return validationForCandidate(
+    path.dirname(canonicalPath),
+    options,
+    canonicalPath,
+  )
+}
+
+interface DerivedDirectoryTarget {
+  readonly targetRoot: string
+  readonly resolvedPath: string
+}
+
+function sharedTargetRoot(
+  targets: readonly OpencodeOperationTargetDerivationResult[],
+  extraRoots: readonly string[] = [],
+): string | undefined {
+  const roots = [...extraRoots]
+  for (const target of targets) {
+    if (target.status === 'unavailable') return undefined
+    roots.push(target.targetRoot)
+  }
+  const targetRoot = roots[0]
+  return targetRoot && roots.every((root) => root === targetRoot)
+    ? targetRoot
+    : undefined
+}
+
+function deriveDirectoryTarget(
+  rawPath: string,
+  baseDirectory: string,
+  parentTargetRoot: string,
+  options: OpencodeOperationTargetDerivationOptions,
+  realPath: (filePath: string) => string,
+):
+  | { readonly status: 'available'; readonly target: DerivedDirectoryTarget }
+  | { readonly status: 'unavailable' } {
+  const resolvedPath = canonicalExistingPath(
+    path.resolve(baseDirectory, rawPath),
+    realPath,
+  )
+  if (!resolvedPath) return { status: 'unavailable' }
+  const parentResult = path.isAbsolute(rawPath)
+    ? undefined
+    : trustedParentTarget(parentTargetRoot, resolvedPath)
+  if (parentResult?.status === 'unavailable') {
+    return { status: 'unavailable' }
+  }
+  if (parentResult) {
+    return {
+      status: 'available',
+      target: { targetRoot: parentResult.targetRoot, resolvedPath },
+    }
+  }
+  const validated = validationForCandidate(resolvedPath, options)
+  return validated.status === 'available'
+    ? {
+        status: 'available',
+        target: { targetRoot: validated.targetRoot, resolvedPath },
+      }
+    : { status: 'unavailable' }
+}
+
+const PATCH_FILE_PREFIXES = [
+  '*** Add File:',
+  '*** Delete File:',
+  '*** Update File:',
+  '*** Move to:',
+] as const
+
+function patchTextFileTargets(
+  patchText: string,
+): readonly string[] | undefined {
+  const paths: string[] = []
+  for (const line of patchText.split(/\r?\n/)) {
+    const prefix = PATCH_FILE_PREFIXES.find((candidate) =>
+      line.startsWith(candidate),
+    )
+    if (!prefix) continue
+    const filePath = line.slice(prefix.length).trim()
+    if (!filePath) return undefined
+    paths.push(filePath)
+  }
+  return paths
+}
+
+function hunkFileTargets(value: unknown): readonly string[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const paths: string[] = []
+  for (const hunk of value) {
+    if (!isRecord(hunk) || typeof hunk.path !== 'string' || !hunk.path) {
+      return undefined
+    }
+    paths.push(hunk.path)
+    if (hunk.move_path === undefined) continue
+    if (typeof hunk.move_path !== 'string' || !hunk.move_path) return undefined
+    paths.push(hunk.move_path)
+  }
+  return paths
+}
+
+function patchFileTargets(
+  args: Record<string, unknown>,
+): readonly string[] | undefined {
+  const patchValue = args.patchText ?? args.patch
+  if (typeof patchValue === 'string') return patchTextFileTargets(patchValue)
+  if (patchValue !== undefined) return undefined
+  return args.hunks === undefined ? [] : hunkFileTargets(args.hunks)
+}
+
+function fileTargetArguments(
+  args: Record<string, unknown>,
+): string[] | undefined {
+  const paths: string[] = []
+  for (const key of ['filePath', 'path'] as const) {
+    if (!(key in args)) continue
+    if (typeof args[key] !== 'string' || args[key].length === 0) {
+      return undefined
+    }
+    paths.push(args[key])
+  }
+  return paths.length > 0 ? paths : undefined
+}
+
+function deriveFileOperationTarget(
+  args: Record<string, unknown>,
+  sessionLocation: string,
+  parentTargetRoot: string,
+  options: OpencodeOperationTargetDerivationOptions,
+  realPath: (filePath: string) => string,
+): OpencodeOperationTargetDerivationResult {
+  const paths = fileTargetArguments(args)
+  if (!paths) return unavailableOperationTarget()
+  const targets = paths.map((rawPath) =>
+    deriveFileTarget(
+      rawPath,
+      sessionLocation,
+      parentTargetRoot,
+      options,
+      realPath,
+    ),
+  )
+  const targetRoot = sharedTargetRoot(targets)
+  return targetRoot
+    ? { status: 'available', targetRoot }
+    : unavailableOperationTarget()
+}
+
+function deriveApplyPatchTarget(
+  args: Record<string, unknown>,
+  sessionLocation: string,
+  parentTargetRoot: string,
+  options: OpencodeOperationTargetDerivationOptions,
+  realPath: (filePath: string) => string,
+): OpencodeOperationTargetDerivationResult {
+  if (
+    args.workdir !== undefined &&
+    (typeof args.workdir !== 'string' || args.workdir.length === 0)
+  ) {
+    return unavailableOperationTarget()
+  }
+  const patchPaths = patchFileTargets(args)
+  if (!patchPaths) return unavailableOperationTarget()
+  const workdir =
+    args.workdir === undefined
+      ? {
+          status: 'available' as const,
+          target: {
+            targetRoot: parentTargetRoot,
+            resolvedPath: sessionLocation,
+          },
+        }
+      : deriveDirectoryTarget(
+          args.workdir,
+          sessionLocation,
+          parentTargetRoot,
+          options,
+          realPath,
+        )
+  if (workdir.status === 'unavailable') return unavailableOperationTarget()
+  const targets = patchPaths.map((rawPath) =>
+    deriveFileTarget(
+      rawPath,
+      workdir.target.resolvedPath,
+      parentTargetRoot,
+      options,
+      realPath,
+      args.workdir === undefined,
+    ),
+  )
+  const targetRoot = sharedTargetRoot(targets, [workdir.target.targetRoot])
+  return targetRoot
+    ? { status: 'available', targetRoot }
+    : unavailableOperationTarget()
+}
+
+function deriveBashTarget(
+  args: Record<string, unknown>,
+  sessionLocation: string,
+  parentTargetRoot: string,
+  options: OpencodeOperationTargetDerivationOptions,
+  realPath: (filePath: string) => string,
+): OpencodeOperationTargetDerivationResult {
+  if (args.workdir === undefined) {
+    return { status: 'available', targetRoot: parentTargetRoot }
+  }
+  if (typeof args.workdir !== 'string' || args.workdir.length === 0) {
+    return unavailableOperationTarget()
+  }
+  const candidatePath = canonicalExistingPath(
+    path.resolve(sessionLocation, args.workdir),
+    realPath,
+  )
+  if (!candidatePath) return unavailableOperationTarget()
+  const parentResult = path.isAbsolute(args.workdir)
+    ? undefined
+    : trustedParentTarget(parentTargetRoot, candidatePath)
+  return parentResult ?? validationForCandidate(candidatePath, options)
+}
+
+export function deriveOpencodeOperationTarget(
+  tool: LocalOperationTool,
+  args: unknown,
+  options: OpencodeOperationTargetDerivationOptions,
+): OpencodeOperationTargetDerivationResult {
+  const realPath = options.realPath ?? fs.realpathSync
+  const parentTargetRoot = canonicalExistingPath(
+    options.parentTargetRoot,
+    realPath,
+  )
+  if (!parentTargetRoot) return unavailableOperationTarget()
+
+  if (!isRecord(args)) return unavailableOperationTarget()
+
+  const sessionLocation = canonicalExistingPath(
+    options.sessionLocation ?? parentTargetRoot,
+    realPath,
+  )
+  if (!sessionLocation) return unavailableOperationTarget()
+
+  if (tool === 'write' || tool === 'edit') {
+    return deriveFileOperationTarget(
+      args,
+      sessionLocation,
+      parentTargetRoot,
+      options,
+      realPath,
+    )
+  }
+  if (tool === 'apply_patch') {
+    return deriveApplyPatchTarget(
+      args,
+      sessionLocation,
+      parentTargetRoot,
+      options,
+      realPath,
+    )
+  }
+  return tool === 'bash'
+    ? deriveBashTarget(
+        args,
+        sessionLocation,
+        parentTargetRoot,
+        options,
+        realPath,
+      )
+    : unavailableOperationTarget()
 }
 
 function serializeStableArray(
@@ -593,11 +1031,7 @@ function terminalForOutput(
 function localOperation(
   operation: ReceiptOperation | null,
 ): operation is 'implementation' | 'verification' | 'commit' {
-  return (
-    operation === 'implementation' ||
-    operation === 'verification' ||
-    operation === 'commit'
-  )
+  return operation !== null && isLocalOperation(operation)
 }
 
 function remoteOperation(
@@ -891,6 +1325,8 @@ function buildMarker(
 
 function createSessionRuntime(
   options: OpencodeWorkflowGuardOptions,
+  operationObservers: OperationObserverRegistry,
+  recoveredOperationContexts: RecoveredOperationRegistry,
 ): SessionRuntime {
   let ledger!: ReceiptLedger
   let guard!: WorkflowGuard
@@ -914,6 +1350,98 @@ function createSessionRuntime(
   const pendingQuestionChallenges = new Map<string, PendingQuestionChallenge>()
   const blockedQuestionCalls = new Map<string, string>()
   const consumedQuestionTargets = new Set<TransitionTarget>()
+
+  function rememberOperationObserver(
+    registration: OperationObserverRegistration,
+  ): void {
+    const existing = operationObservers.get(registration.observer.targetDigest)
+    if (existing && existing.targetRoot !== registration.targetRoot) return
+    operationObservers.set(registration.observer.targetDigest, registration)
+  }
+
+  function parentObserverRegistration():
+    | OperationObserverRegistration
+    | undefined {
+    if (!options.observer) return undefined
+    const targetRoot = canonicalExistingPath(
+      options.targetDirectory ?? process.cwd(),
+      fs.realpathSync,
+    )
+    if (!targetRoot) return undefined
+    let validation: RegisteredWorktreeValidationResult
+    try {
+      validation = options.observer.validateRegisteredWorktree(targetRoot)
+    } catch {
+      return undefined
+    }
+    const registeredIdentity = registeredWorktreeIdentity(validation)
+    if (
+      validation.status !== 'ok' ||
+      registeredIdentity === undefined ||
+      validation.targetRoot !== targetRoot
+    ) {
+      return undefined
+    }
+    const registration = {
+      targetRoot,
+      registeredWorktreeIdentity: registeredIdentity,
+      observer: options.observer,
+    }
+    rememberOperationObserver(registration)
+    return registration
+  }
+
+  function operationObserverRegistration(
+    targetIdentity: string,
+  ): OperationObserverRegistration | undefined {
+    const existing = operationObservers.get(targetIdentity)
+    if (existing) return existing
+    if (options.observer?.targetDigest !== targetIdentity) return undefined
+    return parentObserverRegistration()
+  }
+
+  function effectiveOperationObserver():
+    | EffectiveOperationObserver
+    | undefined {
+    const parentObserver = options.observer
+    if (!parentObserver) return undefined
+    const pinnedTargetIdentity =
+      guard.status().unit?.pinnedOperationTargetIdentity
+    if (
+      pinnedTargetIdentity === undefined ||
+      pinnedTargetIdentity === options.workspaceIdentity
+    ) {
+      return {
+        observer: parentObserver,
+        targetIdentity: options.workspaceIdentity,
+        pinned: false,
+      }
+    }
+    const registration = operationObserverRegistration(pinnedTargetIdentity)
+    if (!registration) return undefined
+    let validation: RegisteredWorktreeValidationResult
+    try {
+      validation = parentObserver.validateRegisteredWorktree(
+        registration.targetRoot,
+      )
+    } catch {
+      return undefined
+    }
+    if (
+      validation.status !== 'ok' ||
+      validation.targetRoot !== registration.targetRoot ||
+      registeredWorktreeIdentity(validation) !==
+        registration.registeredWorktreeIdentity ||
+      registration.observer.targetDigest !== pinnedTargetIdentity
+    ) {
+      return undefined
+    }
+    return {
+      observer: registration.observer,
+      targetIdentity: pinnedTargetIdentity,
+      pinned: true,
+    }
+  }
 
   function questionResource(target: TransitionTarget): string {
     const status = guard.status()
@@ -1465,10 +1993,14 @@ function createSessionRuntime(
       markUnavailable()
       return
     }
-    const current = await options.observer?.snapshot()
-    if (!current || current.status === 'unavailable') {
-      markUnavailable()
-      return
+    // Touch the fixed parent observer for the stable workspace path, but do
+    // not use its mutable repository/worktree revisions for child validation.
+    // A nested worktree can make the parent-root scan unavailable while its
+    // own authenticated target remains valid and independently observable.
+    try {
+      await options.observer?.snapshot()
+    } catch {
+      // Target-specific validation below remains authoritative.
     }
     const currentStatus = guard.status()
     if (!currentStatus.epoch || !currentStatus.unit) return
@@ -1476,15 +2008,12 @@ function createSessionRuntime(
       'workspace',
       parentBefore.workspaceIdentity,
     )
-    const expectedRepository = childLedger.digestIdentity(
-      'repository',
-      current.snapshot.repositoryRevisionDigest,
-    )
-    const expectedWorktree = childLedger.digestIdentity(
-      'worktree',
-      current.snapshot.worktreeRevisionDigest,
-    )
-    const candidates: Array<(typeof recovered.receipts)[number]> = []
+    let batchTargetIdentity = currentStatus.unit.pinnedOperationTargetIdentity
+    const candidates: Array<{
+      readonly receipt: (typeof recovered.receipts)[number]
+      readonly snapshot: OperationObserverSnapshot
+      readonly before?: OperationObserverSnapshot
+    }> = []
     for (const childReceipt of recovered.receipts) {
       const operation = childReceipt.canonical.operation
       if (!localOperation(operation)) continue
@@ -1492,23 +2021,105 @@ function createSessionRuntime(
         markUnavailable()
         return
       }
+
+      const targetIdentity = childReceipt.canonical.operationTargetIdentity
+      if (!targetIdentity) {
+        markUnavailable()
+        return
+      }
+      if (
+        batchTargetIdentity !== undefined &&
+        targetIdentity !== batchTargetIdentity
+      ) {
+        markUnavailable()
+        return
+      }
+      batchTargetIdentity = targetIdentity
+
+      const registration = operationObserverRegistration(targetIdentity)
+      if (!registration || !options.observer) {
+        markUnavailable()
+        return
+      }
+      let validation: RegisteredWorktreeValidationResult
+      try {
+        validation = options.observer.validateRegisteredWorktree(
+          registration.targetRoot,
+        )
+      } catch {
+        markUnavailable()
+        return
+      }
+      if (
+        validation.status === 'error' ||
+        validation.targetRoot !== registration.targetRoot ||
+        registeredWorktreeIdentity(validation) !==
+          registration.registeredWorktreeIdentity ||
+        registration.observer.targetDigest !== targetIdentity
+      ) {
+        markUnavailable()
+        return
+      }
+
+      let targetResult: OperationObserverResult
+      try {
+        targetResult = await registration.observer.snapshot()
+      } catch {
+        markUnavailable()
+        return
+      }
+      if (
+        targetResult.status === 'unavailable' ||
+        targetResult.snapshot.targetDigest !== targetIdentity
+      ) {
+        markUnavailable()
+        return
+      }
+
+      const recoveredContext = recoveredOperationContexts.get(
+        childReceipt.canonical.receiptId,
+      )
+      if (
+        (recoveredContext &&
+          recoveredContext.targetIdentity !== targetIdentity) ||
+        (targetIdentity !== options.observer.targetDigest && !recoveredContext)
+      ) {
+        markUnavailable()
+        return
+      }
+
+      const expectedRepository = childLedger.digestIdentity(
+        'repository',
+        targetResult.snapshot.repositoryRevisionDigest,
+      )
+      const expectedWorktree = childLedger.digestIdentity(
+        'worktree',
+        targetResult.snapshot.worktreeRevisionDigest,
+      )
       if (
         childReceipt.canonical.repositoryDigest !== expectedRepository ||
         childReceipt.canonical.worktreeDigest !== expectedWorktree
       ) {
-        // Stale relative to the current single observer snapshot (repository
-        // or worktree revision has moved since this receipt was minted) —
-        // skip this receipt without minting it, but keep evaluating later
+        // Stale relative to the authenticated target's current snapshot
+        // (repository or worktree revision moved since this receipt was
+        // minted) — skip without minting, but keep evaluating later
         // chronological receipts from the same child rollup.
         continue
       }
-      candidates.push(childReceipt)
+      candidates.push({
+        receipt: childReceipt,
+        snapshot: targetResult.snapshot,
+        before: recoveredContext?.before,
+      })
     }
 
     let minted = false
-    for (const childReceipt of candidates) {
+    for (const candidate of candidates) {
+      const childReceipt = candidate.receipt
+      const targetSnapshot = candidate.snapshot
       const operation = childReceipt.canonical.operation
       const parentContext = guard.currentOperationContext()
+      const beforeSnapshot = candidate.before
       const callID = `task-${host.callID}-${childReceipt.canonical.receiptId}`
       const observation = {
         callId: callID,
@@ -1518,17 +2129,23 @@ function createSessionRuntime(
           epochId: currentStatus.epoch.epochId,
           unitId: currentStatus.unit.unitId,
           workspaceIdentity: parentContext.workspaceIdentity,
-          ...(parentContext.repositoryIdentity
-            ? { repositoryIdentity: parentContext.repositoryIdentity }
-            : {}),
-          ...(parentContext.worktreeIdentity
-            ? { worktreeIdentity: parentContext.worktreeIdentity }
-            : {}),
+          operationTargetIdentity:
+            childReceipt.canonical.operationTargetIdentity,
+          repositoryIdentity:
+            beforeSnapshot?.repositoryRevisionDigest ??
+            parentContext.repositoryIdentity ??
+            targetSnapshot.repositoryRevisionDigest,
+          worktreeIdentity:
+            beforeSnapshot?.worktreeRevisionDigest ??
+            parentContext.worktreeIdentity ??
+            targetSnapshot.worktreeRevisionDigest,
         },
         after: {
           workspaceIdentity: parentContext.workspaceIdentity,
-          repositoryIdentity: current.snapshot.repositoryRevisionDigest,
-          worktreeIdentity: current.snapshot.worktreeRevisionDigest,
+          operationTargetIdentity:
+            childReceipt.canonical.operationTargetIdentity,
+          repositoryIdentity: targetSnapshot.repositoryRevisionDigest,
+          worktreeIdentity: targetSnapshot.worktreeRevisionDigest,
         },
         terminal: {
           status: 'success' as const,
@@ -1641,18 +2258,22 @@ function createSessionRuntime(
   async function refreshReadback(): Promise<void> {
     abandonPending()
     if (!options.observer) return
+    const effective = effectiveOperationObserver()
+    if (!effective) {
+      markUnavailable()
+      return
+    }
     let result: OperationObserverResult
     try {
-      result = await options.observer.snapshot()
+      result = await effective.observer.snapshot()
     } catch {
       markUnavailable()
       return
     }
-    if (result.status === 'unavailable') {
-      markUnavailable()
-      return
-    }
-    if (result.snapshot.targetDigest !== options.workspaceIdentity) {
+    if (
+      result.status === 'unavailable' ||
+      result.snapshot.targetDigest !== effective.targetIdentity
+    ) {
       markUnavailable()
       return
     }
@@ -1660,24 +2281,28 @@ function createSessionRuntime(
       workspaceIdentity: options.workspaceIdentity,
       repositoryIdentity: result.snapshot.repositoryRevisionDigest,
       worktreeIdentity: result.snapshot.worktreeRevisionDigest,
+      ...(effective.pinned
+        ? { operationTargetIdentity: effective.targetIdentity }
+        : {}),
     })
     if (
       (observed.status === 'rejected' &&
         observed.reasonCode === 'workspace-mismatch') ||
-      !(await refreshRemoteReadbacks(result.snapshot))
+      !(await refreshRemoteReadbacks(effective.observer, result.snapshot))
     ) {
       markUnavailable()
     }
   }
 
   async function refreshRemoteReadbacks(
+    observer: OpencodeOperationObserver,
     local: OperationObserverSnapshot,
   ): Promise<boolean> {
     const remoteOperations = guard
       .status()
       .satisfiedOperations.filter(remoteOperation)
     if (remoteOperations.length === 0) return true
-    const remoteSnapshot = options.observer?.remoteSnapshot
+    const remoteSnapshot = observer.remoteSnapshot
     if (!remoteSnapshot) return false
     for (const operation of remoteOperations) {
       const result = await readRemoteScope(remoteSnapshot, operation)
@@ -1927,6 +2552,7 @@ function createSessionRuntime(
   async function remoteIntentForOperation(
     host: HostToolBefore,
     args: unknown,
+    observer: OpencodeOperationObserver,
   ): Promise<
     | {
         operation: RemoteOperation
@@ -1943,7 +2569,7 @@ function createSessionRuntime(
     )
     if (!classification || !remoteOperation(classification.category))
       return undefined
-    const remoteSnapshot = options.observer?.remoteSnapshot
+    const remoteSnapshot = observer.remoteSnapshot
     if (!remoteSnapshot) return { operation: classification.category }
     try {
       return {
@@ -1955,6 +2581,7 @@ function createSessionRuntime(
     }
   }
 
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: target derivation, registered-worktree validation, and observer registration must stay atomic on the before hook
   async function prepareOperation(
     host: HostToolBefore,
     args: unknown,
@@ -1971,9 +2598,55 @@ function createSessionRuntime(
     ) {
       return
     }
+    const parentTargetRoot = options.targetDirectory ?? process.cwd()
+    const sessionLocation = options.sessionLocation ?? parentTargetRoot
+    const target = deriveOpencodeOperationTarget(host.tool, args, {
+      parentTargetRoot,
+      sessionLocation,
+      validateRegisteredWorktree: options.observer.validateRegisteredWorktree,
+    })
+    if (target.status === 'unavailable') {
+      markUnavailable()
+      return
+    }
+    let registeredTarget: RegisteredWorktreeValidationResult
+    try {
+      registeredTarget = options.observer.validateRegisteredWorktree(
+        target.targetRoot,
+      )
+    } catch {
+      markUnavailable()
+      return
+    }
+    const registeredIdentity = registeredWorktreeIdentity(registeredTarget)
+    if (
+      registeredTarget.status !== 'ok' ||
+      registeredIdentity === undefined ||
+      registeredTarget.targetRoot !== target.targetRoot
+    ) {
+      markUnavailable()
+      return
+    }
+    const canonicalParentTargetRoot = canonicalExistingPath(
+      parentTargetRoot,
+      fs.realpathSync,
+    )
+    if (!canonicalParentTargetRoot) {
+      markUnavailable()
+      return
+    }
+    const operationObserver =
+      target.targetRoot === canonicalParentTargetRoot
+        ? options.observer
+        : ([...operationObservers.values()].find(
+            (registration) => registration.targetRoot === target.targetRoot,
+          )?.observer ??
+          createOpencodeOperationObserver({
+            targetDirectory: target.targetRoot,
+          }))
     let result: OperationObserverResult
     try {
-      result = await options.observer.snapshot()
+      result = await operationObserver.snapshot()
     } catch {
       markUnavailable()
       return
@@ -1982,15 +2655,24 @@ function createSessionRuntime(
       markUnavailable()
       return
     }
-    if (result.snapshot.targetDigest !== options.workspaceIdentity) {
+    if (result.snapshot.targetDigest !== operationObserver.targetDigest) {
       markUnavailable()
       return
     }
-    const remote = await remoteIntentForOperation(host, args)
+    rememberOperationObserver({
+      targetRoot: target.targetRoot,
+      registeredWorktreeIdentity: registeredIdentity,
+      observer: operationObserver,
+    })
+    const remote = await remoteIntentForOperation(host, args, operationObserver)
     pendingOperations.set(callDigest, {
       callID: host.callID,
       tool: host.tool,
       argsFingerprint: fingerprint,
+      targetRoot: target.targetRoot,
+      targetIdentity: operationObserver.targetDigest,
+      registeredWorktreeIdentity: registeredIdentity,
+      observer: operationObserver,
       before: result.snapshot,
       ...(remote
         ? { remoteOperation: remote.operation, remoteBefore: remote.before }
@@ -2397,54 +3079,112 @@ function createSessionRuntime(
     if (remember) abandonedCompletes.set(callDigest, pending.target)
   }
 
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: fail-closed effective-observer selection and readback bundle construction must remain a single ordered pipeline
   async function completionReadbacks(): Promise<
     | { status: 'none' }
     | { status: 'unavailable' }
     | { status: 'ready'; readbacks: readonly unknown[] }
   > {
     if (!options.observer) return { status: 'none' }
-    let result: OperationObserverResult
+    let parentResult: OperationObserverResult
     try {
-      result = await options.observer.snapshot()
+      parentResult = await options.observer.snapshot()
     } catch {
       return { status: 'unavailable' }
     }
     if (
-      result.status === 'unavailable' ||
-      result.snapshot.targetDigest !== options.workspaceIdentity
+      parentResult.status === 'unavailable' ||
+      parentResult.snapshot.targetDigest !== options.workspaceIdentity
     ) {
       return { status: 'unavailable' }
     }
-    const remoteReadbacks = await completionRemoteReadbacks()
+    const effective = effectiveOperationObserver()
+    if (!effective) return { status: 'unavailable' }
+    let effectiveSnapshot = parentResult.snapshot
+    if (effective.pinned) {
+      let pinnedResult: OperationObserverResult
+      try {
+        pinnedResult = await effective.observer.snapshot()
+      } catch {
+        return { status: 'unavailable' }
+      }
+      if (
+        pinnedResult.status === 'unavailable' ||
+        pinnedResult.snapshot.targetDigest !== effective.targetIdentity
+      ) {
+        return { status: 'unavailable' }
+      }
+      effectiveSnapshot = pinnedResult.snapshot
+    }
+    const initialEffectiveSnapshot = effectiveSnapshot
+    const remoteReadbacks = await completionRemoteReadbacks(effective.observer)
     if (!remoteReadbacks) return { status: 'unavailable' }
-    let finalResult: OperationObserverResult
+    let finalParentResult: OperationObserverResult
     try {
-      finalResult = await options.observer.snapshot()
+      finalParentResult = await options.observer.snapshot()
     } catch {
       return { status: 'unavailable' }
     }
     if (
-      finalResult.status === 'unavailable' ||
-      finalResult.snapshot.targetDigest !== result.snapshot.targetDigest ||
-      finalResult.snapshot.repositoryRevisionDigest !==
-        result.snapshot.repositoryRevisionDigest ||
-      finalResult.snapshot.worktreeRevisionDigest !==
-        result.snapshot.worktreeRevisionDigest
+      finalParentResult.status === 'unavailable' ||
+      finalParentResult.snapshot.targetDigest !==
+        parentResult.snapshot.targetDigest ||
+      finalParentResult.snapshot.repositoryRevisionDigest !==
+        parentResult.snapshot.repositoryRevisionDigest ||
+      finalParentResult.snapshot.worktreeRevisionDigest !==
+        parentResult.snapshot.worktreeRevisionDigest
     ) {
       return { status: 'unavailable' }
+    }
+    let finalEffective = effective
+    if (effective.pinned) {
+      const revalidated = effectiveOperationObserver()
+      if (!revalidated) return { status: 'unavailable' }
+      finalEffective = revalidated
+      if (
+        finalEffective.observer !== effective.observer ||
+        finalEffective.targetIdentity !== effective.targetIdentity ||
+        !finalEffective.pinned
+      ) {
+        return { status: 'unavailable' }
+      }
+      let pinnedResult: OperationObserverResult
+      try {
+        pinnedResult = await finalEffective.observer.snapshot()
+      } catch {
+        return { status: 'unavailable' }
+      }
+      if (
+        pinnedResult.status === 'unavailable' ||
+        pinnedResult.snapshot.targetDigest !== finalEffective.targetIdentity
+      ) {
+        return { status: 'unavailable' }
+      }
+      effectiveSnapshot = pinnedResult.snapshot
+      if (
+        effectiveSnapshot.repositoryRevisionDigest !==
+          initialEffectiveSnapshot.repositoryRevisionDigest ||
+        effectiveSnapshot.worktreeRevisionDigest !==
+          initialEffectiveSnapshot.worktreeRevisionDigest
+      ) {
+        return { status: 'unavailable' }
+      }
+    } else {
+      effectiveSnapshot = finalParentResult.snapshot
     }
     return {
       status: 'ready',
       readbacks: [
         {
           workspaceIdentity: options.workspaceIdentity,
-          repositoryIdentity: finalResult.snapshot.repositoryRevisionDigest,
-          worktreeIdentity: finalResult.snapshot.worktreeRevisionDigest,
+          repositoryIdentity: effectiveSnapshot.repositoryRevisionDigest,
+          worktreeIdentity: effectiveSnapshot.worktreeRevisionDigest,
+          operationTargetIdentity: finalEffective.targetIdentity,
         },
         ...remoteReadbacks.map(({ operation, snapshot }) =>
           remoteReadbackInput(
             operation,
-            finalResult.snapshot,
+            effectiveSnapshot,
             options.workspaceIdentity,
             snapshot,
           ),
@@ -2453,7 +3193,9 @@ function createSessionRuntime(
     }
   }
 
-  async function completionRemoteReadbacks(): Promise<
+  async function completionRemoteReadbacks(
+    observer: OpencodeOperationObserver,
+  ): Promise<
     | readonly {
         operation: RemoteOperation
         snapshot: OperationObserverRemoteSnapshot
@@ -2464,7 +3206,7 @@ function createSessionRuntime(
       .status()
       .satisfiedOperations.filter(remoteOperation)
     if (remoteOperations.length === 0) return []
-    const remoteSnapshot = options.observer?.remoteSnapshot
+    const remoteSnapshot = observer.remoteSnapshot
     if (!remoteSnapshot) return undefined
     const readbacks: Array<{
       operation: RemoteOperation
@@ -2565,26 +3307,43 @@ function createSessionRuntime(
     return pending
   }
 
-  async function captureAfterOperation(): Promise<
-    OperationObserverSnapshot | undefined
-  > {
+  async function captureAfterOperation(
+    pending: PendingOperation,
+  ): Promise<OperationObserverSnapshot | undefined> {
     if (!options.observer) return undefined
+    let validation: RegisteredWorktreeValidationResult
+    try {
+      validation = options.observer.validateRegisteredWorktree(
+        pending.targetRoot,
+      )
+    } catch {
+      return undefined
+    }
+    if (
+      validation.status === 'error' ||
+      validation.targetRoot !== pending.targetRoot ||
+      registeredWorktreeIdentity(validation) !==
+        pending.registeredWorktreeIdentity
+    ) {
+      return undefined
+    }
     let result: OperationObserverResult
     try {
-      result = await options.observer.snapshot()
+      result = await pending.observer.snapshot()
     } catch {
       return undefined
     }
     return result.status === 'available' &&
-      result.snapshot.targetDigest === options.workspaceIdentity
+      result.snapshot.targetDigest === pending.targetIdentity
       ? result.snapshot
       : undefined
   }
 
   async function captureRemoteAfter(
     operation: RemoteOperation,
+    observer: OpencodeOperationObserver,
   ): Promise<OperationObserverRemoteSnapshot | undefined> {
-    const remoteSnapshot = options.observer?.remoteSnapshot
+    const remoteSnapshot = observer.remoteSnapshot
     if (!remoteSnapshot) return undefined
     let result: OperationObserverRemoteResult
     try {
@@ -2632,6 +3391,9 @@ function createSessionRuntime(
         workspaceIdentity: options.workspaceIdentity,
         repositoryIdentity: pending.before.repositoryRevisionDigest,
         worktreeIdentity: pending.before.worktreeRevisionDigest,
+        ...(localOperation(operation)
+          ? { operationTargetIdentity: pending.targetIdentity }
+          : {}),
         ...(pending.remoteBefore?.status === 'available'
           ? {
               resourceIdentity: pending.remoteBefore.snapshot.resourceIdentity,
@@ -2646,6 +3408,9 @@ function createSessionRuntime(
         workspaceIdentity: options.workspaceIdentity,
         repositoryIdentity: after.repositoryRevisionDigest,
         worktreeIdentity: after.worktreeRevisionDigest,
+        ...(localOperation(operation)
+          ? { operationTargetIdentity: pending.targetIdentity }
+          : {}),
         commitClosure: after.commitClosure,
         ...(remoteAfter
           ? {
@@ -2724,7 +3489,7 @@ function createSessionRuntime(
       sealOperation(callDigest, pending, true)
       return { status: 'unavailable' }
     }
-    const afterSnapshot = await captureAfterOperation()
+    const afterSnapshot = await captureAfterOperation(pending)
     if (!afterSnapshot) {
       sealOperation(callDigest, pending, true)
       return { status: 'unavailable' }
@@ -2747,7 +3512,10 @@ function createSessionRuntime(
     }
     let finalObservation = classification.observation
     if (remoteOperation(finalObservation.operation)) {
-      const remoteAfter = await captureRemoteAfter(finalObservation.operation)
+      const remoteAfter = await captureRemoteAfter(
+        finalObservation.operation,
+        pending.observer,
+      )
       if (!remoteAfter) {
         sealOperation(callDigest, pending, true)
         return { status: 'unavailable' }
@@ -2796,7 +3564,11 @@ function createSessionRuntime(
       return { status: 'unavailable' }
     }
     if (observed.status !== 'accepted') return { status: 'ignored' }
-    return { status: 'accepted', operation: observed.operation }
+    return {
+      status: 'accepted',
+      operation: observed.operation,
+      after: afterSnapshot,
+    }
   }
 
   function receiptForOperation(callID: string, operation: ReceiptOperation) {
@@ -2861,7 +3633,16 @@ function createSessionRuntime(
     }
     if (result.status === 'accepted') {
       const receipt = receiptForOperation(host.callID, result.operation)
-      if (receipt) mergeReceiptMarker(output, receipt)
+      if (receipt) {
+        if (localOperation(result.operation)) {
+          recoveredOperationContexts.set(receipt.canonical.receiptId, {
+            targetIdentity: pending.targetIdentity,
+            before: pending.before,
+            after: result.after,
+          })
+        }
+        mergeReceiptMarker(output, receipt)
+      }
     }
   }
 
@@ -3052,15 +3833,21 @@ export function createOpencodeWorkflowGuard(
   options: OpencodeWorkflowGuardOptions,
 ): OpencodeWorkflowGuard {
   const sessions = new Map<string, SessionRuntime>()
+  const operationObservers: OperationObserverRegistry = new Map()
+  const recoveredOperationContexts: RecoveredOperationRegistry = new Map()
 
   function sessionRuntimeFor(sessionID: string): SessionRuntime {
     const existing = sessions.get(sessionID)
     if (existing) return existing
-    const runtime = createSessionRuntime({
-      ...options,
-      registrationIdentity: options.registrationIdentity,
-      sessionSalt: options.sessionSalt,
-    })
+    const runtime = createSessionRuntime(
+      {
+        ...options,
+        registrationIdentity: options.registrationIdentity,
+        sessionSalt: options.sessionSalt,
+      },
+      operationObservers,
+      recoveredOperationContexts,
+    )
     sessions.set(sessionID, runtime)
     return runtime
   }

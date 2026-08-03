@@ -6,9 +6,15 @@ import type {
   ReceiptLedgerMetadata,
   ReceiptOperation,
 } from './receipt-ledger.js'
+import { isLocalOperation } from './receipt-ledger.js'
 
-export const RECEIPT_READBACK_SCHEMA_VERSION = 1 as const
-export const RECEIPT_READBACK_PROTOCOL_VERSION = 1 as const
+export const RECEIPT_READBACK_SCHEMA_VERSION = 2 as const
+export const RECEIPT_READBACK_PROTOCOL_VERSION = 2 as const
+const LEGACY_RECEIPT_READBACK_SCHEMA_VERSION = 1 as const
+const LEGACY_RECEIPT_READBACK_PROTOCOL_VERSION = 1 as const
+type ReceiptReadbackVersion =
+  | typeof RECEIPT_READBACK_SCHEMA_VERSION
+  | typeof LEGACY_RECEIPT_READBACK_SCHEMA_VERSION
 
 export type ReceiptDigestDomain =
   | 'repository'
@@ -52,8 +58,8 @@ export type ReceiptReadbackFailureCategory =
 
 export interface ReceiptMintMarker {
   readonly kind: 'mint'
-  readonly schemaVersion: typeof RECEIPT_READBACK_SCHEMA_VERSION
-  readonly protocolVersion: typeof RECEIPT_READBACK_PROTOCOL_VERSION
+  readonly schemaVersion: ReceiptReadbackVersion
+  readonly protocolVersion: ReceiptReadbackVersion
   readonly envelope: ReceiptEnvelope
   readonly sessionSalt: string
   readonly integrity: string
@@ -61,8 +67,8 @@ export interface ReceiptMintMarker {
 
 export interface ReceiptConsumeMarker {
   readonly kind: 'control'
-  readonly schemaVersion: typeof RECEIPT_READBACK_SCHEMA_VERSION
-  readonly protocolVersion: typeof RECEIPT_READBACK_PROTOCOL_VERSION
+  readonly schemaVersion: ReceiptReadbackVersion
+  readonly protocolVersion: ReceiptReadbackVersion
   readonly registrationDigest: string
   readonly capabilityFlags: readonly string[]
   readonly control: 'consume'
@@ -74,8 +80,8 @@ export interface ReceiptConsumeMarker {
 
 export interface ReceiptEpochProgressionMarker {
   readonly kind: 'control'
-  readonly schemaVersion: typeof RECEIPT_READBACK_SCHEMA_VERSION
-  readonly protocolVersion: typeof RECEIPT_READBACK_PROTOCOL_VERSION
+  readonly schemaVersion: ReceiptReadbackVersion
+  readonly protocolVersion: ReceiptReadbackVersion
   readonly registrationDigest: string
   readonly capabilityFlags: readonly string[]
   readonly control: 'progression'
@@ -92,8 +98,8 @@ export interface ReceiptEpochProgressionMarker {
 
 export interface ReceiptUnitProgressionMarker {
   readonly kind: 'control'
-  readonly schemaVersion: typeof RECEIPT_READBACK_SCHEMA_VERSION
-  readonly protocolVersion: typeof RECEIPT_READBACK_PROTOCOL_VERSION
+  readonly schemaVersion: ReceiptReadbackVersion
+  readonly protocolVersion: ReceiptReadbackVersion
   readonly registrationDigest: string
   readonly capabilityFlags: readonly string[]
   readonly control: 'progression'
@@ -105,6 +111,7 @@ export interface ReceiptUnitProgressionMarker {
   readonly family: ReceiptEpochFamily
   readonly requiredOperations: readonly ReceiptOperation[]
   readonly resourceScopes: readonly ReceiptResourceScope[]
+  readonly pinnedOperationTargetIdentity?: string
   readonly state: ReceiptProgressionStateName
   readonly transitionDigest: string
   readonly timestamp: number
@@ -150,6 +157,7 @@ export type ReceiptProgressionMarkerInput =
       readonly family: ReceiptEpochFamily
       readonly requiredOperations: readonly ReceiptOperation[]
       readonly resourceScopes: readonly ReceiptResourceScope[]
+      readonly pinnedOperationTargetIdentity?: string
       readonly transitionDigest: string
       readonly timestamp?: number
     }
@@ -168,6 +176,12 @@ export interface ReceiptReadbackExpectation {
   readonly capabilityFlags: readonly string[]
   readonly sessionSalt: Uint8Array
   readonly source?: 'runtime-verified'
+  /**
+   * When present, legacy v1 mint markers are rejected because they cannot
+   * authenticate a foreign/worktree target. Absence retains the narrow v1
+   * parent-target recovery shim; callers must validate that parent separately.
+   */
+  readonly operationTargetIdentity?: string
 }
 
 export type ReceiptEpochProgressionSnapshot = {
@@ -189,6 +203,7 @@ export type ReceiptUnitProgressionSnapshot = {
   readonly family: ReceiptEpochFamily
   readonly requiredOperations: readonly ReceiptOperation[]
   readonly resourceScopes: readonly ReceiptResourceScope[]
+  readonly pinnedOperationTargetIdentity?: string
   readonly transitionDigest: string
 }
 
@@ -280,6 +295,13 @@ const CANONICAL_REQUIRED_KEYS = [
 const CANONICAL_OPTIONAL_KEYS = [
   'repositoryDigest',
   'worktreeDigest',
+  'operationTargetIdentity',
+  'resourceDigest',
+] as const
+
+const LEGACY_CANONICAL_OPTIONAL_KEYS = [
+  'repositoryDigest',
+  'worktreeDigest',
   'resourceDigest',
 ] as const
 
@@ -336,12 +358,17 @@ const UNIT_PROGRESSION_KEYS = [
   'family',
   'requiredOperations',
   'resourceScopes',
+  'pinnedOperationTargetIdentity',
   'state',
   'transitionDigest',
   'timestamp',
   'sessionSalt',
   'integrity',
 ] as const
+
+const LEGACY_UNIT_PROGRESSION_KEYS = UNIT_PROGRESSION_KEYS.filter(
+  (key) => key !== 'pinnedOperationTargetIdentity',
+)
 
 const RESOURCE_SCOPE_KEYS = ['operation', 'resourceIdentity'] as const
 
@@ -369,6 +396,26 @@ function hasExactKeys(
   return (
     required.every((key) => Object.hasOwn(value, key)) &&
     keys.every((key) => allowed.has(key))
+  )
+}
+
+function isCurrentVersionPair(
+  schemaVersion: unknown,
+  protocolVersion: unknown,
+): schemaVersion is typeof RECEIPT_READBACK_SCHEMA_VERSION {
+  return (
+    schemaVersion === RECEIPT_READBACK_SCHEMA_VERSION &&
+    protocolVersion === RECEIPT_READBACK_PROTOCOL_VERSION
+  )
+}
+
+function isLegacyVersionPair(
+  schemaVersion: unknown,
+  protocolVersion: unknown,
+): schemaVersion is typeof LEGACY_RECEIPT_READBACK_SCHEMA_VERSION {
+  return (
+    schemaVersion === LEGACY_RECEIPT_READBACK_SCHEMA_VERSION &&
+    protocolVersion === LEGACY_RECEIPT_READBACK_PROTOCOL_VERSION
   )
 }
 
@@ -529,6 +576,9 @@ function cloneCanonical(
     workspaceDigest: canonical.workspaceDigest,
     repositoryDigest: canonical.repositoryDigest,
     worktreeDigest: canonical.worktreeDigest,
+    ...(isLocalOperation(canonical.operation)
+      ? { operationTargetIdentity: canonical.operationTargetIdentity }
+      : {}),
     resourceDigest: canonical.resourceDigest,
     operation: canonical.operation,
     result: 'success',
@@ -551,9 +601,16 @@ function cloneEnvelope(envelope: ReceiptEnvelope): ReceiptEnvelope {
 
 function parseEnvelope(value: unknown): ReceiptEnvelope | undefined {
   if (!isRecord(value) || !hasExactKeys(value, ENVELOPE_KEYS)) return undefined
+  const currentVersion = isCurrentVersionPair(
+    value.schemaVersion,
+    value.protocolVersion,
+  )
+  const legacyVersion = isLegacyVersionPair(
+    value.schemaVersion,
+    value.protocolVersion,
+  )
   if (
-    value.schemaVersion !== 1 ||
-    value.protocolVersion !== 1 ||
+    (!currentVersion && !legacyVersion) ||
     value.compatibility !== 'compatible' ||
     !isDigest(value.registrationDigest) ||
     !isCapabilityList(value.capabilityFlags) ||
@@ -563,11 +620,14 @@ function parseEnvelope(value: unknown): ReceiptEnvelope | undefined {
   }
 
   const canonical = value.canonical
+  const operation = isOperation(canonical.operation)
+    ? canonical.operation
+    : undefined
   if (
     !hasExactKeys(
       canonical,
       CANONICAL_REQUIRED_KEYS,
-      CANONICAL_OPTIONAL_KEYS,
+      currentVersion ? CANONICAL_OPTIONAL_KEYS : LEGACY_CANONICAL_OPTIONAL_KEYS,
     ) ||
     !isReceiptId(canonical.receiptId) ||
     !isDigest(canonical.registrationDigest) ||
@@ -579,9 +639,18 @@ function parseEnvelope(value: unknown): ReceiptEnvelope | undefined {
       !isDigest(canonical.repositoryDigest)) ||
     (canonical.worktreeDigest !== undefined &&
       !isDigest(canonical.worktreeDigest)) ||
+    (canonical.operationTargetIdentity !== undefined &&
+      !isDigest(canonical.operationTargetIdentity)) ||
+    operation === undefined ||
+    (currentVersion &&
+      isLocalOperation(operation) &&
+      !isDigest(canonical.operationTargetIdentity)) ||
+    (currentVersion &&
+      !isLocalOperation(operation) &&
+      Object.hasOwn(canonical, 'operationTargetIdentity')) ||
+    (legacyVersion && Object.hasOwn(canonical, 'operationTargetIdentity')) ||
     (canonical.resourceDigest !== undefined &&
       !isDigest(canonical.resourceDigest)) ||
-    !isOperation(canonical.operation) ||
     canonical.result !== 'success' ||
     canonical.source !== 'runtime-verified' ||
     (canonical.consumption !== 'available' &&
@@ -593,8 +662,12 @@ function parseEnvelope(value: unknown): ReceiptEnvelope | undefined {
   }
 
   return {
-    schemaVersion: 1,
-    protocolVersion: 1,
+    schemaVersion: currentVersion
+      ? RECEIPT_READBACK_SCHEMA_VERSION
+      : LEGACY_RECEIPT_READBACK_SCHEMA_VERSION,
+    protocolVersion: currentVersion
+      ? RECEIPT_READBACK_PROTOCOL_VERSION
+      : LEGACY_RECEIPT_READBACK_PROTOCOL_VERSION,
     registrationDigest: value.registrationDigest,
     capabilityFlags: [...value.capabilityFlags],
     compatibility: 'compatible',
@@ -607,8 +680,11 @@ function parseEnvelope(value: unknown): ReceiptEnvelope | undefined {
       workspaceDigest: canonical.workspaceDigest,
       repositoryDigest: canonical.repositoryDigest,
       worktreeDigest: canonical.worktreeDigest,
+      ...(isLocalOperation(operation)
+        ? { operationTargetIdentity: canonical.operationTargetIdentity }
+        : {}),
       resourceDigest: canonical.resourceDigest,
-      operation: canonical.operation,
+      operation,
       result: 'success',
       source: 'runtime-verified',
       consumption: canonical.consumption,
@@ -623,16 +699,16 @@ function parseLedgerMetadata(
   if (
     !isRecord(value) ||
     !hasExactKeys(value, LEDGER_METADATA_KEYS) ||
-    value.schemaVersion !== 1 ||
-    value.protocolVersion !== 1 ||
+    value.schemaVersion !== RECEIPT_READBACK_SCHEMA_VERSION ||
+    value.protocolVersion !== RECEIPT_READBACK_PROTOCOL_VERSION ||
     !isDigest(value.registrationDigest) ||
     !isCapabilityList(value.capabilityFlags)
   ) {
     return undefined
   }
   return {
-    schemaVersion: 1,
-    protocolVersion: 1,
+    schemaVersion: RECEIPT_READBACK_SCHEMA_VERSION,
+    protocolVersion: RECEIPT_READBACK_PROTOCOL_VERSION,
     registrationDigest: value.registrationDigest,
     capabilityFlags: [...value.capabilityFlags],
   }
@@ -640,28 +716,32 @@ function parseLedgerMetadata(
 
 function serializeEnvelope(envelope: ReceiptEnvelope): string {
   const canonical = envelope.canonical
+  const canonicalFields = {
+    receiptId: canonical.receiptId,
+    registrationDigest: canonical.registrationDigest,
+    callDigest: canonical.callDigest,
+    epochDigest: canonical.epochDigest,
+    unitDigest: canonical.unitDigest,
+    workspaceDigest: canonical.workspaceDigest,
+    repositoryDigest: canonical.repositoryDigest ?? null,
+    worktreeDigest: canonical.worktreeDigest ?? null,
+    ...(envelope.schemaVersion === RECEIPT_READBACK_SCHEMA_VERSION
+      ? { operationTargetIdentity: canonical.operationTargetIdentity ?? null }
+      : {}),
+    resourceDigest: canonical.resourceDigest ?? null,
+    operation: canonical.operation,
+    result: canonical.result,
+    source: canonical.source,
+    consumption: canonical.consumption,
+    timestamp: canonical.timestamp,
+  }
   return JSON.stringify({
     schemaVersion: envelope.schemaVersion,
     protocolVersion: envelope.protocolVersion,
     registrationDigest: envelope.registrationDigest,
     capabilityFlags: [...envelope.capabilityFlags],
     compatibility: envelope.compatibility,
-    canonical: {
-      receiptId: canonical.receiptId,
-      registrationDigest: canonical.registrationDigest,
-      callDigest: canonical.callDigest,
-      epochDigest: canonical.epochDigest,
-      unitDigest: canonical.unitDigest,
-      workspaceDigest: canonical.workspaceDigest,
-      repositoryDigest: canonical.repositoryDigest ?? null,
-      worktreeDigest: canonical.worktreeDigest ?? null,
-      resourceDigest: canonical.resourceDigest ?? null,
-      operation: canonical.operation,
-      result: canonical.result,
-      source: canonical.source,
-      consumption: canonical.consumption,
-      timestamp: canonical.timestamp,
-    },
+    canonical: canonicalFields,
   })
 }
 
@@ -712,6 +792,12 @@ function progressionIntegrity(marker: ReceiptProgressionMarkerCore): string {
           family: marker.family,
           requiredOperations: [...marker.requiredOperations],
           resourceScopes: marker.resourceScopes.map((scope) => ({ ...scope })),
+          ...(marker.schemaVersion === RECEIPT_READBACK_SCHEMA_VERSION
+            ? {
+                pinnedOperationTargetIdentity:
+                  marker.pinnedOperationTargetIdentity ?? null,
+              }
+            : {}),
         }
   return hashIntegrity(
     'progression',
@@ -745,13 +831,32 @@ function parseMintMarker(value: unknown): ReceiptMarkerValidation {
       value.kind === 'control' ? 'unknown-kind' : 'unknown-kind',
     )
   }
-  if (value.schemaVersion !== RECEIPT_READBACK_SCHEMA_VERSION)
-    return markerResult('unknown-schema')
-  if (value.protocolVersion !== RECEIPT_READBACK_PROTOCOL_VERSION)
+  const currentVersion = isCurrentVersionPair(
+    value.schemaVersion,
+    value.protocolVersion,
+  )
+  const legacyVersion = isLegacyVersionPair(
+    value.schemaVersion,
+    value.protocolVersion,
+  )
+  if (!currentVersion && !legacyVersion) {
+    if (
+      value.schemaVersion !== RECEIPT_READBACK_SCHEMA_VERSION &&
+      value.schemaVersion !== LEGACY_RECEIPT_READBACK_SCHEMA_VERSION
+    )
+      return markerResult('unknown-schema')
     return markerResult('unknown-protocol')
+  }
   if (!hasExactKeys(value, MINT_KEYS)) return markerResult('forbidden-field')
   const envelope = parseEnvelope(value.envelope)
   if (!envelope) return markerResult('malformed')
+  if (
+    (currentVersion &&
+      envelope.schemaVersion !== RECEIPT_READBACK_SCHEMA_VERSION) ||
+    (legacyVersion && envelope.schemaVersion !== 1)
+  ) {
+    return markerResult('malformed')
+  }
   if (!isSessionSaltHex(value.sessionSalt)) return markerResult('malformed')
   if (!isDigest(value.integrity)) return markerResult('malformed')
   if (envelope.canonical.consumption !== 'available')
@@ -759,8 +864,8 @@ function parseMintMarker(value: unknown): ReceiptMarkerValidation {
 
   const marker: ReceiptMintMarker = {
     kind: 'mint',
-    schemaVersion: RECEIPT_READBACK_SCHEMA_VERSION,
-    protocolVersion: RECEIPT_READBACK_PROTOCOL_VERSION,
+    schemaVersion: value.schemaVersion as ReceiptReadbackVersion,
+    protocolVersion: value.protocolVersion as ReceiptReadbackVersion,
     envelope,
     sessionSalt: value.sessionSalt,
     integrity: value.integrity,
@@ -774,9 +879,16 @@ function parseConsumeMarker(
   value: Record<string, unknown>,
 ): ReceiptMarkerValidation {
   if (!hasExactKeys(value, CONSUME_KEYS)) return markerResult('forbidden-field')
+  const currentVersion = isCurrentVersionPair(
+    value.schemaVersion,
+    value.protocolVersion,
+  )
+  const legacyVersion = isLegacyVersionPair(
+    value.schemaVersion,
+    value.protocolVersion,
+  )
   if (
-    value.schemaVersion !== RECEIPT_READBACK_SCHEMA_VERSION ||
-    value.protocolVersion !== RECEIPT_READBACK_PROTOCOL_VERSION ||
+    (!currentVersion && !legacyVersion) ||
     value.kind !== 'control' ||
     value.control !== 'consume' ||
     !isDigest(value.registrationDigest) ||
@@ -790,8 +902,8 @@ function parseConsumeMarker(
   }
   const marker = {
     kind: 'control' as const,
-    schemaVersion: RECEIPT_READBACK_SCHEMA_VERSION,
-    protocolVersion: RECEIPT_READBACK_PROTOCOL_VERSION,
+    schemaVersion: value.schemaVersion as ReceiptReadbackVersion,
+    protocolVersion: value.protocolVersion as ReceiptReadbackVersion,
     registrationDigest: value.registrationDigest,
     capabilityFlags: [...value.capabilityFlags],
     control: 'consume' as const,
@@ -814,6 +926,8 @@ function parseProgressionMarker(
 }
 
 interface ParsedProgressionBase {
+  readonly schemaVersion: ReceiptReadbackVersion
+  readonly protocolVersion: ReceiptReadbackVersion
   readonly registrationDigest: string
   readonly capabilityFlags: readonly string[]
   readonly state: ReceiptProgressionStateName
@@ -827,8 +941,8 @@ function parseProgressionBase(
   value: Record<string, unknown>,
 ): ParsedProgressionBase | undefined {
   if (
-    value.schemaVersion === RECEIPT_READBACK_SCHEMA_VERSION &&
-    value.protocolVersion === RECEIPT_READBACK_PROTOCOL_VERSION &&
+    (isCurrentVersionPair(value.schemaVersion, value.protocolVersion) ||
+      isLegacyVersionPair(value.schemaVersion, value.protocolVersion)) &&
     value.kind === 'control' &&
     value.control === 'progression' &&
     isDigest(value.registrationDigest) &&
@@ -840,6 +954,8 @@ function parseProgressionBase(
     isDigest(value.integrity)
   ) {
     return {
+      schemaVersion: value.schemaVersion as ReceiptReadbackVersion,
+      protocolVersion: value.protocolVersion as ReceiptReadbackVersion,
       registrationDigest: value.registrationDigest,
       capabilityFlags: [...value.capabilityFlags],
       state: value.state,
@@ -873,8 +989,8 @@ function parseEpochProgressionMarker(
   }
   const marker: ReceiptEpochProgressionMarker = {
     kind: 'control',
-    schemaVersion: RECEIPT_READBACK_SCHEMA_VERSION,
-    protocolVersion: RECEIPT_READBACK_PROTOCOL_VERSION,
+    schemaVersion: base.schemaVersion,
+    protocolVersion: base.protocolVersion,
     registrationDigest: base.registrationDigest,
     capabilityFlags: [...base.capabilityFlags],
     control: 'progression',
@@ -894,7 +1010,17 @@ function parseEpochProgressionMarker(
 function parseUnitProgressionMarker(
   value: Record<string, unknown>,
 ): ReceiptMarkerValidation {
-  if (!hasExactKeys(value, UNIT_PROGRESSION_KEYS)) {
+  const currentVersion = isCurrentVersionPair(
+    value.schemaVersion,
+    value.protocolVersion,
+  )
+  if (
+    !hasExactKeys(
+      value,
+      LEGACY_UNIT_PROGRESSION_KEYS,
+      currentVersion ? ['pinnedOperationTargetIdentity'] : [],
+    )
+  ) {
     return Object.hasOwn(value, 'epochId') && Object.hasOwn(value, 'unitId')
       ? markerResult('forbidden-field')
       : markerResult('missing-internal-id')
@@ -903,6 +1029,12 @@ function parseUnitProgressionMarker(
     value.requiredOperations,
   )
   const resourceScopes = canonicalResourceScopes(value.resourceScopes)
+  const pinnedOperationTargetIdentity =
+    value.pinnedOperationTargetIdentity === undefined
+      ? undefined
+      : isDigest(value.pinnedOperationTargetIdentity)
+        ? value.pinnedOperationTargetIdentity
+        : undefined
   const base = parseProgressionBase(value)
   if (
     !base ||
@@ -912,7 +1044,9 @@ function parseUnitProgressionMarker(
     !isDigest(value.unitDigest) ||
     !isFamily(value.family) ||
     !requiredOperations ||
-    !resourceScopes
+    !resourceScopes ||
+    (value.pinnedOperationTargetIdentity !== undefined &&
+      pinnedOperationTargetIdentity === undefined)
   ) {
     return value.epochId === undefined || value.unitId === undefined
       ? markerResult('missing-internal-id')
@@ -920,8 +1054,8 @@ function parseUnitProgressionMarker(
   }
   const marker: ReceiptUnitProgressionMarker = {
     kind: 'control',
-    schemaVersion: RECEIPT_READBACK_SCHEMA_VERSION,
-    protocolVersion: RECEIPT_READBACK_PROTOCOL_VERSION,
+    schemaVersion: base.schemaVersion,
+    protocolVersion: base.protocolVersion,
     registrationDigest: base.registrationDigest,
     capabilityFlags: [...base.capabilityFlags],
     control: 'progression',
@@ -933,6 +1067,7 @@ function parseUnitProgressionMarker(
     family: value.family,
     requiredOperations: [...requiredOperations],
     resourceScopes: resourceScopes.map((scope) => ({ ...scope })),
+    ...(pinnedOperationTargetIdentity ? { pinnedOperationTargetIdentity } : {}),
     state: base.state,
     transitionDigest: base.transitionDigest,
     timestamp: base.timestamp,
@@ -954,10 +1089,17 @@ export function validateReceiptMarker(input: unknown): ReceiptMarkerValidation {
   if (!isRecord(input)) return markerResult('malformed')
   if (input.kind === 'mint') return parseMintMarker(input)
   if (input.kind !== 'control') return markerResult('unknown-kind')
-  if (input.schemaVersion !== RECEIPT_READBACK_SCHEMA_VERSION)
-    return markerResult('unknown-schema')
-  if (input.protocolVersion !== RECEIPT_READBACK_PROTOCOL_VERSION)
+  if (
+    !isCurrentVersionPair(input.schemaVersion, input.protocolVersion) &&
+    !isLegacyVersionPair(input.schemaVersion, input.protocolVersion)
+  ) {
+    if (
+      input.schemaVersion !== RECEIPT_READBACK_SCHEMA_VERSION &&
+      input.schemaVersion !== LEGACY_RECEIPT_READBACK_SCHEMA_VERSION
+    )
+      return markerResult('unknown-schema')
     return markerResult('unknown-protocol')
+  }
   if (input.control === 'consume') return parseConsumeMarker(input)
   if (input.control === 'progression') return parseProgressionMarker(input)
   return markerResult('unknown-kind')
@@ -1184,7 +1326,9 @@ function projectUnitMarker(
     !isInternalId(input.unitId) ||
     !isFamily(input.family) ||
     normalizeRequiredOperations(input.requiredOperations) === undefined ||
-    normalizeResourceScopes(input.resourceScopes) === undefined
+    normalizeResourceScopes(input.resourceScopes) === undefined ||
+    (input.pinnedOperationTargetIdentity !== undefined &&
+      !isDigest(input.pinnedOperationTargetIdentity))
   ) {
     return undefined
   }
@@ -1208,6 +1352,9 @@ function projectUnitMarker(
     family: input.family,
     requiredOperations: [...requiredOperations],
     resourceScopes: resourceScopes.map((scope) => ({ ...scope })),
+    ...(input.pinnedOperationTargetIdentity
+      ? { pinnedOperationTargetIdentity: input.pinnedOperationTargetIdentity }
+      : {}),
     state: input.state,
     transitionDigest: input.transitionDigest,
     timestamp: context.timestamp,
@@ -1294,6 +1441,9 @@ function cloneMarker(marker: ReceiptMarker): ReceiptMarker {
     family: marker.family,
     requiredOperations: [...marker.requiredOperations],
     resourceScopes: marker.resourceScopes.map((scope) => ({ ...scope })),
+    ...(marker.pinnedOperationTargetIdentity
+      ? { pinnedOperationTargetIdentity: marker.pinnedOperationTargetIdentity }
+      : {}),
     state: marker.state,
     transitionDigest: marker.transitionDigest,
     timestamp: marker.timestamp,
@@ -1361,6 +1511,12 @@ function serializeMarker(marker: ReceiptMarker): string {
     family: marker.family,
     requiredOperations: [...marker.requiredOperations],
     resourceScopes: marker.resourceScopes.map((scope) => ({ ...scope })),
+    ...(marker.schemaVersion === RECEIPT_READBACK_SCHEMA_VERSION
+      ? {
+          pinnedOperationTargetIdentity:
+            marker.pinnedOperationTargetIdentity ?? null,
+        }
+      : {}),
     state: marker.state,
     transitionDigest: marker.transitionDigest,
     timestamp: marker.timestamp,
@@ -1411,6 +1567,20 @@ function foldMintMarker(
   context: FoldContext,
 ): ReceiptReadbackFailureCategory | undefined {
   if (marker.sessionSalt !== context.expectedSalt) return 'salt-mismatch'
+  if (
+    marker.envelope.schemaVersion === 1 &&
+    context.expectation.operationTargetIdentity
+  ) {
+    return 'identity-digest-mismatch'
+  }
+  if (
+    marker.envelope.schemaVersion === RECEIPT_READBACK_SCHEMA_VERSION &&
+    context.expectation.operationTargetIdentity &&
+    marker.envelope.canonical.operationTargetIdentity !==
+      context.expectation.operationTargetIdentity
+  ) {
+    return 'identity-digest-mismatch'
+  }
   const registrationMatches =
     marker.envelope.registrationDigest ===
       context.expectation.registrationDigest &&
@@ -1518,6 +1688,9 @@ function progressionSnapshot(
     family: marker.family,
     requiredOperations: [...marker.requiredOperations],
     resourceScopes: marker.resourceScopes.map((scope) => ({ ...scope })),
+    ...(marker.pinnedOperationTargetIdentity
+      ? { pinnedOperationTargetIdentity: marker.pinnedOperationTargetIdentity }
+      : {}),
     transitionDigest: marker.transitionDigest,
   }
 }
@@ -1629,12 +1802,20 @@ function applyUnitStart(
     }
     if (
       sameUnitDeclaration(current, marker) &&
-      current.transitionDigest !== marker.transitionDigest
+      current.transitionDigest !== marker.transitionDigest &&
+      current.pinnedOperationTargetIdentity ===
+        marker.pinnedOperationTargetIdentity
     ) {
       return 'conflicting-marker'
     }
     if (!unitDeclarationExtends(current, marker)) return 'conflicting-marker'
-    if (sameUnitDeclaration(current, marker)) return undefined
+    if (
+      sameUnitDeclaration(current, marker) &&
+      current.pinnedOperationTargetIdentity ===
+        marker.pinnedOperationTargetIdentity
+    ) {
+      return undefined
+    }
     context.progression = { epoch, unit: snapshot }
     return undefined
   }
@@ -1712,8 +1893,17 @@ function unitDeclarationExtends(
       scope.resourceIdentity,
     ]),
   )
-  return [...current.resourceScopes].every(
-    (scope) => nextScopes.get(scope.operation) === scope.resourceIdentity,
+  if (
+    ![...current.resourceScopes].every(
+      (scope) => nextScopes.get(scope.operation) === scope.resourceIdentity,
+    )
+  ) {
+    return false
+  }
+  return (
+    current.pinnedOperationTargetIdentity === undefined ||
+    current.pinnedOperationTargetIdentity ===
+      marker.pinnedOperationTargetIdentity
   )
 }
 
@@ -1799,11 +1989,13 @@ export function foldReceiptReadback(
 export function receiptReadbackExpectationFromMetadata(
   metadata: ReceiptLedgerMetadata,
   sessionSalt: Uint8Array,
+  operationTargetIdentity?: string,
 ): ReceiptReadbackExpectation {
   return {
     registrationDigest: metadata.registrationDigest,
     capabilityFlags: [...metadata.capabilityFlags],
     sessionSalt: new Uint8Array(sessionSalt),
     source: 'runtime-verified',
+    operationTargetIdentity,
   }
 }

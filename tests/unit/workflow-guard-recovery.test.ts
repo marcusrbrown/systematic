@@ -23,6 +23,7 @@ const UNIT_ID = 'b'.repeat(32)
 const WORKSPACE_ID = 'workspace-current'
 const REPOSITORY_ID = 'repository-current'
 const WORKTREE_ID = 'worktree-current'
+const OPERATION_TARGET_IDENTITY = 'd'.repeat(64)
 
 function createRecoveredFixture(
   progressionMode: 'active' | 'consumed' | 'completed' = 'active',
@@ -41,6 +42,7 @@ function createRecoveredFixture(
     epochId: EPOCH_ID,
     unitId: UNIT_ID,
     workspaceIdentity: WORKSPACE_ID,
+    operationTargetIdentity: OPERATION_TARGET_IDENTITY,
     ...(includeRepositoryBoundary
       ? {
           repositoryIdentity:
@@ -63,6 +65,7 @@ function createRecoveredFixture(
     context,
     after: {
       workspaceIdentity: WORKSPACE_ID,
+      operationTargetIdentity: OPERATION_TARGET_IDENTITY,
       ...(includeRepositoryBoundary
         ? {
             repositoryIdentity: REPOSITORY_ID,

@@ -37,6 +37,31 @@ export type OperationObserverReasonCode =
   | 'remote-not-advanced'
   | 'commit-not-closed'
 
+export interface RegisteredWorktreeParentIdentity {
+  readonly targetRoot: string
+  readonly gitDir: string
+  readonly commonDir: string
+  readonly registeredWorktreeRoots: readonly string[]
+}
+
+export interface RegisteredWorktreeValidationOptions {
+  readonly commandRunner?: OperationObserverCommandRunner
+  readonly limits?: OperationObserverLimits
+  readonly realPath?: (filePath: string) => string
+}
+
+export type RegisteredWorktreeValidationResult =
+  | {
+      readonly status: 'ok'
+      readonly targetRoot: string
+      readonly gitDir: string
+      readonly commonDir: string
+    }
+  | {
+      readonly status: 'error'
+      readonly reasonCode: OperationObserverReasonCode
+    }
+
 export type RemoteOperation =
   | 'push'
   | 'pr-creation'
@@ -145,6 +170,9 @@ export interface OpencodeOperationObserverOptions {
 
 export interface OpencodeOperationObserver {
   readonly targetDigest: string
+  validateRegisteredWorktree(
+    candidateDirectory: string,
+  ): RegisteredWorktreeValidationResult
   snapshot(): Promise<OperationObserverResult>
   remoteSnapshot?(
     operation: RemoteOperation,
@@ -175,6 +203,10 @@ interface RepositoryContext {
   readonly worktreeRoot: string
 }
 
+type ParentIdentityCaptureResult =
+  | { status: 'ok'; identity: RegisteredWorktreeParentIdentity }
+  | { status: 'error'; reasonCode: OperationObserverReasonCode }
+
 function unavailable(result: {
   readonly status: 'error'
   readonly reasonCode: OperationObserverReasonCode
@@ -201,6 +233,16 @@ function isCommandTimeout(error: unknown): boolean {
   )
 }
 
+function sanitizedEnvironment(): NodeJS.ProcessEnv {
+  const env = { ...process.env }
+  for (const key of Object.keys(env)) {
+    if (key.startsWith('GIT_')) {
+      delete env[key]
+    }
+  }
+  return env
+}
+
 function defaultCommandRunner(
   args: readonly string[],
   cwd: string,
@@ -210,6 +252,7 @@ function defaultCommandRunner(
   try {
     const result = spawnSync('git', [...args], {
       cwd,
+      env: sanitizedEnvironment(),
       encoding: 'utf8',
       maxBuffer: maxOutputBytes,
       timeout: timeoutMs,
@@ -235,6 +278,7 @@ function defaultRemoteCommandRunner(
   try {
     const result = spawnSync(executable, [...args], {
       cwd,
+      env: sanitizedEnvironment(),
       encoding: 'utf8',
       maxBuffer: maxOutputBytes,
       timeout: timeoutMs,
@@ -337,6 +381,253 @@ function runCommand(
     return { status: 'error', reasonCode: 'command-failed' }
   }
   return { status: 'ok', output: { stdout: result.stdout } }
+}
+
+function canonicalPath(
+  filePath: string,
+  realPath: (filePath: string) => string = fs.realpathSync,
+): string | undefined {
+  try {
+    return realPath(filePath)
+  } catch {
+    return undefined
+  }
+}
+
+function requiredGitPath(
+  runner: OperationObserverCommandRunner,
+  args: readonly string[],
+  cwd: string,
+  limits: Limits,
+  realPath: (filePath: string) => string = fs.realpathSync,
+):
+  | { status: 'ok'; value: string }
+  | { status: 'error'; reasonCode: OperationObserverReasonCode } {
+  const result = runCommand(runner, args, cwd, limits)
+  if (result.status === 'error') return result
+  const rawValue = result.output.stdout.trim()
+  if (!path.isAbsolute(rawValue)) {
+    return { status: 'error', reasonCode: 'target-unavailable' }
+  }
+  const value = canonicalPath(rawValue, realPath)
+  return value === undefined
+    ? { status: 'error', reasonCode: 'target-unavailable' }
+    : { status: 'ok', value }
+}
+
+function captureParentIdentity(
+  targetDirectory: string,
+  runner: OperationObserverCommandRunner,
+  limits: Limits,
+  realPath: (filePath: string) => string = fs.realpathSync,
+): ParentIdentityCaptureResult {
+  const targetRoot = requiredGitPath(
+    runner,
+    ['rev-parse', '--show-toplevel'],
+    targetDirectory,
+    limits,
+    realPath,
+  )
+  if (targetRoot.status === 'error') return targetRoot
+  const gitDir = requiredGitPath(
+    runner,
+    ['rev-parse', '--absolute-git-dir'],
+    targetDirectory,
+    limits,
+    realPath,
+  )
+  if (gitDir.status === 'error') return gitDir
+  const commonDir = requiredGitPath(
+    runner,
+    ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+    targetDirectory,
+    limits,
+    realPath,
+  )
+  if (commonDir.status === 'error') return commonDir
+  const worktreeList = runCommand(
+    runner,
+    ['worktree', 'list', '--porcelain', '-z'],
+    targetDirectory,
+    limits,
+  )
+  if (worktreeList.status === 'error') return worktreeList
+  const registeredWorktreeRoots = worktreeList.output.stdout
+    .split('\0')
+    .filter((record) => record.startsWith('worktree '))
+    .map((record) => canonicalPath(record.slice('worktree '.length), realPath))
+  if (registeredWorktreeRoots.some((root) => root === undefined)) {
+    return { status: 'error', reasonCode: 'target-unavailable' }
+  }
+  const roots = registeredWorktreeRoots.filter(
+    (root): root is string => root !== undefined,
+  )
+  return roots.length > 0
+    ? {
+        status: 'ok',
+        identity: {
+          targetRoot: targetRoot.value,
+          gitDir: gitDir.value,
+          commonDir: commonDir.value,
+          registeredWorktreeRoots: roots,
+        },
+      }
+    : { status: 'error', reasonCode: 'target-unavailable' }
+}
+
+function readGitfileTarget(
+  gitfilePath: string,
+  realPath: (filePath: string) => string = fs.realpathSync,
+): string | undefined {
+  let contents: string
+  try {
+    contents = fs.readFileSync(gitfilePath, 'utf8')
+  } catch {
+    return undefined
+  }
+  const match = /^gitdir:\s*(.+?)\s*$/im.exec(contents)
+  if (!match) return undefined
+  const target = path.isAbsolute(match[1])
+    ? match[1]
+    : path.resolve(path.dirname(gitfilePath), match[1])
+  return canonicalPath(target, realPath)
+}
+
+function readGitdirBacklink(
+  backlinkPath: string,
+  realPath: (filePath: string) => string,
+): string | undefined {
+  let contents: string
+  try {
+    contents = fs.readFileSync(backlinkPath, 'utf8').trim()
+  } catch {
+    return undefined
+  }
+  if (contents.length === 0) return undefined
+  const target = path.isAbsolute(contents)
+    ? contents
+    : path.resolve(path.dirname(backlinkPath), contents)
+  return canonicalPath(target, realPath)
+}
+
+function isPathWithin(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate)
+  return (
+    relative !== '' &&
+    relative !== '..' &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  )
+}
+
+function validateDotGitLinkage(
+  targetRoot: string,
+  gitDir: string,
+  commonDir: string,
+  realPath: (filePath: string) => string,
+): boolean {
+  const dotGit = path.join(targetRoot, '.git')
+  let dotGitStat: fs.Stats
+  try {
+    dotGitStat = fs.lstatSync(dotGit)
+  } catch {
+    return false
+  }
+  if (dotGitStat.isDirectory()) {
+    return gitDir === commonDir && canonicalPath(dotGit, realPath) === commonDir
+  }
+  if (
+    !dotGitStat.isFile() ||
+    dotGitStat.isSymbolicLink() ||
+    !isPathWithin(path.join(commonDir, 'worktrees'), gitDir) ||
+    readGitfileTarget(dotGit, realPath) !== gitDir
+  ) {
+    return false
+  }
+
+  const backlinkPath = path.join(gitDir, 'gitdir')
+  let backlinkStat: fs.Stats
+  try {
+    backlinkStat = fs.lstatSync(backlinkPath)
+  } catch {
+    return false
+  }
+  return (
+    backlinkStat.isFile() &&
+    !backlinkStat.isSymbolicLink() &&
+    readGitdirBacklink(backlinkPath, realPath) ===
+      canonicalPath(dotGit, realPath)
+  )
+}
+
+export function validateRegisteredWorktree(
+  candidateDirectory: string,
+  parentIdentity: RegisteredWorktreeParentIdentity,
+  options: RegisteredWorktreeValidationOptions = {},
+): RegisteredWorktreeValidationResult {
+  const runner = options.commandRunner ?? defaultCommandRunner
+  const limits = mergeLimits(options.limits)
+  const realPath = options.realPath ?? fs.realpathSync
+  const candidateRoot = canonicalPath(candidateDirectory, realPath)
+  if (candidateRoot === undefined) {
+    return { status: 'error', reasonCode: 'target-unavailable' }
+  }
+  const inside = runCommand(
+    runner,
+    ['rev-parse', '--is-inside-work-tree'],
+    candidateRoot,
+    limits,
+  )
+  if (inside.status === 'error') return inside
+  if (inside.output.stdout.trim() !== 'true') {
+    return { status: 'error', reasonCode: 'target-unavailable' }
+  }
+  const targetRoot = requiredGitPath(
+    runner,
+    ['rev-parse', '--show-toplevel'],
+    candidateRoot,
+    limits,
+    realPath,
+  )
+  if (targetRoot.status === 'error') return targetRoot
+  const gitDir = requiredGitPath(
+    runner,
+    ['rev-parse', '--absolute-git-dir'],
+    candidateRoot,
+    limits,
+    realPath,
+  )
+  if (gitDir.status === 'error') return gitDir
+  const commonDir = requiredGitPath(
+    runner,
+    ['rev-parse', '--path-format=absolute', '--git-common-dir'],
+    candidateRoot,
+    limits,
+    realPath,
+  )
+  if (commonDir.status === 'error') return commonDir
+  if (
+    commonDir.value !== parentIdentity.commonDir ||
+    !parentIdentity.registeredWorktreeRoots.includes(targetRoot.value)
+  ) {
+    return { status: 'error', reasonCode: 'target-unavailable' }
+  }
+  if (
+    !validateDotGitLinkage(
+      targetRoot.value,
+      gitDir.value,
+      commonDir.value,
+      realPath,
+    )
+  ) {
+    return { status: 'error', reasonCode: 'target-unavailable' }
+  }
+  return {
+    status: 'ok',
+    targetRoot: targetRoot.value,
+    gitDir: gitDir.value,
+    commonDir: commonDir.value,
+  }
 }
 
 function readRevision(
@@ -1018,9 +1309,16 @@ export function createOpencodeOperationObserver(
   } catch {
     targetDirectory = path.resolve(options.targetDirectory)
   }
-  const targetDigest = digest('target', [targetDirectory])
   const runner = options.commandRunner ?? defaultCommandRunner
   const remoteRunner = options.remoteCommandRunner ?? defaultRemoteCommandRunner
+  const realPath = options.realPath ?? fs.realpathSync
+  const parentIdentityResult = captureParentIdentity(
+    targetDirectory,
+    runner,
+    limits,
+    realPath,
+  )
+  const targetDigest = digest('target', [targetDirectory])
   const fileReader = options.fileReader ?? fs.readFileSync
   const symlinkReader = options.symlinkReader ?? fs.readlinkSync
   const statReader =
@@ -1038,6 +1336,14 @@ export function createOpencodeOperationObserver(
 
   return {
     targetDigest,
+    validateRegisteredWorktree(candidateDirectory) {
+      if (parentIdentityResult.status === 'error') return parentIdentityResult
+      return validateRegisteredWorktree(
+        candidateDirectory,
+        parentIdentityResult.identity,
+        { commandRunner: runner, limits, realPath },
+      )
+    },
     async snapshot(): Promise<OperationObserverResult> {
       const rootResult = runCommand(
         runner,

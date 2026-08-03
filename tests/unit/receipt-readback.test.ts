@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 
 import {
   createReceiptLedger,
@@ -24,6 +25,7 @@ const UNIT_ID = 'b'.repeat(32)
 const RAW_COMMAND = 'git apply private.patch'
 const RAW_OUTPUT = 'private terminal output'
 const RAW_PATH = '/private/repos/receipt-demo'
+const OPERATION_TARGET_IDENTITY = 'c'.repeat(64)
 
 type MintMarker = Extract<ReceiptMarker, { kind: 'mint' }>
 type ConsumeMarker = Extract<
@@ -75,6 +77,7 @@ function createFixture(options: ReceiptFixtureOptions = {}): ReceiptFixture {
     unitId: UNIT_ID,
     workspaceIdentity: RAW_PATH,
     worktreeIdentity: 'worktree-before',
+    operationTargetIdentity: OPERATION_TARGET_IDENTITY,
   }
 
   expect(
@@ -90,6 +93,7 @@ function createFixture(options: ReceiptFixtureOptions = {}): ReceiptFixture {
     after: {
       workspaceIdentity: RAW_PATH,
       worktreeIdentity: 'worktree-after',
+      operationTargetIdentity: OPERATION_TARGET_IDENTITY,
     },
     classification: {
       outcome: 'accepted',
@@ -229,7 +233,210 @@ function conflictingMint(fixture: ReceiptFixture): MintMarker {
   )
 }
 
+function legacyMintMarker(fixture: ReceiptFixture): MintMarker {
+  const canonical = fixture.receipt.canonical
+  const envelope: ReceiptEnvelope = {
+    schemaVersion: 1,
+    protocolVersion: 1,
+    registrationDigest: fixture.receipt.registrationDigest,
+    capabilityFlags: [...fixture.receipt.capabilityFlags],
+    compatibility: 'compatible',
+    canonical: {
+      receiptId: canonical.receiptId,
+      registrationDigest: canonical.registrationDigest,
+      callDigest: canonical.callDigest,
+      epochDigest: canonical.epochDigest,
+      unitDigest: canonical.unitDigest,
+      workspaceDigest: canonical.workspaceDigest,
+      repositoryDigest: canonical.repositoryDigest,
+      worktreeDigest: canonical.worktreeDigest,
+      resourceDigest: canonical.resourceDigest,
+      operation: canonical.operation,
+      result: canonical.result,
+      source: canonical.source,
+      consumption: canonical.consumption,
+      timestamp: canonical.timestamp,
+    },
+  }
+  const serialized = JSON.stringify({
+    schemaVersion: envelope.schemaVersion,
+    protocolVersion: envelope.protocolVersion,
+    registrationDigest: envelope.registrationDigest,
+    capabilityFlags: [...envelope.capabilityFlags],
+    compatibility: envelope.compatibility,
+    canonical: {
+      receiptId: envelope.canonical.receiptId,
+      registrationDigest: envelope.canonical.registrationDigest,
+      callDigest: envelope.canonical.callDigest,
+      epochDigest: envelope.canonical.epochDigest,
+      unitDigest: envelope.canonical.unitDigest,
+      workspaceDigest: envelope.canonical.workspaceDigest,
+      repositoryDigest: envelope.canonical.repositoryDigest ?? null,
+      worktreeDigest: envelope.canonical.worktreeDigest ?? null,
+      resourceDigest: envelope.canonical.resourceDigest ?? null,
+      operation: envelope.canonical.operation,
+      result: envelope.canonical.result,
+      source: envelope.canonical.source,
+      consumption: envelope.canonical.consumption,
+      timestamp: envelope.canonical.timestamp,
+    },
+  })
+  const sessionSalt = Buffer.from(fixture.sessionSalt).toString('hex')
+  return {
+    kind: 'mint',
+    schemaVersion: 1,
+    protocolVersion: 1,
+    envelope,
+    sessionSalt,
+    integrity: createHash('sha256')
+      .update(
+        `systematic/receipt-readback/mint/v1/${sessionSalt}/${serialized}`,
+      )
+      .digest('hex'),
+  }
+}
+
 describe('receipt readback', () => {
+  test('round-trips the v2 operation target identity through a mint marker', () => {
+    const fixture = createFixture()
+
+    expect(fixture.receipt.schemaVersion).toBe(2)
+    expect(fixture.mint.schemaVersion).toBe(2)
+    expect(fixture.mint.envelope.canonical.operationTargetIdentity).toBe(
+      OPERATION_TARGET_IDENTITY,
+    )
+    expect(
+      foldReceiptReadback([fixture.mint], expectationOf(fixture)),
+    ).toMatchObject({
+      status: 'reconstructed',
+      state: {
+        receipts: [
+          {
+            canonical: {
+              operationTargetIdentity: OPERATION_TARGET_IDENTITY,
+            },
+          },
+        ],
+      },
+    })
+  })
+
+  test('admits a valid v1 marker only as legacy parent-target evidence', () => {
+    const fixture = createFixture()
+    const legacy = legacyMintMarker(fixture)
+
+    const result = foldReceiptReadback([legacy], expectationOf(fixture))
+
+    expect(result).toMatchObject({
+      status: 'reconstructed',
+      state: {
+        receipts: [{ canonical: { operationTargetIdentity: undefined } }],
+      },
+    })
+
+    const recoveredLedger = createReceiptLedger({
+      registrationIdentity: 'registration-a',
+      sessionSalt: fixture.sessionSalt,
+    })
+    expect(recoveredLedger.recoverReadback([legacy])).toMatchObject({
+      status: 'recovered',
+      receipts: [{ canonical: { operationTargetIdentity: undefined } }],
+    })
+  })
+
+  test('rejects v1 evidence when recovery expects a foreign target', () => {
+    const fixture = createFixture()
+    const legacy = legacyMintMarker(fixture)
+    const foreignTarget = 'd'.repeat(64)
+
+    const result = foldReceiptReadback([legacy], {
+      ...expectationOf(fixture),
+      operationTargetIdentity: foreignTarget,
+    })
+
+    expect(result).toEqual({
+      status: 'rejected',
+      category: 'identity-digest-mismatch',
+    })
+
+    const recoveredLedger = createReceiptLedger({
+      registrationIdentity: 'registration-a',
+      sessionSalt: fixture.sessionSalt,
+    })
+    expect(recoveredLedger.recoverReadback([legacy], foreignTarget)).toEqual({
+      status: 'rejected',
+      category: 'identity-digest-mismatch',
+    })
+  })
+
+  test('rejects a v2 marker that omits the target identity', () => {
+    const fixture = createFixture()
+    const canonical = { ...fixture.mint.envelope.canonical }
+    delete canonical.operationTargetIdentity
+
+    expect(
+      validateReceiptMarker({
+        ...fixture.mint,
+        envelope: { ...fixture.mint.envelope, canonical },
+      }),
+    ).toEqual({ status: 'rejected', category: 'malformed' })
+  })
+
+  test('binds target identity changes to the mint integrity digest', () => {
+    const fixture = createFixture()
+    const tampered = {
+      ...fixture.mint,
+      envelope: {
+        ...fixture.mint.envelope,
+        canonical: {
+          ...fixture.mint.envelope.canonical,
+          operationTargetIdentity: 'd'.repeat(64),
+        },
+      },
+    }
+
+    expect(validateReceiptMarker(tampered)).toEqual({
+      status: 'rejected',
+      category: 'integrity-mismatch',
+    })
+    const reprojected = required(
+      projectReceiptMintMarker(tampered.envelope, fixture.sessionSalt),
+      'tampered-marker-not-reprojected',
+    )
+    expect(reprojected.integrity).not.toBe(fixture.mint.integrity)
+  })
+
+  test('canonical field insertion order does not change v2 serialization integrity', () => {
+    const fixture = createFixture()
+    const canonical = fixture.receipt.canonical
+    const reordered = {
+      timestamp: canonical.timestamp,
+      consumption: canonical.consumption,
+      source: canonical.source,
+      result: canonical.result,
+      operation: canonical.operation,
+      resourceDigest: canonical.resourceDigest,
+      operationTargetIdentity: canonical.operationTargetIdentity,
+      worktreeDigest: canonical.worktreeDigest,
+      repositoryDigest: canonical.repositoryDigest,
+      workspaceDigest: canonical.workspaceDigest,
+      unitDigest: canonical.unitDigest,
+      epochDigest: canonical.epochDigest,
+      callDigest: canonical.callDigest,
+      registrationDigest: canonical.registrationDigest,
+      receiptId: canonical.receiptId,
+    }
+    const reorderedMarker = required(
+      projectReceiptMintMarker(
+        { ...fixture.receipt, canonical: reordered },
+        fixture.sessionSalt,
+      ),
+      'reordered-marker-not-projected',
+    )
+
+    expect(reorderedMarker.integrity).toBe(fixture.mint.integrity)
+  })
+
   test('hashes raw identities into opaque digests and builds a defensive expectation', () => {
     const fixture = createFixture()
     const digest = digestReceiptIdentity('workspace', RAW_PATH, SESSION_SALT)
@@ -285,6 +492,129 @@ describe('receipt readback', () => {
     ).toEqual({ status: 'rejected', category: 'forbidden-field' })
   })
 
+  test('persists a pinned operation target through unit progression readback', () => {
+    const fixture = createFixture()
+    const pinned = required(
+      projectReceiptProgressionMarker(fixture.ledger, {
+        target: 'unit',
+        state: 'started',
+        epochId: EPOCH_ID,
+        unitId: UNIT_ID,
+        family: 'work',
+        requiredOperations: ['implementation'],
+        resourceScopes: [],
+        pinnedOperationTargetIdentity: OPERATION_TARGET_IDENTITY,
+        transitionDigest: fixture.ledger.digestIdentity('call', 'unit-pin'),
+        timestamp: 6,
+      }),
+      'pinned-unit-marker-not-projected',
+    )
+
+    expect(pinned).toMatchObject({
+      pinnedOperationTargetIdentity: OPERATION_TARGET_IDENTITY,
+    })
+    expect(validateReceiptMarker(pinned)).toMatchObject({ status: 'valid' })
+
+    const result = foldReceiptReadback(
+      [fixture.epochStart, fixture.unitStart, pinned],
+      expectationOf(fixture),
+    )
+    expect(result).toMatchObject({
+      status: 'reconstructed',
+      state: {
+        progression: {
+          unit: { pinnedOperationTargetIdentity: OPERATION_TARGET_IDENTITY },
+        },
+      },
+    })
+  })
+
+  test('round-trips a v2 remote receipt without a local operation target identity', () => {
+    const ledger = createReceiptLedger({
+      registrationIdentity: 'registration-remote-target',
+      sessionSalt: SESSION_SALT,
+    })
+    const context = {
+      epochId: EPOCH_ID,
+      unitId: UNIT_ID,
+      workspaceIdentity: RAW_PATH,
+      repositoryIdentity: 'repository-before',
+      resourceIdentity: 'remote-before',
+    }
+    expect(
+      ledger.prepareObservation({
+        callId: 'remote-push',
+        operation: 'push',
+        context,
+      }),
+    ).toMatchObject({ status: 'prepared' })
+
+    const finalized = ledger.finalizeObservation({
+      callId: 'remote-push',
+      context,
+      after: {
+        workspaceIdentity: RAW_PATH,
+        repositoryIdentity: 'repository-after',
+        resourceIdentity: 'remote-after',
+      },
+      classification: {
+        outcome: 'accepted',
+        category: 'push',
+        attribution: 'runtime-verified',
+        result: 'success',
+        sideEffect: 'required',
+        reasonCode: 'recognized-command',
+      },
+      terminal: { status: 'success', output: 'non-empty', noOp: false },
+    })
+    expect(finalized.status).toBe('finalized')
+    if (finalized.status !== 'finalized') throw new Error('remote-not-minted')
+    expect(finalized.receipt.schemaVersion).toBe(2)
+    expect(finalized.receipt.canonical.operationTargetIdentity).toBeUndefined()
+
+    const mint = required(
+      projectReceiptMintMarker(finalized.receipt, SESSION_SALT),
+      'remote-mint-marker-not-projected',
+    )
+    const result = foldReceiptReadback(
+      [mint],
+      receiptReadbackExpectationFromMetadata(ledger.metadata, SESSION_SALT),
+    )
+    expect(result).toMatchObject({
+      status: 'reconstructed',
+      state: {
+        receipts: [
+          {
+            canonical: {
+              operation: 'push',
+            },
+          },
+        ],
+      },
+    })
+    if (result.status === 'reconstructed') {
+      expect(result.state.receipts[0]?.canonical).not.toHaveProperty(
+        'operationTargetIdentity',
+      )
+    }
+  })
+
+  test('rejects a v2 local receipt marker when its operation target identity is missing', () => {
+    const fixture = createFixture()
+    const {
+      operationTargetIdentity: _operationTargetIdentity,
+      ...canonicalWithoutTarget
+    } = fixture.receipt.canonical
+    const missingTargetReceipt: ReceiptEnvelope = {
+      ...fixture.receipt,
+      canonical: canonicalWithoutTarget,
+    }
+
+    expect(
+      projectReceiptMintMarker(missingTargetReceipt, SESSION_SALT),
+    ).toBeUndefined()
+  })
+
   test('folds mint, consumption, and progression markers into ordered state', () => {
     const fixture = createFixture()
     const result = foldReceiptReadback(
@@ -316,6 +646,17 @@ describe('receipt readback', () => {
           },
         },
       },
+    })
+
+    const recoveredLedger = createReceiptLedger({
+      registrationIdentity: 'registration-a',
+      sessionSalt: fixture.sessionSalt,
+    })
+    expect(recoveredLedger.recoverReadback([fixture.mint])).toMatchObject({
+      status: 'recovered',
+      receipts: [
+        { canonical: { operationTargetIdentity: OPERATION_TARGET_IDENTITY } },
+      ],
     })
   })
 

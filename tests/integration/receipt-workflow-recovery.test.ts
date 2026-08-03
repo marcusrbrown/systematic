@@ -527,21 +527,25 @@ async function createSession(
   client: ReturnType<typeof createOpencodeClient>,
   directory: string,
   title: string,
+  permission = [{ permission: '*', pattern: '*', action: 'allow' as const }],
 ): Promise<string> {
   const created = await client.session.create({
     directory,
     title,
-    permission: [{ permission: '*', pattern: '*', action: 'allow' }],
+    permission,
   })
   return created.data.id
 }
 
-function initializeIsolatedRepository(fixture: IsolatedFixture): void {
+function initializeIsolatedRepository(
+  fixture: IsolatedFixture,
+  additionalTrackedFiles: readonly string[] = [],
+): void {
   const commands = [
     ['git', 'init', '-b', 'main'],
     ['git', 'config', 'user.email', 'u5-integration@example.invalid'],
     ['git', 'config', 'user.name', 'U5 Integration'],
-    ['git', 'add', 'package.json'],
+    ['git', 'add', 'package.json', ...additionalTrackedFiles],
     ['git', 'commit', '-m', 'initial fixture'],
   ]
   for (const command of commands) {
@@ -1679,6 +1683,307 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
           expect(parsedStatus.reasonCode).not.toBe('guard-unavailable')
           expect(parsedStatus.satisfiedOperations).toContain('commit')
           assertPrivacySafeMarkers(afterStatusMessages.data)
+        } finally {
+          if (host) await host.stop()
+          model.stop()
+          destroyIsolatedFixture(localFixture)
+        }
+      },
+      TIMEOUT_MS * 4,
+    )
+
+    test(
+      '#678 reproduction: rolls up parent-rooted child tools targeting a registered nested worktree and completes',
+      async () => {
+        // Regression guard for 3420c5c and earlier: the parent-rooted child
+        // remains in the host checkout while its bash tools target the nested
+        // worktree. The former fixed-root observer therefore saw no change,
+        // minted no parent receipts, and blocked completion.
+        const localFixture = createIsolatedFixture()
+        // Mirror the real repo's gitignored .worktrees/ directory and the
+        // actual #678 dogfood worktree so the parent observer skips nested
+        // worktree contents during its untracked-file walk.
+        fs.writeFileSync(
+          path.join(localFixture.projectDir, '.gitignore'),
+          '.worktrees/\n',
+        )
+        initializeIsolatedRepository(localFixture, ['.gitignore'])
+        const nestedWorktree = path.join(
+          localFixture.projectDir,
+          '.worktrees',
+          'u5c-nested-target',
+        )
+        fs.mkdirSync(path.dirname(nestedWorktree), { recursive: true })
+        const worktreeResult = Bun.spawnSync(
+          ['git', 'worktree', 'add', '-b', 'u5c-nested-target', nestedWorktree],
+          { cwd: localFixture.projectDir },
+        )
+        if (worktreeResult.exitCode !== 0) {
+          throw new Error('isolated nested worktree setup failed')
+        }
+        fs.writeFileSync(
+          path.join(nestedWorktree, 'change.patch'),
+          'diff --git a/u5c-targeted.txt b/u5c-targeted.txt\n' +
+            'new file mode 100644\n' +
+            'index 0000000..2e4c4a1\n' +
+            '--- /dev/null\n' +
+            '+++ b/u5c-targeted.txt\n' +
+            '@@ -0,0 +1 @@\n' +
+            '+nested worktree content\n',
+        )
+
+        const localPackagedPluginUrl =
+          extractPackagedPlugin(localFixture).pluginUrl
+        const targetFile = path.join(nestedWorktree, 'u5c-targeted.txt')
+        const model = startMockModelServer([
+          {
+            toolCalls: [
+              {
+                id: 'u5c-parent-skill',
+                name: 'systematic_skill',
+                arguments: { name: 'ce:work' },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5c-parent-start',
+                name: 'systematic_workflow_start',
+                arguments: {
+                  expected_operations: [
+                    'implementation',
+                    'verification',
+                    'commit',
+                  ],
+                },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5c-parent-write-task',
+                name: 'task',
+                arguments: {
+                  description: 'write in the nested worktree',
+                  prompt:
+                    'Use systematic tools and write one file in the target worktree.',
+                  subagent_type: 'systematic-implementer',
+                },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5c-child-write-skill',
+                name: 'systematic_skill',
+                arguments: { name: 'ce:work' },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5c-child-write-start',
+                name: 'systematic_workflow_start',
+                arguments: { expected_operations: ['implementation'] },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5c-child-write',
+                name: 'bash',
+                arguments: {
+                  command: 'git apply change.patch',
+                  workdir: nestedWorktree,
+                },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5c-child-write-verify',
+                name: 'bash',
+                arguments: {
+                  command: 'git status --short',
+                  workdir: nestedWorktree,
+                },
+              },
+            ],
+          },
+          { text: 'nested worktree write finished' },
+          {
+            toolCalls: [
+              {
+                id: 'u5c-parent-commit-task',
+                name: 'task',
+                arguments: {
+                  description: 'commit the nested worktree change',
+                  prompt:
+                    'Use systematic tools to commit the existing target worktree change.',
+                  subagent_type: 'systematic-implementer',
+                },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5c-child-commit-skill',
+                name: 'systematic_skill',
+                arguments: { name: 'git-commit' },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5c-child-commit-start',
+                name: 'systematic_workflow_start',
+                arguments: {},
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5c-child-commit-status',
+                name: 'bash',
+                arguments: {
+                  command: 'git status --short',
+                  workdir: nestedWorktree,
+                },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5c-child-commit-add',
+                name: 'bash',
+                arguments: {
+                  command: 'git add -A',
+                  workdir: nestedWorktree,
+                },
+              },
+            ],
+          },
+          {
+            toolCalls: [
+              {
+                id: 'u5c-child-commit',
+                name: 'bash',
+                arguments: {
+                  command: 'git commit -m u5c-nested-worktree-commit',
+                  workdir: nestedWorktree,
+                },
+              },
+            ],
+          },
+          { text: 'nested worktree commit finished' },
+          {
+            toolCalls: [
+              {
+                id: 'u5c-parent-complete',
+                name: 'systematic_workflow_complete',
+                arguments: { target: 'unit' },
+              },
+            ],
+          },
+          { text: 'nested worktree workflow completed' },
+        ])
+        const configContent = buildProviderConfig(
+          [localPackagedPluginUrl],
+          model.url,
+        )
+        let host: Awaited<ReturnType<typeof startOpencodeServer>> | undefined
+        try {
+          host = await startOpencodeServer(localFixture, configContent)
+          const client = createOpencodeClient({
+            baseUrl: host.url,
+            directory: localFixture.projectDir,
+          })
+          const parentSessionID = await createSession(
+            client,
+            localFixture.projectDir,
+            'u5c nested worktree rollup',
+            [
+              { permission: '*', pattern: '*', action: 'allow' },
+              {
+                permission: 'external_directory',
+                pattern: '*',
+                action: 'allow',
+              },
+              { permission: 'edit', pattern: '*', action: 'allow' },
+            ],
+          )
+          await promptSession(
+            client,
+            parentSessionID,
+            localFixture.projectDir,
+            'Start a guarded unit, write in the nested worktree, then commit it.',
+          )
+
+          const parentMessages = await client.session.messages({
+            sessionID: parentSessionID,
+            directory: localFixture.projectDir,
+          })
+          const taskParts = completedToolParts(parentMessages.data, 'task')
+          expect(taskParts).toHaveLength(2)
+          const childSessionIDs = taskParts.map((part) => {
+            const state = part.state as Record<string, unknown>
+            const metadata = state.metadata as Record<string, unknown>
+            const childSessionID = metadata.sessionId
+            expect(typeof childSessionID).toBe('string')
+            return childSessionID as string
+          })
+
+          const children = await client.session.children({
+            sessionID: parentSessionID,
+            directory: localFixture.projectDir,
+          })
+          for (const childSessionID of childSessionIDs) {
+            const child = children.data.find(
+              (entry) => entry.id === childSessionID,
+            )
+            expect(child).toBeDefined()
+            expect(child?.parentID).toBe(parentSessionID)
+            const childMessages = await client.session.messages({
+              sessionID: childSessionID,
+              directory: localFixture.projectDir,
+            })
+            expect(
+              systematicMarkers(childMessages.data).length,
+            ).toBeGreaterThan(0)
+            assertPrivacySafeMarkers(childMessages.data)
+          }
+
+          expect(fs.existsSync(targetFile)).toBe(true)
+          const parentMints = receiptMintSummaries(parentMessages.data)
+          expect(parentMints.map(({ operation }) => operation)).toEqual([
+            'implementation',
+            'verification',
+            'commit',
+          ])
+          const completionParts = completedToolParts(
+            parentMessages.data,
+            'systematic_workflow_complete',
+          )
+          expect(completionParts).toHaveLength(1)
+          const completionState = completionParts[0]?.state as Record<
+            string,
+            unknown
+          >
+          expect(completionState.output).toContain(
+            'workflow guard completed unit',
+          )
+          expect(receiptMintSummaries(parentMessages.data)).toEqual(parentMints)
+          assertPrivacySafeMarkers(parentMessages.data)
         } finally {
           if (host) await host.stop()
           model.stop()

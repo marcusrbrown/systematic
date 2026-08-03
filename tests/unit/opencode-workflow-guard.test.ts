@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { z } from 'zod'
 
 import type {
@@ -7,9 +10,11 @@ import type {
   OperationObserverRemoteResult,
   OperationObserverSnapshot,
 } from '../../src/lib/opencode-operation-observer.js'
+import { createOpencodeOperationObserver } from '../../src/lib/opencode-operation-observer.js'
 import {
   createOpencodeWorkflowGuard,
   createWorkflowGuardBlockedError,
+  deriveOpencodeOperationTarget,
   isWorkflowGuardBlockedError,
   type OpencodeWorkflowGuard,
   SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY,
@@ -66,6 +71,92 @@ const OPERATION_SCOPE = {
   workspaceIdentity: 'a'.repeat(64),
   repositoryIdentity: 'b'.repeat(64),
   worktreeIdentity: 'c'.repeat(64),
+  operationTargetIdentity: 'a'.repeat(64),
+}
+
+interface TargetDerivationFixture {
+  readonly parentRoot: string
+  readonly linkedRoot: string
+  readonly secondLinkedRoot: string
+  readonly unrelatedRoot: string
+  cleanup(): void
+}
+
+function runTargetFixtureGit(
+  cwd: string,
+  args: readonly string[],
+): {
+  readonly status: number
+  readonly stdout: string
+  readonly stderr: string
+} {
+  const result = Bun.spawnSync(['git', ...args], {
+    cwd,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
+  return {
+    status: result.exitCode ?? -1,
+    stdout: result.stdout.toString(),
+    stderr: result.stderr.toString(),
+  }
+}
+
+function createTargetDerivationFixture(): TargetDerivationFixture {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-target-'))
+  const parentRoot = path.join(root, 'parent')
+  const linkedRoot = path.join(root, 'linked')
+  const secondLinkedRoot = path.join(root, 'linked-second')
+  const unrelatedRoot = path.join(root, 'unrelated')
+  fs.mkdirSync(parentRoot)
+  fs.mkdirSync(unrelatedRoot)
+
+  const git = (cwd: string, args: readonly string[]) => {
+    const result = runTargetFixtureGit(cwd, args)
+    if (result.status !== 0) {
+      throw new Error(`target fixture git setup failed: ${args.join(' ')}`)
+    }
+  }
+  git(parentRoot, ['init', '--quiet'])
+  git(parentRoot, ['config', 'user.email', 'target@example.invalid'])
+  git(parentRoot, ['config', 'user.name', 'Target Test'])
+  fs.writeFileSync(path.join(parentRoot, 'tracked.txt'), 'parent\n')
+  fs.mkdirSync(path.join(parentRoot, 'nested'))
+  git(parentRoot, ['add', '.'])
+  git(parentRoot, ['commit', '--quiet', '-m', 'initial'])
+  git(parentRoot, ['worktree', 'add', '--quiet', '-b', 'linked', linkedRoot])
+  git(parentRoot, [
+    'worktree',
+    'add',
+    '--quiet',
+    '-b',
+    'linked-second',
+    secondLinkedRoot,
+  ])
+  git(unrelatedRoot, ['init', '--quiet'])
+
+  return {
+    parentRoot,
+    linkedRoot,
+    secondLinkedRoot,
+    unrelatedRoot,
+    cleanup: () => fs.rmSync(root, { recursive: true, force: true }),
+  }
+}
+
+function deriveWithFixture(
+  fixture: TargetDerivationFixture,
+  tool: 'write' | 'edit' | 'apply_patch' | 'bash',
+  args: Record<string, unknown>,
+) {
+  const observer = createOpencodeOperationObserver({
+    targetDirectory: fixture.parentRoot,
+  })
+  return deriveOpencodeOperationTarget(tool, args, {
+    parentTargetRoot: fixture.parentRoot,
+    sessionLocation: fixture.parentRoot,
+    validateRegisteredWorktree: observer.validateRegisteredWorktree,
+  })
 }
 
 function sequenceObserver(
@@ -78,6 +169,14 @@ function sequenceObserver(
   const remoteIndexes = new Map<string, number>()
   return {
     targetDigest: snapshots[0]?.targetDigest ?? 'a'.repeat(64),
+    validateRegisteredWorktree(candidateDirectory) {
+      return {
+        status: 'ok',
+        targetRoot: candidateDirectory,
+        gitDir: path.join(candidateDirectory, '.git'),
+        commonDir: path.join(candidateDirectory, '.git'),
+      }
+    },
     async snapshot() {
       const snapshot = snapshots[Math.min(index++, snapshots.length - 1)]
       if (!snapshot) {
@@ -228,6 +327,7 @@ function mintReceipt(
     unitId: currentStatus.unit.unitId,
     workspaceIdentity: scope.workspaceIdentity,
     repositoryIdentity: scope.repositoryIdentity,
+    operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
     worktreeIdentity:
       operation === 'implementation'
         ? 'worktree-before'
@@ -247,6 +347,7 @@ function mintReceipt(
       workspaceIdentity: scope.workspaceIdentity,
       repositoryIdentity: scope.repositoryIdentity,
       worktreeIdentity: scope.worktreeIdentity,
+      operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
     },
     classification: {
       outcome: 'accepted',
@@ -263,7 +364,700 @@ function mintReceipt(
   if (observed.status !== 'accepted') throw new Error('receipt not observed')
 }
 
+function wrapReceiptMarkers(markers: readonly unknown[]): readonly unknown[] {
+  return [
+    {
+      info: {},
+      parts: [
+        {
+          state: {
+            metadata: {
+              [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: markers,
+            },
+          },
+        },
+      ],
+    },
+  ]
+}
+
+function buildPinnedRecoveryMarkers(
+  registrationIdentity: string,
+  sessionSalt: Uint8Array,
+  workspaceIdentity: string,
+  operationTargetIdentity: string,
+  repositoryIdentity: string,
+  worktreeIdentity: string,
+): readonly unknown[] {
+  const recoveryLedger = createReceiptLedger({
+    capabilityFlags: ['workflow-guard'],
+    registrationIdentity,
+    sessionSalt,
+  })
+  const epochId = 'a'.repeat(32)
+  const unitId = 'b'.repeat(32)
+  const digestCall = (value: string) =>
+    recoveryLedger.digestIdentity('call', value)
+  const epochStart = projectReceiptProgressionMarker(recoveryLedger, {
+    target: 'epoch',
+    state: 'started',
+    epochId,
+    family: 'work',
+    transitionDigest: digestCall('epoch-start'),
+    timestamp: 1,
+  })
+  const unitStart = projectReceiptProgressionMarker(recoveryLedger, {
+    target: 'unit',
+    state: 'started',
+    epochId,
+    unitId,
+    family: 'work',
+    requiredOperations: ['verification'],
+    resourceScopes: [],
+    pinnedOperationTargetIdentity: operationTargetIdentity,
+    transitionDigest: digestCall('unit-start'),
+    timestamp: 2,
+  })
+  if (!epochStart || !unitStart) throw new Error('progression marker failed')
+
+  const context = {
+    epochId,
+    unitId,
+    workspaceIdentity,
+    operationTargetIdentity,
+    repositoryIdentity,
+    worktreeIdentity,
+  }
+  const prepared = recoveryLedger.prepareObservation({
+    callId: 'recovered-verification',
+    operation: 'verification',
+    context,
+  })
+  if (prepared.status !== 'prepared') throw new Error('receipt not prepared')
+  const finalized = recoveryLedger.finalizeObservation({
+    callId: 'recovered-verification',
+    context,
+    after: context,
+    classification: {
+      outcome: 'accepted',
+      category: 'verification',
+      attribution: 'runtime-verified',
+      result: 'success',
+      sideEffect: 'not-required',
+      reasonCode: 'recognized-command',
+    },
+    terminal: { status: 'success', output: 'non-empty', noOp: false },
+  })
+  if (finalized.status !== 'finalized') {
+    throw new Error(
+      `pinned recovery receipt not finalized: ${JSON.stringify(finalized)}`,
+    )
+  }
+  const mint = projectReceiptMintMarker(finalized.receipt, sessionSalt)
+  if (!mint) throw new Error('receipt marker failed')
+  return [epochStart, unitStart, mint]
+}
+
+async function createPinnedRecoveryAdapter(): Promise<{
+  readonly fixture: TargetDerivationFixture
+  readonly adapter: OpencodeWorkflowGuard
+  readonly targetRoot: string
+  readonly targetIdentity: string
+  setTargetValidationAvailable(value: boolean): void
+}> {
+  const fixture = createTargetDerivationFixture()
+  const targetRoot = fs.realpathSync(fixture.linkedRoot)
+  const baseObserver = createOpencodeOperationObserver({
+    targetDirectory: fixture.parentRoot,
+  })
+  const initial = await baseObserver.snapshot()
+  if (initial.status !== 'available') {
+    fixture.cleanup()
+    throw new Error('parent unavailable')
+  }
+  const targetObserver = createOpencodeOperationObserver({
+    targetDirectory: targetRoot,
+  })
+  const targetInitial = await targetObserver.snapshot()
+  if (targetInitial.status !== 'available') {
+    fixture.cleanup()
+    throw new Error('target unavailable')
+  }
+  let targetValidationAvailable = true
+  const observer: OpencodeOperationObserver = {
+    targetDigest: baseObserver.targetDigest,
+    validateRegisteredWorktree: (candidateDirectory) => {
+      if (!targetValidationAvailable && candidateDirectory === targetRoot) {
+        return { status: 'error', reasonCode: 'target-unavailable' }
+      }
+      return baseObserver.validateRegisteredWorktree(candidateDirectory)
+    },
+    snapshot: () => baseObserver.snapshot(),
+  }
+  const registrationIdentity = 'pinned-completion-registration'
+  const sessionSalt = new Uint8Array(32).fill(137)
+  let parentMarkers: readonly unknown[] = []
+  const adapter = createOpencodeWorkflowGuard({
+    config: { mode: 'observe' },
+    workspaceIdentity: initial.snapshot.targetDigest,
+    repositoryIdentity: targetInitial.snapshot.repositoryRevisionDigest,
+    worktreeIdentity: targetInitial.snapshot.worktreeRevisionDigest,
+    targetDirectory: fixture.parentRoot,
+    sessionLocation: fixture.parentRoot,
+    registrationIdentity,
+    sessionSalt,
+    observer,
+    classifier: createReceiptClassifier(),
+    hostReadback: {
+      readSessionParts: async (sessionID) =>
+        sessionID === SESSION_A ? wrapReceiptMarkers(parentMarkers) : [],
+      listChildren: async () => [],
+    },
+  })
+
+  await observeSkill(
+    adapter,
+    'systematic_skill',
+    'ce:work',
+    'pinned-recovery-setup-skill',
+    SESSION_B,
+  )
+  const input = {
+    tool: 'bash' as const,
+    sessionID: SESSION_B,
+    callID: 'pinned-recovery-setup-write',
+    args: { command: 'git status --short', workdir: targetRoot },
+  }
+  await adapter.hooks['tool.execute.before'](input, { args: input.args })
+  await adapter.hooks['tool.execute.after'](input, {
+    title: 'tests complete',
+    output: 'pass',
+    metadata: { exit: 0 },
+  })
+
+  const targetResult = await targetObserver.snapshot()
+  if (targetResult.status !== 'available') {
+    fixture.cleanup()
+    throw new Error('target unavailable')
+  }
+  parentMarkers = buildPinnedRecoveryMarkers(
+    registrationIdentity,
+    sessionSalt,
+    initial.snapshot.targetDigest,
+    targetObserver.targetDigest,
+    targetResult.snapshot.repositoryRevisionDigest,
+    targetResult.snapshot.worktreeRevisionDigest,
+  )
+  await adapter.tools.systematic_workflow_status.execute(
+    {},
+    { sessionID: SESSION_A, metadata: () => {} },
+  )
+
+  return {
+    fixture,
+    adapter,
+    targetRoot,
+    targetIdentity: targetObserver.targetDigest,
+    setTargetValidationAvailable(value) {
+      targetValidationAvailable = value
+    },
+  }
+}
+
+async function createFreshPinnedAdapter(
+  requiredOperations: readonly ReceiptOperation[] = [
+    'implementation',
+    'verification',
+  ],
+): Promise<{
+  readonly fixture: TargetDerivationFixture
+  readonly adapter: OpencodeWorkflowGuard
+  readonly parentObserver: OpencodeOperationObserver
+  readonly targetRoot: string
+  readonly targetIdentity: string
+}> {
+  const fixture = createTargetDerivationFixture()
+  const targetRoot = fs.realpathSync(fixture.linkedRoot)
+  const parentObserver = createOpencodeOperationObserver({
+    targetDirectory: fixture.parentRoot,
+  })
+  const initial = await parentObserver.snapshot()
+  const targetObserver = createOpencodeOperationObserver({
+    targetDirectory: targetRoot,
+  })
+  if (initial.status !== 'available') {
+    fixture.cleanup()
+    throw new Error('parent unavailable')
+  }
+  const adapter = createOpencodeWorkflowGuard({
+    config: { mode: 'observe' },
+    workspaceIdentity: initial.snapshot.targetDigest,
+    repositoryIdentity: initial.snapshot.repositoryRevisionDigest,
+    worktreeIdentity: initial.snapshot.worktreeRevisionDigest,
+    targetDirectory: fixture.parentRoot,
+    sessionLocation: fixture.parentRoot,
+    observer: parentObserver,
+    classifier: createReceiptClassifier(),
+    runtimeRequiredOperations: requiredOperations,
+  })
+  await observeSkill(adapter, 'systematic_skill', 'ce:work')
+  return {
+    fixture,
+    adapter,
+    parentObserver,
+    targetRoot,
+    targetIdentity: targetObserver.targetDigest,
+  }
+}
+
+async function observeFreshWrite(
+  adapter: OpencodeWorkflowGuard,
+  targetPath: string,
+  content: string,
+  callID: string,
+): Promise<void> {
+  const input = {
+    tool: 'write' as const,
+    sessionID: SESSION_A,
+    callID,
+    args: { filePath: targetPath, content },
+  }
+  await adapter.hooks['tool.execute.before'](input, { args: input.args })
+  fs.writeFileSync(targetPath, content)
+  await adapter.hooks['tool.execute.after'](input, {
+    title: 'write complete',
+    output: 'changed',
+    metadata: {},
+  })
+}
+
+async function observeFreshVerification(
+  adapter: OpencodeWorkflowGuard,
+  targetRoot: string,
+  callID: string,
+): Promise<void> {
+  await observeOperationTool(
+    adapter,
+    'bash',
+    {
+      command: 'bun test tests/unit/example.test.ts',
+      workdir: targetRoot,
+    },
+    { title: 'verification complete', output: 'pass', metadata: { exit: 0 } },
+    callID,
+  )
+}
+
+async function completeUnit(
+  adapter: OpencodeWorkflowGuard,
+  callID: string,
+): Promise<{ output: string; metadata: Record<string, unknown> }> {
+  const input = {
+    tool: 'systematic_workflow_complete' as const,
+    sessionID: SESSION_A,
+    callID,
+  }
+  await adapter.hooks['tool.execute.before'](input, {
+    args: { target: 'unit' },
+  })
+  const output = { title: 'complete', output: 'done', metadata: {} }
+  await adapter.hooks['tool.execute.after'](
+    { ...input, args: { target: 'unit' } },
+    output,
+  )
+  return output
+}
+
 describe('OpenCode workflow guard adapter', () => {
+  test('target derivation: registered worktree from bash workdir', () => {
+    const result = deriveOpencodeOperationTarget(
+      'bash',
+      { workdir: '../linked-worktree' },
+      {
+        parentTargetRoot: '/parent',
+        sessionLocation: '/parent',
+        realPath: (value) => value,
+        validateRegisteredWorktree: (candidate) =>
+          candidate === '/linked-worktree'
+            ? {
+                status: 'ok',
+                targetRoot: candidate,
+                gitDir: '/parent/.git/worktrees/linked',
+                commonDir: '/parent/.git',
+              }
+            : { status: 'error', reasonCode: 'target-unavailable' },
+      },
+    )
+
+    expect(result).toEqual({
+      status: 'available',
+      targetRoot: '/linked-worktree',
+    })
+  })
+
+  test('target derivation: worktree from write file path', () => {
+    const result = deriveOpencodeOperationTarget(
+      'write',
+      { path: '/linked-worktree/src/file.ts' },
+      {
+        parentTargetRoot: '/parent',
+        sessionLocation: '/parent',
+        realPath: (value) => value,
+        validateRegisteredWorktree: (candidate) =>
+          candidate === '/linked-worktree/src'
+            ? {
+                status: 'ok',
+                targetRoot: '/linked-worktree',
+                gitDir: '/parent/.git/worktrees/linked',
+                commonDir: '/parent/.git',
+              }
+            : { status: 'error', reasonCode: 'target-unavailable' },
+      },
+    )
+
+    expect(result).toEqual({
+      status: 'available',
+      targetRoot: '/linked-worktree',
+    })
+  })
+
+  test('target derivation: one apply_patch target for every file path', () => {
+    const result = deriveOpencodeOperationTarget(
+      'apply_patch',
+      {
+        workdir: '/linked-worktree',
+        patchText: [
+          '*** Begin Patch',
+          '*** Add File: src/one.ts',
+          '+one',
+          '*** Update File: nested/two.ts',
+          '@@',
+          '-two',
+          '+updated',
+          '*** End Patch',
+        ].join('\n'),
+      },
+      {
+        parentTargetRoot: '/parent',
+        sessionLocation: '/parent',
+        realPath: (value) => value,
+        validateRegisteredWorktree: (candidate) =>
+          candidate === '/linked-worktree' ||
+          candidate === '/linked-worktree/src' ||
+          candidate === '/linked-worktree/nested'
+            ? {
+                status: 'ok',
+                targetRoot: '/linked-worktree',
+                gitDir: '/parent/.git/worktrees/linked',
+                commonDir: '/parent/.git',
+              }
+            : { status: 'error', reasonCode: 'target-unavailable' },
+      },
+    )
+
+    expect(result).toEqual({
+      status: 'available',
+      targetRoot: '/linked-worktree',
+    })
+  })
+
+  test('target derivation: canonical registered worktree for real bash workdir', () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      expect(
+        deriveWithFixture(fixture, 'bash', {
+          command: 'git status --short',
+          workdir: fixture.linkedRoot,
+        }),
+      ).toEqual({
+        status: 'available',
+        targetRoot: fs.realpathSync(fixture.linkedRoot),
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('target derivation: relative bash workdir stays on parent target', () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      expect(
+        deriveWithFixture(fixture, 'bash', {
+          command: 'git status --short',
+          workdir: 'nested',
+        }),
+      ).toEqual({
+        status: 'available',
+        targetRoot: fs.realpathSync(fixture.parentRoot),
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('target derivation: absent bash workdir uses parent target', () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      expect(
+        deriveWithFixture(fixture, 'bash', { command: 'git status --short' }),
+      ).toEqual({
+        status: 'available',
+        targetRoot: fs.realpathSync(fixture.parentRoot),
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('target derivation: write and edit support filePath and path', () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      const expected = {
+        status: 'available' as const,
+        targetRoot: fs.realpathSync(fixture.linkedRoot),
+      }
+      expect(
+        deriveWithFixture(fixture, 'write', {
+          filePath: path.join(fixture.linkedRoot, 'tracked.txt'),
+        }),
+      ).toEqual(expected)
+      expect(
+        deriveWithFixture(fixture, 'edit', {
+          path: path.join(fixture.linkedRoot, 'tracked.txt'),
+        }),
+      ).toEqual(expected)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('target derivation: new write file uses canonical existing parent', () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      const targetDirectory = path.join(fixture.linkedRoot, 'new-files')
+      fs.mkdirSync(targetDirectory)
+      expect(
+        deriveWithFixture(fixture, 'write', {
+          path: path.join(targetDirectory, 'new.ts'),
+        }),
+      ).toEqual({
+        status: 'available',
+        targetRoot: fs.realpathSync(fixture.linkedRoot),
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('target derivation: multiple apply_patch files share one worktree', () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      fs.mkdirSync(path.join(fixture.linkedRoot, 'src'), { recursive: true })
+      fs.mkdirSync(path.join(fixture.linkedRoot, 'nested'), {
+        recursive: true,
+      })
+      fs.writeFileSync(path.join(fixture.linkedRoot, 'src', 'one.ts'), 'one\n')
+      fs.writeFileSync(
+        path.join(fixture.linkedRoot, 'nested', 'two.ts'),
+        'two\n',
+      )
+
+      expect(
+        deriveWithFixture(fixture, 'apply_patch', {
+          workdir: fixture.linkedRoot,
+          patchText: [
+            '*** Begin Patch',
+            '*** Update File: src/one.ts',
+            '*** Update File: nested/two.ts',
+            '*** End Patch',
+          ].join('\n'),
+        }),
+      ).toEqual({
+        status: 'available',
+        targetRoot: fs.realpathSync(fixture.linkedRoot),
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('target derivation: apply_patch spanning worktrees fails closed', () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      expect(
+        deriveWithFixture(fixture, 'apply_patch', {
+          patchText: [
+            '*** Begin Patch',
+            `*** Update File: ${path.join(fixture.linkedRoot, 'tracked.txt')}`,
+            `*** Update File: ${path.join(fixture.secondLinkedRoot, 'tracked.txt')}`,
+            '*** End Patch',
+          ].join('\n'),
+        }),
+      ).toEqual({
+        status: 'unavailable',
+        reasonCode: 'target-unavailable',
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('target derivation: unrelated explicit bash workdir fails closed', () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      expect(
+        deriveWithFixture(fixture, 'bash', {
+          command: 'git status --short',
+          workdir: fixture.unrelatedRoot,
+        }),
+      ).toEqual({
+        status: 'unavailable',
+        reasonCode: 'target-unavailable',
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('target derivation: absolute nested repository is not parent target', () => {
+    const fixture = createTargetDerivationFixture()
+    const nestedRepository = path.join(fixture.parentRoot, 'nested-repo')
+    try {
+      fs.mkdirSync(nestedRepository)
+      const initialized = runTargetFixtureGit(nestedRepository, [
+        'init',
+        '--quiet',
+      ])
+      expect(initialized.status).toBe(0)
+      expect(
+        deriveWithFixture(fixture, 'bash', {
+          command: 'git status --short',
+          workdir: nestedRepository,
+        }),
+      ).toEqual({
+        status: 'unavailable',
+        reasonCode: 'target-unavailable',
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('target derivation: absolute nested repository file fails closed', () => {
+    const fixture = createTargetDerivationFixture()
+    const nestedRepository = path.join(fixture.parentRoot, 'nested-repo')
+    const nestedFile = path.join(nestedRepository, 'nested.ts')
+    try {
+      fs.mkdirSync(nestedRepository)
+      const initialized = runTargetFixtureGit(nestedRepository, [
+        'init',
+        '--quiet',
+      ])
+      expect(initialized.status).toBe(0)
+      fs.writeFileSync(nestedFile, 'nested\n')
+      expect(deriveWithFixture(fixture, 'write', { path: nestedFile })).toEqual(
+        {
+          status: 'unavailable',
+          reasonCode: 'target-unavailable',
+        },
+      )
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('target derivation: explicit apply workdir validates relative files', () => {
+    const fixture = createTargetDerivationFixture()
+    const nestedRepository = path.join(fixture.parentRoot, 'nested-repo')
+    const nestedFile = path.join(nestedRepository, 'nested.ts')
+    try {
+      fs.mkdirSync(nestedRepository)
+      const initialized = runTargetFixtureGit(nestedRepository, [
+        'init',
+        '--quiet',
+      ])
+      expect(initialized.status).toBe(0)
+      fs.writeFileSync(nestedFile, 'nested\n')
+      expect(
+        deriveWithFixture(fixture, 'apply_patch', {
+          workdir: fixture.parentRoot,
+          patchText: [
+            '*** Begin Patch',
+            '*** Update File: nested-repo/nested.ts',
+            '*** End Patch',
+          ].join('\n'),
+        }),
+      ).toEqual({
+        status: 'unavailable',
+        reasonCode: 'target-unavailable',
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('target derivation: invalid explicit apply workdir fails closed', () => {
+    const fixture = createTargetDerivationFixture()
+    const nestedRepository = path.join(fixture.parentRoot, 'nested-repo')
+    try {
+      fs.mkdirSync(nestedRepository)
+      const initialized = runTargetFixtureGit(nestedRepository, [
+        'init',
+        '--quiet',
+      ])
+      expect(initialized.status).toBe(0)
+      expect(
+        deriveWithFixture(fixture, 'apply_patch', {
+          workdir: nestedRepository,
+          patchText: '',
+        }),
+      ).toEqual({
+        status: 'unavailable',
+        reasonCode: 'target-unavailable',
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('target derivation: escaping file symlink is rejected', () => {
+    const fixture = createTargetDerivationFixture()
+    const outsideFile = path.join(
+      path.dirname(fixture.parentRoot),
+      'outside.ts',
+    )
+    const escapedFile = path.join(fixture.linkedRoot, 'escaped.ts')
+    try {
+      fs.writeFileSync(outsideFile, 'outside\n')
+      fs.symlinkSync(outsideFile, escapedFile)
+
+      expect(
+        deriveWithFixture(fixture, 'write', { path: escapedFile }),
+      ).toEqual({
+        status: 'unavailable',
+        reasonCode: 'target-unavailable',
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('target derivation: linked worktree gitfile is rejected', () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      expect(
+        deriveWithFixture(fixture, 'write', {
+          path: path.join(fixture.linkedRoot, '.git'),
+        }),
+      ).toEqual({
+        status: 'unavailable',
+        reasonCode: 'target-unavailable',
+      })
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
   test('does not expose the trusted recovery seam as a host/model tool', () => {
     const adapter = createAdapter('observe')
 
@@ -1300,6 +2094,7 @@ describe('OpenCode workflow guard adapter', () => {
       workspaceIdentity: SCOPE.workspaceIdentity,
       repositoryIdentity: SCOPE.repositoryIdentity,
       worktreeIdentity: SCOPE.worktreeIdentity,
+      operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
     })
 
     const sharedOutput = { title: 'pending', output: 'pending', metadata: {} }
@@ -1371,6 +2166,42 @@ describe('OpenCode workflow guard adapter', () => {
       (secondPass.match(/<SYSTEMATIC_WORKFLOW_GUARD>/g) ?? []).length,
     ).toBe(1)
     expect(secondPass).toContain('unavailable')
+  })
+
+  test('round-trips operation-target-mismatch in prior guard marker sources', async () => {
+    const adapter = createAdapter('protected')
+    const priorSource = {
+      source: 'prior-registration',
+      state: 'rejected',
+      reasonCode: 'operation-target-mismatch',
+      enforcement: 'protected',
+      statusDigest: 'prior-status',
+    }
+    const output = {
+      system: [
+        `<SYSTEMATIC_WORKFLOW_GUARD>${JSON.stringify({
+          protocolVersion: 2,
+          sources: [priorSource],
+          aggregate: priorSource,
+        })}</SYSTEMATIC_WORKFLOW_GUARD>`,
+      ],
+    }
+
+    await adapter.hooks['experimental.chat.system.transform'](
+      { sessionID: SESSION_A },
+      output,
+    )
+
+    const body = output.system
+      .join('\n')
+      .match(
+        /<SYSTEMATIC_WORKFLOW_GUARD>(.*?)<\/SYSTEMATIC_WORKFLOW_GUARD>/s,
+      )?.[1]
+    if (!body) throw new Error('guard marker missing')
+    const document = JSON.parse(body) as {
+      sources: Array<{ source: string; reasonCode: string }>
+    }
+    expect(document.sources).toContainEqual(priorSource)
   })
 
   test('malformed prior guard marker fails closed and internal title transforms stay untouched', async () => {
@@ -1511,7 +2342,13 @@ describe('OpenCode workflow guard adapter', () => {
         expect(observation.context.workspaceIdentity).toBe(
           OPERATION_SCOPE.workspaceIdentity,
         )
+        expect(observation.context.operationTargetIdentity).toBe(
+          OPERATION_SCOPE.workspaceIdentity,
+        )
         expect(observation.after?.workspaceIdentity).toBe(
+          OPERATION_SCOPE.workspaceIdentity,
+        )
+        expect(observation.after?.operationTargetIdentity).toBe(
           OPERATION_SCOPE.workspaceIdentity,
         )
       }
@@ -1567,6 +2404,247 @@ describe('OpenCode workflow guard adapter', () => {
       ])
     })
   }
+
+  test('mints an implementation receipt for a write targeted at a registered worktree', async () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      const parentObserver = createOpencodeOperationObserver({
+        targetDirectory: fixture.parentRoot,
+      })
+      const initial = await parentObserver.snapshot()
+      if (initial.status !== 'available') throw new Error('parent unavailable')
+      const observations: ReceiptOperationObservation[] = []
+      const classifier = createReceiptClassifier()
+      const adapter = createOpencodeWorkflowGuard({
+        config: { mode: 'observe' },
+        workspaceIdentity: initial.snapshot.targetDigest,
+        repositoryIdentity: initial.snapshot.repositoryRevisionDigest,
+        worktreeIdentity: initial.snapshot.worktreeRevisionDigest,
+        targetDirectory: fixture.parentRoot,
+        observer: parentObserver,
+        classifier: {
+          ...classifier,
+          classifyOperation: async (input: unknown) => {
+            observations.push(input as ReceiptOperationObservation)
+            return classifier.classifyOperation?.(input)
+          },
+        },
+      })
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+
+      const filePath = path.join(fixture.linkedRoot, 'targeted.txt')
+      const input = {
+        tool: 'write',
+        sessionID: SESSION_A,
+        callID: 'worktree-targeted-write',
+        args: { filePath, content: 'changed' },
+      }
+      await adapter.hooks['tool.execute.before'](input, { args: input.args })
+      fs.writeFileSync(filePath, 'changed')
+      await adapter.hooks['tool.execute.after'](input, {
+        title: 'write complete',
+        output: 'changed',
+        metadata: {},
+      })
+
+      const receipts = adapter.ledger(SESSION_A)?.listReceipts() ?? []
+      expect(observations).toHaveLength(2)
+      expect(observations.at(-1)).toMatchObject({
+        operation: 'implementation',
+        context: {
+          operationTargetIdentity: expect.any(String),
+        },
+        after: {
+          operationTargetIdentity: expect.any(String),
+        },
+      })
+      expect(receipts).toHaveLength(1)
+      expect(receipts[0]?.canonical.operation).toBe('implementation')
+      expect(receipts[0]?.canonical.operationTargetIdentity).toBe(
+        createOpencodeOperationObserver({
+          targetDirectory: fixture.linkedRoot,
+        }).targetDigest,
+      )
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('rejects a worktree that is removed and recreated at the same path between hooks', async () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      const parentObserver = createOpencodeOperationObserver({
+        targetDirectory: fixture.parentRoot,
+      })
+      const initial = await parentObserver.snapshot()
+      if (initial.status !== 'available') throw new Error('parent unavailable')
+      const adapter = createOpencodeWorkflowGuard({
+        config: { mode: 'observe' },
+        workspaceIdentity: initial.snapshot.targetDigest,
+        repositoryIdentity: initial.snapshot.repositoryRevisionDigest,
+        worktreeIdentity: initial.snapshot.worktreeRevisionDigest,
+        targetDirectory: fixture.parentRoot,
+        observer: parentObserver,
+        classifier: createReceiptClassifier(),
+      })
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+
+      const input = {
+        tool: 'write',
+        sessionID: SESSION_A,
+        callID: 'recreated-worktree-write',
+        args: {
+          filePath: path.join(fixture.linkedRoot, 'targeted.txt'),
+          content: 'changed',
+        },
+      }
+      await adapter.hooks['tool.execute.before'](input, { args: input.args })
+      runTargetFixtureGit(fixture.parentRoot, [
+        'worktree',
+        'remove',
+        '--force',
+        fixture.linkedRoot,
+      ])
+      runTargetFixtureGit(fixture.parentRoot, [
+        'worktree',
+        'add',
+        '--quiet',
+        '-b',
+        'linked-recreated',
+        fixture.linkedRoot,
+      ])
+      await adapter.hooks['tool.execute.after'](input, {
+        title: 'write complete',
+        output: 'changed',
+        metadata: {},
+      })
+
+      expect(ledger(adapter).listReceipts()).toHaveLength(0)
+      expect(status(adapter).state).toBe('rejected')
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('does not fall back to a parent receipt for an invalid target after a parent change', async () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      const parentObserver = createOpencodeOperationObserver({
+        targetDirectory: fixture.parentRoot,
+      })
+      const initial = await parentObserver.snapshot()
+      if (initial.status !== 'available') throw new Error('parent unavailable')
+      const adapter = createOpencodeWorkflowGuard({
+        config: { mode: 'observe' },
+        workspaceIdentity: initial.snapshot.targetDigest,
+        repositoryIdentity: initial.snapshot.repositoryRevisionDigest,
+        worktreeIdentity: initial.snapshot.worktreeRevisionDigest,
+        targetDirectory: fixture.parentRoot,
+        observer: parentObserver,
+        classifier: createReceiptClassifier(),
+      })
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+
+      const input = {
+        tool: 'write',
+        sessionID: SESSION_A,
+        callID: 'invalid-target-with-parent-change',
+        args: {
+          filePath: path.join(fixture.unrelatedRoot, 'targeted.txt'),
+          content: 'should not mint',
+        },
+      }
+      await adapter.hooks['tool.execute.before'](input, { args: input.args })
+      fs.appendFileSync(
+        path.join(fixture.parentRoot, 'tracked.txt'),
+        'parent\n',
+      )
+      await adapter.hooks['tool.execute.after'](input, {
+        title: 'write complete',
+        output: 'changed',
+        metadata: {},
+      })
+
+      expect(ledger(adapter).listReceipts()).toHaveLength(0)
+      expect(status(adapter).state).toBe('unavailable')
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('fails closed when a unit switches from one registered worktree target to another', async () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      const parentObserver = createOpencodeOperationObserver({
+        targetDirectory: fixture.parentRoot,
+      })
+      const initial = await parentObserver.snapshot()
+      if (initial.status !== 'available') throw new Error('parent unavailable')
+      const adapter = createOpencodeWorkflowGuard({
+        config: { mode: 'observe' },
+        workspaceIdentity: initial.snapshot.targetDigest,
+        repositoryIdentity: initial.snapshot.repositoryRevisionDigest,
+        worktreeIdentity: initial.snapshot.worktreeRevisionDigest,
+        targetDirectory: fixture.parentRoot,
+        observer: parentObserver,
+        classifier: createReceiptClassifier(),
+      })
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+
+      const firstPath = path.join(fixture.linkedRoot, 'first-target.txt')
+      const firstInput = {
+        tool: 'write' as const,
+        sessionID: SESSION_A,
+        callID: 'target-switch-first',
+        args: { filePath: firstPath, content: 'first' },
+      }
+      await adapter.hooks['tool.execute.before'](firstInput, {
+        args: firstInput.args,
+      })
+      fs.writeFileSync(firstPath, 'first')
+      await adapter.hooks['tool.execute.after'](firstInput, {
+        title: 'write complete',
+        output: 'changed',
+        metadata: {},
+      })
+
+      const firstTargetIdentity = createOpencodeOperationObserver({
+        targetDirectory: fixture.linkedRoot,
+      }).targetDigest
+      expect(status(adapter).unit?.pinnedOperationTargetIdentity).toBe(
+        firstTargetIdentity,
+      )
+      expect(ledger(adapter).listReceipts()).toHaveLength(1)
+
+      const secondPath = path.join(
+        fixture.secondLinkedRoot,
+        'second-target.txt',
+      )
+      const secondInput = {
+        tool: 'write' as const,
+        sessionID: SESSION_A,
+        callID: 'target-switch-second',
+        args: { filePath: secondPath, content: 'second' },
+      }
+      await adapter.hooks['tool.execute.before'](secondInput, {
+        args: secondInput.args,
+      })
+      fs.writeFileSync(secondPath, 'second')
+      await adapter.hooks['tool.execute.after'](secondInput, {
+        title: 'write complete',
+        output: 'changed',
+        metadata: {},
+      })
+
+      expect(status(adapter).state).toBe('unavailable')
+      expect(status(adapter).unit?.pinnedOperationTargetIdentity).toBe(
+        firstTargetIdentity,
+      )
+      expect(ledger(adapter).listReceipts()).toHaveLength(1)
+    } finally {
+      fixture.cleanup()
+    }
+  })
 
   test('projects observer commitClosure through the operation observation', async () => {
     const observations: ReceiptOperationObservation[] = []
@@ -2199,6 +3277,319 @@ describe('OpenCode workflow guard adapter', () => {
     ).toBe(false)
   })
 
+  test('requalifies a pinned worktree target during completion readback', async () => {
+    const setup = await createPinnedRecoveryAdapter()
+    try {
+      const { adapter } = setup
+      expect(status(adapter).unit?.pinnedOperationTargetIdentity).toBe(
+        setup.targetIdentity,
+      )
+
+      const completeInput = {
+        tool: 'systematic_workflow_complete' as const,
+        sessionID: SESSION_A,
+        callID: 'pinned-completion',
+      }
+      await adapter.hooks['tool.execute.before'](completeInput, {
+        args: { target: 'unit' },
+      })
+      const output = { title: 'complete', output: 'done', metadata: {} }
+      await adapter.hooks['tool.execute.after'](
+        { ...completeInput, args: { target: 'unit' } },
+        output,
+      )
+
+      expect(status(adapter).unit?.status).toBe('completed')
+      expect(output.output).toContain('workflow guard completed unit')
+    } finally {
+      setup.fixture.cleanup()
+    }
+  })
+
+  test('anchors fresh pinned completion readback to the worktree target', async () => {
+    const setup = await createFreshPinnedAdapter()
+    try {
+      const { adapter, fixture } = setup
+
+      const targetPath = path.join(fixture.linkedRoot, 'fresh-target.txt')
+      await observeFreshWrite(
+        adapter,
+        targetPath,
+        'fresh target',
+        'fresh-pinned-completion-write',
+      )
+      await observeFreshVerification(
+        adapter,
+        fixture.linkedRoot,
+        'fresh-pinned-completion-verification',
+      )
+      expect(ledger(adapter).listReceipts()).toHaveLength(2)
+
+      const output = await completeUnit(adapter, 'fresh-pinned-completion')
+
+      expect(status(adapter).unit?.status).toBe('completed')
+      expect(output.output).toContain('workflow guard completed unit')
+    } finally {
+      setup.fixture.cleanup()
+    }
+  })
+
+  test('rejects completion when pinned worktree content changes after evidence', async () => {
+    const setup = await createFreshPinnedAdapter()
+    try {
+      const targetPath = path.join(setup.targetRoot, 'content-drift.txt')
+      await observeFreshWrite(
+        setup.adapter,
+        targetPath,
+        'evidence content',
+        'content-drift-write',
+      )
+      await observeFreshVerification(
+        setup.adapter,
+        setup.targetRoot,
+        'content-drift-verification',
+      )
+      fs.appendFileSync(targetPath, '\npost-evidence drift')
+
+      const contentOutput = await completeUnit(
+        setup.adapter,
+        'content-drift-completion',
+      )
+
+      expect(contentOutput.output).toContain('stale-receipt')
+      expect(status(setup.adapter).state).toBe('unavailable')
+      expect(status(setup.adapter).unit?.status).toBe('active')
+      expect(
+        ledger(setup.adapter)
+          .listReceipts()
+          .some((receipt) => receipt.canonical.consumption === 'consumed'),
+      ).toBe(false)
+    } finally {
+      setup.fixture.cleanup()
+    }
+  })
+
+  test('stales only commit when pinned HEAD advances without content changes', async () => {
+    const setup = await createFreshPinnedAdapter([
+      'implementation',
+      'verification',
+      'commit',
+    ])
+    try {
+      const targetPath = path.join(setup.targetRoot, 'tracked.txt')
+      await observeFreshWrite(
+        setup.adapter,
+        targetPath,
+        'committed content',
+        'head-drift-write',
+      )
+      await observeFreshVerification(
+        setup.adapter,
+        setup.targetRoot,
+        'head-drift-verification',
+      )
+      const commitInput = {
+        tool: 'bash' as const,
+        sessionID: SESSION_A,
+        callID: 'head-drift-commit',
+        args: {
+          command: 'git commit -m "head drift baseline"',
+          workdir: setup.targetRoot,
+        },
+      }
+      await setup.adapter.hooks['tool.execute.before'](commitInput, {
+        args: commitInput.args,
+      })
+      const stageResult = Bun.spawnSync(['git', 'add', 'tracked.txt'], {
+        cwd: setup.targetRoot,
+      })
+      if (stageResult.exitCode !== 0) throw new Error('stage failed')
+      const commitResult = Bun.spawnSync(
+        ['git', 'commit', '-m', 'head drift baseline'],
+        { cwd: setup.targetRoot },
+      )
+      if (commitResult.exitCode !== 0) throw new Error('commit failed')
+      await setup.adapter.hooks['tool.execute.after'](commitInput, {
+        title: 'commit complete',
+        output: 'committed',
+        metadata: { exit: 0 },
+      })
+      const emptyCommit = Bun.spawnSync(
+        ['git', 'commit', '--allow-empty', '-m', 'outside completion'],
+        { cwd: setup.targetRoot },
+      )
+      if (emptyCommit.exitCode !== 0) throw new Error('empty commit failed')
+
+      const output = await completeUnit(setup.adapter, 'head-drift-completion')
+
+      expect(output.output).toContain('stale-receipt')
+      expect(status(setup.adapter).state).toBe('unavailable')
+      expect(status(setup.adapter).satisfiedOperations).toEqual([
+        'implementation',
+        'verification',
+      ])
+      expect(status(setup.adapter).unit?.status).toBe('active')
+      expect(
+        ledger(setup.adapter)
+          .listReceipts()
+          .some((receipt) => receipt.canonical.consumption === 'consumed'),
+      ).toBe(false)
+    } finally {
+      setup.fixture.cleanup()
+    }
+  })
+
+  test('fails closed when the pinned target changes during completion acquisition', async () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      const realParentObserver = createOpencodeOperationObserver({
+        targetDirectory: fixture.parentRoot,
+      })
+      const initial = await realParentObserver.snapshot()
+      if (initial.status !== 'available') throw new Error('parent unavailable')
+      const targetPath = path.join(fixture.linkedRoot, 'acquisition-drift.txt')
+      let mutateDuringCompletion = false
+      let parentSnapshots = 0
+      const parentObserver: OpencodeOperationObserver = {
+        ...realParentObserver,
+        async snapshot() {
+          const result = await realParentObserver.snapshot()
+          parentSnapshots += 1
+          if (mutateDuringCompletion && parentSnapshots === 2) {
+            fs.writeFileSync(targetPath, 'changed during completion')
+          }
+          return result
+        },
+      }
+      const adapter = createOpencodeWorkflowGuard({
+        config: { mode: 'observe' },
+        workspaceIdentity: initial.snapshot.targetDigest,
+        repositoryIdentity: initial.snapshot.repositoryRevisionDigest,
+        worktreeIdentity: initial.snapshot.worktreeRevisionDigest,
+        targetDirectory: fixture.parentRoot,
+        sessionLocation: fixture.parentRoot,
+        observer: parentObserver,
+        classifier: createReceiptClassifier(),
+      })
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      await observeFreshWrite(
+        adapter,
+        targetPath,
+        'stable evidence',
+        'acquisition-drift-write',
+      )
+      await observeFreshVerification(
+        adapter,
+        fixture.linkedRoot,
+        'acquisition-drift-verification',
+      )
+      parentSnapshots = 0
+      mutateDuringCompletion = true
+
+      await completeUnit(adapter, 'acquisition-drift-completion')
+
+      expect(status(adapter).state).toBe('unavailable')
+      expect(status(adapter).reasonCode).toBe('guard-unavailable')
+      expect(
+        ledger(adapter)
+          .listReceipts()
+          .some((receipt) => receipt.canonical.consumption === 'consumed'),
+      ).toBe(false)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('fails closed when the pinned registration identity changes before completion', async () => {
+    const fixture = createTargetDerivationFixture()
+    try {
+      const realParentObserver = createOpencodeOperationObserver({
+        targetDirectory: fixture.parentRoot,
+      })
+      const initial = await realParentObserver.snapshot()
+      if (initial.status !== 'available') throw new Error('parent unavailable')
+      const targetRoot = fs.realpathSync(fixture.linkedRoot)
+      let substituteRegistration = false
+      const parentObserver: OpencodeOperationObserver = {
+        ...realParentObserver,
+        validateRegisteredWorktree(candidateDirectory) {
+          const validation =
+            realParentObserver.validateRegisteredWorktree(candidateDirectory)
+          if (
+            substituteRegistration &&
+            candidateDirectory === targetRoot &&
+            validation.status === 'ok'
+          ) {
+            return { ...validation, gitDir: `${validation.gitDir}-substituted` }
+          }
+          return validation
+        },
+      }
+      const adapter = createOpencodeWorkflowGuard({
+        config: { mode: 'observe' },
+        workspaceIdentity: initial.snapshot.targetDigest,
+        repositoryIdentity: initial.snapshot.repositoryRevisionDigest,
+        worktreeIdentity: initial.snapshot.worktreeRevisionDigest,
+        targetDirectory: fixture.parentRoot,
+        sessionLocation: fixture.parentRoot,
+        observer: parentObserver,
+        classifier: createReceiptClassifier(),
+      })
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      const targetPath = path.join(targetRoot, 'registration-drift.txt')
+      await observeFreshWrite(
+        adapter,
+        targetPath,
+        'registered evidence',
+        'registration-drift-write',
+      )
+      await observeFreshVerification(
+        adapter,
+        targetRoot,
+        'registration-drift-verification',
+      )
+      substituteRegistration = true
+
+      await completeUnit(adapter, 'registration-drift-completion')
+
+      expect(status(adapter).state).toBe('unavailable')
+      expect(status(adapter).reasonCode).toBe('guard-unavailable')
+      expect(
+        ledger(adapter)
+          .listReceipts()
+          .some((receipt) => receipt.canonical.consumption === 'consumed'),
+      ).toBe(false)
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('fails closed when a pinned worktree target no longer validates on completion', async () => {
+    const setup = await createPinnedRecoveryAdapter()
+    try {
+      const { adapter } = setup
+      setup.setTargetValidationAvailable(false)
+
+      const completeInput = {
+        tool: 'systematic_workflow_complete' as const,
+        sessionID: SESSION_A,
+        callID: 'invalid-pinned-completion',
+      }
+      await adapter.hooks['tool.execute.before'](completeInput, {
+        args: { target: 'unit' },
+      })
+      const output = { title: 'complete', output: 'done', metadata: {} }
+      await adapter.hooks['tool.execute.after'](
+        { ...completeInput, args: { target: 'unit' } },
+        output,
+      )
+
+      expect(status(adapter).state).toBe('unavailable')
+    } finally {
+      setup.fixture.cleanup()
+    }
+  })
+
   test('operation evidence remains isolated across sessions and registrations', async () => {
     const first = createAdapter(
       'observe',
@@ -2361,6 +3752,7 @@ describe('OpenCode workflow guard adapter', () => {
           epochId: EPOCH_ID_A,
           unitId: UNIT_ID_A,
           workspaceIdentity: 'workspace-a',
+          operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
           worktreeIdentity: 'worktree-before',
         },
       })
@@ -2370,10 +3762,12 @@ describe('OpenCode workflow guard adapter', () => {
           epochId: EPOCH_ID_A,
           unitId: UNIT_ID_A,
           workspaceIdentity: 'workspace-a',
+          operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
           worktreeIdentity: 'worktree-before',
         },
         after: {
           workspaceIdentity: 'workspace-a',
+          operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
           worktreeIdentity: 'worktree-after',
         },
         classification: {
@@ -2765,6 +4159,7 @@ describe('OpenCode workflow guard adapter', () => {
           epochId: EPOCH_ID,
           unitId: UNIT_ID,
           workspaceIdentity: 'ws',
+          operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
           worktreeIdentity: 'before',
         },
       })
@@ -2774,9 +4169,14 @@ describe('OpenCode workflow guard adapter', () => {
           epochId: EPOCH_ID,
           unitId: UNIT_ID,
           workspaceIdentity: 'ws',
+          operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
           worktreeIdentity: 'before',
         },
-        after: { workspaceIdentity: 'ws', worktreeIdentity: 'after' },
+        after: {
+          workspaceIdentity: 'ws',
+          operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
+          worktreeIdentity: 'after',
+        },
         classification: {
           outcome: 'accepted',
           category: 'implementation',
@@ -2947,6 +4347,7 @@ describe('OpenCode workflow guard adapter', () => {
           epochId: EPOCH_ID,
           unitId: UNIT_ID,
           workspaceIdentity,
+          operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
           repositoryIdentity,
           worktreeIdentity: worktreeBeforeIdentity,
         },
@@ -2957,11 +4358,13 @@ describe('OpenCode workflow guard adapter', () => {
           epochId: EPOCH_ID,
           unitId: UNIT_ID,
           workspaceIdentity,
+          operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
           repositoryIdentity,
           worktreeIdentity: worktreeBeforeIdentity,
         },
         after: {
           workspaceIdentity,
+          operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
           repositoryIdentity,
           worktreeIdentity: worktreeAfterIdentity,
         },
@@ -2995,6 +4398,7 @@ describe('OpenCode workflow guard adapter', () => {
         worktreeBeforeIdentity: string
         worktreeAfterIdentity: string
       }[],
+      operationTargetIdentity = OPERATION_SCOPE.operationTargetIdentity,
     ): unknown[] {
       const childLedger = createReceiptLedger({
         capabilityFlags: ['workflow-guard'],
@@ -3035,6 +4439,7 @@ describe('OpenCode workflow guard adapter', () => {
           epochId,
           unitId,
           workspaceIdentity: receiptWorkspaceIdentity,
+          operationTargetIdentity,
           repositoryIdentity: receipt.repositoryBeforeIdentity,
           worktreeIdentity: receipt.worktreeBeforeIdentity,
         }
@@ -3050,6 +4455,7 @@ describe('OpenCode workflow guard adapter', () => {
           context,
           after: {
             workspaceIdentity: receiptWorkspaceIdentity,
+            operationTargetIdentity,
             repositoryIdentity: receipt.repositoryAfterIdentity,
             worktreeIdentity: receipt.worktreeAfterIdentity,
             ...(receipt.operation === 'commit' ? { commitClosure: true } : {}),
@@ -3393,6 +4799,14 @@ describe('OpenCode workflow guard adapter', () => {
         sessionSalt: ownSalt,
         observer: {
           targetDigest: OPERATION_SCOPE.workspaceIdentity,
+          validateRegisteredWorktree(candidateDirectory: string) {
+            return {
+              status: 'ok' as const,
+              targetRoot: candidateDirectory,
+              gitDir: `${candidateDirectory}/.git`,
+              commonDir: `${candidateDirectory}/.git`,
+            }
+          },
           async snapshot() {
             snapshotCalled = true
             return {
@@ -3505,6 +4919,7 @@ describe('OpenCode workflow guard adapter', () => {
           epochId: EPOCH_ID,
           unitId: UNIT_ID,
           workspaceIdentity: 'ws',
+          operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
           worktreeIdentity: 'b',
         },
       })
@@ -3514,9 +4929,14 @@ describe('OpenCode workflow guard adapter', () => {
           epochId: EPOCH_ID,
           unitId: UNIT_ID,
           workspaceIdentity: 'ws',
+          operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
           worktreeIdentity: 'b',
         },
-        after: { workspaceIdentity: 'ws', worktreeIdentity: 'a' },
+        after: {
+          workspaceIdentity: 'ws',
+          operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
+          worktreeIdentity: 'a',
+        },
         classification: {
           outcome: 'accepted',
           category: 'implementation',
@@ -3572,6 +4992,14 @@ describe('OpenCode workflow guard adapter', () => {
         runtimeRequiredOperations,
         observer: {
           targetDigest: OPERATION_SCOPE.workspaceIdentity,
+          validateRegisteredWorktree(candidateDirectory: string) {
+            return {
+              status: 'ok' as const,
+              targetRoot: candidateDirectory,
+              gitDir: `${candidateDirectory}/.git`,
+              commonDir: `${candidateDirectory}/.git`,
+            }
+          },
           async snapshot() {
             snapshotRef.called = true
             return {
@@ -4065,6 +5493,185 @@ describe('OpenCode workflow guard adapter', () => {
       expect(
         secondOutput.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY],
       ).toBeUndefined()
+    })
+
+    test('rolls up a child implementation from a registered worktree target', async () => {
+      const fixture = createTargetDerivationFixture()
+      try {
+        const parentObserver = createOpencodeOperationObserver({
+          targetDirectory: fixture.parentRoot,
+        })
+        const initial = await parentObserver.snapshot()
+        if (initial.status !== 'available')
+          throw new Error('parent observer unavailable')
+
+        const ownIdentity = 'rollup-registered-worktree-target'
+        const ownSalt = new Uint8Array(32).fill(128)
+        const childSessionID = 'child-registered-worktree-target'
+        const parentSessionID = SESSION_A
+        let childParts: ReadonlyArray<unknown> = []
+        const adapter = createOpencodeWorkflowGuard({
+          config: { mode: 'observe', debug: false },
+          workspaceIdentity: initial.snapshot.targetDigest,
+          repositoryIdentity: initial.snapshot.repositoryRevisionDigest,
+          worktreeIdentity: initial.snapshot.worktreeRevisionDigest,
+          targetDirectory: fixture.parentRoot,
+          registrationIdentity: ownIdentity,
+          sessionSalt: ownSalt,
+          runtimeRequiredOperations: ['implementation'],
+          observer: parentObserver,
+          classifier: createReceiptClassifier(),
+          hostReadback: {
+            readSessionParts: async (sessionID) =>
+              sessionID === parentSessionID ? [] : childParts,
+            listChildren: async (sessionID) =>
+              sessionID === parentSessionID
+                ? [{ sessionId: childSessionID, parentID: parentSessionID }]
+                : [],
+          },
+        })
+
+        await observeSkill(
+          adapter,
+          'systematic_skill',
+          'ce:work',
+          'registered-worktree-parent-skill',
+          parentSessionID,
+        )
+
+        const childSkillOutput = {
+          title: 'Loaded skill',
+          output: 'child skill result',
+          metadata: {},
+        }
+        await observeSkill(
+          adapter,
+          'systematic_skill',
+          'ce:work',
+          'registered-worktree-child-skill',
+          childSessionID,
+          childSkillOutput,
+        )
+
+        const filePath = path.join(fixture.linkedRoot, 'rollup-targeted.txt')
+        const childWriteInput = {
+          tool: 'write',
+          sessionID: childSessionID,
+          callID: 'registered-worktree-child-write',
+          args: { filePath, content: 'changed' },
+        }
+        const childWriteOutput = {
+          title: 'write complete',
+          output: 'changed',
+          metadata: {},
+        }
+        await adapter.hooks['tool.execute.before'](childWriteInput, {
+          args: childWriteInput.args,
+        })
+        fs.writeFileSync(filePath, 'changed')
+        await adapter.hooks['tool.execute.after'](
+          childWriteInput,
+          childWriteOutput,
+        )
+
+        const childSkillMarkers =
+          childSkillOutput.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]
+        const childWriteMarker =
+          childWriteOutput.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]
+        childParts = [
+          {
+            info: {},
+            parts: [
+              {
+                state: {
+                  metadata: {
+                    [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: [
+                      ...(Array.isArray(childSkillMarkers)
+                        ? childSkillMarkers
+                        : childSkillMarkers
+                          ? [childSkillMarkers]
+                          : []),
+                      ...(childWriteMarker ? [childWriteMarker] : []),
+                    ],
+                  },
+                },
+              },
+            ],
+          },
+        ]
+
+        await fireTaskAfter(adapter, childSessionID, parentSessionID)
+
+        const receipts = ledger(adapter, parentSessionID).listReceipts()
+        expect(receipts).toHaveLength(1)
+        expect(receipts[0]?.canonical.operation).toBe('implementation')
+        expect(status(adapter, parentSessionID).satisfiedOperations).toContain(
+          'implementation',
+        )
+      } finally {
+        fixture.cleanup()
+      }
+    })
+
+    test('rejects a child receipt with an authenticated unregistered target identity', async () => {
+      const ownIdentity = 'rollup-wrong-operation-target'
+      const ownSalt = new Uint8Array(32).fill(129)
+      const childSessionID = 'child-wrong-operation-target'
+      const parentSessionID = SESSION_A
+      const wrongTargetIdentity = 'f'.repeat(64)
+      const childMarkers = buildChildMarkersWithReceipts(
+        ownIdentity,
+        ownSalt,
+        OPERATION_SCOPE.workspaceIdentity,
+        [
+          {
+            operation: 'implementation',
+            repositoryBeforeIdentity: OPERATION_SCOPE.repositoryIdentity,
+            repositoryAfterIdentity: OPERATION_SCOPE.repositoryIdentity,
+            worktreeBeforeIdentity: OPERATION_SCOPE.worktreeIdentity,
+            worktreeAfterIdentity: '1'.repeat(64),
+          },
+        ],
+        wrongTargetIdentity,
+      )
+      const childParts = [
+        {
+          info: {},
+          parts: [
+            {
+              state: {
+                metadata: {
+                  [SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]: childMarkers,
+                },
+              },
+            },
+          ],
+        },
+      ]
+      const snapshotRef = { called: false }
+      const adapter = makeRollupAdapter(
+        ownIdentity,
+        ownSalt,
+        snapshotRef,
+        childSessionID,
+        () => childParts,
+        parentSessionID,
+        ['implementation'],
+      )
+
+      await observeSkill(
+        adapter,
+        'systematic_skill',
+        'ce:work',
+        'wrong-operation-target-skill',
+        parentSessionID,
+      )
+      await fireTaskAfter(adapter, childSessionID, parentSessionID)
+
+      expect(adapter.status(parentSessionID).reasonCode).toBe(
+        'guard-unavailable',
+      )
+      expect(ledger(adapter, parentSessionID).listReceipts()).toHaveLength(0)
     })
 
     test('skips stale child receipts, mints a later current receipt, and rolls up once', async () => {

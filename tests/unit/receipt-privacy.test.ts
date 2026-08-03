@@ -29,12 +29,13 @@ import { createWorkflowGuard } from '../../src/lib/workflow-guard.js'
 
 const SESSION_ID = 'privacy-session'
 const RESOURCE = '/Users/example/private/project'
-const SECRET_PATH = '/Users/example/private/project/.env'
+const SECRET_PATH = `${process.cwd()}/tests/unit/.privacy-fixture.env`
 const SECRET_COMMAND = 'git push origin private-branch --token=secret-value'
 const SECRET_PR_BODY = 'private pull request body with customer@example.test'
 const SECRET_ENV = 'SUPER_SECRET_ENV_VALUE'
 const SECRET_PROSE = 'private user prose must never be persisted'
 const SESSION_SALT = new Uint8Array(32).fill(7)
+const OPERATION_TARGET_IDENTITY = 'd'.repeat(64)
 
 const DIGEST = /^[0-9a-f]{64}$/
 const IDENTIFIER = /^[A-Za-z0-9_.:-]{1,256}$/
@@ -104,6 +105,15 @@ function sequenceObserver(
   let index = 0
   return {
     targetDigest: snapshots[0]?.targetDigest ?? 'a'.repeat(64),
+    validateRegisteredWorktree(_candidateDirectory: string) {
+      const targetRoot = process.cwd()
+      return {
+        status: 'ok' as const,
+        targetRoot,
+        gitDir: `${targetRoot}/.git`,
+        commonDir: `${targetRoot}/.git`,
+      }
+    },
     async snapshot() {
       const snapshot = snapshots[Math.min(index++, snapshots.length - 1)]
       if (!snapshot)
@@ -143,6 +153,7 @@ function mintReceipt(): {
     workspaceIdentity: RESOURCE,
     repositoryIdentity: `${RESOURCE}/.git`,
     worktreeIdentity: `${RESOURCE}/.worktree`,
+    operationTargetIdentity: OPERATION_TARGET_IDENTITY,
     resourceIdentity: SECRET_PATH,
   }
   expect(
@@ -159,6 +170,7 @@ function mintReceipt(): {
       workspaceIdentity: RESOURCE,
       repositoryIdentity: `${RESOURCE}/.git-after`,
       worktreeIdentity: `${RESOURCE}/.worktree-after`,
+      operationTargetIdentity: OPERATION_TARGET_IDENTITY,
       resourceIdentity: SECRET_PATH,
     },
     classification: {

@@ -22,6 +22,12 @@ interface SeparatedGitFixture {
   cleanup(): void
 }
 
+interface RegisteredWorktreeFixture {
+  parent: GitFixture
+  linkedWorktree: string
+  cleanup(): void
+}
+
 function runGit(
   root: string,
   args: readonly string[],
@@ -53,6 +59,34 @@ function createGitFixture(): GitFixture {
   return {
     root,
     cleanup: () => fs.rmSync(root, { recursive: true, force: true }),
+  }
+}
+
+function createRegisteredWorktreeFixture(): RegisteredWorktreeFixture {
+  const parent = createGitFixture()
+  const linkedWorktree = path.join(
+    path.dirname(parent.root),
+    `${path.basename(parent.root)}-linked`,
+  )
+  const result = runGit(parent.root, [
+    'worktree',
+    'add',
+    '--quiet',
+    '-b',
+    'linked',
+    linkedWorktree,
+  ])
+  if (result.status !== 0) {
+    parent.cleanup()
+    throw new Error('git setup failed: worktree add')
+  }
+  return {
+    parent,
+    linkedWorktree,
+    cleanup: () => {
+      fs.rmSync(linkedWorktree, { recursive: true, force: true })
+      parent.cleanup()
+    },
   }
 }
 
@@ -123,6 +157,278 @@ function createSeparatedGitRemoteFixture(): SeparatedGitFixture {
 }
 
 describe('OpenCode operation observer', () => {
+  test('validates a registered linked worktree against its parent identity', () => {
+    const fixture = createRegisteredWorktreeFixture()
+    try {
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.parent.root,
+      })
+
+      expect(
+        observer.validateRegisteredWorktree(fixture.linkedWorktree),
+      ).toEqual(
+        expect.objectContaining({
+          status: 'ok',
+          targetRoot: fs.realpathSync(fixture.linkedWorktree),
+        }),
+      )
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('validates the parent main checkout as a registered worktree', () => {
+    const fixture = createGitFixture()
+    try {
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.root,
+      })
+
+      expect(observer.validateRegisteredWorktree(fixture.root)).toEqual(
+        expect.objectContaining({
+          status: 'ok',
+          targetRoot: fs.realpathSync(fixture.root),
+          commonDir: fs.realpathSync(path.join(fixture.root, '.git')),
+        }),
+      )
+    } finally {
+      fixture.cleanup()
+    }
+  })
+
+  test('keeps the parent worktree membership snapshot immutable', () => {
+    const parent = createGitFixture()
+    const observer = createOpencodeOperationObserver({
+      targetDirectory: parent.root,
+    })
+    const linkedWorktree = path.join(
+      path.dirname(parent.root),
+      `${path.basename(parent.root)}-late-linked`,
+    )
+    try {
+      const added = runGit(parent.root, [
+        'worktree',
+        'add',
+        '--quiet',
+        '-b',
+        'late-linked',
+        linkedWorktree,
+      ])
+      expect(added.status).toBe(0)
+      expect(observer.validateRegisteredWorktree(linkedWorktree)).toEqual({
+        status: 'error',
+        reasonCode: 'target-unavailable',
+      })
+    } finally {
+      fs.rmSync(linkedWorktree, { recursive: true, force: true })
+      parent.cleanup()
+    }
+  })
+
+  test('canonicalizes a symlink root to the registered worktree identity', () => {
+    const fixture = createRegisteredWorktreeFixture()
+    const linkedAlias = path.join(
+      path.dirname(fixture.linkedWorktree),
+      `${path.basename(fixture.linkedWorktree)}-alias`,
+    )
+    try {
+      fs.symlinkSync(fixture.linkedWorktree, linkedAlias, 'dir')
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.parent.root,
+      })
+
+      expect(observer.validateRegisteredWorktree(linkedAlias)).toEqual(
+        expect.objectContaining({
+          status: 'ok',
+          targetRoot: fs.realpathSync(fixture.linkedWorktree),
+        }),
+      )
+    } finally {
+      fs.rmSync(linkedAlias, { force: true })
+      fixture.cleanup()
+    }
+  })
+
+  test('rejects an independent unrelated repository', () => {
+    const parent = createGitFixture()
+    const unrelated = createGitFixture()
+    try {
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: parent.root,
+      })
+
+      expect(observer.validateRegisteredWorktree(unrelated.root)).toEqual({
+        status: 'error',
+        reasonCode: 'target-unavailable',
+      })
+    } finally {
+      unrelated.cleanup()
+      parent.cleanup()
+    }
+  })
+
+  test('rejects an independent nested repository inside the parent checkout', () => {
+    const parent = createGitFixture()
+    const nested = path.join(parent.root, 'nested-repo')
+    fs.mkdirSync(nested)
+    runGit(nested, ['init', '--quiet'])
+    try {
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: parent.root,
+      })
+
+      expect(observer.validateRegisteredWorktree(nested)).toEqual({
+        status: 'error',
+        reasonCode: 'target-unavailable',
+      })
+    } finally {
+      parent.cleanup()
+    }
+  })
+
+  test('rejects a submodule target whose common directory is under git modules', () => {
+    const parent = createGitFixture()
+    const submodule = createGitFixture()
+    try {
+      const added = runGit(parent.root, [
+        '-c',
+        'protocol.file.allow=always',
+        'submodule',
+        'add',
+        '--quiet',
+        submodule.root,
+        'submodule',
+      ])
+      expect(added.status).toBe(0)
+      runGit(parent.root, ['commit', '--quiet', '-am', 'add submodule'])
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: parent.root,
+      })
+
+      expect(
+        observer.validateRegisteredWorktree(
+          path.join(parent.root, 'submodule'),
+        ),
+      ).toEqual({
+        status: 'error',
+        reasonCode: 'target-unavailable',
+      })
+    } finally {
+      submodule.cleanup()
+      parent.cleanup()
+    }
+  })
+
+  test('rejects a fake gitfile that points directly at the parent git directory', () => {
+    const parent = createGitFixture()
+    const fakeRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-observer-fake-'),
+    )
+    try {
+      fs.writeFileSync(
+        path.join(fakeRoot, '.git'),
+        `gitdir: ${path.join(parent.root, '.git')}\n`,
+      )
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: parent.root,
+      })
+
+      expect(observer.validateRegisteredWorktree(fakeRoot)).toEqual({
+        status: 'error',
+        reasonCode: 'target-unavailable',
+      })
+    } finally {
+      fs.rmSync(fakeRoot, { recursive: true, force: true })
+      parent.cleanup()
+    }
+  })
+
+  test('rejects a fake gitfile that points at a registered worktree admin directory', () => {
+    const fixture = createRegisteredWorktreeFixture()
+    const fakeRoot = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-observer-fake-'),
+    )
+    try {
+      const admin = runGit(fixture.linkedWorktree, [
+        'rev-parse',
+        '--absolute-git-dir',
+      ]).stdout.trim()
+      fs.writeFileSync(path.join(fakeRoot, '.git'), `gitdir: ${admin}\n`)
+      const observer = createOpencodeOperationObserver({
+        targetDirectory: fixture.parent.root,
+      })
+
+      expect(observer.validateRegisteredWorktree(fakeRoot)).toEqual({
+        status: 'error',
+        reasonCode: 'target-unavailable',
+      })
+    } finally {
+      fs.rmSync(fakeRoot, { recursive: true, force: true })
+      fixture.cleanup()
+    }
+  })
+
+  test('ignores poisoned ambient GIT variables in observer subprocesses', async () => {
+    const parent = createGitFixture()
+    const unrelated = createGitFixture()
+    const traceFile = path.join(parent.root, 'git-trace.log')
+    const poison = {
+      GIT_DIR: path.join(parent.root, '.git'),
+      GIT_WORK_TREE: parent.root,
+      GIT_COMMON_DIR: path.join(parent.root, '.git'),
+      GIT_INDEX_FILE: path.join(parent.root, '.git', 'index'),
+      GIT_OBJECT_DIRECTORY: path.join(parent.root, '.git', 'objects'),
+      GIT_ALTERNATE_OBJECT_DIRECTORIES: path.join(
+        parent.root,
+        '.git',
+        'objects',
+      ),
+      GIT_CONFIG_COUNT: '1',
+      GIT_CONFIG_KEY_0: 'foo.bar',
+      GIT_CONFIG_VALUE_0: 'baz',
+      GIT_TRACE: traceFile,
+    } as const
+    try {
+      fs.writeFileSync(path.join(unrelated.root, 'tracked.txt'), 'unrelated\n')
+      runGit(unrelated.root, ['add', 'tracked.txt'])
+      runGit(unrelated.root, ['commit', '--quiet', '-m', 'unrelated'])
+
+      const child = Bun.spawnSync(
+        [
+          process.execPath,
+          '-e',
+          [
+            "import { createOpencodeOperationObserver } from './src/lib/opencode-operation-observer.ts'",
+            'const observer = createOpencodeOperationObserver({ targetDirectory: process.env.PARENT_DIRECTORY })',
+            'const result = observer.validateRegisteredWorktree(process.env.TARGET_DIRECTORY)',
+            'process.stdout.write(JSON.stringify(result))',
+          ].join(';'),
+        ],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...process.env,
+            ...poison,
+            PARENT_DIRECTORY: parent.root,
+            TARGET_DIRECTORY: unrelated.root,
+          },
+          stdout: 'pipe',
+          stderr: 'pipe',
+        },
+      )
+      expect(child.exitCode).toBe(0)
+      const poisoned = JSON.parse(child.stdout.toString()) as unknown
+      expect(poisoned).toEqual({
+        status: 'error',
+        reasonCode: 'target-unavailable',
+      })
+      expect(fs.existsSync(traceFile)).toBe(false)
+    } finally {
+      unrelated.cleanup()
+      parent.cleanup()
+    }
+  })
+
   test('keeps target stable while repository and worktree revisions change', async () => {
     const fixture = createGitFixture()
     try {
@@ -454,6 +760,53 @@ describe('OpenCode operation observer', () => {
     }
   })
 
+  test('keeps identical registered worktrees distinct by target digest', async () => {
+    const fixture = createRegisteredWorktreeFixture()
+    const secondLinkedWorktree = path.join(
+      path.dirname(fixture.linkedWorktree),
+      `${path.basename(fixture.linkedWorktree)}-second`,
+    )
+    try {
+      const added = runGit(fixture.parent.root, [
+        'worktree',
+        'add',
+        '--quiet',
+        '-b',
+        'linked-second',
+        secondLinkedWorktree,
+      ])
+      expect(added.status).toBe(0)
+
+      const first = await createOpencodeOperationObserver({
+        targetDirectory: fixture.linkedWorktree,
+      }).snapshot()
+      const second = await createOpencodeOperationObserver({
+        targetDirectory: secondLinkedWorktree,
+      }).snapshot()
+      expect(first.status).toBe('available')
+      expect(second.status).toBe('available')
+      if (first.status !== 'available' || second.status !== 'available') {
+        return
+      }
+
+      expect(
+        runGit(fixture.linkedWorktree, ['rev-parse', 'HEAD']).stdout.trim(),
+      ).toBe(runGit(secondLinkedWorktree, ['rev-parse', 'HEAD']).stdout.trim())
+      expect(
+        fs.readFileSync(
+          path.join(fixture.linkedWorktree, 'tracked.txt'),
+          'utf8',
+        ),
+      ).toBe(
+        fs.readFileSync(path.join(secondLinkedWorktree, 'tracked.txt'), 'utf8'),
+      )
+      expect(first.snapshot.targetDigest).not.toBe(second.snapshot.targetDigest)
+    } finally {
+      fs.rmSync(secondLinkedWorktree, { recursive: true, force: true })
+      fixture.cleanup()
+    }
+  })
+
   test('fails closed on command failure and bounded output without exposing raw facts', async () => {
     const fixture = createGitFixture()
     const secret = 'raw-observer-secret'
@@ -613,7 +966,9 @@ describe('OpenCode operation observer', () => {
       const remoteTimeouts: number[] = []
       const remote = createOpencodeOperationObserver({
         targetDirectory: fixture.root,
-        limits: { maxCommandTimeoutMs: 7 } satisfies OperationObserverLimits,
+        limits: {
+          maxCommandTimeoutMs: 1_000,
+        } satisfies OperationObserverLimits,
         remoteCommandRunner: (
           executable,
           args,
@@ -650,7 +1005,7 @@ describe('OpenCode operation observer', () => {
         remote.remoteSnapshot('pr-creation', 'after'),
       ).resolves.toMatchObject({ status: 'available' })
       expect(remoteTimeouts.length).toBeGreaterThan(0)
-      expect(new Set(remoteTimeouts)).toEqual(new Set([7]))
+      expect(new Set(remoteTimeouts)).toEqual(new Set([1_000]))
     } finally {
       fixture.cleanup()
     }

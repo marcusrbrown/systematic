@@ -95,6 +95,8 @@ const initializePlugin = async ({
     repositoryIdentity: initialIdentities.repositoryRevisionDigest,
     worktreeIdentity: initialIdentities.worktreeRevisionDigest,
     registrationIdentity: registrationSourceIdentity,
+    targetDirectory: typeof worktree === 'string' ? worktree : directory,
+    sessionLocation: directory,
     observer,
     classifier: createReceiptClassifier(),
     hostReadback: (() => {

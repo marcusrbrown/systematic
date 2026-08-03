@@ -17,6 +17,7 @@ import type {
   ReceiptOperation,
   ReceiptReasonCode,
 } from './receipt-ledger.js'
+import { isLocalOperation } from './receipt-ledger.js'
 import type {
   ReceiptEpochProgressionSnapshot,
   ReceiptReadbackProgression,
@@ -63,6 +64,7 @@ export type WorkflowReasonCode =
   | 'no-active-unit'
   | 'no-op-operation'
   | 'operation-not-required'
+  | 'operation-target-mismatch'
   | 'receipt-mismatch'
   | 'rejected-operation'
   | 'resource-mismatch'
@@ -115,6 +117,7 @@ export interface UnitSnapshot {
   requiredOperations: readonly ReceiptOperation[]
   requiredResourceOperations: readonly ReceiptOperation[]
   resourceScopes: readonly ReceiptResourceScope[]
+  pinnedOperationTargetIdentity?: string
 }
 
 export interface CurrentOperationContext {
@@ -242,6 +245,7 @@ interface ParsedReadback {
   workspaceIdentity: string
   repositoryIdentity?: string
   worktreeIdentity?: string
+  operationTargetIdentity?: string
   resourceIdentity?: string
   resourceRevisionIdentity?: string
   pullRequest?: ReceiptOperationAfter['pullRequest']
@@ -323,6 +327,7 @@ const RECOVERY_UNIT_KEYS = new Set([
   'family',
   'requiredOperations',
   'resourceScopes',
+  'pinnedOperationTargetIdentity',
   'transitionDigest',
 ])
 const RECOVERY_STATE_KEYS = new Set([
@@ -357,6 +362,7 @@ interface UnitState {
   requiredOperations: readonly ReceiptOperation[]
   declaredResourceOperations: readonly ReceiptOperation[]
   resourceScopes: ReadonlyMap<ReceiptOperation, string>
+  pinnedOperationTargetIdentity?: string
   evidence: Map<ReceiptOperation, ReceiptEnvelope>
   issues: Map<ReceiptOperation, Issue>
   staleReceiptIds: Set<string>
@@ -591,6 +597,12 @@ function parseRecoveryUnit(
     return undefined
   const requiredOperations = parseRecoveryOperations(value.requiredOperations)
   const resourceScopes = parseRecoveryResourceScopes(value.resourceScopes)
+  const pinnedOperationTargetIdentity =
+    value.pinnedOperationTargetIdentity === undefined
+      ? undefined
+      : isRecoveryDigest(value.pinnedOperationTargetIdentity)
+        ? value.pinnedOperationTargetIdentity
+        : undefined
   if (
     value.target !== 'unit' ||
     (value.state !== 'started' && value.state !== 'completed') ||
@@ -601,6 +613,8 @@ function parseRecoveryUnit(
     !isFamily(value.family) ||
     !requiredOperations ||
     !resourceScopes ||
+    (value.pinnedOperationTargetIdentity !== undefined &&
+      pinnedOperationTargetIdentity === undefined) ||
     !isRecoveryDigest(value.transitionDigest)
   ) {
     return undefined
@@ -615,6 +629,7 @@ function parseRecoveryUnit(
     family: value.family,
     requiredOperations,
     resourceScopes,
+    ...(pinnedOperationTargetIdentity ? { pinnedOperationTargetIdentity } : {}),
     transitionDigest: value.transitionDigest,
   }
 }
@@ -683,6 +698,9 @@ function cloneUnit(unit: UnitState): UnitSnapshot {
         resourceIdentity,
       })),
     ),
+    ...(unit.pinnedOperationTargetIdentity
+      ? { pinnedOperationTargetIdentity: unit.pinnedOperationTargetIdentity }
+      : {}),
   })
 }
 
@@ -794,6 +812,7 @@ function parseReadback(input: unknown): ParsedReadback | undefined {
         'workspaceIdentity',
         'repositoryIdentity',
         'worktreeIdentity',
+        'operationTargetIdentity',
         'resourceIdentity',
         'resourceRevisionIdentity',
         'pullRequest',
@@ -810,6 +829,7 @@ function parseReadback(input: unknown): ParsedReadback | undefined {
     workspaceIdentity: input.workspaceIdentity,
     repositoryIdentity: input.repositoryIdentity,
     worktreeIdentity: input.worktreeIdentity,
+    operationTargetIdentity: input.operationTargetIdentity,
     resourceIdentity: input.resourceIdentity,
     resourceRevisionIdentity: input.resourceRevisionIdentity,
     pullRequest: input.pullRequest,
@@ -822,6 +842,7 @@ function parseReadback(input: unknown): ParsedReadback | undefined {
     workspaceIdentity: after.workspaceIdentity,
     repositoryIdentity: after.repositoryIdentity,
     worktreeIdentity: after.worktreeIdentity,
+    operationTargetIdentity: after.operationTargetIdentity,
     resourceIdentity: after.resourceIdentity,
     resourceRevisionIdentity: after.resourceRevisionIdentity,
     pullRequest: after.pullRequest,
@@ -840,6 +861,9 @@ function parseLegacyReadbackAfter(
     input.repositoryIdentity,
   )
   const worktreeIdentity = parseOptionalReadbackIdentity(input.worktreeIdentity)
+  const operationTargetIdentity = parseOptionalReadbackIdentity(
+    input.operationTargetIdentity,
+  )
   const resourceIdentity = parseOptionalReadbackIdentity(input.resourceIdentity)
   const resourceRevisionIdentity = parseOptionalReadbackIdentity(
     input.resourceRevisionIdentity,
@@ -847,6 +871,10 @@ function parseLegacyReadbackAfter(
   if (
     !isOptionalReadbackIdentity(input.repositoryIdentity, repositoryIdentity) ||
     !isOptionalReadbackIdentity(input.worktreeIdentity, worktreeIdentity) ||
+    !isOptionalReadbackIdentity(
+      input.operationTargetIdentity,
+      operationTargetIdentity,
+    ) ||
     !isOptionalReadbackIdentity(input.resourceIdentity, resourceIdentity) ||
     !isOptionalReadbackIdentity(
       input.resourceRevisionIdentity,
@@ -863,6 +891,7 @@ function parseLegacyReadbackAfter(
     workspaceIdentity: input.workspaceIdentity,
     ...(repositoryIdentity ? { repositoryIdentity } : {}),
     ...(worktreeIdentity ? { worktreeIdentity } : {}),
+    ...(operationTargetIdentity ? { operationTargetIdentity } : {}),
     ...(resourceIdentity ? { resourceIdentity } : {}),
     ...(resourceRevisionIdentity ? { resourceRevisionIdentity } : {}),
     ...(pullRequest ? { pullRequest } : {}),
@@ -949,10 +978,14 @@ function toLedgerContext(
 ): ReceiptContext {
   const {
     resourceRevisionIdentity: _resourceRevisionIdentity,
+    operationTargetIdentity: _operationTargetIdentity,
     ...ledgerContext
   } = context
   return {
     ...ledgerContext,
+    ...(isLocalOperation(operation)
+      ? { operationTargetIdentity: context.operationTargetIdentity }
+      : {}),
     resourceIdentity: ledgerResourceIdentity(
       operation,
       context.resourceIdentity,
@@ -970,10 +1003,14 @@ function toLedgerAfter(
     pullRequest: _pullRequest,
     checkState: _checkState,
     reviewDecision: _reviewDecision,
+    operationTargetIdentity: _operationTargetIdentity,
     ...ledgerAfter
   } = after
   return {
     ...ledgerAfter,
+    ...(isLocalOperation(operation)
+      ? { operationTargetIdentity: after.operationTargetIdentity }
+      : {}),
     resourceIdentity: ledgerResourceIdentity(
       operation,
       after.resourceIdentity,
@@ -1055,6 +1092,7 @@ function parseU4Readback(input: unknown): ParsedReadback | undefined {
         'workspaceIdentity',
         'repositoryIdentity',
         'worktreeIdentity',
+        'operationTargetIdentity',
         'resourceIdentity',
         'resourceRevisionIdentity',
         'pullRequest',
@@ -1062,7 +1100,11 @@ function parseU4Readback(input: unknown): ParsedReadback | undefined {
         'reviewDecision',
       ]),
     ) ||
-    (input.operation !== undefined && !isOperation(input.operation))
+    (input.operation !== undefined && !isOperation(input.operation)) ||
+    (input.operation !== undefined &&
+      isOperation(input.operation) &&
+      !isLocalOperation(input.operation) &&
+      Object.hasOwn(input, 'operationTargetIdentity'))
   ) {
     return undefined
   }
@@ -1074,6 +1116,7 @@ function parseU4Readback(input: unknown): ParsedReadback | undefined {
     workspaceIdentity: after.workspaceIdentity,
     repositoryIdentity: after.repositoryIdentity,
     worktreeIdentity: after.worktreeIdentity,
+    operationTargetIdentity: after.operationTargetIdentity,
     resourceIdentity: after.resourceIdentity,
     resourceRevisionIdentity: after.resourceRevisionIdentity,
     pullRequest: after.pullRequest,
@@ -1289,8 +1332,29 @@ export function createWorkflowGuard(
       return 'epoch-mismatch'
     if (input.context.unitId !== unit.unitId) return 'unit-mismatch'
     return (
-      currentIdentityReason(input.context) ?? resourceBeforeReason(input, unit)
+      currentIdentityReason(input.context) ??
+      operationTargetReason(input, unit) ??
+      resourceBeforeReason(input, unit)
     )
+  }
+
+  function operationTargetReason(
+    input: ParsedOperationObservation,
+    unit: UnitState,
+  ): WorkflowReasonCode | undefined {
+    if (!isLocalOperation(input.operation)) return undefined
+    if (
+      input.after &&
+      input.after.operationTargetIdentity !==
+        input.context.operationTargetIdentity
+    ) {
+      return 'operation-target-mismatch'
+    }
+    return unit.pinnedOperationTargetIdentity !== undefined &&
+      input.context.operationTargetIdentity !==
+        unit.pinnedOperationTargetIdentity
+      ? 'operation-target-mismatch'
+      : undefined
   }
 
   function currentIdentityReason(
@@ -1298,6 +1362,7 @@ export function createWorkflowGuard(
   ): WorkflowReasonCode | undefined {
     if (context.workspaceIdentity !== currentWorkspaceIdentity)
       return 'workspace-mismatch'
+    if (context.operationTargetIdentity !== undefined) return undefined
     if (context.repositoryIdentity !== currentRepositoryIdentity)
       return 'receipt-mismatch'
     return context.worktreeIdentity !== currentWorktreeIdentity
@@ -1347,7 +1412,9 @@ export function createWorkflowGuard(
     if (input.after.workspaceIdentity !== input.context.workspaceIdentity) {
       return 'workspace-mismatch'
     }
-    return resourceAfterReason(input, unit)
+    return (
+      operationTargetReason(input, unit) ?? resourceAfterReason(input, unit)
+    )
   }
 
   function resourceAfterReason(
@@ -1811,6 +1878,14 @@ export function createWorkflowGuard(
     ) {
       return 'receipt-mismatch'
     }
+    if (
+      isLocalOperation(envelope.canonical.operation) &&
+      unit.pinnedOperationTargetIdentity !== undefined &&
+      envelope.canonical.operationTargetIdentity !==
+        unit.pinnedOperationTargetIdentity
+    ) {
+      return 'operation-target-mismatch'
+    }
     const historicalImplementation =
       envelope.canonical.operation === 'implementation' &&
       unit.evidence.get('implementation')?.canonical.receiptId ===
@@ -1974,7 +2049,8 @@ export function createWorkflowGuard(
 
   function issueKind(reasonCode: WorkflowReasonCode): Issue['kind'] {
     return reasonCode === 'incompatible-receipt' ||
-      reasonCode === 'guard-unavailable'
+      reasonCode === 'guard-unavailable' ||
+      reasonCode === 'operation-target-mismatch'
       ? 'unavailable'
       : 'rejected'
   }
@@ -2205,6 +2281,7 @@ export function createWorkflowGuard(
     workspaceIdentity: string
     repositoryIdentity?: string
     worktreeIdentity?: string
+    operationTargetIdentity?: string
     resourceIdentity?: string
   } {
     const storedContext = unit.ledgerContexts.get(envelope.canonical.receiptId)
@@ -2216,6 +2293,7 @@ export function createWorkflowGuard(
       workspaceIdentity: currentWorkspaceIdentity,
       repositoryIdentity: currentRepositoryIdentity,
       worktreeIdentity: currentWorktreeIdentity,
+      operationTargetIdentity: envelope.canonical.operationTargetIdentity,
       resourceIdentity: ledgerResourceIdentity(
         operation,
         currentResource(unit, operation),
@@ -2313,6 +2391,14 @@ export function createWorkflowGuard(
       return { status: 'accepted', operation }
     }
     unit.evidence.set(operation, read.envelope)
+    if (
+      isLocalOperation(operation) &&
+      unit.pinnedOperationTargetIdentity === undefined &&
+      read.envelope.canonical.operationTargetIdentity !== undefined
+    ) {
+      unit.pinnedOperationTargetIdentity =
+        read.envelope.canonical.operationTargetIdentity
+    }
     clearIssue(unit, operation)
     globalIssue = undefined
     return { status: 'accepted', operation }
@@ -2327,6 +2413,9 @@ export function createWorkflowGuard(
       workspaceIdentity: after.workspaceIdentity,
       repositoryIdentity: after.repositoryIdentity,
       worktreeIdentity: after.worktreeIdentity,
+      ...(isLocalOperation(operation)
+        ? { operationTargetIdentity: after.operationTargetIdentity }
+        : {}),
       resourceIdentity: after.resourceIdentity,
       resourceRevisionIdentity: after.resourceRevisionIdentity,
       pullRequest: after.pullRequest,
@@ -2780,6 +2869,7 @@ export function createWorkflowGuard(
         workspaceIdentity: parsed.after.workspaceIdentity,
         repositoryIdentity: parsed.after.repositoryIdentity,
         worktreeIdentity: parsed.after.worktreeIdentity,
+        operationTargetIdentity: parsed.after.operationTargetIdentity,
         resourceIdentity: parsed.after.resourceIdentity,
         resourceRevisionIdentity: parsed.after.resourceRevisionIdentity,
       }),
@@ -2812,6 +2902,12 @@ export function createWorkflowGuard(
     const global = readbacks.find((readback) => !readback.operation)
     if (!global?.repositoryIdentity || !global.worktreeIdentity) {
       return 'invalid-receipt'
+    }
+    if (
+      unit.pinnedOperationTargetIdentity !== undefined &&
+      global.operationTargetIdentity !== unit.pinnedOperationTargetIdentity
+    ) {
+      return 'operation-target-mismatch'
     }
     const required = RESOURCE_FINAL_READBACK_OPERATIONS.filter((operation) =>
       unit.evidence.has(operation),
@@ -3007,6 +3103,27 @@ export function createWorkflowGuard(
     return undefined
   }
 
+  function recoveryTargetPinReason(
+    unit: ReceiptUnitProgressionSnapshot | null,
+    matching: readonly ReceiptEnvelope[],
+  ): WorkflowReasonCode | undefined {
+    if (!unit) return undefined
+    const localTargets = matching
+      .filter((envelope) => isLocalOperation(envelope.canonical.operation))
+      .map((envelope) => envelope.canonical.operationTargetIdentity)
+    if (unit.pinnedOperationTargetIdentity !== undefined) {
+      return localTargets.some(
+        (target) => target !== unit.pinnedOperationTargetIdentity,
+      )
+        ? 'operation-target-mismatch'
+        : undefined
+    }
+    const distinctTargets = new Set(
+      localTargets.filter((target): target is string => target !== undefined),
+    )
+    return distinctTargets.size > 1 ? 'operation-target-mismatch' : undefined
+  }
+
   function resourceScopeMatches(
     operation: ReceiptOperation,
     persisted: string,
@@ -3063,6 +3180,7 @@ export function createWorkflowGuard(
       workspaceIdentity: currentWorkspaceIdentity,
       repositoryIdentity: currentRepositoryIdentity,
       worktreeIdentity: currentWorktreeIdentity,
+      operationTargetIdentity: envelope.canonical.operationTargetIdentity,
       resourceIdentity: resourceScopes.get(envelope.canonical.operation),
     }
   }
@@ -3217,6 +3335,12 @@ export function createWorkflowGuard(
       .find((reason): reason is WorkflowReasonCode => reason !== undefined)
     if (boundaryFailure)
       return { status: 'rejected', reasonCode: boundaryFailure }
+    const targetPinFailure = recoveryTargetPinReason(
+      state.progression.unit,
+      receiptSet.matching,
+    )
+    if (targetPinFailure)
+      return { status: 'rejected', reasonCode: targetPinFailure }
     const completionFailure = recoveryCompletionReason(
       state.progression,
       receiptSet.matching,
@@ -3233,6 +3357,11 @@ export function createWorkflowGuard(
   ): UnitState | undefined {
     const snapshot = progression.unit
     if (!snapshot) return undefined
+    const inferredOperationTargetIdentity =
+      snapshot.pinnedOperationTargetIdentity ??
+      matching.find((envelope) =>
+        isLocalOperation(envelope.canonical.operation),
+      )?.canonical.operationTargetIdentity
     const unit: UnitState = {
       unitId: snapshot.unitId,
       status: snapshot.state === 'completed' ? 'completed' : 'active',
@@ -3241,6 +3370,11 @@ export function createWorkflowGuard(
         snapshot.resourceScopes.map((scope) => scope.operation),
       ),
       resourceScopes: new Map(resourceScopes),
+      ...(inferredOperationTargetIdentity
+        ? {
+            pinnedOperationTargetIdentity: inferredOperationTargetIdentity,
+          }
+        : {}),
       evidence: new Map(),
       issues: new Map(),
       staleReceiptIds: new Set(),

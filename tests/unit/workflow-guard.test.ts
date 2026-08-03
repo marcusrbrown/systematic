@@ -7,6 +7,10 @@ import {
   type ReceiptOperation,
 } from '../../src/lib/receipt-ledger.js'
 import {
+  projectReceiptMintMarker,
+  projectReceiptProgressionMarker,
+} from '../../src/lib/receipt-readback.js'
+import {
   createWorkflowGuard,
   type WorkflowGuard,
   type WorkflowGuardOptions,
@@ -17,12 +21,18 @@ const SCOPE = {
   repositoryIdentity: 'repository-current',
   worktreeIdentity: 'worktree-current',
   resourceIdentity: 'resource-current',
+  operationTargetIdentity: 'a'.repeat(64),
 }
 
 const GUARD_SCOPE = {
   workspaceIdentity: SCOPE.workspaceIdentity,
   repositoryIdentity: SCOPE.repositoryIdentity,
   worktreeIdentity: SCOPE.worktreeIdentity,
+}
+
+const RECEIPT_AFTER_SCOPE = {
+  ...GUARD_SCOPE,
+  operationTargetIdentity: SCOPE.operationTargetIdentity,
 }
 
 let callSequence = 0
@@ -85,6 +95,7 @@ function receiptContext(
     workspaceIdentity: SCOPE.workspaceIdentity,
     repositoryIdentity: 'repository-before',
     worktreeIdentity: 'worktree-before',
+    operationTargetIdentity: SCOPE.operationTargetIdentity,
     ...(operation === 'push' || operation === 'pr-creation'
       ? { resourceIdentity: 'resource-before' }
       : {}),
@@ -95,7 +106,7 @@ function mintReceiptWithContext(
   ledger: ReturnType<typeof createReceiptLedger>,
   operation: ReceiptOperation,
   context: ReceiptContext,
-  after = GUARD_SCOPE,
+  after = RECEIPT_AFTER_SCOPE,
 ): ReceiptEnvelope {
   const callId = `host-call-${++callSequence}`
   expect(ledger.prepareObservation({ callId, operation, context }).status).toBe(
@@ -132,7 +143,9 @@ function mintReceipt(
   after = SCOPE,
 ): ReceiptEnvelope {
   const defaultAfter =
-    operation === 'push' || operation === 'pr-creation' ? SCOPE : GUARD_SCOPE
+    operation === 'push' || operation === 'pr-creation'
+      ? { ...RECEIPT_AFTER_SCOPE, resourceIdentity: SCOPE.resourceIdentity }
+      : RECEIPT_AFTER_SCOPE
   return mintReceiptWithContext(
     ledger,
     operation,
@@ -173,6 +186,99 @@ function guardWithReceipts(
 }
 
 describe('workflow guard', () => {
+  test('rejects a recovered unit operation that switches its pinned target', () => {
+    const ledger = createReceiptLedger({ registrationIdentity: 'durable-pin' })
+    const guard = createWorkflowGuard({ ledger, ...GUARD_SCOPE })
+    activateWork(guard)
+    const unit = startUnit(guard)
+    const implementation = mintReceiptWithContext(
+      ledger,
+      'implementation',
+      receiptContext(guard, 'implementation'),
+    )
+    expect(guard.observeReceipt(implementation)).toMatchObject({
+      status: 'accepted',
+    })
+    expect(guard.status().unit).toMatchObject({
+      pinnedOperationTargetIdentity: SCOPE.operationTargetIdentity,
+    })
+
+    const statusSnapshot = guard.status()
+    if (!statusSnapshot.epoch || !statusSnapshot.unit) {
+      throw new Error('workflow unit missing')
+    }
+    const transition = (identity: string) =>
+      ledger.digestIdentity('call', identity)
+    const epochMarker = projectReceiptProgressionMarker(ledger, {
+      target: 'epoch',
+      state: 'started',
+      epochId: statusSnapshot.epoch.epochId,
+      family: statusSnapshot.epoch.family,
+      transitionDigest: transition('epoch-start'),
+    })
+    const unitMarker = projectReceiptProgressionMarker(ledger, {
+      target: 'unit',
+      state: 'started',
+      epochId: statusSnapshot.epoch.epochId,
+      unitId: statusSnapshot.unit.unitId,
+      family: statusSnapshot.epoch.family,
+      requiredOperations: unit.requiredOperations,
+      resourceScopes: [],
+      pinnedOperationTargetIdentity: SCOPE.operationTargetIdentity,
+      transitionDigest: transition('unit-pin'),
+    })
+    const mintMarker = projectReceiptMintMarker(
+      implementation,
+      ledger.getSessionSalt(),
+    )
+    if (!epochMarker || !unitMarker || !mintMarker) {
+      throw new Error('recovery marker missing')
+    }
+
+    const recoveredLedger = createReceiptLedger({
+      registrationIdentity: 'durable-pin',
+      sessionSalt: ledger.getSessionSalt(),
+    })
+    const recovered = recoveredLedger.recoverReadback([
+      epochMarker,
+      unitMarker,
+      mintMarker,
+    ])
+    expect(recovered.status).toBe('recovered')
+    if (recovered.status !== 'recovered') throw new Error('recovery failed')
+
+    const recoveredGuard = createWorkflowGuard({
+      ledger: recoveredLedger,
+      ...GUARD_SCOPE,
+    })
+    expect(
+      recoveredGuard.restore({
+        provenance: 'restart',
+        state: {
+          registrationDigest: recoveredLedger.metadata.registrationDigest,
+          receipts: recovered.receipts,
+          progression: recovered.progression,
+        },
+      }),
+    ).toMatchObject({ status: 'restored' })
+
+    const foreignTarget = 'b'.repeat(64)
+    const foreignContext = {
+      ...receiptContext(recoveredGuard, 'verification'),
+      operationTargetIdentity: foreignTarget,
+    }
+    const foreignReceipt = mintReceiptWithContext(
+      recoveredLedger,
+      'verification',
+      foreignContext,
+      { ...GUARD_SCOPE, operationTargetIdentity: foreignTarget },
+    )
+    expect(recoveredGuard.observeReceipt(foreignReceipt)).toEqual({
+      status: 'unavailable',
+      reasonCode: 'operation-target-mismatch',
+    })
+  })
+
   test('exposes a frozen current operation context without mutable state', () => {
     const { guard } = createGuard()
 
@@ -188,8 +294,17 @@ describe('workflow guard', () => {
         workspaceIdentity: 'workspace-next',
         repositoryIdentity: 'repository-next',
         worktreeIdentity: 'worktree-next',
+        operationTargetIdentity: SCOPE.operationTargetIdentity,
       }),
     ).toMatchObject({ status: 'accepted' })
+    expect(
+      guard.observeReadback({
+        workspaceIdentity: 'workspace-next',
+        repositoryIdentity: 'repository-next',
+        worktreeIdentity: 'worktree-next',
+        operationTargetIdentity: 42,
+      }),
+    ).toEqual({ status: 'rejected', reasonCode: 'invalid-receipt' })
     expect(guard.currentOperationContext()).toEqual({
       workspaceIdentity: 'workspace-next',
       repositoryIdentity: 'repository-next',
@@ -554,6 +669,7 @@ describe('workflow guard', () => {
         epochId,
         unitId,
         ...GUARD_SCOPE,
+        operationTargetIdentity: SCOPE.operationTargetIdentity,
       }),
     ).toMatchObject({ status: 'consumed' })
     expect(guard.observeReceipt(implementation)).toMatchObject({
@@ -642,6 +758,7 @@ describe('workflow guard', () => {
       epochId,
       unitId,
       ...GUARD_SCOPE,
+      operationTargetIdentity: SCOPE.operationTargetIdentity,
     })
     expect(
       guard.finalizeTransition({ callId, transitionId: prepared.transitionId }),
@@ -739,6 +856,7 @@ describe('workflow guard', () => {
     first.ledger.consumeReceipt(firstReceipt.canonical.receiptId, {
       ...firstScope,
       ...GUARD_SCOPE,
+      operationTargetIdentity: SCOPE.operationTargetIdentity,
     })
 
     expect(
@@ -1312,6 +1430,7 @@ describe('workflow guard', () => {
     consumed.ledger.consumeReceipt(implementation.canonical.receiptId, {
       ...consumedScope,
       ...GUARD_SCOPE,
+      operationTargetIdentity: SCOPE.operationTargetIdentity,
     })
     expect(consumed.guard.status()).toMatchObject({
       state: 'rejected',
