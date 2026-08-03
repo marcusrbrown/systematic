@@ -836,7 +836,17 @@ function deriveApplyPatchTarget(
       args.workdir === undefined,
     ),
   )
-  const targetRoot = sharedTargetRoot(targets, [workdir.target.targetRoot])
+  // When workdir is absent and the patch names files, those targets alone
+  // determine the shared root (consistent with deriveFileOperationTarget).
+  // Seeding the parent root here would reject absolute paths into a registered
+  // worktree (#743). An explicit workdir — or a patch with no file targets —
+  // still contributes the workdir root, preserving the spanning guard and the
+  // parent fallback for fileless patches.
+  const seedWorkdirRoot = args.workdir !== undefined || targets.length === 0
+  const targetRoot = sharedTargetRoot(
+    targets,
+    seedWorkdirRoot ? [workdir.target.targetRoot] : [],
+  )
   return targetRoot
     ? { status: 'available', targetRoot }
     : unavailableOperationTarget()
