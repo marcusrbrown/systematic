@@ -294,8 +294,17 @@ describe('workflow guard', () => {
         workspaceIdentity: 'workspace-next',
         repositoryIdentity: 'repository-next',
         worktreeIdentity: 'worktree-next',
+        operationTargetIdentity: SCOPE.operationTargetIdentity,
       }),
     ).toMatchObject({ status: 'accepted' })
+    expect(
+      guard.observeReadback({
+        workspaceIdentity: 'workspace-next',
+        repositoryIdentity: 'repository-next',
+        worktreeIdentity: 'worktree-next',
+        operationTargetIdentity: 42,
+      }),
+    ).toEqual({ status: 'rejected', reasonCode: 'invalid-receipt' })
     expect(guard.currentOperationContext()).toEqual({
       workspaceIdentity: 'workspace-next',
       repositoryIdentity: 'repository-next',

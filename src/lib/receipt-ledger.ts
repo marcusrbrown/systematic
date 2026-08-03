@@ -758,7 +758,9 @@ function parseContext(value: unknown): ReceiptContext | undefined {
   const operationTargetIdentity =
     value.operationTargetIdentity === undefined
       ? undefined
-      : (value.operationTargetIdentity as string)
+      : isDigest(value.operationTargetIdentity)
+        ? value.operationTargetIdentity
+        : undefined
   const resourceIdentity =
     value.resourceIdentity === undefined
       ? undefined

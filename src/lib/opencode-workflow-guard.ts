@@ -123,6 +123,7 @@ const REASON_CODES = new Set([
   'no-active-unit',
   'no-op-operation',
   'operation-not-required',
+  'operation-target-mismatch',
   'receipt-mismatch',
   'rejected-operation',
   'resource-mismatch',

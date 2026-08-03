@@ -126,6 +126,23 @@ describe('receipt ledger', () => {
     )
   })
 
+  test('rejects a non-digest operation target identity in an observation context', () => {
+    const ledger = createReceiptLedger({
+      registrationIdentity: 'registration-invalid-target',
+    })
+
+    expect(
+      ledger.prepareObservation({
+        callId: 'invalid-target',
+        operation: 'implementation',
+        context: {
+          ...context(),
+          operationTargetIdentity: 'not-a-digest',
+        },
+      }),
+    ).toEqual({ status: 'rejected', reasonCode: 'invalid-observation' })
+  })
+
   test('rejects a v2 local receipt when the operation target identity is omitted', () => {
     const ledger = createReceiptLedger({
       registrationIdentity: 'registration-missing-target',

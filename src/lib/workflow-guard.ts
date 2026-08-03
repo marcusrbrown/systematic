@@ -829,6 +829,7 @@ function parseReadback(input: unknown): ParsedReadback | undefined {
     workspaceIdentity: input.workspaceIdentity,
     repositoryIdentity: input.repositoryIdentity,
     worktreeIdentity: input.worktreeIdentity,
+    operationTargetIdentity: input.operationTargetIdentity,
     resourceIdentity: input.resourceIdentity,
     resourceRevisionIdentity: input.resourceRevisionIdentity,
     pullRequest: input.pullRequest,
@@ -860,6 +861,9 @@ function parseLegacyReadbackAfter(
     input.repositoryIdentity,
   )
   const worktreeIdentity = parseOptionalReadbackIdentity(input.worktreeIdentity)
+  const operationTargetIdentity = parseOptionalReadbackIdentity(
+    input.operationTargetIdentity,
+  )
   const resourceIdentity = parseOptionalReadbackIdentity(input.resourceIdentity)
   const resourceRevisionIdentity = parseOptionalReadbackIdentity(
     input.resourceRevisionIdentity,
@@ -867,6 +871,10 @@ function parseLegacyReadbackAfter(
   if (
     !isOptionalReadbackIdentity(input.repositoryIdentity, repositoryIdentity) ||
     !isOptionalReadbackIdentity(input.worktreeIdentity, worktreeIdentity) ||
+    !isOptionalReadbackIdentity(
+      input.operationTargetIdentity,
+      operationTargetIdentity,
+    ) ||
     !isOptionalReadbackIdentity(input.resourceIdentity, resourceIdentity) ||
     !isOptionalReadbackIdentity(
       input.resourceRevisionIdentity,
@@ -883,6 +891,7 @@ function parseLegacyReadbackAfter(
     workspaceIdentity: input.workspaceIdentity,
     ...(repositoryIdentity ? { repositoryIdentity } : {}),
     ...(worktreeIdentity ? { worktreeIdentity } : {}),
+    ...(operationTargetIdentity ? { operationTargetIdentity } : {}),
     ...(resourceIdentity ? { resourceIdentity } : {}),
     ...(resourceRevisionIdentity ? { resourceRevisionIdentity } : {}),
     ...(pullRequest ? { pullRequest } : {}),

@@ -2168,6 +2168,42 @@ describe('OpenCode workflow guard adapter', () => {
     expect(secondPass).toContain('unavailable')
   })
 
+  test('round-trips operation-target-mismatch in prior guard marker sources', async () => {
+    const adapter = createAdapter('protected')
+    const priorSource = {
+      source: 'prior-registration',
+      state: 'rejected',
+      reasonCode: 'operation-target-mismatch',
+      enforcement: 'protected',
+      statusDigest: 'prior-status',
+    }
+    const output = {
+      system: [
+        `<SYSTEMATIC_WORKFLOW_GUARD>${JSON.stringify({
+          protocolVersion: 2,
+          sources: [priorSource],
+          aggregate: priorSource,
+        })}</SYSTEMATIC_WORKFLOW_GUARD>`,
+      ],
+    }
+
+    await adapter.hooks['experimental.chat.system.transform'](
+      { sessionID: SESSION_A },
+      output,
+    )
+
+    const body = output.system
+      .join('\n')
+      .match(
+        /<SYSTEMATIC_WORKFLOW_GUARD>(.*?)<\/SYSTEMATIC_WORKFLOW_GUARD>/s,
+      )?.[1]
+    if (!body) throw new Error('guard marker missing')
+    const document = JSON.parse(body) as {
+      sources: Array<{ source: string; reasonCode: string }>
+    }
+    expect(document.sources).toContainEqual(priorSource)
+  })
+
   test('malformed prior guard marker fails closed and internal title transforms stay untouched', async () => {
     const adapter = createAdapter('protected')
     const malformed = {
