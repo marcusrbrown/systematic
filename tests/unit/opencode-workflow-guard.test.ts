@@ -2498,6 +2498,72 @@ describe('OpenCode workflow guard adapter', () => {
     }
   })
 
+  test('canonicalizes relative-before and absolute-after apply_patch hunks into one implementation receipt', async () => {
+    const cleanup = prepareApplyPatchTargetDirectory()
+    try {
+      const absolutePath = path.resolve(process.cwd(), 'sub/x.ts')
+      const absoluteMovePath = path.resolve(process.cwd(), 'sub/y.ts')
+      const adapter = createAdapter(
+        'observe',
+        false,
+        sequenceObserver([
+          operationSnapshot(),
+          operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+        ]),
+      )
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+
+      await observeOperationToolWithArgs(
+        adapter,
+        { hunks: [{ path: 'sub/x.ts', move_path: 'sub/y.ts' }] },
+        {
+          hunks: [{ path: absolutePath, move_path: absoluteMovePath }],
+        },
+        { title: 'apply_patch complete', output: 'local result', metadata: {} },
+        'apply-patch-canonical-hunks',
+      )
+
+      expect(ledger(adapter).listReceipts()).toHaveLength(1)
+      expect(ledger(adapter).listReceipts()[0]?.canonical.operation).toBe(
+        'implementation',
+      )
+      expect(status(adapter).state).not.toBe('unavailable')
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('fails closed without throwing for an apply_patch empty file-target path', async () => {
+    const malformedPatch = [
+      '*** Begin Patch',
+      '*** Add File: ',
+      '+content',
+      '*** End Patch',
+    ].join('\n')
+    const adapter = createAdapter(
+      'observe',
+      false,
+      sequenceObserver([
+        operationSnapshot(),
+        operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+      ]),
+    )
+    await observeSkill(adapter, 'systematic_skill', 'ce:work')
+
+    await expect(
+      observeOperationToolWithArgs(
+        adapter,
+        { patchText: malformedPatch },
+        { patchText: malformedPatch },
+        { title: 'apply_patch complete', output: 'local result', metadata: {} },
+        'apply-patch-empty-file-target',
+      ),
+    ).resolves.toBeUndefined()
+
+    expect(ledger(adapter).listReceipts()).toHaveLength(0)
+    expect(status(adapter).state).toBe('unavailable')
+  })
+
   test('keeps apply_patch fingerprints different when the patch body changes', async () => {
     const cleanup = prepareApplyPatchTargetDirectory()
     try {
