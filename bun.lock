@@ -14,8 +14,8 @@
       "devDependencies": {
         "@biomejs/biome": "2.5.6",
         "@earendil-works/pi-coding-agent": "0.83.0",
-        "@opencode-ai/plugin": "1.18.10",
-        "@opencode-ai/sdk": "1.18.10",
+        "@opencode-ai/plugin": "1.18.11",
+        "@opencode-ai/sdk": "1.18.11",
         "@semantic-release/exec": "7.1.0",
         "@tintinweb/pi-subagents": "0.14.3",
         "@types/bun": "latest",
@@ -431,9 +431,9 @@
 
     "@octokit/types": ["@octokit/types@16.0.0", "", { "dependencies": { "@octokit/openapi-types": "^27.0.0" } }, "sha512-sKq+9r1Mm4efXW1FCk7hFSeJo4QKreL/tTbR0rz/qx/r1Oa2VV83LTA/H/MuCOX7uCIJmQVRKBcbmWoySjAnSg=="],
 
-    "@opencode-ai/plugin": ["@opencode-ai/plugin@1.18.10", "", { "dependencies": { "@ai-sdk/provider": "3.0.8", "@opencode-ai/sdk": "1.18.10", "effect": "4.0.0-beta.83", "zod": "4.1.8" }, "peerDependencies": { "@opentui/core": ">=0.4.5", "@opentui/keymap": ">=0.4.5", "@opentui/solid": ">=0.4.5" }, "optionalPeers": ["@opentui/core", "@opentui/keymap", "@opentui/solid"] }, "sha512-l4R1ulu5wtA0+cCinzdSPkEO8ZCdIgb/ZjltzstIWQqRqeH3H880OabNaeje/ZCkSoAT8c/o9oT3tdjyFP7o7g=="],
+    "@opencode-ai/plugin": ["@opencode-ai/plugin@1.18.11", "", { "dependencies": { "@ai-sdk/provider": "3.0.8", "@opencode-ai/sdk": "1.18.11", "effect": "4.0.0-beta.83", "zod": "4.1.8" }, "peerDependencies": { "@opentui/core": ">=0.4.5", "@opentui/keymap": ">=0.4.5", "@opentui/solid": ">=0.4.5" }, "optionalPeers": ["@opentui/core", "@opentui/keymap", "@opentui/solid"] }, "sha512-mgn7+YO2J5tM2sWtV8pPBz6Lz6vWZswBOjUWssLvGaxKPuHR60sZ3Py4/tjI9RNl74aB4lhI0NUlanuWZS8NfA=="],
 
-    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.18.10", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-K+glWbBp5pfGepZ/6EHvuXY3IpVG2qgsEqF4z9mOiUQUrs6KWN72Vdp15Qsl2TCDbemgHWXKQKgbX3b8PSK2hg=="],
+    "@opencode-ai/sdk": ["@opencode-ai/sdk@1.18.11", "", { "dependencies": { "cross-spawn": "7.0.6" } }, "sha512-yDImmNv4PhxdMgtiHVNWQWEVwQlAm7Dr0y4XU7CT4dOIbzgO+VP+9I02lAP7Zva1FhGeyI7oKMI2tzB9RUsWaQ=="],
 
     "@opentelemetry/api": ["@opentelemetry/api@1.9.0", "", {}, "sha512-3giAOQvZiH5F9bMlMiv8+GSPMeqg0dbaeo58/0SlA9sxSqZhnUtxzX9/2FzyhS9sWQf5S0GJE0AKBrFqjpeYcg=="],
 
