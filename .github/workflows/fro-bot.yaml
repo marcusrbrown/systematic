@@ -107,13 +107,16 @@ env:
 
     Summarize the report, separate confirmed evidence from claims, identify
     missing reproduction details, name likely repository paths only when
-    evidence supports them, and propose the smallest useful next step. Write the
-    result as one concise issue comment optimized for any LLM agent to continue
-    cold: include evidence, exact paths when known, constraints or do-not-retry
-    warnings, and a concrete verification method.
+    evidence supports them, and propose the smallest useful next step. Maintain
+    one bot-authored triage comment containing `<!-- fro-bot-triage -->`, optimized
+    for any LLM agent to continue cold: include evidence, exact paths when known,
+    constraints or do-not-retry warnings, and a concrete verification method.
+    On issue edits, update that comment only when findings materially change;
+    otherwise leave it unchanged and do not add another comment.
 
     Do NOT modify code, create branches or PRs, change issue metadata, apply
-    labels, assign users, close/reopen issues, or post more than one comment.
+    labels, assign users, close/reopen issues, or maintain more than the one
+    marked triage comment.
 
   AUTOHEAL_PROMPT: |
     You are Fro Bot operating on marcusrbrown/systematic, a TypeScript OpenCode
@@ -301,8 +304,7 @@ env:
        Survey these focus repos for adoptable patterns. Observation only —
        NEVER modify other repositories. NEVER write to other repositories,
        comment on, or open artifacts there, and NEVER clone or check them out.
-       All findings go in THIS
-       repo's perpetual autoheal issue only.
+       All findings go in THIS repo's perpetual autoheal issue only.
 
        Focus repos (drop ones that consistently have nothing actionable, add
        new ones over time):
@@ -361,9 +363,11 @@ env:
     Manage a SINGLE perpetual issue titled "Daily Autohealing Report".
 
     Finding the canonical issue:
-    1. Prefer an open issue titled exactly "Daily Autohealing Report".
-    2. If the canonical exact-title issue exists but is closed, reopen it.
-    3. If it does not exist, create it with that exact title.
+    1. Prefer bot-authored open issues titled exactly "Daily Autohealing Report".
+       If multiple exist, keep the most recently updated one as canonical.
+    2. Otherwise, reopen the most recently updated bot-authored issue with that
+       exact title.
+    3. Otherwise, create a new issue with that exact title.
     4. Keep the canonical issue open and use it for every report update.
 
     Migration and duplicate cleanup are deterministic. Close every other OPEN
