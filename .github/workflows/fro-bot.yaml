@@ -61,11 +61,12 @@ permissions:
 concurrency:
   group: >-
     fro-bot-${{
-      github.event.issue.number ||
-      github.event.pull_request.number ||
-      github.event.discussion.number ||
-      (github.event_name == 'schedule' && github.event.schedule) ||
-      github.run_id
+      (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+      && 'scheduled-agent'
+      || github.event.issue.number
+      || github.event.pull_request.number
+      || github.event.discussion.number
+      || github.run_id
     }}
   cancel-in-progress: false
 
@@ -155,6 +156,14 @@ env:
     broad refactor, architecture change, or many-file edit), do not
     auto-heal it. Open or update an issue and log it under "Needs Human
     Attention".
+
+    WRITE-SAFETY RULE
+    Never test write permissions by modifying a live issue, pull request,
+    comment, branch, or report body. Never write canary, placeholder, or
+    intermediate content to a real GitHub artifact. Prepare and validate the
+    complete intended mutation locally, then perform the single intended write.
+    If that write fails, report the capability as unavailable; do not probe by
+    overwriting another artifact.
 
     DEPENDENCY OWNERSHIP
     Renovate owns routine dependency/version bumps. You may change dependency
@@ -393,6 +402,10 @@ env:
     section has no rows, write "None." directly under its heading. When the
     body approaches 50,000 characters, archive older updates while retaining
     the 30 most recent dated sections and a historical summary/recurrence note.
+    Build the complete final body in a local temporary file, verify its heading,
+    byte count, dated-section retention, and historical content, then update the
+    canonical issue exactly once with `gh issue edit --body-file`. Never use the
+    canonical issue as a permission probe or write intermediate content to it.
 
     Use this report structure in exactly this order:
     ## Update — YYYY-MM-DD (UTC)

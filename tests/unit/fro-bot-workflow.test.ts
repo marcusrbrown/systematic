@@ -188,6 +188,17 @@ describe('Fro Bot workflow contracts', () => {
     expect(checkoutWith['persist-credentials']).toBe(false)
   })
 
+  test('serializes schedule and dispatch agent runs without cancelling them', () => {
+    const { workflow } = readWorkflow()
+    const concurrency = asRecord(workflow.concurrency, 'concurrency')
+    const group = asString(concurrency.group, 'concurrency.group')
+
+    expect(group).toContain("github.event_name == 'schedule'")
+    expect(group).toContain("github.event_name == 'workflow_dispatch'")
+    expect(group).toContain("&& 'scheduled-agent'")
+    expect(concurrency['cancel-in-progress']).toBe(false)
+  })
+
   test('pins every third-party action to a SHA with a version comment', () => {
     const { source } = readWorkflow()
     const usesLines = source
@@ -249,6 +260,10 @@ describe('Fro Bot workflow contracts', () => {
       'close',
       'weekly maintenance report',
       'migration',
+      'never test write permissions by modifying a live issue',
+      'never write canary, placeholder, or intermediate content',
+      'prepare and validate the complete intended mutation locally',
+      'update the canonical issue exactly once with `gh issue edit --body-file`',
       'cold-start',
       'exact paths:',
       'root cause:',
