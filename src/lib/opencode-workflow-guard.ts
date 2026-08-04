@@ -977,11 +977,80 @@ function stableSerialize(
   return serializeStableRecord(value, depth, budget)
 }
 
+function canonicalPatchText(
+  patchText: string,
+  sessionLocation: string,
+): string | undefined {
+  if (patchTextFileTargets(patchText) === undefined) return undefined
+  const segments = patchText.split(/(\r?\n)/)
+  for (let index = 0; index < segments.length; index += 1) {
+    const line = segments[index]
+    if (line === '\n' || line === '\r\n') continue
+    const prefix = PATCH_FILE_PREFIXES.find((candidate) =>
+      line.startsWith(candidate),
+    )
+    if (!prefix) continue
+    const filePath = line.slice(prefix.length).trim()
+    if (!filePath) return undefined
+    segments[index] = `${prefix}${path.resolve(sessionLocation, filePath)}`
+  }
+  return segments.join('')
+}
+
+function canonicalHunks(
+  value: unknown,
+  sessionLocation: string,
+): readonly Record<string, unknown>[] | undefined {
+  if (!Array.isArray(value)) return undefined
+  const hunks: Record<string, unknown>[] = []
+  for (const hunk of value) {
+    if (!isRecord(hunk) || typeof hunk.path !== 'string' || !hunk.path) {
+      return undefined
+    }
+    const canonical: Record<string, unknown> = {
+      ...hunk,
+      path: path.resolve(sessionLocation, hunk.path),
+    }
+    if (hunk.move_path !== undefined) {
+      if (typeof hunk.move_path !== 'string' || !hunk.move_path) {
+        return undefined
+      }
+      canonical.move_path = path.resolve(sessionLocation, hunk.move_path)
+    }
+    hunks.push(canonical)
+  }
+  return hunks
+}
+
+function canonicalOperationArgs(
+  tool: LocalOperationTool,
+  args: unknown,
+  sessionLocation: string,
+): unknown {
+  if (tool !== 'apply_patch' || !isRecord(args)) return args
+  const patchPaths = patchFileTargets(args)
+  if (patchPaths === undefined) return args
+  const patchValue = args.patchText ?? args.patch
+  if (typeof patchValue === 'string') {
+    const canonical = canonicalPatchText(patchValue, sessionLocation)
+    if (canonical === undefined) return args
+    const patchKey = typeof args.patchText === 'string' ? 'patchText' : 'patch'
+    return { ...args, [patchKey]: canonical }
+  }
+  if (patchPaths.length === 0) return args
+  const hunks = canonicalHunks(args.hunks, sessionLocation)
+  return hunks === undefined ? args : { ...args, hunks }
+}
+
 function argsFingerprint(
   ledger: ReturnType<typeof createReceiptLedger>,
+  tool: LocalOperationTool,
   args: unknown,
+  sessionLocation: string,
 ): string | undefined {
-  const serialized = stableSerialize(args)
+  const serialized = stableSerialize(
+    canonicalOperationArgs(tool, args, sessionLocation),
+  )
   return serialized === undefined
     ? undefined
     : ledger.digestIdentity('call', serialized)
@@ -1360,6 +1429,17 @@ function createSessionRuntime(
   const pendingQuestionChallenges = new Map<string, PendingQuestionChallenge>()
   const blockedQuestionCalls = new Map<string, string>()
   const consumedQuestionTargets = new Set<TransitionTarget>()
+
+  function effectiveTargetContext(): {
+    parentTargetRoot: string
+    sessionLocation: string
+  } {
+    const parentTargetRoot = options.targetDirectory ?? process.cwd()
+    return {
+      parentTargetRoot,
+      sessionLocation: options.sessionLocation ?? parentTargetRoot,
+    }
+  }
 
   function rememberOperationObserver(
     registration: OperationObserverRegistration,
@@ -2597,7 +2677,13 @@ function createSessionRuntime(
     args: unknown,
   ): Promise<void> {
     if (!options.observer || !isLocalOperationTool(host.tool)) return
-    const fingerprint = argsFingerprint(ledger, args)
+    const { parentTargetRoot, sessionLocation } = effectiveTargetContext()
+    const fingerprint = argsFingerprint(
+      ledger,
+      host.tool,
+      args,
+      sessionLocation,
+    )
     if (!fingerprint) {
       markUnavailable()
       return
@@ -2608,8 +2694,6 @@ function createSessionRuntime(
     ) {
       return
     }
-    const parentTargetRoot = options.targetDirectory ?? process.cwd()
-    const sessionLocation = options.sessionLocation ?? parentTargetRoot
     const target = deriveOpencodeOperationTarget(host.tool, args, {
       parentTargetRoot,
       sessionLocation,
@@ -3627,7 +3711,13 @@ function createSessionRuntime(
   ): Promise<void> {
     if (!options.observer || !isLocalOperationTool(host.tool)) return
     const callDigest = digestCall(ledger, host.callID)
-    const fingerprint = argsFingerprint(ledger, host.args)
+    const { sessionLocation } = effectiveTargetContext()
+    const fingerprint = argsFingerprint(
+      ledger,
+      host.tool,
+      host.args,
+      sessionLocation,
+    )
     if (isSealedOperationReplay(callDigest, host, fingerprint)) return
     const pending = takePendingOperation(callDigest, host, fingerprint)
     if (!pending) return
@@ -3641,19 +3731,17 @@ function createSessionRuntime(
       markUnavailable()
       return
     }
-    if (result.status === 'accepted') {
-      const receipt = receiptForOperation(host.callID, result.operation)
-      if (receipt) {
-        if (localOperation(result.operation)) {
-          recoveredOperationContexts.set(receipt.canonical.receiptId, {
-            targetIdentity: pending.targetIdentity,
-            before: pending.before,
-            after: result.after,
-          })
-        }
-        mergeReceiptMarker(output, receipt)
-      }
+    if (result.status !== 'accepted') return
+    const receipt = receiptForOperation(host.callID, result.operation)
+    if (!receipt) return
+    if (localOperation(result.operation)) {
+      recoveredOperationContexts.set(receipt.canonical.receiptId, {
+        targetIdentity: pending.targetIdentity,
+        before: pending.before,
+        after: result.after,
+      })
     }
+    mergeReceiptMarker(output, receipt)
   }
 
   async function after(input: unknown, output: unknown): Promise<void> {

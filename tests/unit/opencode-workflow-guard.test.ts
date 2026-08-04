@@ -281,6 +281,33 @@ async function observeOperationTool(
   )
 }
 
+async function observeOperationToolWithArgs(
+  adapter: OpencodeWorkflowGuard,
+  beforeArgs: Record<string, unknown>,
+  afterArgs: Record<string, unknown>,
+  output: Record<string, unknown>,
+  callID = 'apply_patch-operation',
+  sessionID = SESSION_A,
+): Promise<void> {
+  await adapter.hooks['tool.execute.before'](
+    { tool: 'apply_patch', sessionID, callID },
+    { args: beforeArgs },
+  )
+  await adapter.hooks['tool.execute.after'](
+    { tool: 'apply_patch', sessionID, callID, args: afterArgs },
+    output,
+  )
+}
+
+function prepareApplyPatchTargetDirectory(): () => void {
+  const targetDirectory = path.resolve(process.cwd(), 'sub')
+  const existed = fs.existsSync(targetDirectory)
+  fs.mkdirSync(targetDirectory, { recursive: true })
+  return () => {
+    if (!existed) fs.rmSync(targetDirectory, { recursive: true, force: true })
+  }
+}
+
 async function observeSkill(
   adapter: OpencodeWorkflowGuard,
   tool: 'systematic_skill' | 'skill',
@@ -2424,6 +2451,261 @@ describe('OpenCode workflow guard adapter', () => {
       ])
     })
   }
+
+  test('canonicalizes relative-before and absolute-after apply_patch paths into one implementation receipt', async () => {
+    const cleanup = prepareApplyPatchTargetDirectory()
+    try {
+      const absolutePath = path.resolve(process.cwd(), 'sub/x.ts')
+      const adapter = createAdapter(
+        'observe',
+        false,
+        sequenceObserver([
+          operationSnapshot(),
+          operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+        ]),
+      )
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+
+      await observeOperationToolWithArgs(
+        adapter,
+        {
+          patchText: [
+            '*** Begin Patch',
+            '*** Add File: sub/x.ts',
+            '+content',
+            '*** End Patch',
+          ].join('\n'),
+        },
+        {
+          patchText: [
+            '*** Begin Patch',
+            `*** Add File: ${absolutePath}`,
+            '+content',
+            '*** End Patch',
+          ].join('\n'),
+        },
+        { title: 'apply_patch complete', output: 'local result', metadata: {} },
+        'apply-patch-canonical-path',
+      )
+
+      expect(ledger(adapter).listReceipts()).toHaveLength(1)
+      expect(ledger(adapter).listReceipts()[0]?.canonical.operation).toBe(
+        'implementation',
+      )
+      expect(status(adapter).state).not.toBe('unavailable')
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('canonicalizes relative-before and absolute-after apply_patch hunks into one implementation receipt', async () => {
+    const cleanup = prepareApplyPatchTargetDirectory()
+    try {
+      const absolutePath = path.resolve(process.cwd(), 'sub/x.ts')
+      const absoluteMovePath = path.resolve(process.cwd(), 'sub/y.ts')
+      const adapter = createAdapter(
+        'observe',
+        false,
+        sequenceObserver([
+          operationSnapshot(),
+          operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+        ]),
+      )
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+
+      await observeOperationToolWithArgs(
+        adapter,
+        { hunks: [{ path: 'sub/x.ts', move_path: 'sub/y.ts' }] },
+        {
+          hunks: [{ path: absolutePath, move_path: absoluteMovePath }],
+        },
+        { title: 'apply_patch complete', output: 'local result', metadata: {} },
+        'apply-patch-canonical-hunks',
+      )
+
+      expect(ledger(adapter).listReceipts()).toHaveLength(1)
+      expect(ledger(adapter).listReceipts()[0]?.canonical.operation).toBe(
+        'implementation',
+      )
+      expect(status(adapter).state).not.toBe('unavailable')
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('fails closed without throwing for an apply_patch empty file-target path', async () => {
+    const malformedPatch = [
+      '*** Begin Patch',
+      '*** Add File: ',
+      '+content',
+      '*** End Patch',
+    ].join('\n')
+    const adapter = createAdapter(
+      'observe',
+      false,
+      sequenceObserver([
+        operationSnapshot(),
+        operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+      ]),
+    )
+    await observeSkill(adapter, 'systematic_skill', 'ce:work')
+
+    await expect(
+      observeOperationToolWithArgs(
+        adapter,
+        { patchText: malformedPatch },
+        { patchText: malformedPatch },
+        { title: 'apply_patch complete', output: 'local result', metadata: {} },
+        'apply-patch-empty-file-target',
+      ),
+    ).resolves.toBeUndefined()
+
+    expect(ledger(adapter).listReceipts()).toHaveLength(0)
+    expect(status(adapter).state).toBe('unavailable')
+  })
+
+  test('keeps apply_patch fingerprints different when the patch body changes', async () => {
+    const cleanup = prepareApplyPatchTargetDirectory()
+    try {
+      const adapter = createAdapter(
+        'observe',
+        false,
+        sequenceObserver([
+          operationSnapshot(),
+          operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+        ]),
+      )
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+
+      await observeOperationToolWithArgs(
+        adapter,
+        {
+          patchText: [
+            '*** Begin Patch',
+            '*** Add File: sub/x.ts',
+            '+before',
+            '*** End Patch',
+          ].join('\n'),
+        },
+        {
+          patchText: [
+            '*** Begin Patch',
+            '*** Add File: sub/x.ts',
+            '+after',
+            '*** End Patch',
+          ].join('\n'),
+        },
+        { title: 'apply_patch complete', output: 'local result', metadata: {} },
+        'apply-patch-changed-body',
+      )
+
+      expect(ledger(adapter).listReceipts()).toHaveLength(0)
+      expect(status(adapter).state).toBe('unavailable')
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('keeps apply_patch fingerprints different when the target file changes', async () => {
+    const cleanup = prepareApplyPatchTargetDirectory()
+    try {
+      const adapter = createAdapter(
+        'observe',
+        false,
+        sequenceObserver([
+          operationSnapshot(),
+          operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+        ]),
+      )
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+
+      await observeOperationToolWithArgs(
+        adapter,
+        {
+          patchText: [
+            '*** Begin Patch',
+            '*** Add File: sub/x.ts',
+            '+content',
+            '*** End Patch',
+          ].join('\n'),
+        },
+        {
+          patchText: [
+            '*** Begin Patch',
+            '*** Add File: sub/y.ts',
+            '+content',
+            '*** End Patch',
+          ].join('\n'),
+        },
+        { title: 'apply_patch complete', output: 'local result', metadata: {} },
+        'apply-patch-changed-file',
+      )
+
+      expect(ledger(adapter).listReceipts()).toHaveLength(0)
+      expect(status(adapter).state).toBe('unavailable')
+    } finally {
+      cleanup()
+    }
+  })
+
+  test('treats an equivalent duplicate apply_patch after event as a replay', async () => {
+    const cleanup = prepareApplyPatchTargetDirectory()
+    try {
+      const absolutePath = path.resolve(process.cwd(), 'sub/x.ts')
+      const adapter = createAdapter(
+        'observe',
+        false,
+        sequenceObserver([
+          operationSnapshot(),
+          operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+        ]),
+      )
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+
+      await observeOperationToolWithArgs(
+        adapter,
+        {
+          patchText: [
+            '*** Begin Patch',
+            '*** Add File: sub/x.ts',
+            '+content',
+            '*** End Patch',
+          ].join('\n'),
+        },
+        {
+          patchText: [
+            '*** Begin Patch',
+            `*** Add File: ${absolutePath}`,
+            '+content',
+            '*** End Patch',
+          ].join('\n'),
+        },
+        { title: 'apply_patch complete', output: 'local result', metadata: {} },
+        'apply-patch-replay',
+      )
+      await adapter.hooks['tool.execute.after'](
+        {
+          tool: 'apply_patch',
+          sessionID: SESSION_A,
+          callID: 'apply-patch-replay',
+          args: {
+            patchText: [
+              '*** Begin Patch',
+              '*** Add File: sub/x.ts',
+              '+content',
+              '*** End Patch',
+            ].join('\n'),
+          },
+        },
+        { title: 'apply_patch replay', output: 'local result', metadata: {} },
+      )
+
+      expect(ledger(adapter).listReceipts()).toHaveLength(1)
+      expect(status(adapter).state).not.toBe('unavailable')
+    } finally {
+      cleanup()
+    }
+  })
 
   test('mints an implementation receipt for a write targeted at a registered worktree', async () => {
     const fixture = createTargetDerivationFixture()
