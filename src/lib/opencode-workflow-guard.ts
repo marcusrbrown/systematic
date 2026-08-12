@@ -55,6 +55,10 @@ import {
 const MARKER_OPEN = '<SYSTEMATIC_WORKFLOW_GUARD>'
 const MARKER_CLOSE = '</SYSTEMATIC_WORKFLOW_GUARD>'
 const MARKER_PROTOCOL_VERSION = 2
+// v1 markers are structurally identical to v2 (the v2 bump was coordinated
+// with the receipt-envelope schema bump; MarkerSource itself gained no new
+// fields), so a persisted v1 marker recovers cleanly under v2 parsing.
+const LEGACY_MARKER_PROTOCOL_VERSION = 1
 const MAX_MARKER_LENGTH = 4096
 const MAX_MARKER_SOURCES = 8
 const MAX_CALL_ID_LENGTH = 256
@@ -1271,7 +1275,12 @@ function parseMarkerBody(body: string): MarkerSource[] | undefined {
   if (body.length > MAX_MARKER_LENGTH) return undefined
   try {
     const parsed = JSON.parse(body) as Record<string, unknown>
-    if (parsed.protocolVersion !== MARKER_PROTOCOL_VERSION) return undefined
+    if (
+      parsed.protocolVersion !== MARKER_PROTOCOL_VERSION &&
+      parsed.protocolVersion !== LEGACY_MARKER_PROTOCOL_VERSION
+    ) {
+      return undefined
+    }
     if (
       !Array.isArray(parsed.sources) ||
       parsed.sources.length > MAX_MARKER_SOURCES
