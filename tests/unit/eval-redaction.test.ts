@@ -531,6 +531,21 @@ describe('local OpenCode eval redaction and serialization', () => {
     }
   })
 
+  test('treats skill-loading as safe while still rejecting realistic sk token shapes', () => {
+    expect(() =>
+      assertSerializedTextSafe(JSON.stringify({ note: 'skill-loading' })),
+    ).not.toThrow()
+
+    for (const seededValue of [
+      'sk-fake-provider-key-123',
+      'sk_fake_provider_key_123',
+    ]) {
+      expect(() =>
+        assertSerializedTextSafe(JSON.stringify({ note: seededValue })),
+      ).toThrow()
+    }
+  })
+
   test('rejects banned raw fields anywhere in nested candidates', () => {
     for (const field of [
       ...BANNED_FIELD_NAMES,

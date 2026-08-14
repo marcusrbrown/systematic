@@ -45,6 +45,20 @@ function controlledPaths(fixture: EvalFixture): string[] {
   ]
 }
 
+const envInspectionScript = `
+  const forbidden = JSON.parse(process.argv[1])
+  const fakeValue = process.argv[2]
+  const names = Object.keys(process.env)
+
+  console.log(
+    JSON.stringify({
+      forbiddenNames: forbidden.filter((key) => names.includes(key)),
+      fakeValue: Object.values(process.env).includes(fakeValue),
+      home: process.env.HOME,
+    }),
+  )
+`
+
 describe('eval fixture isolation', () => {
   test('creates unique roots and keeps every controlled canonical path inside its run root', () => {
     const parentDir = fs.mkdtempSync(
@@ -137,7 +151,8 @@ describe('eval fixture isolation', () => {
         process.execPath,
         [
           '-e',
-          `const forbidden = ${JSON.stringify([
+          envInspectionScript,
+          JSON.stringify([
             'GH_TOKEN',
             'GITHUB_TOKEN',
             'NPM_TOKEN',
@@ -146,7 +161,8 @@ describe('eval fixture isolation', () => {
             'SSH_AUTH_SOCK',
             'GIT_ASKPASS',
             'OPENCODE_AUTH_TOKEN',
-          ])}; const names = Object.keys(process.env); console.log(JSON.stringify({ forbiddenNames: forbidden.filter((key) => names.includes(key)), fakeValue: Object.values(process.env).includes(${JSON.stringify(fakeValue)}), home: process.env.HOME }));`,
+          ]),
+          fakeValue,
         ],
         { cwd: fixture.projectRoot, env: childEnv, encoding: 'utf8' },
       )

@@ -474,7 +474,8 @@ export const BANNED_FIELD_NAMES = new Set([
 const ABSOLUTE_PATH_PATTERNS = [/^\//, /^\\/, /^[A-Za-z]:[\\/]/, /^file:\/\//i]
 
 const SECRET_PATTERNS = [
-  /\b(?:ghp|gho|github_pat|glpat|npm|sk)[-_A-Za-z0-9]+/i,
+  /\b(?:ghp|gho|github_pat|glpat|npm)[-_A-Za-z0-9]+/i,
+  /\bsk[-_][A-Za-z0-9_-]{8,}\b/i,
   /\bAKIA[0-9A-Z]{8,}\b/,
   /\b(?:fake|dummy|test)[-_A-Za-z0-9]*(?:token|auth|key|secret|credential|password|socket)\b/i,
   /\b(?:token|secret|password|api[-_]?key|private[-_]?key|authorization)\s*[:=]/i,
