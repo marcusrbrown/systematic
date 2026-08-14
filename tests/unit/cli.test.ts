@@ -4,6 +4,8 @@ import * as crypto from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { runCapabilitiesCli as runTestableCli } from '../../src/cli.js'
+import type { ConfigObservationMetadata } from '../../src/lib/capability-snapshot.js'
 import { MANIFEST_FILENAME } from '../../src/lib/pi-subagents-export.js'
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
@@ -11,6 +13,30 @@ const CLI_PATH = path.join(ROOT_DIR, 'src/cli.ts')
 
 function mkTempCwd(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-cli-test-'))
+}
+
+function snapshotTree(root: string): string {
+  const entries: string[] = []
+
+  function visit(directory: string, relative = ''): void {
+    const children = fs
+      .readdirSync(directory, { withFileTypes: true })
+      .sort((left, right) => left.name.localeCompare(right.name))
+
+    for (const child of children) {
+      const childRelative = path.join(relative, child.name)
+      const childPath = path.join(directory, child.name)
+      if (child.isDirectory()) {
+        entries.push(`${childRelative}/`)
+        visit(childPath, childRelative)
+      } else {
+        entries.push(`${childRelative}:${fs.readFileSync(childPath, 'utf8')}`)
+      }
+    }
+  }
+
+  visit(root)
+  return entries.join('\n')
 }
 
 function runCli(
@@ -30,6 +56,72 @@ function runCli(
     stderr: result.stderr ?? '',
     exitCode: result.status ?? -1,
   }
+}
+
+const OBSERVED_AT = '2026-08-13T12:34:56.000Z'
+
+type CapabilityCliRoots = Parameters<typeof runTestableCli>[0]['roots']
+
+function makeCapabilityRoots(root: string): CapabilityCliRoots {
+  const cwd = path.join(root, 'project')
+  const homeDir = path.join(root, 'home')
+  const packageRoot = path.join(root, 'package')
+  const agentsRoot = path.join(packageRoot, 'agents')
+  fs.mkdirSync(path.join(cwd, '.git'), { recursive: true })
+  fs.mkdirSync(homeDir, { recursive: true })
+  fs.mkdirSync(agentsRoot, { recursive: true })
+  fs.writeFileSync(
+    path.join(packageRoot, 'package.json'),
+    JSON.stringify({ name: '@fixture/systematic', version: '9.8.7' }),
+  )
+  return { agentsRoot, cwd, homeDir, packageRoot }
+}
+
+function emptyConfig(): ConfigObservationMetadata {
+  return {
+    authorities: [],
+    protectedFields: [],
+    sources: [
+      { kind: 'custom', presence: 'absent' },
+      { kind: 'project', presence: 'absent' },
+      { kind: 'user', presence: 'absent' },
+    ],
+  }
+}
+
+function runTestableCapabilities(
+  roots: CapabilityCliRoots,
+  args: string[] = ['capabilities'],
+  config: ConfigObservationMetadata = emptyConfig(),
+): { stdout: string; stderr: string; status: number } {
+  const stdout: string[] = []
+  const stderr: string[] = []
+  const status = runTestableCli({
+    argv: ['systematic', ...args],
+    clock: () => Date.parse(OBSERVED_AT),
+    config,
+    errorSink: (message) => stderr.push(message),
+    outputSink: (value) => stdout.push(value),
+    roots,
+  })
+  return { status, stderr: stderr.join('\n'), stdout: stdout.join('\n') }
+}
+
+function runObservedCapabilities(
+  roots: CapabilityCliRoots,
+  config?: ConfigObservationMetadata,
+): { status: number; stderr: string; stdout: string } {
+  const stdout: string[] = []
+  const stderr: string[] = []
+  const status = runTestableCli({
+    argv: ['systematic', 'capabilities'],
+    clock: () => Date.parse(OBSERVED_AT),
+    errorSink: (message) => stderr.push(message),
+    outputSink: (value) => stdout.push(value),
+    roots,
+    ...(config === undefined ? {} : { config }),
+  })
+  return { status, stderr: stderr.join('\n'), stdout: stdout.join('\n') }
 }
 
 describe('cli setup --harness', () => {
@@ -187,6 +279,273 @@ describe('cli setup --harness', () => {
       expect(fs.readdirSync(cwd)).toEqual([])
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('cli capabilities', () => {
+  it('emits a read-only versioned JSON diagnostic without writing to cwd', () => {
+    const cwd = mkTempCwd()
+    try {
+      const before = fs.readdirSync(cwd)
+      const result = runCli(['capabilities'], cwd)
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stderr).toBe('')
+      const parsed = JSON.parse(result.stdout) as {
+        command?: string
+        schemaVersion?: string
+        identity?: { argv?: { subcommand?: string } }
+      }
+      expect(parsed.command).toBe('systematic capabilities')
+      expect(parsed.schemaVersion).toBe('cli-capabilities.v1')
+      expect(parsed.identity?.argv?.subcommand).toBe('capabilities')
+      expect(JSON.stringify(parsed)).not.toContain(cwd)
+      expect(fs.readdirSync(cwd)).toEqual(before)
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('documents read-only standalone observation and non-runtime scope in help', () => {
+    const cwd = mkTempCwd()
+    try {
+      const result = runCli(['--help'], cwd)
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toMatch(/capabilities.*read-only/i)
+      expect(result.stdout).toMatch(/standalone-cli/i)
+      expect(result.stdout).toMatch(/host-runtime|canonical-registry/i)
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('reports invalid capabilities invocation through stderr', () => {
+    const cwd = mkTempCwd()
+    try {
+      const result = runCli(['capabilities', '--unexpected'], cwd)
+
+      expect(result.exitCode).not.toBe(0)
+      expect(result.stdout).toBe('')
+      expect(result.stderr).toMatch(/usage:.*capabilities/i)
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('does not mutate the full diagnostic fixture tree or create generated artifacts', () => {
+    const root = mkTempCwd()
+    try {
+      const roots = makeCapabilityRoots(root)
+      fs.writeFileSync(path.join(roots.cwd, 'fixture-secret.json'), 'secret')
+      const before = snapshotTree(root)
+
+      const result = runTestableCapabilities(roots)
+
+      expect(result.status).toBe(0)
+      expect(snapshotTree(root)).toBe(before)
+      expect(result.stdout).not.toContain('fixture-secret')
+      expect(result.stdout).not.toContain(MANIFEST_FILENAME)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps setup/export/provider operations outside the capability path', () => {
+    const source = fs.readFileSync(CLI_PATH, 'utf8')
+    const start = source.indexOf('function runCapabilities')
+    const end = source.indexOf('function isHarness', start)
+    const capabilityPath = source.slice(start, end)
+
+    expect(capabilityPath).not.toMatch(/setupHarness|exportPersonas|refresh\(/)
+    expect(capabilityPath).not.toMatch(/provider|generated|manifest/i)
+  })
+})
+
+describe('testable capabilities entrypoint', () => {
+  it('is deterministic, bounded, and read-only for frozen roots and clock', () => {
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-capabilities-'),
+    )
+    try {
+      const roots = makeCapabilityRoots(root)
+      const before = fs.readdirSync(root)
+      const first = runTestableCapabilities(roots)
+      const second = runTestableCapabilities(roots)
+
+      expect(first.status).toBe(0)
+      expect(first.stderr).toBe('')
+      expect(first.stdout).toBe(second.stdout)
+      const parsed = JSON.parse(first.stdout) as {
+        facts: Array<Record<string, unknown>>
+        identity: { package: { name: string; version: string } }
+      }
+      expect(parsed.identity.package).toEqual({
+        name: '@fixture/systematic',
+        version: '9.8.7',
+      })
+      expect(parsed.facts).toContainEqual({
+        factId: 'host-runtime',
+        kind: 'status',
+        limitationCode: 'host-runtime-unobservable',
+        status: 'unknown',
+      })
+      expect(first.stdout).not.toContain(root)
+      expect(fs.readdirSync(root)).toEqual(before)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('summarizes only winning skill entries and roots', () => {
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-capabilities-'),
+    )
+    try {
+      const roots = makeCapabilityRoots(root)
+      const winnerDir = path.join(roots.cwd, '.opencode/skills/dupe')
+      const loserDir = path.join(roots.homeDir, '.claude/skills/dupe')
+      fs.mkdirSync(winnerDir, { recursive: true })
+      fs.mkdirSync(loserDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(winnerDir, 'SKILL.md'),
+        '---\nname: dupe\ndescription: winner\n---\nWinner body',
+      )
+      fs.writeFileSync(
+        path.join(loserDir, 'SKILL.md'),
+        '---\nname: dupe\ndescription: loser-secret\n---\nLoser secret body',
+      )
+
+      const result = runTestableCapabilities(roots)
+      const parsed = JSON.parse(result.stdout) as {
+        facts: Array<Record<string, unknown>>
+      }
+      expect(parsed.facts).toContainEqual({
+        count: 1,
+        discoveryId: 'skills',
+        factId: 'discovery-summary',
+        kind: 'discovery',
+        sourceId: 'discovery:skills',
+        status: 'available',
+        winningRoots: ['project-opencode'],
+      })
+      expect(result.stdout).not.toContain('loser-secret')
+      expect(result.stdout).not.toContain('Loser secret body')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('suppresses the agent summary on duplicate flat names', () => {
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-capabilities-'),
+    )
+    try {
+      const roots = makeCapabilityRoots(root)
+      for (const category of ['research', 'review']) {
+        const dir = path.join(roots.agentsRoot, category)
+        fs.mkdirSync(dir, { recursive: true })
+        fs.writeFileSync(
+          path.join(dir, 'duplicate.md'),
+          `---\nname: duplicate\ndescription: ${category}\n---\n${category} body`,
+        )
+      }
+
+      const result = runTestableCapabilities(roots)
+      const parsed = JSON.parse(result.stdout) as {
+        facts: Array<Record<string, unknown>>
+      }
+      const agentFacts = parsed.facts.filter(
+        (fact) => fact.sourceId === 'discovery:agents',
+      )
+      expect(agentFacts).toEqual([
+        {
+          errorCode: 'structural-invalid',
+          factId: 'discovery-summary',
+          kind: 'status',
+          sourceId: 'discovery:agents',
+          status: 'unavailable',
+        },
+      ])
+      expect(JSON.stringify(agentFacts)).not.toContain('count')
+      expect(result.stdout).not.toContain(roots.agentsRoot)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('reports malformed skill and agent sources without leaking content or paths', () => {
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-capabilities-'),
+    )
+    try {
+      const roots = makeCapabilityRoots(root)
+      const brokenSkill = path.join(
+        roots.cwd,
+        '.opencode/skills/broken/SKILL.md',
+      )
+      fs.mkdirSync(brokenSkill, { recursive: true })
+      const brokenAgent = path.join(roots.agentsRoot, 'broken.md')
+      fs.writeFileSync(
+        brokenAgent,
+        '---\nname: broken\ndescription: secret-agent-description\n---\nAgent body',
+      )
+      fs.writeFileSync(
+        brokenAgent,
+        '---\nname: [broken\n---\nsecret-agent-body',
+      )
+
+      const result = runTestableCapabilities(roots)
+      const parsed = JSON.parse(result.stdout) as {
+        facts: Array<Record<string, unknown>>
+      }
+      expect(parsed.facts).toContainEqual({
+        errorCode: 'source-read-failed',
+        factId: 'discovery-source-issue',
+        kind: 'status',
+        sourceId: 'discovery:skills',
+        status: 'unavailable',
+      })
+      expect(parsed.facts).toContainEqual({
+        count: 0,
+        discoveryId: 'skills',
+        factId: 'discovery-summary',
+        kind: 'discovery',
+        sourceId: 'discovery:skills',
+        status: 'available',
+        winningRoots: [],
+      })
+      expect(parsed.facts).toContainEqual({
+        errorCode: 'structural-invalid',
+        factId: 'discovery-summary',
+        kind: 'status',
+        sourceId: 'discovery:agents',
+        status: 'unavailable',
+      })
+      expect(result.stdout).not.toContain(root)
+      expect(result.stdout).not.toContain('secret-agent')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('returns bounded stderr and nonzero status for invalid invocation', () => {
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-capabilities-'),
+    )
+    try {
+      const roots = makeCapabilityRoots(root)
+      const result = runTestableCapabilities(roots, [
+        'capabilities',
+        '--unexpected',
+      ])
+
+      expect(result.status).toBe(2)
+      expect(result.stdout).toBe('')
+      expect(result.stderr).toBe('Usage: systematic capabilities')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
     }
   })
 })
@@ -522,6 +881,278 @@ describe('cli pi-subagents', () => {
       )
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('uses injected config roots instead of process-global config locations', () => {
+    const root = mkTempCwd()
+    const globalCustomDir = path.join(root, 'global-custom')
+    const previousCustomDir = process.env.OPENCODE_CONFIG_DIR
+    try {
+      fs.mkdirSync(globalCustomDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(globalCustomDir, 'systematic.json'),
+        JSON.stringify({
+          bootstrap: { file: '/private/global-secret-path' },
+          skills_as_commands: false,
+        }),
+      )
+      const roots = {
+        ...makeCapabilityRoots(root),
+        configDir: path.join(root, 'injected-config'),
+        opencodeConfigDirOverride: undefined,
+      }
+      process.env.OPENCODE_CONFIG_DIR = globalCustomDir
+
+      const result = runObservedCapabilities(roots)
+      const parsed = JSON.parse(result.stdout) as {
+        facts: Array<Record<string, unknown>>
+        sources: Array<Record<string, unknown>>
+      }
+
+      expect(result.status).toBe(0)
+      expect(parsed.sources).not.toContainEqual(
+        expect.objectContaining({
+          sourceId: 'config:custom',
+          presence: 'present',
+        }),
+      )
+      expect(parsed.facts).not.toContainEqual(
+        expect.objectContaining({
+          fieldPath: 'skills_as_commands',
+          sourceId: 'config:custom',
+        }),
+      )
+      expect(result.stdout).not.toContain(globalCustomDir)
+      expect(result.stdout).not.toContain('global-secret')
+    } finally {
+      if (previousCustomDir === undefined) {
+        delete process.env.OPENCODE_CONFIG_DIR
+      } else {
+        process.env.OPENCODE_CONFIG_DIR = previousCustomDir
+      }
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps successful capabilities stderr empty when config drops removed names', () => {
+    const root = mkTempCwd()
+    const home = path.join(root, 'home')
+    const xdg = path.join(root, 'xdg')
+    const custom = path.join(root, 'custom')
+    const project = path.join(root, 'project')
+    try {
+      fs.mkdirSync(path.join(project, '.opencode'), { recursive: true })
+      fs.mkdirSync(home, { recursive: true })
+      fs.mkdirSync(xdg, { recursive: true })
+      fs.mkdirSync(custom, { recursive: true })
+      fs.writeFileSync(
+        path.join(project, '.opencode/systematic.json'),
+        JSON.stringify({ categories: { docs: {} } }),
+      )
+
+      const result = runCli(['capabilities'], project, {
+        HOME: home,
+        OPENCODE_CONFIG_DIR: custom,
+        XDG_CONFIG_HOME: xdg,
+      })
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stderr).toBe('')
+      expect(() => JSON.parse(result.stdout)).not.toThrow()
+      expect(result.stderr).not.toContain('docs')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('keeps valid skill winners while reporting a separate malformed-source fact', () => {
+    const root = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-capabilities-'),
+    )
+    try {
+      const roots = makeCapabilityRoots(root)
+      const winnerDir = path.join(roots.cwd, '.opencode/skills/good')
+      const brokenDir = path.join(roots.cwd, '.opencode/skills/broken')
+      fs.mkdirSync(winnerDir, { recursive: true })
+      fs.mkdirSync(brokenDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(winnerDir, 'SKILL.md'),
+        '---\nname: good\ndescription: winner\n---\nWinner body',
+      )
+      fs.writeFileSync(path.join(brokenDir, 'SKILL.md'), '---\nname: [broken')
+
+      const result = runTestableCapabilities(roots)
+      const parsed = JSON.parse(result.stdout) as {
+        facts: Array<Record<string, unknown>>
+      }
+
+      expect(parsed.facts).toContainEqual({
+        count: 1,
+        discoveryId: 'skills',
+        factId: 'discovery-summary',
+        kind: 'discovery',
+        sourceId: 'discovery:skills',
+        status: 'available',
+        winningRoots: ['project-opencode'],
+      })
+      expect(parsed.facts).toContainEqual({
+        errorCode: 'source-malformed',
+        factId: 'discovery-source-issue',
+        kind: 'status',
+        sourceId: 'discovery:skills',
+        status: 'unavailable',
+      })
+      expect(
+        parsed.facts.filter((fact) => fact.sourceId === 'discovery:skills'),
+      ).toHaveLength(2)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('deduplicates symlink-equivalent capability roots at the CLI boundary', () => {
+    const root = mkTempCwd()
+    try {
+      const roots = makeCapabilityRoots(root)
+      const realRoot = path.join(root, 'real-root')
+      const aliasRoot = path.join(root, 'alias-root')
+      fs.mkdirSync(path.join(realRoot, 'agents'), { recursive: true })
+      fs.writeFileSync(
+        path.join(realRoot, 'package.json'),
+        JSON.stringify({ name: '@fixture/systematic', version: '1.0.0' }),
+      )
+      fs.symlinkSync(realRoot, aliasRoot, 'dir')
+
+      const result = runTestableCapabilities({
+        ...roots,
+        agentsRoot: path.join(realRoot, 'agents'),
+        cwd: realRoot,
+        packageRoot: aliasRoot,
+      })
+      const parsed = JSON.parse(result.stdout) as {
+        roots: Array<{ id: string }>
+      }
+
+      expect(
+        parsed.roots.filter(({ id }) => id === 'cwd' || id === 'package'),
+      ).toHaveLength(1)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('observes isolated valid and malformed config fixtures in a real subprocess', () => {
+    const cases = [
+      {
+        name: 'valid',
+        project: JSON.stringify({
+          bootstrap: { enabled: false },
+          workflow_guard: { mode: 'protected' },
+        }),
+        assert: (parsed: Record<string, unknown>) => {
+          const facts = parsed.facts as Array<Record<string, unknown>>
+          expect(facts).toContainEqual({
+            factId: 'config-field-authority',
+            fieldPath: 'bootstrap.enabled',
+            kind: 'authority',
+            sourceId: 'config:project',
+            status: 'available',
+          })
+          expect(facts).toContainEqual({
+            factId: 'config-field-authority',
+            fieldPath: 'skills_as_commands',
+            kind: 'authority',
+            sourceId: 'config:custom',
+            status: 'available',
+          })
+          expect(facts).toContainEqual({
+            factId: 'config-protected-field',
+            fieldPath: 'workflow_guard',
+            kind: 'protection',
+            outcome: 'blocked',
+            sourceId: 'config:project',
+            status: 'available',
+          })
+        },
+      },
+      {
+        name: 'malformed-jsonc',
+        project: '{ malformed secret }',
+        assert: (parsed: Record<string, unknown>) => {
+          expect(parsed.sources).toContainEqual({
+            errorCode: 'source-malformed',
+            kind: 'source',
+            presence: 'invalid',
+            sourceId: 'config:project',
+            sourceKind: 'project',
+          })
+        },
+      },
+      {
+        name: 'schema-invalid',
+        project: JSON.stringify({ unknown_key: 'schema-secret' }),
+        assert: (parsed: Record<string, unknown>) => {
+          expect(parsed.sources).toContainEqual({
+            errorCode: 'source-malformed',
+            kind: 'source',
+            presence: 'invalid',
+            sourceId: 'config:project',
+            sourceKind: 'project',
+          })
+        },
+      },
+    ] as const
+
+    for (const fixture of cases) {
+      const root = mkTempCwd()
+      const home = path.join(root, 'home')
+      const xdg = path.join(root, 'xdg')
+      const custom = path.join(root, 'custom')
+      const project = path.join(root, 'project')
+      try {
+        fs.mkdirSync(path.join(project, '.opencode'), { recursive: true })
+        fs.mkdirSync(path.join(home, '.config/opencode'), {
+          recursive: true,
+        })
+        fs.mkdirSync(path.join(xdg, 'opencode'), { recursive: true })
+        fs.mkdirSync(custom, { recursive: true })
+        fs.mkdirSync(xdg, { recursive: true })
+        const userConfig = JSON.stringify({ workflow_guard: { debug: true } })
+        fs.writeFileSync(
+          path.join(home, '.config/opencode/systematic.json'),
+          userConfig,
+        )
+        fs.writeFileSync(path.join(xdg, 'opencode/systematic.json'), userConfig)
+        fs.writeFileSync(
+          path.join(custom, 'systematic.json'),
+          JSON.stringify({
+            bootstrap: { file: '/private/custom-secret-path' },
+            skills_as_commands: false,
+          }),
+        )
+        fs.writeFileSync(
+          path.join(project, '.opencode/systematic.json'),
+          fixture.project,
+        )
+        const before = snapshotTree(root)
+        const result = runCli(['capabilities'], project, {
+          HOME: home,
+          OPENCODE_CONFIG_DIR: custom,
+          XDG_CONFIG_HOME: xdg,
+        })
+        const parsed = JSON.parse(result.stdout) as Record<string, unknown>
+
+        expect(result.exitCode).toBe(0)
+        expect(result.stderr).toBe('')
+        expect(parsed.command).toBe('systematic capabilities')
+        fixture.assert(parsed)
+        expect(result.stdout).not.toContain(root)
+        expect(result.stdout).not.toContain('secret')
+        expect(snapshotTree(root)).toBe(before)
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
     }
   })
 })

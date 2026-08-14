@@ -4,7 +4,10 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Config } from '@opencode-ai/sdk'
+import type { CapabilityCliRoots } from '../../src/cli.js'
+import { runCapabilitiesCli as runTestableCli } from '../../src/cli.js'
 import { extractAgentFrontmatter } from '../../src/lib/agents.js'
+import type { ConfigObservationMetadata } from '../../src/lib/capability-snapshot.js'
 import {
   createConfigHandler,
   formatAgentDescription,
@@ -192,6 +195,106 @@ Command template for ${name}.`,
         bundledCommandsDir: path.join(bundledDir, 'commands'),
       })
       expect(typeof handler).toBe('function')
+    })
+
+    test('keeps emitted runtime config bytes unchanged after capability observation', async () => {
+      createAgent(
+        path.join(bundledDir, 'agents'),
+        'fixture-agent',
+        'Fixture agent',
+      )
+      createSkill(
+        path.join(bundledDir, 'skills'),
+        'fixture-skill',
+        'Fixture skill',
+      )
+      createCommand(
+        path.join(bundledDir, 'commands'),
+        'fixture-command',
+        'Fixture command',
+      )
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+      const makeConfig = (): Config => ({
+        agent: {
+          'native-agent': {
+            description: 'Native agent',
+            prompt: 'Native prompt',
+          },
+        },
+        command: {
+          'native-command': {
+            description: 'Native command',
+            template: 'Native template',
+          },
+        },
+      })
+
+      const before = makeConfig()
+      await handler(before)
+      const beforeSerialized = JSON.stringify(before)
+
+      const diagnosticRoot = path.join(testDir, 'diagnostic')
+      const packageRoot = path.join(diagnosticRoot, 'package')
+      const agentsRoot = path.join(packageRoot, 'agents')
+      fs.mkdirSync(agentsRoot, { recursive: true })
+      fs.writeFileSync(
+        path.join(packageRoot, 'package.json'),
+        JSON.stringify({ name: '@fixture/systematic', version: '1.0.0' }),
+      )
+      const roots: CapabilityCliRoots = {
+        agentsRoot,
+        cwd: projectDir,
+        homeDir: path.join(diagnosticRoot, 'home'),
+        packageRoot,
+      }
+      const conflictingConfig: ConfigObservationMetadata = {
+        authorities: [
+          { fieldPath: 'skills_as_commands', sourceKind: 'custom' },
+        ],
+        protectedFields: [
+          {
+            fieldPath: 'workflow_guard',
+            outcome: 'blocked',
+            sourceKind: 'project',
+          },
+        ],
+        sources: [
+          { kind: 'custom', presence: 'present' },
+          { kind: 'project', presence: 'absent' },
+          { kind: 'user', presence: 'absent' },
+        ],
+      }
+      const diagnosticOutput: string[] = []
+      expect(
+        runTestableCli({
+          argv: ['systematic', 'capabilities'],
+          clock: () => Date.parse('2026-08-13T12:34:56.000Z'),
+          config: conflictingConfig,
+          outputSink: (value) => diagnosticOutput.push(value),
+          roots,
+        }),
+      ).toBe(0)
+
+      const after = makeConfig()
+      await handler(after)
+
+      expect(JSON.stringify(after)).toBe(beforeSerialized)
+      expect(diagnosticOutput).toHaveLength(1)
+    })
+
+    test('config-handler source does not import capability snapshot data', () => {
+      const source = fs.readFileSync(
+        new URL('../../src/lib/config-handler.ts', import.meta.url),
+        'utf8',
+      )
+
+      expect(source).not.toContain('capability-snapshot')
     })
 
     test('collects bundled agents into config', async () => {

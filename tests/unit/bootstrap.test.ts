@@ -10,6 +10,10 @@ import {
   INTERNAL_AGENT_SIGNATURES,
   readHarnessProfile,
 } from '../../src/lib/bootstrap.ts'
+import {
+  buildCapabilitySnapshot,
+  serializeCapabilitySnapshot,
+} from '../../src/lib/capability-snapshot.ts'
 
 /**
  * Reconstruct the production skip predicate from src/index.ts:91-97 using the
@@ -325,6 +329,62 @@ describe('getBootstrapContent', () => {
       </available_skills>
       </SYSTEMATIC_WORKFLOWS>"
     `)
+  })
+
+  test('keeps bootstrap and system-prompt bytes unchanged after capability observation', () => {
+    const skillsDir = makeBundledSkillsDir(
+      '---\nname: using-systematic\ndescription: fixture\n---\nFixture bootstrap body',
+    )
+    const config = {
+      bootstrap: { enabled: true },
+      disabled_skills: [],
+    }
+    const deps = {
+      bundledSkillsDir: skillsDir,
+      profileBlock: 'Frozen profile block',
+      usageTemplate: 'Frozen usage template',
+    }
+
+    const before = getBootstrapContent(config, deps)
+    const promptBefore = composeSystemPromptWithBootstrap(
+      'Frozen system prompt',
+      before,
+    )
+    const snapshot = buildCapabilitySnapshot({
+      argv: ['systematic', 'capabilities'],
+      clock: () => Date.parse('2026-08-13T12:34:56.000Z'),
+      facts: [
+        {
+          factId: 'config-field-authority',
+          fieldPath: 'bootstrap.enabled',
+          kind: 'authority',
+          sourceId: 'config:custom',
+          status: 'available',
+        },
+      ],
+      package: { name: '@fixture/systematic', version: '1.0.0' },
+      roots: [{ id: 'cwd', path: testDir }],
+      outputSink: () => undefined,
+    })
+    expect(serializeCapabilitySnapshot(snapshot)).toContain('config:custom')
+
+    const after = getBootstrapContent(config, deps)
+    const promptAfter = composeSystemPromptWithBootstrap(
+      'Frozen system prompt',
+      after,
+    )
+
+    expect(after).toBe(before)
+    expect(promptAfter).toBe(promptBefore)
+  })
+
+  test('bootstrap source does not import capability snapshot data', () => {
+    const source = fs.readFileSync(
+      new URL('../../src/lib/bootstrap.ts', import.meta.url),
+      'utf8',
+    )
+
+    expect(source).not.toContain('capability-snapshot')
   })
 
   test('default config returns content with SYSTEMATIC_WORKFLOWS wrapper', () => {

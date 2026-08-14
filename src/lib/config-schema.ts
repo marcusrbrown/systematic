@@ -558,7 +558,7 @@ export function validateConfig(input: unknown): ValidationResult {
  *
  * Matches the hand-coded `SECURITY_OVERLAY_FIELDS` set in `src/lib/config.ts`.
  */
-export const SECURITY_OVERLAY_FIELDS: readonly string[] = [
+export const SECURITY_OVERLAY_FIELDS = [
   'model',
   'variant',
   'skills',

@@ -1,9 +1,22 @@
 #!/usr/bin/env node
 import fs from 'node:fs'
+import os from 'node:os'
 import path from 'node:path'
+import { buildAgentCatalog } from './lib/agent-resolver.js'
 import * as agents from './lib/agents.js'
+import {
+  buildCapabilitySnapshot,
+  type CapabilityClock,
+  type CapabilityFactInput,
+  type CapabilityOutputSink,
+  type ConfigObservationMetadata,
+} from './lib/capability-snapshot.js'
 import * as commands from './lib/commands.js'
-import { getConfigPaths } from './lib/config.js'
+import { getConfigPaths, loadConfigWithSources } from './lib/config.js'
+import {
+  discoverSkills,
+  type SkillDiscoveryIssueCode,
+} from './lib/discovered-skills.js'
 import {
   cleanup,
   exportPersonas,
@@ -15,23 +28,38 @@ import {
 import { type Harness, setupHarness } from './lib/setup.js'
 import * as skills from './lib/skills.js'
 
-const getPackageVersion = (): string => {
+interface PackageMetadata {
+  readonly name?: string
+  readonly version?: string
+}
+
+function readPackageMetadata(packageRoot: string): PackageMetadata {
   try {
-    const packageJsonPath = path.resolve(
-      import.meta.dirname,
-      '..',
-      'package.json',
-    )
-    if (!fs.existsSync(packageJsonPath)) return 'unknown'
+    const packageJsonPath = path.join(packageRoot, 'package.json')
+    if (!fs.existsSync(packageJsonPath)) return {}
     const content = fs.readFileSync(packageJsonPath, 'utf8')
-    const parsed = JSON.parse(content) as { version?: string }
-    return parsed.version ?? 'unknown'
+    const parsed = JSON.parse(content) as unknown
+    if (
+      parsed === null ||
+      typeof parsed !== 'object' ||
+      Array.isArray(parsed)
+    ) {
+      return {}
+    }
+    const record = parsed as Record<string, unknown>
+    return {
+      ...(typeof record.name === 'string' ? { name: record.name } : {}),
+      ...(typeof record.version === 'string'
+        ? { version: record.version }
+        : {}),
+    }
   } catch {
-    return 'unknown'
+    return {}
   }
 }
 
-const VERSION = getPackageVersion()
+const PACKAGE_ROOT = path.resolve(import.meta.dirname, '..')
+const VERSION = readPackageMetadata(PACKAGE_ROOT).version ?? 'unknown'
 
 const HELP = `
 systematic - OpenCode plugin for systematic engineering workflows
@@ -41,6 +69,7 @@ Usage:
 
 Commands:
   list [type]                  List available skills, agents, or commands
+  capabilities                 Read-only standalone-CLI observation; not a host-runtime or canonical-registry view
   config [subcommand]          Configuration management
     show                       Show configuration
     path                       Print config file locations
@@ -57,6 +86,7 @@ Options:
 
 Examples:
   systematic list skills
+  systematic capabilities
   systematic list agents
   systematic config show
   systematic setup --harness opencode
@@ -80,6 +110,222 @@ Scope:
   project   <cwd>/.pi/agents (default)
   global    $PI_CODING_AGENT_DIR/agents or ~/.pi/agent/agents
 `
+
+interface CapabilityCliRoots {
+  readonly agentsRoot: string
+  readonly cwd: string
+  readonly homeDir: string
+  readonly packageRoot: string
+  readonly configDir?: string
+  readonly opencodeConfigDirOverride?: string
+}
+
+interface CapabilityCliOptions {
+  readonly argv: readonly string[]
+  readonly roots: CapabilityCliRoots
+  readonly clock?: CapabilityClock
+  readonly config?: ConfigObservationMetadata
+  readonly outputSink?: CapabilityOutputSink
+  readonly errorSink?: (message: string) => void
+}
+
+function defaultCapabilityRoots(): CapabilityCliRoots {
+  const configDir = process.env.XDG_CONFIG_HOME
+    ? path.join(process.env.XDG_CONFIG_HOME, 'opencode')
+    : path.join(os.homedir(), '.config/opencode')
+  return {
+    agentsRoot: path.join(PACKAGE_ROOT, 'agents'),
+    configDir,
+    cwd: process.cwd(),
+    homeDir: os.homedir(),
+    opencodeConfigDirOverride:
+      process.env.OPENCODE_CONFIG_DIR?.trim() || undefined,
+    packageRoot: PACKAGE_ROOT,
+  }
+}
+
+function sourceErrorForSkillIssue(
+  issue: SkillDiscoveryIssueCode,
+): 'source-malformed' | 'source-read-failed' {
+  return issue === 'read-failed' ? 'source-read-failed' : 'source-malformed'
+}
+
+function discoverySummaryFact(
+  discoveryId: 'agents' | 'skills',
+  count: number,
+  winningRoots: readonly string[],
+): CapabilityFactInput {
+  return {
+    count,
+    discoveryId,
+    factId: 'discovery-summary',
+    kind: 'discovery',
+    sourceId: `discovery:${discoveryId}`,
+    status: 'available',
+    winningRoots,
+  }
+}
+
+function unavailableDiscoveryFact(
+  discoveryId: 'agents' | 'skills',
+  errorCode: 'source-malformed' | 'source-read-failed' | 'structural-invalid',
+): CapabilityFactInput {
+  return {
+    errorCode,
+    factId: 'discovery-summary',
+    sourceId: `discovery:${discoveryId}`,
+    status: 'unavailable',
+  }
+}
+
+function discoverySourceIssueFact(
+  errorCode: 'source-malformed' | 'source-read-failed',
+): CapabilityFactInput {
+  return {
+    errorCode,
+    factId: 'discovery-source-issue',
+    kind: 'status',
+    sourceId: 'discovery:skills',
+    status: 'unavailable',
+  }
+}
+
+function collectSkillFacts(roots: CapabilityCliRoots): CapabilityFactInput[] {
+  let issue: SkillDiscoveryIssueCode | undefined
+  try {
+    const skills = discoverSkills({
+      configDir: roots.configDir,
+      homeDir: roots.homeDir,
+      onIssue: (nextIssue) => {
+        issue ??= nextIssue
+      },
+      opencodeConfigDirOverride: roots.opencodeConfigDirOverride,
+      startDir: roots.cwd,
+    })
+    const winningRoots = [...new Set(skills.map((skill) => skill.root))].sort()
+    const facts = [discoverySummaryFact('skills', skills.length, winningRoots)]
+    if (issue !== undefined) {
+      facts.push(discoverySourceIssueFact(sourceErrorForSkillIssue(issue)))
+    }
+    return facts
+  } catch {
+    return [discoverySourceIssueFact('source-malformed')]
+  }
+}
+
+function collectAgentFact(agentsRoot: string): CapabilityFactInput {
+  try {
+    const catalog = buildAgentCatalog(agentsRoot)
+    return discoverySummaryFact('agents', catalog.length, ['agents'])
+  } catch {
+    return unavailableDiscoveryFact('agents', 'structural-invalid')
+  }
+}
+
+function collectDiscoveryFacts(
+  roots: CapabilityCliRoots,
+): CapabilityFactInput[] {
+  return [
+    {
+      factId: 'host-runtime',
+      limitationCode: 'host-runtime-unobservable',
+      status: 'unknown',
+    },
+    ...collectSkillFacts(roots),
+    collectAgentFact(roots.agentsRoot),
+  ]
+}
+
+function collectConfigMetadata(
+  roots: CapabilityCliRoots,
+  injected?: ConfigObservationMetadata,
+): ConfigObservationMetadata | undefined {
+  if (injected !== undefined) return injected
+  try {
+    return loadConfigWithSources(roots.cwd, {
+      customConfigDir: roots.opencodeConfigDirOverride ?? null,
+      homeDir: roots.homeDir,
+      invalidSource: 'report',
+      userConfigDir: roots.configDir,
+      warningSink: () => undefined,
+    }).metadata
+  } catch {
+    return undefined
+  }
+}
+
+function resolveCapabilityRootPath(root: string): string {
+  try {
+    return fs.realpathSync(root)
+  } catch {
+    return path.resolve(root)
+  }
+}
+
+function capabilityRoots(roots: CapabilityCliRoots): readonly {
+  id: 'agents' | 'cwd' | 'package' | 'skills' | 'user'
+  path: string
+}[] {
+  return [
+    { id: 'agents', path: resolveCapabilityRootPath(roots.agentsRoot) },
+    { id: 'cwd', path: resolveCapabilityRootPath(roots.cwd) },
+    { id: 'package', path: resolveCapabilityRootPath(roots.packageRoot) },
+    {
+      id: 'skills',
+      path: resolveCapabilityRootPath(path.join(roots.packageRoot, 'skills')),
+    },
+    { id: 'user', path: resolveCapabilityRootPath(roots.homeDir) },
+  ]
+}
+
+function capabilityPackage(packageRoot: string): {
+  readonly name: string
+  readonly version: string
+} {
+  const metadata = readPackageMetadata(packageRoot)
+  return {
+    name: metadata.name ?? 'unknown',
+    version: metadata.version ?? 'unknown',
+  }
+}
+
+function runCapabilities(options: CapabilityCliOptions): number {
+  const outputSink =
+    options.outputSink ?? ((value: string) => console.log(value))
+  const errorSink =
+    options.errorSink ?? ((message: string) => console.error(message))
+  const isFullArgv =
+    options.argv.length === 2 &&
+    options.argv[0] === 'systematic' &&
+    options.argv[1] === 'capabilities'
+  const isCommandOnlyArgv =
+    options.argv.length === 1 && options.argv[0] === 'capabilities'
+  if (!isFullArgv && !isCommandOnlyArgv) {
+    errorSink('Usage: systematic capabilities')
+    return 2
+  }
+  const builderArgv = isFullArgv ? options.argv : ['systematic', 'capabilities']
+
+  try {
+    buildCapabilitySnapshot({
+      argv: builderArgv,
+      clock: options.clock,
+      config: collectConfigMetadata(options.roots, options.config),
+      facts: collectDiscoveryFacts(options.roots),
+      outputSink,
+      package: capabilityPackage(options.roots.packageRoot),
+      roots: capabilityRoots(options.roots),
+    })
+    return 0
+  } catch {
+    errorSink('Capabilities diagnostic unavailable')
+    return 1
+  }
+}
+
+export function runCapabilitiesCli(options: CapabilityCliOptions): number {
+  return runCapabilities(options)
+}
 
 function isHarness(value: string): value is Harness {
   return value === 'opencode' || value === 'pi'
@@ -370,47 +616,62 @@ function piSubagentsCommand(rest: string[]): void {
   }
 }
 
-const args = process.argv.slice(2)
-const command = args[0]
+function runLegacyCli(args: string[]): void {
+  const command = args[0]
 
-switch (command) {
-  case 'list':
-    listItems(args[1] || 'skills')
-    break
-  case 'setup':
-    setupCommand(args.slice(1))
-    break
-  case 'pi-subagents':
-    piSubagentsCommand(args.slice(1))
-    break
-  case 'config':
-    switch (args[1]) {
-      case 'show':
-      case undefined:
-        configShow()
-        break
-      case 'path':
-        configPath()
-        break
-      default:
-        console.error(`Unknown config subcommand: ${args[1]}`)
-        console.log('Available: show, path')
-        process.exit(1)
+  switch (command) {
+    case 'list':
+      listItems(args[1] || 'skills')
+      break
+    case 'capabilities': {
+      const status = runCapabilitiesCli({
+        argv: ['systematic', ...args],
+        errorSink: console.error,
+        outputSink: console.log,
+        roots: defaultCapabilityRoots(),
+      })
+      if (status !== 0) process.exit(status)
+      break
     }
-    break
-  case 'version':
-  case '--version':
-  case '-v':
-    console.log(`systematic v${VERSION}`)
-    break
-  case 'help':
-  case '--help':
-  case '-h':
-  case undefined:
-    console.log(HELP)
-    break
-  default:
-    console.error(`Unknown command: ${command}`)
-    console.log(HELP)
-    process.exit(1)
+    case 'setup':
+      setupCommand(args.slice(1))
+      break
+    case 'pi-subagents':
+      piSubagentsCommand(args.slice(1))
+      break
+    case 'config':
+      switch (args[1]) {
+        case 'show':
+        case undefined:
+          configShow()
+          break
+        case 'path':
+          configPath()
+          break
+        default:
+          console.error(`Unknown config subcommand: ${args[1]}`)
+          console.log('Available: show, path')
+          process.exit(1)
+      }
+      break
+    case 'version':
+    case '--version':
+    case '-v':
+      console.log(`systematic v${VERSION}`)
+      break
+    case 'help':
+    case '--help':
+    case '-h':
+    case undefined:
+      console.log(HELP)
+      break
+    default:
+      console.error(`Unknown command: ${command}`)
+      console.log(HELP)
+      process.exit(1)
+  }
+}
+
+if (import.meta.main) {
+  runLegacyCli(process.argv.slice(2))
 }
