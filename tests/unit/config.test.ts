@@ -6,6 +6,10 @@ import { fileURLToPath } from 'node:url'
 
 import { BUNDLED_SKILL_NAMES } from '../../src/lib/bundled-names.js'
 import {
+  buildCapabilitySnapshot,
+  serializeCapabilitySnapshot,
+} from '../../src/lib/capability-snapshot.js'
+import {
   computeDroppedNames,
   DEFAULT_CONFIG,
   getConfigPaths,
@@ -13,6 +17,8 @@ import {
   loadConfigWithSources,
   warnDroppedNames,
 } from '../../src/lib/config.js'
+
+const OBSERVED_AT = '2026-08-13T12:34:56.000Z'
 
 describe('config', () => {
   let testDir: string
@@ -156,6 +162,139 @@ describe('config', () => {
 
         const result = loadConfig(testDir)
         expect(result.bootstrap.enabled).toBe(false)
+      })
+    })
+
+    describe('read-only observation metadata', () => {
+      test('reports source presence and field-specific authority without values', () => {
+        writeUserConfig({
+          bootstrap: { enabled: false },
+          workflow_guard: { mode: 'protected' },
+          skills_as_commands: false,
+          agents: {
+            'correctness-reviewer': {
+              model: 'openai/secret-model',
+              permission: { bash: 'deny' },
+            },
+          },
+        })
+
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir)
+        fs.writeFileSync(
+          path.join(projectConfigDir, 'systematic.json'),
+          JSON.stringify({
+            bootstrap: { enabled: true },
+            workflow_guard: { mode: 'disabled' },
+            skills_as_commands: true,
+            agents: {
+              'correctness-reviewer': { temperature: 0.4 },
+            },
+          }),
+        )
+
+        const customDir = fs.mkdtempSync(
+          path.join(os.tmpdir(), 'systematic-custom-'),
+        )
+        process.env.OPENCODE_CONFIG_DIR = customDir
+        fs.writeFileSync(
+          path.join(customDir, 'systematic.json'),
+          JSON.stringify({
+            skills_as_commands: false,
+            categories: { review: { temperature: 0.7 } },
+          }),
+        )
+
+        try {
+          const result = loadConfigWithSources(testDir)
+
+          expect(result.metadata.sources).toEqual([
+            { kind: 'custom', presence: 'present' },
+            { kind: 'project', presence: 'present' },
+            { kind: 'user', presence: 'present' },
+          ])
+          expect(result.metadata.authorities).toEqual(
+            expect.arrayContaining([
+              { fieldPath: 'bootstrap.enabled', sourceKind: 'project' },
+              { fieldPath: 'skills_as_commands', sourceKind: 'custom' },
+              { fieldPath: 'workflow_guard.mode', sourceKind: 'user' },
+            ]),
+          )
+          expect(result.metadata.authorities).not.toContainEqual({
+            fieldPath: 'workflow_guard.mode',
+            sourceKind: 'project',
+          })
+          expect(result.metadata.protectedFields).toContainEqual({
+            fieldPath: 'workflow_guard',
+            outcome: 'blocked',
+            sourceKind: 'project',
+          })
+          expect(JSON.stringify(result.metadata)).not.toContain('secret-model')
+          expect(JSON.stringify(result.metadata)).not.toContain('permission')
+          expect(result.config.skills_as_commands).toBe(false)
+          expect(result.config.bootstrap.enabled).toBe(true)
+          expect(result.config.workflow_guard.mode).toBe('protected')
+        } finally {
+          delete process.env.OPENCODE_CONFIG_DIR
+          fs.rmSync(customDir, { recursive: true, force: true })
+        }
+      })
+
+      test('reports malformed source metadata only in opt-in mode', () => {
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir)
+        const projectConfigPath = path.join(projectConfigDir, 'systematic.json')
+        fs.writeFileSync(projectConfigPath, '{invalid json')
+
+        const result = loadConfigWithSources(testDir, {
+          invalidSource: 'report',
+        })
+
+        expect(result.metadata.sources).toContainEqual({
+          errorCode: 'parse-failed',
+          kind: 'project',
+          presence: 'invalid',
+        })
+        expect(JSON.stringify(result.metadata)).not.toContain(projectConfigPath)
+        expect(() => loadConfig(testDir)).toThrow(projectConfigPath)
+      })
+
+      test('deduplicates symlink-equivalent config sources without leaking paths', () => {
+        const realProjectDir = path.join(testDir, 'real-project')
+        const realConfigDir = path.join(realProjectDir, '.opencode')
+        const aliasedProjectDir = path.join(testDir, 'aliased-project')
+        const aliasedCustomDir = path.join(testDir, 'aliased-custom')
+        fs.mkdirSync(realConfigDir, { recursive: true })
+        fs.writeFileSync(
+          path.join(realConfigDir, 'systematic.json'),
+          JSON.stringify({ skills_as_commands: false }),
+        )
+        fs.symlinkSync(realProjectDir, aliasedProjectDir, 'dir')
+        fs.symlinkSync(realConfigDir, aliasedCustomDir, 'dir')
+        process.env.OPENCODE_CONFIG_DIR = aliasedCustomDir
+
+        try {
+          const result = loadConfigWithSources(aliasedProjectDir)
+          expect(result.metadata.sources).toEqual([
+            { kind: 'custom', presence: 'present' },
+            { kind: 'user', presence: 'absent' },
+          ])
+
+          const serialized = serializeCapabilitySnapshot(
+            buildCapabilitySnapshot({
+              argv: ['systematic', 'capabilities'],
+              clock: () => Date.parse(OBSERVED_AT),
+              config: result.metadata,
+              package: { name: '@fro.bot/systematic', version: '1.2.3' },
+              roots: [],
+            }),
+          )
+          expect(serialized).not.toContain(realProjectDir)
+          expect(serialized).not.toContain(aliasedProjectDir)
+          expect(serialized).not.toContain(aliasedCustomDir)
+        } finally {
+          delete process.env.OPENCODE_CONFIG_DIR
+        }
       })
     })
 

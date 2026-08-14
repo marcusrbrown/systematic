@@ -26,6 +26,8 @@ type DiscoveryRootId =
   | 'project-opencode'
   | 'global-opencode-config'
 
+export type SkillDiscoveryIssueCode = 'read-failed' | 'source-invalid'
+
 export interface DiscoveredSkill {
   name: string
   description: string
@@ -56,6 +58,8 @@ export interface DiscoverSkillsOptions {
    * discovery pure and testable.
    */
   opencodeConfigDirOverride?: string
+  /** Optional bounded issue sink; discovery winners and precedence are unchanged. */
+  onIssue?: (issue: SkillDiscoveryIssueCode) => void
 }
 
 /** Upstream skill-name regex: lowercase alphanumeric segments joined by single hyphens, 1-64 chars. */
@@ -164,7 +168,7 @@ function globSkillFiles(rootDir: string, subdirNames: string[]): string[] {
       if (!fs.existsSync(scanRoot)) continue
       const entries = walkDir(scanRoot, {
         maxDepth: 10,
-        filter: (entry) => !entry.isDirectory && entry.name === 'SKILL.md',
+        filter: (entry) => entry.name === 'SKILL.md',
       })
       for (const entry of entries) {
         results.push(entry.path)
@@ -189,17 +193,26 @@ function globSkillFiles(rootDir: string, subdirNames: string[]): string[] {
 function toDiscoveredSkill(
   skillPath: string,
   rootId: DiscoveryRootId,
+  onIssue?: (issue: SkillDiscoveryIssueCode) => void,
 ): DiscoveredSkill | undefined {
   let content: string
   try {
     content = fs.readFileSync(skillPath, 'utf8')
   } catch {
+    onIssue?.('read-failed')
     return undefined // missing, unreadable, or a directory: skip
   }
 
+  if (parseFrontmatter<Record<string, unknown>>(content).parseError) {
+    onIssue?.('source-invalid')
+    return undefined
+  }
   const frontmatter = extractFrontmatterFromContent(content)
   const name = frontmatter.name
-  if (!name || !isValidSkillName(name)) return undefined
+  if (!name || !isValidSkillName(name)) {
+    onIssue?.('source-invalid')
+    return undefined
+  }
 
   return {
     name,
@@ -239,7 +252,8 @@ function toDiscoveredSkill(
 export function discoverSkills(
   options: DiscoverSkillsOptions,
 ): DiscoveredSkill[] {
-  const { startDir, homeDir, configDir, opencodeConfigDirOverride } = options
+  const { startDir, homeDir, configDir, onIssue, opencodeConfigDirOverride } =
+    options
   const globalConfigDir = configDir ?? path.join(homeDir, '.config/opencode')
   const gitRoot = findGitWorktreeRoot(startDir)
 
@@ -247,7 +261,7 @@ export function discoverSkills(
 
   function upsertAll(skillPaths: string[], rootId: DiscoveryRootId): void {
     for (const skillPath of skillPaths) {
-      const skill = toDiscoveredSkill(skillPath, rootId)
+      const skill = toDiscoveredSkill(skillPath, rootId, onIssue)
       if (skill) byName.set(skill.name, skill)
     }
   }

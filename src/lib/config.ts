@@ -14,7 +14,7 @@ import {
 } from './bundled-names.js'
 import {
   PI_SUBAGENTS_PROTECTED_FIELDS,
-  SECURITY_OVERLAY_FIELDS as SCHEMA_SECURITY_OVERLAY_FIELDS,
+  SECURITY_OVERLAY_FIELDS,
   SystematicConfigSchema,
 } from './config-schema.js'
 import { REMOVED_BUNDLED_AGENT_CATEGORIES } from './removed-names.js'
@@ -46,8 +46,64 @@ export interface SourcedOverlayConfigMap {
   categories: Record<string, SourcedOverlayConfig>
 }
 
+export const CONFIG_AUTHORITY_FIELD_PATHS = [
+  'bootstrap.enabled',
+  'bootstrap.file',
+  'skills_as_commands',
+  'workflow_guard.debug',
+  'workflow_guard.mode',
+] as const
+
+export const CONFIG_PROTECTED_FIELD_PATHS = [
+  'workflow_guard',
+  'agents.*.model',
+  'agents.*.permission',
+  'agents.*.skills',
+  'agents.*.variant',
+  'categories.*.model',
+  'categories.*.permission',
+  'categories.*.skills',
+  'categories.*.variant',
+] as const
+
+export type ConfigSourceKind = 'custom' | 'project' | 'user'
+export type ConfigSourcePresence = 'absent' | 'invalid' | 'present'
+export type ConfigSourceErrorCode =
+  | 'parse-failed'
+  | 'read-failed'
+  | 'schema-invalid'
+  | 'source-invalid'
+export type ConfigAuthorityFieldPath =
+  (typeof CONFIG_AUTHORITY_FIELD_PATHS)[number]
+export type ConfigProtectedFieldPath =
+  (typeof CONFIG_PROTECTED_FIELD_PATHS)[number]
+
+export interface ConfigSourceMetadata {
+  readonly errorCode?: ConfigSourceErrorCode
+  readonly kind: ConfigSourceKind
+  readonly presence: ConfigSourcePresence
+}
+
+export interface ConfigAuthorityMetadata {
+  readonly fieldPath: ConfigAuthorityFieldPath
+  readonly sourceKind: ConfigSourceKind
+}
+
+export interface ConfigProtectedFieldMetadata {
+  readonly fieldPath: ConfigProtectedFieldPath
+  readonly outcome: 'blocked'
+  readonly sourceKind: ConfigSourceKind
+}
+
+export interface ConfigObservationMetadata {
+  readonly authorities: readonly ConfigAuthorityMetadata[]
+  readonly protectedFields: readonly ConfigProtectedFieldMetadata[]
+  readonly sources: readonly ConfigSourceMetadata[]
+}
+
 export interface SourceAwareConfigResult {
   config: SystematicConfig
+  metadata: ConfigObservationMetadata
   overlays: SourcedOverlayConfigMap
 }
 
@@ -102,12 +158,32 @@ interface RawSystematicConfig
 }
 
 interface ConfigSource {
+  canonicalPath: string
   path: string
   config: RawSystematicConfig
-  trust: 'user' | 'project' | 'custom'
+  protectedFields: readonly ConfigProtectedFieldMetadata[]
+  trust: ConfigSourceKind
 }
 
-const SECURITY_OVERLAY_FIELDS = new Set(SCHEMA_SECURITY_OVERLAY_FIELDS)
+type SecurityOverlayField = (typeof SECURITY_OVERLAY_FIELDS)[number]
+
+const PROTECTED_OVERLAY_FIELD_PATHS = {
+  agents: {
+    model: 'agents.*.model',
+    permission: 'agents.*.permission',
+    skills: 'agents.*.skills',
+    variant: 'agents.*.variant',
+  },
+  categories: {
+    model: 'categories.*.model',
+    permission: 'categories.*.permission',
+    skills: 'categories.*.skills',
+    variant: 'categories.*.variant',
+  },
+} satisfies Record<
+  'agents' | 'categories',
+  Record<SecurityOverlayField, ConfigProtectedFieldPath>
+>
 
 const PROJECT_PROTECTED_FIELDS = new Set(['workflow_guard'])
 
@@ -159,6 +235,7 @@ export function warnDroppedNames(
   field: string,
   warned: Set<string>,
   removalVersion?: string,
+  warningSink: (message: string) => void = console.warn,
 ): void {
   for (const name of dropped) {
     if (warned.has(name)) continue
@@ -167,7 +244,7 @@ export function warnDroppedNames(
     const removalNote = removalVersion
       ? ` It was removed in ${removalVersion}.`
       : ''
-    console.warn(
+    warningSink(
       `[systematic] "${displayName}" in \`${field}\` is no longer a bundled name and will be ignored.${removalNote} Remove it from your config to silence this warning. See ${MIGRATION_DOCS_URL} for migration guidance.`,
     )
   }
@@ -378,24 +455,123 @@ function throwTopLevelConfigSchemaError(
 function loadConfigSource(
   filePath: string,
   trust: ConfigSource['trust'],
-): ConfigSource | null {
-  const rawConfig = loadJsoncFile(filePath)
-  if (!rawConfig) return null
+  invalidSource: 'throw' | 'report',
+): { metadata: ConfigSourceMetadata; source: ConfigSource | null } {
+  try {
+    const rawConfig = loadJsoncFile(filePath)
+    if (!rawConfig) {
+      return {
+        metadata: { kind: trust, presence: 'absent' },
+        source: null,
+      }
+    }
 
-  const config =
-    trust === 'project' ? stripProjectProtectedFields(rawConfig) : rawConfig
+    const protectedFields = collectProjectProtectedFields(rawConfig, trust)
+    const config =
+      trust === 'project' ? stripProjectProtectedFields(rawConfig) : rawConfig
 
-  const result = SystematicConfigSchema.safeParse(config)
-  if (!result.success) {
-    throwTopLevelConfigSchemaError(filePath, trust, result.error.issues, config)
+    const result = SystematicConfigSchema.safeParse(config)
+    if (!result.success) {
+      throwTopLevelConfigSchemaError(
+        filePath,
+        trust,
+        result.error.issues,
+        config,
+      )
+    }
+
+    // Validation succeeded; propagate raw parsed JSONC so the merge layer
+    // sees undefined for unset fields (preserves merge semantics where a
+    // higher-priority empty config does NOT override a lower-priority explicit
+    // setting). The schema's defaults are applied by the merge layer via
+    // DEFAULT_CONFIG at the top of the spread chain.
+    return {
+      metadata: { kind: trust, presence: 'present' },
+      source: {
+        canonicalPath: resolveConfigSourcePath(filePath),
+        config,
+        path: filePath,
+        protectedFields,
+        trust,
+      },
+    }
+  } catch (error) {
+    if (invalidSource === 'throw') throw error
+    return {
+      metadata: {
+        errorCode: classifyConfigSourceError(error),
+        kind: trust,
+        presence: 'invalid',
+      },
+      source: null,
+    }
   }
+}
 
-  // Validation succeeded; propagate raw parsed JSONC so the merge layer
-  // sees undefined for unset fields (preserves merge semantics where a
-  // higher-priority empty config does NOT override a lower-priority explicit
-  // setting). The schema's defaults are applied by the merge layer via
-  // DEFAULT_CONFIG at the top of the spread chain.
-  return { path: filePath, config, trust }
+function classifyConfigSourceError(error: unknown): ConfigSourceErrorCode {
+  if (isConfigSchemaError(error)) return 'schema-invalid'
+  if (!(error instanceof Error)) return 'source-invalid'
+  if (error.message.includes('JSONC parse error')) return 'parse-failed'
+  if (error.message.includes('unable to read file')) return 'read-failed'
+  return 'source-invalid'
+}
+
+function isConfigSchemaError(
+  error: unknown,
+): error is Error & { readonly _tag: 'ConfigSchemaError' } {
+  return isRecord(error) && error._tag === 'ConfigSchemaError'
+}
+
+function resolveConfigSourcePath(filePath: string): string {
+  try {
+    return fs.realpathSync(filePath)
+  } catch {
+    return path.resolve(filePath)
+  }
+}
+
+function collectProjectProtectedFields(
+  rawConfig: RawSystematicConfig,
+  trust: ConfigSource['trust'],
+): readonly ConfigProtectedFieldMetadata[] {
+  if (trust !== 'project') return []
+
+  return [
+    ...(Object.hasOwn(rawConfig, 'workflow_guard')
+      ? [
+          {
+            fieldPath: 'workflow_guard' as const,
+            outcome: 'blocked' as const,
+            sourceKind: 'project' as const,
+          },
+        ]
+      : []),
+    ...collectOverlayProtectedFields(rawConfig.agents, 'agents'),
+    ...collectOverlayProtectedFields(rawConfig.categories, 'categories'),
+  ]
+}
+
+function collectOverlayProtectedFields(
+  overlayMap: unknown,
+  mapKey: 'agents' | 'categories',
+): readonly ConfigProtectedFieldMetadata[] {
+  if (!isRecord(overlayMap)) return []
+  return Object.values(overlayMap).flatMap((value) =>
+    isRecord(value) ? collectProtectedOverlayValue(value, mapKey) : [],
+  )
+}
+
+function collectProtectedOverlayValue(
+  value: Record<string, unknown>,
+  mapKey: 'agents' | 'categories',
+): readonly ConfigProtectedFieldMetadata[] {
+  return [...SECURITY_OVERLAY_FIELDS]
+    .filter((field) => Object.hasOwn(value, field))
+    .map((field) => ({
+      fieldPath: PROTECTED_OVERLAY_FIELD_PATHS[mapKey][field],
+      outcome: 'blocked' as const,
+      sourceKind: 'project' as const,
+    }))
 }
 
 function stripProjectProtectedFields(
@@ -430,6 +606,11 @@ export interface LoadConfigOptions {
    * absorbs cwd project overlays (plan R7/R19). Defaults to true.
    */
   includeProject?: boolean
+  invalidSource?: 'throw' | 'report'
+  homeDir?: string
+  userConfigDir?: string
+  customConfigDir?: string | null
+  warningSink?: (message: string) => void
 }
 
 export function loadConfig(
@@ -444,15 +625,26 @@ export function loadConfigWithSources(
   options?: LoadConfigOptions,
 ): SourceAwareConfigResult {
   const includeProject = options?.includeProject ?? true
-  const paths = getConfigPaths(projectDir)
+  const invalidSource = options?.invalidSource ?? 'throw'
+  const paths = getConfigPaths(projectDir, options)
+  const warningSink = options?.warningSink ?? console.warn
 
-  const userSource = loadConfigSource(paths.userConfig, 'user')
-  const projectSource = includeProject
-    ? loadConfigSource(paths.projectConfig, 'project')
-    : null
-  const customSource = paths.customConfig
-    ? loadConfigSource(paths.customConfig, 'custom')
-    : null
+  const user = loadConfigSource(paths.userConfig, 'user', invalidSource)
+  const project = includeProject
+    ? loadConfigSource(paths.projectConfig, 'project', invalidSource)
+    : {
+        metadata: { kind: 'project' as const, presence: 'absent' as const },
+        source: null,
+      }
+  const custom = paths.customConfig
+    ? loadConfigSource(paths.customConfig, 'custom', invalidSource)
+    : {
+        metadata: { kind: 'custom' as const, presence: 'absent' as const },
+        source: null,
+      }
+  const userSource = user.source
+  const projectSource = project.source
+  const customSource = custom.source
   const sources = [userSource, projectSource, customSource].filter(
     (source): source is ConfigSource => source !== null,
   )
@@ -463,7 +655,13 @@ export function loadConfigWithSources(
     (name) => REMOVED_AGENT_CATEGORIES_SET.has(name),
   )
   const warned = new Set<string>()
-  warnDroppedNames(droppedCategories, 'categories', warned, 'v3.0.0')
+  warnDroppedNames(
+    droppedCategories,
+    'categories',
+    warned,
+    'v3.0.0',
+    warningSink,
+  )
   const droppedCategorySet = new Set(droppedCategories)
   const overlays: SourcedOverlayConfigMap =
     droppedCategorySet.size === 0
@@ -544,13 +742,25 @@ export function loadConfigWithSources(
     result.disabled_skills,
     CURRENT_SKILL_NAMES_SET,
   )
-  warnDroppedNames(droppedSkills, 'disabled_skills', warned)
+  warnDroppedNames(
+    droppedSkills,
+    'disabled_skills',
+    warned,
+    undefined,
+    warningSink,
+  )
 
   const droppedAgents = computeDroppedNames(
     result.disabled_agents,
     CURRENT_AGENT_NAMES_SET,
   )
-  warnDroppedNames(droppedAgents, 'disabled_agents', warned)
+  warnDroppedNames(
+    droppedAgents,
+    'disabled_agents',
+    warned,
+    undefined,
+    warningSink,
+  )
 
   const droppedSkillSet = new Set(droppedSkills)
   const droppedAgentSet = new Set(droppedAgents)
@@ -568,7 +778,119 @@ export function loadConfigWithSources(
           ),
         }
 
-  return { config: effectiveConfig, overlays }
+  return {
+    config: effectiveConfig,
+    metadata: buildConfigObservationMetadata({
+      custom: custom.metadata,
+      project: project.metadata,
+      sources,
+      user: user.metadata,
+    }),
+    overlays,
+  }
+}
+
+interface ConfigSourceLoadSummary {
+  readonly custom: ConfigSourceMetadata
+  readonly project: ConfigSourceMetadata
+  readonly sources: readonly ConfigSource[]
+  readonly user: ConfigSourceMetadata
+}
+
+function buildConfigObservationMetadata(
+  summary: ConfigSourceLoadSummary,
+): ConfigObservationMetadata {
+  const authorities: ConfigAuthorityMetadata[] = []
+  const sourceConfigs = new Map<ConfigSourceKind, RawSystematicConfig>()
+  const sourcePaths = new Map<ConfigSourceKind, string>()
+  for (const source of summary.sources) {
+    sourceConfigs.set(source.trust, source.config)
+    sourcePaths.set(source.trust, source.canonicalPath)
+  }
+
+  const firstDefinedSource = (
+    fieldPath: ConfigAuthorityFieldPath,
+    candidates: readonly ConfigSourceKind[],
+  ): ConfigAuthorityMetadata | undefined => {
+    for (const sourceKind of candidates) {
+      const config = sourceConfigs.get(sourceKind)
+      if (config && hasConfigField(config, fieldPath)) {
+        return { fieldPath, sourceKind }
+      }
+    }
+    return undefined
+  }
+
+  const fieldCandidates: Readonly<
+    Record<ConfigAuthorityFieldPath, readonly ConfigSourceKind[]>
+  > = {
+    'bootstrap.enabled': ['custom', 'project', 'user'],
+    'bootstrap.file': ['custom', 'project', 'user'],
+    skills_as_commands: ['custom', 'project', 'user'],
+    'workflow_guard.debug': ['custom', 'user'],
+    'workflow_guard.mode': ['custom', 'user'],
+  }
+  for (const fieldPath of CONFIG_AUTHORITY_FIELD_PATHS) {
+    const authority = firstDefinedSource(fieldPath, fieldCandidates[fieldPath])
+    if (authority) authorities.push(authority)
+  }
+
+  const protectedFields = summary.sources.flatMap(
+    (source) => source.protectedFields,
+  )
+  const sources = dedupeSourceMetadata(
+    [summary.custom, summary.project, summary.user],
+    sourcePaths,
+  )
+  return {
+    authorities: sortAuthorities(authorities),
+    protectedFields: sortProtectedFields(protectedFields),
+    sources,
+  }
+}
+
+function dedupeSourceMetadata(
+  metadata: readonly ConfigSourceMetadata[],
+  sourcePaths: ReadonlyMap<ConfigSourceKind, string>,
+): readonly ConfigSourceMetadata[] {
+  const seen = new Set<string>()
+  return metadata.filter((source) => {
+    const identity = sourcePaths.get(source.kind) ?? `missing:${source.kind}`
+    if (seen.has(identity)) return false
+    seen.add(identity)
+    return true
+  })
+}
+
+function hasConfigField(
+  config: RawSystematicConfig,
+  fieldPath: ConfigAuthorityFieldPath,
+): boolean {
+  const [topLevel, nested] = fieldPath.split('.')
+  if (nested === undefined)
+    return config[topLevel as keyof RawSystematicConfig] !== undefined
+  const value = config[topLevel as keyof RawSystematicConfig]
+  return isRecord(value) && value[nested] !== undefined
+}
+
+function sortAuthorities(
+  authorities: readonly ConfigAuthorityMetadata[],
+): readonly ConfigAuthorityMetadata[] {
+  return [...authorities].sort((left, right) =>
+    left.fieldPath === right.fieldPath
+      ? left.sourceKind.localeCompare(right.sourceKind)
+      : left.fieldPath.localeCompare(right.fieldPath),
+  )
+}
+
+function sortProtectedFields(
+  fields: readonly ConfigProtectedFieldMetadata[],
+): readonly ConfigProtectedFieldMetadata[] {
+  return [...fields].sort((left, right) =>
+    left.fieldPath === right.fieldPath
+      ? left.sourceKind.localeCompare(right.sourceKind)
+      : left.fieldPath.localeCompare(right.fieldPath),
+  )
 }
 
 function mergeOverlaySources(sources: ConfigSource[]): SourcedOverlayConfigMap {
@@ -760,15 +1082,26 @@ function throwInvalidOverlay(sourcePath: string, keyPath: string): never {
   )
 }
 
-export function getConfigPaths(projectDir: string) {
-  const homeDir = os.homedir()
-  const customConfigDir = process.env.OPENCODE_CONFIG_DIR?.trim()
+interface ConfigPathOptions {
+  readonly homeDir?: string
+  readonly userConfigDir?: string
+  readonly customConfigDir?: string | null
+}
+
+export function getConfigPaths(
+  projectDir: string,
+  options?: ConfigPathOptions,
+) {
+  const homeDir = options?.homeDir ?? os.homedir()
+  const userConfigDir =
+    options?.userConfigDir ?? path.join(homeDir, '.config/opencode')
+  const customConfigDir =
+    options !== undefined && Object.hasOwn(options, 'customConfigDir')
+      ? options.customConfigDir?.trim()
+      : process.env.OPENCODE_CONFIG_DIR?.trim()
 
   const result = {
-    userConfig: resolveConfigPath(
-      path.join(homeDir, '.config/opencode'),
-      'systematic',
-    ),
+    userConfig: resolveConfigPath(userConfigDir, 'systematic'),
     projectConfig: resolveConfigPath(
       path.join(projectDir, '.opencode'),
       'systematic',

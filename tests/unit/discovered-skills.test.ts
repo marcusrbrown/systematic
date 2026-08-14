@@ -215,6 +215,22 @@ describe('discoverSkills', () => {
     expect(result.map((s) => s.name)).toEqual(['ok'])
   })
 
+  test('reports bounded source issues without changing winning discovery results', () => {
+    const skillDir = path.join(projectDir, '.opencode/skills/broken')
+    fs.mkdirSync(skillDir, { recursive: true })
+    fs.mkdirSync(path.join(skillDir, 'SKILL.md'), { recursive: true })
+
+    const issues: string[] = []
+    const result = discoverSkills({
+      startDir: projectDir,
+      homeDir,
+      onIssue: (issue) => issues.push(issue),
+    })
+
+    expect(result).toEqual([])
+    expect(issues).toEqual(['read-failed'])
+  })
+
   test('configDir override: skills discovered from custom OpenCode config dir', () => {
     const configDir = path.join(root, 'custom-config')
     writeSkill(path.join(configDir, 'skills/customcfg'), 'customcfg')
