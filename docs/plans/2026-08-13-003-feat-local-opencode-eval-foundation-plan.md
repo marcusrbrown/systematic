@@ -314,7 +314,7 @@ flowchart TB
 
 ## Implementation Units
 
-- [ ] **Unit 1: Define the narrow case and result contracts**
+- [x] **Unit 1: Define the narrow case and result contracts**
 
   **Goal:** Define the two case manifests and the shared result contract without
   creating a reusable eval platform.
@@ -337,7 +337,7 @@ flowchart TB
   full serialized-output validation, seeded fake secrets, path minimization, and
   deterministic sorting.
 
-- [ ] **Unit 2: Implement fixture-scoped execution and environment policy**
+- [x] **Unit 2: Implement fixture-scoped execution and environment policy**
 
   **Goal:** Run either case in unique local roots with explicit child-env denial and
   honest out-of-root detection.
@@ -364,7 +364,7 @@ flowchart TB
   no-write behavior outside allowed run artifacts, primary-checkout preservation,
   probe health, child interruption cleanup, and both deterministic case outcomes.
 
-- [ ] **Unit 3: Harden source and packed-installed modes**
+- [x] **Unit 3: Harden source and packed-installed modes**
 
   **Goal:** Prove distinct source and installed execution boundaries with mode-specific
   config entries and provenance, without generalized dependency infrastructure.
@@ -390,7 +390,7 @@ flowchart TB
   installed results have distinct provenance; malformed archives, unsafe links,
   outside-root module resolution, and missing package content yield `infra_failure`.
 
-- [ ] **Unit 4: Implement cleanup, privacy-safe persistence, and exit semantics**
+- [x] **Unit 4: Implement cleanup, privacy-safe persistence, and exit semantics**
 
   **Goal:** Produce bounded local evidence and correct run-level behavior for partial,
   failed, and successful selections.
