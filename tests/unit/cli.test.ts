@@ -24,6 +24,14 @@ function snapshotTree(root: string): string {
       .sort((left, right) => left.name.localeCompare(right.name))
 
     for (const child of children) {
+      // Bun writes its own runtime module-resolution cache under a `.bun`
+      // directory inside $HOME as a side effect of spawning the CLI
+      // subprocess. That cache is Bun's own artifact, not something the
+      // CLI under test writes, so it must not count as an unexpected file
+      // when a fixture directory is used as HOME.
+      if (child.name === '.bun') {
+        continue
+      }
       const childRelative = path.join(relative, child.name)
       const childPath = path.join(directory, child.name)
       if (child.isDirectory()) {
