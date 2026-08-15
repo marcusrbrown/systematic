@@ -1,0 +1,8 @@
+{
+  "caseSchemaVersion": 1,
+  "caseId": "fixture-local-write",
+  "harness": "opencode",
+  "assertionIds": ["fixture-file-content", "fixture-file-created"],
+  "expectedArtifactId": "fixture/output.txt",
+  "expectedContentId": "fixture-local-write-v1"
+}

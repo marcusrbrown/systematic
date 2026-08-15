@@ -58,5 +58,8 @@ cep-guide.md
 # Eval debug logs (verbose opencode run logs; JSONL transcripts are kept)
 tests/manual/with-without-eval/**/*.log
 
+# Local eval run artifacts
+/evals/runs/
+
 # Generated Claude Code plugin (built in CI, published to the claude-code-plugin branch; never committed)
 claude-code/

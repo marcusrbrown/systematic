@@ -1,0 +1,6 @@
+{
+  "caseSchemaVersion": 1,
+  "caseId": "bootstrap-loading",
+  "harness": "opencode",
+  "assertionIds": ["bootstrap-observed"]
+}
