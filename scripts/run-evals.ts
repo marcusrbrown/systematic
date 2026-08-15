@@ -13,7 +13,11 @@ const HARNESS = 'opencode' as const
 
 export { CASE_SCHEMA_VERSION, HARNESS, RESULT_SCHEMA_VERSION }
 
-export const CASE_IDS = ['bootstrap-loading', 'fixture-local-write'] as const
+export const CASE_IDS = [
+  'bootstrap-loading',
+  'fixture-local-write',
+  'host-skill-coverage',
+] as const
 
 export type CaseId = (typeof CASE_IDS)[number]
 
@@ -41,6 +45,8 @@ export const OUTCOME_SUBCODES = {
   ],
   task_failure: [
     'bootstrap_not_observed',
+    'host_catalog_absent',
+    'host_catalog_incomplete',
     'write_missing',
     'write_mismatch',
     'unexpected_exit',
@@ -72,9 +78,19 @@ export interface FixtureLocalWriteCaseManifest {
   expectedContentId: string
 }
 
+export interface HostSkillCoverageCaseManifest {
+  caseSchemaVersion: typeof CASE_SCHEMA_VERSION
+  caseId: 'host-skill-coverage'
+  harness: typeof HARNESS
+  assertionIds: string[]
+  /** Raw SKILL.md names; OpenCode's catalog does not add Systematic's prefix. */
+  expectedSkillNames: string[]
+}
+
 export type EvalCaseManifest =
   | BootstrapLoadingCaseManifest
   | FixtureLocalWriteCaseManifest
+  | HostSkillCoverageCaseManifest
 
 export interface EvalIdentity {
   opencodeVersion: string
@@ -93,6 +109,29 @@ export interface EvalEvidence {
   sanity: 'passed' | 'failed'
   process: 'completed' | 'failed'
   assertionIds: string[]
+  promptComposition?: PromptCompositionObservation
+  hostCatalogCoverage?: HostCatalogCoverageObservation
+}
+
+export type PromptCatalogState = 'present' | 'absent' | 'impossible'
+
+export interface PromptCatalogObservation {
+  state: PromptCatalogState
+  entryCount: number
+  skillNames: string[]
+}
+
+export interface PromptCompositionObservation {
+  bootstrapPayloadSize: number
+  systematicCatalog: PromptCatalogObservation
+  hostCatalog: PromptCatalogObservation
+}
+
+export interface HostCatalogCoverageObservation {
+  state: PromptCatalogState
+  expectedSkillNames: string[]
+  observedSkillNames: string[]
+  missingSkillNames: string[]
 }
 
 export interface EvalCleanupState {
@@ -150,6 +189,8 @@ export interface EvalCaseExecution {
   process: 'completed' | 'failed'
   probeDigest: string
   artifactRefs: string[]
+  promptComposition?: PromptCompositionObservation
+  hostCatalogCoverage?: HostCatalogCoverageObservation
 }
 
 export interface EvalFixture {
@@ -409,6 +450,7 @@ type RecordValue = Record<string, unknown>
 const CASE_ASSERTIONS: Record<CaseId, readonly string[]> = {
   'bootstrap-loading': ['bootstrap-observed'],
   'fixture-local-write': ['fixture-file-content', 'fixture-file-created'],
+  'host-skill-coverage': ['host-catalog-covered'],
 }
 
 const RESULT_REQUIRED_KEYS = [
@@ -665,7 +707,7 @@ const CLI_USAGE = [
   'Usage: bun scripts/run-evals.ts [options]',
   '',
   'Options:',
-  '  --case <id>       Repeatable: bootstrap-loading | fixture-local-write',
+  '  --case <id>       Repeatable: bootstrap-loading | fixture-local-write | host-skill-coverage',
   '  --mode <mode>     Repeatable: source | installed',
   '  --seed <seed>     [A-Za-z0-9][A-Za-z0-9._-]{0,127}',
   '  --clock <UTC>     YYYY-MM-DDTHH:mm:ss.sssZ',
@@ -841,6 +883,150 @@ function readInteger(value: unknown): number {
   return value
 }
 
+const MAX_PROMPT_COMPOSITION_SIZE = 100_000
+const MAX_PROMPT_CATALOG_ENTRIES = 128
+const SAFE_PROMPT_SKILL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$/
+
+function readNonNegativeInteger(value: unknown, maximum: number): number {
+  if (
+    typeof value !== 'number' ||
+    !Number.isInteger(value) ||
+    value < 0 ||
+    value > maximum
+  ) {
+    fail('result_invalid_field')
+  }
+  return value
+}
+
+function readPromptSkillNames(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > MAX_PROMPT_CATALOG_ENTRIES) {
+    fail('result_invalid_field')
+  }
+  const names: string[] = []
+  for (const item of value) {
+    if (typeof item !== 'string' || !SAFE_PROMPT_SKILL_NAME.test(item)) {
+      fail('result_invalid_field')
+    }
+    assertSafeString(item)
+    if (names.includes(item)) fail('result_invalid_field')
+    names.push(item)
+  }
+  return names.sort()
+}
+
+function normalizePromptCatalogObservation(
+  value: unknown,
+): PromptCatalogObservation {
+  const input = record(value, 'result_invalid_field')
+  assertExactKeys(
+    input,
+    ['state', 'entryCount', 'skillNames'],
+    [],
+    'result_unknown_field',
+    'result_missing_field',
+  )
+  const state = input.state
+  if (state !== 'present' && state !== 'absent' && state !== 'impossible') {
+    fail('result_invalid_field')
+  }
+  const entryCount = readNonNegativeInteger(
+    input.entryCount,
+    MAX_PROMPT_CATALOG_ENTRIES,
+  )
+  const skillNames = readPromptSkillNames(input.skillNames)
+  if (state !== 'present' && (entryCount !== 0 || skillNames.length !== 0)) {
+    fail('result_invalid_field')
+  }
+  if (skillNames.length > entryCount) fail('result_invalid_field')
+  return { state, entryCount, skillNames }
+}
+
+function normalizePromptComposition(
+  value: unknown,
+): PromptCompositionObservation {
+  const input = record(value, 'result_invalid_field')
+  assertExactKeys(
+    input,
+    ['bootstrapPayloadSize', 'systematicCatalog', 'hostCatalog'],
+    [],
+    'result_unknown_field',
+    'result_missing_field',
+  )
+  const bootstrapPayloadSize = readNonNegativeInteger(
+    input.bootstrapPayloadSize,
+    MAX_PROMPT_COMPOSITION_SIZE,
+  )
+  const systematicCatalog = normalizePromptCatalogObservation(
+    input.systematicCatalog,
+  )
+  const hostCatalog = normalizePromptCatalogObservation(input.hostCatalog)
+  return {
+    bootstrapPayloadSize,
+    systematicCatalog,
+    hostCatalog,
+  }
+}
+
+function sameStringList(
+  left: readonly string[],
+  right: readonly string[],
+): boolean {
+  return (
+    left.length === right.length &&
+    left.every((value, index) => value === right[index])
+  )
+}
+
+function normalizeHostCatalogCoverage(
+  value: unknown,
+): HostCatalogCoverageObservation {
+  const input = record(value, 'result_invalid_field')
+  assertExactKeys(
+    input,
+    ['state', 'expectedSkillNames', 'observedSkillNames', 'missingSkillNames'],
+    [],
+    'result_unknown_field',
+    'result_missing_field',
+  )
+  const state = input.state
+  if (state !== 'present' && state !== 'absent' && state !== 'impossible') {
+    fail('result_invalid_field')
+  }
+  const expectedSkillNames = readPromptSkillNames(input.expectedSkillNames)
+  const observedSkillNames = readPromptSkillNames(input.observedSkillNames)
+  const missingSkillNames = readPromptSkillNames(input.missingSkillNames)
+  if (expectedSkillNames.length === 0) fail('result_invalid_field')
+
+  if (state === 'impossible') {
+    if (observedSkillNames.length !== 0 || missingSkillNames.length !== 0) {
+      fail('result_invalid_field')
+    }
+    return {
+      state,
+      expectedSkillNames,
+      observedSkillNames,
+      missingSkillNames,
+    }
+  }
+
+  const expectedMissingSkillNames = expectedSkillNames.filter(
+    (name) => !observedSkillNames.includes(name),
+  )
+  if (!sameStringList(missingSkillNames, expectedMissingSkillNames)) {
+    fail('result_invalid_field')
+  }
+  if (state === 'absent' && observedSkillNames.length !== 0) {
+    fail('result_invalid_field')
+  }
+  return {
+    state,
+    expectedSkillNames,
+    observedSkillNames,
+    missingSkillNames,
+  }
+}
+
 function readSortedIdentifiers(
   value: unknown,
   expected: readonly string[],
@@ -954,7 +1140,7 @@ function normalizeEvidence(
   assertExactKeys(
     input,
     ['sanity', 'process', 'assertionIds'],
-    [],
+    ['promptComposition', 'hostCatalogCoverage'],
     'result_unknown_field',
     'result_missing_field',
   )
@@ -968,11 +1154,22 @@ function normalizeEvidence(
     assertionIds,
     'result_invalid_field',
   )
-  return {
+  const normalized: EvalEvidence = {
     sanity,
     process,
     assertionIds: normalizedAssertionIds,
   }
+  if (hasOwn(input, 'promptComposition')) {
+    normalized.promptComposition = normalizePromptComposition(
+      input.promptComposition,
+    )
+  }
+  if (hasOwn(input, 'hostCatalogCoverage')) {
+    normalized.hostCatalogCoverage = normalizeHostCatalogCoverage(
+      input.hostCatalogCoverage,
+    )
+  }
+  return normalized
 }
 
 function normalizeCleanup(value: unknown): EvalCleanupState {
@@ -1084,11 +1281,47 @@ function normalizeProvenance(
   fail('result_invalid_provenance')
 }
 
+function parseHostSkillCoverageCaseManifest(
+  value: RecordValue,
+): HostSkillCoverageCaseManifest {
+  assertExactKeys(
+    value,
+    [
+      'caseSchemaVersion',
+      'caseId',
+      'harness',
+      'assertionIds',
+      'expectedSkillNames',
+    ],
+    [],
+    'case_unknown_field',
+    'case_missing_field',
+  )
+  if (value.caseSchemaVersion !== CASE_SCHEMA_VERSION) {
+    fail('case_wrong_version')
+  }
+  if (value.harness !== HARNESS) fail('case_invalid_field')
+  const assertionIds = readSortedIdentifiers(
+    value.assertionIds,
+    CASE_ASSERTIONS['host-skill-coverage'],
+    'case_invalid_field',
+  )
+  const expectedSkillNames = readPromptSkillNames(value.expectedSkillNames)
+  if (expectedSkillNames.length === 0) fail('case_invalid_field')
+  return {
+    caseSchemaVersion: CASE_SCHEMA_VERSION,
+    caseId: 'host-skill-coverage',
+    harness: HARNESS,
+    assertionIds,
+    expectedSkillNames,
+  }
+}
+
 export function parseCaseManifest(input: unknown): EvalCaseManifest {
   assertPrivacySafeTree(input)
   const value = record(input, 'case_invalid_shape')
   const caseId = value.caseId
-  if (caseId !== 'bootstrap-loading' && caseId !== 'fixture-local-write') {
+  if (typeof caseId !== 'string' || !isCaseId(caseId)) {
     fail('case_unsupported')
   }
 
@@ -1115,6 +1348,10 @@ export function parseCaseManifest(input: unknown): EvalCaseManifest {
       harness: HARNESS,
       assertionIds,
     }
+  }
+
+  if (caseId === 'host-skill-coverage') {
+    return parseHostSkillCoverageCaseManifest(value)
   }
 
   assertExactKeys(
@@ -1175,7 +1412,7 @@ export function normalizeResult(input: unknown): EvalResult {
   if (value.harness !== HARNESS) fail('result_invalid_field')
 
   const caseId = value.caseId
-  if (caseId !== 'bootstrap-loading' && caseId !== 'fixture-local-write') {
+  if (typeof caseId !== 'string' || !isCaseId(caseId)) {
     fail('result_invalid_field')
   }
   const mode = readMode(value.mode)
@@ -2615,7 +2852,7 @@ function buildResultEnvelope(input: {
         input.runtime.status === 'available'
           ? 'opencode-ai-1.18.5'
           : 'opencode-runtime-unavailable',
-      probeId: 'systematic-eval-probe-v1',
+      probeId: 'systematic-eval-probe-v3',
       probeDigest: input.execution.probeDigest,
       fixtureContractVersion: FIXTURE_CONTRACT_VERSION,
       fixtureContractDigest: FIXTURE_CONTRACT_DIGEST,
@@ -2628,6 +2865,12 @@ function buildResultEnvelope(input: {
       sanity: input.execution.sanity,
       process: input.execution.process,
       assertionIds: input.caseManifest.assertionIds,
+      ...(input.execution.promptComposition
+        ? { promptComposition: input.execution.promptComposition }
+        : {}),
+      ...(input.execution.hostCatalogCoverage
+        ? { hostCatalogCoverage: input.execution.hostCatalogCoverage }
+        : {}),
     },
     cleanup: input.cleanup,
     privacy: { status: 'validated' },

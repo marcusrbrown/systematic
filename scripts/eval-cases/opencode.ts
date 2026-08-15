@@ -11,6 +11,8 @@ import {
   type EvalCaseManifest,
   type EvalFixture,
   EXPECTED_OPENCODE_VERSION,
+  type HostCatalogCoverageObservation,
+  type PromptCompositionObservation,
 } from '../run-evals.ts'
 
 const MODEL_PROVIDER_ID = 'systematic-eval-local-provider'
@@ -18,8 +20,18 @@ const MODEL_ID = 'systematic-eval-local-model'
 const EXPECTED_WRITE_CONTENT = 'fixture-local-write-v1'
 const PROBE_FAKE_VALUE_MARKER = 'eval-parent-fake-value'
 const PROBE_DIGEST = createHash('sha256')
-  .update('systematic-eval-probe-v1')
+  .update('systematic-eval-probe-v3')
   .digest('hex')
+
+const BOOTSTRAP_MARKER_OPEN = '<SYSTEMATIC_WORKFLOWS>'
+const BOOTSTRAP_MARKER_CLOSE = '</SYSTEMATIC_WORKFLOWS>'
+const CATALOG_MARKER_OPEN = '<available_skills>'
+const CATALOG_MARKER_CLOSE = '</available_skills>'
+const OPENCODE_HOST_TIMEOUT = 'opencode-host-timeout'
+const OPENCODE_PROMPT_TIMEOUT = 'opencode-prompt-timeout'
+const SAFE_SKILL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$/
+const MAX_BOOTSTRAP_PAYLOAD_SIZE = 100_000
+const MAX_CATALOG_ENTRIES = 128
 
 export interface ScriptedToolCall {
   id: string
@@ -44,6 +56,7 @@ export type BoundedProbeEvent =
       kind: 'chat'
       status: 'healthy' | 'unhealthy'
       blockCount: number
+      promptComposition?: PromptCompositionObservation
     }
   | { type: 'tool'; tool: 'write'; outcome: 'success' | 'failure' }
 
@@ -59,6 +72,7 @@ interface ProbeHealth {
   subcode?: 'probe_unhealthy'
   blockCount?: number
   transformCount?: number
+  promptComposition: PromptCompositionObservation
 }
 
 interface FixtureWriteGrade {
@@ -78,6 +92,201 @@ interface StoppableModelServer {
 const activeOpencodeChildren = new Set<ChildProcess>()
 const activeModelServers = new Set<StoppableModelServer>()
 
+function impossiblePromptComposition(): PromptCompositionObservation {
+  return {
+    bootstrapPayloadSize: 0,
+    systematicCatalog: {
+      state: 'impossible',
+      entryCount: 0,
+      skillNames: [],
+    },
+    hostCatalog: {
+      state: 'impossible',
+      entryCount: 0,
+      skillNames: [],
+    },
+  }
+}
+
+function findCompleteBlocks(
+  text: string,
+  open: string,
+  close: string,
+): Array<{ start: number; end: number }> {
+  const blocks: Array<{ start: number; end: number }> = []
+  let cursor = 0
+  while (cursor < text.length) {
+    const start = text.indexOf(open, cursor)
+    if (start === -1) break
+    const closeStart = text.indexOf(close, start + open.length)
+    if (closeStart === -1) break
+    blocks.push({ start, end: closeStart + close.length })
+    cursor = closeStart + close.length
+  }
+  return blocks
+}
+
+function findWorkflowBlocks(text: string): {
+  valid: boolean
+  blocks: Array<{ start: number; end: number }>
+} {
+  const blocks: Array<{ start: number; end: number }> = []
+  let openStart = -1
+  let openCount = 0
+  let closeCount = 0
+  let cursor = 0
+
+  while (cursor < text.length) {
+    const openStartCandidate = text.indexOf(BOOTSTRAP_MARKER_OPEN, cursor)
+    const closeStartCandidate = text.indexOf(BOOTSTRAP_MARKER_CLOSE, cursor)
+    if (openStartCandidate === -1 && closeStartCandidate === -1) break
+
+    if (
+      closeStartCandidate === -1 ||
+      (openStartCandidate !== -1 && openStartCandidate < closeStartCandidate)
+    ) {
+      openCount += 1
+      if (openStart !== -1) return { valid: false, blocks: [] }
+      openStart = openStartCandidate
+      cursor = openStartCandidate + BOOTSTRAP_MARKER_OPEN.length
+      continue
+    }
+
+    closeCount += 1
+    if (openStart === -1) return { valid: false, blocks: [] }
+    blocks.push({
+      start: openStart,
+      end: closeStartCandidate + BOOTSTRAP_MARKER_CLOSE.length,
+    })
+    openStart = -1
+    cursor = closeStartCandidate + BOOTSTRAP_MARKER_CLOSE.length
+  }
+
+  if (openStart !== -1 || openCount !== closeCount) {
+    return { valid: false, blocks: [] }
+  }
+  return { valid: true, blocks }
+}
+
+export function observePromptComposition(
+  system: readonly unknown[],
+): PromptCompositionObservation {
+  if (!system.every((entry) => typeof entry === 'string')) {
+    return impossiblePromptComposition()
+  }
+
+  const text = system.join('\n\n')
+  const workflowStructure = findWorkflowBlocks(text)
+  if (!workflowStructure.valid) return impossiblePromptComposition()
+  const workflowBlocks = workflowStructure.blocks
+  const catalogBlocks = findCompleteBlocks(
+    text,
+    CATALOG_MARKER_OPEN,
+    CATALOG_MARKER_CLOSE,
+  )
+  const systematicBlocks = catalogBlocks.filter((block) =>
+    workflowBlocks.some(
+      (workflow) => block.start >= workflow.start && block.end <= workflow.end,
+    ),
+  )
+  const systematicBlockTexts = new Set(
+    systematicBlocks.map((block) => text.slice(block.start, block.end)),
+  )
+  const hostBlocks = catalogBlocks.filter(
+    (block) =>
+      !workflowBlocks.some(
+        (workflow) =>
+          block.start >= workflow.start && block.end <= workflow.end,
+      ) && !systematicBlockTexts.has(text.slice(block.start, block.end)),
+  )
+  const summarize = (
+    blocks: readonly { start: number; end: number }[],
+  ): PromptCompositionObservation['systematicCatalog'] => {
+    const names = new Set<string>()
+    let entryCount = 0
+    for (const block of blocks) {
+      const catalogText = text.slice(block.start, block.end)
+      for (const skillBlock of catalogText.matchAll(
+        /<skill>([\s\S]*?)<\/skill>/g,
+      )) {
+        const name = skillBlock[1]
+          ?.match(/<name>\s*([^<]+?)\s*<\/name>/)?.[1]
+          ?.trim()
+        if (!name || !SAFE_SKILL_NAME.test(name)) continue
+        entryCount += 1
+        names.add(name)
+      }
+    }
+    return {
+      state: blocks.length > 0 ? 'present' : 'absent',
+      entryCount,
+      skillNames: [...names].sort(),
+    }
+  }
+
+  return {
+    bootstrapPayloadSize: workflowBlocks.reduce(
+      (size, block) => size + (block.end - block.start),
+      0,
+    ),
+    systematicCatalog: summarize(systematicBlocks),
+    hostCatalog: summarize(hostBlocks),
+  }
+}
+
+function isBoundedCatalogObservation(
+  value: unknown,
+): value is PromptCompositionObservation['systematicCatalog'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const candidate = value as Record<string, unknown>
+  if (
+    Object.keys(candidate).length !== 3 ||
+    (candidate.state !== 'present' &&
+      candidate.state !== 'absent' &&
+      candidate.state !== 'impossible') ||
+    typeof candidate.entryCount !== 'number' ||
+    !Number.isInteger(candidate.entryCount) ||
+    candidate.entryCount < 0 ||
+    candidate.entryCount > MAX_CATALOG_ENTRIES ||
+    !Array.isArray(candidate.skillNames) ||
+    candidate.skillNames.length > MAX_CATALOG_ENTRIES
+  ) {
+    return false
+  }
+  const names = candidate.skillNames
+  if (
+    names.some(
+      (name) =>
+        typeof name !== 'string' ||
+        !SAFE_SKILL_NAME.test(name) ||
+        name.length > 128,
+    )
+  ) {
+    return false
+  }
+  if (new Set(names).size !== names.length) return false
+  if (candidate.state !== 'present') {
+    return candidate.entryCount === 0 && names.length === 0
+  }
+  return names.length <= candidate.entryCount
+}
+
+function isBoundedPromptComposition(
+  value: unknown,
+): value is PromptCompositionObservation {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const candidate = value as Record<string, unknown>
+  return (
+    Object.keys(candidate).length === 3 &&
+    typeof candidate.bootstrapPayloadSize === 'number' &&
+    Number.isInteger(candidate.bootstrapPayloadSize) &&
+    candidate.bootstrapPayloadSize >= 0 &&
+    candidate.bootstrapPayloadSize <= MAX_BOOTSTRAP_PAYLOAD_SIZE &&
+    isBoundedCatalogObservation(candidate.systematicCatalog) &&
+    isBoundedCatalogObservation(candidate.hostCatalog)
+  )
+}
+
 function isBoundedProbeEvent(value: unknown): value is BoundedProbeEvent {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const candidate = value as Record<string, unknown>
@@ -88,14 +297,19 @@ function isBoundedProbeEvent(value: unknown): value is BoundedProbeEvent {
     )
   }
   if (candidate.type === 'transform') {
+    const hasPromptComposition = candidate.promptComposition !== undefined
     return (
-      Object.keys(candidate).length === 4 &&
+      Object.keys(candidate).length === (hasPromptComposition ? 5 : 4) &&
       candidate.kind === 'chat' &&
       (candidate.status === 'healthy' || candidate.status === 'unhealthy') &&
       typeof candidate.blockCount === 'number' &&
       Number.isInteger(candidate.blockCount) &&
       candidate.blockCount >= 0 &&
-      candidate.blockCount <= 8
+      candidate.blockCount <= 8 &&
+      (candidate.status !== 'healthy' ||
+        isBoundedPromptComposition(candidate.promptComposition)) &&
+      (candidate.promptComposition === undefined ||
+        isBoundedPromptComposition(candidate.promptComposition))
     )
   }
   return (
@@ -165,6 +379,111 @@ function workflowBlockCount(system) {
     count + (typeof entry === 'string' ? entry.split('<SYSTEMATIC_WORKFLOWS>').length - 1 : 0), 0)
 }
 
+const bootstrapMarkerOpen = '<SYSTEMATIC_WORKFLOWS>'
+const bootstrapMarkerClose = '</SYSTEMATIC_WORKFLOWS>'
+const catalogMarkerOpen = '<available_skills>'
+const catalogMarkerClose = '</available_skills>'
+const safeSkillName = /^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$/
+
+function impossiblePromptComposition() {
+  return {
+    bootstrapPayloadSize: 0,
+    systematicCatalog: { state: 'impossible', entryCount: 0, skillNames: [] },
+    hostCatalog: { state: 'impossible', entryCount: 0, skillNames: [] },
+  }
+}
+
+function findCompleteBlocks(text, open, close) {
+  const blocks = []
+  let cursor = 0
+  while (cursor < text.length) {
+    const start = text.indexOf(open, cursor)
+    if (start === -1) break
+    const closeStart = text.indexOf(close, start + open.length)
+    if (closeStart === -1) break
+    blocks.push({ start, end: closeStart + close.length })
+    cursor = closeStart + close.length
+  }
+  return blocks
+}
+
+function findWorkflowBlocks(text) {
+  const blocks = []
+  let openStart = -1
+  let openCount = 0
+  let closeCount = 0
+  let cursor = 0
+  while (cursor < text.length) {
+    const openStartCandidate = text.indexOf(bootstrapMarkerOpen, cursor)
+    const closeStartCandidate = text.indexOf(bootstrapMarkerClose, cursor)
+    if (openStartCandidate === -1 && closeStartCandidate === -1) break
+    if (
+      closeStartCandidate === -1 ||
+      (openStartCandidate !== -1 && openStartCandidate < closeStartCandidate)
+    ) {
+      openCount += 1
+      if (openStart !== -1) return { valid: false, blocks: [] }
+      openStart = openStartCandidate
+      cursor = openStartCandidate + bootstrapMarkerOpen.length
+      continue
+    }
+    closeCount += 1
+    if (openStart === -1) return { valid: false, blocks: [] }
+    blocks.push({
+      start: openStart,
+      end: closeStartCandidate + bootstrapMarkerClose.length,
+    })
+    openStart = -1
+    cursor = closeStartCandidate + bootstrapMarkerClose.length
+  }
+  if (openStart !== -1 || openCount !== closeCount) {
+    return { valid: false, blocks: [] }
+  }
+  return { valid: true, blocks }
+}
+
+function summarizeCatalog(text, blocks) {
+  const names = new Set()
+  let entryCount = 0
+  for (const block of blocks) {
+    const catalogText = text.slice(block.start, block.end)
+    for (const skillBlock of catalogText.matchAll(/<skill>([\\s\\S]*?)<\\/skill>/g)) {
+      const name = skillBlock[1]?.match(/<name>\\s*([^<]+?)\\s*<\\/name>/)?.[1]?.trim()
+      if (!name || !safeSkillName.test(name)) continue
+      entryCount += 1
+      names.add(name)
+    }
+  }
+  return {
+    state: blocks.length > 0 ? 'present' : 'absent',
+    entryCount,
+    skillNames: [...names].sort(),
+  }
+}
+
+function observePromptComposition(system) {
+  if (!system.every((entry) => typeof entry === 'string')) {
+    return impossiblePromptComposition()
+  }
+  const text = system.join('\\n\\n')
+  const workflowStructure = findWorkflowBlocks(text)
+  if (!workflowStructure.valid) return impossiblePromptComposition()
+  const workflowBlocks = workflowStructure.blocks
+  const catalogBlocks = findCompleteBlocks(text, catalogMarkerOpen, catalogMarkerClose)
+  const systematicBlocks = catalogBlocks.filter((block) => workflowBlocks.some((workflow) => block.start >= workflow.start && block.end <= workflow.end))
+  const systematicBlockTexts = new Set(systematicBlocks.map((block) => text.slice(block.start, block.end)))
+  const hostBlocks = catalogBlocks.filter((block) =>
+    !workflowBlocks.some((workflow) => block.start >= workflow.start && block.end <= workflow.end) &&
+    !systematicBlockTexts.has(text.slice(block.start, block.end)))
+  return {
+    bootstrapPayloadSize: workflowBlocks.reduce((size, block) => size + block.end - block.start, 0),
+    systematicCatalog: summarizeCatalog(text, systematicBlocks),
+    hostCatalog: summarizeCatalog(text, hostBlocks),
+  }
+}
+
+export { observePromptComposition }
+
 function isChatTransform(input) {
   return Boolean(input && typeof input === 'object' && typeof input.sessionID === 'string' && 'model' in input)
 }
@@ -177,9 +496,13 @@ export default async function systematicEvalProbe() {
   return {
     'experimental.chat.system.transform': async (input, output) => {
       if (!isChatTransform(input)) return
-      const system = Array.isArray(output?.system) ? output.system : []
+      const systemVisible = Array.isArray(output?.system)
+      const system = systemVisible ? output.system : []
       const blockCount = workflowBlockCount(system)
-      append({ type: 'transform', kind: 'chat', status: Array.isArray(output?.system) ? 'healthy' : 'unhealthy', blockCount })
+      const promptComposition = systemVisible
+        ? observePromptComposition(system)
+        : impossiblePromptComposition()
+      append({ type: 'transform', kind: 'chat', status: systemVisible ? 'healthy' : 'unhealthy', blockCount, promptComposition })
     },
     'tool.execute.after': async (input, output) => {
       if (input.tool !== 'write') return
@@ -203,20 +526,116 @@ export function gradeBootstrapProbe(
 ): ProbeHealth {
   const loaded = events.filter((event) => event.type === 'loaded')
   const transforms = events.filter((event) => event.type === 'transform')
+  const promptComposition =
+    transforms.at(-1)?.promptComposition ?? impossiblePromptComposition()
   if (
     loaded.length !== 1 ||
     loaded[0]?.status !== 'ok' ||
     transforms.length === 0 ||
     transforms.some(
-      (event) => event.status !== 'healthy' || event.blockCount !== 1,
+      (event) =>
+        event.status !== 'healthy' ||
+        event.blockCount !== 1 ||
+        event.promptComposition === undefined ||
+        event.promptComposition.systematicCatalog.state === 'impossible' ||
+        event.promptComposition.hostCatalog.state === 'impossible',
     )
   ) {
-    return { status: 'unhealthy', subcode: 'probe_unhealthy' }
+    return {
+      status: 'unhealthy',
+      subcode: 'probe_unhealthy',
+      promptComposition,
+    }
   }
   return {
     status: 'healthy',
     blockCount: 1,
     transformCount: transforms.length,
+    promptComposition,
+  }
+}
+
+export interface HostSkillCoverageGrade {
+  outcome: 'success' | 'infra_failure' | 'task_failure'
+  subcode:
+    | 'none'
+    | 'probe_unhealthy'
+    | 'host_catalog_absent'
+    | 'host_catalog_incomplete'
+  promptComposition: PromptCompositionObservation
+  hostCatalogCoverage: HostCatalogCoverageObservation
+}
+
+export function gradeHostSkillCoverage(
+  events: readonly BoundedProbeEvent[],
+  expectedSkillNames: readonly string[],
+): HostSkillCoverageGrade {
+  const expected = [...expectedSkillNames].sort()
+  const transforms = events.filter((event) => event.type === 'transform')
+  const promptComposition =
+    transforms.at(-1)?.promptComposition ?? impossiblePromptComposition()
+  const impossibleCoverage: HostCatalogCoverageObservation = {
+    state: 'impossible',
+    expectedSkillNames: expected,
+    observedSkillNames: [],
+    missingSkillNames: [],
+  }
+  const loaded = events.filter((event) => event.type === 'loaded')
+  const probeHealthy =
+    loaded.length === 1 &&
+    loaded[0]?.status === 'ok' &&
+    transforms.length > 0 &&
+    transforms.every(
+      (event) =>
+        event.status === 'healthy' &&
+        event.blockCount === 1 &&
+        event.promptComposition !== undefined &&
+        event.promptComposition.systematicCatalog.state !== 'impossible' &&
+        event.promptComposition.hostCatalog.state !== 'impossible',
+    )
+
+  if (!probeHealthy || promptComposition.hostCatalog.state === 'impossible') {
+    return {
+      outcome: 'infra_failure',
+      subcode: 'probe_unhealthy',
+      promptComposition,
+      hostCatalogCoverage: impossibleCoverage,
+    }
+  }
+
+  const observed = promptComposition.hostCatalog.skillNames
+  const missing = expected.filter((name) => !observed.includes(name))
+  const hostCatalogCoverage: HostCatalogCoverageObservation = {
+    state: promptComposition.hostCatalog.state,
+    expectedSkillNames: expected,
+    observedSkillNames: observed,
+    missingSkillNames: missing,
+  }
+
+  if (promptComposition.hostCatalog.state === 'absent') {
+    return {
+      outcome: 'task_failure',
+      subcode: 'host_catalog_absent',
+      promptComposition,
+      hostCatalogCoverage: {
+        ...hostCatalogCoverage,
+        missingSkillNames: expected,
+      },
+    }
+  }
+  if (missing.length > 0) {
+    return {
+      outcome: 'task_failure',
+      subcode: 'host_catalog_incomplete',
+      promptComposition,
+      hostCatalogCoverage,
+    }
+  }
+  return {
+    outcome: 'success',
+    subcode: 'none',
+    promptComposition,
+    hostCatalogCoverage,
   }
 }
 
@@ -498,7 +917,7 @@ async function startOpencodeHost(
       if (settled) return
       settled = true
       void stopChildProcess(child)
-      reject(new Error('opencode-host-timeout'))
+      reject(new Error(OPENCODE_HOST_TIMEOUT))
     }, timeoutMs)
     const onChunk = (chunk: Buffer): void => {
       if (settled) return
@@ -556,7 +975,7 @@ export async function stopActiveEvalResources(): Promise<void> {
 function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     const timeout = setTimeout(
-      () => reject(new Error('opencode-prompt-timeout')),
+      () => reject(new Error(OPENCODE_PROMPT_TIMEOUT)),
       timeoutMs,
     )
     promise.then(
@@ -572,9 +991,10 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   })
 }
 
-function executionFailure(
+export function executionFailure(
   subcode: 'opencode_unavailable' | 'probe_unhealthy' | 'unexpected_exit',
   probeDigest: string,
+  promptComposition = impossiblePromptComposition(),
 ): EvalCaseExecution {
   return {
     outcome: subcode === 'unexpected_exit' ? 'task_failure' : 'infra_failure',
@@ -583,7 +1003,44 @@ function executionFailure(
     process: 'failed',
     probeDigest,
     artifactRefs: ['probe/events.jsonl'],
+    promptComposition,
   }
+}
+
+function isKnownTimeoutError(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    (error.message === OPENCODE_HOST_TIMEOUT ||
+      error.message === OPENCODE_PROMPT_TIMEOUT)
+  )
+}
+
+export function classifyExecutionFailure(
+  hostStarted: boolean,
+  error: unknown,
+  events: readonly BoundedProbeEvent[],
+  probeDigest: string,
+): EvalCaseExecution {
+  const probeHealth = gradeBootstrapProbe(events)
+  if (hostStarted && isKnownTimeoutError(error)) {
+    return executionFailure(
+      'unexpected_exit',
+      probeDigest,
+      probeHealth.promptComposition,
+    )
+  }
+  if (hostStarted && probeHealth.status !== 'healthy') {
+    return executionFailure(
+      'probe_unhealthy',
+      probeDigest,
+      probeHealth.promptComposition,
+    )
+  }
+  return executionFailure(
+    hostStarted ? 'unexpected_exit' : 'opencode_unavailable',
+    probeDigest,
+    probeHealth.promptComposition,
+  )
 }
 
 interface ExecuteCaseInput {
@@ -596,36 +1053,101 @@ interface ExecuteCaseInput {
   artifactRefs?: readonly string[]
 }
 
+function isPromptOnlyCase(caseId: EvalCaseManifest['caseId']): boolean {
+  return caseId === 'bootstrap-loading' || caseId === 'host-skill-coverage'
+}
+
+function buildScriptedResponses(
+  caseId: EvalCaseManifest['caseId'],
+): ScriptedResponse[] {
+  if (isPromptOnlyCase(caseId)) return [{ text: 'done' }]
+  return [
+    {
+      toolCalls: [
+        {
+          id: 'fixture-write-call',
+          name: 'write',
+          arguments: {
+            filePath: 'fixture/output.txt',
+            content: EXPECTED_WRITE_CONTENT,
+          },
+        },
+      ],
+    },
+    { text: 'done' },
+  ]
+}
+
+function gradeObservedCase(
+  input: ExecuteCaseInput,
+  events: readonly BoundedProbeEvent[],
+  probeDigest: string,
+  artifactRefs: string[],
+): EvalCaseExecution {
+  if (input.caseManifest.caseId === 'host-skill-coverage') {
+    const coverageGrade = gradeHostSkillCoverage(
+      events,
+      input.caseManifest.expectedSkillNames,
+    )
+    const failed = coverageGrade.outcome === 'infra_failure'
+    return {
+      outcome: coverageGrade.outcome,
+      subcode: coverageGrade.subcode,
+      sanity: failed ? 'failed' : 'passed',
+      process: failed ? 'failed' : 'completed',
+      probeDigest,
+      artifactRefs,
+      promptComposition: coverageGrade.promptComposition,
+      hostCatalogCoverage: coverageGrade.hostCatalogCoverage,
+    }
+  }
+
+  const probeHealth = gradeBootstrapProbe(events)
+  if (probeHealth.status !== 'healthy') {
+    return executionFailure(
+      'probe_unhealthy',
+      probeDigest,
+      probeHealth.promptComposition,
+    )
+  }
+  if (input.caseManifest.caseId === 'bootstrap-loading') {
+    return {
+      outcome: 'success',
+      subcode: 'none',
+      sanity: 'passed',
+      process: 'completed',
+      probeDigest,
+      artifactRefs,
+      promptComposition: probeHealth.promptComposition,
+    }
+  }
+  const writeGrade = gradeFixtureWrite(
+    input.fixture.projectRoot,
+    input.caseManifest,
+  )
+  return {
+    outcome: writeGrade.outcome,
+    subcode: writeGrade.subcode,
+    sanity: 'passed',
+    process: 'completed',
+    probeDigest,
+    artifactRefs,
+    promptComposition: probeHealth.promptComposition,
+  }
+}
+
 async function executeCase(
   input: ExecuteCaseInput,
 ): Promise<EvalCaseExecution> {
   const probe = createOpencodeProbe(input.fixture)
-  const responses: ScriptedResponse[] =
-    input.caseManifest.caseId === 'bootstrap-loading'
-      ? [{ text: 'done' }]
-      : [
-          {
-            toolCalls: [
-              {
-                id: 'fixture-write-call',
-                name: 'write',
-                arguments: {
-                  filePath: 'fixture/output.txt',
-                  content: EXPECTED_WRITE_CONTENT,
-                },
-              },
-            ],
-          },
-          { text: 'done' },
-        ]
+  const responses = buildScriptedResponses(input.caseManifest.caseId)
   const model = startScriptedModelServer(responses)
   let host: OpencodeHost | undefined
   const hostTimeoutMs = input.timeoutMs ?? 180_000
   const caseTimeoutMs = input.caseTimeoutMs ?? hostTimeoutMs
-  const caseArtifactRefs =
-    input.caseManifest.caseId === 'bootstrap-loading'
-      ? ['probe/events.jsonl']
-      : ['fixture/output.txt', 'probe/events.jsonl']
+  const caseArtifactRefs = isPromptOnlyCase(input.caseManifest.caseId)
+    ? ['probe/events.jsonl']
+    : ['fixture/output.txt', 'probe/events.jsonl']
   const artifactRefs = [
     ...(input.artifactRefs ?? []),
     ...caseArtifactRefs,
@@ -671,37 +1193,17 @@ async function executeCase(
       caseTimeoutMs,
     )
 
-    const probeHealth = gradeBootstrapProbe(
+    return gradeObservedCase(
+      input,
       readBoundedProbeEvents(probe.capturePath),
-    )
-    if (probeHealth.status !== 'healthy') {
-      return executionFailure('probe_unhealthy', probe.digest)
-    }
-    if (input.caseManifest.caseId === 'bootstrap-loading') {
-      return {
-        outcome: 'success',
-        subcode: 'none',
-        sanity: 'passed',
-        process: 'completed',
-        probeDigest: probe.digest,
-        artifactRefs,
-      }
-    }
-    const writeGrade = gradeFixtureWrite(
-      input.fixture.projectRoot,
-      input.caseManifest,
-    )
-    return {
-      outcome: writeGrade.outcome,
-      subcode: writeGrade.subcode,
-      sanity: 'passed',
-      process: 'completed',
-      probeDigest: probe.digest,
+      probe.digest,
       artifactRefs,
-    }
-  } catch {
-    return executionFailure(
-      host ? 'unexpected_exit' : 'opencode_unavailable',
+    )
+  } catch (error) {
+    return classifyExecutionFailure(
+      host !== undefined,
+      error,
+      readBoundedProbeEvents(probe.capturePath),
       probe.digest,
     )
   } finally {

@@ -4,17 +4,24 @@ import { once } from 'node:events'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import {
   type BoundedProbeEvent,
+  createOpencodeProbe,
   gradeBootstrapProbe,
   gradeFixtureWrite,
+  gradeHostSkillCoverage,
+  observePromptComposition,
 } from '../../scripts/eval-cases/opencode.ts'
 import {
   capturePrimaryCheckout,
+  cleanupEvalFixture,
+  createEvalFixture,
   type EvalFixture,
   type EvalSelectionRunnerInput,
   installEvalSignalHandlers,
   normalizeResult,
+  persistEvalRun,
   runEvalCli,
   runEvalSelections,
   runInstalledEval,
@@ -22,13 +29,15 @@ import {
   validateSerializedResult,
   validateSerializedRunManifest,
 } from '../../scripts/run-evals.ts'
+import { buildCatalogEntries } from '../../src/lib/skill-catalog.js'
 
 const FIXED_CLOCK = '2026-08-13T00:00:00.000Z'
+const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
 const EXPECTED_CLI_HELP = [
   'Usage: bun scripts/run-evals.ts [options]',
   '',
   'Options:',
-  '  --case <id>       Repeatable: bootstrap-loading | fixture-local-write',
+  '  --case <id>       Repeatable: bootstrap-loading | fixture-local-write | host-skill-coverage',
   '  --mode <mode>     Repeatable: source | installed',
   '  --seed <seed>     [A-Za-z0-9][A-Za-z0-9._-]{0,127}',
   '  --clock <UTC>     YYYY-MM-DDTHH:mm:ss.sssZ',
@@ -286,7 +295,51 @@ describe('local OpenCode eval runner', () => {
       expect(result.fixtureSeed).toBe('runner-bootstrap')
       expect(result.normalizedClock).toBe(FIXED_CLOCK)
       expect(result.assertionIds).toEqual(['bootstrap-observed'])
-      expect(result.evidence).toEqual({
+      expect(result.evidence.sanity).toBe('passed')
+      expect(result.evidence.process).toBe('completed')
+      expect(result.evidence.assertionIds).toEqual(['bootstrap-observed'])
+      expect(result.evidence.promptComposition).toBeDefined()
+      expect(result.evidence.promptComposition).toMatchObject({
+        systematicCatalog: {
+          state: 'present',
+          entryCount: 23,
+          skillNames: [
+            'ce:brainstorm',
+            'ce:compound',
+            'ce:ideate',
+            'ce:plan',
+            'ce:review',
+            'ce:work',
+            'systematic:agent-browser',
+            'systematic:agent-native-architecture',
+            'systematic:deepen-plan',
+            'systematic:document-review',
+            'systematic:frontend-design',
+            'systematic:git-clean-gone-branches',
+            'systematic:git-commit',
+            'systematic:git-commit-push-pr',
+            'systematic:git-worktree',
+            'systematic:onboarding',
+            'systematic:orchestrating-subagents',
+            'systematic:reproduce-bug',
+            'systematic:resolve-pr-feedback',
+            'systematic:test-browser',
+            'systematic:test-driven-development',
+            'systematic:using-systematic',
+            'systematic:writing-skills',
+          ],
+        },
+        hostCatalog: {
+          state: 'present',
+        },
+      })
+      expect(
+        result.evidence.promptComposition?.bootstrapPayloadSize,
+      ).toBeGreaterThan(19_000)
+      expect(
+        result.evidence.promptComposition?.bootstrapPayloadSize,
+      ).toBeLessThan(21_000)
+      expect(result.evidence).toMatchObject({
         sanity: 'passed',
         process: 'completed',
         assertionIds: ['bootstrap-observed'],
@@ -329,6 +382,19 @@ describe('local OpenCode eval runner', () => {
     expect(missingProbe).toEqual({
       status: 'unhealthy',
       subcode: 'probe_unhealthy',
+      promptComposition: {
+        bootstrapPayloadSize: 0,
+        systematicCatalog: {
+          state: 'impossible',
+          entryCount: 0,
+          skillNames: [],
+        },
+        hostCatalog: {
+          state: 'impossible',
+          entryCount: 0,
+          skillNames: [],
+        },
+      },
     })
 
     const malformedProbe: BoundedProbeEvent[] = [
@@ -338,6 +404,19 @@ describe('local OpenCode eval runner', () => {
     expect(gradeBootstrapProbe(malformedProbe)).toEqual({
       status: 'unhealthy',
       subcode: 'probe_unhealthy',
+      promptComposition: {
+        bootstrapPayloadSize: 0,
+        systematicCatalog: {
+          state: 'impossible',
+          entryCount: 0,
+          skillNames: [],
+        },
+        hostCatalog: {
+          state: 'impossible',
+          entryCount: 0,
+          skillNames: [],
+        },
+      },
     })
 
     const parentDir = runParent()
@@ -371,6 +450,535 @@ describe('local OpenCode eval runner', () => {
           expectedContentId: 'fixture-local-write-v1',
         }),
       ).toEqual({ outcome: 'success', subcode: 'none' })
+    } finally {
+      fs.rmSync(parentDir, { recursive: true, force: true })
+    }
+  })
+
+  test('grades host catalog coverage as a set and fails closed for absent or impossible observations', async () => {
+    const opencodeModule = (await import(
+      '../../scripts/eval-cases/opencode.ts'
+    )) as unknown as Record<string, unknown>
+    expect(typeof opencodeModule.gradeHostSkillCoverage).toBe('function')
+    if (typeof opencodeModule.gradeHostSkillCoverage !== 'function') return
+
+    const gradeHostSkillCoverage = opencodeModule.gradeHostSkillCoverage as (
+      events: readonly BoundedProbeEvent[],
+      expectedSkillNames: readonly string[],
+    ) => unknown
+    const expectedSkillNames = ['agent-browser', 'ce:brainstorm']
+    const presentPromptComposition = {
+      bootstrapPayloadSize: 100,
+      systematicCatalog: {
+        state: 'present' as const,
+        entryCount: 1,
+        skillNames: ['systematic:agent-browser'],
+      },
+      hostCatalog: {
+        state: 'present' as const,
+        entryCount: 3,
+        skillNames: ['agent-browser', 'ce:brainstorm', 'extra-skill'],
+      },
+    }
+    const presentEvents: BoundedProbeEvent[] = [
+      { type: 'loaded', status: 'ok' },
+      {
+        type: 'transform',
+        kind: 'chat',
+        status: 'healthy',
+        blockCount: 1,
+        promptComposition: presentPromptComposition,
+      },
+    ]
+
+    expect(gradeHostSkillCoverage(presentEvents, expectedSkillNames)).toEqual({
+      outcome: 'success',
+      subcode: 'none',
+      promptComposition: presentPromptComposition,
+      hostCatalogCoverage: {
+        state: 'present',
+        expectedSkillNames,
+        observedSkillNames: ['agent-browser', 'ce:brainstorm', 'extra-skill'],
+        missingSkillNames: [],
+      },
+    })
+
+    const partialPromptComposition = {
+      ...presentPromptComposition,
+      hostCatalog: {
+        state: 'present' as const,
+        entryCount: 1,
+        skillNames: ['agent-browser'],
+      },
+    }
+    expect(
+      gradeHostSkillCoverage(
+        [
+          presentEvents[0] as BoundedProbeEvent,
+          {
+            ...presentEvents[1],
+            promptComposition: partialPromptComposition,
+          } as BoundedProbeEvent,
+        ],
+        expectedSkillNames,
+      ),
+    ).toEqual({
+      outcome: 'task_failure',
+      subcode: 'host_catalog_incomplete',
+      promptComposition: partialPromptComposition,
+      hostCatalogCoverage: {
+        state: 'present',
+        expectedSkillNames,
+        observedSkillNames: ['agent-browser'],
+        missingSkillNames: ['ce:brainstorm'],
+      },
+    })
+
+    const absentPromptComposition = {
+      ...presentPromptComposition,
+      hostCatalog: {
+        state: 'absent' as const,
+        entryCount: 0,
+        skillNames: [],
+      },
+    }
+    expect(
+      gradeHostSkillCoverage(
+        [
+          presentEvents[0] as BoundedProbeEvent,
+          {
+            ...presentEvents[1],
+            promptComposition: absentPromptComposition,
+          } as BoundedProbeEvent,
+        ],
+        expectedSkillNames,
+      ),
+    ).toEqual({
+      outcome: 'task_failure',
+      subcode: 'host_catalog_absent',
+      promptComposition: absentPromptComposition,
+      hostCatalogCoverage: {
+        state: 'absent',
+        expectedSkillNames,
+        observedSkillNames: [],
+        missingSkillNames: expectedSkillNames,
+      },
+    })
+
+    expect(gradeHostSkillCoverage([], expectedSkillNames)).toEqual({
+      outcome: 'infra_failure',
+      subcode: 'probe_unhealthy',
+      promptComposition: {
+        bootstrapPayloadSize: 0,
+        systematicCatalog: {
+          state: 'impossible',
+          entryCount: 0,
+          skillNames: [],
+        },
+        hostCatalog: {
+          state: 'impossible',
+          entryCount: 0,
+          skillNames: [],
+        },
+      },
+      hostCatalogCoverage: {
+        state: 'impossible',
+        expectedSkillNames,
+        observedSkillNames: [],
+        missingSkillNames: [],
+      },
+    })
+
+    const laterCompletePromptComposition = presentPromptComposition
+    expect(
+      gradeHostSkillCoverage(
+        [
+          presentEvents[0],
+          {
+            type: 'transform',
+            kind: 'chat',
+            status: 'healthy',
+            blockCount: 1,
+            promptComposition: {
+              bootstrapPayloadSize: 0,
+              systematicCatalog: {
+                state: 'impossible',
+                entryCount: 0,
+                skillNames: [],
+              },
+              hostCatalog: {
+                state: 'impossible',
+                entryCount: 0,
+                skillNames: [],
+              },
+            },
+          },
+          {
+            type: 'transform',
+            kind: 'chat',
+            status: 'healthy',
+            blockCount: 1,
+            promptComposition: laterCompletePromptComposition,
+          },
+        ],
+        expectedSkillNames,
+      ),
+    ).toMatchObject({
+      outcome: 'infra_failure',
+      subcode: 'probe_unhealthy',
+    })
+  })
+
+  test('classifies an undiagnosed host-started prompt failure without a transform as infrastructure failure', async () => {
+    const opencodeModule = (await import(
+      '../../scripts/eval-cases/opencode.ts'
+    )) as unknown as Record<string, unknown>
+    expect(typeof opencodeModule.classifyExecutionFailure).toBe('function')
+    if (typeof opencodeModule.classifyExecutionFailure !== 'function') return
+
+    const classifyExecutionFailure =
+      opencodeModule.classifyExecutionFailure as (
+        hostStarted: boolean,
+        error: unknown,
+        events: readonly BoundedProbeEvent[],
+        probeDigest: string,
+      ) => { outcome: string; subcode?: string }
+    expect(
+      classifyExecutionFailure(
+        true,
+        new Error('opencode-prompt-failed'),
+        [],
+        'a'.repeat(64),
+      ),
+    ).toMatchObject({
+      outcome: 'infra_failure',
+      subcode: 'probe_unhealthy',
+    })
+  })
+
+  test('classifies a diagnosed host-started prompt timeout as task failure', async () => {
+    const opencodeModule = (await import(
+      '../../scripts/eval-cases/opencode.ts'
+    )) as unknown as Record<string, unknown>
+    expect(typeof opencodeModule.classifyExecutionFailure).toBe('function')
+    if (typeof opencodeModule.classifyExecutionFailure !== 'function') return
+
+    const classifyExecutionFailure =
+      opencodeModule.classifyExecutionFailure as (
+        hostStarted: boolean,
+        error: unknown,
+        events: readonly BoundedProbeEvent[],
+        probeDigest: string,
+      ) => { outcome: string; subcode?: string }
+    expect(
+      classifyExecutionFailure(
+        true,
+        new Error('opencode-prompt-timeout'),
+        [],
+        'a'.repeat(64),
+      ),
+    ).toMatchObject({
+      outcome: 'task_failure',
+      subcode: 'unexpected_exit',
+    })
+  })
+
+  test('scopes Systematic and host catalogs independently around the workflow block', () => {
+    const observation = observePromptComposition([
+      [
+        '<available_skills>',
+        '  <skill><name>host:alpha</name></skill>',
+        '</available_skills>',
+        '<SYSTEMATIC_WORKFLOWS>',
+        'bootstrap body',
+        '<available_skills>',
+        '  <skill><name>systematic:alpha</name></skill>',
+        '  <skill><name>systematic:beta</name></skill>',
+        '</available_skills>',
+        '</SYSTEMATIC_WORKFLOWS>',
+      ].join('\n'),
+    ])
+
+    expect(observation).toEqual({
+      bootstrapPayloadSize: expect.any(Number),
+      systematicCatalog: {
+        state: 'present',
+        entryCount: 2,
+        skillNames: ['systematic:alpha', 'systematic:beta'],
+      },
+      hostCatalog: {
+        state: 'present',
+        entryCount: 1,
+        skillNames: ['host:alpha'],
+      },
+    })
+    expect(observation.bootstrapPayloadSize).toBeGreaterThan(0)
+  })
+
+  test('fails closed when workflow markers are unmatched or nested', () => {
+    const catalog =
+      '<available_skills>\n<skill><name>systematic:agent-browser</name></skill>\n</available_skills>'
+    const impossible = {
+      bootstrapPayloadSize: 0,
+      systematicCatalog: {
+        state: 'impossible' as const,
+        entryCount: 0,
+        skillNames: [],
+      },
+      hostCatalog: {
+        state: 'impossible' as const,
+        entryCount: 0,
+        skillNames: [],
+      },
+    }
+
+    expect(
+      observePromptComposition([`<SYSTEMATIC_WORKFLOWS>\n${catalog}`]),
+    ).toEqual(impossible)
+    expect(
+      observePromptComposition([`${catalog}\n</SYSTEMATIC_WORKFLOWS>`]),
+    ).toEqual(impossible)
+    expect(
+      observePromptComposition([
+        `<SYSTEMATIC_WORKFLOWS><SYSTEMATIC_WORKFLOWS>${catalog}</SYSTEMATIC_WORKFLOWS></SYSTEMATIC_WORKFLOWS>`,
+      ]),
+    ).toEqual(impossible)
+  })
+
+  test('does not count a catalog duplicated outside the workflow as host coverage', () => {
+    const catalog =
+      '<available_skills>\n<skill><name>systematic:agent-browser</name></skill>\n</available_skills>'
+    const observation = observePromptComposition([
+      `<SYSTEMATIC_WORKFLOWS>${catalog}</SYSTEMATIC_WORKFLOWS>\n${catalog}`,
+    ])
+
+    expect(observation.systematicCatalog).toEqual({
+      state: 'present',
+      entryCount: 1,
+      skillNames: ['systematic:agent-browser'],
+    })
+    expect(observation.hostCatalog).toEqual({
+      state: 'absent',
+      entryCount: 0,
+      skillNames: [],
+    })
+    expect(
+      gradeHostSkillCoverage(
+        [
+          { type: 'loaded', status: 'ok' },
+          {
+            type: 'transform',
+            kind: 'chat',
+            status: 'healthy',
+            blockCount: 1,
+            promptComposition: observation,
+          },
+        ],
+        ['systematic:agent-browser'],
+      ),
+    ).toMatchObject({
+      outcome: 'task_failure',
+      subcode: 'host_catalog_absent',
+    })
+  })
+
+  test('disabled_skills exclusions are removed from the expected coverage set', () => {
+    const disabledSkill = 'agent-browser'
+    const filteredEntries = buildCatalogEntries({
+      bundledSkillsDir: path.join(ROOT_DIR, 'skills'),
+      disabledSkills: [disabledSkill],
+    })
+    const expectedSkillNames = filteredEntries.map((entry) => entry.name)
+    const promptComposition = {
+      bootstrapPayloadSize: 100,
+      systematicCatalog: {
+        state: 'present' as const,
+        entryCount: expectedSkillNames.length,
+        skillNames: filteredEntries.map((entry) => entry.prefixedName),
+      },
+      hostCatalog: {
+        state: 'present' as const,
+        entryCount: expectedSkillNames.length,
+        skillNames: expectedSkillNames,
+      },
+    }
+
+    expect(expectedSkillNames).not.toContain(disabledSkill)
+    expect(
+      gradeHostSkillCoverage(
+        [
+          { type: 'loaded', status: 'ok' },
+          {
+            type: 'transform',
+            kind: 'chat',
+            status: 'healthy',
+            blockCount: 1,
+            promptComposition,
+          },
+        ],
+        expectedSkillNames,
+      ),
+    ).toMatchObject({ outcome: 'success', subcode: 'none' })
+  })
+
+  test('reports an observed empty prompt catalog as absent rather than impossible', () => {
+    expect(
+      observePromptComposition([
+        '<SYSTEMATIC_WORKFLOWS>\nbootstrap body\n</SYSTEMATIC_WORKFLOWS>',
+      ]),
+    ).toEqual({
+      bootstrapPayloadSize: expect.any(Number),
+      systematicCatalog: {
+        state: 'absent',
+        entryCount: 0,
+        skillNames: [],
+      },
+      hostCatalog: {
+        state: 'absent',
+        entryCount: 0,
+        skillNames: [],
+      },
+    })
+  })
+
+  test('keeps the generated probe observation implementation behaviorally identical', async () => {
+    const catalog = (name: string) =>
+      `<available_skills>\n<skill><name>${name}</name></skill>\n</available_skills>`
+    const systematicCatalog = catalog('systematic:alpha')
+    const hostCatalog = catalog('host:alpha')
+    const validSystem = [
+      `<SYSTEMATIC_WORKFLOWS>\n${systematicCatalog}\n</SYSTEMATIC_WORKFLOWS>`,
+    ]
+    const corpus: readonly (readonly unknown[])[] = [
+      validSystem,
+      [`<SYSTEMATIC_WORKFLOWS>\n${systematicCatalog}`],
+      [`${systematicCatalog}\n</SYSTEMATIC_WORKFLOWS>`],
+      [
+        `<SYSTEMATIC_WORKFLOWS><SYSTEMATIC_WORKFLOWS>${systematicCatalog}</SYSTEMATIC_WORKFLOWS></SYSTEMATIC_WORKFLOWS>`,
+      ],
+      [
+        `<SYSTEMATIC_WORKFLOWS>${systematicCatalog}</SYSTEMATIC_WORKFLOWS>\n${systematicCatalog}`,
+      ],
+      [
+        `${hostCatalog}\n<SYSTEMATIC_WORKFLOWS>\n${systematicCatalog}\n</SYSTEMATIC_WORKFLOWS>`,
+      ],
+      [validSystem[0], { role: 'system', content: 'not a string entry' }],
+    ]
+    const parentDir = runParent()
+    const fixture = createEvalFixture({
+      caseId: 'bootstrap-loading',
+      mode: 'source',
+      runId: 'probe-differential',
+      parentDir,
+    })
+
+    try {
+      const probe = createOpencodeProbe(fixture)
+      const generatedProbe = (await import(
+        `${pathToFileURL(probe.sourcePath).href}?differential`
+      )) as {
+        observePromptComposition?: (system: readonly unknown[]) => unknown
+      }
+      expect(typeof generatedProbe.observePromptComposition).toBe('function')
+      if (typeof generatedProbe.observePromptComposition !== 'function') return
+
+      const typedObservations = corpus.map((system) =>
+        observePromptComposition(system),
+      )
+      const generatedObservations = corpus.map((system) =>
+        generatedProbe.observePromptComposition?.(system),
+      )
+
+      expect(generatedObservations).toEqual(typedObservations)
+      expect(typedObservations[0]).toMatchObject({
+        systematicCatalog: { state: 'present' },
+      })
+      expect(generatedObservations[0]).toMatchObject({
+        systematicCatalog: { state: 'present' },
+      })
+    } finally {
+      cleanupEvalFixture(fixture)
+      fs.rmSync(parentDir, { recursive: true, force: true })
+    }
+  })
+
+  test('persists prompt composition facts before the final manifest rename', () => {
+    const parentDir = runParent()
+    const runsRoot = path.join(parentDir, 'runs')
+    const promptComposition = {
+      bootstrapPayloadSize: 18_145,
+      systematicCatalog: {
+        state: 'present' as const,
+        entryCount: 23,
+        skillNames: ['systematic:alpha', 'systematic:beta'],
+      },
+      hostCatalog: {
+        state: 'absent' as const,
+        entryCount: 0,
+        skillNames: [],
+      },
+    }
+    const result = normalizeResult({
+      ...syntheticResult({
+        caseId: 'bootstrap-loading',
+        mode: 'source',
+        runId: 'run-prompt-facts',
+        outcome: 'success',
+        subcode: 'none',
+      }),
+      evidence: {
+        sanity: 'passed',
+        process: 'completed',
+        assertionIds: ['bootstrap-observed'],
+        promptComposition,
+      },
+    })
+
+    try {
+      const renameOrder: string[] = []
+      persistEvalRun({
+        runsRoot,
+        manifest: {
+          manifestSchemaVersion: 1,
+          harness: 'opencode',
+          runId: 'run-prompt-facts',
+          requestedSelectionIds: ['bootstrap-loading/source'],
+          completedSelectionIds: ['bootstrap-loading/source'],
+          partial: false,
+          results: [
+            {
+              selectionId: 'bootstrap-loading/source',
+              resultArtifactId: 'results/bootstrap-loading/source.json',
+              outcome: 'success',
+              subcode: 'none',
+            },
+          ],
+        },
+        results: [result],
+        onRename: (relativeId) => renameOrder.push(relativeId),
+      })
+
+      expect(renameOrder).toEqual([
+        'results/bootstrap-loading/source.json',
+        'manifest.json',
+      ])
+      expect(
+        validateSerializedResult(
+          fs.readFileSync(
+            path.join(
+              runsRoot,
+              'run-prompt-facts/results/bootstrap-loading/source.json',
+            ),
+          ),
+        ).evidence.promptComposition,
+      ).toEqual(promptComposition)
+      expect(
+        validateSerializedRunManifest(
+          fs.readFileSync(
+            path.join(runsRoot, 'run-prompt-facts/manifest.json'),
+          ),
+        ).results,
+      ).toHaveLength(1)
     } finally {
       fs.rmSync(parentDir, { recursive: true, force: true })
     }
@@ -453,7 +1061,7 @@ describe('local OpenCode eval runner', () => {
     }
   }, 720_000)
 
-  test('source and installed bootstrap runs succeed with disjoint provenance and matching evidence', async () => {
+  test('source and installed bootstrap runs succeed with disjoint provenance and matching catalog evidence', async () => {
     const sourceParent = runParent()
     const installedParent = runParent()
     try {
@@ -476,7 +1084,28 @@ describe('local OpenCode eval runner', () => {
 
       expectRuntimeOutcome(source)
       expectRuntimeOutcome(installed)
-      expect(source.evidence).toEqual(installed.evidence)
+      expect(source.evidence).toMatchObject({
+        sanity: 'passed',
+        process: 'completed',
+        assertionIds: ['bootstrap-observed'],
+      })
+      expect(installed.evidence).toMatchObject({
+        sanity: 'passed',
+        process: 'completed',
+        assertionIds: ['bootstrap-observed'],
+      })
+      expect(source.evidence.promptComposition?.systematicCatalog).toEqual(
+        installed.evidence.promptComposition?.systematicCatalog,
+      )
+      expect(source.evidence.promptComposition?.hostCatalog).toEqual(
+        installed.evidence.promptComposition?.hostCatalog,
+      )
+      expect(
+        source.evidence.promptComposition?.bootstrapPayloadSize,
+      ).toBeGreaterThan(0)
+      expect(
+        installed.evidence.promptComposition?.bootstrapPayloadSize,
+      ).toBeGreaterThan(0)
       expect(source.mode).toBe('source')
       expect(installed.mode).toBe('installed')
       expect(source.provenance).toMatchObject({
@@ -497,6 +1126,71 @@ describe('local OpenCode eval runner', () => {
       expect(installed.identity.artifactId).toBe('installed-entry')
       expect(JSON.stringify(installed)).not.toContain(sourceParent)
       expect(JSON.stringify(installed)).not.toContain('src/index.ts')
+    } finally {
+      fs.rmSync(sourceParent, { recursive: true, force: true })
+      fs.rmSync(installedParent, { recursive: true, force: true })
+    }
+  }, 720_000)
+
+  test('host-skill-coverage passes in source and installed modes with complete observed coverage', async () => {
+    const sourceParent = runParent()
+    const installedParent = runParent()
+    try {
+      const source = normalizeResult(
+        await runSourceEval({
+          caseId: 'host-skill-coverage',
+          fixtureSeed: 'runner-host-skill-coverage',
+          normalizedClock: FIXED_CLOCK,
+          parentDir: sourceParent,
+        }),
+      )
+      const installed = normalizeResult(
+        await runInstalledEval({
+          caseId: 'host-skill-coverage',
+          fixtureSeed: 'runner-host-skill-coverage',
+          normalizedClock: FIXED_CLOCK,
+          parentDir: installedParent,
+        }),
+      )
+
+      expectRuntimeOutcome(source)
+      expectRuntimeOutcome(installed)
+      expect(source.assertionIds).toEqual(['host-catalog-covered'])
+      expect(installed.assertionIds).toEqual(['host-catalog-covered'])
+      const sourceCoverage = source.evidence.hostCatalogCoverage
+      const installedCoverage = installed.evidence.hostCatalogCoverage
+      if (!sourceCoverage || !installedCoverage) {
+        throw new Error('host catalog coverage evidence missing')
+      }
+      expect(sourceCoverage).toMatchObject({
+        state: 'present',
+        missingSkillNames: [],
+      })
+      expect(installedCoverage).toMatchObject({
+        state: 'present',
+        missingSkillNames: [],
+      })
+      expect(sourceCoverage.expectedSkillNames.length).toBeGreaterThan(0)
+      expect(installedCoverage.expectedSkillNames.length).toBeGreaterThan(0)
+      expect(
+        sourceCoverage.expectedSkillNames.every((name) =>
+          sourceCoverage.observedSkillNames.includes(name),
+        ),
+      ).toBe(true)
+      expect(
+        installedCoverage.expectedSkillNames.every((name) =>
+          installedCoverage.observedSkillNames.includes(name),
+        ),
+      ).toBe(true)
+      expect(sourceCoverage).toEqual(installedCoverage)
+      expect(source.evidence.promptComposition?.hostCatalog.state).toBe(
+        'present',
+      )
+      expect(installed.evidence.promptComposition?.hostCatalog.state).toBe(
+        'present',
+      )
+      expect(JSON.stringify(source)).not.toContain('<available_skills>')
+      expect(JSON.stringify(installed)).not.toContain('<available_skills>')
     } finally {
       fs.rmSync(sourceParent, { recursive: true, force: true })
       fs.rmSync(installedParent, { recursive: true, force: true })

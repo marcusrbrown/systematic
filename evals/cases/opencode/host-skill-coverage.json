@@ -1,0 +1,31 @@
+{
+  "caseSchemaVersion": 1,
+  "caseId": "host-skill-coverage",
+  "harness": "opencode",
+  "assertionIds": ["host-catalog-covered"],
+  "expectedSkillNames": [
+    "agent-browser",
+    "agent-native-architecture",
+    "ce:brainstorm",
+    "ce:compound",
+    "ce:ideate",
+    "ce:plan",
+    "ce:review",
+    "ce:work",
+    "deepen-plan",
+    "document-review",
+    "frontend-design",
+    "git-clean-gone-branches",
+    "git-commit",
+    "git-commit-push-pr",
+    "git-worktree",
+    "onboarding",
+    "orchestrating-subagents",
+    "reproduce-bug",
+    "resolve-pr-feedback",
+    "test-browser",
+    "test-driven-development",
+    "using-systematic",
+    "writing-skills"
+  ]
+}
