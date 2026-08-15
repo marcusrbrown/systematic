@@ -12,6 +12,7 @@ import {
   RESULT_SCHEMA_VERSION,
   serializeResult,
 } from '../../scripts/run-evals.ts'
+import { buildCatalogEntries } from '../../src/lib/skill-catalog.js'
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
 const MANIFEST_DIR = path.join(ROOT_DIR, 'evals/cases/opencode')
@@ -89,8 +90,12 @@ function validResult(mode: EvalMode = 'source'): Record<string, unknown> {
 }
 
 describe('local OpenCode eval contracts', () => {
-  test('exposes exactly two cases, four outcomes, and the supported schema versions', () => {
-    expect(CASE_IDS).toEqual(['bootstrap-loading', 'fixture-local-write'])
+  test('exposes exactly three cases, four outcomes, and the supported schema versions', () => {
+    expect(CASE_IDS).toEqual([
+      'bootstrap-loading',
+      'fixture-local-write',
+      'host-skill-coverage',
+    ])
     expect(OUTCOMES).toEqual([
       'success',
       'infra_failure',
@@ -101,9 +106,30 @@ describe('local OpenCode eval contracts', () => {
     expect(RESULT_SCHEMA_VERSION).toBe(1)
   })
 
-  test('accepts both declarative case manifests', () => {
+  test('accepts the host-skill-coverage case manifest with raw bundled skill names', () => {
+    expect(
+      parseCaseManifest({
+        caseSchemaVersion: 1,
+        caseId: 'host-skill-coverage',
+        harness: 'opencode',
+        assertionIds: ['host-catalog-covered'],
+        expectedSkillNames: ['agent-browser', 'ce:brainstorm'],
+      }),
+    ).toEqual({
+      caseSchemaVersion: 1,
+      caseId: 'host-skill-coverage',
+      harness: 'opencode',
+      assertionIds: ['host-catalog-covered'],
+      expectedSkillNames: ['agent-browser', 'ce:brainstorm'],
+    })
+  })
+
+  test('accepts all declarative case manifests', () => {
     const bootstrap = parseCaseManifest(readManifest('bootstrap-loading.json'))
     const fixture = parseCaseManifest(readManifest('fixture-local-write.json'))
+    const hostCoverage = parseCaseManifest(
+      readManifest('host-skill-coverage.json'),
+    )
 
     expect(bootstrap).toEqual({
       caseSchemaVersion: 1,
@@ -119,6 +145,46 @@ describe('local OpenCode eval contracts', () => {
       expectedArtifactId: 'fixture/output.txt',
       expectedContentId: 'fixture-local-write-v1',
     })
+    expect(hostCoverage).toMatchObject({
+      caseSchemaVersion: 1,
+      caseId: 'host-skill-coverage',
+      harness: 'opencode',
+      assertionIds: ['host-catalog-covered'],
+    })
+  })
+
+  test('keeps host coverage manifest names exactly in sync with the live bundled catalog', () => {
+    const hostCoverage = parseCaseManifest(
+      readManifest('host-skill-coverage.json'),
+    )
+    if (hostCoverage.caseId !== 'host-skill-coverage') {
+      throw new Error('expected host-skill-coverage manifest')
+    }
+
+    const bundledSkillNames = buildCatalogEntries({
+      bundledSkillsDir: path.join(ROOT_DIR, 'skills'),
+      disabledSkills: [],
+    }).map((entry) => entry.name)
+    const manifestSkillNames = hostCoverage.expectedSkillNames
+    const missingFromManifest = bundledSkillNames.filter(
+      (name) => !manifestSkillNames.includes(name),
+    )
+    const staleManifestNames = manifestSkillNames.filter(
+      (name) => !bundledSkillNames.includes(name),
+    )
+
+    if (missingFromManifest.length > 0 || staleManifestNames.length > 0) {
+      throw new Error(
+        [
+          'host-skill-coverage manifest drift detected.',
+          `Add bundled skills missing from the manifest: ${missingFromManifest.join(', ') || 'none'}.`,
+          `Remove manifest skills absent from the bundled catalog: ${staleManifestNames.join(', ') || 'none'}.`,
+        ].join(' '),
+      )
+    }
+
+    expect(missingFromManifest).toEqual([])
+    expect(staleManifestNames).toEqual([])
   })
 
   test('rejects unknown, missing, unsupported, and wrong-version manifest fields', () => {
@@ -220,5 +286,140 @@ describe('local OpenCode eval contracts', () => {
 
     expect(serializeResult(first)).toBe(serializeResult(second))
     expect(JSON.parse(serializeResult(first))).toEqual(normalizeResult(first))
+  })
+
+  test('round-trips bounded prompt composition observations without prompt text', () => {
+    const promptComposition = {
+      bootstrapPayloadSize: 18_145,
+      systematicCatalog: {
+        state: 'present',
+        entryCount: 23,
+        skillNames: ['systematic:alpha', 'systematic:beta'],
+      },
+      hostCatalog: {
+        state: 'absent',
+        entryCount: 0,
+        skillNames: [],
+      },
+    }
+    const candidate = {
+      ...validResult(),
+      evidence: {
+        sanity: 'passed',
+        process: 'completed',
+        assertionIds: ['fixture-file-content', 'fixture-file-created'],
+        promptComposition,
+      },
+    }
+
+    expect(normalizeResult(candidate).evidence.promptComposition).toEqual(
+      promptComposition,
+    )
+    expect(
+      JSON.parse(serializeResult(candidate)).evidence.promptComposition,
+    ).toEqual(promptComposition)
+  })
+
+  test('keeps present, absent, and impossible prompt observations distinct', () => {
+    const states = ['present', 'absent', 'impossible'] as const
+
+    for (const state of states) {
+      const promptComposition = {
+        bootstrapPayloadSize: state === 'impossible' ? 0 : 128,
+        systematicCatalog: {
+          state,
+          entryCount: state === 'present' ? 1 : 0,
+          skillNames: state === 'present' ? ['systematic:alpha'] : [],
+        },
+        hostCatalog: {
+          state: 'absent' as const,
+          entryCount: 0,
+          skillNames: [],
+        },
+      }
+
+      expect(
+        normalizeResult({
+          ...validResult(),
+          evidence: {
+            sanity: 'passed',
+            process: 'completed',
+            assertionIds: ['fixture-file-content', 'fixture-file-created'],
+            promptComposition,
+          },
+        }).evidence.promptComposition?.systematicCatalog.state,
+      ).toBe(state)
+    }
+  })
+
+  test('rejects raw prompt fields before result serialization', () => {
+    expect(() =>
+      serializeResult({
+        ...validResult(),
+        evidence: {
+          sanity: 'passed',
+          process: 'completed',
+          assertionIds: ['fixture-file-content', 'fixture-file-created'],
+          prompt: 'raw system prompt text',
+        },
+      }),
+    ).toThrow()
+  })
+
+  test('round-trips host catalog coverage evidence and rejects an incorrect missing set', () => {
+    const hostCatalogCoverage = {
+      state: 'present',
+      expectedSkillNames: ['agent-browser', 'ce:brainstorm'],
+      observedSkillNames: ['agent-browser', 'ce:brainstorm', 'extra-skill'],
+      missingSkillNames: [],
+    }
+    const candidate = {
+      ...validResult(),
+      evidence: {
+        sanity: 'passed',
+        process: 'completed',
+        assertionIds: ['fixture-file-content', 'fixture-file-created'],
+        hostCatalogCoverage,
+      },
+    }
+
+    expect(normalizeResult(candidate).evidence.hostCatalogCoverage).toEqual(
+      hostCatalogCoverage,
+    )
+    expect(
+      JSON.parse(serializeResult(candidate)).evidence.hostCatalogCoverage,
+    ).toEqual(hostCatalogCoverage)
+    expect(() =>
+      normalizeResult({
+        ...candidate,
+        evidence: {
+          ...candidate.evidence,
+          hostCatalogCoverage: {
+            ...hostCatalogCoverage,
+            missingSkillNames: ['agent-browser'],
+          },
+        },
+      }),
+    ).toThrow()
+
+    const impossibleCoverage = {
+      state: 'impossible',
+      expectedSkillNames: ['agent-browser', 'ce:brainstorm'],
+      observedSkillNames: [],
+      missingSkillNames: [],
+    }
+    expect(
+      normalizeResult({
+        ...validResult(),
+        outcome: 'infra_failure',
+        subcode: 'probe_unhealthy',
+        evidence: {
+          sanity: 'failed',
+          process: 'failed',
+          assertionIds: ['fixture-file-content', 'fixture-file-created'],
+          hostCatalogCoverage: impossibleCoverage,
+        },
+      }).evidence.hostCatalogCoverage,
+    ).toEqual(impossibleCoverage)
   })
 })
