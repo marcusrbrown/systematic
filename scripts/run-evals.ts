@@ -2852,7 +2852,7 @@ function buildResultEnvelope(input: {
         input.runtime.status === 'available'
           ? 'opencode-ai-1.18.5'
           : 'opencode-runtime-unavailable',
-      probeId: 'systematic-eval-probe-v2',
+      probeId: 'systematic-eval-probe-v3',
       probeDigest: input.execution.probeDigest,
       fixtureContractVersion: FIXTURE_CONTRACT_VERSION,
       fixtureContractDigest: FIXTURE_CONTRACT_DIGEST,

@@ -482,6 +482,8 @@ function observePromptComposition(system) {
   }
 }
 
+export { observePromptComposition }
+
 function isChatTransform(input) {
   return Boolean(input && typeof input === 'object' && typeof input.sessionID === 'string' && 'model' in input)
 }

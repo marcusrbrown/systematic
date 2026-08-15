@@ -4,8 +4,10 @@ import { once } from 'node:events'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import {
   type BoundedProbeEvent,
+  createOpencodeProbe,
   gradeBootstrapProbe,
   gradeFixtureWrite,
   gradeHostSkillCoverage,
@@ -13,6 +15,8 @@ import {
 } from '../../scripts/eval-cases/opencode.ts'
 import {
   capturePrimaryCheckout,
+  cleanupEvalFixture,
+  createEvalFixture,
   type EvalFixture,
   type EvalSelectionRunnerInput,
   installEvalSignalHandlers,
@@ -835,6 +839,67 @@ describe('local OpenCode eval runner', () => {
         skillNames: [],
       },
     })
+  })
+
+  test('keeps the generated probe observation implementation behaviorally identical', async () => {
+    const catalog = (name: string) =>
+      `<available_skills>\n<skill><name>${name}</name></skill>\n</available_skills>`
+    const systematicCatalog = catalog('systematic:alpha')
+    const hostCatalog = catalog('host:alpha')
+    const validSystem = [
+      `<SYSTEMATIC_WORKFLOWS>\n${systematicCatalog}\n</SYSTEMATIC_WORKFLOWS>`,
+    ]
+    const corpus: readonly (readonly unknown[])[] = [
+      validSystem,
+      [`<SYSTEMATIC_WORKFLOWS>\n${systematicCatalog}`],
+      [`${systematicCatalog}\n</SYSTEMATIC_WORKFLOWS>`],
+      [
+        `<SYSTEMATIC_WORKFLOWS><SYSTEMATIC_WORKFLOWS>${systematicCatalog}</SYSTEMATIC_WORKFLOWS></SYSTEMATIC_WORKFLOWS>`,
+      ],
+      [
+        `<SYSTEMATIC_WORKFLOWS>${systematicCatalog}</SYSTEMATIC_WORKFLOWS>\n${systematicCatalog}`,
+      ],
+      [
+        `${hostCatalog}\n<SYSTEMATIC_WORKFLOWS>\n${systematicCatalog}\n</SYSTEMATIC_WORKFLOWS>`,
+      ],
+      [validSystem[0], { role: 'system', content: 'not a string entry' }],
+    ]
+    const parentDir = runParent()
+    const fixture = createEvalFixture({
+      caseId: 'bootstrap-loading',
+      mode: 'source',
+      runId: 'probe-differential',
+      parentDir,
+    })
+
+    try {
+      const probe = createOpencodeProbe(fixture)
+      const generatedProbe = (await import(
+        `${pathToFileURL(probe.sourcePath).href}?differential`
+      )) as {
+        observePromptComposition?: (system: readonly unknown[]) => unknown
+      }
+      expect(typeof generatedProbe.observePromptComposition).toBe('function')
+      if (typeof generatedProbe.observePromptComposition !== 'function') return
+
+      const typedObservations = corpus.map((system) =>
+        observePromptComposition(system),
+      )
+      const generatedObservations = corpus.map((system) =>
+        generatedProbe.observePromptComposition?.(system),
+      )
+
+      expect(generatedObservations).toEqual(typedObservations)
+      expect(typedObservations[0]).toMatchObject({
+        systematicCatalog: { state: 'present' },
+      })
+      expect(generatedObservations[0]).toMatchObject({
+        systematicCatalog: { state: 'present' },
+      })
+    } finally {
+      cleanupEvalFixture(fixture)
+      fs.rmSync(parentDir, { recursive: true, force: true })
+    }
   })
 
   test('persists prompt composition facts before the final manifest rename', () => {
