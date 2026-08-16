@@ -2,7 +2,7 @@
 title: semantic-release release-notes-generator ignores commit bodies; patch with gh release edit
 module: .releaserc.yaml + release-pipeline
 date: 2026-05-17
-last_updated: 2026-05-23
+last_updated: 2026-08-16
 problem_type: developer_experience
 component: tooling
 severity: medium
@@ -28,6 +28,8 @@ applies_when:
 Systematic's release pipeline uses `@semantic-release/release-notes-generator` with the `conventionalcommits` preset. The plugin reads the conventional-commits in the release range, groups commit SUBJECT lines under section headers configured in `presetConfig.types[]` (`Features`, `Bug Fixes`, `Build System`, etc.), and writes the result to the GitHub release body via `@semantic-release/github`.
 
 The common mistaken assumption — held by this author across multiple session arcs before being empirically falsified — is that the BODY of each conventional-commit also flows into the release notes. It does not. Only the subject line plus PR/commit links is included.
+
+The subject line carries a second, separate responsibility: `@semantic-release/commit-analyzer` reads it to decide whether a release happens at all, and at what level. A type that appears in `presetConfig.types` gets a changelog section but does not necessarily trigger a release — see the companion doc linked below.
 
 This matters when a release ships an audience-facing narrative — a deprecation announcement, a migration guide, a breaking-change explanation. Authoring that narrative inside the squash-commit body looks right (the body IS in git history, and it survives the squash), but the GitHub release notes show only:
 
@@ -143,6 +145,7 @@ fi
 ## Related
 
 - `docs/solutions/developer-experience/gh-api-heredoc-backtick-escape-2026-05-17.md` — sibling lesson from the same release; both involve `gh` CLI body content
+- [`docs/solutions/workflow-issues/pr-title-selects-release-type-under-squash-merge-2026-08-16.md`](../workflow-issues/pr-title-selects-release-type-under-squash-merge-2026-08-16.md) — the subject line's other job: selecting the release type, and which types publish nothing
 - `.releaserc.yaml` — the source of truth for the plugin chain and section mapping
 - PR #401 / v2.19.0 — where this lesson was empirically verified
 - `.agents/skills/release-notes-narrative/SKILL.md` — formalized procedure for the post-publish patch recommended above
