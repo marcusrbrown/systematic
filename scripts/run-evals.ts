@@ -1659,7 +1659,7 @@ export function serializeRunManifest(input: unknown): string {
   return serialized
 }
 
-export const EXPECTED_OPENCODE_VERSION = '1.18.17' as const
+export const EXPECTED_OPENCODE_VERSION = '1.18.18' as const
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..')
 const FIXTURE_CONTRACT_VERSION = 1 as const
