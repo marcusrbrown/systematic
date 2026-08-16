@@ -65,13 +65,13 @@ Derives field reference content by walking `SystematicConfigSchema`'s JSON Schem
 - Default value (from JSON Schema `default`)
 - Examples (from `.meta({ examples })`)
 
-**No standalone page is produced.** Instead, the generator injects content into the committed human-owned page `src/content/docs/reference/configuration.mdx` between two sets of sentinel markers:
+**No standalone page is produced.** Instead, the generator injects content into the committed human-owned page `src/content/docs/reference/configuration.mdx` between the FIELD-REFERENCE sentinel markers:
 
 | Sentinel pair | What is injected |
 |---|---|
 | `{/* SYSTEMATIC:FIELD-REFERENCE:START */}` … `{/* SYSTEMATIC:FIELD-REFERENCE:END */}` | Full Zod-derived field reference (overlay fields + top-level sections) |
 
-`reference/configuration.mdx` is committed, human-owned content. Only the regions between the sentinel markers are overwritten on each `docs:generate` run. All prose outside the markers is preserved byte-for-byte.
+`reference/configuration.mdx` is committed, human-owned content. Only the region between the sentinel markers is overwritten on each `docs:generate` run. All prose outside the markers is preserved byte-for-byte.
 
 Adding a new top-level field to `SystematicConfigSchema` with `.meta({ description })` automatically produces a new MDX section on the next `docs:generate` run — no manual template update required.
 

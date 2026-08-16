@@ -175,9 +175,6 @@ or unresolved bare reference. Output is gitignored build staging (`claude-code/`
 `validateConfig` before use. `SECURITY_OVERLAY_FIELDS` are stripped from project-level config
 regardless of what the user writes.
 
-**Model availability memoization** (`src/lib/model-availability.ts`) — caches provider/model
-availability checks to avoid redundant API calls during a single plugin load cycle.
-
 **Config priority** — `$OPENCODE_CONFIG_DIR/systematic.json` > project `.opencode/systematic.json`
 > user `~/.config/opencode/systematic.json` > defaults. Disabled lists union-merge across all
 sources; bootstrap config shallow-merges.

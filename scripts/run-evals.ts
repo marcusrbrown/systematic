@@ -97,8 +97,10 @@ export interface ModelInheritanceCaseManifest {
   expectedAgentIds: string[]
   category: string
   categoryModel: string
+  categoryVariant: string
   exactAgentId: string
   exactModel: string
+  exactVariant: string
 }
 
 export type EvalCaseManifest =
@@ -161,7 +163,9 @@ export type ModelInheritancePolicy =
 export interface ModelAgentObservation {
   agentId: string
   modelPresent: boolean
+  variantPresent: boolean
   model?: string
+  variant?: string
 }
 
 export interface ModelInheritanceObservation {
@@ -1086,20 +1090,35 @@ function normalizeModelAgentObservation(value: unknown): ModelAgentObservation {
   const input = record(value, 'result_invalid_field')
   assertExactKeys(
     input,
-    ['agentId', 'modelPresent'],
-    ['model'],
+    ['agentId', 'modelPresent', 'variantPresent'],
+    ['model', 'variant'],
     'result_unknown_field',
     'result_missing_field',
   )
-  if (typeof input.modelPresent !== 'boolean') fail('result_invalid_field')
+  if (
+    typeof input.modelPresent !== 'boolean' ||
+    typeof input.variantPresent !== 'boolean'
+  ) {
+    fail('result_invalid_field')
+  }
   const model = hasOwn(input, 'model')
     ? readModelIdentifier(input.model)
     : undefined
-  if (!input.modelPresent && model !== undefined) fail('result_invalid_field')
+  const variant = hasOwn(input, 'variant')
+    ? readModelIdentifier(input.variant)
+    : undefined
+  if (
+    (!input.modelPresent && model !== undefined) ||
+    (!input.variantPresent && variant !== undefined)
+  ) {
+    fail('result_invalid_field')
+  }
   return {
     agentId: readSafeRelativeId(input.agentId),
     modelPresent: input.modelPresent,
+    variantPresent: input.variantPresent,
     ...(model !== undefined ? { model } : {}),
+    ...(variant !== undefined ? { variant } : {}),
   }
 }
 
@@ -1139,7 +1158,9 @@ function normalizeModelInheritanceObservation(
   agents.sort((left, right) => left.agentId.localeCompare(right.agentId))
   if (
     input.policy === 'none' &&
-    agents.some((agent) => agent.model !== undefined)
+    agents.some(
+      (agent) => agent.model !== undefined || agent.variant !== undefined,
+    )
   ) {
     fail('result_invalid_field')
   }
@@ -1258,6 +1279,7 @@ function normalizeIdentity(value: unknown): EvalIdentity {
 function normalizeEvidence(
   value: unknown,
   assertionIds: readonly string[],
+  caseId: CaseId,
 ): EvalEvidence {
   const input = record(value, 'result_invalid_field')
   assertExactKeys(
@@ -1281,6 +1303,12 @@ function normalizeEvidence(
     sanity,
     process,
     assertionIds: normalizedAssertionIds,
+  }
+  if (caseId !== 'model-inheritance' && hasOwn(input, 'modelInheritance')) {
+    fail('result_invalid_field')
+  }
+  if (caseId === 'model-inheritance' && !hasOwn(input, 'modelInheritance')) {
+    fail('result_invalid_field')
   }
   if (hasOwn(input, 'promptComposition')) {
     normalized.promptComposition = normalizePromptComposition(
@@ -1471,8 +1499,10 @@ function parseModelInheritanceCaseManifest(
       'expectedAgentIds',
       'category',
       'categoryModel',
+      'categoryVariant',
       'exactAgentId',
       'exactModel',
+      'exactVariant',
     ],
     [],
     'case_unknown_field',
@@ -1503,8 +1533,10 @@ function parseModelInheritanceCaseManifest(
     expectedAgentIds,
     category,
     categoryModel: readModelIdentifier(value.categoryModel),
+    categoryVariant: readModelIdentifier(value.categoryVariant),
     exactAgentId,
     exactModel: readModelIdentifier(value.exactModel),
+    exactVariant: readModelIdentifier(value.exactVariant),
   }
 }
 
@@ -1640,7 +1672,7 @@ export function normalizeResult(input: unknown): EvalResult {
     normalizedClock: readClock(value.normalizedClock),
     assertionIds,
     identity,
-    evidence: normalizeEvidence(value.evidence, assertionIds),
+    evidence: normalizeEvidence(value.evidence, assertionIds, caseId),
     cleanup: normalizeCleanup(value.cleanup),
     privacy: normalizePrivacy(value.privacy),
     artifactRefs: readSortedArtifactRefs(value.artifactRefs),
@@ -3066,9 +3098,11 @@ function buildResultEnvelope(input: {
       ...(input.execution.hostCatalogCoverage
         ? { hostCatalogCoverage: input.execution.hostCatalogCoverage }
         : {}),
-      ...(input.execution.modelInheritance
-        ? { modelInheritance: input.execution.modelInheritance }
-        : {}),
+      ...(input.caseManifest.caseId === 'model-inheritance'
+        ? { modelInheritance: input.execution.modelInheritance ?? [] }
+        : input.execution.modelInheritance
+          ? { modelInheritance: input.execution.modelInheritance }
+          : {}),
     },
     cleanup: input.cleanup,
     privacy: { status: 'validated' },

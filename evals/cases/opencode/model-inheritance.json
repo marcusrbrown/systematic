@@ -49,6 +49,8 @@
   ],
   "category": "review",
   "categoryModel": "systematic-eval-category-model",
+  "categoryVariant": "systematic-eval-category-variant",
   "exactAgentId": "review/correctness-reviewer",
-  "exactModel": "systematic-eval-exact-model"
+  "exactModel": "systematic-eval-exact-model",
+  "exactVariant": "systematic-eval-exact-variant"
 }

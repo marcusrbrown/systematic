@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
 
+import { validateModelInheritanceManifest } from '../../scripts/eval-cases/opencode.ts'
 import {
   CASE_IDS,
   CASE_SCHEMA_VERSION,
@@ -118,7 +119,11 @@ function validModelInheritanceResult(
           availability: 'known',
           policy: 'none',
           agents: [
-            { agentId: 'review/correctness-reviewer', modelPresent: false },
+            {
+              agentId: 'review/correctness-reviewer',
+              modelPresent: false,
+              variantPresent: false,
+            },
           ],
         },
       ],
@@ -176,8 +181,10 @@ describe('local OpenCode eval contracts', () => {
       ],
       category: 'review',
       categoryModel: 'systematic-eval-category-model',
+      categoryVariant: 'systematic-eval-category-variant',
       exactAgentId: 'review/correctness-reviewer',
       exactModel: 'systematic-eval-exact-model',
+      exactVariant: 'systematic-eval-exact-variant',
     })
     if (manifest.caseId !== 'model-inheritance') {
       throw new Error('expected model-inheritance manifest')
@@ -195,6 +202,12 @@ describe('local OpenCode eval contracts', () => {
     ).toEqual(
       new Set(['design', 'document-review', 'research', 'review', 'workflow']),
     )
+
+    const crafted = {
+      ...manifest,
+      expectedAgentIds: [...manifest.expectedAgentIds, 'review/attacker-agent'],
+    }
+    expect(() => validateModelInheritanceManifest(crafted)).toThrow()
   })
 
   test('accepts all declarative case manifests', () => {
@@ -495,7 +508,11 @@ describe('local OpenCode eval contracts', () => {
         availability: 'known',
         policy: 'none',
         agents: [
-          { agentId: 'review/correctness-reviewer', modelPresent: false },
+          {
+            agentId: 'review/correctness-reviewer',
+            modelPresent: false,
+            variantPresent: false,
+          },
         ],
       },
     ])
@@ -513,6 +530,7 @@ describe('local OpenCode eval contracts', () => {
                 {
                   agentId: 'review/correctness-reviewer',
                   modelPresent: false,
+                  variantPresent: false,
                 },
               ],
               config: { absolutePath: '/private/config.json' },
@@ -535,6 +553,7 @@ describe('local OpenCode eval contracts', () => {
                 {
                   agentId: 'review/correctness-reviewer',
                   modelPresent: false,
+                  variantPresent: false,
                   model: 'source-owned/provider-model',
                 },
               ],
@@ -543,6 +562,57 @@ describe('local OpenCode eval contracts', () => {
         },
       }),
     ).toThrow()
+  })
+
+  test('round-trips explicit model and variant overlay facts', () => {
+    const candidate = validModelInheritanceResult()
+    candidate.evidence = {
+      ...candidate.evidence,
+      modelInheritance: [
+        {
+          availability: 'known',
+          policy: 'exact',
+          agents: [
+            {
+              agentId: 'review/correctness-reviewer',
+              modelPresent: true,
+              variantPresent: true,
+              model: 'systematic-eval-exact-model',
+              variant: 'systematic-eval-exact-variant',
+            },
+          ],
+        },
+      ],
+    }
+    expect(normalizeResult(candidate).evidence.modelInheritance).toEqual(
+      candidate.evidence.modelInheritance,
+    )
+  })
+
+  test('binds model-inheritance evidence to its case and requires it there', () => {
+    const modelEvidence = {
+      ...validModelInheritanceResult().evidence,
+      assertionIds: ['fixture-file-content', 'fixture-file-created'],
+    }
+    expect(() =>
+      normalizeResult({
+        ...validResult(),
+        evidence: modelEvidence,
+      }),
+    ).toThrow()
+
+    const missingEvidence = validModelInheritanceResult()
+    missingEvidence.evidence = {
+      sanity: 'passed',
+      process: 'completed',
+      assertionIds: [
+        'agents-inherit-invoking-model',
+        'explicit-model-overlay-wins',
+        'model-null-restores-inheritance',
+        'project-model-trust-boundary',
+      ],
+    }
+    expect(() => normalizeResult(missingEvidence)).toThrow()
   })
 
   test('round-trips host catalog coverage evidence and rejects an incorrect missing set', () => {

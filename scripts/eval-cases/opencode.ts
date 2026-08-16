@@ -5,6 +5,7 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createOpencodeClient } from '@opencode-ai/sdk/v2'
 
+import { buildBundledAgentInventory } from '../../src/lib/agent-overlays.js'
 import {
   buildEvalChildEnv,
   type EvalCaseExecution,
@@ -38,6 +39,20 @@ const SAFE_SKILL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$/
 const MAX_BOOTSTRAP_PAYLOAD_SIZE = 100_000
 const MAX_CATALOG_ENTRIES = 128
 const MODEL_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/
+const MODEL_INHERITANCE_SCENARIOS = [
+  { availability: 'known', policy: 'none' },
+  { availability: 'unknown', policy: 'none' },
+  { availability: 'known', policy: 'category' },
+  { availability: 'unknown', policy: 'category' },
+  { availability: 'known', policy: 'exact' },
+  { availability: 'unknown', policy: 'exact' },
+  { availability: 'known', policy: 'null' },
+  { availability: 'unknown', policy: 'null' },
+  { availability: 'known', policy: 'project-error' },
+] as const satisfies ReadonlyArray<{
+  availability: ModelAvailabilityPath
+  policy: ModelInheritancePolicy
+}>
 
 export interface ScriptedToolCall {
   id: string
@@ -305,19 +320,29 @@ function isBoundedModelAgentObservation(
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const candidate = value as Record<string, unknown>
   const hasModel = Object.hasOwn(candidate, 'model')
-  if (
-    Object.keys(candidate).length !== (hasModel ? 3 : 2) ||
-    typeof candidate.agentId !== 'string' ||
-    !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/.test(candidate.agentId) ||
-    typeof candidate.modelPresent !== 'boolean'
-  ) {
-    return false
-  }
-  if (!candidate.modelPresent && hasModel) return false
+  const hasVariant = Object.hasOwn(candidate, 'variant')
   return (
-    !hasModel ||
-    (typeof candidate.model === 'string' &&
-      MODEL_IDENTIFIER_PATTERN.test(candidate.model))
+    Object.keys(candidate).length ===
+      3 + (hasModel ? 1 : 0) + (hasVariant ? 1 : 0) &&
+    typeof candidate.agentId === 'string' &&
+    /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/.test(candidate.agentId) &&
+    isBoundedModelAgentField(candidate, 'model', hasModel) &&
+    isBoundedModelAgentField(candidate, 'variant', hasVariant)
+  )
+}
+
+function isBoundedModelAgentField(
+  candidate: Record<string, unknown>,
+  field: 'model' | 'variant',
+  hasValue: boolean,
+): boolean {
+  const present = candidate[`${field}Present`]
+  if (typeof present !== 'boolean') return false
+  if (!hasValue) return !present
+  return (
+    present &&
+    typeof candidate[field] === 'string' &&
+    MODEL_IDENTIFIER_PATTERN.test(candidate[field])
   )
 }
 
@@ -704,6 +729,7 @@ export function createModelInheritanceProbe(
     manifest: ModelInheritanceCaseManifest
   },
 ): OpencodeProbe {
+  validateModelInheritanceManifest(scenario.manifest)
   const sourcePath = path.join(fixture.probeRoot, 'model-inheritance.mjs')
   const packagePath = path.join(fixture.probeRoot, 'package.json')
   const capturePath = path.join(fixture.probeRoot, 'events.jsonl')
@@ -754,12 +780,24 @@ export default async function systematicModelInheritanceProbe() {
               : policy === 'null'
                 ? agentId.startsWith(category + '/') && agentId !== exactAgentId
                 : false
+        const variantApplies =
+          policy === 'category'
+            ? agentId.startsWith(category + '/')
+            : policy === 'exact'
+              ? agentId.startsWith(category + '/')
+              : policy === 'null'
+                ? agentId.startsWith(category + '/') && agentId !== exactAgentId
+                : false
         const observation = {
           agentId,
           modelPresent: isRecord(entry) && Object.hasOwn(entry, 'model'),
+          variantPresent: isRecord(entry) && Object.hasOwn(entry, 'variant'),
         }
         if (modelApplies && isRecord(entry) && typeof entry.model === 'string') {
           observation.model = entry.model
+        }
+        if (variantApplies && isRecord(entry) && typeof entry.variant === 'string') {
+          observation.variant = entry.variant
         }
         return observation
       })
@@ -772,6 +810,7 @@ export default async function systematicModelInheritanceProbe() {
     },
   }
 }
+
 `,
   )
   return {
@@ -781,6 +820,28 @@ export default async function systematicModelInheritanceProbe() {
     digest: createHash('sha256')
       .update('systematic-eval-model-inheritance-probe-v1')
       .digest('hex'),
+  }
+}
+
+export function validateModelInheritanceManifest(
+  manifest: ModelInheritanceCaseManifest,
+): void {
+  const bundledAgentIds = Object.keys(
+    buildBundledAgentInventory(
+      path.resolve(import.meta.dirname, '../../agents'),
+      [],
+    ).agentsByQualifiedId,
+  ).sort()
+  const expectedAgentIds = [...manifest.expectedAgentIds].sort()
+  if (
+    bundledAgentIds.length !== expectedAgentIds.length ||
+    bundledAgentIds.some(
+      (agentId, index) => agentId !== expectedAgentIds[index],
+    )
+  ) {
+    throw new Error(
+      'model-inheritance manifest agent inventory drifted from bundled agents',
+    )
   }
 }
 
@@ -816,6 +877,42 @@ function expectedModelForAgent(
   return undefined
 }
 
+function expectedVariantForAgent(
+  agentId: string,
+  policy: ModelInheritancePolicy,
+  manifest: ModelInheritanceCaseManifest,
+): string | undefined {
+  if (policy === 'category') {
+    return agentId.startsWith(`${manifest.category}/`)
+      ? manifest.categoryVariant
+      : undefined
+  }
+  if (policy === 'exact') {
+    return agentId === manifest.exactAgentId
+      ? manifest.exactVariant
+      : agentId.startsWith(`${manifest.category}/`)
+        ? manifest.categoryVariant
+        : undefined
+  }
+  if (policy === 'null') {
+    return agentId.startsWith(`${manifest.category}/`) &&
+      agentId !== manifest.exactAgentId
+      ? manifest.categoryVariant
+      : undefined
+  }
+  return undefined
+}
+
+function isExpectedModelField(
+  modelPresent: boolean,
+  model: string | undefined,
+  expected: string | undefined,
+): boolean {
+  return expected === undefined
+    ? !modelPresent && model === undefined
+    : modelPresent && model === expected
+}
+
 function gradeModelObservation(
   event: Extract<BoundedProbeEvent, { type: 'model-config' }>,
   manifest: ModelInheritanceCaseManifest,
@@ -835,10 +932,18 @@ function gradeModelObservation(
   for (const agentId of expectedIds) {
     const observed = observedById.get(agentId)
     if (!observed) return false
-    const expectedModel = expectedModelForAgent(agentId, event.policy, manifest)
-    if (expectedModel === undefined) {
-      if (observed.modelPresent || observed.model !== undefined) return false
-    } else if (!observed.modelPresent || observed.model !== expectedModel) {
+    if (
+      !isExpectedModelField(
+        observed.modelPresent,
+        observed.model,
+        expectedModelForAgent(agentId, event.policy, manifest),
+      ) ||
+      !isExpectedModelField(
+        observed.variantPresent,
+        observed.variant,
+        expectedVariantForAgent(agentId, event.policy, manifest),
+      )
+    ) {
       return false
     }
   }
@@ -849,24 +954,11 @@ export function gradeModelInheritance(
   events: readonly BoundedProbeEvent[],
   manifest: ModelInheritanceCaseManifest,
 ): ModelInheritanceGrade {
+  validateModelInheritanceManifest(manifest)
   const modelEvents = events.filter(
     (event): event is Extract<BoundedProbeEvent, { type: 'model-config' }> =>
       event.type === 'model-config',
   )
-  const expectedScenarios: Array<{
-    availability: ModelAvailabilityPath
-    policy: ModelInheritancePolicy
-  }> = [
-    { availability: 'known', policy: 'none' },
-    { availability: 'unknown', policy: 'none' },
-    { availability: 'known', policy: 'category' },
-    { availability: 'unknown', policy: 'category' },
-    { availability: 'known', policy: 'exact' },
-    { availability: 'unknown', policy: 'exact' },
-    { availability: 'known', policy: 'null' },
-    { availability: 'unknown', policy: 'null' },
-    { availability: 'known', policy: 'project-error' },
-  ]
   const observations = modelEvents.map((event) => ({
     availability: event.availability,
     policy: event.policy,
@@ -875,8 +967,8 @@ export function gradeModelInheritance(
     ),
   }))
   const healthy =
-    modelEvents.length === expectedScenarios.length &&
-    expectedScenarios.every(({ availability, policy }) => {
+    modelEvents.length === MODEL_INHERITANCE_SCENARIOS.length &&
+    MODEL_INHERITANCE_SCENARIOS.every(({ availability, policy }) => {
       const matches = modelEvents.filter(
         (event) =>
           event.availability === availability && event.policy === policy,
@@ -1427,13 +1519,19 @@ function writeModelInheritanceScenario(
         }
       : {
           categories: {
-            [manifest.category]: { model: manifest.categoryModel },
+            [manifest.category]: {
+              model: manifest.categoryModel,
+              variant: manifest.categoryVariant,
+            },
           },
           ...(policy === 'exact' || policy === 'null'
             ? {
                 agents: {
                   [manifest.exactAgentId]: {
                     model: policy === 'exact' ? manifest.exactModel : null,
+                    ...(policy === 'exact'
+                      ? { variant: manifest.exactVariant }
+                      : {}),
                   },
                 },
               }
@@ -1464,22 +1562,7 @@ async function executeModelInheritanceCase(
         force: true,
       })
     }
-    const scenarios: Array<{
-      availability: ModelAvailabilityPath
-      policy: ModelInheritancePolicy
-    }> = [
-      { availability: 'known', policy: 'none' },
-      { availability: 'unknown', policy: 'none' },
-      { availability: 'known', policy: 'category' },
-      { availability: 'unknown', policy: 'category' },
-      { availability: 'known', policy: 'exact' },
-      { availability: 'unknown', policy: 'exact' },
-      { availability: 'known', policy: 'null' },
-      { availability: 'unknown', policy: 'null' },
-      { availability: 'known', policy: 'project-error' },
-    ]
-
-    for (const scenario of scenarios) {
+    for (const scenario of MODEL_INHERITANCE_SCENARIOS) {
       writeModelInheritanceScenario(input.fixture, manifest, scenario.policy)
       const probe = createModelInheritanceProbe(input.fixture, {
         ...scenario,
