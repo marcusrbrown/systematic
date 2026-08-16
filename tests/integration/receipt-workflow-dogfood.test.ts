@@ -7,6 +7,7 @@ import {
   cleanupPackedTarball,
   createIsolatedFixture,
   destroyIsolatedFixture,
+  EXACT_OPENCODE_VERSION,
   extractPackagedPlugin,
   OPENCODE_AVAILABLE,
   packTarballOnce,
@@ -415,7 +416,11 @@ async function runScenario(
   let host: Awaited<ReturnType<typeof startExactOpencodeServer>> | undefined
   try {
     const configText = config(pluginUrl, model.url, mode)
-    host = await startExactOpencodeServer(fixture, configText, '1.18.5')
+    host = await startExactOpencodeServer(
+      fixture,
+      configText,
+      EXACT_OPENCODE_VERSION,
+    )
     const client = createOpencodeClient({
       baseUrl: host.url,
       directory: fixture.projectDir,
@@ -470,8 +475,8 @@ async function runScenario(
 describe.skipIf(!OPENCODE_AVAILABLE)('focused real-host dogfood', () => {
   beforeAll(() => {
     packTarballOnce()
-    const warm = prewarmExactOpencode('1.18.5', 300_000)
-    if (warm.exitCode !== 0 || !warm.stdout.includes('1.18.5')) {
+    const warm = prewarmExactOpencode(EXACT_OPENCODE_VERSION, 300_000)
+    if (warm.exitCode !== 0 || !warm.stdout.includes(EXACT_OPENCODE_VERSION)) {
       throw new Error(
         `OpenCode prewarm failed: exit=${warm.exitCode} stdout=${warm.stdout.slice(-500)} stderr=${warm.stderr.slice(-500)}`,
       )
