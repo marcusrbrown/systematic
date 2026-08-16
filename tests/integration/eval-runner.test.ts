@@ -19,6 +19,7 @@ import {
   createEvalFixture,
   type EvalFixture,
   type EvalSelectionRunnerInput,
+  EXPECTED_OPENCODE_VERSION,
   installEvalSignalHandlers,
   normalizeResult,
   persistEvalRun,
@@ -103,8 +104,8 @@ function syntheticResult(options: {
     normalizedClock: FIXED_CLOCK,
     assertionIds,
     identity: {
-      opencodeVersion: '1.18.5',
-      opencodeBuildId: 'opencode-ai-1.18.5',
+      opencodeVersion: EXPECTED_OPENCODE_VERSION,
+      opencodeBuildId: `opencode-ai-${EXPECTED_OPENCODE_VERSION}`,
       probeId: 'probe-opencode-v1',
       probeDigest: 'a'.repeat(64),
       fixtureContractVersion: 1,
@@ -151,8 +152,10 @@ function expectRuntimeOutcome(
   result: ReturnType<typeof normalizeResult>,
 ): void {
   expect(result.outcome).toBe('success')
-  expect(result.identity.opencodeVersion).toBe('1.18.5')
-  expect(result.identity.opencodeBuildId).toBe('opencode-ai-1.18.5')
+  expect(result.identity.opencodeVersion).toBe(EXPECTED_OPENCODE_VERSION)
+  expect(result.identity.opencodeBuildId).toBe(
+    `opencode-ai-${EXPECTED_OPENCODE_VERSION}`,
+  )
 }
 
 function boundedInfraResult(): ReturnType<typeof normalizeResult> {
@@ -169,8 +172,8 @@ function boundedInfraResult(): ReturnType<typeof normalizeResult> {
     normalizedClock: FIXED_CLOCK,
     assertionIds: ['bootstrap-observed'],
     identity: {
-      opencodeVersion: '1.18.5',
-      opencodeBuildId: 'opencode-ai-1.18.5',
+      opencodeVersion: EXPECTED_OPENCODE_VERSION,
+      opencodeBuildId: `opencode-ai-${EXPECTED_OPENCODE_VERSION}`,
       probeId: 'probe-opencode-v1',
       probeDigest: 'a'.repeat(64),
       fixtureContractVersion: 1,
@@ -212,7 +215,9 @@ function countEvalServeProcesses(): number {
     .toString()
     .split('\n')
     .filter(
-      (line) => line.includes('opencode-ai@1.18.5') && line.includes('serve'),
+      (line) =>
+        line.includes(`opencode-ai@${EXPECTED_OPENCODE_VERSION}`) &&
+        line.includes('serve'),
     ).length
 }
 
@@ -272,7 +277,9 @@ describe('local OpenCode eval runner', () => {
           normalized.subcode,
         )
       } else {
-        expect(normalized.identity.opencodeVersion).toBe('1.18.5')
+        expect(normalized.identity.opencodeVersion).toBe(
+          EXPECTED_OPENCODE_VERSION,
+        )
       }
     } finally {
       fs.rmSync(parentDir, { recursive: true, force: true })
@@ -298,47 +305,51 @@ describe('local OpenCode eval runner', () => {
       expect(result.evidence.sanity).toBe('passed')
       expect(result.evidence.process).toBe('completed')
       expect(result.evidence.assertionIds).toEqual(['bootstrap-observed'])
-      expect(result.evidence.promptComposition).toBeDefined()
-      expect(result.evidence.promptComposition).toMatchObject({
+      const promptComposition = result.evidence.promptComposition
+      if (!promptComposition) {
+        throw new Error('bootstrap prompt composition evidence missing')
+      }
+      expect(promptComposition).toMatchObject({
         systematicCatalog: {
-          state: 'present',
-          entryCount: 23,
-          skillNames: [
-            'ce:brainstorm',
-            'ce:compound',
-            'ce:ideate',
-            'ce:plan',
-            'ce:review',
-            'ce:work',
-            'systematic:agent-browser',
-            'systematic:agent-native-architecture',
-            'systematic:deepen-plan',
-            'systematic:document-review',
-            'systematic:frontend-design',
-            'systematic:git-clean-gone-branches',
-            'systematic:git-commit',
-            'systematic:git-commit-push-pr',
-            'systematic:git-worktree',
-            'systematic:onboarding',
-            'systematic:orchestrating-subagents',
-            'systematic:reproduce-bug',
-            'systematic:resolve-pr-feedback',
-            'systematic:test-browser',
-            'systematic:test-driven-development',
-            'systematic:using-systematic',
-            'systematic:writing-skills',
-          ],
+          state: 'absent',
+          entryCount: 0,
+          skillNames: [],
         },
         hostCatalog: {
           state: 'present',
         },
       })
-      expect(
-        result.evidence.promptComposition?.bootstrapPayloadSize,
-      ).toBeGreaterThan(19_000)
-      expect(
-        result.evidence.promptComposition?.bootstrapPayloadSize,
-      ).toBeLessThan(21_000)
+      expect(promptComposition.hostCatalog.entryCount).toBeGreaterThan(0)
+      expect(promptComposition.hostCatalog.skillNames.length).toBeGreaterThan(0)
+
+      // OpenCode renders raw SKILL.md names; the Systematic prefix belongs only
+      // to the retained systematic_skill description surface.
+      const expectedHostSkillNames = buildCatalogEntries({
+        bundledSkillsDir: path.join(ROOT_DIR, 'skills'),
+        disabledSkills: [],
+      }).map((entry) => entry.name)
+      expect(expectedHostSkillNames.length).toBeGreaterThan(0)
+      const hostCoverage = gradeHostSkillCoverage(
+        [
+          { type: 'loaded', status: 'ok' },
+          {
+            type: 'transform',
+            kind: 'chat',
+            status: 'healthy',
+            blockCount: 1,
+            promptComposition,
+          },
+        ],
+        expectedHostSkillNames,
+      )
+      expect(hostCoverage).toMatchObject({
+        outcome: 'success',
+        subcode: 'none',
+        hostCatalogCoverage: {
+          state: 'present',
+          missingSkillNames: [],
+        },
+      })
       expect(result.evidence).toMatchObject({
         sanity: 'passed',
         process: 'completed',

@@ -1,22 +1,10 @@
-import { pathToFileURL } from 'node:url'
 import { formatSkillCommandName } from './skill-loader.js'
 import { findSkillsInDir } from './skills.js'
-
-/**
- * Escape XML special characters (&, <, >) in text content.
- * Quotes are not escaped because catalog names and descriptions are rendered
- * as element text, not attribute values.
- */
-export function escapeXml(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-}
 
 export interface CatalogEntry {
   name: string
   prefixedName: string
   description: string
-  path: string
-  skillFile: string
 }
 
 export interface CatalogOptions {
@@ -40,29 +28,7 @@ export function buildCatalogEntries(options: CatalogOptions): CatalogEntry[] {
       name: s.name,
       prefixedName: formatSkillCommandName(s.name),
       description: s.description,
-      path: s.path,
-      skillFile: s.skillFile,
     }))
-}
-
-/**
- * Renders discoverable skills as native-style verbose XML for bootstrap content.
- * Returns empty string when no skills are available.
- */
-export function renderCatalogVerbose(options: CatalogOptions): string {
-  const entries = buildCatalogEntries(options)
-
-  if (entries.length === 0) return ''
-
-  const skillLines = entries.flatMap((entry) => [
-    '  <skill>',
-    `    <name>${escapeXml(entry.prefixedName)}</name>`,
-    `    <description>${escapeXml(entry.description)}</description>`,
-    `    <location>${pathToFileURL(entry.path).href}</location>`,
-    '  </skill>',
-  ])
-
-  return ['<available_skills>', ...skillLines, '</available_skills>'].join('\n')
 }
 
 /**

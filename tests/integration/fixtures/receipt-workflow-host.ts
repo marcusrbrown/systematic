@@ -10,7 +10,7 @@ export const OPENCODE_AVAILABLE = (() => {
 })()
 
 export const TIMEOUT_MS = 180_000
-const EXACT_OPENCODE_VERSION = '1.18.5'
+export const EXACT_OPENCODE_VERSION = '1.18.18'
 let exactNpmCacheDir: string | undefined
 export const MAX_RETRIES = 1
 export const RETRY_DELAY_MS = 3_000
@@ -339,6 +339,16 @@ export function countWorkflowBlocks(system: readonly string[]): number {
   )
 }
 
+function countMarkerOccurrences(
+  system: readonly string[],
+  marker: string,
+): number {
+  return system.reduce(
+    (count, entry) => count + entry.split(marker).length - 1,
+    0,
+  )
+}
+
 export function createProbePlugin(fixture: IsolatedFixture): {
   url: string
   capturePath: string
@@ -415,8 +425,18 @@ export function assertProbeCapturedEvents(probe: {
 }
 
 function assertWorkflowSystem(system: readonly string[]): void {
-  if (countWorkflowBlocks(system) !== 1) {
-    throw new Error('mixed-version probe observed duplicate workflow blocks')
+  const openingMarkerCount = countMarkerOccurrences(
+    system,
+    '<SYSTEMATIC_WORKFLOWS>',
+  )
+  const closingMarkerCount = countMarkerOccurrences(
+    system,
+    '</SYSTEMATIC_WORKFLOWS>',
+  )
+  if (openingMarkerCount !== 1 || closingMarkerCount !== 1) {
+    throw new Error(
+      'workflow system must contain exactly one opening and one closing marker',
+    )
   }
   if (!system[0]?.includes('<SYSTEMATIC_WORKFLOWS>')) {
     throw new Error('workflow block was not first system entry')
@@ -426,11 +446,24 @@ function assertWorkflowSystem(system: readonly string[]): void {
       throw new Error('workflow block appeared in a later system entry')
     }
   }
-  if (!system[0]?.includes('<available_skills>')) {
-    throw new Error('workflow system block omitted available skills')
+  const firstSystem = system[0]
+  if (!firstSystem?.includes('</SYSTEMATIC_WORKFLOWS>')) {
+    throw new Error('workflow system block was not closed')
   }
-  if (!/ce:brainstorm|systematic:git-clean-gone-branches/.test(system[0])) {
-    throw new Error('workflow system block omitted expected skill names')
+  if (
+    firstSystem.indexOf('</SYSTEMATIC_WORKFLOWS>') <
+    firstSystem.indexOf('<SYSTEMATIC_WORKFLOWS>')
+  ) {
+    throw new Error('workflow system block markers were out of order')
+  }
+  if (
+    !firstSystem.includes(
+      'Use `systematic_skill` to load Systematic bundled skills',
+    )
+  ) {
+    throw new Error(
+      'workflow system omitted systematic_skill discovery guidance',
+    )
   }
 }
 

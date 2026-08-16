@@ -6,6 +6,7 @@ import {
   CASE_IDS,
   CASE_SCHEMA_VERSION,
   type EvalMode,
+  EXPECTED_OPENCODE_VERSION,
   normalizeResult,
   OUTCOMES,
   parseCaseManifest,
@@ -13,6 +14,7 @@ import {
   serializeResult,
 } from '../../scripts/run-evals.ts'
 import { buildCatalogEntries } from '../../src/lib/skill-catalog.js'
+import { EXACT_OPENCODE_VERSION } from '../integration/fixtures/receipt-workflow-host.js'
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
 const MANIFEST_DIR = path.join(ROOT_DIR, 'evals/cases/opencode')
@@ -185,6 +187,46 @@ describe('local OpenCode eval contracts', () => {
 
     expect(missingFromManifest).toEqual([])
     expect(staleManifestNames).toEqual([])
+  })
+
+  test('keeps exact host-coverage pins aligned with OpenCode devDependencies', () => {
+    const packageJson = JSON.parse(
+      fs.readFileSync(path.join(ROOT_DIR, 'package.json'), 'utf8'),
+    ) as {
+      devDependencies?: Record<string, unknown>
+    }
+    const sdkVersion = packageJson.devDependencies?.['@opencode-ai/sdk']
+    const pluginVersion = packageJson.devDependencies?.['@opencode-ai/plugin']
+
+    if (typeof sdkVersion !== 'string' || typeof pluginVersion !== 'string') {
+      throw new Error(
+        'OpenCode host pin check cannot read @opencode-ai/sdk and @opencode-ai/plugin from package.json devDependencies.',
+      )
+    }
+    if (sdkVersion !== pluginVersion) {
+      throw new Error(
+        `OpenCode devDependency versions disagree: @opencode-ai/sdk is ${sdkVersion}, but @opencode-ai/plugin is ${pluginVersion}. Align both dependencies before re-running the host-coverage eval.`,
+      )
+    }
+
+    const pins = [
+      [
+        'scripts/run-evals.ts EXPECTED_OPENCODE_VERSION',
+        EXPECTED_OPENCODE_VERSION,
+      ],
+      [
+        'tests/integration/fixtures/receipt-workflow-host.ts EXACT_OPENCODE_VERSION',
+        EXACT_OPENCODE_VERSION,
+      ],
+    ] as const
+
+    for (const [name, pin] of pins) {
+      if (pin !== sdkVersion) {
+        throw new Error(
+          `OpenCode host pin drift: ${name} is ${pin}, but package.json devDependencies @opencode-ai/sdk and @opencode-ai/plugin are ${sdkVersion}. Change ${name} to ${sdkVersion}, then re-run the host-coverage eval before relying on bootstrap catalog deletion evidence.`,
+        )
+      }
+    }
   })
 
   test('rejects unknown, missing, unsupported, and wrong-version manifest fields', () => {

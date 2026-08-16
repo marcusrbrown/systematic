@@ -138,19 +138,32 @@ describe('generatePluginFiles — happy path', () => {
     expect(stems).toEqual(['bar', 'baz'])
   })
 
-  test('output-style contains using-systematic body + CC profile content, with force-for-plugin: true, no catalog', () => {
+  test('output-style remains byte-identical, with force-for-plugin: true and no catalog', () => {
     const root = makeFixtureRepo()
     writeUsingSystematicAndProfile(root)
     writeSkill(root, 'foo', 'Foo skill.')
 
     const content = buildOutputStyleContent(root)
 
-    expect(content).toContain('force-for-plugin: true')
-    expect(content).toContain('Using-systematic body content.')
-    expect(content).toContain('Profile body content.')
+    expect(content).toBe(`---
+name: systematic
+description: Compound-engineering loops (brainstorm, plan, work, review) via the Systematic plugin.
+force-for-plugin: true
+---
+
+You have access to structured engineering workflows via the Systematic plugin.
+
+**IMPORTANT: The using-systematic skill content is included below. It is ALREADY LOADED - you are currently following it. Do not load "using-systematic" again - that would be redundant.**
+
+Using-systematic body content.
+
+# Claude Code Capability Profile
+
+Profile body content.
+`)
     expect(content).not.toContain('<SYSTEMATIC_WORKFLOWS>')
     expect(content).not.toContain('<available_skills>')
-    expect(content).not.toContain('<skill>')
+    expect(content).not.toContain('<location>')
   })
 
   test('output-style contains no <location> tag (absolute machine paths must not leak into the bundle)', () => {

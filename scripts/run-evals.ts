@@ -1659,7 +1659,7 @@ export function serializeRunManifest(input: unknown): string {
   return serialized
 }
 
-export const EXPECTED_OPENCODE_VERSION = '1.18.5' as const
+export const EXPECTED_OPENCODE_VERSION = '1.18.18' as const
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..')
 const FIXTURE_CONTRACT_VERSION = 1 as const
@@ -2850,7 +2850,7 @@ function buildResultEnvelope(input: {
       opencodeVersion: runtimeVersion,
       opencodeBuildId:
         input.runtime.status === 'available'
-          ? 'opencode-ai-1.18.5'
+          ? `opencode-ai-${EXPECTED_OPENCODE_VERSION}`
           : 'opencode-runtime-unavailable',
       probeId: 'systematic-eval-probe-v3',
       probeDigest: input.execution.probeDigest,

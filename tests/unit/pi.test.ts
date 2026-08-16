@@ -1,5 +1,7 @@
 import { describe, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type {
   AgentToolResult,
@@ -10,6 +12,9 @@ import type {
   ExtensionHandler,
   ToolDefinition,
 } from '@earendil-works/pi-coding-agent'
+import type { Config } from '@opencode-ai/sdk'
+import { createConfigHandler } from '../../src/lib/config-handler.ts'
+import { formatSkillCommandName } from '../../src/lib/skill-loader.ts'
 import {
   buildSkillContentOutput,
   buildSkillToolDescription,
@@ -17,6 +22,7 @@ import {
   resolveSkill,
 } from '../../src/lib/skill-resolver.ts'
 import { createSkillTool } from '../../src/lib/skill-tool.ts'
+import { findSkillsInDir } from '../../src/lib/skills.ts'
 import piExtension from '../../src/pi.ts'
 
 const bundledSkillsDir = fileURLToPath(new URL('../../skills', import.meta.url))
@@ -80,6 +86,41 @@ describe('src/pi.ts systematic_skill tool registration', () => {
     expect(registered?.promptSnippet).toBe(
       'Use `systematic_skill` to load Systematic skills.',
     )
+  })
+
+  test('systematic_skill description lists every discoverable bundled skill by name and description', async () => {
+    const api = createFakeExtensionApi()
+    await piExtension(api)
+    const registered = findToolByName(api.registeredTools, 'systematic_skill')
+    const expectedSkills = findSkillsInDir(bundledSkillsDir)
+      .filter((skill) => skill.disableModelInvocation !== true)
+      .sort((a, b) => a.name.localeCompare(b.name))
+
+    expect(expectedSkills.length).toBeGreaterThan(0)
+    expect(registered.description.match(/^- /gm)).toHaveLength(
+      expectedSkills.length,
+    )
+    for (const skill of expectedSkills) {
+      expect(registered.description).toContain(
+        `- ${formatSkillCommandName(skill.name)}: ${skill.description}`,
+      )
+    }
+  })
+
+  test('omits disabled bundled skills from the Pi systematic_skill description', async () => {
+    const api = createFakeExtensionApi()
+    await piExtension(api)
+    const registered = findToolByName(api.registeredTools, 'systematic_skill')
+    const disabledSkills = findSkillsInDir(bundledSkillsDir).filter(
+      (skill) => skill.disableModelInvocation === true,
+    )
+
+    expect(disabledSkills.length).toBeGreaterThan(0)
+    for (const skill of disabledSkills) {
+      expect(registered.description).not.toContain(
+        `- ${formatSkillCommandName(skill.name)}: ${skill.description}`,
+      )
+    }
   })
 
   test('parameters schema exposes the exact shared parameter hint on the name property', async () => {
@@ -386,6 +427,39 @@ describe('src/pi.ts before_agent_start bootstrap injection', () => {
 
     expect(second.split(profileMarker)).toHaveLength(2)
     expect(second).toBe(first)
+  })
+})
+
+describe('OpenCode native skill discovery fallback', () => {
+  test('keeps bundled skills in native skills.paths without relying on systematic_skill', async () => {
+    const tempDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-opencode-skill-paths-'),
+    )
+    const originalHomedir = os.homedir
+    const bundledAgentsDir = path.join(tempDir, 'agents')
+    const bundledCommandsDir = path.join(tempDir, 'commands')
+    fs.mkdirSync(bundledAgentsDir)
+    fs.mkdirSync(bundledCommandsDir)
+    os.homedir = () => tempDir
+
+    try {
+      const handler = createConfigHandler({
+        directory: tempDir,
+        bundledSkillsDir,
+        bundledAgentsDir,
+        bundledCommandsDir,
+      })
+      const config = {} as Config & { skills?: { paths?: string[] } }
+
+      // Exercise the OpenCode config hook directly; no systematic_skill tool is
+      // registered in this test, so native path registration is the fallback.
+      await handler(config)
+
+      expect(config.skills?.paths).toEqual([bundledSkillsDir])
+    } finally {
+      os.homedir = originalHomedir
+      fs.rmSync(tempDir, { recursive: true, force: true })
+    }
   })
 })
 

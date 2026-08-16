@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import { createSkillTool, formatSkillsXml } from '../../src/lib/skill-tool.ts'
+import { createSkillTool } from '../../src/lib/skill-tool.ts'
 
 const mockContext = {
   ask: async () => {},
@@ -18,106 +18,6 @@ describe('skill-tool', () => {
 
   afterEach(() => {
     fs.rmSync(testDir, { recursive: true, force: true })
-  })
-
-  describe('formatSkillsXml', () => {
-    test('returns empty string for empty skills array', () => {
-      const result = formatSkillsXml([])
-      expect(result).toBe('')
-    })
-
-    test('formats single skill with space delimiters, indented structure, and location field', () => {
-      const result = formatSkillsXml([
-        {
-          path: '/test/path',
-          skillFile: '/test/path/SKILL.md',
-          name: 'test-skill',
-          description: 'A test skill',
-        },
-      ])
-      expect(result).toContain('<available_skills>')
-      expect(result).toContain('</available_skills>')
-      expect(result).toContain('<name>systematic:test-skill</name>')
-      expect(result).toContain('<description>A test skill</description>')
-      expect(result).toContain('<location>file:///test/path</location>')
-      // Ensure space-delimited format (no newlines)
-      expect(result).not.toContain('\n')
-    })
-
-    test('formats multiple skills with space delimiters and indented structure', () => {
-      const result = formatSkillsXml([
-        {
-          path: '/test/path1',
-          skillFile: '/test/path1/SKILL.md',
-          name: 'skill-one',
-          description: 'First skill',
-        },
-        {
-          path: '/test/path2',
-          skillFile: '/test/path2/SKILL.md',
-          name: 'skill-two',
-          description: 'Second skill',
-        },
-      ])
-      expect(result).toContain('<available_skills>')
-      expect(result).toContain('</available_skills>')
-      expect(result).toContain('<name>systematic:skill-one</name>')
-      expect(result).toContain('<name>systematic:skill-two</name>')
-      expect(result).toContain('<description>First skill</description>')
-      expect(result).toContain('<description>Second skill</description>')
-      // Ensure no newlines in output (space-delimited format)
-      expect(result).not.toContain('\n')
-    })
-
-    test('includes skills even when disableModelInvocation is true', () => {
-      const result = formatSkillsXml([
-        {
-          path: '/test/path1',
-          skillFile: '/test/path1/SKILL.md',
-          name: 'skill-one',
-          description: 'First skill',
-        },
-        {
-          path: '/test/path2',
-          skillFile: '/test/path2/SKILL.md',
-          name: 'skill-two',
-          description: 'Second skill',
-          disableModelInvocation: true,
-        },
-      ])
-      expect(result).toContain('skill-one')
-      expect(result).toContain('skill-two')
-    })
-
-    test('preserves names that already include a colon prefix', () => {
-      const result = formatSkillsXml([
-        {
-          path: '/test/path',
-          skillFile: '/test/path/SKILL.md',
-          name: 'ce:plan',
-          description: 'Plan workflow skill',
-        },
-      ])
-
-      expect(result).toContain('<name>ce:plan</name>')
-      expect(result).not.toContain('<name>systematic:ce:plan</name>')
-    })
-
-    test('escapes XML special chars in name and description', () => {
-      const result = formatSkillsXml([
-        {
-          path: '/test/path',
-          skillFile: '/test/path/SKILL.md',
-          name: 'a&b',
-          description: 'A & B <special>',
-        },
-      ])
-
-      expect(result).toContain('<name>systematic:a&amp;b</name>')
-      expect(result).toContain(
-        '<description>A &amp; B &lt;special&gt;</description>',
-      )
-    })
   })
 
   describe('createSkillTool', () => {
@@ -140,6 +40,15 @@ description: A test skill for unit testing
 
       expect(tool.description).toContain('systematic:test-skill')
       expect(tool.description).toContain('A test skill for unit testing')
+    })
+
+    test('retains all 23 bundled skills in the systematic_skill description', () => {
+      const tool = createSkillTool({
+        bundledSkillsDir: path.resolve(process.cwd(), 'skills'),
+        disabledSkills: [],
+      })
+
+      expect(tool.description.match(/^- /gm)).toHaveLength(23)
     })
 
     test('description uses compact catalog format, not verbose XML', () => {

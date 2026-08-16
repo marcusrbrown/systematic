@@ -132,6 +132,29 @@ OpenCode loads plugin
                  └─ INTERNAL_AGENT_SIGNATURES — skip heuristic for internal agents
 ```
 
+## Skill Discovery and Fallbacks
+
+Skill discovery is harness-owned and does not depend on the bootstrap prompt carrying a catalog:
+
+- **OpenCode** — only the config hook calls `registerSkillsPaths()` and registers the bundled
+  skills directory in native `skills.paths`. OpenCode's native `skill` tool then discovers and
+  loads those skills. If `systematic_skill` is unavailable or denied, discovery is degraded but
+  not lost because the host path remains available.
+- **Pi** — the `systematic_skill` tool description is the only discovery surface. Pi has no
+  equivalent `registerSkillsPaths()` call or host-rendered catalog. If `systematic_skill` is
+  absent or denied, Pi has no remaining discovery surface. This is a knowingly accepted reduction
+  in resilience versus the former bootstrap catalog, which at least named the skills.
+- **Claude Code** — the generated plugin uses Claude Code's native `Skill` tool, so it is already
+  on the no-catalog path and is unaffected by the bootstrap catalog deletion.
+
+Bootstrap deliberately carries no skill catalog. The host and tool-description surfaces already
+carry the needed discovery data; the Systematic copy was stale, permission-blind, and leaked
+absolute machine paths into the prompt.
+
+The `host-skill-coverage` eval case is a standing gate. Re-run it whenever the pinned OpenCode
+runtime changes: host catalog rendering is version-dependent, so coverage proven at one pinned
+version is not evidence for another.
+
 ## Cross-Cutting Concerns
 
 **Content-integrity gate** (`scripts/content-integrity.ts`) — runs in the CI build job. Catches

@@ -217,7 +217,7 @@ This is the program's first live deletion, so it sets precedent. The standard it
 - The case fails loudly when coverage is incomplete.
 - The case remains registered and runnable after Unit 3, so a later runtime bump re-exercises it.
 
-- [ ] **Unit 3: Delete the bootstrap catalog and the code it kept alive**
+- [x] **Unit 3: Delete the bootstrap catalog and the code it kept alive**
 
 **Goal:** Remove the catalog from generated bootstrap content and delete the code paths that become unreachable.
 
@@ -263,7 +263,7 @@ This is the program's first live deletion, so it sets precedent. The standard it
 - Claude Code bundle output is byte-unchanged.
 - No unused exports remain from the deleted surface.
 
-- [ ] **Unit 4: Confirm Pi coverage and record the cross-harness posture**
+- [x] **Unit 4: Confirm Pi coverage and record the cross-harness posture**
 
 **Goal:** Verify Pi retains full skill discoverability without a host-rendered catalog, state the unavailable-tool contract per harness, and document the resulting architecture.
 

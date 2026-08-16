@@ -1,41 +1,17 @@
-import { pathToFileURL } from 'node:url'
 import type { ToolDefinition } from '@opencode-ai/plugin'
 import { z } from 'zod'
-import { escapeXml } from './skill-catalog.js'
-import { formatSkillCommandName } from './skill-loader.js'
 import {
   buildSkillContentOutput,
   buildSkillToolDescription,
   buildSkillToolParameterHint,
   resolveSkill,
 } from './skill-resolver.js'
-import type { SkillInfo } from './skills.js'
 
 export { discoverSkillFiles } from './skill-resolver.js'
 
 export interface SkillToolOptions {
   bundledSkillsDir: string
   disabledSkills: string[]
-}
-
-/**
- * Formats skills as XML for tool description.
- * Uses indented format matching OpenCode's native skill tool.
- */
-export function formatSkillsXml(skills: SkillInfo[]): string {
-  if (skills.length === 0) return ''
-
-  // Match OpenCode's native skill tool format exactly:
-  // Uses space-delimited join with indented XML structure
-  const skillLines = skills.flatMap((skill) => [
-    '  <skill>',
-    `    <name>${escapeXml(formatSkillCommandName(skill.name))}</name>`,
-    `    <description>${escapeXml(skill.description)}</description>`,
-    `    <location>${pathToFileURL(skill.path).href}</location>`,
-    '  </skill>',
-  ])
-
-  return ['<available_skills>', ...skillLines, '</available_skills>'].join(' ')
 }
 
 export function createSkillTool(options: SkillToolOptions): ToolDefinition {

@@ -5,10 +5,7 @@ import path from 'node:path'
 
 import {
   buildCatalogEntries,
-  type CatalogOptions,
-  escapeXml,
   renderCatalogCompact,
-  renderCatalogVerbose,
 } from '../../src/lib/skill-catalog.js'
 
 function writeSkill(
@@ -124,79 +121,6 @@ describe('skill-catalog', () => {
     })
   })
 
-  describe('renderCatalogVerbose', () => {
-    test('renders skills in sorted order as XML', () => {
-      writeSkill(testDir, 'zebra-skill', 'Zebra description')
-      writeSkill(testDir, 'alpha-skill', 'Alpha description')
-
-      const opts: CatalogOptions = {
-        bundledSkillsDir: testDir,
-        disabledSkills: [],
-      }
-      const result = renderCatalogVerbose(opts)
-
-      const alphaPos = result.indexOf('systematic:alpha-skill')
-      const zebraPos = result.indexOf('systematic:zebra-skill')
-      expect(alphaPos).toBeGreaterThanOrEqual(0)
-      expect(zebraPos).toBeGreaterThanOrEqual(0)
-      expect(alphaPos).toBeLessThan(zebraPos)
-    })
-
-    test('renders XML with available_skills wrapper', () => {
-      writeSkill(testDir, 'git-commit', 'Create a git commit')
-
-      const result = renderCatalogVerbose({
-        bundledSkillsDir: testDir,
-        disabledSkills: [],
-      })
-
-      expect(result).toContain('<available_skills>')
-      expect(result).toContain('</available_skills>')
-      expect(result).toContain('<name>systematic:git-commit</name>')
-      expect(result).toContain('<description>Create a git commit</description>')
-    })
-
-    test('excludes disabled skills from verbose output', () => {
-      writeSkill(testDir, 'git-commit', 'Commit skill')
-      writeSkill(testDir, 'ce-brainstorm', 'Brainstorm skill')
-
-      const result = renderCatalogVerbose({
-        bundledSkillsDir: testDir,
-        disabledSkills: ['ce-brainstorm'],
-      })
-
-      expect(result).not.toContain('systematic:ce-brainstorm')
-      expect(result).toContain('systematic:git-commit')
-    })
-
-    test('excludes disable-model-invocation skills from verbose output', () => {
-      writeSkill(testDir, 'git-commit', 'Commit skill')
-      writeSkill(
-        testDir,
-        'internal-only',
-        'Internal skill',
-        'disable-model-invocation: true\n',
-      )
-
-      const result = renderCatalogVerbose({
-        bundledSkillsDir: testDir,
-        disabledSkills: [],
-      })
-
-      expect(result).not.toContain('systematic:internal-only')
-      expect(result).toContain('systematic:git-commit')
-    })
-
-    test('returns empty string when no skills are discoverable', () => {
-      const result = renderCatalogVerbose({
-        bundledSkillsDir: testDir,
-        disabledSkills: [],
-      })
-
-      expect(result).toBe('')
-    })
-  })
-
   describe('renderCatalogCompact', () => {
     test('renders heading and bullet list in sorted order', () => {
       writeSkill(testDir, 'zebra-skill', 'Zebra description')
@@ -275,39 +199,14 @@ describe('skill-catalog', () => {
 
       expect(result).toContain('No Systematic skills are currently available.')
     })
-  })
 
-  describe('escapeXml', () => {
-    test('escapes &, <, > characters', () => {
-      expect(escapeXml('A & B <test>')).toBe('A &amp; B &lt;test&gt;')
-    })
-
-    test('passes through text without special chars', () => {
-      expect(escapeXml('normal text')).toBe('normal text')
-    })
-
-    test('escapes multiple occurrences', () => {
-      expect(escapeXml('<a> & <b>')).toBe('&lt;a&gt; &amp; &lt;b&gt;')
-    })
-
-    test('handles empty string', () => {
-      expect(escapeXml('')).toBe('')
-    })
-  })
-
-  describe('renderCatalogVerbose XML escaping', () => {
-    test('escapes XML special chars in name and description', () => {
-      writeSkill(testDir, 'a&b', 'Skill with A & B <special> chars')
-
-      const result = renderCatalogVerbose({
-        bundledSkillsDir: testDir,
+    test('retains all 23 bundled skills in the compact catalog', () => {
+      const result = renderCatalogCompact({
+        bundledSkillsDir: path.resolve(process.cwd(), 'skills'),
         disabledSkills: [],
       })
 
-      expect(result).toContain('<name>systematic:a&amp;b</name>')
-      expect(result).toContain(
-        '<description>Skill with A &amp; B &lt;special&gt; chars</description>',
-      )
+      expect(result.match(/^- /gm)).toHaveLength(23)
     })
   })
 })

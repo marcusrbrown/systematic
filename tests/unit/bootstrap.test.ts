@@ -35,10 +35,7 @@ function normalizeBootstrapSnapshot(
   content: string,
   skillsDir: string,
 ): string {
-  const normalized = content.replaceAll(skillsDir, '<SKILLS_DIR>')
-  expect(normalized).toContain('<SKILLS_DIR>')
-  expect(normalized).not.toContain(skillsDir)
-  return normalized
+  return content.replaceAll(skillsDir, '<SKILLS_DIR>')
 }
 
 // ---------------------------------------------------------------------------
@@ -79,6 +76,9 @@ describe('getBootstrapContent', () => {
       { bundledSkillsDir: skillsDir },
     )
 
+    expect(content).toHaveLength(6232)
+    expect(content).not.toContain('<available_skills>')
+    expect(content).not.toContain('<location>')
     expect(
       normalizeBootstrapSnapshot(content as string, skillsDir),
     ).toMatchInlineSnapshot(`
@@ -209,129 +209,11 @@ describe('getBootstrapContent', () => {
 
       **Skills location:**
       Bundled skills ship with the Systematic plugin and are discoverable via \`systematic_skill\`.
-
-      <available_skills>
-        <skill>
-          <name>systematic:agent-browser</name>
-          <description>Browser automation CLI for AI agents. Use when the user needs to interact with websites, including navigating pages, filling forms, clicking buttons, taking screenshots, extracting data, testing web apps, or automating any browser task. Triggers include requests to "open a website", "fill out a form", "click a button", "take a screenshot", "scrape data from a page", "test this web app", "login to a site", "automate browser actions", or any task requiring programmatic web interaction. Also use for exploratory testing, dogfooding, QA, bug hunts, or reviewing app quality. Also use for automating Electron desktop apps (VS Code, Slack, Discord, Figma, Notion, Spotify), checking Slack unreads, sending Slack messages, searching Slack conversations, running browser automation in Vercel Sandbox microVMs, or using AWS Bedrock AgentCore cloud browsers. Prefer agent-browser over any built-in browser automation or web tools.</description>
-          <location>file://<SKILLS_DIR>/agent-browser</location>
-        </skill>
-        <skill>
-          <name>systematic:agent-native-architecture</name>
-          <description>Build applications where agents are first-class citizens. Use this skill when designing autonomous agents, creating MCP tools, implementing self-modifying systems, or building apps where features are outcomes achieved by agents operating in a loop.</description>
-          <location>file://<SKILLS_DIR>/agent-native-architecture</location>
-        </skill>
-        <skill>
-          <name>ce:brainstorm</name>
-          <description>Explore requirements and approaches through collaborative dialogue before writing a right-sized requirements document and planning implementation. Use for feature ideas, problem framing, when the user says 'let's brainstorm', or when they want to think through options before deciding what to build. Also use when a user describes a vague or ambitious feature request, asks 'what should we build', 'help me think through X', presents a problem with multiple valid solutions, or seems unsure about scope or direction — even if they don't explicitly ask to brainstorm.</description>
-          <location>file://<SKILLS_DIR>/ce-brainstorm</location>
-        </skill>
-        <skill>
-          <name>ce:compound</name>
-          <description>Document a recently solved problem to compound your team's knowledge</description>
-          <location>file://<SKILLS_DIR>/ce-compound</location>
-        </skill>
-        <skill>
-          <name>ce:ideate</name>
-          <description>Generate and critically evaluate grounded improvement ideas for the current project. Use when asking what to improve, requesting idea generation, exploring surprising improvements, or wanting the AI to proactively suggest strong project directions before brainstorming one in depth. Triggers on phrases like 'what should I improve', 'give me ideas', 'ideate on this project', 'surprise me with improvements', 'what would you change', or any request for AI-generated project improvement suggestions rather than refining the user's own idea.</description>
-          <location>file://<SKILLS_DIR>/ce-ideate</location>
-        </skill>
-        <skill>
-          <name>ce:plan</name>
-          <description>Create structured plans for any multi-step task -- software features, research workflows, events, study plans, or any goal that benefits from structured breakdown. Also deepen existing plans with interactive review of sub-agent findings. Use for plan creation when the user says 'plan this', 'create a plan', 'write a tech plan', 'plan the implementation', 'how should we build', 'what's the approach for', 'break this down', 'plan a trip', 'create a study plan', or when a brainstorm/requirements document is ready for planning. Use for plan deepening when the user says 'deepen the plan', 'deepen my plan', 'deepening pass', or uses 'deepen' in reference to a plan.</description>
-          <location>file://<SKILLS_DIR>/ce-plan</location>
-        </skill>
-        <skill>
-          <name>ce:review</name>
-          <description>Structured code review using tiered persona agents, confidence-gated findings, and a merge/dedup pipeline. Use when reviewing code changes before creating a PR.</description>
-          <location>file://<SKILLS_DIR>/ce-review</location>
-        </skill>
-        <skill>
-          <name>ce:work</name>
-          <description>Execute work efficiently while maintaining quality and finishing features</description>
-          <location>file://<SKILLS_DIR>/ce-work</location>
-        </skill>
-        <skill>
-          <name>systematic:deepen-plan</name>
-          <description>Stress-test an existing implementation plan and selectively strengthen weak sections with targeted research. Use when a plan needs more confidence around decisions, sequencing, system-wide impact, risks, or verification. Best for Standard or Deep plans, or high-risk topics such as auth, payments, migrations, external APIs, and security. For structural or clarity improvements, prefer document-review instead.</description>
-          <location>file://<SKILLS_DIR>/deepen-plan</location>
-        </skill>
-        <skill>
-          <name>systematic:document-review</name>
-          <description>Review requirements or plan documents using parallel persona agents that surface role-specific issues. Use when a requirements document or plan document exists and the user wants to improve it.</description>
-          <location>file://<SKILLS_DIR>/document-review</location>
-        </skill>
-        <skill>
-          <name>systematic:frontend-design</name>
-          <description>Use when building or reviewing any frontend interface. Covers the full design lifecycle: context detection, pre-build planning, design laws (OKLCH color, theme forcing function, layout rhythm, absolute bans on AI-slop patterns), implementation guidance, and visual verification. Use for landing pages, dashboards, components, or any web UI where design quality matters.</description>
-          <location>file://<SKILLS_DIR>/frontend-design</location>
-        </skill>
-        <skill>
-          <name>systematic:git-clean-gone-branches</name>
-          <description>Clean up local branches whose remote tracking branch is gone. Use when the user says "clean up branches", "delete gone branches", "prune local branches", "clean gone", or wants to remove stale local branches that no longer exist on the remote. Also handles removing associated worktrees for branches that have them.</description>
-          <location>file://<SKILLS_DIR>/git-clean-gone-branches</location>
-        </skill>
-        <skill>
-          <name>systematic:git-commit</name>
-          <description>Create a git commit with a clear, value-communicating message. Use when the user says "commit", "commit this", "save my changes", "create a commit", or wants to commit staged or unstaged work. Produces well-structured commit messages that follow repo conventions when they exist, and defaults to conventional commit format otherwise.</description>
-          <location>file://<SKILLS_DIR>/git-commit</location>
-        </skill>
-        <skill>
-          <name>systematic:git-commit-push-pr</name>
-          <description>Commit, push, and open a PR with an adaptive, value-first description. Use when the user says "commit and PR", "push and open a PR", "ship this", "create a PR", "open a pull request", "commit push PR", or wants to go from working changes to an open pull request in one step. Also use when the user says "update the PR description", "refresh the PR description", "freshen the PR", or wants to rewrite an existing PR description. Produces PR descriptions that scale in depth with the complexity of the change, avoiding cookie-cutter templates.</description>
-          <location>file://<SKILLS_DIR>/git-commit-push-pr</location>
-        </skill>
-        <skill>
-          <name>systematic:git-worktree</name>
-          <description>This skill manages Git worktrees for isolated parallel development. It handles creating, listing, switching, and cleaning up worktrees with a simple interactive interface, following KISS principles.</description>
-          <location>file://<SKILLS_DIR>/git-worktree</location>
-        </skill>
-        <skill>
-          <name>systematic:onboarding</name>
-          <description>Generate or regenerate ONBOARDING.md to help new contributors understand a codebase. Use when the user asks to 'create onboarding docs', 'generate ONBOARDING.md', 'document this project for new developers', 'write onboarding documentation', 'vonboard', 'vonboarding', 'prepare this repo for a new contributor', 'refresh the onboarding doc', or 'update ONBOARDING.md'. Also use when someone needs to onboard a new team member and wants a written artifact, or when a codebase lacks onboarding documentation and the user wants to generate one.</description>
-          <location>file://<SKILLS_DIR>/onboarding</location>
-        </skill>
-        <skill>
-          <name>systematic:orchestrating-subagents</name>
-          <description>Use when dispatching parallel or serial subagents, coordinating multi-unit plan execution, synthesizing results from independent subagent runs, or handling subagent failure and retry. Triggers on requests to run tasks in parallel, divide work, orchestrate a pipeline of dependent steps, or coordinate multiple agents without shared-file conflicts.</description>
-          <location>file://<SKILLS_DIR>/orchestrating-subagents</location>
-        </skill>
-        <skill>
-          <name>systematic:reproduce-bug</name>
-          <description>Systematically reproduce and investigate a bug from a GitHub issue. Use when the user provides a GitHub issue number or URL for a bug they want reproduced or investigated.</description>
-          <location>file://<SKILLS_DIR>/reproduce-bug</location>
-        </skill>
-        <skill>
-          <name>systematic:resolve-pr-feedback</name>
-          <description>Resolve PR review feedback by evaluating validity and fixing issues in parallel. Use when addressing PR review comments, resolving review threads, or fixing code review feedback.</description>
-          <location>file://<SKILLS_DIR>/resolve-pr-feedback</location>
-        </skill>
-        <skill>
-          <name>systematic:test-browser</name>
-          <description>Run browser tests on pages affected by current PR or branch</description>
-          <location>file://<SKILLS_DIR>/test-browser</location>
-        </skill>
-        <skill>
-          <name>systematic:test-driven-development</name>
-          <description>Use when implementing any feature or bugfix, before writing implementation code</description>
-          <location>file://<SKILLS_DIR>/test-driven-development</location>
-        </skill>
-        <skill>
-          <name>systematic:using-systematic</name>
-          <description>Use when starting any conversation - establishes how to find and use skills, requiring skill tool invocation before ANY response including clarifying questions</description>
-          <location>file://<SKILLS_DIR>/using-systematic</location>
-        </skill>
-        <skill>
-          <name>systematic:writing-skills</name>
-          <description>Use when creating new skills, editing existing skills, or verifying skills work before deployment</description>
-          <location>file://<SKILLS_DIR>/writing-skills</location>
-        </skill>
-      </available_skills>
       </SYSTEMATIC_WORKFLOWS>"
     `)
   })
 
-  test('keeps bootstrap and system-prompt bytes unchanged after capability observation', () => {
+  test('keeps the catalog-free bootstrap and system-prompt bytes unchanged after capability observation', () => {
     const skillsDir = makeBundledSkillsDir(
       '---\nname: using-systematic\ndescription: fixture\n---\nFixture bootstrap body',
     )
@@ -346,6 +228,8 @@ describe('getBootstrapContent', () => {
     }
 
     const before = getBootstrapContent(config, deps)
+    expect(before).not.toContain('<available_skills>')
+    expect(before).not.toContain('<location>')
     const promptBefore = composeSystemPromptWithBootstrap(
       'Frozen system prompt',
       before,
@@ -432,7 +316,7 @@ describe('getBootstrapContent', () => {
     )
   })
 
-  test('inlines a profile after usage guidance and before the catalog', () => {
+  test('inlines a profile after usage guidance and before the wrapper close', () => {
     const bundledSkillsDir = makeBundledSkillsDir(
       '---\nname: using-systematic\n---\nBootstrap body content here.',
     )
@@ -457,11 +341,10 @@ describe('getBootstrapContent', () => {
       output.indexOf(profile),
     )
     expect(output.indexOf(profile)).toBeLessThan(
-      output.indexOf('<available_skills>'),
-    )
-    expect(output.indexOf(profile)).toBeLessThan(
       output.indexOf('</SYSTEMATIC_WORKFLOWS>'),
     )
+    expect(output).not.toContain('<available_skills>')
+    expect(output).not.toContain('<location>')
   })
 
   test('reports missing harness profiles to stderr and returns null', () => {
@@ -657,6 +540,40 @@ describe('getBootstrapContent', () => {
     expect(content).not.toBeNull()
     expect(content).toContain('<SYSTEMATIC_WORKFLOWS>')
     expect(content).toContain('Bundled body')
+    expect(content).not.toContain('<available_skills>')
+    expect(content).not.toContain('<location>')
+  })
+
+  test('zero discoverable skills and all skills disabled produce the same catalog-free bootstrap', () => {
+    const usingSystematicBody =
+      '---\nname: using-systematic\n---\nBootstrap body'
+    const bundledSkillsDir = makeBundledSkillsDir(usingSystematicBody)
+    const zeroSkills = getBootstrapContent(
+      { bootstrap: { enabled: true }, disabled_skills: [] },
+      { bundledSkillsDir },
+    )
+
+    const disabledSkillDir = path.join(bundledSkillsDir, 'disabled-skill')
+    fs.mkdirSync(disabledSkillDir)
+    fs.writeFileSync(
+      path.join(disabledSkillDir, 'SKILL.md'),
+      '---\nname: disabled-skill\ndescription: Disabled\n---\nBody.',
+    )
+
+    const allDisabled = getBootstrapContent(
+      {
+        bootstrap: { enabled: true },
+        disabled_skills: ['using-systematic', 'disabled-skill'],
+      },
+      { bundledSkillsDir },
+    )
+
+    expect(zeroSkills).toBe(allDisabled)
+    expect(zeroSkills).toContain('<SYSTEMATIC_WORKFLOWS>')
+    expect(zeroSkills).toContain('</SYSTEMATIC_WORKFLOWS>')
+    expect(zeroSkills).not.toContain('<available_skills>')
+    expect(zeroSkills).not.toContain('<location>')
+    expect(zeroSkills).not.toContain('\n\n\n')
   })
 
   test('returns null when using-systematic/SKILL.md is missing from bundledSkillsDir', () => {
@@ -701,16 +618,12 @@ describe('getBootstrapContent', () => {
     const content = getBootstrapContent(config, { bundledSkillsDir })
 
     expect(content).not.toBeNull()
-    // The skill-usage prose must not embed the raw path. Slice from the
-    // heading up to the catalog block (or end of string if no catalog).
+    // The skill-usage prose must not embed the raw path.
     const skillUsageHeading = '**Skills naming:**'
     const skillUsageStart = (content ?? '').indexOf(skillUsageHeading)
     expect(skillUsageStart).toBeGreaterThan(-1)
     const afterHeading = (content ?? '').slice(skillUsageStart)
-    const catalogStart = afterHeading.indexOf('<available_skills>')
-    const skillUsageProse =
-      catalogStart >= 0 ? afterHeading.slice(0, catalogStart) : afterHeading
-    expect(skillUsageProse).not.toContain(bundledSkillsDir)
+    expect(afterHeading).not.toContain(bundledSkillsDir)
     expect(content).toContain(
       'Bundled skills ship with the Systematic plugin and are discoverable via `systematic_skill`.',
     )
@@ -736,157 +649,6 @@ describe('harness profile size budget', () => {
     for (const { name, size } of sizes) {
       expect(size, `${name} profile size`).toBeLessThan(4000)
     }
-  })
-})
-
-// ---------------------------------------------------------------------------
-// Verbose skill catalog in default bootstrap
-// ---------------------------------------------------------------------------
-
-describe('getBootstrapContent — verbose skill catalog', () => {
-  let testDir: string
-
-  beforeEach(() => {
-    testDir = fs.mkdtempSync(
-      path.join(os.tmpdir(), 'systematic-bootstrap-catalog-'),
-    )
-  })
-
-  afterEach(() => {
-    fs.rmSync(testDir, { recursive: true, force: true })
-  })
-
-  function makeSkillsDir(
-    skills: Array<{ name: string; description: string; extra?: string }>,
-  ): string {
-    const bundledSkillsDir = path.join(testDir, 'skills')
-    fs.mkdirSync(path.join(bundledSkillsDir, 'using-systematic'), {
-      recursive: true,
-    })
-    fs.writeFileSync(
-      path.join(bundledSkillsDir, 'using-systematic', 'SKILL.md'),
-      '---\nname: using-systematic\ndescription: Use when starting any conversation\n---\nBootstrap body.',
-    )
-    for (const skill of skills) {
-      const dir = path.join(bundledSkillsDir, skill.name)
-      fs.mkdirSync(dir, { recursive: true })
-      const extra = skill.extra ?? ''
-      fs.writeFileSync(
-        path.join(dir, 'SKILL.md'),
-        `---\nname: ${skill.name}\ndescription: ${skill.description}${extra}\n---\nBody.`,
-      )
-    }
-    return bundledSkillsDir
-  }
-
-  test('default bootstrap contains <available_skills> with skill name, description, and file URL', () => {
-    const bundledSkillsDir = makeSkillsDir([
-      { name: 'git-commit', description: 'Create a git commit' },
-      { name: 'ce:plan', description: 'Create structured plans' },
-    ])
-    const config = {
-      bootstrap: { enabled: true, file: undefined },
-      disabled_skills: [] as string[],
-      disabled_agents: [] as string[],
-      disabled_commands: [] as string[],
-    }
-
-    const content = getBootstrapContent(config, { bundledSkillsDir })
-
-    expect(content).not.toBeNull()
-    expect(content).toContain('<available_skills>')
-    expect(content).toContain('</available_skills>')
-    // Skills appear with prefixed names
-    expect(content).toContain('<name>systematic:git-commit</name>')
-    expect(content).toContain('<description>Create a git commit</description>')
-    expect(content).toContain('<location>file://')
-    expect(content).toContain('git-commit')
-    // ce:plan already has a colon so it keeps its name
-    expect(content).toContain('<name>ce:plan</name>')
-  })
-
-  test('disabled skills are absent from the default bootstrap catalog', () => {
-    const bundledSkillsDir = makeSkillsDir([
-      { name: 'git-commit', description: 'Create a git commit' },
-      { name: 'ce:plan', description: 'Create structured plans' },
-    ])
-    const config = {
-      bootstrap: { enabled: true, file: undefined },
-      disabled_skills: ['git-commit'] as string[],
-      disabled_agents: [] as string[],
-      disabled_commands: [] as string[],
-    }
-
-    const content = getBootstrapContent(config, { bundledSkillsDir })
-
-    expect(content).not.toBeNull()
-    expect(content).not.toContain('<name>systematic:git-commit</name>')
-    expect(content).toContain('<name>ce:plan</name>')
-  })
-
-  test('skills with disableModelInvocation are absent from the default bootstrap catalog', () => {
-    const bundledSkillsDir = makeSkillsDir([
-      { name: 'git-commit', description: 'Create a git commit' },
-      {
-        name: 'internal-tool',
-        description: 'Internal only',
-        extra: '\ndisable-model-invocation: true',
-      },
-    ])
-    const config = {
-      bootstrap: { enabled: true, file: undefined },
-      disabled_skills: [] as string[],
-      disabled_agents: [] as string[],
-      disabled_commands: [] as string[],
-    }
-
-    const content = getBootstrapContent(config, { bundledSkillsDir })
-
-    expect(content).not.toBeNull()
-    expect(content).toContain('<name>systematic:git-commit</name>')
-    expect(content).not.toContain('<name>systematic:internal-tool</name>')
-  })
-
-  test('custom bootstrap file content is returned verbatim without verbose catalog', () => {
-    const bundledSkillsDir = makeSkillsDir([
-      { name: 'git-commit', description: 'Create a git commit' },
-    ])
-    const customPath = path.join(testDir, 'custom-bootstrap.md')
-    fs.writeFileSync(customPath, 'CUSTOM bootstrap content — no catalog here')
-
-    const config = {
-      bootstrap: { enabled: true, file: customPath },
-      disabled_skills: [] as string[],
-      disabled_agents: [] as string[],
-      disabled_commands: [] as string[],
-    }
-
-    const content = getBootstrapContent(config, { bundledSkillsDir })
-
-    expect(content).toBe('CUSTOM bootstrap content — no catalog here')
-    expect(content).not.toContain('<available_skills>')
-  })
-
-  test('missing custom bootstrap path falls through to default bootstrap with catalog', () => {
-    const bundledSkillsDir = makeSkillsDir([
-      { name: 'git-commit', description: 'Create a git commit' },
-    ])
-    const config = {
-      bootstrap: {
-        enabled: true,
-        file: path.join(testDir, 'does-not-exist.md'),
-      },
-      disabled_skills: [] as string[],
-      disabled_agents: [] as string[],
-      disabled_commands: [] as string[],
-    }
-
-    const content = getBootstrapContent(config, { bundledSkillsDir })
-
-    expect(content).not.toBeNull()
-    expect(content).toContain('<SYSTEMATIC_WORKFLOWS>')
-    expect(content).toContain('<available_skills>')
-    expect(content).toContain('<name>systematic:git-commit</name>')
   })
 })
 
