@@ -1,7 +1,7 @@
 ---
 title: 'feat: Establish a local OpenCode eval foundation'
 type: feat
-status: active
+status: completed
 date: 2026-08-13
 origin: docs/plans/2026-08-13-001-refactor-bitter-lesson-harness-plan.md
 ---

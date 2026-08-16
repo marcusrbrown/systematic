@@ -2,6 +2,7 @@
 title: gh api PR/issue body with heredoc escapes backticks visibly
 module: scripts (PR/issue authoring)
 date: 2026-05-17
+last_updated: 2026-08-16
 problem_type: developer_experience
 component: tooling
 severity: low
@@ -15,6 +16,7 @@ applies_when:
   - Authoring PR or issue body content via `gh api -X POST ... -f body=...` with a shell heredoc
   - Using `gh pr create --body "$(cat <<EOF ... EOF)"` patterns
   - Migrating existing PR-creation scripts and seeing escaped backticks render on GitHub
+  - Passing any multi-line message body through a shell, including `git commit -m`
 ---
 
 # gh api PR/issue body with heredoc escapes backticks visibly
@@ -139,6 +141,41 @@ EOF
 
 Unquoted heredoc DOES interpolate, so the escapes are necessary here to preserve backticks as literals. Equivalent output, but more fragile — any future contributor who adds `$VAR` or `$(cmd)` content has to keep track of two different escape rules in the same heredoc.
 
+### Same trap, different command: `git commit -m`
+
+The backtick rule is not a `gh` rule — it is a shell rule, and it bites hardest where there is no rendering step to make the damage obvious. In a double-quoted `git commit -m "..."`, backticks are command substitution. They are evaluated and their contents vanish. Git records whatever is left, silently and with exit code 0.
+
+```bash
+# Wrong: inside double quotes, every backtick-wrapped identifier is
+# executed as a command and its output (nothing) is substituted in.
+git commit -m "`origin/main` bumped `@opencode-ai/sdk` to 1.18.18."
+```
+
+The recorded body becomes:
+
+```text
+ bumped  to 1.18.18.
+```
+
+No error, no warning — just broken prose in permanent history. This repo squash-merges with `squash_merge_commit_message: COMMIT_MESSAGES`, so a mangled branch commit body is concatenated into the public squash commit and flows onward into release notes.
+
+```bash
+# Right: write the message to a file, commit with -F.
+MSG_FILE=$(mktemp -t commit-msg-XXXXXX.txt)
+cat > "$MSG_FILE" <<'EOF'
+build(evals): move host pin to OpenCode 1.18.18
+
+`origin/main` bumped `@opencode-ai/plugin` and `@opencode-ai/sdk` to 1.18.18,
+which trips the host-pin drift guard this branch introduced.
+EOF
+
+git commit -F "$MSG_FILE"
+git log -1 --format=%B    # verify the backticks and blank lines survived
+rm -f "$MSG_FILE"
+```
+
+Recovery is disproportionately expensive relative to the mistake. Fixing an already-pushed mangled body means rewriting history — rebuild the branch on its base, re-commit with `-F`, prove the resulting tree is byte-identical to the original, then `git push --force-with-lease` and wait out a full CI re-run. Writing the message to a file the first time costs one extra line.
+
 ### Verification after PR creation
 
 ```bash
@@ -151,4 +188,6 @@ gh api -X PATCH repos/owner/repo/pulls/N -F body=@FILE
 ## Related
 
 - `docs/solutions/developer-experience/semantic-release-body-ingestion-myth-2026-05-17.md` — sibling lesson from the same release; both about `gh` CLI body content for PRs and releases
+- [`docs/solutions/workflow-issues/pr-title-selects-release-type-under-squash-merge-2026-08-16.md`](../workflow-issues/pr-title-selects-release-type-under-squash-merge-2026-08-16.md) — the other half of squash-merge message hygiene: the header decides whether a release happens at all
 - PR #401 — where the trap was caught mid-flight
+- PR #786 / commit `932be10` — where the same trap hit `git commit -m` and cost a history rewrite

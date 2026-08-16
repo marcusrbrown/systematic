@@ -1,7 +1,7 @@
 ---
 title: 'refactor: Delete the duplicated bootstrap skill catalog'
 type: refactor
-status: active
+status: completed
 date: 2026-08-14
 origin: docs/plans/2026-08-13-001-refactor-bitter-lesson-harness-plan.md
 ---
