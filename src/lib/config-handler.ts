@@ -14,7 +14,6 @@ import { extractCommandFrontmatter, findCommandsInDir } from './commands.js'
 import { loadConfigWithSources } from './config.js'
 import { type DiscoveredSkill, discoverSkills } from './discovered-skills.js'
 import { parseFrontmatter } from './frontmatter.js'
-import type { OpencodeClientLike } from './model-availability.js'
 import {
   type LoadedSkill,
   loadSkill,
@@ -28,8 +27,6 @@ export interface ConfigHandlerDeps {
   bundledSkillsDir: string
   bundledAgentsDir: string
   bundledCommandsDir: string
-  /** Retained for dependency-surface compatibility; config emission does not use it. */
-  client?: OpencodeClientLike
   /** Home directory for discovered-skill lookups. Defaults to `os.homedir()`; inject a temp dir in tests. */
   homeDir?: string
   /** OpenCode global config directory override for discovered-skill lookups. Defaults to `<homeDir>/.config/opencode`. */

@@ -197,7 +197,7 @@ Command template for ${name}.`,
       expect(typeof handler).toBe('function')
     })
 
-    test('keeps emitted runtime config bytes unchanged after capability observation', async () => {
+    test('keeps emitted runtime config bytes unchanged across repeated hooks', async () => {
       createAgent(
         path.join(bundledDir, 'agents'),
         'fixture-agent',
