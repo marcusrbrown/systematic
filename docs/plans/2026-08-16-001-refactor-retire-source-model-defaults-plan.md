@@ -222,7 +222,7 @@ None. This is Systematic's own policy code; the constraints are internally defin
 - No source-owned provider or model literal remains in `src/`.
 - Bundled agents appear in emitted config with no `model` key unless user config supplies one.
 
-- [ ] **Unit 4: Delete the unreachable availability subsystem**
+- [x] **Unit 4: Delete the unreachable availability subsystem**
 
 **Goal:** Remove `src/lib/model-availability.ts` and its tests, now that its only production consumer is gone.
 
@@ -254,7 +254,7 @@ None. This is Systematic's own policy code; the constraints are internally defin
 - Typecheck and build pass with the module deleted.
 - No network or filesystem cache read occurs during config-hook execution.
 
-- [ ] **Unit 5: Prove the emitted-config contract in the eval harness**
+- [x] **Unit 5: Prove the emitted-config contract in the eval harness**
 
 **Goal:** Add a deterministic eval case asserting that bundled agents inherit and explicit user policy still wins, so the program's promotion gate has evidence rather than assertion.
 

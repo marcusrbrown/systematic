@@ -12,6 +12,11 @@ import {
   type EvalFixture,
   EXPECTED_OPENCODE_VERSION,
   type HostCatalogCoverageObservation,
+  type ModelAgentObservation,
+  type ModelAvailabilityPath,
+  type ModelInheritanceCaseManifest,
+  type ModelInheritanceObservation,
+  type ModelInheritancePolicy,
   type PromptCompositionObservation,
 } from '../run-evals.ts'
 
@@ -32,6 +37,7 @@ const OPENCODE_PROMPT_TIMEOUT = 'opencode-prompt-timeout'
 const SAFE_SKILL_NAME = /^[A-Za-z0-9][A-Za-z0-9._:+-]{0,127}$/
 const MAX_BOOTSTRAP_PAYLOAD_SIZE = 100_000
 const MAX_CATALOG_ENTRIES = 128
+const MODEL_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/
 
 export interface ScriptedToolCall {
   id: string
@@ -59,6 +65,12 @@ export type BoundedProbeEvent =
       promptComposition?: PromptCompositionObservation
     }
   | { type: 'tool'; tool: 'write'; outcome: 'success' | 'failure' }
+  | {
+      type: 'model-config'
+      availability: ModelAvailabilityPath
+      policy: ModelInheritancePolicy
+      agents: ModelAgentObservation[]
+    }
 
 export interface OpencodeProbe {
   url: string
@@ -287,31 +299,76 @@ function isBoundedPromptComposition(
   )
 }
 
+function isBoundedModelAgentObservation(
+  value: unknown,
+): value is ModelAgentObservation {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const candidate = value as Record<string, unknown>
+  const hasModel = Object.hasOwn(candidate, 'model')
+  if (
+    Object.keys(candidate).length !== (hasModel ? 3 : 2) ||
+    typeof candidate.agentId !== 'string' ||
+    !/^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/.test(candidate.agentId) ||
+    typeof candidate.modelPresent !== 'boolean'
+  ) {
+    return false
+  }
+  if (!candidate.modelPresent && hasModel) return false
+  return (
+    !hasModel ||
+    (typeof candidate.model === 'string' &&
+      MODEL_IDENTIFIER_PATTERN.test(candidate.model))
+  )
+}
+
+function isBoundedModelConfigEvent(
+  candidate: Record<string, unknown>,
+): boolean {
+  return (
+    Object.keys(candidate).length === 4 &&
+    (candidate.availability === 'known' ||
+      candidate.availability === 'unknown') &&
+    (candidate.policy === 'none' ||
+      candidate.policy === 'category' ||
+      candidate.policy === 'exact' ||
+      candidate.policy === 'null' ||
+      candidate.policy === 'project-error') &&
+    Array.isArray(candidate.agents) &&
+    candidate.agents.length <= 128 &&
+    candidate.agents.every(isBoundedModelAgentObservation)
+  )
+}
+
+function isBoundedTransformEvent(candidate: Record<string, unknown>): boolean {
+  const hasPromptComposition = candidate.promptComposition !== undefined
+  return (
+    Object.keys(candidate).length === (hasPromptComposition ? 5 : 4) &&
+    candidate.kind === 'chat' &&
+    (candidate.status === 'healthy' || candidate.status === 'unhealthy') &&
+    typeof candidate.blockCount === 'number' &&
+    Number.isInteger(candidate.blockCount) &&
+    candidate.blockCount >= 0 &&
+    candidate.blockCount <= 8 &&
+    (candidate.status !== 'healthy' ||
+      isBoundedPromptComposition(candidate.promptComposition)) &&
+    (candidate.promptComposition === undefined ||
+      isBoundedPromptComposition(candidate.promptComposition))
+  )
+}
+
 function isBoundedProbeEvent(value: unknown): value is BoundedProbeEvent {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
   const candidate = value as Record<string, unknown>
+  if (candidate.type === 'model-config') {
+    return isBoundedModelConfigEvent(candidate)
+  }
   if (candidate.type === 'loaded') {
     return (
       Object.keys(candidate).length === 2 &&
       (candidate.status === 'ok' || candidate.status === 'unhealthy')
     )
   }
-  if (candidate.type === 'transform') {
-    const hasPromptComposition = candidate.promptComposition !== undefined
-    return (
-      Object.keys(candidate).length === (hasPromptComposition ? 5 : 4) &&
-      candidate.kind === 'chat' &&
-      (candidate.status === 'healthy' || candidate.status === 'unhealthy') &&
-      typeof candidate.blockCount === 'number' &&
-      Number.isInteger(candidate.blockCount) &&
-      candidate.blockCount >= 0 &&
-      candidate.blockCount <= 8 &&
-      (candidate.status !== 'healthy' ||
-        isBoundedPromptComposition(candidate.promptComposition)) &&
-      (candidate.promptComposition === undefined ||
-        isBoundedPromptComposition(candidate.promptComposition))
-    )
-  }
+  if (candidate.type === 'transform') return isBoundedTransformEvent(candidate)
   return (
     candidate.type === 'tool' &&
     Object.keys(candidate).length === 3 &&
@@ -639,6 +696,200 @@ export function gradeHostSkillCoverage(
   }
 }
 
+export function createModelInheritanceProbe(
+  fixture: EvalFixture,
+  scenario: {
+    availability: ModelAvailabilityPath
+    policy: ModelInheritancePolicy
+    manifest: ModelInheritanceCaseManifest
+  },
+): OpencodeProbe {
+  const sourcePath = path.join(fixture.probeRoot, 'model-inheritance.mjs')
+  const packagePath = path.join(fixture.probeRoot, 'package.json')
+  const capturePath = path.join(fixture.probeRoot, 'events.jsonl')
+  const agentNameToId = Object.fromEntries(
+    scenario.manifest.expectedAgentIds.map((agentId) => [
+      agentId.slice(agentId.indexOf('/') + 1),
+      agentId,
+    ]),
+  )
+  fs.writeFileSync(
+    packagePath,
+    JSON.stringify({
+      name: 'systematic-eval-model-inheritance-probe',
+      type: 'module',
+      main: './model-inheritance.mjs',
+    }),
+  )
+  fs.writeFileSync(
+    sourcePath,
+    `import fs from 'node:fs'
+
+const capturePath = ${JSON.stringify(capturePath)}
+const availability = ${JSON.stringify(scenario.availability)}
+const policy = ${JSON.stringify(scenario.policy)}
+const category = ${JSON.stringify(scenario.manifest.category)}
+const exactAgentId = ${JSON.stringify(scenario.manifest.exactAgentId)}
+const agentNameToId = ${JSON.stringify(agentNameToId)}
+
+function append(event) {
+  fs.appendFileSync(capturePath, JSON.stringify(event) + '\\n')
+}
+
+function isRecord(value) {
+  return Boolean(value && typeof value === 'object' && !Array.isArray(value))
+}
+
+export default async function systematicModelInheritanceProbe() {
+  return {
+    config: async (cfg) => {
+      const agents = isRecord(cfg.agent) ? cfg.agent : {}
+      const observations = Object.entries(agents).map(([name, entry]) => {
+        const agentId = agentNameToId[name] ?? name
+        const modelApplies =
+          policy === 'category'
+            ? agentId.startsWith(category + '/')
+            : policy === 'exact'
+              ? agentId.startsWith(category + '/')
+              : policy === 'null'
+                ? agentId.startsWith(category + '/') && agentId !== exactAgentId
+                : false
+        const observation = {
+          agentId,
+          modelPresent: isRecord(entry) && Object.hasOwn(entry, 'model'),
+        }
+        if (modelApplies && isRecord(entry) && typeof entry.model === 'string') {
+          observation.model = entry.model
+        }
+        return observation
+      })
+      append({
+        type: 'model-config',
+        availability,
+        policy,
+        agents: observations,
+      })
+    },
+  }
+}
+`,
+  )
+  return {
+    url: pathToFileURL(fixture.probeRoot).href,
+    capturePath,
+    sourcePath,
+    digest: createHash('sha256')
+      .update('systematic-eval-model-inheritance-probe-v1')
+      .digest('hex'),
+  }
+}
+
+export interface ModelInheritanceGrade {
+  outcome: 'success' | 'infra_failure' | 'task_failure'
+  subcode: 'none' | 'probe_unhealthy' | 'model_policy_mismatch'
+  modelInheritance: ModelInheritanceObservation[]
+}
+
+function expectedModelForAgent(
+  agentId: string,
+  policy: ModelInheritancePolicy,
+  manifest: ModelInheritanceCaseManifest,
+): string | undefined {
+  if (policy === 'category') {
+    return agentId.startsWith(`${manifest.category}/`)
+      ? manifest.categoryModel
+      : undefined
+  }
+  if (policy === 'exact') {
+    return agentId === manifest.exactAgentId
+      ? manifest.exactModel
+      : agentId.startsWith(`${manifest.category}/`)
+        ? manifest.categoryModel
+        : undefined
+  }
+  if (policy === 'null') {
+    return agentId.startsWith(`${manifest.category}/`) &&
+      agentId !== manifest.exactAgentId
+      ? manifest.categoryModel
+      : undefined
+  }
+  return undefined
+}
+
+function gradeModelObservation(
+  event: Extract<BoundedProbeEvent, { type: 'model-config' }>,
+  manifest: ModelInheritanceCaseManifest,
+): boolean {
+  if (event.policy === 'project-error') return event.agents.length === 0
+  const expectedIds = manifest.expectedAgentIds
+  if (
+    event.agents.length !== expectedIds.length ||
+    new Set(event.agents.map((agent) => agent.agentId)).size !==
+      expectedIds.length
+  ) {
+    return false
+  }
+  const observedById = new Map(
+    event.agents.map((agent) => [agent.agentId, agent]),
+  )
+  for (const agentId of expectedIds) {
+    const observed = observedById.get(agentId)
+    if (!observed) return false
+    const expectedModel = expectedModelForAgent(agentId, event.policy, manifest)
+    if (expectedModel === undefined) {
+      if (observed.modelPresent || observed.model !== undefined) return false
+    } else if (!observed.modelPresent || observed.model !== expectedModel) {
+      return false
+    }
+  }
+  return true
+}
+
+export function gradeModelInheritance(
+  events: readonly BoundedProbeEvent[],
+  manifest: ModelInheritanceCaseManifest,
+): ModelInheritanceGrade {
+  const modelEvents = events.filter(
+    (event): event is Extract<BoundedProbeEvent, { type: 'model-config' }> =>
+      event.type === 'model-config',
+  )
+  const expectedScenarios: Array<{
+    availability: ModelAvailabilityPath
+    policy: ModelInheritancePolicy
+  }> = [
+    { availability: 'known', policy: 'none' },
+    { availability: 'unknown', policy: 'none' },
+    { availability: 'known', policy: 'category' },
+    { availability: 'unknown', policy: 'category' },
+    { availability: 'known', policy: 'exact' },
+    { availability: 'unknown', policy: 'exact' },
+    { availability: 'known', policy: 'null' },
+    { availability: 'unknown', policy: 'null' },
+    { availability: 'known', policy: 'project-error' },
+  ]
+  const observations = modelEvents.map((event) => ({
+    availability: event.availability,
+    policy: event.policy,
+    agents: [...event.agents].sort((left, right) =>
+      left.agentId.localeCompare(right.agentId),
+    ),
+  }))
+  const healthy =
+    modelEvents.length === expectedScenarios.length &&
+    expectedScenarios.every(({ availability, policy }) => {
+      const matches = modelEvents.filter(
+        (event) =>
+          event.availability === availability && event.policy === policy,
+      )
+      return matches.length === 1 && gradeModelObservation(matches[0], manifest)
+    })
+  return {
+    outcome: healthy ? 'success' : 'task_failure',
+    subcode: healthy ? 'none' : 'model_policy_mismatch',
+    modelInheritance: observations,
+  }
+}
+
 function canonicalPath(value: string): string {
   let current = path.resolve(value)
   const suffix: string[] = []
@@ -826,34 +1077,39 @@ export function startScriptedModelServer(
 function buildProviderConfig(
   pluginUrls: readonly string[],
   baseUrl: string,
+  includeProvider = true,
 ): string {
   return JSON.stringify({
     formatter: false,
     lsp: false,
     plugin: pluginUrls,
-    provider: {
-      [MODEL_PROVIDER_ID]: {
-        name: 'Systematic Eval Local Provider',
-        id: MODEL_PROVIDER_ID,
-        env: [],
-        npm: '@ai-sdk/openai-compatible',
-        models: {
-          [MODEL_ID]: {
-            id: MODEL_ID,
-            name: 'Systematic Eval Local Model',
-            attachment: false,
-            reasoning: false,
-            temperature: false,
-            tool_call: true,
-            release_date: '2026-08-13',
-            limit: { context: 100_000, output: 10_000 },
-            cost: { input: 0, output: 0 },
-            options: {},
+    ...(includeProvider
+      ? {
+          provider: {
+            [MODEL_PROVIDER_ID]: {
+              name: 'Systematic Eval Local Provider',
+              id: MODEL_PROVIDER_ID,
+              env: [],
+              npm: '@ai-sdk/openai-compatible',
+              models: {
+                [MODEL_ID]: {
+                  id: MODEL_ID,
+                  name: 'Systematic Eval Local Model',
+                  attachment: false,
+                  reasoning: false,
+                  temperature: false,
+                  tool_call: true,
+                  release_date: '2026-08-13',
+                  limit: { context: 100_000, output: 10_000 },
+                  cost: { input: 0, output: 0 },
+                  options: {},
+                },
+              },
+              options: { apiKey: 'local-eval-only', baseURL: baseUrl },
+            },
           },
-        },
-        options: { apiKey: 'local-eval-only', baseURL: baseUrl },
-      },
-    },
+        }
+      : {}),
   })
 }
 
@@ -1054,7 +1310,11 @@ interface ExecuteCaseInput {
 }
 
 function isPromptOnlyCase(caseId: EvalCaseManifest['caseId']): boolean {
-  return caseId === 'bootstrap-loading' || caseId === 'host-skill-coverage'
+  return (
+    caseId === 'bootstrap-loading' ||
+    caseId === 'host-skill-coverage' ||
+    caseId === 'model-inheritance'
+  )
 }
 
 function buildScriptedResponses(
@@ -1136,9 +1396,148 @@ function gradeObservedCase(
   }
 }
 
+function modelInheritanceConfigPaths(fixture: EvalFixture): string[] {
+  return [
+    path.join(fixture.homeRoot, '.config', 'opencode', 'systematic.json'),
+    path.join(fixture.projectRoot, '.opencode', 'systematic.json'),
+    path.join(fixture.opencodeConfigRoot, 'systematic.json'),
+  ]
+}
+
+function resetModelInheritanceConfig(fixture: EvalFixture): void {
+  for (const filePath of modelInheritanceConfigPaths(fixture)) {
+    fs.rmSync(filePath, { force: true })
+  }
+}
+
+function writeModelInheritanceScenario(
+  fixture: EvalFixture,
+  manifest: ModelInheritanceCaseManifest,
+  policy: ModelInheritancePolicy,
+): void {
+  resetModelInheritanceConfig(fixture)
+  if (policy === 'none') return
+
+  const config =
+    policy === 'project-error'
+      ? {
+          categories: {
+            [manifest.category]: { model: 'systematic-eval-project-model' },
+          },
+        }
+      : {
+          categories: {
+            [manifest.category]: { model: manifest.categoryModel },
+          },
+          ...(policy === 'exact' || policy === 'null'
+            ? {
+                agents: {
+                  [manifest.exactAgentId]: {
+                    model: policy === 'exact' ? manifest.exactModel : null,
+                  },
+                },
+              }
+            : {}),
+        }
+  const target =
+    policy === 'project-error'
+      ? path.join(fixture.projectRoot, '.opencode', 'systematic.json')
+      : path.join(fixture.homeRoot, '.config', 'opencode', 'systematic.json')
+  fs.mkdirSync(path.dirname(target), { recursive: true })
+  fs.writeFileSync(target, JSON.stringify(config))
+}
+
+async function executeModelInheritanceCase(
+  input: ExecuteCaseInput,
+): Promise<EvalCaseExecution> {
+  if (input.caseManifest.caseId !== 'model-inheritance') {
+    throw new Error('model-inheritance execution requires its case manifest')
+  }
+  const manifest = input.caseManifest
+  const model = startScriptedModelServer([])
+  let lastProbeDigest = createHash('sha256')
+    .update('systematic-eval-model-inheritance-probe-v1')
+    .digest('hex')
+  try {
+    if (fs.existsSync(path.join(input.fixture.probeRoot, 'events.jsonl'))) {
+      fs.rmSync(path.join(input.fixture.probeRoot, 'events.jsonl'), {
+        force: true,
+      })
+    }
+    const scenarios: Array<{
+      availability: ModelAvailabilityPath
+      policy: ModelInheritancePolicy
+    }> = [
+      { availability: 'known', policy: 'none' },
+      { availability: 'unknown', policy: 'none' },
+      { availability: 'known', policy: 'category' },
+      { availability: 'unknown', policy: 'category' },
+      { availability: 'known', policy: 'exact' },
+      { availability: 'unknown', policy: 'exact' },
+      { availability: 'known', policy: 'null' },
+      { availability: 'unknown', policy: 'null' },
+      { availability: 'known', policy: 'project-error' },
+    ]
+
+    for (const scenario of scenarios) {
+      writeModelInheritanceScenario(input.fixture, manifest, scenario.policy)
+      const probe = createModelInheritanceProbe(input.fixture, {
+        ...scenario,
+        manifest,
+      })
+      lastProbeDigest = probe.digest
+      const configContent = buildProviderConfig(
+        [pathToFileURL(input.pluginEntry).href, probe.url],
+        model.url,
+        scenario.availability === 'known',
+      )
+      fs.writeFileSync(input.fixture.opencodeConfigPath, configContent)
+      const host = await startOpencodeHost(
+        input.fixture,
+        configContent,
+        model.url,
+        input.parentEnv,
+        input.timeoutMs ?? 180_000,
+      )
+      await host.stop()
+    }
+
+    const grade = gradeModelInheritance(
+      readBoundedProbeEvents(
+        path.join(input.fixture.probeRoot, 'events.jsonl'),
+      ),
+      manifest,
+    )
+    return {
+      outcome: grade.outcome,
+      subcode: grade.subcode,
+      sanity: 'passed',
+      process: 'completed',
+      probeDigest: lastProbeDigest,
+      artifactRefs: ['probe/events.jsonl'],
+      modelInheritance: grade.modelInheritance,
+    }
+  } catch (error) {
+    return classifyExecutionFailure(
+      true,
+      error,
+      readBoundedProbeEvents(
+        path.join(input.fixture.probeRoot, 'events.jsonl'),
+      ),
+      lastProbeDigest,
+    )
+  } finally {
+    await model.stop()
+    resetModelInheritanceConfig(input.fixture)
+  }
+}
+
 async function executeCase(
   input: ExecuteCaseInput,
 ): Promise<EvalCaseExecution> {
+  if (input.caseManifest.caseId === 'model-inheritance') {
+    return executeModelInheritanceCase(input)
+  }
   const probe = createOpencodeProbe(input.fixture)
   const responses = buildScriptedResponses(input.caseManifest.caseId)
   const model = startScriptedModelServer(responses)

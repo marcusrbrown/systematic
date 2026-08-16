@@ -13,6 +13,7 @@ import {
   RESULT_SCHEMA_VERSION,
   serializeResult,
 } from '../../scripts/run-evals.ts'
+import { buildBundledAgentInventory } from '../../src/lib/agent-overlays.js'
 import { buildCatalogEntries } from '../../src/lib/skill-catalog.js'
 import { EXACT_OPENCODE_VERSION } from '../integration/fixtures/receipt-workflow-host.js'
 
@@ -91,12 +92,47 @@ function validResult(mode: EvalMode = 'source'): Record<string, unknown> {
   }
 }
 
+function validModelInheritanceResult(
+  mode: EvalMode = 'source',
+): Record<string, unknown> {
+  const assertionIds = [
+    'agents-inherit-invoking-model',
+    'explicit-model-overlay-wins',
+    'model-null-restores-inheritance',
+    'project-model-trust-boundary',
+  ]
+  return {
+    ...validResult(mode),
+    caseId: 'model-inheritance',
+    assertionIds,
+    identity: {
+      ...(validResult(mode).identity as Record<string, unknown>),
+      artifactId: mode === 'source' ? 'source-entry' : 'installed-entry',
+    },
+    evidence: {
+      sanity: 'passed',
+      process: 'completed',
+      assertionIds,
+      modelInheritance: [
+        {
+          availability: 'known',
+          policy: 'none',
+          agents: [
+            { agentId: 'review/correctness-reviewer', modelPresent: false },
+          ],
+        },
+      ],
+    },
+  }
+}
+
 describe('local OpenCode eval contracts', () => {
-  test('exposes exactly three cases, four outcomes, and the supported schema versions', () => {
+  test('exposes exactly four cases, four outcomes, and the supported schema versions', () => {
     expect(CASE_IDS).toEqual([
       'bootstrap-loading',
       'fixture-local-write',
       'host-skill-coverage',
+      'model-inheritance',
     ])
     expect(OUTCOMES).toEqual([
       'success',
@@ -126,11 +162,49 @@ describe('local OpenCode eval contracts', () => {
     })
   })
 
+  test('accepts the model-inheritance case manifest with every bundled agent', () => {
+    const manifest = parseCaseManifest(readManifest('model-inheritance.json'))
+    expect(manifest).toMatchObject({
+      caseSchemaVersion: 1,
+      caseId: 'model-inheritance',
+      harness: 'opencode',
+      assertionIds: [
+        'agents-inherit-invoking-model',
+        'explicit-model-overlay-wins',
+        'model-null-restores-inheritance',
+        'project-model-trust-boundary',
+      ],
+      category: 'review',
+      categoryModel: 'systematic-eval-category-model',
+      exactAgentId: 'review/correctness-reviewer',
+      exactModel: 'systematic-eval-exact-model',
+    })
+    if (manifest.caseId !== 'model-inheritance') {
+      throw new Error('expected model-inheritance manifest')
+    }
+
+    const inventory = buildBundledAgentInventory(
+      path.join(ROOT_DIR, 'agents'),
+      [],
+    )
+    expect(manifest.expectedAgentIds).toEqual(
+      Object.keys(inventory.agentsByQualifiedId).sort(),
+    )
+    expect(
+      new Set(manifest.expectedAgentIds.map((id) => id.split('/')[0])),
+    ).toEqual(
+      new Set(['design', 'document-review', 'research', 'review', 'workflow']),
+    )
+  })
+
   test('accepts all declarative case manifests', () => {
     const bootstrap = parseCaseManifest(readManifest('bootstrap-loading.json'))
     const fixture = parseCaseManifest(readManifest('fixture-local-write.json'))
     const hostCoverage = parseCaseManifest(
       readManifest('host-skill-coverage.json'),
+    )
+    const modelInheritance = parseCaseManifest(
+      readManifest('model-inheritance.json'),
     )
 
     expect(bootstrap).toEqual({
@@ -152,6 +226,11 @@ describe('local OpenCode eval contracts', () => {
       caseId: 'host-skill-coverage',
       harness: 'opencode',
       assertionIds: ['host-catalog-covered'],
+    })
+    expect(modelInheritance).toMatchObject({
+      caseSchemaVersion: 1,
+      caseId: 'model-inheritance',
+      harness: 'opencode',
     })
   })
 
@@ -403,6 +482,64 @@ describe('local OpenCode eval contracts', () => {
           process: 'completed',
           assertionIds: ['fixture-file-content', 'fixture-file-created'],
           prompt: 'raw system prompt text',
+        },
+      }),
+    ).toThrow()
+  })
+
+  test('persists only structural model-inheritance facts', () => {
+    const candidate = validModelInheritanceResult()
+    const normalized = normalizeResult(candidate)
+    expect(normalized.evidence.modelInheritance).toEqual([
+      {
+        availability: 'known',
+        policy: 'none',
+        agents: [
+          { agentId: 'review/correctness-reviewer', modelPresent: false },
+        ],
+      },
+    ])
+
+    expect(() =>
+      serializeResult({
+        ...candidate,
+        evidence: {
+          ...candidate.evidence,
+          modelInheritance: [
+            {
+              availability: 'known',
+              policy: 'none',
+              agents: [
+                {
+                  agentId: 'review/correctness-reviewer',
+                  modelPresent: false,
+                },
+              ],
+              config: { absolutePath: '/private/config.json' },
+            },
+          ],
+        },
+      }),
+    ).toThrow()
+
+    expect(() =>
+      serializeResult({
+        ...candidate,
+        evidence: {
+          ...candidate.evidence,
+          modelInheritance: [
+            {
+              availability: 'known',
+              policy: 'none',
+              agents: [
+                {
+                  agentId: 'review/correctness-reviewer',
+                  modelPresent: false,
+                  model: 'source-owned/provider-model',
+                },
+              ],
+            },
+          ],
         },
       }),
     ).toThrow()
