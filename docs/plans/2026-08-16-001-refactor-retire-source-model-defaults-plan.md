@@ -149,7 +149,7 @@ None. This is Systematic's own policy code; the constraints are internally defin
 - No code path returns a model that is absent from discovered availability.
 - Agents whose category has no available match emit no `model` key.
 
-- [ ] **Unit 2: Remove the closed provider union and the frequency lore**
+- [x] **Unit 2: Remove the closed provider union and the frequency lore**
 
 **Goal:** Replace `ProviderID`'s seven-literal union with structural validation and delete the usage-frequency rationale.
 
@@ -180,7 +180,7 @@ None. This is Systematic's own policy code; the constraints are internally defin
 - No closed set of vendor names remains in the module.
 - A provider Systematic has never heard of passes validation.
 
-- [ ] **Unit 3: Retire the category default table and its resolution path**
+- [x] **Unit 3: Retire the category default table and its resolution path**
 
 **Goal:** Delete `SOURCE_CATEGORY_MODEL_DEFAULTS`, its schema, resolver, docs formatter, and coverage assertion, and remove source-default application from the config hook.
 
@@ -290,7 +290,7 @@ None. This is Systematic's own policy code; the constraints are internally defin
 **Verification:**
 - The case passes at the pinned runtime and fails if source-owned defaulting is reintroduced in any bundled category or either availability path.
 
-- [ ] **Unit 6: Reconcile generated docs, architecture guidance, and registry artifacts**
+- [x] **Unit 6: Reconcile generated docs, architecture guidance, and registry artifacts**
 
 **Goal:** Make every generated and hand-written surface describe the post-deletion reality.
 

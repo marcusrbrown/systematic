@@ -3,7 +3,6 @@ import path from 'node:path'
 import type { z } from 'zod'
 import type { SourcedOverlayConfigMap } from './config.js'
 import { AgentOverlaySchema, CategoryOverlaySchema } from './config-schema.js'
-import { SOURCE_CATEGORY_MODEL_DEFAULTS } from './source-model-defaults.js'
 import { isRecord } from './validation.js'
 
 export interface BundledAgentInventoryEntry {
@@ -129,18 +128,6 @@ export function resolveAgentOverlaySet(
     categoriesByKey: new Map(
       overlays.categories.map((overlay) => [overlay.key, overlay]),
     ),
-  }
-}
-
-export function assertSourceCategoryModelCoverage(categories: string[]): void {
-  const missingCategories = categories.filter(
-    (category) => !Object.hasOwn(SOURCE_CATEGORY_MODEL_DEFAULTS, category),
-  )
-
-  if (missingCategories.length > 0) {
-    throw new Error(
-      `Source category model defaults missing intentional coverage for: ${missingCategories.join(', ')}`,
-    )
   }
 }
 

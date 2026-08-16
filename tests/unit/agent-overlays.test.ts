@@ -3,7 +3,6 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import {
-  assertSourceCategoryModelCoverage,
   type BundledAgentInventory,
   buildBundledAgentInventory,
   validateAgentOverlays,
@@ -11,7 +10,6 @@ import {
 import type { SourcedOverlayConfig } from '../../src/lib/config.js'
 import { createConfigHandler } from '../../src/lib/config-handler.js'
 import { SECURITY_OVERLAY_FIELDS } from '../../src/lib/config-schema.js'
-import { SOURCE_CATEGORY_MODEL_DEFAULTS } from '../../src/lib/source-model-defaults.js'
 
 function withTempDir(run: (dir: string) => void): void {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-overlays-'))
@@ -561,19 +559,6 @@ describe('validateAgentOverlays', () => {
   })
 })
 
-describe('source category model defaults', () => {
-  test('covers every discovered bundled category intentionally', () => {
-    const inventory = buildBundledAgentInventory(
-      path.join(process.cwd(), 'agents'),
-      [],
-    )
-
-    expect(() =>
-      assertSourceCategoryModelCoverage(inventory.categories),
-    ).not.toThrow()
-  })
-})
-
 describe('variant emission via overlay flow', () => {
   // Security-sensitive overlay fields (model, variant) can only be set in
   // user config or OPENCODE_CONFIG_DIR config, not project-level config.
@@ -610,42 +595,13 @@ describe('variant emission via overlay flow', () => {
     })
   }
 
-  function makeClient(
-    availability: string[],
-  ): Parameters<typeof createConfigHandler>[0]['client'] {
-    return {
-      config: {
-        providers: async () => ({
-          data: {
-            providers: availability.map((key) => {
-              const slash = key.indexOf('/')
-              const id = key.slice(0, slash)
-              const model = key.slice(slash + 1)
-              return { id, models: { [model]: {} } }
-            }),
-            default: {},
-          },
-          error: undefined,
-        }),
-      },
-    }
-  }
-
-  test('integration: empty availability skips source-default pinning', async () => {
-    // When `client.config.providers()` returns an empty connected set,
-    // `getAvailableModels` collapses to `status: 'unknown'`. The downstream
-    // gate in `createConfigHandler` then sets `availabilitySet = undefined`,
-    // which makes `applySourceModelDefault` skip pinning entirely. Bundled
-    // agents emit without `model` or `variant`, inheriting OpenCode's parent
-    // model rather than being pinned to a last-resort first-provider/first-model
-    // entry the user cannot access.
+  test('integration: categorized bundled agent without overlay emits no model', async () => {
     await withVariantTestEnv(null, async (agentsDir, projectDir) => {
       const handler = createConfigHandler({
         directory: projectDir,
         bundledSkillsDir: path.join(agentsDir, '..', 'skills'),
         bundledAgentsDir: agentsDir,
         bundledCommandsDir: path.join(agentsDir, '..', 'commands'),
-        client: makeClient([]),
       })
       const config: Record<string, unknown> = {}
       await handler(config as Parameters<typeof handler>[0])
@@ -658,37 +614,7 @@ describe('variant emission via overlay flow', () => {
     })
   })
 
-  test('integration: source variant emitted when category has matching availability', async () => {
-    // Companion to the empty-availability test above: when availability includes the first
-    // category default, the source-default pinning still works — including the
-    // variant string carried alongside the model entry.
-    await withVariantTestEnv(null, async (agentsDir, projectDir) => {
-      const reviewDefaults = SOURCE_CATEGORY_MODEL_DEFAULTS.review
-      const firstProvider = reviewDefaults.providers[0]
-      const firstModel = firstProvider.models[0]
-      const expectedModel = `${firstProvider.provider}/${firstModel.model}`
-      const handler = createConfigHandler({
-        directory: projectDir,
-        bundledSkillsDir: path.join(agentsDir, '..', 'skills'),
-        bundledAgentsDir: agentsDir,
-        bundledCommandsDir: path.join(agentsDir, '..', 'commands'),
-        client: makeClient([expectedModel]),
-      })
-      const config: Record<string, unknown> = {}
-      await handler(config as Parameters<typeof handler>[0])
-      const agent = (config.agent as Record<string, unknown> | undefined)?.[
-        'correctness-reviewer'
-      ] as Record<string, unknown> | undefined
-      expect(agent?.model).toBe(expectedModel)
-      if (firstModel.variant !== undefined) {
-        expect(agent?.variant).toBe(firstModel.variant)
-      } else {
-        expect(agent?.variant).toBeUndefined()
-      }
-    })
-  })
-
-  test('integration: explicit model and variant override at category level wins over source', async () => {
+  test('integration: category overlay emits its explicit model and variant', async () => {
     await withVariantTestEnv(
       { categories: { review: { model: 'openai/gpt-5.5', variant: 'high' } } },
       async (agentsDir, projectDir) => {
@@ -697,7 +623,6 @@ describe('variant emission via overlay flow', () => {
           bundledSkillsDir: path.join(agentsDir, '..', 'skills'),
           bundledAgentsDir: agentsDir,
           bundledCommandsDir: path.join(agentsDir, '..', 'commands'),
-          client: makeClient([]),
         })
         const config: Record<string, unknown> = {}
         await handler(config as Parameters<typeof handler>[0])
@@ -710,47 +635,25 @@ describe('variant emission via overlay flow', () => {
     )
   })
 
-  test('integration: partial model override at category level clears source variant', async () => {
-    // review category resolves to source default (no variant) by default.
-    // Override model at category level without variant → no variant in emitted config.
-    // intentional fixture: 'openai/gpt-5.5' deliberately differs from source defaults to test override behavior
+  test('integration: category model overlay without variant omits variant', async () => {
     await withVariantTestEnv(
-      { categories: { review: { model: 'openai/gpt-5.5' } } }, // intentional fixture: differs from source defaults to test override
+      { categories: { review: { model: 'openai/gpt-5.5' } } },
       async (agentsDir, projectDir) => {
         const handler = createConfigHandler({
           directory: projectDir,
           bundledSkillsDir: path.join(agentsDir, '..', 'skills'),
           bundledAgentsDir: agentsDir,
           bundledCommandsDir: path.join(agentsDir, '..', 'commands'),
-          client: makeClient([]),
         })
         const config: Record<string, unknown> = {}
         await handler(config as Parameters<typeof handler>[0])
         const agent = (config.agent as Record<string, unknown> | undefined)?.[
           'correctness-reviewer'
         ] as Record<string, unknown> | undefined
-        expect(agent?.model).toBe('openai/gpt-5.5') // intentional fixture: differs from source defaults to test override
+        expect(agent?.model).toBe('openai/gpt-5.5')
         expect(agent?.variant).toBeUndefined()
       },
     )
-  })
-
-  test('integration: variant absence preserved when source has no variant', async () => {
-    await withVariantTestEnv(null, async (agentsDir, projectDir) => {
-      const handler = createConfigHandler({
-        directory: projectDir,
-        bundledSkillsDir: path.join(agentsDir, '..', 'skills'),
-        bundledAgentsDir: agentsDir,
-        bundledCommandsDir: path.join(agentsDir, '..', 'commands'),
-        client: makeClient([]),
-      })
-      const config: Record<string, unknown> = {}
-      await handler(config as Parameters<typeof handler>[0])
-      const agent = (config.agent as Record<string, unknown> | undefined)?.[
-        'correctness-reviewer'
-      ] as Record<string, unknown> | undefined
-      expect(Object.hasOwn(agent ?? {}, 'variant')).toBe(false)
-    })
   })
 })
 

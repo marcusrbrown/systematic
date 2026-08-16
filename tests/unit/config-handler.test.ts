@@ -1124,78 +1124,11 @@ model: gpt-4
       expect(config.command?.['systematic:routed-skill']?.model).toBe('gpt-4')
     })
 
-    test('emits the matched source model when availability contains the configured pair', async () => {
-      createCategorizedAgent('document-review', 'document-reviewer', {
-        name: 'document-reviewer',
-        description: 'Reviews documents',
+    test('categorized and uncategorized bundled agents without overlays emit no model', async () => {
+      createCategorizedAgent('review', 'categorized', {
+        name: 'categorized',
+        description: 'No overlay agent',
       })
-
-      const handler = createConfigHandler({
-        directory: projectDir,
-        bundledSkillsDir: path.join(bundledDir, 'skills'),
-        bundledAgentsDir: path.join(bundledDir, 'agents'),
-        bundledCommandsDir: path.join(bundledDir, 'commands'),
-        client: {
-          config: {
-            providers: async () => ({
-              data: {
-                providers: [
-                  {
-                    id: 'openai',
-                    models: { 'gpt-5.5': {} },
-                  },
-                ],
-                default: {},
-              },
-              error: undefined,
-            }),
-          },
-        },
-      })
-
-      const config: Config = {}
-      await handler(config)
-
-      expect(config.agent?.['document-reviewer']?.model).toBe('openai/gpt-5.5')
-      expect(config.agent?.['document-reviewer']?.variant).toBe('high')
-    })
-
-    test('omits the source model when availability has no configured match', async () => {
-      createCategorizedAgent('document-review', 'document-reviewer', {
-        name: 'document-reviewer',
-        description: 'Reviews documents',
-      })
-
-      const handler = createConfigHandler({
-        directory: projectDir,
-        bundledSkillsDir: path.join(bundledDir, 'skills'),
-        bundledAgentsDir: path.join(bundledDir, 'agents'),
-        bundledCommandsDir: path.join(bundledDir, 'commands'),
-        client: {
-          config: {
-            providers: async () => ({
-              data: {
-                providers: [
-                  {
-                    id: 'anthropic',
-                    models: { 'some-other-model': {} },
-                  },
-                ],
-                default: {},
-              },
-              error: undefined,
-            }),
-          },
-        },
-      })
-
-      const config: Config = {}
-      await handler(config)
-
-      expect(config.agent?.['document-reviewer']).not.toHaveProperty('model')
-    })
-
-    test('uncategorized bundled agent receives no source model default', async () => {
       createAgent(path.join(bundledDir, 'agents'), 'uncategorized', {
         name: 'uncategorized',
         description: 'No category agent',
@@ -1211,11 +1144,12 @@ model: gpt-4
       const config: Config = {}
       await handler(config)
 
+      expect(config.agent?.categorized?.model).toBeUndefined()
       expect(config.agent?.uncategorized?.temperature).toBeUndefined()
       expect(config.agent?.uncategorized?.model).toBeUndefined()
     })
 
-    test('source defaults do not emit for uncategorized agents even with markdown model', async () => {
+    test('explicit markdown model remains on uncategorized agents', async () => {
       createAgent(path.join(bundledDir, 'agents'), 'standalone', {
         name: 'standalone',
         description: 'No category agent',
@@ -1232,11 +1166,10 @@ model: gpt-4
       const config: Config = {}
       await handler(config)
 
-      // Uncategorized agents keep their markdown model since no source default applies
       expect(config.agent?.standalone?.model).toBe('openai/gpt-4')
     })
 
-    test('high-trust exact model: null opt-out removes source default', async () => {
+    test('exact model: null overlay restores parent-model inheritance', async () => {
       createCategorizedAgent('review', 'correctness-reviewer', {
         name: 'correctness-reviewer',
         description: 'Reviews correctness',
@@ -1257,11 +1190,10 @@ model: gpt-4
       const config: Config = {}
       await handler(config)
 
-      // model: null removes source default — agent inherits parent model
       expect(config.agent?.['correctness-reviewer']?.model).toBeUndefined()
     })
 
-    test('high-trust category model: null opt-out removes source default for category members', async () => {
+    test('category model: null overlay restores parent-model inheritance', async () => {
       createCategorizedAgent('review', 'first-reviewer', {
         name: 'first-reviewer',
         description: 'First reviewer',
@@ -1320,7 +1252,7 @@ model: gpt-4
       )
     })
 
-    test('high-trust exact model overrides source default', async () => {
+    test('exact model overlay emits its configured model', async () => {
       createCategorizedAgent('review', 'correctness-reviewer', {
         name: 'correctness-reviewer',
         description: 'Reviews correctness',
@@ -1348,7 +1280,7 @@ model: gpt-4
       )
     })
 
-    test('high-trust category model overrides source defaults for every agent in that category', async () => {
+    test('category model overlay emits its configured model for every agent', async () => {
       createCategorizedAgent('review', 'first-reviewer', {
         name: 'first-reviewer',
         description: 'First reviewer',
@@ -1377,7 +1309,7 @@ model: gpt-4
       expect(config.agent?.['second-reviewer']?.model).toBe('openai/gpt-4o')
     })
 
-    test('native same-name replacement receives no Systematic source model default', async () => {
+    test('native same-name replacement preserves native model-free config', async () => {
       createCategorizedAgent('review', 'native-replaced', {
         name: 'native-replaced',
         description: 'Bundled description',
@@ -1670,24 +1602,6 @@ model: gpt-4
       expect(config.agent?.['spec-flow-analyzer']).toBeUndefined()
     })
 
-    test('assertSourceCategoryModelCoverage fires on missing category', async () => {
-      // Create a categorized agent in a category not covered by source defaults
-      // The existing bundled agents dir has 6 covered categories (design, docs,
-      // document-review, research, review, workflow). An uncovered category would
-      // cause a throw inside createConfigHandler, but we can't create an actual
-      // uncovered directory in bundled agents. Instead, test that when the
-      // assertion is called with an uncovered category, it fails.
-      const { assertSourceCategoryModelCoverage: assertCoverage } =
-        await import('../../src/lib/agent-overlays.js')
-
-      expect(() => assertCoverage(['review', 'unknown-category'])).toThrow(
-        /Source category model defaults missing intentional coverage for/,
-      )
-      expect(() => assertCoverage(['review', 'unknown-category'])).toThrow(
-        /unknown-category/,
-      )
-    })
-
     test('invalid overlay leaves config surfaces unmodified', async () => {
       createCategorizedAgent('review', 'correctness-reviewer', {
         name: 'correctness-reviewer',
@@ -1715,54 +1629,6 @@ model: gpt-4
       await expect(handler(config)).rejects.toThrow(/missing-skill/)
 
       expect(config).toEqual(before)
-    })
-
-    test('discovery completes before user-overlay validation throws', async () => {
-      // When `validateAgentOverlays` rejects a user overlay (here: an unknown
-      // skill reference), the config hook must have already invoked
-      // `client.config.providers()` for availability discovery. This protects
-      // the lifecycle ordering: discover first, validate second. Future
-      // validators that need the availability picture must be able to assume
-      // it's already computed by the time validation runs.
-      createCategorizedAgent('review', 'correctness-reviewer', {
-        name: 'correctness-reviewer',
-        description: 'Reviews correctness',
-      })
-      writeCustomSystematicConfig({
-        agents: { 'correctness-reviewer': { skills: ['missing-skill'] } },
-      })
-
-      const providersCalls: number[] = []
-      const trackingClient = {
-        config: {
-          providers: async () => {
-            providersCalls.push(Date.now())
-            return {
-              data: { providers: [], default: {} },
-              error: undefined,
-            }
-          },
-        },
-      }
-
-      const handler = createConfigHandler({
-        directory: projectDir,
-        bundledSkillsDir: path.join(bundledDir, 'skills'),
-        bundledAgentsDir: path.join(bundledDir, 'agents'),
-        bundledCommandsDir: path.join(bundledDir, 'commands'),
-        client: trackingClient as Parameters<
-          typeof createConfigHandler
-        >[0]['client'],
-      })
-
-      // The handler should still throw because the overlay is invalid; but
-      // the assertion below is that discovery already happened before the
-      // throw site.
-      await expect(handler({})).rejects.toThrow(/missing-skill/)
-
-      // Spy fired exactly once, BEFORE the throw — proves discovery is no
-      // longer gated behind user-overlay validation.
-      expect(providersCalls.length).toBe(1)
     })
 
     test('loads project config from systematic.jsonc with comments', async () => {
@@ -1856,7 +1722,7 @@ model: gpt-4
       )
     })
 
-    test('valid category model defaults still apply alongside removed docs category', async () => {
+    test('valid category overlays still apply alongside removed docs category', async () => {
       createCategorizedAgent('review', 'review-agent', {
         name: 'review-agent',
         description: 'Review agent',

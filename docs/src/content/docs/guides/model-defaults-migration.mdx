@@ -1,0 +1,59 @@
+---
+title: Migrating from source-owned model defaults
+description: Reconstruct the former bundled-agent model routing in explicit config after the source defaults removal.
+sidebar:
+  order: 10
+---
+
+The plain npm plugin no longer chooses a provider/model pair for a bundled agent category. Bundled agents inherit the invoking model unless user-owned configuration supplies an explicit `model` overlay.
+
+This is a removal for plain npm consumers, not a pure relocation. OCX/OMO installers may still provide curated category routing through their registry profile. Users of the plain npm package must opt in explicitly if they want category-aware routing.
+
+## Reconstructing the former mapping
+
+The following table records the complete provider chain that the deleted runtime defaults used. Entries are listed in resolution order. A `+variant` suffix records the variant that was emitted with that model.
+
+| Category | Former provider chain |
+| --- | --- |
+| `design` | `github-copilot/gemini-3.1-pro-preview`, `openai/gpt-5.5+high`, `anthropic/claude-opus-4-7+max`, `vercel/v0-1.5-md` |
+| `document-review` | `anthropic/claude-opus-4-7+max`, `openai/gpt-5.5+high`, `github-copilot/gemini-3.1-pro-preview`, `opencode/claude-sonnet-4-6` |
+| `research` | `openai/gpt-5.4-mini`, `anthropic/claude-sonnet-4-6`, `github-copilot/gemini-3.1-pro-preview`, `opencode/claude-sonnet-4-6` |
+| `review` | `anthropic/claude-sonnet-4-6`, `openai/gpt-5.3-codex`, `github-copilot/gemini-3.1-pro-preview`, `opencode/claude-sonnet-4-6` |
+| `workflow` | `openai/gpt-5.4-mini`, `anthropic/claude-sonnet-4-6`, `opencode/claude-haiku-4-5`, `opencode-go/claude-haiku-4-5` |
+
+To reproduce a prior pin, copy the desired `provider/model` pair into the category's `model` field. If the table includes `+high` or `+max`, set the matching `variant` field as well. The chain is historical guidance; explicit config should reflect the model you actually want to use.
+
+For example:
+
+```jsonc
+{
+  "categories": {
+    "design": {
+      "model": "openai/gpt-5.5",
+      "variant": "high"
+    },
+    "document-review": {
+      "model": "anthropic/claude-opus-4-7",
+      "variant": "max"
+    },
+    "research": {
+      "model": "openai/gpt-5.4-mini"
+    },
+    "review": {
+      "model": "anthropic/claude-sonnet-4-6"
+    },
+    "workflow": {
+      "model": "openai/gpt-5.4-mini"
+    }
+  }
+}
+```
+
+Set an exact `agents.<key>` overlay when one agent needs a different choice from the rest of its category. Set `model: null` to clear an explicit model and restore inheritance.
+
+## What changes by installation type
+
+- **Plain npm plugin:** bundled agents inherit the invoking model. Category-aware routing is absent unless you add `categories` or `agents` overlays in user-owned config.
+- **OCX/OMO installer:** the installer may apply a curated registry profile with explicit category model policy. That policy is separate from the plain npm plugin and is not reconstructed automatically by this migration.
+
+Bundled agent markdown remains model-free in both cases. The portable markdown contract did not change.

@@ -36,7 +36,7 @@ docs/
 │       └── reference/
 │           ├── skills/       # Generated — gitignored (from skills/)
 │           ├── agents/       # Generated — gitignored (from agents/)
-│           └── configuration.mdx  # Human-owned; two sentinel-injected generated regions
+│           └── configuration.mdx  # Human-owned; one sentinel-injected generated region
 └── package.json
 ```
 
@@ -70,7 +70,6 @@ Derives field reference content by walking `SystematicConfigSchema`'s JSON Schem
 | Sentinel pair | What is injected |
 |---|---|
 | `{/* SYSTEMATIC:FIELD-REFERENCE:START */}` … `{/* SYSTEMATIC:FIELD-REFERENCE:END */}` | Full Zod-derived field reference (overlay fields + top-level sections) |
-| `{/* SYSTEMATIC:SOURCE-DEFAULTS:START */}` … `{/* SYSTEMATIC:SOURCE-DEFAULTS:END */}` | Source category model defaults table (from `src/lib/source-model-defaults.ts`) |
 
 `reference/configuration.mdx` is committed, human-owned content. Only the regions between the sentinel markers are overwritten on each `docs:generate` run. All prose outside the markers is preserved byte-for-byte.
 
@@ -78,11 +77,9 @@ Adding a new top-level field to `SystematicConfigSchema` with `.meta({ descripti
 
 The injection is **idempotent**: running `docs:generate` twice in a row produces no diff.
 
-When changing the source defaults:
-1. Edit `src/lib/source-model-defaults.ts:SOURCE_CATEGORY_MODEL_DEFAULTS`
-2. Update the golden snapshot if needed: `bun test tests/unit/source-model-defaults.test.ts --update-snapshots`
-3. Run `bun run docs:generate` to refresh the injected table
-4. Commit `configuration.mdx` alongside the source change
+The retired category routing table is preserved for migration purposes in
+`docs/src/content/docs/guides/model-defaults-migration.mdx`. It is historical
+guidance, not runtime policy or generated reference content.
 
 ## Where to Look
 
