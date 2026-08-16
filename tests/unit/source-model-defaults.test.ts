@@ -9,6 +9,7 @@ import {
 import {
   assertCategoryCoverageOnDisk,
   formatForDocs,
+  ProviderID,
   resolveSourceModel,
   SOURCE_CATEGORY_MODEL_DEFAULTS,
   SourceCategoryDefaultsSchema,
@@ -147,7 +148,7 @@ describe('SourceCategoryDefaultsSchema validation', () => {
     }
   })
 
-  test('error path: unknown provider ID (not in 7-catalog) fails validation', () => {
+  test('happy path: provider IDs outside the former catalog validate structurally', () => {
     const input = {
       design: {
         rationale: 'Test rationale',
@@ -160,10 +161,29 @@ describe('SourceCategoryDefaultsSchema validation', () => {
       },
     }
     const result = SourceCategoryDefaultsSchema.safeParse(input)
-    expect(result.success).toBe(false)
-    if (!result.success) {
-      // The Zod literal union will produce an "invalid_union" or "invalid_literal" error
-      expect(result.error.issues.length).toBeGreaterThan(0)
+    expect(result.success).toBe(true)
+    expect(ProviderID.safeParse('systematic').success).toBe(true)
+  })
+
+  test('happy path: previously-listed provider IDs still validate', () => {
+    expect(ProviderID.safeParse('anthropic').success).toBe(true)
+  })
+
+  test('edge case: empty, whitespace, and internal-whitespace provider IDs fail', () => {
+    for (const provider of ['', '   ', 'anthropic provider']) {
+      expect(ProviderID.safeParse(provider).success).toBe(false)
+    }
+  })
+
+  test('edge case: provider/model separators and path separators fail', () => {
+    for (const provider of ['anthropic/model', 'anthropic\\model']) {
+      expect(ProviderID.safeParse(provider).success).toBe(false)
+    }
+  })
+
+  test('edge case: control characters fail validation', () => {
+    for (const provider of ['anthropic\nmodel', 'anthropic\u0000model']) {
+      expect(ProviderID.safeParse(provider).success).toBe(false)
     }
   })
 

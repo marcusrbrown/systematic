@@ -114,7 +114,7 @@ None. This is Systematic's own policy code; the constraints are internally defin
 
 ## Implementation Units
 
-- [ ] **Unit 1: Stop guessing when availability is known but unmatched**
+- [x] **Unit 1: Stop guessing when availability is known but unmatched**
 
 **Goal:** Delete the last-resort return in `resolveSourceModel` so an unmatched category yields no model and the agent inherits the invoking model.
 

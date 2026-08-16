@@ -4,10 +4,6 @@
  * This module owns the canonical shape, Zod schema, and constant for the
  * per-category model resolution chain. The resolution algorithm walks
  * the provider list in order and picks the first available provider/model pair.
- *
- * Provider catalog is constrained to the 7 IDs with empirical OMO usage-frequency
- * justification: vercel=80, opencode=55, github-copilot=39, opencode-go=26,
- * openai=20, anthropic=18, google=10.
  */
 
 import * as fs from 'node:fs'
@@ -21,18 +17,19 @@ const packageRoot = path.resolve(__dirname, '..', '..')
 const bundledAgentsDir = path.join(packageRoot, 'agents')
 
 /**
- * Zod literal union of the 7 supported provider IDs.
- * Ordered by OMO empirical usage frequency (highest first).
+ * Structurally validated provider identifier.
+ *
+ * Provider IDs flow into emitted config, cache keys, and log output. Keep the
+ * identifier opaque while rejecting values that could smuggle model paths,
+ * path separators, whitespace, or control characters into those sinks.
  */
-export const ProviderID = z.union([
-  z.literal('vercel'),
-  z.literal('opencode'),
-  z.literal('github-copilot'),
-  z.literal('opencode-go'),
-  z.literal('openai'),
-  z.literal('anthropic'),
-  z.literal('google'),
-])
+export const ProviderID = z
+  .string()
+  .min(1, 'provider ID must be a non-empty string')
+  .regex(
+    /^[^\s/\\\p{Cc}]+$/u,
+    'provider ID must not contain whitespace, control characters, or path separators',
+  )
 
 export type ProviderID = z.infer<typeof ProviderID>
 
