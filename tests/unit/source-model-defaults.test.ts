@@ -365,9 +365,11 @@ describe('resolveSourceModel', () => {
     // anthropic is the first provider for document-review
     const availability = new Set(['anthropic/claude-opus-4-7'])
     const result = resolveSourceModel('document-review', availability)
-    expect(result.provider).toBe('anthropic')
-    expect(result.model).toBe('claude-opus-4-7')
-    expect(result.variant).toBe('max')
+    expect(result).toEqual({
+      provider: 'anthropic',
+      model: 'claude-opus-4-7',
+      variant: 'max',
+    })
   })
 
   test('happy path: fallthrough — first provider unavailable, second provider hits', () => {
@@ -375,51 +377,45 @@ describe('resolveSourceModel', () => {
     // availability lacks anthropic models but has openai
     const availability = new Set(['openai/gpt-5.5'])
     const result = resolveSourceModel('document-review', availability)
-    expect(result.provider).toBe('openai')
-    expect(result.model).toBe('gpt-5.5')
-    expect(result.variant).toBe('high')
+    expect(result).toEqual({
+      provider: 'openai',
+      model: 'gpt-5.5',
+      variant: 'high',
+    })
   })
 
-  test('edge case: provider connected but no model match — walks to next provider', () => {
+  test('edge case: provider connected but no model match — returns no resolution', () => {
     // anthropic is in availability but with a different model than what document-review lists
     // document-review lists anthropic/claude-opus-4-7 — availability has anthropic/some-other-model
     const availability = new Set(['anthropic/some-other-model'])
     const result = resolveSourceModel('document-review', availability)
-    // Should NOT return anthropic since the specific model isn't available
-    // Falls through to openai (not available either), then github-copilot (not available), then opencode (not available)
-    // Last resort: first provider's first model
-    expect(result.provider).toBe('anthropic')
-    expect(result.model).toBe('claude-opus-4-7')
-    expect(result.variant).toBe('max')
+    expect(result).toBeUndefined()
   })
 
-  test('edge case: last-resort fallback — empty availability returns first provider first model', () => {
+  test('edge case: empty availability returns no resolution', () => {
     const availability = new Set<string>()
     const result = resolveSourceModel('document-review', availability)
-    // document-review first provider is anthropic, first model is claude-opus-4-7 with variant max
-    expect(result.provider).toBe('anthropic')
-    expect(result.model).toBe('claude-opus-4-7')
-    expect(result.variant).toBe('max')
+    expect(result).toBeUndefined()
   })
 
-  test('edge case: last-resort with multi-model first provider — returns FIRST model not second', () => {
+  test('edge case: no match in a category returns no resolution', () => {
     // Use a category where first provider has multiple models
     // Currently all categories have one model per provider, so we test with review
     // review: anthropic/claude-sonnet-4-6 (no variant)
     const availability = new Set<string>()
     const result = resolveSourceModel('review', availability)
-    expect(result.provider).toBe('anthropic')
-    expect(result.model).toBe('claude-sonnet-4-6')
-    expect(result.variant).toBeUndefined()
+    expect(result).toBeUndefined()
   })
 
   test('edge case: resolved entry has no variant — result has variant undefined', () => {
     // review: anthropic/claude-sonnet-4-6 has no variant
     const availability = new Set(['anthropic/claude-sonnet-4-6'])
     const result = resolveSourceModel('review', availability)
-    expect(result.provider).toBe('anthropic')
-    expect(result.model).toBe('claude-sonnet-4-6')
-    expect(result.variant).toBeUndefined()
+    expect(result).toEqual({
+      provider: 'anthropic',
+      model: 'claude-sonnet-4-6',
+      variant: undefined,
+    })
   })
 
   test('error path: unknown category throws descriptive error', () => {
@@ -439,9 +435,11 @@ describe('resolveSourceModel', () => {
     const result = resolveSourceModel('document-review', availability)
     // anthropic/claude-opus-4-7 not in availability, so anthropic provider is skipped
     // openai/gpt-5.5 IS in availability
-    expect(result.provider).toBe('openai')
-    expect(result.model).toBe('gpt-5.5')
-    expect(result.variant).toBe('high')
+    expect(result).toEqual({
+      provider: 'openai',
+      model: 'gpt-5.5',
+      variant: 'high',
+    })
   })
 })
 

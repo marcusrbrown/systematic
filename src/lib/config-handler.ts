@@ -33,7 +33,7 @@ export interface ConfigHandlerDeps {
   bundledSkillsDir: string
   bundledAgentsDir: string
   bundledCommandsDir: string
-  /** OpenCode client for availability lookup. When omitted, availability falls back to empty set (last-resort resolution). */
+  /** OpenCode client for availability lookup. When omitted, source-default resolution is skipped. */
   client?: OpencodeClientLike
   /** Home directory for discovered-skill lookups. Defaults to `os.homedir()`; inject a temp dir in tests. */
   homeDir?: string
@@ -281,6 +281,8 @@ function applySourceModelDefault(
   if (!agentInfo.category || availabilitySet === undefined) return
 
   const resolved = resolveSourceModel(agentInfo.category, availabilitySet)
+  if (resolved === undefined) return
+
   target.model = `${resolved.provider}/${resolved.model}`
   if (resolved.variant !== undefined) {
     target.variant = resolved.variant

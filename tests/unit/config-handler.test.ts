@@ -1124,6 +1124,77 @@ model: gpt-4
       expect(config.command?.['systematic:routed-skill']?.model).toBe('gpt-4')
     })
 
+    test('emits the matched source model when availability contains the configured pair', async () => {
+      createCategorizedAgent('document-review', 'document-reviewer', {
+        name: 'document-reviewer',
+        description: 'Reviews documents',
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+        client: {
+          config: {
+            providers: async () => ({
+              data: {
+                providers: [
+                  {
+                    id: 'openai',
+                    models: { 'gpt-5.5': {} },
+                  },
+                ],
+                default: {},
+              },
+              error: undefined,
+            }),
+          },
+        },
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.['document-reviewer']?.model).toBe('openai/gpt-5.5')
+      expect(config.agent?.['document-reviewer']?.variant).toBe('high')
+    })
+
+    test('omits the source model when availability has no configured match', async () => {
+      createCategorizedAgent('document-review', 'document-reviewer', {
+        name: 'document-reviewer',
+        description: 'Reviews documents',
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+        client: {
+          config: {
+            providers: async () => ({
+              data: {
+                providers: [
+                  {
+                    id: 'anthropic',
+                    models: { 'some-other-model': {} },
+                  },
+                ],
+                default: {},
+              },
+              error: undefined,
+            }),
+          },
+        },
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.['document-reviewer']).not.toHaveProperty('model')
+    })
+
     test('uncategorized bundled agent receives no source model default', async () => {
       createAgent(path.join(bundledDir, 'agents'), 'uncategorized', {
         name: 'uncategorized',

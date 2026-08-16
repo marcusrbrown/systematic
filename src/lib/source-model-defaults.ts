@@ -387,13 +387,13 @@ export function formatForDocs(): string {
  * 2. Walk providers in declared order. For each provider, walk its models in
  *    declared order and test `${provider}/${model}` membership in availabilitySet.
  * 3. On first hit, return { provider, model, variant? }.
- * 4. Last-resort fallback (no available model anywhere): return the first model
- *    entry of the first provider entry, including its variant if present.
+ * 4. If no configured pair is available, return no resolution so callers can
+ *    preserve parent-model inheritance.
  */
 export function resolveSourceModel(
   category: string,
   availabilitySet: ReadonlySet<string>,
-): { provider: ProviderID; model: string; variant?: string } {
+): { provider: ProviderID; model: string; variant?: string } | undefined {
   const categoryDefault = (
     SOURCE_CATEGORY_MODEL_DEFAULTS as Record<
       string,
@@ -419,12 +419,5 @@ export function resolveSourceModel(
     }
   }
 
-  // Last-resort fallback: first provider's first model
-  const firstProvider = categoryDefault.providers[0]
-  const firstModel = firstProvider.models[0]
-  return {
-    provider: firstProvider.provider,
-    model: firstModel.model,
-    variant: firstModel.variant,
-  }
+  return undefined
 }
