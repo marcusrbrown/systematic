@@ -1,7 +1,7 @@
 ---
 title: 'refactor: Retire source-owned model defaults'
 type: refactor
-status: active
+status: completed
 date: 2026-08-16
 origin: docs/plans/2026-08-13-001-refactor-bitter-lesson-harness-plan.md
 ---
