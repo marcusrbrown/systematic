@@ -4,10 +4,48 @@
   "description": "Structured output schema for code review sub-agents",
   "type": "object",
   "required": ["reviewer", "findings", "residual_risks", "testing_gaps"],
+  "definitions": {
+    "dispatchOutcome": {
+      "type": "string",
+      "enum": ["findings", "empty", "malformed", "never_returned"],
+      "description": "What a persona returned: findings, empty, malformed, or never returned"
+    },
+    "disposition": {
+      "type": "string",
+      "enum": ["surviving", "merged", "suppressed", "filtered", "rejected"],
+      "description": "What happened to an input finding: surviving, merged, suppressed, filtered, or rejected"
+    },
+    "overflowEvidence": {
+      "type": "object",
+      "required": ["overflow", "excerpt"],
+      "properties": {
+        "overflow": {
+          "const": true,
+          "description": "Explicit marker that the complete evidence did not fit in one bounded entry"
+        },
+        "excerpt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500,
+          "pattern": "\\S",
+          "description": "Bounded excerpt retained when evidence must be shortened"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
   "properties": {
     "reviewer": {
       "type": "string",
       "description": "Persona name that produced this output (e.g., 'correctness', 'security')"
+    },
+    "harness": {
+      "type": "string",
+      "enum": ["opencode", "pi", "claude-code"],
+      "description": "Harness that produced the artifact; populated by the parent orchestrator"
+    },
+    "dispatch_outcome": {
+      "$ref": "#/definitions/dispatchOutcome"
     },
     "findings": {
       "type": "array",
@@ -40,7 +78,9 @@
           },
           "file": {
             "type": "string",
-            "description": "Relative file path from repository root"
+            "minLength": 1,
+            "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!\\\\).+",
+            "description": "Relative file path from repository root; absolute POSIX, drive-letter, and UNC paths are rejected"
           },
           "line": {
             "type": "integer",
@@ -49,7 +89,9 @@
           },
           "why_it_matters": {
             "type": "string",
-            "description": "Impact and failure mode -- not 'what is wrong' but 'what breaks'"
+            "minLength": 1,
+            "pattern": "\\S",
+            "description": "Non-empty impact and failure mode -- not 'what is wrong' but 'what breaks'"
           },
           "autofix_class": {
             "type": "string",
@@ -77,9 +119,25 @@
           },
           "evidence": {
             "type": "array",
-            "description": "Code-grounded evidence: snippets, line references, or pattern descriptions. At least 1 item.",
-            "items": { "type": "string" },
-            "minItems": 1
+            "description": "Code-grounded evidence. At least 1 and at most 5 bounded entries; split evidence across entries or use an explicit overflow marker rather than silently truncating it.",
+            "items": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500,
+                  "pattern": "\\S"
+                },
+                {
+                  "$ref": "#/definitions/overflowEvidence"
+                }
+              ]
+            },
+            "minItems": 1,
+            "maxItems": 5
+          },
+          "disposition": {
+            "$ref": "#/definitions/disposition"
           },
           "pre_existing": {
             "type": "boolean",
@@ -126,9 +184,9 @@
       "release": "Operational or rollout follow-up; do not convert into code-fix work automatically."
     },
     "return_tiers": {
-      "description": "Finding fields are split into two tiers. The full schema (with all required fields) applies to the artifact file on disk. The compact return to the orchestrator omits detail-tier fields. Both are valid uses of this schema in different contexts.",
-      "merge_tier": "Returned to orchestrator: title, severity, file, line, confidence, autofix_class, owner, requires_verification, pre_existing, suggested_fix (optional). Plus top-level reviewer, residual_risks, testing_gaps.",
-      "detail_tier": "Required in artifact file, omitted from compact return: why_it_matters, evidence. The artifact file must pass full schema validation including all required fields. Headless output depends on why_it_matters and evidence being present in the artifact."
+      "description": "Finding fields are grouped into two tiers, but both are returned together in one inline payload. Sub-agents do not write to disk; the parent orchestrator validates the complete return against this schema and persists it. The tier names describe how fields are consumed downstream, not separate transports.",
+      "merge_tier": "Consumed during merge and dedup: title, severity, file, line, confidence, autofix_class, owner, requires_verification, pre_existing, suggested_fix (optional). Plus top-level reviewer, residual_risks, testing_gaps.",
+      "detail_tier": "Consumed during synthesis, headless enrichment, and persistence: why_it_matters, evidence. Returned inline alongside merge-tier fields; a return omitting them fails validation and is recorded as a malformed dispatch outcome."
     }
   }
 }

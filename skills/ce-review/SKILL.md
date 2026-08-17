@@ -64,7 +64,7 @@ All tokens are optional. Each one present means one less thing to infer. When ab
 - **Skip all user questions.** Never use the platform question tool (`question` in OpenCode, `request_user_input` in Codex, `ask_user` in Gemini; in Pi, use the blocking-question extension if available, otherwise present numbered options in chat and wait) or other interactive prompts. Infer intent conservatively if the diff metadata is thin.
 - **Require a determinable diff scope.** If headless mode cannot determine a diff scope (no branch, PR, or `base:` ref determinable without user interaction), emit `Review failed (headless mode). Reason: no diff scope detected. Re-invoke with a branch name, PR number, or base:<ref>.` and stop without dispatching agents.
 - **Apply only `safe_auto -> review-fixer` findings in a single pass.** No bounded re-review rounds. Leave `gated_auto`, `manual`, `human`, and `release` work unresolved and return them in the structured output.
-- **Return all non-auto findings as structured text output.** Use the headless output envelope format (see Stage 6 below) preserving severity, autofix_class, owner, requires_verification, confidence, pre_existing, and suggested_fix per finding. Enrich with detail-tier fields (why_it_matters, evidence[]) from the per-agent artifact files on disk (see Detail enrichment in Stage 6).
+- **Return all non-auto findings as structured text output.** Use the headless output envelope format (see Stage 6 below) preserving severity, autofix_class, owner, requires_verification, confidence, pre_existing, and suggested_fix per finding. Enrich with detail-tier fields (why_it_matters, evidence[]) from the validated inline persona returns (see Detail enrichment in Stage 6).
 - **Write a run artifact** under `.context/systematic/ce-review/<run-id>/` summarizing findings, applied fixes, and advisory outputs. Include the artifact path in the structured output.
 - **Do not create todo files.** The caller receives structured findings and routes downstream work itself.
 - **Do not switch the shared checkout.** If the caller passes an explicit PR or branch target, `mode:headless` must run in an isolated checkout/worktree or stop instead of running `gh pr checkout` / `git checkout`. When stopping, emit `Review failed (headless mode). Reason: cannot switch shared checkout. Re-invoke with base:<ref> to review the current checkout, or run from an isolated worktree.`
@@ -383,16 +383,18 @@ The orchestrator (this skill) stays on the default model because it handles inte
 
 #### Run ID
 
-Generate a unique run identifier before dispatching any agents. This ID scopes all agent artifact files and the post-review run artifact to the same directory.
+Generate a unique run identifier before dispatching any agents. This ID scopes the parent-owned per-agent records and the post-review run artifact to the same directory.
 
 ```bash
 RUN_ID=$(date +%Y%m%d-%H%M%S)-$(head -c4 /dev/urandom | od -An -tx1 | tr -d ' ')
 mkdir -p ".context/systematic/ce-review/$RUN_ID"
 ```
 
-Pass `{run_id}` to every persona sub-agent so they can write their full analysis to `.context/systematic/ce-review/{run_id}/{reviewer_name}.json`.
+Keep `{run_id}` in the parent orchestrator. Do not pass it, an artifact path, or any write instruction to persona sub-agents. The parent writes a per-agent record only after the returned payload passes validation.
 
-**Report-only mode:** Skip run-id generation and directory creation. Do not pass `{run_id}` to agents. Agents return compact JSON only with no file write, consistent with report-only's no-write contract.
+Capture the actual invoking harness once in the parent (`opencode`, `pi`, or `claude-code`). Do not infer it from persona metadata or declared tools. Add this parent-owned value to each persisted record and to the synthesis artifact so R6 remains explicit. `mode:report-only` still records nothing because it has no run artifact.
+
+**Report-only mode:** Skip run-id generation and directory creation. Agents return the same full JSON payload, with no file write, consistent with report-only's no-write contract.
 
 #### Spawning
 
@@ -405,14 +407,14 @@ Spawn each selected persona reviewer as a parallel sub-agent using the subagent 
 3. The JSON output contract from the findings schema included below
 4. PR metadata: title, body, and URL when reviewing a PR (empty string otherwise). Passed in a `<pr-context>` block so reviewers can verify code against stated intent
 5. Review context: intent summary, file list, diff
-6. Run ID and reviewer name for the artifact file path
+6. Reviewer name for the returned `reviewer` field
 7. **For `project-standards` only:** the standards file path list from Stage 3b, wrapped in a `<standards-paths>` block appended to the review context
 
-Persona sub-agents are **read-only** with respect to the project: they review and return structured JSON. They do not edit project files or propose refactors. The one permitted write is saving their full analysis to the `.context/` artifact path specified in the output contract.
+Persona sub-agents are **read-only** with respect to the project: they review and return structured JSON. They do not edit project files, write artifacts, or propose refactors. The parent orchestrator owns all persistence.
 
 Read-only here means **non-mutating**, not "no shell access." Reviewer sub-agents may use non-mutating inspection commands when needed to gather evidence or verify scope, including read-oriented `git` / `gh` usage such as `git diff`, `git show`, `git blame`, `git log`, and `gh pr view`. They must not edit project files, change branches, commit, push, create PRs, or otherwise mutate the checkout or repository state.
 
-Each persona sub-agent writes full JSON (all schema fields) to `.context/systematic/ce-review/{run_id}/{reviewer_name}.json` and returns compact JSON with merge-tier fields only:
+Each persona sub-agent returns one full JSON payload (all schema fields) to the parent:
 
 ```json
 {
@@ -428,6 +430,10 @@ Each persona sub-agent writes full JSON (all schema fields) to `.context/systema
       "owner": "downstream-resolver",
       "requires_verification": true,
       "pre_existing": false,
+      "why_it_matters": "An unowned lookup can expose another account's orders.",
+      "evidence": [
+        "orders_controller.rb:42 uses params[:id] without an ownership guard."
+      ],
       "suggested_fix": "Add current_user.owns?(account) guard before lookup"
     }
   ],
@@ -436,7 +442,9 @@ Each persona sub-agent writes full JSON (all schema fields) to `.context/systema
 }
 ```
 
-Detail-tier fields (`why_it_matters`, `evidence`) are in the artifact file only. `suggested_fix` is optional in both tiers -- included in compact returns when present so the orchestrator has fix context for auto-apply decisions. If the file write fails, the compact return still provides everything the merge needs.
+`why_it_matters` and `evidence` are returned inline with the merge-tier fields. `suggested_fix` remains optional. The parent validates the complete payload before writing any per-agent record; a malformed or rejected return is never partially persisted.
+
+Returning the detail tier inline increases parent context per persona. The previous compact/detail split kept synthesis context lean, so this is an intentional cost of deleting the sub-agent write path. Verify it against a real multi-persona run. If it materially degrades synthesis, use a second targeted request per persona and keep the write parent-side; never restore sub-agent disk access.
 
 **CE always-on agents** (agent-native-reviewer, learnings-researcher) are dispatched as standard Agent calls in parallel with the persona agents. Give them the same review context bundle the personas receive: entry mode, any PR metadata gathered in Stage 1, intent summary, review base branch name when known, `BASE:` marker, file list, diff, and `UNTRACKED:` scope notes. Do not invoke them with a generic "review this" prompt. Their output is unstructured and synthesized separately in Stage 6.
 
@@ -444,22 +452,22 @@ Detail-tier fields (`why_it_matters`, `evidence`) are in the artifact file only.
 
 ### Stage 5: Merge findings
 
-Convert multiple reviewer compact JSON returns into one deduplicated, confidence-gated finding set. The compact returns contain merge-tier fields (title, severity, file, line, confidence, autofix_class, owner, requires_verification, pre_existing) plus the optional suggested_fix. Detail-tier fields (why_it_matters, evidence) are on disk in the per-agent artifact files and are not loaded at this stage.
+Convert multiple reviewer JSON returns into one deduplicated, confidence-gated finding set. Each persona return already contains both tiers. The parent must retain the validated payload in memory for merge and synthesis, then persist only the same validated data.
 
-1. **Validate.** Check each compact return for required top-level and per-finding fields, plus value constraints. Drop malformed returns or findings. Record the drop count.
-   - **Top-level required:** reviewer (string), findings (array), residual_risks (array), testing_gaps (array). Drop the entire return if any are missing or wrong type.
-   - **Per-finding required:** title, severity, file, line, confidence, autofix_class, owner, requires_verification, pre_existing
-   - **Value constraints:**
-     - severity: P0 | P1 | P2 | P3
-     - autofix_class: safe_auto | gated_auto | manual | advisory
-     - owner: review-fixer | downstream-resolver | human | release
-     - confidence: numeric, 0.0-1.0
-     - line: positive integer
-     - pre_existing, requires_verification: boolean
-   - Do not validate against the full schema here -- the full schema (including why_it_matters and evidence) applies to the artifact files on disk, not the compact returns.
-2. **Confidence gate.** Suppress findings below 0.60 confidence. Exception: P0 findings at 0.50+ confidence survive the gate -- critical-but-uncertain issues must not be silently dropped. Record the suppressed count. This matches the persona instructions and the schema's confidence thresholds.
-3. **Deduplicate.** Compute fingerprint: `normalize(file) + line_bucket(line, +/-3) + normalize(title)`. When fingerprints match, merge: keep highest severity, keep highest confidence, note which reviewers flagged it.
-4. **Cross-reviewer agreement.** When 2+ independent reviewers flag the same issue (same fingerprint), boost the merged confidence by 0.10 (capped at 1.0). Cross-reviewer agreement is strong signal -- independent reviewers converging on the same issue is more reliable than any single reviewer's confidence. Note the agreement in the Reviewer column of the output (e.g., "security, correctness").
+Before applying the confidence gate, assign every finding in a valid return a stable parent-owned `input_id` of `<reviewer>#<1-based finding index>`. Keep an input ledger through every later stage. The ledger is the authoritative reconciliation record in the synthesis artifact; it is not part of the persona's returned payload. If a return is rejected but its parsed `findings` array can be safely enumerated, assign IDs and record every enumerated input as `rejected`. If the return is malformed JSON or has no safely enumerable findings, record no synthetic input findings; the persona-level dispatch record and its exact safe rejection reason still record the rejection.
+
+1. **Validate before any write.** Treat every persona return as untrusted input. Parse the returned text as JSON without logging the raw text, then validate the complete parsed object against `references/findings-schema.json`, including `why_it_matters` and `evidence`.
+   - **Top-level required:** reviewer (string), findings (array), residual_risks (array), testing_gaps (array). Reject the entire persona return if any are missing or wrong type.
+   - **Per-finding required:** title, severity, file, line, why_it_matters, confidence, evidence, autofix_class, owner, requires_verification, pre_existing.
+   - **Schema constraints:** enforce every enum, type, confidence, line, path, evidence count, evidence length, and explicit overflow-marker bound from the schema. Empty evidence, absolute paths, and over-bound evidence are rejection cases, not truncation cases.
+   - **Environment-value detection:** JSON Schema cannot determine where a string came from, so recursively inspect every string leaf in the parsed payload before writing. Reject the payload when a string contains a shell/environment reference (`$NAME`, `${NAME}`, `process.env.NAME`, or `os.environ[...]`), an assignment using a known environment variable (`NAME=value`), or a current environment value as an exact or embedded match. Use a conservative match set of non-empty runtime environment values; never log the matched value. This detector is an additional parent-side check, not a schema claim.
+   - **Safe rejection message:** report only `Rejected persona <name> return: field <JSON path> failed <reason>.` Derive `<JSON path>` from the validator or recursive scan and use a fixed reason such as `schema validation`, `environment-value detection`, or `malformed JSON`; never include the offending value, raw return, or validator parameters.
+   - **No partial writes:** do not write a per-agent record or merge any finding until the entire persona payload passes schema and environment-value validation. A valid payload is then annotated by the parent with `harness` and `dispatch_outcome` and written by the parent only. Revalidate the enriched record before persistence.
+   - **Dispatch outcome:** a valid non-empty return is `findings`; a valid empty return is `empty`; invalid JSON or a rejected schema/environment payload is `malformed`; timeout or no return is `never_returned`. Keep these outcomes separate from finding `disposition`.
+   - **Rejection policy: degrade, do not fail the whole review.** Continue merging conforming returns, record the rejected persona's `dispatch_outcome` and safe rejection reason in the synthesis artifact, and give any rejected input the `rejected` disposition in the later reconciliation. If every persona fails or times out, use the existing degraded-review behavior. This preserves partial review coverage without ever persisting a non-conforming artifact; only an orchestration/storage failure that prevents the parent from producing its required run artifact is run-fatal.
+2. **Confidence gate.** Suppress findings below 0.60 confidence. Exception: P0 findings at 0.50+ confidence survive the gate -- critical-but-uncertain issues must not be silently dropped. Record the suppressed finding's original confidence and an explicit reason in the input ledger. A retained P0 at 0.50+ is recorded as `surviving` unless it later participates in a deduplication merge. This matches the persona instructions and the schema's confidence thresholds.
+3. **Deduplicate.** Compute fingerprint: `normalize(file) + line_bucket(line, +/-3) + normalize(title)`. When fingerprints match, merge: keep highest severity, keep highest confidence, preserve the exact fingerprint, and retain the input IDs that produced the merged entry. A singleton that passes the gate is `surviving`; each input in a multi-input merge is provisionally `merged`.
+4. **Cross-reviewer agreement.** When 2+ independent reviewers flag the same issue (same fingerprint), boost the merged confidence by 0.10 (capped at 1.0). Cross-reviewer agreement is strong signal -- independent reviewers converging on the same issue is more reliable than any single reviewer's confidence. Preserve the distinction in the merged finding's artifact provenance: `submitters` contains only personas with an input finding in that fingerprint group; `agreement_credit` contains only personas credited by the agreement boost without an input finding in that group. A persona with zero findings never appears in `submitters`. Do not infer submission from the report's Reviewer column.
 5. **Separate pre-existing.** Pull out findings with `pre_existing: true` into a separate list.
 6. **Resolve disagreements.** When reviewers flag the same code region but disagree on severity, autofix_class, or owner, annotate the Reviewer column with the disagreement (e.g., "security (P0), correctness (P1) -- kept P0"). This transparency helps the user understand why a finding was routed the way it was.
 7. **Normalize routing.** For each merged finding, set the final `autofix_class`, `owner`, and `requires_verification`. If reviewers disagree, keep the most conservative route. Synthesis may narrow a finding from `safe_auto` to `gated_auto` or `manual`, but must not widen it without new evidence.
@@ -470,10 +478,11 @@ Convert multiple reviewer compact JSON returns into one deduplicated, confidence
 9. **Sort.** Order by severity (P0 first) -> confidence (descending) -> file path -> line number.
 10. **Collect coverage data.** Union residual_risks and testing_gaps across reviewers.
 11. **Preserve CE agent artifacts.** Keep the learnings, agent-native, schema-drift, and deployment-verification outputs alongside the merged finding set. Do not drop unstructured agent output just because it does not match the persona JSON schema.
+12. **Keep the input ledger complete.** Every enumerated input finding has exactly one final disposition: `surviving`, `merged`, `suppressed`, `filtered`, or `rejected`, plus a reason. The ledger's disposition counts must sum to its input count. A rejected payload's reason is the exact safe rejection message produced by validation, not a bucket such as "invalid"; never include the offending value.
 
 ### Stage 5b: Validation pass
 
-Run an independent validation pass over the merged finding set before synthesis. This pass annotates each gated finding `validated: true` or `validated: false` with a one-sentence reason. It never deletes a finding — findings with `validated: false` are surfaced in the "Filtered (not validated)" group in Stage 6, not removed from the report.
+Run an independent validation pass over the merged finding set before synthesis. This pass annotates each gated finding `validated: true` or `validated: false` with a one-sentence reason. A `validated: false` finding is dropped from the surviving/actioned set and receives disposition `filtered`, but is retained in the synthesis artifact and surfaced in the "Filtered (not validated)" group in Stage 6. It is not erased from the record.
 
 **Gating band (default):** Validate only findings that are **P0 or P1 severity**, or that have `requires_verification: true`. Findings outside this band pass through to Stage 6 unvalidated and unfiltered — no validator is dispatched for them. This bounds cost: one validator subagent per gated finding.
 
@@ -482,9 +491,9 @@ Run an independent validation pass over the merged finding set before synthesis.
 1. Identify all gated findings from the Stage 5 merged set.
 2. For each gated finding, spawn one validator subagent in parallel using the validator template at `references/validator-template.md`. Pass the finding fields, the intent summary, the file list, and the full diff.
 3. Collect `{validated, reason}` from each validator. Attach both fields to the finding.
-4. **Never drop a finding.** A finding with `validated: false` is routed to the "Filtered (not validated)" group for Stage 6 presentation. It is not removed from the report, not suppressed, and not excluded from the Coverage count.
-5. Findings with `validated: true` flow through to Stage 6 unchanged — they appear in the normal severity tables.
-6. Findings outside the gating band carry no `validated` annotation and appear in Stage 6 severity tables unchanged.
+4. **Reconcile filtered inputs.** A finding with `validated: false` moves to the "Filtered (not validated)" presentation group in Stage 6, and every input ID contributing to that merged finding is updated to disposition `filtered` with the validator's exact one-sentence reason. It is not `suppressed`, `rejected`, or silently excluded from the input ledger.
+5. Findings with `validated: true` flow through to Stage 6 unchanged — they appear in the normal severity tables. Their input ledger dispositions remain `surviving` for singleton findings or `merged` for deduplicated groups.
+6. Findings outside the gating band carry no `validated` annotation and appear in Stage 6 severity tables unchanged; their input ledger dispositions remain `surviving` or `merged`.
 
 **Failure handling:** If a validator subagent fails or times out, treat the finding as `validated: true` (conservative fallback — keep it in the actioned set) and note the validator failure in the Coverage section.
 
@@ -494,7 +503,7 @@ Run an independent validation pass over the merged finding set before synthesis.
 
 Assemble the final report using **pipe-delimited markdown tables for findings** from the review output template included below. The table format is mandatory for finding rows in interactive mode — do not render findings as freeform text blocks or horizontal-rule-separated prose. Other report sections (Applied Fixes, Learnings, Coverage, etc.) use bullet lists and the `---` separator before the verdict, as shown in the template.
 
-1. **Header.** Scope, intent, mode, reviewer team with per-conditional justifications.
+1. **Header.** Scope, intent, mode, harness, reviewer team with per-conditional justifications.
 2. **Findings.** Rendered as pipe-delimited tables grouped by severity (`### P0 -- Critical`, `### P1 -- High`, `### P2 -- Moderate`, `### P3 -- Low`). Each finding row shows `#`, file, issue, reviewer(s), confidence, and synthesized route. Omit empty severity levels. Never render findings as freeform text blocks or numbered lists. Only findings with `validated: true` (or no `validated` annotation) appear in these tables.
 3. **Requirements Completeness.** Include only when a plan was found in Stage 2b. For each requirement (R1, R2, etc.) and implementation unit in the plan, report whether corresponding work appears in the diff. Use a simple checklist: met / not addressed / partially addressed. Routing depends on `plan_source`:
    - **`explicit`** (caller-provided or PR body): Flag unaddressed requirements as P1 findings with `autofix_class: manual`, `owner: downstream-resolver`. These enter the residual actionable queue and can become todos.
@@ -525,7 +534,7 @@ Scope: <scope-line>
 Intent: <intent-summary>
 Reviewers: <reviewer-list with conditional justifications>
 Verdict: <Ready to merge | Ready with fixes | Not ready>
-Artifact: .context/systematic/ce-review/<run-id>/
+Artifact: .context/systematic/ce-review/<run-id>/review-summary.json
 
 Applied N safe_auto fixes.
 
@@ -583,15 +592,15 @@ Coverage:
 Review complete
 ```
 
-**Detail enrichment (headless only):** The headless envelope includes `Why:`, `Evidence:`, and `Suggested fix:` lines. After merge (Stage 5), read the per-agent artifact files from `.context/systematic/ce-review/{run_id}/` for only the findings that survived dedup and confidence gating.
-   - **Field tiers:** `Why:` and `Evidence:` are detail-tier -- load from per-agent artifact files. `Suggested fix:` is merge-tier -- use it directly from the compact return without artifact lookup.
-   - **Artifact matching:** For each surviving finding, look up its detail-tier fields in the artifact files of the contributing reviewers. Match on `file + line_bucket(line, +/-3)` (the same tolerance used in Stage 5 dedup) within each contributing reviewer's artifact. When multiple artifact entries fall within the line bucket, apply `normalize(title)` to both the merged finding's title and each candidate entry's title as a tie-breaker.
-   - **Reviewer order:** Try contributing reviewers in the order they appear in the merged finding's reviewer list; use the first match.
-   - **No-match fallback:** If no artifact file contains a match (all writes failed, or the finding was synthesized during merge), omit the `Why:` and `Evidence:` lines for that finding and note the gap in Coverage. The `Suggested fix:` line can still be populated from the compact return since it is merge-tier.
+**Detail enrichment (headless only):** The headless envelope includes `Why:`, `Evidence:`, and `Suggested fix:` lines. After merge (Stage 5), use the validated full persona returns retained in parent memory for only the findings that survived dedup and confidence gating.
+   - **Field tiers:** `Why:` and `Evidence:` are detail-tier and are already present in the validated inline return. `Suggested fix:` is also available directly from that return and survives merge as optional fix context.
+   - **In-memory matching:** For each surviving finding, look up its detail-tier fields in the validated returns of the contributing reviewers. Match on `file + line_bucket(line, +/-3)` (the same tolerance used in Stage 5 dedup). When multiple entries fall within the line bucket, apply `normalize(title)` to the merged finding's title and each candidate entry's title as a tie-breaker.
+   - **Reviewer order:** Try contributing reviewers in the order they appear in the merged finding's reviewer list; use the first validated match.
+   - **No-match fallback:** If no validated in-memory return contains a match, omit the `Why:` and `Evidence:` lines for that finding and note the gap in Coverage. This should indicate a synthesis/matching gap, not a failed artifact-file write. Never re-read per-agent files to recover detail.
 
 **Formatting rules:**
 - The `[needs-verification]` marker appears only on findings where `requires_verification: true`.
-- The `Artifact:` line gives callers the path to the full run artifact for machine-readable access to the complete findings schema. The text envelope is the primary handoff; the artifact is for debugging and full-fidelity access.
+- The `Artifact:` line gives callers the path to the parent-written `review-summary.json` for machine-readable access to the complete findings schema, provenance, dispatch outcomes, and disposition ledger. The text envelope is the primary handoff; the artifact is for debugging and full-fidelity access.
 - Findings with `owner: release` appear in the Advisory section (they are operational/rollout items, not code fixes).
 - Findings with `pre_existing: true` appear in the Pre-existing section regardless of autofix_class.
 - Findings with `validated: false` from Stage 5b appear in the "Filtered (not validated)" section. They are surfaced for human review — not removed. Include the validator reason on the indented `Validator reason:` line.
@@ -691,18 +700,22 @@ After presenting findings and verdict (Stage 6), route the next steps by mode. R
 
 #### Step 4: Emit artifacts and downstream handoff
 
-- In interactive, autofix, and headless modes, write a per-run artifact under `.context/systematic/ce-review/<run-id>/` containing:
-  - synthesized findings (merged output from Stage 5)
-  - applied fixes
-  - residual actionable work
-  - advisory-only outputs
-  Per-agent full-detail JSON files (`{reviewer_name}.json`) are already present in this directory from Stage 4 dispatch.
+- In interactive, autofix, and headless modes, write **`review-summary.json` unconditionally** under `.context/systematic/ce-review/<run-id>/`, including when every persona returns `empty` and there are zero surviving findings. `mode:report-only` remains exempt: it skips run-id and directory creation and writes nothing.
+- `review-summary.json` is the parent-owned synthesis artifact and must contain, at minimum:
+  - `run_id`, `mode`, `harness` (`opencode`, `pi`, or `claude-code`), and run lifecycle fields;
+  - a `dispatches` entry for every selected persona with `persona`, `dispatch_outcome` (`findings`, `empty`, `malformed`, or `never_returned`), the number of safely enumerated input findings, and the exact safe `rejection_reason` when applicable;
+  - an `input_findings` ledger with one entry per safely enumerated input, its `input_id`, reviewer, original confidence, final `disposition` (`surviving`, `merged`, `suppressed`, `filtered`, or `rejected`), and a stated reason. Its count must reconcile exactly with the sum of disposition counts. A malformed JSON return with no safely enumerable finding has zero ledger entries, not a fabricated finding;
+  - surviving synthesized findings and filtered findings, each retaining their original fields plus `input_finding_ids` and provenance. Every synthesized finding's provenance must include the exact dedup `fingerprint`, `submitters`, and `agreement_credit` arrays. `submitters` means independent input submissions; `agreement_credit` means agreement boost credit without a corresponding input submission;
+  - applied fixes, residual actionable work, advisory-only outputs, coverage data, and the harness value.
+- During the pre-dispatch setup described in Stage 4, initialize the synthesis artifact with lifecycle state `in_progress` and all selected personas initialized as `never_returned`. Update each dispatch entry as returns arrive. Finalize it as `completed` or `degraded` after synthesis; if the parent catches an abort or storage/orchestration failure, finalize it as `abnormal` with the stated termination reason. If the process dies before finalization, the pre-written `in_progress` artifact is itself an explicit incomplete run and must be counted as abnormal rather than treated as a missing or clean run. Never infer a clean run from an absent artifact.
+- Per-agent full-detail JSON files (`{reviewer_name}.json`) are written by the parent only after the persona return passes full-schema and environment-value validation. Rejected or never-returned personas do not produce a per-agent file; their dispatch outcome remains in the synthesis artifact. If a later confidence or validation stage changes an input disposition, update the parent-owned record and synthesis ledger before finalizing `review-summary.json`.
 - Also write `metadata.json` alongside the findings so downstream skills can verify the artifact matches the current branch and HEAD. Minimum fields:
   ```json
   {
     "run_id": "<run-id>",
     "branch": "<git branch --show-current at dispatch time>",
     "head_sha": "<git rev-parse HEAD at dispatch time>",
+    "harness": "<opencode | pi | claude-code>",
     "verdict": "<Ready to merge | Ready with fixes | Not ready>",
     "completed_at": "<ISO 8601 UTC timestamp>"
   }
