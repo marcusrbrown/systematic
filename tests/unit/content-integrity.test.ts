@@ -14,6 +14,7 @@ import {
   checkArgumentHint,
   checkBannedPatterns,
   checkContentIntegrity,
+  checkDispatchIdentifiers,
   checkFrontmatter,
   checkFrontmatterParseSafety,
   checkMigratedSkillIdentifiers,
@@ -1696,6 +1697,265 @@ describe('checkAgentStemUniqueness', () => {
   })
 })
 
+describe('checkDispatchIdentifiers', () => {
+  test('flags unresolvable subagent types, including examples in fenced code', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeAgent(root, 'workflow', 'systematic-implementer')
+      writeAgent(root, 'research', 'repo-research-analyst')
+      writeSkill(
+        root,
+        'foo',
+        'The `subagent_type` parameter selects a specialist.\n' +
+          'task({ subagent_type: "NotARealAgent" })\n' +
+          '```typescript\n' +
+          "task({ subagent_type: 'AlsoNotReal' })\n" +
+          '```\n' +
+          'task({ subagent_type: repo-research-analyst })\n' +
+          "task({ subagent_type: 'repo-research-analyst' })\n" +
+          'task({ subagent_type: "systematic-implementer" })\n',
+      )
+
+      const targets = collectScanTargets(root)
+      const violations = checkDispatchIdentifiers(root, targets.markdown)
+
+      expect(violations).toHaveLength(2)
+      expect(violations).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            kind: 'unresolvable-subagent-type',
+            file: 'skills/foo/SKILL.md',
+            line: 2,
+            identifier: 'NotARealAgent',
+          }),
+          expect.objectContaining({
+            kind: 'unresolvable-subagent-type',
+            file: 'skills/foo/SKILL.md',
+            line: 4,
+            identifier: 'AlsoNotReal',
+          }),
+        ]),
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('does not swallow the closing backtick of an inline-code dispatch example', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeAgent(root, 'workflow', 'systematic-implementer')
+      writeAgent(root, 'research', 'repo-research-analyst')
+      writeSkill(
+        root,
+        'foo',
+        'Bundled agent inline: `subagent_type: repo-research-analyst`\n' +
+          'Another bundled agent: `subagent_type: systematic-implementer`\n' +
+          'Bogus inline: `subagent_type: NotARealAgent`\n',
+      )
+
+      const targets = collectScanTargets(root)
+      const violations = checkDispatchIdentifiers(root, targets.markdown)
+
+      // The bundled values must not fire. An unquoted capture that ran to the
+      // closing backtick would yield "repo-research-analyst`", which resolves to
+      // nothing and false-positives on correct content.
+      expect(violations).toHaveLength(1)
+      expect(violations[0]).toEqual(
+        expect.objectContaining({
+          kind: 'unresolvable-subagent-type',
+          line: 3,
+          identifier: 'NotARealAgent',
+        }),
+      )
+      expect(violations[0]?.identifier).not.toContain('`')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags quoted subagent_type property keys without accepting mismatched quotes', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSkill(
+        root,
+        'foo',
+        'JSON dispatch: task({ "subagent_type": "ce-implementer" })\n' +
+          'Mismatched dispatch: task({ "subagent_type\': "ce-implementer" })\n',
+      )
+
+      const violations = checkDispatchIdentifiers(
+        root,
+        collectScanTargets(root).markdown,
+      )
+
+      expect(violations).toHaveLength(1)
+      expect(violations[0]).toMatchObject({
+        kind: 'unresolvable-subagent-type',
+        line: 1,
+        identifier: 'ce-implementer',
+      })
+      expect(violations[0]?.message).toContain(
+        'use a filename stem from agents/**',
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('stops unquoted captures at prose quotes and still flags unresolved quoted error messages', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeAgent(root, 'research', 'repo-research-analyst')
+      writeSkill(
+        root,
+        'foo',
+        'If you see "Unknown subagent_type: ce-architecture-strategist", use the canonical form.\n' +
+          'The documented value is "subagent_type: repo-research-analyst".\n',
+      )
+
+      const violations = checkDispatchIdentifiers(
+        root,
+        collectScanTargets(root).markdown,
+      )
+
+      expect(violations).toHaveLength(1)
+      expect(violations[0]).toMatchObject({
+        kind: 'unresolvable-subagent-type',
+        line: 1,
+        identifier: 'ce-architecture-strategist',
+      })
+      expect(violations[0]?.identifier).not.toMatch(/["']/)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('does not close a longer fence with a shorter same-character fence', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeAgent(root, 'review', 'architecture-strategist')
+      writeSkill(
+        root,
+        'foo',
+        '````\n' +
+          'Opened with FOUR backticks.\n' +
+          '```\n' +
+          'This near-miss remains inside the outer fence: `ce-architecture-strategist`\n' +
+          '````\n',
+      )
+
+      expect(
+        checkDispatchIdentifiers(root, collectScanTargets(root).markdown),
+      ).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('scans each inline-code token independently when one token is a path', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeAgent(root, 'review', 'architecture-strategist')
+      writeSkill(
+        root,
+        'foo',
+        '`agents/review/architecture-strategist.md or ce-architecture-strategist`\n',
+      )
+
+      const violations = checkDispatchIdentifiers(
+        root,
+        collectScanTargets(root).markdown,
+      )
+
+      expect(violations).toHaveLength(1)
+      expect(violations[0]).toMatchObject({
+        kind: 'near-miss-agent-identifier',
+        identifier: 'ce-architecture-strategist',
+        matchedStem: 'architecture-strategist',
+      })
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags near-miss bundled agent identifiers only in inline code', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeAgent(root, 'review', 'architecture-strategist')
+      writeSkill(
+        root,
+        'foo',
+        'Use `ce-architecture-strategist` when dispatching.\n' +
+          'The path `agents/review/architecture-strategist.md` is valid.\n' +
+          'The canonical reference `systematic:review:architecture-strategist` is valid.\n' +
+          'Skill names `ce-plan` and `ce-review` are not agent identifiers.\n' +
+          'Plain ce-architecture-strategist prose is not an inline-code token.\n',
+      )
+
+      const targets = collectScanTargets(root)
+      const violations = checkDispatchIdentifiers(root, targets.markdown)
+
+      expect(violations).toHaveLength(1)
+      expect(violations[0]).toMatchObject({
+        kind: 'near-miss-agent-identifier',
+        file: 'skills/foo/SKILL.md',
+        line: 1,
+        identifier: 'ce-architecture-strategist',
+        matchedStem: 'architecture-strategist',
+      })
+      expect(violations[0]?.message).toContain(
+        'Did you mean `architecture-strategist`?',
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('checkContentIntegrity — dispatch identifier wiring', () => {
+  test('surfaces a dispatch-only violation and counts it toward the CLI exit status', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeCompliantSkill(
+        root,
+        'foo',
+        'task({ subagent_type: "not-a-bundled-agent" })\n',
+      )
+
+      const result = checkContentIntegrity(root)
+
+      expect(result.dispatchIdentifierViolations).toHaveLength(1)
+      expect(result.dispatchIdentifierViolations[0]?.identifier).toBe(
+        'not-a-bundled-agent',
+      )
+      expect(result.phantomRefs).toEqual([])
+      expect(result.phantomSkillRefs).toEqual([])
+      expect(result.brokenSubfileRefs).toEqual([])
+      expect(result.bannedPatterns).toEqual([])
+      expect(result.frontmatterViolations).toEqual([])
+      expect(result.parseSafetyViolations).toEqual([])
+      expect(result.agentModelViolations).toEqual([])
+      expect(result.agentModeViolations).toEqual([])
+      expect(result.agentColorViolations).toEqual([])
+      expect(result.agentStemViolations).toEqual([])
+      expect(result.agentTemperatureViolations).toEqual([])
+      expect(result.argumentHintViolations).toEqual([])
+      expect(result.migratedSkillIdentifierViolations).toEqual([])
+      expect(result.removedNamesOverlapViolations).toEqual([])
+
+      const proc = Bun.spawnSync(['bun', SCRIPT_PATH, root], {
+        cwd: REPO_ROOT,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+      expect(proc.exitCode).toBe(1)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('checkContentIntegrity (top-level)', () => {
   test('clean repo with no violations returns empty arrays', () => {
     const root = makeFixtureRepo()
@@ -1711,6 +1971,7 @@ describe('checkContentIntegrity (top-level)', () => {
       expect(result.frontmatterViolations).toEqual([])
       expect(result.agentModelViolations).toEqual([])
       expect(result.agentStemViolations).toEqual([])
+      expect(result.dispatchIdentifierViolations).toEqual([])
       expect(result.scanStats.markdownFiles).toBe(2) // SKILL.md + agent a.md
       expect(result.scanStats.typescriptFiles).toBe(1)
       expect(result.categories).toEqual(['research'])
