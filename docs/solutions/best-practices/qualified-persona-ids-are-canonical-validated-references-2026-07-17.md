@@ -116,16 +116,21 @@ A gate you have never watched fail is not a verified gate. Plant a wrong categor
 and require a specific failure:
 
 ```bash
-sed -i '' 's/systematic:review:architecture-strategist/systematic:research:architecture-strategist/' \
-  skills/ce-plan/references/deepening-workflow.md
+F=skills/ce-plan/references/deepening-workflow.md
+cp "$F" /tmp/gate-probe.bak
+
+# perl -pi is portable; `sed -i ''` is BSD-only and errors on GNU sed
+perl -pi -e 's/systematic:review:architecture-strategist/systematic:research:architecture-strategist/' "$F"
 
 bun run scripts/content-integrity.ts
 # expect: file, line, the reference, and the missing
 # agents/research/architecture-strategist.md path
+
+cp /tmp/gate-probe.bak "$F"
+bun run scripts/content-integrity.ts   # expect: clean
 ```
 
-Restore afterward and confirm clean. This turns "the gate passes" into "the gate
-discriminates" — different claims.
+This turns "the gate passes" into "the gate discriminates" — different claims.
 
 ## When to Apply
 
