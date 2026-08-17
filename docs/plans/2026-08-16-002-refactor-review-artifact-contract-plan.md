@@ -120,7 +120,7 @@ It also shows the limit worth learning from: that plan's enforcement was an AJV 
 
 ## Implementation Units
 
-- [ ] **Unit 1: Correct the ownership record for three shared personas**
+- [x] **Unit 1: Correct the ownership record for three shared personas**
 
 **Goal:** Make it discoverable that `architecture-strategist`, `pattern-recognition-specialist`, and `code-simplicity-reviewer` are dispatched by `ce-compound` and plan-deepening, not `ce:review`.
 
@@ -158,7 +158,7 @@ It also shows the limit worth learning from: that plan's enforcement was an AJV 
 - Reading any of the three agent files reveals which workflow dispatches it.
 - No identifier in any of the five namespaces changed.
 
-- [ ] **Unit 2: Tighten the findings schema and add its regression test**
+- [x] **Unit 2: Tighten the findings schema and add its regression test**
 
 **Goal:** Make the schema express the contract Unit 3 will enforce, and guard it with the executable test `ce:review` never had.
 
@@ -199,7 +199,7 @@ It also shows the limit worth learning from: that plan's enforcement was an AJV 
 - The real schema compiles and representative objects validate.
 - Every schema-expressible bound in R4 is expressed in the schema; the rest is named as Unit 3 validation logic rather than assumed.
 
-- [ ] **Unit 3: Move artifact persistence to the parent orchestrator**
+- [x] **Unit 3: Move artifact persistence to the parent orchestrator**
 
 **Goal:** Make non-conforming artifacts impossible to persist, on every harness, by removing sub-agent disk access from the design entirely.
 
@@ -248,7 +248,7 @@ Concretely:
 - No non-conforming artifact reaches disk.
 - Enforcement is uniform across OpenCode, Pi, and Claude Code, because it no longer depends on a plugin runtime.
 
-- [ ] **Unit 4: Require synthesis artifacts with provenance and disposition**
+- [x] **Unit 4: Require synthesis artifacts with provenance and disposition**
 
 **Goal:** Every run records what was dispatched, who contributed to each merged finding, and what happened to every input finding.
 
