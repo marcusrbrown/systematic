@@ -38,7 +38,7 @@ const EXPECTED_CLI_HELP = [
   'Usage: bun scripts/run-evals.ts [options]',
   '',
   'Options:',
-  '  --case <id>       Repeatable: bootstrap-loading | fixture-local-write | host-skill-coverage',
+  '  --case <id>       Repeatable: bootstrap-loading | fixture-local-write | host-skill-coverage | model-inheritance',
   '  --mode <mode>     Repeatable: source | installed',
   '  --seed <seed>     [A-Za-z0-9][A-Za-z0-9._-]{0,127}',
   '  --clock <UTC>     YYYY-MM-DDTHH:mm:ss.sssZ',

@@ -4,7 +4,6 @@ import path from 'node:path'
 import type { Config } from '@opencode-ai/plugin'
 import type { AgentConfig } from '@opencode-ai/sdk'
 import {
-  assertSourceCategoryModelCoverage,
   buildBundledAgentInventory,
   type ResolvedAgentOverlaySet,
   resolveAgentOverlaySet,
@@ -16,16 +15,11 @@ import { loadConfigWithSources } from './config.js'
 import { type DiscoveredSkill, discoverSkills } from './discovered-skills.js'
 import { parseFrontmatter } from './frontmatter.js'
 import {
-  getAvailableModels,
-  type OpencodeClientLike,
-} from './model-availability.js'
-import {
   type LoadedSkill,
   loadSkill,
   wrapSkillTemplate,
 } from './skill-loader.js'
 import { findSkillsInDir } from './skills.js'
-import { resolveSourceModel } from './source-model-defaults.js'
 import { isRecord, type PermissionSetting } from './validation.js'
 
 export interface ConfigHandlerDeps {
@@ -33,8 +27,6 @@ export interface ConfigHandlerDeps {
   bundledSkillsDir: string
   bundledAgentsDir: string
   bundledCommandsDir: string
-  /** OpenCode client for availability lookup. When omitted, availability falls back to empty set (last-resort resolution). */
-  client?: OpencodeClientLike
   /** Home directory for discovered-skill lookups. Defaults to `os.homedir()`; inject a temp dir in tests. */
   homeDir?: string
   /** OpenCode global config directory override for discovered-skill lookups. Defaults to `<homeDir>/.config/opencode`. */
@@ -200,19 +192,11 @@ function loadSkillAsCommand(loaded: LoadedSkill): CommandConfig {
   return config
 }
 
-/**
- * Source-default model resolution skips when `availabilitySet` is
- * `undefined`. That happens when both the client API call and the
- * models.json fallback failed — pinning a source default would risk
- * emitting agents the user cannot use, so we leave bundled agents to
- * inherit OpenCode's parent model instead.
- */
 function collectAgents(
   dir: string,
   disabledAgents: string[],
   nativeAgents: Record<string, unknown>,
   overlays: ResolvedAgentOverlaySet,
-  availabilitySet: ReadonlySet<string> | undefined,
 ): NonNullable<Config['agent']> {
   const agents: NonNullable<Config['agent']> = {}
   const agentList = findAgentsInDir(dir)
@@ -230,12 +214,7 @@ function collectAgents(
 
     const config = loadAgentAsConfig(agentInfo)
     if (config) {
-      agents[agentInfo.name] = applyAgentOverlays(
-        config,
-        agentInfo,
-        overlays,
-        availabilitySet,
-      )
+      agents[agentInfo.name] = applyAgentOverlays(config, agentInfo, overlays)
     }
   }
 
@@ -246,7 +225,6 @@ function applyAgentOverlays(
   config: AgentConfig,
   agentInfo: { name: string; category?: string },
   overlays: ResolvedAgentOverlaySet,
-  availabilitySet: ReadonlySet<string> | undefined,
 ): AgentConfig {
   const id = agentInfo.category
     ? `${agentInfo.category}/${agentInfo.name}`
@@ -265,28 +243,11 @@ function applyAgentOverlays(
     addPermissionRules(permissionRules, config.permission)
   }
 
-  applySourceModelDefault(result, agentInfo, availabilitySet)
   applyAgentOverlay(result, categoryOverlay?.value, permissionRules)
   applyAgentOverlay(result, exactOverlay?.value, permissionRules)
   applyPermissionOverlay(result, permissionRules, hasPermissionOverlay)
 
   return result
-}
-
-function applySourceModelDefault(
-  target: AgentConfig,
-  agentInfo: { category?: string },
-  availabilitySet: ReadonlySet<string> | undefined,
-): void {
-  if (!agentInfo.category || availabilitySet === undefined) return
-
-  const resolved = resolveSourceModel(agentInfo.category, availabilitySet)
-  target.model = `${resolved.provider}/${resolved.model}`
-  if (resolved.variant !== undefined) {
-    target.variant = resolved.variant
-  } else {
-    delete target.variant
-  }
 }
 
 function applyAgentOverlay(
@@ -339,11 +300,10 @@ function applyOverlayObjectWithVariantClearing(
   permissionRules: PermissionRuleAccumulator,
 ): void {
   // When an overlay sets model but not variant, clear any lower-precedence
-  // variant so the user-selected model is not paired with a stale source variant.
+  // variant so the user-selected model is not paired with a stale variant.
   // `model: null` (explicit inheritance opt-out) also counts as setting
-  // model — without this, `model: null` without `variant` would silently
-  // keep a stale source variant attached to OpenCode's inherited parent
-  // model.
+  // model — without this, `model: null` without `variant` would silently keep
+  // a stale variant attached to OpenCode's inherited parent model.
   const overlayHasModel = Object.hasOwn(overlay, 'model')
   const overlayHasVariant = Object.hasOwn(overlay, 'variant')
   if (overlayHasModel && !overlayHasVariant) {
@@ -352,7 +312,7 @@ function applyOverlayObjectWithVariantClearing(
 
   for (const field of OVERLAY_ASSIGN_FIELDS) {
     if (Object.hasOwn(overlay, field)) {
-      // model: null means "restore inheritance" — delete any source default
+      // model: null means "restore inheritance" — remove the emitted model
       if (field === 'model' && overlay[field] === null) {
         delete target[field]
       } else {
@@ -634,33 +594,6 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
       systematicConfig.disabled_agents,
     )
 
-    // Discovery runs BEFORE validation. Two reasons:
-    //
-    // 1. Diagnostic clarity. If validation throws, the user sees the
-    //    validation error — and we know discovery already attempted (and
-    //    succeeded or fell back gracefully). Without this ordering, a
-    //    validator throw obscures whether discovery ever ran.
-    //
-    // 2. Forward-compatible lifecycle seam. Future validators that consult
-    //    availability (e.g., rejecting an overlay whose target model is not
-    //    in the connected set) can assume `availabilitySet` is already
-    //    computed by the time validation runs. Do not move discovery back
-    //    down on the grounds that current validators don't consume it; that
-    //    would reintroduce the same ordering bug class.
-    //
-    // When the client is unavailable (tests that don't inject it), or when
-    // discovery fails entirely (API + cache both unreachable), we fall
-    // through to OpenCode parent-model inheritance for bundled agents
-    // rather than pinning potentially-wrong defaults.
-    const availability = deps.client
-      ? await getAvailableModels(deps.client)
-      : undefined
-    const availabilitySet =
-      availability && availability.status !== 'unknown'
-        ? availability.models
-        : undefined
-
-    assertSourceCategoryModelCoverage(inventory.categories)
     const validatedOverlays = validateAgentOverlays({
       inventory,
       overlays,
@@ -673,7 +606,6 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
       systematicConfig.disabled_agents,
       nativeAgents,
       resolvedOverlays,
-      availabilitySet,
     )
 
     const bundledCommands = collectCommands(

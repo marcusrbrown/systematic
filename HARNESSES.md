@@ -20,7 +20,7 @@ The four capability rows use the vocabulary in the [OpenCode profile](skills/usi
 
 ## OpenCode — Tier 1 shipped adapter
 
-OpenCode is the primary controlled integration. Its profile defines delegation, blocking interaction, task tracking, and skill loading [OC-P]. The underlying source registers `task` with specialized-agent, resume, and background fields [OC-1], `question` as a user-facing tool [OC-2], and `todowrite` as a built-in tool [OC-3]. Systematic converts bundled skills into commands in `src/lib/config-handler.ts:467-485` and registers the skill tool in `src/lib/skill-tool.ts:41-101` [OC-4][OC-5]. Bundled agent markdown omits a model field by invariant [OC-6]; runtime configuration may still supply source-owned defaults [OC-7].
+OpenCode is the primary controlled integration. Its profile defines delegation, blocking interaction, task tracking, and skill loading [OC-P]. The underlying source registers `task` with specialized-agent, resume, and background fields [OC-1], `question` as a user-facing tool [OC-2], and `todowrite` as a built-in tool [OC-3]. Systematic converts bundled skills into commands in `src/lib/config-handler.ts:467-485` and registers the skill tool in `src/lib/skill-tool.ts:41-101` [OC-4][OC-5]. Bundled agent markdown omits a model field by invariant [OC-6]; runtime configuration stays model-free unless user-owned config supplies an explicit overlay [OC-7].
 
 Compatibility is direct: OpenCode consumes the concrete invocation language in the profile. The adapter is not a generic claim about other harnesses.
 

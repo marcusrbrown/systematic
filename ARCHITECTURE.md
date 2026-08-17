@@ -100,7 +100,10 @@ These must hold at all times. CI enforces them via the content-integrity gate.
 2. **Bundled agent markdown omits `model`.** Agent `.md` files in `agents/` must not set `model` in
    frontmatter. OpenCode subagents inherit the invoking agent's model when `model` is absent. The
    literal value `model: inherit` is not supported and has caused crashes in older OpenCode versions.
-   TypeScript code (not markdown) owns any opinionated model defaults emitted at runtime.
+   The OpenCode config hook also leaves bundled agents model-free unless user-owned config supplies
+   an explicit overlay. Model policy belongs to the user: OCX/OMO installers may provide curated
+   category routing through their registry profile, while plain npm consumers lose category-aware
+   routing unless they opt in.
 
 3. **Trust boundary on project config.** Project-level `systematic.json` cannot set `model`,
    `variant`, `permission`, or `skills`. These fields are listed in `SECURITY_OVERLAY_FIELDS` and
@@ -171,9 +174,6 @@ or unresolved bare reference. Output is gitignored build staging (`claude-code/`
 **Typed config validation** (`src/lib/config-schema.ts`) — all user-supplied config passes through
 `validateConfig` before use. `SECURITY_OVERLAY_FIELDS` are stripped from project-level config
 regardless of what the user writes.
-
-**Model availability memoization** (`src/lib/model-availability.ts`) — caches provider/model
-availability checks to avoid redundant API calls during a single plugin load cycle.
 
 **Config priority** — `$OPENCODE_CONFIG_DIR/systematic.json` > project `.opencode/systematic.json`
 > user `~/.config/opencode/systematic.json` > defaults. Disabled lists union-merge across all

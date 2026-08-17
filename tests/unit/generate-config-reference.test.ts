@@ -74,6 +74,7 @@ describe('module resolution', () => {
     expect(mod).toBeDefined()
     expect(typeof mod.generateConfigReference).toBe('function')
     expect(typeof mod.validateFieldExamples).toBe('function')
+    expect(mod).not.toHaveProperty('injectSourceDefaultsTable')
   })
 })
 
@@ -399,6 +400,8 @@ describe('error handling', () => {
     expect(repoMdx).not.toContain('schemas/v2/systematic-config.schema.json')
     const tmpMdx = fs.readFileSync(tmpMdxPath, 'utf-8')
     expect(tmpMdx).toContain('schemas/v2/systematic-config.schema.json')
+    expect(tmpMdx).not.toContain('SYSTEMATIC:SOURCE-DEFAULTS')
+    expect(tmpMdx).not.toContain('Source Category Model Defaults')
   })
 
   test('generator with real schema: all fields have examples', async () => {

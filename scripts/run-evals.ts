@@ -17,6 +17,7 @@ export const CASE_IDS = [
   'bootstrap-loading',
   'fixture-local-write',
   'host-skill-coverage',
+  'model-inheritance',
 ] as const
 
 export type CaseId = (typeof CASE_IDS)[number]
@@ -50,6 +51,7 @@ export const OUTCOME_SUBCODES = {
     'write_missing',
     'write_mismatch',
     'unexpected_exit',
+    'model_policy_mismatch',
   ],
   privacy_cleanup_failure: [
     'redaction_failed',
@@ -87,10 +89,25 @@ export interface HostSkillCoverageCaseManifest {
   expectedSkillNames: string[]
 }
 
+export interface ModelInheritanceCaseManifest {
+  caseSchemaVersion: typeof CASE_SCHEMA_VERSION
+  caseId: 'model-inheritance'
+  harness: typeof HARNESS
+  assertionIds: string[]
+  expectedAgentIds: string[]
+  category: string
+  categoryModel: string
+  categoryVariant: string
+  exactAgentId: string
+  exactModel: string
+  exactVariant: string
+}
+
 export type EvalCaseManifest =
   | BootstrapLoadingCaseManifest
   | FixtureLocalWriteCaseManifest
   | HostSkillCoverageCaseManifest
+  | ModelInheritanceCaseManifest
 
 export interface EvalIdentity {
   opencodeVersion: string
@@ -111,6 +128,7 @@ export interface EvalEvidence {
   assertionIds: string[]
   promptComposition?: PromptCompositionObservation
   hostCatalogCoverage?: HostCatalogCoverageObservation
+  modelInheritance?: ModelInheritanceObservation[]
 }
 
 export type PromptCatalogState = 'present' | 'absent' | 'impossible'
@@ -132,6 +150,28 @@ export interface HostCatalogCoverageObservation {
   expectedSkillNames: string[]
   observedSkillNames: string[]
   missingSkillNames: string[]
+}
+
+export type ModelAvailabilityPath = 'known' | 'unknown'
+export type ModelInheritancePolicy =
+  | 'none'
+  | 'category'
+  | 'exact'
+  | 'null'
+  | 'project-error'
+
+export interface ModelAgentObservation {
+  agentId: string
+  modelPresent: boolean
+  variantPresent: boolean
+  model?: string
+  variant?: string
+}
+
+export interface ModelInheritanceObservation {
+  availability: ModelAvailabilityPath
+  policy: ModelInheritancePolicy
+  agents: ModelAgentObservation[]
 }
 
 export interface EvalCleanupState {
@@ -191,6 +231,7 @@ export interface EvalCaseExecution {
   artifactRefs: string[]
   promptComposition?: PromptCompositionObservation
   hostCatalogCoverage?: HostCatalogCoverageObservation
+  modelInheritance?: ModelInheritanceObservation[]
 }
 
 export interface EvalFixture {
@@ -451,6 +492,12 @@ const CASE_ASSERTIONS: Record<CaseId, readonly string[]> = {
   'bootstrap-loading': ['bootstrap-observed'],
   'fixture-local-write': ['fixture-file-content', 'fixture-file-created'],
   'host-skill-coverage': ['host-catalog-covered'],
+  'model-inheritance': [
+    'agents-inherit-invoking-model',
+    'explicit-model-overlay-wins',
+    'model-null-restores-inheritance',
+    'project-model-trust-boundary',
+  ],
 }
 
 const RESULT_REQUIRED_KEYS = [
@@ -707,7 +754,7 @@ const CLI_USAGE = [
   'Usage: bun scripts/run-evals.ts [options]',
   '',
   'Options:',
-  '  --case <id>       Repeatable: bootstrap-loading | fixture-local-write | host-skill-coverage',
+  '  --case <id>       Repeatable: bootstrap-loading | fixture-local-write | host-skill-coverage | model-inheritance',
   '  --mode <mode>     Repeatable: source | installed',
   '  --seed <seed>     [A-Za-z0-9][A-Za-z0-9._-]{0,127}',
   '  --clock <UTC>     YYYY-MM-DDTHH:mm:ss.sssZ',
@@ -1027,6 +1074,103 @@ function normalizeHostCatalogCoverage(
   }
 }
 
+const MAX_MODEL_INHERITANCE_OBSERVATIONS = 16
+const MAX_MODEL_AGENT_OBSERVATIONS = 128
+const MODEL_IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/
+
+function readModelIdentifier(value: unknown): string {
+  if (typeof value !== 'string' || !MODEL_IDENTIFIER_PATTERN.test(value)) {
+    fail('result_invalid_field')
+  }
+  assertSafeString(value)
+  return value
+}
+
+function normalizeModelAgentObservation(value: unknown): ModelAgentObservation {
+  const input = record(value, 'result_invalid_field')
+  assertExactKeys(
+    input,
+    ['agentId', 'modelPresent', 'variantPresent'],
+    ['model', 'variant'],
+    'result_unknown_field',
+    'result_missing_field',
+  )
+  if (
+    typeof input.modelPresent !== 'boolean' ||
+    typeof input.variantPresent !== 'boolean'
+  ) {
+    fail('result_invalid_field')
+  }
+  const model = hasOwn(input, 'model')
+    ? readModelIdentifier(input.model)
+    : undefined
+  const variant = hasOwn(input, 'variant')
+    ? readModelIdentifier(input.variant)
+    : undefined
+  if (
+    (!input.modelPresent && model !== undefined) ||
+    (!input.variantPresent && variant !== undefined)
+  ) {
+    fail('result_invalid_field')
+  }
+  return {
+    agentId: readSafeRelativeId(input.agentId),
+    modelPresent: input.modelPresent,
+    variantPresent: input.variantPresent,
+    ...(model !== undefined ? { model } : {}),
+    ...(variant !== undefined ? { variant } : {}),
+  }
+}
+
+function normalizeModelInheritanceObservation(
+  value: unknown,
+): ModelInheritanceObservation {
+  const input = record(value, 'result_invalid_field')
+  assertExactKeys(
+    input,
+    ['availability', 'policy', 'agents'],
+    [],
+    'result_unknown_field',
+    'result_missing_field',
+  )
+  if (input.availability !== 'known' && input.availability !== 'unknown') {
+    fail('result_invalid_field')
+  }
+  if (
+    input.policy !== 'none' &&
+    input.policy !== 'category' &&
+    input.policy !== 'exact' &&
+    input.policy !== 'null' &&
+    input.policy !== 'project-error'
+  ) {
+    fail('result_invalid_field')
+  }
+  if (
+    !Array.isArray(input.agents) ||
+    input.agents.length > MAX_MODEL_AGENT_OBSERVATIONS
+  ) {
+    fail('result_invalid_field')
+  }
+  const agents = input.agents.map(normalizeModelAgentObservation)
+  if (new Set(agents.map((agent) => agent.agentId)).size !== agents.length) {
+    fail('result_invalid_field')
+  }
+  agents.sort((left, right) => left.agentId.localeCompare(right.agentId))
+  if (
+    input.policy === 'none' &&
+    agents.some(
+      (agent) => agent.model !== undefined || agent.variant !== undefined,
+    )
+  ) {
+    fail('result_invalid_field')
+  }
+  return {
+    availability: input.availability,
+    policy: input.policy,
+    agents,
+  }
+}
+
 function readSortedIdentifiers(
   value: unknown,
   expected: readonly string[],
@@ -1135,12 +1279,13 @@ function normalizeIdentity(value: unknown): EvalIdentity {
 function normalizeEvidence(
   value: unknown,
   assertionIds: readonly string[],
+  caseId: CaseId,
 ): EvalEvidence {
   const input = record(value, 'result_invalid_field')
   assertExactKeys(
     input,
     ['sanity', 'process', 'assertionIds'],
-    ['promptComposition', 'hostCatalogCoverage'],
+    ['promptComposition', 'hostCatalogCoverage', 'modelInheritance'],
     'result_unknown_field',
     'result_missing_field',
   )
@@ -1159,6 +1304,12 @@ function normalizeEvidence(
     process,
     assertionIds: normalizedAssertionIds,
   }
+  if (caseId !== 'model-inheritance' && hasOwn(input, 'modelInheritance')) {
+    fail('result_invalid_field')
+  }
+  if (caseId === 'model-inheritance' && !hasOwn(input, 'modelInheritance')) {
+    fail('result_invalid_field')
+  }
   if (hasOwn(input, 'promptComposition')) {
     normalized.promptComposition = normalizePromptComposition(
       input.promptComposition,
@@ -1167,6 +1318,17 @@ function normalizeEvidence(
   if (hasOwn(input, 'hostCatalogCoverage')) {
     normalized.hostCatalogCoverage = normalizeHostCatalogCoverage(
       input.hostCatalogCoverage,
+    )
+  }
+  if (hasOwn(input, 'modelInheritance')) {
+    if (
+      !Array.isArray(input.modelInheritance) ||
+      input.modelInheritance.length > MAX_MODEL_INHERITANCE_OBSERVATIONS
+    ) {
+      fail('result_invalid_field')
+    }
+    normalized.modelInheritance = input.modelInheritance.map(
+      normalizeModelInheritanceObservation,
     )
   }
   return normalized
@@ -1317,6 +1479,67 @@ function parseHostSkillCoverageCaseManifest(
   }
 }
 
+function readSortedAgentIds(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length === 0) fail('case_invalid_field')
+  const ids = value.map((item) => readSafeRelativeId(item))
+  if (new Set(ids).size !== ids.length) fail('case_invalid_field')
+  return ids.sort()
+}
+
+function parseModelInheritanceCaseManifest(
+  value: RecordValue,
+): ModelInheritanceCaseManifest {
+  assertExactKeys(
+    value,
+    [
+      'caseSchemaVersion',
+      'caseId',
+      'harness',
+      'assertionIds',
+      'expectedAgentIds',
+      'category',
+      'categoryModel',
+      'categoryVariant',
+      'exactAgentId',
+      'exactModel',
+      'exactVariant',
+    ],
+    [],
+    'case_unknown_field',
+    'case_missing_field',
+  )
+  if (value.caseSchemaVersion !== CASE_SCHEMA_VERSION) {
+    fail('case_wrong_version')
+  }
+  if (value.harness !== HARNESS) fail('case_invalid_field')
+  const assertionIds = readSortedIdentifiers(
+    value.assertionIds,
+    CASE_ASSERTIONS['model-inheritance'],
+    'case_invalid_field',
+  )
+  const expectedAgentIds = readSortedAgentIds(value.expectedAgentIds)
+  const category = readIdentifier(value.category)
+  const exactAgentId = readSafeRelativeId(value.exactAgentId)
+  if (!exactAgentId.startsWith(`${category}/`)) fail('case_invalid_field')
+  if (!expectedAgentIds.includes(exactAgentId)) fail('case_invalid_field')
+  if (!expectedAgentIds.some((id) => id.startsWith(`${category}/`))) {
+    fail('case_invalid_field')
+  }
+  return {
+    caseSchemaVersion: CASE_SCHEMA_VERSION,
+    caseId: 'model-inheritance',
+    harness: HARNESS,
+    assertionIds,
+    expectedAgentIds,
+    category,
+    categoryModel: readModelIdentifier(value.categoryModel),
+    categoryVariant: readModelIdentifier(value.categoryVariant),
+    exactAgentId,
+    exactModel: readModelIdentifier(value.exactModel),
+    exactVariant: readModelIdentifier(value.exactVariant),
+  }
+}
+
 export function parseCaseManifest(input: unknown): EvalCaseManifest {
   assertPrivacySafeTree(input)
   const value = record(input, 'case_invalid_shape')
@@ -1352,6 +1575,10 @@ export function parseCaseManifest(input: unknown): EvalCaseManifest {
 
   if (caseId === 'host-skill-coverage') {
     return parseHostSkillCoverageCaseManifest(value)
+  }
+
+  if (caseId === 'model-inheritance') {
+    return parseModelInheritanceCaseManifest(value)
   }
 
   assertExactKeys(
@@ -1445,7 +1672,7 @@ export function normalizeResult(input: unknown): EvalResult {
     normalizedClock: readClock(value.normalizedClock),
     assertionIds,
     identity,
-    evidence: normalizeEvidence(value.evidence, assertionIds),
+    evidence: normalizeEvidence(value.evidence, assertionIds, caseId),
     cleanup: normalizeCleanup(value.cleanup),
     privacy: normalizePrivacy(value.privacy),
     artifactRefs: readSortedArtifactRefs(value.artifactRefs),
@@ -2871,6 +3098,11 @@ function buildResultEnvelope(input: {
       ...(input.execution.hostCatalogCoverage
         ? { hostCatalogCoverage: input.execution.hostCatalogCoverage }
         : {}),
+      ...(input.caseManifest.caseId === 'model-inheritance'
+        ? { modelInheritance: input.execution.modelInheritance ?? [] }
+        : input.execution.modelInheritance
+          ? { modelInheritance: input.execution.modelInheritance }
+          : {}),
     },
     cleanup: input.cleanup,
     privacy: { status: 'validated' },

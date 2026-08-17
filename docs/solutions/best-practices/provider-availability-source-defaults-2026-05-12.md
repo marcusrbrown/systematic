@@ -21,7 +21,9 @@ related_components:
 tags: [provider-availability, auth-json, source-defaults, generated-docs, defensive-guards, integration-tests, plugin-client, clonedeps, lifecycle-ordering, empty-set-collapse]
 ---
 
-# Plugin provider availability discovery and source-default resolution
+# Historical: Plugin provider availability discovery and source-default resolution
+
+> **Historical note (August 2026):** This learning documents the retired source-owned model-default path. The plain npm plugin no longer emits category model defaults; bundled agents inherit the invoking model unless user-owned config supplies one. See [`model-defaults-migration.mdx`](../../src/content/docs/guides/model-defaults-migration.mdx) for the preserved mapping and migration guidance.
 
 ## Context
 

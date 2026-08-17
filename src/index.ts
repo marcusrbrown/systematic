@@ -67,7 +67,6 @@ const initializePlugin = async ({
     bundledSkillsDir,
     bundledAgentsDir,
     bundledCommandsDir,
-    client,
   })
   const observer = createOpencodeOperationObserver({
     targetDirectory: typeof worktree === 'string' ? worktree : directory,
