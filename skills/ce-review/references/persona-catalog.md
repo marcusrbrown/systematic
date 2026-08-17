@@ -2,6 +2,14 @@
 
 13 reviewer personas organized into always-on, cross-cutting conditional, and stack-specific conditional layers, plus CE-specific agents. The orchestrator uses this catalog to select which reviewers to spawn for each review.
 
+## Shared persona pool
+
+The `agents/review/` directory is a shared persona pool, not `systematic:ce-review`'s roster. Directory placement does not imply that a persona is selectable by `systematic:ce-review`. These shared personas are dispatched by other workflows and intentionally do not appear in this catalog's `systematic:ce-review` selection tables:
+
+- `systematic:architecture-strategist` — dispatched by `deepen-plan` and `ce-plan`'s deepening workflow for architectural analysis.
+- `systematic:pattern-recognition-specialist` — dispatched by `deepen-plan`, `ce-plan`'s deepening workflow, and `ce-compound` for consistency, duplication, and pattern analysis.
+- `systematic:code-simplicity-reviewer` — dispatched by `ce-compound` for code-heavy issues.
+
 ## Always-on (4 personas + 2 CE agents)
 
 Spawned on every review regardless of diff content.

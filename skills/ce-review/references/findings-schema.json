@@ -1,134 +1,338 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
   "title": "Code Review Findings",
-  "description": "Structured output schema for code review sub-agents",
-  "type": "object",
-  "required": ["reviewer", "findings", "residual_risks", "testing_gaps"],
-  "properties": {
-    "reviewer": {
+  "description": "Structured output schemas for code review sub-agent returns and parent-persisted records",
+  "$ref": "#/definitions/parentRecord",
+  "definitions": {
+    "dispatchOutcome": {
       "type": "string",
-      "description": "Persona name that produced this output (e.g., 'correctness', 'security')"
+      "enum": ["findings", "empty", "malformed", "never_returned"],
+      "description": "What a persona returned: findings, empty, malformed, or never returned"
     },
-    "findings": {
-      "type": "array",
-      "description": "List of code review findings. Empty array if no issues found.",
-      "items": {
-        "type": "object",
-        "required": [
-          "title",
-          "severity",
-          "file",
-          "line",
-          "why_it_matters",
-          "autofix_class",
-          "owner",
-          "requires_verification",
-          "confidence",
-          "evidence",
-          "pre_existing"
-        ],
-        "properties": {
-          "title": {
+    "disposition": {
+      "type": "string",
+      "enum": ["surviving", "merged", "suppressed", "filtered", "rejected"],
+      "description": "What happened to an input finding: surviving, merged, suppressed, filtered, or rejected"
+    },
+    "harness": {
+      "type": "string",
+      "enum": ["opencode", "pi", "claude-code"],
+      "description": "Harness that produced the artifact; populated by the parent orchestrator"
+    },
+    "repoRelativePath": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!\\\\).+",
+      "description": "Relative file path from repository root; absolute POSIX, drive-letter, and UNC paths are rejected"
+    },
+    "boundedEvidenceString": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!\\\\).+",
+      "description": "Bounded code-grounded evidence; absolute POSIX, drive-letter, and UNC paths are rejected"
+    },
+    "overflowExcerpt": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 500,
+      "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!\\\\).+",
+      "description": "Bounded excerpt retained when evidence must be shortened"
+    },
+    "overflowEvidence": {
+      "type": "object",
+      "required": ["overflow", "excerpt"],
+      "properties": {
+        "overflow": {
+          "const": true,
+          "description": "Explicit marker that the complete evidence did not fit in one bounded entry"
+        },
+        "excerpt": {
+          "$ref": "#/definitions/overflowExcerpt"
+        }
+      },
+      "additionalProperties": false
+    },
+    "findingProperties": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "\\S",
+          "description": "Short, specific issue title. 10 words or fewer."
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["P0", "P1", "P2", "P3"],
+          "description": "Issue severity level"
+        },
+        "file": {
+          "$ref": "#/definitions/repoRelativePath"
+        },
+        "line": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Primary line number of the issue"
+        },
+        "why_it_matters": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "pattern": "\\S",
+          "description": "Non-empty impact and failure mode -- not 'what is wrong' but 'what breaks'"
+        },
+        "autofix_class": {
+          "type": "string",
+          "enum": ["safe_auto", "gated_auto", "manual", "advisory"],
+          "description": "Reviewer's conservative recommendation for how this issue should be handled after synthesis"
+        },
+        "owner": {
+          "type": "string",
+          "enum": ["review-fixer", "downstream-resolver", "human", "release"],
+          "description": "Who should own the next action for this finding after synthesis"
+        },
+        "requires_verification": {
+          "type": "boolean",
+          "description": "Whether any fix for this finding must be re-verified with targeted tests or a follow-up review pass"
+        },
+        "suggested_fix": {
+          "type": ["string", "null"],
+          "maxLength": 2048,
+          "description": "Concrete minimal fix. Omit or null if no good fix is obvious -- a bad suggestion is worse than none."
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "description": "Reviewer confidence in this finding, calibrated per persona"
+        },
+        "evidence": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "description": "Code-grounded evidence. At least 1 and at most 5 bounded entries; split evidence across entries or use an explicit overflow marker rather than silently truncating it.",
+          "items": {
+            "oneOf": [
+              {
+                "$ref": "#/definitions/boundedEvidenceString"
+              },
+              {
+                "$ref": "#/definitions/overflowEvidence"
+              }
+            ]
+          }
+        },
+        "disposition": {
+          "$ref": "#/definitions/disposition"
+        },
+        "pre_existing": {
+          "type": "boolean",
+          "description": "True if this issue exists in unchanged code unrelated to the current diff"
+        }
+      }
+    },
+    "artifactProperties": {
+      "type": "object",
+      "properties": {
+        "reviewer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "\\S",
+          "description": "Persona name that produced this output (e.g., 'correctness', 'security')"
+        },
+        "harness": {
+          "$ref": "#/definitions/harness"
+        },
+        "dispatch_outcome": {
+          "$ref": "#/definitions/dispatchOutcome"
+        },
+        "findings": {
+          "type": "array",
+          "maxItems": 32,
+          "description": "List of code review findings. Empty array if no issues found."
+        },
+        "residual_risks": {
+          "type": "array",
+          "maxItems": 64,
+          "description": "Risks the reviewer noticed but could not confirm as findings",
+          "items": {
             "type": "string",
-            "description": "Short, specific issue title. 10 words or fewer.",
-            "maxLength": 100
-          },
-          "severity": {
+            "maxLength": 1024
+          }
+        },
+        "testing_gaps": {
+          "type": "array",
+          "maxItems": 64,
+          "description": "Missing test coverage the reviewer identified",
+          "items": {
             "type": "string",
-            "enum": ["P0", "P1", "P2", "P3"],
-            "description": "Issue severity level"
-          },
-          "file": {
-            "type": "string",
-            "description": "Relative file path from repository root"
-          },
-          "line": {
-            "type": "integer",
-            "description": "Primary line number of the issue",
-            "minimum": 1
-          },
-          "why_it_matters": {
-            "type": "string",
-            "description": "Impact and failure mode -- not 'what is wrong' but 'what breaks'"
-          },
-          "autofix_class": {
-            "type": "string",
-            "enum": ["safe_auto", "gated_auto", "manual", "advisory"],
-            "description": "Reviewer's conservative recommendation for how this issue should be handled after synthesis"
-          },
-          "owner": {
-            "type": "string",
-            "enum": ["review-fixer", "downstream-resolver", "human", "release"],
-            "description": "Who should own the next action for this finding after synthesis"
-          },
-          "requires_verification": {
-            "type": "boolean",
-            "description": "Whether any fix for this finding must be re-verified with targeted tests or a follow-up review pass"
-          },
-          "suggested_fix": {
-            "type": ["string", "null"],
-            "description": "Concrete minimal fix. Omit or null if no good fix is obvious -- a bad suggestion is worse than none."
-          },
-          "confidence": {
-            "type": "number",
-            "description": "Reviewer confidence in this finding, calibrated per persona",
-            "minimum": 0.0,
-            "maximum": 1.0
-          },
-          "evidence": {
-            "type": "array",
-            "description": "Code-grounded evidence: snippets, line references, or pattern descriptions. At least 1 item.",
-            "items": { "type": "string" },
-            "minItems": 1
-          },
-          "pre_existing": {
-            "type": "boolean",
-            "description": "True if this issue exists in unchanged code unrelated to the current diff"
+            "maxLength": 1024
           }
         }
       }
     },
-    "residual_risks": {
-      "type": "array",
-      "description": "Risks the reviewer noticed but could not confirm as findings",
-      "items": { "type": "string" }
+    "subAgentFinding": {
+      "type": "object",
+      "required": [
+        "title",
+        "severity",
+        "file",
+        "line",
+        "why_it_matters",
+        "autofix_class",
+        "owner",
+        "requires_verification",
+        "confidence",
+        "evidence",
+        "pre_existing"
+      ],
+      "properties": {
+        "title": { "$ref": "#/definitions/findingProperties/properties/title" },
+        "severity": {
+          "$ref": "#/definitions/findingProperties/properties/severity"
+        },
+        "file": { "$ref": "#/definitions/findingProperties/properties/file" },
+        "line": { "$ref": "#/definitions/findingProperties/properties/line" },
+        "why_it_matters": {
+          "$ref": "#/definitions/findingProperties/properties/why_it_matters"
+        },
+        "autofix_class": {
+          "$ref": "#/definitions/findingProperties/properties/autofix_class"
+        },
+        "owner": { "$ref": "#/definitions/findingProperties/properties/owner" },
+        "requires_verification": {
+          "$ref": "#/definitions/findingProperties/properties/requires_verification"
+        },
+        "suggested_fix": {
+          "$ref": "#/definitions/findingProperties/properties/suggested_fix"
+        },
+        "confidence": {
+          "$ref": "#/definitions/findingProperties/properties/confidence"
+        },
+        "evidence": {
+          "$ref": "#/definitions/findingProperties/properties/evidence"
+        },
+        "pre_existing": {
+          "$ref": "#/definitions/findingProperties/properties/pre_existing"
+        }
+      },
+      "additionalProperties": false
     },
-    "testing_gaps": {
-      "type": "array",
-      "description": "Missing test coverage the reviewer identified",
-      "items": { "type": "string" }
-    }
-  },
-
-  "_meta": {
-    "confidence_thresholds": {
-      "suppress": "Below 0.60 -- do not report. Finding is speculative noise. Exception: P0 findings at 0.50+ may be reported.",
-      "flag": "0.60-0.69 -- include only when the issue is clearly actionable with concrete evidence.",
-      "confident": "0.70-0.84 -- real and important. Report with full evidence.",
-      "certain": "0.85-1.00 -- verifiable from the code alone. Report."
+    "parentFinding": {
+      "type": "object",
+      "required": [
+        "title",
+        "severity",
+        "file",
+        "line",
+        "why_it_matters",
+        "autofix_class",
+        "owner",
+        "requires_verification",
+        "confidence",
+        "evidence",
+        "disposition",
+        "pre_existing"
+      ],
+      "properties": {
+        "title": { "$ref": "#/definitions/findingProperties/properties/title" },
+        "severity": {
+          "$ref": "#/definitions/findingProperties/properties/severity"
+        },
+        "file": { "$ref": "#/definitions/findingProperties/properties/file" },
+        "line": { "$ref": "#/definitions/findingProperties/properties/line" },
+        "why_it_matters": {
+          "$ref": "#/definitions/findingProperties/properties/why_it_matters"
+        },
+        "autofix_class": {
+          "$ref": "#/definitions/findingProperties/properties/autofix_class"
+        },
+        "owner": { "$ref": "#/definitions/findingProperties/properties/owner" },
+        "requires_verification": {
+          "$ref": "#/definitions/findingProperties/properties/requires_verification"
+        },
+        "suggested_fix": {
+          "$ref": "#/definitions/findingProperties/properties/suggested_fix"
+        },
+        "confidence": {
+          "$ref": "#/definitions/findingProperties/properties/confidence"
+        },
+        "evidence": {
+          "$ref": "#/definitions/findingProperties/properties/evidence"
+        },
+        "disposition": {
+          "$ref": "#/definitions/findingProperties/properties/disposition"
+        },
+        "pre_existing": {
+          "$ref": "#/definitions/findingProperties/properties/pre_existing"
+        }
+      },
+      "additionalProperties": false
     },
-    "severity_definitions": {
-      "P0": "Critical breakage, exploitable vulnerability, data loss/corruption. Must fix before merge.",
-      "P1": "High-impact defect likely hit in normal usage, breaking contract. Should fix.",
-      "P2": "Moderate issue with meaningful downside (edge case, perf regression, maintainability trap). Fix if straightforward.",
-      "P3": "Low-impact, narrow scope, minor improvement. User's discretion."
+    "subAgentReturn": {
+      "type": "object",
+      "required": ["reviewer", "findings", "residual_risks", "testing_gaps"],
+      "properties": {
+        "reviewer": {
+          "$ref": "#/definitions/artifactProperties/properties/reviewer"
+        },
+        "findings": {
+          "allOf": [
+            { "$ref": "#/definitions/artifactProperties/properties/findings" },
+            {
+              "items": { "$ref": "#/definitions/subAgentFinding" }
+            }
+          ]
+        },
+        "residual_risks": {
+          "$ref": "#/definitions/artifactProperties/properties/residual_risks"
+        },
+        "testing_gaps": {
+          "$ref": "#/definitions/artifactProperties/properties/testing_gaps"
+        }
+      },
+      "additionalProperties": false
     },
-    "autofix_classes": {
-      "safe_auto": "Local, deterministic code or test fix suitable for the in-skill fixer. Examples: extract duplicated helper, add missing nil check, fix off-by-one, add missing test, remove dead code. Do not default to advisory when a concrete safe fix exists.",
-      "gated_auto": "Concrete fix exists, but it changes behavior, permissions, contracts, or other sensitive areas that deserve explicit approval. Examples: add auth to unprotected endpoint, change API response shape.",
-      "manual": "Actionable issue that requires design decisions or cross-cutting changes. Examples: redesign data model, add pagination strategy, choose between architectural approaches.",
-      "advisory": "Informational or operational item that should be surfaced in the report only. Examples: design asymmetry the PR improves but does not fully resolve, residual risk notes, deployment considerations."
-    },
-    "owners": {
-      "review-fixer": "The in-skill fixer can own this when policy allows.",
-      "downstream-resolver": "Turn this into residual work for later resolution.",
-      "human": "A person must make a judgment call before code changes should continue.",
-      "release": "Operational or rollout follow-up; do not convert into code-fix work automatically."
-    },
-    "return_tiers": {
-      "description": "Finding fields are split into two tiers. The full schema (with all required fields) applies to the artifact file on disk. The compact return to the orchestrator omits detail-tier fields. Both are valid uses of this schema in different contexts.",
-      "merge_tier": "Returned to orchestrator: title, severity, file, line, confidence, autofix_class, owner, requires_verification, pre_existing, suggested_fix (optional). Plus top-level reviewer, residual_risks, testing_gaps.",
-      "detail_tier": "Required in artifact file, omitted from compact return: why_it_matters, evidence. The artifact file must pass full schema validation including all required fields. Headless output depends on why_it_matters and evidence being present in the artifact."
+    "parentRecord": {
+      "type": "object",
+      "required": [
+        "reviewer",
+        "harness",
+        "dispatch_outcome",
+        "findings",
+        "residual_risks",
+        "testing_gaps"
+      ],
+      "properties": {
+        "reviewer": {
+          "$ref": "#/definitions/artifactProperties/properties/reviewer"
+        },
+        "harness": {
+          "$ref": "#/definitions/artifactProperties/properties/harness"
+        },
+        "dispatch_outcome": {
+          "$ref": "#/definitions/artifactProperties/properties/dispatch_outcome"
+        },
+        "findings": {
+          "allOf": [
+            { "$ref": "#/definitions/artifactProperties/properties/findings" },
+            {
+              "items": { "$ref": "#/definitions/parentFinding" }
+            }
+          ]
+        },
+        "residual_risks": {
+          "$ref": "#/definitions/artifactProperties/properties/residual_risks"
+        },
+        "testing_gaps": {
+          "$ref": "#/definitions/artifactProperties/properties/testing_gaps"
+        }
+      },
+      "additionalProperties": false
     }
   }
 }
