@@ -40,7 +40,7 @@
     {
       "name": "agent-architecture-strategist",
       "type": "agent",
-      "description": "Analyzes code changes from an architectural perspective for pattern compliance and design integrity. Use when reviewing PRs, adding services, or evaluating structural refactors.",
+      "description": "Analyzes code changes from an architectural perspective for pattern compliance and design integrity. Use when reviewing PRs, adding services, or evaluating structural refactors. Dispatched by deepen-plan and ce-plan's deepening workflow, not by ce:review.",
       "files": ["agents/review/architecture-strategist.md"]
     },
     {
@@ -70,7 +70,7 @@
     {
       "name": "agent-code-simplicity-reviewer",
       "type": "agent",
-      "description": "Final review pass to ensure code is as simple and minimal as possible. Use after implementation is complete to identify YAGNI violations and simplification opportunities.",
+      "description": "Final review pass to ensure code is as simple and minimal as possible. Use after implementation is complete to identify YAGNI violations and simplification opportunities. Dispatched by ce-compound for code-heavy issues, not by ce:review.",
       "files": ["agents/review/code-simplicity-reviewer.md"]
     },
     {
@@ -182,7 +182,7 @@
     {
       "name": "agent-pattern-recognition-specialist",
       "type": "agent",
-      "description": "Analyzes code for design patterns, anti-patterns, naming conventions, and duplication. Use when checking codebase consistency or verifying new code follows established patterns.",
+      "description": "Analyzes code for design patterns, anti-patterns, naming conventions, and duplication. Use when checking codebase consistency or verifying new code follows established patterns. Dispatched by deepen-plan, ce-plan's deepening workflow, and ce-compound, not by ce:review.",
       "files": ["agents/review/pattern-recognition-specialist.md"]
     },
     {

@@ -1,6 +1,6 @@
 ---
 name: code-simplicity-reviewer
-description: "Final review pass to ensure code is as simple and minimal as possible. Use after implementation is complete to identify YAGNI violations and simplification opportunities."
+description: "Final review pass to ensure code is as simple and minimal as possible. Use after implementation is complete to identify YAGNI violations and simplification opportunities. Dispatched by ce-compound for code-heavy issues, not by ce:review."
 tools: Read, Grep, Glob, Bash
 mode: subagent
 temperature: 0.1

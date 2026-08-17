@@ -466,7 +466,8 @@ An initiative cannot enter implementation while two other behavior-changing surf
   - Retire or radically narrow: `src/lib/source-model-defaults.ts`.
   - Modify: `src/lib/model-availability.ts`, `src/lib/config-handler.ts`, `src/lib/agent-overlays.ts`, `src/lib/config-schema.ts`.
   - Modify: generated configuration docs and OMO/standalone registry profiles.
-  - Test: model inheritance, explicit user overrides, unavailable capability handling, and eval-backed optional escalation.
+  - Modify: bundled skill dispatch references (`skills/*/SKILL.md`, persona catalogs) so every named agent resolves to a registered dispatch key.
+  - Test: model inheritance, explicit user overrides, unavailable capability handling, eval-backed optional escalation, and workflow dispatch resolution.
 - **Approach:**
   - Default every bundled agent/capability to the invoking model.
   - Preserve explicit user configuration as the only unconditional model override.
@@ -474,13 +475,15 @@ An initiative cannot enter implementation while two other behavior-changing surf
   - Do not implement automatic escalation in this migration. Capability incompatibility may explain why the active model cannot perform a task, but changing models remains explicit user policy.
   - Remove provider frequency lore and hardcoded provider unions from runtime policy; validate identifiers structurally rather than against a closed commercial catalog.
   - Remove fallback-to-first-provider behavior as the first deletion slice; unknown availability inherits rather than guesses.
+  - Bind every workflow-dispatched agent to a resolvable dispatch key. Config-owned model policy only takes effect if the identifier a skill names is the identifier the harness can dispatch, and today it usually is not. Three failure modes, all silent: 99 references across bundled skills use the qualified `systematic:<category>:<name>` form while the OpenCode config hook registers bare names (`src/lib/config-handler.ts:217`); `ce:compound` Phase 1 names roles in prose ("Context Analyzer", "Solution Extractor", "Related Docs Finder") with no agent binding at all; and `ce:review`/`ce:ideate` instruct a `model:` parameter that OpenCode's `task` tool does not accept. Each one ends the same way — the orchestrator substitutes or falls back, the substitute runs the session default, and per-agent and per-category assignments in `systematic.jsonc` never apply. Exactly one skill dispatches correctly today (`skills/ce-work/SKILL.md:148`). See issue #784, which covers the qualified-name and `model:`-parameter modes; the unbound-prose mode is newly identified. The identity mechanism is I6's `stable IDs and reversible aliases` work — this wedge only requires that named agents resolve, not that the namespace be unified.
 - **Test scenarios:**
   - New provider/model: becomes usable without a Systematic release.
   - Active-model improvement: stronger invoking model receives full workflow freedom rather than being downgraded by category defaults.
   - User override: remains authoritative and trust-protected.
   - Unknown availability: inherits safely instead of guessing a model.
   - Scorecard drift: stale eval data is visible and cannot silently route.
-- **Child-plan entry gate:** inventory each current default's consumer and fallback behavior, select one deletion wedge, and define config precedence and rollback without introducing scorecard-driven routing.
+  - Workflow dispatch: every agent a bundled skill names resolves to a registered dispatch key, and the model that runs is the one the user's config assigns to that agent — not the session default reached by substitution or fallback.
+- **Child-plan entry gate:** inventory each current default's consumer and fallback behavior, select one deletion wedge, and define config precedence and rollback without introducing scorecard-driven routing. For the dispatch-binding wedge, additionally inventory every dispatch reference in bundled skills and classify each as resolvable, qualified-unresolvable, or unbound prose.
 - **Verification:** each promoted wedge removes a source-owned market assumption without reducing task success or overriding explicit user policy. Final zero-literal cleanup is a later deletion decision.
 
 ### I6. Unify generated projection facts without flattening native behavior

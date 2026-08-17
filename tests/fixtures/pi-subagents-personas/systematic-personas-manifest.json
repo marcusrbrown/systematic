@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-07-28T18:12:06.195Z",
+  "generatedAt": "2026-08-17T04:15:56.533Z",
   "entries": [
     {
       "filename": "systematic-best-practices-researcher.md",
@@ -47,7 +47,7 @@
       "filename": "systematic-architecture-strategist.md",
       "status": "exported",
       "sourceRelPath": "agents/review/architecture-strategist.md",
-      "hash": "f4541a4bfe1f3bad713029e34267aa327740f322594f4f83d2ea1a5870099241"
+      "hash": "fc5126a2dfb721f7e392f46f0a3dcb11ab5faf71bd901c3f250e85142d69bfcd"
     },
     {
       "filename": "systematic-cli-readiness-reviewer.md",
@@ -59,7 +59,7 @@
       "filename": "systematic-code-simplicity-reviewer.md",
       "status": "exported",
       "sourceRelPath": "agents/review/code-simplicity-reviewer.md",
-      "hash": "9afa4b84c2421ed6958568f88489d1495a1db02bb3e1b5b9f3150872d7115a13"
+      "hash": "7e1c6cc284b7799221bf4d3dfa99d14e804b45f08d612ef5a1f265bad3d90554"
     },
     {
       "filename": "systematic-correctness-reviewer.md",
@@ -89,7 +89,7 @@
       "filename": "systematic-pattern-recognition-specialist.md",
       "status": "exported",
       "sourceRelPath": "agents/review/pattern-recognition-specialist.md",
-      "hash": "c642aaa1905600d8fcf4a889e707cd6c610a2dacadee80f39c20f52603479bab"
+      "hash": "7a76f6f9ddee25b4741673768360ead2574751d2648ebb3ad8d30239e4b8fe5c"
     },
     {
       "filename": "systematic-performance-reviewer.md",

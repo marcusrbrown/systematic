@@ -1,6 +1,7 @@
 ---
-title: Registry drift when SKILL.md description changes
+title: Generated-artifact drift when a skill or agent description changes
 date: 2026-05-20
+last_updated: 2026-08-16
 category: workflow-issues
 module: registry
 problem_type: workflow_issue
@@ -8,21 +9,26 @@ component: tooling
 severity: medium
 applies_when:
   - Editing a SKILL.md description field
-  - Running the build without also running registry generation
-  - CI fails on "Registry drift check" after an otherwise clean build
+  - Editing an agent frontmatter description field
+  - Running the build without also running registry or Pi fixture generation
+  - CI fails on a drift check after an otherwise clean build
 tags:
   - registry
   - drift
   - skill-description
+  - agent-description
   - generate-registry
+  - pi-subagents
   - ci-gate
 ---
 
-# Registry drift when SKILL.md description changes
+# Generated-artifact drift when a skill or agent description changes
 
 ## Context
 
-`scripts/generate-registry.ts` reads each skill's frontmatter `description` into `registry/registry.jsonc`. The CI "Registry drift check" step (`bun scripts/generate-registry.ts --check`) compares the generated output against the committed file and fails if they differ. `bun run build` does not include registry generation, so a SKILL.md description change that passes `build` + `typecheck` + `lint` + `test` locally will fail CI.
+`scripts/generate-registry.ts` reads each skill's frontmatter `description` into `registry/registry.jsonc`. The CI "Registry drift check" step (`bun scripts/generate-registry.ts --check`) compares the generated output against the committed file and fails if they differ. `bun run build` does not include registry generation, so a description change that passes `build` + `typecheck` + `lint` + `test` locally will fail CI.
+
+**Agent descriptions reach a second generated surface.** Personas listed in `CURATED_PERSONAS` (`src/lib/pi-subagents-personas.ts`) are also exported as committed Pi fixtures under `tests/fixtures/pi-subagents-personas/`, which embed the description verbatim. That surface has its own source-side drift gate, run as `bun scripts/generate-pi-subagents-personas.ts --check`. It is not covered by `registry:drift` and has no npm script alias, so it is the easier of the two to miss — editing one agent description turned a four-file change into eight.
 
 ## Guidance
 
@@ -38,7 +44,23 @@ Then commit the updated `registry/registry.jsonc` alongside the skill change. Th
 bun run build && bun run typecheck && bun run lint && bun test tests/unit && bun scripts/generate-registry.ts --check
 ```
 
-When delegating skill edits to subagents, include `bun scripts/generate-registry.ts` in the verification checklist explicitly — the standard `build` + `typecheck` + `lint` + `test` gate does not cover it.
+For an **agent** description change, regenerate and check both surfaces:
+
+```bash
+bun scripts/generate-registry.ts
+bun scripts/generate-pi-subagents-personas.ts
+
+bun run registry:drift
+bun scripts/generate-pi-subagents-personas.ts --check
+```
+
+When delegating skill or agent edits to subagents, include the generator commands in the verification checklist explicitly — the standard `build` + `typecheck` + `lint` + `test` gate does not cover either surface.
+
+### A passing drift check is not proof that nothing else moved
+
+`registry:drift` proves the committed output is **fresh** relative to source. It does not prove that no identifier changed — a rename regenerates cleanly and passes just the same. For a description-only edit, inspect the regenerated diff and confirm the stronger invariant: only `description` values changed, no component `name`, `files`, or dependency entries changed, and no Pi fixture filename changed.
+
+A changed fixture filename signals an identity or sanitization change rather than ordinary description drift. That distinction matters because bundled agents reach five separate identifier namespaces with no shared alias layer, so an accidental rename is a cross-harness migration rather than a metadata edit.
 
 ## Why This Matters
 

@@ -1,6 +1,6 @@
 ---
 name: architecture-strategist
-description: "Analyzes code changes from an architectural perspective for pattern compliance and design integrity. Use when reviewing PRs, adding services, or evaluating structural refactors."
+description: "Analyzes code changes from an architectural perspective for pattern compliance and design integrity. Use when reviewing PRs, adding services, or evaluating structural refactors. Dispatched by deepen-plan and ce-plan's deepening workflow, not by ce:review."
 tools: Read, Grep, Glob, Bash
 mode: subagent
 temperature: 0.1
