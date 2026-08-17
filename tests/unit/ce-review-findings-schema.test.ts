@@ -217,6 +217,123 @@ describe('ce:review findings schema', () => {
     )
   })
 
+  test('rejects whitespace-only strings with the pattern constraint', () => {
+    for (const [field, pathSuffix] of [
+      ['title', '/findings/0/title'],
+      ['why_it_matters', '/findings/0/why_it_matters'],
+    ] as const) {
+      expect(validateParent(artifactWithFinding({ [field]: ' ' }))).toBe(false)
+      expect(hasKeyword(validateParent, 'pattern', pathSuffix)).toBe(true)
+    }
+
+    expect(validateParent({ ...baseArtifact, reviewer: ' ' })).toBe(false)
+    expect(hasKeyword(validateParent, 'pattern', '/reviewer')).toBe(true)
+  })
+
+  test('accepts findings at the maxItems boundary', () => {
+    expect(
+      validateParent({
+        ...baseArtifact,
+        findings: Array.from({ length: 32 }, () => baseFinding),
+      }),
+    ).toBe(true)
+  })
+
+  test('rejects findings beyond the maxItems boundary', () => {
+    expect(
+      validateParent({
+        ...baseArtifact,
+        findings: Array.from({ length: 33 }, () => baseFinding),
+      }),
+    ).toBe(false)
+    expect(hasKeyword(validateParent, 'maxItems', '/findings')).toBe(true)
+  })
+
+  test('accepts a title at the maxLength boundary', () => {
+    expect(
+      validateParent(artifactWithFinding({ title: 'x'.repeat(256) })),
+    ).toBe(true)
+  })
+
+  test('rejects a title beyond the maxLength boundary', () => {
+    expect(
+      validateParent(artifactWithFinding({ title: 'x'.repeat(257) })),
+    ).toBe(false)
+    expect(hasKeyword(validateParent, 'maxLength', '/findings/0/title')).toBe(
+      true,
+    )
+  })
+
+  test('accepts a suggested_fix at the maxLength boundary', () => {
+    expect(
+      validateParent(artifactWithFinding({ suggested_fix: 'x'.repeat(2048) })),
+    ).toBe(true)
+  })
+
+  test('rejects a suggested_fix beyond the maxLength boundary', () => {
+    expect(
+      validateParent(artifactWithFinding({ suggested_fix: 'x'.repeat(2049) })),
+    ).toBe(false)
+    expect(
+      hasKeyword(validateParent, 'maxLength', '/findings/0/suggested_fix'),
+    ).toBe(true)
+  })
+
+  test('accepts a reviewer at the maxLength boundary', () => {
+    expect(validateParent({ ...baseArtifact, reviewer: 'x'.repeat(64) })).toBe(
+      true,
+    )
+  })
+
+  test('rejects a reviewer beyond the maxLength boundary', () => {
+    expect(validateParent({ ...baseArtifact, reviewer: 'x'.repeat(65) })).toBe(
+      false,
+    )
+    expect(hasKeyword(validateParent, 'maxLength', '/reviewer')).toBe(true)
+  })
+
+  test('accepts a residual risk item at the maxLength boundary', () => {
+    expect(
+      validateParent({
+        ...baseArtifact,
+        residual_risks: ['x'.repeat(1024)],
+      }),
+    ).toBe(true)
+  })
+
+  test('rejects a residual risk item beyond the maxLength boundary', () => {
+    expect(
+      validateParent({
+        ...baseArtifact,
+        residual_risks: ['x'.repeat(1025)],
+      }),
+    ).toBe(false)
+    expect(hasKeyword(validateParent, 'maxLength', '/residual_risks/0')).toBe(
+      true,
+    )
+  })
+
+  test('accepts a testing gap item at the maxLength boundary', () => {
+    expect(
+      validateParent({
+        ...baseArtifact,
+        testing_gaps: ['x'.repeat(1024)],
+      }),
+    ).toBe(true)
+  })
+
+  test('rejects a testing gap item beyond the maxLength boundary', () => {
+    expect(
+      validateParent({
+        ...baseArtifact,
+        testing_gaps: ['x'.repeat(1025)],
+      }),
+    ).toBe(false)
+    expect(hasKeyword(validateParent, 'maxLength', '/testing_gaps/0')).toBe(
+      true,
+    )
+  })
+
   test('rejects over-long why_it_matters and names the maxLength constraint', () => {
     expect(
       validateParent(artifactWithFinding({ why_it_matters: 'x'.repeat(2049) })),
