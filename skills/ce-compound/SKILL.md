@@ -86,7 +86,7 @@ Launch research subagents. Each returns text data to the orchestrator.
 
 <parallel_tasks>
 
-#### 1. **Context Analyzer**
+#### 1. **Context Analyzer** — `systematic:research:repo-research-analyst`
    - Extracts conversation history
    - Reads `references/schema.yaml` for enum validation and **track classification**
    - Determines the track (bug or knowledge) from the problem_type
@@ -100,7 +100,7 @@ Launch research subagents. Each returns text data to the orchestrator.
    - Does not invent enum values, categories, or frontmatter fields from memory; reads the schema and mapping files above
    - Does not force bug-track fields onto knowledge-track learnings or vice versa
 
-#### 2. **Solution Extractor**
+#### 2. **Solution Extractor** — `systematic:research:repo-research-analyst`
    - Reads `references/schema.yaml` for track classification (bug vs knowledge)
    - Adapts output structure based on the problem_type track
    - Incorporates auto memory excerpts (if provided by the orchestrator) as supplementary evidence -- conversation history and the verified fix take priority; if memory notes contradict the conversation, note the contradiction as cautionary context
@@ -122,7 +122,7 @@ Launch research subagents. Each returns text data to the orchestrator.
    - **When to Apply**: Conditions or situations where this applies
    - **Examples**: Concrete before/after or usage examples showing the practice in action
 
-#### 3. **Related Docs Finder**
+#### 3. **Related Docs Finder** — `systematic:research:learnings-researcher`
    - Searches `docs/solutions/` for related documentation
    - Identifies cross-references and links
    - Finds related GitHub issues

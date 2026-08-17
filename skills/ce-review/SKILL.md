@@ -371,13 +371,13 @@ Pass the resulting path list to the `project-standards` persona inside a `<stand
 
 ### Stage 4: Spawn sub-agents
 
-#### Model tiering
+#### Sub-agent dispatch and model policy
 
-Persona sub-agents do focused, scoped work and should use a fast mid-tier model to reduce cost and latency without sacrificing review quality. The orchestrator itself stays on the default (most capable) model.
+Persona sub-agents do focused, scoped work. Dispatch the named bundled agent for each role so the user's configured model assignment applies; the orchestrator itself stays on the default model.
 
-Use the platform's mid-tier model for all persona and CE sub-agents. In OpenCode, pass `model: "sonnet"` in the Agent tool call. On other platforms, use the equivalent mid-tier (e.g., `gpt-4o` in Codex). If the platform has no model override mechanism or the available model names are unknown, omit the model parameter and let agents inherit the default -- a working review on the parent model is better than a broken dispatch from an unrecognized model name.
+Dispatch named bundled agents for all persona and CE sub-agents. The named agent applies the user's configured model assignment; model policy is user-owned configuration, not a skill-level dispatch parameter.
 
-CE always-on agents (agent-native-reviewer, learnings-researcher) and CE conditional agents (deployment-verification-agent) also use the mid-tier model since they perform scoped, focused work.
+The same applies to CE always-on agents (`systematic:review:agent-native-reviewer`, `systematic:research:learnings-researcher`) and CE conditional agents (`systematic:review:deployment-verification-agent`): dispatch each by its bundled name so its configured assignment applies.
 
 The orchestrator (this skill) stays on the default model because it handles intent discovery, reviewer selection, finding merge/dedup, and synthesis -- tasks that benefit from stronger reasoning.
 
