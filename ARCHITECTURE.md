@@ -161,8 +161,8 @@ version is not evidence for another.
 ## Cross-Cutting Concerns
 
 **Content-integrity gate** (`scripts/content-integrity.ts`) — runs in the CI build job. Catches
-phantom `systematic:*` references, frontmatter/model contract violations, and banned CC/CEP
-patterns. Must pass before any release.
+phantom `systematic:*` references, dispatch identifier integrity issues, frontmatter/model
+contract violations, and banned CC/CEP patterns. Must pass before any release.
 
 **Registry drift detection** (`scripts/build-registry.ts --check`) — verifies that the OCX registry
 config stays in sync with the generated bundled assets. Run via `bun run registry:drift`.

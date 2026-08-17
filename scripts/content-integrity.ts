@@ -40,6 +40,10 @@
  *    `argument-hint` field in frontmatter. Fenced code blocks are stripped before
  *    scanning so skills that only document the placeholder are not flagged.
  *
+ * 9. **Dispatch identifier integrity** — every `subagent_type` value resolves to
+ *    a bundled agent stem, and inline-code near-misses of bundled agent stems
+ *    are rejected. Bundled examples must name agents this package ships.
+ *
  * 13. **Migrated skill identifiers** — skills marked
  *     `metadata['harness-portability'] === 'neutral-v1'` must use neutral
  *     lexical vocabulary; exact harness syntax belongs in the harness profiles.
@@ -219,6 +223,29 @@ export interface AgentStemViolation {
   message: string
 }
 
+export interface DispatchIdentifierViolationBase {
+  file: string
+  line: number
+  identifier: string
+  lineContent: string
+  message: string
+}
+
+export interface UnresolvableSubagentTypeViolation
+  extends DispatchIdentifierViolationBase {
+  kind: 'unresolvable-subagent-type'
+}
+
+export interface NearMissAgentIdentifierViolation
+  extends DispatchIdentifierViolationBase {
+  kind: 'near-miss-agent-identifier'
+  matchedStem: string
+}
+
+export type DispatchIdentifierViolation =
+  | UnresolvableSubagentTypeViolation
+  | NearMissAgentIdentifierViolation
+
 export interface AgentTemperatureViolation {
   file: string
   message: string
@@ -268,6 +295,7 @@ export interface CheckResult {
   agentModeViolations: AgentModeViolation[]
   agentColorViolations: AgentColorViolation[]
   agentStemViolations: AgentStemViolation[]
+  dispatchIdentifierViolations: DispatchIdentifierViolation[]
   agentTemperatureViolations: AgentTemperatureViolation[]
   argumentHintViolations: ArgumentHintViolation[]
   migratedSkillIdentifierViolations: MigratedSkillIdentifierViolation[]
@@ -1128,6 +1156,208 @@ export function checkAgentStemUniqueness(
     .sort((a, b) => a.stem.localeCompare(b.stem))
 }
 
+// The unquoted branch must stop at backticks and quotes as well as at whitespace
+// and delimiters. Dispatch examples are frequently written inside an inline-
+// code span (`` `subagent_type: explorer` ``) or prose quotes
+// (`` "subagent_type: explorer" ``), and swallowing the closing delimiter
+// yields a value that can never match a bundled stem — a false positive on
+// correct content, which a fail-closed gate cannot afford.
+const SUBAGENT_TYPE_ASSIGNMENT_REGEX =
+  /(?:\bsubagent_type\b|"subagent_type"|'subagent_type')\s*:\s*(?:"([^"\r\n]*)"|'([^'\r\n]*)'|([^\s,})`"']+))/g
+const INLINE_CODE_SPAN_REGEX = /`([^`\n]+)`/g
+const NEAR_MISS_AGENT_IDENTIFIER_REGEX = /^[a-z][a-z0-9]*(-[a-z0-9]+)+$/
+const INLINE_CODE_TOKEN_SPLIT_REGEX = /[^a-z0-9/.:-]+/
+const FENCE_START_REGEX = /^\s*(`{3,}|~{3,})/
+
+interface FenceMarker {
+  character: string
+  length: number
+}
+
+function collectBundledAgentStems(
+  rootDir: string,
+  markdownFiles: readonly string[],
+): Set<string> {
+  const stems = new Set<string>()
+
+  for (const relPath of markdownFiles) {
+    if (!isAgentFile(relPath)) continue
+    if (!fs.existsSync(path.join(rootDir, relPath))) continue
+    stems.add(path.basename(relPath, '.md'))
+  }
+
+  return stems
+}
+
+function scanSubagentTypeAssignments(
+  relPath: string,
+  line: string,
+  lineNumber: number,
+  bundledAgentStems: ReadonlySet<string>,
+): DispatchIdentifierViolation[] {
+  const violations: DispatchIdentifierViolation[] = []
+
+  for (const match of line.matchAll(SUBAGENT_TYPE_ASSIGNMENT_REGEX)) {
+    const identifier = match[1] ?? match[2] ?? match[3] ?? ''
+    if (bundledAgentStems.has(identifier)) continue
+
+    violations.push({
+      kind: 'unresolvable-subagent-type',
+      file: relPath,
+      line: lineNumber,
+      identifier,
+      lineContent: line,
+      message:
+        `The subagent_type value \`${identifier}\` is unresolvable. Bundled ` +
+        'content must name an agent this package ships: use a filename stem ' +
+        'from agents/**. A host may provide additional agents at runtime, but ' +
+        'they must not appear in bundled examples.',
+    })
+  }
+
+  return violations
+}
+
+/**
+ * Bundled skill directory names, excluded from near-miss detection.
+ *
+ * Skill directories are kebab-case like agent stems, so a skill named `ce-plan`
+ * would read as a near miss of a bundled agent named `plan`. No such agent
+ * exists today, but relying on that coincidence would mean a single future
+ * naming choice fails every `ce-plan` reference across the bundle at once.
+ * Excluding real skill names removes the coupling instead of documenting it.
+ */
+function collectBundledSkillNames(rootDir: string): Set<string> {
+  const names = new Set<string>()
+  const skillsDir = path.join(rootDir, 'skills')
+  if (!fs.existsSync(skillsDir)) return names
+
+  for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true })) {
+    if (entry.isDirectory()) names.add(entry.name)
+  }
+
+  return names
+}
+
+function findNearMissAgentStem(
+  identifier: string,
+  bundledAgentStems: ReadonlySet<string>,
+  bundledSkillNames: ReadonlySet<string>,
+): string | null {
+  if (!NEAR_MISS_AGENT_IDENTIFIER_REGEX.test(identifier)) return null
+  if (bundledAgentStems.has(identifier)) return null
+  if (bundledSkillNames.has(identifier)) return null
+
+  return (
+    [...bundledAgentStems]
+      .filter((stem) => identifier.endsWith(`-${stem}`))
+      .sort((a, b) => b.length - a.length)[0] ?? null
+  )
+}
+
+function scanNearMissAgentIdentifiers(
+  relPath: string,
+  line: string,
+  lineNumber: number,
+  bundledAgentStems: ReadonlySet<string>,
+  bundledSkillNames: ReadonlySet<string>,
+): DispatchIdentifierViolation[] {
+  const violations: DispatchIdentifierViolation[] = []
+
+  for (const spanMatch of line.matchAll(INLINE_CODE_SPAN_REGEX)) {
+    const span = spanMatch[1] ?? ''
+
+    for (const identifier of span.split(INLINE_CODE_TOKEN_SPLIT_REGEX)) {
+      // Paths and canonical references are intentionally not dispatch
+      // identifiers, even when one of their components resembles a stem.
+      if (identifier.length === 0 || /[/.:]/.test(identifier)) continue
+      const matchedStem = findNearMissAgentStem(
+        identifier,
+        bundledAgentStems,
+        bundledSkillNames,
+      )
+      if (!matchedStem) continue
+
+      violations.push({
+        kind: 'near-miss-agent-identifier',
+        file: relPath,
+        line: lineNumber,
+        identifier,
+        lineContent: line,
+        matchedStem,
+        message:
+          `Inline-code identifier \`${identifier}\` ends with bundled ` +
+          `agent stem \`${matchedStem}\` but is not itself a resolvable ` +
+          `agent dispatch identifier. Did you mean \`${matchedStem}\`?`,
+      })
+    }
+  }
+
+  return violations
+}
+
+function updateFenceMarker(
+  line: string,
+  currentMarker: FenceMarker | null,
+): { marker: FenceMarker | null; isFence: boolean } {
+  const fenceMatch = line.match(FENCE_START_REGEX)
+  if (!fenceMatch) return { marker: currentMarker, isFence: false }
+
+  const markerRun = fenceMatch[1] ?? ''
+  const character = markerRun[0] ?? null
+  if (character === null) return { marker: currentMarker, isFence: true }
+  const marker: FenceMarker = { character, length: markerRun.length }
+  if (currentMarker === null) return { marker, isFence: true }
+  if (
+    marker.character === currentMarker.character &&
+    marker.length >= currentMarker.length
+  ) {
+    return { marker: null, isFence: true }
+  }
+  return { marker: currentMarker, isFence: true }
+}
+
+export function checkDispatchIdentifiers(
+  rootDir: string,
+  markdownFiles: readonly string[],
+): DispatchIdentifierViolation[] {
+  const bundledAgentStems = collectBundledAgentStems(rootDir, markdownFiles)
+  const bundledSkillNames = collectBundledSkillNames(rootDir)
+  const violations: DispatchIdentifierViolation[] = []
+
+  for (const relPath of markdownFiles) {
+    const content = readFileSafe(path.join(rootDir, relPath))
+    if (content === null) continue
+
+    const lines = content.split('\n')
+    let fenceMarker: FenceMarker | null = null
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i] ?? ''
+
+      violations.push(
+        ...scanSubagentTypeAssignments(relPath, line, i + 1, bundledAgentStems),
+      )
+
+      const fence = updateFenceMarker(line, fenceMarker)
+      fenceMarker = fence.marker
+      if (fence.isFence || fenceMarker !== null) continue
+
+      violations.push(
+        ...scanNearMissAgentIdentifiers(
+          relPath,
+          line,
+          i + 1,
+          bundledAgentStems,
+          bundledSkillNames,
+        ),
+      )
+    }
+  }
+
+  return violations
+}
+
 /**
  * Strip fenced code blocks (``` or ~~~) from a markdown body string.
  * Returns the body with all fenced regions replaced by empty strings so that
@@ -1513,6 +1743,10 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     rootDir,
     targets.markdown,
   )
+  const dispatchIdentifierViolations = checkDispatchIdentifiers(
+    rootDir,
+    targets.markdown,
+  )
   const agentTemperatureViolations = checkAgentTemperature(
     rootDir,
     targets.markdown,
@@ -1549,6 +1783,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     agentModeViolations,
     agentColorViolations,
     agentStemViolations,
+    dispatchIdentifierViolations,
     agentTemperatureViolations,
     argumentHintViolations,
     migratedSkillIdentifierViolations,
@@ -1601,6 +1836,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
   printAgentModeViolations(result.agentModeViolations)
   printAgentColorViolations(result.agentColorViolations)
   printAgentStemViolations(result.agentStemViolations)
+  printDispatchIdentifierViolations(result.dispatchIdentifierViolations)
   printAgentTemperatureViolations(result.agentTemperatureViolations)
   printArgumentHintViolations(result.argumentHintViolations)
   printMigratedSkillIdentifierViolations(
@@ -1628,6 +1864,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
         `agentModeViolations: ${result.agentModeViolations.length}\n` +
         `agentColorViolations: ${result.agentColorViolations.length}\n` +
         `agentStemViolations: ${result.agentStemViolations.length}\n` +
+        `dispatchIdentifierViolations: ${result.dispatchIdentifierViolations.length}\n` +
         `exemptHits: ${result.exemptHits.length}\n`,
     )
   }
@@ -1737,6 +1974,20 @@ function printAgentStemViolations(
   }
 }
 
+function printDispatchIdentifierViolations(
+  violations: readonly DispatchIdentifierViolation[],
+): void {
+  if (violations.length === 0) return
+  process.stderr.write(
+    `\nDispatch identifier violations (${violations.length}):\n`,
+  )
+  for (const v of violations) {
+    process.stderr.write(
+      `  [${v.kind}] ${v.file}:${v.line}  ${v.identifier}  ${v.message}\n`,
+    )
+  }
+}
+
 function printAgentTemperatureViolations(
   violations: readonly AgentTemperatureViolation[],
 ): void {
@@ -1797,6 +2048,7 @@ function totalViolations(result: CheckResult): number {
     result.agentModeViolations.length +
     result.agentColorViolations.length +
     result.agentStemViolations.length +
+    result.dispatchIdentifierViolations.length +
     result.agentTemperatureViolations.length +
     result.argumentHintViolations.length +
     result.migratedSkillIdentifierViolations.length +

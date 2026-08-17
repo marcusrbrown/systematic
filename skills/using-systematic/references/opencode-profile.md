@@ -22,15 +22,25 @@ task({
 
 // Background dispatch (run independent work concurrently; reconcile on completion):
 task({
-  subagent_type: "explorer",
+  subagent_type: "repo-research-analyst",
   description: "Map fixture patterns",
   prompt: "…",
   background: true,
 })
 
 // Resume a prior specialist session:
-task({ subagent_type: "fixer", task_id: "<prior-session-id>", description: "Resume fixer task", prompt: "…" })
+task({ subagent_type: "systematic-implementer", task_id: "<prior-session-id>", description: "Resume the implementation task", prompt: "…" })
 ```
+
+`subagent_type` takes a bare agent stem — OpenCode registers bundled agents under
+their filename stem, not a namespaced identifier. Prose that *refers* to an agent
+uses the canonical `systematic:<category>:<name>` form instead, which the
+content-integrity gate validates against real agent files.
+
+Both forms are enforced. Examples in bundled content must name agents this
+package actually ships, so they work for every reader. A host may provide
+additional agents through the user's own configuration; those are available at
+runtime but must not appear in bundled examples.
 
 ### Blocking user interaction
 
