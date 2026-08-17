@@ -99,7 +99,7 @@ Before generating ideas, gather codebase context.
 
 Run agents in parallel in the **foreground** (do not use background dispatch — the results are needed before proceeding):
 
-1. **Quick context scan** — dispatch a general-purpose sub-agent using the platform's cheapest capable model (e.g., `model: "haiku"` in OpenCode) with this prompt:
+1. **Quick context scan** — dispatch `systematic:research:repo-research-analyst` with this prompt:
 
    > Read the project's AGENTS.md (or AGENTS.md only as compatibility fallback, then README.md if neither exists), then discover the top-level directory layout using the native file-search/glob tool (e.g., `Glob` with pattern `*` or `*/*` in OpenCode). Return a concise summary (under 30 lines) covering:
    > - project shape (language, framework, top-level directory layout)

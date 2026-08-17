@@ -84,6 +84,54 @@ evidence only surfaced during implementation. When a refactor's premise rests on
 "this form is wrong," verify against the gates and conventions that already
 consume that form before scoping the work.
 
+## The unvalidated complement rots silently (2026-08-17)
+
+The guidance above is prospective: do not *move* references out of coverage. A
+second incident showed the inverse, and it is the more actionable half.
+
+`skills/ce-plan/references/deepening-workflow.md` carried 24 agent references
+using a `ce-` prefix — `ce-spec-flow-analyzer`, `ce-deployment-verification-agent`,
+`ce-architecture-strategist`. No such agent has ever existed; `ls agents/*/ce-*.md`
+returns nothing. `skills/deepen-plan/SKILL.md` held the same roster in canonical
+form, so one file was a stale duplicate of the other.
+
+Content-integrity reported clean the entire time. `checkReferenceIntegrity` only
+matches the qualified shape, so references in any other spelling are not
+validated — they are invisible. The canonical surface stayed healthy precisely
+because it was checked; the uncovered surface accumulated 24 dead references
+because it was not.
+
+A clean gate result is evidence about the surface the gate inspects, and nothing
+more. The operational rule:
+
+- **When a validator recognizes one representation, audit the ones it cannot
+  see.** Enumerate the spellings actually in use, not just the ones that validate.
+- **Fix by moving references *into* coverage.** Converting `ce-<name>` to
+  `systematic:<category>:<name>` both repairs the reference and places it under
+  the gate. The reverse direction is the mistake this document already warns about.
+
+### Verify the gate by making it fail
+
+A gate you have never watched fail is not a verified gate. Plant a wrong category
+and require a specific failure:
+
+```bash
+F=skills/ce-plan/references/deepening-workflow.md
+cp "$F" /tmp/gate-probe.bak
+
+# perl -pi is portable; `sed -i ''` is BSD-only and errors on GNU sed
+perl -pi -e 's/systematic:review:architecture-strategist/systematic:research:architecture-strategist/' "$F"
+
+bun run scripts/content-integrity.ts
+# expect: file, line, the reference, and the missing
+# agents/research/architecture-strategist.md path
+
+cp /tmp/gate-probe.bak "$F"
+bun run scripts/content-integrity.ts   # expect: clean
+```
+
+This turns "the gate passes" into "the gate discriminates" — different claims.
+
 ## When to Apply
 
 - Any refactor that touches `systematic:<category>:<name>` references.
