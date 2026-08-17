@@ -1160,8 +1160,8 @@ export function checkAgentStemUniqueness(
 // and delimiters. Dispatch examples are frequently written inside an inline-
 // code span (`` `subagent_type: explorer` ``) or prose quotes
 // (`` "subagent_type: explorer" ``), and swallowing the closing delimiter
-// yields a value that can never match a bundled stem or the host allowlist — a
-// false positive on correct content, which a fail-closed gate cannot afford.
+// yields a value that can never match a bundled stem — a false positive on
+// correct content, which a fail-closed gate cannot afford.
 const SUBAGENT_TYPE_ASSIGNMENT_REGEX =
   /(?:\bsubagent_type\b|"subagent_type"|'subagent_type')\s*:\s*(?:"([^"\r\n]*)"|'([^'\r\n]*)'|([^\s,})`"']+))/g
 const INLINE_CODE_SPAN_REGEX = /`([^`\n]+)`/g
@@ -1218,12 +1218,35 @@ function scanSubagentTypeAssignments(
   return violations
 }
 
+/**
+ * Bundled skill directory names, excluded from near-miss detection.
+ *
+ * Skill directories are kebab-case like agent stems, so a skill named `ce-plan`
+ * would read as a near miss of a bundled agent named `plan`. No such agent
+ * exists today, but relying on that coincidence would mean a single future
+ * naming choice fails every `ce-plan` reference across the bundle at once.
+ * Excluding real skill names removes the coupling instead of documenting it.
+ */
+function collectBundledSkillNames(rootDir: string): Set<string> {
+  const names = new Set<string>()
+  const skillsDir = path.join(rootDir, 'skills')
+  if (!fs.existsSync(skillsDir)) return names
+
+  for (const entry of fs.readdirSync(skillsDir, { withFileTypes: true })) {
+    if (entry.isDirectory()) names.add(entry.name)
+  }
+
+  return names
+}
+
 function findNearMissAgentStem(
   identifier: string,
   bundledAgentStems: ReadonlySet<string>,
+  bundledSkillNames: ReadonlySet<string>,
 ): string | null {
   if (!NEAR_MISS_AGENT_IDENTIFIER_REGEX.test(identifier)) return null
   if (bundledAgentStems.has(identifier)) return null
+  if (bundledSkillNames.has(identifier)) return null
 
   return (
     [...bundledAgentStems]
@@ -1237,6 +1260,7 @@ function scanNearMissAgentIdentifiers(
   line: string,
   lineNumber: number,
   bundledAgentStems: ReadonlySet<string>,
+  bundledSkillNames: ReadonlySet<string>,
 ): DispatchIdentifierViolation[] {
   const violations: DispatchIdentifierViolation[] = []
 
@@ -1247,7 +1271,11 @@ function scanNearMissAgentIdentifiers(
       // Paths and canonical references are intentionally not dispatch
       // identifiers, even when one of their components resembles a stem.
       if (identifier.length === 0 || /[/.:]/.test(identifier)) continue
-      const matchedStem = findNearMissAgentStem(identifier, bundledAgentStems)
+      const matchedStem = findNearMissAgentStem(
+        identifier,
+        bundledAgentStems,
+        bundledSkillNames,
+      )
       if (!matchedStem) continue
 
       violations.push({
@@ -1294,6 +1322,7 @@ export function checkDispatchIdentifiers(
   markdownFiles: readonly string[],
 ): DispatchIdentifierViolation[] {
   const bundledAgentStems = collectBundledAgentStems(rootDir, markdownFiles)
+  const bundledSkillNames = collectBundledSkillNames(rootDir)
   const violations: DispatchIdentifierViolation[] = []
 
   for (const relPath of markdownFiles) {
@@ -1320,6 +1349,7 @@ export function checkDispatchIdentifiers(
           line,
           i + 1,
           bundledAgentStems,
+          bundledSkillNames,
         ),
       )
     }

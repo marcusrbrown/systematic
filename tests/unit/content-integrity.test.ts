@@ -1879,6 +1879,37 @@ describe('checkDispatchIdentifiers', () => {
     }
   })
 
+  test('does not flag a skill directory name that shadows an agent stem', () => {
+    const root = makeFixtureRepo()
+    try {
+      // A bundled agent literally named `plan` makes `ce-plan` look like a
+      // near miss. Without the skill-name exclusion, every reference to the
+      // real `ce-plan` skill across the bundle would fail at once.
+      writeAgent(root, 'workflow', 'plan')
+      writeSkill(root, 'ce-plan', 'Placeholder.\n')
+      writeSkill(
+        root,
+        'foo',
+        'Real skill reference: `ce-plan`\n' +
+          'Genuine near miss: `ce-nonexistent-plan`\n',
+      )
+
+      const violations = checkDispatchIdentifiers(
+        root,
+        collectScanTargets(root).markdown,
+      )
+
+      expect(violations).toHaveLength(1)
+      expect(violations[0]).toMatchObject({
+        kind: 'near-miss-agent-identifier',
+        identifier: 'ce-nonexistent-plan',
+        matchedStem: 'plan',
+      })
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   test('flags near-miss bundled agent identifiers only in inline code', () => {
     const root = makeFixtureRepo()
     try {
