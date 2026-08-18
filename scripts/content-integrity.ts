@@ -590,7 +590,7 @@ export const CODEMAP_DOCUMENT = 'ARCHITECTURE.md'
 export const CODEMAP_EXCLUSION_HEADING = '## Codemap exclusions'
 
 const HOOK_ASSERTION_REGEX =
-  /\b(?:registers?|exposes?)\b(?:[^\n]*\n){0,2}?\s*(?:these|every|all|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+(?:OpenCode\s+)?hooks?\b/i
+  /\b(?:registers?|exposes?)\b(?:[^\n]*\n){0,2}?\s*(?:these|every|all|one|two|three|four|five|six|seven|eight|nine|ten|\d+)(?:\s+(?:one|two|three|four|five|six|seven|eight|nine|ten|\d+))?\s+(?:OpenCode\s+)?hooks?\b/i
 const INLINE_HOOK_REGEX = /`([^`\n]+)`/g
 
 /**
@@ -1426,12 +1426,20 @@ function extractHookClaim(
   const assertion = content.match(HOOK_ASSERTION_REGEX)
   if (!assertion || assertion.index === undefined) return null
 
-  if (/\b(?:every|all)\b[\s\S]{0,30}\bhooks?\b/i.test(assertion[0])) {
+  const assertionSection = extractHookAssertionSection(content, assertion.index)
+  const claimedHooks = extractClaimedHookNames(assertionSection)
+  const namesRegisteredBySource = claimedHooks.filter((hook) =>
+    actualHooks.includes(hook),
+  )
+
+  if (
+    /\b(?:every|all)\b[\s\S]{0,30}\bhooks?\b/i.test(assertion[0]) &&
+    namesRegisteredBySource.length === 0
+  ) {
     return [...actualHooks]
   }
 
-  const assertionSection = extractHookAssertionSection(content, assertion.index)
-  return extractClaimedHookNames(assertionSection)
+  return claimedHooks
 }
 
 function extractHookAssertionSection(content: string, start: number): string {
@@ -1483,45 +1491,25 @@ function extractRegisteredPluginHooks(rootDir: string): string[] {
     throw new Error('Unable to read plugin entry point at src/index.ts')
   }
 
-  const initializeStart = source.indexOf('const initializePlugin')
-  if (initializeStart < 0) {
+  const inventoryMatch = source.match(
+    /const\s+REGISTERED_PLUGIN_HOOKS\s*=\s*\[([\s\S]*?)\]\s+as\s+const\b/,
+  )
+  if (!inventoryMatch) {
     throw new Error(
-      'Unable to locate initializePlugin in src/index.ts while checking hook parity',
+      'Unable to locate REGISTERED_PLUGIN_HOOKS in src/index.ts while checking hook parity',
     )
   }
 
-  const initializeSource = source.slice(initializeStart)
-  const initializeLine =
-    source.slice(0, initializeStart).split('\n').pop() ?? ''
-  const functionIndent = initializeLine.match(/^\s*/)?.[0] ?? ''
-  const returnMatch = initializeSource.match(
-    new RegExp(`\\n(${escapeRegex(functionIndent)}  )return\\s*\\{\\s*\\n`),
-  )
-  if (!returnMatch || returnMatch.index === undefined) {
-    throw new Error(
-      'Unable to locate initializePlugin return object in src/index.ts while checking hook parity',
-    )
-  }
-
-  const returnIndent = returnMatch[1] ?? ''
-  const propertyIndent = `${returnIndent}  `
-  const objectBody = initializeSource
-    .slice(returnMatch.index + returnMatch[0].length)
-    .split(new RegExp(`^${escapeRegex(returnIndent)}}`, 'm'), 1)[0]
-
-  const propertyRegex = new RegExp(
-    `^${escapeRegex(propertyIndent)}(?:(['"])([^'"]+)\\1|([A-Za-z_$][\\w$]*))\\s*:`,
-    'gm',
-  )
+  const inventoryBody = inventoryMatch[1] ?? ''
   const hooks = new Set<string>()
-  for (const match of objectBody.matchAll(propertyRegex)) {
-    const hook = match[2] ?? match[3]
+  for (const match of inventoryBody.matchAll(/(['"])([^'"\n]+)\1/g)) {
+    const hook = match[2]
     if (hook) hooks.add(hook)
   }
 
   if (hooks.size === 0) {
     throw new Error(
-      'Unable to derive plugin hooks from initializePlugin in src/index.ts',
+      'Unable to derive plugin hooks from REGISTERED_PLUGIN_HOOKS in src/index.ts',
     )
   }
   return [...hooks].sort()

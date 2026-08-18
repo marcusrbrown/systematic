@@ -103,7 +103,7 @@ function writePluginEntryPoint(root: string, hooks: readonly string[]): void {
   writeFile(
     root,
     'src/index.ts',
-    `const initializePlugin = async () => {\n  return {\n${properties}\n  }\n}\n`,
+    `const REGISTERED_PLUGIN_HOOKS = [\n${hooks.map((hook) => `  '${hook}',`).join('\n')}\n] as const\n\nconst initializePlugin = async () => {\n  return {\n${properties}\n  }\n}\n`,
   )
 }
 
@@ -308,6 +308,68 @@ describe('checkHookParity', () => {
     const root = makeFixtureRepo()
     try {
       writePluginEntryPoint(root, FIXTURE_PLUGIN_HOOKS)
+      writeFile(
+        root,
+        'ARCHITECTURE.md',
+        `The plugin registers these hooks:\n${FIXTURE_PLUGIN_HOOKS.map((hook) => `- **\`${hook}\`**`).join('\n')}\n`,
+      )
+
+      expect(checkHookParity(root, ['ARCHITECTURE.md'])).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('fails when an all-hooks claim enumerates only part of the registered set', () => {
+    const root = makeFixtureRepo()
+    try {
+      writePluginEntryPoint(root, FIXTURE_PLUGIN_HOOKS)
+      writeFile(
+        root,
+        'ARCHITECTURE.md',
+        'The plugin registers all six hooks:\n' +
+          '- **`config`**\n' +
+          '- **`tool`**\n' +
+          '- **`event`**\n',
+      )
+
+      const violations = checkHookParity(root, ['ARCHITECTURE.md'])
+
+      expect(violations).toHaveLength(1)
+      expect(violations[0]?.missingHooks).toEqual([
+        'experimental.chat.system.transform',
+        'tool.execute.after',
+        'tool.execute.before',
+      ])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('uses the complete set for an all-hooks prose claim without hook names', () => {
+    const root = makeFixtureRepo()
+    try {
+      writePluginEntryPoint(root, FIXTURE_PLUGIN_HOOKS)
+      writeFile(
+        root,
+        'STRUCTURE.md',
+        '- `src/index.ts` — plugin factory, registers every OpenCode hook Systematic provides.\n',
+      )
+
+      expect(checkHookParity(root, ['STRUCTURE.md'])).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('uses the typed inventory when hooks are returned through a helper spread', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'src/index.ts',
+        `const REGISTERED_PLUGIN_HOOKS = [\n${FIXTURE_PLUGIN_HOOKS.map((hook) => `  '${hook}',`).join('\n')}\n] as const\n\nconst hooks = {\n  config: async () => {},\n}\n\nconst initializePlugin = async () => {\n  return { ...hooks }\n}\n`,
+      )
       writeFile(
         root,
         'ARCHITECTURE.md',
@@ -3488,9 +3550,28 @@ describe('integration: real repo', () => {
     expect(result.parseSafetyViolations).toEqual([])
     expect(result.agentModeViolations).toEqual([])
     expect(result.agentTemperatureViolations).toEqual([])
+    assertNoViolations(
+      result.hookParityViolations,
+      (v) => {
+        const hv = v as (typeof result.hookParityViolations)[number]
+        return `${hv.file}  ${hv.message}`
+      },
+      'Plugin hook parity violations in repo',
+    )
+    assertNoViolations(
+      result.codemapCompletenessViolations,
+      (v) => {
+        const cv = v as (typeof result.codemapCompletenessViolations)[number]
+        return `${cv.kind}  ${cv.module}  ${cv.message}`
+      },
+      'Architecture codemap completeness violations in repo',
+    )
     expect(result.allowlistWarnings).toEqual([])
     expect(result.scanStats.markdownFiles).toBeGreaterThan(0)
     expect(result.scanStats.typescriptFiles).toBeGreaterThan(0)
+    expect(result.hookParityViolations).toEqual([])
+    expect(result.codemapCompletenessViolations).toEqual([])
+    expect(result.scanStats.rootDocuments).toBeGreaterThan(0)
   })
 })
 
