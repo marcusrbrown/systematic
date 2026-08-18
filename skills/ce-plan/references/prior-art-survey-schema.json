@@ -137,8 +137,8 @@
       ],
       "properties": {
         "schema_version": {
-          "const": 1,
-          "description": "Version discriminator for this survey contract."
+          "const": 2,
+          "description": "Version discriminator for this survey contract. Bumped to 2 when excluded_scopes became conditionally required for a build-new-within-scope verdict."
         },
         "verdict": {
           "$ref": "#/definitions/verdict"
@@ -176,6 +176,33 @@
           },
           "description": "Alternative scopes considered when no defensible survey scope could be selected."
         },
+        "excluded_scopes": {
+          "type": "array",
+          "minItems": 0,
+          "maxItems": 8,
+          "items": {
+            "type": "object",
+            "required": ["scope", "reason"],
+            "properties": {
+              "scope": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "pattern": "\\S",
+                "description": "Adjacent scope considered but deliberately not searched."
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500,
+                "pattern": "\\S",
+                "description": "Why the adjacent scope was deliberately not searched."
+              }
+            },
+            "additionalProperties": false
+          },
+          "description": "Adjacent scopes considered but not searched, with a reason for each exclusion. An empty list explicitly means no adjacent scopes exist."
+        },
         "acceptance": {
           "$ref": "#/definitions/acceptance"
         }
@@ -191,6 +218,7 @@
             }
           },
           "then": {
+            "required": ["excluded_scopes"],
             "properties": {
               "candidates": {
                 "minItems": 1,

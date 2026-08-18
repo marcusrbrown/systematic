@@ -563,7 +563,7 @@ Omit `scopes_considered` unless the verdict is `unscoped`, and omit `acceptance`
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "verdict": "reuse | extend | build-new-within-scope | unscoped | unresolved",
   "scope": "<workspace or subtree searched>",
   "freshness": {
