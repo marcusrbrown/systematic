@@ -28,6 +28,11 @@ const baseCandidate = {
   disposition: 'reuse',
 }
 
+const baseExcludedScope = {
+  scope: 'packages/adapter',
+  reason: 'The concern does not cross this package boundary.',
+}
+
 const baseSurvey: Survey = {
   schema_version: 1,
   verdict: 'reuse',
@@ -112,6 +117,7 @@ describe('prior-art survey schema', () => {
             insufficiency_reason: 'Does not cover the required state boundary.',
           },
         ],
+        excluded_scopes: [],
       }),
       surveyWith({
         verdict: 'unscoped',
@@ -164,10 +170,197 @@ describe('prior-art survey schema', () => {
         surveyWith({
           verdict: 'build-new-within-scope',
           candidates: [],
+          excluded_scopes: [],
         }),
       ),
     ).toBe(false)
     expect(hasKeyword('minItems', '/candidates')).toBe(true)
+  })
+
+  test('rejects build-new-within-scope without excluded scopes at the required constraint', () => {
+    expect(
+      validate(
+        surveyWith({
+          verdict: 'build-new-within-scope',
+          candidates: [
+            {
+              ...baseCandidate,
+              disposition: 'insufficient',
+              insufficiency_reason:
+                'Does not cover the required state boundary.',
+            },
+          ],
+        }),
+      ),
+    ).toBe(false)
+    expect(hasKeyword('required', '')).toBe(true)
+    expect(
+      (validate.errors ?? []).some(
+        (error) =>
+          error.keyword === 'required' &&
+          (error.params as { missingProperty?: string }).missingProperty ===
+            'excluded_scopes',
+      ),
+    ).toBe(true)
+  })
+
+  test('accepts an explicit empty excluded scopes list for a single-package repository', () => {
+    expect(
+      validate(
+        surveyWith({
+          verdict: 'build-new-within-scope',
+          candidates: [
+            {
+              ...baseCandidate,
+              disposition: 'insufficient',
+              insufficiency_reason:
+                'Does not cover the required state boundary.',
+            },
+          ],
+          excluded_scopes: [],
+        }),
+      ),
+    ).toBe(true)
+  })
+
+  test('rejects an excluded scope without a reason at the nested required constraint', () => {
+    expect(
+      validate(
+        surveyWith({
+          verdict: 'build-new-within-scope',
+          candidates: [
+            {
+              ...baseCandidate,
+              disposition: 'insufficient',
+              insufficiency_reason:
+                'Does not cover the required state boundary.',
+            },
+          ],
+          excluded_scopes: [{ scope: baseExcludedScope.scope }],
+        }),
+      ),
+    ).toBe(false)
+    expect(hasKeyword('required', '/excluded_scopes/0')).toBe(true)
+  })
+
+  test('rejects more than eight excluded scopes at the maxItems constraint', () => {
+    expect(
+      validate(
+        surveyWith({
+          verdict: 'build-new-within-scope',
+          candidates: [
+            {
+              ...baseCandidate,
+              disposition: 'insufficient',
+              insufficiency_reason:
+                'Does not cover the required state boundary.',
+            },
+          ],
+          excluded_scopes: Array.from({ length: 9 }, (_, index) => ({
+            ...baseExcludedScope,
+            scope: `packages/adapter-${index}`,
+          })),
+        }),
+      ),
+    ).toBe(false)
+    expect(hasKeyword('maxItems', '/excluded_scopes')).toBe(true)
+  })
+
+  test('rejects an excluded scope with an overlong reason at maxLength', () => {
+    expect(
+      validate(
+        surveyWith({
+          verdict: 'build-new-within-scope',
+          candidates: [
+            {
+              ...baseCandidate,
+              disposition: 'insufficient',
+              insufficiency_reason:
+                'Does not cover the required state boundary.',
+            },
+          ],
+          excluded_scopes: [
+            {
+              ...baseExcludedScope,
+              reason: 'x'.repeat(501),
+            },
+          ],
+        }),
+      ),
+    ).toBe(false)
+    expect(hasKeyword('maxLength', '/excluded_scopes/0/reason')).toBe(true)
+  })
+
+  test('rejects an excluded scope with an overlong scope name at maxLength', () => {
+    expect(
+      validate(
+        surveyWith({
+          verdict: 'build-new-within-scope',
+          candidates: [
+            {
+              ...baseCandidate,
+              disposition: 'insufficient',
+              insufficiency_reason:
+                'Does not cover the required state boundary.',
+            },
+          ],
+          excluded_scopes: [
+            {
+              ...baseExcludedScope,
+              scope: 'x'.repeat(257),
+            },
+          ],
+        }),
+      ),
+    ).toBe(false)
+    expect(hasKeyword('maxLength', '/excluded_scopes/0/scope')).toBe(true)
+  })
+
+  test('rejects an excluded scope with an empty scope name at minLength', () => {
+    expect(
+      validate(
+        surveyWith({
+          verdict: 'build-new-within-scope',
+          candidates: [
+            {
+              ...baseCandidate,
+              disposition: 'insufficient',
+              insufficiency_reason:
+                'Does not cover the required state boundary.',
+            },
+          ],
+          excluded_scopes: [{ ...baseExcludedScope, scope: '' }],
+        }),
+      ),
+    ).toBe(false)
+    expect(hasKeyword('minLength', '/excluded_scopes/0/scope')).toBe(true)
+  })
+
+  test('rejects an unknown excluded scope field at additionalProperties', () => {
+    expect(
+      validate(
+        surveyWith({
+          verdict: 'build-new-within-scope',
+          candidates: [
+            {
+              ...baseCandidate,
+              disposition: 'insufficient',
+              insufficiency_reason:
+                'Does not cover the required state boundary.',
+            },
+          ],
+          excluded_scopes: [
+            {
+              ...baseExcludedScope,
+              NOT_PART_OF_CONTRACT: true,
+            },
+          ],
+        }),
+      ),
+    ).toBe(false)
+    expect(
+      hasAdditionalProperty('NOT_PART_OF_CONTRACT', '/excluded_scopes/0'),
+    ).toBe(true)
   })
 
   test('rejects unscoped without scopes considered at the required constraint', () => {
