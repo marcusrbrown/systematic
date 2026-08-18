@@ -34,7 +34,7 @@ const baseExcludedScope = {
 }
 
 const baseSurvey: Survey = {
-  schema_version: 1,
+  schema_version: 2,
   verdict: 'reuse',
   scope: 'workspace root',
   freshness: {
@@ -417,7 +417,7 @@ describe('prior-art survey schema', () => {
   })
 
   test('rejects an unsupported schema version at the version const constraint', () => {
-    expect(validate(surveyWith({ schema_version: 2 }))).toBe(false)
+    expect(validate(surveyWith({ schema_version: 1 }))).toBe(false)
     expect(hasKeyword('const', '/schema_version')).toBe(true)
   })
 

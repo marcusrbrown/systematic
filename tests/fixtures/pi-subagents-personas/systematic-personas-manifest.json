@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-18T20:30:10.653Z",
+  "generatedAt": "2026-08-18T20:39:40.977Z",
   "entries": [
     {
       "filename": "systematic-best-practices-researcher.md",
@@ -29,7 +29,7 @@
       "filename": "systematic-repo-research-analyst.md",
       "status": "exported",
       "sourceRelPath": "agents/research/repo-research-analyst.md",
-      "hash": "a4dd56f238808813d41ac425169286cb057204e8cf83300b8c5a0bd2e38eba19"
+      "hash": "89c7d6b7cfd412c23f93cfe2cdfe5e0b42f737a451d564cec378b17ff8c3c854"
     },
     {
       "filename": "systematic-adversarial-reviewer.md",

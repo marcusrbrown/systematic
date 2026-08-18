@@ -137,8 +137,8 @@
       ],
       "properties": {
         "schema_version": {
-          "const": 1,
-          "description": "Version discriminator for this survey contract."
+          "const": 2,
+          "description": "Version discriminator for this survey contract. Bumped to 2 when excluded_scopes became conditionally required for a build-new-within-scope verdict."
         },
         "verdict": {
           "$ref": "#/definitions/verdict"
