@@ -41,6 +41,34 @@
       },
       "additionalProperties": false
     },
+    "freshness": {
+      "type": "object",
+      "properties": {
+        "vcs_reference": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "\\S",
+          "description": "VCS revision or equivalent reference for the surveyed scope, when available."
+        },
+        "scope_baseline": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "pattern": "\\S",
+          "description": "Portable digest or compact baseline for the surveyed scope when VCS history is unavailable."
+        }
+      },
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "required": ["vcs_reference"]
+        },
+        {
+          "required": ["scope_baseline"]
+        }
+      ]
+    },
     "candidate": {
       "type": "object",
       "required": ["path_or_symbol", "description", "disposition"],
@@ -99,8 +127,19 @@
     },
     "survey": {
       "type": "object",
-      "required": ["verdict", "scope", "budget", "candidates"],
+      "required": [
+        "schema_version",
+        "verdict",
+        "scope",
+        "freshness",
+        "budget",
+        "candidates"
+      ],
       "properties": {
+        "schema_version": {
+          "const": 1,
+          "description": "Version discriminator for this survey contract."
+        },
         "verdict": {
           "$ref": "#/definitions/verdict"
         },
@@ -110,6 +149,9 @@
           "maxLength": 256,
           "pattern": "\\S",
           "description": "Workspace or subtree searched by this survey."
+        },
+        "freshness": {
+          "$ref": "#/definitions/freshness"
         },
         "budget": {
           "$ref": "#/definitions/budget"
@@ -213,6 +255,48 @@
             "properties": {
               "verdict": {
                 "enum": ["unscoped", "unresolved"]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["verdict", "acceptance"],
+            "properties": {
+              "verdict": {
+                "const": "unscoped"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "acceptance": {
+                "properties": {
+                  "accepted_verdict": {
+                    "const": "unscoped"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": ["verdict", "acceptance"],
+            "properties": {
+              "verdict": {
+                "const": "unresolved"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "acceptance": {
+                "properties": {
+                  "accepted_verdict": {
+                    "const": "unresolved"
+                  }
+                }
               }
             }
           }

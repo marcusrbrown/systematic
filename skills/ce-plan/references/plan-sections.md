@@ -25,7 +25,7 @@ Render the `Prior-Art Survey` as a top-level section after `Context & Research` 
 
 ## Prior-Art Survey rendering
 
-Render the survey as a schema-conforming structured block, preferably a fenced `json` block preserving the contract's field names. Include `verdict`, `scope`, `budget`, and `candidates`; each candidate must name what it owns in the code's vocabulary and its disposition. Include `scopes_considered` for an `unscoped` verdict and `acceptance` only when the user accepts an `unscoped` or `unresolved` verdict. An `unscoped` or `unresolved` result without that acceptance record remains a planning blocker, not explanatory prose.
+The section must contain exactly one fenced `json` block and no alternate survey result in prose or another code block. Parse that block as JSON and validate it against `skills/ce-plan/references/prior-art-survey-schema.json`; a missing, malformed, schema-invalid, or placeholder block is not a survey result. Preserve the contract's field names, including `schema_version`, `verdict`, `scope`, `freshness`, `budget`, and `candidates`. Each candidate must name what it owns in the code's vocabulary and its disposition. Include `scopes_considered` for an `unscoped` verdict and `acceptance` only when the user accepts an `unscoped` or `unresolved` verdict. An `unscoped` or `unresolved` result without that acceptance record remains a planning blocker, not explanatory prose.
 
 ## Decide whether a plan doc is warranted at all
 

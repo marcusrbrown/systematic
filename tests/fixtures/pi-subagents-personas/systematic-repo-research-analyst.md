@@ -158,12 +158,17 @@ Run this survey for every software-work concern, including shallow plans. Skip i
 4. Collect every plausible candidate before assigning any disposition. For each candidate, describe what it owns in the vocabulary the code itself uses: use its symbols, module names, events, records, states, or boundaries rather than translating it into the request's vocabulary.
 5. Only after the candidate inventory is complete, disposition candidates and identify the strongest evidence. Preserve the stated scope and budget in the result, including whether the budget was exhausted.
 
-The prior-art output must report the concern framing, surveyed workspace or subtree, search budget, candidate inventory, and dispositions. Emit the machine-checkable result using `skills/ce-plan/references/prior-art-survey-schema.json` as the contract:
+The prior-art output must report the concern framing, surveyed workspace or subtree, freshness record, search budget, candidate inventory, and dispositions. Emit exactly one machine-checkable result using `skills/ce-plan/references/prior-art-survey-schema.json` as the contract. Use `schema_version: 1`. The `freshness` object must include at least one of `vcs_reference` (the current VCS reference for the surveyed scope, when available) or `scope_baseline` (a portable digest or compact baseline for the surveyed scope when VCS is unavailable); include both when both are available. Do not replace this record with prose.
 
 ```json
 {
+  "schema_version": 1,
   "verdict": "reuse | extend | build-new-within-scope | unscoped | unresolved",
   "scope": "<workspace or subtree searched>",
+  "freshness": {
+    "vcs_reference": "<current VCS reference for the surveyed scope, when available>",
+    "scope_baseline": "<portable digest or baseline for the surveyed scope when VCS is unavailable>"
+  },
   "budget": {
     "max_search_passes": 3,
     "max_candidate_inspections": 10,
@@ -275,6 +280,7 @@ Structure your findings as:
 ### Prior-Art Survey
 - Concern framing: trigger, effect, state, and integration boundary
 - A structured result conforming to `skills/ce-plan/references/prior-art-survey-schema.json`
+- `schema_version: 1` and a `freshness` record with at least one of `vcs_reference` or `scope_baseline`
 - Exactly one verdict: `reuse`, `extend`, `build-new-within-scope`, `unscoped`, or `unresolved`
 - The searched workspace or subtree in `scope`, plus bounded `budget` fields and whether the budget was exhausted
 - A complete `candidates` inventory with each path or symbol, code-vocabulary ownership description, and disposition

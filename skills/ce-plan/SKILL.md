@@ -232,7 +232,7 @@ Collect:
 - Technology stack and versions (used in section 1.2 to make sharper external research decisions)
 - Architectural patterns and conventions to follow
 - Implementation patterns, relevant files, modules, and tests
-- Prior-art survey result: verdict, surveyed scope and budget, candidate ownership and dispositions, and any recorded acceptance
+- Prior-art survey result: schema version, verdict, surveyed scope and freshness record, bounded budget, candidate ownership and dispositions, and any recorded acceptance
 - AGENTS.md guidance that materially affects the plan, with AGENTS.md used only as compatibility fallback when present
 - Institutional learnings from `docs/solutions/`
 
@@ -557,14 +557,19 @@ deepened: YYYY-MM-DD  # optional, set when the confidence check substantively st
 
 ## Prior-Art Survey
 
-Include this section for every qualifying software-work or behavior-changing plan. Omit it only when Phase 1.1 explicitly applies the non-software or mechanical-no-behavior-change exemption. Preserve the survey's schema-conforming structured result, including the verdict, surveyed scope, bounded budget, candidate ownership and dispositions, and the acceptance record when present.
+Include this section for every qualifying software-work or behavior-changing plan. Omit it only when Phase 1.1 explicitly applies the non-software or mechanical-no-behavior-change exemption. The section must contain exactly one fenced `json` block, and that block must validate against `references/prior-art-survey-schema.json`. Preserve the survey's schema-conforming structured result, including the schema version, verdict, surveyed scope, freshness record, bounded budget, candidate ownership and dispositions, and the acceptance record when present. A plan containing prose, placeholders, a missing block, multiple blocks, or a malformed/schema-invalid block is not compliant.
 
 Omit `scopes_considered` unless the verdict is `unscoped`, and omit `acceptance` unless the user has accepted an `unscoped` or `unresolved` verdict.
 
 ```json
 {
+  "schema_version": 1,
   "verdict": "reuse | extend | build-new-within-scope | unscoped | unresolved",
   "scope": "<workspace or subtree searched>",
+  "freshness": {
+    "vcs_reference": "<VCS reference for the surveyed scope, when available>",
+    "scope_baseline": "<portable digest or baseline for the surveyed scope when VCS is unavailable>"
+  },
   "budget": {
     "max_search_passes": 1,
     "max_candidate_inspections": 1,
@@ -574,7 +579,8 @@ Omit `scopes_considered` unless the verdict is `unscoped`, and omit `acceptance`
     {
       "path_or_symbol": "<repository-relative path or source symbol>",
       "description": "<what it owns in the code's vocabulary>",
-      "disposition": "reuse | extend | insufficient | undispositioned"
+      "disposition": "reuse | extend | insufficient | undispositioned",
+      "insufficiency_reason": "<required when verdict is build-new-within-scope>"
     }
   ],
   "scopes_considered": ["<required for an unscoped verdict>"],

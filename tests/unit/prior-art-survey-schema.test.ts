@@ -29,8 +29,12 @@ const baseCandidate = {
 }
 
 const baseSurvey: Survey = {
+  schema_version: 1,
   verdict: 'reuse',
   scope: 'workspace root',
+  freshness: {
+    scope_baseline: 'sha256:workspace-root-baseline',
+  },
   budget: baseBudget,
   candidates: [baseCandidate],
 }
@@ -142,6 +146,18 @@ describe('prior-art survey schema', () => {
     ).toBe(true)
   })
 
+  test('accepts a VCS reference as the freshness record', () => {
+    expect(
+      validate(
+        surveyWith({
+          freshness: {
+            vcs_reference: 'refs/heads/feat/prior-art-survey@abc123',
+          },
+        }),
+      ),
+    ).toBe(true)
+  })
+
   test('rejects build-new-within-scope without candidates at the minItems constraint', () => {
     expect(
       validate(
@@ -207,6 +223,16 @@ describe('prior-art survey schema', () => {
     expect(hasAdditionalProperty('NOT_PART_OF_CONTRACT', '')).toBe(true)
   })
 
+  test('rejects an unsupported schema version at the version const constraint', () => {
+    expect(validate(surveyWith({ schema_version: 2 }))).toBe(false)
+    expect(hasKeyword('const', '/schema_version')).toBe(true)
+  })
+
+  test('rejects a freshness record without a VCS reference or portable baseline at anyOf', () => {
+    expect(validate(surveyWith({ freshness: {} }))).toBe(false)
+    expect(hasKeyword('anyOf', '/freshness')).toBe(true)
+  })
+
   test('rejects an unknown candidate field at additionalProperties', () => {
     expect(
       validate(
@@ -233,5 +259,40 @@ describe('prior-art survey schema', () => {
       ),
     ).toBe(false)
     expect(hasKeyword('enum', '/verdict')).toBe(true)
+  })
+
+  test('rejects unscoped acceptance that names unresolved at the accepted verdict const constraint', () => {
+    expect(
+      validate(
+        surveyWith({
+          verdict: 'unscoped',
+          candidates: [],
+          scopes_considered: ['workspace root'],
+          acceptance: {
+            accepted_by_user: true,
+            accepted_verdict: 'unresolved',
+            reason: 'The user accepted the bounded planning limitation.',
+          },
+        }),
+      ),
+    ).toBe(false)
+    expect(hasKeyword('const', '/acceptance/accepted_verdict')).toBe(true)
+  })
+
+  test('rejects unresolved acceptance that names unscoped at the accepted verdict const constraint', () => {
+    expect(
+      validate(
+        surveyWith({
+          verdict: 'unresolved',
+          candidates: [{ ...baseCandidate, disposition: 'undispositioned' }],
+          acceptance: {
+            accepted_by_user: true,
+            accepted_verdict: 'unscoped',
+            reason: 'The user accepted the unresolved survey state.',
+          },
+        }),
+      ),
+    ).toBe(false)
+    expect(hasKeyword('const', '/acceptance/accepted_verdict')).toBe(true)
   })
 })
