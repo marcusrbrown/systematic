@@ -38,9 +38,9 @@ tags:
 
 Descriptions are the most common cause, not the only one. Two broader triggers reach the same generated surfaces:
 
-**A body edit drifts the Pi fixtures.** The Pi export embeds the full persona text, not just its metadata, so editing an agent's body — with frontmatter untouched — still changes the generated fixture. A branch that added a research scope to one agent's body left `tests/fixtures/pi-subagents-personas/` stale while every targeted test passed; it surfaced only when the full unit suite ran.
+**A body edit drifts the Pi fixtures.** The Pi export embeds the full persona text, not just its metadata, and its drift gate compares a SHA-256 hash of the generated content against the committed fixture (`scripts/generate-pi-subagents-personas.ts:103-105`). Any body change alters that hash, so editing an agent's body — with frontmatter untouched — leaves the fixture stale. A branch that added a research scope to one agent's body did exactly this while every targeted test passed; it surfaced only when the full unit suite ran.
 
-**A new file under a skill's `references/` drifts the registry.** The generator walks each skill directory recursively and records a per-component file list, so adding a reference file changes registry output even when no description moved. On the same branch this produced seven test failures plus a `registry:drift` failure, all from one added schema file.
+**A new file under a skill's `references/` drifts the registry.** The generator calls `walkDir` on each skill directory (`scripts/generate-registry.ts:149`) and records the resulting per-component file list, so adding a reference file changes registry output even when no description moved. On the same branch this produced seven test failures plus a `registry:drift` failure, all from one added schema file.
 
 Both are invisible to targeted tests by construction: the drift is between committed generated output and source, and a test that exercises the generator does not compare its output to what is checked in.
 
