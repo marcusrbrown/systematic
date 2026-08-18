@@ -120,11 +120,14 @@ import { vi } from 'vitest'
 
 ## Plugin Architecture
 
-The plugin exposes three hooks. Changes to any of these are high-risk:
+The plugin exposes these hooks. Changes to any of these are high-risk:
 
 - **`config`** — merges bundled skills/agents/commands into OpenCode config
-- **`tool`** — registers the `systematic_skill` tool
-- **`system.transform`** — injects bootstrap prompt into conversations
+- **`tool`** — registers the `systematic_skill` tool and the workflow-guard tools
+- **`tool.execute.before`** — workflow-guard observation; can block an operation by throwing
+- **`tool.execute.after`** — workflow-guard observation of results
+- **`event`** — workflow-guard observation of host events
+- **`experimental.chat.system.transform`** — injects bootstrap prompt into conversations
 
 Treat modifications to `src/index.ts` hook implementations as breaking-change candidates.
 

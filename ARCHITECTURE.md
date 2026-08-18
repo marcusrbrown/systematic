@@ -13,13 +13,24 @@ Systematic ships as an npm package with two distinct parts:
 2. **Bundled assets** (`skills/`, `agents/`) — Markdown content shipped alongside the compiled code
 
 At runtime, OpenCode loads the plugin via its default export (`src/index.ts`). The plugin registers
-three hooks:
+these hooks:
 
 - **`config`** — discovers bundled agents, skills, and commands, then merges them into the OpenCode
   config. Existing user config wins; Systematic fills in what's missing.
-- **`tool`** — registers the `systematic_skill` tool, which lets agents load skill content on demand.
+- **`tool`** — registers the `systematic_skill` tool, which lets agents load skill content on demand,
+  alongside the workflow-guard tools (`systematic_workflow_start`, `_status`, `_complete`,
+  `_control`).
+- **`tool.execute.before`** — workflow-guard observation of pending operations. Blocks execution by
+  rethrowing a guard error when a guarded transition is unsatisfied.
+- **`tool.execute.after`** — workflow-guard observation of completed operations, feeding receipt
+  classification. Fail-closed; never blocks the host.
+- **`event`** — workflow-guard observation of host events, including skill loads that activate an
+  epoch. Fail-closed; never blocks the host.
 - **`experimental.chat.system.transform`** — injects a bootstrap prompt into the system message and
   suppresses title generation for internal agents.
+
+The last four are the receipt-backed workflow guard (see Cross-Cutting Concerns). The registered set
+is authoritative in `src/index.ts`; do not restate a count here.
 
 The CLI (`src/cli.ts`) is a separate entry point exposing `list`, `config`, and `setup --harness`
 subcommands. It does not participate in the plugin hook lifecycle. `setup --harness opencode|pi`
@@ -163,6 +174,15 @@ version is not evidence for another.
 **Content-integrity gate** (`scripts/content-integrity.ts`) — runs in the CI build job. Catches
 phantom `systematic:*` references, dispatch identifier integrity issues, frontmatter/model
 contract violations, and banned CC/CEP patterns. Must pass before any release.
+
+**Receipt-backed workflow guard** (`src/lib/workflow-guard.ts` plus the OpenCode adapter in
+`src/lib/opencode-workflow-guard.ts`, `opencode-operation-observer.ts`, and `receipt-classifier.ts`
+/ `receipt-ledger.ts` / `receipt-readback.ts`) — observes tool executions through the
+`tool.execute.before` / `tool.execute.after` / `event` hooks, classifies them into operations
+(implementation, verification, commit, push, pr-creation, check-readback, review-readback),
+validates each claim against observed workspace state, and mints integrity-checked receipts. A
+guarded transition that lacks its required receipts is rejected. OpenCode only — `src/pi.ts`
+registers no guard, and the Claude Code bundle ships no runtime.
 
 **Registry drift detection** (`scripts/build-registry.ts --check`) — verifies that the OCX registry
 config stays in sync with the generated bundled assets. Run via `bun run registry:drift`.

@@ -38,7 +38,8 @@ systematic/
 **Contains:** Plugin entry point, CLI entry point, and the `lib/` subdirectory of core modules.
 
 **Key files:**
-- `src/index.ts` — plugin factory (`SystematicPlugin`), registers all three OpenCode hooks
+- `src/index.ts` — plugin factory (`SystematicPlugin`), registers every OpenCode hook Systematic
+  provides (config, tool, the workflow-guard observation hooks, and the system transform)
 - `src/cli.ts` — CLI commands: `list`, `config show/path`, `setup --harness opencode|pi` (Claude Code
   has no CLI setup step — it installs as a prebuilt plugin via marketplace, see `scripts/`)
 - `src/lib/setup.ts` — `setupHarness`: atomic/backed-up/idempotent, project-local-only harness config writes
