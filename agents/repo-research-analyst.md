@@ -159,13 +159,13 @@ Run this survey for every software-work concern, including shallow plans. Skip i
 2. Bound the search to a workspace or subtree using the existing Phase 0.1 and 0.1b detection logic above. For a monorepo, use the named workspace or service when the concern identifies one; otherwise report the workspace map and choose the smallest defensible subtree. State a finite search budget before searching, covering the search passes and candidate inspection depth you will use.
 3. Search the bounded scope for source, registrations, tests, schemas, and configuration that currently handle the trigger, effect, state, or integration boundary. Use the concern's synonyms and nearby domain terms, including terms discovered from filenames, symbols, registrations, and schemas.
 4. Collect every plausible candidate before assigning any disposition. For each candidate, describe what it owns in the vocabulary the code itself uses: use its symbols, module names, events, records, states, or boundaries rather than translating it into the request's vocabulary.
-5. Only after the candidate inventory is complete, disposition candidates and identify the strongest evidence. Preserve the stated scope and budget in the result, including whether the budget was exhausted.
+5. Only after the candidate inventory is complete, disposition candidates and identify the strongest evidence. Preserve the stated scope and budget in the result, including whether the budget was exhausted. If the verdict is `build-new-within-scope`, also record every adjacent scope you considered but deliberately did not search, with the reason for each exclusion. Emit `excluded_scopes: []` when the surveyed scope has no adjacent scopes; do not omit the field or use an empty list to mean that exclusions were not considered.
 
-The prior-art output must report the concern framing, surveyed workspace or subtree, freshness record, search budget, candidate inventory, and dispositions. Emit exactly one machine-checkable result using `skills/ce-plan/references/prior-art-survey-schema.json` as the contract. Use `schema_version: 1`. The `freshness` object must include at least one of `vcs_reference` (the current VCS reference for the surveyed scope, when available) or `scope_baseline` (a portable digest or compact baseline for the surveyed scope when VCS is unavailable); include both when both are available. Do not replace this record with prose.
+The prior-art output must report the concern framing, surveyed workspace or subtree, freshness record, search budget, candidate inventory, and dispositions. Emit exactly one machine-checkable result using `skills/ce-plan/references/prior-art-survey-schema.json` as the contract. Use `schema_version: 2`. The `freshness` object must include at least one of `vcs_reference` (the current VCS reference for the surveyed scope, when available) or `scope_baseline` (a portable digest or compact baseline for the surveyed scope when VCS is unavailable); include both when both are available. Do not replace this record with prose.
 
 ```json
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "verdict": "reuse | extend | build-new-within-scope | unscoped | unresolved",
   "scope": "<workspace or subtree searched>",
   "freshness": {
@@ -185,6 +185,12 @@ The prior-art output must report the concern framing, surveyed workspace or subt
       "insufficiency_reason": "<required for build-new-within-scope candidates>"
     }
   ],
+  "excluded_scopes": [
+    {
+      "scope": "<adjacent scope considered but not searched>",
+      "reason": "<why this adjacent scope was deliberately not searched>"
+    }
+  ],
   "scopes_considered": ["<required for an unscoped verdict>"],
   "acceptance": {
     "accepted_by_user": true,
@@ -194,7 +200,7 @@ The prior-art output must report the concern framing, surveyed workspace or subt
 }
 ```
 
-Use exactly one verdict. `build-new-within-scope` requires at least one candidate, every candidate must have disposition `insufficient`, and every candidate must include `insufficiency_reason`. `unscoped` requires a non-empty `scopes_considered` list. `unresolved` requires at least one `undispositioned` candidate and must retain every disposition already reached. Include `acceptance` only when a user accepts an `unscoped` or `unresolved` verdict. An empty candidate list is the only representation of absence: keep it alongside the searched `scope` and `budget`, and never claim that no equivalent exists anywhere.
+Use exactly one verdict. `build-new-within-scope` requires at least one candidate, every candidate must have disposition `insufficient`, every candidate must include `insufficiency_reason`, and `excluded_scopes` must be present. Each excluded scope entry must include a non-blank `scope` and a reason; use `excluded_scopes: []` only when no adjacent scopes exist. `unscoped` requires a non-empty `scopes_considered` list. `unresolved` requires at least one `undispositioned` candidate and must retain every disposition already reached. Include `acceptance` only when a user accepts an `unscoped` or `unresolved` verdict. An empty candidate list is the only representation of absence: keep it alongside the searched `scope` and `budget`, and never claim that no equivalent exists anywhere.
 
 ---
 
@@ -283,11 +289,11 @@ Structure your findings as:
 ### Prior-Art Survey
 - Concern framing: trigger, effect, state, and integration boundary
 - A structured result conforming to `skills/ce-plan/references/prior-art-survey-schema.json`
-- `schema_version: 1` and a `freshness` record with at least one of `vcs_reference` or `scope_baseline`
+- `schema_version: 2` and a `freshness` record with at least one of `vcs_reference` or `scope_baseline`
 - Exactly one verdict: `reuse`, `extend`, `build-new-within-scope`, `unscoped`, or `unresolved`
 - The searched workspace or subtree in `scope`, plus bounded `budget` fields and whether the budget was exhausted
 - A complete `candidates` inventory with each path or symbol, code-vocabulary ownership description, and disposition
-- For `build-new-within-scope`, a non-empty candidate list whose candidates all explain their insufficiency
+- For `build-new-within-scope`, a non-empty candidate list whose candidates all explain their insufficiency, plus `excluded_scopes` entries naming adjacent scopes deliberately not searched and why (or an explicit empty list when none are adjacent)
 - For `unscoped`, a non-empty `scopes_considered` list; for `unresolved`, at least one `undispositioned` candidate while preserving reached dispositions
 - An optional `acceptance` record only when a user accepted an `unscoped` or `unresolved` verdict
 - Absence represented only by the searched scope, budget, and an empty candidate list; never assert an unbounded absence
