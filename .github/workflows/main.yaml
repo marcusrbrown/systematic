@@ -188,7 +188,17 @@ jobs:
 
   release:
     env:
-      DRY_RUN: ${{ github.event_name == 'pull_request' || github.event.inputs.dry-run && 'true' || 'false' }}
+      # The parentheses are load-bearing. `&&` binds tighter than `||`, and a
+      # workflow_dispatch input arrives as a string, so an unparenthesized
+      # `inputs.dry-run && 'true'` evaluates truthy even when the caller passes
+      # false. Compare against the string explicitly rather than relying on
+      # truthiness.
+      #
+      # This value is the only gate on the dry-run flag. Do not add a step that
+      # overrides it for the default branch: semantic-release already refuses to
+      # publish from anywhere its own `branches` config does not allow, and an
+      # override here silently turns a requested dry run into a real release.
+      DRY_RUN: ${{ (github.event_name == 'pull_request' || github.event.inputs.dry-run == 'true') && 'true' || 'false' }}
     name: Release
     needs: [build, typecheck, lint, test]
     outputs:
@@ -241,15 +251,6 @@ jobs:
 
       - name: Build
         run: bun run build
-
-      - name: Get Release Options
-        env:
-          INPUT_DRY_RUN: ${{ github.event_name != 'workflow_dispatch' || github.event.inputs.dry-run && 'true' || 'false' }}
-          IS_DEFAULT_BRANCH: ${{ github.ref == format('refs/heads/{0}', github.event.repository.default_branch) }}
-        run: |
-          if [[ $DRY_RUN != 'true' || $IS_DEFAULT_BRANCH == 'true' ]]; then
-            echo "DRY_RUN=false" >> $GITHUB_ENV
-          fi
 
       - name: Semantic Release
         id: semantic-release
