@@ -11,7 +11,7 @@ Systematic is a plugin providing compound-engineering loops (brainstorm, plan, w
 | Question | Go to |
 |----------|-------|
 | How does the plugin work? | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
-| What are the three plugin hooks? | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
+| Which plugin hooks are registered? | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
 | What invariants must hold? | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
 | What is the config priority order? | [`ARCHITECTURE.md`](ARCHITECTURE.md) |
 | Where do I put new code? | [`STRUCTURE.md`](STRUCTURE.md) |

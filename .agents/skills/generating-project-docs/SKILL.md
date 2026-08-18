@@ -103,11 +103,11 @@ Do NOT add: skill tables, agent category tables, CLI reference tables, Mermaid d
 Following matklad's "Bird's Eye" pattern. Audience: contributors who need to understand how the plugin works at a system level.
 
 1. `# Architecture` — H1 title + 1–2 sentence orientation that points at `STRUCTURE.md` and `AGENTS.md`
-2. `## Bird's Eye Overview` — two-paragraph summary of plugin shape and the three OpenCode hooks
+2. `## Bird's Eye Overview` — two-paragraph summary of plugin shape and the hooks the plugin registers. Enumerate the hooks from the object returned in `src/index.ts`; never carry a count forward from the existing document.
 3. `## Codemap` — pipeline diagram + symbol table mapping roles to file paths
 4. `## Invariants` — numbered list of invariants CI enforces
 5. `## Data Flow` — ASCII tree from plugin load through hooks
-6. `## Cross-Cutting Concerns` — content-integrity gate, registry drift, config validation, memoization, config priority
+6. `## Cross-Cutting Concerns` — the gates and invariant-enforcing systems that span modules. Derive the current set from `scripts/` and the CI workflow rather than reproducing the list in the existing document.
 
 ### `STRUCTURE.md`
 
