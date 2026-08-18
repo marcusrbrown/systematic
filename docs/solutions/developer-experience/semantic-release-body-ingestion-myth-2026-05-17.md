@@ -1,8 +1,8 @@
 ---
-title: semantic-release release-notes-generator ignores commit bodies; patch with gh release edit
+title: The release pipeline has two stages with opposite commit-body ingestion
 module: .releaserc.yaml + release-pipeline
 date: 2026-05-17
-last_updated: 2026-08-16
+last_updated: 2026-08-17
 problem_type: developer_experience
 component: tooling
 severity: medium
@@ -17,11 +17,14 @@ applies_when:
   - A release needs an audience-facing narrative (deprecation cycle, migration steps, breaking changes) beyond the auto-generated commit-subject bullets
   - Authoring a squash-commit message body intending for it to appear in the GitHub release notes
   - Validating release-notes content after a semantic-release publish
+  - Writing any commit subject, commit body, or PR description that will land between two releases
 ---
 
-> **Note (2026-05-23):** The manual `gh release edit` workflow described here is now automated for this repo. As of v2.23.4, `scripts/dispatch-release-notes.sh` (wired via `@semantic-release/exec` in `.releaserc.yaml`) dispatches the `release-notes-narrative` skill on every successful publish from `main`. See [`docs/solutions/best-practices/release-notes-narrative-ci-automation-architecture-2026-05-23.md`](../best-practices/release-notes-narrative-ci-automation-architecture-2026-05-23.md) for the v2 CI automation architecture and [`docs/solutions/best-practices/release-notes-narrative-procedure-2026-05-23.md`](../best-practices/release-notes-narrative-procedure-2026-05-23.md) for the v1 manual procedure both modes inherit. The myth itself — that release-notes-generator ingests commit bodies — remains true. Manual `gh release edit` is still the right answer when the automation fails-soft or for backfilling historical releases.
+> **Note (2026-05-23):** The manual `gh release edit` workflow described here is now automated for this repo. As of v2.23.4, `scripts/dispatch-release-notes.sh` (wired via `@semantic-release/exec` in `.releaserc.yaml`) dispatches the `release-notes-narrative` skill on every successful publish from `main`. See [`docs/solutions/best-practices/release-notes-narrative-ci-automation-architecture-2026-05-23.md`](../best-practices/release-notes-narrative-ci-automation-architecture-2026-05-23.md) for the v2 CI automation architecture and [`docs/solutions/best-practices/release-notes-narrative-procedure-2026-05-23.md`](../best-practices/release-notes-narrative-procedure-2026-05-23.md) for the v1 manual procedure both modes inherit. Manual `gh release edit` is still the right answer when the automation fails-soft or for backfilling historical releases.
 
-# semantic-release release-notes-generator ignores commit bodies; patch with gh release edit
+> **Correction (2026-08-17):** The 2026-05-23 note above originally ended "The myth itself — that release-notes-generator ignores commit bodies — remains true." That is true of the *plugin* and false of the *pipeline*, and the difference is not academic — see [Stage 2 reversed the ingestion rule](#stage-2-reversed-the-ingestion-rule-2026-08-17) below. Reading only the original claim leads to "commit bodies are internal," which published internal planning vocabulary to a real release.
+
+# The release pipeline has two stages with opposite commit-body ingestion
 
 ## Context
 
@@ -71,11 +74,85 @@ The detailed PR body is reviewer-facing, not audience-facing. The squash-commit 
 
 The cost of the patch is small: a `gh release edit` call after the release-pipeline run completes. The cost of skipping it is users hitting v3.0.0 surprised, opening issues, and the maintainer linking them to a commit body they didn't know existed.
 
+## Stage 2 reversed the ingestion rule (2026-08-17)
+
+The pipeline has two stages, and they ingest different things. Conflating them is
+what makes this doc's original framing dangerous rather than merely incomplete.
+
+| Stage | Mechanism | Reads |
+|---|---|---|
+| 1 | `@semantic-release/release-notes-generator` | commit **subjects** only |
+| 2 | `release-notes-narrative` skill via `successCmd` | commit **bodies** (`%b`) and PR descriptions |
+
+Stage 2 is dispatched by `scripts/dispatch-release-notes.sh` on every successful
+publish and pulls the full body of every commit in the range:
+
+```bash
+# .agents/skills/release-notes-narrative/SKILL.md
+git log "${PREV}..${TARGET}" --pretty=format:'%H%x1f%s%x1f%b%x1e'
+```
+
+It also reads the PR description when a commit body is thin. So the practical
+answer to "does my commit body reach the published release notes?" is **yes** —
+via stage 2 — even though the plugin in stage 1 never touches it.
+
+### Non-releasing commits are not private commits
+
+Two settings in `.releaserc.yaml` answer different questions, and only one of
+them is scope-aware:
+
+| Setting | Question | Scope-aware |
+|---|---|---|
+| `releaseRules` | Does this commit trigger a release? | **Yes** — `docs` releases only for `readme`/`skill`/`skills`/`agents`/`commands` |
+| `presetConfig.types` | Which notes section does it get? | **No** — `docs` → "Documentation", unconditionally |
+
+A `docs(plans)` commit therefore triggers nothing and still earns a Documentation
+section in whatever release does fire. Stage 2 then expands that section into
+prose.
+
+That is not hypothetical. The v3.11.0 notes opened their Documentation section
+with "Plan item I5 is marked complete." `I5` is an initiative label from an
+internal planning document. It reached the public record from commit `3463491`,
+subject `docs(plans): mark I5 complete and scope its residual to reference
+integrity (#801)` — the only commit in `v3.10.2..v3.11.0` mentioning it, and a
+non-releasing one.
+
+The reasoning that failed was: *`docs(plans)` publishes nothing, so its wording is
+internal.* Both halves were individually correct about stage 1 and wrong about the
+pipeline.
+
+### What this means for writing commits
+
+Treat every commit subject, commit body, and PR description that lands between two
+releases as **public prose**. This repo squash-merges with
+`squash_merge_commit_title=COMMIT_OR_PR_TITLE`, so a PR title becomes a commit
+subject, and a PR body becomes stage 2 input.
+
+Before committing or opening a PR, check for internal vocabulary:
+
+```bash
+git log -1 --format='%B' | grep -nEi \
+  'plan item|initiative|\bI[0-9]+\b|wedge|phase [0-9]|unit [0-9]|persona|entry gate'
+```
+
+The fix is not to stop writing informative bodies — stage 2 exists precisely to use
+them. The fix is to write them in the vocabulary of someone who has never read the
+plan: describe the change and its consequence, not the plan coordinate it occupies.
+
+```text
+# Leaks planning taxonomy
+docs(plans): mark I5 complete and scope its residual to reference integrity
+
+# Same commit, public vocabulary
+docs(plans): record model-routing retirement as complete
+```
+
 ## When to Apply
 
 - Whenever a release ships a deprecation cycle, a migration step, a breaking change, or any other audience-facing narrative
 - When validating any release that has more substance than a routine bugfix or dependency bump
 - During release-pipeline monitoring: after the workflow reports success, check `gh release view <tag> --json body --jq '.body'` and verify the narrative is present
+- Before writing any commit subject, body, or PR description — stage 2 will read it if it lands in a release range
 
 ## Examples
 
