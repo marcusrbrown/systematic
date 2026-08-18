@@ -19,6 +19,14 @@ A great plan enables three audiences to act:
 
 Sections earn their place by serving one of these audiences. Omit padding.
 
+## Section ordering
+
+Render the `Prior-Art Survey` as a top-level section after `Context & Research` and before `Key Technical Decisions`. Keep it addressable and separate from general research so downstream review and execution checks can locate the result without interpreting surrounding prose. For qualifying software-work or behavior-changing plans, the section is part of the hard floor; omit it only when planning explicitly records the non-software or mechanical-no-behavior-change exemption.
+
+## Prior-Art Survey rendering
+
+The section must contain exactly one fenced `json` block and no alternate survey result in prose or another code block. Parse that block as JSON and validate it against `skills/ce-plan/references/prior-art-survey-schema.json`; a missing, malformed, schema-invalid, or placeholder block is not a survey result. Preserve the contract's field names, including `schema_version`, `verdict`, `scope`, `freshness`, `budget`, and `candidates`. Each candidate must name what it owns in the code's vocabulary and its disposition. Include `scopes_considered` for an `unscoped` verdict and `acceptance` only when the user accepts an `unscoped` or `unresolved` verdict. An `unscoped` or `unresolved` result without that acceptance record remains a planning blocker, not explanatory prose.
+
 ## Decide whether a plan doc is warranted at all
 
 Not every invocation of `ce:plan` should produce a plan document. For

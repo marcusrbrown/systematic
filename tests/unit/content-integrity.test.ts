@@ -13,10 +13,12 @@ import {
   checkAgentTemperature,
   checkArgumentHint,
   checkBannedPatterns,
+  checkCodemapCompleteness,
   checkContentIntegrity,
   checkDispatchIdentifiers,
   checkFrontmatter,
   checkFrontmatterParseSafety,
+  checkHookParity,
   checkMigratedSkillIdentifiers,
   checkReferenceIntegrity,
   checkRemovedNamesOverlap,
@@ -90,6 +92,29 @@ function writeMigratedSkill(root: string, name: string, body: string): void {
     `---\nname: ${name}\ndescription: Test skill\nmetadata:\n  harness-portability: neutral-v1\n---\n${body}`,
   )
 }
+
+function writePluginEntryPoint(root: string, hooks: readonly string[]): void {
+  const properties = hooks
+    .map((hook) => {
+      const key = /^[a-z_$][a-z0-9_$]*$/i.test(hook) ? hook : `'${hook}'`
+      return `    ${key}: async () => {},`
+    })
+    .join('\n')
+  writeFile(
+    root,
+    'src/index.ts',
+    `const REGISTERED_PLUGIN_HOOKS = [\n${hooks.map((hook) => `  '${hook}',`).join('\n')}\n] as const\n\nconst initializePlugin = async () => {\n  return {\n${properties}\n  }\n}\n`,
+  )
+}
+
+const FIXTURE_PLUGIN_HOOKS = [
+  'config',
+  'tool',
+  'tool.execute.before',
+  'tool.execute.after',
+  'event',
+  'experimental.chat.system.transform',
+] as const
 
 // ---------------------------------------------------------------------------
 
@@ -212,6 +237,26 @@ describe('collectScanTargets', () => {
     }
   })
 
+  test('collects the named root documents for source-checked hook parity', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, 'ARCHITECTURE.md', 'architecture')
+      writeFile(root, 'STRUCTURE.md', 'structure')
+      writeFile(root, 'AGENTS.md', 'agents')
+      writeFile(root, '.github/copilot-instructions.md', 'copilot')
+      writeFile(root, 'docs/not-scanned.md', 'should be excluded')
+
+      expect(collectScanTargets(root).rootDocuments).toEqual([
+        '.github/copilot-instructions.md',
+        'AGENTS.md',
+        'ARCHITECTURE.md',
+        'STRUCTURE.md',
+      ])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   test('skips *.md files under src/ (developer-facing documentation)', () => {
     const root = makeFixtureRepo()
     try {
@@ -221,6 +266,402 @@ describe('collectScanTargets', () => {
       const targets = collectScanTargets(root)
       expect(targets.markdown).not.toContain('src/lib/notes.md')
       expect(targets.typescript).toContain('src/lib/code.ts')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('checkHookParity', () => {
+  test('fails for the pre-fix three-hook claim before source scanning is wired', () => {
+    const root = makeFixtureRepo()
+    try {
+      writePluginEntryPoint(root, FIXTURE_PLUGIN_HOOKS)
+      writeFile(
+        root,
+        'ARCHITECTURE.md',
+        'The plugin registers three hooks:\n' +
+          '- **`config`**\n' +
+          '- **`tool`**\n' +
+          '- **`event`**\n',
+      )
+
+      const violations = checkHookParity(root, ['ARCHITECTURE.md'])
+
+      expect(violations).toHaveLength(1)
+      expect(violations[0]).toMatchObject({
+        file: 'ARCHITECTURE.md',
+        claimedHooks: ['config', 'event', 'tool'],
+        missingHooks: [
+          'experimental.chat.system.transform',
+          'tool.execute.after',
+          'tool.execute.before',
+        ],
+        unregisteredHooks: [],
+      })
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('passes when a document names exactly the registered hooks', () => {
+    const root = makeFixtureRepo()
+    try {
+      writePluginEntryPoint(root, FIXTURE_PLUGIN_HOOKS)
+      writeFile(
+        root,
+        'ARCHITECTURE.md',
+        `The plugin registers these hooks:\n${FIXTURE_PLUGIN_HOOKS.map((hook) => `- **\`${hook}\`**`).join('\n')}\n`,
+      )
+
+      expect(checkHookParity(root, ['ARCHITECTURE.md'])).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('fails when an all-hooks claim enumerates only part of the registered set', () => {
+    const root = makeFixtureRepo()
+    try {
+      writePluginEntryPoint(root, FIXTURE_PLUGIN_HOOKS)
+      writeFile(
+        root,
+        'ARCHITECTURE.md',
+        'The plugin registers all six hooks:\n' +
+          '- **`config`**\n' +
+          '- **`tool`**\n' +
+          '- **`event`**\n',
+      )
+
+      const violations = checkHookParity(root, ['ARCHITECTURE.md'])
+
+      expect(violations).toHaveLength(1)
+      expect(violations[0]?.missingHooks).toEqual([
+        'experimental.chat.system.transform',
+        'tool.execute.after',
+        'tool.execute.before',
+      ])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('uses the complete set for an all-hooks prose claim without hook names', () => {
+    const root = makeFixtureRepo()
+    try {
+      writePluginEntryPoint(root, FIXTURE_PLUGIN_HOOKS)
+      writeFile(
+        root,
+        'STRUCTURE.md',
+        '- `src/index.ts` — plugin factory, registers every OpenCode hook Systematic provides.\n',
+      )
+
+      expect(checkHookParity(root, ['STRUCTURE.md'])).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('uses the typed inventory when hooks are returned through a helper spread', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'src/index.ts',
+        `const REGISTERED_PLUGIN_HOOKS = [\n${FIXTURE_PLUGIN_HOOKS.map((hook) => `  '${hook}',`).join('\n')}\n] as const\n\nconst hooks = {\n  config: async () => {},\n}\n\nconst initializePlugin = async () => {\n  return { ...hooks }\n}\n`,
+      )
+      writeFile(
+        root,
+        'ARCHITECTURE.md',
+        `The plugin registers these hooks:\n${FIXTURE_PLUGIN_HOOKS.map((hook) => `- **\`${hook}\`**`).join('\n')}\n`,
+      )
+
+      expect(checkHookParity(root, ['ARCHITECTURE.md'])).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('fails when a document claims a hook that source does not register', () => {
+    const root = makeFixtureRepo()
+    try {
+      writePluginEntryPoint(root, FIXTURE_PLUGIN_HOOKS)
+      writeFile(
+        root,
+        'ARCHITECTURE.md',
+        'The plugin registers these hooks:\n' +
+          '- **`config`**\n' +
+          '- **`not-a-real-hook`**\n',
+      )
+
+      const violations = checkHookParity(root, ['ARCHITECTURE.md'])
+
+      expect(violations[0]?.unregisteredHooks).toEqual(['not-a-real-hook'])
+      expect(violations[0]?.message).toContain('not-a-real-hook')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('ignores hook discussion that does not assert the registered set', () => {
+    const root = makeFixtureRepo()
+    try {
+      writePluginEntryPoint(root, FIXTURE_PLUGIN_HOOKS)
+      writeFile(
+        root,
+        'ARCHITECTURE.md',
+        'Hooks are implemented in src/index.ts.\n',
+      )
+
+      expect(checkHookParity(root, ['ARCHITECTURE.md'])).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('ignores a fenced hook example that follows the real hook assertion', () => {
+    const root = makeFixtureRepo()
+    try {
+      writePluginEntryPoint(root, FIXTURE_PLUGIN_HOOKS)
+      writeFile(
+        root,
+        'ARCHITECTURE.md',
+        `The plugin registers these hooks:\n${FIXTURE_PLUGIN_HOOKS.map((hook) => `- **\`${hook}\`**`).join('\n')}\n\n` +
+          '```text\n' +
+          'The plugin registers two hooks:\n' +
+          '- `invented.one`\n' +
+          '- `invented.two`\n' +
+          '```\n',
+      )
+
+      expect(checkHookParity(root, ['ARCHITECTURE.md'])).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('ignores a fenced-only hook assertion', () => {
+    const root = makeFixtureRepo()
+    try {
+      writePluginEntryPoint(root, FIXTURE_PLUGIN_HOOKS)
+      writeFile(
+        root,
+        'ARCHITECTURE.md',
+        '```text\n' +
+          'The plugin registers two hooks:\n' +
+          '- `invented.one`\n' +
+          '- `invented.two`\n' +
+          '```\n',
+      )
+
+      expect(checkHookParity(root, ['ARCHITECTURE.md'])).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('ignores a fenced hook example in AGENTS.md without a real assertion', () => {
+    const root = makeFixtureRepo()
+    try {
+      writePluginEntryPoint(root, FIXTURE_PLUGIN_HOOKS)
+      writeFile(
+        root,
+        'AGENTS.md',
+        '```text\n' +
+          'The plugin registers two hooks:\n' +
+          '- `invented.one`\n' +
+          '- `invented.two`\n' +
+          '```\n',
+      )
+
+      expect(checkHookParity(root, ['AGENTS.md'])).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('ignores a blockquoted hook assertion', () => {
+    const root = makeFixtureRepo()
+    try {
+      writePluginEntryPoint(root, FIXTURE_PLUGIN_HOOKS)
+      writeFile(
+        root,
+        'ARCHITECTURE.md',
+        '> The plugin registers two hooks:\n' +
+          '> - `invented.one`\n' +
+          '> - `invented.two`\n',
+      )
+
+      expect(checkHookParity(root, ['ARCHITECTURE.md'])).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('skips a document listed in the explicit exemption set', () => {
+    const root = makeFixtureRepo()
+    try {
+      writePluginEntryPoint(root, FIXTURE_PLUGIN_HOOKS)
+      writeFile(
+        root,
+        'AGENTS.md',
+        'The plugin registers three hooks: `config`.\n',
+      )
+
+      expect(
+        checkHookParity(root, ['AGENTS.md'], new Set(['AGENTS.md'])),
+      ).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('checkContentIntegrity — hook parity wiring', () => {
+  test('surfaces hook parity violations and counts them toward the gate exit status', () => {
+    const root = makeFixtureRepo()
+    try {
+      writePluginEntryPoint(root, FIXTURE_PLUGIN_HOOKS)
+      writeFile(
+        root,
+        'ARCHITECTURE.md',
+        'The plugin registers three hooks:\n' +
+          '- **`config`**\n' +
+          '- **`tool`**\n' +
+          '- **`event`**\n',
+      )
+
+      const result = checkContentIntegrity(root)
+
+      expect(result.hookParityViolations).toHaveLength(1)
+      expect(result.hookParityViolations[0]?.missingHooks).toContain(
+        'tool.execute.before',
+      )
+
+      const proc = Bun.spawnSync(['bun', SCRIPT_PATH, root], {
+        cwd: REPO_ROOT,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+      expect(proc.exitCode).toBe(1)
+      expect(proc.stderr.toString()).toContain('Plugin hook parity violations')
+      expect(proc.stderr.toString()).toContain('tool.execute.before')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('checkCodemapCompleteness', () => {
+  test('passes when every library module is named in the codemap', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, 'src/lib/alpha.ts', 'export const alpha = true\n')
+      writeFile(root, 'src/lib/nested/beta.ts', 'export const beta = true\n')
+      writeFile(
+        root,
+        'ARCHITECTURE.md',
+        '## Codemap\n' +
+          '- `src/lib/alpha.ts` — alpha\n' +
+          '- `src/lib/nested/beta.ts` — beta\n' +
+          '\n## Invariants\n',
+      )
+
+      expect(checkCodemapCompleteness(root)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('reports a module on disk that is absent from the codemap', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, 'src/lib/alpha.ts', 'export const alpha = true\n')
+      writeFile(root, 'ARCHITECTURE.md', '## Codemap\n\n## Invariants\n')
+
+      const violations = checkCodemapCompleteness(root)
+
+      expect(violations).toMatchObject([
+        {
+          kind: 'missing-from-codemap',
+          module: 'src/lib/alpha.ts',
+        },
+      ])
+      expect(violations[0]?.message).toContain('src/lib/alpha.ts')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('reports a codemap entry whose module no longer exists', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'ARCHITECTURE.md',
+        '## Codemap\n- `src/lib/ghost.ts` — deleted\n\n## Invariants\n',
+      )
+
+      const violations = checkCodemapCompleteness(root)
+
+      expect(violations).toMatchObject([
+        {
+          kind: 'missing-on-disk',
+          module: 'src/lib/ghost.ts',
+        },
+      ])
+      expect(violations[0]?.message).toContain('src/lib/ghost.ts')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('skips an excluded module and keeps the exclusion visible in the document', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, 'src/lib/internal.ts', 'export const internal = true\n')
+      const architecture =
+        '## Codemap\n\n' +
+        '## Codemap exclusions\n' +
+        '- `src/lib/internal.ts` — generated compatibility shim, intentionally omitted.\n' +
+        '\n## Invariants\n'
+      writeFile(root, 'ARCHITECTURE.md', architecture)
+
+      expect(checkCodemapCompleteness(root)).toEqual([])
+      expect(
+        fs.readFileSync(path.join(root, 'ARCHITECTURE.md'), 'utf8'),
+      ).toContain('`src/lib/internal.ts`')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('checkContentIntegrity — codemap completeness wiring', () => {
+  test('counts codemap violations and the CLI exits non-zero when an entry is removed', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, 'src/lib/alpha.ts', 'export const alpha = true\n')
+      writePluginEntryPoint(root, FIXTURE_PLUGIN_HOOKS)
+      writeFile(root, 'ARCHITECTURE.md', '## Codemap\n\n## Invariants\n')
+
+      const result = checkContentIntegrity(root)
+
+      expect(result.codemapCompletenessViolations).toHaveLength(1)
+      expect(result.codemapCompletenessViolations[0]?.module).toBe(
+        'src/lib/alpha.ts',
+      )
+
+      const proc = Bun.spawnSync(['bun', SCRIPT_PATH, root], {
+        cwd: REPO_ROOT,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+      expect(proc.exitCode).toBe(1)
+      expect(proc.stderr.toString()).toContain(
+        'Architecture codemap completeness violations',
+      )
+      expect(proc.stderr.toString()).toContain('src/lib/alpha.ts')
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
@@ -3188,9 +3629,28 @@ describe('integration: real repo', () => {
     expect(result.parseSafetyViolations).toEqual([])
     expect(result.agentModeViolations).toEqual([])
     expect(result.agentTemperatureViolations).toEqual([])
+    assertNoViolations(
+      result.hookParityViolations,
+      (v) => {
+        const hv = v as (typeof result.hookParityViolations)[number]
+        return `${hv.file}  ${hv.message}`
+      },
+      'Plugin hook parity violations in repo',
+    )
+    assertNoViolations(
+      result.codemapCompletenessViolations,
+      (v) => {
+        const cv = v as (typeof result.codemapCompletenessViolations)[number]
+        return `${cv.kind}  ${cv.module}  ${cv.message}`
+      },
+      'Architecture codemap completeness violations in repo',
+    )
     expect(result.allowlistWarnings).toEqual([])
     expect(result.scanStats.markdownFiles).toBeGreaterThan(0)
     expect(result.scanStats.typescriptFiles).toBeGreaterThan(0)
+    expect(result.hookParityViolations).toEqual([])
+    expect(result.codemapCompletenessViolations).toEqual([])
+    expect(result.scanStats.rootDocuments).toBeGreaterThan(0)
   })
 })
 

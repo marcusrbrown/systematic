@@ -226,14 +226,17 @@ Prepare a concise planning context summary (a paragraph or two) to pass as input
 
 Run these agents in parallel:
 
-- Dispatch `systematic:research:repo-research-analyst` — scope: technology, architecture, patterns; pass the planning context summary.
+- Dispatch `systematic:research:repo-research-analyst` — scope: technology, architecture, patterns, prior-art; pass the planning context summary to the technology, architecture, and patterns scopes. For the prior-art scope, pass only the independently stated concern — its trigger, effect, state, and integration boundary — plus the classified plan depth, rather than the planning context summary or proposed solution. Skip the prior-art scope for explicitly non-software planning and mechanical work that changes no behavior; make that exemption decision here at dispatch.
 - Dispatch `systematic:research:learnings-researcher` — pass the planning context summary.
 Collect:
 - Technology stack and versions (used in section 1.2 to make sharper external research decisions)
 - Architectural patterns and conventions to follow
 - Implementation patterns, relevant files, modules, and tests
+- Prior-art survey result: schema version, verdict, surveyed scope and freshness record, bounded budget, candidate ownership and dispositions, and any recorded acceptance
 - AGENTS.md guidance that materially affects the plan, with AGENTS.md used only as compatibility fallback when present
 - Institutional learnings from `docs/solutions/`
+
+When the prior-art scope runs, apply its verdict before continuing planning: an `unscoped` or `unresolved` result stops planning until the scope narrows, the budget rises, or the user explicitly accepts the uncertainty. Record that acceptance in the Prior-Art Survey section. In a run with no user present, either verdict fails the run rather than proceeding.
 
 **Slack context** (opt-in) — never auto-dispatch. Route by condition:
 
@@ -552,6 +555,43 @@ deepened: YYYY-MM-DD  # optional, set when the confidence check substantively st
 
 - [Relevant external docs or best-practice source, if used]
 
+## Prior-Art Survey
+
+Include this section for every qualifying software-work or behavior-changing plan. Omit it only when Phase 1.1 explicitly applies the non-software or mechanical-no-behavior-change exemption. The section must contain exactly one fenced `json` block, and that block must validate against `references/prior-art-survey-schema.json`. Preserve the survey's schema-conforming structured result, including the schema version, verdict, surveyed scope, freshness record, bounded budget, candidate ownership and dispositions, and the acceptance record when present. A plan containing prose, placeholders, a missing block, multiple blocks, or a malformed/schema-invalid block is not compliant.
+
+Omit `scopes_considered` unless the verdict is `unscoped`, and omit `acceptance` unless the user has accepted an `unscoped` or `unresolved` verdict.
+
+```json
+{
+  "schema_version": 1,
+  "verdict": "reuse | extend | build-new-within-scope | unscoped | unresolved",
+  "scope": "<workspace or subtree searched>",
+  "freshness": {
+    "vcs_reference": "<VCS reference for the surveyed scope, when available>",
+    "scope_baseline": "<portable digest or baseline for the surveyed scope when VCS is unavailable>"
+  },
+  "budget": {
+    "max_search_passes": 1,
+    "max_candidate_inspections": 1,
+    "exhausted": false
+  },
+  "candidates": [
+    {
+      "path_or_symbol": "<repository-relative path or source symbol>",
+      "description": "<what it owns in the code's vocabulary>",
+      "disposition": "reuse | extend | insufficient | undispositioned",
+      "insufficiency_reason": "<required when verdict is build-new-within-scope>"
+    }
+  ],
+  "scopes_considered": ["<required for an unscoped verdict>"],
+  "acceptance": {
+    "accepted_by_user": true,
+    "accepted_verdict": "unscoped | unresolved",
+    "reason": "<what the user accepted and why planning may proceed>"
+  }
+}
+```
+
 ## Key Technical Decisions
 
 - [Decision]: [Rationale]
@@ -697,7 +737,7 @@ For larger `Deep` plans, extend the core template only when useful with sections
 
 Compose the plan using two paired references:
 
-- `references/plan-sections.md` — the section contract. Describes what the plan contains: the outcome the plan must enable for downstream consumers, the hard floor (Summary, Problem Frame, Requirements, KTDs, Implementation Units), the include-when-material catalog (HTD, Scope Boundaries, Open Questions, System-Wide Impact, Risks & Dependencies, Acceptance Examples, Documentation/Operational Notes, Sources & Research), the agency-driven escape hatch (introduce new sections when content warrants), and the ID/content rules.
+- `references/plan-sections.md` — the section contract. Describes what the plan contains: the outcome the plan must enable for downstream consumers, the hard floor (Summary, Problem Frame, Requirements, Prior-Art Survey, KTDs, Implementation Units), the include-when-material catalog (HTD, Scope Boundaries, Open Questions, System-Wide Impact, Risks & Dependencies, Acceptance Examples, Documentation/Operational Notes, Sources & Research), the agency-driven escape hatch (introduce new sections when content warrants), and the ID/content rules.
 - `references/markdown-rendering.md` — how to present the sections in markdown (table-vs-prose by content shape, ID prefix format, diagram rendering, etc.).
 
 The section catalog is the same regardless of plan depth. Format-specific principles live in the rendering reference. The Core Plan Template above (Section 4.2) is the canonical content authority — `plan-sections.md` is a rendering/ordering layer that describes how sections present, not which sections exist.

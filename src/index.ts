@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
-import type { Plugin, PluginInput } from '@opencode-ai/plugin'
+import type { Hooks, Plugin, PluginInput } from '@opencode-ai/plugin'
 import {
   applyBootstrapContent,
   getBootstrapContent,
@@ -21,6 +21,22 @@ import {
 } from './lib/opencode-workflow-guard.js'
 import { createReceiptClassifier } from './lib/receipt-classifier.js'
 import { createSkillTool } from './lib/skill-tool.js'
+
+// Keep this local because OpenCode's plugin loader requires a default export
+// only. The content-integrity gate reads this typed inventory instead of
+// inferring hooks from the returned object shape.
+const REGISTERED_PLUGIN_HOOKS = [
+  'config',
+  'tool',
+  'tool.execute.before',
+  'tool.execute.after',
+  'event',
+  'experimental.chat.system.transform',
+] as const satisfies readonly (keyof Hooks)[]
+
+type RegisteredPluginHooks = Required<
+  Pick<Hooks, (typeof REGISTERED_PLUGIN_HOOKS)[number]>
+>
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 
@@ -142,7 +158,7 @@ const initializePlugin = async ({
     })(),
   })
 
-  return {
+  const hooks: RegisteredPluginHooks = {
     config: configHandler,
 
     tool: {
@@ -238,6 +254,8 @@ const initializePlugin = async ({
       }
     },
   }
+
+  return hooks
 }
 
 const SystematicPlugin: Plugin = async (input) => {

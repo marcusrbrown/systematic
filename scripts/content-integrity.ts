@@ -36,7 +36,7 @@
  * number satisfies this invariant.
  *
  * 8. **Skill argument-hint** — bundled skills whose body references the literal
- *    `$ARGUMENTS` outside fenced code blocks must declare a non-empty
+ *    `$ARGUMENTS` outside fenced code blocks or blockquotes must declare a non-empty
  *    `argument-hint` field in frontmatter. Fenced code blocks are stripped before
  *    scanning so skills that only document the placeholder are not flagged.
  *
@@ -44,17 +44,31 @@
  *    a bundled agent stem, and inline-code near-misses of bundled agent stems
  *    are rejected. Bundled examples must name agents this package ships.
  *
+ * 10. **Plugin hook parity** — named contributor-facing root documents that
+ *     assert the registered hook set must match the keys returned by the plugin
+ *     entry point.
+ *
+ * 11. **Architecture codemap completeness** — every TypeScript module directly
+ *     under `src/lib/` must appear in the `ARCHITECTURE.md` codemap or in its
+ *     visible codemap-exclusion list, and every codemap entry must resolve to a
+ *     module on disk.
+ *
  * 13. **Migrated skill identifiers** — skills marked
  *     `metadata['harness-portability'] === 'neutral-v1'` must use neutral
  *     lexical vocabulary; exact harness syntax belongs in the harness profiles.
  *
  * Scope is narrow by design: `skills/**\/*.md`, `agents/**\/*.md`, and
- * `src/**\/*.ts` for the full invariant suite. Additionally, `docs/solutions/**\/*.md`
- * is scanned for frontmatter parse-safety only (flags any unquoted inline comment —
- * whitespace-before-`#` or value-start `#` — in frontmatter; remediation is to quote
- * the value or remove the comment). The gate does not scan `.opencode/`, `.github/`,
- * `dist/`, `node_modules/`, `registry/`, or markdown files under `src/` —
- * those intentionally contain historical or documented CC/CEP references.
+ * `src/**\/*.ts` for the full invariant suite. The named root documents
+ * `ARCHITECTURE.md`, `STRUCTURE.md`, `AGENTS.md`, and
+ * `.github/copilot-instructions.md` are additionally scanned for plugin hook
+ * parity because they are contributor-facing inventories of the system's
+ * registered surface; they are not merged into the full markdown scan.
+ * Additionally, `docs/solutions/**\/*.md` is scanned for frontmatter parse-safety
+ * only (flags any unquoted inline comment — whitespace-before-`#` or value-start
+ * `#` — in frontmatter; remediation is to quote the value or remove the comment).
+ * The gate does not scan `.opencode/`, `dist/`, `node_modules/`, `registry/`, or
+ * markdown files under `src/` — those intentionally contain historical or
+ * documented CC/CEP references.
  * Solution docs are intentionally excluded from banned-pattern enforcement
  * because historical docs may legitimately reference CC/CEP terms.
  *
@@ -281,6 +295,21 @@ export interface RemovedNamesOverlapViolation {
   message: string
 }
 
+export interface HookParityViolation {
+  file: string
+  claimedHooks: string[]
+  actualHooks: string[]
+  missingHooks: string[]
+  unregisteredHooks: string[]
+  message: string
+}
+
+export interface CodemapCompletenessViolation {
+  kind: 'missing-from-codemap' | 'missing-on-disk'
+  module: string
+  message: string
+}
+
 export interface CheckResult {
   rootDir: string
   categories: string[]
@@ -300,11 +329,14 @@ export interface CheckResult {
   argumentHintViolations: ArgumentHintViolation[]
   migratedSkillIdentifierViolations: MigratedSkillIdentifierViolation[]
   removedNamesOverlapViolations: RemovedNamesOverlapViolation[]
+  hookParityViolations: HookParityViolation[]
+  codemapCompletenessViolations: CodemapCompletenessViolation[]
   exemptHits: ExemptHit[]
   scanStats: {
     markdownFiles: number
     typescriptFiles: number
     solutionMarkdownFiles: number
+    rootDocuments: number
   }
 }
 
@@ -539,7 +571,27 @@ export interface ScanTargets {
   markdown: string[] // repo-relative paths under skills/ and agents/
   typescript: string[] // repo-relative paths under src/ (excluding markdown)
   solutionMarkdown: string[] // repo-relative paths under docs/solutions/ (parse-safety only)
+  rootDocuments: string[] // named contributor-facing root docs (hook parity only)
 }
+
+export const HOOK_PARITY_DOCUMENTS = [
+  'ARCHITECTURE.md',
+  'STRUCTURE.md',
+  'AGENTS.md',
+  '.github/copilot-instructions.md',
+] as const
+
+// Keep exemptions explicit. The current named documents all assert the
+// registered set; a legitimate hook discussion without that assertion is
+// simply ignored by the claim extractor and needs no exemption entry.
+export const HOOK_PARITY_EXEMPTIONS: ReadonlySet<string> = new Set()
+
+export const CODEMAP_DOCUMENT = 'ARCHITECTURE.md'
+export const CODEMAP_EXCLUSION_HEADING = '## Codemap exclusions'
+
+const HOOK_ASSERTION_REGEX =
+  /\b(?:registers?|exposes?)\b(?:[^\n]*\n){0,2}?\s*(?:these|every|all|one|two|three|four|five|six|seven|eight|nine|ten|\d+)(?:\s+(?:one|two|three|four|five|six|seven|eight|nine|ten|\d+))?\s+(?:OpenCode\s+)?hooks?\b/i
+const INLINE_HOOK_REGEX = /`([^`\n]+)`/g
 
 /**
  * Collect the files the gate scans. Paths are repo-relative for consistent
@@ -591,10 +643,19 @@ export function collectScanTargets(rootDir: string): ScanTargets {
     }
   }
 
+  const rootDocuments = HOOK_PARITY_DOCUMENTS.filter((relPath) =>
+    fs.existsSync(path.join(rootDir, relPath)),
+  )
+
   markdown.sort()
   typescript.sort()
   solutionMarkdown.sort()
-  return { markdown, typescript, solutionMarkdown }
+  return {
+    markdown,
+    typescript,
+    solutionMarkdown,
+    rootDocuments: [...rootDocuments].sort(),
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1358,6 +1419,255 @@ export function checkDispatchIdentifiers(
   return violations
 }
 
+function extractHookClaim(
+  content: string,
+  actualHooks: readonly string[],
+): string[] | null {
+  const contentWithoutAssertions = stripMarkdownNonAssertions(content)
+  const assertion = contentWithoutAssertions.match(HOOK_ASSERTION_REGEX)
+  if (!assertion || assertion.index === undefined) return null
+
+  const assertionSection = extractHookAssertionSection(
+    contentWithoutAssertions,
+    assertion.index,
+  )
+  const claimedHooks = extractClaimedHookNames(assertionSection)
+  const namesRegisteredBySource = claimedHooks.filter((hook) =>
+    actualHooks.includes(hook),
+  )
+
+  if (
+    /\b(?:every|all)\b[\s\S]{0,30}\bhooks?\b/i.test(assertion[0]) &&
+    namesRegisteredBySource.length === 0
+  ) {
+    return [...actualHooks]
+  }
+
+  return claimedHooks
+}
+
+function extractHookAssertionSection(content: string, start: number): string {
+  const afterAssertion = content.slice(start)
+  const nextHeading = afterAssertion.search(/\n#{1,6}\s/)
+  return nextHeading >= 0
+    ? afterAssertion.slice(0, nextHeading)
+    : afterAssertion
+}
+
+function extractHookBulletLines(section: string): string[] {
+  const bulletLines: string[] = []
+  let collectingBullets = false
+  for (const line of section.split('\n')) {
+    if (/^\s*[-*]\s+/.test(line)) {
+      collectingBullets = true
+      bulletLines.push(line)
+      continue
+    }
+    if (collectingBullets && line.trim() === '') break
+  }
+  return bulletLines
+}
+
+function extractClaimedHookNames(section: string): string[] {
+  const bulletLines = extractHookBulletLines(section)
+  const claimed = new Set<string>()
+  if (bulletLines.length > 0) {
+    for (const line of bulletLines) {
+      const inline = line.match(/`([^`\n]+)`/)
+      const hook =
+        inline?.[1]?.trim() ??
+        line.match(/^\s*[-*]\s+(?:\*\*)?([A-Za-z][\w.-]*)/)?.[1]?.trim()
+      if (hook) claimed.add(hook)
+    }
+  } else {
+    for (const match of section.matchAll(INLINE_HOOK_REGEX)) {
+      const hook = match[1]?.trim()
+      if (hook) claimed.add(hook)
+    }
+  }
+
+  return [...claimed].sort()
+}
+
+function extractRegisteredPluginHooks(rootDir: string): string[] {
+  const source = readFileSafe(path.join(rootDir, 'src', 'index.ts'))
+  if (source === null) {
+    throw new Error('Unable to read plugin entry point at src/index.ts')
+  }
+
+  const inventoryMatch = source.match(
+    /const\s+REGISTERED_PLUGIN_HOOKS\s*=\s*\[([\s\S]*?)\]\s+as\s+const\b/,
+  )
+  if (!inventoryMatch) {
+    throw new Error(
+      'Unable to locate REGISTERED_PLUGIN_HOOKS in src/index.ts while checking hook parity',
+    )
+  }
+
+  const inventoryBody = inventoryMatch[1] ?? ''
+  const hooks = new Set<string>()
+  for (const match of inventoryBody.matchAll(/(['"])([^'"\n]+)\1/g)) {
+    const hook = match[2]
+    if (hook) hooks.add(hook)
+  }
+
+  if (hooks.size === 0) {
+    throw new Error(
+      'Unable to derive plugin hooks from REGISTERED_PLUGIN_HOOKS in src/index.ts',
+    )
+  }
+  return [...hooks].sort()
+}
+
+export function checkHookParity(
+  rootDir: string,
+  documentFiles: readonly string[] = HOOK_PARITY_DOCUMENTS,
+  exemptDocuments: ReadonlySet<string> = HOOK_PARITY_EXEMPTIONS,
+): HookParityViolation[] {
+  const documents = documentFiles.filter(
+    (relPath) =>
+      !exemptDocuments.has(relPath) &&
+      fs.existsSync(path.join(rootDir, relPath)),
+  )
+  if (documents.length === 0) return []
+
+  const actualHooks = extractRegisteredPluginHooks(rootDir)
+  const violations: HookParityViolation[] = []
+
+  for (const file of documents) {
+    const content = readFileSafe(path.join(rootDir, file))
+    if (content === null) continue
+
+    const claimedHooks = extractHookClaim(content, actualHooks)
+    if (claimedHooks === null) continue
+
+    const missingHooks = actualHooks.filter(
+      (hook) => !claimedHooks.includes(hook),
+    )
+    const unregisteredHooks = claimedHooks.filter(
+      (hook) => !actualHooks.includes(hook),
+    )
+    if (missingHooks.length === 0 && unregisteredHooks.length === 0) continue
+
+    const problems = [
+      missingHooks.length > 0
+        ? `missing registered hooks: ${missingHooks.join(', ')}`
+        : '',
+      unregisteredHooks.length > 0
+        ? `unregistered hooks: ${unregisteredHooks.join(', ')}`
+        : '',
+    ].filter(Boolean)
+    violations.push({
+      file,
+      claimedHooks,
+      actualHooks: [...actualHooks],
+      missingHooks,
+      unregisteredHooks,
+      message:
+        `${file} claims hooks [${claimedHooks.join(', ')}], but src/index.ts ` +
+        `registers [${actualHooks.join(', ')}]; ${problems.join('; ')}`,
+    })
+  }
+
+  return violations
+}
+
+function extractArchitectureSection(
+  content: string,
+  heading: string,
+): string | null {
+  const headingIndex = content.indexOf(heading)
+  if (headingIndex < 0) return null
+
+  const sectionStart = headingIndex + heading.length
+  const nextHeading = content.slice(sectionStart).search(/^##\s+/m)
+  return nextHeading < 0
+    ? content.slice(sectionStart)
+    : content.slice(sectionStart, sectionStart + nextHeading)
+}
+
+function extractCodemapExclusionSection(content: string): string {
+  return extractArchitectureSection(content, CODEMAP_EXCLUSION_HEADING) ?? ''
+}
+
+function extractCodemapModules(content: string): string[] {
+  const codemapSection = extractArchitectureSection(content, '## Codemap')
+  if (codemapSection === null) return []
+
+  const exclusionSection = extractCodemapExclusionSection(codemapSection)
+  const codemapOnly = codemapSection.replace(exclusionSection, '')
+  const modules = new Set<string>()
+  const moduleRegex = /`?(src\/lib\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*\.ts)`?/g
+  for (const match of codemapOnly.matchAll(moduleRegex)) {
+    const module = match[1]
+    if (module) modules.add(module)
+  }
+  return [...modules].sort()
+}
+
+function extractCodemapExclusions(content: string): Set<string> {
+  const section = extractCodemapExclusionSection(content)
+  const exclusions = new Set<string>()
+  const moduleRegex = /`?(src\/lib\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*\.ts)`?/g
+  for (const match of section.matchAll(moduleRegex)) {
+    const module = match[1]
+    if (module) exclusions.add(module)
+  }
+  return exclusions
+}
+
+function collectLibModules(rootDir: string): string[] {
+  const libDir = path.join(rootDir, 'src', 'lib')
+  if (!fs.existsSync(libDir)) return []
+
+  return walkDir(libDir, {
+    maxDepth: 10,
+    filter: (entry) => !entry.isDirectory && entry.name.endsWith('.ts'),
+  })
+    .map((entry) => path.relative(rootDir, entry.path))
+    .sort()
+}
+
+export function checkCodemapCompleteness(
+  rootDir: string,
+  architectureFile = CODEMAP_DOCUMENT,
+): CodemapCompletenessViolation[] {
+  const architecturePath = path.join(rootDir, architectureFile)
+  const content = readFileSafe(architecturePath)
+  if (content === null) return []
+
+  const onDisk = collectLibModules(rootDir)
+  const codemap = extractCodemapModules(content)
+  const exclusions = extractCodemapExclusions(content)
+  const codemapSet = new Set(codemap)
+  const onDiskSet = new Set(onDisk)
+  const violations: CodemapCompletenessViolation[] = []
+
+  for (const module of onDisk) {
+    if (exclusions.has(module) || codemapSet.has(module)) continue
+    violations.push({
+      kind: 'missing-from-codemap',
+      module,
+      message:
+        `${module} exists on disk but is absent from ${architectureFile}'s ` +
+        `Codemap. Add it or list it in the visible "Codemap exclusions" section.`,
+    })
+  }
+
+  for (const module of codemap) {
+    if (exclusions.has(module) || onDiskSet.has(module)) continue
+    violations.push({
+      kind: 'missing-on-disk',
+      module,
+      message:
+        `${architectureFile}'s Codemap names ${module}, but no such module ` +
+        'exists on disk. Remove the stale entry.',
+    })
+  }
+
+  return violations
+}
+
 /**
  * Strip fenced code blocks (``` or ~~~) from a markdown body string.
  * Returns the body with all fenced regions replaced by empty strings so that
@@ -1372,10 +1682,19 @@ function stripFencedCodeBlocks(body: string): string {
 }
 
 /**
+ * Strip markdown regions that are not the document author's own assertions.
+ * Fenced blocks are examples, and blockquotes are quoted prose.
+ */
+function stripMarkdownNonAssertions(body: string): string {
+  return stripFencedCodeBlocks(body).replace(/^[ \t]*>[^\n]*(?:\n|$)/gm, '')
+}
+
+/**
  * Check that every bundled skill whose body references the literal `$ARGUMENTS`
- * outside fenced code blocks also declares a non-empty `argument-hint` field in
- * its frontmatter. Skills that only document `$ARGUMENTS` inside code fences are
- * not flagged -- the fence-stripping pass removes those occurrences first.
+ * outside fenced code blocks or blockquotes also declares a non-empty
+ * `argument-hint` field in its frontmatter. Skills that only document
+ * `$ARGUMENTS` inside code fences or blockquotes are not flagged -- the
+ * non-assertion stripping pass removes those occurrences first.
  */
 export function checkArgumentHint(
   rootDir: string,
@@ -1390,7 +1709,7 @@ export function checkArgumentHint(
     const parsed = parseFrontmatter(content)
     if (!isRecord(parsed.data)) continue
 
-    const strippedBody = stripFencedCodeBlocks(parsed.body)
+    const strippedBody = stripMarkdownNonAssertions(parsed.body)
     if (!strippedBody.includes('$ARGUMENTS')) continue
 
     const hint = parsed.data['argument-hint']
@@ -1399,7 +1718,7 @@ export function checkArgumentHint(
     violations.push({
       file: relPath,
       message:
-        `Skill body references \`$ARGUMENTS\` outside fenced code blocks but frontmatter is missing a non-empty \`argument-hint\` field. ` +
+        `Skill body references \`$ARGUMENTS\` outside fenced code blocks or blockquotes but frontmatter is missing a non-empty \`argument-hint\` field. ` +
         `Add \`argument-hint: "<description>"\` to the frontmatter so callers know what to pass.`,
     })
   }
@@ -1763,6 +2082,8 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     BUNDLED_AGENT_NAMES,
     BUNDLED_AGENT_QUALIFIED_IDS,
   )
+  const hookParityViolations = checkHookParity(rootDir, targets.rootDocuments)
+  const codemapCompletenessViolations = checkCodemapCompleteness(rootDir)
   const { hits: bannedPatterns, exempt: exemptHits } = checkBannedPatterns(
     rootDir,
     allScannedFiles,
@@ -1788,11 +2109,14 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     argumentHintViolations,
     migratedSkillIdentifierViolations,
     removedNamesOverlapViolations,
+    hookParityViolations,
+    codemapCompletenessViolations,
     exemptHits,
     scanStats: {
       markdownFiles: targets.markdown.length,
       typescriptFiles: targets.typescript.length,
       solutionMarkdownFiles: targets.solutionMarkdown.length,
+      rootDocuments: targets.rootDocuments.length,
     },
   }
 }
@@ -1843,12 +2167,15 @@ function printResult(result: CheckResult, verbose: boolean): void {
     result.migratedSkillIdentifierViolations,
   )
   printRemovedNamesOverlapViolations(result.removedNamesOverlapViolations)
+  printHookParityViolations(result.hookParityViolations)
+  printCodemapCompletenessViolations(result.codemapCompletenessViolations)
 
   if (totalViolations(result) === 0) {
     process.stdout.write(
       `content-integrity: clean (${result.scanStats.markdownFiles} md + ` +
         `${result.scanStats.typescriptFiles} ts + ` +
-        `${result.scanStats.solutionMarkdownFiles} solution-md scanned, ` +
+        `${result.scanStats.solutionMarkdownFiles} solution-md + ` +
+        `${result.scanStats.rootDocuments} root docs scanned, ` +
         `${result.exemptHits.length} exempt hits, ` +
         `${result.allowlistWarnings.length} warnings)\n`,
     )
@@ -1857,7 +2184,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
   if (verbose) {
     process.stdout.write(
       `\ncategories: ${result.categories.join(', ')}\n` +
-        `scanStats: ${result.scanStats.markdownFiles} md + ${result.scanStats.typescriptFiles} ts + ${result.scanStats.solutionMarkdownFiles} solution-md\n` +
+        `scanStats: ${result.scanStats.markdownFiles} md + ${result.scanStats.typescriptFiles} ts + ${result.scanStats.solutionMarkdownFiles} solution-md + ${result.scanStats.rootDocuments} root docs\n` +
         `frontmatterViolations: ${result.frontmatterViolations.length}\n` +
         `parseSafetyViolations: ${result.parseSafetyViolations.length}\n` +
         `agentModelViolations: ${result.agentModelViolations.length}\n` +
@@ -1865,6 +2192,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
         `agentColorViolations: ${result.agentColorViolations.length}\n` +
         `agentStemViolations: ${result.agentStemViolations.length}\n` +
         `dispatchIdentifierViolations: ${result.dispatchIdentifierViolations.length}\n` +
+        `hookParityViolations: ${result.hookParityViolations.length}\n` +
         `exemptHits: ${result.exemptHits.length}\n`,
     )
   }
@@ -2036,6 +2364,30 @@ function printRemovedNamesOverlapViolations(
   }
 }
 
+function printHookParityViolations(
+  violations: readonly HookParityViolation[],
+): void {
+  if (violations.length === 0) return
+  process.stderr.write(
+    `\nPlugin hook parity violations (${violations.length}):\n`,
+  )
+  for (const violation of violations) {
+    process.stderr.write(`  ${violation.message}\n`)
+  }
+}
+
+function printCodemapCompletenessViolations(
+  violations: readonly CodemapCompletenessViolation[],
+): void {
+  if (violations.length === 0) return
+  process.stderr.write(
+    `\nArchitecture codemap completeness violations (${violations.length}):\n`,
+  )
+  for (const violation of violations) {
+    process.stderr.write(`  [${violation.kind}] ${violation.message}\n`)
+  }
+}
+
 function totalViolations(result: CheckResult): number {
   return (
     result.phantomRefs.length +
@@ -2052,7 +2404,9 @@ function totalViolations(result: CheckResult): number {
     result.agentTemperatureViolations.length +
     result.argumentHintViolations.length +
     result.migratedSkillIdentifierViolations.length +
-    result.removedNamesOverlapViolations.length
+    result.removedNamesOverlapViolations.length +
+    result.hookParityViolations.length +
+    result.codemapCompletenessViolations.length
   )
 }
 
