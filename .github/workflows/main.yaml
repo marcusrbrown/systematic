@@ -193,6 +193,11 @@ jobs:
       # `inputs.dry-run && 'true'` evaluates truthy even when the caller passes
       # false. Compare against the string explicitly rather than relying on
       # truthiness.
+      #
+      # This value is the only gate on the dry-run flag. Do not add a step that
+      # overrides it for the default branch: semantic-release already refuses to
+      # publish from anywhere its own `branches` config does not allow, and an
+      # override here silently turns a requested dry run into a real release.
       DRY_RUN: ${{ (github.event_name == 'pull_request' || github.event.inputs.dry-run == 'true') && 'true' || 'false' }}
     name: Release
     needs: [build, typecheck, lint, test]
