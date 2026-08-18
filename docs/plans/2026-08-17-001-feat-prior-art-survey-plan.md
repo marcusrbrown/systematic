@@ -1,7 +1,7 @@
 ---
 title: Prior-art survey in planning, and source-checked orientation documents
 type: feat
-status: active
+status: completed
 date: 2026-08-17
 origin: docs/brainstorms/2026-08-17-grounding-planning-in-existing-code-requirements.md
 ---
@@ -149,7 +149,7 @@ accepted_by_user:  <present only when an unscoped/unresolved verdict was accepte
 
 ## Implementation Units
 
-- [ ] **Unit 1: Add the prior-art scope to the research agent**
+- [x] **Unit 1: Add the prior-art scope to the research agent**
 
 **Goal:** The research agent gains a seventh scope that performs a concern-anchored prior-art survey, and its authority ordering stops preferring documentation over source.
 
@@ -182,7 +182,7 @@ accepted_by_user:  <present only when an unscoped/unresolved verdict was accepte
 
 ---
 
-- [ ] **Unit 2: Define the survey output contract and its schema**
+- [x] **Unit 2: Define the survey output contract and its schema**
 
 **Goal:** The survey's verdict is machine-checkable at the consumer boundary rather than described only in prose.
 
@@ -223,7 +223,7 @@ accepted_by_user:  <present only when an unscoped/unresolved verdict was accepte
 
 ---
 
-- [ ] **Unit 3: Wire the survey into planning and the plan document**
+- [x] **Unit 3: Wire the survey into planning and the plan document**
 
 **Goal:** Planning dispatches the survey on every qualifying run, and its result lands in a required plan section.
 
@@ -259,7 +259,7 @@ accepted_by_user:  <present only when an unscoped/unresolved verdict was accepte
 
 ---
 
-- [ ] **Unit 4: Plan review validates the survey against source**
+- [x] **Unit 4: Plan review validates the survey against source**
 
 **Goal:** The reviewer that already asks whether an equivalent exists now checks the survey's specific claims rather than accepting them.
 
@@ -288,7 +288,7 @@ accepted_by_user:  <present only when an unscoped/unresolved verdict was accepte
 
 ---
 
-- [ ] **Unit 5: Work execution refuses an unsatisfied survey**
+- [x] **Unit 5: Work execution refuses an unsatisfied survey**
 
 **Goal:** Work does not begin on a plan whose survey is empty, carries an unaccepted failure verdict, or has gone stale.
 
@@ -319,7 +319,7 @@ accepted_by_user:  <present only when an unscoped/unresolved verdict was accepte
 
 ---
 
-- [ ] **Unit 6: Widen the integrity gate and check hook parity**
+- [x] **Unit 6: Widen the integrity gate and check hook parity**
 
 **Goal:** The gate covers named root documents and fails when their claimed plugin hook set disagrees with source.
 
@@ -357,7 +357,7 @@ accepted_by_user:  <present only when an unscoped/unresolved verdict was accepte
 
 ---
 
-- [ ] **Unit 7: Check codemap completeness**
+- [x] **Unit 7: Check codemap completeness**
 
 **Goal:** A module cannot land in the library without appearing in the architecture document's codemap or an explicit exclusion.
 
