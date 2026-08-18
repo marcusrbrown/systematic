@@ -1,7 +1,7 @@
 ---
-title: Generated-artifact drift when a skill or agent description changes
+title: Generated-artifact drift when bundled skill or agent content changes
 date: 2026-05-20
-last_updated: 2026-08-16
+last_updated: 2026-08-18
 category: workflow-issues
 module: registry
 problem_type: workflow_issue
@@ -10,6 +10,8 @@ severity: medium
 applies_when:
   - Editing a SKILL.md description field
   - Editing an agent frontmatter description field
+  - Editing the body of a bundled skill or agent, not only its frontmatter
+  - Adding, removing, or renaming a file under a skill's references directory
   - Running the build without also running registry or Pi fixture generation
   - CI fails on a drift check after an otherwise clean build
 tags:
@@ -17,18 +19,30 @@ tags:
   - drift
   - skill-description
   - agent-description
+  - skill-body
+  - generated-artifacts
   - generate-registry
   - pi-subagents
   - ci-gate
 ---
 
-# Generated-artifact drift when a skill or agent description changes
+# Generated-artifact drift when bundled skill or agent content changes
 
 ## Context
 
 `scripts/generate-registry.ts` reads each skill's frontmatter `description` into `registry/registry.jsonc`. The CI "Registry drift check" step (`bun scripts/generate-registry.ts --check`) compares the generated output against the committed file and fails if they differ. `bun run build` does not include registry generation, so a description change that passes `build` + `typecheck` + `lint` + `test` locally will fail CI.
 
 **Agent descriptions reach a second generated surface.** Personas listed in `CURATED_PERSONAS` (`src/lib/pi-subagents-personas.ts`) are also exported as committed Pi fixtures under `tests/fixtures/pi-subagents-personas/`, which embed the description verbatim. That surface has its own source-side drift gate, run as `bun scripts/generate-pi-subagents-personas.ts --check`. It is not covered by `registry:drift` and has no npm script alias, so it is the easier of the two to miss — editing one agent description turned a four-file change into eight.
+
+### The trigger is any bundled-content edit, not only a description
+
+Descriptions are the most common cause, not the only one. Two broader triggers reach the same generated surfaces:
+
+**A body edit drifts the Pi fixtures.** The Pi export embeds the full persona text, not just its metadata, so editing an agent's body — with frontmatter untouched — still changes the generated fixture. A branch that added a research scope to one agent's body left `tests/fixtures/pi-subagents-personas/` stale while every targeted test passed; it surfaced only when the full unit suite ran.
+
+**A new file under a skill's `references/` drifts the registry.** The generator walks each skill directory recursively and records a per-component file list, so adding a reference file changes registry output even when no description moved. On the same branch this produced seven test failures plus a `registry:drift` failure, all from one added schema file.
+
+Both are invisible to targeted tests by construction: the drift is between committed generated output and source, and a test that exercises the generator does not compare its output to what is checked in.
 
 ## Guidance
 
@@ -44,7 +58,7 @@ Then commit the updated `registry/registry.jsonc` alongside the skill change. Th
 bun run build && bun run typecheck && bun run lint && bun test tests/unit && bun scripts/generate-registry.ts --check
 ```
 
-For an **agent** description change, regenerate and check both surfaces:
+For an **agent** change of any kind — description or body — and for any change to a skill's file set, regenerate and check both surfaces:
 
 ```bash
 bun scripts/generate-registry.ts
