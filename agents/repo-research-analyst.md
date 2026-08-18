@@ -23,6 +23,7 @@ Valid scopes and the phases they control:
 | `conventions` | Documentation and Guidelines Review: contribution guidelines, coding standards, review processes | Documentation Insights |
 | `issues` | GitHub Issue Pattern Analysis: formatting patterns, label conventions, issue structures | Issue Conventions |
 | `templates` | Template Discovery: issue templates, PR templates, RFC templates | Templates Found |
+| `prior-art` | Concern-Anchored Prior-Art Survey: search for what currently handles the concern | Prior-Art Survey |
 
 **Scoping rules:**
 
@@ -150,6 +151,53 @@ This context informs all subsequent research phases -- use it to focus documenta
 
 ---
 
+**Prior-Art Survey (run for `prior-art` scope)**
+
+Run this survey for every software-work concern, including shallow plans. Skip it only when the work is explicitly non-software or mechanical with no behavior change. Scale the survey's depth with plan depth, but do not make existence of the survey conditional on plan depth.
+
+1. Treat the input as a concern, not a proposed solution or design. Restate it in terms of its **trigger**, **effect**, **state**, and **integration boundary** before searching. Do not let a named implementation, component, or desired mechanism substitute for that concern.
+2. Bound the search to a workspace or subtree using the existing Phase 0.1 and 0.1b detection logic above. For a monorepo, use the named workspace or service when the concern identifies one; otherwise report the workspace map and choose the smallest defensible subtree. State a finite search budget before searching, covering the search passes and candidate inspection depth you will use.
+3. Search the bounded scope for source, registrations, tests, schemas, and configuration that currently handle the trigger, effect, state, or integration boundary. Use the concern's synonyms and nearby domain terms, including terms discovered from filenames, symbols, registrations, and schemas.
+4. Collect every plausible candidate before assigning any disposition. For each candidate, describe what it owns in the vocabulary the code itself uses: use its symbols, module names, events, records, states, or boundaries rather than translating it into the request's vocabulary.
+5. Only after the candidate inventory is complete, disposition candidates and identify the strongest evidence. Preserve the stated scope and budget in the result, including whether the budget was exhausted.
+
+The prior-art output must report the concern framing, surveyed workspace or subtree, freshness record, search budget, candidate inventory, and dispositions. Emit exactly one machine-checkable result using `skills/ce-plan/references/prior-art-survey-schema.json` as the contract. Use `schema_version: 1`. The `freshness` object must include at least one of `vcs_reference` (the current VCS reference for the surveyed scope, when available) or `scope_baseline` (a portable digest or compact baseline for the surveyed scope when VCS is unavailable); include both when both are available. Do not replace this record with prose.
+
+```json
+{
+  "schema_version": 1,
+  "verdict": "reuse | extend | build-new-within-scope | unscoped | unresolved",
+  "scope": "<workspace or subtree searched>",
+  "freshness": {
+    "vcs_reference": "<current VCS reference for the surveyed scope, when available>",
+    "scope_baseline": "<portable digest or baseline for the surveyed scope when VCS is unavailable>"
+  },
+  "budget": {
+    "max_search_passes": 3,
+    "max_candidate_inspections": 10,
+    "exhausted": false
+  },
+  "candidates": [
+    {
+      "path_or_symbol": "<repository-relative path or source symbol>",
+      "description": "<what it owns in the code's vocabulary>",
+      "disposition": "reuse | extend | insufficient | undispositioned",
+      "insufficiency_reason": "<required for build-new-within-scope candidates>"
+    }
+  ],
+  "scopes_considered": ["<required for an unscoped verdict>"],
+  "acceptance": {
+    "accepted_by_user": true,
+    "accepted_verdict": "unscoped | unresolved",
+    "reason": "<what the user accepted>"
+  }
+}
+```
+
+Use exactly one verdict. `build-new-within-scope` requires at least one candidate, every candidate must have disposition `insufficient`, and every candidate must include `insufficiency_reason`. `unscoped` requires a non-empty `scopes_considered` list. `unresolved` requires at least one `undispositioned` candidate and must retain every disposition already reached. Include `acceptance` only when a user accepts an `unscoped` or `unresolved` verdict. An empty candidate list is the only representation of absence: keep it alongside the searched `scope` and `budget`, and never claim that no equivalent exists anywhere.
+
+---
+
 **Core Responsibilities:**
 
 1. **Architecture and Structure Analysis**
@@ -190,7 +238,7 @@ This context informs all subsequent research phases -- use it to focus documenta
 2. Start with high-level documentation to understand project context
 3. Progressively drill down into specific areas based on findings
 4. Cross-reference discoveries across different sources
-5. Prioritize official documentation over inferred patterns
+5. Apply authority by claim type: source, tests, registrations, and schemas establish what exists; documentation and history explain why it exists and what constrains it; orientation prose is a lead requiring verification and never establishes absence.
 6. Note any inconsistencies or areas lacking documentation
 
 **Output Format:**
@@ -231,6 +279,18 @@ Structure your findings as:
 - Common code patterns identified
 - Naming conventions
 - Project-specific practices
+
+### Prior-Art Survey
+- Concern framing: trigger, effect, state, and integration boundary
+- A structured result conforming to `skills/ce-plan/references/prior-art-survey-schema.json`
+- `schema_version: 1` and a `freshness` record with at least one of `vcs_reference` or `scope_baseline`
+- Exactly one verdict: `reuse`, `extend`, `build-new-within-scope`, `unscoped`, or `unresolved`
+- The searched workspace or subtree in `scope`, plus bounded `budget` fields and whether the budget was exhausted
+- A complete `candidates` inventory with each path or symbol, code-vocabulary ownership description, and disposition
+- For `build-new-within-scope`, a non-empty candidate list whose candidates all explain their insufficiency
+- For `unscoped`, a non-empty `scopes_considered` list; for `unresolved`, at least one `undispositioned` candidate while preserving reached dispositions
+- An optional `acceptance` record only when a user accepted an `unscoped` or `unresolved` verdict
+- Absence represented only by the searched scope, budget, and an empty candidate list; never assert an unbounded absence
 
 ### Recommendations
 - How to best align with project conventions
