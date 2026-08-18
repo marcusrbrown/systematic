@@ -179,8 +179,19 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Cache Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+
+      # `--with-deps` is deliberately omitted. On ubuntu-latest every system
+      # library Playwright requires is already present, so the flag spends most
+      # of a minute on `apt-get update` to install CJK, Thai, and Cyrillic fonts
+      # that the diagrams do not use. Chromium fails loudly at launch if that
+      # ever stops being true.
       - name: Install Playwright Chromium
-        run: bun playwright install --with-deps chromium
+        run: bun playwright install chromium
         working-directory: docs
 
       - name: Build docs
