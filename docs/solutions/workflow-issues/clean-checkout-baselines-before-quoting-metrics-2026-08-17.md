@@ -114,6 +114,7 @@ A local `claude-code/` build adds 6 more from generated output.
 
 ## Related
 
+- [`docs/solutions/developer-experience/typecheck-does-not-cover-ci-gate-scripts-2026-08-17.md`](../developer-experience/typecheck-does-not-cover-ci-gate-scripts-2026-08-17.md) — the same shape with a different mechanism: there the green signal is narrowed by `tsconfig` `include` rather than by working-directory state, and it hides an undefined function rather than extra warnings.
 - [`docs/solutions/best-practices/comments-and-commit-messages-are-claims-not-evidence-2026-08-16.md`](../best-practices/comments-and-commit-messages-are-claims-not-evidence-2026-08-16.md) — the same failure in prose: a written number that the repository does not support.
 - [`docs/solutions/best-practices/a-perfect-measurement-means-a-broken-instrument-2026-08-16.md`](../best-practices/a-perfect-measurement-means-a-broken-instrument-2026-08-16.md) — ask what the instrument measures before trusting its output; here it measured more than intended.
 - [`docs/solutions/workflow-issues/version-pinned-evidence-must-be-reproven-2026-08-16.md`](version-pinned-evidence-must-be-reproven-2026-08-16.md) — adjacent: evidence invalidated by a moving pin rather than by working-directory state.
