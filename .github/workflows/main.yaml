@@ -167,7 +167,10 @@ jobs:
 
   release:
     env:
-      DRY_RUN: ${{ github.event_name == 'pull_request' || github.event.inputs.dry-run && 'true' || 'false' }}
+      # The parentheses are load-bearing: `&&` binds tighter than `||`, and a
+      # workflow_dispatch input arrives as a string, so an unparenthesized
+      # `inputs.dry-run && 'true'` is truthy even when the caller passes false.
+      DRY_RUN: ${{ (github.event_name == 'pull_request' || github.event.inputs.dry-run == 'true') && 'true' || 'false' }}
     name: Release
     needs: [build, typecheck, lint, test]
     runs-on: ubuntu-latest
