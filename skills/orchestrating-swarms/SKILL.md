@@ -165,7 +165,6 @@ A swarm consists of:
       "agentId": "worker-1@my-project",
       "name": "worker-1",
       "agentType": "Explore",
-      "model": "haiku",
       "prompt": "Analyze the codebase structure...",
       "color": "#D94A4A",
       "planModeRequired": false,
@@ -191,7 +190,6 @@ task({
   subagent_type: "Explore",
   description: "Find auth files",
   prompt: "Find all authentication-related files in this codebase",
-  model: "haiku"  // Optional: haiku, sonnet, opus
 })
 ```
 
@@ -260,11 +258,10 @@ task({
   subagent_type: "Explore",
   description: "Find API endpoints",
   prompt: "Find all API endpoints in this codebase. Be very thorough.",
-  model: "haiku"  // Fast and cheap
 })
 ```
 - **Tools:** All read-only tools (no Edit, Write, NotebookEdit, Task)
-- **Model:** Haiku (optimized for speed)
+- **Model:** Inherits from the parent
 - **Best for:** Codebase exploration, file searches, code understanding
 - **Thoroughness levels:** "quick", "medium", "very thorough"
 

@@ -34,7 +34,7 @@ Select option 7 (action parity) to load the full reference material.
 
 ### Step 2: Launch Parallel Sub-Agents
 
-Launch 8 parallel sub-agents using the task tool with `subagent_type: Explore`, one for each principle. Each agent should:
+Launch 8 parallel sub-agents using the bundled `systematic:research:repo-research-analyst` agent, one for each principle. Each agent should:
 
 1. Enumerate ALL instances in the codebase (user actions, tools, contexts, data stores, etc.)
 2. Check compliance against the principle

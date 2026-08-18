@@ -99,43 +99,43 @@ Use fully-qualified agent names inside Task calls.
 **Deterministic Section-to-Agent Mapping:**
 
 **Requirements / Open Questions classification**
-- `ce-spec-flow-analyzer` for missing user flows, edge cases, and handoff gaps
-- `ce-repo-research-analyst` (Scope: `architecture, patterns`) for repo-grounded patterns, conventions, and implementation reality checks
+- `systematic:workflow:spec-flow-analyzer` for missing user flows, edge cases, and handoff gaps
+- `systematic:research:repo-research-analyst` (Scope: `architecture, patterns`) for repo-grounded patterns, conventions, and implementation reality checks
 
 **Context & Research / Sources & References gaps**
-- `ce-learnings-researcher` for institutional knowledge and past solved problems
-- `ce-framework-docs-researcher` for official framework or library behavior
-- `ce-best-practices-researcher` for current external patterns and industry guidance
-- Add `ce-git-history-analyzer` only when historical rationale or prior art is materially missing
+- `systematic:research:learnings-researcher` for institutional knowledge and past solved problems
+- `systematic:research:framework-docs-researcher` for official framework or library behavior
+- `systematic:research:best-practices-researcher` for current external patterns and industry guidance
+- Add `systematic:research:git-history-analyzer` only when historical rationale or prior art is materially missing
 
 **Key Technical Decisions**
-- `ce-architecture-strategist` for design integrity, boundaries, and architectural tradeoffs
-- Add `ce-framework-docs-researcher` or `ce-best-practices-researcher` when the decision needs external grounding beyond repo evidence
+- `systematic:review:architecture-strategist` for design integrity, boundaries, and architectural tradeoffs
+- Add `systematic:research:framework-docs-researcher` or `systematic:research:best-practices-researcher` when the decision needs external grounding beyond repo evidence
 
 **High-Level Technical Design**
-- `ce-architecture-strategist` for validating that the technical design accurately represents the intended approach and identifying gaps
-- `ce-repo-research-analyst` (Scope: `architecture, patterns`) for grounding the technical design in existing repo patterns and conventions
-- Add `ce-best-practices-researcher` when the technical design involves a DSL, API surface, or pattern that benefits from external validation
+- `systematic:review:architecture-strategist` for validating that the technical design accurately represents the intended approach and identifying gaps
+- `systematic:research:repo-research-analyst` (Scope: `architecture, patterns`) for grounding the technical design in existing repo patterns and conventions
+- Add `systematic:research:best-practices-researcher` when the technical design involves a DSL, API surface, or pattern that benefits from external validation
 
 **Implementation Units / Verification**
-- `ce-repo-research-analyst` (Scope: `patterns`) for concrete file targets, patterns to follow, and repo-specific sequencing clues
-- `ce-pattern-recognition-specialist` for consistency, duplication risks, and alignment with existing patterns
-- Add `ce-spec-flow-analyzer` when sequencing depends on user flow or handoff completeness
+- `systematic:research:repo-research-analyst` (Scope: `patterns`) for concrete file targets, patterns to follow, and repo-specific sequencing clues
+- `systematic:review:pattern-recognition-specialist` for consistency, duplication risks, and alignment with existing patterns
+- Add `systematic:workflow:spec-flow-analyzer` when sequencing depends on user flow or handoff completeness
 
 **System-Wide Impact**
-- `ce-architecture-strategist` for cross-boundary effects, interface surfaces, and architectural knock-on impact
+- `systematic:review:architecture-strategist` for cross-boundary effects, interface surfaces, and architectural knock-on impact
 - Add the specific specialist that matches the risk:
-  - `ce-performance-oracle` for scalability, latency, throughput, and resource-risk analysis
-  - `ce-security-sentinel` for auth, validation, exploit surfaces, and security boundary review
-  - `ce-data-integrity-guardian` for migrations, persistent state safety, consistency, and data lifecycle risks
+  - `systematic:review:performance-oracle` for scalability, latency, throughput, and resource-risk analysis
+  - `systematic:review:security-sentinel` for auth, validation, exploit surfaces, and security boundary review
+  - `systematic:review:data-integrity-guardian` for migrations, persistent state safety, consistency, and data lifecycle risks
 
 **Risks & Dependencies / Operational Notes**
 - Use the specialist that matches the actual risk:
-  - `ce-security-sentinel` for security, auth, privacy, and exploit risk
-  - `ce-data-integrity-guardian` for persistent data safety, constraints, and transaction boundaries
-  - `ce-data-migration-expert` for migration realism, backfills, and production data transformation risk
-  - `ce-deployment-verification-agent` for rollout checklists, rollback planning, and launch verification
-  - `ce-performance-oracle` for capacity, latency, and scaling concerns
+  - `systematic:review:security-sentinel` for security, auth, privacy, and exploit risk
+  - `systematic:review:data-integrity-guardian` for persistent data safety, constraints, and transaction boundaries
+  - `systematic:review:data-migration-expert` for migration realism, backfills, and production data transformation risk
+  - `systematic:review:deployment-verification-agent` for rollout checklists, rollback planning, and launch verification
+  - `systematic:review:performance-oracle` for capacity, latency, and scaling concerns
 
 **Agent Prompt Shape:**
 
@@ -201,7 +201,7 @@ Skip this step in auto mode — proceed directly to 5.3.7.
 
 In interactive mode, present each agent's findings to the user before integration. For each agent that returned findings:
 
-1. **Summarize the agent and its target section** — e.g., "The ce-architecture-strategist reviewed Key Technical Decisions and found:"
+1. **Summarize the agent and its target section** — e.g., "The systematic:review:architecture-strategist reviewed Key Technical Decisions and found:"
 2. **Present the findings concisely** — bullet the key points, not the raw agent output. Include enough context for the user to evaluate: what the agent found, what evidence supports it, and what plan change it implies.
 3. **Ask the user** using the platform's blocking question tool when available (see Interaction Method):
    - **Accept** — integrate these findings into the plan

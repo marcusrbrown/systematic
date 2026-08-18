@@ -1,6 +1,13 @@
 ---
+# This branch-only entry publishes a single v2 maintenance release. It exists on
+# fix/v2-dispatch-identifiers and must never be merged to main. The channel is a
+# throwaway dist-tag that is removed after publish, so `latest` keeps pointing at
+# the v3 line and no standing v2 channel is created.
 branches:
   - main
+  - name: fix/v2-dispatch-identifiers
+    range: 2.33.x
+    channel: v2-temp
 
 plugins:
   - '@semantic-release/commit-analyzer'
