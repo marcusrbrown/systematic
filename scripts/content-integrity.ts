@@ -48,6 +48,11 @@
  *     assert the registered hook set must match the keys returned by the plugin
  *     entry point.
  *
+ * 11. **Architecture codemap completeness** — every TypeScript module directly
+ *     under `src/lib/` must appear in the `ARCHITECTURE.md` codemap or in its
+ *     visible codemap-exclusion list, and every codemap entry must resolve to a
+ *     module on disk.
+ *
  * 13. **Migrated skill identifiers** — skills marked
  *     `metadata['harness-portability'] === 'neutral-v1'` must use neutral
  *     lexical vocabulary; exact harness syntax belongs in the harness profiles.
@@ -299,6 +304,12 @@ export interface HookParityViolation {
   message: string
 }
 
+export interface CodemapCompletenessViolation {
+  kind: 'missing-from-codemap' | 'missing-on-disk'
+  module: string
+  message: string
+}
+
 export interface CheckResult {
   rootDir: string
   categories: string[]
@@ -319,6 +330,7 @@ export interface CheckResult {
   migratedSkillIdentifierViolations: MigratedSkillIdentifierViolation[]
   removedNamesOverlapViolations: RemovedNamesOverlapViolation[]
   hookParityViolations: HookParityViolation[]
+  codemapCompletenessViolations: CodemapCompletenessViolation[]
   exemptHits: ExemptHit[]
   scanStats: {
     markdownFiles: number
@@ -573,6 +585,9 @@ export const HOOK_PARITY_DOCUMENTS = [
 // registered set; a legitimate hook discussion without that assertion is
 // simply ignored by the claim extractor and needs no exemption entry.
 export const HOOK_PARITY_EXEMPTIONS: ReadonlySet<string> = new Set()
+
+export const CODEMAP_DOCUMENT = 'ARCHITECTURE.md'
+export const CODEMAP_EXCLUSION_HEADING = '## Codemap exclusions'
 
 const HOOK_ASSERTION_REGEX =
   /\b(?:registers?|exposes?)\b(?:[^\n]*\n){0,2}?\s*(?:these|every|all|one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+(?:OpenCode\s+)?hooks?\b/i
@@ -1565,6 +1580,102 @@ export function checkHookParity(
   return violations
 }
 
+function extractArchitectureSection(
+  content: string,
+  heading: string,
+): string | null {
+  const headingIndex = content.indexOf(heading)
+  if (headingIndex < 0) return null
+
+  const sectionStart = headingIndex + heading.length
+  const nextHeading = content.slice(sectionStart).search(/^##\s+/m)
+  return nextHeading < 0
+    ? content.slice(sectionStart)
+    : content.slice(sectionStart, sectionStart + nextHeading)
+}
+
+function extractCodemapExclusionSection(content: string): string {
+  return extractArchitectureSection(content, CODEMAP_EXCLUSION_HEADING) ?? ''
+}
+
+function extractCodemapModules(content: string): string[] {
+  const codemapSection = extractArchitectureSection(content, '## Codemap')
+  if (codemapSection === null) return []
+
+  const exclusionSection = extractCodemapExclusionSection(codemapSection)
+  const codemapOnly = codemapSection.replace(exclusionSection, '')
+  const modules = new Set<string>()
+  const moduleRegex = /`?(src\/lib\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*\.ts)`?/g
+  for (const match of codemapOnly.matchAll(moduleRegex)) {
+    const module = match[1]
+    if (module) modules.add(module)
+  }
+  return [...modules].sort()
+}
+
+function extractCodemapExclusions(content: string): Set<string> {
+  const section = extractCodemapExclusionSection(content)
+  const exclusions = new Set<string>()
+  const moduleRegex = /`?(src\/lib\/[A-Za-z0-9_-]+(?:\/[A-Za-z0-9_-]+)*\.ts)`?/g
+  for (const match of section.matchAll(moduleRegex)) {
+    const module = match[1]
+    if (module) exclusions.add(module)
+  }
+  return exclusions
+}
+
+function collectLibModules(rootDir: string): string[] {
+  const libDir = path.join(rootDir, 'src', 'lib')
+  if (!fs.existsSync(libDir)) return []
+
+  return walkDir(libDir, {
+    maxDepth: 10,
+    filter: (entry) => !entry.isDirectory && entry.name.endsWith('.ts'),
+  })
+    .map((entry) => path.relative(rootDir, entry.path))
+    .sort()
+}
+
+export function checkCodemapCompleteness(
+  rootDir: string,
+  architectureFile = CODEMAP_DOCUMENT,
+): CodemapCompletenessViolation[] {
+  const architecturePath = path.join(rootDir, architectureFile)
+  const content = readFileSafe(architecturePath)
+  if (content === null) return []
+
+  const onDisk = collectLibModules(rootDir)
+  const codemap = extractCodemapModules(content)
+  const exclusions = extractCodemapExclusions(content)
+  const codemapSet = new Set(codemap)
+  const onDiskSet = new Set(onDisk)
+  const violations: CodemapCompletenessViolation[] = []
+
+  for (const module of onDisk) {
+    if (exclusions.has(module) || codemapSet.has(module)) continue
+    violations.push({
+      kind: 'missing-from-codemap',
+      module,
+      message:
+        `${module} exists on disk but is absent from ${architectureFile}'s ` +
+        `Codemap. Add it or list it in the visible "Codemap exclusions" section.`,
+    })
+  }
+
+  for (const module of codemap) {
+    if (exclusions.has(module) || onDiskSet.has(module)) continue
+    violations.push({
+      kind: 'missing-on-disk',
+      module,
+      message:
+        `${architectureFile}'s Codemap names ${module}, but no such module ` +
+        'exists on disk. Remove the stale entry.',
+    })
+  }
+
+  return violations
+}
+
 /**
  * Strip fenced code blocks (``` or ~~~) from a markdown body string.
  * Returns the body with all fenced regions replaced by empty strings so that
@@ -1971,6 +2082,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     BUNDLED_AGENT_QUALIFIED_IDS,
   )
   const hookParityViolations = checkHookParity(rootDir, targets.rootDocuments)
+  const codemapCompletenessViolations = checkCodemapCompleteness(rootDir)
   const { hits: bannedPatterns, exempt: exemptHits } = checkBannedPatterns(
     rootDir,
     allScannedFiles,
@@ -1997,6 +2109,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     migratedSkillIdentifierViolations,
     removedNamesOverlapViolations,
     hookParityViolations,
+    codemapCompletenessViolations,
     exemptHits,
     scanStats: {
       markdownFiles: targets.markdown.length,
@@ -2054,6 +2167,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
   )
   printRemovedNamesOverlapViolations(result.removedNamesOverlapViolations)
   printHookParityViolations(result.hookParityViolations)
+  printCodemapCompletenessViolations(result.codemapCompletenessViolations)
 
   if (totalViolations(result) === 0) {
     process.stdout.write(
@@ -2261,6 +2375,18 @@ function printHookParityViolations(
   }
 }
 
+function printCodemapCompletenessViolations(
+  violations: readonly CodemapCompletenessViolation[],
+): void {
+  if (violations.length === 0) return
+  process.stderr.write(
+    `\nArchitecture codemap completeness violations (${violations.length}):\n`,
+  )
+  for (const violation of violations) {
+    process.stderr.write(`  [${violation.kind}] ${violation.message}\n`)
+  }
+}
+
 function totalViolations(result: CheckResult): number {
   return (
     result.phantomRefs.length +
@@ -2278,7 +2404,8 @@ function totalViolations(result: CheckResult): number {
     result.argumentHintViolations.length +
     result.migratedSkillIdentifierViolations.length +
     result.removedNamesOverlapViolations.length +
-    result.hookParityViolations.length
+    result.hookParityViolations.length +
+    result.codemapCompletenessViolations.length
   )
 }
 

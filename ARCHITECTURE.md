@@ -81,7 +81,42 @@ Skill tool (plugin tool hook)
 
 Bootstrap injection (plugin transform hook)
   src/lib/bootstrap.ts       — getBootstrapContent, INTERNAL_AGENT_SIGNATURES
+
+Config overlays and validation
+  src/lib/agent-overlays.ts — buildBundledAgentInventory, validateAgentOverlays, resolveAgentOverlaySet
+
+Supporting utilities
+  src/lib/bundled-names.ts        — generated bundled agent and skill name sets for typed config validation
+  src/lib/capability-snapshot.ts  — normalize and serialize capability and config-observation snapshots
+  src/lib/question-attestation.ts — challenge, bind, and consume guarded transition confirmations
+  src/lib/removed-names.ts        — compatibility lists of removed bundled names accepted by config validation
+
+Skill discovery and resolution
+  src/lib/discovered-skills.ts — discover user and project skills across external and OpenCode config roots
+  src/lib/skill-catalog.ts     — build and render the filtered bundled skill catalog
+  src/lib/skill-resolver.ts    — resolve bundled skills and build shared skill-tool output
+
+Pi adapter
+  src/lib/agent-resolver.ts        — flatten bundled agent personas into Pi's runtime catalog and resolve tool allowlists
+  src/lib/pi-delegate-session.ts   — construct isolated in-memory Pi delegate child sessions
+  src/lib/pi-delegate-tool.ts      — create the bounded sequential `systematic_delegate` tool
+  src/lib/pi-subagents-personas.ts — curate, screen, and generate Pi-subagents persona content
+  src/lib/pi-subagents-export.ts   — manage transactional export, refresh, and cleanup of Pi personas
+  src/lib/setup.ts                 — atomically configure project-local OpenCode or Pi harness settings
+
+Workflow guard and evidence
+  src/lib/opencode-operation-observer.ts — snapshot local and remote operation evidence for guard readback
+  src/lib/opencode-workflow-guard.ts     — OpenCode hook and tool adapter for the receipt-backed workflow guard
+  src/lib/receipt-classifier.ts          — classify observed tool commands into receipt operations
+  src/lib/receipt-ledger.ts              — mint, validate, and consume integrity-checked operation receipts
+  src/lib/receipt-readback.ts            — validate and project receipt markers and progression readbacks
+  src/lib/workflow-guard.ts              — core receipt-backed workflow state machine and transition enforcement
+
 ```
+
+## Codemap exclusions
+
+No `src/lib` modules are intentionally excluded from this codemap.
 
 Key symbols:
 

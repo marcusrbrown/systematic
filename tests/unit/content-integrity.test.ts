@@ -13,6 +13,7 @@ import {
   checkAgentTemperature,
   checkArgumentHint,
   checkBannedPatterns,
+  checkCodemapCompleteness,
   checkContentIntegrity,
   checkDispatchIdentifiers,
   checkFrontmatter,
@@ -404,6 +405,122 @@ describe('checkContentIntegrity — hook parity wiring', () => {
       expect(proc.exitCode).toBe(1)
       expect(proc.stderr.toString()).toContain('Plugin hook parity violations')
       expect(proc.stderr.toString()).toContain('tool.execute.before')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('checkCodemapCompleteness', () => {
+  test('passes when every library module is named in the codemap', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, 'src/lib/alpha.ts', 'export const alpha = true\n')
+      writeFile(root, 'src/lib/nested/beta.ts', 'export const beta = true\n')
+      writeFile(
+        root,
+        'ARCHITECTURE.md',
+        '## Codemap\n' +
+          '- `src/lib/alpha.ts` — alpha\n' +
+          '- `src/lib/nested/beta.ts` — beta\n' +
+          '\n## Invariants\n',
+      )
+
+      expect(checkCodemapCompleteness(root)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('reports a module on disk that is absent from the codemap', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, 'src/lib/alpha.ts', 'export const alpha = true\n')
+      writeFile(root, 'ARCHITECTURE.md', '## Codemap\n\n## Invariants\n')
+
+      const violations = checkCodemapCompleteness(root)
+
+      expect(violations).toMatchObject([
+        {
+          kind: 'missing-from-codemap',
+          module: 'src/lib/alpha.ts',
+        },
+      ])
+      expect(violations[0]?.message).toContain('src/lib/alpha.ts')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('reports a codemap entry whose module no longer exists', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'ARCHITECTURE.md',
+        '## Codemap\n- `src/lib/ghost.ts` — deleted\n\n## Invariants\n',
+      )
+
+      const violations = checkCodemapCompleteness(root)
+
+      expect(violations).toMatchObject([
+        {
+          kind: 'missing-on-disk',
+          module: 'src/lib/ghost.ts',
+        },
+      ])
+      expect(violations[0]?.message).toContain('src/lib/ghost.ts')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('skips an excluded module and keeps the exclusion visible in the document', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, 'src/lib/internal.ts', 'export const internal = true\n')
+      const architecture =
+        '## Codemap\n\n' +
+        '## Codemap exclusions\n' +
+        '- `src/lib/internal.ts` — generated compatibility shim, intentionally omitted.\n' +
+        '\n## Invariants\n'
+      writeFile(root, 'ARCHITECTURE.md', architecture)
+
+      expect(checkCodemapCompleteness(root)).toEqual([])
+      expect(
+        fs.readFileSync(path.join(root, 'ARCHITECTURE.md'), 'utf8'),
+      ).toContain('`src/lib/internal.ts`')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('checkContentIntegrity — codemap completeness wiring', () => {
+  test('counts codemap violations and the CLI exits non-zero when an entry is removed', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, 'src/lib/alpha.ts', 'export const alpha = true\n')
+      writePluginEntryPoint(root, FIXTURE_PLUGIN_HOOKS)
+      writeFile(root, 'ARCHITECTURE.md', '## Codemap\n\n## Invariants\n')
+
+      const result = checkContentIntegrity(root)
+
+      expect(result.codemapCompletenessViolations).toHaveLength(1)
+      expect(result.codemapCompletenessViolations[0]?.module).toBe(
+        'src/lib/alpha.ts',
+      )
+
+      const proc = Bun.spawnSync(['bun', SCRIPT_PATH, root], {
+        cwd: REPO_ROOT,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+      expect(proc.exitCode).toBe(1)
+      expect(proc.stderr.toString()).toContain(
+        'Architecture codemap completeness violations',
+      )
+      expect(proc.stderr.toString()).toContain('src/lib/alpha.ts')
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
