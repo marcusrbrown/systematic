@@ -36,7 +36,7 @@
  * number satisfies this invariant.
  *
  * 8. **Skill argument-hint** — bundled skills whose body references the literal
- *    `$ARGUMENTS` outside fenced code blocks must declare a non-empty
+ *    `$ARGUMENTS` outside fenced code blocks or blockquotes must declare a non-empty
  *    `argument-hint` field in frontmatter. Fenced code blocks are stripped before
  *    scanning so skills that only document the placeholder are not flagged.
  *
@@ -1423,10 +1423,14 @@ function extractHookClaim(
   content: string,
   actualHooks: readonly string[],
 ): string[] | null {
-  const assertion = content.match(HOOK_ASSERTION_REGEX)
+  const contentWithoutAssertions = stripMarkdownNonAssertions(content)
+  const assertion = contentWithoutAssertions.match(HOOK_ASSERTION_REGEX)
   if (!assertion || assertion.index === undefined) return null
 
-  const assertionSection = extractHookAssertionSection(content, assertion.index)
+  const assertionSection = extractHookAssertionSection(
+    contentWithoutAssertions,
+    assertion.index,
+  )
   const claimedHooks = extractClaimedHookNames(assertionSection)
   const namesRegisteredBySource = claimedHooks.filter((hook) =>
     actualHooks.includes(hook),
@@ -1678,10 +1682,19 @@ function stripFencedCodeBlocks(body: string): string {
 }
 
 /**
+ * Strip markdown regions that are not the document author's own assertions.
+ * Fenced blocks are examples, and blockquotes are quoted prose.
+ */
+function stripMarkdownNonAssertions(body: string): string {
+  return stripFencedCodeBlocks(body).replace(/^[ \t]*>[^\n]*(?:\n|$)/gm, '')
+}
+
+/**
  * Check that every bundled skill whose body references the literal `$ARGUMENTS`
- * outside fenced code blocks also declares a non-empty `argument-hint` field in
- * its frontmatter. Skills that only document `$ARGUMENTS` inside code fences are
- * not flagged -- the fence-stripping pass removes those occurrences first.
+ * outside fenced code blocks or blockquotes also declares a non-empty
+ * `argument-hint` field in its frontmatter. Skills that only document
+ * `$ARGUMENTS` inside code fences or blockquotes are not flagged -- the
+ * non-assertion stripping pass removes those occurrences first.
  */
 export function checkArgumentHint(
   rootDir: string,
@@ -1696,7 +1709,7 @@ export function checkArgumentHint(
     const parsed = parseFrontmatter(content)
     if (!isRecord(parsed.data)) continue
 
-    const strippedBody = stripFencedCodeBlocks(parsed.body)
+    const strippedBody = stripMarkdownNonAssertions(parsed.body)
     if (!strippedBody.includes('$ARGUMENTS')) continue
 
     const hint = parsed.data['argument-hint']
@@ -1705,7 +1718,7 @@ export function checkArgumentHint(
     violations.push({
       file: relPath,
       message:
-        `Skill body references \`$ARGUMENTS\` outside fenced code blocks but frontmatter is missing a non-empty \`argument-hint\` field. ` +
+        `Skill body references \`$ARGUMENTS\` outside fenced code blocks or blockquotes but frontmatter is missing a non-empty \`argument-hint\` field. ` +
         `Add \`argument-hint: "<description>"\` to the frontmatter so callers know what to pass.`,
     })
   }

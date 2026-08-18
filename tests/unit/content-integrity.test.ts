@@ -419,6 +419,85 @@ describe('checkHookParity', () => {
     }
   })
 
+  test('ignores a fenced hook example that follows the real hook assertion', () => {
+    const root = makeFixtureRepo()
+    try {
+      writePluginEntryPoint(root, FIXTURE_PLUGIN_HOOKS)
+      writeFile(
+        root,
+        'ARCHITECTURE.md',
+        `The plugin registers these hooks:\n${FIXTURE_PLUGIN_HOOKS.map((hook) => `- **\`${hook}\`**`).join('\n')}\n\n` +
+          '```text\n' +
+          'The plugin registers two hooks:\n' +
+          '- `invented.one`\n' +
+          '- `invented.two`\n' +
+          '```\n',
+      )
+
+      expect(checkHookParity(root, ['ARCHITECTURE.md'])).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('ignores a fenced-only hook assertion', () => {
+    const root = makeFixtureRepo()
+    try {
+      writePluginEntryPoint(root, FIXTURE_PLUGIN_HOOKS)
+      writeFile(
+        root,
+        'ARCHITECTURE.md',
+        '```text\n' +
+          'The plugin registers two hooks:\n' +
+          '- `invented.one`\n' +
+          '- `invented.two`\n' +
+          '```\n',
+      )
+
+      expect(checkHookParity(root, ['ARCHITECTURE.md'])).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('ignores a fenced hook example in AGENTS.md without a real assertion', () => {
+    const root = makeFixtureRepo()
+    try {
+      writePluginEntryPoint(root, FIXTURE_PLUGIN_HOOKS)
+      writeFile(
+        root,
+        'AGENTS.md',
+        '```text\n' +
+          'The plugin registers two hooks:\n' +
+          '- `invented.one`\n' +
+          '- `invented.two`\n' +
+          '```\n',
+      )
+
+      expect(checkHookParity(root, ['AGENTS.md'])).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('ignores a blockquoted hook assertion', () => {
+    const root = makeFixtureRepo()
+    try {
+      writePluginEntryPoint(root, FIXTURE_PLUGIN_HOOKS)
+      writeFile(
+        root,
+        'ARCHITECTURE.md',
+        '> The plugin registers two hooks:\n' +
+          '> - `invented.one`\n' +
+          '> - `invented.two`\n',
+      )
+
+      expect(checkHookParity(root, ['ARCHITECTURE.md'])).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   test('skips a document listed in the explicit exemption set', () => {
     const root = makeFixtureRepo()
     try {
