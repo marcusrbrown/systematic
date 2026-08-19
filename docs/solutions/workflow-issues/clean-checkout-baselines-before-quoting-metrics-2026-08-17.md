@@ -1,6 +1,7 @@
 ---
-title: A lint count is not a project fact until the input set is defined
+title: A measured count is not a project fact until the input set is defined
 date: 2026-08-17
+last_updated: 2026-08-18
 category: workflow-issues
 module: lint-baseline
 problem_type: workflow_issue
@@ -11,6 +12,7 @@ applies_when:
   - "Generated or gitignored output may exist in the working tree"
   - "A lint, test, or warning count is about to be quoted in a PR or commit message"
   - "A repository-wide command traverses the filesystem rather than tracked files"
+  - "A tool under test reads ambient user configuration from outside the repository"
 tags:
   - lint
   - baseline
@@ -18,9 +20,11 @@ tags:
   - generated-output
   - reproducibility
   - metrics
+  - test-isolation
+  - user-config
 ---
 
-# A lint count is not a project fact until the input set is defined
+# A measured count is not a project fact until the input set is defined
 
 ## Context
 
@@ -78,7 +82,22 @@ A warning count reads like a property of the code. It is actually a function of 
 count = tool version × command × configuration × filesystem input set
 ```
 
-Three of those are version-controlled. The fourth is whatever happens to be on disk. When a command is spelled `.` or `**/*`, gitignored build output silently joins the measurement.
+It is tempting to say three of those are version-controlled and only the filesystem is not. That is not reliable either. When a command is spelled `.` or `**/*`, gitignored build output silently joins the measurement — and when a tool reads ambient user configuration, the configuration factor leaves version control too.
+
+A second instance, one day later, took the configuration path. `bun test tests/unit` produced 8 failing plugin-loading tests on a v2.x checkout, and the same 8 on a pristine checkout of the release tag, which made them look like a known-bad property of that release:
+
+```text
+error: Invalid Systematic config in ~/.config/opencode/systematic.jsonc: Unrecognized key: "workflow_guard"
+```
+
+The tests load the developer's real user config. That file carries a `workflow_guard` key introduced in the v3 schema, which v2's stricter validation rejects, so plugin init threw. Nothing was wrong with the branch. CI had been green throughout, because runners have no user config at that path.
+
+```bash
+OPENCODE_CONFIG_DIR=/tmp/isolated HOME=/tmp/isolated-home bun test tests/unit
+# → 1072 pass, 0 fail
+```
+
+The reproducible-input rule is the same; only the contaminating factor moved. Worth noting the sharper trap in this variant: repeating the run on a pristine checkout *confirmed* the failures, because the contaminant lived outside the repository entirely and a clean checkout does not touch it. Checking out clean code is not the same as controlling the input set.
 
 The practical damage is not the wrong number, it is that the wrong number becomes a shared reference point. "Unchanged from baseline" is unfalsifiable when two people hold different baselines, so a real regression can hide inside a stale delta. Quoting the number in a commit message makes it permanent.
 
@@ -87,6 +106,8 @@ The practical damage is not the wrong number, it is that the wrong number become
 - Before writing any count into a PR description, commit message, or review comment.
 - After running a build that emits gitignored output — especially one you then forget about.
 - When local and CI results disagree and the tool versions match. Suspect the input set before suspecting the tool.
+- When a failure reproduces on a pristine checkout. That rules out your working tree, not the environment around it — ambient config in `$HOME` survives any checkout.
+- Before reporting test failures from a checkout of a different major version, where a schema or config contract may have changed underneath a file the tool reads from outside the repository.
 - When generated output uses a different language or ruleset than the source it was generated from, which is exactly when it produces unfamiliar findings.
 
 ## Examples
@@ -118,3 +139,5 @@ A local `claude-code/` build adds 6 more from generated output.
 - [`docs/solutions/best-practices/comments-and-commit-messages-are-claims-not-evidence-2026-08-16.md`](../best-practices/comments-and-commit-messages-are-claims-not-evidence-2026-08-16.md) — the same failure in prose: a written number that the repository does not support.
 - [`docs/solutions/best-practices/a-perfect-measurement-means-a-broken-instrument-2026-08-16.md`](../best-practices/a-perfect-measurement-means-a-broken-instrument-2026-08-16.md) — ask what the instrument measures before trusting its output; here it measured more than intended.
 - [`docs/solutions/workflow-issues/version-pinned-evidence-must-be-reproven-2026-08-16.md`](version-pinned-evidence-must-be-reproven-2026-08-16.md) — adjacent: evidence invalidated by a moving pin rather than by working-directory state.
+- [`docs/solutions/workflow-issues/delegated-verification-needs-a-prepared-environment-2026-08-18.md`](delegated-verification-needs-a-prepared-environment-2026-08-18.md) — the same rule applied to delegation: a gate run in an unprepared environment reports on the environment, not the code.
+- [`docs/solutions/integration-issues/isolated-opencode-subprocess-fixtures-2026-05-14.md`](../integration-issues/isolated-opencode-subprocess-fixtures-2026-05-14.md) — the structural fix for ambient-state contamination: isolate `HOME`, XDG roots, and config paths so the input set stops depending on whose machine runs the command.
