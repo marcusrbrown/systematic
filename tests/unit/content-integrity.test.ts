@@ -15,6 +15,7 @@ import {
   checkBannedPatterns,
   checkCodemapCompleteness,
   checkContentIntegrity,
+  checkDispatchArguments,
   checkDispatchIdentifiers,
   checkFrontmatter,
   checkFrontmatterParseSafety,
@@ -4202,5 +4203,181 @@ describe('checkRemovedNamesOverlap', () => {
     )
     expect(violations.length).toBeGreaterThan(0)
     expect(violations.some((v) => v.name === 'orchestrating-swarms')).toBe(true)
+  })
+})
+
+describe('checkDispatchArguments', () => {
+  const cases: [string, string][] = [
+    [
+      'names the Agent tool explicitly',
+      'In OpenCode, pass `model: "sonnet"` in the Agent tool call.',
+    ],
+    [
+      'sits inside a markdown table cell',
+      '| **Recommended** | Research first. | In OpenCode, use the Agent tool with `model: "haiku"` for each search. |',
+    ],
+    [
+      'never names a tool, only dispatch vocabulary',
+      '1. **Quick scan** — dispatch a general-purpose sub-agent using the platform\'s cheapest capable model (e.g., `model: "haiku"` in OpenCode) with this prompt:',
+    ],
+  ]
+
+  for (const [label, body] of cases) {
+    test(`flags prose that ${label}`, () => {
+      const root = makeFixtureRepo()
+      try {
+        writeFile(
+          root,
+          'skills/example/SKILL.md',
+          `---\nname: example\n---\n\n${body}\n`,
+        )
+
+        const violations = checkDispatchArguments(root, [
+          'skills/example/SKILL.md',
+        ])
+
+        expect(violations).toHaveLength(1)
+        expect(violations[0]?.file).toBe('skills/example/SKILL.md')
+        expect(violations[0]?.message).toContain('does not accept')
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
+  }
+
+  const allowed: [string, string][] = [
+    [
+      'documents the frontmatter field without dispatch vocabulary',
+      '| `model` | A skill-level choice for skill execution. | `model: anthropic/claude-haiku-4-5` |',
+    ],
+    [
+      'prohibits the inherit literal while discussing subagents',
+      'Subagents with no `model` inherit from the invoker. Do **not** declare `model: inherit`: that literal is undocumented.',
+    ],
+    [
+      'discusses dispatch and models without naming an argument',
+      'Dispatch 3-4 parallel ideation sub-agents on the inherited model (do not tier down).',
+    ],
+    [
+      'passes a model inside a fenced code sample',
+      'Launch the client:\n\n```ts\nconst res = await client.create({ model: "claude-3-haiku" })\n```\n',
+    ],
+    [
+      'quotes dispatch guidance in a blockquote',
+      '> In OpenCode, pass `model: "sonnet"` in the Agent tool call.',
+    ],
+  ]
+
+  for (const [label, body] of allowed) {
+    test(`allows prose that ${label}`, () => {
+      const root = makeFixtureRepo()
+      try {
+        writeFile(
+          root,
+          'skills/example/SKILL.md',
+          `---\nname: example\n---\n\n${body}\n`,
+        )
+
+        expect(
+          checkDispatchArguments(root, ['skills/example/SKILL.md']),
+        ).toEqual([])
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
+  }
+
+  test('reports a distinct line for each repeated occurrence', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'skills/example/SKILL.md',
+        '---\nname: example\n---\n\nIn OpenCode, pass `model: "sonnet"` in the Agent tool call.\n\nfiller\n\nIn OpenCode, pass `model: "sonnet"` in the Agent tool call.\n',
+      )
+
+      const violations = checkDispatchArguments(root, [
+        'skills/example/SKILL.md',
+      ])
+
+      expect(violations).toHaveLength(2)
+      expect(violations[0]?.line).not.toBe(violations[1]?.line)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('matches the argument key regardless of case', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'skills/example/SKILL.md',
+        '---\nname: example\n---\n\nDispatch the sub-agent and set `Model: "sonnet"` explicitly.\n',
+      )
+
+      expect(
+        checkDispatchArguments(root, ['skills/example/SKILL.md']),
+      ).toHaveLength(1)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('allows a prose colon that is not a code assignment', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'skills/example/SKILL.md',
+        '---\nname: example\n---\n\nWhen you spawn a task, note the reasoning model: it varies by category.\n',
+      )
+
+      expect(checkDispatchArguments(root, ['skills/example/SKILL.md'])).toEqual(
+        [],
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('scans bundled agent files, not only skills', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'agents/research/example.md',
+        '---\nname: example\n---\n\nIn OpenCode, pass `model: "sonnet"` in the Agent tool call.\n',
+      )
+
+      const violations = checkDispatchArguments(root, [
+        'agents/research/example.md',
+      ])
+
+      expect(violations).toHaveLength(1)
+      expect(violations[0]?.file).toBe('agents/research/example.md')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('participates in the aggregate violation count', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'skills/example/SKILL.md',
+        '---\nname: example\n---\n\nIn OpenCode, pass `model: "sonnet"` in the Agent tool call.\n',
+      )
+
+      const violations = checkDispatchArguments(root, [
+        'skills/example/SKILL.md',
+      ])
+
+      expect(violations.length).toBeGreaterThan(0)
+      expect(violations[0]?.line).toBeGreaterThan(0)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
   })
 })

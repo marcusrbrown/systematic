@@ -270,6 +270,12 @@ export interface ArgumentHintViolation {
   message: string
 }
 
+export interface DispatchArgumentViolation {
+  file: string
+  line: number
+  message: string
+}
+
 export interface MigratedSkillIdentifierViolation {
   file: string
   line: number
@@ -331,6 +337,7 @@ export interface CheckResult {
   removedNamesOverlapViolations: RemovedNamesOverlapViolation[]
   hookParityViolations: HookParityViolation[]
   codemapCompletenessViolations: CodemapCompletenessViolation[]
+  dispatchArgumentViolations: DispatchArgumentViolation[]
   exemptHits: ExemptHit[]
   scanStats: {
     markdownFiles: number
@@ -1690,6 +1697,28 @@ function stripMarkdownNonAssertions(body: string): string {
 }
 
 /**
+ * Like {@link stripMarkdownNonAssertions}, but preserves the line count so a
+ * caller can map an index back to a real line number. Fenced-block and
+ * blockquote lines become empty rather than disappearing.
+ */
+function blankMarkdownNonAssertions(body: string): string {
+  const lines = body.split('\n')
+  const blanked: string[] = []
+  let inFence = false
+
+  for (const line of lines) {
+    if (/^[ \t]*(?:```|~~~)/.test(line)) {
+      inFence = !inFence
+      blanked.push('')
+      continue
+    }
+    blanked.push(inFence || /^[ \t]*>/.test(line) ? '' : line)
+  }
+
+  return blanked.join('\n')
+}
+
+/**
  * Check that every bundled skill whose body references the literal `$ARGUMENTS`
  * outside fenced code blocks or blockquotes also declares a non-empty
  * `argument-hint` field in its frontmatter. Skills that only document
@@ -1724,6 +1753,101 @@ export function checkArgumentHint(
   }
 
   return violations
+}
+
+/**
+ * Matches a `model: <value>` assignment. The value is required: `model` with no
+ * value (`` `model:` ``, or a table cell naming the field) is documentation of
+ * the frontmatter field, not an instruction to pass an argument.
+ */
+const MODEL_ARGUMENT_ASSIGNMENT = /\bmodel\s*:\s*["']?([A-Za-z0-9][\w./-]*)/i
+
+/**
+ * Inline-code spans. A supplied argument is written as code; prose that merely
+ * uses a colon after the word "model" is not an instruction to pass one.
+ * Requiring the assignment to sit inside a span keeps sentences such as
+ * "when you spawn a task, note the reasoning model: it varies" from failing a
+ * gate that has no advisory channel.
+ */
+const INLINE_CODE_SPAN = /`([^`]+)`/g
+
+/**
+ * `model: inherit` is a frontmatter literal, never a dispatch argument. Skills
+ * document it precisely to prohibit it, and that guidance sits in prose about
+ * subagents -- so the assignment shape and dispatch vocabulary both appear on a
+ * line that is telling readers *not* to do something. The agent-model check
+ * already enforces the frontmatter rule itself.
+ */
+const FRONTMATTER_ONLY_MODEL_VALUES = new Set(['inherit'])
+
+/**
+ * Vocabulary that marks a line as being about dispatching a sub-agent.
+ *
+ * Deliberately excludes the bare word `agent`: bundled content discusses
+ * "bundled agents" and "agent markdown" constantly while documenting the
+ * frontmatter rules, and pairing that with a `model:` example is legitimate.
+ */
+const DISPATCH_VOCABULARY = [
+  'agent tool',
+  'task tool',
+  'dispatch',
+  'spawn',
+  'launch',
+  'sub-agent',
+  'subagent',
+]
+
+export function checkDispatchArguments(
+  rootDir: string,
+  markdownFiles: readonly string[],
+): DispatchArgumentViolation[] {
+  const violations: DispatchArgumentViolation[] = []
+
+  for (const relPath of markdownFiles) {
+    const content = readFileSafe(path.join(rootDir, relPath))
+    if (content === null) continue
+    const parsed = parseFrontmatter(content)
+
+    // `parsed.body` is a suffix of `content`, so the difference in line counts
+    // is exactly the frontmatter offset. Blanking (rather than deleting)
+    // non-assertion lines keeps body indexes aligned with real line numbers,
+    // so repeated occurrences of the same sentence each report their own line.
+    const offset =
+      content.split('\n').length - parsed.body.split('\n').length + 1
+    const bodyLines = blankMarkdownNonAssertions(parsed.body).split('\n')
+
+    for (const [index, rawLine] of bodyLines.entries()) {
+      if (!isDispatchArgumentInstruction(rawLine)) continue
+      violations.push({
+        file: relPath,
+        line: offset + index,
+        message:
+          `Prose instructs passing a \`model\` argument when dispatching a sub-agent, which the task tool does not accept. ` +
+          `Dispatch the bundled agent by name instead so the user's configured assignment applies; model policy is user-owned configuration.`,
+      })
+    }
+  }
+
+  return violations
+}
+
+/**
+ * True when a single line both shows a `model` argument being supplied and
+ * talks about dispatching a sub-agent.
+ */
+function isDispatchArgumentInstruction(rawLine: string): boolean {
+  const lowered = rawLine.toLowerCase()
+  if (!DISPATCH_VOCABULARY.some((token) => lowered.includes(token)))
+    return false
+
+  for (const span of rawLine.matchAll(INLINE_CODE_SPAN)) {
+    const assignment = MODEL_ARGUMENT_ASSIGNMENT.exec(span[1])
+    if (assignment === null) continue
+    if (FRONTMATTER_ONLY_MODEL_VALUES.has(assignment[1].toLowerCase())) continue
+    return true
+  }
+
+  return false
 }
 
 // These are deliberately lexical tokens only; the gate does not attempt to
@@ -2084,6 +2208,10 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
   )
   const hookParityViolations = checkHookParity(rootDir, targets.rootDocuments)
   const codemapCompletenessViolations = checkCodemapCompleteness(rootDir)
+  const dispatchArgumentViolations = checkDispatchArguments(
+    rootDir,
+    targets.markdown,
+  )
   const { hits: bannedPatterns, exempt: exemptHits } = checkBannedPatterns(
     rootDir,
     allScannedFiles,
@@ -2111,6 +2239,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     removedNamesOverlapViolations,
     hookParityViolations,
     codemapCompletenessViolations,
+    dispatchArgumentViolations,
     exemptHits,
     scanStats: {
       markdownFiles: targets.markdown.length,
@@ -2169,6 +2298,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
   printRemovedNamesOverlapViolations(result.removedNamesOverlapViolations)
   printHookParityViolations(result.hookParityViolations)
   printCodemapCompletenessViolations(result.codemapCompletenessViolations)
+  printDispatchArgumentViolations(result.dispatchArgumentViolations)
 
   if (totalViolations(result) === 0) {
     process.stdout.write(
@@ -2376,6 +2506,20 @@ function printHookParityViolations(
   }
 }
 
+function printDispatchArgumentViolations(
+  violations: readonly DispatchArgumentViolation[],
+): void {
+  if (violations.length === 0) return
+  process.stderr.write(
+    `\nUnsupported dispatch argument violations (${violations.length}):\n`,
+  )
+  for (const violation of violations) {
+    process.stderr.write(
+      `  ${violation.file}:${violation.line} ${violation.message}\n`,
+    )
+  }
+}
+
 function printCodemapCompletenessViolations(
   violations: readonly CodemapCompletenessViolation[],
 ): void {
@@ -2406,7 +2550,8 @@ function totalViolations(result: CheckResult): number {
     result.migratedSkillIdentifierViolations.length +
     result.removedNamesOverlapViolations.length +
     result.hookParityViolations.length +
-    result.codemapCompletenessViolations.length
+    result.codemapCompletenessViolations.length +
+    result.dispatchArgumentViolations.length
   )
 }
 
