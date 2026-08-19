@@ -9,7 +9,7 @@ import {
   normalizePermission,
   type PermissionConfig,
 } from './validation.js'
-import { isDiscoverableMarkdown, walkDir } from './walk-dir.js';
+import { isDiscoverableMarkdown, walkDir } from './walk-dir.js'
 
 export interface AgentFrontmatter {
   /** Name of the agent */

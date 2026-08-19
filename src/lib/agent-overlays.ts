@@ -4,7 +4,7 @@ import type { z } from 'zod'
 import type { SourcedOverlayConfigMap } from './config.js'
 import { AgentOverlaySchema, CategoryOverlaySchema } from './config-schema.js'
 import { isRecord } from './validation.js'
-import { isDiscoverableMarkdown } from './walk-dir.js';
+import { isDiscoverableMarkdown } from './walk-dir.js'
 
 export interface BundledAgentInventoryEntry {
   id: string

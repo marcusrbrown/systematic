@@ -4,7 +4,7 @@ import {
   extractNonEmptyString,
   extractString,
 } from './validation.js'
-import { isDiscoverableMarkdown, walkDir } from './walk-dir.js';
+import { isDiscoverableMarkdown, walkDir } from './walk-dir.js'
 
 export interface CommandFrontmatter {
   name: string
