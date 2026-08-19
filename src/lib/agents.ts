@@ -9,7 +9,7 @@ import {
   normalizePermission,
   type PermissionConfig,
 } from './validation.js'
-import { walkDir } from './walk-dir.js'
+import { isDiscoverableMarkdown, walkDir } from './walk-dir.js';
 
 export interface AgentFrontmatter {
   /** Name of the agent */
@@ -51,7 +51,7 @@ export interface AgentInfo {
 export function findAgentsInDir(dir: string, maxDepth = 2): AgentInfo[] {
   const entries = walkDir(dir, {
     maxDepth,
-    filter: (e) => !e.isDirectory && e.name.endsWith('.md'),
+    filter: (e) => !e.isDirectory && isDiscoverableMarkdown(e.name),
   })
 
   return entries.map((entry) => ({

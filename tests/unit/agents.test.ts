@@ -1,6 +1,13 @@
 import { describe, expect, test } from 'bun:test'
-import { readFileSync } from 'node:fs'
-import { resolve } from 'node:path'
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join, resolve } from 'node:path'
 import {
   extractAgentFrontmatter,
   findAgentsInDir,
@@ -186,6 +193,63 @@ Prompt`
       const result = extractAgentFrontmatter(content)
       expect(result.permission).toEqual({ edit: 'allow' })
     })
+  })
+})
+
+describe('findAgentsInDir README exclusion', () => {
+  test('does not register a category README as an agent', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agents-readme-'))
+    try {
+      const category = join(dir, 'review')
+      mkdirSync(category)
+      writeFileSync(
+        join(category, 'README.md'),
+        '---\nname: pool\ndescription: Shared pool\n---\nDocs.',
+      )
+      writeFileSync(
+        join(category, 'real-agent.md'),
+        '---\nname: real-agent\ndescription: A real agent\n---\nPrompt.',
+      )
+
+      const names = findAgentsInDir(dir).map((a) => a.name)
+      expect(names).toEqual(['real-agent'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('excludes README regardless of filename casing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agents-readme-case-'))
+    try {
+      const category = join(dir, 'review')
+      mkdirSync(category)
+      writeFileSync(join(category, 'readme.md'), 'lowercase')
+      writeFileSync(join(category, 'ReadMe.md'), 'mixed case')
+
+      expect(findAgentsInDir(dir)).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('does not exclude agents whose name merely contains readme', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'agents-readme-substr-'))
+    try {
+      const category = join(dir, 'review')
+      mkdirSync(category)
+      writeFileSync(join(category, 'readme-reviewer.md'), 'real agent')
+
+      const names = findAgentsInDir(dir).map((a) => a.name)
+      expect(names).toEqual(['readme-reviewer'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('the bundled review pool README is not a registered agent', () => {
+    const agentsDir = resolve(import.meta.dirname, '../../agents')
+    const names = findAgentsInDir(agentsDir).map((a) => a.name)
+    expect(names).not.toContain('README')
   })
 })
 
