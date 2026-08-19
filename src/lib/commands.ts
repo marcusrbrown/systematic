@@ -4,7 +4,7 @@ import {
   extractNonEmptyString,
   extractString,
 } from './validation.js'
-import { walkDir } from './walk-dir.js'
+import { isDiscoverableMarkdown, walkDir } from './walk-dir.js'
 
 export interface CommandFrontmatter {
   name: string
@@ -27,7 +27,7 @@ export interface CommandInfo {
 export function findCommandsInDir(dir: string, maxDepth = 2): CommandInfo[] {
   const entries = walkDir(dir, {
     maxDepth,
-    filter: (e) => !e.isDirectory && e.name.endsWith('.md'),
+    filter: (e) => !e.isDirectory && isDiscoverableMarkdown(e.name),
   })
 
   return entries.map((entry) => {

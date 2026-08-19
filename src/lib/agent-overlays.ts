@@ -4,6 +4,7 @@ import type { z } from 'zod'
 import type { SourcedOverlayConfigMap } from './config.js'
 import { AgentOverlaySchema, CategoryOverlaySchema } from './config-schema.js'
 import { isRecord } from './validation.js'
+import { isDiscoverableMarkdown } from './walk-dir.js'
 
 export interface BundledAgentInventoryEntry {
   id: string
@@ -312,7 +313,7 @@ function readMarkdownFiles(categoryDir: string): string[] {
   try {
     return fs
       .readdirSync(categoryDir, { withFileTypes: true })
-      .filter((entry) => entry.isFile() && entry.name.endsWith('.md'))
+      .filter((entry) => entry.isFile() && isDiscoverableMarkdown(entry.name))
       .map((entry) => entry.name)
       .sort()
   } catch {

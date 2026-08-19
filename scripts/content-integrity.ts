@@ -105,7 +105,7 @@ import {
   REMOVED_BUNDLED_SKILL_NAMES,
 } from '../src/lib/removed-names.js'
 import { SKILL_FRONTMATTER_FIELDS } from '../src/lib/skills.js'
-import { walkDir } from '../src/lib/walk-dir.js'
+import { isDiscoverableMarkdown, walkDir } from '../src/lib/walk-dir.js'
 
 // ---------------------------------------------------------------------------
 // Banned-pattern list
@@ -2056,11 +2056,18 @@ export function checkRemovedNamesOverlap(
 }
 
 function isAgentFile(relPath: string): boolean {
+  // Mirrors findAgentsInDir's discovery rule: a category README documents the
+  // directory and is never a registered agent, so it carries no agent
+  // frontmatter and must not be held to the agent frontmatter contract. It stays
+  // in the scan set so reference-integrity and banned-pattern checks still cover
+  // it.
   const parts = relPath.split('/')
+  const fileName = parts[2]
   return (
     parts.length === 3 &&
     parts[0] === 'agents' &&
-    parts[2]?.endsWith('.md') === true &&
+    fileName !== undefined &&
+    isDiscoverableMarkdown(fileName) &&
     (parts[1]?.length ?? 0) > 0
   )
 }

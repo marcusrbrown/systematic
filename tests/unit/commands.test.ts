@@ -1,5 +1,38 @@
 import { describe, expect, test } from 'bun:test'
-import { extractCommandFrontmatter } from '../../src/lib/commands.ts'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import {
+  extractCommandFrontmatter,
+  findCommandsInDir,
+} from '../../src/lib/commands.ts'
+
+describe('findCommandsInDir README exclusion', () => {
+  test('does not register a category README as a command', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'commands-readme-'))
+    try {
+      const category = join(dir, 'git')
+      mkdirSync(category)
+      writeFileSync(join(category, 'README.md'), 'Docs about this directory.')
+      writeFileSync(join(category, 'commit.md'), 'Real command.')
+
+      const names = findCommandsInDir(dir).map((c) => c.name)
+      expect(names).toEqual(['/git:commit'])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('excludes README regardless of filename casing', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'commands-readme-case-'))
+    try {
+      writeFileSync(join(dir, 'readme.md'), 'lowercase')
+      expect(findCommandsInDir(dir)).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
 
 describe('extractCommandFrontmatter', () => {
   test('extracts agent field when present', () => {

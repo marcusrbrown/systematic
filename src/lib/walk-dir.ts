@@ -14,6 +14,19 @@ export interface WalkOptions {
   filter?: (entry: WalkEntry) => boolean
 }
 
+/**
+ * Whether a markdown filename is discoverable content rather than documentation
+ * about the directory that holds it.
+ *
+ * Agent and command discovery register every `.md` file they walk, so a plain
+ * `README.md` placed in `agents/<category>/` would otherwise be registered as a
+ * dispatchable agent named `README`. README is documentation by universal
+ * convention, so it is never content.
+ */
+export function isDiscoverableMarkdown(fileName: string): boolean {
+  return fileName.endsWith('.md') && fileName.toLowerCase() !== 'readme.md'
+}
+
 export function walkDir(
   rootDir: string,
   options: WalkOptions = {},
