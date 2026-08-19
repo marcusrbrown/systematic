@@ -4287,6 +4287,80 @@ describe('checkDispatchArguments', () => {
     })
   }
 
+  test('reports a distinct line for each repeated occurrence', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'skills/example/SKILL.md',
+        '---\nname: example\n---\n\nIn OpenCode, pass `model: "sonnet"` in the Agent tool call.\n\nfiller\n\nIn OpenCode, pass `model: "sonnet"` in the Agent tool call.\n',
+      )
+
+      const violations = checkDispatchArguments(root, [
+        'skills/example/SKILL.md',
+      ])
+
+      expect(violations).toHaveLength(2)
+      expect(violations[0]?.line).not.toBe(violations[1]?.line)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('matches the argument key regardless of case', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'skills/example/SKILL.md',
+        '---\nname: example\n---\n\nDispatch the sub-agent and set `Model: "sonnet"` explicitly.\n',
+      )
+
+      expect(
+        checkDispatchArguments(root, ['skills/example/SKILL.md']),
+      ).toHaveLength(1)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('allows a prose colon that is not a code assignment', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'skills/example/SKILL.md',
+        '---\nname: example\n---\n\nWhen you spawn a task, note the reasoning model: it varies by category.\n',
+      )
+
+      expect(checkDispatchArguments(root, ['skills/example/SKILL.md'])).toEqual(
+        [],
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('scans bundled agent files, not only skills', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'agents/research/example.md',
+        '---\nname: example\n---\n\nIn OpenCode, pass `model: "sonnet"` in the Agent tool call.\n',
+      )
+
+      const violations = checkDispatchArguments(root, [
+        'agents/research/example.md',
+      ])
+
+      expect(violations).toHaveLength(1)
+      expect(violations[0]?.file).toBe('agents/research/example.md')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   test('participates in the aggregate violation count', () => {
     const root = makeFixtureRepo()
     try {

@@ -1697,6 +1697,28 @@ function stripMarkdownNonAssertions(body: string): string {
 }
 
 /**
+ * Like {@link stripMarkdownNonAssertions}, but preserves the line count so a
+ * caller can map an index back to a real line number. Fenced-block and
+ * blockquote lines become empty rather than disappearing.
+ */
+function blankMarkdownNonAssertions(body: string): string {
+  const lines = body.split('\n')
+  const blanked: string[] = []
+  let inFence = false
+
+  for (const line of lines) {
+    if (/^[ \t]*(?:```|~~~)/.test(line)) {
+      inFence = !inFence
+      blanked.push('')
+      continue
+    }
+    blanked.push(inFence || /^[ \t]*>/.test(line) ? '' : line)
+  }
+
+  return blanked.join('\n')
+}
+
+/**
  * Check that every bundled skill whose body references the literal `$ARGUMENTS`
  * outside fenced code blocks or blockquotes also declares a non-empty
  * `argument-hint` field in its frontmatter. Skills that only document
@@ -1738,7 +1760,16 @@ export function checkArgumentHint(
  * value (`` `model:` ``, or a table cell naming the field) is documentation of
  * the frontmatter field, not an instruction to pass an argument.
  */
-const MODEL_ARGUMENT_ASSIGNMENT = /\bmodel\s*:\s*["'`]?([A-Za-z0-9][\w./-]*)/
+const MODEL_ARGUMENT_ASSIGNMENT = /\bmodel\s*:\s*["']?([A-Za-z0-9][\w./-]*)/i
+
+/**
+ * Inline-code spans. A supplied argument is written as code; prose that merely
+ * uses a colon after the word "model" is not an instruction to pass one.
+ * Requiring the assignment to sit inside a span keeps sentences such as
+ * "when you spawn a task, note the reasoning model: it varies" from failing a
+ * gate that has no advisory channel.
+ */
+const INLINE_CODE_SPAN = /`([^`]+)`/g
 
 /**
  * `model: inherit` is a frontmatter literal, never a dispatch argument. Skills
@@ -1766,23 +1797,6 @@ const DISPATCH_VOCABULARY = [
   'subagent',
 ]
 
-/**
- * Check that no bundled prose instructs an orchestrator to pass a `model`
- * argument when dispatching a sub-agent.
- *
- * OpenCode's `task` tool accepts `subagent_type`, `description`, `prompt`,
- * `task_id`, `command`, and `background` -- there is no `model` parameter.
- * An instruction to pass one degrades the dispatch to a generic sub-agent with
- * no configured model, which then inherits the session model and silently
- * discards the user's per-agent and per-category assignments.
- *
- * Detection requires BOTH an assignment shape and dispatch vocabulary on the
- * same line. Either signal alone is common in legitimate content: skills
- * document the real skill-level `model` frontmatter field, and dispatch prose
- * correctly discusses "the inherited model" without naming an argument.
- * Fenced code blocks and blockquotes are stripped first, so third-party SDK
- * samples that legitimately pass `model` to their own APIs are out of scope.
- */
 export function checkDispatchArguments(
   rootDir: string,
   markdownFiles: readonly string[],
@@ -1794,21 +1808,19 @@ export function checkDispatchArguments(
     if (content === null) continue
     const parsed = parseFrontmatter(content)
 
-    const originalLines = content.split('\n')
-    for (const rawLine of stripMarkdownNonAssertions(parsed.body).split('\n')) {
-      const assignment = MODEL_ARGUMENT_ASSIGNMENT.exec(rawLine)
-      if (assignment === null) continue
-      if (FRONTMATTER_ONLY_MODEL_VALUES.has(assignment[1].toLowerCase()))
-        continue
-      const lowered = rawLine.toLowerCase()
-      if (!DISPATCH_VOCABULARY.some((token) => lowered.includes(token)))
-        continue
+    // `parsed.body` is a suffix of `content`, so the difference in line counts
+    // is exactly the frontmatter offset. Blanking (rather than deleting)
+    // non-assertion lines keeps body indexes aligned with real line numbers,
+    // so repeated occurrences of the same sentence each report their own line.
+    const offset =
+      content.split('\n').length - parsed.body.split('\n').length + 1
+    const bodyLines = blankMarkdownNonAssertions(parsed.body).split('\n')
 
-      const trimmed = rawLine.trim()
-      const index = originalLines.findIndex((line) => line.trim() === trimmed)
+    for (const [index, rawLine] of bodyLines.entries()) {
+      if (!isDispatchArgumentInstruction(rawLine)) continue
       violations.push({
         file: relPath,
-        line: index === -1 ? 0 : index + 1,
+        line: offset + index,
         message:
           `Prose instructs passing a \`model\` argument when dispatching a sub-agent, which the task tool does not accept. ` +
           `Dispatch the bundled agent by name instead so the user's configured assignment applies; model policy is user-owned configuration.`,
@@ -1817,6 +1829,25 @@ export function checkDispatchArguments(
   }
 
   return violations
+}
+
+/**
+ * True when a single line both shows a `model` argument being supplied and
+ * talks about dispatching a sub-agent.
+ */
+function isDispatchArgumentInstruction(rawLine: string): boolean {
+  const lowered = rawLine.toLowerCase()
+  if (!DISPATCH_VOCABULARY.some((token) => lowered.includes(token)))
+    return false
+
+  for (const span of rawLine.matchAll(INLINE_CODE_SPAN)) {
+    const assignment = MODEL_ARGUMENT_ASSIGNMENT.exec(span[1])
+    if (assignment === null) continue
+    if (FRONTMATTER_ONLY_MODEL_VALUES.has(assignment[1].toLowerCase())) continue
+    return true
+  }
+
+  return false
 }
 
 // These are deliberately lexical tokens only; the gate does not attempt to
