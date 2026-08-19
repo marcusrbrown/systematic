@@ -43,8 +43,16 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
 
+      - name: Cache Playwright browsers
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('bun.lock') }}
+
+      # Keep this install in step with the docs job in `main.yaml`; `--with-deps`
+      # is omitted there for the same reason. See that comment for the detail.
       - name: Install Playwright Chromium
-        run: bun playwright install --with-deps chromium
+        run: bun playwright install chromium
         working-directory: docs
 
       - name: Generate reference content
