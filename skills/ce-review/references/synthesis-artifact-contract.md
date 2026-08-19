@@ -62,6 +62,7 @@ The artifact must preserve these distinctions:
       "reviewer": "kieran-typescript",
       "dispatch_outcome": "malformed",
       "rejected_finding_count": 1,
+      "rejected_severities": ["P2"],
       "disposition": "rejected",
       "reason": "Rejected persona kieran-typescript return: field findings[0].evidence failed schema validation."
     }
@@ -99,7 +100,11 @@ The artifact must preserve these distinctions:
   a reason. A rejected payload is represented by one summary ledger entry,
   carrying the persona name, its `dispatch_outcome`, the
   `rejected_finding_count` of findings not admitted, `disposition: "rejected"`,
-  and the exact safe rejection message. Do not enumerate rejected findings or
+  `rejected_severities`, a list of the severities of the findings not
+  admitted as parsed from the payload, and the exact safe rejection message.
+  When a rejected finding's severity is absent, malformed, or not a valid
+  severity value, record it as `unknown`. Severity is metadata; recording it
+  never includes the offending value. Do not enumerate rejected findings or
   assign them input IDs. A finding-level environment rejection uses the same
   summary entry while admitted findings from that return continue normally.
   Disposition counts are weighted by `rejected_finding_count` for that summary
@@ -154,8 +159,11 @@ at least 16 characters long and are not composed solely of digits, dots,
 dashes, or path-separator characters (forward slash or backslash). A
 value is also eligible regardless of length when
 its variable name contains one of `TOKEN`, `SECRET`, `KEY`, `PASSWORD`,
-`PASSWD`, `CREDENTIAL`, `AUTH`, `SESSION`, `COOKIE`, or `PRIVATE`, matched as a
-case-insensitive substring. Values that satisfy neither condition are not
+`PASSWD`, `CREDENTIAL`, `AUTH`, `SESSION`, `COOKIE`, `PRIVATE`, `_PASS`,
+`_PWD`, `PASSPHRASE`, or `SALT`, matched as a case-insensitive substring.
+Entries containing an underscore are matched against the variable name as
+written; the underscore is deliberate and prevents matching benign names that
+merely contain the bare word. Values that satisfy neither condition are not
 matched. A match is an exact or embedded match.
 
 If the offending string is inside one finding, drop that finding and record it
@@ -181,8 +189,15 @@ environment-value validation and is relevant to the same surface. A coverage
 note alone cannot satisfy this rule; the verdict must reflect the missing
 risk-critical evidence.
 
-The same rule applies to finding-level rejection. A selected risk-critical
-persona whose summary ledger entry carries a nonzero `rejected_finding_count`
-lost evidence the parent cannot inspect, so its surface is not covered by that
-persona's surviving findings alone. Treat it exactly as a rejected persona for
-this rule. Partial return is not partial coverage.
+Finding-level rejection is keyed by the severities in
+`rejected_severities`. A selected risk-critical persona whose rejected
+findings include any `P0`, `P1`, or `unknown` severity is treated exactly as a
+rejected persona for this verdict rule: blocking unless another persona
+covered the same surface with validated evidence. A selected risk-critical
+persona whose rejected findings are only `P2` or `P3` does not block on that
+basis alone; record it in the Coverage section instead. Unknown severity is
+treated as blocking as deliberate fail-closed behavior because the parent
+could not determine what was lost. Admitted findings and verdict blocking
+are independent: surviving findings from the same return continue through
+synthesis normally. Partial return is not partial coverage when the lost
+part was critical.
