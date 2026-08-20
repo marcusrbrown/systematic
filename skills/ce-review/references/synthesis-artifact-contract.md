@@ -19,11 +19,13 @@ reason. An unfinished `in_progress` artifact is evidence of an abnormal run,
 not evidence of a clean run. Never infer a clean run from an absent artifact.
 
 The artifact is parent-owned. Per-agent full-detail JSON files are written
-only after the persona return passes full-schema and environment-value
-validation. Rejected or never-returned personas do not produce per-agent
-files. If a later confidence or validation stage changes an input disposition,
-the parent updates the record and synthesis ledger before finalizing the
-artifact.
+only for findings admitted after the parent completes schema and
+environment-value validation. A finding rejected by environment-value
+detection is not persisted; other findings from the same return may proceed.
+A payload rejected at top level, or a rejected or never-returned persona,
+does not produce a per-agent file. If a later confidence or validation stage
+changes an input disposition, the parent updates the record and synthesis
+ledger before finalizing the artifact.
 
 ## Required distinctions and reconciliation
 
@@ -42,9 +44,14 @@ The artifact must preserve these distinctions:
       "input_finding_count": 2
     },
     {
+      "persona": "testing",
+      "dispatch_outcome": "findings",
+      "input_finding_count": 1
+    },
+    {
       "persona": "kieran-typescript",
       "dispatch_outcome": "malformed",
-      "input_finding_count": 1,
+      "input_finding_count": 2,
       "rejection_reason": "Rejected persona kieran-typescript return: field findings[0].evidence failed schema validation."
     }
   ],
@@ -55,6 +62,14 @@ The artifact must preserve these distinctions:
       "confidence": 0.55,
       "disposition": "suppressed",
       "reason": "confidence 0.55 is below the 0.60 gate"
+    },
+    {
+      "reviewer": "kieran-typescript",
+      "dispatch_outcome": "malformed",
+      "rejected_finding_count": 2,
+      "rejected_severities": ["P2", "P3"],
+      "disposition": "rejected",
+      "reason": "Rejected persona kieran-typescript return: field findings[0].evidence failed schema validation."
     }
   ],
   "findings": [
@@ -73,7 +88,7 @@ The artifact must preserve these distinctions:
     "merged": 2,
     "suppressed": 1,
     "filtered": 0,
-    "rejected": 0
+    "rejected": 2
   }
 }
 ```
@@ -84,16 +99,24 @@ The artifact must preserve these distinctions:
   naming persona and field without echoing the offending value. Dispatch
   outcome is separate from finding disposition.
 - `input_findings` is the authoritative parent-owned ledger. Before the
-  confidence gate, every safely enumerable finding receives an `input_id` of
-  `<reviewer>#<1-based finding index>`. Every enumerated input has exactly one
-  final `disposition`: `surviving`, `merged`, `suppressed`, `filtered`, or
-  `rejected`, plus a reason. Disposition counts equal the input-finding count.
-  If a rejected return has a safely enumerable `findings` array, assign IDs and
-  record each enumerated input as `rejected`.
-  A malformed JSON return with no safely enumerable finding has zero ledger
-  entries, not a fabricated finding. A rejected payload's reason is the exact
-  safe rejection message, not a bucket such as `invalid`; never include the
-  offending value.
+  confidence gate, every admitted finding receives an `input_id` of
+  `<reviewer>#<1-based finding index>`. Every admitted input has exactly one
+  final `disposition`: `surviving`, `merged`, `suppressed`, or `filtered`, plus
+  a reason. A rejected payload is represented by one summary ledger entry,
+  carrying the persona name, its `dispatch_outcome`, the
+  `rejected_finding_count` of findings not admitted, `disposition: "rejected"`,
+  `rejected_severities`, a list of the severities of the findings not
+  admitted as parsed from the payload, and the exact safe rejection message.
+  When a rejected finding's severity is absent, malformed, or not a valid
+  severity value, record it as `unknown`. Severity is metadata; recording it
+  never includes the offending value. Do not enumerate rejected findings or
+  assign them input IDs. A finding-level environment rejection uses the same
+  summary entry while admitted findings from that return continue normally.
+  Disposition counts are weighted by `rejected_finding_count` for that summary
+  entry, so their sum equals the total number of findings observed, not the
+  number of ledger rows. A malformed JSON return with no safely enumerable
+  finding has zero ledger entries, not a fabricated finding. Never include the
+  offending value in a rejection reason.
 - Synthesized and filtered findings retain their original fields plus
   `input_finding_ids` and provenance. Provenance contains the exact dedup
   fingerprint `normalize(file) + line_bucket(line, +/-3) + normalize(title)`,
@@ -120,8 +143,66 @@ the verdict is finalized. Existing artifacts without this additive metadata
 remain valid, with downstream consumers falling back to file mtime.
 
 Validation and persistence remain parent-side: no per-agent record or finding
-is written or merged until the complete persona payload passes schema and
-environment-value validation. Rejected or malformed persona returns do not
-fail the whole review; the review degrades while conforming returns continue
-through synthesis. Only an orchestration or storage failure that prevents the
-parent from producing the required run artifact is run-fatal.
+is written or merged until that finding passes schema and environment-value
+validation. Rejected findings are recorded through the single rejected-payload
+ledger summary; admitted findings from the same return remain eligible for
+synthesis. Rejected or malformed persona returns do not fail the whole review;
+the review degrades while conforming returns continue through synthesis. Only
+an orchestration or storage failure that prevents the parent from producing the
+required run artifact is run-fatal.
+
+## Environment-value validation
+
+The parent recursively inspects every string leaf without logging the raw
+return or any matched value. Structural environment detectors remain
+unbounded and unchanged: `$NAME`, `${NAME}`, `process.env.NAME`,
+`os.environ[...]`, and `NAME=value` assignments using a known environment
+variable name are shape-based checks.
+
+Value-based matching uses only non-empty runtime environment values that are
+at least 16 characters long and are not composed solely of digits, dots,
+dashes, or path-separator characters (forward slash or backslash). A
+value is also eligible regardless of length when
+its variable name contains one of `TOKEN`, `SECRET`, `KEY`, `PASSWORD`,
+`PASSWD`, `CREDENTIAL`, `AUTH`, `SESSION`, `COOKIE`, `PRIVATE`, `_PASS`,
+`_PWD`, `PASSPHRASE`, or `_SALT`, matched as a case-insensitive substring.
+Entries containing an underscore are matched against the variable name as
+written; the underscore is deliberate and prevents matching benign names that
+merely contain the bare word. Values that satisfy neither condition are not
+matched. A match is an exact or embedded match.
+
+If the offending string is inside one finding, drop that finding and record it
+through the rejected-payload summary entry; the remaining findings continue
+through validation and synthesis. If the offending string is outside any
+finding, reject the whole payload. Every rejection uses only the persona name,
+JSON path, and a fixed reason (`schema validation`, `environment-value
+detection`, or `malformed JSON`):
+`Rejected persona <name> return: field <JSON path> failed <reason>.` Never
+echo the matched value.
+
+## Risk-aware degraded verdict
+
+The risk-critical surfaces are `security`, `data-migrations`, `api-contract`,
+`reliability`, and `performance`. They are the conditional personas selected
+specifically for the matching diff shape in Stage 3. If one of those selected
+personas has `dispatch_outcome: "malformed"` or
+`dispatch_outcome: "never_returned"`, the review verdict must not be clean:
+it is blocking unless another persona covered the same surface and returned
+validated evidence for it. For this rule, validated evidence means at least
+one finding from that other persona's return passed complete schema and
+environment-value validation and is relevant to the same surface. A coverage
+note alone cannot satisfy this rule; the verdict must reflect the missing
+risk-critical evidence.
+
+Finding-level rejection is keyed by the severities in
+`rejected_severities`. A selected risk-critical persona whose rejected
+findings include any `P0`, `P1`, or `unknown` severity is treated exactly as a
+rejected persona for this verdict rule: blocking unless another persona
+covered the same surface with validated evidence. A selected risk-critical
+persona whose rejected findings are only `P2` or `P3` does not block on that
+basis alone; record it in the Coverage section instead. Unknown severity is
+treated as blocking as deliberate fail-closed behavior because the parent
+could not determine what was lost. Admitted findings and verdict blocking
+are independent: surviving findings from the same return continue through
+synthesis normally. Partial return is not partial coverage when the lost
+part was critical.
