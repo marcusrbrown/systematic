@@ -44,9 +44,14 @@ The artifact must preserve these distinctions:
       "input_finding_count": 2
     },
     {
+      "persona": "testing",
+      "dispatch_outcome": "findings",
+      "input_finding_count": 1
+    },
+    {
       "persona": "kieran-typescript",
       "dispatch_outcome": "malformed",
-      "input_finding_count": 1,
+      "input_finding_count": 2,
       "rejection_reason": "Rejected persona kieran-typescript return: field findings[0].evidence failed schema validation."
     }
   ],
@@ -61,8 +66,8 @@ The artifact must preserve these distinctions:
     {
       "reviewer": "kieran-typescript",
       "dispatch_outcome": "malformed",
-      "rejected_finding_count": 1,
-      "rejected_severities": ["P2"],
+      "rejected_finding_count": 2,
+      "rejected_severities": ["P2", "P3"],
       "disposition": "rejected",
       "reason": "Rejected persona kieran-typescript return: field findings[0].evidence failed schema validation."
     }
@@ -83,7 +88,7 @@ The artifact must preserve these distinctions:
     "merged": 2,
     "suppressed": 1,
     "filtered": 0,
-    "rejected": 1
+    "rejected": 2
   }
 }
 ```
@@ -160,7 +165,7 @@ dashes, or path-separator characters (forward slash or backslash). A
 value is also eligible regardless of length when
 its variable name contains one of `TOKEN`, `SECRET`, `KEY`, `PASSWORD`,
 `PASSWD`, `CREDENTIAL`, `AUTH`, `SESSION`, `COOKIE`, `PRIVATE`, `_PASS`,
-`_PWD`, `PASSPHRASE`, or `SALT`, matched as a case-insensitive substring.
+`_PWD`, `PASSPHRASE`, or `_SALT`, matched as a case-insensitive substring.
 Entries containing an underscore are matched against the variable name as
 written; the underscore is deliberate and prevents matching benign names that
 merely contain the bare word. Values that satisfy neither condition are not
@@ -180,7 +185,7 @@ echo the matched value.
 The risk-critical surfaces are `security`, `data-migrations`, `api-contract`,
 `reliability`, and `performance`. They are the conditional personas selected
 specifically for the matching diff shape in Stage 3. If one of those selected
-personas ends with `dispatch_outcome: "malformed"` or
+personas has `dispatch_outcome: "malformed"` or
 `dispatch_outcome: "never_returned"`, the review verdict must not be clean:
 it is blocking unless another persona covered the same surface and returned
 validated evidence for it. For this rule, validated evidence means at least

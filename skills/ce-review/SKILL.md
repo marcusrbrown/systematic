@@ -519,7 +519,7 @@ Assemble the final report using **pipe-delimited markdown tables for findings** 
 9. **Agent-Native Gaps.** Surface agent-native-reviewer results. Omit section if no gaps found.
 10. **Deployment Notes.** If deployment-verification-agent ran, surface the key Go/No-Go items: blocking pre-deploy checks, the most important verification queries, rollback caveats, and monitoring focus areas. Keep the checklist actionable rather than dropping it into Coverage.
 11. **Coverage.** Suppressed count, residual risks, testing gaps, failed/timed-out reviewers, validator failures, and any intent uncertainty carried by non-interactive modes.
-12. **Verdict.** Ready to merge / Ready with fixes / Not ready. Fix order if applicable. When an `explicit` plan has unaddressed requirements, the verdict must reflect it — a PR that's code-clean but missing planned requirements is "Not ready" unless the omission is intentional. When an `inferred` plan has unaddressed requirements, note it in the verdict reasoning but do not block on it alone.
+12. **Verdict.** Ready to merge / Ready with fixes / Not ready. Fix order if applicable. When an `explicit` plan has unaddressed requirements, the verdict must reflect it — a PR that's code-clean but missing planned requirements is "Not ready" unless the omission is intentional. When an `inferred` plan has unaddressed requirements, note it in the verdict reasoning but do not block on it alone. Apply the risk-aware degraded verdict rule from the [synthesis artifact contract](./references/synthesis-artifact-contract.md).
 
 Do not include time estimates.
 
