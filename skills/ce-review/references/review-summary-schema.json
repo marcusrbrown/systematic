@@ -1,0 +1,517 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "schema_version": {
+      "type": "number",
+      "const": 1
+    },
+    "run_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "\\S"
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["interactive", "autofix", "headless"]
+    },
+    "harness": {
+      "type": "string",
+      "enum": ["opencode", "pi", "claude-code"]
+    },
+    "run_status": {
+      "type": "string",
+      "enum": ["in_progress", "completed", "degraded", "abnormal"]
+    },
+    "verdict": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256,
+      "pattern": "\\S"
+    },
+    "dispatches": {
+      "maxItems": 64,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "persona": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "\\S"
+          },
+          "dispatch_outcome": {
+            "type": "string",
+            "enum": ["findings", "empty", "malformed", "never_returned"]
+          },
+          "input_finding_count": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 32
+          },
+          "rejection_reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "\\S"
+          }
+        },
+        "required": ["persona", "dispatch_outcome", "input_finding_count"],
+        "additionalProperties": false
+      }
+    },
+    "input_findings": {
+      "maxItems": 2048,
+      "type": "array",
+      "items": {
+        "oneOf": [
+          {
+            "type": "object",
+            "properties": {
+              "record_type": {
+                "type": "string",
+                "const": "admitted"
+              },
+              "input_id": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 128,
+                "pattern": "\\S"
+              },
+              "reviewer": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "\\S"
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "disposition": {
+                "type": "string",
+                "enum": ["surviving", "merged", "suppressed", "filtered"]
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048,
+                "pattern": "\\S"
+              }
+            },
+            "required": [
+              "record_type",
+              "input_id",
+              "reviewer",
+              "confidence",
+              "disposition",
+              "reason"
+            ],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "record_type": {
+                "type": "string",
+                "const": "rejected_summary"
+              },
+              "reviewer": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 64,
+                "pattern": "\\S"
+              },
+              "dispatch_outcome": {
+                "type": "string",
+                "enum": ["findings", "empty", "malformed", "never_returned"]
+              },
+              "rejected_finding_count": {
+                "type": "integer",
+                "exclusiveMinimum": 0,
+                "maximum": 32
+              },
+              "rejected_severities": {
+                "maxItems": 32,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "enum": ["P0", "P1", "P2", "P3", "unknown"]
+                }
+              },
+              "disposition": {
+                "type": "string",
+                "enum": ["rejected"]
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048,
+                "pattern": "\\S"
+              }
+            },
+            "required": [
+              "record_type",
+              "reviewer",
+              "dispatch_outcome",
+              "rejected_finding_count",
+              "rejected_severities",
+              "disposition",
+              "reason"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "findings": {
+      "maxItems": 32,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "pattern": "\\S"
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["P0", "P1", "P2", "P3"]
+          },
+          "file": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "allOf": [
+              {
+                "type": "string",
+                "pattern": "\\S"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!\\/)(?![A-Za-z]:[\\\\/])(?!\\\\).+"
+              }
+            ]
+          },
+          "line": {
+            "type": "integer",
+            "exclusiveMinimum": 0,
+            "maximum": 9007199254740991
+          },
+          "why_it_matters": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "\\S"
+          },
+          "autofix_class": {
+            "type": "string",
+            "enum": ["safe_auto", "gated_auto", "manual", "advisory"]
+          },
+          "owner": {
+            "type": "string",
+            "enum": ["review-fixer", "downstream-resolver", "human", "release"]
+          },
+          "requires_verification": {
+            "type": "boolean"
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "evidence": {
+            "minItems": 1,
+            "maxItems": 5,
+            "type": "array",
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500,
+                  "allOf": [
+                    {
+                      "type": "string",
+                      "pattern": "\\S"
+                    },
+                    {
+                      "type": "string",
+                      "pattern": "^(?!\\/)(?![A-Za-z]:[\\\\/])(?!\\\\).+"
+                    }
+                  ]
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "overflow": {
+                      "type": "boolean",
+                      "const": true
+                    },
+                    "excerpt": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 500,
+                      "allOf": [
+                        {
+                          "type": "string",
+                          "pattern": "\\S"
+                        },
+                        {
+                          "type": "string",
+                          "pattern": "^(?!\\/)(?![A-Za-z]:[\\\\/])(?!\\\\).+"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["overflow", "excerpt"],
+                  "additionalProperties": false
+                }
+              ]
+            }
+          },
+          "pre_existing": {
+            "type": "boolean"
+          },
+          "suggested_fix": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2048
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "validated": {
+            "type": "boolean"
+          },
+          "validation_reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "\\S"
+          },
+          "input_finding_ids": {
+            "minItems": 1,
+            "maxItems": 32,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "\\S"
+            }
+          },
+          "provenance": {
+            "type": "object",
+            "properties": {
+              "fingerprint": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 512,
+                "pattern": "\\S"
+              },
+              "submitters": {
+                "maxItems": 64,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64,
+                  "pattern": "\\S"
+                }
+              },
+              "agreement_credit": {
+                "maxItems": 64,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 64,
+                  "pattern": "\\S"
+                }
+              }
+            },
+            "required": ["fingerprint", "submitters", "agreement_credit"],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "title",
+          "severity",
+          "file",
+          "line",
+          "why_it_matters",
+          "autofix_class",
+          "owner",
+          "requires_verification",
+          "confidence",
+          "evidence",
+          "pre_existing",
+          "input_finding_ids",
+          "provenance"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "disposition_counts": {
+      "type": "object",
+      "properties": {
+        "surviving": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2048
+        },
+        "merged": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2048
+        },
+        "suppressed": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2048
+        },
+        "filtered": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2048
+        },
+        "rejected": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2048
+        }
+      },
+      "required": ["surviving", "merged", "suppressed", "filtered", "rejected"],
+      "additionalProperties": false
+    },
+    "applied_fixes": {
+      "maxItems": 32,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2048,
+        "pattern": "\\S"
+      }
+    },
+    "residual_actionable_work": {
+      "maxItems": 32,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2048,
+        "pattern": "\\S"
+      }
+    },
+    "advisory_outputs": {
+      "maxItems": 32,
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2048,
+        "pattern": "\\S"
+      }
+    },
+    "coverage": {
+      "type": "object",
+      "properties": {
+        "reviewers": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 64
+        },
+        "validators": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 64
+        },
+        "residual_risks": {
+          "maxItems": 64,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "\\S"
+          }
+        },
+        "testing_gaps": {
+          "maxItems": 64,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "\\S"
+          }
+        },
+        "failed_reviewers": {
+          "maxItems": 64,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "pattern": "\\S"
+          }
+        },
+        "validator_failures": {
+          "maxItems": 64,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "\\S"
+          }
+        },
+        "intent_uncertainty": {
+          "maxItems": 64,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "\\S"
+          }
+        }
+      },
+      "required": [
+        "residual_risks",
+        "testing_gaps",
+        "failed_reviewers",
+        "validator_failures",
+        "intent_uncertainty"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "schema_version",
+    "run_id",
+    "mode",
+    "harness",
+    "run_status",
+    "verdict",
+    "dispatches",
+    "input_findings",
+    "findings",
+    "disposition_counts",
+    "applied_fixes",
+    "residual_actionable_work",
+    "advisory_outputs",
+    "coverage"
+  ],
+  "additionalProperties": false
+}

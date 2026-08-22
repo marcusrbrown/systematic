@@ -95,6 +95,9 @@ jobs:
       - name: Schema drift check
         run: bun run schema:drift
 
+      - name: Review artifact schema drift check
+        run: bun run review-schema:drift
+
   typecheck:
     name: Typecheck
     runs-on: ubuntu-latest

@@ -112,6 +112,9 @@ Workflow guard and evidence
   src/lib/receipt-readback.ts            — validate and project receipt markers and progression readbacks
   src/lib/workflow-guard.ts              — core receipt-backed workflow state machine and transition enforcement
 
+Review artifact contract
+  src/lib/review-artifact-schema.ts      — Zod source of truth for the ce:review run-level artifact
+
 ```
 
 ## Codemap exclusions

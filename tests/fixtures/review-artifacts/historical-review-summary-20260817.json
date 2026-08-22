@@ -1,0 +1,112 @@
+{
+  "schema_note": "ce:review synthesis artifact",
+  "harness": "opencode",
+  "scope": {
+    "base": "placeholder",
+    "commits": 1,
+    "files": 2,
+    "executable_lines_changed": 217
+  },
+  "dispatches": [
+    { "reviewer": "correctness", "dispatch_outcome": "findings", "count": 2 },
+    { "reviewer": "adversarial", "dispatch_outcome": "findings", "count": 4 },
+    { "reviewer": "testing", "dispatch_outcome": "findings", "count": 1 },
+    {
+      "reviewer": "maintainability",
+      "dispatch_outcome": "findings",
+      "count": 1
+    },
+    {
+      "reviewer": "project-standards",
+      "dispatch_outcome": "findings",
+      "count": 1
+    },
+    {
+      "reviewer": "kieran-typescript",
+      "dispatch_outcome": "findings",
+      "count": 1
+    },
+    { "reviewer": "api-contract", "dispatch_outcome": "findings", "count": 1 },
+    {
+      "reviewer": "agent-native",
+      "dispatch_outcome": "findings",
+      "count": 4,
+      "format": "unstructured"
+    },
+    {
+      "reviewer": "learnings-researcher",
+      "dispatch_outcome": "findings",
+      "count": 0,
+      "format": "unstructured"
+    }
+  ],
+  "input_ledger": {
+    "inputs": 11,
+    "surviving": 4,
+    "merged": 2,
+    "filtered": 1,
+    "suppressed": 0,
+    "rejected": 0,
+    "advisory": 4
+  },
+  "orchestrator_verification": "placeholder",
+  "confirmed": [
+    {
+      "defect": "placeholder",
+      "submitters": ["adversarial", "correctness"],
+      "agreement_credit": [],
+      "severity": "P1",
+      "status": "fixed"
+    },
+    {
+      "defect": "placeholder",
+      "submitters": ["adversarial"],
+      "agreement_credit": [],
+      "severity": "P1",
+      "status": "fixed"
+    },
+    {
+      "defect": "placeholder",
+      "submitters": ["correctness"],
+      "agreement_credit": [],
+      "severity": "P2",
+      "status": "fixed"
+    },
+    {
+      "defect": "placeholder",
+      "submitters": ["adversarial"],
+      "agreement_credit": [],
+      "severity": "P2",
+      "status": "fixed"
+    }
+  ],
+  "filtered": [
+    {
+      "claim": "placeholder",
+      "submitters": ["adversarial"],
+      "confidence": 0.87,
+      "validated": false,
+      "reason": "placeholder"
+    }
+  ],
+  "also_fixed": [
+    "placeholder",
+    "placeholder",
+    "placeholder",
+    "placeholder",
+    "placeholder"
+  ],
+  "deferred": [
+    {
+      "item": "placeholder",
+      "reviewer": "agent-native",
+      "reason": "placeholder"
+    },
+    {
+      "item": "placeholder",
+      "reviewer": "maintainability",
+      "reason": "placeholder"
+    }
+  ],
+  "verdict": "Ready with fixes applied"
+}

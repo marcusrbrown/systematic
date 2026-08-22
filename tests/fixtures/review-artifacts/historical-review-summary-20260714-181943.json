@@ -1,0 +1,52 @@
+{
+  "run_id": "20260714-181943-example",
+  "mode": "autofix",
+  "base": "placeholder",
+  "head": "placeholder",
+  "intent": "placeholder",
+  "verdict": "actionable",
+  "findings": [
+    {
+      "title": "placeholder",
+      "severity": "P2",
+      "file": "src/example.ts",
+      "line": 42,
+      "confidence": 0.96,
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "validated": true
+    },
+    {
+      "title": "placeholder",
+      "severity": "P2",
+      "file": "src/example.ts",
+      "line": 7,
+      "confidence": 0.82,
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "validated": true
+    }
+  ],
+  "filtered": [
+    {
+      "title": "placeholder",
+      "validated": false,
+      "reason": "placeholder"
+    },
+    {
+      "title": "placeholder",
+      "validated": false,
+      "reason": "placeholder"
+    },
+    {
+      "title": "placeholder",
+      "validated": false,
+      "reason": "placeholder"
+    }
+  ],
+  "malformed_returns": ["placeholder", "placeholder"],
+  "applied_fixes": [],
+  "residual_todos": ["004"]
+}
