@@ -25,6 +25,7 @@ import {
   refresh,
   resolveAgentsRoot,
 } from './lib/pi-subagents-export.js'
+import { ReviewArtifactSchema } from './lib/review-artifact-schema.js'
 import { type Harness, setupHarness } from './lib/setup.js'
 import * as skills from './lib/skills.js'
 
@@ -70,6 +71,8 @@ Usage:
 Commands:
   list [type]                  List available skills, agents, or commands
   capabilities                 Read-only standalone-CLI observation; not a host-runtime or canonical-registry view
+  validate-review-artifact <path>
+                               Validate a ce:review run artifact
   config [subcommand]          Configuration management
     show                       Show configuration
     path                       Print config file locations
@@ -87,6 +90,7 @@ Options:
 Examples:
   systematic list skills
   systematic capabilities
+  systematic validate-review-artifact .context/systematic/ce-review/review-summary.json
   systematic list agents
   systematic config show
   systematic setup --harness opencode
@@ -110,6 +114,9 @@ Scope:
   project   <cwd>/.pi/agents (default)
   global    $PI_CODING_AGENT_DIR/agents or ~/.pi/agent/agents
 `
+
+const VALIDATE_REVIEW_ARTIFACT_USAGE =
+  'Usage: systematic validate-review-artifact <path>'
 
 interface CapabilityCliRoots {
   readonly agentsRoot: string
@@ -325,6 +332,221 @@ function runCapabilities(options: CapabilityCliOptions): number {
 
 export function runCapabilitiesCli(options: CapabilityCliOptions): number {
   return runCapabilities(options)
+}
+
+interface ValidateReviewArtifactCliOptions {
+  readonly argv: readonly string[]
+  readonly cwd?: string
+  readonly outputSink?: (message: string) => void
+  readonly errorSink?: (message: string) => void
+}
+
+type ArtifactPathResult =
+  | { readonly ok: true; readonly path: string }
+  | { readonly ok: false; readonly message: string }
+
+function hasParentDirectoryTraversal(input: string): boolean {
+  return input.split(/[\\/]+/).some((segment) => segment === '..')
+}
+
+function pathContainsSymlink(candidate: string): boolean {
+  let current = path.parse(candidate).root
+  const relative = path.relative(current, candidate)
+  for (const segment of relative.split(path.sep)) {
+    if (!segment) continue
+    current = path.join(current, segment)
+    try {
+      if (fs.lstatSync(current).isSymbolicLink()) return true
+    } catch {
+      // A missing path is handled by realpathSync below. Existing ancestors
+      // have still been checked for symlinks before reaching the missing part.
+      return false
+    }
+  }
+  return false
+}
+
+function isWithinDirectory(candidate: string, directory: string): boolean {
+  const relative = path.relative(directory, candidate)
+  return (
+    relative !== '' &&
+    relative !== '..' &&
+    !relative.startsWith(`..${path.sep}`) &&
+    !path.isAbsolute(relative)
+  )
+}
+
+function resolveReviewArtifactPath(
+  input: string,
+  cwd: string,
+): ArtifactPathResult {
+  if (hasParentDirectoryTraversal(input)) {
+    return {
+      message:
+        'Review artifact path must not contain parent-directory traversal',
+      ok: false,
+    }
+  }
+
+  const artifactRoot = path.resolve(cwd, '.context', 'systematic', 'ce-review')
+  let canonicalRoot: string
+  try {
+    canonicalRoot = fs.realpathSync(artifactRoot)
+    if (!fs.statSync(canonicalRoot).isDirectory()) {
+      return {
+        message: 'Review artifact directory is not a directory',
+        ok: false,
+      }
+    }
+  } catch {
+    return { message: 'Review artifact directory is unavailable', ok: false }
+  }
+
+  const candidate = path.resolve(cwd, input)
+  if (pathContainsSymlink(candidate)) {
+    return {
+      message: 'Review artifact path must not contain symlinks',
+      ok: false,
+    }
+  }
+
+  let canonicalTarget: string
+  try {
+    canonicalTarget = fs.realpathSync(candidate)
+  } catch {
+    return { message: 'Review artifact file was not found', ok: false }
+  }
+
+  if (!isWithinDirectory(canonicalTarget, canonicalRoot)) {
+    return {
+      message:
+        'Review artifact path must remain inside .context/systematic/ce-review',
+      ok: false,
+    }
+  }
+
+  try {
+    if (!fs.lstatSync(canonicalTarget).isFile()) {
+      return {
+        message: 'Review artifact target is not a regular file',
+        ok: false,
+      }
+    }
+  } catch {
+    return { message: 'Review artifact file was not found', ok: false }
+  }
+
+  return { ok: true, path: canonicalTarget }
+}
+
+function formatReviewArtifactIssuePath(
+  issuePath: readonly PropertyKey[],
+): string {
+  if (issuePath.length === 0) return '$'
+  return issuePath
+    .map((segment) => (typeof segment === 'number' ? String(segment) : segment))
+    .join('.')
+}
+
+function validateReviewArtifactArgument(
+  argv: readonly string[],
+): string | undefined {
+  const commandIndex = argv[0] === 'systematic' ? 1 : 0
+  if (argv[commandIndex] !== 'validate-review-artifact') return undefined
+  if (argv.length !== commandIndex + 2) return undefined
+  return argv[commandIndex + 1]
+}
+
+type ReadArtifactResult =
+  | { readonly ok: true; readonly value: unknown }
+  | { readonly ok: false; readonly message: string }
+
+function readReviewArtifact(filePath: string): ReadArtifactResult {
+  let content: string
+  try {
+    content = fs.readFileSync(filePath, 'utf8')
+  } catch {
+    return { message: 'Review artifact file could not be read', ok: false }
+  }
+
+  try {
+    return { ok: true, value: JSON.parse(content) as unknown }
+  } catch (error) {
+    return {
+      message:
+        error instanceof SyntaxError
+          ? 'Review artifact contains malformed JSON'
+          : 'Review artifact file could not be read',
+      ok: false,
+    }
+  }
+}
+
+function isLegacyReviewArtifact(value: unknown): boolean {
+  return (
+    value === null ||
+    typeof value !== 'object' ||
+    !Object.hasOwn(value, 'schema_version')
+  )
+}
+
+function runValidateReviewArtifact(
+  options: ValidateReviewArtifactCliOptions,
+): number {
+  const outputSink =
+    options.outputSink ?? ((message: string) => console.log(message))
+  const errorSink =
+    options.errorSink ?? ((message: string) => console.error(message))
+  const input = validateReviewArtifactArgument(options.argv)
+  if (input === undefined) {
+    errorSink(VALIDATE_REVIEW_ARTIFACT_USAGE)
+    return 2
+  }
+
+  const resolved = resolveReviewArtifactPath(
+    input,
+    options.cwd ?? process.cwd(),
+  )
+  if (!resolved.ok) {
+    errorSink(resolved.message)
+    return 2
+  }
+
+  const artifact = readReviewArtifact(resolved.path)
+  if (!artifact.ok) {
+    errorSink(artifact.message)
+    return 2
+  }
+
+  if (isLegacyReviewArtifact(artifact.value)) {
+    errorSink('Legacy review artifact: no schema_version field')
+    return 3
+  }
+
+  const result = ReviewArtifactSchema.safeParse(artifact.value)
+  if (!result.success) {
+    for (const issue of result.error.issues) {
+      const issuePath = formatReviewArtifactIssuePath(issue.path)
+      // Custom issues are authored by ReviewArtifactSchema and contain static
+      // cross-field diagnostics. All other Zod messages may interpolate input.
+      const authoredMessage =
+        issue.code === 'custom' ? `: ${issue.message}` : ''
+      errorSink(`${issuePath} ${issue.code}${authoredMessage}`)
+    }
+    errorSink(
+      `Review artifact validation failed: ${result.error.issues.length} issue(s)`,
+    )
+    return 1
+  }
+
+  outputSink('Review artifact is valid')
+  return 0
+}
+
+export function runValidateReviewArtifactCli(
+  options: ValidateReviewArtifactCliOptions,
+): number {
+  return runValidateReviewArtifact(options)
 }
 
 function isHarness(value: string): value is Harness {
@@ -629,6 +851,16 @@ function runLegacyCli(args: string[]): void {
         errorSink: console.error,
         outputSink: console.log,
         roots: defaultCapabilityRoots(),
+      })
+      if (status !== 0) process.exit(status)
+      break
+    }
+    case 'validate-review-artifact': {
+      const status = runValidateReviewArtifactCli({
+        argv: ['systematic', ...args],
+        cwd: process.cwd(),
+        errorSink: console.error,
+        outputSink: console.log,
       })
       if (status !== 0) process.exit(status)
       break
