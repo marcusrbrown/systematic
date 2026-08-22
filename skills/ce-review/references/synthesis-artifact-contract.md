@@ -34,6 +34,7 @@ The artifact must preserve these distinctions:
 ```json
 {
   "run_id": "<run-id>",
+  "schema_version": 1,
   "mode": "<interactive | autofix | headless>",
   "harness": "<opencode | pi | claude-code>",
   "run_status": "<in_progress | completed | degraded | abnormal>",
@@ -179,6 +180,45 @@ JSON path, and a fixed reason (`schema validation`, `environment-value
 detection`, or `malformed JSON`):
 `Rejected persona <name> return: field <JSON path> failed <reason>.` Never
 echo the matched value.
+
+## Artifact validation
+
+The parent writes `schema_version: 1` into `review-summary.json` before
+validating it. This ordering makes the artifact validatable at all: without
+`schema_version`, the validator reports the legacy status (exit 3) rather than
+a real validation result.
+
+After writing `review-summary.json`, the parent runs
+`systematic validate-review-artifact <path>` against it. A nonzero exit means
+the run is not complete. The [executable schema](./review-summary-schema.json)
+is generated from a Zod source and is the machine-checkable form of the shape
+described here.
+
+On validation failure, the parent repairs the artifact and re-runs the
+validator. It does not report a verdict over an artifact that failed
+validation, and it does not delete the artifact to escape the check. A failing
+artifact is evidence and stays on disk; an absent artifact is never evidence
+of a clean run.
+
+This is enforcement by visible failure, not by containment. An agent that
+never runs the command can still finalize an artifact, but produces no evidence
+in either direction. That is why the command exists as an independently
+runnable check rather than as a self-validation instruction, and why its result
+belongs in the run record.
+
+`mode:report-only` writes no artifact and therefore performs no validation.
+
+## Historical corpus exclusion
+
+Artifacts without `schema_version` predate this contract, are excluded from
+quantitative analysis, and no legacy reader will be written. The validator
+backs this exclusion with its exit 3 legacy status rather than leaving it as
+a prose-only decision. Across 26 run directories, 7 synthesis artifacts were
+written under two different filenames (`review-summary.json` and
+`summary.json`); no two shared a shape. A parser would need seven special
+cases to recover data that still could not answer cross-reviewer agreement
+questions, because 19 of the 26 runs had no synthesis artifact to reconcile
+against at all.
 
 ## Risk-aware degraded verdict
 

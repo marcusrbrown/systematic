@@ -704,6 +704,7 @@ After presenting findings and verdict (Stage 6), route the next steps by mode. R
 
 - In interactive, autofix, and headless modes, write **`review-summary.json` unconditionally** under `.context/systematic/ce-review/<run-id>`; `mode:report-only` remains the deliberate no-write exception.
 - `review-summary.json` is the parent-owned synthesis artifact. Its lifecycle, dispatch outcomes, complete input ledger, synthesized and filtered findings with provenance, disposition counts, and downstream work are defined in the [canonical synthesis artifact contract](./references/synthesis-artifact-contract.md), whose vocabulary and bounds are executable in [`findings-schema.json`](./references/findings-schema.json).
+- Before finalizing, follow the [artifact validation and failure path](./references/synthesis-artifact-contract.md).
 - Initialize the artifact before dispatch and persist only validated parent-owned records. Finalize lifecycle and reconciliation after synthesis; preserve the existing degraded and abnormal-run behavior described in the canonical contract.
 - Also write `metadata.json` alongside the findings so downstream skills can verify the artifact matches the current branch and HEAD. Minimum fields:
   ```json
