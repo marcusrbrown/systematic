@@ -25,8 +25,7 @@ systematic/
 ├── tests/
 │   ├── unit/         # 56 unit test files
 │   └── integration/  # 11 integration test files
-├── .opencode/        # Project-specific OpenCode config + commands
-│   └── commands/     # Project-only commands (not shipped in npm package)
+├── .opencode/        # Project-specific OpenCode config (theme, TUI)
 ├── .claude-plugin/   # marketplace.json — Claude Code marketplace catalog entry
 └── dist/             # Compiled output (generated, not committed)
 ```
@@ -119,7 +118,6 @@ bundled assets before editing or building the docs site.
 - `scripts/generate-agent-browser-skill.ts` — generates the agent-browser skill content; pass
   `--check` for drift detection
 - `scripts/generate-config-schema.ts` — JSON Schema codegen + drift check
-- `scripts/generate-review-artifact-schema.ts` — JSON Schema codegen for the `ce:review` artifact + drift check
 - `scripts/build-claude-code-plugin.ts` — generates the self-contained Claude Code plugin bundle
   (`claude-code/`, gitignored staging) from `skills/` and `agents/`; CI publishes the output to the
   orphan `claude-code-plugin` branch, never committed to `main`
@@ -160,9 +158,12 @@ no mocking libraries.
 
 **Purpose:** Project-specific OpenCode configuration. Not shipped in the npm package.
 
-**Contains:**
-- `.opencode/commands/` — project-only commands (e.g., `generate-readme`). These are not bundled;
-  they exist only for contributors working in this repo.
+**Contains:** `themes/systematic.json` and `tui.json`. Everything else under this directory
+is local tooling state and is gitignored.
+
+`findCommandsInDir` (`src/lib/commands.ts`) still discovers `.opencode/commands/` for
+backward compatibility, but this repository ships no project commands of its own — the
+directory is absent.
 
 ### `.claude-plugin/`
 
