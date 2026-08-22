@@ -1,9 +1,20 @@
 import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
-import { ReviewArtifactSchema } from '../../src/lib/review-artifact-schema.js'
+import {
+  REVIEW_ARTIFACT_CUSTOM_MESSAGES,
+  type ReviewArtifact,
+  ReviewArtifactSchema,
+} from '../../src/lib/review-artifact-schema.js'
 
 type JsonObject = Record<string, unknown>
+
+type UnvalidatedFindingRequiresReason =
+  Extract<ReviewArtifact['findings'][number], { validated: false }> extends {
+    validation_reason: string
+  }
+    ? true
+    : false
 
 const fixtureRoot = path.resolve(
   import.meta.dir,
@@ -116,6 +127,12 @@ describe('review artifact schema', () => {
     expect(result.success).toBe(true)
   })
 
+  test('requires a validation reason in the type for unvalidated findings', () => {
+    const requirement: UnvalidatedFindingRequiresReason = true
+
+    expect(requirement).toBe(true)
+  })
+
   test('accepts an artifact with an empty input_findings array', () => {
     const result = ReviewArtifactSchema.safeParse(
       artifactWith({ input_findings: [] }),
@@ -222,32 +239,228 @@ describe('review artifact schema', () => {
     expect(result.success).toBe(false)
   })
 
-  test('rejects every historical artifact fixture with a named reason', () => {
+  test('rejects every historical artifact fixture with its expected issue set', () => {
     const historicalFixtures = [
-      'historical-review-summary-20260817.json',
       'historical-review-summary-20260714.json',
       'historical-review-summary-20260713.json',
       'historical-review-summary-20260714-181943.json',
       'historical-summary-20260731-212644.json',
       'historical-summary-20260731-140958.json',
       'historical-summary-20260801.json',
+      'historical-review-summary-20260817.json',
     ]
+
+    const expectedIssues: Record<string, readonly string[]> = {
+      'historical-review-summary-20260713.json': [
+        'schema_version invalid_value',
+        'harness invalid_value',
+        'run_status invalid_value',
+        'dispatches invalid_type',
+        'input_findings invalid_type',
+        'findings.0.why_it_matters invalid_type',
+        'findings.0.evidence invalid_type',
+        'findings.0.pre_existing invalid_type',
+        'findings.0.input_finding_ids invalid_type',
+        'findings.0.provenance invalid_type',
+        'findings.0 unrecognized_keys',
+        'findings.1.why_it_matters invalid_type',
+        'findings.1.evidence invalid_type',
+        'findings.1.pre_existing invalid_type',
+        'findings.1.input_finding_ids invalid_type',
+        'findings.1.provenance invalid_type',
+        'findings.1 unrecognized_keys',
+        'disposition_counts invalid_type',
+        'applied_fixes invalid_type',
+        'residual_actionable_work invalid_type',
+        'advisory_outputs invalid_type',
+        'coverage invalid_type',
+        '$ unrecognized_keys',
+      ],
+      'historical-review-summary-20260714-181943.json': [
+        'schema_version invalid_value',
+        'harness invalid_value',
+        'run_status invalid_value',
+        'dispatches invalid_type',
+        'input_findings invalid_type',
+        'findings.0.why_it_matters invalid_type',
+        'findings.0.evidence invalid_type',
+        'findings.0.pre_existing invalid_type',
+        'findings.0.input_finding_ids invalid_type',
+        'findings.0.provenance invalid_type',
+        'findings.1.why_it_matters invalid_type',
+        'findings.1.evidence invalid_type',
+        'findings.1.pre_existing invalid_type',
+        'findings.1.input_finding_ids invalid_type',
+        'findings.1.provenance invalid_type',
+        'disposition_counts invalid_type',
+        'residual_actionable_work invalid_type',
+        'advisory_outputs invalid_type',
+        'coverage invalid_type',
+        '$ unrecognized_keys',
+      ],
+      'historical-review-summary-20260714.json': [
+        'schema_version invalid_value',
+        'harness invalid_value',
+        'run_status invalid_value',
+        'dispatches invalid_type',
+        'input_findings invalid_type',
+        ...Array.from({ length: 5 }, (_, index) => [
+          `findings.${index}.file invalid_type`,
+          `findings.${index}.line invalid_type`,
+          `findings.${index}.why_it_matters invalid_type`,
+          `findings.${index}.autofix_class invalid_value`,
+          `findings.${index}.owner invalid_value`,
+          `findings.${index}.requires_verification invalid_type`,
+          `findings.${index}.confidence invalid_type`,
+          `findings.${index}.evidence invalid_type`,
+          `findings.${index}.pre_existing invalid_type`,
+          `findings.${index}.input_finding_ids invalid_type`,
+          `findings.${index}.provenance invalid_type`,
+          `findings.${index} unrecognized_keys`,
+        ]).flat(),
+        'disposition_counts invalid_type',
+        'applied_fixes invalid_type',
+        'residual_actionable_work invalid_type',
+        'advisory_outputs invalid_type',
+        'coverage.residual_risks invalid_type',
+        'coverage.testing_gaps invalid_type',
+        'coverage.failed_reviewers invalid_type',
+        'coverage.validator_failures invalid_type',
+        'coverage.intent_uncertainty invalid_type',
+        'coverage unrecognized_keys',
+        '$ unrecognized_keys',
+      ],
+      'historical-review-summary-20260817.json': [
+        'schema_version invalid_value',
+        'run_id invalid_type',
+        'mode invalid_value',
+        'run_status invalid_value',
+        ...Array.from({ length: 9 }, (_, index) => [
+          `dispatches.${index}.persona invalid_type`,
+          `dispatches.${index}.input_finding_count invalid_type`,
+          `dispatches.${index} unrecognized_keys`,
+        ]).flat(),
+        'input_findings invalid_type',
+        'findings invalid_type',
+        'disposition_counts invalid_type',
+        'applied_fixes invalid_type',
+        'residual_actionable_work invalid_type',
+        'advisory_outputs invalid_type',
+        'coverage invalid_type',
+        '$ unrecognized_keys',
+      ],
+      'historical-summary-20260731-140958.json': [
+        'schema_version invalid_value',
+        'run_id invalid_type',
+        'harness invalid_value',
+        'run_status invalid_value',
+        'dispatches invalid_type',
+        'input_findings invalid_type',
+        'findings invalid_type',
+        'disposition_counts invalid_type',
+        'applied_fixes invalid_type',
+        'residual_actionable_work invalid_type',
+        'advisory_outputs invalid_type',
+        'coverage.residual_risks invalid_type',
+        'coverage.testing_gaps invalid_type',
+        'coverage.failed_reviewers invalid_type',
+        'coverage.validator_failures invalid_type',
+        'coverage.intent_uncertainty invalid_type',
+        'coverage unrecognized_keys',
+        '$ unrecognized_keys',
+      ],
+      'historical-summary-20260731-212644.json': [
+        'schema_version invalid_value',
+        'run_id invalid_type',
+        'harness invalid_value',
+        'run_status invalid_value',
+        'dispatches invalid_type',
+        'input_findings invalid_type',
+        'disposition_counts invalid_type',
+        'advisory_outputs invalid_type',
+        'coverage.residual_risks invalid_type',
+        'coverage.testing_gaps invalid_type',
+        'coverage.intent_uncertainty invalid_type',
+        'coverage unrecognized_keys',
+        '$ unrecognized_keys',
+      ],
+      'historical-summary-20260801.json': [
+        'schema_version invalid_value',
+        'run_id invalid_type',
+        'harness invalid_value',
+        'run_status invalid_value',
+        'dispatches invalid_type',
+        'input_findings invalid_type',
+        'findings.0.why_it_matters invalid_type',
+        'findings.0.evidence invalid_type',
+        'findings.0.pre_existing invalid_type',
+        'findings.0.input_finding_ids invalid_type',
+        'findings.0.provenance invalid_type',
+        'findings.0 unrecognized_keys',
+        'disposition_counts invalid_type',
+        'advisory_outputs invalid_type',
+        'coverage.residual_risks invalid_type',
+        'coverage.testing_gaps invalid_type',
+        'coverage.intent_uncertainty invalid_type',
+        'coverage unrecognized_keys',
+        '$ unrecognized_keys',
+      ],
+    }
 
     for (const fixture of historicalFixtures) {
       const result = ReviewArtifactSchema.safeParse(readFixture(fixture))
 
-      expect(result.success, `${fixture}: missing schema_version issue`).toBe(
-        false,
-      )
+      expect(result.success, `${fixture}: unexpectedly valid`).toBe(false)
       if (!result.success) {
-        expect(
-          result.error.issues.some(
-            (issue) =>
-              issue.path.length === 1 && issue.path[0] === 'schema_version',
-          ),
-          `${fixture}: schema_version was not named`,
-        ).toBe(true)
+        const issueSignatures = result.error.issues.map(
+          (issue) => `${issue.path.join('.') || '$'} ${issue.code}`,
+        )
+        expect(issueSignatures, `${fixture}: unexpected issue set`).toEqual(
+          expectedIssues[fixture],
+        )
       }
+    }
+  })
+
+  test('all custom schema issues use authored literal messages', () => {
+    const customMessages = new Set(REVIEW_ARTIFACT_CUSTOM_MESSAGES)
+    const cases = [
+      artifactWith({
+        input_findings: [
+          {
+            ...rejectedSummary,
+            rejected_severities: ['P2'],
+          },
+        ],
+      }),
+      artifactWith({
+        findings: [
+          {
+            ...baseFinding,
+            validated: false,
+            validation_reason: undefined,
+            input_finding_ids: ['correctness#1'],
+            provenance: {
+              fingerprint: 'src/example.ts|40|example issue',
+              submitters: ['correctness'],
+              agreement_credit: [],
+            },
+          },
+        ],
+      }),
+    ]
+
+    const issues = cases.flatMap((value) => {
+      const result = ReviewArtifactSchema.safeParse(value)
+      expect(result.success).toBe(false)
+      return result.success
+        ? []
+        : result.error.issues.filter((issue) => issue.code === 'custom')
+    })
+
+    expect(issues.length).toBe(2)
+    for (const issue of issues) {
+      expect(customMessages.has(issue.message)).toBe(true)
     }
   })
 

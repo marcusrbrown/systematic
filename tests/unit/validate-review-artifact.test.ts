@@ -232,6 +232,110 @@ describe('systematic validate-review-artifact', () => {
     }
   })
 
+  it('reports a JSON array as a validation failure instead of legacy', () => {
+    const cwd = makeCwd()
+    try {
+      const target = artifactPath(cwd)
+      fs.writeFileSync(target, '[]')
+
+      const result = runCli(
+        [
+          'validate-review-artifact',
+          '.context/systematic/ce-review/review-summary.json',
+        ],
+        cwd,
+      )
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).not.toContain('Legacy review artifact')
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('reports a bare string as a validation failure instead of legacy', () => {
+    const cwd = makeCwd()
+    try {
+      const target = artifactPath(cwd)
+      fs.writeFileSync(target, JSON.stringify('garbage'))
+
+      const result = runCli(
+        [
+          'validate-review-artifact',
+          '.context/systematic/ce-review/review-summary.json',
+        ],
+        cwd,
+      )
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).not.toContain('Legacy review artifact')
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('reports a number as a validation failure instead of legacy', () => {
+    const cwd = makeCwd()
+    try {
+      const target = artifactPath(cwd)
+      fs.writeFileSync(target, '42')
+
+      const result = runCli(
+        [
+          'validate-review-artifact',
+          '.context/systematic/ce-review/review-summary.json',
+        ],
+        cwd,
+      )
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).not.toContain('Legacy review artifact')
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('reports null as a validation failure instead of legacy', () => {
+    const cwd = makeCwd()
+    try {
+      const target = artifactPath(cwd)
+      fs.writeFileSync(target, 'null')
+
+      const result = runCli(
+        [
+          'validate-review-artifact',
+          '.context/systematic/ce-review/review-summary.json',
+        ],
+        cwd,
+      )
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).not.toContain('Legacy review artifact')
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('documents validation exit statuses and the required artifact path in help', () => {
+    const cwd = makeCwd()
+    try {
+      const result = runCli(['--help'], cwd)
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain(
+        'The <path> argument is required by design; no artifact discovery is performed.',
+      )
+      expect(result.stdout).toContain('0 valid artifact')
+      expect(result.stdout).toContain('1 validation failure')
+      expect(result.stdout).toContain('2 operational failure')
+      expect(result.stdout).toContain(
+        '3 legacy artifact with no schema_version',
+      )
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
   it('does not echo artifact strings or generated Zod messages', () => {
     const cwd = makeCwd()
     const distinctive = 'distinctive-review-secret-9f4c'
@@ -250,10 +354,15 @@ describe('systematic validate-review-artifact', () => {
       )
 
       expect(result.exitCode).toBe(1)
-      expect(result.stderr).toContain('run_id too_big')
-      expect(result.stderr).not.toContain(distinctive)
-      expect(result.stderr).not.toContain('expected string')
-      expect(result.stderr).not.toContain('received')
+      expect(result.stderr.split('\n')[0]).toBe('run_id too_big')
+      expect(result.stderr).toBe(
+        [
+          'run_id too_big',
+          'Schema: skills/ce-review/references/review-summary-schema.json',
+          'Review artifact validation failed: 1 issue(s)',
+          '',
+        ].join('\n'),
+      )
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true })
     }

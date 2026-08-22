@@ -7,6 +7,11 @@ const MAX_REASON_LENGTH = 2048
 const MAX_FINDINGS = 32
 const MAX_PERSONAS = 64
 
+export const REVIEW_ARTIFACT_CUSTOM_MESSAGES = [
+  'severity count must match rejected finding count',
+  'filtered findings require a validation reason',
+] as const
+
 const boundedText = (maxLength: number) =>
   z.string().min(1).max(maxLength).regex(/\S/)
 
@@ -94,7 +99,7 @@ const RejectedInputFindingSchema = z
       ctx.addIssue({
         code: 'custom',
         path: ['rejected_severities'],
-        message: 'severity count must match rejected finding count',
+        message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[0],
       })
     }
   })
@@ -112,7 +117,7 @@ const ProvenanceSchema = z
   })
   .strict()
 
-const SynthesizedFindingSchema = z
+const SynthesizedFindingFieldsSchema = z
   .object({
     title: FindingTitleSchema,
     severity: FindingSeveritySchema,
@@ -135,7 +140,26 @@ const SynthesizedFindingSchema = z
     provenance: ProvenanceSchema,
   })
   .strict()
-  .superRefine((finding, ctx) => {
+
+type SynthesizedFindingFields = z.infer<typeof SynthesizedFindingFieldsSchema>
+
+type SynthesizedFinding = Omit<
+  SynthesizedFindingFields,
+  'validated' | 'validation_reason'
+> &
+  (
+    | {
+        validated: false
+        validation_reason: string
+      }
+    | {
+        validated?: true
+        validation_reason?: string
+      }
+  )
+
+const SynthesizedFindingSchema = SynthesizedFindingFieldsSchema.superRefine(
+  (finding, ctx) => {
     if (
       finding.validated === false &&
       finding.validation_reason === undefined
@@ -143,10 +167,11 @@ const SynthesizedFindingSchema = z
       ctx.addIssue({
         code: 'custom',
         path: ['validation_reason'],
-        message: 'filtered findings require a validation reason',
+        message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[1],
       })
     }
-  })
+  },
+) as z.ZodType<SynthesizedFinding, SynthesizedFindingFields>
 
 const DispatchSchema = z
   .object({

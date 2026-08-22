@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import {
   generateSchemaContent,
+  normalizeForCompare,
   REVIEW_SCHEMA_RELATIVE_PATH,
 } from '../../scripts/generate-review-artifact-schema.js'
 
@@ -41,7 +42,9 @@ describe('review artifact schema generator', () => {
 
     expect(result.exitCode, output(result)).toBe(0)
     expect(fs.existsSync(SCHEMA_PATH)).toBe(true)
-    expect(fs.readFileSync(SCHEMA_PATH, 'utf8')).toBe(generateSchemaContent())
+    const generated = generateSchemaContent()
+    expect(generated.endsWith('\n')).toBe(true)
+    expect(fs.readFileSync(SCHEMA_PATH, 'utf8')).toBe(generated)
   })
 
   test('--check exits 0 when the committed schema matches the Zod source', () => {
@@ -95,6 +98,12 @@ describe('review artifact schema generator', () => {
       expect(result.exitCode).toBe(1)
       expect(output(result)).toContain(REVIEW_SCHEMA_RELATIVE_PATH)
     })
+  })
+
+  test('normalization changes line endings but preserves trailing whitespace', () => {
+    expect(normalizeForCompare('foo\r\nbar\r\n')).toBe('foo\nbar\n')
+    expect(normalizeForCompare('foo\n\n')).toBe('foo\n\n')
+    expect(normalizeForCompare('foo \n')).toBe('foo \n')
   })
 
   test('the CI workflow invokes the review schema drift gate', () => {

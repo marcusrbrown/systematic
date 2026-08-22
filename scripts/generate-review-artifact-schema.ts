@@ -52,12 +52,17 @@ function formatJsonWithBiome(content: string): string {
  */
 export function generateSchemaContent(): string {
   const result = z.toJSONSchema(ReviewArtifactSchema, getGenerationOptions())
-  const { '~standard': _standard, ...clean } = result as Record<string, unknown>
-  return formatJsonWithBiome(`${JSON.stringify(clean, null, 2)}\n`)
+  const { '~standard': _standard, ...clean } = result as Record<
+    string,
+    unknown
+  > &
+    typeof result
+  const formatted = formatJsonWithBiome(`${JSON.stringify(clean, null, 2)}\n`)
+  return formatted.endsWith('\n') ? formatted : `${formatted}\n`
 }
 
 export function normalizeForCompare(content: string): string {
-  return content.replace(/\r\n/g, '\n').replace(/\s+$/, '')
+  return content.replace(/\r\n?/g, '\n')
 }
 
 function getSchemaPath(rootDir: string): string {

@@ -73,6 +73,9 @@ Commands:
   capabilities                 Read-only standalone-CLI observation; not a host-runtime or canonical-registry view
   validate-review-artifact <path>
                                Validate a ce:review run artifact
+                               The <path> argument is required by design; no artifact discovery is performed.
+                               Exit statuses: 0 valid artifact, 1 validation failure,
+                               2 operational failure, 3 legacy artifact with no schema_version
   config [subcommand]          Configuration management
     show                       Show configuration
     path                       Print config file locations
@@ -117,6 +120,8 @@ Scope:
 
 const VALIDATE_REVIEW_ARTIFACT_USAGE =
   'Usage: systematic validate-review-artifact <path>'
+const REVIEW_ARTIFACT_SCHEMA_RELATIVE_PATH =
+  'skills/ce-review/references/review-summary-schema.json'
 
 interface CapabilityCliRoots {
   readonly agentsRoot: string
@@ -484,8 +489,9 @@ function readReviewArtifact(filePath: string): ReadArtifactResult {
 
 function isLegacyReviewArtifact(value: unknown): boolean {
   return (
-    value === null ||
-    typeof value !== 'object' ||
+    value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
     !Object.hasOwn(value, 'schema_version')
   )
 }
@@ -527,12 +533,13 @@ function runValidateReviewArtifact(
   if (!result.success) {
     for (const issue of result.error.issues) {
       const issuePath = formatReviewArtifactIssuePath(issue.path)
-      // Custom issues are authored by ReviewArtifactSchema and contain static
-      // cross-field diagnostics. All other Zod messages may interpolate input.
+      // The custom-message exception depends on author-written constants;
+      // tests/unit/review-artifact-schema.test.ts enforces that contract.
       const authoredMessage =
         issue.code === 'custom' ? `: ${issue.message}` : ''
       errorSink(`${issuePath} ${issue.code}${authoredMessage}`)
     }
+    errorSink(`Schema: ${REVIEW_ARTIFACT_SCHEMA_RELATIVE_PATH}`)
     errorSink(
       `Review artifact validation failed: ${result.error.issues.length} issue(s)`,
     )
