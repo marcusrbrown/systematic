@@ -354,6 +354,10 @@ function hasParentDirectoryTraversal(input: string): boolean {
   return input.split(/[\\/]+/).some((segment) => segment === '..')
 }
 
+// Deliberately redundant with the realpath + containment check below. That pair
+// rejects a symlink whose target escapes the artifact root; this rejects every
+// symlink in the path outright, which also narrows the window between the
+// containment check and the later read.
 function pathContainsSymlink(candidate: string): boolean {
   let current = path.parse(candidate).root
   const relative = path.relative(current, candidate)
