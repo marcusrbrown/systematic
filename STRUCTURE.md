@@ -23,7 +23,7 @@ systematic/
 ├── scripts/          # Build-time + CI scripts (integrity, schema codegen, registry, CC plugin build, evals)
 ├── assets/           # Static assets (banner SVG)
 ├── tests/
-│   ├── unit/         # 59 unit test files
+│   ├── unit/         # 56 unit test files
 │   └── integration/  # 11 integration test files
 ├── .opencode/        # Project-specific OpenCode config + commands
 │   └── commands/     # Project-only commands (not shipped in npm package)
@@ -149,7 +149,7 @@ coverage, model inheritance) against a real OpenCode runtime, in both source and
 **Purpose:** Test suite for the TypeScript source.
 
 **Contains:**
-- `tests/unit/` — 59 unit test files covering `src/lib/` modules, `scripts/` build/codegen scripts,
+- `tests/unit/` — 56 unit test files covering `src/lib/` modules, `scripts/` build/codegen scripts,
   and `docs/scripts/` generation scripts
 - `tests/integration/` — 11 integration test files (skip automatically if deps unavailable)
 
