@@ -219,7 +219,7 @@ validates each claim against observed workspace state, and mints integrity-check
 guarded transition that lacks its required receipts is rejected. OpenCode only — `src/pi.ts`
 registers no guard, and the Claude Code bundle ships no runtime.
 
-**Registry drift detection** (`scripts/build-registry.ts --check`) — verifies that the OCX registry
+**Registry drift detection** (`scripts/generate-registry.ts --check`) — verifies that the OCX registry
 config stays in sync with the generated bundled assets. Run via `bun run registry:drift`.
 
 **Claude Code plugin build** (`scripts/build-claude-code-plugin.ts`) — generates the CC bundle from
