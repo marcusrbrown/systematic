@@ -223,7 +223,7 @@ branch ref. Users install via `claude plugin marketplace add marcusrbrown/system
 
 | Path | Role |
 |------|------|
-| `tests/unit/` | Unit tests (59 files) |
+| `tests/unit/` | Unit tests (56 files) |
 | `tests/integration/` | Integration tests (11 files) |
 
 ## Naming Conventions
