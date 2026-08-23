@@ -203,8 +203,8 @@ const DispatchSchema = z
   .strict()
   .superRefine((dispatch, ctx) => {
     if (
-      RISK_CRITICAL_PERSONAS.includes(
-        dispatch.persona as (typeof RISK_CRITICAL_PERSONAS)[number],
+      (RISK_CRITICAL_PERSONAS as readonly string[]).includes(
+        dispatch.persona,
       ) &&
       (!dispatch.selection_surface || dispatch.selection_surface.length === 0)
     ) {
