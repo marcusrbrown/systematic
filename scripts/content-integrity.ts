@@ -322,7 +322,7 @@ export interface CodemapCompletenessViolation {
 }
 
 export interface LibModuleTableCompletenessViolation {
-  kind: 'missing-from-table' | 'missing-on-disk'
+  kind: 'missing-from-table' | 'missing-on-disk' | 'ambiguous-basename'
   module: string
   message: string
 }
@@ -1690,9 +1690,13 @@ export function checkCodemapCompleteness(
 }
 
 function extractLibModuleTableModules(content: string): string[] {
+  const exclusionSection =
+    extractArchitectureSection(content, LIB_MODULE_TABLE_EXCLUSION_HEADING) ??
+    ''
+  const moduleTableOnly = content.replace(exclusionSection, '')
   const modules = new Set<string>()
   const moduleRowRegex = /^\|\s*`([A-Za-z0-9_-]+\.ts)`\s*\|/gm
-  for (const match of content.matchAll(moduleRowRegex)) {
+  for (const match of moduleTableOnly.matchAll(moduleRowRegex)) {
     const module = match[1]
     if (module) modules.add(module)
   }
@@ -1720,16 +1724,31 @@ export function checkLibModuleTableCompleteness(
   const content = readFileSafe(moduleTablePath)
   if (content === null) return []
 
-  const onDisk = [
-    ...new Set(
-      collectLibModules(rootDir).map((modulePath) => path.basename(modulePath)),
-    ),
-  ].sort()
+  const onDiskPaths = collectLibModules(rootDir)
+  const modulesByBasename = new Map<string, string[]>()
+  for (const modulePath of onDiskPaths) {
+    const basename = path.basename(modulePath)
+    const paths = modulesByBasename.get(basename) ?? []
+    paths.push(modulePath)
+    modulesByBasename.set(basename, paths)
+  }
+  const onDisk = [...modulesByBasename.keys()].sort()
   const tableModules = extractLibModuleTableModules(content)
   const exclusions = extractLibModuleTableExclusions(content)
   const tableSet = new Set(tableModules)
   const onDiskSet = new Set(onDisk)
   const violations: LibModuleTableCompletenessViolation[] = []
+
+  for (const [basename, modulePaths] of modulesByBasename) {
+    if (modulePaths.length < 2) continue
+    violations.push({
+      kind: 'ambiguous-basename',
+      module: basename,
+      message:
+        `${moduleTableFile}'s module table addresses modules by bare filename ` +
+        `and therefore cannot disambiguate these conflicting modules: ${modulePaths.join(', ')}.`,
+    })
+  }
 
   for (const module of onDisk) {
     if (exclusions.has(module) || tableSet.has(module)) continue

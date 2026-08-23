@@ -688,6 +688,38 @@ describe('checkLibModuleTableCompleteness', () => {
     }
   })
 
+  test('reports duplicate basenames in different library subdirectories', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, 'src/lib/first/shared.ts', 'export const first = true\n')
+      writeFile(
+        root,
+        'src/lib/second/shared.ts',
+        'export const second = true\n',
+      )
+      writeFile(
+        root,
+        'src/lib/AGENTS.md',
+        '## Modules\n\n| Module | Key Exports | Role |\n|--------|-------------|------|\n' +
+          '| `shared.ts` | `shared` | shared module |\n',
+      )
+
+      const violations = checkLibModuleTableCompleteness(root)
+
+      expect(violations).toMatchObject([
+        {
+          kind: 'ambiguous-basename',
+          module: 'shared.ts',
+        },
+      ])
+      expect(violations[0]?.message).toContain('src/lib/first/shared.ts')
+      expect(violations[0]?.message).toContain('src/lib/second/shared.ts')
+      expect(violations[0]?.message).toContain('bare filename')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   test('reports a module on disk that is absent from the module tables', () => {
     const root = makeFixtureRepo()
     try {
@@ -751,6 +783,24 @@ describe('checkLibModuleTableCompleteness', () => {
       expect(
         fs.readFileSync(path.join(root, 'src/lib/AGENTS.md'), 'utf8'),
       ).toContain('`internal.ts`')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('does not treat table-formatted exclusions as documented modules', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, 'src/lib/internal.ts', 'export const internal = true\n')
+      writeFile(
+        root,
+        'src/lib/AGENTS.md',
+        '## Modules\n\n| Module | Key Exports | Role |\n|--------|-------------|------|\n' +
+          '## Module table exclusions\n\n| Module | Reason |\n|--------|--------|\n' +
+          '| `internal.ts` | generated compatibility shim |\n',
+      )
+
+      expect(checkLibModuleTableCompleteness(root)).toEqual([])
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
