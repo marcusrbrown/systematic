@@ -216,12 +216,18 @@ When it is available, the parent runs
 `systematic validate-review-artifact <path>` against it. The executable ships
 through the npm package's `bin` entry; a harness that installs bundled
 markdown without that package will not have it. When it is unavailable, the
-parent records that validation did not run and why in the run record.
-Unavailable validation is distinct from skipped validation, and the parent
-does not represent the artifact as validated. A nonzero exit means the run is
-not complete. The [executable schema](./review-summary-schema.json) is
-generated from a Zod source and is the machine-checkable form of the shape
-described here.
+parent records `validation.status: "unavailable"` and a `validation.reason` in
+the run record. When the executable is available and the parent does not run
+it, that is `validation.status: "not_attempted"`, also with a reason. The
+`validation.status` values are `passed`, `failed`, `unavailable`, and
+`not_attempted`; `validation.reason` is required for every status except
+`passed`, where it is forbidden.
+
+Unavailable validation is distinct from skipped validation — `unavailable`
+versus `not_attempted` — and in neither case does the parent represent the
+artifact as validated. A nonzero exit means the run is not complete. The
+[executable schema](./review-summary-schema.json) is generated from a Zod
+source and is the machine-checkable form of the shape described here.
 
 On validation failure, the parent repairs the artifact and re-runs the
 validator. It does not report a verdict over an artifact that failed
@@ -235,6 +241,11 @@ in either direction. That is why the command exists as an independently
 runnable check rather than as a self-validation instruction, and why its result
 belongs in the run record. An unavailable validator is recorded as unavailable,
 not as skipped or validated.
+The `validation` field is self-reported: an agent can write `status: passed`
+without running anything, so it is a claim rather than evidence. Its value is
+that it distinguishes states that were previously one indistinguishable
+silence: a check that passed, one that failed, one that could not run, and one
+that was skipped.
 
 `mode:report-only` writes no artifact and therefore performs no validation.
 
