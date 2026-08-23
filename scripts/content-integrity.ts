@@ -53,6 +53,11 @@
  *     visible codemap-exclusion list, and every codemap entry must resolve to a
  *     module on disk.
  *
+ * 12. **Library module-table completeness** — every TypeScript module directly
+ *     under `src/lib/` must appear in `src/lib/AGENTS.md`'s module tables or in
+ *     its visible module-table exclusion list, and every table entry must
+ *     resolve to a module on disk.
+ *
  * 13. **Migrated skill identifiers** — skills marked
  *     `metadata['harness-portability'] === 'neutral-v1'` must use neutral
  *     lexical vocabulary; exact harness syntax belongs in the harness profiles.
@@ -316,6 +321,12 @@ export interface CodemapCompletenessViolation {
   message: string
 }
 
+export interface LibModuleTableCompletenessViolation {
+  kind: 'missing-from-table' | 'missing-on-disk'
+  module: string
+  message: string
+}
+
 export interface CheckResult {
   rootDir: string
   categories: string[]
@@ -337,6 +348,7 @@ export interface CheckResult {
   removedNamesOverlapViolations: RemovedNamesOverlapViolation[]
   hookParityViolations: HookParityViolation[]
   codemapCompletenessViolations: CodemapCompletenessViolation[]
+  libModuleTableCompletenessViolations: LibModuleTableCompletenessViolation[]
   dispatchArgumentViolations: DispatchArgumentViolation[]
   exemptHits: ExemptHit[]
   scanStats: {
@@ -595,6 +607,8 @@ export const HOOK_PARITY_EXEMPTIONS: ReadonlySet<string> = new Set()
 
 export const CODEMAP_DOCUMENT = 'ARCHITECTURE.md'
 export const CODEMAP_EXCLUSION_HEADING = '## Codemap exclusions'
+export const LIB_MODULE_TABLE_DOCUMENT = 'src/lib/AGENTS.md'
+export const LIB_MODULE_TABLE_EXCLUSION_HEADING = '## Module table exclusions'
 
 const HOOK_ASSERTION_REGEX =
   /\b(?:registers?|exposes?)\b(?:[^\n]*\n){0,2}?\s*(?:these|every|all|one|two|three|four|five|six|seven|eight|nine|ten|\d+)(?:\s+(?:one|two|three|four|five|six|seven|eight|nine|ten|\d+))?\s+(?:OpenCode\s+)?hooks?\b/i
@@ -1675,6 +1689,73 @@ export function checkCodemapCompleteness(
   return violations
 }
 
+function extractLibModuleTableModules(content: string): string[] {
+  const modules = new Set<string>()
+  const moduleRowRegex = /^\|\s*`([A-Za-z0-9_-]+\.ts)`\s*\|/gm
+  for (const match of content.matchAll(moduleRowRegex)) {
+    const module = match[1]
+    if (module) modules.add(module)
+  }
+  return [...modules].sort()
+}
+
+function extractLibModuleTableExclusions(content: string): Set<string> {
+  const section =
+    extractArchitectureSection(content, LIB_MODULE_TABLE_EXCLUSION_HEADING) ??
+    ''
+  const exclusions = new Set<string>()
+  const moduleRegex = /`?([A-Za-z0-9_-]+\.ts)`?/g
+  for (const match of section.matchAll(moduleRegex)) {
+    const module = match[1]
+    if (module) exclusions.add(module)
+  }
+  return exclusions
+}
+
+export function checkLibModuleTableCompleteness(
+  rootDir: string,
+  moduleTableFile = LIB_MODULE_TABLE_DOCUMENT,
+): LibModuleTableCompletenessViolation[] {
+  const moduleTablePath = path.join(rootDir, moduleTableFile)
+  const content = readFileSafe(moduleTablePath)
+  if (content === null) return []
+
+  const onDisk = [
+    ...new Set(
+      collectLibModules(rootDir).map((modulePath) => path.basename(modulePath)),
+    ),
+  ].sort()
+  const tableModules = extractLibModuleTableModules(content)
+  const exclusions = extractLibModuleTableExclusions(content)
+  const tableSet = new Set(tableModules)
+  const onDiskSet = new Set(onDisk)
+  const violations: LibModuleTableCompletenessViolation[] = []
+
+  for (const module of onDisk) {
+    if (exclusions.has(module) || tableSet.has(module)) continue
+    violations.push({
+      kind: 'missing-from-table',
+      module,
+      message:
+        `${module} exists on disk but is absent from ${moduleTableFile}'s ` +
+        `module tables. Add it or list it in the visible "${LIB_MODULE_TABLE_EXCLUSION_HEADING}" section.`,
+    })
+  }
+
+  for (const module of tableModules) {
+    if (exclusions.has(module) || onDiskSet.has(module)) continue
+    violations.push({
+      kind: 'missing-on-disk',
+      module,
+      message:
+        `${moduleTableFile}'s module tables name ${module}, but no such module ` +
+        'exists on disk. Remove the stale row.',
+    })
+  }
+
+  return violations
+}
+
 /**
  * Strip fenced code blocks (``` or ~~~) from a markdown body string.
  * Returns the body with all fenced regions replaced by empty strings so that
@@ -2215,6 +2296,8 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
   )
   const hookParityViolations = checkHookParity(rootDir, targets.rootDocuments)
   const codemapCompletenessViolations = checkCodemapCompleteness(rootDir)
+  const libModuleTableCompletenessViolations =
+    checkLibModuleTableCompleteness(rootDir)
   const dispatchArgumentViolations = checkDispatchArguments(
     rootDir,
     targets.markdown,
@@ -2246,6 +2329,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     removedNamesOverlapViolations,
     hookParityViolations,
     codemapCompletenessViolations,
+    libModuleTableCompletenessViolations,
     dispatchArgumentViolations,
     exemptHits,
     scanStats: {
@@ -2305,6 +2389,9 @@ function printResult(result: CheckResult, verbose: boolean): void {
   printRemovedNamesOverlapViolations(result.removedNamesOverlapViolations)
   printHookParityViolations(result.hookParityViolations)
   printCodemapCompletenessViolations(result.codemapCompletenessViolations)
+  printLibModuleTableCompletenessViolations(
+    result.libModuleTableCompletenessViolations,
+  )
   printDispatchArgumentViolations(result.dispatchArgumentViolations)
 
   if (totalViolations(result) === 0) {
@@ -2330,6 +2417,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
         `agentStemViolations: ${result.agentStemViolations.length}\n` +
         `dispatchIdentifierViolations: ${result.dispatchIdentifierViolations.length}\n` +
         `hookParityViolations: ${result.hookParityViolations.length}\n` +
+        `libModuleTableCompletenessViolations: ${result.libModuleTableCompletenessViolations.length}\n` +
         `exemptHits: ${result.exemptHits.length}\n`,
     )
   }
@@ -2539,6 +2627,18 @@ function printCodemapCompletenessViolations(
   }
 }
 
+function printLibModuleTableCompletenessViolations(
+  violations: readonly LibModuleTableCompletenessViolation[],
+): void {
+  if (violations.length === 0) return
+  process.stderr.write(
+    `\nLibrary module-table completeness violations (${violations.length}):\n`,
+  )
+  for (const violation of violations) {
+    process.stderr.write(`  [${violation.kind}] ${violation.message}\n`)
+  }
+}
+
 function totalViolations(result: CheckResult): number {
   return (
     result.phantomRefs.length +
@@ -2558,6 +2658,7 @@ function totalViolations(result: CheckResult): number {
     result.removedNamesOverlapViolations.length +
     result.hookParityViolations.length +
     result.codemapCompletenessViolations.length +
+    result.libModuleTableCompletenessViolations.length +
     result.dispatchArgumentViolations.length
   )
 }
