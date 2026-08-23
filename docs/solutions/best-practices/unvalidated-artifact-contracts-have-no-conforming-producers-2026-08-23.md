@@ -1,6 +1,7 @@
 ---
 title: An artifact contract with no validated write path has no conforming producers
 date: 2026-08-23
+last_updated: 2026-08-23
 category: best-practices
 module: ce-review
 problem_type: best_practice
@@ -106,7 +107,12 @@ An agent that never runs the command produces no evidence in either direction. T
 durable value is that the command is independently runnable — a human or a CI job can
 check any artifact without the producing agent's cooperation.
 
-### Packaging determines where a validator can live
+That honesty has a sharp edge, found the following day. If an agent *cannot* run the
+command, its silence is identical to the silence of an agent that chose not to. The
+contract now requires the two to be recorded differently, because "no evidence" is only
+an acceptable outcome when running the check was actually possible.
+
+### Packaging determines where a validator can live — and where it can be invoked
 
 A validator in `scripts/` cannot reach a single consumer. `package.json`'s `files`
 array ships only `dist`, `skills`, `agents`, and two markdown files. AJV is a
@@ -115,6 +121,17 @@ development dependency and is absent at runtime.
 Check the publish surface before choosing a home for enforcement code. Here the CLI
 ships through `bin` into `dist/`, and `zod` was already a runtime dependency, so
 validation went into `src/cli.ts` at zero dependency cost.
+
+The second half of that rule cost a follow-up fix. Placing the validator correctly does
+not mean every reader of the contract can run it. Bundled instruction prose is copied
+into all three harness packages, but the `bin` entry only reaches the ones that install
+the npm package — the Claude Code bundle is built deliberately without npm coupling and
+carries no executable. A contract sentence naming a command therefore has a reach the
+contract file itself does not.
+
+Write the instruction as a condition the agent can check at runtime rather than an
+unconditional command, and say what to record when the condition fails. A list of
+harness names would go stale; an availability check does not.
 
 ### Generate the schema from one runtime source and gate the drift
 
@@ -241,11 +258,16 @@ belongs in the run record:
 
 ```text
 1. Write review-summary.json with schema_version: 1.
-2. Run systematic validate-review-artifact <path>.
+2. If the systematic executable is on PATH, run
+   systematic validate-review-artifact <path>.
+   Otherwise record that validation was unavailable, and why.
 3. If it fails, repair the artifact and re-run the command.
 4. Do not report a verdict over a failing artifact.
 5. Keep the failing artifact on disk as evidence.
 ```
+
+Step 2 carries the availability branch because the instruction reaches harnesses the
+executable does not. Unavailable and skipped must not record the same way.
 
 The same shape applies to the schema itself: replace a hand-written JSON Schema kept
 beside a runtime schema with one Zod source, a generated committed artifact, and
