@@ -5,6 +5,9 @@
   "harness": "opencode",
   "run_status": "completed",
   "verdict": "Ready to merge",
+  "branch": "fix/example",
+  "head_sha": "0123456789abcdef0123456789abcdef01234567",
+  "completed_at": "2026-08-21T00:00:00Z",
   "dispatches": [
     {
       "persona": "correctness",
