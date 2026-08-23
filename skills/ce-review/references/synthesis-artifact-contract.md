@@ -217,14 +217,17 @@ When it is available, the parent runs
 through the npm package's `bin` entry; a harness that installs bundled
 markdown without that package will not have it. When it is unavailable, the
 parent records `validation.status: "unavailable"` and a `validation.reason` in
-the run record. The `validation.status` values are `passed`, `failed`,
-`unavailable`, and `not_attempted`; `validation.reason` is required for every
-status except `passed`, where it is forbidden.
-Unavailable validation is distinct from skipped validation, and the parent
-does not represent the artifact as validated. A nonzero exit means the run is
-not complete. The [executable schema](./review-summary-schema.json) is
-generated from a Zod source and is the machine-checkable form of the shape
-described here.
+the run record. When the executable is available and the parent does not run
+it, that is `validation.status: "not_attempted"`, also with a reason. The
+`validation.status` values are `passed`, `failed`, `unavailable`, and
+`not_attempted`; `validation.reason` is required for every status except
+`passed`, where it is forbidden.
+
+Unavailable validation is distinct from skipped validation — `unavailable`
+versus `not_attempted` — and in neither case does the parent represent the
+artifact as validated. A nonzero exit means the run is not complete. The
+[executable schema](./review-summary-schema.json) is generated from a Zod
+source and is the machine-checkable form of the shape described here.
 
 On validation failure, the parent repairs the artifact and re-runs the
 validator. It does not report a verdict over an artifact that failed
