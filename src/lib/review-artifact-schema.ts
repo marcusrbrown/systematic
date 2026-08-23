@@ -14,6 +14,7 @@ export const REVIEW_ARTIFACT_CUSTOM_MESSAGES = [
   'risk-critical dispatches require a non-empty selection surface',
   'satisfied risk coverage requires a citing input finding ID',
   'unsatisfied risk coverage must not cite an input finding ID',
+  'passed validation must not include a reason; non-passed validation requires a reason',
 ] as const
 
 const boundedText = (maxLength: number) =>
@@ -269,6 +270,35 @@ const DeclinedMergeSchema = z
   })
   .strict()
 
+const ValidationSchema = z
+  .object({
+    status: z.enum([
+      'passed',
+      'failed',
+      'unavailable',
+      'not_attempted',
+    ] as const),
+    reason: ReasonSchema.optional(),
+  })
+  .strict()
+  .superRefine((validation, ctx) => {
+    if (validation.status === 'passed' && validation.reason !== undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['reason'],
+        message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[5],
+      })
+    }
+
+    if (validation.status !== 'passed' && validation.reason === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['reason'],
+        message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[5],
+      })
+    }
+  })
+
 const RiskCoverageSchema = z
   .object({
     persona: RiskCriticalPersonaSchema,
@@ -322,6 +352,7 @@ export const ReviewArtifactSchema = z
     residual_actionable_work: z.array(ReasonSchema).max(MAX_FINDINGS),
     advisory_outputs: z.array(ReasonSchema).max(MAX_FINDINGS),
     coverage: CoverageSchema,
+    validation: ValidationSchema.optional(),
   })
   .strict()
 

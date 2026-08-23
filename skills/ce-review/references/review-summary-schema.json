@@ -606,6 +606,23 @@
         "intent_uncertainty"
       ],
       "additionalProperties": false
+    },
+    "validation": {
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["passed", "failed", "unavailable", "not_attempted"]
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "pattern": "\\S"
+        }
+      },
+      "required": ["status"],
+      "additionalProperties": false
     }
   },
   "required": [
