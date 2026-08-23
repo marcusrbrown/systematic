@@ -136,12 +136,12 @@ The artifact must preserve these distinctions:
   or higher.
 
 The artifact also includes applied fixes, residual actionable work,
-advisory-only outputs, coverage data, and the harness value. Alongside the
-findings, the parent writes `metadata.json` with the run ID, branch and HEAD
-captured at dispatch time, harness, verdict, and completion timestamp. The
-branch and HEAD are captured before autofixes land; metadata is written after
-the verdict is finalized. Existing artifacts without this additive metadata
-remain valid, with downstream consumers falling back to file mtime.
+advisory-only outputs, coverage data, and the harness value. The run artifact
+itself carries the branch and HEAD provenance alongside the run ID, harness,
+verdict, and completion timestamp. The parent captures `branch` and `head_sha`
+at dispatch, before autofixes land, and writes the artifact after the verdict
+is finalized; consumers can therefore tell whether the artifact describes the
+current checkout.
 
 Validation and persistence remain parent-side: no per-agent record or finding
 is written or merged until that finding passes schema and environment-value

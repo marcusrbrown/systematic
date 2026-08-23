@@ -64,6 +64,9 @@ const baseArtifact: JsonObject = {
   harness: 'opencode',
   run_status: 'completed',
   verdict: 'Ready to merge',
+  branch: 'fix/example',
+  head_sha: '0123456789abcdef0123456789abcdef01234567',
+  completed_at: '2026-08-21T00:00:00Z',
   dispatches: [
     {
       persona: 'correctness',
@@ -223,6 +226,42 @@ describe('review artifact schema', () => {
     expect(result.success).toBe(false)
   })
 
+  test('accepts an empty branch for detached HEAD artifacts', () => {
+    const result = ReviewArtifactSchema.safeParse(artifactWith({ branch: '' }))
+
+    expect(result.success).toBe(true)
+  })
+
+  test('rejects short and uppercase head SHAs', () => {
+    for (const head_sha of [
+      '0123456789abcdef',
+      '0123456789ABCDEF0123456789abcdef01234567',
+    ]) {
+      const result = ReviewArtifactSchema.safeParse(artifactWith({ head_sha }))
+
+      expect(result.success).toBe(false)
+    }
+  })
+
+  test('rejects a malformed completion timestamp', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({ completed_at: 'not-a-timestamp' }),
+    )
+
+    expect(result.success).toBe(false)
+  })
+
+  test('requires branch, head SHA, and completion timestamp', () => {
+    for (const field of ['branch', 'head_sha', 'completed_at'] as const) {
+      const artifact = { ...baseArtifact }
+      delete artifact[field]
+
+      const result = ReviewArtifactSchema.safeParse(artifact)
+
+      expect(result.success, `${field} should be required`).toBe(false)
+    }
+  })
+
   test('rejects an unknown top-level key', () => {
     const result = ReviewArtifactSchema.safeParse(
       artifactWith({ unknown_key: 'not part of the contract' }),
@@ -253,8 +292,11 @@ describe('review artifact schema', () => {
     const expectedIssues: Record<string, readonly string[]> = {
       'historical-review-summary-20260713.json': [
         'schema_version invalid_value',
+        'branch invalid_type',
+        'head_sha invalid_type',
         'harness invalid_value',
         'run_status invalid_value',
+        'completed_at invalid_type',
         'dispatches invalid_type',
         'input_findings invalid_type',
         'findings.0.why_it_matters invalid_type',
@@ -278,8 +320,11 @@ describe('review artifact schema', () => {
       ],
       'historical-review-summary-20260714-181943.json': [
         'schema_version invalid_value',
+        'branch invalid_type',
+        'head_sha invalid_type',
         'harness invalid_value',
         'run_status invalid_value',
+        'completed_at invalid_type',
         'dispatches invalid_type',
         'input_findings invalid_type',
         'findings.0.why_it_matters invalid_type',
@@ -300,8 +345,11 @@ describe('review artifact schema', () => {
       ],
       'historical-review-summary-20260714.json': [
         'schema_version invalid_value',
+        'branch invalid_type',
+        'head_sha invalid_type',
         'harness invalid_value',
         'run_status invalid_value',
+        'completed_at invalid_type',
         'dispatches invalid_type',
         'input_findings invalid_type',
         ...Array.from({ length: 5 }, (_, index) => [
@@ -333,8 +381,11 @@ describe('review artifact schema', () => {
       'historical-review-summary-20260817.json': [
         'schema_version invalid_value',
         'run_id invalid_type',
+        'branch invalid_type',
+        'head_sha invalid_type',
         'mode invalid_value',
         'run_status invalid_value',
+        'completed_at invalid_type',
         ...Array.from({ length: 9 }, (_, index) => [
           `dispatches.${index}.persona invalid_type`,
           `dispatches.${index}.input_finding_count invalid_type`,
@@ -352,8 +403,10 @@ describe('review artifact schema', () => {
       'historical-summary-20260731-140958.json': [
         'schema_version invalid_value',
         'run_id invalid_type',
+        'head_sha invalid_type',
         'harness invalid_value',
         'run_status invalid_value',
+        'completed_at invalid_type',
         'dispatches invalid_type',
         'input_findings invalid_type',
         'findings invalid_type',
@@ -372,8 +425,10 @@ describe('review artifact schema', () => {
       'historical-summary-20260731-212644.json': [
         'schema_version invalid_value',
         'run_id invalid_type',
+        'head_sha invalid_type',
         'harness invalid_value',
         'run_status invalid_value',
+        'completed_at invalid_type',
         'dispatches invalid_type',
         'input_findings invalid_type',
         'disposition_counts invalid_type',
@@ -387,8 +442,10 @@ describe('review artifact schema', () => {
       'historical-summary-20260801.json': [
         'schema_version invalid_value',
         'run_id invalid_type',
+        'head_sha invalid_type',
         'harness invalid_value',
         'run_status invalid_value',
+        'completed_at invalid_type',
         'dispatches invalid_type',
         'input_findings invalid_type',
         'findings.0.why_it_matters invalid_type',

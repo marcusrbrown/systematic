@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 const MAX_REVIEWER_LENGTH = 64
 const MAX_RUN_ID_LENGTH = 64
+const MAX_BRANCH_LENGTH = 256
 const MAX_INPUT_ID_LENGTH = 128
 const MAX_REASON_LENGTH = 2048
 const MAX_FINDINGS = 32
@@ -39,6 +40,9 @@ export const RepoRelativePathSchema = boundedText(256).regex(
 )
 
 const ReviewerSchema = boundedText(MAX_REVIEWER_LENGTH)
+const BranchSchema = z.string().max(MAX_BRANCH_LENGTH)
+const HeadShaSchema = z.string().regex(/^[0-9a-f]{40}$/)
+const CompletedAtSchema = z.iso.datetime({ offset: false })
 const ReasonSchema = boundedText(MAX_REASON_LENGTH)
 const FindingTitleSchema = boundedText(256)
 const SeveritySchema = z.enum(['P0', 'P1', 'P2', 'P3', 'unknown'] as const)
@@ -228,6 +232,8 @@ export const ReviewArtifactSchema = z
   .object({
     schema_version: z.literal(1),
     run_id: boundedText(MAX_RUN_ID_LENGTH),
+    branch: BranchSchema,
+    head_sha: HeadShaSchema,
     mode: z.enum(['interactive', 'autofix', 'headless'] as const),
     harness: HarnessSchema,
     run_status: z.enum([
@@ -237,6 +243,7 @@ export const ReviewArtifactSchema = z
       'abnormal',
     ] as const),
     verdict: boundedText(256),
+    completed_at: CompletedAtSchema,
     dispatches: z.array(DispatchSchema).max(MAX_PERSONAS),
     input_findings: z
       .array(InputFindingSchema)
