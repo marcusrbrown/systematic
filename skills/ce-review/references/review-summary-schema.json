@@ -374,6 +374,49 @@
         "additionalProperties": false
       }
     },
+    "declined_merges": {
+      "maxItems": 32,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "file": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 256,
+            "allOf": [
+              {
+                "type": "string",
+                "pattern": "\\S"
+              },
+              {
+                "type": "string",
+                "pattern": "^(?!\\/)(?![A-Za-z]:[\\\\/])(?!\\\\).+"
+              }
+            ]
+          },
+          "input_finding_ids": {
+            "minItems": 2,
+            "maxItems": 32,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128,
+              "pattern": "\\S"
+            }
+          },
+          "reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "\\S"
+          }
+        },
+        "required": ["file", "input_finding_ids", "reason"],
+        "additionalProperties": false
+      }
+    },
     "disposition_counts": {
       "type": "object",
       "properties": {
