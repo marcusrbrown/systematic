@@ -210,10 +210,17 @@ validating it. This ordering makes the artifact validatable at all: without
 `schema_version`, the validator reports the legacy status (exit 3) rather than
 a real validation result.
 
-After writing `review-summary.json`, the parent runs
-`systematic validate-review-artifact <path>` against it. A nonzero exit means
-the run is not complete. The [executable schema](./review-summary-schema.json)
-is generated from a Zod source and is the machine-checkable form of the shape
+After writing `review-summary.json`, the parent checks whether the
+`systematic` executable is available on the invoking environment's `PATH`.
+When it is available, the parent runs
+`systematic validate-review-artifact <path>` against it. The executable ships
+through the npm package's `bin` entry; a harness that installs bundled
+markdown without that package will not have it. When it is unavailable, the
+parent records that validation did not run and why in the run record.
+Unavailable validation is distinct from skipped validation, and the parent
+does not represent the artifact as validated. A nonzero exit means the run is
+not complete. The [executable schema](./review-summary-schema.json) is
+generated from a Zod source and is the machine-checkable form of the shape
 described here.
 
 On validation failure, the parent repairs the artifact and re-runs the
@@ -226,7 +233,8 @@ This is enforcement by visible failure, not by containment. An agent that
 never runs the command can still finalize an artifact, but produces no evidence
 in either direction. That is why the command exists as an independently
 runnable check rather than as a self-validation instruction, and why its result
-belongs in the run record.
+belongs in the run record. An unavailable validator is recorded as unavailable,
+not as skipped or validated.
 
 `mode:report-only` writes no artifact and therefore performs no validation.
 
