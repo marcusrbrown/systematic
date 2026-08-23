@@ -137,7 +137,7 @@ This fails because: no pipe-delimited tables, no severity-grouped `###` headers,
 - **Learnings & Past Solutions section** -- results from learnings-researcher, with links to docs/solutions/ files
 - **Agent-Native Gaps section** -- results from agent-native-reviewer. Omit if no gaps found.
 - **Deployment Notes section** -- key checklist items from deployment-verification-agent. Omit if the agent did not run.
-- **Coverage section** -- suppressed count with original confidences, residual risks, testing gaps, failed reviewers, and disposition reconciliation
+- **Coverage section** -- suppressed count with original confidences, residual risks, testing gaps, failed reviewers, disposition reconciliation, and risk-coverage entries with their citing input finding IDs and blocked-entry exit conditions
 - **Summary uses blockquotes** for verdict, reasoning, and fix order
 - **Horizontal rule** (`---`) separates findings from verdict
 - **`###` headers** for each section -- never plain text headers

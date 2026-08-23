@@ -360,6 +360,10 @@ Review team:
 
 This is progress reporting, not a blocking confirmation.
 
+Record each conditional persona's selection reason and triggering file paths
+on its dispatch record; see the [synthesis artifact contract](./references/synthesis-artifact-contract.md)
+for the field semantics.
+
 ### Stage 3b: Discover project standards paths
 
 Before spawning sub-agents, find the file paths (not contents) of all relevant standards files for the `project-standards` persona. Use the native file-search/glob tool to locate:
@@ -520,8 +524,8 @@ Assemble the final report using **pipe-delimited markdown tables for findings** 
 8. **Learnings & Past Solutions.** Surface learnings-researcher results: if past solutions are relevant, flag them as "Known Pattern" with links to docs/solutions/ files.
 9. **Agent-Native Gaps.** Surface agent-native-reviewer results. Omit section if no gaps found.
 10. **Deployment Notes.** If deployment-verification-agent ran, surface the key Go/No-Go items: blocking pre-deploy checks, the most important verification queries, rollback caveats, and monitoring focus areas. Keep the checklist actionable rather than dropping it into Coverage.
-11. **Coverage.** Suppressed count, residual risks, testing gaps, failed/timed-out reviewers, validator failures, and any intent uncertainty carried by non-interactive modes.
-12. **Verdict.** Ready to merge / Ready with fixes / Not ready. Fix order if applicable. When an `explicit` plan has unaddressed requirements, the verdict must reflect it — a PR that's code-clean but missing planned requirements is "Not ready" unless the omission is intentional. When an `inferred` plan has unaddressed requirements, note it in the verdict reasoning but do not block on it alone. Apply the risk-aware degraded verdict rule from the [synthesis artifact contract](./references/synthesis-artifact-contract.md).
+11. **Coverage.** Suppressed count, residual risks, testing gaps, failed/timed-out reviewers, validator failures, risk-coverage entries with citing input finding IDs and exit conditions for blocked entries, and any intent uncertainty carried by non-interactive modes.
+12. **Verdict.** Ready to merge / Ready with fixes / Not ready. Fix order if applicable. When an `explicit` plan has unaddressed requirements, the verdict must reflect it — a PR that's code-clean but missing planned requirements is "Not ready" unless the omission is intentional. When an `inferred` plan has unaddressed requirements, note it in the verdict reasoning but do not block on it alone. Apply the risk-aware degraded verdict rule from the [synthesis artifact contract](./references/synthesis-artifact-contract.md), including the recorded exit condition for a blocked risk-critical verdict.
 
 Do not include time estimates.
 
