@@ -216,6 +216,80 @@ describe('review artifact schema', () => {
     expect(result.success).toBe(true)
   })
 
+  test('accepts an artifact that omits validation', () => {
+    const result = ReviewArtifactSchema.safeParse(baseArtifact)
+
+    expect(result.success).toBe(true)
+  })
+
+  test('accepts passed validation without a reason', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({ validation: { status: 'passed' } }),
+    )
+
+    expect(result.success).toBe(true)
+  })
+
+  test('rejects passed validation with a reason', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        validation: { status: 'passed', reason: 'The check completed.' },
+      }),
+    )
+
+    expect(result.success).toBe(false)
+  })
+
+  test('requires a reason for every non-passed validation status', () => {
+    for (const status of ['failed', 'unavailable', 'not_attempted'] as const) {
+      const result = ReviewArtifactSchema.safeParse(
+        artifactWith({ validation: { status } }),
+      )
+
+      expect(result.success, `${status} should require a reason`).toBe(false)
+    }
+  })
+
+  test('accepts a reason for every non-passed validation status', () => {
+    for (const status of ['failed', 'unavailable', 'not_attempted'] as const) {
+      const result = ReviewArtifactSchema.safeParse(
+        artifactWith({
+          validation: { status, reason: 'The check was not successful.' },
+        }),
+      )
+
+      expect(result.success, `${status} should accept a reason`).toBe(true)
+    }
+  })
+
+  test('rejects an unknown validation status', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({ validation: { status: 'unknown' } }),
+    )
+
+    expect(result.success).toBe(false)
+  })
+
+  test('rejects extra keys inside validation', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        validation: { status: 'passed', extra: 'not part of the contract' },
+      }),
+    )
+
+    expect(result.success).toBe(false)
+  })
+
+  test('enforces the validation reason length bound', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        validation: { status: 'failed', reason: 'x'.repeat(2049) },
+      }),
+    )
+
+    expect(result.success).toBe(false)
+  })
+
   test('enforces selection surface path and array bounds', () => {
     const tooLongPath = ReviewArtifactSchema.safeParse(
       artifactWith({
@@ -752,6 +826,10 @@ describe('review artifact schema', () => {
           },
         ],
       }),
+      artifactWith({ validation: { status: 'failed' } }),
+      artifactWith({
+        validation: { status: 'passed', reason: 'The check completed.' },
+      }),
     ]
 
     const issues = cases.flatMap((value) => {
@@ -762,7 +840,7 @@ describe('review artifact schema', () => {
         : result.error.issues.filter((issue) => issue.code === 'custom')
     })
 
-    expect(issues.length).toBe(5)
+    expect(issues.length).toBe(7)
     for (const issue of issues) {
       expect(customMessages.has(issue.message)).toBe(true)
     }
