@@ -17,6 +17,9 @@ tags:
   - ground-truth
   - instrument-validation
   - analysis
+  - dedup
+  - fingerprint
+  - ce-review
 ---
 
 # A perfect measurement is evidence about the instrument, not the system
