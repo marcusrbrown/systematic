@@ -52,7 +52,7 @@ tags: [keyword-one, keyword-two]
 
 ## Knowledge Track Template
 
-Use for: `best_practice`, `documentation_gap`, `workflow_issue`, `developer_experience`
+Use for: `best_practice`, `documentation_gap`, `workflow_issue`, `developer_experience`, `architecture_pattern`, `design_pattern`, `tooling_decision`, `convention`
 
 ```markdown
 ---
