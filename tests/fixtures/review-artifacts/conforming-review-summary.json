@@ -43,7 +43,7 @@
       "validation_reason": "The issue is reproducible in the changed code.",
       "input_finding_ids": ["correctness#1"],
       "provenance": {
-        "fingerprint": "src/example.ts|40|example issue",
+        "fingerprint": "src/example.ts|42",
         "submitters": ["correctness"],
         "agreement_credit": []
       }

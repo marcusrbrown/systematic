@@ -228,6 +228,17 @@ const CoverageSchema = z
   })
   .strict()
 
+const DeclinedMergeSchema = z
+  .object({
+    file: RepoRelativePathSchema,
+    input_finding_ids: z
+      .array(boundedText(MAX_INPUT_ID_LENGTH))
+      .min(2)
+      .max(MAX_FINDINGS),
+    reason: ReasonSchema,
+  })
+  .strict()
+
 export const ReviewArtifactSchema = z
   .object({
     schema_version: z.literal(1),
@@ -249,6 +260,7 @@ export const ReviewArtifactSchema = z
       .array(InputFindingSchema)
       .max(MAX_FINDINGS * MAX_PERSONAS),
     findings: z.array(SynthesizedFindingSchema).max(MAX_FINDINGS),
+    declined_merges: z.array(DeclinedMergeSchema).max(MAX_FINDINGS).optional(),
     disposition_counts: DispositionCountsSchema,
     applied_fixes: z.array(ReasonSchema).max(MAX_FINDINGS),
     residual_actionable_work: z.array(ReasonSchema).max(MAX_FINDINGS),

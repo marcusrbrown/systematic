@@ -86,7 +86,7 @@ const baseArtifact: JsonObject = {
       ...baseFinding,
       input_finding_ids: ['correctness#1'],
       provenance: {
-        fingerprint: 'src/example.ts|40|example issue',
+        fingerprint: 'src/example.ts|42',
         submitters: ['correctness'],
         agreement_credit: [],
       },
@@ -142,6 +142,83 @@ describe('review artifact schema', () => {
     )
 
     expect(result.success).toBe(true)
+  })
+
+  test('accepts a well-formed declined merge entry', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        declined_merges: [
+          {
+            file: 'src/example.ts',
+            input_finding_ids: ['correctness#1', 'testing#1'],
+            reason: 'The findings describe separate validation paths.',
+          },
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(true)
+  })
+
+  test('accepts an artifact that omits declined merges', () => {
+    const result = ReviewArtifactSchema.safeParse(baseArtifact)
+
+    expect(result.success).toBe(true)
+  })
+
+  test('rejects a declined merge entry missing a required field', () => {
+    const entry = {
+      file: 'src/example.ts',
+      input_finding_ids: ['correctness#1', 'testing#1'],
+      reason: 'The findings describe separate validation paths.',
+    }
+
+    for (const field of ['file', 'input_finding_ids', 'reason'] as const) {
+      const incompleteEntry = { ...entry }
+      delete incompleteEntry[field]
+      const result = ReviewArtifactSchema.safeParse(
+        artifactWith({ declined_merges: [incompleteEntry] }),
+      )
+
+      expect(result.success, `${field} should be required`).toBe(false)
+    }
+  })
+
+  test('enforces declined merge array and reason bounds', () => {
+    const entry = {
+      file: 'src/example.ts',
+      input_finding_ids: ['correctness#1', 'testing#1'],
+      reason: 'The findings describe separate validation paths.',
+    }
+
+    const tooManyEntries = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        declined_merges: Array.from({ length: 33 }, () => entry),
+      }),
+    )
+    expect(tooManyEntries.success).toBe(false)
+
+    const tooManyInputIds = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        declined_merges: [
+          {
+            ...entry,
+            input_finding_ids: Array.from(
+              { length: 33 },
+              (_, index) => `reviewer#${index + 1}`,
+            ),
+          },
+        ],
+      }),
+    )
+    expect(tooManyInputIds.success).toBe(false)
+
+    const oversizedReason = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        declined_merges: [{ ...entry, reason: 'x'.repeat(2049) }],
+      }),
+    )
+    expect(oversizedReason.success).toBe(false)
   })
 
   test('rejects a rejected summary with no rejected findings', () => {
@@ -498,7 +575,7 @@ describe('review artifact schema', () => {
             validation_reason: undefined,
             input_finding_ids: ['correctness#1'],
             provenance: {
-              fingerprint: 'src/example.ts|40|example issue',
+              fingerprint: 'src/example.ts|42',
               submitters: ['correctness'],
               agreement_credit: [],
             },
