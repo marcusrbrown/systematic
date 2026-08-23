@@ -23,12 +23,16 @@ tracks:
       - integration_issue
       - logic_error
   knowledge:
-    description: "Best practices, workflow improvements, patterns, and documentation"
+    description: "Best practices, workflow improvements, patterns, conventions, and documentation"
     problem_types:
       - best_practice
       - documentation_gap
       - workflow_issue
       - developer_experience
+      - architecture_pattern
+      - design_pattern
+      - tooling_decision
+      - convention
 
 # --- Fields required by BOTH tracks -----------------------------------------
 required_fields:
@@ -57,7 +61,18 @@ required_fields:
       - workflow_issue
       - best_practice
       - documentation_gap
-    description: "Primary category — determines track (bug vs knowledge)"
+      - architecture_pattern
+      - design_pattern
+      - tooling_decision
+      - convention
+    description: >-
+      Primary category — determines track (bug vs knowledge).
+      Prefer the narrowest applicable value; best_practice is the fallback
+      when no narrower knowledge-track value fits.
+      architecture_pattern: structural decisions about how components relate.
+      design_pattern: reusable solutions to recurring design problems.
+      tooling_decision: choices about tools, libraries, or build infrastructure.
+      convention: agreed-upon naming, formatting, or style rules.
 
   component:
     type: enum
@@ -220,3 +235,13 @@ validation_rules:
   - "date must match YYYY-MM-DD format"
   - "rails_version, if provided, must match X.Y.Z format and only applies to bug-track docs"
   - "tags should be lowercase and hyphen-separated"
+  - |-
+    YAML quoting: scalar values that contain ' #' (space-hash) must be
+    double-quoted to prevent silent YAML comment truncation (the YAML parser
+    treats ' #' as an inline comment, silently dropping the rest of the value
+    with parseError: false). Example: problem: "cache miss # under load".
+  - |-
+    YAML quoting: array-of-strings frontmatter items must be double-quoted when
+    the value starts with a YAML reserved indicator (e.g., '{', '[', '|', '>',
+    '!', '&', '*', '?', ':', '-') or contains ': ' (colon-space). Example:
+    symptoms: - "[mdx-js/rollup] Could not parse expression"

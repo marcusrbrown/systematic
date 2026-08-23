@@ -16,7 +16,14 @@ The `problem_type` determines which **track** applies. Each track has different 
 | Track | problem_types | Description |
 |-------|--------------|-------------|
 | **Bug** | `build_error`, `test_failure`, `runtime_error`, `performance_issue`, `database_issue`, `security_issue`, `ui_bug`, `integration_issue`, `logic_error` | Defects and failures that were diagnosed and fixed |
-| **Knowledge** | `best_practice`, `documentation_gap`, `workflow_issue`, `developer_experience` | Practices, patterns, workflow improvements, and documentation |
+| **Knowledge** | `best_practice`, `documentation_gap`, `workflow_issue`, `developer_experience`, `architecture_pattern`, `design_pattern`, `tooling_decision`, `convention` | Practices, patterns, workflow improvements, and documentation |
+
+Prefer the narrowest applicable value. `best_practice` is the fallback when no narrower knowledge-track value fits.
+
+- `architecture_pattern` — structural decisions about how components relate
+- `design_pattern` — reusable solutions to recurring design problems
+- `tooling_decision` — choices about tools, libraries, or build infrastructure
+- `convention` — agreed-upon naming, formatting, or style rules
 
 ## Required Fields (both tracks)
 
@@ -34,6 +41,8 @@ Required:
 - **resolution_type**: One of `code_fix`, `migration`, `config_change`, `test_fix`, `dependency_update`, `environment_setup`, `workflow_improvement`, `documentation_update`, `tooling_addition`, `seed_data_update`
 
 ## Knowledge Track Fields
+
+Applies to every knowledge-track `problem_type` listed in the Tracks table above.
 
 No additional required fields beyond the shared ones. All fields below are optional:
 
@@ -73,6 +82,14 @@ Docs created before the track system may have `symptoms`/`root_cause`/`resolutio
 - `workflow_issue` -> `docs/solutions/workflow-issues/`
 - `best_practice` -> `docs/solutions/best-practices/`
 - `documentation_gap` -> `docs/solutions/documentation-gaps/`
+- `architecture_pattern` -> `docs/solutions/best-practices/`
+- `design_pattern` -> `docs/solutions/best-practices/`
+- `tooling_decision` -> `docs/solutions/best-practices/`
+- `convention` -> `docs/solutions/best-practices/`
+
+The four narrower knowledge-track types share the `best-practices/` directory rather than each
+getting their own. That matches where such docs are already filed, and avoids single-document
+directories that fragment search.
 
 ## Validation Rules
 
