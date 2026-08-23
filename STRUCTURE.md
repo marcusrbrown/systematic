@@ -10,7 +10,7 @@ systematic/
 ├── src/              # TypeScript plugin + CLI source
 │   ├── index.ts      # OpenCode plugin entry — default export only
 │   ├── pi.ts         # Pi extension entry — default export only
-│   ├── cli.ts        # CLI entry (list / config / setup --harness)
+│   ├── cli.ts        # CLI entry (list / capabilities / validate-review-artifact / config / setup --harness / pi-subagents)
 │   └── lib/          # Core modules
 ├── skills/           # 31 bundled skills (one directory per skill, SKILL.md format)
 ├── agents/           # 37 bundled agents (5 category subdirectories)
@@ -23,7 +23,7 @@ systematic/
 ├── scripts/          # Build-time + CI scripts (integrity, schema codegen, registry, CC plugin build, evals)
 ├── assets/           # Static assets (banner SVG)
 ├── tests/
-│   ├── unit/         # 56 unit test files
+│   ├── unit/         # 60 unit test files
 │   └── integration/  # 11 integration test files
 ├── .opencode/        # Project-specific OpenCode config (theme, TUI)
 ├── .claude-plugin/   # marketplace.json — Claude Code marketplace catalog entry
@@ -44,8 +44,9 @@ subdirectory of core modules.
   provides (config, tool, the workflow-guard observation hooks, and the system transform)
 - `src/pi.ts` — Pi extension factory (`systematicPiExtension`), registers `before_agent_start` for
   bootstrap injection plus the `systematic_skill` and `systematic_delegate` tools. No workflow guard.
-- `src/cli.ts` — CLI commands: `list`, `config show/path`, `setup --harness opencode|pi` (Claude Code
-  has no CLI setup step — it installs as a prebuilt plugin via marketplace, see `scripts/`)
+- `src/cli.ts` — CLI commands: `list`, `capabilities`, `validate-review-artifact <path>`,
+  `config show/path`, `setup --harness opencode|pi`, `pi-subagents <subcommand>` (Claude Code has no
+  CLI setup step — it installs as a prebuilt plugin via marketplace, see `scripts/`)
 - `src/lib/setup.ts` — `setupHarness`: atomic/backed-up/idempotent, project-local-only harness config writes
 - `src/lib/config.ts` — JSONC config loading, 3-source merge
 - `src/lib/config-schema.ts` — canonical Zod schema, `validateConfig`, `SECURITY_OVERLAY_FIELDS`
@@ -118,6 +119,9 @@ bundled assets before editing or building the docs site.
 - `scripts/generate-agent-browser-skill.ts` — generates the agent-browser skill content; pass
   `--check` for drift detection
 - `scripts/generate-config-schema.ts` — JSON Schema codegen + drift check
+- `scripts/generate-review-artifact-schema.ts` — regenerates
+  `skills/ce-review/references/review-summary-schema.json` from the Zod schema in
+  `src/lib/review-artifact-schema.ts`; pass `--check` for drift detection (`bun run review-schema:drift`)
 - `scripts/build-claude-code-plugin.ts` — generates the self-contained Claude Code plugin bundle
   (`claude-code/`, gitignored staging) from `skills/` and `agents/`; CI publishes the output to the
   orphan `claude-code-plugin` branch, never committed to `main`
@@ -147,7 +151,7 @@ coverage, model inheritance) against a real OpenCode runtime, in both source and
 **Purpose:** Test suite for the TypeScript source.
 
 **Contains:**
-- `tests/unit/` — 56 unit test files covering `src/lib/` modules, `scripts/` build/codegen scripts,
+- `tests/unit/` — 60 unit test files covering `src/lib/` modules, `scripts/` build/codegen scripts,
   and `docs/scripts/` generation scripts
 - `tests/integration/` — 11 integration test files (skip automatically if deps unavailable)
 
@@ -181,7 +185,7 @@ branch ref. Users install via `claude plugin marketplace add marcusrbrown/system
 |------|------|
 | `src/index.ts` | OpenCode plugin entry — `SystematicPlugin` default export |
 | `src/pi.ts` | Pi extension entry — `systematicPiExtension` default export |
-| `src/cli.ts` | CLI entry — `list`, `config`, `setup --harness` commands |
+| `src/cli.ts` | CLI entry — `list`, `capabilities`, `validate-review-artifact`, `config`, `setup --harness`, `pi-subagents` commands |
 
 ### Configuration
 
@@ -224,7 +228,7 @@ branch ref. Users install via `claude plugin marketplace add marcusrbrown/system
 
 | Path | Role |
 |------|------|
-| `tests/unit/` | Unit tests (56 files) |
+| `tests/unit/` | Unit tests (60 files) |
 | `tests/integration/` | Integration tests (11 files) |
 
 ## Naming Conventions

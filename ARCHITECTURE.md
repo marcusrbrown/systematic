@@ -32,11 +32,11 @@ these hooks:
 The last four are the receipt-backed workflow guard (see Cross-Cutting Concerns). The registered set
 is authoritative in `src/index.ts`; do not restate a count here.
 
-The CLI (`src/cli.ts`) is a separate entry point exposing `list`, `config`, and `setup --harness`
-subcommands. It does not participate in the plugin hook lifecycle. `setup --harness opencode|pi`
-performs project-local, atomic, idempotent config writes for those two harnesses; Claude Code has no
-equivalent CLI setup step because it is delivered as a prebuilt plugin (see below), not a runtime
-config write.
+The CLI (`src/cli.ts`) is a separate entry point exposing `list`, `capabilities`,
+`validate-review-artifact`, `config`, `setup --harness`, and `pi-subagents` subcommands. It does not
+participate in the plugin hook lifecycle. `setup --harness opencode|pi` performs project-local,
+atomic, idempotent config writes for those two harnesses; Claude Code has no equivalent CLI setup
+step because it is delivered as a prebuilt plugin (see below), not a runtime config write.
 
 Systematic is delivered to three harnesses from this same source tree, with different packaging per
 harness:
@@ -224,6 +224,16 @@ registers no guard, and the Claude Code bundle ships no runtime.
 
 **Registry drift detection** (`scripts/generate-registry.ts --check`) — verifies that the OCX registry
 config stays in sync with the generated bundled assets. Run via `bun run registry:drift`.
+
+**Review artifact contract** (`src/lib/review-artifact-schema.ts`) — Zod source of truth for the
+`ce:review` run-level `review-summary.json` artifact. `scripts/generate-review-artifact-schema.ts`
+generates the committed JSON Schema at `skills/ce-review/references/review-summary-schema.json` and
+is gated against drift via `--check` (`bun run review-schema:drift`). `systematic
+validate-review-artifact <path>` (`src/cli.ts`) validates any artifact against it and ships in
+`dist/`. `ce:review` stamps `schema_version` on the artifact it writes and runs the validator against
+it before reporting a verdict; a failing artifact is repaired and re-validated, never deleted or
+reported over. Artifacts without `schema_version` predate the contract and are excluded (exit 3,
+"legacy").
 
 **Claude Code plugin build** (`scripts/build-claude-code-plugin.ts`) — generates the CC bundle from
 `skills/` and `agents/` on every CI run; the build fails on any leftover source-namespace identifier
