@@ -1,0 +1,46 @@
+{
+  "runId": "20260731-140958-example",
+  "mode": "autofix",
+  "base": "placeholder",
+  "branch": "fix/example",
+  "intent": "placeholder",
+  "files": ["src/example.ts", "tests/unit/example.test.ts"],
+  "reviewers": [
+    "correctness",
+    "testing",
+    "maintainability",
+    "project-standards",
+    "agent-native-reviewer",
+    "learnings-researcher",
+    "reliability",
+    "adversarial",
+    "kieran-typescript"
+  ],
+  "appliedFixes": [],
+  "residualActionableWork": [],
+  "filteredNotValidated": [
+    {
+      "severity": "P2",
+      "file": "src/example.ts",
+      "line": 260,
+      "title": "placeholder",
+      "validatorReason": "placeholder"
+    }
+  ],
+  "discardedFalsePositives": [
+    {
+      "severity": "P3",
+      "file": "tests/unit/example.test.ts",
+      "line": 169,
+      "title": "placeholder",
+      "reason": "placeholder"
+    }
+  ],
+  "advisory": ["placeholder", "placeholder", "placeholder"],
+  "coverage": {
+    "reviewerFailures": [],
+    "validatorFailures": [],
+    "artifactWriteGaps": ["placeholder"]
+  },
+  "verdict": "ready"
+}

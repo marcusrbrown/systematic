@@ -1,0 +1,68 @@
+{
+  "schema_version": 1,
+  "run_id": "20260821-000000-example",
+  "mode": "interactive",
+  "harness": "opencode",
+  "run_status": "completed",
+  "verdict": "Ready to merge",
+  "dispatches": [
+    {
+      "persona": "correctness",
+      "dispatch_outcome": "findings",
+      "input_finding_count": 1
+    }
+  ],
+  "input_findings": [
+    {
+      "record_type": "admitted",
+      "input_id": "correctness#1",
+      "reviewer": "correctness",
+      "confidence": 0.85,
+      "disposition": "surviving",
+      "reason": "The finding passed the confidence gate."
+    }
+  ],
+  "findings": [
+    {
+      "title": "Example issue",
+      "severity": "P1",
+      "file": "src/example.ts",
+      "line": 42,
+      "why_it_matters": "The example path can fail during normal execution.",
+      "autofix_class": "gated_auto",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "confidence": 0.85,
+      "evidence": ["src/example.ts:42 demonstrates the failure path."],
+      "pre_existing": false,
+      "suggested_fix": "Handle the failure before continuing.",
+      "validated": true,
+      "validation_reason": "The issue is reproducible in the changed code.",
+      "input_finding_ids": ["correctness#1"],
+      "provenance": {
+        "fingerprint": "src/example.ts|40|example issue",
+        "submitters": ["correctness"],
+        "agreement_credit": []
+      }
+    }
+  ],
+  "disposition_counts": {
+    "surviving": 1,
+    "merged": 0,
+    "suppressed": 0,
+    "filtered": 0,
+    "rejected": 0
+  },
+  "applied_fixes": ["Updated the example path."],
+  "residual_actionable_work": [],
+  "advisory_outputs": [],
+  "coverage": {
+    "reviewers": 1,
+    "validators": 1,
+    "residual_risks": [],
+    "testing_gaps": [],
+    "failed_reviewers": [],
+    "validator_failures": [],
+    "intent_uncertainty": []
+  }
+}

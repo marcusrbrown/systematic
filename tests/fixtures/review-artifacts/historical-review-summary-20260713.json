@@ -1,0 +1,42 @@
+{
+  "run_id": "20260713-230652-example",
+  "base": "placeholder",
+  "head": "placeholder",
+  "mode": "autofix",
+  "verdict": "actionable",
+  "findings": [
+    {
+      "title": "placeholder",
+      "severity": "P2",
+      "file": "src/example.ts",
+      "line": 42,
+      "confidence": 0.97,
+      "autofix_class": "manual",
+      "owner": "downstream-resolver",
+      "requires_verification": true,
+      "validated": true,
+      "resolution": "todo:003"
+    },
+    {
+      "title": "placeholder",
+      "severity": "P3",
+      "file": "src/example.ts",
+      "line": 130,
+      "confidence": 0.84,
+      "autofix_class": "safe_auto",
+      "owner": "review-fixer",
+      "requires_verification": true,
+      "validated": true,
+      "resolution": "autofixed"
+    }
+  ],
+  "rejected_findings": [{ "title": "placeholder", "reason": "placeholder" }],
+  "residual_risks": ["placeholder"],
+  "testing_gaps": ["placeholder"],
+  "autofix": {
+    "attempted": 1,
+    "succeeded": 1,
+    "failed": 0,
+    "verification": "placeholder"
+  }
+}
