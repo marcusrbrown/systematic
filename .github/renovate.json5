@@ -37,6 +37,20 @@
       semanticCommitType: 'build',
     },
     {
+      // Let release-pipeline packages settle before they reach the release job. A
+      // broken same-day publish (e.g. semantic-release 25.0.4 shipped a missing
+      // @semantic-release/core import) would otherwise break Perform Release before
+      // upstream ships a fix.
+      matchPackageNames: ['/^@semantic-release//', 'conventional-changelog-conventionalcommits', 'semantic-release'],
+      minimumReleaseAge: '3 days',
+    },
+    {
+      matchPackageNames: ['conventional-changelog-conventionalcommits', 'semantic-release'],
+      matchUpdateTypes: ['major'],
+      groupName: 'semantic-release and conventionalcommits',
+      semanticCommitType: 'feat',
+    },
+    {
       matchPackageNames: ['@opencode-ai/{/,}**'],
       groupName: 'OpenCode',
       semanticCommitType: 'build',
