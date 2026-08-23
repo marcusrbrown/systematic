@@ -706,18 +706,7 @@ After presenting findings and verdict (Stage 6), route the next steps by mode. R
 - `review-summary.json` is the parent-owned synthesis artifact. Its lifecycle, dispatch outcomes, complete input ledger, synthesized and filtered findings with provenance, disposition counts, and downstream work are defined in the [canonical synthesis artifact contract](./references/synthesis-artifact-contract.md), whose vocabulary and bounds are executable in [`findings-schema.json`](./references/findings-schema.json).
 - Before finalizing, follow the [artifact validation and failure path](./references/synthesis-artifact-contract.md).
 - Initialize the artifact before dispatch and persist only validated parent-owned records. Finalize lifecycle and reconciliation after synthesis; preserve the existing degraded and abnormal-run behavior described in the canonical contract.
-- Also write `metadata.json` alongside the findings so downstream skills can verify the artifact matches the current branch and HEAD. Minimum fields:
-  ```json
-  {
-    "run_id": "<run-id>",
-    "branch": "<git branch --show-current at dispatch time>",
-    "head_sha": "<git rev-parse HEAD at dispatch time>",
-    "harness": "<opencode | pi | claude-code>",
-    "verdict": "<Ready to merge | Ready with fixes | Not ready>",
-    "completed_at": "<ISO 8601 UTC timestamp>"
-  }
-  ```
-  Capture `branch` and `head_sha` at dispatch time (before any autofixes land), and write the file after the verdict is finalized. This file is additive -- pre-existing artifacts that predate this field are still valid, and downstream skills fall back to file mtime when it is missing.
+- Capture `branch` and `head_sha` at dispatch time, before any autofixes land, and write them into `review-summary.json` with `completed_at` when the verdict is finalized; see the [canonical synthesis artifact contract](./references/synthesis-artifact-contract.md) for the provenance semantics.
 - In autofix mode, create durable todo files only for unresolved actionable findings whose final owner is `downstream-resolver`. Load the `todos` skill (Create section) for the canonical directory path, naming convention, YAML frontmatter structure, and template. Each todo should map the finding's severity to the todo priority (`P0`/`P1` -> `p1`, `P2` -> `p2`, `P3` -> `p3`) and set `status: ready` since these findings have already been triaged by synthesis.
 - Do not create todos for `advisory` findings, `owner: human`, `owner: release`, or protected-artifact cleanup suggestions.
 - If only advisory outputs remain, create no todos.
