@@ -69,6 +69,31 @@
             "minLength": 1,
             "maxLength": 2048,
             "pattern": "\\S"
+          },
+          "selection_surface": {
+            "maxItems": 32,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256,
+              "allOf": [
+                {
+                  "type": "string",
+                  "pattern": "\\S"
+                },
+                {
+                  "type": "string",
+                  "pattern": "^(?!\\/)(?![A-Za-z]:[\\\\/])(?!\\\\).+"
+                }
+              ]
+            }
+          },
+          "selection_reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "\\S"
           }
         },
         "required": ["persona", "dispatch_outcome", "input_finding_count"],
@@ -414,6 +439,36 @@
           }
         },
         "required": ["file", "input_finding_ids", "reason"],
+        "additionalProperties": false
+      }
+    },
+    "risk_coverage": {
+      "maxItems": 64,
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "persona": {
+            "type": "string",
+            "enum": [
+              "security",
+              "data-migrations",
+              "api-contract",
+              "reliability",
+              "performance"
+            ]
+          },
+          "satisfied": {
+            "type": "boolean"
+          },
+          "input_finding_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "pattern": "\\S"
+          }
+        },
+        "required": ["persona", "satisfied"],
         "additionalProperties": false
       }
     },

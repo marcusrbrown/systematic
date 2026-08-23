@@ -130,6 +130,150 @@ describe('review artifact schema', () => {
     expect(result.success).toBe(true)
   })
 
+  test('rejects a risk-critical dispatch without a selection surface', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        dispatches: [
+          {
+            persona: 'security',
+            dispatch_outcome: 'findings',
+            input_finding_count: 1,
+          },
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(false)
+  })
+
+  test('rejects a risk-critical dispatch with an empty selection surface', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        dispatches: [
+          {
+            persona: 'security',
+            dispatch_outcome: 'findings',
+            input_finding_count: 1,
+            selection_surface: [],
+          },
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(false)
+  })
+
+  test('accepts an always-on dispatch without a selection surface', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'findings',
+            input_finding_count: 1,
+          },
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(true)
+  })
+
+  test('rejects satisfied risk coverage without a citing input finding ID', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        risk_coverage: [
+          {
+            persona: 'security',
+            satisfied: true,
+          },
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(false)
+  })
+
+  test('rejects unsatisfied risk coverage with a citing input finding ID', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        risk_coverage: [
+          {
+            persona: 'security',
+            satisfied: false,
+            input_finding_id: 'correctness#1',
+          },
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(false)
+  })
+
+  test('accepts an artifact that omits risk coverage', () => {
+    const result = ReviewArtifactSchema.safeParse(baseArtifact)
+
+    expect(result.success).toBe(true)
+  })
+
+  test('enforces selection surface path and array bounds', () => {
+    const tooLongPath = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        dispatches: [
+          {
+            persona: 'security',
+            dispatch_outcome: 'findings',
+            input_finding_count: 1,
+            selection_surface: [`src/${'x'.repeat(253)}`],
+          },
+        ],
+      }),
+    )
+    expect(tooLongPath.success).toBe(false)
+
+    const tooManyPaths = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        dispatches: [
+          {
+            persona: 'security',
+            dispatch_outcome: 'findings',
+            input_finding_count: 1,
+            selection_surface: Array.from(
+              { length: 33 },
+              (_, index) => `src/example-${index}.ts`,
+            ),
+          },
+        ],
+      }),
+    )
+    expect(tooManyPaths.success).toBe(false)
+
+    const tooLongReason = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        dispatches: [
+          {
+            persona: 'security',
+            dispatch_outcome: 'findings',
+            input_finding_count: 1,
+            selection_surface: ['src/example.ts'],
+            selection_reason: 'x'.repeat(2049),
+          },
+        ],
+      }),
+    )
+    expect(tooLongReason.success).toBe(false)
+
+    const tooManyCoverageEntries = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        risk_coverage: Array.from({ length: 65 }, () => ({
+          persona: 'security',
+          satisfied: false,
+        })),
+      }),
+    )
+    expect(tooManyCoverageEntries.success).toBe(false)
+  })
+
   test('requires a validation reason in the type for unvalidated findings', () => {
     const requirement: UnvalidatedFindingRequiresReason = true
 
@@ -582,6 +726,32 @@ describe('review artifact schema', () => {
           },
         ],
       }),
+      artifactWith({
+        dispatches: [
+          {
+            persona: 'security',
+            dispatch_outcome: 'findings',
+            input_finding_count: 1,
+          },
+        ],
+      }),
+      artifactWith({
+        risk_coverage: [
+          {
+            persona: 'security',
+            satisfied: true,
+          },
+        ],
+      }),
+      artifactWith({
+        risk_coverage: [
+          {
+            persona: 'security',
+            satisfied: false,
+            input_finding_id: 'correctness#1',
+          },
+        ],
+      }),
     ]
 
     const issues = cases.flatMap((value) => {
@@ -592,7 +762,7 @@ describe('review artifact schema', () => {
         : result.error.issues.filter((issue) => issue.code === 'custom')
     })
 
-    expect(issues.length).toBe(2)
+    expect(issues.length).toBe(5)
     for (const issue of issues) {
       expect(customMessages.has(issue.message)).toBe(true)
     }

@@ -11,6 +11,9 @@ const MAX_PERSONAS = 64
 export const REVIEW_ARTIFACT_CUSTOM_MESSAGES = [
   'severity count must match rejected finding count',
   'filtered findings require a validation reason',
+  'risk-critical dispatches require a non-empty selection surface',
+  'satisfied risk coverage requires a citing input finding ID',
+  'unsatisfied risk coverage must not cite an input finding ID',
 ] as const
 
 const boundedText = (maxLength: number) =>
@@ -44,6 +47,14 @@ const BranchSchema = z.string().max(MAX_BRANCH_LENGTH)
 const HeadShaSchema = z.string().regex(/^[0-9a-f]{40}$/)
 const CompletedAtSchema = z.iso.datetime({ offset: false })
 const ReasonSchema = boundedText(MAX_REASON_LENGTH)
+const RISK_CRITICAL_PERSONAS = [
+  'security',
+  'data-migrations',
+  'api-contract',
+  'reliability',
+  'performance',
+] as const
+const RiskCriticalPersonaSchema = z.enum(RISK_CRITICAL_PERSONAS)
 const FindingTitleSchema = boundedText(256)
 const SeveritySchema = z.enum(['P0', 'P1', 'P2', 'P3', 'unknown'] as const)
 const FindingSeveritySchema = SeveritySchema.exclude(['unknown'])
@@ -183,8 +194,27 @@ const DispatchSchema = z
     dispatch_outcome: DispatchOutcomeSchema,
     input_finding_count: z.number().int().nonnegative().max(MAX_FINDINGS),
     rejection_reason: ReasonSchema.optional(),
+    selection_surface: z
+      .array(RepoRelativePathSchema)
+      .max(MAX_FINDINGS)
+      .optional(),
+    selection_reason: ReasonSchema.optional(),
   })
   .strict()
+  .superRefine((dispatch, ctx) => {
+    if (
+      (RISK_CRITICAL_PERSONAS as readonly string[]).includes(
+        dispatch.persona,
+      ) &&
+      (!dispatch.selection_surface || dispatch.selection_surface.length === 0)
+    ) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['selection_surface'],
+        message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[2],
+      })
+    }
+  })
 
 const DispositionCountsSchema = z
   .object({
@@ -239,6 +269,31 @@ const DeclinedMergeSchema = z
   })
   .strict()
 
+const RiskCoverageSchema = z
+  .object({
+    persona: RiskCriticalPersonaSchema,
+    satisfied: z.boolean(),
+    input_finding_id: boundedText(MAX_INPUT_ID_LENGTH).optional(),
+  })
+  .strict()
+  .superRefine((coverage, ctx) => {
+    if (coverage.satisfied && coverage.input_finding_id === undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['input_finding_id'],
+        message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[3],
+      })
+    }
+
+    if (!coverage.satisfied && coverage.input_finding_id !== undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['input_finding_id'],
+        message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[4],
+      })
+    }
+  })
+
 export const ReviewArtifactSchema = z
   .object({
     schema_version: z.literal(1),
@@ -261,6 +316,7 @@ export const ReviewArtifactSchema = z
       .max(MAX_FINDINGS * MAX_PERSONAS),
     findings: z.array(SynthesizedFindingSchema).max(MAX_FINDINGS),
     declined_merges: z.array(DeclinedMergeSchema).max(MAX_FINDINGS).optional(),
+    risk_coverage: z.array(RiskCoverageSchema).max(MAX_PERSONAS).optional(),
     disposition_counts: DispositionCountsSchema,
     applied_fixes: z.array(ReasonSchema).max(MAX_FINDINGS),
     residual_actionable_work: z.array(ReasonSchema).max(MAX_FINDINGS),
