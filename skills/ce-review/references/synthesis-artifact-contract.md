@@ -135,6 +135,12 @@ The artifact must preserve these distinctions:
   different personas on the same normalized file; sort their findings by line.
   Adjacency creates a candidate, not a conclusion: genuinely different
   defects on the same line remain separate.
+- A candidate group may resolve partially. When some findings in a group merge
+  and others stay separate, record one entry per declined separation, listing
+  the input finding IDs on both sides of it. A group of three where two merge
+  and one stays separate records a single entry naming all three IDs, with a
+  reason describing why the third is a different defect. Record the separation,
+  not the merge; a fully merged group produces no entry.
 - `submitters` contains only personas with an input finding in the adjudicated
   merge. `agreement_credit` contains only personas credited by the
   cross-reviewer agreement boost without an input finding in that merge. A
