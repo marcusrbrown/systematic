@@ -20,6 +20,7 @@ import {
   checkFrontmatter,
   checkFrontmatterParseSafety,
   checkHookParity,
+  checkLibModuleTableCompleteness,
   checkMigratedSkillIdentifiers,
   checkReferenceIntegrity,
   checkRemovedNamesOverlap,
@@ -663,6 +664,175 @@ describe('checkContentIntegrity — codemap completeness wiring', () => {
         'Architecture codemap completeness violations',
       )
       expect(proc.stderr.toString()).toContain('src/lib/alpha.ts')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('checkLibModuleTableCompleteness', () => {
+  test('passes when every library module is named in the module tables', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, 'src/lib/alpha.ts', 'export const alpha = true\n')
+      writeFile(
+        root,
+        'src/lib/AGENTS.md',
+        '## Modules\n\n| Module | Key Exports | Role |\n|--------|-------------|------|\n' +
+          '| `alpha.ts` | `alpha` | alpha |\n',
+      )
+
+      expect(checkLibModuleTableCompleteness(root)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('reports duplicate basenames in different library subdirectories', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, 'src/lib/first/shared.ts', 'export const first = true\n')
+      writeFile(
+        root,
+        'src/lib/second/shared.ts',
+        'export const second = true\n',
+      )
+      writeFile(
+        root,
+        'src/lib/AGENTS.md',
+        '## Modules\n\n| Module | Key Exports | Role |\n|--------|-------------|------|\n' +
+          '| `shared.ts` | `shared` | shared module |\n',
+      )
+
+      const violations = checkLibModuleTableCompleteness(root)
+
+      expect(violations).toMatchObject([
+        {
+          kind: 'ambiguous-basename',
+          module: 'shared.ts',
+        },
+      ])
+      expect(violations[0]?.message).toContain('src/lib/first/shared.ts')
+      expect(violations[0]?.message).toContain('src/lib/second/shared.ts')
+      expect(violations[0]?.message).toContain('bare filename')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('reports a module on disk that is absent from the module tables', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, 'src/lib/alpha.ts', 'export const alpha = true\n')
+      writeFile(
+        root,
+        'src/lib/AGENTS.md',
+        'The module `alpha.ts` is important, but this is not a table row.\n',
+      )
+
+      const violations = checkLibModuleTableCompleteness(root)
+
+      expect(violations).toMatchObject([
+        {
+          kind: 'missing-from-table',
+          module: 'alpha.ts',
+        },
+      ])
+      expect(violations[0]?.message).toContain('alpha.ts')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('reports a stale module-table row whose module no longer exists', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'src/lib/AGENTS.md',
+        '| Module | Key Exports | Role |\n|--------|-------------|------|\n' +
+          '| `ghost.ts` | `ghost` | deleted |\n',
+      )
+
+      const violations = checkLibModuleTableCompleteness(root)
+
+      expect(violations).toMatchObject([
+        {
+          kind: 'missing-on-disk',
+          module: 'ghost.ts',
+        },
+      ])
+      expect(violations[0]?.message).toContain('ghost.ts')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('skips an excluded module and keeps the exclusion visible', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, 'src/lib/internal.ts', 'export const internal = true\n')
+      writeFile(
+        root,
+        'src/lib/AGENTS.md',
+        '## Modules\n\n## Module table exclusions\n' +
+          '- `internal.ts` — generated compatibility shim, intentionally omitted.\n',
+      )
+
+      expect(checkLibModuleTableCompleteness(root)).toEqual([])
+      expect(
+        fs.readFileSync(path.join(root, 'src/lib/AGENTS.md'), 'utf8'),
+      ).toContain('`internal.ts`')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('does not treat table-formatted exclusions as documented modules', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, 'src/lib/internal.ts', 'export const internal = true\n')
+      writeFile(
+        root,
+        'src/lib/AGENTS.md',
+        '## Modules\n\n| Module | Key Exports | Role |\n|--------|-------------|------|\n' +
+          '## Module table exclusions\n\n| Module | Reason |\n|--------|--------|\n' +
+          '| `internal.ts` | generated compatibility shim |\n',
+      )
+
+      expect(checkLibModuleTableCompleteness(root)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('checkContentIntegrity — library module-table completeness wiring', () => {
+  test('surfaces module-table violations in the aggregate result', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(root, 'src/lib/alpha.ts', 'export const alpha = true\n')
+      writeFile(root, 'src/lib/AGENTS.md', '## Modules\n')
+
+      const result = checkContentIntegrity(root)
+
+      expect(result.libModuleTableCompletenessViolations).toMatchObject([
+        {
+          kind: 'missing-from-table',
+          module: 'alpha.ts',
+        },
+      ])
+
+      const proc = Bun.spawnSync(['bun', SCRIPT_PATH, root], {
+        cwd: REPO_ROOT,
+        stdout: 'pipe',
+        stderr: 'pipe',
+      })
+      expect(proc.exitCode).toBe(1)
+      expect(proc.stderr.toString()).toContain(
+        'Library module-table completeness violations',
+      )
+      expect(proc.stderr.toString()).toContain('alpha.ts')
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }

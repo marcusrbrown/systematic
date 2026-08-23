@@ -66,6 +66,8 @@ bun run registry:validate  # Validate registry without building
 
   See [`docs/solutions/workflow-issues/registry-drift-on-skill-description-change-2026-05-20.md`](docs/solutions/workflow-issues/registry-drift-on-skill-description-change-2026-05-20.md) for prior art.
 
+  Creating a module under `src/lib/` also requires an `ARCHITECTURE.md` codemap entry and a `src/lib/AGENTS.md` module-table row; both registration surfaces are gate-enforced. Verify them with `bun scripts/content-integrity.ts`.
+
 ## Anti-Patterns
 
 - `require()` — use ESM imports
