@@ -1,0 +1,40 @@
+{
+  "mode": "autofix",
+  "base": "placeholder",
+  "branch": "fix/example",
+  "intent": "placeholder",
+  "changed_files": [
+    "src/example.ts",
+    "tests/unit/example.test.ts",
+    "tests/unit/example.snapshot.ts"
+  ],
+  "reviewers": [
+    "correctness",
+    "testing",
+    "maintainability",
+    "project-standards",
+    "agent-native",
+    "learnings",
+    "reliability"
+  ],
+  "findings": [],
+  "applied_fixes": [],
+  "residual_actionable_work": [],
+  "filtered_not_validated": [
+    {
+      "title": "placeholder",
+      "file": "src/example.ts",
+      "line": 890,
+      "original_severity": "P2",
+      "confidence": 0.86,
+      "validator_reason": "placeholder"
+    }
+  ],
+  "coverage": {
+    "failed_reviewers": [],
+    "validator_failures": [],
+    "suppressed_findings": 0,
+    "aggregate_runner_note": "placeholder"
+  },
+  "verdict": "ready"
+}

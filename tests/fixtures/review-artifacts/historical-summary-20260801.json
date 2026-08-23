@@ -1,0 +1,50 @@
+{
+  "mode": "autofix",
+  "base": "placeholder",
+  "branch": "fix/example",
+  "changed_files": ["src/example.ts", "tests/unit/example.test.ts"],
+  "intent": "placeholder",
+  "reviewers": [
+    "correctness",
+    "testing",
+    "maintainability",
+    "project-standards",
+    "agent-native",
+    "learnings",
+    "reliability"
+  ],
+  "findings": [
+    {
+      "title": "placeholder",
+      "severity": "P2",
+      "file": "tests/unit/example.test.ts",
+      "line": 566,
+      "confidence": 0.86,
+      "autofix_class": "safe_auto",
+      "owner": "review-fixer",
+      "requires_verification": true,
+      "validated": true,
+      "status": "fixed"
+    }
+  ],
+  "applied_fixes": ["placeholder"],
+  "residual_actionable_work": [],
+  "suppressed_findings": [
+    {
+      "title": "placeholder",
+      "reason": "placeholder"
+    }
+  ],
+  "dogfood": {
+    "single_reviewer_pressure_pass": "PASS",
+    "structured_review": "placeholder",
+    "longest_reviewer_elapsed_reason": "placeholder",
+    "reread_observation": "placeholder"
+  },
+  "coverage": {
+    "failed_reviewers": [],
+    "validator_failures": [],
+    "suppressed_below_confidence": 0
+  },
+  "verdict": "ready"
+}

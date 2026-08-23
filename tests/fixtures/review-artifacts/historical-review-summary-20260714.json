@@ -1,0 +1,53 @@
+{
+  "run_id": "20260714-221040-example",
+  "mode": "autofix",
+  "scope": "placeholder",
+  "intent": "placeholder",
+  "verdict": "actionable",
+  "findings": [
+    {
+      "severity": "P3",
+      "title": "placeholder",
+      "status": "autofixed",
+      "files": ["src/example.ts"]
+    },
+    {
+      "severity": "P2",
+      "title": "placeholder",
+      "status": "ready_todo_005",
+      "files": ["src/example.ts"]
+    },
+    {
+      "severity": "P2",
+      "title": "placeholder",
+      "status": "ready_todo_005",
+      "files": ["src/example.ts", "src/pi.ts"]
+    },
+    {
+      "severity": "P2",
+      "title": "placeholder",
+      "status": "ready_todo_005",
+      "files": ["src/example.ts", "src/pi.ts"]
+    },
+    {
+      "severity": "P2",
+      "title": "placeholder",
+      "status": "pending_todo_006",
+      "files": ["src/example.ts"]
+    }
+  ],
+  "filtered": ["placeholder", "placeholder", "placeholder", "placeholder"],
+  "requirements": {
+    "R10": "partially met pending todo 005",
+    "R14": "OpenCode behavior remains unchanged",
+    "future_units": "out of review scope"
+  },
+  "agent_native_gaps": ["placeholder", "placeholder"],
+  "coverage": {
+    "reviewers": 10,
+    "validators": 9,
+    "malformed_returns_dropped": 0,
+    "suppressed_by_policy": 0
+  },
+  "residual_risks": ["placeholder", "placeholder"]
+}
