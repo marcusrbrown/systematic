@@ -105,7 +105,10 @@ The artifact must preserve these distinctions:
   records what a persona returned: `findings`, `empty`, `malformed`, or
   `never_returned`. A rejection reason is the exact safe validation reason,
   naming persona and field without echoing the offending value. Dispatch
-  outcome is separate from finding disposition.
+  outcome is separate from finding disposition. Conditional selections record
+  their triggering changed-file paths in `selection_surface` and the announced
+  selection explanation in `selection_reason`; always-on personas may omit
+  both fields.
 - `input_findings` is the authoritative parent-owned ledger. Before the
   confidence gate, every admitted finding receives an `input_id` of
   `<reviewer>#<1-based finding index>`. Every admitted input has exactly one
@@ -246,18 +249,20 @@ The risk-critical surfaces are `security`, `data-migrations`, `api-contract`,
 specifically for the matching diff shape in Stage 3. If one of those selected
 personas has `dispatch_outcome: "malformed"` or
 `dispatch_outcome: "never_returned"`, the review verdict must not be clean:
-it is blocking unless another persona covered the same surface and returned
-validated evidence for it. For this rule, validated evidence means at least
+it is blocking unless another persona covered the lost surface with validated
+evidence. For this rule, a validated finding from another persona covers a
+lost risk-critical surface if and only if the finding's `file` appears in the
+lost persona's recorded `selection_surface`; validated evidence means at least
 one finding from that other persona's return passed complete schema and
-environment-value validation and is relevant to the same surface. A coverage
-note alone cannot satisfy this rule; the verdict must reflect the missing
-risk-critical evidence.
+environment-value validation. A coverage note alone cannot satisfy this rule;
+the verdict must reflect the missing risk-critical evidence.
 
 Finding-level rejection is keyed by the severities in
 `rejected_severities`. A selected risk-critical persona whose rejected
 findings include any `P0`, `P1`, or `unknown` severity is treated exactly as a
 rejected persona for this verdict rule: blocking unless another persona
-covered the same surface with validated evidence. A selected risk-critical
+covered the lost surface with a validated finding whose `file` appears in the
+lost persona's recorded `selection_surface`. A selected risk-critical
 persona whose rejected findings are only `P2` or `P3` does not block on that
 basis alone; record it in the Coverage section instead. Unknown severity is
 treated as blocking as deliberate fail-closed behavior because the parent
@@ -265,3 +270,12 @@ could not determine what was lost. Admitted findings and verdict blocking
 are independent: surviving findings from the same return continue through
 synthesis normally. Partial return is not partial coverage when the lost
 part was critical.
+
+Record each lost risk-critical persona in the optional `risk_coverage` array
+with `satisfied: true` and `input_finding_id` set to the citing input finding
+ID when coverage is satisfied, or `satisfied: false` without an
+`input_finding_id` otherwise. A blocked verdict must name its exit condition
+in the report: re-run the lost persona, or supply a validated finding from
+another persona whose `file` appears in the lost persona's recorded
+`selection_surface`. Derive that condition from the dispatch and risk-coverage
+records, not from a coverage note.
