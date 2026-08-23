@@ -443,6 +443,8 @@ For each unit, include:
 
 Every feature-bearing unit should include the test file path in `**Files:**`.
 
+When a unit creates a file in a directory that carries registration obligations — a manifest, index, codemap, module table, or generated artifact that must list it — name those surfaces in the same unit's `**Files:**`, and name the regeneration command in its `**Verification**`. Phase 1.1 already collects this from the repository's own contributor guidance; carry it into the unit rather than leaving it for a failing gate to report. An obligation that no gate enforces is the one most likely to be missed, so state it even when nothing will fail.
+
 Use `Execution note` sparingly. Good uses include:
 - `Execution note: Start with a failing integration test for the request/response contract.`
 - `Execution note: Add characterization coverage before modifying this legacy parser.`
