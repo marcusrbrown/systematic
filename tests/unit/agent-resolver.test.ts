@@ -273,12 +273,26 @@ describe('real bundled agents catalog', () => {
     ).toEqual({
       tools: ['read', 'grep', 'find', 'edit', 'write', 'bash'],
     })
-    expect(
-      resolveToolAllowlist(
-        resolveAgent(catalog, 'git-history-analyzer')?.toolsSource,
-      ),
-    ).toEqual({
-      tools: [...DEFAULT_READONLY_TOOLS],
+      expect(
+        resolveToolAllowlist(
+          resolveAgent(catalog, 'pr-comment-resolver')?.toolsSource,
+        ),
+      ).toEqual({
+        tools: ['read', 'grep', 'find', 'edit', 'write', 'bash'],
+      })
+      expect(
+        resolveToolAllowlist(
+          resolveAgent(catalog, 'bug-reproduction-validator')?.toolsSource,
+        ),
+      ).toEqual({
+        tools: ['read', 'grep', 'find', 'edit', 'write', 'bash'],
+      })
+      expect(
+        resolveToolAllowlist(
+          resolveAgent(catalog, 'git-history-analyzer')?.toolsSource,
+        ),
+      ).toEqual({
+        tools: [...DEFAULT_READONLY_TOOLS],
+      })
     })
-  })
 })
