@@ -254,8 +254,10 @@ branch ref. Users install via `claude plugin marketplace add marcusrbrown/system
   must be trust-protected (blocked from project-level config), add its name to `SECURITY_OVERLAY_FIELDS`.
 
 - **New core module** → add `src/lib/<name>.ts`. Export only what other modules need. Add a
-  corresponding `tests/unit/<name>.test.ts`, and add the module to `ARCHITECTURE.md`'s codemap. If
-  it is intentionally omitted, record it in the visible codemap exclusions section instead.
+  corresponding `tests/unit/<name>.test.ts`, and register it on both gate-enforced surfaces: the
+  `ARCHITECTURE.md` codemap and the matching module-table row in `src/lib/AGENTS.md`. If it is
+  intentionally omitted from either, record it in that document's visible exclusions section
+  instead. Verify both with `bun scripts/content-integrity.ts`.
 
 - **New test** → `tests/unit/<module>.test.ts` for unit tests, `tests/integration/<name>.test.ts`
   for integration tests. Use real temp directories for filesystem isolation.
