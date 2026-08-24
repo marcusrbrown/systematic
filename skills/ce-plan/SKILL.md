@@ -514,7 +514,7 @@ title: [Plan Title]
 type: [feat|fix|refactor]
 status: active
 date: YYYY-MM-DD
-origin: docs/brainstorms/YYYY-MM-DD-<topic>-requirements.md  # include when planning from a requirements doc
+origin: docs/brainstorms/YYYY-MM-DD-<topic>-requirements.md  # include when planning from a requirements doc; see Sources if the path is untracked
 deepened: YYYY-MM-DD  # optional, set when the confidence check substantively strengthens the plan
 ---
 
@@ -680,6 +680,9 @@ Omit `scopes_considered` unless the verdict is `unscoped`, and omit `acceptance`
 ## Sources & References
 
 - **Origin document:** [docs/brainstorms/YYYY-MM-DD-<topic>-requirements.md](path)
+  <!-- If the origin path is untracked in this repository, say so on this line. A
+       reader cloning the repo will not find it, and a bare link cannot tell them
+       whether they are missing context or whether it was always local. -->
 - Related code: [path or symbol]
 - Related PRs/issues: #[number]
 - External docs: [url]
