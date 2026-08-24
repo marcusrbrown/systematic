@@ -1,5 +1,5 @@
 {
-  "generatedAt": "2026-08-18T20:39:40.977Z",
+  "generatedAt": "2026-08-24T18:55:46.321Z",
   "entries": [
     {
       "filename": "systematic-best-practices-researcher.md",
@@ -173,7 +173,7 @@
       "filename": "systematic-bug-reproduction-validator.md",
       "status": "exported-with-warning",
       "sourceRelPath": "agents/workflow/bug-reproduction-validator.md",
-      "hash": "698bc3727cf99cbcdbc28f1407a0bdba6bf8b3ae2fba33ee00b6f551b88a8e35",
+      "hash": "d5239f6c447c477fa1c8ae2eb474807e58bbd9b213502e71f8b6b6a848f6c029",
       "reason": "References agent-browser CLI/skill as an optional tool hint. Behavior may differ if agent-browser is not available, but persona remains operable without it."
     }
   ]
