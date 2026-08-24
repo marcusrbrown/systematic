@@ -57,6 +57,7 @@ Read the plan file completely.
 If the plan frontmatter includes an `origin:` path:
 - Read the origin document too
 - Use it to check whether the plan still reflects the product intent, scope boundaries, and success criteria
+- If the path does not resolve, continue from the plan alone rather than treating it as a defect. A repository may deliberately not track its brainstorm directory, in which case the origin exists only for whoever wrote the plan. Note that the check could not run instead of reporting a missing file.
 
 #### 0.2 Classify Plan Depth and Topic Risk
 
