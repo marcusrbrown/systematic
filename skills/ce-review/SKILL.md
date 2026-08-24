@@ -250,8 +250,12 @@ git checkout <branch>
 
 Then detect the review base branch and compute the merge-base. Run the `references/resolve-base.sh` script, which handles fork-safe remote resolution with multi-fallback detection (PR metadata -> `origin/HEAD` -> `gh repo view` -> common branch names):
 
+When this skill loads, its own directory is stated in the surrounding instructions; set `SKILL_DIR` to that directory because the scripts live beside this file.
+
 ```
-RESOLVE_OUT=$(bash references/resolve-base.sh) || { echo "ERROR: resolve-base.sh failed"; exit 1; }
+# Resolve helper scripts relative to this skill's directory.
+SKILL_DIR="<skill directory stated when this skill loads>";
+RESOLVE_OUT=$(bash "$SKILL_DIR/references/resolve-base.sh") || { echo "ERROR: resolve-base.sh failed"; exit 1; }
 if [ -z "$RESOLVE_OUT" ] || echo "$RESOLVE_OUT" | grep -q '^ERROR:'; then echo "${RESOLVE_OUT:-ERROR: resolve-base.sh produced no output}"; exit 1; fi
 BASE=$(echo "$RESOLVE_OUT" | sed 's/^BASE://')
 ```
@@ -271,7 +275,9 @@ You may still fetch additional PR metadata with `gh pr view` for title, body, an
 Detect the review base branch and compute the merge-base using the same `references/resolve-base.sh` script as branch mode:
 
 ```
-RESOLVE_OUT=$(bash references/resolve-base.sh) || { echo "ERROR: resolve-base.sh failed"; exit 1; }
+# Resolve helper scripts relative to this skill's directory.
+SKILL_DIR="<skill directory stated when this skill loads>";
+RESOLVE_OUT=$(bash "$SKILL_DIR/references/resolve-base.sh") || { echo "ERROR: resolve-base.sh failed"; exit 1; }
 if [ -z "$RESOLVE_OUT" ] || echo "$RESOLVE_OUT" | grep -q '^ERROR:'; then echo "${RESOLVE_OUT:-ERROR: resolve-base.sh produced no output}"; exit 1; fi
 BASE=$(echo "$RESOLVE_OUT" | sed 's/^BASE://')
 ```

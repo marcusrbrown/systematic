@@ -41,8 +41,12 @@ gh pr view --json number -q .number
 
 Then fetch all feedback using the GraphQL script at [scripts/get-pr-comments](scripts/get-pr-comments):
 
+When this skill loads, its own directory is stated in the surrounding instructions; set `SKILL_DIR` to that directory because the scripts live beside this file.
+
 ```bash
-bash scripts/get-pr-comments PR_NUMBER
+# Resolve helper scripts relative to this skill's directory.
+SKILL_DIR="<skill directory stated when this skill loads>";
+bash "$SKILL_DIR/scripts/get-pr-comments" PR_NUMBER
 ```
 
 Returns a JSON object with three keys:
@@ -240,12 +244,16 @@ For `needs-human` verdicts, post the reply but do NOT resolve the thread. Leave 
 
 1. **Reply** using [scripts/reply-to-pr-thread](scripts/reply-to-pr-thread):
 ```bash
-echo "REPLY_TEXT" | bash scripts/reply-to-pr-thread THREAD_ID
+# Resolve helper scripts relative to this skill's directory.
+SKILL_DIR="<skill directory stated when this skill loads>";
+echo "REPLY_TEXT" | bash "$SKILL_DIR/scripts/reply-to-pr-thread" THREAD_ID
 ```
 
 2. **Resolve** using [scripts/resolve-pr-thread](scripts/resolve-pr-thread):
 ```bash
-bash scripts/resolve-pr-thread THREAD_ID
+# Resolve helper scripts relative to this skill's directory.
+SKILL_DIR="<skill directory stated when this skill loads>";
+bash "$SKILL_DIR/scripts/resolve-pr-thread" THREAD_ID
 ```
 
 #### PR comments and review bodies
@@ -263,7 +271,9 @@ Include enough quoted context in the reply so the reader can follow which commen
 Re-fetch feedback to confirm resolution:
 
 ```bash
-bash scripts/get-pr-comments PR_NUMBER
+# Resolve helper scripts relative to this skill's directory.
+SKILL_DIR="<skill directory stated when this skill loads>";
+bash "$SKILL_DIR/scripts/get-pr-comments" PR_NUMBER
 ```
 
 The `review_threads` array should be empty (except `needs-human` items).
@@ -352,7 +362,9 @@ gh api repos/OWNER/REPO/pulls/comments/COMMENT_ID \
 
 **Step 2** -- Map comment to its thread ID. Use [scripts/get-thread-for-comment](scripts/get-thread-for-comment):
 ```bash
-bash scripts/get-thread-for-comment PR_NUMBER COMMENT_NODE_ID [OWNER/REPO]
+# Resolve helper scripts relative to this skill's directory.
+SKILL_DIR="<skill directory stated when this skill loads>";
+bash "$SKILL_DIR/scripts/get-thread-for-comment" PR_NUMBER COMMENT_NODE_ID [OWNER/REPO]
 ```
 
 This fetches thread IDs and their first comment IDs (minimal fields, no bodies) and returns the matching thread with full comment details.

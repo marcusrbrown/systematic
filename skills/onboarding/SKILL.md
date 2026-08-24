@@ -26,8 +26,12 @@ This skill always regenerates the document from scratch. It does not read or dif
 
 Run the bundled inventory script (`scripts/inventory.mjs`) to get a structural map of the repository without reading every file:
 
+When this skill loads, its own directory is stated in the surrounding instructions; set `SKILL_DIR` to that directory because the scripts live beside this file.
+
 ```bash
-node scripts/inventory.mjs --root .
+# Resolve helper scripts relative to this skill's directory.
+SKILL_DIR="<skill directory stated when this skill loads>";
+node "$SKILL_DIR/scripts/inventory.mjs" --root .
 ```
 
 Parse the JSON output. This provides:
