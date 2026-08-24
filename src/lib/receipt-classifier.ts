@@ -635,7 +635,7 @@ async function initializeParserAssets(
 ): Promise<ParserAssets> {
   const treeSitterWasmPath =
     options.treeSitterWasmPath ??
-    resolveAsset('web-tree-sitter/tree-sitter.wasm')
+    resolveAsset('web-tree-sitter/web-tree-sitter.wasm')
   const bashWasmPath =
     options.bashWasmPath ??
     resolveAsset('tree-sitter-bash/tree-sitter-bash.wasm')
