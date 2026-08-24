@@ -60,6 +60,20 @@
       groupName: 'Pi',
       semanticCommitType: 'build',
     },
+    {
+      // web-tree-sitter is the WASM runtime; tree-sitter-bash is the grammar it
+      // loads. A grammar is compiled against an ABI version and the runtime
+      // accepts a range, so moving one alone can land the pair outside it. Both
+      // are pinned exactly rather than with a caret for the same reason.
+      //
+      // 0.26.12 also renamed the runtime's exported asset from tree-sitter.wasm
+      // to web-tree-sitter.wasm, which broke every call site resolving the old
+      // path. The command classifier fails closed, so 44 tests failed before a
+      // single parse was attempted. Grouping them makes that class of change
+      // arrive as one reviewable PR.
+      matchPackageNames: ['tree-sitter-bash', 'web-tree-sitter'],
+      groupName: 'tree-sitter',
+    },
   ],
   postUpgradeTasks: {
     // `bun run fix` runs Biome lint --fix to auto-correct formatting drift.
