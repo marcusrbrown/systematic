@@ -13,8 +13,12 @@ Delete local branches whose remote tracking branch has been deleted, including a
 
 Run the discovery script to fetch the latest remote state and identify gone branches:
 
+When this skill loads, its own directory is stated in the surrounding instructions; set `SKILL_DIR` to that directory because the scripts live beside this file.
+
 ```bash
-bash scripts/clean-gone
+# Resolve helper scripts relative to this skill's directory.
+SKILL_DIR="<skill directory stated when this skill loads>";
+bash "$SKILL_DIR/scripts/clean-gone"
 ```
 
 [scripts/clean-gone](./scripts/clean-gone)
