@@ -2,7 +2,7 @@
 # Resolve the review base branch and compute the merge-base for ce:review.
 # Handles fork-safe remote resolution, PR metadata, and multi-fallback detection.
 #
-# Usage: bash references/resolve-base.sh
+# Usage: bash "$SKILL_DIR/references/resolve-base.sh"
 # Output: BASE:<sha> on success, ERROR:<message> on failure.
 #
 # Detects the base branch from (in priority order):
