@@ -106,6 +106,14 @@ semantics so downstream tooling can rely on them:
   doc (e.g., `docs/brainstorms/2026-05-12-pagination-requirements.md`).
   Set when planning from an upstream brainstorm; carried for traceability
   and re-resolved when `ce:plan` re-deepens.
+
+  A repository may deliberately not track its brainstorm directory, treating
+  requirements docs as local planning input that the plan supersedes. The
+  field still carries real provenance for whoever wrote the plan, so keep it
+  — but a reader working from a clone will find nothing at that path. Say so
+  in Sources & References rather than leaving a bare link, because a link
+  that resolves to nothing cannot tell a reader whether they are missing
+  context or whether none was ever shared.
 - **`deepened`** — ISO 8601 date marking the first time the confidence
   check substantively strengthened the plan. Presence affects Phase 0.1
   resume fast-path logic (see `references/deepening-workflow.md`).
