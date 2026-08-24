@@ -10,7 +10,7 @@ export const OPENCODE_AVAILABLE = (() => {
 })()
 
 export const TIMEOUT_MS = 180_000
-export const EXACT_OPENCODE_VERSION = '1.18.18'
+export const EXACT_OPENCODE_VERSION = '1.18.21'
 let exactNpmCacheDir: string | undefined
 export const MAX_RETRIES = 1
 export const RETRY_DELAY_MS = 3_000
