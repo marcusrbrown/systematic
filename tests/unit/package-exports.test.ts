@@ -246,7 +246,7 @@ describe('build output and packaging', () => {
             import fs from 'node:fs'
             import { fileURLToPath } from 'node:url'
             const entryUrl = ${JSON.stringify(pathToFileURL(entryPath).href)}
-            const treeSitterUrl = import.meta.resolve('web-tree-sitter/tree-sitter.wasm', entryUrl)
+            const treeSitterUrl = import.meta.resolve('web-tree-sitter/web-tree-sitter.wasm', entryUrl)
             const bashUrl = import.meta.resolve('tree-sitter-bash/tree-sitter-bash.wasm', entryUrl)
             if (!treeSitterUrl.startsWith('file:') || !bashUrl.startsWith('file:')) process.exit(1)
             if (!fs.existsSync(fileURLToPath(treeSitterUrl)) || !fs.existsSync(fileURLToPath(bashUrl))) process.exit(2)

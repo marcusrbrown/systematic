@@ -379,7 +379,7 @@ describe('receipt classifier', () => {
 
   test('reports incompatible grammar assets as bounded unavailable results', async () => {
     const incompatibleGrammar = fileURLToPath(
-      import.meta.resolve('web-tree-sitter/tree-sitter.wasm'),
+      import.meta.resolve('web-tree-sitter/web-tree-sitter.wasm'),
     )
     const classifier = createReceiptClassifier({
       bashWasmPath: incompatibleGrammar,
