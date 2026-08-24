@@ -1,11 +1,22 @@
 ---
 title: 'feat: Ship an MCP server with the Claude Code plugin bundle'
 type: feat
-status: active
+status: superseded
+superseded_at: 2026-08-24
+superseded_by: docs/solutions/best-practices/entry-point-scope-decides-what-a-plugin-can-ship-2026-08-24.md
+superseded_reason: "The premise was measured false. This plan assumed a Claude Code bundle cannot carry an executable, so it routed the validator through an MCP server. A local install against Claude Code 2.1.163 showed marketplace install copies the entire plugin directory including non-declared directories, preserves the executable bit, and puts bin/ on the Bash tool's PATH. The real constraint is entry-point scope, not transport: the full CLI is unshippable because jsonc-parser's UMD branch emits a runtime require no bundler resolves, while a purpose-built entry importing only the review-artifact schema builds to a 0.50 MB self-contained file. A successor plan replaces the MCP server with a bundled bin/ entry, dropping the Node 20 floor bump, the npx launch pin, and the new runtime dependency this plan required."
 date: 2026-08-23
 deepened: 2026-08-23
 origin: docs/brainstorms/2026-08-23-claude-code-mcp-server-requirements.md
 ---
+
+> **Status: superseded.** This plan's central assumption — that a Claude Code bundle cannot
+> carry an executable — was measured false against a real install. `bin/` is copied intact,
+> stays executable, and is added to the Bash tool's `PATH`, so no MCP transport is needed to
+> reach a bundled validator. The measurements and the three packaging failures behind them
+> are recorded in
+> [entry-point scope decides what a plugin bundle can ship](../solutions/best-practices/entry-point-scope-decides-what-a-plugin-can-ship-2026-08-24.md).
+> Everything below is retained for the research and the decision record; do not implement it.
 
 # feat: Ship an MCP server with the Claude Code plugin bundle
 
