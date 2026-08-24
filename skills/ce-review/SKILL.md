@@ -254,7 +254,7 @@ When this skill loads, its own directory is stated in the surrounding instructio
 
 ```
 # Resolve helper scripts relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>"
+SKILL_DIR="<skill directory stated when this skill loads>";
 RESOLVE_OUT=$(bash "$SKILL_DIR/references/resolve-base.sh") || { echo "ERROR: resolve-base.sh failed"; exit 1; }
 if [ -z "$RESOLVE_OUT" ] || echo "$RESOLVE_OUT" | grep -q '^ERROR:'; then echo "${RESOLVE_OUT:-ERROR: resolve-base.sh produced no output}"; exit 1; fi
 BASE=$(echo "$RESOLVE_OUT" | sed 's/^BASE://')
@@ -276,7 +276,7 @@ Detect the review base branch and compute the merge-base using the same `referen
 
 ```
 # Resolve helper scripts relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>"
+SKILL_DIR="<skill directory stated when this skill loads>";
 RESOLVE_OUT=$(bash "$SKILL_DIR/references/resolve-base.sh") || { echo "ERROR: resolve-base.sh failed"; exit 1; }
 if [ -z "$RESOLVE_OUT" ] || echo "$RESOLVE_OUT" | grep -q '^ERROR:'; then echo "${RESOLVE_OUT:-ERROR: resolve-base.sh produced no output}"; exit 1; fi
 BASE=$(echo "$RESOLVE_OUT" | sed 's/^BASE://')

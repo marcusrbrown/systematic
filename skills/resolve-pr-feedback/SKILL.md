@@ -45,7 +45,7 @@ When this skill loads, its own directory is stated in the surrounding instructio
 
 ```bash
 # Resolve helper scripts relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>"
+SKILL_DIR="<skill directory stated when this skill loads>";
 bash "$SKILL_DIR/scripts/get-pr-comments" PR_NUMBER
 ```
 
@@ -245,14 +245,14 @@ For `needs-human` verdicts, post the reply but do NOT resolve the thread. Leave 
 1. **Reply** using [scripts/reply-to-pr-thread](scripts/reply-to-pr-thread):
 ```bash
 # Resolve helper scripts relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>"
+SKILL_DIR="<skill directory stated when this skill loads>";
 echo "REPLY_TEXT" | bash "$SKILL_DIR/scripts/reply-to-pr-thread" THREAD_ID
 ```
 
 2. **Resolve** using [scripts/resolve-pr-thread](scripts/resolve-pr-thread):
 ```bash
 # Resolve helper scripts relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>"
+SKILL_DIR="<skill directory stated when this skill loads>";
 bash "$SKILL_DIR/scripts/resolve-pr-thread" THREAD_ID
 ```
 
@@ -272,7 +272,7 @@ Re-fetch feedback to confirm resolution:
 
 ```bash
 # Resolve helper scripts relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>"
+SKILL_DIR="<skill directory stated when this skill loads>";
 bash "$SKILL_DIR/scripts/get-pr-comments" PR_NUMBER
 ```
 
@@ -363,7 +363,7 @@ gh api repos/OWNER/REPO/pulls/comments/COMMENT_ID \
 **Step 2** -- Map comment to its thread ID. Use [scripts/get-thread-for-comment](scripts/get-thread-for-comment):
 ```bash
 # Resolve helper scripts relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>"
+SKILL_DIR="<skill directory stated when this skill loads>";
 bash "$SKILL_DIR/scripts/get-thread-for-comment" PR_NUMBER COMMENT_NODE_ID [OWNER/REPO]
 ```
 

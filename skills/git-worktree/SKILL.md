@@ -35,7 +35,7 @@ When this skill loads, its own directory is stated in the surrounding instructio
 ```bash
 # ✅ CORRECT - Always use the script
 # Resolve the manager script relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>"
+SKILL_DIR="<skill directory stated when this skill loads>";
 bash "$SKILL_DIR/scripts/worktree-manager.sh" create feature-name
 
 # ❌ WRONG - Never do this directly
@@ -68,7 +68,7 @@ You can also invoke the skill directly from bash:
 
 ```bash
 # Resolve helper scripts relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>"
+SKILL_DIR="<skill directory stated when this skill loads>";
 # Create a new worktree (copies .env files automatically)
 bash "$SKILL_DIR/scripts/worktree-manager.sh" create feature-login
 
@@ -98,7 +98,7 @@ Creates a new worktree with the given branch name.
 **Example:**
 ```bash
 # Resolve helper scripts relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>"
+SKILL_DIR="<skill directory stated when this skill loads>";
 bash "$SKILL_DIR/scripts/worktree-manager.sh" create feature-login
 ```
 
@@ -120,7 +120,7 @@ Lists all available worktrees with their branches and current status.
 **Example:**
 ```bash
 # Resolve helper scripts relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>"
+SKILL_DIR="<skill directory stated when this skill loads>";
 bash "$SKILL_DIR/scripts/worktree-manager.sh" list
 ```
 
@@ -137,7 +137,7 @@ Switches to an existing worktree and cd's into it.
 **Example:**
 ```bash
 # Resolve helper scripts relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>"
+SKILL_DIR="<skill directory stated when this skill loads>";
 bash "$SKILL_DIR/scripts/worktree-manager.sh" switch feature-login
 ```
 
@@ -151,7 +151,7 @@ Interactively cleans up inactive worktrees with confirmation.
 **Example:**
 ```bash
 # Resolve helper scripts relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>"
+SKILL_DIR="<skill directory stated when this skill loads>";
 bash "$SKILL_DIR/scripts/worktree-manager.sh" cleanup
 ```
 
@@ -167,7 +167,7 @@ bash "$SKILL_DIR/scripts/worktree-manager.sh" cleanup
 
 ```bash
 # Resolve helper scripts relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>"
+SKILL_DIR="<skill directory stated when this skill loads>";
 # OpenCode recognizes you're not on the PR branch
 # Offers: "Use worktree for isolated review? (y/n)"
 
@@ -187,7 +187,7 @@ bash "$SKILL_DIR/scripts/worktree-manager.sh" cleanup
 
 ```bash
 # Resolve helper scripts relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>"
+SKILL_DIR="<skill directory stated when this skill loads>";
 # For first feature (copies .env files):
 bash "$SKILL_DIR/scripts/worktree-manager.sh" create feature-login
 
@@ -268,7 +268,7 @@ Switch out of the worktree first (to main repo), then cleanup:
 
 ```bash
 # Resolve helper scripts relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>"
+SKILL_DIR="<skill directory stated when this skill loads>";
 cd $(git rev-parse --show-toplevel)
 bash "$SKILL_DIR/scripts/worktree-manager.sh" cleanup
 ```
@@ -279,7 +279,7 @@ See where you are:
 
 ```bash
 # Resolve helper scripts relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>"
+SKILL_DIR="<skill directory stated when this skill loads>";
 bash "$SKILL_DIR/scripts/worktree-manager.sh" list
 ```
 
@@ -289,7 +289,7 @@ If a worktree was created without .env files (e.g., via raw `git worktree add`),
 
 ```bash
 # Resolve helper scripts relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>"
+SKILL_DIR="<skill directory stated when this skill loads>";
 bash "$SKILL_DIR/scripts/worktree-manager.sh" copy-env feature-name
 ```
 

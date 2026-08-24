@@ -30,7 +30,7 @@ When this skill loads, its own directory is stated in the surrounding instructio
 
 ```bash
 # Resolve helper scripts relative to this skill's directory.
-SKILL_DIR="<skill directory stated when this skill loads>"
+SKILL_DIR="<skill directory stated when this skill loads>";
 node "$SKILL_DIR/scripts/inventory.mjs" --root .
 ```
 
