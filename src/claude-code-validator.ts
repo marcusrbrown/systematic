@@ -1,5 +1,9 @@
-import fs from 'node:fs'
-import { resolveReviewArtifactPath } from './lib/review-artifact-path.js'
+import {
+  formatReviewArtifactIssuePath,
+  isLegacyReviewArtifact,
+  readReviewArtifact,
+  resolveReviewArtifactPath,
+} from './lib/review-artifact-path.js'
 import { ReviewArtifactSchema } from './lib/review-artifact-schema.js'
 
 const VALIDATE_REVIEW_ARTIFACT_USAGE =
@@ -12,49 +16,6 @@ interface ValidatorOptions {
   readonly cwd?: string
   readonly outputSink?: (message: string) => void
   readonly errorSink?: (message: string) => void
-}
-
-type ReadArtifactResult =
-  | { readonly ok: true; readonly value: unknown }
-  | { readonly ok: false; readonly message: string }
-
-function formatReviewArtifactIssuePath(
-  issuePath: readonly PropertyKey[],
-): string {
-  if (issuePath.length === 0) return '$'
-  return issuePath
-    .map((segment) => (typeof segment === 'number' ? String(segment) : segment))
-    .join('.')
-}
-
-function readReviewArtifact(filePath: string): ReadArtifactResult {
-  let content: string
-  try {
-    content = fs.readFileSync(filePath, 'utf8')
-  } catch {
-    return { message: 'Review artifact file could not be read', ok: false }
-  }
-
-  try {
-    return { ok: true, value: JSON.parse(content) as unknown }
-  } catch (error) {
-    return {
-      message:
-        error instanceof SyntaxError
-          ? 'Review artifact contains malformed JSON'
-          : 'Review artifact file could not be read',
-      ok: false,
-    }
-  }
-}
-
-function isLegacyReviewArtifact(value: unknown): boolean {
-  return (
-    value !== null &&
-    typeof value === 'object' &&
-    !Array.isArray(value) &&
-    !Object.hasOwn(value, 'schema_version')
-  )
 }
 
 function validateReviewArtifactArgument(

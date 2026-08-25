@@ -25,7 +25,12 @@ import {
   refresh,
   resolveAgentsRoot,
 } from './lib/pi-subagents-export.js'
-import { resolveReviewArtifactPath } from './lib/review-artifact-path.js'
+import {
+  formatReviewArtifactIssuePath,
+  isLegacyReviewArtifact,
+  readReviewArtifact,
+  resolveReviewArtifactPath,
+} from './lib/review-artifact-path.js'
 import { ReviewArtifactSchema } from './lib/review-artifact-schema.js'
 import { type Harness, setupHarness } from './lib/setup.js'
 import * as skills from './lib/skills.js'
@@ -347,15 +352,6 @@ interface ValidateReviewArtifactCliOptions {
   readonly errorSink?: (message: string) => void
 }
 
-function formatReviewArtifactIssuePath(
-  issuePath: readonly PropertyKey[],
-): string {
-  if (issuePath.length === 0) return '$'
-  return issuePath
-    .map((segment) => (typeof segment === 'number' ? String(segment) : segment))
-    .join('.')
-}
-
 function validateReviewArtifactArgument(
   argv: readonly string[],
 ): string | undefined {
@@ -363,40 +359,6 @@ function validateReviewArtifactArgument(
   if (argv[commandIndex] !== 'validate-review-artifact') return undefined
   if (argv.length !== commandIndex + 2) return undefined
   return argv[commandIndex + 1]
-}
-
-type ReadArtifactResult =
-  | { readonly ok: true; readonly value: unknown }
-  | { readonly ok: false; readonly message: string }
-
-function readReviewArtifact(filePath: string): ReadArtifactResult {
-  let content: string
-  try {
-    content = fs.readFileSync(filePath, 'utf8')
-  } catch {
-    return { message: 'Review artifact file could not be read', ok: false }
-  }
-
-  try {
-    return { ok: true, value: JSON.parse(content) as unknown }
-  } catch (error) {
-    return {
-      message:
-        error instanceof SyntaxError
-          ? 'Review artifact contains malformed JSON'
-          : 'Review artifact file could not be read',
-      ok: false,
-    }
-  }
-}
-
-function isLegacyReviewArtifact(value: unknown): boolean {
-  return (
-    value !== null &&
-    typeof value === 'object' &&
-    !Array.isArray(value) &&
-    !Object.hasOwn(value, 'schema_version')
-  )
 }
 
 function runValidateReviewArtifact(

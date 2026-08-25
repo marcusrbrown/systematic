@@ -5,6 +5,49 @@ export type ArtifactPathResult =
   | { readonly ok: true; readonly path: string }
   | { readonly ok: false; readonly message: string }
 
+export type ReadArtifactResult =
+  | { readonly ok: true; readonly value: unknown }
+  | { readonly ok: false; readonly message: string }
+
+export function formatReviewArtifactIssuePath(
+  issuePath: readonly PropertyKey[],
+): string {
+  if (issuePath.length === 0) return '$'
+  return issuePath
+    .map((segment) => (typeof segment === 'number' ? String(segment) : segment))
+    .join('.')
+}
+
+export function readReviewArtifact(filePath: string): ReadArtifactResult {
+  let content: string
+  try {
+    content = fs.readFileSync(filePath, 'utf8')
+  } catch {
+    return { message: 'Review artifact file could not be read', ok: false }
+  }
+
+  try {
+    return { ok: true, value: JSON.parse(content) as unknown }
+  } catch (error) {
+    return {
+      message:
+        error instanceof SyntaxError
+          ? 'Review artifact contains malformed JSON'
+          : 'Review artifact file could not be read',
+      ok: false,
+    }
+  }
+}
+
+export function isLegacyReviewArtifact(value: unknown): boolean {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    !Object.hasOwn(value, 'schema_version')
+  )
+}
+
 export function hasParentDirectoryTraversal(input: string): boolean {
   return input.split(/[\\/]+/).some((segment) => segment === '..')
 }
