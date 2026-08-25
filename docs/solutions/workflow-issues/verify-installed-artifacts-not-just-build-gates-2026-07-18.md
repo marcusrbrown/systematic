@@ -1,6 +1,7 @@
 ---
 title: Verify installed artifacts, not just build gates
 date: 2026-07-18
+last_updated: 2026-08-24
 category: workflow-issues
 module: claude-code-harness
 problem_type: workflow_issue
@@ -43,6 +44,8 @@ Concretely, for a generated/published artifact:
 
 **Probe unproven runtime channels empirically before designing around them.** Don't assume a host honors a mechanism. In this arc, probing the real Claude Desktop revealed that **imperative `SessionStart` hook content is refused as prompt injection**, while **declarative facts and the plugin output-style are honored** — which directly shaped the design (declarative hook, output-style enforcement). Verify the channel behaves as assumed before building on it.
 
+A probe that comes back positive has not finished the job. It shows the capability is reachable; it does not show what made it reachable, and an ambient cause looks identical to the one you intended. See [A capability that works has not yet named its cause](./a-capability-that-works-has-not-named-its-cause-2026-08-24.md) for the negative control that separates them — and for what it cost when this rule was available here and went unconsulted.
+
 **Close the class with a source-side gate where you can.** The arc also added a lexical skill-reference integrity check (`checkSkillReferenceIntegrity`, `SKILL_REF_REGEX = /\bce:([a-z0-9-]+)\b/g`) that fails when a `ce:<name>` reference has no matching `skills/ce-<name>/` directory — catching phantom references (`ce:debug`, `ce:polish-beta`) that had dangled on every harness.
 
 ## Why This Matters
@@ -74,6 +77,7 @@ Empirical channel finding that shaped the design: imperative hook content refuse
 
 ## Related
 
+- [A capability that works has not yet named its cause](./a-capability-that-works-has-not-named-its-cause-2026-08-24.md) — extends the probe rule above with mechanism isolation: removing the suspected cause to prove it was the cause.
 - [Pi real-runtime integration harness](../best-practices/pi-real-runtime-integration-harness-2026-07-16.md) — verify a packaged extension in the *real* host runtime, not against a fake SDK; same "installed artifact ≠ build output" spine.
 - [Cross-harness adapter parity contract tests](../best-practices/cross-harness-adapter-parity-contract-tests-2026-07-14.md) — don't mistake boundary/helper tests for runtime proof.
 - [Pi chained bootstrap composition](../logic-errors/pi-chained-bootstrap-composition-2026-07-14.md) — host-specific prompt composition; the imperative-vs-declarative channel distinction.
