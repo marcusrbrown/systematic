@@ -590,7 +590,11 @@ export function writePluginFiles(
     for (const [relPath, content] of files) {
       const outPath = path.join(tempDir, relPath)
       fs.mkdirSync(path.dirname(outPath), { recursive: true })
-      fs.writeFileSync(outPath, content)
+      if (relPath.startsWith('bin/')) {
+        fs.writeFileSync(outPath, content, { mode: 0o755 })
+      } else {
+        fs.writeFileSync(outPath, content)
+      }
     }
   } catch (err) {
     fs.rmSync(tempDir, { recursive: true, force: true })

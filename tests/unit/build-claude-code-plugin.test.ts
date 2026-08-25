@@ -630,6 +630,40 @@ describe('writePluginFiles — atomic staging write', () => {
     expect(fs.existsSync(path.join(outDir, 'agents/bar.md'))).toBe(true)
   })
 
+  test('writes bin entries with the executable bit set', () => {
+    const root = makeFixtureRepo()
+    writeUsingSystematicAndProfile(root)
+    writeSkill(root, 'foo', 'Foo skill.')
+
+    const outDir = path.join(root, 'out')
+    writePluginFiles(
+      new Map<string, Buffer>([
+        [`bin/${CLAUDE_CODE_VALIDATOR_BIN}`, Buffer.from('validator')],
+      ]),
+      outDir,
+    )
+
+    expect(
+      fs.statSync(path.join(outDir, `bin/${CLAUDE_CODE_VALIDATOR_BIN}`)).mode &
+        0o111,
+    ).toBe(0o111)
+  })
+
+  test('keeps non-bin entries at the default file mode', () => {
+    const root = makeFixtureRepo()
+    const outDir = path.join(root, 'out')
+
+    writePluginFiles(
+      new Map<string, Buffer>([['regular.txt', Buffer.from('regular')]]),
+      outDir,
+    )
+
+    const expectedMode = 0o666 & ~process.umask()
+    expect(fs.statSync(path.join(outDir, 'regular.txt')).mode & 0o777).toBe(
+      expectedMode,
+    )
+  })
+
   test('leaves no stray staging temp dir or backup dir behind after a successful write', () => {
     const root = makeFixtureRepo()
     writeUsingSystematicAndProfile(root)
@@ -839,6 +873,10 @@ describe('build — real repo, temp dir', () => {
       expect(
         fs.existsSync(path.join(tempOut, '.claude-plugin/plugin.json')),
       ).toBe(true)
+      expect(
+        fs.statSync(path.join(tempOut, `bin/${CLAUDE_CODE_VALIDATOR_BIN}`))
+          .mode & 0o111,
+      ).toBe(0o111)
     } finally {
       fs.rmSync(tempOut, { recursive: true, force: true })
     }
