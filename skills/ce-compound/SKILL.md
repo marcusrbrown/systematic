@@ -133,7 +133,7 @@ Launch research subagents. Each returns text data to the orchestrator.
      - **Low**: 0-1 dimensions match — related but distinct
 
      The score is a function of the count, not a separate judgment about how related the docs feel. Two docs on the same topic that match on one dimension score Low. When the score you are inclined to write disagrees with the count, the count wins.
-   - Returns: Links, relationships, refresh candidates, and overlap assessment. State the per-dimension verdicts, then the resulting count, then the score, in that order. An assessment whose recommendation contradicts its own score — scoring High while recommending a new doc, for instance — is a defect in the assessment rather than a nuance in it. Re-derive it before returning.
+   - Returns: Links, relationships, refresh candidates, and overlap assessment. State the per-dimension verdicts, then the resulting count, then the score, in that order. Two consistency checks apply in sequence and both must hold: the score follows the count, and the recommendation follows the score. High overlap means update the existing doc, so an assessment that scores High while recommending a new doc has broken the second check even if the first one held. Either break is a defect to re-derive, not a nuance to note.
 
    **Search strategy (grep-first filtering for efficiency):**
 
@@ -142,7 +142,7 @@ Launch research subagents. Each returns text data to the orchestrator.
    3. Use the native content-search tool (e.g., Grep in OpenCode) to pre-filter candidate files BEFORE reading any content. Run multiple searches in parallel, case-insensitive, targeting frontmatter fields. These are template patterns -- substitute actual keywords:
       - `title:.*<keyword>`
       - `tags:.*(<keyword1>|<keyword2>)`
-      - `module:.*<module name>`
+      - `module:.*<module name>` — fill from the values enumerated in step 1, not from free-text keywords
       - `component:.*<component>`
    4. If search returns >25 candidates, re-run with more specific patterns. If <3, broaden to full content search
    5. Read only frontmatter (first 30 lines) of candidate files to score relevance
