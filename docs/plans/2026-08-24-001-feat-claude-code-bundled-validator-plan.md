@@ -1,7 +1,7 @@
 ---
 title: 'feat: Ship the review-artifact validator in the Claude Code bundle'
 type: feat
-status: active
+status: completed
 date: 2026-08-24
 origin: docs/brainstorms/2026-08-23-claude-code-mcp-server-requirements.md
 ---
@@ -246,7 +246,7 @@ change and are recorded in Scope Boundaries.
 
 ## Implementation Units
 
-- [ ] **Unit 1: Build the validator entry and add it to the bundle**
+- [x] **Unit 1: Build the validator entry and add it to the bundle**
 
 **Goal:** The bundle contains a runnable validator executable.
 
@@ -300,7 +300,7 @@ codemap and `src/lib/AGENTS.md` module-table obligations, both gate-enforced by
 - Running the built artifact against a valid and an invalid artifact returns the same
   verdicts and exit codes as the CLI subcommand.
 
-- [ ] **Unit 2: Preserve the executable bit when writing the bundle**
+- [x] **Unit 2: Preserve the executable bit when writing the bundle**
 
 **Goal:** The shipped executable is executable.
 
@@ -327,7 +327,7 @@ codemap and `src/lib/AGENTS.md` module-table obligations, both gate-enforced by
 - `stat` on the built `bin/` entry shows an executable mode.
 - Existing bundle tests still pass unchanged.
 
-- [ ] **Unit 3: Assert the executable before publishing**
+- [x] **Unit 3: Assert the executable before publishing**
 
 **Goal:** A build that lost the executable cannot reach the branch users install from.
 
@@ -356,7 +356,7 @@ codemap and `src/lib/AGENTS.md` module-table obligations, both gate-enforced by
 - On a real install, the bundled command runs as a bare command in a Bash tool call. Confirmed
   at Claude Code 2.1.163; re-confirm when the host major version moves.
 
-- [ ] **Unit 4: State reachability in the contract**
+- [x] **Unit 4: State reachability in the contract**
 
 **Goal:** The parent knows how to reach the validator on Claude Code, and what to record when
 it cannot.
@@ -389,7 +389,7 @@ it cannot.
 - `bun scripts/content-integrity.ts` is clean.
 - The contract no longer claims a bundled-markdown harness cannot have the executable.
 
-- [ ] **Unit 5: Correct the stale no-executable claim**
+- [x] **Unit 5: Correct the stale no-executable claim**
 
 **Goal:** No shipped doc asserts the bundle carries no executable.
 
