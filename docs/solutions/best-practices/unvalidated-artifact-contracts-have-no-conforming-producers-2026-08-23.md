@@ -1,7 +1,7 @@
 ---
 title: An artifact contract with no validated write path has no conforming producers
 date: 2026-08-23
-last_updated: 2026-08-23
+last_updated: 2026-08-24
 category: best-practices
 module: ce-review
 problem_type: best_practice
@@ -124,10 +124,10 @@ validation went into `src/cli.ts` at zero dependency cost.
 
 The second half of that rule cost a follow-up fix. Placing the validator correctly does
 not mean every reader of the contract can run it. Bundled instruction prose is copied
-into all three harness packages, but the `bin` entry only reaches the ones that install
-the npm package — the Claude Code bundle is built deliberately without npm coupling and
-carries no executable. A contract sentence naming a command therefore has a reach the
-contract file itself does not.
+into all three harness packages, but the npm `bin` entry only reaches the ones that install
+the npm package — the Claude Code bundle is built deliberately without npm coupling but
+ships its own validator executable. A contract sentence naming a command therefore has a
+reach the contract file itself does not.
 
 Write the instruction as a condition the agent can check at runtime rather than an
 unconditional command, and say what to record when the condition fails. A list of

@@ -210,15 +210,27 @@ validating it. This ordering makes the artifact validatable at all: without
 `schema_version`, the validator reports the legacy status (exit 3) rather than
 a real validation result.
 
-After writing `review-summary.json`, the parent checks whether the
-`systematic` executable is available on the invoking environment's `PATH`.
-When it is available, the parent runs
-`systematic validate-review-artifact <path>` against it. The executable ships
-through the npm package's `bin` entry; a harness that installs bundled
-markdown without that package will not have it. When it is unavailable, the
-parent records `validation.status: "unavailable"` and a `validation.reason` in
-the run record. When the executable is available and the parent does not run
-it, that is `validation.status: "not_attempted"`, also with a reason. The
+After writing `review-summary.json`, the parent resolves and runs a validator
+in this order: the bundled `systematic-validate-review-artifact <path>` command
+first, then the npm-installed `systematic validate-review-artifact <path>`
+command. Both can be present at once. The bundled command ships beside the
+prose being executed, so it is the one whose behavior matches the contract.
+The parent runs the first command it resolves and reads its result; it does not
+merely test whether a name is on `PATH`, because a version-manager shim can be
+present there and fail on every invocation.
+
+The command runs from the repository root. Containment resolves
+`.context/systematic/ce-review` relative to the working directory. If it runs
+elsewhere, the CLI reports that the directory is unavailable and the parent
+records that reason. This is visible degradation rather than silent success,
+so it is acceptable. If neither command is available, the parent records
+`validation.status: "unavailable"` with a reason that the validator is absent.
+If a resolved command is present but cannot be started or otherwise fails
+before returning a validation result, the parent records the same status with
+a distinct invocation-failure reason. Neither case is `failed`: that value is
+reserved for a validator that ran and found that the artifact did not conform.
+When a validator is available and the parent does not run it, that is
+`validation.status: "not_attempted"`, also with a reason. The
 `validation.status` values are `passed`, `failed`, `unavailable`, and
 `not_attempted`; `validation.reason` is required for every status except
 `passed`, where it is forbidden.
