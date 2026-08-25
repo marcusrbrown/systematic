@@ -258,7 +258,16 @@ change and are recorded in Scope Boundaries.
 - Create: `src/claude-code-validator.ts`
 - Modify: `scripts/build-claude-code-plugin.ts`
 - Modify: `STRUCTURE.md` (Entry Points table — a fourth `src/` entry point)
+- Modify: `src/cli.ts` — likely; see the note below
 - Test: `tests/unit/build-claude-code-plugin.test.ts`
+
+This list is not exhaustive. The containment helpers the entry needs —
+`resolveReviewArtifactPath`, `hasParentDirectoryTraversal`, and `pathContainsSymlink` — are
+private to `src/cli.ts` and exported nowhere, so reusing them means either exporting them or
+extracting them. Which is right depends on what importing them drags in, which is the open
+question below. If extraction wins, a new `src/lib/` module also carries the `ARCHITECTURE.md`
+codemap and `src/lib/AGENTS.md` module-table obligations, both gate-enforced by
+`bun scripts/content-integrity.ts`.
 
 **Approach:**
 - The entry imports only `src/lib/review-artifact-schema.ts` and the containment helper. It
