@@ -1,6 +1,7 @@
 ---
 title: Entry-point scope decides what a plugin bundle can ship
 date: 2026-08-24
+last_updated: 2026-08-24
 category: best-practices
 module: claude-code-harness
 problem_type: tooling_decision
@@ -136,4 +137,4 @@ cd / && .../bin/systematic-validate '{"schema_version":1}'
 
 - [Build and publish a harness plugin from CI instead of committing it](./claude-code-plugin-build-and-publish-architecture-2026-07-18.md) — the build and publish topology this packaging decision sits inside
 - [Verify installed artifacts, not just build gates](../workflow-issues/verify-installed-artifacts-not-just-build-gates-2026-07-18.md) — the general form of the probe used here
-- [An unvalidated artifact contract has no conforming producers](./unvalidated-artifact-contracts-have-no-conforming-producers-2026-08-23.md) — states that the bundle carries no executable, which this qualifies as a build choice rather than a property
+- [An unvalidated artifact contract has no conforming producers](./unvalidated-artifact-contracts-have-no-conforming-producers-2026-08-23.md) — explains why artifact contracts need runtime-checkable availability conditions; the Claude Code bundle now ships its own validator alongside the prose
