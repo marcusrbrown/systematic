@@ -127,20 +127,22 @@ Launch research subagents. Each returns text data to the orchestrator.
    - Identifies cross-references and links
    - Finds related GitHub issues
    - Flags any related learning or pattern docs that may now be stale, contradicted, or overly broad
-   - **Assesses overlap** with the new doc being created across five dimensions: problem statement, root cause, solution approach, referenced files, and prevention rules. Score as:
+   - **Assesses overlap** with the new doc being created across five dimensions: problem statement, root cause, solution approach, referenced files, and prevention rules. Judge each dimension as match or no-match first, then count the matches, then read the score off the count:
      - **High**: 4-5 dimensions match — essentially the same problem solved again
      - **Moderate**: 2-3 dimensions match — same area but different angle or solution
      - **Low**: 0-1 dimensions match — related but distinct
-   - Returns: Links, relationships, refresh candidates, and overlap assessment (score + which dimensions matched)
+
+     The score is a function of the count, not a separate judgment about how related the docs feel. Two docs on the same topic that match on one dimension score Low. When the score you are inclined to write disagrees with the count, the count wins.
+   - Returns: Links, relationships, refresh candidates, and overlap assessment. State the per-dimension verdicts, then the resulting count, then the score, in that order. Two consistency checks apply in sequence and both must hold: the score follows the count, and the recommendation follows the score. High overlap means update the existing doc, so an assessment that scores High while recommending a new doc has broken the second check even if the first one held. Either break is a defect to re-derive, not a nuance to note.
 
    **Search strategy (grep-first filtering for efficiency):**
 
-   1. Extract keywords from the problem context: module names, technical terms, error messages, component types
+   1. Extract keywords from the problem context: technical terms, error messages, component types. Separately, enumerate the `module:` values already in use across `docs/solutions/` and pick the one or two closest to this problem, rather than inferring a module name from the problem text. Module values are curated identifiers that often do not appear in a problem description at all, so keyword search alone will not find docs clustered under one — and docs sharing a module are among the highest-value candidates.
    2. If the problem category is clear, narrow search to the matching `docs/solutions/<category>/` directory
    3. Use the native content-search tool (e.g., Grep in OpenCode) to pre-filter candidate files BEFORE reading any content. Run multiple searches in parallel, case-insensitive, targeting frontmatter fields. These are template patterns -- substitute actual keywords:
       - `title:.*<keyword>`
       - `tags:.*(<keyword1>|<keyword2>)`
-      - `module:.*<module name>`
+      - `module:.*<module name>` — fill from the values enumerated in step 1, not from free-text keywords
       - `component:.*<component>`
    4. If search returns >25 candidates, re-run with more specific patterns. If <3, broaden to full content search
    5. Read only frontmatter (first 30 lines) of candidate files to score relevance
@@ -422,6 +424,7 @@ What's next?
 
 Overlap detected: docs/solutions/performance-issues/n-plus-one-queries.md
   Matched dimensions: problem statement, root cause, solution, referenced files
+  Count: 4 of 5 -> High
   Action: Updated existing doc with fresher code examples and prevention tips
 
 File updated:
