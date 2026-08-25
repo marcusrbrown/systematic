@@ -9,11 +9,13 @@ import {
   buildOutputStyleContent,
   buildPluginManifest,
   buildSourceInventory,
+  CLAUDE_CODE_VALIDATOR_BIN,
   checkGeneratedNamespace,
   collectSkillFiles,
   flattenAgents,
   generatePluginFiles,
   HOOK_PAYLOAD_CAP,
+  translateBundle,
   translateIdentifiers,
   writePluginFiles,
 } from '../../scripts/build-claude-code-plugin.ts'
@@ -21,6 +23,7 @@ import {
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const REPO_ROOT = path.resolve(__dirname, '../..')
+const PLACEHOLDER_VALIDATOR_BUNDLE = Buffer.from('placeholder validator bundle')
 
 const TEMP_ROOTS: string[] = []
 
@@ -96,7 +99,7 @@ describe('generatePluginFiles — happy path', () => {
     writeSkill(root, 'foo', 'Foo skill.')
     writeAgent(root, 'review', 'bar', 'Bar agent.')
 
-    const files = generatePluginFiles(root)
+    const files = generatePluginFiles(root, PLACEHOLDER_VALIDATOR_BUNDLE)
 
     expect(files.has('.claude-plugin/plugin.json')).toBe(true)
     expect(files.has('output-styles/systematic.md')).toBe(true)
@@ -104,6 +107,18 @@ describe('generatePluginFiles — happy path', () => {
     expect(files.has('skills/foo/SKILL.md')).toBe(true)
     expect(files.has('skills/using-systematic/SKILL.md')).toBe(true)
     expect(files.has('agents/bar.md')).toBe(true)
+    const validatorPath = `bin/${CLAUDE_CODE_VALIDATOR_BIN}`
+    const validator = files.get(validatorPath)
+    expect(validator).toBeDefined()
+    expect(validator?.length).toBeGreaterThan(0)
+    expect(
+      validator?.subarray(0, '#!/usr/bin/env node\n'.length).toString(),
+    ).toBe('#!/usr/bin/env node\n')
+    expect(
+      translateBundle(files, buildSourceInventory(root))
+        .get(validatorPath)
+        ?.equals(validator ?? Buffer.alloc(0)),
+    ).toBe(true)
   })
 
   test('a sample skill is byte-identical to source', () => {
@@ -235,13 +250,13 @@ Profile body content.
     writeAgent(root, 'review', 'bar', 'Bar agent.')
 
     const outDir = path.join(root, 'out')
-    const first = generatePluginFiles(root)
+    const first = generatePluginFiles(root, PLACEHOLDER_VALIDATOR_BUNDLE)
     writePluginFiles(first, outDir)
     const firstSnapshot = fs.readFileSync(
       path.join(outDir, 'output-styles/systematic.md'),
     )
 
-    const second = generatePluginFiles(root)
+    const second = generatePluginFiles(root, PLACEHOLDER_VALIDATOR_BUNDLE)
     writePluginFiles(second, outDir)
     const secondSnapshot = fs.readFileSync(
       path.join(outDir, 'output-styles/systematic.md'),
@@ -589,9 +604,9 @@ describe('checkGeneratedNamespace — integrity gate', () => {
     writeSkill(root, 'foo', 'Foo skill referencing ce:nonexistent for context.')
     writeAgent(root, 'review', 'bar', 'Bar agent.')
 
-    expect(() => generatePluginFiles(root)).toThrow(
-      /untranslated source identifier/,
-    )
+    expect(() =>
+      generatePluginFiles(root, PLACEHOLDER_VALIDATOR_BUNDLE),
+    ).toThrow(/untranslated source identifier/)
   })
 })
 
@@ -606,7 +621,7 @@ describe('writePluginFiles — atomic staging write', () => {
     writeAgent(root, 'review', 'bar', 'Bar agent.')
 
     const outDir = path.join(root, 'out')
-    const files = generatePluginFiles(root)
+    const files = generatePluginFiles(root, PLACEHOLDER_VALIDATOR_BUNDLE)
     writePluginFiles(files, outDir)
 
     expect(fs.existsSync(path.join(outDir, '.claude-plugin/plugin.json'))).toBe(
@@ -621,7 +636,7 @@ describe('writePluginFiles — atomic staging write', () => {
     writeSkill(root, 'foo', 'Foo skill.')
 
     const outDir = path.join(root, 'out')
-    const files = generatePluginFiles(root)
+    const files = generatePluginFiles(root, PLACEHOLDER_VALIDATOR_BUNDLE)
     writePluginFiles(files, outDir)
 
     const siblingEntries = fs.readdirSync(root)
@@ -638,7 +653,7 @@ describe('writePluginFiles — atomic staging write', () => {
     writeSkill(root, 'foo', 'Foo skill.')
 
     const outDir = path.join(root, 'out')
-    const files = generatePluginFiles(root)
+    const files = generatePluginFiles(root, PLACEHOLDER_VALIDATOR_BUNDLE)
     writePluginFiles(files, outDir) // first write (outDir does not yet exist)
     writePluginFiles(files, outDir) // second write (outDir exists — exercises rename-aside)
 
@@ -804,9 +819,9 @@ describe('writePluginFiles — atomic staging write', () => {
 
     const outDir = path.join(root, 'claude-code')
 
-    expect(() => generatePluginFiles(root)).toThrow(
-      /untranslated source identifier/,
-    )
+    expect(() =>
+      generatePluginFiles(root, PLACEHOLDER_VALIDATOR_BUNDLE),
+    ).toThrow(/untranslated source identifier/)
     // generatePluginFiles throws before writePluginFiles is ever called in
     // the real main() flow — assert the outDir was never created.
     expect(fs.existsSync(outDir)).toBe(false)
@@ -819,7 +834,7 @@ describe('build — real repo, temp dir', () => {
       path.join(os.tmpdir(), 'claude-code-real-build-'),
     )
     try {
-      const files = generatePluginFiles(REPO_ROOT)
+      const files = generatePluginFiles(REPO_ROOT, PLACEHOLDER_VALIDATOR_BUNDLE)
       writePluginFiles(files, tempOut)
       expect(
         fs.existsSync(path.join(tempOut, '.claude-plugin/plugin.json')),

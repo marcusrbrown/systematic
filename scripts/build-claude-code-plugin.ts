@@ -45,6 +45,8 @@ const PROJECT_ROOT = path.resolve(__dirname, '..')
 
 /** SessionStart `additionalContext` cap per Claude Code hooks docs. */
 export const HOOK_PAYLOAD_CAP = 10000
+export const CLAUDE_CODE_VALIDATOR_BIN = 'systematic-validate-review-artifact'
+const CLAUDE_CODE_VALIDATOR_SHEBANG = '#!/usr/bin/env node\n'
 
 /**
  * Tagged error for build-detected failures (missing source, stem collisions).
@@ -502,10 +504,14 @@ export function flattenAgents(rootDir: string): FlattenedAgent[] {
 
 /**
  * Generates the full set of `claude-code/`-relative files in memory. Pure
- * function of `rootDir` — throws BuildError on missing source or stem
- * collisions, never emits a silent empty bundle.
+ * function of `rootDir` and the already-built validator bundle — throws
+ * BuildError on missing source or stem collisions, never emits a silent empty
+ * bundle.
  */
-export function generatePluginFiles(rootDir: string): Map<string, Buffer> {
+export function generatePluginFiles(
+  rootDir: string,
+  validatorBundle: Buffer,
+): Map<string, Buffer> {
   const files = new Map<string, Buffer>()
 
   files.set(
@@ -521,6 +527,14 @@ export function generatePluginFiles(rootDir: string): Map<string, Buffer> {
   files.set(
     'hooks/hooks.json',
     Buffer.from(`${JSON.stringify(buildHooksJson(rootDir), null, 2)}\n`),
+  )
+
+  files.set(
+    `bin/${CLAUDE_CODE_VALIDATOR_BIN}`,
+    Buffer.concat([
+      Buffer.from(CLAUDE_CODE_VALIDATOR_SHEBANG),
+      validatorBundle,
+    ]),
   )
 
   for (const [relPath, content] of collectSkillFiles(rootDir)) {
@@ -611,12 +625,33 @@ export function writePluginFiles(
   }
 }
 
-function main(rootDir: string): void {
+async function buildValidatorBundle(rootDir: string): Promise<Buffer> {
+  const result = await Bun.build({
+    entrypoints: [path.join(rootDir, 'src/claude-code-validator.ts')],
+    minify: true,
+    target: 'node',
+  })
+  if (!result.success) {
+    const diagnostics = result.logs.map((log) => log.message).join('\n')
+    throw new Error(
+      diagnostics || 'Failed to build the Claude Code validator bundle.',
+    )
+  }
+
+  const output = result.outputs[0]
+  if (!output) {
+    throw new Error('Claude Code validator build produced no output.')
+  }
+  return Buffer.from(await output.arrayBuffer())
+}
+
+async function main(rootDir: string): Promise<void> {
   const claudeCodeDir = path.join(rootDir, 'claude-code')
 
+  const validatorBundle = await buildValidatorBundle(rootDir)
   let files: Map<string, Buffer>
   try {
-    files = generatePluginFiles(rootDir)
+    files = generatePluginFiles(rootDir, validatorBundle)
   } catch (err) {
     if (isBuildError(err)) {
       console.error(`Error: ${err.message}`)
@@ -636,5 +671,8 @@ function main(rootDir: string): void {
 
 // Only run main() when this file is invoked directly (not when imported by tests).
 if (import.meta.main) {
-  main(PROJECT_ROOT)
+  main(PROJECT_ROOT).catch((err: unknown) => {
+    console.error(err instanceof Error ? `Error: ${err.message}` : err)
+    process.exitCode = 1
+  })
 }
