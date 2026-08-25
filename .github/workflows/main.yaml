@@ -313,6 +313,7 @@ jobs:
             "claude-code/skills/using-systematic/SKILL.md"
             "claude-code/output-styles/systematic.md"
             "claude-code/hooks/hooks.json"
+            "claude-code/bin/systematic-validate-review-artifact"
           )
           for f in "${required[@]}"; do
             if [[ ! -f "$f" ]]; then
@@ -320,6 +321,10 @@ jobs:
               exit 1
             fi
           done
+          if [[ ! -x "claude-code/bin/systematic-validate-review-artifact" ]]; then
+            echo "::error::Required artifact is not executable: claude-code/bin/systematic-validate-review-artifact"
+            exit 1
+          fi
           if ! find claude-code/agents -mindepth 1 -type f | grep -q .; then
             echo "::error::No files found under claude-code/agents/"
             exit 1
