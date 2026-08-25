@@ -11,6 +11,7 @@ systematic/
 │   ├── index.ts      # OpenCode plugin entry — default export only
 │   ├── pi.ts         # Pi extension entry — default export only
 │   ├── cli.ts        # CLI entry (list / capabilities / validate-review-artifact / config / setup --harness / pi-subagents)
+│   ├── claude-code-validator.ts # Claude Code bundled review-artifact validator entry
 │   └── lib/          # Core modules
 ├── skills/           # 31 bundled skills (one directory per skill, SKILL.md format)
 ├── agents/           # 37 bundled agents (5 category subdirectories)
@@ -47,6 +48,7 @@ subdirectory of core modules.
 - `src/cli.ts` — CLI commands: `list`, `capabilities`, `validate-review-artifact <path>`,
   `config show/path`, `setup --harness opencode|pi`, `pi-subagents <subcommand>` (Claude Code has no
   CLI setup step — it installs as a prebuilt plugin via marketplace, see `scripts/`)
+- `src/claude-code-validator.ts` — purpose-built Claude Code bundle entry for validating review artifacts
 - `src/lib/setup.ts` — `setupHarness`: atomic/backed-up/idempotent, project-local-only harness config writes
 - `src/lib/config.ts` — JSONC config loading, 3-source merge
 - `src/lib/config-schema.ts` — canonical Zod schema, `validateConfig`, `SECURITY_OVERLAY_FIELDS`
@@ -186,6 +188,7 @@ branch ref. Users install via `claude plugin marketplace add marcusrbrown/system
 | `src/index.ts` | OpenCode plugin entry — `SystematicPlugin` default export |
 | `src/pi.ts` | Pi extension entry — `systematicPiExtension` default export |
 | `src/cli.ts` | CLI entry — `list`, `capabilities`, `validate-review-artifact`, `config`, `setup --harness`, `pi-subagents` commands |
+| `src/claude-code-validator.ts` | Claude Code bundled validator entry — review-artifact validation with isolated dependencies |
 
 ### Configuration
 

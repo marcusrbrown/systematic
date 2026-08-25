@@ -114,6 +114,7 @@ Workflow guard and evidence
 
 Review artifact contract
   src/lib/review-artifact-schema.ts      — Zod source of truth for the ce:review run-level artifact
+  src/lib/review-artifact-path.ts        — bounded artifact path, JSON reading, and issue projection helpers
 
 ```
 
@@ -138,6 +139,8 @@ Key symbols:
 | `findAgentsInDir` | `src/lib/agents.ts` | Agent discovery |
 | `walkDir` | `src/lib/walk-dir.ts` | Recursive dir walker (foundation layer) |
 | `loadSkill` | `src/lib/skill-loader.ts` | Skill content loading + XML wrapping |
+| `resolveReviewArtifactPath` | `src/lib/review-artifact-path.ts` | Cwd-anchored artifact path containment |
+| `readReviewArtifact` | `src/lib/review-artifact-path.ts` | Safe JSON reading with projected operational errors |
 
 ## Invariants
 
