@@ -24,7 +24,7 @@ systematic/
 ├── scripts/          # Build-time + CI scripts (integrity, schema codegen, registry, CC plugin build, evals)
 ├── assets/           # Static assets (banner SVG)
 ├── tests/
-│   ├── unit/         # 60 unit test files
+│   ├── unit/         # 62 unit test files
 │   └── integration/  # 11 integration test files
 ├── .opencode/        # Project-specific OpenCode config (theme, TUI)
 ├── .claude-plugin/   # marketplace.json — Claude Code marketplace catalog entry
@@ -153,7 +153,7 @@ coverage, model inheritance) against a real OpenCode runtime, in both source and
 **Purpose:** Test suite for the TypeScript source.
 
 **Contains:**
-- `tests/unit/` — 60 unit test files covering `src/lib/` modules, `scripts/` build/codegen scripts,
+- `tests/unit/` — 62 unit test files covering `src/lib/` modules, `scripts/` build/codegen scripts,
   and `docs/scripts/` generation scripts
 - `tests/integration/` — 11 integration test files (skip automatically if deps unavailable)
 
@@ -231,7 +231,7 @@ branch ref. Users install via `claude plugin marketplace add marcusrbrown/system
 
 | Path | Role |
 |------|------|
-| `tests/unit/` | Unit tests (60 files) |
+| `tests/unit/` | Unit tests (62 files) |
 | `tests/integration/` | Integration tests (11 files) |
 
 ## Naming Conventions
