@@ -151,11 +151,17 @@ export const OPENCODE_AVAILABLE = (() => {
       encoding: 'utf8',
       timeout: 15_000,
     })
-    const available = result.status === 0 && /\d+\.\d+\.\d+/.test(result.stdout)
+    const available =
+      !result.error &&
+      result.status === 0 &&
+      /\d+\.\d+\.\d+/.test(result.stdout ?? '')
     if (!available) {
-      const stderr = result.stderr.slice(0, 200).replaceAll(/\s+/g, ' ').trim()
+      const stderr = (result.stderr ?? '')
+        .slice(0, 200)
+        .replaceAll(/\s+/g, ' ')
+        .trim()
       console.warn(
-        `[systematic] opencode availability probe failed: status=${result.status ?? 'null'} signal=${result.signal ?? 'null'} stderr=${stderr}`,
+        `[systematic] opencode availability probe failed: status=${result.status ?? 'null'} signal=${result.signal ?? 'null'} error=${result.error?.message ?? 'none'} stderr=${stderr}`,
       )
     }
     return available
@@ -581,6 +587,8 @@ async function startOpencodeProcess(
     },
   }
   liveOpencodeHosts.add(host)
+  server.once('exit', () => liveOpencodeHosts.delete(host))
+  installTerminalSignalHandlers()
   return host
 }
 
@@ -643,16 +651,16 @@ function installTerminalSignalHandlers(): void {
 
   process.on('SIGINT', () => {
     killLiveOpencodeHostsSync()
+    // Exiting here skips remaining afterAll hooks (temp dirs may leak); orphaned host processes cost more than temp dirs.
     process.exit(130)
   })
   process.on('SIGTERM', () => {
     killLiveOpencodeHostsSync()
+    // Exiting here skips remaining afterAll hooks (temp dirs may leak); orphaned host processes cost more than temp dirs.
     process.exit(143)
   })
   process.on('exit', killLiveOpencodeHostsSync)
 }
-
-installTerminalSignalHandlers()
 
 async function stopOpencodeProcess(server: ChildProcess): Promise<void> {
   await stopProcessGroup(server, 10_000)

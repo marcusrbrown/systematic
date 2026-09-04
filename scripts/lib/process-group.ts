@@ -4,7 +4,14 @@ const DEFAULT_STOP_TIMEOUT_MS = 5_000
 
 function signalProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
   const pid = child.pid
-  if (pid === undefined) return
+  if (pid === undefined) {
+    try {
+      child.kill(signal)
+    } catch {
+      // Cleanup is best effort; the process may already be gone.
+    }
+    return
+  }
 
   try {
     process.kill(-pid, signal)
@@ -21,9 +28,7 @@ export async function stopProcessGroup(
   child: ChildProcess,
   timeoutMs = DEFAULT_STOP_TIMEOUT_MS,
 ): Promise<void> {
-  const pid = child.pid
-  if (pid === undefined) return
-  if (child.exitCode !== null) {
+  if (child.exitCode !== null || child.signalCode !== null) {
     signalProcessGroup(child, 'SIGKILL')
     return
   }

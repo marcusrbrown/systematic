@@ -58,4 +58,27 @@ describe('process-group reaping', () => {
       await stopProcessGroup(child, 1_000)
     }
   })
+
+  it('returns quickly when the direct child already died from a signal', async () => {
+    const child = spawn('sh', ['-c', 'sleep 30 & sleep 30 & wait'], {
+      detached: true,
+      stdio: 'ignore',
+    })
+    const pid = child.pid
+    if (pid === undefined)
+      throw new Error('test child did not expose a process id')
+
+    child.kill('SIGTERM')
+    await once(child, 'exit')
+    expect(child.signalCode).not.toBeNull()
+
+    try {
+      const started = performance.now()
+      await stopProcessGroup(child, 1_000)
+      expect(performance.now() - started).toBeLessThan(200)
+      expect(await waitForEmptyProcessGroup(pid, 2_000)).toBe(true)
+    } finally {
+      await stopProcessGroup(child, 1_000)
+    }
+  })
 })

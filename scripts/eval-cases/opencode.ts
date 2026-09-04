@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url'
 import { createOpencodeClient } from '@opencode-ai/sdk/v2'
 
 import { buildBundledAgentInventory } from '../../src/lib/agent-overlays.js'
+import { stopProcessGroup } from '../lib/process-group.js'
 import {
   buildEvalChildEnv,
   type EvalCaseExecution,
@@ -1205,47 +1206,6 @@ function buildProviderConfig(
   })
 }
 
-function signalProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
-  const pid = child.pid
-  if (pid === undefined) {
-    try {
-      child.kill(signal)
-    } catch {
-      // Cleanup is best effort; the process may already be gone.
-    }
-    return
-  }
-
-  try {
-    process.kill(-pid, signal)
-  } catch {
-    try {
-      child.kill(signal)
-    } catch {
-      // Cleanup is best effort; the process may already be gone.
-    }
-  }
-}
-
-async function stopChildProcess(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null) return Promise.resolve()
-  await new Promise<void>((resolve) => {
-    let settled = false
-    const finish = (): void => {
-      if (settled) return
-      settled = true
-      clearTimeout(timeout)
-      resolve()
-    }
-    const timeout = setTimeout(() => {
-      signalProcessGroup(child, 'SIGKILL')
-      finish()
-    }, 5_000)
-    child.once('exit', finish)
-    signalProcessGroup(child, 'SIGTERM')
-  })
-}
-
 async function startOpencodeHost(
   fixture: EvalFixture,
   configContent: string,
@@ -1292,7 +1252,7 @@ async function startOpencodeHost(
       if (settled) return
       settled = true
       void (async () => {
-        await stopChildProcess(child)
+        await stopProcessGroup(child, 5_000)
         reject(new Error(OPENCODE_HOST_TIMEOUT))
       })()
     }, timeoutMs)
@@ -1326,7 +1286,7 @@ async function startOpencodeHost(
     async stop(): Promise<void> {
       if (stopped) return
       stopped = true
-      await stopChildProcess(child)
+      await stopProcessGroup(child, 5_000)
     },
   }
 }
@@ -1335,7 +1295,7 @@ export async function stopActiveEvalResources(): Promise<void> {
   const children = [...activeOpencodeChildren]
   await Promise.all(
     children.map(async (child) => {
-      await stopChildProcess(child)
+      await stopProcessGroup(child, 5_000)
       activeOpencodeChildren.delete(child)
     }),
   )
