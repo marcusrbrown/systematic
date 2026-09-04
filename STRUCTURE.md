@@ -13,8 +13,8 @@ systematic/
 │   ├── cli.ts        # CLI entry (list / capabilities / validate-review-artifact / config / setup --harness / pi-subagents)
 │   ├── claude-code-validator.ts # Claude Code bundled review-artifact validator entry
 │   └── lib/          # Core modules
-├── skills/           # 31 bundled skills (one directory per skill, SKILL.md format)
-├── agents/           # 37 bundled agents (5 category subdirectories)
+├── skills/           # Bundled skills (one directory per skill, SKILL.md format)
+├── agents/           # Bundled agents (one subdirectory per category)
 ├── docs/             # Starlight/Astro docs workspace (separate bun workspace)
 │   ├── scripts/      # Content generation from bundled assets
 │   ├── src/content/  # Manual guides + generated reference pages
@@ -24,8 +24,8 @@ systematic/
 ├── scripts/          # Build-time + CI scripts (integrity, schema codegen, registry, CC plugin build, evals)
 ├── assets/           # Static assets (banner SVG)
 ├── tests/
-│   ├── unit/         # 60 unit test files
-│   └── integration/  # 11 integration test files
+│   ├── unit/         # Unit tests
+│   └── integration/  # Integration tests
 ├── .opencode/        # Project-specific OpenCode config (theme, TUI)
 ├── .claude-plugin/   # marketplace.json — Claude Code marketplace catalog entry
 └── dist/             # Compiled output (generated, not committed)
@@ -153,9 +153,9 @@ coverage, model inheritance) against a real OpenCode runtime, in both source and
 **Purpose:** Test suite for the TypeScript source.
 
 **Contains:**
-- `tests/unit/` — 60 unit test files covering `src/lib/` modules, `scripts/` build/codegen scripts,
-  and `docs/scripts/` generation scripts
-- `tests/integration/` — 11 integration test files (skip automatically if deps unavailable)
+- `tests/unit/` — unit tests covering `src/lib/` modules, `scripts/` build/codegen scripts, and
+  `docs/scripts/` generation scripts
+- `tests/integration/` — integration tests (skip automatically if deps unavailable)
 
 **Pattern:** Tests use `bun:test` with `describe`/`it`. Filesystem tests use real temp directories;
 no mocking libraries.
@@ -231,8 +231,8 @@ branch ref. Users install via `claude plugin marketplace add marcusrbrown/system
 
 | Path | Role |
 |------|------|
-| `tests/unit/` | Unit tests (60 files) |
-| `tests/integration/` | Integration tests (11 files) |
+| `tests/unit/` | Unit tests |
+| `tests/integration/` | Integration tests |
 
 ## Naming Conventions
 

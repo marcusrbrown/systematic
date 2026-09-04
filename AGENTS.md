@@ -30,8 +30,8 @@ bun install              # Install deps
 bun run build            # Build to dist/
 bun run typecheck        # Type check (strict)
 bun run lint             # Biome linter
-bun test tests/unit      # Unit tests (60 files)
-bun test tests/integration  # Integration tests (11 files)
+bun test tests/unit      # Unit tests
+bun test tests/integration  # Integration tests
 bun test                 # All tests
 bun test --filter "pattern"  # Filter tests
 bun run docs:dev         # Local docs site

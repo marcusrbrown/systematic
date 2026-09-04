@@ -241,6 +241,9 @@ reported over. Artifacts without `schema_version` predate the contract and are e
 **Claude Code plugin build** (`scripts/build-claude-code-plugin.ts`) — generates the CC bundle from
 `skills/` and `agents/` on every CI run; the build fails on any leftover source-namespace identifier
 or unresolved bare reference. Output is gitignored build staging (`claude-code/`), never committed.
+Entries under the bundle's `bin/` directory are written with executable mode (`0o755`); nothing else
+in the bundle changes mode. The CI pre-publish guard checks that the bundled validator is executable,
+not merely present, before the job pushes to the branch users install from.
 
 **Typed config validation** (`src/lib/config-schema.ts`) — all user-supplied config passes through
 `validateConfig` before use. `SECURITY_OVERLAY_FIELDS` are stripped from project-level config
