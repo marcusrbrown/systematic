@@ -16,7 +16,7 @@ The OpenCode-dependent integration tests become CI-authoritative and locally bes
 
 - `bun test tests/integration` online: the OpenCode suites run against `bunx opencode-ai@<pin>`. The first run downloads the launcher and one platform binary (about 150 MB) into Bun's cache; later runs start in under a second. Nothing is installed on PATH and the contributor's own `opencode`, if any, is never used.
 - Offline or cache-cold: every OpenCode suite skips with one named reason (`bunx opencode-ai@<pin> --version` failed, with the captured stderr); `pi.test.ts`, `claude-code.test.ts`, and the synthetic eval-runner tests still run. A local skip is informational only — CI is the authority.
-- Today, by contrast, the suite runs only if a contributor has installed the exact pinned version themselves, and a version bump asks them to re-run it for 15–17 minutes and paste the result.
+- Today, by contrast, the pinned half of the suite (`startExactOpencodeServer`) runs only if a contributor has the exact version installed, while the unpinned half (`startOpencodeServer`, used by `question-attestation-opencode.test.ts` and `receipt-workflow-recovery.test.ts`) accepts any `opencode` on PATH that prints a version — silent version drift. A version bump asks the contributor to re-run the pinned half for 15–17 minutes and paste the result.
 
 ### Keeping the suite versus dropping it
 
@@ -27,6 +27,8 @@ The alternative on the table was deleting the OpenCode-dependent suites and keep
 The suite under `tests/integration/` that spawns OpenCode, plus `scripts/eval-cases/opencode.ts` and the four manifests under `evals/cases/opencode/`, are harness-contract tests. They assert that the plugin loads, the config hook merges agents and skills without crashing, `systematic_skill` registers, `experimental.chat.system.transform` output carries the bootstrap and the host-rendered skill catalog, the question API produces the expected event shapes, and receipt markers survive a host restart. Every session/prompt test runs against a local scripted OpenAI-compatible server with dummy keys; no assertion checks model prose. Exactly one test (`tests/integration/opencode.test.ts`, the source/dist local group) runs `opencode run --model opencode/big-pickle`, a hosted model, and depends on it choosing to call `systematic_skill`.
 
 None of this runs in CI. `.github/workflows/main.yaml` runs `bun test tests/unit` only. The only automated effect of the version pin is `tests/unit/eval-contract.test.ts` (the OpenCode host pin check), which fails the unit suite whenever `package.json` disagrees with two hand-edited constants — `EXPECTED_OPENCODE_VERSION` in `scripts/run-evals.ts` and `EXACT_OPENCODE_VERSION` in `tests/integration/fixtures/receipt-workflow-host.ts`. That turns every Renovate OpenCode bump red by construction, and the documented recovery (`docs/solutions/workflow-issues/version-pinned-evidence-must-be-reproven-2026-08-16.md`) is a 15–17 minute local run that requires a specific OpenCode version on the developer's machine. The maintainer manages OpenCode through a separate `harness` CLI and does not use that version. The evidence the ritual produces is exactly what a CI job would produce for free.
+
+The pin is also only half-enforced today. `OPENCODE_AVAILABLE` accepts any PATH `opencode` that prints a semver, so the suites built on `startOpencodeServer` run against whatever version a contributor happens to have; only the `startExactOpencodeServer` suites are pinned. Collapsing the two launch paths onto one pinned launcher fixes that drift as a side effect.
 
 Two adjacent facts shaped the design. `mise.toml` prepends `./node_modules/.bin` to PATH, so adding `opencode-ai` as a devDependency would shadow the maintainer's own binary — rejected. And `bunx opencode-ai@1.18.28 --version` resolves and runs the pinned launcher in 36 s cold with no install, so an exact pin can be honored everywhere without touching PATH.
 
@@ -44,8 +46,8 @@ Two adjacent facts shaped the design. `mise.toml` prepends `./node_modules/.bin`
 
 - The suite's assertions change in exactly two deliberate places: the hosted-model trigger in `tests/integration/opencode.test.ts` becomes a scripted one (the assertions on the result are unchanged, but the real-model path is no longer exercised anywhere — by design, since the suite tests the harness, not a model), and the `HOST_VERSIONS` log-only test is deleted. Everything else keeps its assertions; this plan changes how the host is launched, how the pin is read, and where the suite runs.
 - `evals/`, "grade", "assertion ID", and the eval-runner vocabulary are not renamed.
-- The receipt-workflow host process-group reaping is PR #896 and lands before this work; this plan assumes it.
-- OpenCode `1.18.28` is the pin the first implementation lands on (superseding Renovate PR #880), but choosing the version is not part of the design.
+- The receipt-workflow host process-group reaping is PR #896 (merged); this plan assumes it.
+- Choosing the OpenCode version is not part of the design. The first implementation lands on the current release (`1.18.28` at planning time), which supersedes Renovate PR #880's partial bump.
 
 ### Deferred to Separate Tasks
 
@@ -127,10 +129,11 @@ Two adjacent facts shaped the design. `mise.toml` prepends `./node_modules/.bin`
 - **The pin is `package.json`, read at runtime.** One small helper reads `devDependencies['@opencode-ai/sdk']` from the repository's `package.json` and exports it; both former constants become re-exports of that value. Rationale: Renovate already edits `package.json`; a derived value cannot drift. Two devDependencies still exist because both packages are consumed, so the lockstep unit test shrinks to the one assertion that still guards something — `@opencode-ai/sdk` equals `@opencode-ai/plugin`. Renovate's existing `OpenCode` group bumps both in one PR, so the equality check is a backstop for manual edits, not a routine gate.
 - **`bunx opencode-ai@<pin>` is the only launcher, everywhere.** Rationale: it honors an exact pin with no install step, so CI needs no setup and a developer machine needs nothing on PATH. It is also the reason a devDependency was rejected: `mise.toml` puts `node_modules/.bin` on PATH and a bundled `opencode` would shadow the maintainer's own. `bunx` matches the project's Bun toolchain; `npx` is removed from every spawn site. The launcher-chain orphan risk this keeps is what PR #896's process-group reaping addresses.
 - **One probe, two outcomes.** A single module-scope probe runs `bunx opencode-ai@<pin> --version` under the same isolated HOME/XDG the fixture children get, with a bounded timeout. Success means the reported version equals the pin. Anywhere else, the suites skip with a named reason that includes the status and captured stderr. When `SYSTEMATIC_REQUIRE_OPENCODE=1` (set only by the CI job), the same probe failure throws at module scope, so a green CI run can never be a run of zero tests. Rationale: `availability-guards-must-check-executability` plus the flow analysis's silent-skip finding.
-- **The host-contract job is a required predecessor of `release`, and runs unconditionally on every push to `main`.** Rationale: the failure it catches is "the published plugin does not load on the pinned host", which is precisely what must never ship. The suite is hermetic (scripted provider, dummy keys), so the cost is wall time — roughly 15 minutes on the `main` push before publish — not flakiness. Path-gating applies only to pull requests and only at step level: the job always completes and reports a status, so it can be a required check. It must never be skipped at job level, because a `needs` dependency that is skipped skips `release` too — a docs-only push that should publish a patch would silently publish nothing. The fail-closed property rests on three things the workflow owns and a PR cannot alter: `SYSTEMATIC_REQUIRE_OPENCODE=1` is set in the workflow's `env` (a pull request, including one from a fork, cannot change the workflow that runs against it); the job is in `release`'s `needs`; and the job asserts after the run that no OpenCode suite reported the fixture's skip reason. A local skip is never authoritative.
+- **The host-contract job is a required predecessor of `release`, and runs unconditionally on every push to `main`.** Rationale: the failure it catches is "the published plugin does not load on the pinned host", which is precisely what must never ship. The suite is hermetic (scripted provider, dummy keys), so the cost is wall time — roughly 15 minutes on the `main` push before publish — not flakiness. Path-gating applies only to pull requests and only at step level: the job always completes and reports a status, so it can be a required check. It must never be skipped at job level, because a `needs` dependency that is skipped skips `release` too — a docs-only push that should publish a patch would silently publish nothing. The fail-closed property rests on three things the workflow owns and a PR cannot alter: `SYSTEMATIC_REQUIRE_OPENCODE=1` is set in the workflow's `env` (a pull request, including one from a fork, cannot change the workflow that runs against it); the job is in `release`'s `needs`; and the job asserts after the run, from Bun's own summary, that zero tests were skipped and at least the measured floor passed. A local skip is never authoritative.
 - **The `1.18.3/4/5` matrix test is deleted.** Its only assertion is that each cell's status is `pass` or `blocked`, which cannot fail; it costs up to 36 minutes and three launcher downloads of old versions. The `'1.18.5'` cells in the same file use the pin. This is the one test removal in the plan and it removes no coverage.
 - **The hosted-model test moves to the scripted provider.** `opencode/big-pickle` is free but is a real network model whose choice to call `systematic_skill` is the only nondeterministic step in the suite. The scripted provider emits that tool call deterministically, matching how every other prompt test already works.
-- **`bun test tests/integration` runs whole.** The non-OpenCode files (`pi.test.ts`, `claude-code.test.ts`, `eval-fixture.test.ts`) are hermetic and fast; running the directory keeps the job definition to one line and gives those files CI coverage they do not have today.
+- **`bun test tests/integration` runs whole.** The directory holds eleven files. Six spawn OpenCode hosts: `opencode.test.ts`, `question-attestation-opencode.test.ts`, `receipt-workflow-guard-real-host.test.ts`, `receipt-workflow-recovery.test.ts`, `receipt-workflow-dogfood.test.ts` (five real-host scenarios behind a 360 s `beforeAll` that packs a tarball and prewarms the host), and `eval-runner.test.ts` (real eval runs plus synthetic grading). Five do not: `pi.test.ts`, `claude-code.test.ts`, `eval-fixture.test.ts`, `eval-artifact.test.ts`, `release-notes-ci.test.ts` — hermetic and fast. Running the directory keeps the job definition to one line and gives the non-OpenCode files CI coverage they do not have today. The job's `timeout-minutes` is derived from a measured run of all eleven, not from the per-test ceilings.
+- **`bunx` shares one download across every fixture without a cache mechanism of its own.** Measured under a redirected `HOME` (the condition the fixtures actually run in): `bunx opencode-ai@1.18.28 --version` completes in 0.3–0.6 s from four separate fresh `HOME` directories, because `bunx` caches under `$TMPDIR/bunx-<uid>-opencode-ai@<pin>` (138 MB), keyed by user and package, not by `HOME` or `XDG_*`. `TMPDIR` is already in the fixture's env allowlist. So the `npx`-era machinery — `getExactNpmCacheDir()`, the forwarded `NPM_CONFIG_CACHE`, `npm_config_update_notifier`, and `prewarmExactOpencode`'s 300 s budget — is removed as dead rather than replaced. A CI job pays the cold download once, on the runner's `/tmp`.
 
 ## Open Questions
 
@@ -141,6 +144,7 @@ Two adjacent facts shaped the design. `mise.toml` prepends `./node_modules/.bin`
 - Does the `HOST_VERSIONS` matrix conflict with a single pin? No — the test cannot fail and is deleted.
 - Is a Renovate rule needed? No — `@opencode-ai/**` is already grouped as `OpenCode`, and derived constants need no `postUpgradeTasks` step.
 - Does the `bunx` launcher work with an exact version? Yes — measured: `bunx opencode-ai@1.18.28 --version` printed `1.18.28`, 36 s cold, no stray processes.
+- Does redirecting `HOME` per fixture defeat `bunx`'s cache? No — measured (see Key Technical Decisions): warm runs from fresh `HOME` directories take 0.3–0.6 s; the cache lives under `$TMPDIR` keyed by uid and package.
 - Does `countEvalServeProcesses` still match after the launcher change? Yes — measured: a `bunx opencode-ai@1.18.28 serve` host's `ps` command line is `<bunx cache dir>/bunx-<uid>-opencode-ai@1.18.28/node_modules/.bin/opencode serve --port 0`, which contains both `opencode-ai@<pin>` and `serve`. `bunx` execs the binary directly, so the host is a single process with no launcher grandchild at steady state.
 
 ### Deferred to Implementation
@@ -192,16 +196,17 @@ Two adjacent facts shaped the design. `mise.toml` prepends `./node_modules/.bin`
 **Dependencies:** Unit 1; PR #896 merged (process-group reaping)
 
 **Files:**
-- Modify: `tests/integration/fixtures/receipt-workflow-host.ts` (`OPENCODE_AVAILABLE`, `startOpencodeServer`, `startExactOpencodeServer`, `runOpencode`), `scripts/eval-cases/opencode.ts` (`startOpencodeHost`), `scripts/run-evals.ts` (`verifyExactOpencodeRuntime`)
+- Modify: `tests/integration/fixtures/receipt-workflow-host.ts` (`OPENCODE_AVAILABLE`, `startOpencodeServer`, `startExactOpencodeServer`, `prewarmExactOpencode`, `getExactNpmCacheDir`, `runOpencode`), `scripts/eval-cases/opencode.ts` (`startOpencodeHost`), `scripts/run-evals.ts` (`verifyExactOpencodeRuntime`)
+- Modify: `tests/integration/receipt-workflow-dogfood.test.ts` (its `beforeAll` prewarm call and 360 s hook budget, retuned once the `npx` cache path is gone)
 - Modify: `tests/integration/eval-runner.test.ts` (`countEvalServeProcesses` if the command line changes)
 - Test: `tests/unit/opencode-availability.test.ts` (probe classification, fake launcher), existing integration suites as consumers
 
 **Approach:**
-- Every spawn of an OpenCode host or command becomes `bunx` with `opencode-ai@<pin>` as the first argument, followed by the existing OpenCode arguments. `startOpencodeServer` and `startExactOpencodeServer` collapse to one path since "exact" is now the only mode; keep both names exported if callers differ, or fold and update callers.
+- Every spawn of an OpenCode host or command becomes `bunx` with `opencode-ai@<pin>` as the first argument, followed by the existing OpenCode arguments. `startOpencodeServer` and `startExactOpencodeServer` collapse to one path since "exact" is now the only mode; keep both names exported if callers differ, or fold and update callers. `getExactNpmCacheDir`, the `NPM_CONFIG_CACHE` / `npm_config_update_notifier` overrides, and `prewarmExactOpencode` are removed: `bunx` caches under `$TMPDIR` per user and package regardless of `HOME` (measured), so there is nothing to prewarm or forward. The dogfood suite's `beforeAll` loses its prewarm call and its 360 s budget is re-derived from a measured run.
 - The probe: run `bunx opencode-ai@<pin> --version` once at module scope under the fixture's isolated HOME/XDG env (built through the existing allowlist helper), with a bounded timeout generous enough for a cold download on CI. Classify: `available` when exit 0 and stdout equals the pin; `mismatch` when exit 0 and stdout differs; `unavailable` otherwise (with status/signal and up to a few hundred characters of stderr). The isolation is of config, cache, and data directories, not execution containment: the probe and the hosts run a downloaded binary with the checkout readable, exactly as the `npx` path did. No repository write path is provided to them; the fixture's existing repo-untouched assertions remain the check.
 - `OPENCODE_AVAILABLE` stays a boolean for the existing `describe.skipIf` sites, plus an exported reason string. Every `skipIf` site's description or a `console.warn` at module scope carries the reason so a skipped local run is legible.
 - When `process.env.SYSTEMATIC_REQUIRE_OPENCODE === '1'` and the classification is not `available`, throw at module scope with the reason. This is the CI fail-closed path.
-- `verifyExactOpencodeRuntime` in the eval runner reuses the same classification rather than keeping its own `npx` probe.
+- `verifyExactOpencodeRuntime` in the eval runner reuses the same classification rather than keeping its own `npx` probe, and it honors `SYSTEMATIC_REQUIRE_OPENCODE` the same way: under the flag, a non-`available` classification is a hard failure of the eval run (non-zero exit), not an `unavailable` result envelope. `scripts/run-evals.ts` does not import the fixture module, so the flag check lives with the shared classification helper, not with the fixture's module-scope throw.
 - `runOpencode` (used for `opencode run` and `opencode debug config`) goes through the same launcher.
 
 **Patterns to follow:**
@@ -230,11 +235,11 @@ Two adjacent facts shaped the design. `mise.toml` prepends `./node_modules/.bin`
 **Dependencies:** Unit 2
 
 **Files:**
-- Modify: `tests/integration/opencode.test.ts` (source/dist local group), `tests/integration/receipt-workflow-guard-real-host.test.ts`
+- Modify: `tests/integration/fixtures/receipt-workflow-host.ts` (`OPENCODE_TEST_MODEL`, `runOpencode`), `tests/integration/opencode.test.ts` (all seven `runOpencode` call sites), `tests/integration/receipt-workflow-guard-real-host.test.ts`
 - Test: the modified files are the tests
 
 **Approach:**
-- In `opencode.test.ts`, the group that runs `opencode run --model opencode/big-pickle` starts the scripted provider (mirroring `question-attestation-opencode.test.ts`'s provider/model wiring) with a response script that emits the `systematic_skill` tool call the assertions look for, then a short completion. The assertions themselves — plugin loaded, tool registered, skill output present, env isolation, repo `.opencode` untouched — do not change.
+- The hosted-model dependency lives in the fixture, not the test: `OPENCODE_TEST_MODEL = 'opencode/big-pickle'` is hard-coded into `runOpencode`'s argument list, and `opencode.test.ts` calls `runOpencode` seven times across its source-local, dist-local, packaged, and mixed-version groups. `runOpencode` gains a scripted provider: it starts the local model server (mirroring `question-attestation-opencode.test.ts`'s provider/model wiring), writes the provider config into the fixture's isolated config dir, and passes that provider's model ID instead of `opencode/big-pickle`. The response script emits the `systematic_skill` tool call the assertions look for, then a short completion. The assertions themselves — plugin loaded, tool registered, skill output present, env isolation, repo `.opencode` untouched — do not change at any call site.
 - In `receipt-workflow-guard-real-host.test.ts`, delete the "reports each exact host version cell independently" test and the `HOST_VERSIONS` constant; replace the literal `'1.18.5'` in the remaining cells with the pin.
 
 **Patterns to follow:**
@@ -246,7 +251,7 @@ Two adjacent facts shaped the design. `mise.toml` prepends `./node_modules/.bin`
 - Edge case: the packed-runtime cell in the real-host file runs at the pin and still asserts `mint` in marker kinds.
 
 **Verification:**
-- No `--model opencode/` string remains in `tests/`.
+- Neither `OPENCODE_TEST_MODEL` nor `big-pickle` appears anywhere under `tests/integration/` (`tests/manual/` legitimately keeps its hosted-model scripts).
 - No test in `tests/integration/` has an assertion that admits every outcome.
 
 - [ ] **Unit 4: Add the `host-contract` CI job**
@@ -265,7 +270,7 @@ Two adjacent facts shaped the design. `mise.toml` prepends `./node_modules/.bin`
 - New job `host-contract`: `ubuntu-latest`, same Bun and Node 24 setup as the `test` job, `bun install --frozen-lockfile`, then `bun test tests/integration` with `SYSTEMATIC_REQUIRE_OPENCODE=1` in `env`. `timeout-minutes` set from a measured run plus headroom.
 - Path gating, pull requests only: a `paths-filter` step decides whether the PR touches `src/`, `tests/`, `scripts/`, `evals/`, `package.json`, `bun.lock`, or the workflow file, and the install/test steps are conditioned on its output. The job itself has no `if:` — it always runs to completion and reports a status. On `push` to `main` the filter step is bypassed and the suite always runs, so `release` (which `needs` this job) is never skipped and never publishes without a host-contract result from the same run.
 - Add the job to the `release` job's `needs`.
-- After the test step, a guard step fails the job if the captured output contains the fixture's named skip reason for any OpenCode suite, so a green job is never a run in which those suites were skipped.
+- After the test step, a guard step parses Bun's summary line from the captured output and fails the job if the skipped count is above zero or the passed count is below a floor set from the first measured run. The module-scope throw already covers a missing or mismatched host; this guard covers what it cannot — per-test gates such as `test.skipIf(!DIST_LOCAL_AVAILABLE)` skipping for an unrelated reason (a failed tarball pack, for example) while the job stays green.
 - Upload the test log as an artifact on failure so a host that dies on startup is diagnosable without re-running.
 - No secrets and no elevated permissions: the job inherits the workflow-level `contents: read` token and declares nothing else; the scripted provider uses dummy keys that are never real credentials.
 
@@ -322,7 +327,7 @@ Two adjacent facts shaped the design. `mise.toml` prepends `./node_modules/.bin`
 ## Documentation / Operational Notes
 
 - `AGENTS.md`'s Commands block lists `bun test tests/integration`; add a one-line note that OpenCode suites skip locally unless `bunx opencode-ai@<pin>` can run, and that CI runs them with `SYSTEMATIC_REQUIRE_OPENCODE=1`.
-- After this lands, Renovate PR #880 (OpenCode 1.18.21 → 1.18.25) is superseded by a bump straight to the current version; the `host-contract` job on that PR is the evidence.
+- After this lands, Renovate PR #880 (OpenCode 1.18.21 → 1.18.25, already stale) is superseded by a bump straight to the current version; the `host-contract` job on that PR is the evidence.
 
 ## Sources & References
 
