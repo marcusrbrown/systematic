@@ -228,7 +228,7 @@ describe('claude-code bundle — artifact self-containment', () => {
     expect(validator.subarray(Buffer.byteLength(shebang))).toEqual(
       VALIDATOR_BUNDLE,
     )
-    expect(fs.statSync(validatorPath).mode & 0o111).not.toBe(0)
+    expect(fs.statSync(validatorPath).mode & 0o111).toBe(0o111)
   })
 
   test('.claude-plugin/plugin.json exists, is valid JSON, has a name, no version, and author object', () => {
