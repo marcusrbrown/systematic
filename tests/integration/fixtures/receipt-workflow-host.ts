@@ -4,31 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-import { stopProcessGroup } from './process-group.js'
-
-export const OPENCODE_AVAILABLE = (() => {
-  const probeRoot = fs.mkdtempSync(
-    path.join(os.tmpdir(), 'systematic-opencode-probe-'),
-  )
-  try {
-    // Fixtures redirect HOME/XDG paths, so a PATH shim must also run in that environment.
-    const result = spawnSync('opencode', ['--version'], {
-      env: {
-        ...process.env,
-        HOME: probeRoot,
-        XDG_CONFIG_HOME: probeRoot,
-        XDG_DATA_HOME: probeRoot,
-        XDG_CACHE_HOME: probeRoot,
-        XDG_STATE_HOME: probeRoot,
-      },
-      encoding: 'utf8',
-      timeout: 15_000,
-    })
-    return result.status === 0 && /\d+\.\d+\.\d+/.test(result.stdout)
-  } finally {
-    fs.rmSync(probeRoot, { recursive: true, force: true })
-  }
-})()
+import { stopProcessGroup } from '../../../scripts/lib/process-group.js'
 
 export const TIMEOUT_MS = 180_000
 export const EXACT_OPENCODE_VERSION = '1.18.21'
@@ -157,6 +133,36 @@ export function buildChildEnv(
   }
   return { ...base, ...overrides }
 }
+
+export const OPENCODE_AVAILABLE = (() => {
+  const probeRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'systematic-opencode-probe-'),
+  )
+  try {
+    // Fixtures redirect HOME/XDG paths, so a PATH shim must also run in that environment.
+    const result = spawnSync('opencode', ['--version'], {
+      env: buildChildEnv({
+        HOME: probeRoot,
+        XDG_CONFIG_HOME: probeRoot,
+        XDG_DATA_HOME: probeRoot,
+        XDG_CACHE_HOME: probeRoot,
+        XDG_STATE_HOME: probeRoot,
+      }),
+      encoding: 'utf8',
+      timeout: 15_000,
+    })
+    const available = result.status === 0 && /\d+\.\d+\.\d+/.test(result.stdout)
+    if (!available) {
+      const stderr = result.stderr.slice(0, 200).replaceAll(/\s+/g, ' ').trim()
+      console.warn(
+        `[systematic] opencode availability probe failed: status=${result.status ?? 'null'} signal=${result.signal ?? 'null'} stderr=${stderr}`,
+      )
+    }
+    return available
+  } finally {
+    fs.rmSync(probeRoot, { recursive: true, force: true })
+  }
+})()
 
 export function buildIsolatedOpencodeEnv(
   fixture: IsolatedFixture,
@@ -523,6 +529,7 @@ async function startOpencodeProcess(
   const server = spawn(command, [...args], {
     env,
     cwd: fixture.projectDir,
+    detached: true,
   })
   const pid = server.pid
   if (!pid) throw new Error('opencode server did not expose a process id')
@@ -560,8 +567,7 @@ async function startOpencodeProcess(
   })
 
   let stopped = false
-  let host: OpencodeServer
-  host = {
+  const host: OpencodeServer = {
     url,
     pid,
     async stop(): Promise<void> {
@@ -618,6 +624,35 @@ export interface OpencodeServer {
 }
 
 const liveOpencodeHosts = new Set<OpencodeServer>()
+
+let terminalSignalHandlersInstalled = false
+
+function killLiveOpencodeHostsSync(): void {
+  for (const host of liveOpencodeHosts) {
+    try {
+      process.kill(-host.pid, 'SIGKILL')
+    } catch {
+      // Cleanup is best effort; the process may already be gone.
+    }
+  }
+}
+
+function installTerminalSignalHandlers(): void {
+  if (terminalSignalHandlersInstalled) return
+  terminalSignalHandlersInstalled = true
+
+  process.on('SIGINT', () => {
+    killLiveOpencodeHostsSync()
+    process.exit(130)
+  })
+  process.on('SIGTERM', () => {
+    killLiveOpencodeHostsSync()
+    process.exit(143)
+  })
+  process.on('exit', killLiveOpencodeHostsSync)
+}
+
+installTerminalSignalHandlers()
 
 async function stopOpencodeProcess(server: ChildProcess): Promise<void> {
   await stopProcessGroup(server, 10_000)

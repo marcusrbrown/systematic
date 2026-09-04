@@ -418,8 +418,8 @@ describe.skipIf(!OPENCODE_AVAILABLE)('OpenCode Question attestation', () => {
     packTarballOnce()
   }, 200_000)
 
-  afterAll(stopAllOpencodeHosts)
-  afterAll(() => {
+  afterAll(async () => {
+    await stopAllOpencodeHosts()
     cleanupPackedTarball()
   })
 

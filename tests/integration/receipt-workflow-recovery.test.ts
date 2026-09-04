@@ -581,8 +581,8 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
       packTarballOnce()
     }, 200_000)
 
-    afterAll(stopAllOpencodeHosts)
-    afterAll(() => {
+    afterAll(async () => {
+      await stopAllOpencodeHosts()
       cleanupPackedTarball()
     })
 

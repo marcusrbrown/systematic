@@ -484,8 +484,10 @@ describe.skipIf(!OPENCODE_AVAILABLE)('focused real-host dogfood', () => {
     }
     console.log(`U7_PREWARM ${warm.stdout.trim()}`)
   }, 360_000)
-  afterAll(stopAllOpencodeHosts)
-  afterAll(() => cleanupPackedTarball())
+  afterAll(async () => {
+    await stopAllOpencodeHosts()
+    cleanupPackedTarball()
+  })
 
   test(
     'proves decisive shipping flows in isolated observe/protected hosts',

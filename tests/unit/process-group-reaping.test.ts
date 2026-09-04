@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'bun:test'
 import { spawn, spawnSync } from 'node:child_process'
+import { once } from 'node:events'
 
-import { stopProcessGroup } from '../integration/fixtures/process-group.js'
+import { stopProcessGroup } from '../../scripts/lib/process-group.js'
 
 function processGroupHasMembers(pgid: number): boolean {
   return (
@@ -33,6 +34,24 @@ describe('process-group reaping', () => {
 
     try {
       expect(processGroupHasMembers(pid)).toBe(true)
+      await stopProcessGroup(child, 1_000)
+      expect(await waitForEmptyProcessGroup(pid, 2_000)).toBe(true)
+    } finally {
+      await stopProcessGroup(child, 1_000)
+    }
+  })
+
+  it('reaps grandchildren after the detached launcher has already exited', async () => {
+    const child = spawn('sh', ['-c', 'sleep 30 & exit 0'], {
+      detached: true,
+      stdio: 'ignore',
+    })
+    const pid = child.pid
+    if (pid === undefined)
+      throw new Error('test child did not expose a process id')
+
+    await once(child, 'exit')
+    try {
       await stopProcessGroup(child, 1_000)
       expect(await waitForEmptyProcessGroup(pid, 2_000)).toBe(true)
     } finally {
