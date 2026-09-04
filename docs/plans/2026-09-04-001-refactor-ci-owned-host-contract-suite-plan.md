@@ -15,7 +15,7 @@ The OpenCode-dependent integration tests become CI-authoritative and locally bes
 ### Contributor experience after this lands
 
 - `bun test tests/integration` online: the OpenCode suites run against `bunx opencode-ai@<pin>`. The first run downloads the launcher and one platform binary (about 150 MB) into Bun's cache; later runs start in under a second. Nothing is installed on PATH and the contributor's own `opencode`, if any, is never used.
-- Offline or cache-cold: every fixture-gated OpenCode suite skips with one named reason (`bunx opencode-ai@<pin> --version` failed, with the captured stderr); `pi.test.ts`, `claude-code.test.ts`, and the synthetic eval-runner tests still run. The eval-runner's real-eval tests report `infra_failure` rather than skipping, and locally that is tolerated. A local skip is informational only — CI is the authority.
+- Offline or cache-cold: every fixture-gated OpenCode suite skips with one named reason (`bunx opencode-ai@<pin> --version` failed, with the captured stderr); `pi.test.ts`, `claude-code.test.ts`, and the synthetic eval-runner tests still run. The eval-runner's real-eval tests, which today hard-fail offline because they assert a `success` outcome, are put behind the same availability classification and skip with the same reason. A local skip is informational only — CI is the authority.
 - Today, by contrast, the pinned half of the suite (`startExactOpencodeServer`) runs only if a contributor has the exact version installed, while the unpinned half (`startOpencodeServer`, used by `question-attestation-opencode.test.ts` and `receipt-workflow-recovery.test.ts`) accepts any `opencode` on PATH that prints a version — silent version drift. A version bump asks the contributor to re-run the pinned half for 15–17 minutes and paste the result.
 
 ### Keeping the suite versus dropping it
@@ -168,7 +168,7 @@ Two adjacent facts shaped the design. `mise.toml` prepends `./node_modules/.bin`
 - Test: `tests/unit/opencode-pin.test.ts`
 
 **Approach:**
-- The helper reads the repository `package.json` (path resolved relative to the module, not `cwd`), returns `devDependencies['@opencode-ai/sdk']` as an exact semver string, and throws a clear error if the field is missing or not an exact version (a range would silently break "exact pin" semantics).
+- The helper reads the repository `package.json` (path resolved relative to the module, not `cwd`), returns `devDependencies['@opencode-ai/sdk']` as an exact semver string, and throws a clear error if the field is missing or not an exact version (a range would silently break "exact pin" semantics). The equality backstop compares `devDependencies['@opencode-ai/sdk']` with `devDependencies['@opencode-ai/plugin']` specifically — `@opencode-ai/plugin` also appears under `peerDependencies` as a range, which is not the pin.
 - `EXPECTED_OPENCODE_VERSION` and `EXACT_OPENCODE_VERSION` stay exported under their current names as re-exports, so every existing importer keeps working; the literal `'1.18.21'` disappears from both files.
 - The host pin check keeps one assertion — `@opencode-ai/sdk` equals `@opencode-ai/plugin` — and drops the two constant comparisons, since those values are now the same field.
 - Check whether `scripts/lib/` carries a registration surface (a README or table listing its modules); if it does, add the new module there.
@@ -198,7 +198,7 @@ Two adjacent facts shaped the design. `mise.toml` prepends `./node_modules/.bin`
 **Files:**
 - Modify: `tests/integration/fixtures/receipt-workflow-host.ts` (`OPENCODE_AVAILABLE`, `startOpencodeServer`, `startExactOpencodeServer`, `prewarmExactOpencode`, `getExactNpmCacheDir`, `runOpencode`), `scripts/eval-cases/opencode.ts` (`startOpencodeHost`), `scripts/run-evals.ts` (`verifyExactOpencodeRuntime`)
 - Modify: `tests/integration/receipt-workflow-dogfood.test.ts` (its `beforeAll` prewarm call; the 360 s hook budget is re-derived under Unit 4's warm build, see Approach)
-- Modify: `tests/integration/eval-runner.test.ts` (`countEvalServeProcesses` if the command line changes)
+- Modify: `tests/integration/eval-runner.test.ts` (`countEvalServeProcesses` if the command line changes; the real-eval tests — every caller of `expectRuntimeOutcome`, the started-host timeout classification test, and the repeated-runs equality test — gated on the shared availability classification so they skip offline instead of failing on `outcome !== 'success'`)
 - Test: `tests/unit/opencode-availability.test.ts` (probe classification, fake launcher), existing integration suites as consumers
 
 **Approach:**
@@ -206,7 +206,7 @@ Two adjacent facts shaped the design. `mise.toml` prepends `./node_modules/.bin`
 - The probe: run `bunx opencode-ai@<pin> --version` once at module scope under the fixture's isolated HOME/XDG env (built through the existing allowlist helper), with a bounded timeout generous enough for a cold download on CI. Classify: `available` when exit 0 and stdout equals the pin; `mismatch` when exit 0 and stdout differs; `unavailable` otherwise (with status/signal and up to a few hundred characters of stderr). The isolation is of config, cache, and data directories, not execution containment: the probe and the hosts run a downloaded binary with the checkout readable, exactly as the `npx` path did. No repository write path is provided to them; the fixture's existing repo-untouched assertions remain the check.
 - `OPENCODE_AVAILABLE` stays a boolean for the existing `describe.skipIf` sites, plus an exported reason string. Every `skipIf` site's description or a `console.warn` at module scope carries the reason so a skipped local run is legible.
 - When `process.env.SYSTEMATIC_REQUIRE_OPENCODE === '1'` and the classification is not `available`, throw at module scope with the reason. This is the CI fail-closed path.
-- `verifyExactOpencodeRuntime` in the eval runner reuses the same classification rather than keeping its own `npx` probe, and it honors `SYSTEMATIC_REQUIRE_OPENCODE` the same way: under the flag, a non-`available` classification is a hard failure of the eval run (non-zero exit), not an `unavailable` result envelope. `scripts/run-evals.ts` does not import the fixture module, so the flag check lives with the shared classification helper, not with the fixture's module-scope throw.
+- `verifyExactOpencodeRuntime` in the eval runner reuses the same classification rather than keeping its own `npx` probe, and it honors `SYSTEMATIC_REQUIRE_OPENCODE` the same way: under the flag, a non-`available` classification **throws** from the helper, so both the CLI (non-zero exit) and the in-process callers the tests use directly (`runSourceEval` / `runInstalledEval`) fail rather than returning an `infra_failure` envelope. `scripts/run-evals.ts` does not import the fixture module, so the flag check lives with the shared classification helper, not with the fixture's module-scope throw. The eval-runner's real-eval tests import the same classification for their local skip, so one helper owns both behaviors.
 - `runOpencode` (used for `opencode run` and `opencode debug config`) goes through the same launcher.
 
 **Patterns to follow:**
@@ -223,7 +223,7 @@ Two adjacent facts shaped the design. `mise.toml` prepends `./node_modules/.bin`
 
 **Verification:**
 - `npx` no longer appears in `scripts/` or `tests/` outside historical docs.
-- A local run with no network and an empty Bun cache skips every fixture-gated OpenCode suite with a readable reason and runs everything else; the eval-runner real-eval tests report `infra_failure` and stay green locally.
+- A local run with no network and an empty Bun cache skips every OpenCode-reaching test — the fixture-gated suites and the eval-runner's real-eval tests alike — with a readable reason, and runs everything else green.
 - The eval runner's result envelope still records `identity.opencodeVersion` equal to the pin.
 
 - [ ] **Unit 3: Put the hosted-model test on the scripted provider and delete the no-op matrix**
@@ -253,7 +253,7 @@ Two adjacent facts shaped the design. `mise.toml` prepends `./node_modules/.bin`
 
 **Verification:**
 - Neither `OPENCODE_TEST_MODEL` nor `big-pickle` appears anywhere under `tests/integration/` (`tests/manual/` legitimately keeps its hosted-model scripts).
-- Under `SYSTEMATIC_REQUIRE_OPENCODE=1`, no test in `tests/integration/` has an assertion that admits every outcome; the only tolerant branch left is the eval-runner gate test's local (unflagged) path.
+- Under `SYSTEMATIC_REQUIRE_OPENCODE=1`, no test in `tests/integration/` has an assertion that admits every outcome. Locally, two eval-runner shapes stay tolerant by design — the gate test's `infra_failure` branch and the repeated-runs equality test (two `infra_failure` envelopes compare equal) — and both are unreachable offline once Unit 2 gates them, and unreachable in CI once the helper throws.
 
 - [ ] **Unit 4: Add the `host-contract` CI job**
 
