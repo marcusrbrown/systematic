@@ -77,9 +77,11 @@
   ],
   postUpgradeTasks: {
     // `bun run fix` runs Biome lint --fix to auto-correct formatting drift.
-    // `bun run postupgrade` regenerates all necessary build artifacts, including
-    // skills/agent-browser/SKILL.md from the pinned package so an agent-browser
-    // bump lands the new stub in the same Renovate PR.
+    // `bun run postupgrade` regenerates every artifact derived from a dependency:
+    // skills/agent-browser/SKILL.md from the pinned package, then registry/registry.jsonc
+    // from skill/agent frontmatter, plus the config/review-summary JSON schemas from
+    // zod's toJSONSchema output. A bump that changes any of them lands the regenerated
+    // file in the same Renovate PR instead of failing the drift gates.
     commands: ['bun install', 'bun run fix', 'bun run postupgrade'],
     executionMode: 'branch',
   },
