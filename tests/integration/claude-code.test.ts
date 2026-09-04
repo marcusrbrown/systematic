@@ -29,7 +29,7 @@
  * touches the build script or its inputs. That gate is a manual step, never an
  * automated skip that would masquerade as a passing test.
  */
-import { afterAll, describe, expect, it, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -38,6 +38,7 @@ import {
   buildHookFacts,
   buildOutputStyleContent,
   buildValidatorBundle,
+  CLAUDE_CODE_VALIDATOR_BIN,
   generatePluginFiles,
   HOOK_PAYLOAD_CAP,
   writePluginFiles,
@@ -114,20 +115,6 @@ afterAll(() => {
 // ---------------------------------------------------------------------------
 
 describe('claude-code bundle — shared-core content fidelity', () => {
-  it('generated validator file preserves the real bundle after its shebang', () => {
-    const files = generatePluginFiles(REPO_ROOT, VALIDATOR_BUNDLE)
-    const validator = files.get('bin/systematic-validate-review-artifact')
-    const shebang = '#!/usr/bin/env node\n'
-
-    expect(validator).toBeDefined()
-    expect(validator?.subarray(0, Buffer.byteLength(shebang)).toString()).toBe(
-      shebang,
-    )
-    expect(validator?.subarray(Buffer.byteLength(shebang))).toEqual(
-      VALIDATOR_BUNDLE,
-    )
-  })
-
   test('output-style body contains a distinctive using-systematic enforcement line', () => {
     const content = fs.readFileSync(
       path.join(BUILD_DIR, 'output-styles/systematic.md'),
@@ -226,6 +213,24 @@ describe('claude-code bundle — shared-core content fidelity', () => {
 // ---------------------------------------------------------------------------
 
 describe('claude-code bundle — artifact self-containment', () => {
+  test('generated validator file preserves the real bundle after its shebang and is installed executable', () => {
+    const shebang = '#!/usr/bin/env node\n'
+    const validatorPath = path.join(
+      BUILD_DIR,
+      `bin/${CLAUDE_CODE_VALIDATOR_BIN}`,
+    )
+    const validator = fs.readFileSync(validatorPath)
+
+    expect(VALIDATOR_BUNDLE.length).toBeGreaterThan(0)
+    expect(validator.subarray(0, Buffer.byteLength(shebang)).toString()).toBe(
+      shebang,
+    )
+    expect(validator.subarray(Buffer.byteLength(shebang))).toEqual(
+      VALIDATOR_BUNDLE,
+    )
+    expect(fs.statSync(validatorPath).mode & 0o111).not.toBe(0)
+  })
+
   test('.claude-plugin/plugin.json exists, is valid JSON, has a name, no version, and author object', () => {
     const manifestPath = path.join(BUILD_DIR, '.claude-plugin/plugin.json')
     expect(fs.existsSync(manifestPath)).toBe(true)
