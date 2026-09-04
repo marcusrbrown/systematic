@@ -1205,18 +1205,44 @@ function buildProviderConfig(
   })
 }
 
-function stopChildProcess(child: ChildProcess): Promise<void> {
+function signalProcessGroup(child: ChildProcess, signal: NodeJS.Signals): void {
+  const pid = child.pid
+  if (pid === undefined) {
+    try {
+      child.kill(signal)
+    } catch {
+      // Cleanup is best effort; the process may already be gone.
+    }
+    return
+  }
+
+  try {
+    process.kill(-pid, signal)
+  } catch {
+    try {
+      child.kill(signal)
+    } catch {
+      // Cleanup is best effort; the process may already be gone.
+    }
+  }
+}
+
+async function stopChildProcess(child: ChildProcess): Promise<void> {
   if (child.exitCode !== null) return Promise.resolve()
-  return new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-      child.kill('SIGKILL')
-      resolve()
-    }, 5_000)
-    child.once('exit', () => {
+  await new Promise<void>((resolve) => {
+    let settled = false
+    const finish = (): void => {
+      if (settled) return
+      settled = true
       clearTimeout(timeout)
       resolve()
-    })
-    child.kill('SIGTERM')
+    }
+    const timeout = setTimeout(() => {
+      signalProcessGroup(child, 'SIGKILL')
+      finish()
+    }, 5_000)
+    child.once('exit', finish)
+    signalProcessGroup(child, 'SIGTERM')
   })
 }
 
@@ -1245,6 +1271,7 @@ async function startOpencodeHost(
         modelBaseUrl,
         parentEnv,
       }),
+      detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     },
   )
@@ -1264,8 +1291,10 @@ async function startOpencodeHost(
     const timeout = setTimeout(() => {
       if (settled) return
       settled = true
-      void stopChildProcess(child)
-      reject(new Error(OPENCODE_HOST_TIMEOUT))
+      void (async () => {
+        await stopChildProcess(child)
+        reject(new Error(OPENCODE_HOST_TIMEOUT))
+      })()
     }, timeoutMs)
     const onChunk = (chunk: Buffer): void => {
       if (settled) return

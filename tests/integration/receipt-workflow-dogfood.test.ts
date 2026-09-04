@@ -13,6 +13,7 @@ import {
   packTarballOnce,
   prewarmExactOpencode,
   startExactOpencodeServer,
+  stopAllOpencodeHosts,
   TIMEOUT_MS,
 } from './fixtures/receipt-workflow-host.js'
 
@@ -483,6 +484,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)('focused real-host dogfood', () => {
     }
     console.log(`U7_PREWARM ${warm.stdout.trim()}`)
   }, 360_000)
+  afterAll(stopAllOpencodeHosts)
   afterAll(() => cleanupPackedTarball())
 
   test(

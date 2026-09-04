@@ -1,12 +1,33 @@
-import { type ChildProcess, spawn } from 'node:child_process'
+import { type ChildProcess, spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
+import { stopProcessGroup } from './process-group.js'
+
 export const OPENCODE_AVAILABLE = (() => {
-  const result = Bun.spawnSync(['which', 'opencode'])
-  return result.exitCode === 0
+  const probeRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'systematic-opencode-probe-'),
+  )
+  try {
+    // Fixtures redirect HOME/XDG paths, so a PATH shim must also run in that environment.
+    const result = spawnSync('opencode', ['--version'], {
+      env: {
+        ...process.env,
+        HOME: probeRoot,
+        XDG_CONFIG_HOME: probeRoot,
+        XDG_DATA_HOME: probeRoot,
+        XDG_CACHE_HOME: probeRoot,
+        XDG_STATE_HOME: probeRoot,
+      },
+      encoding: 'utf8',
+      timeout: 15_000,
+    })
+    return result.status === 0 && /\d+\.\d+\.\d+/.test(result.stdout)
+  } finally {
+    fs.rmSync(probeRoot, { recursive: true, force: true })
+  }
 })()
 
 export const TIMEOUT_MS = 180_000
@@ -509,10 +530,11 @@ async function startOpencodeProcess(
   const url = await new Promise<string>((resolve, reject) => {
     let buffer = ''
     const timeout = setTimeout(() => {
-      server.kill('SIGTERM')
-      reject(
-        new Error(`OpenCode server start timed out: ${buffer.slice(-500)}`),
-      )
+      void stopOpencodeProcess(server).then(() => {
+        reject(
+          new Error(`OpenCode server start timed out: ${buffer.slice(-500)}`),
+        )
+      })
     }, timeoutMs)
 
     const onChunk = (chunk: Buffer): void => {
@@ -538,15 +560,22 @@ async function startOpencodeProcess(
   })
 
   let stopped = false
-  return {
+  let host: OpencodeServer
+  host = {
     url,
     pid,
     async stop(): Promise<void> {
       if (stopped) return
       stopped = true
-      await stopOpencodeProcess(server)
+      try {
+        await stopOpencodeProcess(server)
+      } finally {
+        liveOpencodeHosts.delete(host)
+      }
     },
   }
+  liveOpencodeHosts.add(host)
+  return host
 }
 
 export async function startOpencodeServer(
@@ -588,19 +617,14 @@ export interface OpencodeServer {
   stop(): Promise<void>
 }
 
+const liveOpencodeHosts = new Set<OpencodeServer>()
+
 async function stopOpencodeProcess(server: ChildProcess): Promise<void> {
-  if (server.exitCode !== null) return
-  await new Promise<void>((resolve) => {
-    const timeout = setTimeout(() => {
-      server.kill('SIGKILL')
-      resolve()
-    }, 10_000)
-    server.once('exit', () => {
-      clearTimeout(timeout)
-      resolve()
-    })
-    server.kill('SIGTERM')
-  })
+  await stopProcessGroup(server, 10_000)
+}
+
+export async function stopAllOpencodeHosts(): Promise<void> {
+  await Promise.all([...liveOpencodeHosts].map((host) => host.stop()))
 }
 
 let packedTarballPath: string | null = null

@@ -14,6 +14,7 @@ import {
   packTarballOnce,
   REPO_ROOT,
   startOpencodeServer,
+  stopAllOpencodeHosts,
   TIMEOUT_MS,
 } from './fixtures/receipt-workflow-host.js'
 
@@ -580,6 +581,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
       packTarballOnce()
     }, 200_000)
 
+    afterAll(stopAllOpencodeHosts)
     afterAll(() => {
       cleanupPackedTarball()
     })
