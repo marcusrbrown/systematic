@@ -15,7 +15,7 @@ The OpenCode-dependent integration tests become CI-authoritative and locally bes
 ### Contributor experience after this lands
 
 - `bun test tests/integration` online: the OpenCode suites run against `bunx opencode-ai@<pin>`. The first run downloads the launcher and one platform binary (about 150 MB) into Bun's cache; later runs start in under a second. Nothing is installed on PATH and the contributor's own `opencode`, if any, is never used.
-- Offline or cache-cold: every OpenCode suite skips with one named reason (`bunx opencode-ai@<pin> --version` failed, with the captured stderr); `pi.test.ts`, `claude-code.test.ts`, and the synthetic eval-runner tests still run. A local skip is informational only — CI is the authority.
+- Offline or cache-cold: every fixture-gated OpenCode suite skips with one named reason (`bunx opencode-ai@<pin> --version` failed, with the captured stderr); `pi.test.ts`, `claude-code.test.ts`, and the synthetic eval-runner tests still run. The eval-runner's real-eval tests report `infra_failure` rather than skipping, and locally that is tolerated. A local skip is informational only — CI is the authority.
 - Today, by contrast, the pinned half of the suite (`startExactOpencodeServer`) runs only if a contributor has the exact version installed, while the unpinned half (`startOpencodeServer`, used by `question-attestation-opencode.test.ts` and `receipt-workflow-recovery.test.ts`) accepts any `opencode` on PATH that prints a version — silent version drift. A version bump asks the contributor to re-run the pinned half for 15–17 minutes and paste the result.
 
 ### Keeping the suite versus dropping it
@@ -197,7 +197,7 @@ Two adjacent facts shaped the design. `mise.toml` prepends `./node_modules/.bin`
 
 **Files:**
 - Modify: `tests/integration/fixtures/receipt-workflow-host.ts` (`OPENCODE_AVAILABLE`, `startOpencodeServer`, `startExactOpencodeServer`, `prewarmExactOpencode`, `getExactNpmCacheDir`, `runOpencode`), `scripts/eval-cases/opencode.ts` (`startOpencodeHost`), `scripts/run-evals.ts` (`verifyExactOpencodeRuntime`)
-- Modify: `tests/integration/receipt-workflow-dogfood.test.ts` (its `beforeAll` prewarm call and 360 s hook budget, retuned once the `npx` cache path is gone)
+- Modify: `tests/integration/receipt-workflow-dogfood.test.ts` (its `beforeAll` prewarm call; the 360 s hook budget is re-derived under Unit 4's warm build, see Approach)
 - Modify: `tests/integration/eval-runner.test.ts` (`countEvalServeProcesses` if the command line changes)
 - Test: `tests/unit/opencode-availability.test.ts` (probe classification, fake launcher), existing integration suites as consumers
 
@@ -223,7 +223,7 @@ Two adjacent facts shaped the design. `mise.toml` prepends `./node_modules/.bin`
 
 **Verification:**
 - `npx` no longer appears in `scripts/` or `tests/` outside historical docs.
-- A local run with no network and an empty Bun cache skips every OpenCode suite with a readable reason and runs everything else.
+- A local run with no network and an empty Bun cache skips every fixture-gated OpenCode suite with a readable reason and runs everything else; the eval-runner real-eval tests report `infra_failure` and stay green locally.
 - The eval runner's result envelope still records `identity.opencodeVersion` equal to the pin.
 
 - [ ] **Unit 3: Put the hosted-model test on the scripted provider and delete the no-op matrix**
@@ -235,12 +235,13 @@ Two adjacent facts shaped the design. `mise.toml` prepends `./node_modules/.bin`
 **Dependencies:** Unit 2
 
 **Files:**
-- Modify: `tests/integration/fixtures/receipt-workflow-host.ts` (`OPENCODE_TEST_MODEL`, `runOpencode`), `tests/integration/opencode.test.ts` (all seven `runOpencode` call sites), `tests/integration/receipt-workflow-guard-real-host.test.ts`
+- Modify: `tests/integration/fixtures/receipt-workflow-host.ts` (`OPENCODE_TEST_MODEL`, `runOpencode`), `tests/integration/opencode.test.ts` (all seven `runOpencode` call sites), `tests/integration/receipt-workflow-guard-real-host.test.ts`, `tests/integration/eval-runner.test.ts` (the runtime-identity gate test)
 - Test: the modified files are the tests
 
 **Approach:**
 - The hosted-model dependency lives in the fixture, not the test: `OPENCODE_TEST_MODEL = 'opencode/big-pickle'` is hard-coded into `runOpencode`'s argument list, and `opencode.test.ts` calls `runOpencode` seven times across its source-local, dist-local, packaged, and mixed-version groups. `runOpencode` gains a scripted provider: it starts the local model server (mirroring `question-attestation-opencode.test.ts`'s provider/model wiring), writes the provider config into the fixture's isolated config dir, and passes that provider's model ID instead of `opencode/big-pickle`. The response script emits the `systematic_skill` tool call the assertions look for, then a short completion. The assertions themselves — plugin loaded, tool registered, skill output present, env isolation, repo `.opencode` untouched — do not change at any call site.
 - In `receipt-workflow-guard-real-host.test.ts`, delete the "reports each exact host version cell independently" test and the `HOST_VERSIONS` constant; replace the literal `'1.18.5'` in the remaining cells with the pin.
+- `eval-runner.test.ts` does not import the fixture, so it inherits neither the named skip nor the module-scope throw, and its runtime-identity gate test ("gates grading on exact OpenCode runtime identity without silently skipping") has a tolerant branch: an `infra_failure` outcome with subcode `opencode_unavailable` or `identity_drift` passes, and so does a real run. Under `SYSTEMATIC_REQUIRE_OPENCODE=1` that branch becomes a failure — the test asserts the `success` outcome and the pinned version, nothing else. Locally, without the flag, the tolerant branch stays. The deliberate `timeoutMs: 1` test elsewhere in the file expects `infra_failure` by design and is untouched.
 
 **Patterns to follow:**
 - `startMockModelServer` in `scripts/eval-cases/opencode.ts` and the `u6-question` provider config in `question-attestation-opencode.test.ts`.
@@ -252,7 +253,7 @@ Two adjacent facts shaped the design. `mise.toml` prepends `./node_modules/.bin`
 
 **Verification:**
 - Neither `OPENCODE_TEST_MODEL` nor `big-pickle` appears anywhere under `tests/integration/` (`tests/manual/` legitimately keeps its hosted-model scripts).
-- No test in `tests/integration/` has an assertion that admits every outcome.
+- Under `SYSTEMATIC_REQUIRE_OPENCODE=1`, no test in `tests/integration/` has an assertion that admits every outcome; the only tolerant branch left is the eval-runner gate test's local (unflagged) path.
 
 - [ ] **Unit 4: Add the `host-contract` CI job**
 
@@ -270,7 +271,7 @@ Two adjacent facts shaped the design. `mise.toml` prepends `./node_modules/.bin`
 - New job `host-contract`: `ubuntu-latest`, same Bun and Node 24 setup as the `test` job, `bun install --frozen-lockfile`, `bun run build`, then `bun test tests/integration` with `SYSTEMATIC_REQUIRE_OPENCODE=1` in `env`. The build step is load-bearing: `dist/` is gitignored, `opencode.test.ts` computes `DIST_LOCAL_AVAILABLE` from `dist/index.js` at module scope, and `packTarballOnce()` builds inside a `beforeAll` — too late for that gate. Building first makes the dist-local assertion run in CI and turns the in-`beforeAll` build into a warm no-op. `timeout-minutes` set from a measured run plus headroom.
 - Path gating, pull requests only: a `paths-filter` step decides whether the PR touches `src/`, `tests/`, `scripts/`, `evals/`, `package.json`, `bun.lock`, or the workflow file, and the install/test steps are conditioned on its output. The job itself has no `if:` — it always runs to completion and reports a status. On `push` to `main` the filter step is bypassed and the suite always runs, so `release` (which `needs` this job) is never skipped and never publishes without a host-contract result from the same run.
 - Add the job to the `release` job's `needs`.
-- After the test step, a guard step reads the `(skip)` lines and the summary counts from the captured output and fails the job unless the skipped set equals the known-exempt set (today: the `SYSTEMATIC_MIXED_VERSION_TEST` case) and the passed count is at or above a floor set from the first measured run. The module-scope throw already covers a missing or mismatched host; this guard covers what it cannot — a per-test gate such as `test.skipIf(!DIST_LOCAL_AVAILABLE)` skipping for an unexpected reason while the job stays green. The exempt set lives in the workflow next to the guard so adding an entry is a reviewed change, not a silent loosening.
+- The test step runs with `--reporter=junit --reporter-outfile=<path>` in addition to the default output; Bun's default reporter prints only aggregate counts, while the JUnit file names each skipped case. A guard step reads the skipped cases from that file and the summary counts from the captured output and fails the job unless the skipped set equals the known-exempt set (today: the `SYSTEMATIC_MIXED_VERSION_TEST` case) and the passed count is at or above a floor set from the first measured run. The module-scope throw already covers a missing or mismatched host; this guard covers what it cannot — a per-test gate such as `test.skipIf(!DIST_LOCAL_AVAILABLE)` skipping for an unexpected reason while the job stays green. The exempt set lives in the workflow next to the guard so adding an entry is a reviewed change, not a silent loosening.
 - Upload the test log as an artifact on failure so a host that dies on startup is diagnosable without re-running.
 - No secrets and no elevated permissions: the job inherits the workflow-level `contents: read` token and declares nothing else; the scripted provider uses dummy keys that are never real credentials.
 
@@ -322,6 +323,7 @@ Two adjacent facts shaped the design. `mise.toml` prepends `./node_modules/.bin`
 | The scripted provider's tool-call script diverges from what `opencode run` expects at a future OpenCode version | That is the host contract the suite exists to catch; a failure is signal, not flake. |
 | Release wall time grows by the suite's duration | Accepted: the failure it prevents is a published plugin that does not load. The job is path-gated so docs and registry PRs are unaffected. |
 | A future test adds a `describe.skipIf` without the reason string | The exported reason and the CI throw are module-level in the fixture; any suite importing `OPENCODE_AVAILABLE` gets both. |
+| A suite reaches OpenCode without importing the fixture and tolerates host failure (the eval-runner shape) | Unit 3 collapses the one known tolerant branch under the CI flag; the shared classification helper is the only supported way to reach a host, and `verifyExactOpencodeRuntime` fails hard under the flag, so a new suite built on it inherits the failure. |
 | Deleting the matrix test removes a signal someone relied on | It asserted nothing and its log line was never consumed; the packed-runtime cell at the pin keeps the real assertion. |
 
 ## Documentation / Operational Notes
