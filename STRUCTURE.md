@@ -13,8 +13,8 @@ systematic/
 │   ├── cli.ts        # CLI entry (list / capabilities / validate-review-artifact / config / setup --harness / pi-subagents)
 │   ├── claude-code-validator.ts # Claude Code bundled review-artifact validator entry
 │   └── lib/          # Core modules
-├── skills/           # 31 bundled skills (one directory per skill, SKILL.md format)
-├── agents/           # 37 bundled agents (5 category subdirectories)
+├── skills/           # Bundled skills (one directory per skill, SKILL.md format)
+├── agents/           # Bundled agents (one subdirectory per category)
 ├── docs/             # Starlight/Astro docs workspace (separate bun workspace)
 │   ├── scripts/      # Content generation from bundled assets
 │   ├── src/content/  # Manual guides + generated reference pages
