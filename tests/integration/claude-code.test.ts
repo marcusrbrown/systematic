@@ -29,7 +29,7 @@
  * touches the build script or its inputs. That gate is a manual step, never an
  * automated skip that would masquerade as a passing test.
  */
-import { afterAll, describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, it, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -37,6 +37,7 @@ import { fileURLToPath } from 'node:url'
 import {
   buildHookFacts,
   buildOutputStyleContent,
+  buildValidatorBundle,
   generatePluginFiles,
   HOOK_PAYLOAD_CAP,
   writePluginFiles,
@@ -46,6 +47,7 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const REPO_ROOT = path.resolve(__dirname, '../..')
 const SRC_DIR = path.join(REPO_ROOT, 'src')
+const VALIDATOR_BUNDLE = await buildValidatorBundle(REPO_ROOT)
 
 /**
  * Manual, non-automated release gate. Re-run these steps by hand in Claude
@@ -89,7 +91,9 @@ function listSourceAgentStems(): string[] {
   for (const category of categories) {
     const categoryDir = path.join(agentsDir, category.name)
     for (const file of fs.readdirSync(categoryDir)) {
-      if (file.endsWith('.md')) stems.push(path.basename(file, '.md'))
+      if (file.endsWith('.md') && file.toLowerCase() !== 'readme.md') {
+        stems.push(path.basename(file, '.md'))
+      }
     }
   }
   return stems.sort((a, b) => a.localeCompare(b))
@@ -99,7 +103,7 @@ function listSourceAgentStems(): string[] {
 const BUILD_DIR = fs.mkdtempSync(
   path.join(os.tmpdir(), 'claude-code-integration-'),
 )
-writePluginFiles(generatePluginFiles(REPO_ROOT), BUILD_DIR)
+writePluginFiles(generatePluginFiles(REPO_ROOT, VALIDATOR_BUNDLE), BUILD_DIR)
 
 afterAll(() => {
   fs.rmSync(BUILD_DIR, { recursive: true, force: true })
@@ -110,6 +114,20 @@ afterAll(() => {
 // ---------------------------------------------------------------------------
 
 describe('claude-code bundle — shared-core content fidelity', () => {
+  it('generated validator file preserves the real bundle after its shebang', () => {
+    const files = generatePluginFiles(REPO_ROOT, VALIDATOR_BUNDLE)
+    const validator = files.get('bin/systematic-validate-review-artifact')
+    const shebang = '#!/usr/bin/env node\n'
+
+    expect(validator).toBeDefined()
+    expect(validator?.subarray(0, Buffer.byteLength(shebang)).toString()).toBe(
+      shebang,
+    )
+    expect(validator?.subarray(Buffer.byteLength(shebang))).toEqual(
+      VALIDATOR_BUNDLE,
+    )
+  })
+
   test('output-style body contains a distinctive using-systematic enforcement line', () => {
     const content = fs.readFileSync(
       path.join(BUILD_DIR, 'output-styles/systematic.md'),
@@ -319,7 +337,7 @@ describe('claude-code bundle — no regression on OpenCode/Pi', () => {
       path.join(os.tmpdir(), 'claude-code-build-isolated-'),
     )
     try {
-      const files = generatePluginFiles(REPO_ROOT)
+      const files = generatePluginFiles(REPO_ROOT, VALIDATOR_BUNDLE)
       writePluginFiles(files, tempOut)
 
       expect(fs.readFileSync(indexPath, 'utf8')).toBe(beforeIndex)

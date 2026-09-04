@@ -629,7 +629,7 @@ export function writePluginFiles(
   }
 }
 
-async function buildValidatorBundle(rootDir: string): Promise<Buffer> {
+export async function buildValidatorBundle(rootDir: string): Promise<Buffer> {
   const result = await Bun.build({
     entrypoints: [path.join(rootDir, 'src/claude-code-validator.ts')],
     minify: true,
