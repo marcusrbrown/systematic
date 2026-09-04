@@ -1236,7 +1236,22 @@ async function startOpencodeHost(
     },
   )
   activeOpencodeChildren.add(child)
-  child.once('exit', () => activeOpencodeChildren.delete(child))
+  child.once('exit', () => {
+    const pid = child.pid
+    if (pid === undefined) {
+      activeOpencodeChildren.delete(child)
+      return
+    }
+    // A pgid cannot be recycled while its group has members, so this is a safe
+    // ownership probe. Only evict once the group is actually empty; otherwise
+    // the launcher exited but the opencode grandchild is still alive and
+    // needs to stay reachable for cleanup.
+    try {
+      process.kill(-pid, 0)
+    } catch {
+      activeOpencodeChildren.delete(child)
+    }
+  })
   const markerPath = process.env.SYSTEMATIC_EVAL_STARTED_CHILD_MARKER
   if (markerPath) {
     try {

@@ -81,4 +81,38 @@ describe('process-group reaping', () => {
       await stopProcessGroup(child, 1_000)
     }
   })
+
+  it('stops a non-detached child via the direct-kill fallback without signalling an unrelated group', async () => {
+    const child = spawn('sh', ['-c', 'sleep 30'], {
+      stdio: 'ignore',
+    })
+    const pid = child.pid
+    if (pid === undefined)
+      throw new Error('test child did not expose a process id')
+
+    await stopProcessGroup(child, 1_000)
+    expect(child.exitCode !== null || child.signalCode !== null).toBe(true)
+  })
+
+  it('keeps a registry-style probe positive while the group is populated and negative once reaped', async () => {
+    const child = spawn('sh', ['-c', 'sleep 30 & exit 0'], {
+      detached: true,
+      stdio: 'ignore',
+    })
+    const pid = child.pid
+    if (pid === undefined)
+      throw new Error('test child did not expose a process id')
+
+    await once(child, 'exit')
+    try {
+      expect(() => process.kill(-pid, 0)).not.toThrow()
+
+      await stopProcessGroup(child, 1_000)
+      await waitForEmptyProcessGroup(pid, 2_000)
+
+      expect(() => process.kill(-pid, 0)).toThrow()
+    } finally {
+      await stopProcessGroup(child, 1_000)
+    }
+  })
 })

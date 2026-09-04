@@ -587,7 +587,17 @@ async function startOpencodeProcess(
     },
   }
   liveOpencodeHosts.add(host)
-  server.once('exit', () => liveOpencodeHosts.delete(host))
+  server.once('exit', () => {
+    // A pgid cannot be recycled while its group has members, so this is a safe
+    // ownership probe. Only evict once the group is actually empty; otherwise
+    // the launcher exited but the opencode grandchild is still alive and
+    // needs to stay reachable for stopAllOpencodeHosts/the terminal-signal guard.
+    try {
+      process.kill(-pid, 0)
+    } catch {
+      liveOpencodeHosts.delete(host)
+    }
+  })
   installTerminalSignalHandlers()
   return host
 }
