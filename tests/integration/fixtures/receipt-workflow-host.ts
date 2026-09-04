@@ -1,13 +1,10 @@
-import { type ChildProcess, spawn } from 'node:child_process'
+import { type ChildProcess, spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
-export const OPENCODE_AVAILABLE = (() => {
-  const result = Bun.spawnSync(['which', 'opencode'])
-  return result.exitCode === 0
-})()
+import { stopProcessGroup } from '../../../scripts/lib/process-group.js'
 
 export const TIMEOUT_MS = 180_000
 export const EXACT_OPENCODE_VERSION = '1.18.21'
@@ -136,6 +133,42 @@ export function buildChildEnv(
   }
   return { ...base, ...overrides }
 }
+
+export const OPENCODE_AVAILABLE = (() => {
+  const probeRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'systematic-opencode-probe-'),
+  )
+  try {
+    // Fixtures redirect HOME/XDG paths, so a PATH shim must also run in that environment.
+    const result = spawnSync('opencode', ['--version'], {
+      env: buildChildEnv({
+        HOME: probeRoot,
+        XDG_CONFIG_HOME: probeRoot,
+        XDG_DATA_HOME: probeRoot,
+        XDG_CACHE_HOME: probeRoot,
+        XDG_STATE_HOME: probeRoot,
+      }),
+      encoding: 'utf8',
+      timeout: 15_000,
+    })
+    const available =
+      !result.error &&
+      result.status === 0 &&
+      /\d+\.\d+\.\d+/.test(result.stdout ?? '')
+    if (!available) {
+      const stderr = (result.stderr ?? '')
+        .slice(0, 200)
+        .replaceAll(/\s+/g, ' ')
+        .trim()
+      console.warn(
+        `[systematic] opencode availability probe failed: status=${result.status ?? 'null'} signal=${result.signal ?? 'null'} error=${result.error?.message ?? 'none'} stderr=${stderr}`,
+      )
+    }
+    return available
+  } finally {
+    fs.rmSync(probeRoot, { recursive: true, force: true })
+  }
+})()
 
 export function buildIsolatedOpencodeEnv(
   fixture: IsolatedFixture,
@@ -502,6 +535,7 @@ async function startOpencodeProcess(
   const server = spawn(command, [...args], {
     env,
     cwd: fixture.projectDir,
+    detached: true,
   })
   const pid = server.pid
   if (!pid) throw new Error('opencode server did not expose a process id')
@@ -509,10 +543,11 @@ async function startOpencodeProcess(
   const url = await new Promise<string>((resolve, reject) => {
     let buffer = ''
     const timeout = setTimeout(() => {
-      server.kill('SIGTERM')
-      reject(
-        new Error(`OpenCode server start timed out: ${buffer.slice(-500)}`),
-      )
+      void stopOpencodeProcess(server).then(() => {
+        reject(
+          new Error(`OpenCode server start timed out: ${buffer.slice(-500)}`),
+        )
+      })
     }, timeoutMs)
 
     const onChunk = (chunk: Buffer): void => {
@@ -538,15 +573,33 @@ async function startOpencodeProcess(
   })
 
   let stopped = false
-  return {
+  const host: OpencodeServer = {
     url,
     pid,
     async stop(): Promise<void> {
       if (stopped) return
       stopped = true
-      await stopOpencodeProcess(server)
+      try {
+        await stopOpencodeProcess(server)
+      } finally {
+        liveOpencodeHosts.delete(host)
+      }
     },
   }
+  liveOpencodeHosts.add(host)
+  server.once('exit', () => {
+    // A pgid cannot be recycled while its group has members, so this is a safe
+    // ownership probe. Only evict once the group is actually empty; otherwise
+    // the launcher exited but the opencode grandchild is still alive and
+    // needs to stay reachable for stopAllOpencodeHosts/the terminal-signal guard.
+    try {
+      process.kill(-pid, 0)
+    } catch {
+      liveOpencodeHosts.delete(host)
+    }
+  })
+  installTerminalSignalHandlers()
+  return host
 }
 
 export async function startOpencodeServer(
@@ -588,19 +641,43 @@ export interface OpencodeServer {
   stop(): Promise<void>
 }
 
-async function stopOpencodeProcess(server: ChildProcess): Promise<void> {
-  if (server.exitCode !== null) return
-  await new Promise<void>((resolve) => {
-    const timeout = setTimeout(() => {
-      server.kill('SIGKILL')
-      resolve()
-    }, 10_000)
-    server.once('exit', () => {
-      clearTimeout(timeout)
-      resolve()
-    })
-    server.kill('SIGTERM')
+const liveOpencodeHosts = new Set<OpencodeServer>()
+
+let terminalSignalHandlersInstalled = false
+
+function killLiveOpencodeHostsSync(): void {
+  for (const host of liveOpencodeHosts) {
+    try {
+      process.kill(-host.pid, 'SIGKILL')
+    } catch {
+      // Cleanup is best effort; the process may already be gone.
+    }
+  }
+}
+
+function installTerminalSignalHandlers(): void {
+  if (terminalSignalHandlersInstalled) return
+  terminalSignalHandlersInstalled = true
+
+  process.on('SIGINT', () => {
+    killLiveOpencodeHostsSync()
+    // Exiting here skips remaining afterAll hooks (temp dirs may leak); orphaned host processes cost more than temp dirs.
+    process.exit(130)
   })
+  process.on('SIGTERM', () => {
+    killLiveOpencodeHostsSync()
+    // Exiting here skips remaining afterAll hooks (temp dirs may leak); orphaned host processes cost more than temp dirs.
+    process.exit(143)
+  })
+  process.on('exit', killLiveOpencodeHostsSync)
+}
+
+async function stopOpencodeProcess(server: ChildProcess): Promise<void> {
+  await stopProcessGroup(server, 10_000)
+}
+
+export async function stopAllOpencodeHosts(): Promise<void> {
+  await Promise.all([...liveOpencodeHosts].map((host) => host.stop()))
 }
 
 let packedTarballPath: string | null = null

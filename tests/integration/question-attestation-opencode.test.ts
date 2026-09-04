@@ -12,6 +12,7 @@ import {
   OPENCODE_AVAILABLE,
   packTarballOnce,
   startOpencodeServer,
+  stopAllOpencodeHosts,
   TIMEOUT_MS,
 } from './fixtures/receipt-workflow-host.js'
 
@@ -417,7 +418,8 @@ describe.skipIf(!OPENCODE_AVAILABLE)('OpenCode Question attestation', () => {
     packTarballOnce()
   }, 200_000)
 
-  afterAll(() => {
+  afterAll(async () => {
+    await stopAllOpencodeHosts()
     cleanupPackedTarball()
   })
 

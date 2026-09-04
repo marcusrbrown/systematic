@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url'
 import { createOpencodeClient } from '@opencode-ai/sdk/v2'
 
 import { buildBundledAgentInventory } from '../../src/lib/agent-overlays.js'
+import { stopProcessGroup } from '../lib/process-group.js'
 import {
   buildEvalChildEnv,
   type EvalCaseExecution,
@@ -1205,21 +1206,6 @@ function buildProviderConfig(
   })
 }
 
-function stopChildProcess(child: ChildProcess): Promise<void> {
-  if (child.exitCode !== null) return Promise.resolve()
-  return new Promise((resolve) => {
-    const timeout = setTimeout(() => {
-      child.kill('SIGKILL')
-      resolve()
-    }, 5_000)
-    child.once('exit', () => {
-      clearTimeout(timeout)
-      resolve()
-    })
-    child.kill('SIGTERM')
-  })
-}
-
 async function startOpencodeHost(
   fixture: EvalFixture,
   configContent: string,
@@ -1245,11 +1231,27 @@ async function startOpencodeHost(
         modelBaseUrl,
         parentEnv,
       }),
+      detached: true,
       stdio: ['ignore', 'pipe', 'pipe'],
     },
   )
   activeOpencodeChildren.add(child)
-  child.once('exit', () => activeOpencodeChildren.delete(child))
+  child.once('exit', () => {
+    const pid = child.pid
+    if (pid === undefined) {
+      activeOpencodeChildren.delete(child)
+      return
+    }
+    // A pgid cannot be recycled while its group has members, so this is a safe
+    // ownership probe. Only evict once the group is actually empty; otherwise
+    // the launcher exited but the opencode grandchild is still alive and
+    // needs to stay reachable for cleanup.
+    try {
+      process.kill(-pid, 0)
+    } catch {
+      activeOpencodeChildren.delete(child)
+    }
+  })
   const markerPath = process.env.SYSTEMATIC_EVAL_STARTED_CHILD_MARKER
   if (markerPath) {
     try {
@@ -1264,8 +1266,10 @@ async function startOpencodeHost(
     const timeout = setTimeout(() => {
       if (settled) return
       settled = true
-      void stopChildProcess(child)
-      reject(new Error(OPENCODE_HOST_TIMEOUT))
+      void (async () => {
+        await stopProcessGroup(child, 5_000)
+        reject(new Error(OPENCODE_HOST_TIMEOUT))
+      })()
     }, timeoutMs)
     const onChunk = (chunk: Buffer): void => {
       if (settled) return
@@ -1297,7 +1301,7 @@ async function startOpencodeHost(
     async stop(): Promise<void> {
       if (stopped) return
       stopped = true
-      await stopChildProcess(child)
+      await stopProcessGroup(child, 5_000)
     },
   }
 }
@@ -1306,7 +1310,7 @@ export async function stopActiveEvalResources(): Promise<void> {
   const children = [...activeOpencodeChildren]
   await Promise.all(
     children.map(async (child) => {
-      await stopChildProcess(child)
+      await stopProcessGroup(child, 5_000)
       activeOpencodeChildren.delete(child)
     }),
   )
