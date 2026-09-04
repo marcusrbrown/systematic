@@ -37,6 +37,8 @@ import { fileURLToPath } from 'node:url'
 import {
   buildHookFacts,
   buildOutputStyleContent,
+  buildValidatorBundle,
+  CLAUDE_CODE_VALIDATOR_BIN,
   generatePluginFiles,
   HOOK_PAYLOAD_CAP,
   writePluginFiles,
@@ -46,6 +48,7 @@ const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
 const REPO_ROOT = path.resolve(__dirname, '../..')
 const SRC_DIR = path.join(REPO_ROOT, 'src')
+const VALIDATOR_BUNDLE = await buildValidatorBundle(REPO_ROOT)
 
 /**
  * Manual, non-automated release gate. Re-run these steps by hand in Claude
@@ -89,7 +92,9 @@ function listSourceAgentStems(): string[] {
   for (const category of categories) {
     const categoryDir = path.join(agentsDir, category.name)
     for (const file of fs.readdirSync(categoryDir)) {
-      if (file.endsWith('.md')) stems.push(path.basename(file, '.md'))
+      if (file.endsWith('.md') && file.toLowerCase() !== 'readme.md') {
+        stems.push(path.basename(file, '.md'))
+      }
     }
   }
   return stems.sort((a, b) => a.localeCompare(b))
@@ -99,7 +104,7 @@ function listSourceAgentStems(): string[] {
 const BUILD_DIR = fs.mkdtempSync(
   path.join(os.tmpdir(), 'claude-code-integration-'),
 )
-writePluginFiles(generatePluginFiles(REPO_ROOT), BUILD_DIR)
+writePluginFiles(generatePluginFiles(REPO_ROOT, VALIDATOR_BUNDLE), BUILD_DIR)
 
 afterAll(() => {
   fs.rmSync(BUILD_DIR, { recursive: true, force: true })
@@ -208,6 +213,24 @@ describe('claude-code bundle — shared-core content fidelity', () => {
 // ---------------------------------------------------------------------------
 
 describe('claude-code bundle — artifact self-containment', () => {
+  test('generated validator file preserves the real bundle after its shebang and is installed executable', () => {
+    const shebang = '#!/usr/bin/env node\n'
+    const validatorPath = path.join(
+      BUILD_DIR,
+      `bin/${CLAUDE_CODE_VALIDATOR_BIN}`,
+    )
+    const validator = fs.readFileSync(validatorPath)
+
+    expect(VALIDATOR_BUNDLE.length).toBeGreaterThan(0)
+    expect(validator.subarray(0, Buffer.byteLength(shebang)).toString()).toBe(
+      shebang,
+    )
+    expect(validator.subarray(Buffer.byteLength(shebang))).toEqual(
+      VALIDATOR_BUNDLE,
+    )
+    expect(fs.statSync(validatorPath).mode & 0o111).toBe(0o111)
+  })
+
   test('.claude-plugin/plugin.json exists, is valid JSON, has a name, no version, and author object', () => {
     const manifestPath = path.join(BUILD_DIR, '.claude-plugin/plugin.json')
     expect(fs.existsSync(manifestPath)).toBe(true)
@@ -319,7 +342,7 @@ describe('claude-code bundle — no regression on OpenCode/Pi', () => {
       path.join(os.tmpdir(), 'claude-code-build-isolated-'),
     )
     try {
-      const files = generatePluginFiles(REPO_ROOT)
+      const files = generatePluginFiles(REPO_ROOT, VALIDATOR_BUNDLE)
       writePluginFiles(files, tempOut)
 
       expect(fs.readFileSync(indexPath, 'utf8')).toBe(beforeIndex)
