@@ -3,9 +3,10 @@
   "compilerOptions": {
     "noEmit": true,
     "rootDir": ".",
-    "allowImportingTsExtensions": true,
-    "declarationDir": null,
-    "outDir": null
+    // Temporary: silences ~44 files of TS5097 noise from `.ts`-suffixed
+    // relative imports used throughout tests/. Drop once #897's burn-down
+    // removes or rewrites those imports.
+    "allowImportingTsExtensions": true
   },
   "include": ["src/**/*", "scripts/**/*", "tests/**/*", "docs/scripts/**/*"],
   "exclude": [
