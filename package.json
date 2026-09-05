@@ -117,7 +117,7 @@
     "js-yaml": "^4.3.1",
     "jsonc-parser": "^3.3.0",
     "tree-sitter-bash": "0.25.1",
-    "web-tree-sitter": "0.26.12",
+    "web-tree-sitter": "0.27.0",
     "zod": "4.5.4"
   },
   "overrides": {
