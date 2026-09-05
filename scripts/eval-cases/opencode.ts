@@ -1458,6 +1458,12 @@ function gradeObservedCase(
     }
   }
 
+  if (input.caseManifest.caseId === 'model-inheritance') {
+    throw new Error(
+      'model-inheritance cases are graded via executeModelInheritanceCase, not gradeObservedCase',
+    )
+  }
+
   const probeHealth = gradeBootstrapProbe(events)
   if (probeHealth.status !== 'healthy') {
     return executionFailure(
@@ -1661,6 +1667,9 @@ async function executeCase(
       title: `systematic eval ${input.caseManifest.caseId}`,
       permission: [{ permission: '*', pattern: '*', action: 'allow' }],
     })
+    if (!session.data) {
+      throw new Error('client.session.create returned no session data')
+    }
     await withTimeout(
       client.session.prompt({
         sessionID: session.data.id,

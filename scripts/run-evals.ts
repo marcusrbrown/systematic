@@ -3527,6 +3527,7 @@ function buildSelectionFailureResult(options: {
     })
   }
   return buildInstalledResult({
+    rootDir: options.rootDir,
     caseManifest,
     runId: options.runId,
     fixtureSeed: options.fixtureSeed,

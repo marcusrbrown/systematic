@@ -113,6 +113,12 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      # Advisory until #897's burn-down lands; becomes a required step once
+      # the tests/ error backlog is cleared.
+      - name: Typecheck tests and scripts (advisory)
+        run: bun run typecheck:all
+        continue-on-error: true
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

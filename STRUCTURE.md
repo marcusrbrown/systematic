@@ -199,6 +199,7 @@ branch ref. Users install via `claude plugin marketplace add marcusrbrown/system
 | `src/lib/config-handler.ts` | Plugin config hook — merges bundled assets |
 | `biome.json` | Linter + formatter config |
 | `tsconfig.json` | TypeScript compiler config |
+| `tsconfig.tests.json` | Advisory typecheck config covering `src/`, `scripts/`, `tests/`, `docs/scripts/` (`bun run typecheck:all`) |
 | `package.json` | Package metadata, scripts, dependencies |
 
 ### Core Logic

@@ -29,6 +29,7 @@ Before implementing features or diagnosing failures, search `docs/solutions/` fo
 bun install              # Install deps
 bun run build            # Build to dist/
 bun run typecheck        # Type check (strict)
+bun run typecheck:all    # Type check tests + scripts too (advisory in CI until #897 burn-down lands)
 bun run lint             # Biome linter
 bun test tests/unit      # Unit tests
 bun test tests/integration  # Integration tests
