@@ -827,7 +827,10 @@ describe('AJV parity: Zod runtime contract vs generated JSON Schema', () => {
       name: 'agent variant with explicit model accepted by both',
       value: {
         agents: {
-          'correctness-reviewer': { model: 'openai/gpt-5.5', variant: 'high' },
+          'correctness-reviewer': {
+            model: 'openai/gpt-6-astra',
+            variant: 'high',
+          },
         },
       },
       accepted: true,
@@ -855,7 +858,10 @@ describe('AJV parity: Zod runtime contract vs generated JSON Schema', () => {
       name: 'variant with explicit model accepted by both',
       value: {
         agents: {
-          'correctness-reviewer': { model: 'openai/gpt-5.5', variant: 'high' },
+          'correctness-reviewer': {
+            model: 'openai/gpt-6-astra',
+            variant: 'high',
+          },
         },
       },
       accepted: true,

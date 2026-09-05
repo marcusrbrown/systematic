@@ -229,12 +229,12 @@ Add your own overrides:
 {
   "agents": {
     "Sisyphus": {
-      "model": "anthropic/claude-opus-4"
+      "model": "anthropic/claude-opus-5"
     }
   },
   "categories": {
     "visual-engineering": {
-      "model": "anthropic/claude-opus-4-6"
+      "model": "anthropic/claude-opus-5"
     }
   }
 }

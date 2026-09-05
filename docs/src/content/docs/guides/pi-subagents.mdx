@@ -88,15 +88,15 @@ This is a sanitized, repo-portable example — public model identifiers only, no
   "$schema": "https://fro.bot/systematic/schemas/v3/systematic-config.schema.json",
   "categories": {
     "research": {
-      "model": "github-copilot/gpt-5.4-mini"
+      "model": "github-copilot/gpt-5.6-luna"
     },
     "review": {
-      "model": "openai/gpt-5.5"
+      "model": "openai/gpt-6-astra"
     }
   },
   "agents": {
     "repo-research-analyst": {
-      "model": "github-copilot/gpt-5.4-mini"
+      "model": "github-copilot/gpt-5.6-luna"
     }
   },
   "pi_subagents": {
@@ -118,7 +118,7 @@ This is a sanitized, repo-portable example — public model identifiers only, no
 
 Named `tools`/`skills` values must be discoverable by the user's own Pi installation — pi-subagents does not know about Systematic's bundled `ce:*` skill names, so don't reference them here; use `true` to enable all skills, or a comma-separated list of skills the target Pi environment actually has installed.
 
-Here, every exported persona in the `research` category picks up `model: github-copilot/gpt-5.4-mini` and `thinking: medium`, except `repo-research-analyst`, whose exact-agent overlay wins for both `model` and `max_turns`/`tools`/`skills`. Every persona in the `review` category picks up `model: openai/gpt-5.5`.
+Here, every exported persona in the `research` category picks up `model: github-copilot/gpt-5.6-luna` and `thinking: medium`, except `repo-research-analyst`, whose exact-agent overlay wins for both `model` and `max_turns`/`tools`/`skills`. Every persona in the `review` category picks up `model: openai/gpt-6-astra`.
 
 ### Pi-native field values
 

@@ -48,7 +48,7 @@ When both `.jsonc` and `.json` exist in the same directory, `.jsonc` takes prece
   "agents": {
     "security-reviewer": {
       // User or custom config only; project config cannot choose model/provider routing.
-      "model": "anthropic/claude-sonnet-4-5",
+      "model": "anthropic/claude-sonnet-5",
       "variant": "thinking",
       "temperature": 0.2,
       "steps": 30
@@ -105,10 +105,10 @@ For a task-oriented walkthrough, see the [model profiles guide](/systematic/guid
   "profile": "personal", // your default when nothing else selects one
   "profiles": {
     "work": {
-      "agents": { "correctness-reviewer": { "model": "openai/gpt-5" } }
+      "agents": { "correctness-reviewer": { "model": "openai/gpt-6-astra" } }
     },
     "personal": {
-      "categories": { "review": { "model": "anthropic/claude-opus-4-7" } }
+      "categories": { "review": { "model": "anthropic/claude-opus-5" } }
     }
   }
 }
@@ -137,7 +137,7 @@ Switching which profile is active never changes an agent's visibility, permissio
 {
   "agents": {
     "correctness-reviewer": {
-      "model": "anthropic/claude-sonnet-4-5", // harness-neutral default
+      "model": "anthropic/claude-sonnet-5", // harness-neutral default
       "opencode": { "variant": "thinking" }, // OpenCode-only qualifier
       "pi": { "thinking": "high" } // Pi-only qualifier
     }
@@ -154,13 +154,13 @@ Resolution precedence, evaluated independently for `model` and for the harness's
 ```jsonc
 {
   "categories": {
-    "review": { "model": "openai/gpt-4o", "variant": "v1" }
+    "review": { "model": "openai/gpt-6-astra", "variant": "high" }
   },
   "agents": {
-    // Overrides the category's model. The category's "v1" variant does NOT
+    // Overrides the category's model. The category's "high" variant does NOT
     // carry over -- it was set at a less specific layer than the agent's
     // model override, so it's dropped, not inherited.
-    "correctness-reviewer": { "model": "openai/gpt-5" }
+    "correctness-reviewer": { "model": "openai/gpt-6-astra" }
   }
 }
 ```
@@ -219,7 +219,7 @@ Model identifier in provider/model format, or null to inherit parent model
 **Examples:**
 
 ```json
-anthropic/claude-sonnet-4
+anthropic/claude-sonnet-5
 ```
 
 ```json
@@ -411,8 +411,8 @@ OpenCode-specific routing block. When present, model/variant here override the f
 
 ```json
 {
-  "model": "anthropic/claude-opus-4-7",
-  "variant": "v2"
+  "model": "anthropic/claude-opus-5",
+  "variant": "high"
 }
 ```
 
@@ -431,7 +431,7 @@ Model identifier in provider/model format, or null to inherit parent model
 **Examples:**
 
 ```json
-anthropic/claude-sonnet-4
+anthropic/claude-sonnet-5
 ```
 
 ```json
@@ -464,7 +464,7 @@ Pi-specific routing block. When present, model/thinking here override the flat m
 
 ```json
 {
-  "model": "anthropic/claude-opus-4-7",
+  "model": "anthropic/claude-opus-5",
   "thinking": "high"
 }
 ```
@@ -484,7 +484,7 @@ Model identifier in provider/model format, or null to inherit parent model
 **Examples:**
 
 ```json
-anthropic/claude-sonnet-4
+anthropic/claude-sonnet-5
 ```
 
 ```json
@@ -567,7 +567,7 @@ Per-category configuration overlays keyed by category name
 ```json
 {
   "review": {
-    "model": "anthropic/claude-opus-4-7"
+    "model": "anthropic/claude-opus-5"
   }
 }
 ```
@@ -592,7 +592,7 @@ Named routing-only overlay bundles, selectable by name via the profile field. On
   "personal": {
     "agents": {
       "correctness-reviewer": {
-        "model": "openai/gpt-5"
+        "model": "openai/gpt-6-astra"
       }
     }
   }
@@ -842,7 +842,7 @@ Model identifier in provider/model format, or null to inherit parent model
 **Examples:**
 
 ```json
-anthropic/claude-sonnet-4
+anthropic/claude-sonnet-5
 ```
 
 ```json
@@ -915,8 +915,8 @@ OpenCode-specific routing block. When present, model/variant here override the f
 
 ```json
 {
-  "model": "anthropic/claude-opus-4-7",
-  "variant": "v2"
+  "model": "anthropic/claude-opus-5",
+  "variant": "high"
 }
 ```
 
@@ -935,7 +935,7 @@ Model identifier in provider/model format, or null to inherit parent model
 **Examples:**
 
 ```json
-anthropic/claude-sonnet-4
+anthropic/claude-sonnet-5
 ```
 
 ```json
@@ -968,7 +968,7 @@ Pi-specific routing block. When present, model/thinking here override the flat m
 
 ```json
 {
-  "model": "anthropic/claude-opus-4-7",
+  "model": "anthropic/claude-opus-5",
   "thinking": "high"
 }
 ```
@@ -988,7 +988,7 @@ Model identifier in provider/model format, or null to inherit parent model
 **Examples:**
 
 ```json
-anthropic/claude-sonnet-4
+anthropic/claude-sonnet-5
 ```
 
 ```json
