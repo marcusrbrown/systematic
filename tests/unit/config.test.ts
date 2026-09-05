@@ -2521,6 +2521,52 @@ describe('config', () => {
       )
     })
 
+    // Code review fix: ConfigSource is now a discriminated union
+    // (FileConfigSource | ProfileBundleConfigSource) instead of a
+    // `trust: 'user'` file source plus an `isProfileBundle` boolean flag.
+    // This test pins the metadata-facing guarantee that change protects:
+    // the profile pseudo-source must never be double-counted as a fourth
+    // 'user' entry in `sources`/`authorities`, regardless of how many
+    // fields the active profile sets.
+    test('an active profile never appears as its own entry in metadata sources or authorities', () => {
+      writeUserConfig({
+        profile: 'p',
+        profiles: {
+          p: {
+            agents: { 'correctness-reviewer': { model: 'a/B', variant: 'v2' } },
+            categories: { review: { model: 'a/C', temperature: 0.5 } },
+          },
+        },
+        bootstrap: { enabled: true },
+      })
+
+      const result = loadConfigWithSources(testDir, { warningSink })
+
+      expect(result.metadata.activeProfile).toBe('p')
+      // Exactly the three file-backed sources -- never a fourth entry for
+      // the profile bundle, and never a 'profile' kind leaking into the
+      // metadata-facing ConfigSourceKind-only shape.
+      expect(result.metadata.sources).toEqual([
+        { kind: 'custom', presence: 'absent' },
+        { kind: 'project', presence: 'absent' },
+        { kind: 'user', presence: 'present' },
+      ])
+      expect(result.metadata.sources).toHaveLength(3)
+      for (const source of result.metadata.sources) {
+        expect(source.kind).not.toBe('profile')
+      }
+      // The one authority this config sets (bootstrap.enabled) is correctly
+      // attributed to 'user' -- not fabricated as a 'profile' sourceKind,
+      // which ConfigSourceKind doesn't even have as a valid value.
+      expect(result.metadata.authorities).toContainEqual({
+        fieldPath: 'bootstrap.enabled',
+        sourceKind: 'user',
+      })
+      for (const authority of result.metadata.authorities) {
+        expect(authority.sourceKind).not.toBe('profile')
+      }
+    })
+
     test('the pre-existing three-entry pi_subagents merge and metadata sources are unaffected by an active profile', () => {
       writeUserConfig({
         profile: 'p',

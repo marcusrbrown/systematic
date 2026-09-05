@@ -724,6 +724,158 @@ describe('cli config show', () => {
       fs.rmSync(root, { recursive: true, force: true })
     }
   })
+
+  describe('--json (code review residual)', () => {
+    it('parses as JSON and has the documented top-level keys', () => {
+      const root = mkTempCwd()
+      const home = path.join(root, 'home')
+      const project = path.join(root, 'project')
+      try {
+        fs.mkdirSync(project, { recursive: true })
+        writeUserConfig(home, {
+          profile: 'fast',
+          profiles: {
+            fast: {
+              agents: { 'correctness-reviewer': { model: 'anthropic/haiku' } },
+            },
+          },
+        })
+
+        const result = runCli(['config', 'show', '--json'], project, {
+          HOME: home,
+        })
+
+        expect(result.exitCode).toBe(0)
+        const parsed = JSON.parse(result.stdout) as Record<string, unknown>
+        expect(Object.keys(parsed).sort()).toEqual([
+          'activeProfile',
+          'locations',
+          'profileFallback',
+          'profileSelectorSource',
+          'routing',
+        ])
+        expect(parsed.activeProfile).toBe('fast')
+        expect(parsed.profileSelectorSource).toBe('user')
+        expect(parsed.profileFallback).toBeNull()
+        const locations = parsed.locations as Record<string, unknown>
+        expect(Object.keys(locations).sort()).toEqual([
+          'custom',
+          'project',
+          'user',
+        ])
+        expect(typeof locations.user).toBe('string')
+        expect(typeof locations.project).toBe('string')
+        expect(locations.custom).toBeNull()
+        const routing = parsed.routing as Array<Record<string, unknown>>
+        expect(routing.length).toBeGreaterThan(0)
+        const entry = routing.find(
+          (r) =>
+            (r.target as Record<string, unknown>).agentKey ===
+            'correctness-reviewer',
+        )
+        expect(entry).toBeDefined()
+        expect(Object.keys(entry as object).sort()).toEqual([
+          'opencode',
+          'pi',
+          'target',
+        ])
+        const opencode = (entry as Record<string, unknown>).opencode as Record<
+          string,
+          unknown
+        >
+        // 'qualifier' is undefined (unset) for this fixture, so
+        // JSON.stringify legitimately omits the key -- only 'model' and
+        // 'source' are guaranteed present here.
+        for (const key of Object.keys(opencode)) {
+          expect(['model', 'qualifier', 'source']).toContain(key)
+        }
+        expect(opencode.model).toBe('anthropic/haiku')
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
+
+    it('contains no raw config contents (comment canary absent)', () => {
+      const root = mkTempCwd()
+      const home = path.join(root, 'home')
+      const project = path.join(root, 'project')
+      const commentCanary = 'JSON-MODE-CANARY-DO-NOT-LEAK-4b7e'
+      try {
+        fs.mkdirSync(project, { recursive: true })
+        fs.mkdirSync(path.join(home, '.config/opencode'), { recursive: true })
+        fs.writeFileSync(
+          path.join(home, '.config/opencode/systematic.jsonc'),
+          `{\n  // ${commentCanary}\n  "agents": { "correctness-reviewer": { "model": "anthropic/haiku" } }\n}`,
+        )
+
+        const result = runCli(['config', 'show', '--json'], project, {
+          HOME: home,
+        })
+
+        expect(result.exitCode).toBe(0)
+        expect(result.stdout).not.toContain(commentCanary)
+        expect(result.stdout).not.toContain('//')
+        expect(() => JSON.parse(result.stdout)).not.toThrow()
+        const parsed = JSON.parse(result.stdout) as Record<string, unknown>
+        const routing = parsed.routing as Array<Record<string, unknown>>
+        const entry = routing.find(
+          (r) =>
+            (r.target as Record<string, unknown>).agentKey ===
+            'correctness-reviewer',
+        )
+        expect(
+          (
+            (entry as Record<string, unknown>).opencode as Record<
+              string,
+              unknown
+            >
+          ).model,
+        ).toBe('anthropic/haiku')
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
+
+    it('prose mode is unchanged when --json is omitted', () => {
+      const root = mkTempCwd()
+      const home = path.join(root, 'home')
+      const project = path.join(root, 'project')
+      try {
+        fs.mkdirSync(project, { recursive: true })
+        writeUserConfig(home, {
+          profile: 'fast',
+          profiles: {
+            fast: {
+              agents: { 'correctness-reviewer': { model: 'anthropic/haiku' } },
+            },
+          },
+        })
+
+        const result = runCli(['config', 'show'], project, { HOME: home })
+
+        expect(result.exitCode).toBe(0)
+        expect(result.stdout).toContain('Configuration locations:')
+        expect(result.stdout).toContain('Active profile: fast')
+        expect(() => JSON.parse(result.stdout)).toThrow()
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
+
+    it('an unknown flag is rejected with a nonzero exit and usage text', () => {
+      const root = mkTempCwd()
+      try {
+        fs.mkdirSync(root, { recursive: true })
+        const result = runCli(['config', 'show', '--bogus'], root)
+
+        expect(result.exitCode).not.toBe(0)
+        expect(result.stderr).toContain('Unknown argument')
+        expect(result.stderr).toContain('--json')
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
+  })
 })
 
 // ---------------------------------------------------------------------------

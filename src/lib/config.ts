@@ -218,26 +218,48 @@ interface RawSystematicConfig
   profile?: string | null
 }
 
-interface ConfigSource {
-  canonicalPath: string
-  path: string
-  config: RawSystematicConfig
-  protectedFields: readonly ConfigProtectedFieldMetadata[]
-  trust: ConfigSourceKind
-  /**
-   * True only for the synthetic pseudo-source built from the active
-   * profile bundle (see `resolveActiveProfile` / the `profileEntry`
-   * construction in `loadConfigWithSources`). It carries `trust: 'user'`
-   * for every other purpose (it is authored inside the user's own config
-   * file and may freely set the same fields a user overlay can), but its
-   * merge behavior in `mergeOverlayMap` differs: switching which profile is
-   * active must never change an agent's visibility, permissions, or
-   * existence (R7/R10), so the profile layer merges field-by-field over the
-   * base value instead of the narrower security+trustAny preserve used for
-   * an ordinary user/custom same-key override.
-   */
-  isProfileBundle?: boolean
+interface ConfigSourceBase {
+  readonly canonicalPath: string
+  readonly path: string
+  readonly config: RawSystematicConfig
+  readonly protectedFields: readonly ConfigProtectedFieldMetadata[]
 }
+
+/** A config source loaded from an actual file: user, project, or custom. */
+interface FileConfigSource extends ConfigSourceBase {
+  readonly kind: 'file'
+  readonly trust: ConfigSourceKind
+}
+
+/**
+ * The synthetic pseudo-source built from the active profile bundle (see
+ * `resolveActiveProfile` / the `profileEntry` construction in
+ * `loadConfigWithSources`). A distinct discriminated-union member, not a
+ * boolean flag layered on a `FileConfigSource` -- it has no `trust` field at
+ * all, so every place that decides project-only behavior
+ * (`rejectProjectSecurityOverlay` via `source.trust === 'project'`,
+ * `preserveSecurityFields`) type-narrows away from this member first and
+ * can never mistake it for a project source. It is authored inside the
+ * user's own config file and may freely set the same fields a user overlay
+ * can (its `sourcePath`/`canonicalPath` mirror the user source's file), but
+ * its merge behavior in `mergeOverlayMap` differs: switching which profile
+ * is active must never change an agent's visibility, permissions, or
+ * existence (R7/R10), so the profile layer merges field-by-field over the
+ * base value instead of the narrower security+trustAny preserve used for an
+ * ordinary user/custom same-key override. It is also never counted as a
+ * file source in the `sources`/`authorities` observation metadata --
+ * `ConfigSourceLoadSummary.sources` is typed `readonly FileConfigSource[]`
+ * and is populated from a separate, profile-free source list (see the
+ * `sources` vs `overlaySources` split in `loadConfigWithSources`), so this
+ * member cannot reach that code path even by mistake.
+ */
+interface ProfileBundleConfigSource extends ConfigSourceBase {
+  readonly kind: 'profile-bundle'
+  /** The active profile's name (mirrors `ProfileSelectionResult.activeProfile`). */
+  readonly profileName: string | null
+}
+
+type ConfigSource = FileConfigSource | ProfileBundleConfigSource
 
 type SecurityOverlayField = (typeof SECURITY_OVERLAY_FIELDS)[number]
 
@@ -527,7 +549,7 @@ function resolveValueAtPath(
 
 function throwTopLevelConfigSchemaError(
   filePath: string,
-  trust: ConfigSource['trust'],
+  trust: ConfigSourceKind,
   rawIssues: readonly z.core.$ZodIssue[],
   rawInput: unknown,
 ): never {
@@ -565,9 +587,9 @@ function throwTopLevelConfigSchemaError(
 
 function loadConfigSource(
   filePath: string,
-  trust: ConfigSource['trust'],
+  trust: ConfigSourceKind,
   invalidSource: 'throw' | 'report',
-): { metadata: ConfigSourceMetadata; source: ConfigSource | null } {
+): { metadata: ConfigSourceMetadata; source: FileConfigSource | null } {
   try {
     const rawConfig = loadJsoncFile(filePath)
     if (!rawConfig) {
@@ -599,6 +621,7 @@ function loadConfigSource(
     return {
       metadata: { kind: trust, presence: 'present' },
       source: {
+        kind: 'file',
         canonicalPath: resolveConfigSourcePath(filePath),
         config,
         path: filePath,
@@ -643,7 +666,7 @@ function resolveConfigSourcePath(filePath: string): string {
 
 function collectProjectProtectedFields(
   rawConfig: RawSystematicConfig,
-  trust: ConfigSource['trust'],
+  trust: ConfigSourceKind,
 ): readonly ConfigProtectedFieldMetadata[] {
   if (trust !== 'project') return []
 
@@ -901,7 +924,7 @@ export function loadConfigWithSources(
   const projectSource = project.source
   const customSource = custom.source
   const sources = [userSource, projectSource, customSource].filter(
-    (source): source is ConfigSource => source !== null,
+    (source): source is FileConfigSource => source !== null,
   )
   const userConfig = userSource?.config
   const projectConfig = projectSource?.config
@@ -932,15 +955,18 @@ export function loadConfigWithSources(
 
   // The active profile bundle is inserted as a fourth chain entry between
   // user base and project (plan KTD: "Profile selection is a load-time step
-  // between stripping and merging"). It carries `trust: 'user'` -- it is
-  // authored inside the user's own config file, so the same merge rules that
-  // apply to any other user-trust overlay value apply to it (it may freely
-  // set model/variant/opencode/pi; ProfileOverlaySchema already restricts it
-  // to routing-only fields at parse time). Its sourcePath/canonicalPath
-  // mirror the user source's file since that is where the bundle is defined.
-  const profileEntry: ConfigSource | null =
+  // between stripping and merging"). It is authored inside the user's own
+  // config file, so the same merge rules that apply to any other user-trust
+  // overlay value apply to it (it may freely set model/variant/opencode/pi;
+  // ProfileOverlaySchema already restricts it to routing-only fields at
+  // parse time) -- see `ProfileBundleConfigSource`'s doc comment for why it
+  // is a distinct union member rather than a `trust: 'user'` file source.
+  // Its sourcePath/canonicalPath mirror the user source's file since that is
+  // where the bundle is defined.
+  const profileEntry: ProfileBundleConfigSource | null =
     profileSelection.bundle && userSource
       ? {
+          kind: 'profile-bundle',
           canonicalPath: userSource.canonicalPath,
           path: userSource.path,
           config: {
@@ -948,8 +974,7 @@ export function loadConfigWithSources(
             categories: profileSelection.bundle.categories,
           },
           protectedFields: [],
-          trust: 'user',
-          isProfileBundle: true,
+          profileName: profileSelection.activeProfile,
         }
       : null
 
@@ -1123,7 +1148,7 @@ interface ConfigSourceLoadSummary {
   readonly custom: ConfigSourceMetadata
   readonly profileSelection: ProfileSelectionResult
   readonly project: ConfigSourceMetadata
-  readonly sources: readonly ConfigSource[]
+  readonly sources: readonly FileConfigSource[]
   readonly user: ConfigSourceMetadata
 }
 
@@ -1376,7 +1401,7 @@ function mergeOverlayMap(
       throwInvalidOverlay(source.path, keyPath)
     }
 
-    if (source.trust === 'project') {
+    if (source.kind === 'file' && source.trust === 'project') {
       rejectProjectSecurityOverlay(source.path, keyPath, value)
     }
 
@@ -1405,8 +1430,10 @@ function resolveOverlayEntryValue(
   source: ConfigSource,
 ): OverlayConfig {
   if (!previous) return next
+  if (source.kind === 'profile-bundle') {
+    return mergeProfileOverlayValue(previous, next)
+  }
   if (source.trust === 'project') return preserveSecurityFields(previous, next)
-  if (source.isProfileBundle) return mergeProfileOverlayValue(previous, next)
   return preserveFieldsAbsentFromNext(previous, next)
 }
 
@@ -1532,7 +1559,7 @@ const PI_SUBAGENTS_PROTECTED_FIELD_SET = new Set(PI_SUBAGENTS_PROTECTED_FIELDS)
  * trust lattice: project cannot grant tools/skills to an exported persona.
  */
 function mergePiSubagentsOverlaySources(
-  sources: ConfigSource[],
+  sources: readonly FileConfigSource[],
 ): SourcedOverlayConfigMap {
   const result: SourcedOverlayConfigMap = {
     agents: {},
@@ -1580,7 +1607,7 @@ function preservePiSubagentsProtectedFields(
 
 function mergePiSubagentsOverlayMap(
   target: Record<string, SourcedOverlayConfig>,
-  source: ConfigSource,
+  source: FileConfigSource,
   mapKey: 'agents' | 'categories',
 ): void {
   const overlayMap = source.config.pi_subagents?.[mapKey]

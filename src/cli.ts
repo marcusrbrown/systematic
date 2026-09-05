@@ -40,6 +40,7 @@ import {
 import { ReviewArtifactSchema } from './lib/review-artifact-schema.js'
 import {
   type RoutingFieldSource,
+  type RoutingResolution,
   resolveRouting,
 } from './lib/routing-resolver.js'
 import { type Harness, setupHarness } from './lib/setup.js'
@@ -93,7 +94,7 @@ Commands:
                                Exit statuses: 0 valid artifact, 1 validation failure,
                                2 operational failure, 3 legacy artifact with no schema_version
   config [subcommand]          Configuration management
-    show                       Show configuration
+    show [--json]              Show configuration (--json for a machine-readable resolved view)
     path                       Print config file locations
   setup --harness opencode|pi  Configure a harness to load Systematic (project-local only)
   pi-subagents <subcommand>    Manage Systematic persona export for pi-subagents
@@ -112,6 +113,7 @@ Examples:
   systematic validate-review-artifact .context/systematic/ce-review/review-summary.json
   systematic list agents
   systematic config show
+  systematic config show --json
   systematic setup --harness opencode
   systematic setup --harness pi
   systematic pi-subagents preview
@@ -119,6 +121,14 @@ Examples:
   systematic pi-subagents export --scope global
   systematic pi-subagents refresh
   systematic pi-subagents cleanup
+`
+
+const CONFIG_SHOW_USAGE = `Usage: systematic config show [--json]
+
+Options:
+  --json    Print a machine-readable resolved view (active profile, fallback,
+            and per-agent/harness routing) instead of prose. No raw file
+            contents in JSON mode.
 `
 
 const PI_SUBAGENTS_USAGE = `Usage: systematic pi-subagents <subcommand> [--scope project|global]
@@ -607,7 +617,115 @@ function printResolvedSection(): void {
   printRoutingTable(loaded)
 }
 
-function configShow(): void {
+interface ConfigShowJsonRoutingResolution {
+  readonly model: string | null | undefined
+  readonly qualifier: string | undefined
+  readonly source: {
+    readonly model: RoutingFieldSource | undefined
+    readonly qualifier: RoutingFieldSource | undefined
+  }
+}
+
+/** Picks only the three documented fields off a `RoutingResolution`, deliberately dropping the internal `legacyPiSubagentsThinkingPresent` flag from the public `--json` shape. */
+function toJsonRoutingResolution(
+  resolution: RoutingResolution,
+): ConfigShowJsonRoutingResolution {
+  return {
+    model: resolution.model,
+    qualifier: resolution.qualifier,
+    source: resolution.source,
+  }
+}
+
+interface ConfigShowJsonOutput {
+  readonly locations: {
+    readonly user: string
+    readonly project: string
+    readonly custom: string | null
+  }
+  readonly activeProfile: string | null
+  readonly profileSelectorSource: LoaderConfigObservationMetadata['profileSelectorSource']
+  readonly profileFallback: LoaderConfigObservationMetadata['profileFallback']
+  readonly routing: ReadonlyArray<{
+    readonly target: { readonly agentKey: string; readonly category: string }
+    readonly opencode: ConfigShowJsonRoutingResolution
+    readonly pi: ConfigShowJsonRoutingResolution
+  }>
+}
+
+/**
+ * Builds the `--json` output for `config show`: file paths only (never raw
+ * file contents), the resolved profile state, and the per-target routing
+ * table -- the same resolver calls `printRoutingTable` makes, just
+ * collected into data instead of printed lines, so the two modes can never
+ * diagnostically disagree.
+ */
+function buildConfigShowJson(): ConfigShowJsonOutput {
+  const paths = getConfigPaths(process.cwd())
+  const locations = {
+    user: paths.userConfig,
+    project: paths.projectConfig,
+    custom: paths.customConfig ?? null,
+  }
+
+  let loaded: SourceAwareConfigResult | undefined
+  try {
+    loaded = loadConfigWithSources(process.cwd())
+  } catch {
+    loaded = undefined
+  }
+
+  if (!loaded) {
+    return {
+      locations,
+      activeProfile: null,
+      profileSelectorSource: null,
+      profileFallback: null,
+      routing: [],
+    }
+  }
+
+  const targets = collectRoutingTargets(loaded.overlays).sort((left, right) =>
+    `${left.category}/${left.agentKey}`.localeCompare(
+      `${right.category}/${right.agentKey}`,
+    ),
+  )
+
+  const routing = targets.map((target) => ({
+    target,
+    opencode: toJsonRoutingResolution(
+      resolveRouting({
+        harness: 'opencode',
+        overlays: loaded.overlays,
+        piSubagentsOverlays: loaded.piSubagentsOverlays,
+        target,
+      }),
+    ),
+    pi: toJsonRoutingResolution(
+      resolveRouting({
+        harness: 'pi',
+        overlays: loaded.overlays,
+        piSubagentsOverlays: loaded.piSubagentsOverlays,
+        target,
+      }),
+    ),
+  }))
+
+  return {
+    locations,
+    activeProfile: loaded.metadata.activeProfile,
+    profileSelectorSource: loaded.metadata.profileSelectorSource,
+    profileFallback: loaded.metadata.profileFallback,
+    routing,
+  }
+}
+
+function configShow(options: { json: boolean }): void {
+  if (options.json) {
+    console.log(JSON.stringify(buildConfigShowJson(), null, 2))
+    return
+  }
+
   const paths = getConfigPaths(process.cwd())
 
   console.log('Configuration locations:\n')
@@ -625,6 +743,20 @@ function configShow(): void {
   }
 
   printResolvedSection()
+}
+
+function parseConfigShowArgs(rest: string[]): { json: boolean } {
+  let json = false
+  for (const arg of rest) {
+    if (arg === '--json') {
+      json = true
+    } else {
+      console.error(`Unknown argument: ${arg}`)
+      console.error(CONFIG_SHOW_USAGE)
+      process.exit(1)
+    }
+  }
+  return { json }
 }
 
 function configPath(): void {
@@ -863,7 +995,7 @@ function runLegacyCli(args: string[]): void {
       switch (args[1]) {
         case 'show':
         case undefined:
-          configShow()
+          configShow(parseConfigShowArgs(args.slice(2)))
           break
         case 'path':
           configPath()
