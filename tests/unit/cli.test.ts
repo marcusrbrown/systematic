@@ -826,6 +826,55 @@ describe('cli config show', () => {
       }
     })
 
+    // A profile defined and selected entirely from custom config
+    // (OPENCODE_CONFIG_DIR), with NO user config file at all, must still
+    // be attributed correctly and its routing listed.
+    it('lists routing for a profile defined and selected with no user config file at all', () => {
+      const root = mkTempCwd()
+      const home = path.join(root, 'home')
+      const project = path.join(root, 'project')
+      const custom = path.join(root, 'custom')
+      try {
+        fs.mkdirSync(project, { recursive: true })
+        fs.mkdirSync(custom, { recursive: true })
+        fs.writeFileSync(
+          path.join(custom, 'systematic.json'),
+          JSON.stringify({
+            profile: 'work',
+            profiles: {
+              work: {
+                agents: { 'correctness-reviewer': { model: 'a/work' } },
+              },
+            },
+          }),
+        )
+
+        const result = runCli(['config', 'show', '--json'], project, {
+          HOME: home,
+          OPENCODE_CONFIG_DIR: custom,
+        })
+
+        expect(result.exitCode).toBe(0)
+        const parsed = JSON.parse(result.stdout) as Record<string, unknown>
+        expect(parsed.activeProfile).toBe('work')
+        expect(parsed.profileSelectorSource).toBe('custom')
+        const routing = parsed.routing as Array<Record<string, unknown>>
+        const entry = routing.find(
+          (r) =>
+            (r.target as Record<string, unknown>).agentKey ===
+            'correctness-reviewer',
+        )
+        expect(entry).toBeDefined()
+        const opencode = (entry as Record<string, unknown>).opencode as Record<
+          string,
+          unknown
+        >
+        expect(opencode.model).toBe('a/work')
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
+
     it('contains no raw config contents (comment canary absent)', () => {
       const root = mkTempCwd()
       const home = path.join(root, 'home')

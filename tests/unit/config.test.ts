@@ -2503,6 +2503,34 @@ describe('config', () => {
       )
     })
 
+    // A profile defined and selected entirely from custom config, with NO
+    // user config file at all (not even an empty one) -- `profileEntry`
+    // must attribute the bundle to the custom source, not silently drop it
+    // for lack of a user file to attribute it to.
+    test('custom defines and selects its own profile with NO user config file at all → active and the overlay is applied', () => {
+      expect(fs.existsSync(userConfigPath())).toBe(false)
+
+      withCustomConfig(
+        {
+          profile: 'work',
+          profiles: {
+            work: { agents: { 'correctness-reviewer': { model: 'a/work' } } },
+          },
+        },
+        () => {
+          const result = loadConfigWithSources(testDir, { warningSink })
+
+          expect(result.metadata.activeProfile).toBe('work')
+          expect(result.metadata.profileSelectorSource).toBe('custom')
+          expect(result.metadata.profileFallback).toBeNull()
+          expect(result.config.agents?.['correctness-reviewer']).toEqual({
+            model: 'a/work',
+          })
+          expect(warnings).toEqual([])
+        },
+      )
+    })
+
     test('project selects a name that ONLY exists in the custom profiles map → active, no warning', () => {
       writeUserConfig({})
       writeProjectConfig({ profile: 'work' })
@@ -3077,7 +3105,7 @@ describe('config', () => {
         expect(legacyWarnings).toHaveLength(1)
       })
 
-      test('legacy thinking is the ONLY overlay set, via the category form → warning still fires for every agent in that category', () => {
+      test('legacy thinking is the ONLY overlay set, via the category form \u2192 exactly one warning naming the written category path', () => {
         writeUserConfig({
           pi_subagents: {
             categories: { review: { thinking: 'low' } },
@@ -3088,18 +3116,19 @@ describe('config', () => {
 
         expect(result.config.categories?.review).toBeUndefined()
         const legacyWarnings = warnings.filter((w) =>
-          w.includes('correctness-reviewer'),
+          w.includes('pi_subagents'),
         )
-        expect(legacyWarnings).toHaveLength(1)
+        expect(legacyWarnings).toEqual([
+          '[systematic] pi_subagents.categories.review.thinking is deprecated; set categories.review.pi.thinking instead. The legacy value is honoured only when the new location is unset, and support for it will be removed in a future release.',
+        ])
       })
 
-      // Pin the fan-out deliberately: a category-level legacy field must
-      // produce exactly one warning per bundled agent in that category, not
-      // one warning for the category as a whole and not a duplicate per
-      // agent. The 'review' category's agent count is read from the
-      // generated bundled-names source of truth rather than hardcoded, so
-      // this test tracks the category's real membership.
-      test('category-level legacy thinking fires exactly one warning per agent in that category', () => {
+      // Dedup by the WRITTEN legacy path, not by every agent the field
+      // happens to resolve for: a category-level write is ONE field the
+      // user wrote, so it must produce exactly ONE warning naming exactly
+      // that field -- never N warnings (one per bundled agent in the
+      // category) each naming an agent-level path the user never wrote.
+      test('category-level legacy thinking fires exactly one warning naming the category, never one per agent', () => {
         const reviewAgentCount = BUNDLED_AGENT_QUALIFIED_IDS.filter((id) =>
           id.startsWith('review/'),
         ).length
@@ -3116,15 +3145,12 @@ describe('config', () => {
         const legacyWarnings = warnings.filter((w) =>
           w.includes('pi_subagents'),
         )
-        expect(legacyWarnings).toHaveLength(reviewAgentCount)
-        const distinctAgentsWarned = new Set(
-          legacyWarnings.map((w) => {
-            const match = /agents\.([\w-]+)\.pi\.thinking/.exec(w)
-            if (!match) throw new Error(`warning did not name an agent: ${w}`)
-            return match[1]
-          }),
+        expect(legacyWarnings).toHaveLength(1)
+        expect(legacyWarnings[0]).toContain(
+          'pi_subagents.categories.review.thinking',
         )
-        expect(distinctAgentsWarned.size).toBe(reviewAgentCount)
+        expect(legacyWarnings[0]).toContain('categories.review.pi.thinking')
+        expect(legacyWarnings[0]).not.toContain('correctness-reviewer')
       })
 
       test('both legacy and pi block set and disagreeing → pi block wins, warning still emitted once', () => {

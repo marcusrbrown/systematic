@@ -393,10 +393,12 @@ export function resolveAgentOverlaySchema(
 /**
  * Resolve the routing-only overlay schema object for `profiles.<name>.agents`
  * entries from the top-level JSON Schema properties map. `profiles` is
- * always a `z.record`, and each bundle's `agents`/`categories` fields are
- * themselves `z.record`s of {@link PROFILE_OVERLAY_FIELD_KEYS}, so this only
- * needs the record-of-record path (no typed-object fallback — profile
- * bundles are never keyed by bundled agent name, unlike top-level `agents`).
+ * always a `z.record`, but each bundle's `agents` field mirrors the
+ * top-level `agents` field exactly (see `createProfileBundleSchema` in
+ * config-schema.ts): a strict, enum-keyed object of bundled agent names
+ * (bare + qualified), not a `z.record`. Mirrors
+ * {@link resolveAgentOverlaySchema}'s typed-object/record fallback for
+ * that reason.
  */
 function resolveProfileOverlaySchema(
   properties: Record<string, unknown>,
@@ -419,7 +421,11 @@ function resolveProfileOverlaySchema(
   ) {
     return agentsAdditional as Record<string, unknown>
   }
-  return undefined
+  const agentProperties = agentsField?.properties as
+    | Record<string, Record<string, unknown>>
+    | undefined
+  const firstKey = agentProperties ? Object.keys(agentProperties)[0] : undefined
+  return firstKey && agentProperties ? agentProperties[firstKey] : undefined
 }
 
 /**

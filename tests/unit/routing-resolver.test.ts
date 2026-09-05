@@ -5,10 +5,9 @@ import type {
   SourcedOverlayConfigMap,
 } from '../../src/lib/config.js'
 import {
-  collectLegacyPiSubagentsThinkingWarnings,
-  formatLegacyPiSubagentsThinkingWarning,
+  collectWrittenLegacyPiSubagentsThinkingWarnings,
+  formatWrittenLegacyPiSubagentsThinkingWarning,
   qualifierResolvesWithoutModel,
-  type RoutingResolutionEntry,
   type RoutingTarget,
   resolveRouting,
 } from '../../src/lib/routing-resolver.js'
@@ -439,53 +438,75 @@ describe('resolveRouting', () => {
   })
 })
 
-describe('collectLegacyPiSubagentsThinkingWarnings', () => {
-  function entry(
-    agentKey: string,
-    category: string,
-    legacyPresent: boolean,
-  ): RoutingResolutionEntry {
+describe('collectWrittenLegacyPiSubagentsThinkingWarnings', () => {
+  function piSubagentsOverlaysWith(
+    agents: Record<string, OverlayConfig>,
+    categories: Record<string, OverlayConfig> = {},
+  ): SourcedOverlayConfigMap {
+    const wrap = (
+      map: Record<string, OverlayConfig>,
+      scope: 'agents' | 'categories',
+    ): Record<string, SourcedOverlayConfig> =>
+      Object.fromEntries(
+        Object.entries(map).map(([key, value]) => [
+          key,
+          {
+            value,
+            sourcePath: '/fake/systematic.json',
+            keyPath: `pi_subagents.${scope}.${key}`,
+          },
+        ]),
+      )
     return {
-      target: target(agentKey, category),
-      resolution: {
-        model: 'anthropic/M',
-        qualifier: undefined,
-        source: { model: undefined, qualifier: undefined },
-        legacyPiSubagentsThinkingPresent: legacyPresent,
-      },
+      agents: wrap(agents, 'agents'),
+      categories: wrap(categories, 'categories'),
     }
   }
 
-  test('two targets with legacy present \u2192 two warnings, one each', () => {
-    const warnings = collectLegacyPiSubagentsThinkingWarnings([
-      entry('x', 'review', true),
-      entry('y', 'review', true),
-    ])
+  test('two written agent-level fields \u2192 two warnings, one each naming the exact written path', () => {
+    const warnings = collectWrittenLegacyPiSubagentsThinkingWarnings(
+      piSubagentsOverlaysWith({
+        x: { thinking: 'low' },
+        y: { thinking: 'high' },
+      }),
+    )
     expect(warnings).toHaveLength(2)
-    expect(warnings[0]).toContain('x')
-    expect(warnings[1]).toContain('y')
+    expect(warnings[0]).toContain('pi_subagents.agents.x.thinking')
+    expect(warnings[1]).toContain('pi_subagents.agents.y.thinking')
   })
 
-  test('same target resolved twice \u2192 still one warning', () => {
-    const warnings = collectLegacyPiSubagentsThinkingWarnings([
-      entry('x', 'review', true),
-      entry('x', 'review', true),
-    ])
+  // Dedup by the WRITTEN field, not by every agent a category-level write
+  // happens to resolve for: a single category-level write is ONE field,
+  // so it must produce exactly ONE warning naming exactly the category
+  // path the user wrote, never one per bundled agent in that category.
+  test('one written category-level field \u2192 exactly one warning naming the category path, not an agent path', () => {
+    const warnings = collectWrittenLegacyPiSubagentsThinkingWarnings(
+      piSubagentsOverlaysWith({}, { review: { thinking: 'low' } }),
+    )
     expect(warnings).toHaveLength(1)
+    expect(warnings[0]).toContain('pi_subagents.categories.review.thinking')
+    expect(warnings[0]).toContain('categories.review.pi.thinking')
   })
 
-  test('entries with legacyPresent false produce no warnings', () => {
-    const warnings = collectLegacyPiSubagentsThinkingWarnings([
-      entry('x', 'review', false),
-    ])
+  test('a field written without `thinking` produces no warning', () => {
+    const warnings = collectWrittenLegacyPiSubagentsThinkingWarnings(
+      piSubagentsOverlaysWith({ x: { max_turns: 10 } }),
+    )
     expect(warnings).toHaveLength(0)
   })
 
-  test('formatLegacyPiSubagentsThinkingWarning names the new location', () => {
-    const message = formatLegacyPiSubagentsThinkingWarning(
-      target('x', 'review'),
-    )
-    expect(message).toContain('agents.x.pi.thinking')
+  test('formatWrittenLegacyPiSubagentsThinkingWarning names the written path and the replacement, agent form', () => {
+    const message = formatWrittenLegacyPiSubagentsThinkingWarning('agents', 'x')
     expect(message).toContain('pi_subagents.agents.x.thinking')
+    expect(message).toContain('agents.x.pi.thinking')
+  })
+
+  test('formatWrittenLegacyPiSubagentsThinkingWarning names the written path and the replacement, category form', () => {
+    const message = formatWrittenLegacyPiSubagentsThinkingWarning(
+      'categories',
+      'review',
+    )
+    expect(message).toContain('pi_subagents.categories.review.thinking')
+    expect(message).toContain('categories.review.pi.thinking')
   })
 })

@@ -319,36 +319,62 @@ export const ProfileOverlaySchema = z
     ],
   })
 
-export const ProfileBundleSchema = z
-  .object({
-    agents: z
-      .record(z.string(), ProfileOverlaySchema)
-      .optional()
-      .meta({
-        description:
-          'Per-agent routing overlays for this profile, keyed by bundled agent name (bare or qualified category/name), using the same routing-only field set as every profile entry.',
-        examples: [{ 'correctness-reviewer': { model: 'openai/gpt-5' } }],
-      }),
-    categories: z
-      .record(z.string(), ProfileOverlaySchema)
-      .optional()
-      .meta({
-        description:
-          'Per-category routing overlays for this profile, keyed by category name, using the same routing-only field set as every profile entry.',
-        examples: [{ review: { model: 'anthropic/claude-opus-4-7' } }],
-      }),
-  })
-  .strict()
-  .meta({
-    description:
-      'A named routing-only overlay bundle. Entries under agents/categories have the same shape as the top-level agents/categories overlays, restricted to routing fields.',
-    examples: [
-      {
-        agents: { fixer: { model: 'anthropic/claude-opus-4-7' } },
-        categories: { review: { pi: { thinking: 'high' } } },
-      },
-    ],
-  })
+/**
+ * Build a profile bundle schema keyed the same way the top-level
+ * `agents`/`categories` fields are keyed, so a typo in a profile's agent
+ * key is rejected at PARSE time -- exactly like a typo in the top-level
+ * `agents` overlay is -- for every source that may define `profiles`
+ * (custom and user alike), without needing a separate runtime check.
+ * `agents` mirrors the top-level `agents` field exactly: a strict object
+ * enumerating both bare and qualified (`category/name`) bundled agent
+ * names. `categories` mirrors the top-level `categories` field, which is a
+ * free-form `z.record` (bundled categories are not enumerated in a static
+ * generated list the way qualified agent ids are), so category-key
+ * validation still happens at runtime load (`assertAllProfileBundlesAreValid`).
+ */
+function createProfileBundleSchema(
+  agentNames: readonly string[],
+  qualifiedAgentIds: readonly string[],
+): z.ZodObject<z.core.$ZodLooseShape> {
+  return z
+    .object({
+      agents: z
+        .object(
+          Object.fromEntries(
+            [...agentNames, ...qualifiedAgentIds].map((name) => [
+              name,
+              ProfileOverlaySchema.optional(),
+            ]),
+          ) as Record<string, z.ZodOptional<typeof ProfileOverlaySchema>>,
+        )
+        .strict()
+        .optional()
+        .meta({
+          description:
+            'Per-agent routing overlays for this profile, keyed by bundled agent name (bare or qualified category/name), using the same routing-only field set as every profile entry. Unknown keys are rejected with a Zod parse error, exactly like the top-level `agents` field.',
+          examples: [{ 'correctness-reviewer': { model: 'openai/gpt-5' } }],
+        }),
+      categories: z
+        .record(z.string(), ProfileOverlaySchema)
+        .optional()
+        .meta({
+          description:
+            'Per-category routing overlays for this profile, keyed by category name, using the same routing-only field set as every profile entry.',
+          examples: [{ review: { model: 'anthropic/claude-opus-4-7' } }],
+        }),
+    })
+    .strict()
+    .meta({
+      description:
+        'A named routing-only overlay bundle. Entries under agents/categories have the same shape as the top-level agents/categories overlays, restricted to routing fields.',
+      examples: [
+        {
+          agents: { fixer: { model: 'anthropic/claude-opus-4-7' } },
+          categories: { review: { pi: { thinking: 'high' } } },
+        },
+      ],
+    })
+}
 
 const profileSchema = z
   .string()
@@ -556,7 +582,10 @@ export function createSystematicConfigSchema(
           examples: [{ review: { model: 'anthropic/claude-opus-4-7' } }, {}],
         }),
       profiles: z
-        .record(z.string(), ProfileBundleSchema)
+        .record(
+          z.string(),
+          createProfileBundleSchema(agentNames, qualifiedAgentIds),
+        )
         .default({})
         .meta({
           description:

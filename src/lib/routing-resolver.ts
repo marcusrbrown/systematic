@@ -522,45 +522,53 @@ export function qualifierResolvesWithoutModel(
 }
 
 /**
- * Format the one-line deprecation message for a target whose legacy
- * `pi_subagents.<key>.thinking` value is present, naming the new location it
- * should move to.
+ * Format the one-line deprecation message for a WRITTEN
+ * `pi_subagents.<scope>.<key>.thinking` field, naming the exact path the
+ * user wrote and the replacement path it should move to. `scope` is
+ * `'agents'` or `'categories'`, matching whichever map the field was
+ * actually written under -- a category-level write is never renamed to
+ * look like an agent-level path (or vice versa).
  */
-export function formatLegacyPiSubagentsThinkingWarning(
-  target: RoutingTarget,
+export function formatWrittenLegacyPiSubagentsThinkingWarning(
+  scope: 'agents' | 'categories',
+  key: string,
 ): string {
+  const writtenPath = `pi_subagents.${scope}.${key}.thinking`
+  const replacementPath = `${scope}.${key}.pi.thinking`
   return (
-    `[systematic] pi_subagents.agents.${target.agentKey}.thinking (or its category form) is deprecated; ` +
-    `set agents.${target.agentKey}.pi.thinking instead. The legacy value is honoured only when the new ` +
-    'location is unset, and support for it will be removed in a future release.'
+    `[systematic] ${writtenPath} is deprecated; set ${replacementPath} instead. The legacy value is ` +
+    'honoured only when the new location is unset, and support for it will be removed in a future release.'
   )
 }
 
-export interface RoutingResolutionEntry {
-  readonly target: RoutingTarget
-  readonly resolution: RoutingResolution
-}
-
 /**
- * Collect one deprecation-warning message per distinct target (by
- * `agentKey`) whose `legacyPiSubagentsThinkingPresent` flag is set, from a
- * list of resolutions the caller already computed. Deduplicates across
- * repeated entries for the same target within one call — a caller that
- * resolves the same target more than once in a single load still gets
- * exactly one warning for it. Pure: returns message strings; the caller
- * feeds them through its own `warningSink` (this module never calls
- * `console.warn`).
+ * Collect one deprecation-warning message per WRITTEN
+ * `pi_subagents.<scope>.<key>.thinking` field found directly in the merged
+ * `pi_subagents` overlays -- NOT one per agent the field happens to
+ * resolve for. A category-level write (`pi_subagents.categories.<c>.thinking`)
+ * fans out to every bundled agent in that category when resolved through
+ * `resolveRouting` (by design -- that is how the legacy fallback applies),
+ * but the user only wrote ONE field, so they should see exactly ONE
+ * warning naming exactly the field they wrote, not N warnings each naming
+ * an agent-level path they never touched. The warning fires whenever the
+ * field is written, regardless of whether a higher-priority `pi.thinking`
+ * block ends up winning for any given agent -- a written legacy field is
+ * always deprecated, whether or not it is currently shadowed.
  */
-export function collectLegacyPiSubagentsThinkingWarnings(
-  entries: Iterable<RoutingResolutionEntry>,
+export function collectWrittenLegacyPiSubagentsThinkingWarnings(
+  piSubagentsOverlays: SourcedOverlayConfigMap,
 ): string[] {
-  const seen = new Set<string>()
   const warnings: string[] = []
-  for (const { target, resolution } of entries) {
-    if (!resolution.legacyPiSubagentsThinkingPresent) continue
-    if (seen.has(target.agentKey)) continue
-    seen.add(target.agentKey)
-    warnings.push(formatLegacyPiSubagentsThinkingWarning(target))
+  for (const scope of ['agents', 'categories'] as const) {
+    for (const [key, overlay] of Object.entries(piSubagentsOverlays[scope])) {
+      if (
+        !isRecord(overlay.value) ||
+        !Object.hasOwn(overlay.value, 'thinking')
+      ) {
+        continue
+      }
+      warnings.push(formatWrittenLegacyPiSubagentsThinkingWarning(scope, key))
+    }
   }
   return warnings
 }

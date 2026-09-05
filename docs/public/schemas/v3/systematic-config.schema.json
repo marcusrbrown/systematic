@@ -1221,7 +1221,7 @@
       }
     },
     "__schema58": {
-      "description": "Per-agent routing overlays for this profile, keyed by bundled agent name (bare or qualified category/name), using the same routing-only field set as every profile entry.",
+      "description": "Per-agent routing overlays for this profile, keyed by bundled agent name (bare or qualified category/name), using the same routing-only field set as every profile entry. Unknown keys are rejected with a Zod parse error, exactly like the top-level `agents` field.",
       "examples": [
         {
           "correctness-reviewer": {
@@ -1237,12 +1237,527 @@
     },
     "__schema59": {
       "type": "object",
-      "propertyNames": {
-        "type": "string"
+      "properties": {
+        "adversarial-document-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "adversarial-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "agent-native-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "api-contract-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "architecture-strategist": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "best-practices-researcher": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "bug-reproduction-validator": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "cli-readiness-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "code-simplicity-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "coherence-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "correctness-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "data-migrations-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "deployment-verification-agent": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "design-iterator": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "design-lens-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "feasibility-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "framework-docs-researcher": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "git-history-analyzer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "issue-intelligence-analyst": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "kieran-typescript-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "learnings-researcher": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "maintainability-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "pattern-recognition-specialist": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "performance-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "pr-comment-resolver": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "previous-comments-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "product-lens-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "project-standards-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "reliability-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "repo-research-analyst": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "scope-guardian-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "security-lens-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "security-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "slack-researcher": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "spec-flow-analyzer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "systematic-implementer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "testing-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "design/design-iterator": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "document-review/adversarial-document-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "document-review/coherence-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "document-review/design-lens-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "document-review/feasibility-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "document-review/product-lens-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "document-review/scope-guardian-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "document-review/security-lens-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "research/best-practices-researcher": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "research/framework-docs-researcher": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "research/git-history-analyzer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "research/issue-intelligence-analyst": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "research/learnings-researcher": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "research/repo-research-analyst": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "research/slack-researcher": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/adversarial-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/agent-native-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/api-contract-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/architecture-strategist": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/cli-readiness-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/code-simplicity-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/correctness-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/data-migrations-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/deployment-verification-agent": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/kieran-typescript-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/maintainability-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/pattern-recognition-specialist": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/performance-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/previous-comments-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/project-standards-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/reliability-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/security-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/testing-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "workflow/bug-reproduction-validator": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "workflow/pr-comment-resolver": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "workflow/spec-flow-analyzer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "workflow/systematic-implementer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        }
       },
-      "additionalProperties": {
-        "$ref": "#/definitions/__schema60"
-      }
+      "additionalProperties": false
     },
     "__schema60": {
       "type": "object",

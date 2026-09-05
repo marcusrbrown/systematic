@@ -171,7 +171,7 @@ Pi's `thinking` qualifier, by contrast, is **independent of `model`**: it applie
 
 ### `pi_subagents.<name>.thinking` is deprecated
 
-The legacy `pi_subagents.<name>.thinking` field (and its category form) is superseded by `agents.<name>.pi.thinking` / `categories.<category>.pi.thinking`. The new location wins when both are set; the legacy field is honored only when the new location is unset, and using it prints one deprecation warning per agent. Migrate by moving `thinking` into the `pi` block.
+The legacy `pi_subagents.<name>.thinking` field (and its category form) is superseded by `agents.<name>.pi.thinking` / `categories.<category>.pi.thinking`. The new location wins when both are set; the legacy field is honored only when the new location is unset, and using it prints one deprecation warning naming the exact legacy field you wrote — a category-level `pi_subagents.categories.<category>.thinking` write prints one warning naming that category, not one per agent in it. Migrate by moving `thinking` into the `pi` block.
 
 ## Schema and Autocomplete
 

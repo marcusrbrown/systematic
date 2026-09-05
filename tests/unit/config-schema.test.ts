@@ -1335,7 +1335,11 @@ describe('profiles and profile selector', () => {
   test('rejects a non-routing field inside a profile agent entry, naming the path', () => {
     const result = SystematicConfigSchema.safeParse({
       profiles: {
-        x: { agents: { fixer: { permission: { edit: 'allow' } } } },
+        x: {
+          agents: {
+            'correctness-reviewer': { permission: { edit: 'allow' } },
+          },
+        },
       },
     })
     expect(result.success).toBe(false)
@@ -1347,7 +1351,12 @@ describe('profiles and profile selector', () => {
       }
       expect(issue.code).toBe('unrecognized_keys')
       expect(issue.keys).toContain('permission')
-      expect(issue.path).toEqual(['profiles', 'x', 'agents', 'fixer'])
+      expect(issue.path).toEqual([
+        'profiles',
+        'x',
+        'agents',
+        'correctness-reviewer',
+      ])
     }
   })
 
@@ -1370,7 +1379,9 @@ describe('profiles and profile selector', () => {
 
   test('rejects a claude-code block inside a profile agent entry', () => {
     const result = SystematicConfigSchema.safeParse({
-      profiles: { x: { agents: { fixer: { 'claude-code': {} } } } },
+      profiles: {
+        x: { agents: { 'correctness-reviewer': { 'claude-code': {} } } },
+      },
     })
     expect(result.success).toBe(false)
   })
@@ -1380,7 +1391,7 @@ describe('profiles and profile selector', () => {
       profiles: {
         x: {
           agents: {
-            fixer: {
+            'correctness-reviewer': {
               model: 'anthropic/claude-opus-4-7',
               variant: 'v2',
               temperature: 0.1,
@@ -1397,7 +1408,9 @@ describe('profiles and profile selector', () => {
 
   test('model: null inside a profile entry parses', () => {
     const result = SystematicConfigSchema.safeParse({
-      profiles: { x: { agents: { fixer: { model: null } } } },
+      profiles: {
+        x: { agents: { 'correctness-reviewer': { model: null } } },
+      },
     })
     expect(result.success).toBe(true)
   })
