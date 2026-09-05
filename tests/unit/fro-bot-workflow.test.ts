@@ -237,6 +237,30 @@ describe('Fro Bot workflow contracts', () => {
     expect(outputMode).toContain('branch-pr')
     expect(outputMode).toContain("github.event_name == 'schedule'")
     expect(outputMode).toContain("inputs.mode == 'autoheal'")
+    expect(outputMode).toContain("|| ''")
+    expect(outputMode).toContain("inputs.prompt == ''")
+    expect(outputMode).toContain("github.event.schedule == '30 3 * * *'")
+  })
+
+  test('agrees with the PROMPT ladder that prompt-only dispatches stay comment-only', () => {
+    const { workflow } = readWorkflow()
+    const jobs = asRecord(workflow.jobs, 'jobs')
+    const froBot = asRecord(jobs['fro-bot'], 'fro-bot job')
+    const steps = asArray(froBot.steps, 'fro-bot steps')
+    const runFroBot = findStep(steps, 'Run Fro Bot')
+    const runFroBotEnv = asRecord(runFroBot.env, 'Run Fro Bot env')
+    const runFroBotWith = asRecord(runFroBot.with, 'Run Fro Bot with')
+    const promptExpression = asString(
+      runFroBotEnv.PROMPT,
+      'Run Fro Bot env.PROMPT',
+    )
+    const outputMode = asString(
+      runFroBotWith['output-mode'],
+      'Run Fro Bot with.output-mode',
+    )
+
+    expect(promptExpression).toContain("inputs.prompt != ''")
+    expect(outputMode).toContain("inputs.prompt == ''")
   })
 
   test('retains the exact issue_comment pull_request fork guard', () => {
