@@ -1,7 +1,7 @@
 ---
 title: 'fix: Give the review run artifact an executable contract'
 type: fix
-status: active
+status: completed
 date: 2026-08-21
 ---
 
@@ -317,7 +317,7 @@ modifies `ce:review` itself, each unit must leave the repository in a state wher
 
 ## Implementation Units
 
-- [ ] **Unit 1: Define the Zod source of truth for the run-level artifact**
+- [x] **Unit 1: Define the Zod source of truth for the run-level artifact**
 
 **Goal:** A Zod source schema defining `review-summary.json`, including the
 discriminated ledger and a version discriminator, from which the committed JSON
@@ -395,7 +395,7 @@ Schema is generated.
 - The historical fixtures are a snapshot of pre-contract shapes and are never
   updated to conform; they document what the contract rejects.
 
-- [ ] **Unit 2: Generate the committed artifact schema and add its drift gate**
+- [x] **Unit 2: Generate the committed artifact schema and add its drift gate**
 
 **Goal:** A generator and CI drift gate that keep the committed JSON Schema in
 lockstep with the Unit 1 Zod source.
@@ -443,7 +443,7 @@ lockstep with the Unit 1 Zod source.
 - Generation and `--check` both pass, and the committed file is the only output
   modified by the generator.
 
-- [ ] **Unit 3: Expose artifact validation through the CLI**
+- [x] **Unit 3: Expose artifact validation through the CLI**
 
 **Goal:** `systematic validate-review-artifact <path>` validates a written
 artifact with the Unit 1 Zod source and exposes distinct failure statuses to
@@ -508,7 +508,7 @@ every shipped consumer.
 - Running the CLI against a real artifact under `.context/` reports the
   specific non-conformances rather than a generic failure.
 
-- [ ] **Unit 4: Require the parent to run the validator**
+- [x] **Unit 4: Require the parent to run the validator**
 
 **Goal:** The contract makes running the validator a condition of finalizing a run,
 and the failure path is defined.
@@ -556,7 +556,7 @@ and the failure path is defined.
   `schema_version: 1`, and the validator reports on it rather than classifying it as
   legacy.
 
-- [ ] **Unit 5: Record the corpus exclusion**
+- [x] **Unit 5: Record the corpus exclusion**
 
 **Goal:** State that only versioned artifacts are machine-readable, so the historical
 corpus is excluded rather than silently mistrusted.

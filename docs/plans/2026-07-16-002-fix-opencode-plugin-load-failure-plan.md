@@ -1,7 +1,7 @@
 ---
 title: 'fix: v3 OpenCode plugin load failure (optional-peer runtime import)'
 type: fix
-status: active
+status: completed
 date: 2026-07-16
 ---
 
