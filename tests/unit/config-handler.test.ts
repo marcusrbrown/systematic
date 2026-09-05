@@ -2381,6 +2381,26 @@ Discovered body for hidden.`,
         return config
       }
 
+      /**
+       * `collectAgents` walks `findAgentsInDir`'s directory-read order, which
+       * is filesystem-dependent (macOS `readdir` happens to return entries
+       * sorted; Linux ext4 does not) -- so the emitted `config.agent` map's
+       * TOP-LEVEL key order is nondeterministic across platforms and must
+       * not be baked into a byte-identity assertion. This sorts only the
+       * top-level agent keys before stringifying; each agent's OWN object
+       * retains its original key insertion order (the order Unit 4
+       * deliberately preserved), so the assertion still pins per-agent field
+       * order -- only cross-agent map order is canonicalized.
+       */
+      function canonicalAgentOrderJson(agent: Config['agent']): string {
+        const canonical: NonNullable<Config['agent']> = {}
+        for (const key of Object.keys(agent ?? {}).sort()) {
+          const value = agent?.[key]
+          if (value !== undefined) canonical[key] = value
+        }
+        return JSON.stringify(canonical)
+      }
+
       test('full frontmatter, no overlay', async () => {
         createAgent(path.join(bundledDir, 'agents'), 'full-agent', {
           name: 'full-agent',
@@ -2395,7 +2415,7 @@ Discovered body for hidden.`,
           permission: { edit: 'ask' },
         })
         const config = await run()
-        expect(JSON.stringify(config.agent)).toBe(
+        expect(canonicalAgentOrderJson(config.agent)).toBe(
           '{"full-agent":{"description":"A full agent (Full-Agent - Systematic)","prompt":"# full-agent\\n\\nAgent prompt for full-agent.","model":"gpt-4","temperature":0.7,"top_p":1,"tools":{"bash":true,"read":false},"mode":"subagent","color":"#ff0000","steps":10,"permission":{"edit":"ask"}}}',
         )
       })
@@ -2406,7 +2426,7 @@ Discovered body for hidden.`,
           description: 'No overlay agent',
         })
         const config = await run()
-        expect(JSON.stringify(config.agent)).toBe(
+        expect(canonicalAgentOrderJson(config.agent)).toBe(
           '{"categorized":{"description":"No overlay agent (Categorized - Systematic)","prompt":"# categorized\\n\\nAgent prompt for categorized."}}',
         )
       })
@@ -2417,7 +2437,7 @@ Discovered body for hidden.`,
           description: 'No category agent',
         })
         const config = await run()
-        expect(JSON.stringify(config.agent)).toBe(
+        expect(canonicalAgentOrderJson(config.agent)).toBe(
           '{"uncategorized":{"description":"No category agent (Uncategorized - Systematic)","prompt":"# uncategorized\\n\\nAgent prompt for uncategorized."}}',
         )
       })
@@ -2429,7 +2449,7 @@ Discovered body for hidden.`,
           model: 'openai/gpt-4',
         })
         const config = await run()
-        expect(JSON.stringify(config.agent)).toBe(
+        expect(canonicalAgentOrderJson(config.agent)).toBe(
           '{"standalone":{"description":"No category agent (Standalone - Systematic)","prompt":"# standalone\\n\\nAgent prompt for standalone.","model":"openai/gpt-4"}}',
         )
       })
@@ -2443,7 +2463,7 @@ Discovered body for hidden.`,
           agents: { 'correctness-reviewer': { model: null } },
         })
         const config = await run()
-        expect(JSON.stringify(config.agent)).toBe(
+        expect(canonicalAgentOrderJson(config.agent)).toBe(
           '{"correctness-reviewer":{"description":"Reviews correctness (Correctness-Reviewer - Systematic)","prompt":"# correctness-reviewer\\n\\nAgent prompt for correctness-reviewer."}}',
         )
       })
@@ -2461,8 +2481,8 @@ Discovered body for hidden.`,
           categories: { review: { model: null } },
         })
         const config = await run()
-        expect(JSON.stringify(config.agent)).toBe(
-          '{"second-reviewer":{"description":"Second reviewer (Second-Reviewer - Systematic)","prompt":"# second-reviewer\\n\\nAgent prompt for second-reviewer."},"first-reviewer":{"description":"First reviewer (First-Reviewer - Systematic)","prompt":"# first-reviewer\\n\\nAgent prompt for first-reviewer."}}',
+        expect(canonicalAgentOrderJson(config.agent)).toBe(
+          '{"first-reviewer":{"description":"First reviewer (First-Reviewer - Systematic)","prompt":"# first-reviewer\\n\\nAgent prompt for first-reviewer."},"second-reviewer":{"description":"Second reviewer (Second-Reviewer - Systematic)","prompt":"# second-reviewer\\n\\nAgent prompt for second-reviewer."}}',
         )
       })
 
@@ -2480,7 +2500,7 @@ Discovered body for hidden.`,
           },
         })
         const config = await run()
-        expect(JSON.stringify(config.agent)).toBe(
+        expect(canonicalAgentOrderJson(config.agent)).toBe(
           '{"correctness-reviewer":{"description":"Reviews correctness (Correctness-Reviewer - Systematic)","prompt":"# correctness-reviewer\\n\\nAgent prompt for correctness-reviewer.","model":"openrouter/anthropic/claude-sonnet-4"}}',
         )
       })
@@ -2498,7 +2518,7 @@ Discovered body for hidden.`,
           },
         })
         const config = await run()
-        expect(JSON.stringify(config.agent)).toBe(
+        expect(canonicalAgentOrderJson(config.agent)).toBe(
           '{"correctness-reviewer":{"description":"Reviews correctness (Correctness-Reviewer - Systematic)","prompt":"# correctness-reviewer\\n\\nAgent prompt for correctness-reviewer.","model":"openrouter/anthropic/claude-sonnet-4"}}',
         )
       })
@@ -2516,8 +2536,8 @@ Discovered body for hidden.`,
           categories: { review: { model: 'openai/gpt-4o' } },
         })
         const config = await run()
-        expect(JSON.stringify(config.agent)).toBe(
-          '{"second-reviewer":{"description":"Second reviewer (Second-Reviewer - Systematic)","prompt":"# second-reviewer\\n\\nAgent prompt for second-reviewer.","model":"openai/gpt-4o"},"first-reviewer":{"description":"First reviewer (First-Reviewer - Systematic)","prompt":"# first-reviewer\\n\\nAgent prompt for first-reviewer.","model":"openai/gpt-4o"}}',
+        expect(canonicalAgentOrderJson(config.agent)).toBe(
+          '{"first-reviewer":{"description":"First reviewer (First-Reviewer - Systematic)","prompt":"# first-reviewer\\n\\nAgent prompt for first-reviewer.","model":"openai/gpt-4o"},"second-reviewer":{"description":"Second reviewer (Second-Reviewer - Systematic)","prompt":"# second-reviewer\\n\\nAgent prompt for second-reviewer.","model":"openai/gpt-4o"}}',
         )
       })
 
@@ -2532,7 +2552,7 @@ Discovered body for hidden.`,
           categories: { review: { model: 'openai/gpt-4o', temperature: 0.3 } },
         })
         const config = await run()
-        expect(JSON.stringify(config.agent)).toBe(
+        expect(canonicalAgentOrderJson(config.agent)).toBe(
           '{"mixed-reviewer":{"description":"Mixed reviewer (Mixed-Reviewer - Systematic)","prompt":"# mixed-reviewer\\n\\nAgent prompt for mixed-reviewer.","color":"blue","steps":5,"model":"openai/gpt-4o","temperature":0.3}}',
         )
       })
@@ -2547,7 +2567,7 @@ Discovered body for hidden.`,
           agents: { 'correctness-reviewer': { model: 'openai/gpt-4o' } },
         })
         const config = await run()
-        expect(JSON.stringify(config.agent)).toBe(
+        expect(canonicalAgentOrderJson(config.agent)).toBe(
           '{"correctness-reviewer":{"description":"Probe reviewer (Correctness-Reviewer - Systematic)","prompt":"# correctness-reviewer\\n\\nAgent prompt for correctness-reviewer.","temperature":0.4,"model":"openai/gpt-4o"}}',
         )
       })
@@ -2563,7 +2583,7 @@ Discovered body for hidden.`,
           },
         })
         const config = await run()
-        expect(JSON.stringify(config.agent)).toBe(
+        expect(canonicalAgentOrderJson(config.agent)).toBe(
           '{"correctness-reviewer":{"description":"Variant reviewer (Correctness-Reviewer - Systematic)","prompt":"# correctness-reviewer\\n\\nAgent prompt for correctness-reviewer.","model":"openai/gpt-4o","variant":"v2"}}',
         )
       })

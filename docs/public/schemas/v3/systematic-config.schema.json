@@ -981,7 +981,7 @@
         }
       },
       "additionalProperties": false,
-      "description": "Pi-specific routing block. When present, model/thinking here override the flat model field and the legacy pi_subagents.<name>.thinking value for Pi only; the flat model field remains the harness-neutral default and still applies to OpenCode. A qualifier set here with no model anywhere in the merged overlay is a config-load error raised by the routing resolver, not a parse-time error.",
+      "description": "Pi-specific routing block. When present, model/thinking here override the flat model field and the legacy `pi_subagents.<name>.thinking` value for Pi only; the flat model field remains the harness-neutral default and still applies to OpenCode. A qualifier set here with no model anywhere in the merged overlay is a config-load error raised by the routing resolver, not a parse-time error.",
       "examples": [
         {
           "model": "anthropic/claude-opus-4-7",
