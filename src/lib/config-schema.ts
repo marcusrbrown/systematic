@@ -184,25 +184,54 @@ function trustProtected<T extends z.ZodType>(schema: T): T {
   return schema.meta({ trust: 'project-or-higher' }) as T
 }
 
-interface OverlayModelVariantFields {
-  model?: string | null
-  variant?: string
-}
+// A written fragment -- a category overlay, a profile bundle entry, or a
+// harness block -- may legitimately set a qualifier (`variant` here;
+// `pi.thinking` on the Pi block) with no model anywhere in that same
+// fragment, since the model may come from a different layer in the merge
+// chain (e.g. a profile sets `pi.thinking` while the user's base config
+// supplies the model). A single fragment's parse-time schema cannot see
+// the merged result, so the invariant lives entirely post-merge in
+// `src/lib/routing-resolver.ts`'s `qualifierResolvesWithoutModel` (opencode
+// `variant` only -- Pi's `thinking` is independent of `model` by design;
+// see that function's doc comment).
 
-function enforceVariantHasExplicitModel(
-  overlay: OverlayModelVariantFields,
-  ctx: z.RefinementCtx,
-): void {
-  if (overlay.variant === undefined) return
-  if (typeof overlay.model === 'string') return
-
-  ctx.addIssue({
-    code: 'custom',
-    path: ['variant'],
-    message:
-      'variant requires a non-null model in the same overlay; remove variant or set model explicitly',
+const piSubagentsThinkingSchema = z
+  .enum(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const)
+  .meta({
+    description:
+      'pi-subagents reasoning effort level for exported persona frontmatter',
+    examples: ['off', 'medium', 'high'],
   })
-}
+
+const OpencodeHarnessBlockSchema = z
+  .object({
+    model: trustProtected(modelSchema).optional(),
+    variant: trustProtected(variantSchema).optional(),
+  })
+  .strict()
+  .meta({
+    description:
+      'OpenCode-specific routing block. When present, model/variant here override the flat model/variant fields for OpenCode only; the flat fields remain the harness-neutral default and still apply to Pi. `variant` is bound to whichever layer supplies `model`: it is used only from that layer or a more specific one, and is dropped when a more specific layer sets (or nulls) `model` without repeating the variant. A `variant` with no `model` anywhere in the merged overlay is a config-load error raised by the routing resolver, not a parse-time error.',
+    examples: [
+      { model: 'anthropic/claude-opus-4-7', variant: 'v2' },
+      { model: null },
+    ],
+  })
+
+const PiHarnessBlockSchema = z
+  .object({
+    model: trustProtected(modelSchema).optional(),
+    thinking: trustProtected(piSubagentsThinkingSchema).optional(),
+  })
+  .strict()
+  .meta({
+    description:
+      "Pi-specific routing block. When present, model/thinking here override the flat model field and the legacy `pi_subagents.<name>.thinking` value for Pi only; the flat model field remains the harness-neutral default and still applies to OpenCode. Unlike OpenCode's `variant`, `thinking` is independent of `model`: it applies to whatever model the delegate ends up running, including one inherited from the parent session, so `thinking` with no `model` anywhere in the merged overlay is valid and never a config-load error.",
+    examples: [
+      { model: 'anthropic/claude-opus-4-7', thinking: 'high' },
+      { model: null },
+    ],
+  })
 
 export const AgentOverlaySchema = z
   .object({
@@ -217,9 +246,10 @@ export const AgentOverlaySchema = z
     disable: disableSchema.optional(),
     skills: trustProtected(skillsSchema).optional(),
     permission: trustProtected(permissionSchema).optional(),
+    opencode: trustProtected(OpencodeHarnessBlockSchema).optional(),
+    pi: trustProtected(PiHarnessBlockSchema).optional(),
   })
   .strict()
-  .superRefine(enforceVariantHasExplicitModel)
   .meta({
     description: 'Per-agent configuration overlay',
     examples: [
@@ -227,6 +257,10 @@ export const AgentOverlaySchema = z
         model: 'anthropic/claude-opus-4-7',
         temperature: 0.1,
         mode: 'subagent',
+      },
+      {
+        opencode: { model: 'anthropic/claude-opus-4-7', variant: 'v2' },
+        pi: { model: 'anthropic/claude-opus-4-7', thinking: 'high' },
       },
     ],
   })
@@ -243,24 +277,117 @@ export const CategoryOverlaySchema = z
     hidden: hiddenSchema.optional(),
     skills: trustProtected(skillsSchema).optional(),
     permission: trustProtected(permissionSchema).optional(),
+    opencode: trustProtected(OpencodeHarnessBlockSchema).optional(),
+    pi: trustProtected(PiHarnessBlockSchema).optional(),
   })
   .strict()
-  .superRefine(enforceVariantHasExplicitModel)
   .meta({
     description:
       'Per-category configuration overlay (same fields as agent minus disable)',
-    examples: [{ model: 'anthropic/claude-opus-4-7', temperature: 0.1 }],
+    examples: [
+      { model: 'anthropic/claude-opus-4-7', temperature: 0.1 },
+      { opencode: { variant: 'v2' }, pi: { thinking: 'high' } },
+    ],
+  })
+
+// ── profiles (named routing-only overlay bundles) ──────────────────────────
+
+/**
+ * Routing-only projection of the agent/category overlay fields, permitted
+ * inside a named `profiles` bundle. Deliberately excludes every non-routing
+ * field (`mode`, `color`, `steps`, `hidden`, `disable`, `skills`,
+ * `permission`) so a profile cannot smuggle in UI/execution/permission
+ * changes through the profile-selection mechanism — only the fields a
+ * profile exists to carry: model, variant/thinking, and sampling knobs.
+ */
+export const ProfileOverlaySchema = z
+  .object({
+    model: trustProtected(modelSchema).optional(),
+    variant: trustProtected(variantSchema).optional(),
+    temperature: trustAny(temperatureSchema).optional(),
+    top_p: trustAny(topPSchema).optional(),
+    opencode: trustProtected(OpencodeHarnessBlockSchema).optional(),
+    pi: trustProtected(PiHarnessBlockSchema).optional(),
+  })
+  .strict()
+  .meta({
+    description:
+      'Routing-only overlay fields permitted inside a named profile bundle entry: model, variant, temperature, top_p, and the opencode/pi harness blocks. Non-routing fields (permission, skills, mode, hidden, disable, steps, color) are rejected.',
+    examples: [
+      { model: 'anthropic/claude-opus-4-7' },
+      { opencode: { variant: 'v2' }, pi: { thinking: 'high' } },
+    ],
+  })
+
+/**
+ * Build a profile bundle schema keyed the same way the top-level
+ * `agents`/`categories` fields are keyed, so a typo in a profile's agent
+ * key is rejected at PARSE time -- exactly like a typo in the top-level
+ * `agents` overlay is -- for every source that may define `profiles`
+ * (custom and user alike), without needing a separate runtime check.
+ * `agents` mirrors the top-level `agents` field exactly: a strict object
+ * enumerating both bare and qualified (`category/name`) bundled agent
+ * names. `categories` mirrors the top-level `categories` field, which is a
+ * free-form `z.record` (bundled categories are not enumerated in a static
+ * generated list the way qualified agent ids are), so category-key
+ * validation still happens at runtime load (`assertAllProfileBundlesAreValid`).
+ */
+function createProfileBundleSchema(
+  agentNames: readonly string[],
+  qualifiedAgentIds: readonly string[],
+): z.ZodObject<z.core.$ZodLooseShape> {
+  return z
+    .object({
+      agents: z
+        .object(
+          Object.fromEntries(
+            [...agentNames, ...qualifiedAgentIds].map((name) => [
+              name,
+              ProfileOverlaySchema.optional(),
+            ]),
+          ) as Record<string, z.ZodOptional<typeof ProfileOverlaySchema>>,
+        )
+        .strict()
+        .optional()
+        .meta({
+          description:
+            'Per-agent routing overlays for this profile, keyed by bundled agent name (bare or qualified category/name), using the same routing-only field set as every profile entry. Unknown keys are rejected with a Zod parse error, exactly like the top-level `agents` field.',
+          examples: [{ 'correctness-reviewer': { model: 'openai/gpt-5' } }],
+        }),
+      categories: z
+        .record(z.string(), ProfileOverlaySchema)
+        .optional()
+        .meta({
+          description:
+            'Per-category routing overlays for this profile, keyed by category name, using the same routing-only field set as every profile entry.',
+          examples: [{ review: { model: 'anthropic/claude-opus-4-7' } }],
+        }),
+    })
+    .strict()
+    .meta({
+      description:
+        'A named routing-only overlay bundle. Entries under agents/categories have the same shape as the top-level agents/categories overlays, restricted to routing fields.',
+      examples: [
+        {
+          agents: { fixer: { model: 'anthropic/claude-opus-4-7' } },
+          categories: { review: { pi: { thinking: 'high' } } },
+        },
+      ],
+    })
+}
+
+const profileSchema = z
+  .string()
+  .min(1)
+  .nullable()
+  .optional()
+  .meta({
+    description:
+      "Selects a named entry from this source's profiles map as the routing overlay bundle to apply. null explicitly selects the base config (no profile), which still wins over a lower-priority source's selection. Omitting the field entirely defers the decision to a lower-priority source.",
+    examples: ['personal', null],
   })
 
 // ── pi_subagents overlay (Pi-native export fields; see pi-subagents-export.ts) ──
-
-const piSubagentsThinkingSchema = z
-  .enum(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const)
-  .meta({
-    description:
-      'pi-subagents reasoning effort level for exported persona frontmatter',
-    examples: ['off', 'medium', 'high'],
-  })
 
 const piSubagentsMaxTurnsSchema = z
   .number()
@@ -454,6 +581,25 @@ export function createSystematicConfigSchema(
             'Per-category configuration overlays keyed by category name',
           examples: [{ review: { model: 'anthropic/claude-opus-4-7' } }, {}],
         }),
+      profiles: z
+        .record(
+          z.string(),
+          createProfileBundleSchema(agentNames, qualifiedAgentIds),
+        )
+        .default({})
+        .meta({
+          description:
+            'Named routing-only overlay bundles, selectable by name via the profile field. Only valid in user config or OPENCODE_CONFIG_DIR config — a project config may select a profile but may not define this field.',
+          examples: [
+            {
+              personal: {
+                agents: { 'correctness-reviewer': { model: 'openai/gpt-5' } },
+              },
+            },
+            {},
+          ],
+        }),
+      profile: profileSchema,
       disabled_skills: z
         // z.enum requires a non-empty tuple; skillNames is guaranteed non-empty
         // by the sanity check in generateBundledNamesContent. Removed names are
@@ -563,4 +709,6 @@ export const SECURITY_OVERLAY_FIELDS = [
   'variant',
   'skills',
   'permission',
+  'opencode',
+  'pi',
 ] as const

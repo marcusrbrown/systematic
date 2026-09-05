@@ -73,6 +73,33 @@ describe('buildDelegateAgentSessionOptions', () => {
     expect(options.resourceLoader).toBe(resourceLoader)
     expect(options.sessionManager).toBe(sessionManager)
   })
+
+  test('includes thinkingLevel when given', () => {
+    const options = buildDelegateAgentSessionOptions({
+      cwd: '/parent/cwd',
+      agentDir: '/agent/dir',
+      model: { provider: 'p', id: 'm' } as CreateAgentSessionOptions['model'],
+      thinkingLevel: 'high',
+      allowedToolNames: ['read'],
+      resourceLoader: {} as never,
+      sessionManager: {} as never,
+    })
+
+    expect(options.thinkingLevel).toBe('high')
+  })
+
+  test('omits the thinkingLevel key entirely when not given (child inherits Pi default)', () => {
+    const options = buildDelegateAgentSessionOptions({
+      cwd: '/parent/cwd',
+      agentDir: '/agent/dir',
+      model: { provider: 'p', id: 'm' } as CreateAgentSessionOptions['model'],
+      allowedToolNames: ['read'],
+      resourceLoader: {} as never,
+      sessionManager: {} as never,
+    })
+
+    expect(Object.hasOwn(options, 'thinkingLevel')).toBe(false)
+  })
 })
 
 function createFakeRuntime(): {
@@ -186,6 +213,38 @@ describe('createDelegateSessionWith: live adapter contract, no provider required
 
     // reload() must be called before createAgentSession() is invoked.
     expect(calls.callOrder).toEqual(['reload', 'createAgentSession'])
+  })
+
+  test('threads thinkingLevel through to the created session options when given, and omits it when not', async () => {
+    const { runtime, calls } = createFakeRuntime()
+    const createSession = createDelegateSessionWith(runtime)
+
+    await createSession({
+      agentName: 'git-analyzer',
+      model: { provider: 'p', id: 'm' } as CreateAgentSessionOptions['model'],
+      thinkingLevel: 'high',
+      cwd: '/parent/cwd',
+      systemPromptOverride: 'Persona body.',
+      allowedToolNames: ['read'],
+    })
+
+    const withThinking = calls
+      .createAgentSessionArgs[0] as CreateAgentSessionOptions
+    expect(withThinking.thinkingLevel).toBe('high')
+
+    const { runtime: runtime2, calls: calls2 } = createFakeRuntime()
+    const createSession2 = createDelegateSessionWith(runtime2)
+    await createSession2({
+      agentName: 'git-analyzer',
+      model: { provider: 'p', id: 'm' } as CreateAgentSessionOptions['model'],
+      cwd: '/parent/cwd',
+      systemPromptOverride: 'Persona body.',
+      allowedToolNames: ['read'],
+    })
+
+    const withoutThinking = calls2
+      .createAgentSessionArgs[0] as CreateAgentSessionOptions
+    expect(Object.hasOwn(withoutThinking, 'thinkingLevel')).toBe(false)
   })
 
   test('fails closed and never constructs a resource loader when allowedToolNames includes the delegate tool', async () => {

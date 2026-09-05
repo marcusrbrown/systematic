@@ -4,6 +4,11 @@ import type {
   ToolDefinition,
 } from '@earendil-works/pi-coding-agent'
 import type { AgentCatalogEntry } from '../../src/lib/agent-resolver.js'
+import type {
+  OverlayConfig,
+  SourcedOverlayConfig,
+  SourcedOverlayConfigMap,
+} from '../../src/lib/config.js'
 import {
   createPiDelegateTool,
   DELEGATE_EXECUTION_MODE,
@@ -19,12 +24,18 @@ const catalog: AgentCatalogEntry[] = [
     description: 'Analyzes git history',
     body: 'You are a git historian.',
     toolsSource: undefined,
+    key: 'git-analyzer',
+    category: 'research',
+    id: 'research/git-analyzer',
   },
   {
     name: 'security-reviewer',
     description: 'Reviews for security issues',
     body: 'You are a security reviewer.',
     toolsSource: 'Read, Grep, Glob, Bash',
+    key: 'security-reviewer',
+    category: 'review',
+    id: 'review/security-reviewer',
   },
 ]
 
@@ -121,12 +132,45 @@ function createFakeSession(turnsToEmit: number): FakeSession {
 function fakeCtx(
   model: unknown = { provider: 'p', id: 'm' },
   hasModel = true,
+  modelRegistry: { find: (provider: string, id: string) => unknown } = {
+    find: () => undefined,
+  },
 ): ExtensionContext {
   return {
     cwd: '/fake/cwd',
     model: hasModel ? model : undefined,
+    modelRegistry,
   } as unknown as ExtensionContext
 }
+
+/** Fake `ctx.modelRegistry` that resolves exactly the given `provider/id` strings to distinct sentinel model objects, for asserting the delegate passed the resolved (not the inherited) model. */
+function fakeModelRegistry(known: Record<string, unknown>): {
+  find: (provider: string, id: string) => unknown
+} {
+  return {
+    find: (provider: string, id: string) => known[`${provider}/${id}`],
+  }
+}
+
+function overlay(value: OverlayConfig): SourcedOverlayConfig {
+  return { value, sourcePath: '/fake/systematic.json', keyPath: 'fake' }
+}
+
+function overlays(
+  agents: Record<string, OverlayConfig> = {},
+  categories: Record<string, OverlayConfig> = {},
+): SourcedOverlayConfigMap {
+  return {
+    agents: Object.fromEntries(
+      Object.entries(agents).map(([k, v]) => [k, overlay(v)]),
+    ),
+    categories: Object.fromEntries(
+      Object.entries(categories).map(([k, v]) => [k, overlay(v)]),
+    ),
+  }
+}
+
+const EMPTY_OVERLAYS: SourcedOverlayConfigMap = { agents: {}, categories: {} }
 
 describe('createPiDelegateTool: registration shape', () => {
   test('registers exactly {agent, task} parameters', () => {
@@ -586,6 +630,9 @@ describe('createPiDelegateTool: error paths', () => {
         description: 'Has an unmappable tool',
         body: 'Body',
         toolsSource: 'Read, Frobnicate',
+        key: 'bad-persona',
+        category: 'misc',
+        id: 'misc/bad-persona',
       },
     ]
     const tool = createPiDelegateTool({
@@ -617,6 +664,9 @@ describe('createPiDelegateTool: error paths', () => {
         description: 'Declares Task',
         body: 'Body',
         toolsSource: 'Read, Task',
+        key: 'self-delegating',
+        category: 'misc',
+        id: 'misc/self-delegating',
       },
     ]
     const tool = createPiDelegateTool({
@@ -636,5 +686,507 @@ describe('createPiDelegateTool: error paths', () => {
       ),
     ).rejects.toThrow(/self-delegating.*Task|Unknown declared tool "Task"/s)
     expect(created).toBe(false)
+  })
+})
+
+describe('createPiDelegateTool: Pi routing (Unit 5)', () => {
+  test('agents.fixer.pi.model set → child session created with that model', async () => {
+    const fixerCatalog: AgentCatalogEntry[] = [
+      {
+        name: 'fixer',
+        description: 'Fixes things',
+        body: 'You are a fixer.',
+        toolsSource: undefined,
+        key: 'fixer',
+        category: 'fix',
+        id: 'fix/fixer',
+      },
+    ]
+    const configModel = { provider: 'anthropic', id: 'pi-only-model' }
+    let capturedModel: unknown
+    const tool = createPiDelegateTool({
+      catalog: fixerCatalog,
+      createDelegateSession: async (opts) => {
+        capturedModel = opts.model
+        return createFakeSession(1)
+      },
+      overlays: overlays({
+        fixer: { pi: { model: 'anthropic/pi-only-model' } },
+      }),
+    })
+
+    await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'fixer', task: 'fix it' },
+      undefined,
+      fakeCtx(
+        { provider: 'p', id: 'parent-model' },
+        true,
+        fakeModelRegistry({ 'anthropic/pi-only-model': configModel }),
+      ),
+    )
+
+    expect(capturedModel).toBe(configModel)
+  })
+
+  test('flat agents.fixer.model set and no block → same routing as a pi block (AE4)', async () => {
+    const fixerCatalog: AgentCatalogEntry[] = [
+      {
+        name: 'fixer',
+        description: 'Fixes things',
+        body: 'You are a fixer.',
+        toolsSource: undefined,
+        key: 'fixer',
+        category: 'fix',
+        id: 'fix/fixer',
+      },
+    ]
+    const configModel = { provider: 'openai', id: 'flat-model' }
+    let capturedModel: unknown
+    const tool = createPiDelegateTool({
+      catalog: fixerCatalog,
+      createDelegateSession: async (opts) => {
+        capturedModel = opts.model
+        return createFakeSession(1)
+      },
+      overlays: overlays({ fixer: { model: 'openai/flat-model' } }),
+    })
+
+    await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'fixer', task: 'fix it' },
+      undefined,
+      fakeCtx(
+        { provider: 'p', id: 'parent-model' },
+        true,
+        fakeModelRegistry({ 'openai/flat-model': configModel }),
+      ),
+    )
+
+    expect(capturedModel).toBe(configModel)
+  })
+
+  test('nothing resolves → child inherits ctx.model', async () => {
+    const parentModel = { provider: 'p', id: 'parent-model' }
+    let capturedModel: unknown
+    const tool = createPiDelegateTool({
+      catalog,
+      createDelegateSession: async (opts) => {
+        capturedModel = opts.model
+        return createFakeSession(1)
+      },
+      overlays: EMPTY_OVERLAYS,
+    })
+
+    await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'git-analyzer', task: 'x' },
+      undefined,
+      fakeCtx(parentModel),
+    )
+
+    expect(capturedModel).toBe(parentModel)
+  })
+
+  test('model: null resolves → inherits ctx.model even though a category pinned a model', async () => {
+    const fixerCatalog: AgentCatalogEntry[] = [
+      {
+        name: 'fixer',
+        description: 'Fixes things',
+        body: 'You are a fixer.',
+        toolsSource: undefined,
+        key: 'fixer',
+        category: 'fix',
+        id: 'fix/fixer',
+      },
+    ]
+    const parentModel = { provider: 'p', id: 'parent-model' }
+    let capturedModel: unknown
+    const tool = createPiDelegateTool({
+      catalog: fixerCatalog,
+      createDelegateSession: async (opts) => {
+        capturedModel = opts.model
+        return createFakeSession(1)
+      },
+      overlays: overlays(
+        { fixer: { model: null } },
+        { fix: { model: 'anthropic/category-model' } },
+      ),
+    })
+
+    await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'fixer', task: 'fix it' },
+      undefined,
+      fakeCtx(parentModel),
+    )
+
+    expect(capturedModel).toBe(parentModel)
+  })
+
+  test('nothing resolves and ctx.model undefined → the existing fail-closed error', async () => {
+    const tool = createPiDelegateTool({
+      catalog,
+      createDelegateSession: async () => createFakeSession(1),
+      overlays: EMPTY_OVERLAYS,
+    })
+
+    await expect(
+      execute(
+        tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+        { agent: 'git-analyzer', task: 'x' },
+        undefined,
+        fakeCtx(undefined, false),
+      ),
+    ).rejects.toThrow(/cannot start because no model is available to inherit/i)
+  })
+
+  test('first dispatch with a config-sourced model gets one routing notice; second dispatch of the same agent gets none; a different agent gets its own (AE9)', async () => {
+    const twoCatalog: AgentCatalogEntry[] = [
+      {
+        name: 'fixer',
+        description: 'Fixes things',
+        body: 'You are a fixer.',
+        toolsSource: undefined,
+        key: 'fixer',
+        category: 'fix',
+        id: 'fix/fixer',
+      },
+      {
+        name: 'oracle',
+        description: 'Knows things',
+        body: 'You are an oracle.',
+        toolsSource: undefined,
+        key: 'oracle',
+        category: 'review',
+        id: 'review/oracle',
+      },
+    ]
+    const fixerModel = { provider: 'anthropic', id: 'fixer-model' }
+    const oracleModel = { provider: 'anthropic', id: 'oracle-model' }
+    const modelRegistry = fakeModelRegistry({
+      'anthropic/fixer-model': fixerModel,
+      'anthropic/oracle-model': oracleModel,
+    })
+    const tool = createPiDelegateTool({
+      catalog: twoCatalog,
+      createDelegateSession: async () => createFakeSession(1),
+      overlays: overlays({
+        fixer: { model: 'anthropic/fixer-model' },
+        oracle: { model: 'anthropic/oracle-model' },
+      }),
+      activeProfile: 'personal',
+    })
+
+    const first = await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'fixer', task: 'fix it' },
+      undefined,
+      fakeCtx({ provider: 'p', id: 'parent' }, true, modelRegistry),
+    )
+    const firstText = (first.content[0] as { text: string }).text
+    expect(firstText).toContain('fixer')
+    expect(firstText).toContain('anthropic/fixer-model')
+    expect(firstText).toContain('personal')
+
+    const second = await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'fixer', task: 'fix it again' },
+      undefined,
+      fakeCtx({ provider: 'p', id: 'parent' }, true, modelRegistry),
+    )
+    const secondText = (second.content[0] as { text: string }).text
+    expect(secondText).not.toContain('[systematic]')
+
+    const third = await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'oracle', task: 'ask it' },
+      undefined,
+      fakeCtx({ provider: 'p', id: 'parent' }, true, modelRegistry),
+    )
+    const thirdText = (third.content[0] as { text: string }).text
+    expect(thirdText).toContain('oracle')
+    expect(thirdText).toContain('anthropic/oracle-model')
+  })
+
+  // The once-per-agent R4a notice must also fire when the model is
+  // inherited from the parent session and only `thinking` came from config
+  // -- previously this branch returned `notice: undefined` unconditionally,
+  // so a config whose only routing was `pi.thinking` silently applied the
+  // thinking level with no notice at all.
+  test('inherited model with a config-sourced thinking level still gets the once-per-agent notice', async () => {
+    const fixerCatalog: AgentCatalogEntry[] = [
+      {
+        name: 'fixer',
+        description: 'Fixes things',
+        body: 'You are a fixer.',
+        toolsSource: undefined,
+        key: 'fixer',
+        category: 'fix',
+        id: 'fix/fixer',
+      },
+    ]
+    const tool = createPiDelegateTool({
+      catalog: fixerCatalog,
+      createDelegateSession: async () => createFakeSession(1),
+      overlays: overlays({ fixer: { pi: { thinking: 'high' } } }),
+    })
+
+    const first = await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'fixer', task: 'fix it' },
+      undefined,
+      fakeCtx({ provider: 'p', id: 'parent-model' }),
+    )
+    const firstText = (first.content[0] as { text: string }).text
+    expect(firstText).toContain('[systematic]')
+    expect(firstText).toContain('routed on the inherited model')
+    expect(firstText).toContain('thinking "high"')
+
+    const second = await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'fixer', task: 'fix it again' },
+      undefined,
+      fakeCtx({ provider: 'p', id: 'parent-model' }),
+    )
+    const secondText = (second.content[0] as { text: string }).text
+    expect(secondText).not.toContain('[systematic]')
+  })
+
+  test('a session-creation failure does not consume the one-time routing notice; the next successful dispatch of the same agent still gets it', async () => {
+    const fixerCatalog: AgentCatalogEntry[] = [
+      {
+        name: 'fixer',
+        description: 'Fixes things',
+        body: 'You are a fixer.',
+        toolsSource: undefined,
+        key: 'fixer',
+        category: 'fix',
+        id: 'fix/fixer',
+      },
+    ]
+    const fixerModel = { provider: 'anthropic', id: 'fixer-model' }
+    const modelRegistry = fakeModelRegistry({
+      'anthropic/fixer-model': fixerModel,
+    })
+    let attempts = 0
+    const tool = createPiDelegateTool({
+      catalog: fixerCatalog,
+      createDelegateSession: async () => {
+        attempts += 1
+        if (attempts === 1) {
+          throw new Error('session creation boom')
+        }
+        return createFakeSession(1)
+      },
+      overlays: overlays({ fixer: { model: 'anthropic/fixer-model' } }),
+    })
+
+    await expect(
+      execute(
+        tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+        { agent: 'fixer', task: 'fix it' },
+        undefined,
+        fakeCtx({ provider: 'p', id: 'parent' }, true, modelRegistry),
+      ),
+    ).rejects.toThrow()
+
+    const second = await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'fixer', task: 'fix it again' },
+      undefined,
+      fakeCtx({ provider: 'p', id: 'parent' }, true, modelRegistry),
+    )
+    const secondText = (second.content[0] as { text: string }).text
+    expect(secondText).toContain('[systematic]')
+    expect(secondText).toContain('fixer')
+    expect(secondText).toContain('anthropic/fixer-model')
+    expect(attempts).toBe(2)
+  })
+
+  test('an unregistered configured model fails closed instead of silently falling back', async () => {
+    const fixerCatalog: AgentCatalogEntry[] = [
+      {
+        name: 'fixer',
+        description: 'Fixes things',
+        body: 'You are a fixer.',
+        toolsSource: undefined,
+        key: 'fixer',
+        category: 'fix',
+        id: 'fix/fixer',
+      },
+    ]
+    const tool = createPiDelegateTool({
+      catalog: fixerCatalog,
+      createDelegateSession: async () => createFakeSession(1),
+      overlays: overlays({ fixer: { model: 'anthropic/unregistered-model' } }),
+    })
+
+    await expect(
+      execute(
+        tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+        { agent: 'fixer', task: 'fix it' },
+        undefined,
+        fakeCtx({ provider: 'p', id: 'parent' }),
+      ),
+    ).rejects.toThrow(/not registered/i)
+  })
+
+  test('agents.fixer.pi.thinking: "high" → session options carry thinkingLevel: "high"', async () => {
+    const fixerCatalog: AgentCatalogEntry[] = [
+      {
+        name: 'fixer',
+        description: 'Fixes things',
+        body: 'You are a fixer.',
+        toolsSource: undefined,
+        key: 'fixer',
+        category: 'fix',
+        id: 'fix/fixer',
+      },
+    ]
+    let capturedThinkingLevel: unknown
+    const tool = createPiDelegateTool({
+      catalog: fixerCatalog,
+      createDelegateSession: async (opts) => {
+        capturedThinkingLevel = opts.thinkingLevel
+        return createFakeSession(1)
+      },
+      overlays: overlays({ fixer: { pi: { thinking: 'high' } } }),
+    })
+
+    await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'fixer', task: 'fix it' },
+      undefined,
+      fakeCtx({ provider: 'p', id: 'parent-model' }),
+    )
+
+    expect(capturedThinkingLevel).toBe('high')
+  })
+
+  test('agents.fixer.pi.thinking set with NO model anywhere \u2192 thinkingLevel applied on the inherited ctx.model (thinking is model-independent)', async () => {
+    const fixerCatalog: AgentCatalogEntry[] = [
+      {
+        name: 'fixer',
+        description: 'Fixes things',
+        body: 'You are a fixer.',
+        toolsSource: undefined,
+        key: 'fixer',
+        category: 'fix',
+        id: 'fix/fixer',
+      },
+    ]
+    const inheritedModel = { provider: 'p', id: 'parent-model' }
+    let capturedThinkingLevel: unknown
+    let capturedModel: unknown
+    const tool = createPiDelegateTool({
+      catalog: fixerCatalog,
+      createDelegateSession: async (opts) => {
+        capturedThinkingLevel = opts.thinkingLevel
+        capturedModel = opts.model
+        return createFakeSession(1)
+      },
+      overlays: overlays({ fixer: { pi: { thinking: 'high' } } }),
+    })
+
+    await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'fixer', task: 'fix it' },
+      undefined,
+      fakeCtx(inheritedModel),
+    )
+
+    expect(capturedThinkingLevel).toBe('high')
+    expect(capturedModel).toBe(inheritedModel)
+  })
+
+  test('no thinking anywhere \u2192 thinkingLevel key is absent (child inherits Pi default)', async () => {
+    let capturedOpts: Record<string, unknown> | undefined
+    const tool = createPiDelegateTool({
+      catalog,
+      createDelegateSession: async (opts) => {
+        capturedOpts = opts as unknown as Record<string, unknown>
+        return createFakeSession(1)
+      },
+      overlays: EMPTY_OVERLAYS,
+    })
+
+    await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'git-analyzer', task: 'x' },
+      undefined,
+      fakeCtx({ provider: 'p', id: 'parent-model' }),
+    )
+
+    expect(capturedOpts?.thinkingLevel).toBeUndefined()
+  })
+
+  test('legacy pi_subagents.<key>.thinking still resolves to thinkingLevel when no pi block is set (AE8)', async () => {
+    const fixerCatalog: AgentCatalogEntry[] = [
+      {
+        name: 'fixer',
+        description: 'Fixes things',
+        body: 'You are a fixer.',
+        toolsSource: undefined,
+        key: 'fixer',
+        category: 'fix',
+        id: 'fix/fixer',
+      },
+    ]
+    let capturedThinkingLevel: unknown
+    const tool = createPiDelegateTool({
+      catalog: fixerCatalog,
+      createDelegateSession: async (opts) => {
+        capturedThinkingLevel = opts.thinkingLevel
+        return createFakeSession(1)
+      },
+      overlays: EMPTY_OVERLAYS,
+      piSubagentsOverlays: { agents: { fixer: { thinking: 'medium' } } },
+    })
+
+    await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'fixer', task: 'fix it' },
+      undefined,
+      fakeCtx({ provider: 'p', id: 'parent-model' }),
+    )
+
+    expect(capturedThinkingLevel).toBe('medium')
+  })
+
+  test('the R4a notice includes the applied thinking level when one is set', async () => {
+    const fixerCatalog: AgentCatalogEntry[] = [
+      {
+        name: 'fixer',
+        description: 'Fixes things',
+        body: 'You are a fixer.',
+        toolsSource: undefined,
+        key: 'fixer',
+        category: 'fix',
+        id: 'fix/fixer',
+      },
+    ]
+    const configModel = { provider: 'anthropic', id: 'fixer-model' }
+    const tool = createPiDelegateTool({
+      catalog: fixerCatalog,
+      createDelegateSession: async () => createFakeSession(1),
+      overlays: overlays({
+        fixer: { model: 'anthropic/fixer-model', pi: { thinking: 'high' } },
+      }),
+    })
+
+    const result = await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'fixer', task: 'fix it' },
+      undefined,
+      fakeCtx(
+        { provider: 'p', id: 'parent' },
+        true,
+        fakeModelRegistry({ 'anthropic/fixer-model': configModel }),
+      ),
+    )
+
+    const text = (result.content[0] as { text: string }).text
+    expect(text).toContain('thinking "high"')
   })
 })

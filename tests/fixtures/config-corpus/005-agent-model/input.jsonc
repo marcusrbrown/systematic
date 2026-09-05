@@ -1,0 +1,6 @@
+// Mirrors tests/unit/config-handler.test.ts: "exact model overlay emits its configured model"
+{
+  "agents": {
+    "correctness-reviewer": { "model": "openrouter/anthropic/claude-sonnet-4" }
+  }
+}

@@ -38,6 +38,8 @@ const TOP_LEVEL_KEYS = [
   '$schema',
   'agents',
   'categories',
+  'profiles',
+  'profile',
   'disabled_skills',
   'disabled_agents',
   'disabled_commands',
@@ -71,6 +73,24 @@ const OVERLAY_FIELD_KEYS = [
   'disable',
   'skills',
   'permission',
+  'opencode',
+  'pi',
+] as const
+
+/**
+ * Routing-only overlay fields permitted inside a named `profiles` bundle
+ * entry (`profiles.<name>.agents.<name>` / `profiles.<name>.categories.<name>`).
+ * A strict subset of {@link OVERLAY_FIELD_KEYS} — non-routing fields
+ * (`permission`, `skills`, `mode`, `hidden`, `disable`, `steps`, `color`) are
+ * rejected by the schema and therefore have no docs entry here.
+ */
+const PROFILE_OVERLAY_FIELD_KEYS = [
+  'model',
+  'variant',
+  'temperature',
+  'top_p',
+  'opencode',
+  'pi',
 ] as const
 
 /** Bootstrap sub-fields. */
@@ -174,6 +194,12 @@ function renderFieldSection(
 
 /**
  * Render documentation for overlay fields (agent or category sub-fields).
+ *
+ * Recurses one heading level deeper into any field that is itself a nested
+ * object with its own `properties` (e.g. the `opencode`/`pi` harness routing
+ * blocks), so `model`/`variant` under `opencode` and `model`/`thinking`
+ * under `pi` get their own sub-sections instead of being summarized only as
+ * the parent block's type.
  */
 function renderOverlayFields(
   schema: Record<string, unknown>,
@@ -186,7 +212,24 @@ function renderOverlayFields(
       const fieldSchema = getNestedSchema(schema, key)
       if (!fieldSchema) return null
       const label = FIELD_LABELS[key] || key
-      return renderFieldSection(`${hPrefix} ${label}`, fieldSchema)
+      const own = renderFieldSection(`${hPrefix} ${label}`, fieldSchema)
+
+      const nestedProps = fieldSchema.properties
+      if (
+        nestedProps &&
+        typeof nestedProps === 'object' &&
+        !Array.isArray(nestedProps)
+      ) {
+        const nestedKeys = Object.keys(nestedProps as Record<string, unknown>)
+        const nested = renderOverlayFields(
+          fieldSchema,
+          nestedKeys,
+          headingLevel + 1,
+        )
+        return nested ? `${own}\n${nested}` : own
+      }
+
+      return own
     })
     .filter(Boolean)
     .join('\n')
@@ -308,9 +351,11 @@ function renderTopLevelSection(
   const crossRef =
     key === 'agents' || key === 'categories'
       ? '\n\nPer-entry overlay fields are documented in the [Agent/Category Overlay Fields](#agentcategory-overlay-fields) section above.'
-      : key === 'pi_subagents'
-        ? '\n\nPer-entry overlay fields are documented in the [Pi-subagents Overlay Fields](#pi-subagents-overlay-fields) section below.'
-        : ''
+      : key === 'profiles'
+        ? "\n\nEach named bundle's `agents`/`categories` entries have the same shape as the top-level `agents`/`categories` overlays above, restricted to a routing-only field subset — see [Profile Bundle Overlay Fields](#profile-bundle-overlay-fields) below."
+        : key === 'pi_subagents'
+          ? '\n\nPer-entry overlay fields are documented in the [Pi-subagents Overlay Fields](#pi-subagents-overlay-fields) section below.'
+          : ''
 
   return `## ${key}\n\n${desc ? `${desc}\n\n` : ''}**Type:** ${formatType(propSchema)}${defaultStr}${examplesBlock}${subFields}${crossRef}`
 }
@@ -339,6 +384,44 @@ export function resolveAgentOverlaySchema(
     return agentsAdditional as Record<string, unknown>
   }
   const agentProperties = agentsSchema?.properties as
+    | Record<string, Record<string, unknown>>
+    | undefined
+  const firstKey = agentProperties ? Object.keys(agentProperties)[0] : undefined
+  return firstKey && agentProperties ? agentProperties[firstKey] : undefined
+}
+
+/**
+ * Resolve the routing-only overlay schema object for `profiles.<name>.agents`
+ * entries from the top-level JSON Schema properties map. `profiles` is
+ * always a `z.record`, but each bundle's `agents` field mirrors the
+ * top-level `agents` field exactly (see `createProfileBundleSchema` in
+ * config-schema.ts): a strict, enum-keyed object of bundled agent names
+ * (bare + qualified), not a `z.record`. Mirrors
+ * {@link resolveAgentOverlaySchema}'s typed-object/record fallback for
+ * that reason.
+ */
+function resolveProfileOverlaySchema(
+  properties: Record<string, unknown>,
+): Record<string, unknown> | undefined {
+  const profilesSchema = properties.profiles as
+    | Record<string, unknown>
+    | undefined
+  const bundleSchema = profilesSchema?.additionalProperties as
+    | Record<string, unknown>
+    | undefined
+  const bundleProps = bundleSchema?.properties as
+    | Record<string, unknown>
+    | undefined
+  const agentsField = bundleProps?.agents as Record<string, unknown> | undefined
+  const agentsAdditional = agentsField?.additionalProperties
+  if (
+    agentsAdditional !== null &&
+    typeof agentsAdditional === 'object' &&
+    !Array.isArray(agentsAdditional)
+  ) {
+    return agentsAdditional as Record<string, unknown>
+  }
+  const agentProperties = agentsField?.properties as
     | Record<string, Record<string, unknown>>
     | undefined
   const firstKey = agentProperties ? Object.keys(agentProperties)[0] : undefined
@@ -435,6 +518,18 @@ Each key under \`agents\` or \`categories\` is an object with the following fiel
 ${renderOverlayFields(agentProps, OVERLAY_FIELD_KEYS, 3)}`
     : ''
 
+  // Profile bundle overlay fields section (routing-only subset, shared
+  // reference for profiles.<name>.agents/categories entries)
+  const profileOverlayProps = resolveProfileOverlaySchema(properties)
+
+  const profileOverlaySection = profileOverlayProps?.properties
+    ? `## Profile Bundle Overlay Fields
+
+Each named bundle under \`profiles\` may set \`agents.<name>\` and \`categories.<name>\` entries using a routing-only subset of the [Agent/Category Overlay Fields](#agentcategory-overlay-fields): \`model\`, \`variant\`, \`temperature\`, \`top_p\`, and the harness routing blocks \`opencode\`/\`pi\`. Non-routing fields (\`permission\`, \`skills\`, \`mode\`, \`hidden\`, \`disable\`, \`steps\`, \`color\`) are rejected.
+
+${renderOverlayFields(profileOverlayProps, PROFILE_OVERLAY_FIELD_KEYS, 3)}`
+    : ''
+
   const sections = TOP_LEVEL_KEYS.map((key) =>
     renderTopLevelSection(key, properties, schemaUrl),
   )
@@ -457,6 +552,8 @@ ${renderOverlayFields(piSubagentsOverlayProps, PI_SUBAGENTS_OVERLAY_FIELD_KEYS, 
   // Return only the field reference content (injected between sentinel markers)
   return `${overlaySection}
 ${sections}
+
+${profileOverlaySection}
 
 ${piSubagentsOverlaySection}
 
@@ -568,6 +665,18 @@ function checkDirectProperties(
   }
 }
 
+/**
+ * Walk the `additionalProperties` value of a record-shaped schema node
+ * (e.g. `agents.<name>.properties.opencode` or
+ * `profiles.<name>.agents.<name>.model`).
+ *
+ * Recurses into any inner field that is itself a container (has its own
+ * `properties` or `additionalProperties`) so nested harness blocks
+ * (`opencode`/`pi` on a category overlay) and doubly-nested records
+ * (`profiles.<name>.agents.<name>.<field>`) are walked all the way down —
+ * not just one level. Mirrors {@link checkDirectProperties}'s recurse/check
+ * pattern, applied to the additionalProperties side of the tree.
+ */
 function checkAdditionalProperties(
   schema: Record<string, unknown>,
   currentPrefix: string,
@@ -591,7 +700,19 @@ function checkAdditionalProperties(
         ? `${currentPrefix}.<name>.${key}`
         : `<name>.${key}`
 
-      if (val.description) {
+      const hasSubProperties =
+        (val.properties || val.additionalProperties) &&
+        !val.type?.toString().startsWith('array')
+
+      if (hasSubProperties) {
+        // Recurse into the nested container (harness block, or a
+        // record-of-record like profiles.<name>.agents).
+        const subErrors = validateFieldExamples(val, fieldPath)
+        errors.push(...subErrors)
+        if (val.description) {
+          checkExamples(val, fieldPath, errors)
+        }
+      } else if (val.description) {
         checkExamples(val, fieldPath, errors)
       }
     }

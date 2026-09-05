@@ -13,6 +13,7 @@ import {
   computeBootstrapContentSafe,
   readHarnessProfile,
 } from './lib/bootstrap.js'
+import { loadConfigWithSources } from './lib/config.js'
 import { createRealPiDelegateSession } from './lib/pi-delegate-session.js'
 import { createPiDelegateTool } from './lib/pi-delegate-tool.js'
 import {
@@ -58,6 +59,19 @@ export default async function systematicPiExtension(
   const { buildAgentCatalog: buildAgentCatalogFn = buildAgentCatalog } = deps
   const disabledSkills: string[] = []
   const resolverOptions = { bundledSkillsDir, disabledSkills }
+
+  // Loaded once at extension init, same as OpenCode's `loadConfig(directory)`
+  // call in src/index.ts — not wrapped in try/catch, so an invalid config
+  // fails the whole extension init the same way it fails OpenCode's plugin
+  // init (fail hard, not fail open). `process.cwd()` mirrors OpenCode's
+  // `directory` (both resolve to the process's working directory; there is
+  // no per-dispatch cwd available at extension init time). A profile change
+  // needs a Pi restart to take effect (KTD: "no per-dispatch re-parse").
+  const {
+    config: piConfig,
+    metadata: piConfigMetadata,
+    overlays: piRoutingOverlays,
+  } = loadConfigWithSources(process.cwd())
 
   // Match OpenCode's process-lifetime bootstrap snapshot.
   const bootstrapContent = computeBootstrapContentSafe(
@@ -109,6 +123,9 @@ export default async function systematicPiExtension(
       createPiDelegateTool({
         catalog,
         createDelegateSession: createRealPiDelegateSession,
+        overlays: piRoutingOverlays,
+        piSubagentsOverlays: piConfig.pi_subagents,
+        activeProfile: piConfigMetadata.activeProfile,
       }),
     )
   } catch (error) {

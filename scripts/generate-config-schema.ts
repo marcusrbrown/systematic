@@ -257,18 +257,6 @@ function asObject(value: unknown): Record<string, unknown> | null {
   return value as Record<string, unknown>
 }
 
-function getSchemaNode(
-  root: Record<string, unknown>,
-  path: readonly string[],
-): Record<string, unknown> | null {
-  let current: Record<string, unknown> | null = root
-  for (const segment of path) {
-    current = asObject(current?.[segment])
-    if (current === null) return null
-  }
-  return current
-}
-
 /**
  * Resolve a node that may be a `{ "$ref": "#/definitions/__schemaN" }` indirection
  * to the underlying definition object. Returns the node itself if it is not a ref,
@@ -339,105 +327,23 @@ function resolveRef(
   return null
 }
 
-function cloneSchemaNode(
-  node: Record<string, unknown>,
-): Record<string, unknown> {
-  return JSON.parse(JSON.stringify(node)) as Record<string, unknown>
-}
-
-function getNonNullModelBranch(
-  root: Record<string, unknown>,
-  overlayNode: Record<string, unknown>,
-): Record<string, unknown> | null {
-  const properties = asObject(overlayNode.properties)
-  const modelNode = asObject(properties?.model)
-  if (modelNode === null) return null
-
-  // With `reused: 'ref'`, the model field is several layers of ref/wrapper
-  // indirection (overlay.properties.model → ref → allOf wrapper → ref → anyOf).
-  // Resolve through them to reach the anyOf union that lists the string and
-  // null branches.
-  const modelBody = resolveRef(root, modelNode)
-  const anyOf = modelBody?.anyOf
-  if (!Array.isArray(anyOf)) return null
-
-  for (const candidate of anyOf) {
-    const branch = asObject(candidate)
-    if (branch === null) continue
-    // The string branch may itself be a $ref to a definition that holds the
-    // type/pattern constraints; resolve it before checking `type === 'string'`.
-    const resolved = resolveRef(root, branch)
-    if (resolved?.type === 'string') return cloneSchemaNode(resolved)
-  }
-
-  return null
-}
-
-function addVariantRequiresExplicitModel(
-  root: Record<string, unknown>,
-  overlayNode: Record<string, unknown>,
-): void {
-  const modelStringBranch = getNonNullModelBranch(root, overlayNode)
-  if (modelStringBranch === null) return
-
-  const variantRequiresModel: Record<string, unknown> = {
-    if: { required: ['variant'] },
-  }
-  variantRequiresModel['then'] = {
-    required: ['model'],
-    properties: {
-      model: modelStringBranch,
-    },
-  }
-
-  const allOf = Array.isArray(overlayNode.allOf) ? overlayNode.allOf : []
-  overlayNode.allOf = [...allOf, variantRequiresModel]
-}
-
-function addOverlayCrossFieldConstraints(root: Record<string, unknown>): void {
-  // With `reused: 'ref'`, repeated overlay shapes live under `#/definitions/__schemaN`
-  // and are referenced from `properties.agents.properties.<agentName>` (one ref per
-  // bundled agent) and from `properties.categories.additionalProperties`. Resolving
-  // the ref before mutating lets a single allOf injection propagate to every
-  // referrer.
-  //
-  // Track which definition nodes have already received the constraint so we don't
-  // double-inject when multiple referrers (categories + 102 agents) share the same
-  // underlying definition.
-  const mutated = new WeakSet<Record<string, unknown>>()
-
-  const applyConstraint = (node: Record<string, unknown> | null): void => {
-    if (node === null) return
-    const target = resolveRef(root, node)
-    if (target === null || mutated.has(target)) return
-    mutated.add(target)
-    addVariantRequiresExplicitModel(root, target)
-  }
-
-  // categories: still uses additionalProperties (z.record). The root path
-  // `properties.categories` may be a ref to a metadata-wrapped def; resolveRef
-  // unwraps both layers to reach the structural body that holds
-  // `additionalProperties`.
-  const categoriesNode = getSchemaNode(root, ['properties', 'categories'])
-  const categoriesBody =
-    categoriesNode === null ? null : resolveRef(root, categoriesNode)
-  if (categoriesBody !== null) {
-    applyConstraint(asObject(categoriesBody.additionalProperties))
-  }
-
-  // agents: a typed object whose container is itself behind a ref/wrapper.
-  // Resolve the container first to expose `properties`, then iterate per-agent
-  // entries (each of which is a ref to the shared overlay definition).
-  // Resolving once and mutating the overlay definition covers all 102 keys.
-  const agentsNode = getSchemaNode(root, ['properties', 'agents'])
-  const agentsBody = agentsNode === null ? null : resolveRef(root, agentsNode)
-  const agentProperties = asObject(agentsBody?.properties)
-  if (agentProperties !== null) {
-    for (const key of Object.keys(agentProperties)) {
-      applyConstraint(asObject(agentProperties[key]))
-    }
-  }
-}
+// The variant/thinking-requires-explicit-model JSON Schema cross-field
+// constraint (formerly injected here via `addOverlayCrossFieldConstraints`,
+// `addVariantRequiresExplicitModel`, `getNonNullModelBranch`, and
+// `cloneSchemaNode`) was removed in plan
+// 2026-09-04-002-feat-model-config-profiles, Unit 1. The underlying Zod-level
+// check (`enforceVariantHasExplicitModel` in src/lib/config-schema.ts) was
+// relaxed to a no-op at the same time — a written fragment may set a
+// qualifier without a model because the model may come from a different
+// layer in the profile/category merge chain, and this per-fragment JSON
+// Schema constraint has no visibility into that merge. The invariant is
+// re-asserted once per (target, harness) on the *merged* overlay at
+// config-load time (see src/lib/routing-resolver.ts, planned for that same
+// feature's Unit 3) rather than published as a standalone schema constraint
+// here. Keeping a stricter constraint in the generated JSON Schema than what
+// the runtime actually enforces would silently reject configs the Zod
+// schema accepts — exactly the drift this generator's AJV parity tests
+// exist to catch.
 
 /**
  * Generate the JSON Schema content string for the given version.
@@ -502,7 +408,6 @@ export function generateSchemaContentFromSchema(
     clean as Record<string, unknown>,
     schema,
   )
-  addOverlayCrossFieldConstraints(clean as Record<string, unknown>)
 
   const raw = `${JSON.stringify(clean, null, 2)}\n`
   return formatJsonWithBiome(raw, 'systematic-config.schema.json')

@@ -9,28 +9,34 @@
       "$ref": "#/definitions/__schema2"
     },
     "categories": {
-      "$ref": "#/definitions/__schema33"
+      "$ref": "#/definitions/__schema42"
+    },
+    "profiles": {
+      "$ref": "#/definitions/__schema56"
+    },
+    "profile": {
+      "$ref": "#/definitions/__schema69"
     },
     "disabled_skills": {
-      "$ref": "#/definitions/__schema45"
+      "$ref": "#/definitions/__schema71"
     },
     "disabled_agents": {
-      "$ref": "#/definitions/__schema47"
+      "$ref": "#/definitions/__schema73"
     },
     "disabled_commands": {
-      "$ref": "#/definitions/__schema49"
+      "$ref": "#/definitions/__schema75"
     },
     "bootstrap": {
-      "$ref": "#/definitions/__schema51"
+      "$ref": "#/definitions/__schema77"
     },
     "workflow_guard": {
-      "$ref": "#/definitions/__schema57"
+      "$ref": "#/definitions/__schema83"
     },
     "pi_subagents": {
-      "$ref": "#/definitions/__schema61"
+      "$ref": "#/definitions/__schema87"
     },
     "skills_as_commands": {
-      "$ref": "#/definitions/__schema72"
+      "$ref": "#/definitions/__schema98"
     }
   },
   "additionalProperties": false,
@@ -641,6 +647,12 @@
         },
         "permission": {
           "$ref": "#/definitions/__schema28"
+        },
+        "opencode": {
+          "$ref": "#/definitions/__schema33"
+        },
+        "pi": {
+          "$ref": "#/definitions/__schema37"
         }
       },
       "additionalProperties": false,
@@ -650,22 +662,15 @@
           "model": "anthropic/claude-opus-4-7",
           "temperature": 0.1,
           "mode": "subagent"
-        }
-      ],
-      "allOf": [
+        },
         {
-          "if": {
-            "required": ["variant"]
+          "opencode": {
+            "model": "anthropic/claude-opus-4-7",
+            "variant": "v2"
           },
-          "then": {
-            "required": ["model"],
-            "properties": {
-              "model": {
-                "type": "string",
-                "minLength": 1,
-                "pattern": "^[^\\s/]+\\/\\S+$"
-              }
-            }
+          "pi": {
+            "model": "anthropic/claude-opus-4-7",
+            "thinking": "high"
           }
         }
       ]
@@ -890,6 +895,104 @@
       ]
     },
     "__schema33": {
+      "trust": "project-or-higher",
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema36"
+        }
+      ]
+    },
+    "__schema34": {
+      "trust": "project-or-higher",
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema7"
+        }
+      ]
+    },
+    "__schema35": {
+      "trust": "project-or-higher",
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema9"
+        }
+      ]
+    },
+    "__schema36": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "$ref": "#/definitions/__schema34"
+        },
+        "variant": {
+          "$ref": "#/definitions/__schema35"
+        }
+      },
+      "additionalProperties": false,
+      "description": "OpenCode-specific routing block. When present, model/variant here override the flat model/variant fields for OpenCode only; the flat fields remain the harness-neutral default and still apply to Pi. `variant` is bound to whichever layer supplies `model`: it is used only from that layer or a more specific one, and is dropped when a more specific layer sets (or nulls) `model` without repeating the variant. A `variant` with no `model` anywhere in the merged overlay is a config-load error raised by the routing resolver, not a parse-time error.",
+      "examples": [
+        {
+          "model": "anthropic/claude-opus-4-7",
+          "variant": "v2"
+        },
+        {
+          "model": null
+        }
+      ]
+    },
+    "__schema37": {
+      "trust": "project-or-higher",
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema41"
+        }
+      ]
+    },
+    "__schema38": {
+      "trust": "project-or-higher",
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema7"
+        }
+      ]
+    },
+    "__schema39": {
+      "trust": "project-or-higher",
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema40"
+        }
+      ]
+    },
+    "__schema40": {
+      "type": "string",
+      "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
+      "description": "pi-subagents reasoning effort level for exported persona frontmatter",
+      "examples": ["off", "medium", "high"]
+    },
+    "__schema41": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "$ref": "#/definitions/__schema38"
+        },
+        "thinking": {
+          "$ref": "#/definitions/__schema39"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Pi-specific routing block. When present, model/thinking here override the flat model field and the legacy `pi_subagents.<name>.thinking` value for Pi only; the flat model field remains the harness-neutral default and still applies to OpenCode. Unlike OpenCode's `variant`, `thinking` is independent of `model`: it applies to whatever model the delegate ends up running, including one inherited from the parent session, so `thinking` with no `model` anywhere in the merged overlay is valid and never a config-load error.",
+      "examples": [
+        {
+          "model": "anthropic/claude-opus-4-7",
+          "thinking": "high"
+        },
+        {
+          "model": null
+        }
+      ]
+    },
+    "__schema42": {
       "default": {},
       "description": "Per-category configuration overlays keyed by category name",
       "examples": [
@@ -902,11 +1005,11 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema34"
+          "$ref": "#/definitions/__schema43"
         }
       ]
     },
-    "__schema34": {
+    "__schema43": {
       "type": "object",
       "propertyNames": {
         "type": "string"
@@ -915,34 +1018,40 @@
         "type": "object",
         "properties": {
           "model": {
-            "$ref": "#/definitions/__schema35"
+            "$ref": "#/definitions/__schema44"
           },
           "variant": {
-            "$ref": "#/definitions/__schema36"
+            "$ref": "#/definitions/__schema45"
           },
           "temperature": {
-            "$ref": "#/definitions/__schema37"
+            "$ref": "#/definitions/__schema46"
           },
           "top_p": {
-            "$ref": "#/definitions/__schema38"
+            "$ref": "#/definitions/__schema47"
           },
           "mode": {
-            "$ref": "#/definitions/__schema39"
+            "$ref": "#/definitions/__schema48"
           },
           "color": {
-            "$ref": "#/definitions/__schema40"
+            "$ref": "#/definitions/__schema49"
           },
           "steps": {
-            "$ref": "#/definitions/__schema41"
+            "$ref": "#/definitions/__schema50"
           },
           "hidden": {
-            "$ref": "#/definitions/__schema42"
+            "$ref": "#/definitions/__schema51"
           },
           "skills": {
-            "$ref": "#/definitions/__schema43"
+            "$ref": "#/definitions/__schema52"
           },
           "permission": {
-            "$ref": "#/definitions/__schema44"
+            "$ref": "#/definitions/__schema53"
+          },
+          "opencode": {
+            "$ref": "#/definitions/__schema54"
+          },
+          "pi": {
+            "$ref": "#/definitions/__schema55"
           }
         },
         "additionalProperties": false,
@@ -951,28 +1060,19 @@
           {
             "model": "anthropic/claude-opus-4-7",
             "temperature": 0.1
-          }
-        ],
-        "allOf": [
+          },
           {
-            "if": {
-              "required": ["variant"]
+            "opencode": {
+              "variant": "v2"
             },
-            "then": {
-              "required": ["model"],
-              "properties": {
-                "model": {
-                  "type": "string",
-                  "minLength": 1,
-                  "pattern": "^[^\\s/]+\\/\\S+$"
-                }
-              }
+            "pi": {
+              "thinking": "high"
             }
           }
         ]
       }
     },
-    "__schema35": {
+    "__schema44": {
       "trust": "project-or-higher",
       "allOf": [
         {
@@ -980,7 +1080,7 @@
         }
       ]
     },
-    "__schema36": {
+    "__schema45": {
       "trust": "project-or-higher",
       "allOf": [
         {
@@ -988,7 +1088,7 @@
         }
       ]
     },
-    "__schema37": {
+    "__schema46": {
       "trust": "any",
       "allOf": [
         {
@@ -996,7 +1096,7 @@
         }
       ]
     },
-    "__schema38": {
+    "__schema47": {
       "trust": "any",
       "allOf": [
         {
@@ -1004,35 +1104,35 @@
         }
       ]
     },
-    "__schema39": {
+    "__schema48": {
       "allOf": [
         {
           "$ref": "#/definitions/__schema15"
         }
       ]
     },
-    "__schema40": {
+    "__schema49": {
       "allOf": [
         {
           "$ref": "#/definitions/__schema17"
         }
       ]
     },
-    "__schema41": {
+    "__schema50": {
       "allOf": [
         {
           "$ref": "#/definitions/__schema21"
         }
       ]
     },
-    "__schema42": {
+    "__schema51": {
       "allOf": [
         {
           "$ref": "#/definitions/__schema23"
         }
       ]
     },
-    "__schema43": {
+    "__schema52": {
       "trust": "project-or-higher",
       "allOf": [
         {
@@ -1040,7 +1140,7 @@
         }
       ]
     },
-    "__schema44": {
+    "__schema53": {
       "trust": "project-or-higher",
       "allOf": [
         {
@@ -1048,17 +1148,758 @@
         }
       ]
     },
-    "__schema45": {
+    "__schema54": {
+      "trust": "project-or-higher",
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema36"
+        }
+      ]
+    },
+    "__schema55": {
+      "trust": "project-or-higher",
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema41"
+        }
+      ]
+    },
+    "__schema56": {
+      "default": {},
+      "description": "Named routing-only overlay bundles, selectable by name via the profile field. Only valid in user config or OPENCODE_CONFIG_DIR config — a project config may select a profile but may not define this field.",
+      "examples": [
+        {
+          "personal": {
+            "agents": {
+              "correctness-reviewer": {
+                "model": "openai/gpt-5"
+              }
+            }
+          }
+        },
+        {}
+      ],
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema57"
+        }
+      ]
+    },
+    "__schema57": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "type": "object",
+        "properties": {
+          "agents": {
+            "$ref": "#/definitions/__schema58"
+          },
+          "categories": {
+            "$ref": "#/definitions/__schema67"
+          }
+        },
+        "additionalProperties": false,
+        "description": "A named routing-only overlay bundle. Entries under agents/categories have the same shape as the top-level agents/categories overlays, restricted to routing fields.",
+        "examples": [
+          {
+            "agents": {
+              "fixer": {
+                "model": "anthropic/claude-opus-4-7"
+              }
+            },
+            "categories": {
+              "review": {
+                "pi": {
+                  "thinking": "high"
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "__schema58": {
+      "description": "Per-agent routing overlays for this profile, keyed by bundled agent name (bare or qualified category/name), using the same routing-only field set as every profile entry. Unknown keys are rejected with a Zod parse error, exactly like the top-level `agents` field.",
+      "examples": [
+        {
+          "correctness-reviewer": {
+            "model": "openai/gpt-5"
+          }
+        }
+      ],
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema59"
+        }
+      ]
+    },
+    "__schema59": {
+      "type": "object",
+      "properties": {
+        "adversarial-document-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "adversarial-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "agent-native-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "api-contract-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "architecture-strategist": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "best-practices-researcher": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "bug-reproduction-validator": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "cli-readiness-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "code-simplicity-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "coherence-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "correctness-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "data-migrations-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "deployment-verification-agent": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "design-iterator": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "design-lens-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "feasibility-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "framework-docs-researcher": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "git-history-analyzer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "issue-intelligence-analyst": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "kieran-typescript-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "learnings-researcher": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "maintainability-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "pattern-recognition-specialist": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "performance-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "pr-comment-resolver": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "previous-comments-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "product-lens-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "project-standards-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "reliability-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "repo-research-analyst": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "scope-guardian-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "security-lens-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "security-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "slack-researcher": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "spec-flow-analyzer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "systematic-implementer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "testing-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "design/design-iterator": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "document-review/adversarial-document-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "document-review/coherence-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "document-review/design-lens-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "document-review/feasibility-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "document-review/product-lens-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "document-review/scope-guardian-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "document-review/security-lens-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "research/best-practices-researcher": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "research/framework-docs-researcher": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "research/git-history-analyzer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "research/issue-intelligence-analyst": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "research/learnings-researcher": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "research/repo-research-analyst": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "research/slack-researcher": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/adversarial-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/agent-native-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/api-contract-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/architecture-strategist": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/cli-readiness-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/code-simplicity-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/correctness-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/data-migrations-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/deployment-verification-agent": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/kieran-typescript-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/maintainability-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/pattern-recognition-specialist": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/performance-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/previous-comments-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/project-standards-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/reliability-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/security-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "review/testing-reviewer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "workflow/bug-reproduction-validator": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "workflow/pr-comment-resolver": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "workflow/spec-flow-analyzer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        },
+        "workflow/systematic-implementer": {
+          "allOf": [
+            {
+              "$ref": "#/definitions/__schema60"
+            }
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "__schema60": {
+      "type": "object",
+      "properties": {
+        "model": {
+          "$ref": "#/definitions/__schema61"
+        },
+        "variant": {
+          "$ref": "#/definitions/__schema62"
+        },
+        "temperature": {
+          "$ref": "#/definitions/__schema63"
+        },
+        "top_p": {
+          "$ref": "#/definitions/__schema64"
+        },
+        "opencode": {
+          "$ref": "#/definitions/__schema65"
+        },
+        "pi": {
+          "$ref": "#/definitions/__schema66"
+        }
+      },
+      "additionalProperties": false,
+      "description": "Routing-only overlay fields permitted inside a named profile bundle entry: model, variant, temperature, top_p, and the opencode/pi harness blocks. Non-routing fields (permission, skills, mode, hidden, disable, steps, color) are rejected.",
+      "examples": [
+        {
+          "model": "anthropic/claude-opus-4-7"
+        },
+        {
+          "opencode": {
+            "variant": "v2"
+          },
+          "pi": {
+            "thinking": "high"
+          }
+        }
+      ]
+    },
+    "__schema61": {
+      "trust": "project-or-higher",
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema7"
+        }
+      ]
+    },
+    "__schema62": {
+      "trust": "project-or-higher",
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema9"
+        }
+      ]
+    },
+    "__schema63": {
+      "trust": "any",
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema11"
+        }
+      ]
+    },
+    "__schema64": {
+      "trust": "any",
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema13"
+        }
+      ]
+    },
+    "__schema65": {
+      "trust": "project-or-higher",
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema36"
+        }
+      ]
+    },
+    "__schema66": {
+      "trust": "project-or-higher",
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema41"
+        }
+      ]
+    },
+    "__schema67": {
+      "description": "Per-category routing overlays for this profile, keyed by category name, using the same routing-only field set as every profile entry.",
+      "examples": [
+        {
+          "review": {
+            "model": "anthropic/claude-opus-4-7"
+          }
+        }
+      ],
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema68"
+        }
+      ]
+    },
+    "__schema68": {
+      "type": "object",
+      "propertyNames": {
+        "type": "string"
+      },
+      "additionalProperties": {
+        "$ref": "#/definitions/__schema60"
+      }
+    },
+    "__schema69": {
+      "description": "Selects a named entry from this source's profiles map as the routing overlay bundle to apply. null explicitly selects the base config (no profile), which still wins over a lower-priority source's selection. Omitting the field entirely defers the decision to a lower-priority source.",
+      "examples": ["personal", null],
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema70"
+        }
+      ]
+    },
+    "__schema70": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "__schema71": {
       "default": [],
       "description": "Array of bundled skill names to disable globally. Unknown skill names are rejected at parse time.",
       "examples": [["ce:plan", "ce:review"]],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema46"
+          "$ref": "#/definitions/__schema72"
         }
       ]
     },
-    "__schema46": {
+    "__schema72": {
       "type": "array",
       "items": {
         "type": "string",
@@ -1115,7 +1956,7 @@
         ]
       }
     },
-    "__schema47": {
+    "__schema73": {
       "default": [],
       "description": "Array of bundled agent names (bare or qualified category/name) to disable globally. Unknown agent names are rejected at parse time.",
       "examples": [
@@ -1124,11 +1965,11 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema48"
+          "$ref": "#/definitions/__schema74"
         }
       ]
     },
-    "__schema48": {
+    "__schema74": {
       "type": "array",
       "items": {
         "type": "string",
@@ -1238,23 +2079,23 @@
         ]
       }
     },
-    "__schema49": {
+    "__schema75": {
       "default": [],
       "description": "Array of command names to disable globally",
       "examples": [["deprecated-migration-helper"]],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema50"
+          "$ref": "#/definitions/__schema76"
         }
       ]
     },
-    "__schema50": {
+    "__schema76": {
       "type": "array",
       "items": {
         "type": "string"
       }
     },
-    "__schema51": {
+    "__schema77": {
       "default": {
         "enabled": true
       },
@@ -1269,18 +2110,18 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema52"
+          "$ref": "#/definitions/__schema78"
         }
       ]
     },
-    "__schema52": {
+    "__schema78": {
       "type": "object",
       "properties": {
         "enabled": {
-          "$ref": "#/definitions/__schema53"
+          "$ref": "#/definitions/__schema79"
         },
         "file": {
-          "$ref": "#/definitions/__schema55"
+          "$ref": "#/definitions/__schema81"
         }
       },
       "additionalProperties": false,
@@ -1294,32 +2135,32 @@
         }
       ]
     },
-    "__schema53": {
+    "__schema79": {
       "default": true,
       "description": "Enable bootstrap prompt injection into every conversation",
       "examples": [true, false],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema54"
+          "$ref": "#/definitions/__schema80"
         }
       ]
     },
-    "__schema54": {
+    "__schema80": {
       "type": "boolean"
     },
-    "__schema55": {
+    "__schema81": {
       "description": "Path to a custom bootstrap prompt file",
       "examples": ["~/.config/opencode/bootstrap.md"],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema56"
+          "$ref": "#/definitions/__schema82"
         }
       ]
     },
-    "__schema56": {
+    "__schema82": {
       "type": "string"
     },
-    "__schema57": {
+    "__schema83": {
       "default": {
         "mode": "observe",
         "debug": false
@@ -1333,11 +2174,11 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema58"
+          "$ref": "#/definitions/__schema84"
         }
       ]
     },
-    "__schema58": {
+    "__schema84": {
       "type": "object",
       "properties": {
         "mode": {
@@ -1346,7 +2187,7 @@
           "examples": ["observe", "protected", "disabled"],
           "allOf": [
             {
-              "$ref": "#/definitions/__schema59"
+              "$ref": "#/definitions/__schema85"
             }
           ]
         },
@@ -1356,21 +2197,21 @@
           "examples": [false, true],
           "allOf": [
             {
-              "$ref": "#/definitions/__schema60"
+              "$ref": "#/definitions/__schema86"
             }
           ]
         }
       },
       "additionalProperties": false
     },
-    "__schema59": {
+    "__schema85": {
       "type": "string",
       "enum": ["observe", "protected", "disabled"]
     },
-    "__schema60": {
+    "__schema86": {
       "type": "boolean"
     },
-    "__schema61": {
+    "__schema87": {
       "default": {
         "categories": {},
         "agents": {}
@@ -1392,11 +2233,11 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema62"
+          "$ref": "#/definitions/__schema88"
         }
       ]
     },
-    "__schema62": {
+    "__schema88": {
       "type": "object",
       "properties": {
         "categories": {
@@ -1412,7 +2253,7 @@
           ],
           "allOf": [
             {
-              "$ref": "#/definitions/__schema63"
+              "$ref": "#/definitions/__schema89"
             }
           ]
         },
@@ -1429,14 +2270,14 @@
           ],
           "allOf": [
             {
-              "$ref": "#/definitions/__schema71"
+              "$ref": "#/definitions/__schema97"
             }
           ]
         }
       },
       "additionalProperties": false
     },
-    "__schema63": {
+    "__schema89": {
       "type": "object",
       "propertyNames": {
         "type": "string"
@@ -1450,19 +2291,20 @@
         ],
         "allOf": [
           {
-            "$ref": "#/definitions/__schema70"
+            "$ref": "#/definitions/__schema96"
           }
         ]
       }
     },
-    "__schema64": {
-      "type": "string",
-      "enum": ["off", "minimal", "low", "medium", "high", "xhigh", "max"],
-      "description": "pi-subagents reasoning effort level for exported persona frontmatter",
-      "examples": ["off", "medium", "high"],
-      "trust": "project-or-higher"
+    "__schema90": {
+      "trust": "project-or-higher",
+      "allOf": [
+        {
+          "$ref": "#/definitions/__schema40"
+        }
+      ]
     },
-    "__schema65": {
+    "__schema91": {
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991,
@@ -1470,48 +2312,48 @@
       "examples": [0, 10, 25],
       "trust": "any"
     },
-    "__schema66": {
+    "__schema92": {
       "type": "string",
       "minLength": 1,
       "description": "pi-subagents comma-selector tool string (built-ins, */all/none, or extension selectors)",
       "examples": ["*", "read,grep,glob", "none"],
       "trust": "project-or-higher"
     },
-    "__schema67": {
+    "__schema93": {
       "anyOf": [
         {
-          "$ref": "#/definitions/__schema68"
+          "$ref": "#/definitions/__schema94"
         },
         {
-          "$ref": "#/definitions/__schema69"
+          "$ref": "#/definitions/__schema95"
         }
       ],
       "description": "pi-subagents skills selector: true (all) or a comma-separated list of skill names",
       "examples": [true, "ce:plan,ce:review"],
       "trust": "project-or-higher"
     },
-    "__schema68": {
+    "__schema94": {
       "type": "boolean",
       "const": true
     },
-    "__schema69": {
+    "__schema95": {
       "type": "string",
       "minLength": 1
     },
-    "__schema70": {
+    "__schema96": {
       "type": "object",
       "properties": {
         "thinking": {
-          "$ref": "#/definitions/__schema64"
+          "$ref": "#/definitions/__schema90"
         },
         "max_turns": {
-          "$ref": "#/definitions/__schema65"
+          "$ref": "#/definitions/__schema91"
         },
         "tools": {
-          "$ref": "#/definitions/__schema66"
+          "$ref": "#/definitions/__schema92"
         },
         "skills": {
-          "$ref": "#/definitions/__schema67"
+          "$ref": "#/definitions/__schema93"
         }
       },
       "additionalProperties": false,
@@ -1523,26 +2365,26 @@
         }
       ]
     },
-    "__schema71": {
+    "__schema97": {
       "type": "object",
       "propertyNames": {
         "type": "string"
       },
       "additionalProperties": {
-        "$ref": "#/definitions/__schema70"
+        "$ref": "#/definitions/__schema96"
       }
     },
-    "__schema72": {
+    "__schema98": {
       "default": true,
       "description": "Register skills discovered from user/project skill directories (OpenCode config and other agent-harness-standard locations) as slash commands. Default true.",
       "examples": [true, false],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema73"
+          "$ref": "#/definitions/__schema99"
         }
       ]
     },
-    "__schema73": {
+    "__schema99": {
       "type": "boolean"
     }
   }

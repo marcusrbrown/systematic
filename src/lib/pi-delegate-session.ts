@@ -65,6 +65,8 @@ export function buildDelegateAgentSessionOptions(options: {
   cwd: string
   agentDir: string
   model: CreateAgentSessionOptions['model']
+  /** Omitted (not `undefined`-valued) when unset, so the child inherits Pi's default thinking level instead of an explicit `undefined` overriding it. */
+  thinkingLevel?: CreateAgentSessionOptions['thinkingLevel']
   allowedToolNames: string[]
   resourceLoader: ResourceLoader
   sessionManager: ReturnType<typeof SessionManager.inMemory>
@@ -73,6 +75,7 @@ export function buildDelegateAgentSessionOptions(options: {
     cwd,
     agentDir,
     model,
+    thinkingLevel,
     allowedToolNames,
     resourceLoader,
     sessionManager,
@@ -81,6 +84,7 @@ export function buildDelegateAgentSessionOptions(options: {
     cwd,
     agentDir,
     model,
+    ...(thinkingLevel !== undefined && { thinkingLevel }),
     tools: allowedToolNames,
     customTools: [],
     resourceLoader,
@@ -92,7 +96,13 @@ export function createDelegateSessionWith(
   runtime: PiDelegateSessionRuntime,
 ): CreateDelegateSession {
   return async (options): Promise<DelegateSessionLike> => {
-    const { model, cwd, systemPromptOverride, allowedToolNames } = options
+    const {
+      model,
+      thinkingLevel,
+      cwd,
+      systemPromptOverride,
+      allowedToolNames,
+    } = options
 
     if (allowedToolNames.includes(DELEGATE_TOOL_NAME)) {
       throw new Error(
@@ -119,6 +129,7 @@ export function createDelegateSessionWith(
         cwd,
         agentDir,
         model,
+        thinkingLevel,
         allowedToolNames,
         resourceLoader,
         sessionManager,

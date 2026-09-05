@@ -24,14 +24,19 @@ const CONFIG_AUTHORITY_FIELD_PATHS = [
 
 const CONFIG_PROTECTED_FIELD_PATHS = [
   'workflow_guard',
+  'profiles',
   'agents.*.model',
   'agents.*.permission',
   'agents.*.skills',
   'agents.*.variant',
+  'agents.*.opencode',
+  'agents.*.pi',
   'categories.*.model',
   'categories.*.permission',
   'categories.*.skills',
   'categories.*.variant',
+  'categories.*.opencode',
+  'categories.*.pi',
 ] as const
 
 const CONFIG_SOURCE_ERROR_CODES = [
@@ -638,7 +643,20 @@ function normalizeConfigObservation(config: ConfigObservationMetadata): {
   assertRecord(config, 'config')
   assertAllowedKeys(
     config,
-    ['authorities', 'protectedFields', 'sources'],
+    // activeProfile/profileSelectorSource/profileFallback (plan
+    // 2026-09-04-002-feat-model-config-profiles, Unit 2) are accepted but
+    // not yet surfaced in the capability snapshot -- Unit 6 wires `config
+    // show`/capabilities to read them. Listing them here keeps this
+    // allowlist from rejecting the wider ConfigObservationMetadata shape
+    // that src/lib/config.ts now produces.
+    [
+      'authorities',
+      'protectedFields',
+      'sources',
+      'activeProfile',
+      'profileSelectorSource',
+      'profileFallback',
+    ],
     'config',
   )
   if (!Array.isArray(config.sources)) {

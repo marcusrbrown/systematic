@@ -1,6 +1,7 @@
 /** Pi-specific adapter factory for the `systematic_delegate` tool. `noExtensions: true` is the structural depth-1 boundary; max turns is fixed at 20. */
 import type {
   AgentToolResult,
+  CreateAgentSessionOptions,
   ExtensionContext,
   ToolDefinition,
 } from '@earendil-works/pi-coding-agent'
@@ -10,6 +11,15 @@ import {
   resolveAgent,
   resolveToolAllowlist,
 } from './agent-resolver.js'
+import type {
+  PiSubagentsOverlayMap,
+  SourcedOverlayConfigMap,
+} from './config.js'
+import {
+  type RoutingFieldSource,
+  resolveRouting,
+  toSourcedPiSubagentsOverlays,
+} from './routing-resolver.js'
 
 /** Fixed, non-configurable delegation bounds (LOCKED). */
 export const MAX_DELEGATE_TURNS = 20
@@ -21,6 +31,19 @@ export type DelegateOutcome = 'completed' | 'turn_limit' | 'aborted' | 'failed'
 
 /** The parent session's model, narrowed to always-defined (validated before use). */
 export type DelegateParentModel = NonNullable<ExtensionContext['model']>
+
+/**
+ * Derived from the pinned Pi SDK's own `CreateAgentSessionOptions` type
+ * (`'off' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max'` as of
+ * @earendil-works/pi-coding-agent@0.83.0) rather than hand-declared, so a
+ * future SDK bump that changes the union surfaces as a type error here
+ * instead of silently drifting. Value-for-value identical to Systematic's
+ * own `piSubagentsThinkingSchema` enum in config-schema.ts today — see
+ * `isKnownThinkingLevel`'s runtime guard for the defence-in-depth check.
+ */
+export type DelegateThinkingLevel = NonNullable<
+  CreateAgentSessionOptions['thinkingLevel']
+>
 
 export interface DelegateToolDetails {
   persona: string
@@ -37,6 +60,8 @@ export interface DelegateSessionLike {
 export type CreateDelegateSession = (options: {
   agentName: string
   model: DelegateParentModel
+  /** Omitted for a config-neutral or thinking-neutral dispatch — the child then inherits Pi's default thinking level. Resolved from `pi.thinking` (or the legacy `pi_subagents.thinking`) the same way `model` is; the pinned Pi SDK's `CreateAgentSessionOptions.thinkingLevel` field is what makes this a real session option, not just an export-time one. */
+  thinkingLevel?: DelegateThinkingLevel
   cwd: string
   systemPromptOverride: string
   allowedToolNames: string[]
@@ -45,6 +70,39 @@ export type CreateDelegateSession = (options: {
 export interface PiDelegateToolDeps {
   catalog: AgentCatalogEntry[]
   createDelegateSession: CreateDelegateSession
+  /**
+   * Merged agent/category routing overlays from `loadConfigWithSources`'s
+   * `overlays` field. Omit for a config-neutral tool — routing then always
+   * inherits `ctx.model` (matches pre-Unit-5 behaviour).
+   */
+  overlays?: SourcedOverlayConfigMap
+  /**
+   * The final config's merged `pi_subagents` map (`SystematicConfig.pi_subagents`,
+   * already project-stripped by the loader), for `resolveRouting`'s legacy
+   * `thinking` fallback (R5). Model resolution never reads this map.
+   */
+  piSubagentsOverlays?: PiSubagentsOverlayMap
+  /**
+   * The active profile's name, from `ConfigObservationMetadata.activeProfile`.
+   * Echoed in the R4a routing notice so a user with multiple profiles can
+   * tell which one produced the model. `null`/omitted means no profile is
+   * active.
+   */
+  activeProfile?: string | null
+}
+
+const EMPTY_ROUTING_OVERLAYS: SourcedOverlayConfigMap = {
+  agents: {},
+  categories: {},
+}
+
+/** Routing state shared across every dispatch made through one registered tool instance (closure-scoped; see R4a's "once per session" note). */
+interface RoutingContext {
+  overlays: SourcedOverlayConfigMap
+  piSubagentsOverlays: SourcedOverlayConfigMap
+  activeProfile: string | null
+  /** Qualified persona ids (`category/key`) already notified once, per R4a. */
+  notifiedAgentIds: Set<string>
 }
 
 function buildDescription(catalog: AgentCatalogEntry[]): string {
@@ -131,7 +189,17 @@ export function createPiDelegateTool(
   ReturnType<typeof buildDelegateParametersSchema>,
   DelegateToolDetails
 > {
-  const { catalog } = deps
+  const { catalog, createDelegateSession } = deps
+  // Built once per registered tool instance and captured by every dispatch's
+  // closure below — this is the "once per session" state R4a's KTD describes
+  // (the tool has no session object of its own to hang state on; a Pi
+  // extension instance lives for the process's life, which is the session).
+  const routing: RoutingContext = {
+    overlays: deps.overlays ?? EMPTY_ROUTING_OVERLAYS,
+    piSubagentsOverlays: toSourcedPiSubagentsOverlays(deps.piSubagentsOverlays),
+    activeProfile: deps.activeProfile ?? null,
+    notifiedAgentIds: new Set<string>(),
+  }
 
   return {
     name: DELEGATE_TOOL_NAME,
@@ -148,7 +216,13 @@ export function createPiDelegateTool(
       _onUpdate,
       ctx: ExtensionContext,
     ): Promise<AgentToolResult<DelegateToolDetails>> {
-      return runDelegateTool(deps, params, signal, ctx)
+      return runDelegateTool(
+        { catalog, createDelegateSession },
+        routing,
+        params,
+        signal,
+        ctx,
+      )
     },
   } satisfies ToolDefinition<
     ReturnType<typeof buildDelegateParametersSchema>,
@@ -169,9 +243,10 @@ function buildSuccessResult(
   agentName: string,
   turnCount: number,
   text: string,
+  notice: string | undefined,
 ): AgentToolResult<DelegateToolDetails> {
   return {
-    content: [{ type: 'text', text }],
+    content: [{ type: 'text', text: notice ? `${text}\n\n${notice}` : text }],
     details: { persona: agentName, turnCount, outcome: 'completed' },
   }
 }
@@ -209,12 +284,212 @@ interface ValidatedDelegateRequest {
   personaBody: string
   allowedToolNames: string[]
   model: DelegateParentModel
+  thinkingLevel: DelegateThinkingLevel | undefined
+  /** R4a one-line notice for the first dispatch of an agent whose model came from config; `undefined` otherwise. */
+  routingNotice: string | undefined
+  /**
+   * Marks `persona.id` as notified in `RoutingContext.notifiedAgentIds`.
+   * Present only alongside a defined `routingNotice`. Deliberately NOT
+   * called at resolution time -- call it only once `createDelegateSession`
+   * has actually produced a session, so a dispatch that fails before then
+   * (e.g. `createDelegateSession` rejects) does not consume the one-time
+   * notification slot for an agent the user was never actually told about.
+   */
+  commitRoutingNotice: (() => void) | undefined
+}
+
+/**
+ * Systematic's `piSubagentsThinkingSchema` enum (config-schema.ts:
+ * 'off'|'minimal'|'low'|'medium'|'high'|'xhigh'|'max') is value-for-value
+ * identical to the pinned Pi SDK's `ThinkingLevel` union today, so a resolved
+ * qualifier string never needs mapping — only a defence-in-depth runtime
+ * check in case a future SDK bump narrows the union out from under a config
+ * value schema validation already accepted.
+ */
+const KNOWN_THINKING_LEVELS: readonly DelegateThinkingLevel[] = [
+  'off',
+  'minimal',
+  'low',
+  'medium',
+  'high',
+  'xhigh',
+  'max',
+]
+
+function isKnownThinkingLevel(value: string): value is DelegateThinkingLevel {
+  return (KNOWN_THINKING_LEVELS as readonly string[]).includes(value)
+}
+
+/** `undefined` qualifier means no layer set `pi.thinking` (or the legacy `pi_subagents.thinking`) — the child then inherits Pi's default thinking level, same as an omitted `thinkingLevel` session option. */
+function resolveThinkingLevel(
+  agentName: string,
+  qualifier: string | undefined,
+): DelegateThinkingLevel | undefined {
+  if (qualifier === undefined) return undefined
+  if (!isKnownThinkingLevel(qualifier)) {
+    throw new Error(
+      `Delegation to "${agentName}" cannot start because the configured thinking level "${qualifier}" is not recognized by this Pi installation.`,
+    )
+  }
+  return qualifier
+}
+
+/** Splits a `provider/model` routing string. `resolveRouting`'s inputs are schema-validated against `MODEL_PATTERN` upstream, so a malformed string here would indicate a config-loading bug — fails closed rather than silently misrouting. */
+function splitModelString(
+  agentName: string,
+  modelString: string,
+): { provider: string; id: string } {
+  const separatorIndex = modelString.indexOf('/')
+  if (separatorIndex <= 0 || separatorIndex === modelString.length - 1) {
+    throw new Error(
+      `Delegation to "${agentName}" cannot start because the configured model "${modelString}" is not in "provider/model" format.`,
+    )
+  }
+  return {
+    provider: modelString.slice(0, separatorIndex),
+    id: modelString.slice(separatorIndex + 1),
+  }
+}
+
+/** One-line R4a notice naming the resolved model, its precedence layer, the applied thinking level (if any), and whether a profile was active. Format is this implementation's choice (plan left it "deferred to implementation"). */
+function formatRoutingNotice(
+  agentName: string,
+  modelString: string,
+  source: RoutingFieldSource,
+  activeProfile: string | null,
+  thinkingLevel: DelegateThinkingLevel | undefined,
+): string {
+  const profileNote =
+    activeProfile !== null
+      ? ` (active profile "${activeProfile}")`
+      : ' (no active profile)'
+  const thinkingNote =
+    thinkingLevel !== undefined ? `, thinking "${thinkingLevel}"` : ''
+  return `[systematic] "${agentName}" routed to model "${modelString}"${thinkingNote} from config (${source.level} ${source.form})${profileNote}.`
+}
+
+/**
+ * One-line R4a notice for the case where no layer sets `model` (the
+ * delegate inherits the parent session's model) but a `thinking` qualifier
+ * DID resolve from config. Without this, a config whose only routing is
+ * `pi.thinking` (or the legacy `pi_subagents.thinking`) silently applied
+ * that thinking level with no R4a notice at all, since `formatRoutingNotice`
+ * is only reachable when `resolution.source.model` is set.
+ */
+function formatInheritedModelThinkingNotice(
+  agentName: string,
+  source: RoutingFieldSource,
+  activeProfile: string | null,
+  thinkingLevel: DelegateThinkingLevel,
+): string {
+  const profileNote =
+    activeProfile !== null
+      ? ` (active profile "${activeProfile}")`
+      : ' (no active profile)'
+  return `[systematic] "${agentName}" routed on the inherited model with thinking "${thinkingLevel}" from config (${source.level} ${source.form})${profileNote}.`
+}
+
+interface ResolvedPersonaRouting {
+  model: DelegateParentModel
+  thinkingLevel: DelegateThinkingLevel | undefined
+  notice: string | undefined
+  /** Present only alongside `notice`; see `ValidatedDelegateRequest.commitRoutingNotice`. */
+  commitNotice: (() => void) | undefined
+}
+
+/**
+ * Resolves the dispatched persona's effective model and thinking level on
+ * the `pi` harness. `resolveRouting`'s `model: string` wins over the parent
+ * session's model; `undefined` (nothing set) or `null` (explicit "inherit",
+ * e.g. a lower layer's `model: null` beating a category's pinned model) both
+ * fall back to `ctx.model`, preserving the existing fail-closed rule when
+ * that is also undefined. `thinkingLevel` resolves independently of which
+ * branch supplied the model — a config can set `pi.thinking` alone with the
+ * model inherited from the parent session.
+ */
+function resolvePersonaRouting(
+  persona: AgentCatalogEntry,
+  agentName: string,
+  ctx: ExtensionContext,
+  routing: RoutingContext,
+): ResolvedPersonaRouting {
+  const resolution = resolveRouting({
+    overlays: routing.overlays,
+    piSubagentsOverlays: routing.piSubagentsOverlays,
+    target: { agentKey: persona.key, category: persona.category },
+    harness: 'pi',
+  })
+
+  const thinkingLevel = resolveThinkingLevel(agentName, resolution.qualifier)
+
+  if (typeof resolution.model !== 'string') {
+    if (ctx.model === undefined) {
+      throw new Error(
+        `Delegation to "${agentName}" cannot start because no model is available to inherit from the parent session; refusing to select a default model (fail-closed).`,
+      )
+    }
+
+    let inheritedNotice: string | undefined
+    let inheritedCommitNotice: (() => void) | undefined
+    const qualifierSource = resolution.source.qualifier
+    if (
+      thinkingLevel !== undefined &&
+      qualifierSource &&
+      !routing.notifiedAgentIds.has(persona.id)
+    ) {
+      inheritedNotice = formatInheritedModelThinkingNotice(
+        agentName,
+        qualifierSource,
+        routing.activeProfile,
+        thinkingLevel,
+      )
+      // Deliberately not committed here -- see the field doc on
+      // `ValidatedDelegateRequest.commitRoutingNotice` for why the
+      // one-time notification slot must survive a failed dispatch.
+      inheritedCommitNotice = () => routing.notifiedAgentIds.add(persona.id)
+    }
+
+    return {
+      model: ctx.model,
+      thinkingLevel,
+      notice: inheritedNotice,
+      commitNotice: inheritedCommitNotice,
+    }
+  }
+
+  const { provider, id } = splitModelString(agentName, resolution.model)
+  const resolvedModel = ctx.modelRegistry.find(provider, id)
+  if (!resolvedModel) {
+    throw new Error(
+      `Delegation to "${agentName}" cannot start because the configured model "${resolution.model}" is not registered with this Pi installation (unknown provider/model).`,
+    )
+  }
+
+  let notice: string | undefined
+  let commitNotice: (() => void) | undefined
+  const source = resolution.source.model
+  if (source && !routing.notifiedAgentIds.has(persona.id)) {
+    notice = formatRoutingNotice(
+      agentName,
+      resolution.model,
+      source,
+      routing.activeProfile,
+      thinkingLevel,
+    )
+    // Deliberately not committed here -- see the field doc on
+    // `ValidatedDelegateRequest.commitRoutingNotice` for why the one-time
+    // notification slot must survive a failed dispatch.
+    commitNotice = () => routing.notifiedAgentIds.add(persona.id)
+  }
+
+  return { model: resolvedModel, thinkingLevel, notice, commitNotice }
 }
 
 function validateDelegateRequest(
   catalog: AgentCatalogEntry[],
   params: { agent: string; task: string },
   ctx: ExtensionContext,
+  routing: RoutingContext,
 ): ValidatedDelegateRequest {
   const { agent: agentName, task } = params
 
@@ -227,11 +502,12 @@ function validateDelegateRequest(
     )
   }
 
-  if (ctx.model === undefined) {
-    throw new Error(
-      `Delegation to "${agentName}" cannot start because no model is available to inherit from the parent session; refusing to select a default model (fail-closed).`,
-    )
-  }
+  const { model, thinkingLevel, notice, commitNotice } = resolvePersonaRouting(
+    persona,
+    agentName,
+    ctx,
+    routing,
+  )
 
   let allowedToolNames: string[]
   try {
@@ -253,7 +529,10 @@ function validateDelegateRequest(
     task,
     personaBody: persona.body,
     allowedToolNames,
-    model: ctx.model,
+    model,
+    thinkingLevel,
+    routingNotice: notice,
+    commitRoutingNotice: commitNotice,
   }
 }
 
@@ -337,7 +616,16 @@ async function runValidatedDelegateSession(
   signal: AbortSignal | undefined,
   cwd: string,
 ): Promise<AgentToolResult<DelegateToolDetails>> {
-  const { agentName, task, personaBody, allowedToolNames, model } = request
+  const {
+    agentName,
+    task,
+    personaBody,
+    allowedToolNames,
+    model,
+    thinkingLevel,
+    routingNotice,
+    commitRoutingNotice,
+  } = request
 
   if (signal?.aborted) {
     throw buildAbortError(agentName, 0)
@@ -357,6 +645,7 @@ async function runValidatedDelegateSession(
     const sessionPromise = createDelegateSession({
       agentName,
       model,
+      thinkingLevel,
       cwd,
       systemPromptOverride: personaBody,
       allowedToolNames,
@@ -397,6 +686,9 @@ async function runValidatedDelegateSession(
 
     const activeSession = sessionOrAbort.session
     state.session = activeSession
+    // Session creation succeeded -- now, and only now, consume the
+    // one-time routing-notice slot (see `ValidatedDelegateRequest.commitRoutingNotice`).
+    commitRoutingNotice?.()
 
     unsubscribe = subscribeTurnCap(activeSession, state)
     await runPromptRespectingAbort(activeSession, task, signal, state)
@@ -420,7 +712,7 @@ async function runValidatedDelegateSession(
     }
 
     const text = activeSession.getLastAssistantText() ?? ''
-    return buildSuccessResult(agentName, state.turnCount, text)
+    return buildSuccessResult(agentName, state.turnCount, text, routingNotice)
   } catch (error) {
     const normalized = normalizeError(error)
     if (
@@ -444,12 +736,13 @@ async function runValidatedDelegateSession(
 }
 
 async function runDelegateTool(
-  deps: PiDelegateToolDeps,
+  deps: Pick<PiDelegateToolDeps, 'catalog' | 'createDelegateSession'>,
+  routing: RoutingContext,
   params: { agent: string; task: string },
   signal: AbortSignal | undefined,
   ctx: ExtensionContext,
 ): Promise<AgentToolResult<DelegateToolDetails>> {
-  const request = validateDelegateRequest(deps.catalog, params, ctx)
+  const request = validateDelegateRequest(deps.catalog, params, ctx, routing)
   return runValidatedDelegateSession(
     deps.createDelegateSession,
     request,

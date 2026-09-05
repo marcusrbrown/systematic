@@ -93,6 +93,86 @@ Overlay application precedence for a Systematic-owned bundled agent (strongest f
 
 Bundled agents inherit the invoking model unless high-trust user or `$OPENCODE_CONFIG_DIR/systematic.json` config supplies an explicit `model`. Set `"model": null` to clear an explicit model and restore parent-model inheritance. Project config cannot set, erase, or shadow `model` at any value.
 
+A flat `agents.<name>.model` now also routes in-process Pi delegates, not just OpenCode — previously it applied to OpenCode only.
+
+## Profiles and Per-Harness Routing
+
+A **profile** is a named, reusable bundle of routing overrides — `model`, `variant`, `temperature`, `top_p`, and the `opencode`/`pi` blocks below — defined once in your user config's `profiles` map and selected by name. Profiles exist for people who work across repositories that warrant different model routing from the same harness: define `work` and `personal` profiles once in user config, then let each repository pick one.
+
+```jsonc
+// ~/.config/opencode/systematic.json (or $OPENCODE_CONFIG_DIR/systematic.json)
+{
+  "profile": "personal", // your default when nothing else selects one
+  "profiles": {
+    "work": {
+      "agents": { "correctness-reviewer": { "model": "openai/gpt-5" } }
+    },
+    "personal": {
+      "categories": { "review": { "model": "anthropic/claude-opus-4-7" } }
+    }
+  }
+}
+```
+
+Any config source may set the top-level `profile` selector to choose among the user's profiles — including a repository's project config:
+
+```jsonc
+// .opencode/systematic.json (project config)
+{ "profile": "work" }
+```
+
+Only `profile` (the selector) is project-settable. `profiles` (the map of bundle definitions) is trust-protected exactly like `model`, `variant`, `permission`, and `skills` — a project may choose among the profiles you've defined, but it cannot define new ones or see into ones you haven't shared. A `profiles` map set in project config is ignored with a warning. Both your user config and `$OPENCODE_CONFIG_DIR` config ("custom" config) may define a `profiles` map; a name is looked up in custom's map first, then user's, so a bundle defined only in custom config is still selectable by any source.
+
+`profile` is **tri-state**: leaving it unset means "no opinion, let a lower-priority source decide"; setting it to a name selects that bundle; setting it to `null` explicitly means "base configuration, no profile" and wins outright over a weaker source's name — this is how a repository can opt out of your default profile rather than merely failing to set one. The strongest source that sets `profile` at all wins: custom config, then project config, then user config.
+
+If the selected name doesn't match a defined profile (in either custom's or user's `profiles` map), Systematic warns once and falls back to your own `profile` default (if you have one and it resolves — checked the same way, custom first, then user); if that's also undefined, it falls back to base configuration with no profile active. Run `systematic config show` to see the active profile, which source selected it, and any fallback that occurred.
+
+Switching which profile is active never changes an agent's visibility, permissions, mode, or existence: unlike an ordinary same-key overlay override (which fully replaces the previous value), the active profile's overlay merges field-by-field over the base config — a field the profile bundle is schema-incapable of carrying (`mode`, `color`, `steps`, `hidden`, `disable`, `permission`, `skills`) simply survives untouched regardless of which profile is selected. `ProfileOverlaySchema` restricts a profile entry to routing-only fields for exactly this reason.
+
+### Per-harness routing blocks
+
+`agents.<name>` and `categories.<category>` overlays accept optional `opencode` and `pi` blocks so one config routes correctly on both harnesses, while the existing flat `model`/`variant` fields stay as the harness-neutral default:
+
+```jsonc
+{
+  "agents": {
+    "correctness-reviewer": {
+      "model": "anthropic/claude-sonnet-4-5", // harness-neutral default
+      "opencode": { "variant": "thinking" }, // OpenCode-only qualifier
+      "pi": { "thinking": "high" } // Pi-only qualifier
+    }
+  }
+}
+```
+
+Resolution precedence, evaluated independently for `model` and for the harness's qualifier (`variant` on OpenCode, `thinking` on Pi): **agent block > agent flat > category block > category flat**. Merge order across sources is **user base → selected profile → project → custom**, with each later source overriding the same field at the same level.
+
+`model: null` is a value, not an absence — it means "inherit from the parent session" and beats a lower layer's explicit model at the same precedence level. But it obeys the *same* precedence as any other value: a block's `null` beats a flat explicit model at the same level, not the other way around. Concretely, a profile that sets `agents.x.model: null` does **not** undo a base config's `agents.x.opencode.model` — the block is more specific than the flat field it's trying to override, so OpenCode keeps the block's model. To restore inheritance on OpenCode specifically, set `agents.x.opencode.model: null`. When `model: null` wins at layer L on OpenCode, any `variant` is dropped too — inheriting the parent's model means inheriting its variant as well; there is no "inherited model, explicit variant" combination.
+
+**The two harnesses' qualifiers bind to `model` differently.** OpenCode's `variant` is coupled to whichever layer supplies `model`: let L be the most specific layer (agent block > agent flat > category block > category flat) that sets `model`. `variant` is used only from L or a MORE specific layer than L — a `variant` from a LESS specific layer is dropped, so a more specific layer's model change doesn't accidentally inherit a stale variant from further up the merge chain:
+
+```jsonc
+{
+  "categories": {
+    "review": { "model": "openai/gpt-4o", "variant": "v1" }
+  },
+  "agents": {
+    // Overrides the category's model. The category's "v1" variant does NOT
+    // carry over -- it was set at a less specific layer than the agent's
+    // model override, so it's dropped, not inherited.
+    "correctness-reviewer": { "model": "openai/gpt-5" }
+  }
+}
+```
+
+Setting `variant` with no `model` resolving anywhere for that agent on OpenCode — after every layer is merged — is a config-load error naming the agent and `opencode`. A profile is allowed to set `opencode.variant` alone precisely because the model is expected to come from a lower layer (your base config); the error only fires when no layer supplies one on OpenCode.
+
+Pi's `thinking` qualifier, by contrast, is **independent of `model`**: it applies to whatever model the Pi delegate ends up running, including a model inherited from the parent session when no layer sets one at all. `pi.thinking` with no model resolving anywhere is a normal, valid configuration — never a config-load error. This mirrors how the deprecated `pi_subagents.thinking` field always behaved.
+
+### `pi_subagents.<name>.thinking` is deprecated
+
+The legacy `pi_subagents.<name>.thinking` field (and its category form) is superseded by `agents.<name>.pi.thinking` / `categories.<category>.pi.thinking`. The new location wins when both are set; the legacy field is honored only when the new location is unset, and using it prints one deprecation warning naming the exact legacy field you wrote — a category-level `pi_subagents.categories.<category>.thinking` write prints one warning naming that category, not one per agent in it. Migrate by moving `thinking` into the `pi` block.
+
 ## Schema and Autocomplete
 
 Add a `$schema` field to your `systematic.json` to enable per-key autocomplete in editors that honor JSON Schema property completion:
@@ -321,6 +401,118 @@ Permission overrides per tool
 }
 ```
 
+### opencode
+
+OpenCode-specific routing block. When present, model/variant here override the flat model/variant fields for OpenCode only; the flat fields remain the harness-neutral default and still apply to Pi. `variant` is bound to whichever layer supplies `model`: it is used only from that layer or a more specific one, and is dropped when a more specific layer sets (or nulls) `model` without repeating the variant. A `variant` with no `model` anywhere in the merged overlay is a config-load error raised by the routing resolver, not a parse-time error.
+
+**Type:** `object`
+
+**Examples:**
+
+```json
+{
+  "model": "anthropic/claude-opus-4-7",
+  "variant": "v2"
+}
+```
+
+```json
+{
+  "model": null
+}
+```
+
+#### model
+
+Model identifier in provider/model format, or null to inherit parent model
+
+**Type:** `string` | `null`
+
+**Examples:**
+
+```json
+anthropic/claude-sonnet-4
+```
+
+```json
+null
+```
+
+#### variant
+
+Model variant identifier
+
+**Type:** `string`
+
+**Examples:**
+
+```json
+v2
+```
+
+```json
+extended
+```
+
+### pi
+
+Pi-specific routing block. When present, model/thinking here override the flat model field and the legacy `pi_subagents.<name>.thinking` value for Pi only; the flat model field remains the harness-neutral default and still applies to OpenCode. Unlike OpenCode's `variant`, `thinking` is independent of `model`: it applies to whatever model the delegate ends up running, including one inherited from the parent session, so `thinking` with no `model` anywhere in the merged overlay is valid and never a config-load error.
+
+**Type:** `object`
+
+**Examples:**
+
+```json
+{
+  "model": "anthropic/claude-opus-4-7",
+  "thinking": "high"
+}
+```
+
+```json
+{
+  "model": null
+}
+```
+
+#### model
+
+Model identifier in provider/model format, or null to inherit parent model
+
+**Type:** `string` | `null`
+
+**Examples:**
+
+```json
+anthropic/claude-sonnet-4
+```
+
+```json
+null
+```
+
+#### thinking
+
+pi-subagents reasoning effort level for exported persona frontmatter
+
+**Type:** `string`
+
+**Valid values:** `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`
+
+**Examples:**
+
+```json
+off
+```
+
+```json
+medium
+```
+
+```json
+high
+```
+
 ## $schema
 
 JSON Schema URL for IDE autocomplete. The value is informational only — the loader does not fetch or validate against it. Add this to enable IDE schema activation and field-level autocomplete in editors that support JSON Schema (VSCode, Zed, IntelliJ).
@@ -386,6 +578,49 @@ Per-category configuration overlays keyed by category name
 
 
 Per-entry overlay fields are documented in the [Agent/Category Overlay Fields](#agentcategory-overlay-fields) section above.
+
+## profiles
+
+Named routing-only overlay bundles, selectable by name via the profile field. Only valid in user config or OPENCODE_CONFIG_DIR config — a project config may select a profile but may not define this field.
+
+**Type:** `object`
+**Default:** `{}`
+**Examples:**
+
+```json
+{
+  "personal": {
+    "agents": {
+      "correctness-reviewer": {
+        "model": "openai/gpt-5"
+      }
+    }
+  }
+}
+```
+
+```json
+{}
+```
+
+
+Each named bundle's `agents`/`categories` entries have the same shape as the top-level `agents`/`categories` overlays above, restricted to a routing-only field subset — see [Profile Bundle Overlay Fields](#profile-bundle-overlay-fields) below.
+
+## profile
+
+Selects a named entry from this source's profiles map as the routing overlay bundle to apply. null explicitly selects the base config (no profile), which still wins over a lower-priority source's selection. Omitting the field entirely defers the decision to a lower-priority source.
+
+**Type:** `string` | `null`
+**Examples:**
+
+```json
+personal
+```
+
+```json
+null
+```
+
 
 ## disabled_skills
 
@@ -591,6 +826,195 @@ true
 
 ```json
 false
+```
+
+
+## Profile Bundle Overlay Fields
+
+Each named bundle under `profiles` may set `agents.<name>` and `categories.<name>` entries using a routing-only subset of the [Agent/Category Overlay Fields](#agentcategory-overlay-fields): `model`, `variant`, `temperature`, `top_p`, and the harness routing blocks `opencode`/`pi`. Non-routing fields (`permission`, `skills`, `mode`, `hidden`, `disable`, `steps`, `color`) are rejected.
+
+### model
+
+Model identifier in provider/model format, or null to inherit parent model
+
+**Type:** `string` | `null`
+
+**Examples:**
+
+```json
+anthropic/claude-sonnet-4
+```
+
+```json
+null
+```
+
+### variant
+
+Model variant identifier
+
+**Type:** `string`
+
+**Examples:**
+
+```json
+v2
+```
+
+```json
+extended
+```
+
+### temperature
+
+Sampling temperature (≥0; 0 = deterministic)
+
+**Type:** `number`
+
+**Examples:**
+
+```json
+0.1
+```
+
+```json
+0.7
+```
+
+```json
+0
+```
+
+### top_p
+
+Nucleus sampling parameter (0 to 1)
+
+**Type:** `number`
+
+**Examples:**
+
+```json
+0.9
+```
+
+```json
+0.1
+```
+
+```json
+1
+```
+
+### opencode
+
+OpenCode-specific routing block. When present, model/variant here override the flat model/variant fields for OpenCode only; the flat fields remain the harness-neutral default and still apply to Pi. `variant` is bound to whichever layer supplies `model`: it is used only from that layer or a more specific one, and is dropped when a more specific layer sets (or nulls) `model` without repeating the variant. A `variant` with no `model` anywhere in the merged overlay is a config-load error raised by the routing resolver, not a parse-time error.
+
+**Type:** `object`
+
+**Examples:**
+
+```json
+{
+  "model": "anthropic/claude-opus-4-7",
+  "variant": "v2"
+}
+```
+
+```json
+{
+  "model": null
+}
+```
+
+#### model
+
+Model identifier in provider/model format, or null to inherit parent model
+
+**Type:** `string` | `null`
+
+**Examples:**
+
+```json
+anthropic/claude-sonnet-4
+```
+
+```json
+null
+```
+
+#### variant
+
+Model variant identifier
+
+**Type:** `string`
+
+**Examples:**
+
+```json
+v2
+```
+
+```json
+extended
+```
+
+### pi
+
+Pi-specific routing block. When present, model/thinking here override the flat model field and the legacy `pi_subagents.<name>.thinking` value for Pi only; the flat model field remains the harness-neutral default and still applies to OpenCode. Unlike OpenCode's `variant`, `thinking` is independent of `model`: it applies to whatever model the delegate ends up running, including one inherited from the parent session, so `thinking` with no `model` anywhere in the merged overlay is valid and never a config-load error.
+
+**Type:** `object`
+
+**Examples:**
+
+```json
+{
+  "model": "anthropic/claude-opus-4-7",
+  "thinking": "high"
+}
+```
+
+```json
+{
+  "model": null
+}
+```
+
+#### model
+
+Model identifier in provider/model format, or null to inherit parent model
+
+**Type:** `string` | `null`
+
+**Examples:**
+
+```json
+anthropic/claude-sonnet-4
+```
+
+```json
+null
+```
+
+#### thinking
+
+pi-subagents reasoning effort level for exported persona frontmatter
+
+**Type:** `string`
+
+**Valid values:** `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`
+
+**Examples:**
+
+```json
+off
+```
+
+```json
+medium
+```
+
+```json
+high
 ```
 
 

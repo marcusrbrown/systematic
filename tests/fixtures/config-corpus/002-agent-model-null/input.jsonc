@@ -1,0 +1,4 @@
+// Mirrors tests/unit/config-handler.test.ts: "exact model: null overlay restores parent-model inheritance"
+{
+  "agents": { "correctness-reviewer": { "model": null } }
+}

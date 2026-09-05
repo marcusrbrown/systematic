@@ -1,0 +1,6 @@
+// Mirrors tests/unit/config-handler.test.ts skills-overlay fixtures (line ~1378).
+{
+  "agents": {
+    "correctness-reviewer": { "skills": ["ce:review"] }
+  }
+}

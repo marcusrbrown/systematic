@@ -814,9 +814,14 @@ describe('AJV parity: Zod runtime contract vs generated JSON Schema', () => {
       accepted: false,
     },
     {
-      name: 'agent variant without explicit model rejected by both',
+      // Relaxed in plan 2026-09-04-002-feat-model-config-profiles, Unit 1:
+      // a written fragment may set a qualifier without a model in that same
+      // fragment (the model may come from a different layer in the merge
+      // chain). Both the Zod schema and the generated JSON Schema now agree
+      // on accepting this — the invariant moves to a post-merge check.
+      name: 'agent variant without explicit model accepted by both (invariant deferred to post-merge)',
       value: { agents: { 'correctness-reviewer': { variant: 'high' } } },
-      accepted: false,
+      accepted: true,
     },
     {
       name: 'agent variant with explicit model accepted by both',
@@ -828,19 +833,23 @@ describe('AJV parity: Zod runtime contract vs generated JSON Schema', () => {
       accepted: true,
     },
     {
-      name: 'category variant without explicit model rejected by both',
+      name: 'category variant without explicit model accepted by both (invariant deferred to post-merge)',
       value: { categories: { review: { variant: 'high' } } },
-      accepted: false,
+      accepted: true,
     },
     {
-      name: 'agent variant with model:null rejected by both',
+      // Still rejected — but now for a different reason than before Unit 1.
+      // 'foo' is not a bundled agent name, so this fails typed-key validation
+      // (SECURITY_OVERLAY_FIELDS relaxation is irrelevant here since 'agents'
+      // is a strict typed object keyed by bundled names, not a z.record).
+      name: 'agent variant with model:null rejected by both (invalid agent key, unrelated to the relaxed qualifier invariant)',
       value: { agents: { foo: { model: null, variant: 'high' } } },
       accepted: false,
     },
     {
-      name: 'category variant with model:null rejected by both',
+      name: 'category variant with model:null accepted by both (invariant deferred to post-merge)',
       value: { categories: { review: { model: null, variant: 'high' } } },
-      accepted: false,
+      accepted: true,
     },
     {
       name: 'variant with explicit model accepted by both',
@@ -940,7 +949,7 @@ describe('AJV parity: Zod runtime contract vs generated JSON Schema', () => {
     })
   }
 
-  test('parity: qualified bundled agent rejects variant without explicit model', () => {
+  test('parity: qualified bundled agent accepts variant without explicit model (invariant deferred to post-merge)', () => {
     if (!ajvAvailable) {
       console.warn('SKIP: ajv not available')
       return
@@ -948,9 +957,10 @@ describe('AJV parity: Zod runtime contract vs generated JSON Schema', () => {
     const config = {
       agents: { 'review/correctness-reviewer': { variant: 'v2' } },
     }
-    // Both Zod and JSON Schema must reject this
-    expect(zodParse(config).success).toBe(false)
-    expect(ajvValidate(config)).toBe(false)
+    // Relaxed in plan 2026-09-04-002-feat-model-config-profiles, Unit 1 —
+    // both Zod and the generated JSON Schema now accept this.
+    expect(zodParse(config).success).toBe(true)
+    expect(ajvValidate(config)).toBe(true)
   })
 
   test('parity: qualified bundled agent accepts variant with explicit model', () => {

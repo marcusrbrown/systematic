@@ -11,9 +11,13 @@ import {
 } from './agent-overlays.js'
 import { extractAgentFrontmatter, findAgentsInDir } from './agents.js'
 import { extractCommandFrontmatter, findCommandsInDir } from './commands.js'
-import { loadConfigWithSources } from './config.js'
+import {
+  loadConfigWithSources,
+  type SourcedOverlayConfigMap,
+} from './config.js'
 import { type DiscoveredSkill, discoverSkills } from './discovered-skills.js'
 import { parseFrontmatter } from './frontmatter.js'
+import { type RoutingResolution, resolveRouting } from './routing-resolver.js'
 import {
   type LoadedSkill,
   loadSkill,
@@ -197,6 +201,7 @@ function collectAgents(
   disabledAgents: string[],
   nativeAgents: Record<string, unknown>,
   overlays: ResolvedAgentOverlaySet,
+  rawOverlays: SourcedOverlayConfigMap,
 ): NonNullable<Config['agent']> {
   const agents: NonNullable<Config['agent']> = {}
   const agentList = findAgentsInDir(dir)
@@ -214,17 +219,34 @@ function collectAgents(
 
     const config = loadAgentAsConfig(agentInfo)
     if (config) {
-      agents[agentInfo.name] = applyAgentOverlays(config, agentInfo, overlays)
+      agents[agentInfo.name] = applyAgentOverlays(
+        config,
+        agentInfo,
+        overlays,
+        rawOverlays,
+      )
     }
   }
 
   return agents
 }
 
+/**
+ * `pi_subagents` overlays are irrelevant to the `opencode` harness — the
+ * legacy `thinking` fallback the resolver consults is `pi`-only
+ * (`resolveRouting` never reads it for `harness: 'opencode'`). A shared
+ * empty constant avoids allocating a throwaway map per agent.
+ */
+const EMPTY_PI_SUBAGENTS_OVERLAYS: SourcedOverlayConfigMap = {
+  agents: {},
+  categories: {},
+}
+
 function applyAgentOverlays(
   config: AgentConfig,
   agentInfo: { name: string; category?: string },
   overlays: ResolvedAgentOverlaySet,
+  rawOverlays: SourcedOverlayConfigMap,
 ): AgentConfig {
   const id = agentInfo.category
     ? `${agentInfo.category}/${agentInfo.name}`
@@ -243,20 +265,84 @@ function applyAgentOverlays(
     addPermissionRules(permissionRules, config.permission)
   }
 
-  applyAgentOverlay(result, categoryOverlay?.value, permissionRules)
-  applyAgentOverlay(result, exactOverlay?.value, permissionRules)
+  // `model`/`variant` are resolved once via the shared opencode routing
+  // answer (agent block > agent flat > category block > category flat,
+  // per R3a) instead of being read directly off each raw overlay object.
+  // `resolution.source.{model,qualifier}.level` says which pass
+  // ('category' or 'agent') the winning value came from, so it is applied
+  // at that pass's point in the pipeline below — this preserves the exact
+  // key-insertion order a config with no harness blocks or profiles
+  // produced before this resolver existed (see
+  // tests/unit/config-handler.test.ts's byte-identity corpus).
+  const routing = resolveRouting({
+    overlays: rawOverlays,
+    piSubagentsOverlays: EMPTY_PI_SUBAGENTS_OVERLAYS,
+    target: { agentKey: agentInfo.name, category: agentInfo.category ?? '' },
+    harness: 'opencode',
+  })
+
+  applyAgentOverlayPass(
+    result,
+    categoryOverlay?.value,
+    permissionRules,
+    routing,
+    'category',
+  )
+  applyAgentOverlayPass(
+    result,
+    exactOverlay?.value,
+    permissionRules,
+    routing,
+    'agent',
+  )
   applyPermissionOverlay(result, permissionRules, hasPermissionOverlay)
 
   return result
 }
 
-function applyAgentOverlay(
+/**
+ * Apply one overlay pass (category, then agent) to `target`: the routing
+ * resolver's `model`/`variant` answer (only when this pass is where it won),
+ * followed by the pass's own non-routing overlay fields and
+ * permission/skills accumulation. Mirrors the pre-resolver two-pass
+ * structure exactly so key insertion order is unaffected when no harness
+ * block or profile changes the winning layer.
+ */
+function applyAgentOverlayPass(
   target: AgentConfig,
   overlay: Record<string, unknown> | undefined,
   permissionRules: PermissionRuleAccumulator,
+  routing: RoutingResolution,
+  level: 'agent' | 'category',
 ): void {
+  if (routing.source.model?.level === level) {
+    applyRoutingModel(target, routing.model)
+  }
+  if (routing.source.qualifier?.level === level) {
+    target.variant = routing.qualifier
+  }
+
   if (overlay === undefined) return
-  applyOverlayObjectWithVariantClearing(target, overlay, permissionRules)
+  applyOverlayObjectFields(target, overlay)
+
+  if (isRecord(overlay.permission)) {
+    addPermissionRules(permissionRules, overlay.permission)
+  }
+  if (Array.isArray(overlay.skills)) {
+    addManagedSkillRules(permissionRules, overlay.skills)
+  }
+}
+
+/** `model: null` means "restore inheritance" — remove any emitted model. */
+function applyRoutingModel(
+  target: AgentConfig,
+  model: string | null | undefined,
+): void {
+  if (model === null) {
+    delete target.model
+  } else if (model !== undefined) {
+    target.model = model
+  }
 }
 
 function applyPermissionOverlay(
@@ -283,9 +369,10 @@ function overlayControlsPermission(
   )
 }
 
+// `model`/`variant` are no longer read from here — see `applyAgentOverlayPass`
+// and `resolveRouting`. Every other overlay-assignable field keeps its
+// original direct-copy path, unchanged by the model-config-profiles feature.
 const OVERLAY_ASSIGN_FIELDS = [
-  'model',
-  'variant',
   'temperature',
   'top_p',
   'mode',
@@ -294,38 +381,14 @@ const OVERLAY_ASSIGN_FIELDS = [
   'hidden',
 ] as const
 
-function applyOverlayObjectWithVariantClearing(
+function applyOverlayObjectFields(
   target: AgentConfig,
   overlay: Record<string, unknown>,
-  permissionRules: PermissionRuleAccumulator,
 ): void {
-  // When an overlay sets model but not variant, clear any lower-precedence
-  // variant so the user-selected model is not paired with a stale variant.
-  // `model: null` (explicit inheritance opt-out) also counts as setting
-  // model — without this, `model: null` without `variant` would silently keep
-  // a stale variant attached to OpenCode's inherited parent model.
-  const overlayHasModel = Object.hasOwn(overlay, 'model')
-  const overlayHasVariant = Object.hasOwn(overlay, 'variant')
-  if (overlayHasModel && !overlayHasVariant) {
-    delete target.variant
-  }
-
   for (const field of OVERLAY_ASSIGN_FIELDS) {
     if (Object.hasOwn(overlay, field)) {
-      // model: null means "restore inheritance" — remove the emitted model
-      if (field === 'model' && overlay[field] === null) {
-        delete target[field]
-      } else {
-        ;(target as Record<string, unknown>)[field] = overlay[field]
-      }
+      ;(target as Record<string, unknown>)[field] = overlay[field]
     }
-  }
-
-  if (isRecord(overlay.permission)) {
-    addPermissionRules(permissionRules, overlay.permission)
-  }
-  if (Array.isArray(overlay.skills)) {
-    addManagedSkillRules(permissionRules, overlay.skills)
   }
 }
 
@@ -606,6 +669,7 @@ export function createConfigHandler(deps: ConfigHandlerDeps) {
       systematicConfig.disabled_agents,
       nativeAgents,
       resolvedOverlays,
+      overlays,
     )
 
     const bundledCommands = collectCommands(

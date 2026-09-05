@@ -1,0 +1,4 @@
+// Mirrors tests/unit/config-handler.test.ts: "category model overlay emits its configured model for every agent"
+{
+  "categories": { "review": { "model": "openai/gpt-4o" } }
+}
