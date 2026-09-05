@@ -108,7 +108,7 @@ A legacy field still works and prints one deprecation warning naming the exact p
 
 ## Checking Active Routing
 
-If the `systematic` CLI is on your `PATH`, `config show` prints the config files it found, the active profile, which source selected it, any fallback, and the resolved routing for every overlaid agent. `--json` gives the same as one object. Plain `config show` prints the full contents of each config file it finds, while `--json` reports only their paths — keep that in mind before pasting either into an issue:
+If the `systematic` CLI is on your `PATH`, `config show` prints the config files it found, the active profile, which source selected it, any fallback, and the resolved routing for every overlaid agent. `--json` gives the same routing data as one object. Plain `config show` also prints the full contents of the user and project config files, while `--json` reports only their paths — keep that in mind before pasting either into an issue:
 
 ```bash
 systematic config show --json
