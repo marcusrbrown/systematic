@@ -909,7 +909,51 @@ describe('createPiDelegateTool: Pi routing (Unit 5)', () => {
     expect(thirdText).toContain('anthropic/oracle-model')
   })
 
-  test('a session-creation failure does not consume the one-time routing notice; the next successful dispatch of the same agent still gets it (code review fix)', async () => {
+  // The once-per-agent R4a notice must also fire when the model is
+  // inherited from the parent session and only `thinking` came from config
+  // -- previously this branch returned `notice: undefined` unconditionally,
+  // so a config whose only routing was `pi.thinking` silently applied the
+  // thinking level with no notice at all.
+  test('inherited model with a config-sourced thinking level still gets the once-per-agent notice', async () => {
+    const fixerCatalog: AgentCatalogEntry[] = [
+      {
+        name: 'fixer',
+        description: 'Fixes things',
+        body: 'You are a fixer.',
+        toolsSource: undefined,
+        key: 'fixer',
+        category: 'fix',
+        id: 'fix/fixer',
+      },
+    ]
+    const tool = createPiDelegateTool({
+      catalog: fixerCatalog,
+      createDelegateSession: async () => createFakeSession(1),
+      overlays: overlays({ fixer: { pi: { thinking: 'high' } } }),
+    })
+
+    const first = await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'fixer', task: 'fix it' },
+      undefined,
+      fakeCtx({ provider: 'p', id: 'parent-model' }),
+    )
+    const firstText = (first.content[0] as { text: string }).text
+    expect(firstText).toContain('[systematic]')
+    expect(firstText).toContain('routed on the inherited model')
+    expect(firstText).toContain('thinking "high"')
+
+    const second = await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'fixer', task: 'fix it again' },
+      undefined,
+      fakeCtx({ provider: 'p', id: 'parent-model' }),
+    )
+    const secondText = (second.content[0] as { text: string }).text
+    expect(secondText).not.toContain('[systematic]')
+  })
+
+  test('a session-creation failure does not consume the one-time routing notice; the next successful dispatch of the same agent still gets it', async () => {
     const fixerCatalog: AgentCatalogEntry[] = [
       {
         name: 'fixer',

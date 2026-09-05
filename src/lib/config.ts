@@ -897,7 +897,7 @@ function resolveActiveProfile(
     trustedDefault !== undefined && trustedDefault !== requested
       ? ` Your default profile "${trustedDefault}" is also not defined in \`profiles\`.`
       : trustedDefault === undefined
-        ? ' No default profile is configured (`profile` in your user or custom config).'
+        ? ' No default profile is configured (`profile` in your user config).'
         : ''
   input.warningSink(
     `[systematic] profile "${requested}"${sourceNote} is not defined in \`profiles\`; using base configuration (no profile).${alsoMissingNote} See ${PROFILE_DOCS_URL} for how to define a profile.`,
@@ -980,19 +980,14 @@ export function loadConfigWithSources(
     )
   }
 
+  assertAllProfileBundlesAreValid(userConfig, customConfig)
+
   const profileSelection = resolveActiveProfile({
     userConfig,
     projectConfig,
     customConfig,
     warningSink,
   })
-
-  if (profileSelection.bundle) {
-    assertProfileBundleKeysAreBundledNames(
-      profileSelection.activeProfile,
-      profileSelection.bundle,
-    )
-  }
 
   // The active profile bundle is inserted as a fourth chain entry between
   // user base and project (plan KTD: "Profile selection is a load-time step
@@ -1360,8 +1355,8 @@ export function collectRoutingTargets(
 }
 
 /**
- * Validate that every `agents`/`categories` key inside an active profile
- * bundle names a real bundled agent (bare or qualified `category/key`) or
+ * Validate that every `agents`/`categories` key inside a profile bundle
+ * names a real bundled agent (bare or qualified `category/key`) or
  * category -- a typo in a profile is a config error, exactly like a typo
  * in the top-level `agents`/`categories` overlays is. Uses the same static
  * `BUNDLED_AGENT_CATEGORY_BY_KEY`/`BUNDLED_AGENT_KEYS_BY_CATEGORY`
@@ -1373,7 +1368,7 @@ export function collectRoutingTargets(
  * other.
  */
 function assertProfileBundleKeysAreBundledNames(
-  profileName: string | null,
+  profileName: string,
   bundle: RawProfileBundle,
 ): void {
   for (const rawKey of Object.keys(bundle.agents ?? {})) {
@@ -1396,6 +1391,27 @@ function assertProfileBundleKeysAreBundledNames(
       throw new Error(
         `Invalid Systematic config: profiles.${profileName}.categories.${categoryKey} is not a bundled agent category. Valid categories: ${Array.from(BUNDLED_AGENT_KEYS_BY_CATEGORY.keys()).join(', ')}`,
       )
+    }
+  }
+}
+
+/**
+ * Validate every profile bundle defined in every source that may define
+ * `profiles` (custom and user -- project's `profiles` is stripped before
+ * this ever runs), regardless of whether that bundle is currently
+ * selected. A typo in an unselected profile must fail config load exactly
+ * like a typo in the top-level `agents`/`categories` overlays does, rather
+ * than staying silent until some later repository happens to select it.
+ */
+function assertAllProfileBundlesAreValid(
+  userConfig: RawSystematicConfig | undefined,
+  customConfig: RawSystematicConfig | undefined,
+): void {
+  for (const config of [userConfig, customConfig]) {
+    for (const [profileName, bundle] of Object.entries(
+      config?.profiles ?? {},
+    )) {
+      assertProfileBundleKeysAreBundledNames(profileName, bundle)
     }
   }
 }

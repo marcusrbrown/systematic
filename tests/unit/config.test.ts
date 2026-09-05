@@ -4,7 +4,10 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-import { BUNDLED_SKILL_NAMES } from '../../src/lib/bundled-names.js'
+import {
+  BUNDLED_AGENT_QUALIFIED_IDS,
+  BUNDLED_SKILL_NAMES,
+} from '../../src/lib/bundled-names.js'
 import {
   buildCapabilitySnapshot,
   serializeCapabilitySnapshot,
@@ -17,6 +20,10 @@ import {
   loadConfigWithSources,
   warnDroppedNames,
 } from '../../src/lib/config.js'
+import {
+  type RoutingTarget,
+  resolveRouting,
+} from '../../src/lib/routing-resolver.js'
 
 const OBSERVED_AT = '2026-08-13T12:34:56.000Z'
 
@@ -2067,6 +2074,80 @@ describe('config', () => {
       )
     })
 
+    // Every profile bundle is validated at load, regardless of selection: a
+    // typo in an unselected bundle must fail config load immediately, not
+    // stay silent until some later repository selects it.
+    test('a typo in an unselected profile bundle throws at load, with no selector set anywhere', () => {
+      writeUserConfig({
+        profiles: {
+          work: {
+            agents: { 'not-an-agent': { model: 'a/x' } },
+          },
+        },
+      })
+
+      expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
+        /profiles\.work\.agents\.not-an-agent/,
+      )
+    })
+
+    test('a typo in a profile bundle throws the same error whether or not a project selects it', () => {
+      writeUserConfig({
+        profiles: {
+          work: {
+            agents: { 'not-an-agent': { model: 'a/x' } },
+          },
+        },
+      })
+      writeProjectConfig({ profile: 'work' })
+
+      expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
+        /profiles\.work\.agents\.not-an-agent/,
+      )
+    })
+
+    test('a valid profile bundle that is never selected still loads fine', () => {
+      writeUserConfig({
+        profiles: {
+          work: {
+            agents: { 'correctness-reviewer': { model: 'a/work' } },
+          },
+        },
+      })
+
+      const result = loadConfigWithSources(testDir, { warningSink })
+
+      expect(result.metadata.activeProfile).toBeNull()
+      expect(result.config.agents?.['correctness-reviewer']).toBeUndefined()
+      expect(warnings).toEqual([])
+    })
+
+    test('a category/key qualified key in a profile bundle is accepted and resolves', () => {
+      writeUserConfig({
+        profile: 'work',
+        profiles: {
+          work: {
+            agents: { 'review/correctness-reviewer': { model: 'a/qualified' } },
+          },
+        },
+      })
+
+      const result = loadConfigWithSources(testDir, { warningSink })
+
+      expect(result.metadata.activeProfile).toBe('work')
+      const target: RoutingTarget = {
+        agentKey: 'correctness-reviewer',
+        category: 'review',
+      }
+      const resolution = resolveRouting({
+        overlays: result.overlays,
+        piSubagentsOverlays: result.piSubagentsOverlays,
+        target,
+        harness: 'opencode',
+      })
+      expect(resolution.model).toBe('a/qualified')
+    })
+
     // Case 2: user default only.
     test('case 2: user default profile only → that profile is active', () => {
       writeUserConfig({
@@ -2209,6 +2290,44 @@ describe('config', () => {
       })
       expect(warnings).toHaveLength(1)
       expect(warnings[0]).toContain('ghost')
+    })
+
+    // The warning must name exactly the source that selected the missing
+    // name and what was used instead -- never implying the fallback
+    // default came from a source other than the one actually consulted.
+    test('project-invalid missing-profile warning names project as the selector and states no default is configured', () => {
+      writeUserConfig({
+        profiles: {
+          personal: {
+            agents: { 'correctness-reviewer': { model: 'a/personal' } },
+          },
+        },
+      })
+      writeProjectConfig({ profile: 'ghost' })
+
+      loadConfigWithSources(testDir, { warningSink })
+
+      expect(warnings).toEqual([
+        '[systematic] profile "ghost" (selected by project config) is not defined in `profiles`; using base configuration (no profile). No default profile is configured (`profile` in your user config). See https://fro.bot/systematic/reference/configuration#profiles for how to define a profile.',
+      ])
+    })
+
+    test('custom-invalid missing-profile warning names custom as the selector, never claims a user default was used', () => {
+      writeUserConfig({
+        profiles: {
+          personal: {
+            agents: { 'correctness-reviewer': { model: 'a/personal' } },
+          },
+        },
+      })
+
+      withCustomConfig({ profile: 'ghost' }, () => {
+        loadConfigWithSources(testDir, { warningSink })
+
+        expect(warnings).toEqual([
+          '[systematic] profile "ghost" (selected by custom config) is not defined in `profiles`; using base configuration (no profile). No default profile is configured (`profile` in your user config). See https://fro.bot/systematic/reference/configuration#profiles for how to define a profile.',
+        ])
+      })
     })
 
     // Case 8: custom names undefined, user default defined and valid.
@@ -2657,7 +2776,7 @@ describe('config', () => {
       )
     })
 
-    // Code review fix: ConfigSource is now a discriminated union
+    // ConfigSource is a discriminated union
     // (FileConfigSource | ProfileBundleConfigSource) instead of a
     // `trust: 'user'` file source plus an `isProfileBundle` boolean flag.
     // This test pins the metadata-facing guarantee that change protects:
@@ -2862,7 +2981,7 @@ describe('config', () => {
       )
     })
 
-    // Code review fix: a disabled agent must never block config load on a
+    // A disabled agent must never block config load on a
     // missing model -- it is never emitted to OpenCode at all, so a
     // category-level qualifier with nothing for it to attach to is moot.
     test('a disabled agent (via disabled_agents) with no model anywhere does not block load', () => {
@@ -2972,6 +3091,40 @@ describe('config', () => {
           w.includes('correctness-reviewer'),
         )
         expect(legacyWarnings).toHaveLength(1)
+      })
+
+      // Pin the fan-out deliberately: a category-level legacy field must
+      // produce exactly one warning per bundled agent in that category, not
+      // one warning for the category as a whole and not a duplicate per
+      // agent. The 'review' category's agent count is read from the
+      // generated bundled-names source of truth rather than hardcoded, so
+      // this test tracks the category's real membership.
+      test('category-level legacy thinking fires exactly one warning per agent in that category', () => {
+        const reviewAgentCount = BUNDLED_AGENT_QUALIFIED_IDS.filter((id) =>
+          id.startsWith('review/'),
+        ).length
+        expect(reviewAgentCount).toBeGreaterThan(1)
+
+        writeUserConfig({
+          pi_subagents: {
+            categories: { review: { thinking: 'low' } },
+          },
+        })
+
+        loadConfigWithSources(testDir, { warningSink })
+
+        const legacyWarnings = warnings.filter((w) =>
+          w.includes('pi_subagents'),
+        )
+        expect(legacyWarnings).toHaveLength(reviewAgentCount)
+        const distinctAgentsWarned = new Set(
+          legacyWarnings.map((w) => {
+            const match = /agents\.([\w-]+)\.pi\.thinking/.exec(w)
+            if (!match) throw new Error(`warning did not name an agent: ${w}`)
+            return match[1]
+          }),
+        )
+        expect(distinctAgentsWarned.size).toBe(reviewAgentCount)
       })
 
       test('both legacy and pi block set and disagreeing → pi block wins, warning still emitted once', () => {

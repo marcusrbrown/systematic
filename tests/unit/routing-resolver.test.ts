@@ -420,7 +420,7 @@ describe('resolveRouting', () => {
     expect(qualifierResolvesWithoutModel(resolution)).toBe(false)
   })
 
-  // Code review fix: runtime narrowing replaces `as string` casts. Config
+  // Runtime narrowing instead of casts. Config
   // values are Zod-validated at the config-load boundary, so a non-string
   // `model` can never reach the resolver from real JSONC input -- this test
   // feeds one in programmatically (bypassing that boundary entirely, the

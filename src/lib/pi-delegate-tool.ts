@@ -368,6 +368,27 @@ function formatRoutingNotice(
   return `[systematic] "${agentName}" routed to model "${modelString}"${thinkingNote} from config (${source.level} ${source.form})${profileNote}.`
 }
 
+/**
+ * One-line R4a notice for the case where no layer sets `model` (the
+ * delegate inherits the parent session's model) but a `thinking` qualifier
+ * DID resolve from config. Without this, a config whose only routing is
+ * `pi.thinking` (or the legacy `pi_subagents.thinking`) silently applied
+ * that thinking level with no R4a notice at all, since `formatRoutingNotice`
+ * is only reachable when `resolution.source.model` is set.
+ */
+function formatInheritedModelThinkingNotice(
+  agentName: string,
+  source: RoutingFieldSource,
+  activeProfile: string | null,
+  thinkingLevel: DelegateThinkingLevel,
+): string {
+  const profileNote =
+    activeProfile !== null
+      ? ` (active profile "${activeProfile}")`
+      : ' (no active profile)'
+  return `[systematic] "${agentName}" routed on the inherited model with thinking "${thinkingLevel}" from config (${source.level} ${source.form})${profileNote}.`
+}
+
 interface ResolvedPersonaRouting {
   model: DelegateParentModel
   thinkingLevel: DelegateThinkingLevel | undefined
@@ -407,11 +428,32 @@ function resolvePersonaRouting(
         `Delegation to "${agentName}" cannot start because no model is available to inherit from the parent session; refusing to select a default model (fail-closed).`,
       )
     }
+
+    let inheritedNotice: string | undefined
+    let inheritedCommitNotice: (() => void) | undefined
+    const qualifierSource = resolution.source.qualifier
+    if (
+      thinkingLevel !== undefined &&
+      qualifierSource &&
+      !routing.notifiedAgentIds.has(persona.id)
+    ) {
+      inheritedNotice = formatInheritedModelThinkingNotice(
+        agentName,
+        qualifierSource,
+        routing.activeProfile,
+        thinkingLevel,
+      )
+      // Deliberately not committed here -- see the field doc on
+      // `ValidatedDelegateRequest.commitRoutingNotice` for why the
+      // one-time notification slot must survive a failed dispatch.
+      inheritedCommitNotice = () => routing.notifiedAgentIds.add(persona.id)
+    }
+
     return {
       model: ctx.model,
       thinkingLevel,
-      notice: undefined,
-      commitNotice: undefined,
+      notice: inheritedNotice,
+      commitNotice: inheritedCommitNotice,
     }
   }
 
