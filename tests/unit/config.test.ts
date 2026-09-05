@@ -1975,6 +1975,573 @@ describe('config', () => {
       expect(result1.disabled_skills).toEqual(result2.disabled_skills)
     })
   })
+
+  // ════════════════════════════════════════════════════════════════════════
+  // Unit 2 (plan 2026-09-04-002-feat-model-config-profiles): profile
+  // selection and the four-entry merge chain (user base -> active profile
+  // -> project -> custom).
+  // ════════════════════════════════════════════════════════════════════════
+  describe('profile selection', () => {
+    let warnings: string[]
+    let warningSink: (message: string) => void
+
+    beforeEach(() => {
+      warnings = []
+      warningSink = (message: string) => warnings.push(message)
+    })
+
+    function writeProjectConfig(config: Record<string, unknown>): string {
+      const dir = path.join(testDir, '.opencode')
+      fs.mkdirSync(dir, { recursive: true })
+      const filePath = path.join(dir, 'systematic.json')
+      fs.writeFileSync(filePath, JSON.stringify(config))
+      return filePath
+    }
+
+    function withCustomConfig<T>(
+      config: Record<string, unknown>,
+      fn: (customDir: string) => T,
+    ): T {
+      const customDir = fs.mkdtempSync(
+        path.join(os.tmpdir(), 'systematic-profile-custom-'),
+      )
+      process.env.OPENCODE_CONFIG_DIR = customDir
+      fs.writeFileSync(
+        path.join(customDir, 'systematic.json'),
+        JSON.stringify(config),
+      )
+      try {
+        return fn(customDir)
+      } finally {
+        delete process.env.OPENCODE_CONFIG_DIR
+        fs.rmSync(customDir, { recursive: true, force: true })
+      }
+    }
+
+    // Case 1: no selector anywhere.
+    test('case 1: no source sets profile → base configuration, no warning', () => {
+      writeUserConfig({
+        profiles: {
+          personal: { agents: { 'correctness-reviewer': { model: 'a/a' } } },
+        },
+      })
+
+      const result = loadConfigWithSources(testDir, { warningSink })
+
+      expect(result.metadata.activeProfile).toBeNull()
+      expect(result.metadata.profileSelectorSource).toBeNull()
+      expect(result.metadata.profileFallback).toBeNull()
+      expect(warnings).toEqual([])
+    })
+
+    // Case 2: user default only.
+    test('case 2: user default profile only → that profile is active', () => {
+      writeUserConfig({
+        profile: 'personal',
+        profiles: {
+          personal: {
+            agents: { 'correctness-reviewer': { model: 'anthropic/claude-a' } },
+          },
+        },
+      })
+
+      const result = loadConfigWithSources(testDir, { warningSink })
+
+      expect(result.metadata.activeProfile).toBe('personal')
+      expect(result.metadata.profileSelectorSource).toBe('user')
+      expect(result.metadata.profileFallback).toBeNull()
+      expect(result.config.agents?.['correctness-reviewer']).toEqual({
+        model: 'anthropic/claude-a',
+      })
+      expect(warnings).toEqual([])
+    })
+
+    // Case 3: project selector over user default.
+    test('case 3: project profile selector wins over user default', () => {
+      writeUserConfig({
+        profile: 'personal',
+        profiles: {
+          personal: {
+            agents: { 'correctness-reviewer': { model: 'a/personal' } },
+          },
+          work: { agents: { 'correctness-reviewer': { model: 'a/work' } } },
+        },
+      })
+      writeProjectConfig({ profile: 'work' })
+
+      const result = loadConfigWithSources(testDir, { warningSink })
+
+      expect(result.metadata.activeProfile).toBe('work')
+      expect(result.metadata.profileSelectorSource).toBe('project')
+      expect(result.config.agents?.['correctness-reviewer']).toEqual({
+        model: 'a/work',
+      })
+      expect(warnings).toEqual([])
+    })
+
+    // Case 4: custom over both.
+    test('case 4: custom profile selector wins over project and user default', () => {
+      writeUserConfig({
+        profile: 'personal',
+        profiles: {
+          personal: {
+            agents: { 'correctness-reviewer': { model: 'a/personal' } },
+          },
+          work: { agents: { 'correctness-reviewer': { model: 'a/work' } } },
+          ci: { agents: { 'correctness-reviewer': { model: 'a/ci' } } },
+        },
+      })
+      writeProjectConfig({ profile: 'work' })
+
+      withCustomConfig({ profile: 'ci' }, () => {
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        expect(result.metadata.activeProfile).toBe('ci')
+        expect(result.metadata.profileSelectorSource).toBe('custom')
+        expect(result.config.agents?.['correctness-reviewer']).toEqual({
+          model: 'a/ci',
+        })
+        expect(warnings).toEqual([])
+      })
+    })
+
+    // Case 5: project names an undefined profile, user default is defined and valid.
+    test('case 5: project selects a missing profile, falls back to defined user default with one warning', () => {
+      writeUserConfig({
+        profile: 'personal',
+        profiles: {
+          personal: {
+            agents: { 'correctness-reviewer': { model: 'a/personal' } },
+          },
+        },
+      })
+      writeProjectConfig({ profile: 'ghost' })
+
+      const result = loadConfigWithSources(testDir, { warningSink })
+
+      expect(result.metadata.activeProfile).toBe('personal')
+      expect(result.metadata.profileSelectorSource).toBe('project')
+      expect(result.metadata.profileFallback).toEqual({
+        requested: 'ghost',
+        usedDefault: 'personal',
+      })
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]).toContain('ghost')
+      expect(warnings[0]).toContain('personal')
+    })
+
+    // Case 6: project names undefined, user default is also a name that's undefined.
+    test('case 6: project selects a missing profile and user default is also missing → base, one warning', () => {
+      writeUserConfig({
+        profile: 'also-ghost',
+        profiles: {
+          personal: {
+            agents: { 'correctness-reviewer': { model: 'a/personal' } },
+          },
+        },
+      })
+      writeProjectConfig({ profile: 'ghost' })
+
+      const result = loadConfigWithSources(testDir, { warningSink })
+
+      expect(result.metadata.activeProfile).toBeNull()
+      expect(result.metadata.profileSelectorSource).toBe('project')
+      expect(result.metadata.profileFallback).toEqual({
+        requested: 'ghost',
+        usedDefault: null,
+      })
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]).toContain('ghost')
+      expect(warnings[0]).toContain('also-ghost')
+    })
+
+    // Case 7: project names undefined, no user default at all.
+    test('case 7: project selects a missing profile and the user has no default → base, one warning', () => {
+      writeUserConfig({
+        profiles: {
+          personal: {
+            agents: { 'correctness-reviewer': { model: 'a/personal' } },
+          },
+        },
+      })
+      writeProjectConfig({ profile: 'ghost' })
+
+      const result = loadConfigWithSources(testDir, { warningSink })
+
+      expect(result.metadata.activeProfile).toBeNull()
+      expect(result.metadata.profileSelectorSource).toBe('project')
+      expect(result.metadata.profileFallback).toEqual({
+        requested: 'ghost',
+        usedDefault: null,
+      })
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]).toContain('ghost')
+    })
+
+    // Case 8: custom names undefined, user default defined and valid.
+    test('case 8: custom selects a missing profile, falls back to defined user default', () => {
+      writeUserConfig({
+        profile: 'personal',
+        profiles: {
+          personal: {
+            agents: { 'correctness-reviewer': { model: 'a/personal' } },
+          },
+        },
+      })
+
+      withCustomConfig({ profile: 'ghost' }, () => {
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        expect(result.metadata.activeProfile).toBe('personal')
+        expect(result.metadata.profileSelectorSource).toBe('custom')
+        expect(result.metadata.profileFallback).toEqual({
+          requested: 'ghost',
+          usedDefault: 'personal',
+        })
+        expect(warnings).toHaveLength(1)
+      })
+    })
+
+    // Case 9: custom names undefined, default undefined.
+    test('case 9: custom selects a missing profile and default is missing → base', () => {
+      writeUserConfig({
+        profiles: {
+          personal: {
+            agents: { 'correctness-reviewer': { model: 'a/personal' } },
+          },
+        },
+      })
+
+      withCustomConfig({ profile: 'ghost' }, () => {
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        expect(result.metadata.activeProfile).toBeNull()
+        expect(result.metadata.profileSelectorSource).toBe('custom')
+        expect(result.metadata.profileFallback).toEqual({
+          requested: 'ghost',
+          usedDefault: null,
+        })
+        expect(warnings).toHaveLength(1)
+      })
+    })
+
+    // Case 10: user default itself is undefined (no loop).
+    test("case 10: user's own default names a missing profile → base, one warning, no loop", () => {
+      writeUserConfig({
+        profile: 'ghost',
+        profiles: {
+          personal: {
+            agents: { 'correctness-reviewer': { model: 'a/personal' } },
+          },
+        },
+      })
+
+      const result = loadConfigWithSources(testDir, { warningSink })
+
+      expect(result.metadata.activeProfile).toBeNull()
+      expect(result.metadata.profileSelectorSource).toBe('user')
+      expect(result.metadata.profileFallback).toEqual({
+        requested: 'ghost',
+        usedDefault: null,
+      })
+      expect(warnings).toHaveLength(1)
+    })
+
+    // Case 11: explicit null wins outright, no warning.
+    test('case 11a: project profile: null overrides user default → base, no warning', () => {
+      writeUserConfig({
+        profile: 'personal',
+        profiles: {
+          personal: {
+            agents: { 'correctness-reviewer': { model: 'a/personal' } },
+          },
+        },
+      })
+      writeProjectConfig({ profile: null })
+
+      const result = loadConfigWithSources(testDir, { warningSink })
+
+      expect(result.metadata.activeProfile).toBeNull()
+      expect(result.metadata.profileSelectorSource).toBe('project')
+      expect(result.metadata.profileFallback).toBeNull()
+      expect(warnings).toEqual([])
+    })
+
+    test('case 11b: custom profile: null overrides a project name → base, no warning', () => {
+      writeUserConfig({
+        profile: 'personal',
+        profiles: {
+          personal: {
+            agents: { 'correctness-reviewer': { model: 'a/personal' } },
+          },
+        },
+      })
+      writeProjectConfig({ profile: 'personal' })
+
+      withCustomConfig({ profile: null }, () => {
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        expect(result.metadata.activeProfile).toBeNull()
+        expect(result.metadata.profileSelectorSource).toBe('custom')
+        expect(result.metadata.profileFallback).toBeNull()
+        expect(warnings).toEqual([])
+      })
+    })
+
+    // Project `profiles` is protected: stripped, one warning, its bundles are
+    // never selectable even if the project also sets `profile`.
+    test('project-defined profiles map is stripped with one warning and is never selectable', () => {
+      writeUserConfig({
+        profiles: {
+          personal: {
+            agents: { 'correctness-reviewer': { model: 'a/personal' } },
+          },
+        },
+      })
+      const projectConfigPath = writeProjectConfig({
+        profile: 'sneaky',
+        profiles: {
+          sneaky: { agents: { 'correctness-reviewer': { model: 'a/sneaky' } } },
+        },
+      })
+
+      const result = loadConfigWithSources(testDir, { warningSink })
+
+      // The project's own 'sneaky' bundle is not in the user's profiles map,
+      // so selecting it is exactly the "missing name, no user default" path.
+      expect(result.metadata.activeProfile).toBeNull()
+      expect(result.metadata.profileFallback).toEqual({
+        requested: 'sneaky',
+        usedDefault: null,
+      })
+      expect(result.config.agents?.['correctness-reviewer']).toBeUndefined()
+
+      const profilesWarning = warnings.find((w) => w.includes('`profiles`'))
+      expect(profilesWarning).toBeDefined()
+      expect(profilesWarning).toContain(projectConfigPath)
+      // Exactly one warning about the stripped `profiles` map, plus exactly
+      // one about the missing selector fallback -- not more.
+      expect(warnings).toHaveLength(2)
+    })
+
+    // Merge order: base -> profile -> project -> custom, verifying the
+    // four-entry chain composes additively for disjoint fields and later
+    // wins for the same field.
+    test('merge order: base model A, profile model B, project temperature 0.2, custom model C → effective model C + temperature 0.2', () => {
+      writeUserConfig({
+        profile: 'p',
+        agents: { 'correctness-reviewer': { model: 'a/A' } },
+        profiles: {
+          p: { agents: { 'correctness-reviewer': { model: 'a/B' } } },
+        },
+      })
+      writeProjectConfig({
+        agents: { 'correctness-reviewer': { temperature: 0.2 } },
+      })
+
+      withCustomConfig(
+        { agents: { 'correctness-reviewer': { model: 'a/C' } } },
+        () => {
+          const result = loadConfigWithSources(testDir, { warningSink })
+
+          expect(result.config.agents?.['correctness-reviewer']).toEqual({
+            model: 'a/C',
+            temperature: 0.2,
+          })
+        },
+      )
+    })
+
+    test('merge order without custom: base model A, profile model B, project temperature 0.2 → effective model B + temperature 0.2', () => {
+      writeUserConfig({
+        profile: 'p',
+        agents: { 'correctness-reviewer': { model: 'a/A' } },
+        profiles: {
+          p: { agents: { 'correctness-reviewer': { model: 'a/B' } } },
+        },
+      })
+      writeProjectConfig({
+        agents: { 'correctness-reviewer': { temperature: 0.2 } },
+      })
+
+      const result = loadConfigWithSources(testDir, { warningSink })
+
+      expect(result.config.agents?.['correctness-reviewer']).toEqual({
+        model: 'a/B',
+        temperature: 0.2,
+      })
+    })
+
+    // Regression: a profile bundle can only ever carry routing fields
+    // (ProfileOverlaySchema forbids mode/color/steps/hidden/disable), so
+    // switching which profile is active must never change an agent's
+    // visibility, permissions, mode, or existence (R7/R10).
+    test('profile switch preserves non-routing fields the profile cannot itself carry (disable/hidden/mode/steps)', () => {
+      writeUserConfig({
+        profile: 'p',
+        agents: {
+          'correctness-reviewer': {
+            disable: true,
+            hidden: true,
+            mode: 'subagent',
+            steps: 3,
+            model: 'a/x',
+          },
+        },
+        profiles: {
+          p: { agents: { 'correctness-reviewer': { model: 'b/y' } } },
+        },
+      })
+
+      const result = loadConfigWithSources(testDir, { warningSink })
+
+      expect(result.config.agents?.['correctness-reviewer']).toEqual({
+        disable: true,
+        hidden: true,
+        mode: 'subagent',
+        steps: 3,
+        model: 'b/y',
+      })
+    })
+
+    // Regression: a profile setting only `pi.thinking` must not wipe a base
+    // `pi.model` -- R3b requires a profile to be able to set a qualifier
+    // alone when the model resolves from a lower layer, including when that
+    // lower layer is itself a harness block.
+    test('profile pi block merges one level deep: base pi.model survives a profile pi.thinking-only fragment', () => {
+      writeUserConfig({
+        profile: 'p',
+        agents: {
+          'correctness-reviewer': { pi: { model: 'p/m' } },
+        },
+        profiles: {
+          p: {
+            agents: { 'correctness-reviewer': { pi: { thinking: 'high' } } },
+          },
+        },
+      })
+
+      const result = loadConfigWithSources(testDir, { warningSink })
+
+      expect(result.config.agents?.['correctness-reviewer']?.pi).toEqual({
+        model: 'p/m',
+        thinking: 'high',
+      })
+    })
+
+    // Regression: a profile's explicit opencode.model: null must win (opt
+    // out of the block's model) while the base block's variant survives.
+    test('profile opencode block merges one level deep: explicit model: null wins, base variant survives', () => {
+      writeUserConfig({
+        profile: 'p',
+        agents: {
+          'correctness-reviewer': {
+            opencode: { model: 'o/m', variant: 'high' },
+          },
+        },
+        profiles: {
+          p: {
+            agents: {
+              'correctness-reviewer': { opencode: { model: null } },
+            },
+          },
+        },
+      })
+
+      const result = loadConfigWithSources(testDir, { warningSink })
+
+      expect(result.config.agents?.['correctness-reviewer']?.opencode).toEqual({
+        model: null,
+        variant: 'high',
+      })
+    })
+
+    // Regression: same field-additive guarantee for categories, using a
+    // non-routing field (color) the profile schema cannot carry at all.
+    test('profile switch preserves a category color field the profile cannot itself carry', () => {
+      writeUserConfig({
+        profile: 'p',
+        categories: { review: { color: 'primary', model: 'a/review-old' } },
+        profiles: {
+          p: { categories: { review: { model: 'a/review-new' } } },
+        },
+      })
+
+      const result = loadConfigWithSources(testDir, { warningSink })
+
+      expect(result.config.categories?.review).toEqual({
+        color: 'primary',
+        model: 'a/review-new',
+      })
+    })
+
+    // Non-regression: the pinned custom-replaces-project whole-replace
+    // semantics (preserveFieldsAbsentFromNext's narrower field set for
+    // non-profile overrides) must be untouched by the profile-layer change.
+    test('non-regression: custom config category overlay still replaces project same-key overlay (steps dropped)', () => {
+      writeProjectConfig({
+        categories: { review: { steps: 8, temperature: 0.1 } },
+      })
+
+      withCustomConfig({ categories: { review: { temperature: 0.7 } } }, () => {
+        const result = loadConfigWithSources(testDir, { warningSink })
+        expect(result.config.categories?.review).toEqual({
+          temperature: 0.7,
+        })
+      })
+    })
+
+    test('active profile categories overlay merges into the effective config', () => {
+      writeUserConfig({
+        profile: 'p',
+        profiles: {
+          p: { categories: { review: { model: 'a/review-model' } } },
+        },
+      })
+
+      const result = loadConfigWithSources(testDir, { warningSink })
+
+      expect(result.config.categories?.review).toEqual({
+        model: 'a/review-model',
+      })
+    })
+
+    test('overlays.agents sourcePath for a profile-sourced value points at the user config file', () => {
+      const userConfigPath = writeUserConfig({
+        profile: 'p',
+        profiles: {
+          p: { agents: { 'correctness-reviewer': { model: 'a/B' } } },
+        },
+      })
+
+      const result = loadConfigWithSources(testDir, { warningSink })
+
+      expect(result.overlays.agents['correctness-reviewer']?.sourcePath).toBe(
+        userConfigPath,
+      )
+    })
+
+    test('the pre-existing three-entry pi_subagents merge and metadata sources are unaffected by an active profile', () => {
+      writeUserConfig({
+        profile: 'p',
+        profiles: {
+          p: { agents: { 'correctness-reviewer': { model: 'a/B' } } },
+        },
+        pi_subagents: { agents: { x: { thinking: 'high' } } },
+      })
+
+      const result = loadConfigWithSources(testDir, { warningSink })
+
+      expect(result.config.pi_subagents?.agents?.x).toEqual({
+        thinking: 'high',
+      })
+      expect(result.metadata.sources).toEqual([
+        { kind: 'custom', presence: 'absent' },
+        { kind: 'project', presence: 'absent' },
+        { kind: 'user', presence: 'present' },
+      ])
+    })
+  })
 })
 
 describe('pi_subagents merge and trust', () => {
