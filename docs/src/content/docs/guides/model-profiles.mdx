@@ -108,7 +108,7 @@ A legacy field still works and prints one deprecation warning naming the exact p
 
 ## Checking Active Routing
 
-If the `systematic` CLI is on your `PATH`, `config show` prints the config files it found, the active profile, which source selected it, any fallback, and the resolved routing for every overlaid agent. `--json` gives the same as one object:
+If the `systematic` CLI is on your `PATH`, `config show` prints the config files it found, the active profile, which source selected it, any fallback, and the resolved routing for every overlaid agent. `--json` gives the same as one object. Plain `config show` prints the full contents of each config file it finds, while `--json` reports only their paths — keep that in mind before pasting either into an issue:
 
 ```bash
 systematic config show --json
@@ -119,7 +119,7 @@ With the `work` profile above selected by a repository:
 ```json title="systematic config show --json (trimmed)"
 {
   "locations": {
-    "user": "~/.config/opencode/systematic.json",
+    "user": "/home/you/.config/opencode/systematic.json",
     "project": "/path/to/repo/.opencode/systematic.json",
     "custom": null
   },
@@ -156,5 +156,5 @@ With the `work` profile above selected by a repository:
 
 - **A selected profile name is not defined.** Systematic warns once and uses your own default `profile` instead; with no usable default it runs on base configuration. `config show` reports the fallback under `profileFallback`.
 - **Config fails to load naming an agent and `opencode`.** An OpenCode `variant` resolved with no `model` at any layer for that agent. Add a model at the same layer or a less specific one, or remove the variant.
-- **Config fails to load naming `profiles.<name>.agents.<key>`.** A profile contains an agent or category key that is not a bundled name. Every profile is validated at load, selected or not, so the typo has to be fixed even in a profile you never use.
+- **Config fails to load naming `profiles.<name>.agents.<key>` or `profiles.<name>.categories.<key>`.** A profile contains an agent or category key that is not a bundled name. Every profile is validated at load, selected or not, so the typo has to be fixed even in a profile you never use.
 - **A profile changed routing but nothing else.** By design: profile entries carry only `model`, `variant`, `temperature`, `top_p`, `opencode`, and `pi`. Fields such as `mode`, `permission`, `disable`, `hidden`, `steps`, and `color` come from your base config and survive any profile switch.
