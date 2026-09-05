@@ -18,8 +18,7 @@ applies_when:
   - Building a test whose purpose is to prove deleted behavior stays deleted
   - The deleted mechanism wrote more than one field
   - A gate's headline assertion names one symptom of a broader capability
-  - Replacing a heuristic, refinement, or schema post-processor with a rewrite that must preserve its behavior
-  - Seeding a compatibility corpus for a byte-identical output check
+  - Seeding a compatibility corpus to prove a rewrite preserves a deleted heuristic, refinement, or schema post-processor
 ---
 
 # A deletion gate must observe every field the deleted code could write
@@ -131,7 +130,7 @@ rg 'variant' src/lib/config-handler.ts
 | `categories.review = {model, variant}` + `agents.x = {model}` | agent model, no variant | agent model **with** the category variant |
 | `categories.review = {model, variant}` + `agents.x = {model: null}` | neither | category variant alone |
 
-These live at `tests/fixtures/config-corpus/013-agent-model-clears-category-variant/` and `014-agent-model-null-clears-category-routing/`. The heuristic's third branch, a variant with no model anywhere, is a rejection rather than an output shape, so it is pinned by a loader test instead of a corpus row.
+These are corpus entries 013 and 014, described in `tests/fixtures/config-corpus/README.md`. The heuristic's third branch, a variant with no model anywhere, is a rejection rather than an output shape, so it is pinned by a loader test instead of a corpus row.
 
 ## Related
 
