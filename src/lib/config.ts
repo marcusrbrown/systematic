@@ -60,10 +60,14 @@ export const CONFIG_PROTECTED_FIELD_PATHS = [
   'agents.*.permission',
   'agents.*.skills',
   'agents.*.variant',
+  'agents.*.opencode',
+  'agents.*.pi',
   'categories.*.model',
   'categories.*.permission',
   'categories.*.skills',
   'categories.*.variant',
+  'categories.*.opencode',
+  'categories.*.pi',
 ] as const
 
 export type ConfigSourceKind = 'custom' | 'project' | 'user'
@@ -173,12 +177,16 @@ const PROTECTED_OVERLAY_FIELD_PATHS = {
     permission: 'agents.*.permission',
     skills: 'agents.*.skills',
     variant: 'agents.*.variant',
+    opencode: 'agents.*.opencode',
+    pi: 'agents.*.pi',
   },
   categories: {
     model: 'categories.*.model',
     permission: 'categories.*.permission',
     skills: 'categories.*.skills',
     variant: 'categories.*.variant',
+    opencode: 'categories.*.opencode',
+    pi: 'categories.*.pi',
   },
 } satisfies Record<
   'agents' | 'categories',

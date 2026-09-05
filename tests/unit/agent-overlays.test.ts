@@ -659,8 +659,20 @@ describe('variant emission via overlay flow', () => {
 
 describe('Zod-backed overlay validation', () => {
   test('SECURITY_OVERLAY_FIELDS derived from schema matches the hand-coded set', () => {
+    // Unit 1 of plan 2026-09-04-002-feat-model-config-profiles adds the
+    // opencode/pi harness routing blocks as whole-block trust-protected
+    // fields (each block's model/variant/thinking fields are individually
+    // trust-protected too, but SECURITY_OVERLAY_FIELDS only needs to name
+    // the block itself since a project source cannot set any of it).
     const derived = Array.from(SECURITY_OVERLAY_FIELDS)
-    const expected = ['model', 'variant', 'skills', 'permission']
+    const expected = [
+      'model',
+      'variant',
+      'skills',
+      'permission',
+      'opencode',
+      'pi',
+    ]
     expect(derived.sort()).toEqual(expected.sort())
   })
 

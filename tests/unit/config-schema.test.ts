@@ -97,6 +97,7 @@ describe('SystematicConfigSchema', () => {
       expect(result.data.bootstrap.enabled).toBe(true)
       expect(result.data.agents).toEqual({})
       expect(result.data.categories).toEqual({})
+      expect(result.data.profiles).toEqual({})
       expect(result.data.skills_as_commands).toBe(true)
       expect(result.data.workflow_guard).toEqual({
         mode: 'observe',
@@ -106,7 +107,8 @@ describe('SystematicConfigSchema', () => {
         categories: {},
         agents: {},
       })
-      // Verify all top-level keys exist
+      // Verify all top-level keys exist. `profile` is absent (optional, no
+      // default) since it was omitted from the input.
       expect(Object.keys(result.data).sort()).toEqual([
         'agents',
         'bootstrap',
@@ -115,6 +117,7 @@ describe('SystematicConfigSchema', () => {
         'disabled_commands',
         'disabled_skills',
         'pi_subagents',
+        'profiles',
         'skills_as_commands',
         'workflow_guard',
       ])
@@ -422,29 +425,28 @@ describe('validateConfig wrapper', () => {
     }
   })
 
-  test('rejects agent variant without same-overlay model', () => {
+  // Relaxed in the model-config-profiles feature (plan 2026-09-04-002, Unit
+  // 1): a written fragment may set a qualifier (variant/thinking) with no
+  // model in that same fragment; the invariant moves to a post-merge check
+  // in Unit 3's routing resolver. These two tests previously asserted a
+  // parse-time rejection; they now assert the relaxed acceptance.
+  test('accepts agent variant without same-overlay model (invariant deferred to post-merge)', () => {
     const result = validateConfig({
       agents: { 'correctness-reviewer': { variant: 'high' } },
     })
-    expect(result.success).toBe(false)
-    if (!result.success) {
-      expect(result.errors[0].path).toEqual([
-        'agents',
-        'correctness-reviewer',
-        'variant',
-      ])
-      expect(result.errors[0].message).toContain('model')
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.agents['correctness-reviewer']?.variant).toBe('high')
     }
   })
 
-  test('rejects category variant without same-overlay model', () => {
+  test('accepts category variant without same-overlay model (invariant deferred to post-merge)', () => {
     const result = validateConfig({
       categories: { review: { variant: 'high' } },
     })
-    expect(result.success).toBe(false)
-    if (!result.success) {
-      expect(result.errors[0].path).toEqual(['categories', 'review', 'variant'])
-      expect(result.errors[0].message).toContain('model')
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.categories.review?.variant).toBe('high')
     }
   })
 })
@@ -468,23 +470,21 @@ describe('AgentOverlaySchema', () => {
     expect(result.success).toBe(true)
   })
 
-  test('rejects variant without same-overlay model', () => {
+  // Relaxed in the model-config-profiles feature (plan 2026-09-04-002, Unit
+  // 1) — see the comment on enforceVariantHasExplicitModel in
+  // src/lib/config-schema.ts. The invariant moves to a post-merge check in
+  // Unit 3's routing resolver.
+  test('accepts variant without same-overlay model (invariant deferred to post-merge)', () => {
     const result = AgentOverlaySchema.safeParse({ variant: 'high' })
-    expect(result.success).toBe(false)
-    if (!result.success) {
-      expect(result.error.issues[0].message).toContain('model')
-    }
+    expect(result.success).toBe(true)
   })
 
-  test('rejects variant with model null inheritance opt-out', () => {
+  test('accepts variant with model null inheritance opt-out (invariant deferred to post-merge)', () => {
     const result = AgentOverlaySchema.safeParse({
       model: null,
       variant: 'high',
     })
-    expect(result.success).toBe(false)
-    if (!result.success) {
-      expect(result.error.issues[0].message).toContain('model')
-    }
+    expect(result.success).toBe(true)
   })
 
   test('rejects unknown fields via strict mode', () => {
@@ -526,23 +526,21 @@ describe('CategoryOverlaySchema', () => {
     expect(result.success).toBe(true)
   })
 
-  test('rejects variant without same-overlay model', () => {
+  // Relaxed in the model-config-profiles feature (plan 2026-09-04-002, Unit
+  // 1) — see the comment on enforceVariantHasExplicitModel in
+  // src/lib/config-schema.ts. The invariant moves to a post-merge check in
+  // Unit 3's routing resolver.
+  test('accepts variant without same-overlay model (invariant deferred to post-merge)', () => {
     const result = CategoryOverlaySchema.safeParse({ variant: 'high' })
-    expect(result.success).toBe(false)
-    if (!result.success) {
-      expect(result.error.issues[0].message).toContain('model')
-    }
+    expect(result.success).toBe(true)
   })
 
-  test('rejects variant with model null inheritance opt-out', () => {
+  test('accepts variant with model null inheritance opt-out (invariant deferred to post-merge)', () => {
     const result = CategoryOverlaySchema.safeParse({
       model: null,
       variant: 'high',
     })
-    expect(result.success).toBe(false)
-    if (!result.success) {
-      expect(result.error.issues[0].message).toContain('model')
-    }
+    expect(result.success).toBe(true)
   })
 
   test('rejects disable field (only valid for agents)', () => {
@@ -1176,5 +1174,348 @@ describe('removed-names in createSystematicConfigSchema', () => {
       disabled_agents: [SYNTHETIC_REMOVED_AGENT_QUALIFIED],
     })
     expect(result.success).toBe(false)
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════
+// Unit 1 (plan 2026-09-04-002-feat-model-config-profiles): harness routing
+// blocks (opencode/pi), profiles, profile selector, and the relaxed
+// qualifier-requires-model invariant.
+// ═══════════════════════════════════════════════════════════════════════
+
+describe('harness routing blocks (opencode/pi)', () => {
+  test('agent overlay accepts both opencode and pi blocks', () => {
+    const result = AgentOverlaySchema.safeParse({
+      opencode: { model: 'anthropic/claude-opus-4-7', variant: 'v2' },
+      pi: { model: 'anthropic/claude-opus-4-7', thinking: 'high' },
+    })
+    expect(result.success).toBe(true)
+  })
+
+  test('category overlay accepts both opencode and pi blocks', () => {
+    const result = CategoryOverlaySchema.safeParse({
+      opencode: { model: 'anthropic/claude-opus-4-7', variant: 'v2' },
+      pi: { model: 'anthropic/claude-opus-4-7', thinking: 'high' },
+    })
+    expect(result.success).toBe(true)
+  })
+
+  test('rejects pi.variant (variant is opencode-only) naming the path', () => {
+    const result = AgentOverlaySchema.safeParse({ pi: { variant: 'v2' } })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const issue = result.error.issues[0] as {
+        code: string
+        keys?: string[]
+        path: (string | number)[]
+      }
+      expect(issue.code).toBe('unrecognized_keys')
+      expect(issue.keys).toContain('variant')
+      expect(issue.path).toEqual(['pi'])
+    }
+  })
+
+  test('rejects opencode.thinking (thinking is pi-only) naming the path', () => {
+    const result = AgentOverlaySchema.safeParse({
+      opencode: { thinking: 'high' },
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const issue = result.error.issues[0] as {
+        code: string
+        keys?: string[]
+        path: (string | number)[]
+      }
+      expect(issue.code).toBe('unrecognized_keys')
+      expect(issue.keys).toContain('thinking')
+      expect(issue.path).toEqual(['opencode'])
+    }
+  })
+
+  test('rejects a claude-code block on an agent overlay', () => {
+    const result = AgentOverlaySchema.safeParse({ 'claude-code': {} })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const issue = result.error.issues[0] as { code: string; keys?: string[] }
+      expect(issue.code).toBe('unrecognized_keys')
+      expect(issue.keys).toContain('claude-code')
+    }
+  })
+
+  test('rejects a claude-code block on a category overlay', () => {
+    const result = CategoryOverlaySchema.safeParse({ 'claude-code': {} })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const issue = result.error.issues[0] as { code: string; keys?: string[] }
+      expect(issue.code).toBe('unrecognized_keys')
+      expect(issue.keys).toContain('claude-code')
+    }
+  })
+
+  test('pi.thinking with no model anywhere in the fragment parses (invariant deferred to post-merge)', () => {
+    const result = AgentOverlaySchema.safeParse({ pi: { thinking: 'high' } })
+    expect(result.success).toBe(true)
+  })
+
+  test('opencode.variant with no model anywhere in the fragment parses (invariant deferred to post-merge)', () => {
+    const result = AgentOverlaySchema.safeParse({
+      opencode: { variant: 'v2' },
+    })
+    expect(result.success).toBe(true)
+  })
+
+  test('model: null inside a harness block parses', () => {
+    const opencodeResult = AgentOverlaySchema.safeParse({
+      opencode: { model: null },
+    })
+    expect(opencodeResult.success).toBe(true)
+    const piResult = AgentOverlaySchema.safeParse({ pi: { model: null } })
+    expect(piResult.success).toBe(true)
+  })
+
+  test('via SystematicConfigSchema: a bundled agent overlay accepts both blocks', () => {
+    const result = SystematicConfigSchema.safeParse({
+      agents: {
+        'correctness-reviewer': {
+          opencode: { model: 'anthropic/claude-opus-4-7', variant: 'v2' },
+          pi: { model: 'anthropic/claude-opus-4-7', thinking: 'high' },
+        },
+      },
+    })
+    expect(result.success).toBe(true)
+  })
+})
+
+describe('profiles and profile selector', () => {
+  test('a profiles map with two bundles and a top-level profile selector parses', () => {
+    const result = SystematicConfigSchema.safeParse({
+      profiles: {
+        personal: {
+          agents: { 'correctness-reviewer': { model: 'openai/gpt-5' } },
+        },
+        work: {
+          categories: { review: { pi: { thinking: 'high' } } },
+        },
+      },
+      profile: 'personal',
+    })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.profile).toBe('personal')
+      expect(
+        result.data.profiles.personal?.agents?.['correctness-reviewer']?.model,
+      ).toBe('openai/gpt-5')
+      expect(result.data.profiles.work?.categories?.review?.pi?.thinking).toBe(
+        'high',
+      )
+    }
+  })
+
+  test('profile: null parses (explicit base selection)', () => {
+    const result = SystematicConfigSchema.safeParse({ profile: null })
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(result.data.profile).toBeNull()
+    }
+  })
+
+  test('omitting profile leaves it absent (tri-state: undefined defers to a lower-priority source)', () => {
+    const result = SystematicConfigSchema.safeParse({})
+    expect(result.success).toBe(true)
+    if (result.success) {
+      expect(Object.hasOwn(result.data, 'profile')).toBe(false)
+    }
+  })
+
+  test('empty string profile name is rejected', () => {
+    const result = SystematicConfigSchema.safeParse({ profile: '' })
+    expect(result.success).toBe(false)
+  })
+
+  test('rejects a non-routing field inside a profile agent entry, naming the path', () => {
+    const result = SystematicConfigSchema.safeParse({
+      profiles: {
+        x: { agents: { fixer: { permission: { edit: 'allow' } } } },
+      },
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const issue = result.error.issues[0] as {
+        code: string
+        keys?: string[]
+        path: (string | number)[]
+      }
+      expect(issue.code).toBe('unrecognized_keys')
+      expect(issue.keys).toContain('permission')
+      expect(issue.path).toEqual(['profiles', 'x', 'agents', 'fixer'])
+    }
+  })
+
+  test('rejects a non-routing field inside a profile category entry, naming the path', () => {
+    const result = SystematicConfigSchema.safeParse({
+      profiles: { x: { categories: { review: { mode: 'primary' } } } },
+    })
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      const issue = result.error.issues[0] as {
+        code: string
+        keys?: string[]
+        path: (string | number)[]
+      }
+      expect(issue.code).toBe('unrecognized_keys')
+      expect(issue.keys).toContain('mode')
+      expect(issue.path).toEqual(['profiles', 'x', 'categories', 'review'])
+    }
+  })
+
+  test('rejects a claude-code block inside a profile agent entry', () => {
+    const result = SystematicConfigSchema.safeParse({
+      profiles: { x: { agents: { fixer: { 'claude-code': {} } } } },
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('profile agent/category entries accept the full routing-only field set', () => {
+    const result = SystematicConfigSchema.safeParse({
+      profiles: {
+        x: {
+          agents: {
+            fixer: {
+              model: 'anthropic/claude-opus-4-7',
+              variant: 'v2',
+              temperature: 0.1,
+              top_p: 0.9,
+              opencode: { variant: 'v2' },
+              pi: { thinking: 'high' },
+            },
+          },
+        },
+      },
+    })
+    expect(result.success).toBe(true)
+  })
+
+  test('model: null inside a profile entry parses', () => {
+    const result = SystematicConfigSchema.safeParse({
+      profiles: { x: { agents: { fixer: { model: null } } } },
+    })
+    expect(result.success).toBe(true)
+  })
+})
+
+describe('back-compat: existing config shapes (R13/R14, Unit 1 scope)', () => {
+  test('a fully populated legacy config parses to its old values plus the new profiles default', () => {
+    const input = {
+      agents: {
+        'correctness-reviewer': {
+          model: 'openai/gpt-4',
+          variant: 'v2',
+          temperature: 0.3,
+          top_p: 0.9,
+          mode: 'subagent' as const,
+          color: 'primary',
+          steps: 10,
+          hidden: false,
+          disable: false,
+          skills: ['ce:plan'],
+          permission: { edit: 'allow' as const },
+        },
+      },
+      categories: {
+        review: {
+          model: 'anthropic/claude-3',
+          temperature: 0.1,
+        },
+      },
+      disabled_skills: ['ce:plan'],
+      disabled_agents: ['correctness-reviewer'],
+      disabled_commands: ['cmd-1'],
+      bootstrap: {
+        enabled: false,
+        file: '/tmp/prompt.md',
+      },
+      workflow_guard: {
+        mode: 'protected' as const,
+        debug: true,
+      },
+    }
+
+    const result = SystematicConfigSchema.safeParse(input)
+    expect(result.success).toBe(true)
+    if (!result.success) return
+
+    expect(result.data).toEqual({
+      agents: {
+        'correctness-reviewer': {
+          model: 'openai/gpt-4',
+          variant: 'v2',
+          temperature: 0.3,
+          top_p: 0.9,
+          mode: 'subagent',
+          color: 'primary',
+          steps: 10,
+          hidden: false,
+          disable: false,
+          skills: ['ce:plan'],
+          permission: { edit: 'allow' },
+        },
+      },
+      categories: {
+        review: {
+          model: 'anthropic/claude-3',
+          temperature: 0.1,
+        },
+      },
+      profiles: {},
+      disabled_skills: ['ce:plan'],
+      disabled_agents: ['correctness-reviewer'],
+      disabled_commands: ['cmd-1'],
+      bootstrap: {
+        enabled: false,
+        file: '/tmp/prompt.md',
+      },
+      workflow_guard: {
+        mode: 'protected',
+        debug: true,
+      },
+      pi_subagents: { categories: {}, agents: {} },
+      skills_as_commands: true,
+    })
+    expect(Object.hasOwn(result.data, 'profile')).toBe(false)
+  })
+
+  test('an empty config parses to defaults plus profiles: {} and no profile key', () => {
+    const result = SystematicConfigSchema.safeParse({})
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data).toEqual({
+      agents: {},
+      categories: {},
+      profiles: {},
+      disabled_skills: [],
+      disabled_agents: [],
+      disabled_commands: [],
+      bootstrap: { enabled: true },
+      workflow_guard: { mode: 'observe', debug: false },
+      pi_subagents: { categories: {}, agents: {} },
+      skills_as_commands: true,
+    })
+  })
+
+  test('a pi_subagents-only legacy config is unaffected by the new fields', () => {
+    const input = {
+      pi_subagents: {
+        agents: { 'repo-research-analyst': { thinking: 'medium' as const } },
+      },
+    }
+    const result = SystematicConfigSchema.safeParse(input)
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    expect(result.data.pi_subagents).toEqual({
+      categories: {},
+      agents: { 'repo-research-analyst': { thinking: 'medium' } },
+    })
+    expect(result.data.profiles).toEqual({})
+    expect(Object.hasOwn(result.data, 'profile')).toBe(false)
   })
 })

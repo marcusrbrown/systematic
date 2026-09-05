@@ -321,6 +321,118 @@ Permission overrides per tool
 }
 ```
 
+### opencode
+
+OpenCode-specific routing block. When present, model/variant here override the flat model/variant fields for OpenCode only; the flat fields remain the harness-neutral default and still apply to Pi. A qualifier set here with no model anywhere in the merged overlay is a config-load error raised by the routing resolver, not a parse-time error.
+
+**Type:** `object`
+
+**Examples:**
+
+```json
+{
+  "model": "anthropic/claude-opus-4-7",
+  "variant": "v2"
+}
+```
+
+```json
+{
+  "model": null
+}
+```
+
+#### model
+
+Model identifier in provider/model format, or null to inherit parent model
+
+**Type:** `string` | `null`
+
+**Examples:**
+
+```json
+anthropic/claude-sonnet-4
+```
+
+```json
+null
+```
+
+#### variant
+
+Model variant identifier
+
+**Type:** `string`
+
+**Examples:**
+
+```json
+v2
+```
+
+```json
+extended
+```
+
+### pi
+
+Pi-specific routing block. When present, model/thinking here override the flat model field and the legacy pi_subagents.<name>.thinking value for Pi only; the flat model field remains the harness-neutral default and still applies to OpenCode. A qualifier set here with no model anywhere in the merged overlay is a config-load error raised by the routing resolver, not a parse-time error.
+
+**Type:** `object`
+
+**Examples:**
+
+```json
+{
+  "model": "anthropic/claude-opus-4-7",
+  "thinking": "high"
+}
+```
+
+```json
+{
+  "model": null
+}
+```
+
+#### model
+
+Model identifier in provider/model format, or null to inherit parent model
+
+**Type:** `string` | `null`
+
+**Examples:**
+
+```json
+anthropic/claude-sonnet-4
+```
+
+```json
+null
+```
+
+#### thinking
+
+pi-subagents reasoning effort level for exported persona frontmatter
+
+**Type:** `string`
+
+**Valid values:** `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`
+
+**Examples:**
+
+```json
+off
+```
+
+```json
+medium
+```
+
+```json
+high
+```
+
 ## $schema
 
 JSON Schema URL for IDE autocomplete. The value is informational only — the loader does not fetch or validate against it. Add this to enable IDE schema activation and field-level autocomplete in editors that support JSON Schema (VSCode, Zed, IntelliJ).
@@ -386,6 +498,49 @@ Per-category configuration overlays keyed by category name
 
 
 Per-entry overlay fields are documented in the [Agent/Category Overlay Fields](#agentcategory-overlay-fields) section above.
+
+## profiles
+
+Named routing-only overlay bundles, selectable by name via the profile field. Only valid in user config or OPENCODE_CONFIG_DIR config — a project config may select a profile but may not define this field.
+
+**Type:** `object`
+**Default:** `{}`
+**Examples:**
+
+```json
+{
+  "personal": {
+    "agents": {
+      "correctness-reviewer": {
+        "model": "openai/gpt-5"
+      }
+    }
+  }
+}
+```
+
+```json
+{}
+```
+
+
+Each named bundle's `agents`/`categories` entries have the same shape as the top-level `agents`/`categories` overlays above, restricted to a routing-only field subset — see [Profile Bundle Overlay Fields](#profile-bundle-overlay-fields) below.
+
+## profile
+
+Selects a named entry from this source's profiles map as the routing overlay bundle to apply. null explicitly selects the base config (no profile), which still wins over a lower-priority source's selection. Omitting the field entirely defers the decision to a lower-priority source.
+
+**Type:** `string` | `null`
+**Examples:**
+
+```json
+personal
+```
+
+```json
+null
+```
+
 
 ## disabled_skills
 
@@ -591,6 +746,195 @@ true
 
 ```json
 false
+```
+
+
+## Profile Bundle Overlay Fields
+
+Each named bundle under `profiles` may set `agents.<name>` and `categories.<name>` entries using a routing-only subset of the [Agent/Category Overlay Fields](#agentcategory-overlay-fields): `model`, `variant`, `temperature`, `top_p`, and the harness routing blocks `opencode`/`pi`. Non-routing fields (`permission`, `skills`, `mode`, `hidden`, `disable`, `steps`, `color`) are rejected.
+
+### model
+
+Model identifier in provider/model format, or null to inherit parent model
+
+**Type:** `string` | `null`
+
+**Examples:**
+
+```json
+anthropic/claude-sonnet-4
+```
+
+```json
+null
+```
+
+### variant
+
+Model variant identifier
+
+**Type:** `string`
+
+**Examples:**
+
+```json
+v2
+```
+
+```json
+extended
+```
+
+### temperature
+
+Sampling temperature (≥0; 0 = deterministic)
+
+**Type:** `number`
+
+**Examples:**
+
+```json
+0.1
+```
+
+```json
+0.7
+```
+
+```json
+0
+```
+
+### top_p
+
+Nucleus sampling parameter (0 to 1)
+
+**Type:** `number`
+
+**Examples:**
+
+```json
+0.9
+```
+
+```json
+0.1
+```
+
+```json
+1
+```
+
+### opencode
+
+OpenCode-specific routing block. When present, model/variant here override the flat model/variant fields for OpenCode only; the flat fields remain the harness-neutral default and still apply to Pi. A qualifier set here with no model anywhere in the merged overlay is a config-load error raised by the routing resolver, not a parse-time error.
+
+**Type:** `object`
+
+**Examples:**
+
+```json
+{
+  "model": "anthropic/claude-opus-4-7",
+  "variant": "v2"
+}
+```
+
+```json
+{
+  "model": null
+}
+```
+
+#### model
+
+Model identifier in provider/model format, or null to inherit parent model
+
+**Type:** `string` | `null`
+
+**Examples:**
+
+```json
+anthropic/claude-sonnet-4
+```
+
+```json
+null
+```
+
+#### variant
+
+Model variant identifier
+
+**Type:** `string`
+
+**Examples:**
+
+```json
+v2
+```
+
+```json
+extended
+```
+
+### pi
+
+Pi-specific routing block. When present, model/thinking here override the flat model field and the legacy pi_subagents.<name>.thinking value for Pi only; the flat model field remains the harness-neutral default and still applies to OpenCode. A qualifier set here with no model anywhere in the merged overlay is a config-load error raised by the routing resolver, not a parse-time error.
+
+**Type:** `object`
+
+**Examples:**
+
+```json
+{
+  "model": "anthropic/claude-opus-4-7",
+  "thinking": "high"
+}
+```
+
+```json
+{
+  "model": null
+}
+```
+
+#### model
+
+Model identifier in provider/model format, or null to inherit parent model
+
+**Type:** `string` | `null`
+
+**Examples:**
+
+```json
+anthropic/claude-sonnet-4
+```
+
+```json
+null
+```
+
+#### thinking
+
+pi-subagents reasoning effort level for exported persona frontmatter
+
+**Type:** `string`
+
+**Valid values:** `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`
+
+**Examples:**
+
+```json
+off
+```
+
+```json
+medium
+```
+
+```json
+high
 ```
 
 

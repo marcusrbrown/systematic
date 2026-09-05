@@ -28,10 +28,14 @@ const CONFIG_PROTECTED_FIELD_PATHS = [
   'agents.*.permission',
   'agents.*.skills',
   'agents.*.variant',
+  'agents.*.opencode',
+  'agents.*.pi',
   'categories.*.model',
   'categories.*.permission',
   'categories.*.skills',
   'categories.*.variant',
+  'categories.*.opencode',
+  'categories.*.pi',
 ] as const
 
 const CONFIG_SOURCE_ERROR_CODES = [

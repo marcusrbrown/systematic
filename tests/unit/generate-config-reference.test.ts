@@ -497,6 +497,62 @@ describe('schema-described field parity', () => {
   })
 })
 
+// ═════════════════════════════════════════════════════════════════
+// Unit 1 (plan 2026-09-04-002-feat-model-config-profiles): harness routing
+// blocks (opencode/pi) and the profiles/profile top-level fields render.
+// ═════════════════════════════════════════════════════════════════
+
+describe('harness routing blocks and profiles rendering', () => {
+  let generateFn: (version?: string) => string
+
+  beforeAll(async () => {
+    const mod = await import('../../docs/scripts/generate-config-reference.js')
+    generateFn = mod.generateConfigReference
+  })
+
+  test('has sections for the new top-level profiles and profile fields', () => {
+    const content = generateFn('2.11.0')
+    const headings = collectSectionHeadings(content)
+    expect(headings.has('profiles')).toBe(true)
+    expect(headings.has('profile')).toBe(true)
+  })
+
+  test('Agent/Category Overlay Fields includes opencode and pi sub-sections', () => {
+    const content = generateFn('2.11.0')
+    expect(content).toContain('### opencode')
+    expect(content).toContain('### pi')
+  })
+
+  test('harness block nested fields (model/variant/thinking) render as their own sub-sections', () => {
+    const content = generateFn('2.11.0')
+    const headings = collectSectionHeadings(content)
+    // Nested fields render one heading level deeper (####) under the block.
+    expect(content).toMatch(/####\s+model/)
+    expect(content).toMatch(/####\s+variant/)
+    expect(content).toMatch(/####\s+thinking/)
+    expect(headings.has('model')).toBe(true)
+    expect(headings.has('variant')).toBe(true)
+    expect(headings.has('thinking')).toBe(true)
+  })
+
+  test('renders a Profile Bundle Overlay Fields section documenting the routing-only subset', () => {
+    const content = generateFn('2.11.0')
+    expect(content).toContain('## Profile Bundle Overlay Fields')
+    // Routing fields present
+    expect(content).toMatch(/###\s+model/)
+    expect(content).toMatch(/###\s+variant/)
+    expect(content).toMatch(/###\s+temperature/)
+    expect(content).toMatch(/###\s+top_p/)
+    expect(content).toMatch(/###\s+opencode/)
+    expect(content).toMatch(/###\s+pi\b/)
+  })
+
+  test('the profiles top-level section cross-references the Profile Bundle Overlay Fields section', () => {
+    const content = generateFn('2.11.0')
+    expect(content).toContain('#profile-bundle-overlay-fields')
+  })
+})
+
 describe('--version flag semver validation', () => {
   let generateFn: (version?: string) => string
 
