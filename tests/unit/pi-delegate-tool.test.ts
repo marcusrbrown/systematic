@@ -909,6 +909,57 @@ describe('createPiDelegateTool: Pi routing (Unit 5)', () => {
     expect(thirdText).toContain('anthropic/oracle-model')
   })
 
+  test('a session-creation failure does not consume the one-time routing notice; the next successful dispatch of the same agent still gets it (code review fix)', async () => {
+    const fixerCatalog: AgentCatalogEntry[] = [
+      {
+        name: 'fixer',
+        description: 'Fixes things',
+        body: 'You are a fixer.',
+        toolsSource: undefined,
+        key: 'fixer',
+        category: 'fix',
+        id: 'fix/fixer',
+      },
+    ]
+    const fixerModel = { provider: 'anthropic', id: 'fixer-model' }
+    const modelRegistry = fakeModelRegistry({
+      'anthropic/fixer-model': fixerModel,
+    })
+    let attempts = 0
+    const tool = createPiDelegateTool({
+      catalog: fixerCatalog,
+      createDelegateSession: async () => {
+        attempts += 1
+        if (attempts === 1) {
+          throw new Error('session creation boom')
+        }
+        return createFakeSession(1)
+      },
+      overlays: overlays({ fixer: { model: 'anthropic/fixer-model' } }),
+    })
+
+    await expect(
+      execute(
+        tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+        { agent: 'fixer', task: 'fix it' },
+        undefined,
+        fakeCtx({ provider: 'p', id: 'parent' }, true, modelRegistry),
+      ),
+    ).rejects.toThrow()
+
+    const second = await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'fixer', task: 'fix it again' },
+      undefined,
+      fakeCtx({ provider: 'p', id: 'parent' }, true, modelRegistry),
+    )
+    const secondText = (second.content[0] as { text: string }).text
+    expect(secondText).toContain('[systematic]')
+    expect(secondText).toContain('fixer')
+    expect(secondText).toContain('anthropic/fixer-model')
+    expect(attempts).toBe(2)
+  })
+
   test('an unregistered configured model fails closed instead of silently falling back', async () => {
     const fixerCatalog: AgentCatalogEntry[] = [
       {

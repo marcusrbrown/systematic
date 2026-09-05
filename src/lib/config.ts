@@ -992,7 +992,27 @@ export function loadConfigWithSources(
           ),
         }
 
-  assertRoutingInvariants(overlays, mergedPiSubagentsOverlays, warningSink)
+  // Computed here, ahead of the disabled_skills/disabled_commands merges
+  // below, so `assertRoutingInvariants` can exclude disabled agents from its
+  // walk -- a disabled agent must never block config load on a missing
+  // model (see the disabled-agent exclusion comment on `collectRoutingTargets`).
+  const mergedDisabledAgents = mergeArraysUnique(
+    mergeArraysUnique(
+      mergeArraysUnique(
+        DEFAULT_CONFIG.disabled_agents,
+        userConfig?.disabled_agents,
+      ),
+      projectConfig?.disabled_agents,
+    ),
+    customConfig?.disabled_agents,
+  )
+
+  assertRoutingInvariants(
+    overlays,
+    mergedPiSubagentsOverlays,
+    new Set(mergedDisabledAgents),
+    warningSink,
+  )
 
   const result: SystematicConfig = {
     disabled_skills: mergeArraysUnique(
@@ -1005,16 +1025,7 @@ export function loadConfigWithSources(
       ),
       customConfig?.disabled_skills,
     ),
-    disabled_agents: mergeArraysUnique(
-      mergeArraysUnique(
-        mergeArraysUnique(
-          DEFAULT_CONFIG.disabled_agents,
-          userConfig?.disabled_agents,
-        ),
-        projectConfig?.disabled_agents,
-      ),
-      customConfig?.disabled_agents,
-    ),
+    disabled_agents: mergedDisabledAgents,
     disabled_commands: mergeArraysUnique(
       mergeArraysUnique(
         mergeArraysUnique(
@@ -1229,13 +1240,33 @@ function sortProtectedFields(
  * isn't a real bundled agent) is silently skipped here -- it is not a valid
  * routing target and this check has no stronger claim to make about it than
  * schema validation already does elsewhere.
+ *
+ * A disabled agent is excluded from the result: matched by bare key or
+ * qualified `category/key` id in `disabledAgents` (the merged
+ * `disabled_agents` list), or by its own effective overlay's
+ * `disable: true` (bare key checked before the qualified id, mirroring
+ * `config-handler.ts`'s `collectAgents`/`applyAgentOverlays` precedence).
+ * A disabled agent is never emitted to OpenCode at all, so it must never
+ * block config load over a routing invariant it can't violate in practice.
  */
 export function collectRoutingTargets(
   overlays: SourcedOverlayConfigMap,
+  disabledAgents: ReadonlySet<string> = new Set(),
 ): RoutingTarget[] {
   const targets = new Map<string, RoutingTarget>()
 
+  const isDisabled = (agentKey: string, category: string): boolean => {
+    const qualifiedId = `${category}/${agentKey}`
+    if (disabledAgents.has(agentKey) || disabledAgents.has(qualifiedId)) {
+      return true
+    }
+    const overlay =
+      overlays.agents[agentKey]?.value ?? overlays.agents[qualifiedId]?.value
+    return overlay?.disable === true
+  }
+
   const addTarget = (agentKey: string, category: string): void => {
+    if (isDisabled(agentKey, category)) return
     targets.set(`${category}/${agentKey}`, { agentKey, category })
   }
 
@@ -1282,9 +1313,10 @@ const ROUTING_HARNESSES = ['opencode', 'pi'] as const
 function assertRoutingInvariants(
   overlays: SourcedOverlayConfigMap,
   piSubagentsOverlays: SourcedOverlayConfigMap,
+  disabledAgents: ReadonlySet<string>,
   warningSink: (message: string) => void,
 ): void {
-  const targets = collectRoutingTargets(overlays)
+  const targets = collectRoutingTargets(overlays, disabledAgents)
   const entries: RoutingResolutionEntry[] = []
 
   for (const target of targets) {

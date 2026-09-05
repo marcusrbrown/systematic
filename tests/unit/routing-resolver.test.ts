@@ -343,6 +343,24 @@ describe('resolveRouting', () => {
     expect(resolution.qualifier).toBeUndefined()
     expect(qualifierResolvesWithoutModel(resolution)).toBe(false)
   })
+
+  // Code review fix: runtime narrowing replaces `as string` casts. Config
+  // values are Zod-validated at the config-load boundary, so a non-string
+  // `model` can never reach the resolver from real JSONC input -- this test
+  // feeds one in programmatically (bypassing that boundary entirely, the
+  // way a future consumer with different validation might) to prove the
+  // resolver narrows defensively instead of trusting a cast.
+  test('a non-string model value narrows to undefined instead of being cast through', () => {
+    const merged = overlays({ x: { model: 42 } })
+    const resolution = resolveRouting({
+      overlays: merged,
+      piSubagentsOverlays: EMPTY_PI_SUBAGENTS,
+      target: target('x', 'review'),
+      harness: 'opencode',
+    })
+    expect(resolution.model).toBeUndefined()
+    expect(resolution.source.model).toBeUndefined()
+  })
 })
 
 describe('collectLegacyPiSubagentsThinkingWarnings', () => {

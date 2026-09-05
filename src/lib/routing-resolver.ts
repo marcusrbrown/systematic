@@ -14,7 +14,13 @@
  * does not.
  */
 
-import type { OverlayConfig, SourcedOverlayConfigMap } from './config.js'
+import type {
+  OverlayConfig,
+  OverlayConfigMap,
+  PiSubagentsOverlayMap,
+  SourcedOverlayConfig,
+  SourcedOverlayConfigMap,
+} from './config.js'
 import { isRecord } from './validation.js'
 
 export type Harness = 'opencode' | 'pi'
@@ -92,6 +98,45 @@ function getOverlayValue(
 }
 
 /**
+ * `loadConfigWithSources` exposes the merged `agents`/`categories` routing
+ * overlays in `SourcedOverlayConfigMap` form (value + source metadata), but
+ * some callers (the Pi delegate tool, Pi persona export) only have a plain,
+ * already-flattened overlay map on hand -- e.g. `SystematicConfig.pi_subagents`,
+ * which retains no per-value source metadata past its own merge.
+ * `resolveRouting`'s `piSubagentsOverlays` parameter only ever reads
+ * `.value` off each entry (see `getOverlayValue` above), so wrapping each
+ * plain value with placeholder source fields is a safe, purely-shape
+ * adapter for feeding the resolver -- it never changes what resolves.
+ * Exported so every consumer shares one implementation instead of each
+ * defining its own copy.
+ */
+export function toSourcedOverlayMap(
+  map: OverlayConfigMap | undefined,
+): Record<string, SourcedOverlayConfig> {
+  const result: Record<string, SourcedOverlayConfig> = {}
+  if (!map) return result
+  for (const [key, value] of Object.entries(map)) {
+    result[key] = { value, sourcePath: '', keyPath: key }
+  }
+  return result
+}
+
+/**
+ * Apply {@link toSourcedOverlayMap} to both halves of a plain
+ * `pi_subagents`-shaped map (`{agents, categories}`), producing a
+ * `SourcedOverlayConfigMap` ready to pass as `resolveRouting`'s
+ * `piSubagentsOverlays` argument.
+ */
+export function toSourcedPiSubagentsOverlays(
+  map: PiSubagentsOverlayMap | undefined,
+): SourcedOverlayConfigMap {
+  return {
+    agents: toSourcedOverlayMap(map?.agents),
+    categories: toSourcedOverlayMap(map?.categories),
+  }
+}
+
+/**
  * Look up an agent's merged overlay value by bare key first, then by the
  * qualified `category/key` alias — mirrors the bare/qualified alias
  * resolution `resolveAgentOverlaySet`/`validateExactAgentOverlays` perform
@@ -130,6 +175,30 @@ function readFlatField(
 interface FieldCandidate {
   readonly value: unknown
   readonly source: RoutingFieldSource
+}
+
+/**
+ * Narrow an arbitrary resolved `model` candidate to its runtime-checked
+ * type instead of trusting a type assertion: a string stays a string, `null`
+ * stays `null` (an explicit "inherit" value), and anything else (including
+ * a candidate whose shape doesn't match, which Zod validation at the config
+ * boundary should already have rejected) narrows to `undefined` (treated as
+ * unset rather than surfaced as a malformed value).
+ */
+function narrowModelValue(value: unknown): string | null | undefined {
+  if (typeof value === 'string') return value
+  if (value === null) return null
+  return undefined
+}
+
+/**
+ * Narrow an arbitrary resolved qualifier candidate (`variant` or
+ * `thinking`) the same way `narrowModelValue` does for `model`, minus the
+ * `null` case — neither qualifier schema is nullable, so a non-string
+ * candidate narrows straight to `undefined` (unset).
+ */
+function narrowQualifierValue(value: unknown): string | undefined {
+  return typeof value === 'string' ? value : undefined
 }
 
 /**
@@ -183,7 +252,11 @@ function resolveModel(
       source: { level: 'category', form: 'flat' },
     },
   ])
-  return { value: value as string | null | undefined, source }
+  const narrowedValue = narrowModelValue(value)
+  return {
+    value: narrowedValue,
+    source: narrowedValue === undefined ? undefined : source,
+  }
 }
 
 /**
@@ -212,7 +285,11 @@ function resolveOpencodeVariant(
       source: { level: 'category', form: 'flat' },
     },
   ])
-  return { value: value as string | undefined, source }
+  const narrowedValue = narrowQualifierValue(value)
+  return {
+    value: narrowedValue,
+    source: narrowedValue === undefined ? undefined : source,
+  }
 }
 
 /**
@@ -261,17 +338,19 @@ function resolvePiThinking(
       : legacyCategoryThinking
   const legacyPresent = legacyValue !== undefined
 
-  if (blockResolution.value !== undefined) {
+  const narrowedBlockValue = narrowQualifierValue(blockResolution.value)
+  if (narrowedBlockValue !== undefined) {
     return {
-      value: blockResolution.value as string,
+      value: narrowedBlockValue,
       source: blockResolution.source,
       legacyPresent,
     }
   }
 
-  if (legacyValue !== undefined) {
+  const narrowedLegacyValue = narrowQualifierValue(legacyValue)
+  if (narrowedLegacyValue !== undefined) {
     return {
-      value: legacyValue as string,
+      value: narrowedLegacyValue,
       source: {
         level: legacyAgentThinking !== undefined ? 'agent' : 'category',
         form: 'legacy-pi-subagents',

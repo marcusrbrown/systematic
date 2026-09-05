@@ -2638,6 +2638,58 @@ describe('config', () => {
       )
     })
 
+    // Code review fix: a disabled agent must never block config load on a
+    // missing model -- it is never emitted to OpenCode at all, so a
+    // category-level qualifier with nothing for it to attach to is moot.
+    test('a disabled agent (via disabled_agents) with no model anywhere does not block load', () => {
+      writeUserConfig({
+        categories: { workflow: { variant: 'high' } },
+        disabled_agents: ['systematic-implementer'],
+        agents: {
+          'bug-reproduction-validator': { model: 'a/a' },
+          'pr-comment-resolver': { model: 'a/b' },
+          'spec-flow-analyzer': { model: 'a/c' },
+          // 'systematic-implementer' is disabled and sets no model anywhere.
+        },
+      })
+
+      expect(() =>
+        loadConfigWithSources(testDir, { warningSink }),
+      ).not.toThrow()
+    })
+
+    test('a disabled agent (via agents.<key>.disable) with no model anywhere does not block load', () => {
+      writeUserConfig({
+        categories: { workflow: { variant: 'high' } },
+        agents: {
+          'bug-reproduction-validator': { model: 'a/a' },
+          'pr-comment-resolver': { model: 'a/b' },
+          'spec-flow-analyzer': { model: 'a/c' },
+          'systematic-implementer': { disable: true },
+        },
+      })
+
+      expect(() =>
+        loadConfigWithSources(testDir, { warningSink }),
+      ).not.toThrow()
+    })
+
+    test('an enabled agent in the same category without a model still errors', () => {
+      writeUserConfig({
+        categories: { workflow: { variant: 'high' } },
+        disabled_agents: ['systematic-implementer'],
+        agents: {
+          'bug-reproduction-validator': { model: 'a/a' },
+          'pr-comment-resolver': { model: 'a/b' },
+          // 'spec-flow-analyzer' is enabled and sets no model -- must still error.
+        },
+      })
+
+      expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
+        /spec-flow-analyzer/,
+      )
+    })
+
     describe('R5: legacy pi_subagents.thinking deprecation warning', () => {
       test('legacy thinking present, no pi block → resolves, one warning', () => {
         writeUserConfig({

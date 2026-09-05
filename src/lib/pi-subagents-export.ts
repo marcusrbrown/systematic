@@ -17,9 +17,6 @@ import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type {
   OverlayConfig,
-  OverlayConfigMap,
-  PiSubagentsOverlayMap,
-  SourcedOverlayConfig,
   SourcedOverlayConfigMap,
   SystematicConfig,
 } from './config.js'
@@ -27,7 +24,10 @@ import { loadConfigWithSources } from './config.js'
 import { parseFrontmatter } from './frontmatter.js'
 import type { ManifestEntry } from './pi-subagents-personas.js'
 import { generateAll } from './pi-subagents-personas.js'
-import { resolveRouting } from './routing-resolver.js'
+import {
+  resolveRouting,
+  toSourcedPiSubagentsOverlays,
+} from './routing-resolver.js'
 
 export type ExportScope = 'project' | 'global'
 
@@ -690,36 +690,6 @@ function lookupOverlay(
     if (qualified) return qualified
   }
   return map[agentKey]
-}
-
-/**
- * `loadConfigWithSources` exposes the merged `agents`/`categories` routing
- * overlays in `SourcedOverlayConfigMap` form, but only the plain,
- * already-flattened `pi_subagents` map on the final `SystematicConfig` (no
- * per-value source metadata survives that merge). `resolveRouting`'s
- * `piSubagentsOverlays` parameter only ever reads `.value` off each entry,
- * so wrapping each plain value with placeholder source fields is a safe,
- * purely-shape adapter for feeding the resolver — it never changes what
- * resolves. (Mirrors the same adapter in pi-delegate-tool.ts.)
- */
-function toSourcedOverlayMap(
-  map: OverlayConfigMap | undefined,
-): Record<string, SourcedOverlayConfig> {
-  const result: Record<string, SourcedOverlayConfig> = {}
-  if (!map) return result
-  for (const [key, value] of Object.entries(map)) {
-    result[key] = { value, sourcePath: '', keyPath: key }
-  }
-  return result
-}
-
-function toSourcedPiSubagentsOverlays(
-  map: PiSubagentsOverlayMap | undefined,
-): SourcedOverlayConfigMap {
-  return {
-    agents: toSourcedOverlayMap(map?.agents),
-    categories: toSourcedOverlayMap(map?.categories),
-  }
 }
 
 /**

@@ -12,12 +12,14 @@ import {
   resolveToolAllowlist,
 } from './agent-resolver.js'
 import type {
-  OverlayConfigMap,
   PiSubagentsOverlayMap,
-  SourcedOverlayConfig,
   SourcedOverlayConfigMap,
 } from './config.js'
-import { type RoutingFieldSource, resolveRouting } from './routing-resolver.js'
+import {
+  type RoutingFieldSource,
+  resolveRouting,
+  toSourcedPiSubagentsOverlays,
+} from './routing-resolver.js'
 
 /** Fixed, non-configurable delegation bounds (LOCKED). */
 export const MAX_DELEGATE_TURNS = 20
@@ -92,36 +94,6 @@ export interface PiDelegateToolDeps {
 const EMPTY_ROUTING_OVERLAYS: SourcedOverlayConfigMap = {
   agents: {},
   categories: {},
-}
-
-/**
- * `loadConfigWithSources` exposes the merged `agents`/`categories` routing
- * overlays in `SourcedOverlayConfigMap` form (value + source metadata), but
- * only the plain, already-flattened `pi_subagents` map on the final
- * `SystematicConfig` (no per-value source metadata is retained past that
- * merge). `resolveRouting`'s `piSubagentsOverlays` parameter only ever reads
- * `.value` off each entry (see routing-resolver.ts's `getOverlayValue`), so
- * wrapping each plain value with placeholder source fields is a safe,
- * purely-shape adapter — it never changes what `resolveRouting` resolves to.
- */
-function toSourcedOverlayMap(
-  map: OverlayConfigMap | undefined,
-): Record<string, SourcedOverlayConfig> {
-  const result: Record<string, SourcedOverlayConfig> = {}
-  if (!map) return result
-  for (const [key, value] of Object.entries(map)) {
-    result[key] = { value, sourcePath: '', keyPath: key }
-  }
-  return result
-}
-
-function toSourcedPiSubagentsOverlays(
-  map: PiSubagentsOverlayMap | undefined,
-): SourcedOverlayConfigMap {
-  return {
-    agents: toSourcedOverlayMap(map?.agents),
-    categories: toSourcedOverlayMap(map?.categories),
-  }
 }
 
 /** Routing state shared across every dispatch made through one registered tool instance (closure-scoped; see R4a's "once per session" note). */
@@ -315,6 +287,15 @@ interface ValidatedDelegateRequest {
   thinkingLevel: DelegateThinkingLevel | undefined
   /** R4a one-line notice for the first dispatch of an agent whose model came from config; `undefined` otherwise. */
   routingNotice: string | undefined
+  /**
+   * Marks `persona.id` as notified in `RoutingContext.notifiedAgentIds`.
+   * Present only alongside a defined `routingNotice`. Deliberately NOT
+   * called at resolution time -- call it only once `createDelegateSession`
+   * has actually produced a session, so a dispatch that fails before then
+   * (e.g. `createDelegateSession` rejects) does not consume the one-time
+   * notification slot for an agent the user was never actually told about.
+   */
+  commitRoutingNotice: (() => void) | undefined
 }
 
 /**
@@ -391,6 +372,8 @@ interface ResolvedPersonaRouting {
   model: DelegateParentModel
   thinkingLevel: DelegateThinkingLevel | undefined
   notice: string | undefined
+  /** Present only alongside `notice`; see `ValidatedDelegateRequest.commitRoutingNotice`. */
+  commitNotice: (() => void) | undefined
 }
 
 /**
@@ -424,7 +407,12 @@ function resolvePersonaRouting(
         `Delegation to "${agentName}" cannot start because no model is available to inherit from the parent session; refusing to select a default model (fail-closed).`,
       )
     }
-    return { model: ctx.model, thinkingLevel, notice: undefined }
+    return {
+      model: ctx.model,
+      thinkingLevel,
+      notice: undefined,
+      commitNotice: undefined,
+    }
   }
 
   const { provider, id } = splitModelString(agentName, resolution.model)
@@ -436,9 +424,9 @@ function resolvePersonaRouting(
   }
 
   let notice: string | undefined
+  let commitNotice: (() => void) | undefined
   const source = resolution.source.model
   if (source && !routing.notifiedAgentIds.has(persona.id)) {
-    routing.notifiedAgentIds.add(persona.id)
     notice = formatRoutingNotice(
       agentName,
       resolution.model,
@@ -446,9 +434,13 @@ function resolvePersonaRouting(
       routing.activeProfile,
       thinkingLevel,
     )
+    // Deliberately not committed here -- see the field doc on
+    // `ValidatedDelegateRequest.commitRoutingNotice` for why the one-time
+    // notification slot must survive a failed dispatch.
+    commitNotice = () => routing.notifiedAgentIds.add(persona.id)
   }
 
-  return { model: resolvedModel, thinkingLevel, notice }
+  return { model: resolvedModel, thinkingLevel, notice, commitNotice }
 }
 
 function validateDelegateRequest(
@@ -468,7 +460,7 @@ function validateDelegateRequest(
     )
   }
 
-  const { model, thinkingLevel, notice } = resolvePersonaRouting(
+  const { model, thinkingLevel, notice, commitNotice } = resolvePersonaRouting(
     persona,
     agentName,
     ctx,
@@ -498,6 +490,7 @@ function validateDelegateRequest(
     model,
     thinkingLevel,
     routingNotice: notice,
+    commitRoutingNotice: commitNotice,
   }
 }
 
@@ -589,6 +582,7 @@ async function runValidatedDelegateSession(
     model,
     thinkingLevel,
     routingNotice,
+    commitRoutingNotice,
   } = request
 
   if (signal?.aborted) {
@@ -650,6 +644,9 @@ async function runValidatedDelegateSession(
 
     const activeSession = sessionOrAbort.session
     state.session = activeSession
+    // Session creation succeeded -- now, and only now, consume the
+    // one-time routing-notice slot (see `ValidatedDelegateRequest.commitRoutingNotice`).
+    commitRoutingNotice?.()
 
     unsubscribe = subscribeTurnCap(activeSession, state)
     await runPromptRespectingAbort(activeSession, task, signal, state)
