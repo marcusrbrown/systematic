@@ -2034,6 +2034,39 @@ describe('config', () => {
       expect(warnings).toEqual([])
     })
 
+    // A typo inside a profile bundle's `agents`/`categories` keys is a
+    // config error, exactly like a typo at the top level -- not silently
+    // ignored or merely warned about.
+    test('a profile bundle agent key that is not a real bundled agent name throws a config error', () => {
+      writeUserConfig({
+        profile: 'p',
+        profiles: {
+          p: {
+            agents: { 'totally-not-a-real-agent': { model: 'a/x' } },
+          },
+        },
+      })
+
+      expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
+        /profiles\.p\.agents\.totally-not-a-real-agent/,
+      )
+    })
+
+    test('a profile bundle category key that is not a real bundled category throws a config error', () => {
+      writeUserConfig({
+        profile: 'p',
+        profiles: {
+          p: {
+            categories: { 'not-a-real-category': { model: 'a/x' } },
+          },
+        },
+      })
+
+      expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
+        /profiles\.p\.categories\.not-a-real-category/,
+      )
+    })
+
     // Case 2: user default only.
     test('case 2: user default profile only → that profile is active', () => {
       writeUserConfig({
@@ -2324,10 +2357,98 @@ describe('config', () => {
       expect(warnings).toHaveLength(2)
     })
 
+    // `profiles` defined in custom (OPENCODE_CONFIG_DIR) config is honoured:
+    // custom is the strongest trust level, so its `profiles` map is checked
+    // alongside the user source's.
+    test('custom-defined profiles map is honoured: custom selects its own bundle, no warning', () => {
+      writeUserConfig({})
+
+      withCustomConfig(
+        {
+          profile: 'work',
+          profiles: {
+            work: { agents: { 'correctness-reviewer': { model: 'a/work' } } },
+          },
+        },
+        () => {
+          const result = loadConfigWithSources(testDir, { warningSink })
+
+          expect(result.metadata.activeProfile).toBe('work')
+          expect(result.metadata.profileSelectorSource).toBe('custom')
+          expect(result.metadata.profileFallback).toBeNull()
+          expect(result.config.agents?.['correctness-reviewer']).toEqual({
+            model: 'a/work',
+          })
+          expect(warnings).toEqual([])
+        },
+      )
+    })
+
+    test('project selects a name that ONLY exists in the custom profiles map → active, no warning', () => {
+      writeUserConfig({})
+      writeProjectConfig({ profile: 'work' })
+
+      withCustomConfig(
+        {
+          profiles: {
+            work: { agents: { 'correctness-reviewer': { model: 'a/work' } } },
+          },
+        },
+        () => {
+          const result = loadConfigWithSources(testDir, { warningSink })
+
+          expect(result.metadata.activeProfile).toBe('work')
+          expect(result.metadata.profileSelectorSource).toBe('project')
+          expect(result.metadata.profileFallback).toBeNull()
+          expect(result.config.agents?.['correctness-reviewer']).toEqual({
+            model: 'a/work',
+          })
+          expect(warnings).toEqual([])
+        },
+      )
+    })
+
+    // Project selects a name that exists nowhere; the USER's own default
+    // name resolves to a bundle that lives in CUSTOM's `profiles` map (not
+    // user's) -- proving the fallback bundle lookup also checks custom, not
+    // just the initial requested-name lookup.
+    test('project selects a missing name; falls back to the user default, whose bundle is defined in custom → custom bundle used', () => {
+      writeUserConfig({ profile: 'shared-default' })
+      writeProjectConfig({ profile: 'missing-everywhere' })
+
+      withCustomConfig(
+        {
+          profiles: {
+            'shared-default': {
+              agents: { 'correctness-reviewer': { model: 'a/shared' } },
+            },
+          },
+        },
+        () => {
+          const result = loadConfigWithSources(testDir, { warningSink })
+
+          expect(result.metadata.activeProfile).toBe('shared-default')
+          expect(result.metadata.profileSelectorSource).toBe('project')
+          expect(result.metadata.profileFallback).toEqual({
+            requested: 'missing-everywhere',
+            usedDefault: 'shared-default',
+          })
+          expect(result.config.agents?.['correctness-reviewer']).toEqual({
+            model: 'a/shared',
+          })
+          expect(warnings).toHaveLength(1)
+        },
+      )
+    })
+
     // Merge order: base -> profile -> project -> custom, verifying the
     // four-entry chain composes additively for disjoint fields and later
-    // wins for the same field.
-    test('merge order: base model A, profile model B, project temperature 0.2, custom model C → effective model C + temperature 0.2', () => {
+    // wins for the same field -- EXCEPT that custom is a plain file-trust
+    // source, so its same-key overlay fully REPLACES the accumulated value
+    // wholesale, dropping project's `temperature` here since custom doesn't
+    // repeat it. This is deliberately unlike the profile-bundle layer
+    // (`mergeProfileOverlayValue`), which merges field-by-field.
+    test('merge order: base model A, profile model B, project temperature 0.2, custom model C → custom wholesale-replaces (temperature dropped)', () => {
       writeUserConfig({
         profile: 'p',
         agents: { 'correctness-reviewer': { model: 'a/A' } },
@@ -2346,7 +2467,6 @@ describe('config', () => {
 
           expect(result.config.agents?.['correctness-reviewer']).toEqual({
             model: 'a/C',
-            temperature: 0.2,
           })
         },
       )
@@ -2475,9 +2595,25 @@ describe('config', () => {
       })
     })
 
-    // Non-regression: the pinned custom-replaces-project whole-replace
-    // semantics (preserveFieldsAbsentFromNext's narrower field set for
-    // non-profile overrides) must be untouched by the profile-layer change.
+    // A user->custom same-key override is a wholesale replace: a custom
+    // `mode` overlay must fully replace a user `model` overlay for the same
+    // agent, dropping the model entirely.
+    test('user model overlay + custom mode overlay for the SAME agent → custom wholesale-replaces (model dropped)', () => {
+      writeUserConfig({
+        agents: { 'correctness-reviewer': { model: 'openai/gpt-5' } },
+      })
+
+      withCustomConfig(
+        { agents: { 'correctness-reviewer': { mode: 'subagent' } } },
+        () => {
+          const result = loadConfigWithSources(testDir, { warningSink })
+          expect(result.config.agents?.['correctness-reviewer']).toEqual({
+            mode: 'subagent',
+          })
+        },
+      )
+    })
+
     test('non-regression: custom config category overlay still replaces project same-key overlay (steps dropped)', () => {
       writeProjectConfig({
         categories: { review: { steps: 8, temperature: 0.1 } },
@@ -2618,19 +2754,61 @@ describe('config', () => {
       )
     })
 
-    test('agents.x.pi.thinking with no model at any layer throws, naming the agent and pi', () => {
+    // A legacy `pi_subagents.<key>.thinking` value with an unrelated flat
+    // `temperature` overlay and no model anywhere must load fine on both
+    // the agent and category legacy forms, exactly like a `pi.thinking`
+    // block does.
+    test('legacy pi_subagents.agents.<key>.thinking with unrelated temperature overlay, no model anywhere → loads fine', () => {
+      writeUserConfig({
+        agents: { 'correctness-reviewer': { temperature: 0.2 } },
+        pi_subagents: {
+          agents: { 'correctness-reviewer': { thinking: 'high' } },
+        },
+      })
+
+      const result = loadConfigWithSources(testDir, { warningSink })
+
+      expect(result.config.agents?.['correctness-reviewer']).toEqual({
+        temperature: 0.2,
+      })
+      expect(
+        result.config.pi_subagents?.agents?.['correctness-reviewer'],
+      ).toEqual({ thinking: 'high' })
+    })
+
+    test('legacy pi_subagents.categories.<name>.thinking with unrelated temperature overlay, no model anywhere → loads fine (category form)', () => {
+      writeUserConfig({
+        categories: { review: { temperature: 0.2 } },
+        pi_subagents: {
+          categories: { review: { thinking: 'high' } },
+        },
+      })
+
+      const result = loadConfigWithSources(testDir, { warningSink })
+
+      expect(result.config.categories?.review).toEqual({ temperature: 0.2 })
+      expect(result.config.pi_subagents?.categories?.review).toEqual({
+        thinking: 'high',
+      })
+    })
+
+    // Pi's `thinking` is independent of `model` -- it applies to whatever
+    // model the delegate ends up running, including one inherited from the
+    // parent session, so this must load successfully, not throw. Only the
+    // `opencode` variant-without-model case (the test immediately above)
+    // remains a config-load error.
+    test('agents.x.pi.thinking with no model at any layer loads fine (thinking is model-independent, unlike opencode variant)', () => {
       writeUserConfig({
         agents: {
           'correctness-reviewer': { pi: { thinking: 'high' } },
         },
       })
 
-      expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
-        /correctness-reviewer/,
-      )
-      expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
-        /pi\.thinking/,
-      )
+      const result = loadConfigWithSources(testDir, { warningSink })
+
+      expect(result.config.agents?.['correctness-reviewer']).toEqual({
+        pi: { thinking: 'high' },
+      })
     })
 
     test('a qualifier with an explicit model: null still throws (null is a model, but this agent has variant with no model at all)', () => {
@@ -2757,6 +2935,43 @@ describe('config', () => {
         expect(legacyWarnings[0]).toContain(
           'agents.correctness-reviewer.pi.thinking',
         )
+      })
+
+      // The ONLY Pi customization is the legacy field -- no
+      // `agents`/`categories` overlay at all for this agent, so it would
+      // never appear in `collectRoutingTargets`'s walk alone (that walk
+      // only enumerates agents that already have an ordinary overlay
+      // entry). The warning must still fire.
+      test('legacy thinking is the ONLY overlay set for this agent (no agents/categories overlay at all) → warning still fires', () => {
+        writeUserConfig({
+          pi_subagents: {
+            agents: { 'correctness-reviewer': { thinking: 'low' } },
+          },
+        })
+
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        expect(result.config.agents?.['correctness-reviewer']).toBeUndefined()
+        const legacyWarnings = warnings.filter((w) =>
+          w.includes('correctness-reviewer'),
+        )
+        expect(legacyWarnings).toHaveLength(1)
+      })
+
+      test('legacy thinking is the ONLY overlay set, via the category form → warning still fires for every agent in that category', () => {
+        writeUserConfig({
+          pi_subagents: {
+            categories: { review: { thinking: 'low' } },
+          },
+        })
+
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        expect(result.config.categories?.review).toBeUndefined()
+        const legacyWarnings = warnings.filter((w) =>
+          w.includes('correctness-reviewer'),
+        )
+        expect(legacyWarnings).toHaveLength(1)
       })
 
       test('both legacy and pi block set and disagreeing → pi block wins, warning still emitted once', () => {

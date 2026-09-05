@@ -554,8 +554,23 @@ function printProfileSummary(metadata: LoaderConfigObservationMetadata): void {
  * routing values only: never environment values, never raw file contents
  * beyond what the sections above already print.
  */
+/**
+ * The merged `disabled_agents` set for a loaded config, in the shape
+ * `collectRoutingTargets` expects. Shared by `printRoutingTable` and
+ * `buildConfigShowJson` so a disabled agent (or one whose effective
+ * overlay sets `disable: true`) is excluded from `config show`'s routing
+ * table/JSON output, consistent with the loader's own post-merge check
+ * (`assertRoutingInvariants`).
+ */
+function disabledAgentsSet(loaded: SourceAwareConfigResult): Set<string> {
+  return new Set(loaded.config.disabled_agents ?? [])
+}
+
 function printRoutingTable(loaded: SourceAwareConfigResult): void {
-  const targets = collectRoutingTargets(loaded.overlays).sort((left, right) =>
+  const targets = collectRoutingTargets(
+    loaded.overlays,
+    disabledAgentsSet(loaded),
+  ).sort((left, right) =>
     `${left.category}/${left.agentKey}`.localeCompare(
       `${right.category}/${right.agentKey}`,
     ),
@@ -637,12 +652,14 @@ function toJsonRoutingResolution(
   }
 }
 
-interface ConfigShowJsonOutput {
-  readonly locations: {
-    readonly user: string
-    readonly project: string
-    readonly custom: string | null
-  }
+interface ConfigShowJsonLocations {
+  readonly user: string
+  readonly project: string
+  readonly custom: string | null
+}
+
+interface ConfigShowJsonSuccess {
+  readonly locations: ConfigShowJsonLocations
   readonly activeProfile: string | null
   readonly profileSelectorSource: LoaderConfigObservationMetadata['profileSelectorSource']
   readonly profileFallback: LoaderConfigObservationMetadata['profileFallback']
@@ -652,6 +669,19 @@ interface ConfigShowJsonOutput {
     readonly pi: ConfigShowJsonRoutingResolution
   }>
 }
+
+/**
+ * A load failure (e.g. an invalid config file) is reported as `{ error }`
+ * instead of silently emitting a `routing: []` success shape with no
+ * indication anything went wrong. The caller (`configShow`) exits
+ * non-zero for this shape.
+ */
+interface ConfigShowJsonError {
+  readonly locations: ConfigShowJsonLocations
+  readonly error: string
+}
+
+type ConfigShowJsonOutput = ConfigShowJsonSuccess | ConfigShowJsonError
 
 /**
  * Builds the `--json` output for `config show`: file paths only (never raw
@@ -668,24 +698,20 @@ function buildConfigShowJson(): ConfigShowJsonOutput {
     custom: paths.customConfig ?? null,
   }
 
-  let loaded: SourceAwareConfigResult | undefined
+  let loaded: SourceAwareConfigResult
   try {
     loaded = loadConfigWithSources(process.cwd())
-  } catch {
-    loaded = undefined
-  }
-
-  if (!loaded) {
+  } catch (error) {
     return {
       locations,
-      activeProfile: null,
-      profileSelectorSource: null,
-      profileFallback: null,
-      routing: [],
+      error: error instanceof Error ? error.message : String(error),
     }
   }
 
-  const targets = collectRoutingTargets(loaded.overlays).sort((left, right) =>
+  const targets = collectRoutingTargets(
+    loaded.overlays,
+    disabledAgentsSet(loaded),
+  ).sort((left, right) =>
     `${left.category}/${left.agentKey}`.localeCompare(
       `${right.category}/${right.agentKey}`,
     ),
@@ -722,7 +748,9 @@ function buildConfigShowJson(): ConfigShowJsonOutput {
 
 function configShow(options: { json: boolean }): void {
   if (options.json) {
-    console.log(JSON.stringify(buildConfigShowJson(), null, 2))
+    const output = buildConfigShowJson()
+    console.log(JSON.stringify(output, null, 2))
+    if ('error' in output) process.exit(1)
     return
   }
 

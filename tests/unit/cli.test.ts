@@ -725,7 +725,38 @@ describe('cli config show', () => {
     }
   })
 
-  describe('--json (code review residual)', () => {
+  describe('--json', () => {
+    // Both the prose routing table and the --json routing array must
+    // exclude a disabled agent.
+    it('a disabled agent is excluded from the --json routing array', () => {
+      const root = mkTempCwd()
+      const home = path.join(root, 'home')
+      const project = path.join(root, 'project')
+      try {
+        fs.mkdirSync(project, { recursive: true })
+        writeUserConfig(home, {
+          disabled_agents: ['correctness-reviewer'],
+          categories: { review: { model: 'anthropic/haiku' } },
+        })
+
+        const result = runCli(['config', 'show', '--json'], project, {
+          HOME: home,
+        })
+
+        expect(result.exitCode).toBe(0)
+        const parsed = JSON.parse(result.stdout) as Record<string, unknown>
+        const routing = parsed.routing as Array<Record<string, unknown>>
+        const disabledEntry = routing.find(
+          (r) =>
+            (r.target as Record<string, unknown>).agentKey ===
+            'correctness-reviewer',
+        )
+        expect(disabledEntry).toBeUndefined()
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
+
     it('parses as JSON and has the documented top-level keys', () => {
       const root = mkTempCwd()
       const home = path.join(root, 'home')
@@ -871,6 +902,37 @@ describe('cli config show', () => {
         expect(result.exitCode).not.toBe(0)
         expect(result.stderr).toContain('Unknown argument')
         expect(result.stderr).toContain('--json')
+      } finally {
+        fs.rmSync(root, { recursive: true, force: true })
+      }
+    })
+
+    // A load failure must be reported as `{ error }` with a nonzero exit,
+    // not silently degrade to a success-shaped `{ routing: [] }` with no
+    // indication anything failed.
+    it('a config load failure is reported as { error } with a nonzero exit', () => {
+      const root = mkTempCwd()
+      const home = path.join(root, 'home')
+      const project = path.join(root, 'project')
+      try {
+        fs.mkdirSync(project, { recursive: true })
+        // A variant with no model anywhere is a config-load error (R3b).
+        writeUserConfig(home, {
+          agents: { 'correctness-reviewer': { variant: 'high' } },
+        })
+
+        const result = runCli(['config', 'show', '--json'], project, {
+          HOME: home,
+        })
+
+        expect(result.exitCode).not.toBe(0)
+        const parsed = JSON.parse(result.stdout) as Record<string, unknown>
+        expect(typeof parsed.error).toBe('string')
+        expect(parsed.error as string).toContain('correctness-reviewer')
+        expect(parsed.routing).toBeUndefined()
+        expect(parsed.activeProfile).toBeUndefined()
+        const locations = parsed.locations as Record<string, unknown>
+        expect(typeof locations.user).toBe('string')
       } finally {
         fs.rmSync(root, { recursive: true, force: true })
       }

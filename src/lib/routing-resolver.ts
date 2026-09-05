@@ -79,6 +79,13 @@ export interface RoutingResolution {
    * supplied the resolved value.
    */
   readonly legacyPiSubagentsThinkingPresent: boolean
+  /**
+   * Which harness this resolution was computed for. Carried on the result
+   * (not just the input) so `qualifierResolvesWithoutModel` can self-guard
+   * against ever flagging a Pi resolution as a violation, regardless of
+   * caller discipline — see that function's doc comment.
+   */
+  readonly harness: Harness
 }
 
 export interface ResolveRoutingInput {
@@ -225,6 +232,9 @@ function resolveField(candidates: readonly FieldCandidate[]): {
  * `overlay[harness]` — `model` inside `opencode`/`pi` blocks is itself
  * harness-specific (an `opencode.model` does not apply on `pi`, and vice
  * versa), so this is called once per harness with that harness's block.
+ * Used for the `pi` harness only — `opencode` uses
+ * `resolveOpencodeModelAndVariant`, which couples model and variant
+ * resolution together (see that function's doc comment for why).
  */
 function resolveModel(
   agentOverlay: OverlayConfig | undefined,
@@ -260,36 +270,111 @@ function resolveModel(
 }
 
 /**
- * Resolve the OpenCode qualifier (`variant`): agent block > agent flat >
- * category block > category flat. `variant` never surfaces on `pi`.
+ * The four `model`/`variant` layers in specificity order, most specific
+ * first — shared by `resolveOpencodeModelAndVariant` so the layer INDEX
+ * (not just its identity) is comparable: "a candidate layer is at least as
+ * specific as L" means "its index in this array is <= L's index".
  */
-function resolveOpencodeVariant(
+const OPENCODE_MODEL_VARIANT_LAYERS: readonly RoutingFieldSource[] = [
+  { level: 'agent', form: 'block' },
+  { level: 'agent', form: 'flat' },
+  { level: 'category', form: 'block' },
+  { level: 'category', form: 'flat' },
+]
+
+function readOpencodeLayerField(
   agentOverlay: OverlayConfig | undefined,
   categoryOverlay: OverlayConfig | undefined,
-): { value: string | undefined; source: RoutingFieldSource | undefined } {
-  const { value, source } = resolveField([
-    {
-      value: readBlockField(agentOverlay, 'opencode', 'variant'),
-      source: { level: 'agent', form: 'block' },
-    },
-    {
-      value: readFlatField(agentOverlay, 'variant'),
-      source: { level: 'agent', form: 'flat' },
-    },
-    {
-      value: readBlockField(categoryOverlay, 'opencode', 'variant'),
-      source: { level: 'category', form: 'block' },
-    },
-    {
-      value: readFlatField(categoryOverlay, 'variant'),
-      source: { level: 'category', form: 'flat' },
-    },
-  ])
-  const narrowedValue = narrowQualifierValue(value)
-  return {
-    value: narrowedValue,
-    source: narrowedValue === undefined ? undefined : source,
+  layer: RoutingFieldSource,
+  field: 'model' | 'variant',
+): unknown {
+  const overlay = layer.level === 'agent' ? agentOverlay : categoryOverlay
+  return layer.form === 'block'
+    ? readBlockField(overlay, 'opencode', field)
+    : readFlatField(overlay, field)
+}
+
+/**
+ * Resolve OpenCode's `model` and `variant` TOGETHER -- resolving `variant`
+ * fully independently of `model` would let a less-specific layer's stale
+ * `variant` leak past a more-specific layer's `model`, and would make a
+ * qualifier-without-model config error unreachable in cases `main`
+ * correctly rejects.
+ *
+ * Let L be the index (in `OPENCODE_MODEL_VARIANT_LAYERS`, most specific
+ * first) of the most specific layer that sets `model` as an own property
+ * (a string or explicit `null`). `variant` may only be taken from a layer
+ * at least as specific as L — index <= L — restoring `main`'s "a higher
+ * layer's model, set without a variant, clears a lower layer's stale
+ * variant" behavior, while still allowing a MORE specific layer to set
+ * `variant` alone over a LESS specific layer's `model` (R3b: e.g. an agent
+ * `opencode.variant` over a flat category `model`).
+ *
+ * If the model at L is `null` (explicit inherit), `variant` is dropped
+ * entirely regardless of what any layer sets — inheriting the parent's
+ * model means inheriting its variant too; there is no "inherited model,
+ * explicit variant" combination.
+ *
+ * If NO layer sets a model at all, `variant` still resolves via its own
+ * full precedence (unconstrained by any L) so a variant-with-no-model
+ * anywhere is still detectable and rejected by `qualifierResolvesWithoutModel`
+ * — this is the one case `main` already treated as an error, and this fix
+ * preserves it.
+ *
+ * `source` reflects what was ACTUALLY used: a variant dropped by either
+ * rule above reports `qualifier: undefined` and no source, never a stale
+ * layer identity.
+ */
+function resolveOpencodeModelAndVariant(
+  agentOverlay: OverlayConfig | undefined,
+  categoryOverlay: OverlayConfig | undefined,
+): {
+  model: string | null | undefined
+  modelSource: RoutingFieldSource | undefined
+  qualifier: string | undefined
+  qualifierSource: RoutingFieldSource | undefined
+} {
+  const modelLayerIndex = OPENCODE_MODEL_VARIANT_LAYERS.findIndex(
+    (layer) =>
+      readOpencodeLayerField(agentOverlay, categoryOverlay, layer, 'model') !==
+      undefined,
+  )
+  const rawModel =
+    modelLayerIndex === -1
+      ? undefined
+      : readOpencodeLayerField(
+          agentOverlay,
+          categoryOverlay,
+          OPENCODE_MODEL_VARIANT_LAYERS[modelLayerIndex],
+          'model',
+        )
+  const model = narrowModelValue(rawModel)
+  const hasModel = model !== undefined
+  const modelSource = hasModel
+    ? OPENCODE_MODEL_VARIANT_LAYERS[modelLayerIndex]
+    : undefined
+
+  let qualifier: string | undefined
+  let qualifierSource: RoutingFieldSource | undefined
+
+  if (model !== null) {
+    const eligibleLayerCount = hasModel
+      ? modelLayerIndex + 1
+      : OPENCODE_MODEL_VARIANT_LAYERS.length
+    for (let i = 0; i < eligibleLayerCount; i++) {
+      const layer = OPENCODE_MODEL_VARIANT_LAYERS[i]
+      const narrowed = narrowQualifierValue(
+        readOpencodeLayerField(agentOverlay, categoryOverlay, layer, 'variant'),
+      )
+      if (narrowed !== undefined) {
+        qualifier = narrowed
+        qualifierSource = layer
+        break
+      }
+    }
   }
+
+  return { model, modelSource, qualifier, qualifierSource }
 }
 
 /**
@@ -372,24 +457,31 @@ export function resolveRouting(input: ResolveRoutingInput): RoutingResolution {
   const agentOverlay = lookupAgentOverlay(overlays, target)
   const categoryOverlay = getOverlayValue(overlays.categories, target.category)
 
-  const modelResolution = resolveModel(agentOverlay, categoryOverlay, harness)
-
   if (harness === 'opencode') {
-    const qualifierResolution = resolveOpencodeVariant(
+    const resolution = resolveOpencodeModelAndVariant(
       agentOverlay,
       categoryOverlay,
     )
     return {
-      model: modelResolution.value,
-      qualifier: qualifierResolution.value,
+      model: resolution.model,
+      qualifier: resolution.qualifier,
       source: {
-        model: modelResolution.source,
-        qualifier: qualifierResolution.source,
+        model: resolution.modelSource,
+        qualifier: resolution.qualifierSource,
       },
       legacyPiSubagentsThinkingPresent: false,
+      harness,
     }
   }
 
+  // Pi: model and thinking resolve INDEPENDENTLY. Unlike opencode's variant,
+  // Pi's thinking level applies to whatever model the delegate ends up
+  // running, including a model inherited from the parent session/agent when
+  // no layer sets one at all -- exactly how `main` treated
+  // `pi_subagents.thinking` and how `resolvePersonaRouting` already applies
+  // `thinkingLevel` at dispatch time regardless of where `model` came from.
+  // There is no model/qualifier coupling to enforce here.
+  const modelResolution = resolveModel(agentOverlay, categoryOverlay, harness)
   const qualifierResolution = resolvePiThinking(
     agentOverlay,
     categoryOverlay,
@@ -404,19 +496,28 @@ export function resolveRouting(input: ResolveRoutingInput): RoutingResolution {
       qualifier: qualifierResolution.source,
     },
     legacyPiSubagentsThinkingPresent: qualifierResolution.legacyPresent,
+    harness,
   }
 }
 
 /**
- * True when a qualifier resolved (variant on opencode, thinking on pi) but
- * no model resolved at any layer (`model` is `undefined` — `null` counts as
- * a resolved model meaning "inherit", so it does NOT trigger this). Used by
- * the loader's post-merge check to raise a config error naming the target
- * and harness (R3b).
+ * True when the OpenCode `variant` resolved but no model resolved at any
+ * layer (`model` is `undefined` — `null` counts as a resolved model meaning
+ * "inherit", so it does NOT trigger this). Used by the loader's post-merge
+ * check to raise a config error naming the target and harness (R3b).
+ *
+ * ALWAYS false for the `pi` harness: Pi's `thinking` qualifier is
+ * independent of `model` by design (see `resolveRouting`'s Pi branch) — it
+ * applies to whatever model the delegate ends up running, including one
+ * inherited from the parent session, so "thinking with no model anywhere"
+ * is a normal, valid configuration, not an error. This function self-guards
+ * on `resolution.harness` rather than relying on every caller to only ever
+ * invoke it for opencode resolutions.
  */
 export function qualifierResolvesWithoutModel(
   resolution: RoutingResolution,
 ): boolean {
+  if (resolution.harness !== 'opencode') return false
   return resolution.qualifier !== undefined && resolution.model === undefined
 }
 

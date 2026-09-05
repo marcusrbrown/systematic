@@ -17,7 +17,7 @@ export interface AgentCatalogEntry {
   toolsSource: string | undefined
   /** The agent's source file stem (filename without `.md`), used to key into `agents.<key>` overlays for routing (distinct from the display `name`). */
   key: string
-  /** The agent's category (source subdirectory name), used to key into `categories.<category>` overlays. `'(root)'` when the file has no category subdirectory. */
+  /** The agent's category (source subdirectory name), used to key into `categories.<category>` overlays. `''` when the file has no category subdirectory -- the same no-category sentinel `config-handler.ts` and `pi-subagents-export.ts` use. */
   category: string
   /** Qualified `category/key` id, mirroring `agent-overlays.ts`'s target-id convention, for callers that want a single stable identity. */
   id: string
@@ -32,13 +32,13 @@ export function buildAgentCatalog(agentsDir: string): AgentCatalogEntry[] {
   for (const info of infos) {
     const content = fs.readFileSync(info.file, 'utf8')
     const parsed = parseValidatedAgentEntry(content, info.file)
-    const category = info.category ?? '(root)'
+    const category = info.category ?? ''
     const key = info.name
     const entry: AgentCatalogEntry = {
       ...parsed,
       key,
       category,
-      id: `${category}/${key}`,
+      id: category ? `${category}/${key}` : key,
     }
 
     try {
@@ -50,9 +50,9 @@ export function buildAgentCatalog(agentsDir: string): AgentCatalogEntry[] {
 
     const existing = byName.get(entry.name)
     if (existing) {
-      existing.push(info.category ?? '(root)')
+      existing.push(category)
     } else {
-      byName.set(entry.name, [info.category ?? '(root)'])
+      byName.set(entry.name, [category])
     }
 
     entries.push(entry)

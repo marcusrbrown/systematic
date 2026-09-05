@@ -1,0 +1,8 @@
+// A category sets both model and variant; the agent overrides model only.
+// The more specific agent model wins AND clears the category's variant --
+// a category variant is not implicitly "inherited" by an agent that
+// overrides the category's model.
+{
+  "categories": { "review": { "model": "openai/gpt-4o", "variant": "v1" } },
+  "agents": { "correctness-reviewer": { "model": "openai/gpt-5" } }
+}

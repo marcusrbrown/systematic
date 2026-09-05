@@ -792,15 +792,52 @@ function resolveProfileSelector(input: ProfileSelectionInput): {
 }
 
 /**
+ * Look up a named profile bundle across the two sources that are actually
+ * allowed to define `profiles`: custom (OPENCODE_CONFIG_DIR), then user.
+ * Custom wins on a name collision -- it is the strongest trust level, and
+ * there is no security reason to exclude it.
+ */
+function lookupProfileBundle(
+  input: ProfileSelectionInput,
+  name: string,
+): RawProfileBundle | undefined {
+  return (
+    input.customConfig?.profiles?.[name] ?? input.userConfig?.profiles?.[name]
+  )
+}
+
+/**
+ * The single fallback candidate name to retry when a selected profile name
+ * is missing: the USER source's own `profile` default. This is the
+ * bottom-rung default regardless of which source's SELECTOR failed --
+ * `custom` has no independent "default" identity distinct from `user`'s
+ * (a `custom`-sourced selector that itself fails has nothing more trusted
+ * to fall back to, so it also bottoms out here), and `resolveProfileSelector`
+ * guarantees `custom.profile` is `undefined` whenever `project` wins the
+ * selector in the first place (custom is checked before project), so
+ * `custom.profile` could never provide a genuinely different fallback
+ * candidate than `user.profile` in a reachable case. The BUNDLE for this
+ * name is looked up via `lookupProfileBundle`, which checks custom's
+ * `profiles` map first, so a fallback name that only exists in custom's
+ * `profiles` (not user's) is still found.
+ */
+function trustedDefaultProfileName(
+  input: ProfileSelectionInput,
+): string | undefined {
+  const userDefault = input.userConfig?.profile
+  return typeof userDefault === 'string' ? userDefault : undefined
+}
+
+/**
  * Resolve which named profile bundle (if any) is active for this load,
  * implementing the selection table from plan
  * 2026-09-04-002-feat-model-config-profiles (Unit 2). The named bundle is
- * always looked up in the USER source's `profiles` map, regardless of which
- * source supplied the winning selector -- project's `profiles` is stripped
- * before this ever runs (see `PROJECT_PROTECTED_FIELDS`), and a custom
- * source selecting a name does not make its own `profiles` map (if any)
- * selectable either. Emits at most one warning per call through
- * `warningSink`.
+ * looked up across custom and user `profiles` maps (`lookupProfileBundle`)
+ * -- project's `profiles` is stripped before this ever runs (see
+ * `PROJECT_PROTECTED_FIELDS`), so it is never a lookup source, but a
+ * custom OR user source's `profiles` map is equally eligible regardless of
+ * which source supplied the winning selector name. Emits at most one
+ * warning per call through `warningSink`.
  */
 function resolveActiveProfile(
   input: ProfileSelectionInput,
@@ -820,8 +857,7 @@ function resolveActiveProfile(
   }
 
   const requested = selection.value
-  const userProfiles = input.userConfig?.profiles
-  const requestedBundle = userProfiles?.[requested]
+  const requestedBundle = lookupProfileBundle(input, requested)
   if (requestedBundle !== undefined) {
     return {
       activeProfile: requested,
@@ -831,42 +867,40 @@ function resolveActiveProfile(
     }
   }
 
-  // Missing name. If the winning selector IS the user's own default, there
-  // is no further fallback to attempt -- retrying the same name would loop.
-  if (selection.source === 'user') {
-    input.warningSink(
-      `[systematic] profile "${requested}" is not defined in \`profiles\`; using base configuration (no profile). See ${PROFILE_DOCS_URL} for how to define a profile.`,
-    )
-    return {
-      activeProfile: null,
-      profileSelectorSource: selection.source,
-      profileFallback: { requested, usedDefault: null },
-      bundle: null,
-    }
-  }
-
-  const userDefault = input.userConfig?.profile
+  // Missing name. Try the one distinct trusted-default fallback candidate.
+  // For a `custom`- or `user`-sourced selector this always equals `requested`
+  // itself (see `trustedDefaultProfileName`'s doc comment) -- already known
+  // missing, so there is nothing new to find and no risk of looping.
+  const trustedDefault = trustedDefaultProfileName(input)
   const fallbackBundle =
-    typeof userDefault === 'string' ? userProfiles?.[userDefault] : undefined
+    trustedDefault !== undefined && trustedDefault !== requested
+      ? lookupProfileBundle(input, trustedDefault)
+      : undefined
 
-  if (typeof userDefault === 'string' && fallbackBundle !== undefined) {
+  if (fallbackBundle !== undefined && trustedDefault !== undefined) {
     input.warningSink(
-      `[systematic] profile "${requested}" (selected by ${selection.source} config) is not defined in \`profiles\`; falling back to your default profile "${userDefault}". See ${PROFILE_DOCS_URL} for how to define a profile.`,
+      `[systematic] profile "${requested}" (selected by ${selection.source} config) is not defined in \`profiles\`; falling back to your default profile "${trustedDefault}". See ${PROFILE_DOCS_URL} for how to define a profile.`,
     )
     return {
-      activeProfile: userDefault,
+      activeProfile: trustedDefault,
       profileSelectorSource: selection.source,
-      profileFallback: { requested, usedDefault: userDefault },
+      profileFallback: { requested, usedDefault: trustedDefault },
       bundle: fallbackBundle,
     }
   }
 
+  const sourceNote =
+    selection.source === 'user'
+      ? ''
+      : ` (selected by ${selection.source} config)`
   const alsoMissingNote =
-    typeof userDefault === 'string'
-      ? ` Your default profile "${userDefault}" is also not defined in \`profiles\`.`
-      : ' No default profile is configured (`profile` in your user config).'
+    trustedDefault !== undefined && trustedDefault !== requested
+      ? ` Your default profile "${trustedDefault}" is also not defined in \`profiles\`.`
+      : trustedDefault === undefined
+        ? ' No default profile is configured (`profile` in your user or custom config).'
+        : ''
   input.warningSink(
-    `[systematic] profile "${requested}" (selected by ${selection.source} config) is not defined in \`profiles\`; using base configuration (no profile).${alsoMissingNote} See ${PROFILE_DOCS_URL} for how to define a profile.`,
+    `[systematic] profile "${requested}"${sourceNote} is not defined in \`profiles\`; using base configuration (no profile).${alsoMissingNote} See ${PROFILE_DOCS_URL} for how to define a profile.`,
   )
   return {
     activeProfile: null,
@@ -952,6 +986,13 @@ export function loadConfigWithSources(
     customConfig,
     warningSink,
   })
+
+  if (profileSelection.bundle) {
+    assertProfileBundleKeysAreBundledNames(
+      profileSelection.activeProfile,
+      profileSelection.bundle,
+    )
+  }
 
   // The active profile bundle is inserted as a fourth chain entry between
   // user base and project (plan KTD: "Profile selection is a load-time step
@@ -1318,6 +1359,85 @@ export function collectRoutingTargets(
   return Array.from(targets.values())
 }
 
+/**
+ * Validate that every `agents`/`categories` key inside an active profile
+ * bundle names a real bundled agent (bare or qualified `category/key`) or
+ * category -- a typo in a profile is a config error, exactly like a typo
+ * in the top-level `agents`/`categories` overlays is. Uses the same static
+ * `BUNDLED_AGENT_CATEGORY_BY_KEY`/`BUNDLED_AGENT_KEYS_BY_CATEGORY`
+ * inventory `collectRoutingTargets` already relies on rather than
+ * `agent-overlays.ts`'s filesystem-backed `buildBundledAgentInventory`
+ * (which needs an `agentsDir` this loader doesn't have) -- both are
+ * derived from the same generated `BUNDLED_AGENT_QUALIFIED_IDS` source of
+ * truth, so a name real enough to pass one is real enough to pass the
+ * other.
+ */
+function assertProfileBundleKeysAreBundledNames(
+  profileName: string | null,
+  bundle: RawProfileBundle,
+): void {
+  for (const rawKey of Object.keys(bundle.agents ?? {})) {
+    const separatorIndex = rawKey.indexOf('/')
+    const isKnown =
+      separatorIndex === -1
+        ? BUNDLED_AGENT_CATEGORY_BY_KEY.has(rawKey)
+        : BUNDLED_AGENT_CATEGORY_BY_KEY.get(
+            rawKey.slice(separatorIndex + 1),
+          ) === rawKey.slice(0, separatorIndex)
+    if (!isKnown) {
+      throw new Error(
+        `Invalid Systematic config: profiles.${profileName}.agents.${rawKey} is not a bundled agent. Valid agents: ${BUNDLED_AGENT_NAMES.join(', ')}`,
+      )
+    }
+  }
+
+  for (const categoryKey of Object.keys(bundle.categories ?? {})) {
+    if (!BUNDLED_AGENT_KEYS_BY_CATEGORY.has(categoryKey)) {
+      throw new Error(
+        `Invalid Systematic config: profiles.${profileName}.categories.${categoryKey} is not a bundled agent category. Valid categories: ${Array.from(BUNDLED_AGENT_KEYS_BY_CATEGORY.keys()).join(', ')}`,
+      )
+    }
+  }
+}
+
+/**
+ * Targets derived directly from the merged `pi_subagents` overlays'
+ * `agents`/`categories` keys, independent of whether those keys also
+ * appear in the ordinary `agents`/`categories` routing overlays. A config
+ * whose ONLY Pi customization is the legacy `pi_subagents.<key>.thinking`
+ * field (no `agents`/`categories` overlay at all for that agent) would
+ * otherwise never be walked by `collectRoutingTargets` -- which only
+ * enumerates agents that already have an `agents`/`categories` overlay
+ * entry -- so the R5 deprecation warning would silently never fire for
+ * the exact "only legacy field set"
+ * case the warning exists to catch.
+ */
+function collectPiSubagentsLegacyTargets(
+  piSubagentsOverlays: SourcedOverlayConfigMap,
+  disabledAgents: ReadonlySet<string>,
+): RoutingTarget[] {
+  const targets = new Map<string, RoutingTarget>()
+
+  const addTarget = (agentKey: string, category: string): void => {
+    const qualifiedId = `${category}/${agentKey}`
+    if (disabledAgents.has(agentKey) || disabledAgents.has(qualifiedId)) return
+    targets.set(qualifiedId, { agentKey, category })
+  }
+
+  for (const agentKey of Object.keys(piSubagentsOverlays.agents)) {
+    const category = BUNDLED_AGENT_CATEGORY_BY_KEY.get(agentKey)
+    if (category !== undefined) addTarget(agentKey, category)
+  }
+
+  for (const categoryKey of Object.keys(piSubagentsOverlays.categories)) {
+    const agentKeys = BUNDLED_AGENT_KEYS_BY_CATEGORY.get(categoryKey)
+    if (agentKeys === undefined) continue
+    for (const agentKey of agentKeys) addTarget(agentKey, categoryKey)
+  }
+
+  return Array.from(targets.values())
+}
+
 const ROUTING_HARNESSES = ['opencode', 'pi'] as const
 
 /**
@@ -1342,8 +1462,24 @@ function assertRoutingInvariants(
   warningSink: (message: string) => void,
 ): void {
   const targets = collectRoutingTargets(overlays, disabledAgents)
+  const legacyOnlyTargets = collectPiSubagentsLegacyTargets(
+    piSubagentsOverlays,
+    disabledAgents,
+  )
+  const targetKeys = new Set(targets.map((t) => `${t.category}/${t.agentKey}`))
+  for (const target of legacyOnlyTargets) {
+    if (!targetKeys.has(`${target.category}/${target.agentKey}`)) {
+      targets.push(target)
+    }
+  }
   const entries: RoutingResolutionEntry[] = []
 
+  // Both harnesses are resolved so `entries` covers Pi resolutions too --
+  // required for the legacy-`pi_subagents.thinking` deprecation-warning
+  // collection below. But `qualifierResolvesWithoutModel` is a no-op for Pi
+  // (it self-guards on `resolution.harness`): Pi's `thinking` is
+  // independent of `model` by design, so only the `opencode` resolution can
+  // ever actually throw here.
   for (const target of targets) {
     for (const harness of ROUTING_HARNESSES) {
       const resolution = resolveRouting({
@@ -1421,7 +1557,7 @@ function mergeOverlayMap(
  * previously-accumulated value (if any) and this source's fragment.
  * Extracted from `mergeOverlayMap` to keep that function's branching
  * shallow -- the three merge strategies (blind project preserve, additive
- * profile merge, narrower user/custom preserve) are each documented at
+ * profile merge, wholesale user/custom replace) are each documented at
  * their own definition.
  */
 function resolveOverlayEntryValue(
@@ -1434,7 +1570,11 @@ function resolveOverlayEntryValue(
     return mergeProfileOverlayValue(previous, next)
   }
   if (source.trust === 'project') return preserveSecurityFields(previous, next)
-  return preserveFieldsAbsentFromNext(previous, next)
+  // An ordinary user or custom same-key overlay fully replaces the previous
+  // value. Only the project trust level (above) and the profile-bundle
+  // pseudo-source (mergeProfileOverlayValue) merge field-by-field instead
+  // of replacing.
+  return next
 }
 
 function rejectProjectSecurityOverlay(
@@ -1465,42 +1605,6 @@ function preserveSecurityFields(
 }
 
 /**
- * Fields carried forward from a lower layer's overlay value when an
- * ordinary user or custom source replaces the same overlay key without
- * itself setting that field: the trust-protected fields (model, variant,
- * skills, permission, opencode, pi) plus the trust-any sampling knobs
- * (temperature, top_p). Every other field (mode, color, steps, hidden,
- * disable) is NOT carried forward -- a same-key overlay from these trust
- * levels fully replaces them, same as a plain object overwrite.
- * `preserveSecurityFields` above stays the project-only, blind-overwrite
- * variant (its `next` never contains a security field, by construction of
- * `rejectProjectSecurityOverlay`), while this variant only fills gaps
- * `next` leaves unset, so a later fragment's explicit value always wins.
- *
- * NOT used for the active profile layer -- see `mergeProfileOverlayValue`,
- * which must be fully field-additive (R7/R10: switching profiles must never
- * change an agent's visibility, permissions, mode, or existence).
- */
-const PRESERVE_ACROSS_OVERRIDE_FIELDS: readonly string[] = [
-  ...SECURITY_OVERLAY_FIELDS,
-  'temperature',
-  'top_p',
-]
-
-function preserveFieldsAbsentFromNext(
-  previous: OverlayConfig,
-  next: OverlayConfig,
-): OverlayConfig {
-  const result: OverlayConfig = { ...next }
-  for (const field of PRESERVE_ACROSS_OVERRIDE_FIELDS) {
-    if (!Object.hasOwn(next, field) && Object.hasOwn(previous, field)) {
-      result[field] = previous[field]
-    }
-  }
-  return result
-}
-
-/**
  * Harness routing blocks that nest one level deeper and need their own
  * field-level merge when both the base value and the profile fragment set
  * them -- otherwise a profile setting only `pi.thinking` would wipe a base
@@ -1515,9 +1619,10 @@ const HARNESS_BLOCK_KEYS = ['opencode', 'pi'] as const
  * project/custom-merged) value for the same agent/category key.
  *
  * Fully field-additive: every field of `previous` absent from `next` is
- * preserved -- not just the trust-protected/trust-any subset
- * `preserveFieldsAbsentFromNext` preserves for an ordinary same-key
- * override. A profile bundle can only ever carry routing fields
+ * preserved. This is deliberately DIFFERENT from an ordinary user/custom
+ * same-key override, which fully replaces the previous value (see
+ * `resolveOverlayEntryValue`). A profile bundle can only ever carry
+ * routing fields
  * (`ProfileOverlaySchema` rejects `mode`/`color`/`steps`/`hidden`/`disable`
  * at parse time), so switching which profile is active must never change
  * an agent's visibility, permissions, mode, or existence (R7/R10) --

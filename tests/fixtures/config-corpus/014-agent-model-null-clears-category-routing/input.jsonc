@@ -1,0 +1,7 @@
+// Same scenario as 013, but the agent explicitly opts out with model: null
+// (inherit) instead of overriding with a concrete model -- neither model
+// nor variant should resolve.
+{
+  "categories": { "review": { "model": "openai/gpt-4o", "variant": "v1" } },
+  "agents": { "correctness-reviewer": { "model": null } }
+}

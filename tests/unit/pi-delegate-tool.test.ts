@@ -1020,7 +1020,43 @@ describe('createPiDelegateTool: Pi routing (Unit 5)', () => {
     expect(capturedThinkingLevel).toBe('high')
   })
 
-  test('no thinking anywhere → thinkingLevel key is absent (child inherits Pi default)', async () => {
+  test('agents.fixer.pi.thinking set with NO model anywhere \u2192 thinkingLevel applied on the inherited ctx.model (thinking is model-independent)', async () => {
+    const fixerCatalog: AgentCatalogEntry[] = [
+      {
+        name: 'fixer',
+        description: 'Fixes things',
+        body: 'You are a fixer.',
+        toolsSource: undefined,
+        key: 'fixer',
+        category: 'fix',
+        id: 'fix/fixer',
+      },
+    ]
+    const inheritedModel = { provider: 'p', id: 'parent-model' }
+    let capturedThinkingLevel: unknown
+    let capturedModel: unknown
+    const tool = createPiDelegateTool({
+      catalog: fixerCatalog,
+      createDelegateSession: async (opts) => {
+        capturedThinkingLevel = opts.thinkingLevel
+        capturedModel = opts.model
+        return createFakeSession(1)
+      },
+      overlays: overlays({ fixer: { pi: { thinking: 'high' } } }),
+    })
+
+    await execute(
+      tool as unknown as ToolDefinition<never, DelegateToolDetails>,
+      { agent: 'fixer', task: 'fix it' },
+      undefined,
+      fakeCtx(inheritedModel),
+    )
+
+    expect(capturedThinkingLevel).toBe('high')
+    expect(capturedModel).toBe(inheritedModel)
+  })
+
+  test('no thinking anywhere \u2192 thinkingLevel key is absent (child inherits Pi default)', async () => {
     let capturedOpts: Record<string, unknown> | undefined
     const tool = createPiDelegateTool({
       catalog,

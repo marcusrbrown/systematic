@@ -72,8 +72,10 @@ Body.`,
 
     const rootLevel = resolveAgent(catalog, 'a-different-display-name')
     expect(rootLevel?.key).toBe('a-different-display-name')
-    expect(rootLevel?.category).toBe('(root)')
-    expect(rootLevel?.id).toBe('(root)/a-different-display-name')
+    // '' is the no-category sentinel, aligned with config-handler.ts and
+    // pi-subagents-export.ts.
+    expect(rootLevel?.category).toBe('')
+    expect(rootLevel?.id).toBe('a-different-display-name')
   })
 
   test('a body line beginning "tools:" is never mistaken for a frontmatter declaration', () => {
@@ -282,8 +284,8 @@ describe('real bundled agents catalog', () => {
       expect(entry.category.length).toBeGreaterThan(0)
       expect(entry.id).toBe(`${entry.category}/${entry.key}`)
       // Real bundled agents live under agents/<category>/<name>.md, so none
-      // should fall back to the '(root)' no-category sentinel.
-      expect(entry.category).not.toBe('(root)')
+      // should fall back to the '' no-category sentinel.
+      expect(entry.category).not.toBe('')
     }
   })
 

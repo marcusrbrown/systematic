@@ -34,6 +34,16 @@ post-change hook and committed. This is the proof that the resolver-based
 rewrite (Units 1–5) changed nothing observable for every config shape this
 corpus covers.
 
+## Entries 013-014
+
+Entries `013-agent-model-clears-category-variant` and
+`014-agent-model-null-clears-category-routing` pin the variant-binding rule: a
+category sets both `model` and `variant`, and a more specific agent layer
+overrides only `model` (013) or opts out with `model: null` (014). A variant
+from a less specific layer than the winning model is dropped, and a null model
+drops every variant. Both entries were verified against pre-feature `main`
+(commit `324a87e`) with the reconstruction method above, with 0 differences.
+
 ## Adding an entry
 
 1. Create a new numbered directory (`NNN-short-description/`).

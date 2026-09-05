@@ -182,6 +182,67 @@ describe('resolveRouting', () => {
     expect(opencodeResolution.qualifier).toBeUndefined()
   })
 
+  // A category sets BOTH model and variant; a more specific agent layer
+  // sets only model. The more specific model wins AND clears the less
+  // specific layer's stale variant -- a category variant is not implicitly
+  // "inherited" by an agent that overrides the category's model.
+  test('category model+variant, agent overrides model only \u2192 agent model wins, category variant is dropped', () => {
+    const merged = overlays(
+      { 'correctness-reviewer': { model: 'openai/gpt-5' } },
+      { review: { model: 'openai/gpt-4o', variant: 'v1' } },
+    )
+    const resolution = resolveRouting({
+      overlays: merged,
+      piSubagentsOverlays: EMPTY_PI_SUBAGENTS,
+      target: target('correctness-reviewer', 'review'),
+      harness: 'opencode',
+    })
+    expect(resolution.model).toBe('openai/gpt-5')
+    expect(resolution.qualifier).toBeUndefined()
+    expect(resolution.source.qualifier).toBeUndefined()
+  })
+
+  // Same scenario, but the agent overrides with an explicit `model: null`
+  // (inherit) instead of a concrete model -- neither model nor variant
+  // should resolve.
+  test('category model+variant, agent overrides with model: null \u2192 neither model nor variant resolve', () => {
+    const merged = overlays(
+      { 'correctness-reviewer': { model: null } },
+      { review: { model: 'openai/gpt-4o', variant: 'v1' } },
+    )
+    const resolution = resolveRouting({
+      overlays: merged,
+      piSubagentsOverlays: EMPTY_PI_SUBAGENTS,
+      target: target('correctness-reviewer', 'review'),
+      harness: 'opencode',
+    })
+    expect(resolution.model).toBeNull()
+    expect(resolution.qualifier).toBeUndefined()
+  })
+
+  // R3b: a MORE specific layer may still set variant alone over a LESS
+  // specific layer's model -- the opposite direction from the scenario
+  // above. An agent-level opencode.variant with no agent model, over a flat
+  // agent model, is still "at least as specific as" the model's layer
+  // (agent flat), so it survives.
+  test('R3b: agents.x.opencode.variant + flat agents.x.model \u2192 flat model wins, block variant survives (more specific than the model layer)', () => {
+    const merged = overlays({
+      x: { model: 'anthropic/M', opencode: { variant: 'high' } },
+    })
+    const resolution = resolveRouting({
+      overlays: merged,
+      piSubagentsOverlays: EMPTY_PI_SUBAGENTS,
+      target: target('x', 'review'),
+      harness: 'opencode',
+    })
+    expect(resolution.model).toBe('anthropic/M')
+    expect(resolution.qualifier).toBe('high')
+    expect(resolution.source.qualifier).toEqual({
+      level: 'agent',
+      form: 'block',
+    })
+  })
+
   test('error-precursor: agents.x.variant with no model anywhere \u2192 qualifier resolves, model undefined', () => {
     const merged = overlays({ x: { variant: 'high' } })
     const resolution = resolveRouting({
@@ -195,7 +256,15 @@ describe('resolveRouting', () => {
     expect(qualifierResolvesWithoutModel(resolution)).toBe(true)
   })
 
-  test('error-precursor: agents.x.pi.thinking with no model anywhere \u2192 qualifier resolves, model undefined', () => {
+  // Pi's `thinking` is independent of `model` by design -- it applies to
+  // whatever model the delegate ends up running, including one inherited
+  // from the parent session, and `resolvePersonaRouting` already applies
+  // `thinkingLevel` regardless of where `model` came from. "thinking with
+  // no model anywhere" is therefore a normal, valid configuration on Pi,
+  // never a `qualifierResolvesWithoutModel` violation -- unlike the
+  // opencode `variant` case immediately above, which is still correctly
+  // rejected.
+  test('agents.x.pi.thinking with no model anywhere \u2192 resolves fine, never a violation (thinking is model-independent)', () => {
     const merged = overlays({ x: { pi: { thinking: 'high' } } })
     const resolution = resolveRouting({
       overlays: merged,
@@ -205,10 +274,16 @@ describe('resolveRouting', () => {
     })
     expect(resolution.qualifier).toBe('high')
     expect(resolution.model).toBeUndefined()
-    expect(qualifierResolvesWithoutModel(resolution)).toBe(true)
+    expect(qualifierResolvesWithoutModel(resolution)).toBe(false)
   })
 
-  test('qualifierResolvesWithoutModel is false when model resolves to null (inherit counts as a model)', () => {
+  // An explicit `model: null` at the SAME layer as `variant` means
+  // "inherit the parent's model AND variant" -- there is no "inherited
+  // model, explicit variant" combination, so the variant set alongside a
+  // null model at the same fragment is dropped, not preserved. (A
+  // `variant` from a MORE specific layer than the null model still
+  // survives -- see the R3b test below.)
+  test('model: null and variant in the SAME fragment \u2192 variant is dropped (null model means inherit variant too)', () => {
     const merged = overlays({ x: { model: null, variant: 'high' } })
     const resolution = resolveRouting({
       overlays: merged,
@@ -217,7 +292,8 @@ describe('resolveRouting', () => {
       harness: 'opencode',
     })
     expect(resolution.model).toBeNull()
-    expect(resolution.qualifier).toBe('high')
+    expect(resolution.qualifier).toBeUndefined()
+    expect(resolution.source.qualifier).toBeUndefined()
     expect(qualifierResolvesWithoutModel(resolution)).toBe(false)
   })
 

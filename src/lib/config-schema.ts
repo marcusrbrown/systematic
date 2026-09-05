@@ -184,35 +184,16 @@ function trustProtected<T extends z.ZodType>(schema: T): T {
   return schema.meta({ trust: 'project-or-higher' }) as T
 }
 
-interface OverlayModelVariantFields {
-  model?: string | null
-  variant?: string
-}
-
-/**
- * Historically enforced that `variant` required an explicit (non-null)
- * `model` in the same overlay fragment, failing at parse time otherwise.
- *
- * Relaxed for the model-config-profiles feature (plan
- * 2026-09-04-002-feat-model-config-profiles): a written fragment — a
- * category overlay, a profile bundle entry, or a harness block — may now set
- * a qualifier (`variant` here; `pi.thinking` on the Pi block) with no model
- * anywhere in that same fragment, because the model may come from a
- * different layer in the merge chain (e.g. a profile sets `pi.thinking`
- * while the user's base config supplies the model). A single fragment's
- * parse-time schema cannot see the merged result, so the invariant is
- * re-asserted once per (target, harness) on the *merged* overlay, in
- * `src/lib/routing-resolver.ts` (Unit 3 of that plan) — not here.
- *
- * Kept as a no-op (rather than deleted) so the wiring below stays intact for
- * any future parse-time-checkable narrowing of this invariant.
- */
-function enforceVariantHasExplicitModel(
-  _overlay: OverlayModelVariantFields,
-  _ctx: z.RefinementCtx,
-): void {
-  // Intentionally empty — see doc comment above.
-}
+// A written fragment -- a category overlay, a profile bundle entry, or a
+// harness block -- may legitimately set a qualifier (`variant` here;
+// `pi.thinking` on the Pi block) with no model anywhere in that same
+// fragment, since the model may come from a different layer in the merge
+// chain (e.g. a profile sets `pi.thinking` while the user's base config
+// supplies the model). A single fragment's parse-time schema cannot see
+// the merged result, so the invariant lives entirely post-merge in
+// `src/lib/routing-resolver.ts`'s `qualifierResolvesWithoutModel` (opencode
+// `variant` only -- Pi's `thinking` is independent of `model` by design;
+// see that function's doc comment).
 
 const piSubagentsThinkingSchema = z
   .enum(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const)
@@ -230,7 +211,7 @@ const OpencodeHarnessBlockSchema = z
   .strict()
   .meta({
     description:
-      'OpenCode-specific routing block. When present, model/variant here override the flat model/variant fields for OpenCode only; the flat fields remain the harness-neutral default and still apply to Pi. A qualifier set here with no model anywhere in the merged overlay is a config-load error raised by the routing resolver, not a parse-time error.',
+      'OpenCode-specific routing block. When present, model/variant here override the flat model/variant fields for OpenCode only; the flat fields remain the harness-neutral default and still apply to Pi. `variant` is bound to whichever layer supplies `model`: it is used only from that layer or a more specific one, and is dropped when a more specific layer sets (or nulls) `model` without repeating the variant. A `variant` with no `model` anywhere in the merged overlay is a config-load error raised by the routing resolver, not a parse-time error.',
     examples: [
       { model: 'anthropic/claude-opus-4-7', variant: 'v2' },
       { model: null },
@@ -245,7 +226,7 @@ const PiHarnessBlockSchema = z
   .strict()
   .meta({
     description:
-      'Pi-specific routing block. When present, model/thinking here override the flat model field and the legacy `pi_subagents.<name>.thinking` value for Pi only; the flat model field remains the harness-neutral default and still applies to OpenCode. A qualifier set here with no model anywhere in the merged overlay is a config-load error raised by the routing resolver, not a parse-time error.',
+      "Pi-specific routing block. When present, model/thinking here override the flat model field and the legacy `pi_subagents.<name>.thinking` value for Pi only; the flat model field remains the harness-neutral default and still applies to OpenCode. Unlike OpenCode's `variant`, `thinking` is independent of `model`: it applies to whatever model the delegate ends up running, including one inherited from the parent session, so `thinking` with no `model` anywhere in the merged overlay is valid and never a config-load error.",
     examples: [
       { model: 'anthropic/claude-opus-4-7', thinking: 'high' },
       { model: null },
@@ -269,7 +250,6 @@ export const AgentOverlaySchema = z
     pi: trustProtected(PiHarnessBlockSchema).optional(),
   })
   .strict()
-  .superRefine(enforceVariantHasExplicitModel)
   .meta({
     description: 'Per-agent configuration overlay',
     examples: [
@@ -301,7 +281,6 @@ export const CategoryOverlaySchema = z
     pi: trustProtected(PiHarnessBlockSchema).optional(),
   })
   .strict()
-  .superRefine(enforceVariantHasExplicitModel)
   .meta({
     description:
       'Per-category configuration overlay (same fields as agent minus disable)',
