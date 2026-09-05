@@ -1,0 +1,160 @@
+---
+title: Model profiles and per-harness routing
+description: Define named model profiles once, select one per repository, and route an agent differently on OpenCode and Pi.
+sidebar:
+  order: 11
+---
+
+import { Tabs, TabItem, Steps } from '@astrojs/starlight/components';
+
+A profile is a named bundle of model routing overrides. You need one when you work across repositories that warrant different routing from the same harness: define `work` and `personal` once in your user config, then let each repository pick one.
+
+<Steps>
+1. **Define profiles** in your user config under `profiles`.
+2. **Select one per repository** with a top-level `profile` key in that repository's project config.
+3. **Check what is active** with `systematic config show`.
+</Steps>
+
+## Defining Profiles
+
+Profiles live in your user config. Each entry under `profiles` carries `agents` and `categories` overlays limited to routing fields; the top-level `profile` key names your default.
+
+```jsonc title="~/.config/opencode/systematic.json"
+{
+  "$schema": "https://fro.bot/systematic/schemas/v3/systematic-config.schema.json",
+  "profile": "personal", // your default when nothing else selects one
+  "profiles": {
+    "work": {
+      "agents": {
+        "correctness-reviewer": {
+          "model": "openai/gpt-6-astra",
+          "opencode": { "variant": "high" },
+          "pi": { "thinking": "high" }
+        }
+      }
+    },
+    "personal": {
+      "categories": { "review": { "model": "anthropic/claude-opus-5" } }
+    }
+  }
+}
+```
+
+:::note
+`$OPENCODE_CONFIG_DIR/systematic.json` may also define `profiles`. When both define the same name, that file's definition is used.
+:::
+
+## Selecting a Profile per Project
+
+A repository selects a profile in its project config. Project config can only select a profile you already defined; a `profiles` map there is ignored with a warning.
+
+```json title=".opencode/systematic.json"
+{ "profile": "work" }
+```
+
+To make a repository ignore your default profile and run on base configuration, set `profile` to `null`:
+
+```json title=".opencode/systematic.json"
+{ "profile": null }
+```
+
+The strongest source that sets `profile` wins: `$OPENCODE_CONFIG_DIR` config, then project config, then user config. The full resolution and merge rules are in the [configuration reference](/systematic/reference/configuration/#profiles-and-per-harness-routing).
+
+## Per-Harness Overrides
+
+Any `agents.<name>` or `categories.<category>` overlay, in a profile or in base config, accepts `opencode` and `pi` blocks. The flat `model` stays the harness-neutral default; each block adds that harness's qualifier.
+
+```jsonc title="~/.config/opencode/systematic.json"
+{
+  "agents": {
+    "correctness-reviewer": {
+      "model": "anthropic/claude-sonnet-5",
+      "opencode": { "variant": "high" },
+      "pi": { "thinking": "high" }
+    }
+  }
+}
+```
+
+- **`opencode.variant`** follows the layer that supplies `model`. When a more specific layer (an agent) overrides the model, a `variant` set at a less specific layer (its category) is dropped rather than inherited.
+- **`pi.thinking`** is independent of `model`. It applies to whatever model the Pi delegate runs, including one inherited from the parent session, so `thinking` with no model anywhere is valid.
+
+The [configuration reference](/systematic/reference/configuration/#per-harness-routing-blocks) has the precedence order and the `model: null` rules.
+
+## Migrating Pi Subagents Thinking
+
+`pi_subagents.<name>.thinking` is deprecated in favour of `agents.<name>.pi.thinking` (and the category form). Move the value into the `pi` block:
+
+<Tabs>
+  <TabItem label="After">
+    ```jsonc title="systematic.json"
+    {
+      "agents": { "repo-research-analyst": { "pi": { "thinking": "medium" } } }
+    }
+    ```
+  </TabItem>
+  <TabItem label="Before">
+    ```jsonc title="systematic.json"
+    {
+      "pi_subagents": {
+        "agents": { "repo-research-analyst": { "thinking": "medium" } }
+      }
+    }
+    ```
+  </TabItem>
+</Tabs>
+
+A legacy field still works and prints one deprecation warning naming the exact path you wrote. When both are set, the `pi` block wins.
+
+## Checking Active Routing
+
+If the `systematic` CLI is on your `PATH`, `config show` prints the config files it found, the active profile, which source selected it, any fallback, and the resolved routing for every overlaid agent. `--json` gives the same routing data as one object. Plain `config show` also prints the full contents of the user and project config files, while `--json` reports only their paths — keep that in mind before pasting either into an issue:
+
+```bash
+systematic config show --json
+```
+
+With the `work` profile above selected by a repository:
+
+```json title="systematic config show --json (trimmed)"
+{
+  "locations": {
+    "user": "/home/you/.config/opencode/systematic.json",
+    "project": "/path/to/repo/.opencode/systematic.json",
+    "custom": null
+  },
+  "activeProfile": "work",
+  "profileSelectorSource": "project",
+  "profileFallback": null,
+  "routing": [
+    {
+      "target": { "agentKey": "correctness-reviewer", "category": "review" },
+      "opencode": {
+        "model": "openai/gpt-6-astra",
+        "qualifier": "high",
+        "source": {
+          "model": { "level": "agent", "form": "flat" },
+          "qualifier": { "level": "agent", "form": "block" }
+        }
+      },
+      "pi": {
+        "model": "openai/gpt-6-astra",
+        "qualifier": "high",
+        "source": {
+          "model": { "level": "agent", "form": "flat" },
+          "qualifier": { "level": "agent", "form": "block" }
+        }
+      }
+    }
+  ]
+}
+```
+
+`source` tells you which layer supplied each value: `level` is `agent` or `category`, `form` is `block`, `flat`, or `legacy-pi-subagents`.
+
+## Troubleshooting
+
+- **A selected profile name is not defined.** Systematic warns once and uses your own default `profile` instead; with no usable default it runs on base configuration. `config show` reports the fallback under `profileFallback`.
+- **Config fails to load naming an agent and `opencode`.** An OpenCode `variant` resolved with no `model` at any layer for that agent. Add a model at the same layer or a less specific one, or remove the variant.
+- **Config fails to load naming `profiles.<name>.agents.<key>` or `profiles.<name>.categories.<key>`.** A profile contains an agent or category key that is not a bundled name. Every profile is validated at load, selected or not, so the typo has to be fixed even in a profile you never use.
+- **A profile changed routing but nothing else.** By design: profile entries carry only `model`, `variant`, `temperature`, `top_p`, `opencode`, and `pi`. Fields such as `mode`, `permission`, `disable`, `hidden`, `steps`, and `color` come from your base config and survive any profile switch.

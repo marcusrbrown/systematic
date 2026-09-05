@@ -97,7 +97,7 @@ A flat `agents.<name>.model` now also routes in-process Pi delegates, not just O
 
 ## Profiles and Per-Harness Routing
 
-A **profile** is a named, reusable bundle of routing overrides — `model`, `variant`, `temperature`, `top_p`, and the `opencode`/`pi` blocks below — defined once in your user config's `profiles` map and selected by name. Profiles exist for people who work across repositories that warrant different model routing from the same harness: define `work` and `personal` profiles once in user config, then let each repository pick one.
+For a task-oriented walkthrough, see the [model profiles guide](/systematic/guides/model-profiles/). A **profile** is a named, reusable bundle of routing overrides — `model`, `variant`, `temperature`, `top_p`, and the `opencode`/`pi` blocks below — defined once in your user config's `profiles` map and selected by name. Profiles exist for people who work across repositories that warrant different model routing from the same harness: define `work` and `personal` profiles once in user config, then let each repository pick one.
 
 ```jsonc
 // ~/.config/opencode/systematic.json (or $OPENCODE_CONFIG_DIR/systematic.json)
