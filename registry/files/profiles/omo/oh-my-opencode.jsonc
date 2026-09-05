@@ -31,7 +31,7 @@
   "categories": {
     // Configure category models for domain-specific tasks
     "visual-engineering": {
-      "model": "google/gemini-3-pro-preview"
+      "model": "google/gemini-3.1-pro-preview"
     },
     "ultrabrain": {
       "model": "openai/gpt-5.3-codex",
@@ -41,10 +41,10 @@
       "model": "anthropic/claude-haiku-4-5"
     },
     "unspecified-low": {
-      "model": "anthropic/claude-sonnet-4-5"
+      "model": "anthropic/claude-sonnet-5"
     },
     "unspecified-high": {
-      "model": "anthropic/claude-opus-4-6",
+      "model": "anthropic/claude-opus-5",
       "variant": "max"
     }
   },

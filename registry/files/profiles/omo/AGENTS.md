@@ -202,9 +202,9 @@ The profile comes pre-configured with:
 
 - **Category models** — Optimal model per task type:
   - `quick` → Haiku (fast/cheap)
-  - `visual-engineering` → Gemini 3 Pro (UI excellence)
+  - `visual-engineering` → Gemini 3.1 Pro (UI excellence)
   - `ultrabrain` → GPT-5.3-codex (deep reasoning)
-  - `unspecified-high` → Opus 4.6 (powerful general)
+  - `unspecified-high` → Opus 5 (powerful general)
 
 - **Disabled features**:
   - Prometheus Planner (use Systematic's better planning)
@@ -229,12 +229,12 @@ Add your own overrides:
 {
   "agents": {
     "Sisyphus": {
-      "model": "anthropic/claude-opus-4"
+      "model": "anthropic/claude-opus-5"
     }
   },
   "categories": {
     "visual-engineering": {
-      "model": "anthropic/claude-opus-4-6"
+      "model": "anthropic/claude-opus-5"
     }
   }
 }
