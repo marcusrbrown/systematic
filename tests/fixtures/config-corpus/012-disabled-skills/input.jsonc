@@ -1,0 +1,4 @@
+// Mirrors tests/unit/config-schema.test.ts fixture style for disabled_skills.
+{
+  "disabled_skills": ["ce:plan"]
+}

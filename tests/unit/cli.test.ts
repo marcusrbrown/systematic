@@ -559,6 +559,174 @@ describe('testable capabilities entrypoint', () => {
 })
 
 // ---------------------------------------------------------------------------
+// CLI: config show (Unit 6, plan 2026-09-04-002-feat-model-config-profiles)
+// ---------------------------------------------------------------------------
+
+describe('cli config show', () => {
+  function writeProjectConfig(
+    project: string,
+    value: Record<string, unknown>,
+  ): void {
+    fs.mkdirSync(path.join(project, '.opencode'), { recursive: true })
+    fs.writeFileSync(
+      path.join(project, '.opencode/systematic.json'),
+      JSON.stringify(value),
+    )
+  }
+
+  function writeUserConfig(home: string, value: Record<string, unknown>): void {
+    const userConfigDir = path.join(home, '.config/opencode')
+    fs.mkdirSync(userConfigDir, { recursive: true })
+    fs.writeFileSync(
+      path.join(userConfigDir, 'systematic.json'),
+      JSON.stringify(value),
+    )
+  }
+
+  it('a selected profile prints its name and selecting source', () => {
+    const root = mkTempCwd()
+    const home = path.join(root, 'home')
+    const project = path.join(root, 'project')
+    try {
+      fs.mkdirSync(project, { recursive: true })
+      writeUserConfig(home, {
+        profile: 'fast',
+        profiles: {
+          fast: {
+            agents: { 'correctness-reviewer': { model: 'anthropic/haiku' } },
+          },
+        },
+      })
+
+      const result = runCli(['config', 'show'], project, { HOME: home })
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('Active profile: fast')
+      expect(result.stdout).toContain('Selected by:    user')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('a missing profile name prints the fallback that occurred', () => {
+    const root = mkTempCwd()
+    const home = path.join(root, 'home')
+    const project = path.join(root, 'project')
+    try {
+      fs.mkdirSync(project, { recursive: true })
+      writeUserConfig(home, {
+        profile: 'fast',
+        profiles: {
+          fast: {
+            agents: { 'correctness-reviewer': { model: 'anthropic/haiku' } },
+          },
+        },
+      })
+      writeProjectConfig(project, { profile: 'missing-name' })
+
+      const result = runCli(['config', 'show'], project, { HOME: home })
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain(
+        'Fallback:       requested "missing-name" is not defined; used your default profile "fast"',
+      )
+      expect(result.stdout).toContain('Active profile: fast')
+      expect(result.stdout).toContain('Selected by:    project')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('the routing table lists each overlaid agent with model, qualifier, and source per harness', () => {
+    const root = mkTempCwd()
+    const home = path.join(root, 'home')
+    const project = path.join(root, 'project')
+    try {
+      fs.mkdirSync(project, { recursive: true })
+      writeUserConfig(home, {
+        agents: {
+          'correctness-reviewer': {
+            model: 'anthropic/base-model',
+            opencode: { variant: 'v2' },
+            pi: { thinking: 'high' },
+          },
+        },
+      })
+
+      const result = runCli(['config', 'show'], project, { HOME: home })
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('correctness-reviewer (review):')
+      expect(result.stdout).toContain(
+        'opencode: model=anthropic/base-model (agent/flat), variant=v2 (agent/block)',
+      )
+      expect(result.stdout).toContain(
+        'pi: model=anthropic/base-model (agent/flat), thinking=high (agent/block)',
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('prints one line when no profiles and no overlays are defined', () => {
+    const root = mkTempCwd()
+    const home = path.join(root, 'home')
+    const project = path.join(root, 'project')
+    try {
+      fs.mkdirSync(project, { recursive: true })
+      fs.mkdirSync(home, { recursive: true })
+
+      const result = runCli(['config', 'show'], project, { HOME: home })
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain(
+        'No profiles are selected and no per-agent/category overlays are defined.',
+      )
+      expect(result.stdout).not.toContain('Active profile:')
+      expect(result.stdout).not.toContain('Routing:')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('leaks no env value and no custom-config comment text', () => {
+    const root = mkTempCwd()
+    const home = path.join(root, 'home')
+    const project = path.join(root, 'project')
+    const custom = path.join(root, 'custom')
+    const envCanary = 'ENV-CANARY-DO-NOT-LEAK-8f2a'
+    const commentCanary = 'COMMENT-CANARY-DO-NOT-LEAK-c91e'
+    try {
+      fs.mkdirSync(project, { recursive: true })
+      fs.mkdirSync(home, { recursive: true })
+      fs.mkdirSync(custom, { recursive: true })
+      // The comment canary lives in the CUSTOM config (OPENCODE_CONFIG_DIR),
+      // whose raw contents `config show` has never printed (only user and
+      // project files are dumped) -- proving the new Resolved section
+      // doesn't echo raw source text (comments are stripped by the JSONC
+      // parser) or reach into files it isn't supposed to display at all.
+      fs.writeFileSync(
+        path.join(custom, 'systematic.json'),
+        `{\n  // ${commentCanary}\n  "agents": { "correctness-reviewer": { "model": "anthropic/custom-model" } }\n}`,
+      )
+
+      const result = runCli(['config', 'show'], project, {
+        HOME: home,
+        OPENCODE_CONFIG_DIR: custom,
+        MY_SECRET_TOKEN: envCanary,
+      })
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).not.toContain(envCanary)
+      expect(result.stdout).not.toContain(commentCanary)
+      expect(result.stdout).not.toContain(custom)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
 // CLI: pi-subagents command
 // ---------------------------------------------------------------------------
 

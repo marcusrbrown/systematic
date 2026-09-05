@@ -93,6 +93,66 @@ Overlay application precedence for a Systematic-owned bundled agent (strongest f
 
 Bundled agents inherit the invoking model unless high-trust user or `$OPENCODE_CONFIG_DIR/systematic.json` config supplies an explicit `model`. Set `"model": null` to clear an explicit model and restore parent-model inheritance. Project config cannot set, erase, or shadow `model` at any value.
 
+A flat `agents.<name>.model` now also routes in-process Pi delegates, not just OpenCode — previously it applied to OpenCode only.
+
+## Profiles and Per-Harness Routing
+
+A **profile** is a named, reusable bundle of routing overrides — `model`, `variant`, `temperature`, `top_p`, and the `opencode`/`pi` blocks below — defined once in your user config's `profiles` map and selected by name. Profiles exist for people who work across repositories that warrant different model routing from the same harness: define `work` and `personal` profiles once in user config, then let each repository pick one.
+
+```jsonc
+// ~/.config/opencode/systematic.json (or $OPENCODE_CONFIG_DIR/systematic.json)
+{
+  "profile": "personal", // your default when nothing else selects one
+  "profiles": {
+    "work": {
+      "agents": { "correctness-reviewer": { "model": "openai/gpt-5" } }
+    },
+    "personal": {
+      "categories": { "review": { "model": "anthropic/claude-opus-4-7" } }
+    }
+  }
+}
+```
+
+Any config source may set the top-level `profile` selector to choose among the user's profiles — including a repository's project config:
+
+```jsonc
+// .opencode/systematic.json (project config)
+{ "profile": "work" }
+```
+
+Only `profile` (the selector) is project-settable. `profiles` (the map of bundle definitions) is trust-protected exactly like `model`, `variant`, `permission`, and `skills` — a project may choose among the profiles you've defined, but it cannot define new ones or see into ones you haven't shared. A `profiles` map set in project config is ignored with a warning.
+
+`profile` is **tri-state**: leaving it unset means "no opinion, let a lower-priority source decide"; setting it to a name selects that bundle; setting it to `null` explicitly means "base configuration, no profile" and wins outright over a weaker source's name — this is how a repository can opt out of your default profile rather than merely failing to set one. The strongest source that sets `profile` at all wins: custom config, then project config, then user config.
+
+If the selected name doesn't match a defined profile, Systematic warns once and falls back to your own `profile` default (if you have one and it resolves); if that's also undefined, it falls back to base configuration with no profile active. Run `systematic config show` to see the active profile, which source selected it, and any fallback that occurred.
+
+### Per-harness routing blocks
+
+`agents.<name>` and `categories.<category>` overlays accept optional `opencode` and `pi` blocks so one config routes correctly on both harnesses, while the existing flat `model`/`variant` fields stay as the harness-neutral default:
+
+```jsonc
+{
+  "agents": {
+    "correctness-reviewer": {
+      "model": "anthropic/claude-sonnet-4-5", // harness-neutral default
+      "opencode": { "variant": "thinking" }, // OpenCode-only qualifier
+      "pi": { "thinking": "high" } // Pi-only qualifier
+    }
+  }
+}
+```
+
+Resolution precedence, evaluated independently for `model` and for the harness's qualifier (`variant` on OpenCode, `thinking` on Pi): **agent block > agent flat > category block > category flat**. Merge order across sources is **user base → selected profile → project → custom**, with each later source overriding the same field at the same level.
+
+`model: null` is a value, not an absence — it means "inherit from the parent session" and beats a lower layer's explicit model at the same precedence level. But it obeys the *same* precedence as any other value: a block's `null` beats a flat explicit model at the same level, not the other way around. Concretely, a profile that sets `agents.x.model: null` does **not** undo a base config's `agents.x.opencode.model` — the block is more specific than the flat field it's trying to override, so OpenCode keeps the block's model. To restore inheritance on OpenCode specifically, set `agents.x.opencode.model: null`.
+
+Setting a qualifier (`variant` or `pi.thinking`) with no model resolving anywhere for that agent and harness — after every layer is merged — is a config-load error naming the agent and the harness. A profile is allowed to set `pi.thinking` alone precisely because the model is expected to come from a lower layer (your base config); the error only fires when no layer supplies one.
+
+### `pi_subagents.<name>.thinking` is deprecated
+
+The legacy `pi_subagents.<name>.thinking` field (and its category form) is superseded by `agents.<name>.pi.thinking` / `categories.<category>.pi.thinking`. The new location wins when both are set; the legacy field is honored only when the new location is unset, and using it prints one deprecation warning per agent. Migrate by moving `thinking` into the `pi` block.
+
 ## Schema and Autocomplete
 
 Add a `$schema` field to your `systematic.json` to enable per-key autocomplete in editors that honor JSON Schema property completion:

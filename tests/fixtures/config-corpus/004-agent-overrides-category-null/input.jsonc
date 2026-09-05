@@ -1,0 +1,7 @@
+// Mirrors tests/unit/config-handler.test.ts: "exact model string overrides category model: null opt-out"
+{
+  "categories": { "review": { "model": null } },
+  "agents": {
+    "correctness-reviewer": { "model": "openrouter/anthropic/claude-sonnet-4" }
+  }
+}

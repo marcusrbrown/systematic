@@ -1,0 +1,4 @@
+// Mirrors tests/unit/config.test.ts fixture style for disabled_agents.
+{
+  "disabled_agents": ["spec-flow-analyzer"]
+}

@@ -12,7 +12,13 @@ import {
   type ConfigObservationMetadata,
 } from './lib/capability-snapshot.js'
 import * as commands from './lib/commands.js'
-import { getConfigPaths, loadConfigWithSources } from './lib/config.js'
+import {
+  collectRoutingTargets,
+  getConfigPaths,
+  type ConfigObservationMetadata as LoaderConfigObservationMetadata,
+  loadConfigWithSources,
+  type SourceAwareConfigResult,
+} from './lib/config.js'
 import {
   discoverSkills,
   type SkillDiscoveryIssueCode,
@@ -32,6 +38,10 @@ import {
   resolveReviewArtifactPath,
 } from './lib/review-artifact-path.js'
 import { ReviewArtifactSchema } from './lib/review-artifact-schema.js'
+import {
+  type RoutingFieldSource,
+  resolveRouting,
+} from './lib/routing-resolver.js'
 import { type Harness, setupHarness } from './lib/setup.js'
 import * as skills from './lib/skills.js'
 
@@ -493,6 +503,110 @@ function listItems(type: string): void {
   }
 }
 
+function formatRoutingModel(model: string | null | undefined): string {
+  if (model === undefined) return '(unset)'
+  if (model === null) return 'null (inherit)'
+  return model
+}
+
+function formatRoutingQualifier(qualifier: string | undefined): string {
+  return qualifier === undefined ? '(none)' : qualifier
+}
+
+function formatRoutingSource(source: RoutingFieldSource | undefined): string {
+  return source === undefined ? '(n/a)' : `${source.level}/${source.form}`
+}
+
+function printProfileSummary(metadata: LoaderConfigObservationMetadata): void {
+  const activeLabel = metadata.activeProfile ?? 'none'
+  const selectedByLabel = metadata.profileSelectorSource ?? '(none)'
+  console.log(`  Active profile: ${activeLabel}`)
+  console.log(`  Selected by:    ${selectedByLabel}`)
+
+  if (metadata.profileFallback) {
+    const usedLabel = metadata.profileFallback.usedDefault
+      ? `your default profile "${metadata.profileFallback.usedDefault}"`
+      : 'base configuration (no default profile is set)'
+    console.log(
+      `  Fallback:       requested "${metadata.profileFallback.requested}" is not defined; used ${usedLabel}`,
+    )
+  }
+}
+
+/**
+ * Print one line per overlaid target per harness: the resolved `model`,
+ * qualifier (`variant` on opencode, `thinking` on pi), and which layer
+ * supplied each (`level/form`, or `(n/a)` when nothing resolved). Reuses
+ * the same `resolveRouting` call and `collectRoutingTargets` enumeration
+ * the loader's post-merge qualifier check already performs, so this table
+ * is diagnostically consistent with what actually gets validated at load
+ * time -- never a second, independently-computed view. Prints resolved
+ * routing values only: never environment values, never raw file contents
+ * beyond what the sections above already print.
+ */
+function printRoutingTable(loaded: SourceAwareConfigResult): void {
+  const targets = collectRoutingTargets(loaded.overlays).sort((left, right) =>
+    `${left.category}/${left.agentKey}`.localeCompare(
+      `${right.category}/${right.agentKey}`,
+    ),
+  )
+
+  if (targets.length === 0) {
+    console.log('  No per-agent or per-category overlays are defined.')
+    return
+  }
+
+  for (const target of targets) {
+    console.log(`  ${target.agentKey} (${target.category}):`)
+    for (const harness of ['opencode', 'pi'] as const) {
+      const resolution = resolveRouting({
+        harness,
+        overlays: loaded.overlays,
+        piSubagentsOverlays: loaded.piSubagentsOverlays,
+        target,
+      })
+      const qualifierName = harness === 'opencode' ? 'variant' : 'thinking'
+      console.log(
+        `    ${harness}: model=${formatRoutingModel(resolution.model)} (${formatRoutingSource(resolution.source.model)}), ` +
+          `${qualifierName}=${formatRoutingQualifier(resolution.qualifier)} (${formatRoutingSource(resolution.source.qualifier)})`,
+      )
+    }
+  }
+}
+
+function printResolvedSection(): void {
+  let loaded: SourceAwareConfigResult
+  try {
+    loaded = loadConfigWithSources(process.cwd())
+  } catch {
+    console.log(
+      '\nResolved configuration: unavailable (the configuration failed to load).',
+    )
+    return
+  }
+
+  const { metadata, overlays } = loaded
+  const hasProfileSelection =
+    metadata.activeProfile !== null || metadata.profileSelectorSource !== null
+  const hasOverlays =
+    Object.keys(overlays.agents).length > 0 ||
+    Object.keys(overlays.categories).length > 0
+
+  console.log('\nResolved configuration:')
+
+  if (!hasProfileSelection && !hasOverlays) {
+    console.log(
+      '  No profiles are selected and no per-agent/category overlays are defined.',
+    )
+    return
+  }
+
+  printProfileSummary(metadata)
+  console.log('')
+  console.log('  Routing:')
+  printRoutingTable(loaded)
+}
+
 function configShow(): void {
   const paths = getConfigPaths(process.cwd())
 
@@ -509,6 +623,8 @@ function configShow(): void {
     console.log('\nUser configuration:')
     console.log(fs.readFileSync(paths.userConfig, 'utf-8'))
   }
+
+  printResolvedSection()
 }
 
 function configPath(): void {

@@ -143,6 +143,15 @@ export interface SourceAwareConfigResult {
   config: SystematicConfig
   metadata: ConfigObservationMetadata
   overlays: SourcedOverlayConfigMap
+  /**
+   * Merged `pi_subagents.{agents,categories}` overlays (three-entry chain --
+   * user, project, custom; no profile pseudo-entry, see the merge-order
+   * comment in `loadConfigWithSources`). Exposed so a caller building a
+   * routing table (e.g. `systematic config show`) can pass the exact same
+   * legacy-`thinking`-fallback input `resolveRouting` uses internally for
+   * the post-merge qualifier check, without recomputing it.
+   */
+  piSubagentsOverlays: SourcedOverlayConfigMap
 }
 
 export interface PiSubagentsOverlayMap {
@@ -1095,6 +1104,7 @@ export function loadConfigWithSources(
       user: user.metadata,
     }),
     overlays,
+    piSubagentsOverlays: mergedPiSubagentsOverlays,
   }
 }
 
@@ -1220,7 +1230,7 @@ function sortProtectedFields(
  * routing target and this check has no stronger claim to make about it than
  * schema validation already does elsewhere.
  */
-function collectRoutingTargets(
+export function collectRoutingTargets(
   overlays: SourcedOverlayConfigMap,
 ): RoutingTarget[] {
   const targets = new Map<string, RoutingTarget>()

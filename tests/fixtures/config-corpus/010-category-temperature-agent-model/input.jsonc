@@ -1,0 +1,7 @@
+// Combines a category-level temperature overlay with an agent-level model
+// overlay -- the "append-order probe" shape from Unit 4's baseline capture
+// (tests/unit/config-handler.test.ts's byte-identity corpus).
+{
+  "categories": { "review": { "temperature": 0.4 } },
+  "agents": { "correctness-reviewer": { "model": "openai/gpt-4o" } }
+}

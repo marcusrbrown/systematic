@@ -1,0 +1,8 @@
+// Mirrors tests/unit/config-handler.test.ts permission-overlay fixtures.
+{
+  "agents": {
+    "correctness-reviewer": {
+      "permission": { "edit": "ask", "bash": "deny" }
+    }
+  }
+}

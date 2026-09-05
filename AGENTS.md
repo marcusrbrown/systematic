@@ -55,6 +55,8 @@ bun run registry:validate  # Validate registry without building
 
   Bundled agent markdown and the runtime config emitted by the plain npm plugin stay model-free unless user-owned config supplies an explicit model overlay. OpenCode subagents inherit the invoking model. OCX/OMO installers may provide curated category routing through their registry profile; plain npm consumers lose category-aware routing unless they opt in.
 
+  A flat `agents.<name>.model` overlay applies to both OpenCode agents and in-process Pi delegates, not just OpenCode.
+
   **Generated surfaces:** Editing an `agents/` frontmatter `description` updates `registry/registry.jsonc`; if the persona is in `CURATED_PERSONAS`, it also updates `tests/fixtures/pi-subagents-personas/`. Editing any agent body updates the Pi fixture too. Adding, removing, or renaming a file under a skill's `references/` updates the registry's per-component file list. Regenerate and check both surfaces:
 
   ```bash

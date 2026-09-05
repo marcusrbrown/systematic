@@ -1,0 +1,6 @@
+// Mirrors tests/unit/config-handler.test.ts: "agent overlay sets variant with an existing model"
+{
+  "agents": {
+    "correctness-reviewer": { "model": "openai/gpt-4o", "variant": "v2" }
+  }
+}
