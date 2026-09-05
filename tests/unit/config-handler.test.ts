@@ -2186,4 +2186,387 @@ Discovered body for hidden.`,
       expect(agent.permission).toBeUndefined()
     })
   })
+
+  // ════════════════════════════════════════════════════════════════════════
+  // Unit 4 (plan 2026-09-04-002-feat-model-config-profiles): the OpenCode
+  // config hook resolves model/variant via src/lib/routing-resolver.ts
+  // instead of reading overlay fields directly.
+  // ════════════════════════════════════════════════════════════════════════
+  describe('routing resolver integration (opencode harness)', () => {
+    test("agents.x.opencode.model is emitted as the agent's model", async () => {
+      createCategorizedAgent('review', 'correctness-reviewer', {
+        name: 'correctness-reviewer',
+        description: 'Reviews correctness',
+      })
+      writeCustomSystematicConfig({
+        agents: {
+          'correctness-reviewer': { opencode: { model: 'openai/block-model' } },
+        },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.['correctness-reviewer']?.model).toBe(
+        'openai/block-model',
+      )
+    })
+
+    test('flat model is emitted when no opencode block is set', async () => {
+      createCategorizedAgent('review', 'correctness-reviewer', {
+        name: 'correctness-reviewer',
+        description: 'Reviews correctness',
+      })
+      writeCustomSystematicConfig({
+        agents: { 'correctness-reviewer': { model: 'openai/flat-model' } },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.['correctness-reviewer']?.model).toBe(
+        'openai/flat-model',
+      )
+    })
+
+    test('opencode block variant is emitted', async () => {
+      createCategorizedAgent('review', 'correctness-reviewer', {
+        name: 'correctness-reviewer',
+        description: 'Reviews correctness',
+      })
+      writeCustomSystematicConfig({
+        agents: {
+          'correctness-reviewer': {
+            model: 'openai/m',
+            opencode: { variant: 'v2' },
+          },
+        },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.['correctness-reviewer']?.variant).toBe('v2')
+    })
+
+    test('a selected profile overriding a category model reaches every emitted agent in that category unless an agent-level model exists', async () => {
+      createCategorizedAgent('review', 'correctness-reviewer', {
+        name: 'correctness-reviewer',
+        description: 'Reviews correctness',
+      })
+      createCategorizedAgent('review', 'security-reviewer', {
+        name: 'security-reviewer',
+        description: 'Reviews security',
+      })
+      // `profiles`/`profile` are only selectable from USER config -- write
+      // directly to the stubbed home directory's config path rather than via
+      // `writeCustomSystematicConfig` (OPENCODE_CONFIG_DIR is 'custom'
+      // trust, which cannot define or select a profile).
+      const userConfigDir = path.join(testDir, 'home', '.config/opencode')
+      fs.mkdirSync(userConfigDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(userConfigDir, 'systematic.json'),
+        JSON.stringify({
+          profile: 'p',
+          profiles: {
+            p: {
+              categories: { review: { model: 'anthropic/profile-model' } },
+            },
+          },
+        }),
+      )
+      writeCustomSystematicConfig({
+        agents: {
+          'security-reviewer': { model: 'anthropic/agent-level-model' },
+        },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      expect(config.agent?.['correctness-reviewer']?.model).toBe(
+        'anthropic/profile-model',
+      )
+      expect(config.agent?.['security-reviewer']?.model).toBe(
+        'anthropic/agent-level-model',
+      )
+    })
+
+    test('a pi block on an agent has no effect on OpenCode output', async () => {
+      createCategorizedAgent('review', 'correctness-reviewer', {
+        name: 'correctness-reviewer',
+        description: 'Reviews correctness',
+      })
+      writeCustomSystematicConfig({
+        agents: {
+          'correctness-reviewer': {
+            model: 'openai/opencode-model',
+            pi: { model: 'anthropic/pi-only-model', thinking: 'high' },
+          },
+        },
+      })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      await handler(config)
+
+      const agent = config.agent?.['correctness-reviewer']
+      expect(agent?.model).toBe('openai/opencode-model')
+      expect(agent?.variant).toBeUndefined()
+      expect(JSON.stringify(agent)).not.toContain('pi-only-model')
+      expect(JSON.stringify(agent)).not.toContain('thinking')
+    })
+
+    // ────────────────────────────────────────────────────────────────────────
+    // Byte-identity corpus: for every scenario below (no harness blocks, no
+    // profiles), the emitted config.agent JSON must be IDENTICAL to what
+    // src/lib/config-handler.ts emitted before this unit's resolver-based
+    // rewrite -- same keys, same key order, same undefined-vs-absent.
+    //
+    // Baseline established by running tests/manual/unit4-baseline-capture.ts
+    // (a throwaway script mirroring these exact scenarios with the same
+    // createAgent/createCategorizedAgent/writeCustomSystematicConfig
+    // helpers) against the PRE-CHANGE code at git commit 8a459f1 ("feat(config):
+    // resolve per-harness routing and check qualifiers after merge", the
+    // last commit before this unit's edits), capturing
+    // `JSON.stringify(config.agent)` for each. The literal strings below are
+    // those captured outputs, pasted verbatim. Re-running the same script
+    // after this unit's rewrite reproduced byte-identical output for all 12
+    // scenarios before this test was written.
+    // ────────────────────────────────────────────────────────────────────────
+    describe('byte-identity corpus (no harness blocks, no profiles)', () => {
+      async function run(): Promise<Config> {
+        const handler = createConfigHandler({
+          directory: projectDir,
+          bundledSkillsDir: path.join(bundledDir, 'skills'),
+          bundledAgentsDir: path.join(bundledDir, 'agents'),
+          bundledCommandsDir: path.join(bundledDir, 'commands'),
+        })
+        const config: Config = {}
+        await handler(config)
+        return config
+      }
+
+      test('full frontmatter, no overlay', async () => {
+        createAgent(path.join(bundledDir, 'agents'), 'full-agent', {
+          name: 'full-agent',
+          description: 'A full agent',
+          model: 'gpt-4',
+          temperature: 0.7,
+          top_p: 1,
+          steps: 10,
+          color: '#ff0000',
+          mode: 'subagent',
+          tools: { bash: true, read: false },
+          permission: { edit: 'ask' },
+        })
+        const config = await run()
+        expect(JSON.stringify(config.agent)).toBe(
+          '{"full-agent":{"description":"A full agent (Full-Agent - Systematic)","prompt":"# full-agent\\n\\nAgent prompt for full-agent.","model":"gpt-4","temperature":0.7,"top_p":1,"tools":{"bash":true,"read":false},"mode":"subagent","color":"#ff0000","steps":10,"permission":{"edit":"ask"}}}',
+        )
+      })
+
+      test('categorized, no overlay', async () => {
+        createCategorizedAgent('review', 'categorized', {
+          name: 'categorized',
+          description: 'No overlay agent',
+        })
+        const config = await run()
+        expect(JSON.stringify(config.agent)).toBe(
+          '{"categorized":{"description":"No overlay agent (Categorized - Systematic)","prompt":"# categorized\\n\\nAgent prompt for categorized."}}',
+        )
+      })
+
+      test('uncategorized, no overlay', async () => {
+        createAgent(path.join(bundledDir, 'agents'), 'uncategorized', {
+          name: 'uncategorized',
+          description: 'No category agent',
+        })
+        const config = await run()
+        expect(JSON.stringify(config.agent)).toBe(
+          '{"uncategorized":{"description":"No category agent (Uncategorized - Systematic)","prompt":"# uncategorized\\n\\nAgent prompt for uncategorized."}}',
+        )
+      })
+
+      test('uncategorized, frontmatter model', async () => {
+        createAgent(path.join(bundledDir, 'agents'), 'standalone', {
+          name: 'standalone',
+          description: 'No category agent',
+          model: 'openai/gpt-4',
+        })
+        const config = await run()
+        expect(JSON.stringify(config.agent)).toBe(
+          '{"standalone":{"description":"No category agent (Standalone - Systematic)","prompt":"# standalone\\n\\nAgent prompt for standalone.","model":"openai/gpt-4"}}',
+        )
+      })
+
+      test('exact model: null overlay', async () => {
+        createCategorizedAgent('review', 'correctness-reviewer', {
+          name: 'correctness-reviewer',
+          description: 'Reviews correctness',
+        })
+        writeCustomSystematicConfig({
+          agents: { 'correctness-reviewer': { model: null } },
+        })
+        const config = await run()
+        expect(JSON.stringify(config.agent)).toBe(
+          '{"correctness-reviewer":{"description":"Reviews correctness (Correctness-Reviewer - Systematic)","prompt":"# correctness-reviewer\\n\\nAgent prompt for correctness-reviewer."}}',
+        )
+      })
+
+      test('category model: null overlay, two agents', async () => {
+        createCategorizedAgent('review', 'first-reviewer', {
+          name: 'first-reviewer',
+          description: 'First reviewer',
+        })
+        createCategorizedAgent('review', 'second-reviewer', {
+          name: 'second-reviewer',
+          description: 'Second reviewer',
+        })
+        writeCustomSystematicConfig({
+          categories: { review: { model: null } },
+        })
+        const config = await run()
+        expect(JSON.stringify(config.agent)).toBe(
+          '{"second-reviewer":{"description":"Second reviewer (Second-Reviewer - Systematic)","prompt":"# second-reviewer\\n\\nAgent prompt for second-reviewer."},"first-reviewer":{"description":"First reviewer (First-Reviewer - Systematic)","prompt":"# first-reviewer\\n\\nAgent prompt for first-reviewer."}}',
+        )
+      })
+
+      test('exact model string overrides category model:null', async () => {
+        createCategorizedAgent('review', 'correctness-reviewer', {
+          name: 'correctness-reviewer',
+          description: 'Reviews correctness',
+        })
+        writeCustomSystematicConfig({
+          categories: { review: { model: null } },
+          agents: {
+            'correctness-reviewer': {
+              model: 'openrouter/anthropic/claude-sonnet-4',
+            },
+          },
+        })
+        const config = await run()
+        expect(JSON.stringify(config.agent)).toBe(
+          '{"correctness-reviewer":{"description":"Reviews correctness (Correctness-Reviewer - Systematic)","prompt":"# correctness-reviewer\\n\\nAgent prompt for correctness-reviewer.","model":"openrouter/anthropic/claude-sonnet-4"}}',
+        )
+      })
+
+      test('exact model overlay emits its configured model', async () => {
+        createCategorizedAgent('review', 'correctness-reviewer', {
+          name: 'correctness-reviewer',
+          description: 'Reviews correctness',
+        })
+        writeCustomSystematicConfig({
+          agents: {
+            'correctness-reviewer': {
+              model: 'openrouter/anthropic/claude-sonnet-4',
+            },
+          },
+        })
+        const config = await run()
+        expect(JSON.stringify(config.agent)).toBe(
+          '{"correctness-reviewer":{"description":"Reviews correctness (Correctness-Reviewer - Systematic)","prompt":"# correctness-reviewer\\n\\nAgent prompt for correctness-reviewer.","model":"openrouter/anthropic/claude-sonnet-4"}}',
+        )
+      })
+
+      test('category model overlay emits for every agent', async () => {
+        createCategorizedAgent('review', 'first-reviewer', {
+          name: 'first-reviewer',
+          description: 'First reviewer',
+        })
+        createCategorizedAgent('review', 'second-reviewer', {
+          name: 'second-reviewer',
+          description: 'Second reviewer',
+        })
+        writeCustomSystematicConfig({
+          categories: { review: { model: 'openai/gpt-4o' } },
+        })
+        const config = await run()
+        expect(JSON.stringify(config.agent)).toBe(
+          '{"second-reviewer":{"description":"Second reviewer (Second-Reviewer - Systematic)","prompt":"# second-reviewer\\n\\nAgent prompt for second-reviewer.","model":"openai/gpt-4o"},"first-reviewer":{"description":"First reviewer (First-Reviewer - Systematic)","prompt":"# first-reviewer\\n\\nAgent prompt for first-reviewer.","model":"openai/gpt-4o"}}',
+        )
+      })
+
+      test('category model + temperature overlay, frontmatter has steps/color', async () => {
+        createCategorizedAgent('review', 'mixed-reviewer', {
+          name: 'mixed-reviewer',
+          description: 'Mixed reviewer',
+          steps: 5,
+          color: 'blue',
+        })
+        writeCustomSystematicConfig({
+          categories: { review: { model: 'openai/gpt-4o', temperature: 0.3 } },
+        })
+        const config = await run()
+        expect(JSON.stringify(config.agent)).toBe(
+          '{"mixed-reviewer":{"description":"Mixed reviewer (Mixed-Reviewer - Systematic)","prompt":"# mixed-reviewer\\n\\nAgent prompt for mixed-reviewer.","color":"blue","steps":5,"model":"openai/gpt-4o","temperature":0.3}}',
+        )
+      })
+
+      test('agent overlay sets model only, category overlay sets temperature only (append-order probe)', async () => {
+        createCategorizedAgent('review', 'correctness-reviewer', {
+          name: 'correctness-reviewer',
+          description: 'Probe reviewer',
+        })
+        writeCustomSystematicConfig({
+          categories: { review: { temperature: 0.4 } },
+          agents: { 'correctness-reviewer': { model: 'openai/gpt-4o' } },
+        })
+        const config = await run()
+        expect(JSON.stringify(config.agent)).toBe(
+          '{"correctness-reviewer":{"description":"Probe reviewer (Correctness-Reviewer - Systematic)","prompt":"# correctness-reviewer\\n\\nAgent prompt for correctness-reviewer.","temperature":0.4,"model":"openai/gpt-4o"}}',
+        )
+      })
+
+      test('agent overlay sets variant with an existing model', async () => {
+        createCategorizedAgent('review', 'correctness-reviewer', {
+          name: 'correctness-reviewer',
+          description: 'Variant reviewer',
+        })
+        writeCustomSystematicConfig({
+          agents: {
+            'correctness-reviewer': { model: 'openai/gpt-4o', variant: 'v2' },
+          },
+        })
+        const config = await run()
+        expect(JSON.stringify(config.agent)).toBe(
+          '{"correctness-reviewer":{"description":"Variant reviewer (Correctness-Reviewer - Systematic)","prompt":"# correctness-reviewer\\n\\nAgent prompt for correctness-reviewer.","model":"openai/gpt-4o","variant":"v2"}}',
+        )
+      })
+    })
+  })
 })
