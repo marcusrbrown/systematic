@@ -2034,6 +2034,130 @@ describe('config-aware export: model + pi_subagents field application', () => {
     }
   })
 
+  test('agents.x.pi.model and agents.x.pi.thinking reach the persona frontmatter (Unit 5: resolver-based export)', () => {
+    setupFakeHome()
+    try {
+      writeUserConfig({
+        agents: {
+          'repo-research-analyst': {
+            pi: { model: 'anthropic/pi-only-model', thinking: 'high' },
+          },
+        },
+      })
+      const cwd = mkTmp()
+      const agentsRoot = path.join(cwd, '.pi', 'agents')
+      exportPersonas(agentsRoot, { scope: 'project', cwd })
+      const content = fs.readFileSync(
+        path.join(agentsRoot, 'systematic-repo-research-analyst.md'),
+        'utf-8',
+      )
+      expect(content).toMatch(/^model: "anthropic\/pi-only-model"$/m)
+      expect(content).toMatch(/^thinking: "high"$/m)
+    } finally {
+      restoreHome()
+    }
+  })
+
+  test('legacy pi_subagents.<name>.thinking still resolves when no pi block is set (AE8)', () => {
+    setupFakeHome()
+    try {
+      writeUserConfig({
+        pi_subagents: {
+          agents: { 'repo-research-analyst': { thinking: 'low' } },
+        },
+      })
+      const cwd = mkTmp()
+      const agentsRoot = path.join(cwd, '.pi', 'agents')
+      exportPersonas(agentsRoot, { scope: 'project', cwd })
+      const content = fs.readFileSync(
+        path.join(agentsRoot, 'systematic-repo-research-analyst.md'),
+        'utf-8',
+      )
+      expect(content).toMatch(/^thinking: "low"$/m)
+    } finally {
+      restoreHome()
+    }
+  })
+
+  test('agents.x.pi.thinking wins over the legacy pi_subagents.x.thinking value when both are set', () => {
+    setupFakeHome()
+    try {
+      writeUserConfig({
+        agents: {
+          'repo-research-analyst': {
+            model: 'anthropic/base-model',
+            pi: { thinking: 'high' },
+          },
+        },
+        pi_subagents: {
+          agents: { 'repo-research-analyst': { thinking: 'low' } },
+        },
+      })
+      const cwd = mkTmp()
+      const agentsRoot = path.join(cwd, '.pi', 'agents')
+      exportPersonas(agentsRoot, { scope: 'project', cwd })
+      const content = fs.readFileSync(
+        path.join(agentsRoot, 'systematic-repo-research-analyst.md'),
+        'utf-8',
+      )
+      expect(content).toMatch(/^thinking: "high"$/m)
+    } finally {
+      restoreHome()
+    }
+  })
+
+  test('`variant` is never emitted even when a pi block sets model/thinking alongside it', () => {
+    setupFakeHome()
+    try {
+      writeUserConfig({
+        agents: {
+          'repo-research-analyst': {
+            model: 'anthropic/flat-model',
+            variant: 'v2',
+            pi: { model: 'anthropic/pi-only-model', thinking: 'high' },
+          },
+        },
+      })
+      const cwd = mkTmp()
+      const agentsRoot = path.join(cwd, '.pi', 'agents')
+      exportPersonas(agentsRoot, { scope: 'project', cwd })
+      const content = fs.readFileSync(
+        path.join(agentsRoot, 'systematic-repo-research-analyst.md'),
+        'utf-8',
+      )
+      expect(content).not.toMatch(/^variant:/m)
+      expect(content).toMatch(/^model: "anthropic\/pi-only-model"$/m)
+      expect(content).toMatch(/^thinking: "high"$/m)
+    } finally {
+      restoreHome()
+    }
+  })
+
+  test('project-sourced agents.x.pi is rejected outright (SECURITY_OVERLAY_FIELDS boundary, not silently stripped like legacy pi_subagents fields)', () => {
+    setupFakeHome()
+    try {
+      const cwd = mkTmp()
+      const projectConfigDir = path.join(cwd, '.opencode')
+      fs.mkdirSync(projectConfigDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(projectConfigDir, 'systematic.json'),
+        JSON.stringify({
+          agents: {
+            'repo-research-analyst': { pi: { thinking: 'high' } },
+          },
+        }),
+      )
+
+      const agentsRoot = path.join(cwd, '.pi', 'agents')
+      const result = exportPersonas(agentsRoot, { scope: 'project', cwd })
+      expect(result.status).toBe('error')
+      expect(result.error).toContain('pi')
+      expect(fs.existsSync(agentsRoot)).toBe(false)
+    } finally {
+      restoreHome()
+    }
+  })
+
   test('global scope does not absorb cwd project config', () => {
     setupFakeHome()
     try {

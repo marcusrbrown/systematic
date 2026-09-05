@@ -15,11 +15,19 @@ import * as fs from 'node:fs'
 import * as os from 'node:os'
 import * as path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { OverlayConfig, SystematicConfig } from './config.js'
+import type {
+  OverlayConfig,
+  OverlayConfigMap,
+  PiSubagentsOverlayMap,
+  SourcedOverlayConfig,
+  SourcedOverlayConfigMap,
+  SystematicConfig,
+} from './config.js'
 import { loadConfigWithSources } from './config.js'
 import { parseFrontmatter } from './frontmatter.js'
 import type { ManifestEntry } from './pi-subagents-personas.js'
 import { generateAll } from './pi-subagents-personas.js'
+import { resolveRouting } from './routing-resolver.js'
 
 export type ExportScope = 'project' | 'global'
 
@@ -685,39 +693,75 @@ function lookupOverlay(
 }
 
 /**
- * Resolve the effective `model` value for a persona: per-agent overlay beats
- * category overlay; explicit `model: null` on the winning overlay means
- * "omit" (never fall through to a lower-precedence value).
+ * `loadConfigWithSources` exposes the merged `agents`/`categories` routing
+ * overlays in `SourcedOverlayConfigMap` form, but only the plain,
+ * already-flattened `pi_subagents` map on the final `SystematicConfig` (no
+ * per-value source metadata survives that merge). `resolveRouting`'s
+ * `piSubagentsOverlays` parameter only ever reads `.value` off each entry,
+ * so wrapping each plain value with placeholder source fields is a safe,
+ * purely-shape adapter for feeding the resolver — it never changes what
+ * resolves. (Mirrors the same adapter in pi-delegate-tool.ts.)
  */
-function resolveModel(
-  config: SystematicConfig,
-  category: string | undefined,
-  agentKey: string,
-): string | undefined {
-  const agentOverlay = lookupOverlay(config.agents, category, agentKey)
-  if (agentOverlay && Object.hasOwn(agentOverlay, 'model')) {
-    const value = agentOverlay.model
-    return typeof value === 'string' ? value : undefined
+function toSourcedOverlayMap(
+  map: OverlayConfigMap | undefined,
+): Record<string, SourcedOverlayConfig> {
+  const result: Record<string, SourcedOverlayConfig> = {}
+  if (!map) return result
+  for (const [key, value] of Object.entries(map)) {
+    result[key] = { value, sourcePath: '', keyPath: key }
   }
-  const categoryOverlay = category ? config.categories?.[category] : undefined
-  if (categoryOverlay && Object.hasOwn(categoryOverlay, 'model')) {
-    const value = categoryOverlay.model
-    return typeof value === 'string' ? value : undefined
-  }
-  return undefined
+  return result
 }
 
-const PI_SUBAGENTS_FRONTMATTER_FIELDS = [
-  'thinking',
+function toSourcedPiSubagentsOverlays(
+  map: PiSubagentsOverlayMap | undefined,
+): SourcedOverlayConfigMap {
+  return {
+    agents: toSourcedOverlayMap(map?.agents),
+    categories: toSourcedOverlayMap(map?.categories),
+  }
+}
+
+/**
+ * Resolve the effective `model` and `thinking` values for a persona on the
+ * `pi` harness through the shared routing resolver — the same precedence
+ * (agent block > agent flat > category block > category flat for `model`;
+ * agent block > category block, then the legacy `pi_subagents.thinking`
+ * location, for the qualifier) that the OpenCode config hook and the Pi
+ * delegate tool use. `model: null`/no model anywhere both omit the field
+ * (export never falls back to a parent model the way the delegate does —
+ * there is no parent session at export time).
+ */
+function resolveRoutedFields(
+  overlays: SourcedOverlayConfigMap,
+  piSubagentsOverlays: SourcedOverlayConfigMap,
+  category: string | undefined,
+  agentKey: string,
+): { model: string | undefined; thinking: string | undefined } {
+  const resolution = resolveRouting({
+    overlays,
+    piSubagentsOverlays,
+    target: { agentKey, category: category ?? '' },
+    harness: 'pi',
+  })
+  return {
+    model: typeof resolution.model === 'string' ? resolution.model : undefined,
+    thinking: resolution.qualifier,
+  }
+}
+
+const OTHER_PI_SUBAGENTS_FRONTMATTER_FIELDS = [
   'max_turns',
   'tools',
   'skills',
 ] as const
 
 /**
- * Resolve the effective `pi_subagents` fields for a persona: category
- * values apply first, per-agent values override field-by-field (not
- * whole-object replacement).
+ * Resolve the effective `pi_subagents` fields that are NOT part of routing
+ * (`max_turns`, `tools`, `skills`): category values apply first, per-agent
+ * values override field-by-field (not whole-object replacement). `thinking`
+ * moved to `resolveRoutedFields` (Unit 5) — it is routing, not export-only
+ * metadata.
  */
 function resolvePiSubagentsFields(
   config: SystematicConfig,
@@ -733,7 +777,7 @@ function resolvePiSubagentsFields(
     agentKey,
   )
   const result: Record<string, unknown> = {}
-  for (const field of PI_SUBAGENTS_FRONTMATTER_FIELDS) {
+  for (const field of OTHER_PI_SUBAGENTS_FRONTMATTER_FIELDS) {
     if (agentOverlay && Object.hasOwn(agentOverlay, field)) {
       result[field] = agentOverlay[field]
     } else if (categoryOverlay && Object.hasOwn(categoryOverlay, field)) {
@@ -752,21 +796,29 @@ function resolvePiSubagentsFields(
 function applyConfigToContent(
   content: string,
   config: SystematicConfig,
+  overlays: SourcedOverlayConfigMap,
+  piSubagentsOverlays: SourcedOverlayConfigMap,
   category: string | undefined,
   agentKey: string,
 ): string {
   const { data, body } = parseFrontmatter<Record<string, unknown>>(content)
-  const model = resolveModel(config, category, agentKey)
-  const piSubagentsFields = resolvePiSubagentsFields(config, category, agentKey)
+  const { model, thinking } = resolveRoutedFields(
+    overlays,
+    piSubagentsOverlays,
+    category,
+    agentKey,
+  )
+  const otherFields = resolvePiSubagentsFields(config, category, agentKey)
 
   const frontmatter: Record<string, unknown> = {}
   if (typeof data.description === 'string') {
     frontmatter.description = data.description
   }
   if (model !== undefined) frontmatter.model = model
-  for (const field of PI_SUBAGENTS_FRONTMATTER_FIELDS) {
-    if (Object.hasOwn(piSubagentsFields, field)) {
-      frontmatter[field] = piSubagentsFields[field]
+  if (thinking !== undefined) frontmatter.thinking = thinking
+  for (const field of OTHER_PI_SUBAGENTS_FRONTMATTER_FIELDS) {
+    if (Object.hasOwn(otherFields, field)) {
+      frontmatter[field] = otherFields[field]
     }
   }
 
@@ -791,6 +843,8 @@ function applyConfigToContent(
 function applyConfigToEntries(
   entries: ManifestEntry[],
   config: SystematicConfig,
+  overlays: SourcedOverlayConfigMap,
+  piSubagentsOverlays: SourcedOverlayConfigMap,
 ): ManifestEntry[] {
   return entries.map((entry) => {
     if (entry.status === 'excluded-critical' || !entry.content) return entry
@@ -800,6 +854,8 @@ function applyConfigToEntries(
     const content = applyConfigToContent(
       entry.content,
       config,
+      overlays,
+      piSubagentsOverlays,
       category,
       agentKey,
     )
@@ -820,10 +876,11 @@ function generateEntries(
 ): ManifestEntry[] {
   const entries = generateAll(repoRoot)
   if (!configOptions) return entries
-  const config = loadConfigWithSources(configOptions.cwd, {
+  const { config, overlays } = loadConfigWithSources(configOptions.cwd, {
     includeProject: configOptions.scope === 'project',
-  }).config
-  return applyConfigToEntries(entries, config)
+  })
+  const piSubagentsOverlays = toSourcedPiSubagentsOverlays(config.pi_subagents)
+  return applyConfigToEntries(entries, config, overlays, piSubagentsOverlays)
 }
 
 // ── Package root discovery ─────────────────────────────────────────────────────

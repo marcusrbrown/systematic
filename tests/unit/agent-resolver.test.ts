@@ -50,6 +50,32 @@ Be a security reviewer.`,
     expect(git?.toolsSource).toBeUndefined()
   })
 
+  test('key/category/id are derived from the source path, independent of the frontmatter name', () => {
+    const dir = makeTempAgentsDir({
+      'research/git-analyzer.md': `---
+name: git-analyzer
+description: Analyzes git history
+---
+Be a git historian.`,
+      'a-different-display-name.md': `---
+name: a-different-display-name
+description: Root-level, no category subdir
+---
+Body.`,
+    })
+
+    const catalog = buildAgentCatalog(dir)
+    const categorized = resolveAgent(catalog, 'git-analyzer')
+    expect(categorized?.key).toBe('git-analyzer')
+    expect(categorized?.category).toBe('research')
+    expect(categorized?.id).toBe('research/git-analyzer')
+
+    const rootLevel = resolveAgent(catalog, 'a-different-display-name')
+    expect(rootLevel?.key).toBe('a-different-display-name')
+    expect(rootLevel?.category).toBe('(root)')
+    expect(rootLevel?.id).toBe('(root)/a-different-display-name')
+  })
+
   test('a body line beginning "tools:" is never mistaken for a frontmatter declaration', () => {
     const dir = makeTempAgentsDir({
       'a/persona.md': `---
@@ -245,6 +271,20 @@ describe('real bundled agents catalog', () => {
     expect(catalog.length).toBeGreaterThan(0)
     const names = catalog.map((e) => e.name)
     expect(new Set(names).size).toBe(names.length)
+  })
+
+  test('every entry carries key, category, and a qualified category/key id', () => {
+    const agentsDir = path.resolve(import.meta.dirname, '../../agents')
+    const catalog = buildAgentCatalog(agentsDir)
+    expect(catalog.length).toBeGreaterThan(0)
+    for (const entry of catalog) {
+      expect(entry.key.length).toBeGreaterThan(0)
+      expect(entry.category.length).toBeGreaterThan(0)
+      expect(entry.id).toBe(`${entry.category}/${entry.key}`)
+      // Real bundled agents live under agents/<category>/<name>.md, so none
+      // should fall back to the '(root)' no-category sentinel.
+      expect(entry.category).not.toBe('(root)')
+    }
   })
 
   test('every real declared tools source resolves to a known allowlist', () => {

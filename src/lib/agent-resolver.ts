@@ -7,7 +7,7 @@ import { extractString } from './validation.js'
 
 /** A single resolved persona entry in the flattened catalog. */
 export interface AgentCatalogEntry {
-  /** Flat persona name (category dropped). */
+  /** Flat persona name (category dropped). Used for dispatch matching (`resolveAgent`); may differ from `key` if frontmatter `name` and the file stem diverge. */
   name: string
   /** Human-readable description, used in tool description/parameter hints. */
   description: string
@@ -15,6 +15,12 @@ export interface AgentCatalogEntry {
   body: string
   /** Raw comma-separated `tools:` frontmatter value, if declared. Undefined = not declared. */
   toolsSource: string | undefined
+  /** The agent's source file stem (filename without `.md`), used to key into `agents.<key>` overlays for routing (distinct from the display `name`). */
+  key: string
+  /** The agent's category (source subdirectory name), used to key into `categories.<category>` overlays. `'(root)'` when the file has no category subdirectory. */
+  category: string
+  /** Qualified `category/key` id, mirroring `agent-overlays.ts`'s target-id convention, for callers that want a single stable identity. */
+  id: string
 }
 
 /** Fails closed if the same persona name appears under more than one category. */
@@ -25,7 +31,15 @@ export function buildAgentCatalog(agentsDir: string): AgentCatalogEntry[] {
 
   for (const info of infos) {
     const content = fs.readFileSync(info.file, 'utf8')
-    const entry = parseValidatedAgentEntry(content, info.file)
+    const parsed = parseValidatedAgentEntry(content, info.file)
+    const category = info.category ?? '(root)'
+    const key = info.name
+    const entry: AgentCatalogEntry = {
+      ...parsed,
+      key,
+      category,
+      id: `${category}/${key}`,
+    }
 
     try {
       resolveToolAllowlist(entry.toolsSource)
@@ -62,7 +76,7 @@ export function buildAgentCatalog(agentsDir: string): AgentCatalogEntry[] {
 function parseValidatedAgentEntry(
   content: string,
   sourceFile: string,
-): AgentCatalogEntry {
+): Omit<AgentCatalogEntry, 'key' | 'category' | 'id'> {
   const { data, body, parseError } =
     parseFrontmatter<Record<string, unknown>>(content)
   if (parseError) {
