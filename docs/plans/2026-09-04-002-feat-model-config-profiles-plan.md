@@ -1,7 +1,7 @@
 ---
 title: "feat: Named model profiles with per-harness routing blocks"
 type: feat
-status: active
+status: completed
 date: 2026-09-04
 origin: docs/brainstorms/2026-09-04-model-config-profiles-requirements.md
 deepened: 2026-09-04
@@ -132,7 +132,7 @@ Carried from the origin document; IDs match it.
 - **`profile` is not protected; `profiles` is.** The selector chooses among bundles the user authored, so a repository setting it is the feature. `profiles` joins `PROJECT_PROTECTED_FIELDS` and both `trustProtected` metadata and `SECURITY_OVERLAY_FIELDS` gain the new block paths. Rationale: the trust boundary in `layered-trust-boundaries-overlay-config` is exactly "select, never define."
 - **Qualifier-requires-model moves from parse time to a post-merge pass.** The per-overlay `superRefine` is relaxed to allow a qualifier without a model in a written fragment; the check runs once on each target's effective overlay per harness and throws a config error naming the target and harness. Rationale: R3b requires a profile to set `pi.thinking` alone; a parse-time check cannot see the lower layer. Severity stays an error because a qualifier with no model is a config bug, and today it is already an error.
 - **The Pi delegate resolves routing from config loaded once at extension start.** `src/pi.ts` does not load config today (it builds the catalog and registers tools); it gains one `loadConfigWithSources` call at init and passes the merged overlays and the resolver into `createPiDelegateTool`. `AgentCatalogEntry` gains the agent's file stem, category, and qualified id so the tool can key into the overlays (today it keeps only the frontmatter `name`). Rationale: no per-dispatch re-parse; the cost is that a profile change needs a Pi restart.
-- **The in-process Pi delegate applies `model` only; `thinking` reaches Pi through the export path.** `CreateAgentSessionOptions` in `pi-delegate-session.ts` carries no reasoning-effort field, so the delegate cannot apply `thinking` unless the pinned Pi SDK exposes one — which the implementer checks and records (Deferred to Implementation). Persona export, which already emits `thinking`, is the consumer that honours the `pi` block's qualifier today. Rationale: promise only what a consumer can execute; the notice in R4a names the model, which is what the delegate applies.
+- **The in-process Pi delegate applies both `model` and `thinking`.** The pinned Pi SDK (`@earendil-works/pi-coding-agent` 0.83.0) exposes `thinkingLevel` on `CreateAgentSessionOptions`, and its value set is identical to Systematic's `thinking` enum, so the delegate passes the resolved qualifier straight through (absent when none resolves, so the child inherits Pi's default). Planning had assumed no such option existed; implementation checked the SDK and found it. Persona export applies the same values through the resolver.
 - **`profile` is tri-state.** `undefined` means "no opinion" (lower sources decide); `null` means "explicitly none" and is a selection that wins like any other; a string names a bundle. Rationale: without `null`, a stronger source has no way to force base config when a weaker one sets a default — the fallback would depend on omission rather than intent.
 - **Provenance is not needed after merge.** Protected fields (`model`, `variant`, `thinking`, `permission`, `skills`) are stripped from the project source before the chain is merged, so the merged overlays cannot carry a project-sourced value for them and the resolver needs no layer tags to be safe; `temperature`/`top_p` are project-settable today and stay so. Rationale: the boundary is enforced once, at load, as `layered-trust-boundaries-overlay-config` prescribes.
 - **"Once per session" for R4a is a set keyed by delegated agent in the tool's closure.** The first dispatch of each agent whose model came from config appends one line to the tool's result naming model and source. Rationale: the tool has no session object to hang state on; closure state lives for the extension's life, which is the session.
@@ -148,7 +148,7 @@ Carried from the origin document; IDs match it.
 - Does the Pi persona fixture drift gate see local profiles? No — `generateAll` reads bundled markdown only.
 - Can the eval `model-inheritance` case be reused as the back-compat gate? Partly: it proves bundled agents stay model-free under the config hook. R13 additionally needs a snapshot of emitted OpenCode agent config for a corpus of pre-change user configs; Unit 6 builds that corpus from the existing config fixtures.
 - Selection state table (custom C, project P, user default U; "defined" means present in user `profiles`): strongest-set selector S wins, where `null` counts as set and means base; if S is a name not defined → warn naming S → use U if defined → else base with a second clause noting U also missing; S = U = undefined name → single warning, base. Eleven cases enumerated in Unit 2's test scenarios.
-- Does the Pi delegate session accept a reasoning-effort option? Not in the current `CreateAgentSessionOptions`; the delegate applies `model` only, and `thinking` is honoured by persona export.
+- Does the Pi delegate session accept a reasoning-effort option? Yes — `thinkingLevel` on `CreateAgentSessionOptions` (found during implementation); the delegate applies model and thinking, and persona export applies the same.
 - Does `capabilities` already compute a resolved routing view to reuse for `config show`? No — it builds a capability snapshot without per-agent routing. `config show` sources its resolved section from the new loader metadata instead.
 
 ### Deferred to Implementation
@@ -156,7 +156,6 @@ Carried from the origin document; IDs match it.
 - Exact names of the resolver and its result type; whether `source` is an enum or a small struct.
 - Whether the four-entry overlay chain is built as an array or as a named struct; either is fine for `mergeOverlaySources`.
 - The one-line format of the Pi delegate's routing notice.
-- Whether the pinned Pi SDK's session options expose a reasoning-effort setting the delegate could pass `thinking` through; if so, wiring it is a one-line follow-up inside Unit 5, recorded in the PR.
 - Whether `config show` prints the per-agent routing table by default or behind a flag; the active profile line is unconditional.
 
 ## High-Level Technical Design
@@ -182,7 +181,7 @@ consumers:
 
 ## Implementation Units
 
-- [ ] **Unit 1: Schema — harness blocks, profiles, relaxed parse-time refinement**
+- [x] **Unit 1: Schema — harness blocks, profiles, relaxed parse-time refinement**
 
 **Goal:** The strict schema accepts the new shapes and rejects the forbidden ones; generated JSON Schema and docs reference regenerate clean.
 
@@ -219,7 +218,7 @@ consumers:
 **Verification:**
 - Schema and docs drift gates clean; content-integrity clean.
 
-- [ ] **Unit 2: Loader — profile selection and the four-entry merge chain**
+- [x] **Unit 2: Loader — profile selection and the four-entry merge chain**
 
 **Goal:** `loadConfigWithSources` resolves the selector, looks up the bundle, strips project `profiles`, and merges base → profile → project → custom.
 
@@ -250,7 +249,7 @@ consumers:
 **Verification:**
 - The ten selection cases pass; metadata exposes the active profile; existing loader tests unchanged.
 
-- [ ] **Unit 3: Routing resolver and post-merge qualifier check**
+- [x] **Unit 3: Routing resolver and post-merge qualifier check**
 
 **Goal:** One function answers "what model and qualifier does target T get on harness H, and from where"; the loader asserts the qualifier invariant on its output.
 
@@ -290,7 +289,7 @@ consumers:
 **Verification:**
 - Resolver tests pass; content-integrity clean with the codemap and module-table entries.
 
-- [ ] **Unit 4: OpenCode config hook uses the resolver**
+- [x] **Unit 4: OpenCode config hook uses the resolver**
 
 **Goal:** The OpenCode hook emits per-agent `model`/`variant` from the resolver's `opencode` answer; output for every pre-change config is byte-identical.
 
@@ -318,7 +317,7 @@ consumers:
 **Verification:**
 - Snapshot corpus identical; eval assertions unchanged.
 
-- [ ] **Unit 5: Pi — catalog identity, delegate routing, export parity**
+- [x] **Unit 5: Pi — catalog identity, delegate routing, export parity**
 
 **Goal:** `systematic_delegate` honours resolved Pi routing and reports its source once per agent; persona export uses the same resolver.
 
@@ -332,7 +331,7 @@ consumers:
 
 **Approach:**
 - The tool keys the resolver by the catalog entry's file stem and category, not the display name.
-- When the resolver returns a model, the child session uses it; when it returns `null` or nothing, the child inherits `ctx.model`, and the fail-closed rule when `ctx.model` is undefined is unchanged. The delegate does not apply `thinking` (no session option exists); export does.
+- When the resolver returns a model, the child session uses it; when it returns `null` or nothing, the child inherits `ctx.model`, and the fail-closed rule when `ctx.model` is undefined is unchanged. The delegate applies `thinking` as `thinkingLevel` on the session options; export applies the same resolved value.
 - Everyone who constructs or matches `AgentCatalogEntry` (tests, `pi-subagents-personas.ts`) is updated; persona file naming (`systematic-<sanitized-name>.md`) keys on the frontmatter `name` and is unchanged.
 - The routing notice is appended to the tool's result text the first time each agent dispatches with a config-sourced model; it names model and source.
 - Export resolves `model` and `thinking` for the `pi` harness through the resolver and continues to drop project-sourced values; `variant` is never emitted.
@@ -354,7 +353,7 @@ consumers:
 **Verification:**
 - Delegate and export tests pass; `bun scripts/generate-pi-subagents-personas.ts --check` clean.
 
-- [ ] **Unit 6: `config show`, back-compat corpus, and documentation**
+- [x] **Unit 6: `config show`, back-compat corpus, and documentation**
 
 **Goal:** Resolved profile state is visible; a stored corpus proves R13; the config reference and release notes describe the feature and the Pi behaviour change.
 
@@ -405,7 +404,6 @@ consumers:
 | JSON Schema ref-dedup collapses the routing-only bundle schema into the full overlay schema or vice versa | Ref-aware post-processing per the 2026-05-17 learning; the drift gate catches a wrong shape. |
 | The persona catalog change alters export output | Catalog gains fields; export output is generated from bundled markdown only, so the fixture gate proves no change. |
 | Existing configs change behaviour on OpenCode | The corpus test compares canonical serializations byte for byte; any difference, including key order, fails it. |
-| The in-process Pi delegate cannot apply `thinking` | Stated as a decision; export applies it; the implementer records whether the pinned Pi SDK exposes a session-level option. |
 
 ## Documentation / Operational Notes
 
