@@ -2542,6 +2542,210 @@ describe('config', () => {
       ])
     })
   })
+
+  // ════════════════════════════════════════════════════════════════════════
+  // Unit 3 (plan 2026-09-04-002-feat-model-config-profiles): the loader's
+  // post-merge qualifier-requires-model check, backed by
+  // src/lib/routing-resolver.ts. Uses real bundled review-category agents
+  // ('correctness-reviewer', 'security-reviewer') since the check only
+  // walks targets that resolve to a real bundled agent.
+  // ════════════════════════════════════════════════════════════════════════
+  describe('routing invariants (post-merge qualifier check)', () => {
+    let warnings: string[]
+    let warningSink: (message: string) => void
+
+    beforeEach(() => {
+      warnings = []
+      warningSink = (message: string) => warnings.push(message)
+    })
+
+    test('agents.x.variant with no model at any layer throws, naming the agent and opencode', () => {
+      writeUserConfig({
+        agents: { 'correctness-reviewer': { variant: 'high' } },
+      })
+
+      expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
+        /correctness-reviewer/,
+      )
+      expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
+        /opencode/,
+      )
+    })
+
+    test('agents.x.pi.thinking with no model at any layer throws, naming the agent and pi', () => {
+      writeUserConfig({
+        agents: {
+          'correctness-reviewer': { pi: { thinking: 'high' } },
+        },
+      })
+
+      expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
+        /correctness-reviewer/,
+      )
+      expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
+        /pi\.thinking/,
+      )
+    })
+
+    test('a qualifier with an explicit model: null still throws (null is a model, but this agent has variant with no model at all)', () => {
+      // Sanity check the error path is reachable at all through the full
+      // loader (not just directly in the resolver): a category-level
+      // variant with no model anywhere for this specific agent.
+      writeUserConfig({
+        categories: { review: { variant: 'high' } },
+      })
+
+      expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
+        /opencode/,
+      )
+    })
+
+    // The 'workflow' category has exactly four bundled agents
+    // (bug-reproduction-validator, pr-comment-resolver, spec-flow-analyzer,
+    // systematic-implementer) -- small enough to give every member an
+    // explicit model in the "valid" case, unlike 'review' (~18 agents).
+    test('category variant with no category model is fine when every agent in that category resolves its own model', () => {
+      writeUserConfig({
+        categories: { workflow: { variant: 'high' } },
+        agents: {
+          'bug-reproduction-validator': { model: 'a/a' },
+          'pr-comment-resolver': { model: 'a/b' },
+          'spec-flow-analyzer': { model: 'a/c' },
+          'systematic-implementer': { model: 'a/d' },
+        },
+      })
+
+      expect(() =>
+        loadConfigWithSources(testDir, { warningSink }),
+      ).not.toThrow()
+    })
+
+    test('category variant with no category model errors for the one agent in that category with no model anywhere', () => {
+      writeUserConfig({
+        categories: { workflow: { variant: 'high' } },
+        agents: {
+          'bug-reproduction-validator': { model: 'a/a' },
+          'pr-comment-resolver': { model: 'a/b' },
+          'spec-flow-analyzer': { model: 'a/c' },
+          // 'systematic-implementer' is in 'workflow' too but sets no model
+          // anywhere -- it inherits the category's variant with nothing to
+          // attach it to.
+        },
+      })
+
+      expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
+        /systematic-implementer/,
+      )
+    })
+
+    describe('R5: legacy pi_subagents.thinking deprecation warning', () => {
+      test('legacy thinking present, no pi block → resolves, one warning', () => {
+        writeUserConfig({
+          agents: { 'correctness-reviewer': { model: 'a/m' } },
+          pi_subagents: {
+            agents: { 'correctness-reviewer': { thinking: 'low' } },
+          },
+        })
+
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        expect(result.config.agents?.['correctness-reviewer']?.model).toBe(
+          'a/m',
+        )
+        const legacyWarnings = warnings.filter((w) =>
+          w.includes('correctness-reviewer'),
+        )
+        expect(legacyWarnings).toHaveLength(1)
+        expect(legacyWarnings[0]).toContain(
+          'agents.correctness-reviewer.pi.thinking',
+        )
+      })
+
+      test('both legacy and pi block set and disagreeing → pi block wins, warning still emitted once', () => {
+        writeUserConfig({
+          agents: {
+            'correctness-reviewer': {
+              model: 'a/m',
+              pi: { thinking: 'high' },
+            },
+          },
+          pi_subagents: {
+            agents: { 'correctness-reviewer': { thinking: 'low' } },
+          },
+        })
+
+        loadConfigWithSources(testDir, { warningSink })
+
+        const legacyWarnings = warnings.filter((w) =>
+          w.includes('correctness-reviewer'),
+        )
+        expect(legacyWarnings).toHaveLength(1)
+      })
+
+      test('two targets with legacy thinking → two warnings, one each', () => {
+        writeUserConfig({
+          agents: {
+            'correctness-reviewer': { model: 'a/m' },
+            'security-reviewer': { model: 'a/n' },
+          },
+          pi_subagents: {
+            agents: {
+              'correctness-reviewer': { thinking: 'low' },
+              'security-reviewer': { thinking: 'medium' },
+            },
+          },
+        })
+
+        loadConfigWithSources(testDir, { warningSink })
+
+        const legacyWarnings = warnings.filter((w) =>
+          w.includes('pi_subagents'),
+        )
+        expect(legacyWarnings).toHaveLength(2)
+        expect(
+          legacyWarnings.some((w) => w.includes('correctness-reviewer')),
+        ).toBe(true)
+        expect(
+          legacyWarnings.some((w) => w.includes('security-reviewer')),
+        ).toBe(true)
+      })
+
+      test('the same target is only walked once per load → still exactly one warning', () => {
+        // The target is reachable via BOTH the agent-key walk AND the
+        // category-driven walk (its category also has an overlay), which
+        // could in principle produce duplicate entries if collectRoutingTargets
+        // didn't dedupe by category/key.
+        writeUserConfig({
+          agents: { 'correctness-reviewer': { model: 'a/m' } },
+          categories: { review: { temperature: 0.2 } },
+          pi_subagents: {
+            agents: { 'correctness-reviewer': { thinking: 'low' } },
+          },
+        })
+
+        loadConfigWithSources(testDir, { warningSink })
+
+        const legacyWarnings = warnings.filter((w) =>
+          w.includes('correctness-reviewer'),
+        )
+        expect(legacyWarnings).toHaveLength(1)
+      })
+
+      test('no legacy thinking anywhere → no deprecation warning', () => {
+        writeUserConfig({
+          agents: {
+            'correctness-reviewer': { model: 'a/m', pi: { thinking: 'high' } },
+          },
+        })
+
+        loadConfigWithSources(testDir, { warningSink })
+
+        expect(warnings.filter((w) => w.includes('pi_subagents'))).toHaveLength(
+          0,
+        )
+      })
+    })
+  })
 })
 
 describe('pi_subagents merge and trust', () => {

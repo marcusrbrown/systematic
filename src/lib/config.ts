@@ -18,6 +18,13 @@ import {
   SystematicConfigSchema,
 } from './config-schema.js'
 import { REMOVED_BUNDLED_AGENT_CATEGORIES } from './removed-names.js'
+import {
+  collectLegacyPiSubagentsThinkingWarnings,
+  qualifierResolvesWithoutModel,
+  type RoutingResolutionEntry,
+  type RoutingTarget,
+  resolveRouting,
+} from './routing-resolver.js'
 
 export interface BootstrapConfig {
   enabled: boolean
@@ -270,6 +277,39 @@ const CURRENT_AGENT_NAMES_SET: ReadonlySet<string> = new Set([
 const REMOVED_AGENT_CATEGORIES_SET: ReadonlySet<string> = new Set(
   REMOVED_BUNDLED_AGENT_CATEGORIES,
 )
+
+/**
+ * Bare agent key -> category, and category -> bare agent keys, derived from
+ * `BUNDLED_AGENT_QUALIFIED_IDS` ("category/key" strings) without any
+ * filesystem access. Used by the routing-resolver post-merge check
+ * (`assertRoutingInvariants`) to enumerate real targets from the merged
+ * overlays: every bundled agent has exactly one category (`agents/` is
+ * one level of category subdirectories, `agentQualifiedIds` in
+ * `scripts/generate-config-schema.ts` derives one qualified id per bundled
+ * agent), so these maps are complete and don't need `agent-overlays.ts`'s
+ * heavier `buildBundledAgentInventory` (which requires an `agentsDir` path
+ * `loadConfigWithSources` doesn't have).
+ */
+const BUNDLED_AGENT_CATEGORY_BY_KEY: ReadonlyMap<string, string> = new Map(
+  BUNDLED_AGENT_QUALIFIED_IDS.map((qualifiedId) => {
+    const separatorIndex = qualifiedId.indexOf('/')
+    return [
+      qualifiedId.slice(separatorIndex + 1),
+      qualifiedId.slice(0, separatorIndex),
+    ] as const
+  }),
+)
+
+const BUNDLED_AGENT_KEYS_BY_CATEGORY: ReadonlyMap<string, readonly string[]> =
+  (() => {
+    const byCategory = new Map<string, string[]>()
+    for (const [agentKey, category] of BUNDLED_AGENT_CATEGORY_BY_KEY) {
+      const existing = byCategory.get(category) ?? []
+      existing.push(agentKey)
+      byCategory.set(category, existing)
+    }
+    return byCategory
+  })()
 
 /**
  * Return the subset of `names` that are absent from `allowedSet`. These are
@@ -943,6 +983,8 @@ export function loadConfigWithSources(
           ),
         }
 
+  assertRoutingInvariants(overlays, mergedPiSubagentsOverlays, warningSink)
+
   const result: SystematicConfig = {
     disabled_skills: mergeArraysUnique(
       mergeArraysUnique(
@@ -1161,6 +1203,103 @@ function sortProtectedFields(
       ? left.sourceKind.localeCompare(right.sourceKind)
       : left.fieldPath.localeCompare(right.fieldPath),
   )
+}
+
+/**
+ * Enumerate every routing-resolver target implied by the merged overlays:
+ * every raw agent-overlay key that resolves to a real bundled agent (bare or
+ * qualified `category/key`), plus every bundled agent whose category has a
+ * category overlay (R3b's "categories are not checked in isolation" --
+ * `categories.review.variant` with no category model is fine as long as
+ * every agent in `review` resolves its own model, so every agent in an
+ * overlaid category must be walked, not just the category itself).
+ *
+ * A raw overlay key that does not resolve to any known bundled agent (e.g.
+ * an unrestricted `profiles.<name>.agents.<key>` entry naming something that
+ * isn't a real bundled agent) is silently skipped here -- it is not a valid
+ * routing target and this check has no stronger claim to make about it than
+ * schema validation already does elsewhere.
+ */
+function collectRoutingTargets(
+  overlays: SourcedOverlayConfigMap,
+): RoutingTarget[] {
+  const targets = new Map<string, RoutingTarget>()
+
+  const addTarget = (agentKey: string, category: string): void => {
+    targets.set(`${category}/${agentKey}`, { agentKey, category })
+  }
+
+  for (const rawKey of Object.keys(overlays.agents)) {
+    const separatorIndex = rawKey.indexOf('/')
+    if (separatorIndex === -1) {
+      const category = BUNDLED_AGENT_CATEGORY_BY_KEY.get(rawKey)
+      if (category !== undefined) addTarget(rawKey, category)
+      continue
+    }
+    const category = rawKey.slice(0, separatorIndex)
+    const agentKey = rawKey.slice(separatorIndex + 1)
+    if (BUNDLED_AGENT_CATEGORY_BY_KEY.get(agentKey) === category) {
+      addTarget(agentKey, category)
+    }
+  }
+
+  for (const categoryKey of Object.keys(overlays.categories)) {
+    const agentKeys = BUNDLED_AGENT_KEYS_BY_CATEGORY.get(categoryKey)
+    if (agentKeys === undefined) continue
+    for (const agentKey of agentKeys) addTarget(agentKey, categoryKey)
+  }
+
+  return Array.from(targets.values())
+}
+
+const ROUTING_HARNESSES = ['opencode', 'pi'] as const
+
+/**
+ * Post-merge qualifier-requires-model check (R3b), run once per
+ * `loadConfigWithSources` call immediately after the merged overlays exist.
+ * Walks every target `collectRoutingTargets` finds, resolves it on both
+ * harnesses via the shared routing resolver, and throws a config error
+ * naming the target and harness when a qualifier resolves without a model
+ * (`model: null` counts as a model -- it means inherit; only `undefined`,
+ * meaning no layer set a model at all, is the violation). Also emits the R5
+ * legacy `pi_subagents.thinking` deprecation warnings collected across the
+ * walk, deduplicated once per target regardless of how the target was
+ * reached (agent-key walk vs. category-driven walk can't both add the same
+ * target twice -- `collectRoutingTargets` already dedupes by `category/key`
+ * -- but the warning collector dedupes independently in case a future
+ * caller re-resolves the same target).
+ */
+function assertRoutingInvariants(
+  overlays: SourcedOverlayConfigMap,
+  piSubagentsOverlays: SourcedOverlayConfigMap,
+  warningSink: (message: string) => void,
+): void {
+  const targets = collectRoutingTargets(overlays)
+  const entries: RoutingResolutionEntry[] = []
+
+  for (const target of targets) {
+    for (const harness of ROUTING_HARNESSES) {
+      const resolution = resolveRouting({
+        overlays,
+        piSubagentsOverlays,
+        target,
+        harness,
+      })
+      entries.push({ target, resolution })
+
+      if (qualifierResolvesWithoutModel(resolution)) {
+        const qualifierFieldPath =
+          harness === 'opencode' ? 'variant' : 'pi.thinking'
+        throw new Error(
+          `Invalid Systematic config: agents.${target.agentKey}.${qualifierFieldPath} resolves to "${resolution.qualifier}" on the ${harness} harness, but no model resolves for agents.${target.agentKey} on ${harness} at any layer (agent, category, block, or flat). Set a model at the same layer or a lower one, or remove the qualifier.`,
+        )
+      }
+    }
+  }
+
+  for (const warning of collectLegacyPiSubagentsThinkingWarnings(entries)) {
+    warningSink(warning)
+  }
 }
 
 function mergeOverlaySources(sources: ConfigSource[]): SourcedOverlayConfigMap {

@@ -84,6 +84,7 @@ Bootstrap injection (plugin transform hook)
 
 Config overlays and validation
   src/lib/agent-overlays.ts — buildBundledAgentInventory, validateAgentOverlays, resolveAgentOverlaySet
+  src/lib/routing-resolver.ts — resolveRouting: per-target/harness model+qualifier precedence and legacy pi_subagents.thinking fallback
 
 Supporting utilities
   src/lib/bundled-names.ts        — generated bundled agent and skill name sets for typed config validation
