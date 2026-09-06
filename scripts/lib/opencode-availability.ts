@@ -55,6 +55,13 @@ export interface ProbeOpencodeAvailabilityOptions {
    * `[opencode-ai@<pin>, --version]`. Production callers must not set this.
    */
   args?: readonly string[]
+  /**
+   * Suppresses the pre-probe diagnostic (see below). Set by callers whose
+   * output is itself asserted to be clean, such as `verifyExactOpencodeRuntime`'s
+   * per-case probe inside the eval runner CLI child — its stderr is asserted
+   * empty by `eval-runner.test.ts`'s direct-CLI tests. Defaults to `false`.
+   */
+  quiet?: boolean
 }
 
 const DEFAULT_PROBE_TIMEOUT_MS = 300_000
@@ -95,8 +102,10 @@ export function probeOpencodeAvailability(
   // own `command`, and this line would otherwise fire once per fake-launcher
   // case. A wedged package registry blocks synchronously for the full
   // timeout with no other output, so this line is what makes that stall
-  // attributable in CI logs rather than a silent multi-minute pause.
-  if (options.command === undefined) {
+  // attributable in CI logs rather than a silent multi-minute pause. Callers
+  // whose own output must stay clean (the eval runner CLI child) pass
+  // `quiet: true` to suppress it.
+  if (options.command === undefined && !options.quiet) {
     console.warn(
       `[opencode-availability] probing bunx opencode-ai@${options.pin} --version`,
     )
