@@ -58,6 +58,10 @@ interface MintMarkerEvidence {
   receiptId: string
 }
 
+type HostCell =
+  | ({ status: 'pass'; elapsedMs: number } & HostEvidence)
+  | { status: 'blocked'; version: string; reason: string }
+
 /**
  * The OpenCode SDK client types every response as `{ data?: T; error?:
  * unknown }` to model transport failures. These tests always run against a
@@ -66,9 +70,7 @@ interface MintMarkerEvidence {
  */
 function unwrapData<T>(result: { data?: T; error?: unknown }): T {
   if (result.data === undefined) {
-    throw new Error(
-      `opencode client call failed: ${JSON.stringify(result.error)}`,
-    )
+    throw new Error(`opencode client call failed: ${String(result.error)}`)
   }
   return result.data
 }
@@ -581,7 +583,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)('U7a real host', () => {
   test(
     'reports each exact host version cell independently',
     async () => {
-      const cells: Array<Record<string, unknown>> = []
+      const cells: HostCell[] = []
       for (const version of HOST_VERSIONS) {
         const fixture = createIsolatedFixture()
         const packed = extractPackagedPlugin(fixture).pluginUrl
@@ -602,7 +604,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)('U7a real host', () => {
       console.log(`U7_HOST_MATRIX ${JSON.stringify(cells)}`)
       expect(cells).toHaveLength(HOST_VERSIONS.length)
       for (const cell of cells) {
-        expect(['pass', 'blocked'] as unknown[]).toContain(cell.status)
+        expect(['pass', 'blocked']).toContain(cell.status)
       }
     },
     TIMEOUT_MS * 12,

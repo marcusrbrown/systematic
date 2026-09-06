@@ -43,9 +43,7 @@ interface MockModelServer {
  */
 function unwrapData<T>(result: { data?: T; error?: unknown }): T {
   if (result.data === undefined) {
-    throw new Error(
-      `opencode client call failed: ${JSON.stringify(result.error)}`,
-    )
+    throw new Error(`opencode client call failed: ${String(result.error)}`)
   }
   return result.data
 }
@@ -808,12 +806,12 @@ describe.skipIf(!OPENCODE_AVAILABLE)('OpenCode Question attestation', () => {
         })
         const sessionID = await createSession(client, fixture.projectDir)
         await promptSession(client, sessionID, fixture.projectDir, 'yes')
-        const messages = (
+        const messages = unwrapData(
           await client.session.messages({
             sessionID,
             directory: fixture.projectDir,
-          })
-        ).data
+          }),
+        )
         const serialized = JSON.stringify(messages)
         expect(serialized).not.toContain('questionAttestation')
         expect(

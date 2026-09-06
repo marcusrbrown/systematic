@@ -36,9 +36,7 @@ type ModelResponse = { text?: string; toolCalls?: ToolCall[] }
  */
 function unwrapData<T>(result: { data?: T; error?: unknown }): T {
   if (result.data === undefined) {
-    throw new Error(
-      `opencode client call failed: ${JSON.stringify(result.error)}`,
-    )
+    throw new Error(`opencode client call failed: ${String(result.error)}`)
   }
   return result.data
 }
@@ -458,17 +456,16 @@ async function runScenario(
       title: `focused-${name}`,
       permission: [{ permission: '*', pattern: '*', action: 'allow' }],
     })
-    if (!session.data)
-      throw new Error(`session-create ${JSON.stringify(session)}`)
+    const sessionData = unwrapData(session)
     await client.session.prompt({
-      sessionID: session.data.id,
+      sessionID: sessionData.id,
       directory: fixture.projectDir,
       model: { providerID: PROVIDER, modelID: MODEL },
       parts: [{ type: 'text', text: `Run focused ${name}.` }],
     })
     const messages = unwrapData(
       await client.session.messages({
-        sessionID: session.data.id,
+        sessionID: sessionData.id,
         directory: fixture.projectDir,
       }),
     )
@@ -560,10 +557,10 @@ describe.skipIf(!OPENCODE_AVAILABLE)('focused real-host dogfood', () => {
       // The push unit ends at push — pr-creation/check/review require real GitHub.
       // The guard status after push is 'waiting'/'missing-evidence' (pending remote ops).
       // Verify via the systematic_workflow_status result directly.
-      const pushStatusResult = push?.results?.find(
-        (r: Record<string, unknown>) =>
+      const pushStatusResult = push?.results.find(
+        (r) =>
           r.callID === 'push-status' && r.tool === 'systematic_workflow_status',
-      ) as Record<string, unknown> | undefined
+      )
       expect(pushStatusResult).toBeDefined()
       expect(pushStatusResult?.state).toBe('waiting')
       expect(pushStatusResult?.reasonCode).toBe('missing-evidence')
