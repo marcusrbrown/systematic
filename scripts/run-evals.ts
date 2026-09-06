@@ -6,6 +6,8 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { gunzipSync } from 'node:zlib'
 
+import { readOpencodeSdkPin } from './lib/opencode-pin.js'
+
 const CASE_SCHEMA_VERSION = 1 as const
 const RESULT_SCHEMA_VERSION = 1 as const
 export const RUN_MANIFEST_SCHEMA_VERSION = 1 as const
@@ -1886,7 +1888,8 @@ export function serializeRunManifest(input: unknown): string {
   return serialized
 }
 
-export const EXPECTED_OPENCODE_VERSION = '1.18.21' as const
+// `string`, read from package.json at import time; throws if the pin is missing or not exact.
+export const EXPECTED_OPENCODE_VERSION = readOpencodeSdkPin()
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..')
 const FIXTURE_CONTRACT_VERSION = 1 as const
