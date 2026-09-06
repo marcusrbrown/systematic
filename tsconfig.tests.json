@@ -1,20 +1,10 @@
 {
-  "extends": "./tsconfig.json",
-  "compilerOptions": {
-    "noEmit": true,
-    "rootDir": ".",
-    // Temporary: silences ~44 files of TS5097 noise from `.ts`-suffixed
-    // relative imports used throughout tests/. Drop once #897's burn-down
-    // removes or rewrites those imports.
-    "allowImportingTsExtensions": true
-  },
-  "include": ["src/**/*", "scripts/**/*", "tests/**/*", "docs/scripts/**/*"],
-  "exclude": [
-    "node_modules",
-    "dist",
-    "claude-code",
-    "docs/dist",
-    "docs/node_modules",
-    ".slim"
-  ]
+  "extends": "./tsconfig.scripts.json",
+  // allowImportingTsExtensions is inherited from tsconfig.scripts.json, where
+  // it's required for scripts/ imports unrelated to this file. It also
+  // silences ~44 tests/ files using `.ts`-suffixed relative imports — that
+  // part is temporary, tied to #897's burn-down. Do not read the flag itself
+  // as removable once that lands; only reconsider whether tests/ still needs
+  // it.
+  "include": ["src/**/*", "scripts/**/*", "tests/**/*", "docs/scripts/**/*"]
 }

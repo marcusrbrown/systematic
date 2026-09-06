@@ -3,8 +3,16 @@
   "compilerOptions": {
     "noEmit": true,
     "rootDir": ".",
+    // Required, not temporary: 4 files under scripts/ use `.ts`-suffixed
+    // relative imports independent of the tests/ burn-down tracked in #897.
+    // Do not remove this when that burn-down completes — it would break
+    // this required gate.
     "allowImportingTsExtensions": true
   },
+  // docs/scripts/**/* is also covered by docs/tsconfig.json, which extends
+  // astro/tsconfigs/strict and defines a `@/*` path alias this config does
+  // not. A docs script that starts using that alias or an Astro-specific
+  // type will pass `docs:build` and fail this required gate.
   "include": ["src/**/*", "scripts/**/*", "docs/scripts/**/*"],
   "exclude": [
     "node_modules",
