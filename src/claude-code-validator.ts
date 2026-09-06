@@ -7,9 +7,10 @@ import {
 import { ReviewArtifactSchema } from './lib/review-artifact-schema.js'
 
 const VALIDATE_REVIEW_ARTIFACT_USAGE =
-  'Usage: systematic validate-review-artifact <path>'
+  'Usage: systematic validate-review-artifact <path> [--allow-outside-artifact-root]'
 const REVIEW_ARTIFACT_SCHEMA_RELATIVE_PATH =
   'skills/ce-review/references/review-summary-schema.json'
+const ALLOW_OUTSIDE_ARTIFACT_ROOT_FLAG = '--allow-outside-artifact-root'
 
 interface ValidatorOptions {
   readonly argv: readonly string[]
@@ -18,11 +19,24 @@ interface ValidatorOptions {
   readonly errorSink?: (message: string) => void
 }
 
+interface ValidateReviewArtifactArguments {
+  readonly path: string
+  readonly allowOutsideArtifactRoot: boolean
+}
+
 function validateReviewArtifactArgument(
   argv: readonly string[],
-): string | undefined {
-  if (argv.length !== 1) return undefined
-  return argv[0]
+): ValidateReviewArtifactArguments | undefined {
+  const flagIndex = argv.indexOf(ALLOW_OUTSIDE_ARTIFACT_ROOT_FLAG)
+  const allowOutsideArtifactRoot = flagIndex !== -1
+  const positional =
+    flagIndex === -1
+      ? argv
+      : [...argv.slice(0, flagIndex), ...argv.slice(flagIndex + 1)]
+  if (positional.length !== 1) return undefined
+  const path = positional[0]
+  if (path === undefined) return undefined
+  return { allowOutsideArtifactRoot, path }
 }
 
 export function runClaudeCodeValidator(options: ValidatorOptions): number {
@@ -30,15 +44,16 @@ export function runClaudeCodeValidator(options: ValidatorOptions): number {
     options.outputSink ?? ((message: string) => console.log(message))
   const errorSink =
     options.errorSink ?? ((message: string) => console.error(message))
-  const input = validateReviewArtifactArgument(options.argv)
-  if (input === undefined) {
+  const parsedArgs = validateReviewArtifactArgument(options.argv)
+  if (parsedArgs === undefined) {
     errorSink(VALIDATE_REVIEW_ARTIFACT_USAGE)
     return 2
   }
 
   const resolved = resolveReviewArtifactPath(
-    input,
+    parsedArgs.path,
     options.cwd ?? process.cwd(),
+    { allowOutsideArtifactRoot: parsedArgs.allowOutsideArtifactRoot },
   )
   if (!resolved.ok) {
     errorSink(resolved.message)

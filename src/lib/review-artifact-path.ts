@@ -83,10 +83,21 @@ function isWithinDirectory(candidate: string, directory: string): boolean {
   )
 }
 
+export interface ResolveReviewArtifactPathOptions {
+  // When true, skip the containment check that requires the resolved path to
+  // stay inside .context/systematic/ce-review, and do not require that
+  // directory to exist. Lexical `..` rejection, symlink rejection, realpath
+  // canonicalization, and the regular-file check still apply. Default false.
+  readonly allowOutsideArtifactRoot?: boolean
+}
+
 export function resolveReviewArtifactPath(
   input: string,
   cwd: string,
+  options: ResolveReviewArtifactPathOptions = {},
 ): ArtifactPathResult {
+  const allowOutsideArtifactRoot = options.allowOutsideArtifactRoot ?? false
+
   if (hasParentDirectoryTraversal(input)) {
     return {
       message:
@@ -95,18 +106,25 @@ export function resolveReviewArtifactPath(
     }
   }
 
-  const artifactRoot = path.resolve(cwd, '.context', 'systematic', 'ce-review')
-  let canonicalRoot: string
-  try {
-    canonicalRoot = fs.realpathSync(artifactRoot)
-    if (!fs.statSync(canonicalRoot).isDirectory()) {
-      return {
-        message: 'Review artifact directory is not a directory',
-        ok: false,
+  let canonicalRoot: string | undefined
+  if (!allowOutsideArtifactRoot) {
+    const artifactRoot = path.resolve(
+      cwd,
+      '.context',
+      'systematic',
+      'ce-review',
+    )
+    try {
+      canonicalRoot = fs.realpathSync(artifactRoot)
+      if (!fs.statSync(canonicalRoot).isDirectory()) {
+        return {
+          message: 'Review artifact directory is not a directory',
+          ok: false,
+        }
       }
+    } catch {
+      return { message: 'Review artifact directory is unavailable', ok: false }
     }
-  } catch {
-    return { message: 'Review artifact directory is unavailable', ok: false }
   }
 
   const candidate = path.resolve(cwd, input)
@@ -124,7 +142,10 @@ export function resolveReviewArtifactPath(
     return { message: 'Review artifact file was not found', ok: false }
   }
 
-  if (!isWithinDirectory(canonicalTarget, canonicalRoot)) {
+  if (
+    canonicalRoot !== undefined &&
+    !isWithinDirectory(canonicalTarget, canonicalRoot)
+  ) {
     return {
       message:
         'Review artifact path must remain inside .context/systematic/ce-review',

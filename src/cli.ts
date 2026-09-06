@@ -88,9 +88,12 @@ Usage:
 Commands:
   list [type]                  List available skills, agents, or commands
   capabilities                 Read-only standalone-CLI observation; not a host-runtime or canonical-registry view
-  validate-review-artifact <path>
+  validate-review-artifact <path> [--allow-outside-artifact-root]
                                Validate a ce:review run artifact
                                The <path> argument is required by design; no artifact discovery is performed.
+                               --allow-outside-artifact-root skips the requirement that <path> resolve
+                               inside .context/systematic/ce-review, for validating artifacts copied from
+                               CI, issues, or fixtures. Not for the ce:review parent's own run artifact.
                                Exit statuses: 0 valid artifact, 1 validation failure,
                                2 operational failure, 3 legacy artifact with no schema_version
   config [subcommand]          Configuration management
@@ -111,6 +114,7 @@ Examples:
   systematic list skills
   systematic capabilities
   systematic validate-review-artifact .context/systematic/ce-review/review-summary.json
+  systematic validate-review-artifact --allow-outside-artifact-root /tmp/external-artifact.json
   systematic list agents
   systematic config show
   systematic config show --json
@@ -145,9 +149,10 @@ Scope:
 `
 
 const VALIDATE_REVIEW_ARTIFACT_USAGE =
-  'Usage: systematic validate-review-artifact <path>'
+  'Usage: systematic validate-review-artifact <path> [--allow-outside-artifact-root]'
 const REVIEW_ARTIFACT_SCHEMA_RELATIVE_PATH =
   'skills/ce-review/references/review-summary-schema.json'
+const ALLOW_OUTSIDE_ARTIFACT_ROOT_FLAG = '--allow-outside-artifact-root'
 
 interface CapabilityCliRoots {
   readonly agentsRoot: string
@@ -372,13 +377,27 @@ interface ValidateReviewArtifactCliOptions {
   readonly errorSink?: (message: string) => void
 }
 
+interface ValidateReviewArtifactArguments {
+  readonly path: string
+  readonly allowOutsideArtifactRoot: boolean
+}
+
 function validateReviewArtifactArgument(
   argv: readonly string[],
-): string | undefined {
+): ValidateReviewArtifactArguments | undefined {
   const commandIndex = argv[0] === 'systematic' ? 1 : 0
   if (argv[commandIndex] !== 'validate-review-artifact') return undefined
-  if (argv.length !== commandIndex + 2) return undefined
-  return argv[commandIndex + 1]
+  const rest = argv.slice(commandIndex + 1)
+  const flagIndex = rest.indexOf(ALLOW_OUTSIDE_ARTIFACT_ROOT_FLAG)
+  const allowOutsideArtifactRoot = flagIndex !== -1
+  const positional =
+    flagIndex === -1
+      ? rest
+      : [...rest.slice(0, flagIndex), ...rest.slice(flagIndex + 1)]
+  if (positional.length !== 1) return undefined
+  const path = positional[0]
+  if (path === undefined) return undefined
+  return { allowOutsideArtifactRoot, path }
 }
 
 function runValidateReviewArtifact(
@@ -388,15 +407,16 @@ function runValidateReviewArtifact(
     options.outputSink ?? ((message: string) => console.log(message))
   const errorSink =
     options.errorSink ?? ((message: string) => console.error(message))
-  const input = validateReviewArtifactArgument(options.argv)
-  if (input === undefined) {
+  const parsedArgs = validateReviewArtifactArgument(options.argv)
+  if (parsedArgs === undefined) {
     errorSink(VALIDATE_REVIEW_ARTIFACT_USAGE)
     return 2
   }
 
   const resolved = resolveReviewArtifactPath(
-    input,
+    parsedArgs.path,
     options.cwd ?? process.cwd(),
+    { allowOutsideArtifactRoot: parsedArgs.allowOutsideArtifactRoot },
   )
   if (!resolved.ok) {
     errorSink(resolved.message)

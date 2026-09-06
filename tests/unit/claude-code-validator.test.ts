@@ -111,4 +111,46 @@ describe('Claude Code bundled validator entry', () => {
       fs.rmSync(cwd, { recursive: true, force: true })
     }
   })
+
+  it('returns 0 for a valid artifact outside the run directory with the flag', () => {
+    const cwd = makeCwd()
+    const outsideDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'claude-code-validator-external-')),
+    )
+    try {
+      const target = path.join(outsideDir, 'external.json')
+      fs.copyFileSync(CONFORMING_FIXTURE, target)
+
+      const exitCode = runClaudeCodeValidator({
+        argv: [target, '--allow-outside-artifact-root'],
+        cwd: fs.realpathSync(cwd),
+      })
+
+      expect(exitCode).toBe(0)
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+      fs.rmSync(outsideDir, { recursive: true, force: true })
+    }
+  })
+
+  it('still returns 2 for an artifact outside the run directory without the flag', () => {
+    const cwd = makeCwd()
+    const outsideDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'claude-code-validator-external-')),
+    )
+    try {
+      const target = path.join(outsideDir, 'external.json')
+      fs.copyFileSync(CONFORMING_FIXTURE, target)
+
+      const exitCode = runClaudeCodeValidator({
+        argv: [target],
+        cwd: fs.realpathSync(cwd),
+      })
+
+      expect(exitCode).toBe(2)
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+      fs.rmSync(outsideDir, { recursive: true, force: true })
+    }
+  })
 })
