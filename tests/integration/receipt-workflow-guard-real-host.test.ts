@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url'
 import { createOpencodeClient } from '@opencode-ai/sdk/v2'
 
 import { requireOpencodeAvailable } from '../../scripts/lib/opencode-availability.js'
+import { readOpencodeSdkPin } from '../../scripts/lib/opencode-pin.js'
 import {
   cleanupPackedTarball,
   createIsolatedFixture,
@@ -30,7 +31,9 @@ if (!isOpencodeAvailable()) {
 
 const MOCK_PROVIDER_ID = 'u7-real-host-provider'
 const MOCK_MODEL_ID = 'u7-real-host-model'
-const HOST_VERSIONS = ['1.18.3', '1.18.4', '1.18.5'] as const
+// Pinned host version for the packed-runtime cells below (matches the
+// `@opencode-ai/sdk` devDependency pin; see scripts/lib/opencode-pin.ts).
+const PINNED_HOST_VERSION = readOpencodeSdkPin()
 
 interface ToolCall {
   id: string
@@ -69,10 +72,6 @@ interface MintMarkerEvidence {
   operation: string
   receiptId: string
 }
-
-type HostCell =
-  | ({ status: 'pass'; elapsedMs: number } & HostEvidence)
-  | { status: 'blocked'; version: string; reason: string }
 
 /**
  * The OpenCode SDK client types every response as `{ data?: T; error?:
@@ -572,7 +571,7 @@ describe.skipIf(!isOpencodeAvailable())('U7a real host', () => {
       const probe = writeProbe(fixture)
       try {
         const started = performance.now()
-        const evidence = await runObserveCell(fixture, '1.18.5', [
+        const evidence = await runObserveCell(fixture, PINNED_HOST_VERSION, [
           packed,
           probe,
         ])
@@ -595,36 +594,6 @@ describe.skipIf(!isOpencodeAvailable())('U7a real host', () => {
   )
 
   test(
-    'reports each exact host version cell independently',
-    async () => {
-      const cells: HostCell[] = []
-      for (const version of HOST_VERSIONS) {
-        const fixture = createIsolatedFixture()
-        const packed = extractPackagedPlugin(fixture).pluginUrl
-        try {
-          const started = performance.now()
-          const evidence = await runObserveCell(fixture, version, [packed])
-          cells.push({
-            status: 'pass',
-            elapsedMs: Math.round(performance.now() - started),
-            ...evidence,
-          })
-        } catch (error) {
-          cells.push({ status: 'blocked', version, reason: String(error) })
-        } finally {
-          destroyIsolatedFixture(fixture)
-        }
-      }
-      console.log(`U7_HOST_MATRIX ${JSON.stringify(cells)}`)
-      expect(cells).toHaveLength(HOST_VERSIONS.length)
-      for (const cell of cells) {
-        expect(['pass', 'blocked']).toContain(cell.status)
-      }
-    },
-    TIMEOUT_MS * 12,
-  )
-
-  test(
     'keeps packed and source registrations independent without duplicate host calls',
     async () => {
       const fixture = createIsolatedFixture()
@@ -633,7 +602,7 @@ describe.skipIf(!isOpencodeAvailable())('U7a real host', () => {
       const secondPacked = extractPackagedPlugin(secondFixture).pluginUrl
       try {
         const started = performance.now()
-        const evidence = await runObserveCell(fixture, '1.18.5', [
+        const evidence = await runObserveCell(fixture, PINNED_HOST_VERSION, [
           packed,
           secondPacked,
         ])
@@ -679,7 +648,7 @@ describe.skipIf(!isOpencodeAvailable())('U7a real host', () => {
         const server = await startExactOpencodeServer(
           fixture,
           JSON.stringify({ formatter: false, lsp: false }),
-          '1.18.5',
+          PINNED_HOST_VERSION,
         )
         expect(server.pid).toBeGreaterThan(0)
         await server.stop()

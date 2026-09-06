@@ -821,9 +821,8 @@ describe.skipIf(!isOpencodeAvailable() || process.platform === 'win32')(
       destroyIsolatedFixture(fixture)
     })
 
-    // Relies on `opencode/big-pickle`, confirmed public/no-auth by the
-    // isolated-HOME test above. Provider outage is a genuine integration
-    // failure here, not a skip condition.
+    // Runs against `runOpencode`'s scripted local provider (no network,
+    // no hosted-model dependency); see fixtures/receipt-workflow-host.ts.
     test(
       'packaged plugin loads, warns on a removed disabled_skills name, and exposes a compliant catalog',
       async () => {

@@ -17,8 +17,13 @@ export const TIMEOUT_MS = 180_000
 export const EXACT_OPENCODE_VERSION = readOpencodeSdkPin()
 export const MAX_RETRIES = 1
 export const RETRY_DELAY_MS = 3_000
-export const OPENCODE_TEST_MODEL = 'opencode/big-pickle'
 export const REPO_ROOT = path.resolve(import.meta.dirname, '../../..')
+
+// `runOpencode`'s scripted provider: a local OpenAI-compatible server takes
+// the place of the previously hosted free-tier model so the suite's only
+// tool-invocation decision is deterministic and requires no network.
+const SCRIPTED_PROVIDER_ID = 'systematic-host-contract-provider'
+const SCRIPTED_MODEL_ID = 'systematic-host-contract-model'
 
 export interface OpencodeResult {
   stdout: string
@@ -216,6 +221,248 @@ export function buildIsolatedOpencodeEnv(
   })
 }
 
+interface ScriptedToolCall {
+  id: string
+  name: string
+  arguments: Record<string, unknown>
+}
+
+interface ScriptedResponse {
+  text?: string
+  toolCalls?: ScriptedToolCall[]
+}
+
+interface ScriptedModelServer {
+  url: string
+  stop(): void
+}
+
+function sseChunk(value: unknown): string {
+  return `data: ${JSON.stringify(value)}\n\n`
+}
+
+function scriptedResponseChunks(
+  response: ScriptedResponse,
+  requestId: string,
+  created: number,
+): Record<string, unknown>[] {
+  if (response.toolCalls && response.toolCalls.length > 0) {
+    return [
+      ...response.toolCalls.map((toolCall, index) => ({
+        id: requestId,
+        object: 'chat.completion.chunk',
+        created,
+        model: SCRIPTED_MODEL_ID,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index,
+                  id: toolCall.id,
+                  type: 'function',
+                  function: {
+                    name: toolCall.name,
+                    arguments: JSON.stringify(toolCall.arguments),
+                  },
+                },
+              ],
+            },
+            finish_reason: null,
+          },
+        ],
+      })),
+      {
+        id: requestId,
+        object: 'chat.completion.chunk',
+        created,
+        model: SCRIPTED_MODEL_ID,
+        choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }],
+      },
+    ]
+  }
+  const text = response.text ?? ''
+  return [
+    {
+      id: requestId,
+      object: 'chat.completion.chunk',
+      created,
+      model: SCRIPTED_MODEL_ID,
+      choices: [
+        {
+          index: 0,
+          delta: text ? { role: 'assistant' } : {},
+          finish_reason: null,
+        },
+      ],
+    },
+    ...(text
+      ? [
+          {
+            id: requestId,
+            object: 'chat.completion.chunk',
+            created,
+            model: SCRIPTED_MODEL_ID,
+            choices: [
+              { index: 0, delta: { content: text }, finish_reason: null },
+            ],
+          },
+        ]
+      : []),
+    {
+      id: requestId,
+      object: 'chat.completion.chunk',
+      created,
+      model: SCRIPTED_MODEL_ID,
+      choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+    },
+  ]
+}
+
+interface ChatCompletionRequestBody {
+  tools?: unknown[]
+  messages?: unknown[]
+}
+
+function isChatCompletionRequestBody(
+  value: unknown,
+): value is ChatCompletionRequestBody {
+  return typeof value === 'object' && value !== null
+}
+
+function requestCarriesToolResult(messages: unknown[] | undefined): boolean {
+  if (!Array.isArray(messages)) return false
+  return messages.some(
+    (message) =>
+      typeof message === 'object' &&
+      message !== null &&
+      (message as { role?: unknown }).role === 'tool',
+  )
+}
+
+/**
+ * Starts a local OpenAI-compatible scripted model server for one
+ * `runOpencode` invocation. OpenCode's `run` CLI issues two kinds of
+ * requests against the configured model: the real chat turn (always carries
+ * a non-empty `tools` array) and, once per session, a background title-
+ * generation turn forked from `SessionPrompt.ensureTitle` with `tools: {}`
+ * (opencode's `session/prompt.ts`). That title turn is forked concurrently
+ * with the main loop, so its arrival relative to the main call is not
+ * ordered; dispatch is therefore based on the request body shape (tool
+ * presence, then tool-result presence), never on call order.
+ */
+function startScriptedSkillModelServer(
+  skillName: string,
+  completionText: string,
+): ScriptedModelServer {
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      if (
+        request.method !== 'POST' ||
+        !request.url.endsWith('/chat/completions')
+      ) {
+        return new Response('not found', { status: 404 })
+      }
+      const rawBody: unknown = await request.json()
+      const body = isChatCompletionRequestBody(rawBody) ? rawBody : {}
+      const hasTools = Array.isArray(body.tools) && body.tools.length > 0
+
+      const response: ScriptedResponse = !hasTools
+        ? { text: 'Systematic host contract title probe' }
+        : requestCarriesToolResult(body.messages)
+          ? { text: completionText }
+          : {
+              toolCalls: [
+                {
+                  id: 'host-contract-skill-call',
+                  name: 'systematic_skill',
+                  arguments: { name: skillName },
+                },
+              ],
+            }
+
+      const chunks = scriptedResponseChunks(
+        response,
+        'host-contract-response',
+        Math.floor(Date.now() / 1000),
+      )
+      const stream = new ReadableStream({
+        start(controller) {
+          const encoder = new TextEncoder()
+          for (const chunk of chunks)
+            controller.enqueue(encoder.encode(sseChunk(chunk)))
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+          controller.close()
+        },
+      })
+      return new Response(stream, {
+        headers: { 'Content-Type': 'text/event-stream' },
+      })
+    },
+  })
+  return {
+    url: `http://localhost:${server.port}/v1`,
+    stop: () => server.stop(true),
+  }
+}
+
+const LOAD_SKILL_PROMPT_PATTERN =
+  /^Use the systematic_skill tool to load (\S+)$/
+
+/**
+ * Every `runOpencode` call site prompts with the fixed shape "Use the
+ * systematic_skill tool to load <name>"; extracting the name here lets the
+ * scripted model script the exact tool call each call site's assertions
+ * expect, without each call site building its own model script.
+ */
+function extractSkillNameFromPrompt(prompt: string): string {
+  const match = LOAD_SKILL_PROMPT_PATTERN.exec(prompt)
+  const skillName = match?.[1]
+  if (!skillName) {
+    throw new Error(
+      `runOpencode's scripted provider could not extract a skill name from prompt: ${prompt}`,
+    )
+  }
+  return skillName
+}
+
+function withScriptedProvider(configContent: string, baseUrl: string): string {
+  const parsed = JSON.parse(configContent) as Record<string, unknown>
+  const existingProvider =
+    typeof parsed.provider === 'object' && parsed.provider !== null
+      ? (parsed.provider as Record<string, unknown>)
+      : {}
+  return JSON.stringify({
+    ...parsed,
+    provider: {
+      ...existingProvider,
+      [SCRIPTED_PROVIDER_ID]: {
+        name: 'Systematic Host Contract Provider',
+        id: SCRIPTED_PROVIDER_ID,
+        env: [],
+        npm: '@ai-sdk/openai-compatible',
+        models: {
+          [SCRIPTED_MODEL_ID]: {
+            id: SCRIPTED_MODEL_ID,
+            name: 'Systematic Host Contract Model',
+            attachment: false,
+            reasoning: false,
+            temperature: false,
+            tool_call: true,
+            release_date: '2026-09-04',
+            limit: { context: 100_000, output: 10_000 },
+            cost: { input: 0, output: 0 },
+            options: {},
+          },
+        },
+        options: { apiKey: 'unused-host-contract-key', baseURL: baseUrl },
+      },
+    },
+  })
+}
+
 export interface RunOpencodeOptions {
   fixture: IsolatedFixture
   configContent: string
@@ -227,52 +474,67 @@ export async function runOpencode(
   options: RunOpencodeOptions,
 ): Promise<OpencodeResult> {
   const { fixture, configContent, extraEnv } = options
-  const childEnv = buildIsolatedOpencodeEnv(fixture, configContent, extraEnv)
-  let lastResult: OpencodeResult = { stdout: '', stderr: '', exitCode: -1 }
+  const skillName = extractSkillNameFromPrompt(prompt)
+  const model = startScriptedSkillModelServer(
+    skillName,
+    `Loaded skill ${skillName}. Reviewing repository state now.`,
+  )
 
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    const result = Bun.spawnSync(
-      [
-        'bunx',
-        `opencode-ai@${EXACT_OPENCODE_VERSION}`,
-        'run',
-        '--model',
-        OPENCODE_TEST_MODEL,
-        prompt,
-      ],
-      {
-        cwd: fixture.projectDir,
-        env: childEnv,
-        timeout: TIMEOUT_MS,
-      },
+  try {
+    const scriptedConfigContent = withScriptedProvider(configContent, model.url)
+    const childEnv = buildIsolatedOpencodeEnv(
+      fixture,
+      scriptedConfigContent,
+      extraEnv,
     )
+    let lastResult: OpencodeResult = { stdout: '', stderr: '', exitCode: -1 }
 
-    lastResult = {
-      stdout: result.stdout.toString(),
-      stderr: result.stderr.toString(),
-      exitCode: result.exitCode ?? -1,
-    }
-
-    const isTimeout =
-      lastResult.exitCode === -1 || lastResult.stderr.includes('ETIMEDOUT')
-    const isRateLimit =
-      lastResult.stderr.includes('rate limit') ||
-      lastResult.stderr.includes('429')
-
-    if (!isTimeout && !isRateLimit && lastResult.exitCode === 0) {
-      return lastResult
-    }
-
-    if (attempt < MAX_RETRIES) {
-      const delay = RETRY_DELAY_MS * attempt
-      console.log(
-        `Attempt ${attempt}/${MAX_RETRIES} failed, retrying in ${delay}ms...`,
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      const result = Bun.spawnSync(
+        [
+          'bunx',
+          `opencode-ai@${EXACT_OPENCODE_VERSION}`,
+          'run',
+          '--model',
+          `${SCRIPTED_PROVIDER_ID}/${SCRIPTED_MODEL_ID}`,
+          prompt,
+        ],
+        {
+          cwd: fixture.projectDir,
+          env: childEnv,
+          timeout: TIMEOUT_MS,
+        },
       )
-      await Bun.sleep(delay)
-    }
-  }
 
-  return lastResult
+      lastResult = {
+        stdout: result.stdout.toString(),
+        stderr: result.stderr.toString(),
+        exitCode: result.exitCode ?? -1,
+      }
+
+      const isTimeout =
+        lastResult.exitCode === -1 || lastResult.stderr.includes('ETIMEDOUT')
+      const isRateLimit =
+        lastResult.stderr.includes('rate limit') ||
+        lastResult.stderr.includes('429')
+
+      if (!isTimeout && !isRateLimit && lastResult.exitCode === 0) {
+        return lastResult
+      }
+
+      if (attempt < MAX_RETRIES) {
+        const delay = RETRY_DELAY_MS * attempt
+        console.log(
+          `Attempt ${attempt}/${MAX_RETRIES} failed, retrying in ${delay}ms...`,
+        )
+        await Bun.sleep(delay)
+      }
+    }
+
+    return lastResult
+  } finally {
+    model.stop()
+  }
 }
 
 export function assertOk(result: OpencodeResult): void {
