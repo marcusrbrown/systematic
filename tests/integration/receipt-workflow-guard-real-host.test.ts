@@ -58,6 +58,25 @@ interface MintMarkerEvidence {
   receiptId: string
 }
 
+type HostCell =
+  | ({ status: 'pass'; elapsedMs: number } & HostEvidence)
+  | { status: 'blocked'; version: string; reason: string }
+
+/**
+ * The OpenCode SDK client types every response as `{ data?: T; error?:
+ * unknown }` to model transport failures. These tests always run against a
+ * live host and expect success; this asserts that at the call site instead
+ * of accessing `.data` with `?.`/`!` at every downstream read.
+ */
+function unwrapData<T>(result: { data?: T; error?: unknown }): T {
+  if (result.data === undefined) {
+    throw new Error(
+      `opencode client call failed: ${JSON.stringify(result.error)}`,
+    )
+  }
+  return result.data
+}
+
 function sseChunk(value: unknown): string {
   return `data: ${JSON.stringify(value)}\n\n`
 }
@@ -229,7 +248,7 @@ async function createSession(
     title: 'U7 real host',
     permission: [{ permission: '*', pattern: '*', action: 'allow' }],
   })
-  return session.data.id
+  return unwrapData(session).id
 }
 
 async function promptSession(
@@ -483,12 +502,12 @@ async function runObserveCell(
       fixture.projectDir,
       'Run the guarded workflow and ship the local change.',
     )
-    const messages = (
+    const messages = unwrapData(
       await client.session.messages({
         sessionID,
         directory: fixture.projectDir,
-      })
-    ).data
+      }),
+    )
     const markers = markerKinds(messages)
     console.log(
       `U7_CELL_EVIDENCE ${JSON.stringify({
@@ -566,7 +585,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)('U7a real host', () => {
   test(
     'reports each exact host version cell independently',
     async () => {
-      const cells: Array<Record<string, unknown>> = []
+      const cells: HostCell[] = []
       for (const version of HOST_VERSIONS) {
         const fixture = createIsolatedFixture()
         const packed = extractPackagedPlugin(fixture).pluginUrl

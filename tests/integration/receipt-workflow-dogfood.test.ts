@@ -28,6 +28,21 @@ type ToolCall = {
 }
 type ModelResponse = { text?: string; toolCalls?: ToolCall[] }
 
+/**
+ * The OpenCode SDK client types every response as `{ data?: T; error?:
+ * unknown }` to model transport failures. These tests always run against a
+ * live host and expect success; this asserts that at the call site instead
+ * of accessing `.data` with `?.`/`!` at every downstream read.
+ */
+function unwrapData<T>(result: { data?: T; error?: unknown }): T {
+  if (result.data === undefined) {
+    throw new Error(
+      `opencode client call failed: ${JSON.stringify(result.error)}`,
+    )
+  }
+  return result.data
+}
+
 function sse(value: unknown): string {
   return `data: ${JSON.stringify(value)}\n\n`
 }
@@ -381,11 +396,23 @@ function callsFor(name: string, index: number): ToolCall[] {
   ]
 }
 
+interface ScenarioResult {
+  mode: Mode
+  scenario: string
+  workflow: Record<string, unknown>
+  markerKinds: string[]
+  results: Array<Record<string, unknown>>
+  pid: number
+  upstreamBefore?: string
+  upstreamAfter?: string
+  localHead?: string
+}
+
 async function runScenario(
   mode: Mode,
   name: string,
   index: number,
-): Promise<Record<string, unknown>> {
+): Promise<ScenarioResult> {
   const fixture = createIsolatedFixture()
   const file = `dogfood-${index}.txt`
   const remoteDir =
@@ -431,20 +458,19 @@ async function runScenario(
       title: `focused-${name}`,
       permission: [{ permission: '*', pattern: '*', action: 'allow' }],
     })
-    if (!session.data)
-      throw new Error(`session-create ${JSON.stringify(session)}`)
+    const sessionData = unwrapData(session)
     await client.session.prompt({
-      sessionID: session.data.id,
+      sessionID: sessionData.id,
       directory: fixture.projectDir,
       model: { providerID: PROVIDER, modelID: MODEL },
       parts: [{ type: 'text', text: `Run focused ${name}.` }],
     })
-    const messages = (
+    const messages = unwrapData(
       await client.session.messages({
-        sessionID: session.data.id,
+        sessionID: sessionData.id,
         directory: fixture.projectDir,
-      })
-    ).data
+      }),
+    )
     const upstreamAfter =
       name === 'push'
         ? gitOutput(fixture.projectDir, [
@@ -533,10 +559,10 @@ describe.skipIf(!OPENCODE_AVAILABLE)('focused real-host dogfood', () => {
       // The push unit ends at push — pr-creation/check/review require real GitHub.
       // The guard status after push is 'waiting'/'missing-evidence' (pending remote ops).
       // Verify via the systematic_workflow_status result directly.
-      const pushStatusResult = push?.results?.find(
-        (r: Record<string, unknown>) =>
+      const pushStatusResult = push?.results.find(
+        (r) =>
           r.callID === 'push-status' && r.tool === 'systematic_workflow_status',
-      ) as Record<string, unknown> | undefined
+      )
       expect(pushStatusResult).toBeDefined()
       expect(pushStatusResult?.state).toBe('waiting')
       expect(pushStatusResult?.reasonCode).toBe('missing-evidence')
