@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -15,10 +15,19 @@ import {
 } from '../../src/lib/pi-delegate-session.js'
 import { DELEGATE_TOOL_NAME } from '../../src/lib/pi-delegate-tool.js'
 
+const tempDirs: string[] = []
+
+afterAll(() => {
+  for (const dir of tempDirs) {
+    fs.rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 function makeTempAgentsDir(files: Record<string, string>): string {
   const dir = fs.mkdtempSync(
     path.join(os.tmpdir(), 'pi-delegate-session-recursion-test-'),
   )
+  tempDirs.push(dir)
   for (const [relPath, content] of Object.entries(files)) {
     const full = path.join(dir, relPath)
     fs.mkdirSync(path.dirname(full), { recursive: true })
