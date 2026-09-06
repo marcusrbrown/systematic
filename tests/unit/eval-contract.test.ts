@@ -8,10 +8,15 @@ import {
   CASE_IDS,
   CASE_SCHEMA_VERSION,
   type EvalMode,
+  type EvalResult,
+  type HostCatalogCoverageObservation,
+  type InstalledProvenance,
   normalizeResult,
   OUTCOMES,
+  type PromptCompositionObservation,
   parseCaseManifest,
   RESULT_SCHEMA_VERSION,
+  type SourceProvenance,
   serializeResult,
 } from '../../scripts/run-evals.ts'
 import { buildBundledAgentInventory } from '../../src/lib/agent-overlays.js'
@@ -26,7 +31,7 @@ function readManifest(fileName: string): unknown {
   ) as unknown
 }
 
-function sourceProvenance(): Record<string, unknown> {
+function sourceProvenance(): SourceProvenance {
   return {
     kind: 'source',
     checkoutRelativeSource: 'src/index.ts',
@@ -37,7 +42,7 @@ function sourceProvenance(): Record<string, unknown> {
   }
 }
 
-function installedProvenance(): Record<string, unknown> {
+function installedProvenance(): InstalledProvenance {
   return {
     kind: 'installed',
     packageName: '@fro.bot/systematic',
@@ -49,7 +54,7 @@ function installedProvenance(): Record<string, unknown> {
   }
 }
 
-function validResult(mode: EvalMode = 'source'): Record<string, unknown> {
+function validResult(mode: EvalMode = 'source'): EvalResult {
   const fixtureAssertions = ['fixture-file-content', 'fixture-file-created']
   return {
     resultSchemaVersion: RESULT_SCHEMA_VERSION,
@@ -92,9 +97,7 @@ function validResult(mode: EvalMode = 'source'): Record<string, unknown> {
   }
 }
 
-function validModelInheritanceResult(
-  mode: EvalMode = 'source',
-): Record<string, unknown> {
+function validModelInheritanceResult(mode: EvalMode = 'source'): EvalResult {
   const assertionIds = [
     'agents-inherit-invoking-model',
     'explicit-model-overlay-wins',
@@ -106,7 +109,7 @@ function validModelInheritanceResult(
     caseId: 'model-inheritance',
     assertionIds,
     identity: {
-      ...(validResult(mode).identity as Record<string, unknown>),
+      ...validResult(mode).identity,
       artifactId: mode === 'source' ? 'source-entry' : 'installed-entry',
     },
     evidence: {
@@ -370,7 +373,7 @@ describe('local OpenCode eval contracts', () => {
       }),
     ).toThrow()
 
-    const incomplete = sourceProvenance()
+    const incomplete: Record<string, unknown> = { ...sourceProvenance() }
     delete incomplete.canonicalSourceEntryId
     expect(() =>
       normalizeResult({ ...validResult('source'), provenance: incomplete }),
@@ -405,7 +408,7 @@ describe('local OpenCode eval contracts', () => {
         entryCount: 0,
         skillNames: [],
       },
-    }
+    } satisfies PromptCompositionObservation
     const candidate = {
       ...validResult(),
       evidence: {
@@ -591,7 +594,7 @@ describe('local OpenCode eval contracts', () => {
       expectedSkillNames: ['agent-browser', 'ce:brainstorm'],
       observedSkillNames: ['agent-browser', 'ce:brainstorm', 'extra-skill'],
       missingSkillNames: [],
-    }
+    } satisfies HostCatalogCoverageObservation
     const candidate = {
       ...validResult(),
       evidence: {
@@ -626,7 +629,7 @@ describe('local OpenCode eval contracts', () => {
       expectedSkillNames: ['agent-browser', 'ce:brainstorm'],
       observedSkillNames: [],
       missingSkillNames: [],
-    }
+    } satisfies HostCatalogCoverageObservation
     expect(
       normalizeResult({
         ...validResult(),
