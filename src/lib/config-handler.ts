@@ -374,6 +374,12 @@ export type AgentPermissionRuleMap = Record<string, PermissionSetting>
  * `applyPermissionOverlay`/`addManagedSkillRules` genuinely write a `skill`
  * rule map identical in shape to `bash`. This type documents and reads that
  * real runtime shape without migrating the module to the v2 type surface.
+ *
+ * `permissionFromRules` emits a rule map for whatever tool key gets passed to
+ * `setPermissionRule` — not just the named keys below (e.g. `task`, per
+ * `PermissionConfig` in validation.ts and the `task` overlay field applied at
+ * config-handler.ts's overlay pass). The named keys stay for documentation of
+ * the common cases; the index signature covers every other emitted tool key.
  */
 export interface EmittedAgentPermission {
   edit?: AgentPermissionRuleMap
@@ -382,6 +388,7 @@ export interface EmittedAgentPermission {
   doom_loop?: AgentPermissionRuleMap
   external_directory?: AgentPermissionRuleMap
   skill?: AgentPermissionRuleMap
+  readonly [tool: string]: AgentPermissionRuleMap | undefined
 }
 
 /**

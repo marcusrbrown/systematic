@@ -30,7 +30,7 @@ bun install              # Install deps
 bun run build            # Build to dist/
 bun run typecheck        # Type check (strict)
 bun run typecheck:scripts  # Type check scripts + docs scripts too (required in CI)
-bun run typecheck:all    # Type check tests + scripts too (advisory in CI until #897 burn-down lands)
+bun run typecheck:all    # Type check tests + scripts too (required CI gate: tests + scripts + docs scripts)
 bun run lint             # Biome linter
 bun test tests/unit      # Unit tests
 bun test tests/integration  # Integration tests

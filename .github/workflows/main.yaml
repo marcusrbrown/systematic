@@ -118,12 +118,11 @@ jobs:
       - name: Typecheck scripts and docs scripts
         run: bun run typecheck:scripts
 
-      # Advisory until #897's burn-down lands: tests/ carries a real error
-      # backlog (see PR #914), so this stays continue-on-error until that
-      # backlog is cleared, then becomes a required step in its own right.
-      - name: Typecheck tests and scripts (advisory)
+      # Required: #897's burn-down cleared the tests/ error backlog (see PR
+      # #914, PR #926), so this is a required gate keeping tests + scripts
+      # type-clean going forward.
+      - name: Typecheck tests and scripts
         run: bun run typecheck:all
-        continue-on-error: true
 
   lint:
     name: Lint

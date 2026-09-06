@@ -62,10 +62,15 @@ interface ParsedSystematicConfig {
 /**
  * Narrow a successful `SystematicConfigSchema.safeParse`/`validateConfig`
  * result's `data` to {@link ParsedSystematicConfig}. See that type's doc for
- * why the assertion is necessary.
+ * why the assertion is necessary. The parameter stays typed as the schema's
+ * own (loose) inferred output — not `unknown` — so this compiles only if
+ * `ValidationResult`/`safeParse`'s result stays a discriminated union on
+ * `success`; the `as` cast is confined to this one boundary.
  */
-function narrowParsedConfig(data: unknown): ParsedSystematicConfig {
-  return data as ParsedSystematicConfig
+function narrowParsedConfig(
+  data: z.infer<typeof SystematicConfigSchema>,
+): ParsedSystematicConfig {
+  return data as unknown as ParsedSystematicConfig
 }
 
 const EXPECTED_COLOR_TOKENS = [
