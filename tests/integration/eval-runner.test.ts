@@ -21,6 +21,7 @@ import {
   createEvalFixture,
   type EvalFixture,
   type EvalSelectionRunnerInput,
+  type EvalSubcode,
   EXPECTED_OPENCODE_VERSION,
   installEvalSignalHandlers,
   normalizeResult,
@@ -93,8 +94,17 @@ const SYNTHETIC_CASE_ASSERTIONS = {
   ],
 } as const satisfies Record<CaseId, readonly string[]>
 
+function requireSyntheticCaseId(
+  caseId: CaseId,
+): Exclude<CaseId, 'model-inheritance'> {
+  if (caseId === 'model-inheritance') {
+    throw new Error('syntheticResult cannot build a model-inheritance result')
+  }
+  return caseId
+}
+
 function syntheticResult(options: {
-  caseId: CaseId
+  caseId: Exclude<CaseId, 'model-inheritance'>
   mode: 'source' | 'installed'
   runId: string
   outcome: 'success' | 'task_failure' | 'infra_failure'
@@ -253,7 +263,7 @@ function normalizeRunIdentity<T>(value: T, runIds: readonly string[]): T {
   return value
 }
 
-function requireSubcode(subcode: string | undefined): string {
+function requireSubcode(subcode: EvalSubcode | undefined): EvalSubcode {
   if (subcode === undefined) {
     throw new Error('expected result.subcode to be defined')
   }
@@ -1481,7 +1491,7 @@ describe('local OpenCode eval runner', () => {
         sourceRunner: async (options) => {
           calls.push(`${options.caseId}/${options.mode}`)
           return syntheticResult({
-            caseId: options.caseId,
+            caseId: requireSyntheticCaseId(options.caseId),
             mode: 'source',
             runId: options.runId ?? 'run-missing',
             outcome: 'success',
@@ -1491,7 +1501,7 @@ describe('local OpenCode eval runner', () => {
         installedRunner: async (options) => {
           calls.push(`${options.caseId}/${options.mode}`)
           return syntheticResult({
-            caseId: options.caseId,
+            caseId: requireSyntheticCaseId(options.caseId),
             mode: 'installed',
             runId: options.runId ?? 'run-missing',
             outcome:
@@ -1532,7 +1542,7 @@ describe('local OpenCode eval runner', () => {
         sourceRunner: async (options) => {
           abortedCalls.push(options.caseId)
           return syntheticResult({
-            caseId: options.caseId,
+            caseId: requireSyntheticCaseId(options.caseId),
             mode: 'source',
             runId: options.runId ?? 'run-missing',
             outcome: 'infra_failure',
@@ -1570,7 +1580,7 @@ describe('local OpenCode eval runner', () => {
         sourceRunner: async (options) => {
           calls.push(`${options.caseId}/${options.mode}`)
           return syntheticResult({
-            caseId: options.caseId,
+            caseId: requireSyntheticCaseId(options.caseId),
             mode: 'source',
             runId: options.runId ?? 'run-missing',
             outcome: 'success',
@@ -1580,7 +1590,7 @@ describe('local OpenCode eval runner', () => {
         installedRunner: async (options) => {
           calls.push(`${options.caseId}/${options.mode}`)
           return syntheticResult({
-            caseId: options.caseId,
+            caseId: requireSyntheticCaseId(options.caseId),
             mode: 'installed',
             runId: options.runId ?? 'run-missing',
             outcome: 'success',
@@ -1625,7 +1635,7 @@ describe('local OpenCode eval runner', () => {
         },
         sourceRunner: async (input) =>
           syntheticResult({
-            caseId: input.caseId,
+            caseId: requireSyntheticCaseId(input.caseId),
             mode: 'source',
             runId: input.runId ?? 'run-missing',
             outcome: 'success',
@@ -1697,7 +1707,7 @@ describe('local OpenCode eval runner', () => {
       sourceRunner: async (input: EvalSelectionRunnerInput) => {
         cleanupCalls.push(`${input.caseId}/${input.mode}`)
         return syntheticResult({
-          caseId: input.caseId,
+          caseId: requireSyntheticCaseId(input.caseId),
           mode: 'source',
           runId: input.runId ?? 'run-missing',
           outcome: 'success',
@@ -1707,7 +1717,7 @@ describe('local OpenCode eval runner', () => {
       installedRunner: async (input: EvalSelectionRunnerInput) => {
         cleanupCalls.push(`${input.caseId}/${input.mode}`)
         return syntheticResult({
-          caseId: input.caseId,
+          caseId: requireSyntheticCaseId(input.caseId),
           mode: 'installed',
           runId: input.runId ?? 'run-missing',
           outcome: 'success',
@@ -1766,7 +1776,7 @@ describe('local OpenCode eval runner', () => {
       },
       sourceRunner: async (input: EvalSelectionRunnerInput) =>
         syntheticResult({
-          caseId: input.caseId,
+          caseId: requireSyntheticCaseId(input.caseId),
           mode: 'source',
           runId: input.runId ?? 'run-missing',
           outcome: 'success',
@@ -1774,7 +1784,7 @@ describe('local OpenCode eval runner', () => {
         }),
       installedRunner: async (input: EvalSelectionRunnerInput) =>
         syntheticResult({
-          caseId: input.caseId,
+          caseId: requireSyntheticCaseId(input.caseId),
           mode: 'installed',
           runId: input.runId ?? 'run-missing',
           outcome: 'success',
@@ -1852,7 +1862,7 @@ describe('local OpenCode eval runner', () => {
       sourceRunner: async (input: EvalSelectionRunnerInput) => {
         calls.push(`${input.caseId}/${input.mode}`)
         return syntheticResult({
-          caseId: input.caseId,
+          caseId: requireSyntheticCaseId(input.caseId),
           mode: 'source',
           runId: input.runId ?? 'run-missing',
           outcome: 'success',
@@ -1862,7 +1872,7 @@ describe('local OpenCode eval runner', () => {
       installedRunner: async (input: EvalSelectionRunnerInput) => {
         calls.push(`${input.caseId}/${input.mode}`)
         return syntheticResult({
-          caseId: input.caseId,
+          caseId: requireSyntheticCaseId(input.caseId),
           mode: 'installed',
           runId: input.runId ?? 'run-missing',
           outcome: 'success',
@@ -1974,7 +1984,7 @@ describe('local OpenCode eval runner', () => {
       }),
       sourceRunner: async (input: EvalSelectionRunnerInput) =>
         syntheticResult({
-          caseId: input.caseId,
+          caseId: requireSyntheticCaseId(input.caseId),
           mode: 'source',
           runId: input.runId ?? 'run-missing',
           outcome: 'success',
@@ -1982,7 +1992,7 @@ describe('local OpenCode eval runner', () => {
         }),
       installedRunner: async (input: EvalSelectionRunnerInput) =>
         syntheticResult({
-          caseId: input.caseId,
+          caseId: requireSyntheticCaseId(input.caseId),
           mode: 'installed',
           runId: input.runId ?? 'run-missing',
           outcome: 'success',
@@ -2043,7 +2053,7 @@ describe('local OpenCode eval runner', () => {
           runsRoot: path.join(parentDir, 'runs'),
           sourceRunner: async (options) =>
             syntheticResult({
-              caseId: options.caseId,
+              caseId: requireSyntheticCaseId(options.caseId),
               mode: 'source',
               runId: options.runId ?? 'run-missing',
               outcome: 'task_failure',
