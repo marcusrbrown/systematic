@@ -8,6 +8,7 @@ import { readOpencodeSdkPin } from '../../../scripts/lib/opencode-pin.js'
 import { stopProcessGroup } from '../../../scripts/lib/process-group.js'
 
 export const TIMEOUT_MS = 180_000
+// `string`, read from package.json at import time; throws if the pin is missing or not exact.
 export const EXACT_OPENCODE_VERSION = readOpencodeSdkPin()
 let exactNpmCacheDir: string | undefined
 export const MAX_RETRIES = 1

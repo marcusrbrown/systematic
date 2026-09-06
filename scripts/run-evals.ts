@@ -1888,6 +1888,7 @@ export function serializeRunManifest(input: unknown): string {
   return serialized
 }
 
+// `string`, read from package.json at import time; throws if the pin is missing or not exact.
 export const EXPECTED_OPENCODE_VERSION = readOpencodeSdkPin()
 
 const REPO_ROOT = path.resolve(import.meta.dirname, '..')

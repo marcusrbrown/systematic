@@ -289,8 +289,6 @@ describe('local OpenCode eval contracts', () => {
         `OpenCode devDependency versions disagree: @opencode-ai/sdk is ${sdkVersion}, but @opencode-ai/plugin is ${pluginVersion}. Align both dependencies before re-running the host-coverage eval.`,
       )
     }
-
-    expect(sdkVersion).toBe(pluginVersion)
   })
 
   test('rejects unknown, missing, unsupported, and wrong-version manifest fields', () => {

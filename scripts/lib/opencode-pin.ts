@@ -27,14 +27,16 @@ interface PackageJsonShape {
   devDependencies?: Record<string, unknown>
 }
 
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
 function readPackageJson(packageJsonPath: string): PackageJsonShape {
   let raw: string
   try {
     raw = fs.readFileSync(packageJsonPath, 'utf8')
   } catch (err) {
-    throw new Error(
-      `Failed to read ${packageJsonPath}: ${(err as Error).message}`,
-    )
+    throw new Error(`Failed to read ${packageJsonPath}: ${errorMessage(err)}`)
   }
 
   let parsed: unknown
@@ -42,7 +44,7 @@ function readPackageJson(packageJsonPath: string): PackageJsonShape {
     parsed = JSON.parse(raw)
   } catch (err) {
     throw new Error(
-      `Failed to parse ${packageJsonPath} as JSON: ${(err as Error).message}`,
+      `Failed to parse ${packageJsonPath} as JSON: ${errorMessage(err)}`,
     )
   }
 
@@ -56,11 +58,18 @@ function readPackageJson(packageJsonPath: string): PackageJsonShape {
 /** Matches an exact semver version with no range specifier. */
 const EXACT_SEMVER_PATTERN = /^\d+\.\d+\.\d+(?:[-+].+)?$/
 
-function readExactDevDependency(
+/**
+ * Extracts and validates one exact-pinned devDependency field from an
+ * already-parsed `package.json` object. Kept separate from `readPackageJson`
+ * so a caller that needs multiple fields (`readOpencodeDevDependencyPins`)
+ * reads and parses the file once and extracts each field from that same
+ * parsed object, rather than re-reading the file per field.
+ */
+function extractExactDevDependency(
+  pkg: PackageJsonShape,
   fieldName: string,
   packageJsonPath: string,
 ): string {
-  const pkg = readPackageJson(packageJsonPath)
   const devDeps = pkg.devDependencies
   if (
     typeof devDeps !== 'object' ||
@@ -86,6 +95,17 @@ function readExactDevDependency(
   }
 
   return raw
+}
+
+function readExactDevDependency(
+  fieldName: string,
+  packageJsonPath: string,
+): string {
+  return extractExactDevDependency(
+    readPackageJson(packageJsonPath),
+    fieldName,
+    packageJsonPath,
+  )
 }
 
 /**
@@ -118,8 +138,9 @@ export function readOpencodeDevDependencyPins(packageJsonPath?: string): {
   plugin: string
 } {
   const resolvedPath = packageJsonPath ?? DEFAULT_PACKAGE_JSON_PATH
+  const pkg = readPackageJson(resolvedPath)
   return {
-    sdk: readExactDevDependency('@opencode-ai/sdk', resolvedPath),
-    plugin: readExactDevDependency('@opencode-ai/plugin', resolvedPath),
+    sdk: extractExactDevDependency(pkg, '@opencode-ai/sdk', resolvedPath),
+    plugin: extractExactDevDependency(pkg, '@opencode-ai/plugin', resolvedPath),
   }
 }

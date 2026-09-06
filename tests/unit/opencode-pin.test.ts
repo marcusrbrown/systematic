@@ -24,19 +24,50 @@ function makeTempDir(): string {
   return tmp
 }
 
-function writePackageJson(
+function writePackageJson(dir: string, contents: unknown): string {
+  const full = path.join(dir, 'package.json')
+  fs.writeFileSync(full, JSON.stringify(contents), 'utf-8')
+  return full
+}
+
+function writeDevDependencies(
   dir: string,
   devDependencies: Record<string, unknown>,
 ): string {
-  const full = path.join(dir, 'package.json')
-  fs.writeFileSync(full, JSON.stringify({ devDependencies }), 'utf-8')
-  return full
+  return writePackageJson(dir, { devDependencies })
 }
 
 afterAll(() => {
   for (const root of TEMP_ROOTS) {
     fs.rmSync(root, { recursive: true, force: true })
   }
+})
+
+describe('readPackageJson error branches (via readOpencodeSdkPin)', () => {
+  test('throws when the package.json file does not exist', () => {
+    const dir = makeTempDir()
+    const missingPath = path.join(dir, 'package.json')
+
+    expect(() => readOpencodeSdkPin(missingPath)).toThrow(/Failed to read/)
+  })
+
+  test('throws when the package.json file is not valid JSON', () => {
+    const dir = makeTempDir()
+    const pkgPath = path.join(dir, 'package.json')
+    fs.writeFileSync(pkgPath, '{ not valid json', 'utf-8')
+
+    expect(() => readOpencodeSdkPin(pkgPath)).toThrow(/Failed to parse/)
+  })
+
+  test('throws when the parsed package.json is not a JSON object (an array)', () => {
+    const dir = makeTempDir()
+    const pkgPath = path.join(dir, 'package.json')
+    fs.writeFileSync(pkgPath, '[]', 'utf-8')
+
+    expect(() => readOpencodeSdkPin(pkgPath)).toThrow(
+      /does not contain a JSON object/,
+    )
+  })
 })
 
 describe('readOpencodeSdkPin', () => {
@@ -53,30 +84,50 @@ describe('readOpencodeSdkPin', () => {
     expect(readOpencodeSdkPin()).toBe(expected)
   })
 
-  test('throws naming the field when the sdk entry is a range', () => {
+  test('throws when devDependencies is missing entirely', () => {
     const dir = makeTempDir()
-    const pkgPath = writePackageJson(dir, {
+    const pkgPath = writePackageJson(dir, {})
+
+    expect(() => readOpencodeSdkPin(pkgPath)).toThrow(
+      /is missing a devDependencies object/,
+    )
+  })
+
+  test('throws when devDependencies is not an object', () => {
+    const dir = makeTempDir()
+    const pkgPath = writePackageJson(dir, { devDependencies: [] })
+
+    expect(() => readOpencodeSdkPin(pkgPath)).toThrow(
+      /is missing a devDependencies object/,
+    )
+  })
+
+  test('throws "not listed in" when the sdk entry is missing', () => {
+    const dir = makeTempDir()
+    const pkgPath = writeDevDependencies(dir, {
+      '@opencode-ai/plugin': '9.9.0',
+    })
+
+    expect(() => readOpencodeSdkPin(pkgPath)).toThrow(/not listed in/)
+  })
+
+  test('throws "must be an exact version" when the sdk entry is a range', () => {
+    const dir = makeTempDir()
+    const pkgPath = writeDevDependencies(dir, {
       '@opencode-ai/sdk': '^9.9.0',
       '@opencode-ai/plugin': '9.9.0',
     })
 
-    expect(() => readOpencodeSdkPin(pkgPath)).toThrow(/@opencode-ai\/sdk/)
-  })
-
-  test('throws naming the field when the sdk entry is missing', () => {
-    const dir = makeTempDir()
-    const pkgPath = writePackageJson(dir, {
-      '@opencode-ai/plugin': '9.9.0',
-    })
-
-    expect(() => readOpencodeSdkPin(pkgPath)).toThrow(/@opencode-ai\/sdk/)
+    expect(() => readOpencodeSdkPin(pkgPath)).toThrow(
+      /must be an exact version/,
+    )
   })
 })
 
 describe('readOpencodeDevDependencyPins', () => {
   test('returns matching sdk and plugin devDependency versions', () => {
     const dir = makeTempDir()
-    const pkgPath = writePackageJson(dir, {
+    const pkgPath = writeDevDependencies(dir, {
       '@opencode-ai/sdk': '9.9.1',
       '@opencode-ai/plugin': '9.9.1',
     })
@@ -89,7 +140,7 @@ describe('readOpencodeDevDependencyPins', () => {
 
   test('the equality check fails when sdk and plugin devDependencies disagree', () => {
     const dir = makeTempDir()
-    const pkgPath = writePackageJson(dir, {
+    const pkgPath = writeDevDependencies(dir, {
       '@opencode-ai/sdk': '9.9.1',
       '@opencode-ai/plugin': '9.9.0',
     })
@@ -112,5 +163,54 @@ describe('re-exports stay in sync with the helper', () => {
       '../integration/fixtures/receipt-workflow-host.ts'
     )
     expect(EXACT_OPENCODE_VERSION).toBe(readOpencodeSdkPin())
+  })
+})
+
+describe('R1: no hardcoded OpenCode pin literal', () => {
+  const EXCLUDED_DIR = path.join(REPO_ROOT, 'tests', 'fixtures')
+
+  function isExcludedDir(dirPath: string): boolean {
+    return dirPath.includes('node_modules') || dirPath === EXCLUDED_DIR
+  }
+
+  function collectTsFiles(rootDir: string): string[] {
+    const results: string[] = []
+
+    for (const entry of fs.readdirSync(rootDir, { withFileTypes: true })) {
+      const fullPath = path.join(rootDir, entry.name)
+      if (entry.isDirectory()) {
+        if (!isExcludedDir(fullPath)) {
+          results.push(...collectTsFiles(fullPath))
+        }
+      } else if (entry.isFile() && entry.name.endsWith('.ts')) {
+        results.push(fullPath)
+      }
+    }
+
+    return results
+  }
+
+  test('the pinned version string appears nowhere under scripts/ or tests/', () => {
+    const pin = readOpencodeSdkPin()
+    const files = [
+      ...collectTsFiles(path.join(REPO_ROOT, 'scripts')),
+      ...collectTsFiles(path.join(REPO_ROOT, 'tests')),
+    ]
+
+    const offenders = files.filter((file) =>
+      fs.readFileSync(file, 'utf8').includes(pin),
+    )
+
+    if (offenders.length > 0) {
+      throw new Error(
+        `Found the hardcoded OpenCode pin "${pin}" in: ${offenders
+          .map((file) => path.relative(REPO_ROOT, file))
+          .join(
+            ', ',
+          )}. Read it via readOpencodeSdkPin() / readOpencodeDevDependencyPins() from scripts/lib/opencode-pin.ts instead.`,
+      )
+    }
+
+    expect(offenders).toEqual([])
   })
 })
