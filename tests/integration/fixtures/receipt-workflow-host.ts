@@ -487,50 +487,70 @@ export interface RunOpencodeOptions {
 }
 
 /**
- * Runs an argv async via `Bun.spawn`, never `Bun.spawnSync`. This function
+ * Runs an argv async via node's `spawn`, never `Bun.spawnSync`. This function
  * (and every other real `opencode` child process in this module) shares the
  * event loop with `startScriptedSkillModelServer`'s `Bun.serve` instance: a
- * synchronous spawn would block that same thread for its whole duration,
- * so the scripted server could never answer the child's own HTTP request
- * back to it — every scripted call would hang to its timeout. `Bun.spawn` is
+ * synchronous spawn would block that same thread for its whole duration, so
+ * the scripted server could never answer the child's own HTTP request back
+ * to it — every scripted call would hang to its timeout. An async spawn is
  * non-blocking, so the server keeps servicing requests while this awaits.
  *
- * Preserves the prior `Bun.spawnSync({ timeout })` semantics: on timeout the
- * child is killed and the result reports `exitCode: -1`, matching what a
- * `spawnSync` timeout previously produced (only the direct child is
- * signaled, not its process group — the same limitation `spawnSync`'s own
- * `timeout` option had).
+ * The real argv is `bunx opencode-ai@<pin> run ...`: `bunx` execs or forks
+ * `opencode-ai` as a descendant, so a plain `child.kill()` on timeout would
+ * signal only the direct `bunx` process and leave that `opencode-ai`
+ * grandchild alive, holding the stdout/stderr pipe write-ends open — this
+ * function's stream reads would then never see EOF and it would hang past
+ * its own timeout, leaking the grandchild besides. So the child is spawned
+ * `detached: true` (a new process group) and, on timeout, the *whole group*
+ * is reaped via `stopProcessGroup` (SIGTERM then SIGKILL to the group),
+ * exactly like the sibling `startOpencodeProcess`/`stopOpencodeProcess`
+ * below. Killing the group closes every descendant's pipes, so this
+ * function's stream listeners finish and the promise resolves instead of
+ * hanging.
  */
-async function spawnOpencodeChild(
+export async function spawnOpencodeChild(
   argv: readonly string[],
   options: { cwd: string; env: Record<string, string>; timeoutMs: number },
 ): Promise<OpencodeResult> {
   const [command, ...rest] = argv
   if (!command) throw new Error('spawnOpencodeChild requires a non-empty argv')
 
-  const proc = Bun.spawn([command, ...rest], {
-    cwd: options.cwd,
-    env: options.env,
-    stdout: 'pipe',
-    stderr: 'pipe',
+  return new Promise<OpencodeResult>((resolve) => {
+    const child = spawn(command, rest, {
+      cwd: options.cwd,
+      env: options.env,
+      detached: true,
+    })
+
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+
+    const finish = (exitCode: number): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      resolve({ stdout, stderr, exitCode })
+    }
+
+    const timeout = setTimeout(() => {
+      void stopProcessGroup(child, 10_000).then(() => finish(-1))
+    }, options.timeoutMs)
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString()
+    })
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString()
+    })
+    child.once('error', (error) => {
+      stderr += `\n${String(error)}`
+      finish(-1)
+    })
+    child.once('close', (code) => {
+      finish(code ?? -1)
+    })
   })
-
-  let timedOut = false
-  const timeout = setTimeout(() => {
-    timedOut = true
-    proc.kill()
-  }, options.timeoutMs)
-
-  try {
-    const [stdout, stderr, exitCode] = await Promise.all([
-      new Response(proc.stdout).text(),
-      new Response(proc.stderr).text(),
-      proc.exited,
-    ])
-    return { stdout, stderr, exitCode: timedOut ? -1 : exitCode }
-  } finally {
-    clearTimeout(timeout)
-  }
 }
 
 export async function runOpencode(

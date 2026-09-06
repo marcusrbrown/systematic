@@ -5,6 +5,7 @@ import {
   extractSkillNameFromPrompt,
   type ProbeEvent,
   scriptedResponseChunks,
+  spawnOpencodeChild,
   startScriptedSkillModelServer,
   withScriptedProvider,
 } from '../integration/fixtures/receipt-workflow-host.js'
@@ -282,18 +283,20 @@ describe('startScriptedSkillModelServer dispatch', () => {
   })
 })
 
-// Regression test for the Bun.serve + Bun.spawnSync deadlock: `runOpencode`
-// previously blocked its own thread with a synchronous spawn while the
-// scripted model server (also on that thread) needed to answer the spawned
-// child's HTTP request — every call hung to TIMEOUT_MS. This drives the
-// server through the SAME async-spawn mechanism `runOpencode` now uses
-// (`Bun.spawn`, never `Bun.spawnSync`) and asserts a real response arrives
-// well inside a short bound, never a timeout. It needs no `opencode` or
-// `bunx` on `PATH` — the spawned child only performs a `fetch` against the
-// scripted server, exactly like `runOpencode`'s CLI child does once it
-// reaches the model.
+const TEST_CHILD_ENV = { PATH: process.env.PATH ?? '' }
+
+// Regression test for the Bun.serve + synchronous-spawn deadlock:
+// `runOpencode` previously blocked its own thread with a synchronous spawn
+// while the scripted model server (also on that thread) needed to answer
+// the spawned child's HTTP request — every call hung to TIMEOUT_MS. This
+// drives the server through `spawnOpencodeChild` itself — the exact
+// production helper `runOpencode` calls — rather than a hand-rolled spawn,
+// so reverting that helper to a synchronous spawn would fail this test. It
+// needs no `opencode` or `bunx` on `PATH` — the spawned child only performs
+// a `fetch` against the scripted server, exactly like `runOpencode`'s CLI
+// child does once it reaches the model.
 describe('scripted server survives an async-spawned child (deadlock regression)', () => {
-  test('a Bun.spawn child can fetch a real response from the scripted server while the test thread stays live', async () => {
+  test('spawnOpencodeChild can fetch a real response from the scripted server while the test thread stays live', async () => {
     const model = startScriptedSkillModelServer('demo-skill', 'done text')
     try {
       const script = `
@@ -304,22 +307,55 @@ describe('scripted server survives an async-spawned child (deadlock regression)'
         })
         process.stdout.write(await response.text())
       `
-      const proc = Bun.spawn(['bun', '-e', script], {
-        stdout: 'pipe',
-        stderr: 'pipe',
+      const result = await spawnOpencodeChild(['bun', '-e', script], {
+        cwd: process.cwd(),
+        env: TEST_CHILD_ENV,
+        timeoutMs: 5_000,
       })
-      const timeout = setTimeout(() => proc.kill(), 5_000)
-      const [stdout, exitCode] = await Promise.all([
-        new Response(proc.stdout).text(),
-        proc.exited,
-      ])
-      clearTimeout(timeout)
 
-      expect(exitCode).toBe(0)
-      expect(stdout).toContain('chat.completion.chunk')
-      expect(stdout).toContain('systematic_skill')
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('chat.completion.chunk')
+      expect(result.stdout).toContain('systematic_skill')
     } finally {
       model.stop()
     }
   }, 10_000)
+})
+
+// Pins the fix for the leak/hang `proc.kill()` alone would cause: a
+// deliberately long-lived child that itself spawns a long-lived grandchild,
+// both outliving a short `timeoutMs`. If `spawnOpencodeChild` only signaled
+// the direct child, the grandchild would survive and this test would hang
+// waiting for its stdio pipes to close (they never would). Reaping the
+// whole process group lets both die together, so the promise resolves and
+// the grandchild's pid is confirmed gone afterward.
+describe('spawnOpencodeChild timeout path', () => {
+  test('reaps the whole process group on timeout, leaving no descendant process behind', async () => {
+    const script = `
+      const { spawn } = require('node:child_process')
+      const grandchild = spawn('sleep', ['9999'], { stdio: 'ignore' })
+      process.stdout.write('grandchild-pid:' + grandchild.pid + '\\n')
+      setInterval(() => {}, 1000)
+    `
+
+    const start = Date.now()
+    const result = await spawnOpencodeChild(['bun', '-e', script], {
+      cwd: process.cwd(),
+      env: TEST_CHILD_ENV,
+      timeoutMs: 500,
+    })
+    const elapsedMs = Date.now() - start
+
+    // Returns (does not hang) within a bounded margin over its own timeout.
+    expect(elapsedMs).toBeLessThan(10_000)
+    expect(result.exitCode).toBe(-1)
+
+    const match = /grandchild-pid:(\d+)/.exec(result.stdout)
+    expect(match).not.toBeNull()
+    const grandchildPid = Number(match?.[1])
+
+    // Give the OS a brief moment to finish reaping after the group signal.
+    await Bun.sleep(300)
+    expect(() => process.kill(grandchildPid, 0)).toThrow()
+  }, 15_000)
 })
