@@ -184,6 +184,9 @@ jobs:
               - 'tests/**'
               - 'scripts/**'
               - 'evals/**'
+              - 'skills/**'
+              - 'agents/**'
+              - 'registry/**'
               - 'package.json'
               - 'bun.lock'
               - '.github/workflows/main.yaml'
@@ -194,11 +197,22 @@ jobs:
       # of repeating the push-vs-pull_request branch.
       - name: Determine whether to run the host contract suite
         id: gate
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          FILTER_RESULT: ${{ steps.filter.outputs.host-contract }}
         run: |
-          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
+          elif [[ "$FILTER_RESULT" == "true" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          elif [[ "$FILTER_RESULT" == "false" ]]; then
+            echo "run=false" >> "$GITHUB_OUTPUT"
           else
-            echo "run=${{ steps.filter.outputs.host-contract }}" >> "$GITHUB_OUTPUT"
+            # Fail closed: a malformed or empty paths-filter output must never
+            # be treated as "skip and report success", since that would
+            # silently satisfy release's needs on this job.
+            echo "::error::paths-filter returned an unexpected value: '$FILTER_RESULT' (expected 'true' or 'false')"
+            exit 1
           fi
 
       - name: Setup Node.js
@@ -225,7 +239,6 @@ jobs:
         run: bun run build
 
       - name: Run host contract suite
-        id: host-contract-run
         if: steps.gate.outputs.run == 'true'
         env:
           SYSTEMATIC_REQUIRE_OPENCODE: '1'
@@ -238,8 +251,11 @@ jobs:
       # The module-scope throw (SYSTEMATIC_REQUIRE_OPENCODE=1) already covers
       # a missing or mismatched host. This guard covers what it cannot: a
       # per-test gate such as test.skipIf(!DIST_LOCAL_AVAILABLE) skipping for
-      # an unexpected reason while the job stays green. The exempt set lives
-      # here, next to the guard, so adding an entry is a reviewed change.
+      # an unexpected reason while the job stays green, or a whole-file
+      # collapse (a crash or an early exit) that still leaves the console
+      # summary and pass floor looking plausible. The exempt set, the
+      # expected-file list, and the floor all live here, next to the guard,
+      # so widening any of them is a reviewed change.
       - name: Guard skipped tests and pass floor
         if: steps.gate.outputs.run == 'true'
         run: |
@@ -257,15 +273,38 @@ jobs:
             },
           ]
 
-          // Conservative placeholder floor. Re-tune upward from the actual
-          // pass count once this job has run against a live OpenCode host
-          // (see the plan's Unit 4 deferred item on the measured floor).
-          const PASS_FLOOR = 50
+          // Every test file under tests/integration/, enumerated by hand and
+          // verified against `ls tests/integration/*.test.ts`. A file
+          // producing zero JUnit testsuite entries means bun test never
+          // actually ran it -- the exact failure mode a mass-skip or an
+          // early crash would produce while the console summary and pass
+          // floor alone could still look plausible.
+          const EXPECTED_SUITE_FILES = [
+            'tests/integration/claude-code.test.ts',
+            'tests/integration/eval-artifact.test.ts',
+            'tests/integration/eval-fixture.test.ts',
+            'tests/integration/eval-runner.test.ts',
+            'tests/integration/opencode.test.ts',
+            'tests/integration/pi.test.ts',
+            'tests/integration/question-attestation-opencode.test.ts',
+            'tests/integration/receipt-workflow-dogfood.test.ts',
+            'tests/integration/receipt-workflow-guard-real-host.test.ts',
+            'tests/integration/receipt-workflow-recovery.test.ts',
+            'tests/integration/release-notes-ci.test.ts',
+          ]
+
+          // Measured: 138 test()/it() call sites exist across the eleven
+          // integration files as of this writing. The prior floor of 50
+          // exactly equalled the host-free test count (claude-code 18 +
+          // eval-artifact 7 + eval-fixture 5 + release-notes-ci 20 = 50), so
+          // a total collapse of every host-touching file could still clear
+          // it silently. Raise this floor as the suite grows; do not lower
+          // it without a documented reason.
+          const PASS_FLOOR = 120
 
           const [, , junitPath, logPath] = process.argv
           const xml = readFileSync(junitPath, 'utf8')
 
-          const testcaseRe = /<testcase\b([^>]*?)(\/>|>[\s\S]*?<\/testcase>)/g
           const attrRe = /(\w+)="([^"]*)"/g
 
           function parseAttrs(str) {
@@ -276,10 +315,30 @@ jobs:
             return attrs
           }
 
+          // Bun emits one outer <testsuite> per test file, plus one nested
+          // <testsuite> per describe block, all sharing that file's file=
+          // attribute -- so collecting every testsuite's file attribute and
+          // taking the unique set recovers exactly the set of files bun
+          // actually loaded and ran, regardless of describe nesting.
+          // <testsuite\b never matches the closing </testsuite> tag (a /
+          // immediately follows <, not t), and never matches the plural
+          // <testsuites container (no word boundary between testsuite and
+          // the trailing s).
+          const testsuiteRe = /<testsuite\b([^>]*)>/g
+          const producedFiles = new Set()
+          let suiteMatch
+          while ((suiteMatch = testsuiteRe.exec(xml))) {
+            const attrs = parseAttrs(suiteMatch[1])
+            if (attrs.file) producedFiles.add(attrs.file)
+          }
+
+          const missingFiles = EXPECTED_SUITE_FILES.filter((f) => !producedFiles.has(f))
+
+          const testcaseRe = /<testcase\b([^>]*?)(\/>|>[\s\S]*?<\/testcase>)/g
           const skipped = []
-          let match
-          while ((match = testcaseRe.exec(xml))) {
-            const [, attrStr, rest] = match
+          let caseMatch
+          while ((caseMatch = testcaseRe.exec(xml))) {
+            const [, attrStr, rest] = caseMatch
             const attrs = parseAttrs(attrStr)
             if (rest.includes('<skipped')) {
               skipped.push({ classname: attrs.classname ?? '', name: attrs.name ?? '' })
@@ -295,6 +354,12 @@ jobs:
 
           let failed = false
 
+          if (missingFiles.length > 0) {
+            console.error('Expected integration test file(s) produced no JUnit suite (bun test never ran them):')
+            for (const f of missingFiles) console.error(`  - ${f}`)
+            failed = true
+          }
+
           if (unexpected.length > 0) {
             console.error('Unexpected skipped test(s) (not in the known-exempt set):')
             for (const k of unexpected) console.error(`  - ${k}`)
@@ -308,12 +373,17 @@ jobs:
           }
 
           const log = readFileSync(logPath, 'utf8')
-          const passMatch = log.match(/^\s*(\d+)\s+pass\s*$/m)
-          if (!passMatch) {
+          // Bun's default reporter prints one "<N> pass" summary line per
+          // run; take the last match rather than the first so a captured
+          // log containing more than one summary is scored on the final,
+          // authoritative count.
+          const passMatches = [...log.matchAll(/^\s*(\d+)\s+pass\s*$/gm)]
+          const lastPassMatch = passMatches.at(-1)
+          if (!lastPassMatch) {
             console.error('Could not find a "<N> pass" summary line in the captured test output.')
             failed = true
           } else {
-            const passCount = Number(passMatch[1])
+            const passCount = Number(lastPassMatch[1])
             console.log(`Observed pass count: ${passCount} (floor: ${PASS_FLOOR})`)
             if (passCount < PASS_FLOOR) {
               console.error(`Pass count ${passCount} is below the floor of ${PASS_FLOOR}.`)

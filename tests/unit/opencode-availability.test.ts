@@ -176,6 +176,49 @@ describe('probeOpencodeAvailability', () => {
   })
 })
 
+describe('probeOpencodeAvailability diagnostic logging', () => {
+  test('logs a diagnostic before the real bunx probe unless quiet is set', () => {
+    // Every other case in this suite passes a `command` override, which
+    // means `options.command === undefined` -- the branch that gates the
+    // diagnostic -- is never exercised. Aliasing a fake launcher as `bunx`
+    // on a PATH scoped to the child's env lets this test drive the real
+    // default-command path without touching the network-reaching real
+    // launcher.
+    const dir = tempDir()
+    try {
+      const bunxPath = path.join(dir, 'bunx')
+      fs.writeFileSync(bunxPath, '#!/usr/bin/env bash\necho "1.18.28"\n', {
+        mode: 0o755,
+      })
+      fs.chmodSync(bunxPath, 0o755)
+      const env = { PATH: `${dir}:${process.env.PATH ?? ''}` }
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+      try {
+        const loud = probeOpencodeAvailability({ pin: '1.18.28', env })
+        expect(loud.status).toBe('available')
+        expect(warnSpy).toHaveBeenCalledTimes(1)
+        expect(warnSpy.mock.calls[0]?.[0]).toContain(
+          'probing bunx opencode-ai@1.18.28',
+        )
+
+        warnSpy.mockClear()
+
+        const quiet = probeOpencodeAvailability({
+          pin: '1.18.28',
+          env,
+          quiet: true,
+        })
+        expect(quiet.status).toBe('available')
+        expect(warnSpy).not.toHaveBeenCalled()
+      } finally {
+        warnSpy.mockRestore()
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+})
+
 describe('requireOpencodeAvailable', () => {
   test('an available classification never throws, flag set or not', () => {
     const available: OpencodeAvailabilityClassification = {

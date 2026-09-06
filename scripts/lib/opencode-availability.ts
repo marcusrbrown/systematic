@@ -85,6 +85,20 @@ function extractReportedVersion(output: string): string | undefined {
 }
 
 /**
+ * True only on the real launcher path: every unit test override supplies its
+ * own `command`, and logging would otherwise fire once per fake-launcher
+ * case. Callers whose own output must stay clean (the eval runner CLI
+ * child) pass `quiet: true` to suppress it. Split out from
+ * {@link probeOpencodeAvailability} to keep that function's cognitive
+ * complexity under the project's lint ceiling.
+ */
+function shouldLogProbeDiagnostic(
+  options: ProbeOpencodeAvailabilityOptions,
+): boolean {
+  return options.command === undefined && !options.quiet
+}
+
+/**
  * Runs `bunx opencode-ai@<pin> --version` (or the test-only override) under
  * the given environment and classifies the outcome. Never throws; never
  * memoizes. `available` requires exit 0 and the last stdout line to equal
@@ -98,14 +112,10 @@ export function probeOpencodeAvailability(
   const command = options.command ?? 'bunx'
   const args = options.args ?? [`opencode-ai@${options.pin}`, '--version']
 
-  // Only the real launcher path logs: every unit test override supplies its
-  // own `command`, and this line would otherwise fire once per fake-launcher
-  // case. A wedged package registry blocks synchronously for the full
-  // timeout with no other output, so this line is what makes that stall
-  // attributable in CI logs rather than a silent multi-minute pause. Callers
-  // whose own output must stay clean (the eval runner CLI child) pass
-  // `quiet: true` to suppress it.
-  if (options.command === undefined && !options.quiet) {
+  // A wedged package registry blocks synchronously for the full timeout
+  // with no other output, so this line is what makes that stall
+  // attributable in CI logs rather than a silent multi-minute pause.
+  if (shouldLogProbeDiagnostic(options)) {
     console.warn(
       `[opencode-availability] probing bunx opencode-ai@${options.pin} --version`,
     )
