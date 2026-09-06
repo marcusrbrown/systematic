@@ -233,7 +233,7 @@ Two adjacent facts shaped the design. `mise.toml` prepends `./node_modules/.bin`
 - A local run with no network and an empty Bun cache skips every OpenCode-reaching test — the fixture-gated suites and the eval-runner's real-eval tests alike — with a readable reason, and runs everything else green. The one exception is the eval-runner's impossible-timeout test, which is ungated by design and passes offline on the `unavailable` classification it expects.
 - The eval runner's result envelope still records `identity.opencodeVersion` equal to the pin.
 
-- [ ] **Unit 3: Put the hosted-model test on the scripted provider and delete the no-op matrix**
+- [x] **Unit 3: Put the hosted-model test on the scripted provider and delete the no-op matrix**
 
 **Goal:** Remove the suite's only network model dependency and its only unfalsifiable test.
 

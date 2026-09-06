@@ -350,12 +350,18 @@ function buildDistLocalConfig(): string {
 const DIST_INDEX = path.join(REPO_ROOT, 'dist/index.js')
 const DIST_LOCAL_AVAILABLE = fs.existsSync(DIST_INDEX)
 
+// stdout under the scripted provider is entirely fixture-authored text (see
+// runOpencode's completionText in fixtures/receipt-workflow-host.ts), so an
+// assertion on its wording would only test the fixture, never the host. The
+// stderr check below is the load-bearing one: it is the *host's own*
+// tool-invocation log line, produced only if OpenCode actually dispatched
+// the scripted `systematic_skill` call with the expected skill name —
+// evidence the plugin's tool genuinely registered and ran.
 function expectSetupSkillLoaded(result: OpencodeResult): void {
   assertOk(result)
   expect(result.stderr).toMatch(
     /(?:Skill\s+"?git-clean-gone-branches"?|systematic_skill\s*\{"name":"(?:systematic:)?git-clean-gone-branches"\})/i,
   )
-  expect(result.stdout).toMatch(/(?:branch|repositor(?:y|ies)|\brepo\b)/i)
 }
 
 test('expectSetupSkillLoaded accepts git-clean-gone-branches output without tool id mention', () => {
@@ -821,9 +827,8 @@ describe.skipIf(!isOpencodeAvailable() || process.platform === 'win32')(
       destroyIsolatedFixture(fixture)
     })
 
-    // Relies on `opencode/big-pickle`, confirmed public/no-auth by the
-    // isolated-HOME test above. Provider outage is a genuine integration
-    // failure here, not a skip condition.
+    // Runs against `runOpencode`'s scripted local provider (no network,
+    // no hosted-model dependency); see fixtures/receipt-workflow-host.ts.
     test(
       'packaged plugin loads, warns on a removed disabled_skills name, and exposes a compliant catalog',
       async () => {

@@ -17,8 +17,17 @@ export const TIMEOUT_MS = 180_000
 export const EXACT_OPENCODE_VERSION = readOpencodeSdkPin()
 export const MAX_RETRIES = 1
 export const RETRY_DELAY_MS = 3_000
-export const OPENCODE_TEST_MODEL = 'opencode/big-pickle'
 export const REPO_ROOT = path.resolve(import.meta.dirname, '../../..')
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+// `runOpencode`'s scripted provider: a local OpenAI-compatible server takes
+// the place of the previously hosted free-tier model so the suite's only
+// tool-invocation decision is deterministic and requires no network.
+const SCRIPTED_PROVIDER_ID = 'systematic-host-contract-provider'
+const SCRIPTED_MODEL_ID = 'systematic-host-contract-model'
 
 export interface OpencodeResult {
   stdout: string
@@ -216,10 +225,332 @@ export function buildIsolatedOpencodeEnv(
   })
 }
 
+export interface ScriptedToolCall {
+  id: string
+  name: string
+  arguments: Record<string, unknown>
+}
+
+export interface ScriptedResponse {
+  text?: string
+  toolCalls?: ScriptedToolCall[]
+}
+
+export interface ScriptedModelServer {
+  url: string
+  stop(): void
+}
+
+function sseChunk(value: unknown): string {
+  return `data: ${JSON.stringify(value)}\n\n`
+}
+
+export function scriptedResponseChunks(
+  response: ScriptedResponse,
+  requestId: string,
+  created: number,
+): Record<string, unknown>[] {
+  if (response.toolCalls && response.toolCalls.length > 0) {
+    return [
+      ...response.toolCalls.map((toolCall, index) => ({
+        id: requestId,
+        object: 'chat.completion.chunk',
+        created,
+        model: SCRIPTED_MODEL_ID,
+        choices: [
+          {
+            index: 0,
+            delta: {
+              tool_calls: [
+                {
+                  index,
+                  id: toolCall.id,
+                  type: 'function',
+                  function: {
+                    name: toolCall.name,
+                    arguments: JSON.stringify(toolCall.arguments),
+                  },
+                },
+              ],
+            },
+            finish_reason: null,
+          },
+        ],
+      })),
+      {
+        id: requestId,
+        object: 'chat.completion.chunk',
+        created,
+        model: SCRIPTED_MODEL_ID,
+        choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }],
+      },
+    ]
+  }
+  const text = response.text ?? ''
+  return [
+    {
+      id: requestId,
+      object: 'chat.completion.chunk',
+      created,
+      model: SCRIPTED_MODEL_ID,
+      choices: [
+        {
+          index: 0,
+          delta: text ? { role: 'assistant' } : {},
+          finish_reason: null,
+        },
+      ],
+    },
+    ...(text
+      ? [
+          {
+            id: requestId,
+            object: 'chat.completion.chunk',
+            created,
+            model: SCRIPTED_MODEL_ID,
+            choices: [
+              { index: 0, delta: { content: text }, finish_reason: null },
+            ],
+          },
+        ]
+      : []),
+    {
+      id: requestId,
+      object: 'chat.completion.chunk',
+      created,
+      model: SCRIPTED_MODEL_ID,
+      choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+    },
+  ]
+}
+
+interface ChatCompletionRequestBody {
+  tools?: unknown
+  messages?: unknown
+}
+
+function isChatCompletionRequestBody(
+  value: unknown,
+): value is ChatCompletionRequestBody {
+  return isRecord(value)
+}
+
+function requestCarriesToolResult(messages: unknown): boolean {
+  if (!Array.isArray(messages)) return false
+  return messages.some(
+    (message) => isRecord(message) && message.role === 'tool',
+  )
+}
+
+/**
+ * Starts a local OpenAI-compatible scripted model server for one
+ * `runOpencode` invocation. OpenCode's `run` CLI issues two kinds of
+ * requests against the configured model: the real chat turn (always carries
+ * a non-empty `tools` array) and, once per session, a background title-
+ * generation turn forked from `SessionPrompt.ensureTitle` with `tools: {}`
+ * (opencode's `session/prompt.ts`). That title turn is forked concurrently
+ * with the main loop, so its arrival relative to the main call is not
+ * ordered; dispatch is therefore based on the request body shape (tool
+ * presence, then tool-result presence), never on call order.
+ *
+ * The scripted `systematic_skill` tool call is issued at most once per
+ * server instance: once issued, every later tool-capable request (whether
+ * or not it actually carries the tool result — a mis-registration means it
+ * never will) falls through to `completionText` instead of re-issuing the
+ * call. A broken registration then fails fast on the real assertions
+ * (the host's own tool-invocation log, the probe capture) instead of
+ * silently re-prompting until the step cap.
+ */
+export function startScriptedSkillModelServer(
+  skillName: string,
+  completionText: string,
+): ScriptedModelServer {
+  let toolCallIssued = false
+  const server = Bun.serve({
+    port: 0,
+    async fetch(request) {
+      if (
+        request.method !== 'POST' ||
+        !request.url.endsWith('/chat/completions')
+      ) {
+        return new Response('not found', { status: 404 })
+      }
+      const rawBody: unknown = await request.json()
+      const body = isChatCompletionRequestBody(rawBody) ? rawBody : {}
+      const hasTools = Array.isArray(body.tools) && body.tools.length > 0
+
+      let response: ScriptedResponse
+      if (!hasTools) {
+        response = { text: 'Systematic host contract title probe' }
+      } else if (toolCallIssued || requestCarriesToolResult(body.messages)) {
+        response = { text: completionText }
+      } else {
+        toolCallIssued = true
+        response = {
+          toolCalls: [
+            {
+              id: 'host-contract-skill-call',
+              name: 'systematic_skill',
+              arguments: { name: skillName },
+            },
+          ],
+        }
+      }
+
+      const chunks = scriptedResponseChunks(
+        response,
+        'host-contract-response',
+        Math.floor(Date.now() / 1000),
+      )
+      const stream = new ReadableStream({
+        start(controller) {
+          const encoder = new TextEncoder()
+          for (const chunk of chunks)
+            controller.enqueue(encoder.encode(sseChunk(chunk)))
+          controller.enqueue(encoder.encode('data: [DONE]\n\n'))
+          controller.close()
+        },
+      })
+      return new Response(stream, {
+        headers: { 'Content-Type': 'text/event-stream' },
+      })
+    },
+  })
+  return {
+    url: `http://localhost:${server.port}/v1`,
+    stop: () => server.stop(true),
+  }
+}
+
+const LOAD_SKILL_PROMPT_PATTERN =
+  /^Use the systematic_skill tool to load (\S+)$/
+
+/**
+ * Every `runOpencode` call site prompts with the fixed shape "Use the
+ * systematic_skill tool to load <name>"; extracting the name here lets the
+ * scripted model script the exact tool call each call site's assertions
+ * expect, without each call site building its own model script.
+ */
+export function extractSkillNameFromPrompt(prompt: string): string {
+  const match = LOAD_SKILL_PROMPT_PATTERN.exec(prompt)
+  const skillName = match?.[1]
+  if (!skillName) {
+    throw new Error(
+      `runOpencode's scripted provider could not extract a skill name from prompt: ${prompt}`,
+    )
+  }
+  return skillName
+}
+
+export function withScriptedProvider(
+  configContent: string,
+  baseUrl: string,
+): string {
+  const parsed = JSON.parse(configContent) as Record<string, unknown>
+  const existingProvider =
+    typeof parsed.provider === 'object' && parsed.provider !== null
+      ? (parsed.provider as Record<string, unknown>)
+      : {}
+  return JSON.stringify({
+    ...parsed,
+    provider: {
+      ...existingProvider,
+      [SCRIPTED_PROVIDER_ID]: {
+        name: 'Systematic Host Contract Provider',
+        id: SCRIPTED_PROVIDER_ID,
+        env: [],
+        npm: '@ai-sdk/openai-compatible',
+        models: {
+          [SCRIPTED_MODEL_ID]: {
+            id: SCRIPTED_MODEL_ID,
+            name: 'Systematic Host Contract Model',
+            attachment: false,
+            reasoning: false,
+            temperature: false,
+            tool_call: true,
+            release_date: '2026-09-04',
+            limit: { context: 100_000, output: 10_000 },
+            cost: { input: 0, output: 0 },
+            options: {},
+          },
+        },
+        options: { apiKey: 'unused-host-contract-key', baseURL: baseUrl },
+      },
+    },
+  })
+}
+
 export interface RunOpencodeOptions {
   fixture: IsolatedFixture
   configContent: string
   extraEnv?: Record<string, string>
+}
+
+/**
+ * Runs an argv async via node's `spawn`, never `Bun.spawnSync`. This function
+ * (and every other real `opencode` child process in this module) shares the
+ * event loop with `startScriptedSkillModelServer`'s `Bun.serve` instance: a
+ * synchronous spawn would block that same thread for its whole duration, so
+ * the scripted server could never answer the child's own HTTP request back
+ * to it — every scripted call would hang to its timeout. An async spawn is
+ * non-blocking, so the server keeps servicing requests while this awaits.
+ *
+ * The real argv is `bunx opencode-ai@<pin> run ...`: `bunx` execs or forks
+ * `opencode-ai` as a descendant, so a plain `child.kill()` on timeout would
+ * signal only the direct `bunx` process and leave that `opencode-ai`
+ * grandchild alive, holding the stdout/stderr pipe write-ends open — this
+ * function's stream reads would then never see EOF and it would hang past
+ * its own timeout, leaking the grandchild besides. So the child is spawned
+ * `detached: true` (a new process group) and, on timeout, the *whole group*
+ * is reaped via `stopProcessGroup` (SIGTERM then SIGKILL to the group),
+ * exactly like the sibling `startOpencodeProcess`/`stopOpencodeProcess`
+ * below. Killing the group closes every descendant's pipes, so this
+ * function's stream listeners finish and the promise resolves instead of
+ * hanging.
+ */
+export async function spawnOpencodeChild(
+  argv: readonly string[],
+  options: { cwd: string; env: Record<string, string>; timeoutMs: number },
+): Promise<OpencodeResult> {
+  const [command, ...rest] = argv
+  if (!command) throw new Error('spawnOpencodeChild requires a non-empty argv')
+
+  return new Promise<OpencodeResult>((resolve) => {
+    const child = spawn(command, rest, {
+      cwd: options.cwd,
+      env: options.env,
+      detached: true,
+    })
+
+    let stdout = ''
+    let stderr = ''
+    let settled = false
+
+    const finish = (exitCode: number): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timeout)
+      resolve({ stdout, stderr, exitCode })
+    }
+
+    const timeout = setTimeout(() => {
+      void stopProcessGroup(child, 10_000).then(() => finish(-1))
+    }, options.timeoutMs)
+
+    child.stdout?.on('data', (chunk: Buffer) => {
+      stdout += chunk.toString()
+    })
+    child.stderr?.on('data', (chunk: Buffer) => {
+      stderr += chunk.toString()
+    })
+    child.once('error', (error) => {
+      stderr += `\n${String(error)}`
+      finish(-1)
+    })
+    child.once('close', (code) => {
+      finish(code ?? -1)
+    })
+  })
 }
 
 export async function runOpencode(
@@ -227,52 +558,57 @@ export async function runOpencode(
   options: RunOpencodeOptions,
 ): Promise<OpencodeResult> {
   const { fixture, configContent, extraEnv } = options
-  const childEnv = buildIsolatedOpencodeEnv(fixture, configContent, extraEnv)
-  let lastResult: OpencodeResult = { stdout: '', stderr: '', exitCode: -1 }
+  const skillName = extractSkillNameFromPrompt(prompt)
+  const model = startScriptedSkillModelServer(
+    skillName,
+    `Loaded skill ${skillName}. Reviewing repository state now.`,
+  )
 
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    const result = Bun.spawnSync(
-      [
-        'bunx',
-        `opencode-ai@${EXACT_OPENCODE_VERSION}`,
-        'run',
-        '--model',
-        OPENCODE_TEST_MODEL,
-        prompt,
-      ],
-      {
-        cwd: fixture.projectDir,
-        env: childEnv,
-        timeout: TIMEOUT_MS,
-      },
+  try {
+    const scriptedConfigContent = withScriptedProvider(configContent, model.url)
+    const childEnv = buildIsolatedOpencodeEnv(
+      fixture,
+      scriptedConfigContent,
+      extraEnv,
     )
+    let lastResult: OpencodeResult = { stdout: '', stderr: '', exitCode: -1 }
 
-    lastResult = {
-      stdout: result.stdout.toString(),
-      stderr: result.stderr.toString(),
-      exitCode: result.exitCode ?? -1,
-    }
-
-    const isTimeout =
-      lastResult.exitCode === -1 || lastResult.stderr.includes('ETIMEDOUT')
-    const isRateLimit =
-      lastResult.stderr.includes('rate limit') ||
-      lastResult.stderr.includes('429')
-
-    if (!isTimeout && !isRateLimit && lastResult.exitCode === 0) {
-      return lastResult
-    }
-
-    if (attempt < MAX_RETRIES) {
-      const delay = RETRY_DELAY_MS * attempt
-      console.log(
-        `Attempt ${attempt}/${MAX_RETRIES} failed, retrying in ${delay}ms...`,
+    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+      lastResult = await spawnOpencodeChild(
+        [
+          'bunx',
+          `opencode-ai@${EXACT_OPENCODE_VERSION}`,
+          'run',
+          '--model',
+          `${SCRIPTED_PROVIDER_ID}/${SCRIPTED_MODEL_ID}`,
+          prompt,
+        ],
+        { cwd: fixture.projectDir, env: childEnv, timeoutMs: TIMEOUT_MS },
       )
-      await Bun.sleep(delay)
-    }
-  }
 
-  return lastResult
+      const isTimeout =
+        lastResult.exitCode === -1 || lastResult.stderr.includes('ETIMEDOUT')
+      const isRateLimit =
+        lastResult.stderr.includes('rate limit') ||
+        lastResult.stderr.includes('429')
+
+      if (!isTimeout && !isRateLimit && lastResult.exitCode === 0) {
+        return lastResult
+      }
+
+      if (attempt < MAX_RETRIES) {
+        const delay = RETRY_DELAY_MS * attempt
+        console.log(
+          `Attempt ${attempt}/${MAX_RETRIES} failed, retrying in ${delay}ms...`,
+        )
+        await Bun.sleep(delay)
+      }
+    }
+
+    return lastResult
+  } finally {
+    model.stop()
+  }
 }
 
 export function assertOk(result: OpencodeResult): void {
@@ -321,10 +657,6 @@ export function isProbeSystemEvent(
 
 export function isProbeToolEvent(value: ProbeEvent): value is ProbeToolEvent {
   return value.type === 'tool'
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function isStringArray(value: unknown): value is string[] {
