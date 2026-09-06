@@ -12,6 +12,7 @@ import {
   getOpencodeAvailability,
   type IsolatedFixture,
   isOpencodeAvailable,
+  opencodeAvailabilityReason,
   packTarballOnce,
   startOpencodeServer,
   stopAllOpencodeHosts,
@@ -24,6 +25,11 @@ import {
 // mismatched host makes this module fail to load instead of silently
 // skipping.
 requireOpencodeAvailable(getOpencodeAvailability())
+if (!isOpencodeAvailable()) {
+  console.warn(
+    `[systematic] skipping OpenCode-dependent tests in question-attestation-opencode.test.ts: ${opencodeAvailabilityReason()}`,
+  )
+}
 
 const MOCK_PROVIDER_ID = 'u6-question-provider'
 const MOCK_MODEL_ID = 'u6-question-model'

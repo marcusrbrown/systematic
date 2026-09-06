@@ -32,6 +32,7 @@ import {
   isProbeToolEvent,
   MAX_RETRIES,
   type OpencodeResult,
+  opencodeAvailabilityReason,
   packTarballOnce,
   parseProbeEvent,
   REPO_ROOT,
@@ -42,6 +43,11 @@ import {
 // See tests/integration/question-attestation-opencode.test.ts for why this
 // call lives here rather than in the fixture module.
 requireOpencodeAvailable(getOpencodeAvailability())
+if (!isOpencodeAvailable()) {
+  console.warn(
+    `[systematic] skipping OpenCode-dependent tests in opencode.test.ts: ${opencodeAvailabilityReason()}`,
+  )
+}
 
 // Snapshot the repo's .opencode tree at module load so tests can assert that
 // live OpenCode subprocesses do not mutate the real repository state.

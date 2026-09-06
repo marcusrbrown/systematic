@@ -13,6 +13,7 @@ import {
   getOpencodeAvailability,
   type IsolatedFixture,
   isOpencodeAvailable,
+  opencodeAvailabilityReason,
   packTarballOnce,
   REPO_ROOT,
   startOpencodeServer,
@@ -23,6 +24,11 @@ import {
 // See question-attestation-opencode.test.ts for why this call lives here
 // rather than in the fixture module.
 requireOpencodeAvailable(getOpencodeAvailability())
+if (!isOpencodeAvailable()) {
+  console.warn(
+    `[systematic] skipping OpenCode-dependent tests in receipt-workflow-recovery.test.ts: ${opencodeAvailabilityReason()}`,
+  )
+}
 
 const MOCK_PROVIDER_ID = 'systematic-receipt-probe'
 const MOCK_MODEL_ID = 'receipt-probe-model'

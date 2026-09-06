@@ -129,6 +129,51 @@ describe('probeOpencodeAvailability', () => {
       fs.rmSync(dir, { recursive: true, force: true })
     }
   })
+
+  test('a fake launcher exiting 0 with unparseable stdout classifies as unavailable', () => {
+    const dir = tempDir()
+    try {
+      const launcher = writeFakeLauncher(
+        dir,
+        '#!/usr/bin/env bash\necho "no version here"\n',
+      )
+      const classification = probeOpencodeAvailability({
+        pin: '1.18.28',
+        env: { PATH: process.env.PATH ?? '' },
+        command: launcher,
+        args: [],
+      })
+      expect(classification.status).toBe('unavailable')
+      expect(classification.reportedVersion).toBeUndefined()
+      expect(classification.reason).toContain('no parseable version')
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('a trailing update-notice line after the real version does not get misparsed as the reported version', () => {
+    const dir = tempDir()
+    try {
+      // Old regex-anywhere-in-buffer parsing would have picked "9.9.9" out of
+      // the notice line and reported a false mismatch against the 9.9.8 pin.
+      // The new last-line-exact-semver contract instead treats a non-semver
+      // last line as unparseable, which is the safe outcome here.
+      const launcher = writeFakeLauncher(
+        dir,
+        '#!/usr/bin/env bash\necho "9.9.8"\necho "update available 9.9.9"\n',
+      )
+      const classification = probeOpencodeAvailability({
+        pin: '9.9.8',
+        env: { PATH: process.env.PATH ?? '' },
+        command: launcher,
+        args: [],
+      })
+      expect(classification.status).toBe('unavailable')
+      expect(classification.reportedVersion).toBeUndefined()
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('requireOpencodeAvailable', () => {
@@ -205,7 +250,58 @@ describe('resolveBunInstallCacheDir', () => {
     }
   })
 
-  test('refuses a directory owned by a foreign uid (stubbed lstatSync)', () => {
+  test('refuses a real symlink pointing at another directory', () => {
+    const tmpRoot = tempDir()
+    try {
+      // Create the directory for real first, then swap it for a real
+      // symlink at the exact same path, so lstatSync sees a genuine
+      // symlink rather than a stubbed one.
+      const dirPath = resolveBunInstallCacheDir({ pin: '1.18.28', tmpRoot })
+      fs.rmSync(dirPath, { recursive: true, force: true })
+      const target = path.join(tmpRoot, 'symlink-target')
+      fs.mkdirSync(target, { recursive: true, mode: 0o700 })
+      fs.symlinkSync(target, dirPath, 'dir')
+
+      expect(() =>
+        resolveBunInstallCacheDir({ pin: '1.18.28', tmpRoot }),
+      ).toThrow(/symlink/)
+    } finally {
+      fs.rmSync(tmpRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('does not memoize across calls in one process (real symlink swap, no stubbing)', () => {
+    const tmpRoot = tempDir()
+    try {
+      const dirPath = resolveBunInstallCacheDir({ pin: '1.18.28', tmpRoot })
+
+      // Swap the real directory for a real symlink: the very next call must
+      // still throw, proving nothing was cached from the prior successful call.
+      fs.rmSync(dirPath, { recursive: true, force: true })
+      const target = path.join(tmpRoot, 'memoize-swap-target')
+      fs.mkdirSync(target, { recursive: true, mode: 0o700 })
+      fs.symlinkSync(target, dirPath, 'dir')
+      expect(() =>
+        resolveBunInstallCacheDir({ pin: '1.18.28', tmpRoot }),
+      ).toThrow(/symlink/)
+
+      // Swap back to a real directory: the call after that must succeed
+      // again, proving the prior throw wasn't cached either.
+      fs.rmSync(dirPath, { force: true })
+      fs.mkdirSync(dirPath, { recursive: true, mode: 0o700 })
+      expect(() =>
+        resolveBunInstallCacheDir({ pin: '1.18.28', tmpRoot }),
+      ).not.toThrow()
+    } finally {
+      fs.rmSync(tmpRoot, { recursive: true, force: true })
+    }
+  })
+
+  test('refuses a directory owned by a foreign uid (stubbed lstatSync; unavoidable rootless)', () => {
+    // Unlike the symlink case above, a genuinely foreign-owned directory
+    // cannot be created without root (or a second real user account), so
+    // this one case stays stubbed — every other resolver behavior in this
+    // suite exercises the real filesystem.
     const tmpRoot = tempDir()
     const uid = process.getuid?.() ?? 0
     const spy = spyOn(fs, 'lstatSync').mockReturnValue(
@@ -222,58 +318,6 @@ describe('resolveBunInstallCacheDir', () => {
       ).toThrow(/owned by uid/)
     } finally {
       spy.mockRestore()
-      fs.rmSync(tmpRoot, { recursive: true, force: true })
-    }
-  })
-
-  test('refuses a symlink (stubbed lstatSync)', () => {
-    const tmpRoot = tempDir()
-    const uid = process.getuid?.() ?? 0
-    const spy = spyOn(fs, 'lstatSync').mockReturnValue(
-      fakeStats({
-        isSymbolicLink: true,
-        isDirectory: false,
-        uid,
-        mode: 0o700,
-      }),
-    )
-    try {
-      expect(() =>
-        resolveBunInstallCacheDir({ pin: '1.18.28', tmpRoot }),
-      ).toThrow(/symlink/)
-    } finally {
-      spy.mockRestore()
-      fs.rmSync(tmpRoot, { recursive: true, force: true })
-    }
-  })
-
-  test('does not memoize across calls in one process', () => {
-    const tmpRoot = tempDir()
-    const uid = process.getuid?.() ?? 0
-    try {
-      // Real call succeeds and creates the directory for real.
-      resolveBunInstallCacheDir({ pin: '1.18.28', tmpRoot })
-
-      // Stub a foreign-uid owner: the very next call must still throw,
-      // proving nothing was cached from the prior successful call.
-      const spy = spyOn(fs, 'lstatSync').mockReturnValue(
-        fakeStats({
-          isSymbolicLink: false,
-          isDirectory: true,
-          uid: uid + 1,
-          mode: 0o700,
-        }),
-      )
-      expect(() =>
-        resolveBunInstallCacheDir({ pin: '1.18.28', tmpRoot }),
-      ).toThrow()
-      spy.mockRestore()
-
-      // And the call after that, once the stub is gone, must succeed again.
-      expect(() =>
-        resolveBunInstallCacheDir({ pin: '1.18.28', tmpRoot }),
-      ).not.toThrow()
-    } finally {
       fs.rmSync(tmpRoot, { recursive: true, force: true })
     }
   })

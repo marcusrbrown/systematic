@@ -159,10 +159,17 @@ function computeOpencodeAvailability(): OpencodeAvailabilityClassification {
     path.join(os.tmpdir(), 'systematic-opencode-probe-'),
   )
   try {
-    // Fixtures redirect HOME/XDG paths, so the probe must also run in that environment.
+    // Fixtures redirect HOME/XDG paths, so the probe must also run in that
+    // environment. The OPENCODE_DISABLE_* flags mirror buildIsolatedOpencodeEnv
+    // below (the real hosts' env) so a first-run autoupdate/models fetch can't
+    // pollute the probe's stdout or add network latency the real hosts don't pay.
     return probeOpencodeAvailability({
       pin: EXACT_OPENCODE_VERSION,
       env: buildChildEnv({
+        OPENCODE_DISABLE_AUTOUPDATE: '1',
+        OPENCODE_DISABLE_LSP_DOWNLOAD: '1',
+        OPENCODE_DISABLE_MODELS_FETCH: '1',
+        OPENCODE_DISABLE_PRUNE: '1',
         HOME: probeRoot,
         XDG_CONFIG_HOME: probeRoot,
         XDG_DATA_HOME: probeRoot,

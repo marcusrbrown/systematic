@@ -62,6 +62,13 @@ function computeOpencodeAvailability(): OpencodeAvailabilityClassification {
         XDG_CACHE_HOME: probeRoot,
         XDG_STATE_HOME: probeRoot,
         TMPDIR: probeRoot,
+        // Mirrors buildEvalChildEnv's real-host env so a first-run
+        // autoupdate/models fetch can't pollute the probe's stdout or add
+        // network latency the real hosts don't pay.
+        OPENCODE_DISABLE_AUTOUPDATE: '1',
+        OPENCODE_DISABLE_LSP_DOWNLOAD: '1',
+        OPENCODE_DISABLE_MODELS_FETCH: '1',
+        OPENCODE_DISABLE_PRUNE: '1',
         BUN_INSTALL_CACHE_DIR: resolveBunInstallCacheDir({
           pin: EXPECTED_OPENCODE_VERSION,
         }),
@@ -75,6 +82,11 @@ function computeOpencodeAvailability(): OpencodeAvailabilityClassification {
 const OPENCODE_AVAILABILITY = computeOpencodeAvailability()
 requireOpencodeAvailable(OPENCODE_AVAILABILITY)
 const OPENCODE_AVAILABLE = OPENCODE_AVAILABILITY.status === 'available'
+if (!OPENCODE_AVAILABLE) {
+  console.warn(
+    `[systematic] skipping OpenCode-dependent tests in eval-runner.test.ts: ${OPENCODE_AVAILABILITY.reason}`,
+  )
+}
 
 const FIXED_CLOCK = '2026-08-13T00:00:00.000Z'
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
@@ -323,8 +335,15 @@ describe('local OpenCode eval runner', () => {
     expect(() => expectRuntimeOutcome(result)).toThrow()
   })
 
+  // This test itself is skipped offline (test.skipIf below) since it starts
+  // a real host; the tolerant infra_failure branch inside it is not a local
+  // skip mechanism, it's the CI fail-closed boundary from Unit 3 (an
+  // opencode_unavailable/identity_drift outcome tightens to a hard failure
+  // under SYSTEMATIC_REQUIRE_OPENCODE=1). The offline "doesn't silently
+  // skip" guarantee for the unavailable path is covered instead by the
+  // ungated `timeoutMs: 1` test below, which runs with no host required.
   test.skipIf(!OPENCODE_AVAILABLE)(
-    'gates grading on exact OpenCode runtime identity without silently skipping',
+    'gates grading on exact OpenCode runtime identity without silently skipping (online only; see the ungated timeoutMs:1 test for the offline path)',
     async () => {
       const parentDir = runParent()
       try {
@@ -2166,67 +2185,74 @@ describe('local OpenCode eval runner', () => {
     })
   })
 
-  test('source direct CLI success emits one JSON object and validator-parseable artifacts', async () => {
-    const rootDir = path.resolve(import.meta.dirname, '../..')
-    const child = spawn(
-      process.execPath,
-      [
-        'scripts/run-evals.ts',
-        '--case',
-        'bootstrap-loading',
-        '--mode',
-        'source',
-        '--seed',
-        'direct-cli-success',
-        '--clock',
-        FIXED_CLOCK,
-      ],
-      { cwd: rootDir, stdio: ['ignore', 'pipe', 'pipe'] },
-    )
-    let stdout = ''
-    let stderr = ''
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString()
-    })
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString()
-    })
+  // Spawns the real CLI, which starts a real OpenCode host; gated like the
+  // other real-eval tests so it skips offline instead of hard-failing on
+  // exitCode/outcome !== success.
+  test.skipIf(!OPENCODE_AVAILABLE)(
+    'source direct CLI success emits one JSON object and validator-parseable artifacts',
+    async () => {
+      const rootDir = path.resolve(import.meta.dirname, '../..')
+      const child = spawn(
+        process.execPath,
+        [
+          'scripts/run-evals.ts',
+          '--case',
+          'bootstrap-loading',
+          '--mode',
+          'source',
+          '--seed',
+          'direct-cli-success',
+          '--clock',
+          FIXED_CLOCK,
+        ],
+        { cwd: rootDir, stdio: ['ignore', 'pipe', 'pipe'] },
+      )
+      let stdout = ''
+      let stderr = ''
+      child.stdout.on('data', (chunk: Buffer) => {
+        stdout += chunk.toString()
+      })
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString()
+      })
 
-    const [exitCode] = (await once(child, 'exit')) as [number | null]
-    expect(exitCode).toBe(0)
-    expect(stderr).toBe('')
-    const lines = stdout.trim().split(/\r?\n/)
-    expect(lines).toHaveLength(1)
-    const summary = JSON.parse(lines[0] ?? '') as {
-      status: string
-      exitCode: number
-      runId: string
-      manifestArtifactId: string
-    }
-    expect(summary).toMatchObject({
-      status: 'written',
-      exitCode: 0,
-      manifestArtifactId: `evals/runs/${summary.runId}/manifest.json`,
-    })
+      const [exitCode] = (await once(child, 'exit')) as [number | null]
+      expect(exitCode).toBe(0)
+      expect(stderr).toBe('')
+      const lines = stdout.trim().split(/\r?\n/)
+      expect(lines).toHaveLength(1)
+      const summary = JSON.parse(lines[0] ?? '') as {
+        status: string
+        exitCode: number
+        runId: string
+        manifestArtifactId: string
+      }
+      expect(summary).toMatchObject({
+        status: 'written',
+        exitCode: 0,
+        manifestArtifactId: `evals/runs/${summary.runId}/manifest.json`,
+      })
 
-    const runRoot = path.join(rootDir, 'evals/runs', summary.runId)
-    try {
-      expect(
-        validateSerializedRunManifest(
-          fs.readFileSync(path.join(runRoot, 'manifest.json')),
-        ).partial,
-      ).toBe(false)
-      expect(
-        validateSerializedResult(
-          fs.readFileSync(
-            path.join(runRoot, 'results/bootstrap-loading/source.json'),
-          ),
-        ).outcome,
-      ).toBe('success')
-    } finally {
-      fs.rmSync(runRoot, { recursive: true, force: true })
-    }
-  }, 360_000)
+      const runRoot = path.join(rootDir, 'evals/runs', summary.runId)
+      try {
+        expect(
+          validateSerializedRunManifest(
+            fs.readFileSync(path.join(runRoot, 'manifest.json')),
+          ).partial,
+        ).toBe(false)
+        expect(
+          validateSerializedResult(
+            fs.readFileSync(
+              path.join(runRoot, 'results/bootstrap-loading/source.json'),
+            ),
+          ).outcome,
+        ).toBe('success')
+      } finally {
+        fs.rmSync(runRoot, { recursive: true, force: true })
+      }
+    },
+    360_000,
+  )
 
   test('direct CLI interruption cleans started children and run-owned roots', async () => {
     const parentDir = runParent()

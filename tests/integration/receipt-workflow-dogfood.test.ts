@@ -12,6 +12,7 @@ import {
   extractPackagedPlugin,
   getOpencodeAvailability,
   isOpencodeAvailable,
+  opencodeAvailabilityReason,
   packTarballOnce,
   startExactOpencodeServer,
   stopAllOpencodeHosts,
@@ -21,6 +22,11 @@ import {
 // See tests/integration/question-attestation-opencode.test.ts for why this
 // call lives here rather than in the fixture module.
 requireOpencodeAvailable(getOpencodeAvailability())
+if (!isOpencodeAvailable()) {
+  console.warn(
+    `[systematic] skipping OpenCode-dependent tests in receipt-workflow-dogfood.test.ts: ${opencodeAvailabilityReason()}`,
+  )
+}
 
 const PROVIDER = 'u7-focused-provider'
 const MODEL = 'u7-focused-model'

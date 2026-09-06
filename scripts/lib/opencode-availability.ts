@@ -59,17 +59,31 @@ export interface ProbeOpencodeAvailabilityOptions {
 
 const DEFAULT_PROBE_TIMEOUT_MS = 300_000
 
+const EXACT_SEMVER_LINE_PATTERN = /^\d+\.\d+\.\d+(?:[-+].+)?$/
+
+/**
+ * Extracts the reported version per the documented contract: the last
+ * non-empty trimmed line of stdout must itself be an exact semver — not any
+ * substring anywhere in the buffer. A first-run autoupdate banner or a
+ * trailing "update available" notice on its own line is therefore never
+ * mistaken for the reported version; it simply fails to parse (the caller's
+ * `OPENCODE_DISABLE_*` env flags are what actually prevent that banner from
+ * appearing at all).
+ */
 function extractReportedVersion(output: string): string | undefined {
-  const matches = output.match(/\b\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?\b/g)
-  return matches?.at(-1)
+  const lines = output.split(/\r?\n/).map((line) => line.trim())
+  const lastNonEmpty = [...lines].reverse().find((line) => line.length > 0)
+  if (lastNonEmpty === undefined) return undefined
+  return EXACT_SEMVER_LINE_PATTERN.test(lastNonEmpty) ? lastNonEmpty : undefined
 }
 
 /**
  * Runs `bunx opencode-ai@<pin> --version` (or the test-only override) under
  * the given environment and classifies the outcome. Never throws; never
- * memoizes. `available` requires exit 0 and stdout equal to the pin exactly;
- * `mismatch` is exit 0 with a different reported version; anything else,
- * including a timeout, is `unavailable`.
+ * memoizes. `available` requires exit 0 and the last stdout line to equal
+ * the pin exactly; `mismatch` is exit 0 with a different exact-semver last
+ * line; anything else, including a timeout or an unparseable last line, is
+ * `unavailable`.
  */
 export function probeOpencodeAvailability(
   options: ProbeOpencodeAvailabilityOptions,
@@ -77,6 +91,19 @@ export function probeOpencodeAvailability(
   const command = options.command ?? 'bunx'
   const args = options.args ?? [`opencode-ai@${options.pin}`, '--version']
 
+  // spawnSync's own timeout sends SIGTERM (then SIGKILL) to the direct child
+  // only, not its process group; this function is deliberately synchronous
+  // (every caller computes availability once, inline, before deciding
+  // whether to proceed), and `stopProcessGroup` from process-group.js needs
+  // an async ChildProcess to await the exit event on, which spawnSync does
+  // not produce. A timed-out `bunx` cold-install could therefore in
+  // principle leave a grandchild `bun install` writing into the shared
+  // BUN_INSTALL_CACHE_DIR after this function returns `unavailable`, risking
+  // a partially-populated shared cache for the next caller. Mitigating that
+  // fully would mean switching this probe to async spawn + group reaping
+  // everywhere it's called (the fixture, eval-runner.test.ts, and
+  // verifyExactOpencodeRuntime's per-case path); left as a documented risk
+  // rather than expanding this change's surface.
   const result = spawnSync(command, args, {
     cwd: options.cwd,
     env: options.env,
@@ -174,19 +201,29 @@ export interface ResolveBunInstallCacheDirOptions {
 export function resolveBunInstallCacheDir(
   options: ResolveBunInstallCacheDirOptions,
 ): string {
-  if (typeof process.getuid !== 'function') {
-    throw new Error(
-      'resolveBunInstallCacheDir requires a POSIX platform with process.getuid()',
-    )
-  }
-  const uid = process.getuid()
+  // process.getuid is POSIX-only (undefined on Windows). Where it's missing,
+  // the directory name falls back to the OS username as its discriminator,
+  // and the ownership assertion below (which needs a uid to compare against)
+  // is skipped rather than thrown — this function must never throw at module
+  // load on a getuid-less platform, since it runs from every fixture-consuming
+  // suite's module scope ahead of that suite's own `process.platform` skip
+  // guards. The symlink/non-directory refusal and the 0700 mkdir/chmod still
+  // apply on every platform.
+  const uid = process.getuid?.()
+  const discriminator = uid ?? os.userInfo().username
   const tmpRoot = options.tmpRoot ?? os.tmpdir()
   const dirPath = path.join(
     tmpRoot,
-    `systematic-bun-install-cache-${uid}-${options.pin}`,
+    `systematic-bun-install-cache-${discriminator}-${options.pin}`,
   )
 
-  fs.mkdirSync(dirPath, { recursive: true, mode: 0o700 })
+  try {
+    fs.mkdirSync(dirPath, { recursive: true, mode: 0o700 })
+  } catch (err) {
+    throw new Error(
+      `failed to create ${dirPath} as the Bun install cache directory: ${err instanceof Error ? err.message : String(err)}`,
+    )
+  }
 
   const stats = fs.lstatSync(dirPath)
 
@@ -200,7 +237,7 @@ export function resolveBunInstallCacheDir(
       `refusing to use ${dirPath} as the Bun install cache directory: it is not a directory`,
     )
   }
-  if (stats.uid !== uid) {
+  if (uid !== undefined && stats.uid !== uid) {
     throw new Error(
       `refusing to use ${dirPath} as the Bun install cache directory: it is owned by uid ${stats.uid}, not the current uid ${uid}`,
     )

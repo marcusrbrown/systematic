@@ -12,6 +12,7 @@ import {
   extractPackagedPlugin,
   getOpencodeAvailability,
   isOpencodeAvailable,
+  opencodeAvailabilityReason,
   packTarballOnce,
   startExactOpencodeServer,
   stopAllOpencodeHosts,
@@ -21,6 +22,11 @@ import {
 // See question-attestation-opencode.test.ts for why this call lives here
 // rather than in the fixture module.
 requireOpencodeAvailable(getOpencodeAvailability())
+if (!isOpencodeAvailable()) {
+  console.warn(
+    `[systematic] skipping OpenCode-dependent tests in receipt-workflow-guard-real-host.test.ts: ${opencodeAvailabilityReason()}`,
+  )
+}
 
 const MOCK_PROVIDER_ID = 'u7-real-host-provider'
 const MOCK_MODEL_ID = 'u7-real-host-model'
