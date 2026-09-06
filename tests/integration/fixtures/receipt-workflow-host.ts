@@ -19,6 +19,10 @@ export const MAX_RETRIES = 1
 export const RETRY_DELAY_MS = 3_000
 export const REPO_ROOT = path.resolve(import.meta.dirname, '../../..')
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
 // `runOpencode`'s scripted provider: a local OpenAI-compatible server takes
 // the place of the previously hosted free-tier model so the suite's only
 // tool-invocation decision is deterministic and requires no network.
@@ -221,18 +225,18 @@ export function buildIsolatedOpencodeEnv(
   })
 }
 
-interface ScriptedToolCall {
+export interface ScriptedToolCall {
   id: string
   name: string
   arguments: Record<string, unknown>
 }
 
-interface ScriptedResponse {
+export interface ScriptedResponse {
   text?: string
   toolCalls?: ScriptedToolCall[]
 }
 
-interface ScriptedModelServer {
+export interface ScriptedModelServer {
   url: string
   stop(): void
 }
@@ -241,7 +245,7 @@ function sseChunk(value: unknown): string {
   return `data: ${JSON.stringify(value)}\n\n`
 }
 
-function scriptedResponseChunks(
+export function scriptedResponseChunks(
   response: ScriptedResponse,
   requestId: string,
   created: number,
@@ -321,23 +325,20 @@ function scriptedResponseChunks(
 }
 
 interface ChatCompletionRequestBody {
-  tools?: unknown[]
-  messages?: unknown[]
+  tools?: unknown
+  messages?: unknown
 }
 
 function isChatCompletionRequestBody(
   value: unknown,
 ): value is ChatCompletionRequestBody {
-  return typeof value === 'object' && value !== null
+  return isRecord(value)
 }
 
-function requestCarriesToolResult(messages: unknown[] | undefined): boolean {
+function requestCarriesToolResult(messages: unknown): boolean {
   if (!Array.isArray(messages)) return false
   return messages.some(
-    (message) =>
-      typeof message === 'object' &&
-      message !== null &&
-      (message as { role?: unknown }).role === 'tool',
+    (message) => isRecord(message) && message.role === 'tool',
   )
 }
 
@@ -351,11 +352,20 @@ function requestCarriesToolResult(messages: unknown[] | undefined): boolean {
  * with the main loop, so its arrival relative to the main call is not
  * ordered; dispatch is therefore based on the request body shape (tool
  * presence, then tool-result presence), never on call order.
+ *
+ * The scripted `systematic_skill` tool call is issued at most once per
+ * server instance: once issued, every later tool-capable request (whether
+ * or not it actually carries the tool result — a mis-registration means it
+ * never will) falls through to `completionText` instead of re-issuing the
+ * call. A broken registration then fails fast on the real assertions
+ * (the host's own tool-invocation log, the probe capture) instead of
+ * silently re-prompting until the step cap.
  */
-function startScriptedSkillModelServer(
+export function startScriptedSkillModelServer(
   skillName: string,
   completionText: string,
 ): ScriptedModelServer {
+  let toolCallIssued = false
   const server = Bun.serve({
     port: 0,
     async fetch(request) {
@@ -369,19 +379,23 @@ function startScriptedSkillModelServer(
       const body = isChatCompletionRequestBody(rawBody) ? rawBody : {}
       const hasTools = Array.isArray(body.tools) && body.tools.length > 0
 
-      const response: ScriptedResponse = !hasTools
-        ? { text: 'Systematic host contract title probe' }
-        : requestCarriesToolResult(body.messages)
-          ? { text: completionText }
-          : {
-              toolCalls: [
-                {
-                  id: 'host-contract-skill-call',
-                  name: 'systematic_skill',
-                  arguments: { name: skillName },
-                },
-              ],
-            }
+      let response: ScriptedResponse
+      if (!hasTools) {
+        response = { text: 'Systematic host contract title probe' }
+      } else if (toolCallIssued || requestCarriesToolResult(body.messages)) {
+        response = { text: completionText }
+      } else {
+        toolCallIssued = true
+        response = {
+          toolCalls: [
+            {
+              id: 'host-contract-skill-call',
+              name: 'systematic_skill',
+              arguments: { name: skillName },
+            },
+          ],
+        }
+      }
 
       const chunks = scriptedResponseChunks(
         response,
@@ -417,7 +431,7 @@ const LOAD_SKILL_PROMPT_PATTERN =
  * scripted model script the exact tool call each call site's assertions
  * expect, without each call site building its own model script.
  */
-function extractSkillNameFromPrompt(prompt: string): string {
+export function extractSkillNameFromPrompt(prompt: string): string {
   const match = LOAD_SKILL_PROMPT_PATTERN.exec(prompt)
   const skillName = match?.[1]
   if (!skillName) {
@@ -428,7 +442,10 @@ function extractSkillNameFromPrompt(prompt: string): string {
   return skillName
 }
 
-function withScriptedProvider(configContent: string, baseUrl: string): string {
+export function withScriptedProvider(
+  configContent: string,
+  baseUrl: string,
+): string {
   const parsed = JSON.parse(configContent) as Record<string, unknown>
   const existingProvider =
     typeof parsed.provider === 'object' && parsed.provider !== null
@@ -469,6 +486,53 @@ export interface RunOpencodeOptions {
   extraEnv?: Record<string, string>
 }
 
+/**
+ * Runs an argv async via `Bun.spawn`, never `Bun.spawnSync`. This function
+ * (and every other real `opencode` child process in this module) shares the
+ * event loop with `startScriptedSkillModelServer`'s `Bun.serve` instance: a
+ * synchronous spawn would block that same thread for its whole duration,
+ * so the scripted server could never answer the child's own HTTP request
+ * back to it — every scripted call would hang to its timeout. `Bun.spawn` is
+ * non-blocking, so the server keeps servicing requests while this awaits.
+ *
+ * Preserves the prior `Bun.spawnSync({ timeout })` semantics: on timeout the
+ * child is killed and the result reports `exitCode: -1`, matching what a
+ * `spawnSync` timeout previously produced (only the direct child is
+ * signaled, not its process group — the same limitation `spawnSync`'s own
+ * `timeout` option had).
+ */
+async function spawnOpencodeChild(
+  argv: readonly string[],
+  options: { cwd: string; env: Record<string, string>; timeoutMs: number },
+): Promise<OpencodeResult> {
+  const [command, ...rest] = argv
+  if (!command) throw new Error('spawnOpencodeChild requires a non-empty argv')
+
+  const proc = Bun.spawn([command, ...rest], {
+    cwd: options.cwd,
+    env: options.env,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
+
+  let timedOut = false
+  const timeout = setTimeout(() => {
+    timedOut = true
+    proc.kill()
+  }, options.timeoutMs)
+
+  try {
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ])
+    return { stdout, stderr, exitCode: timedOut ? -1 : exitCode }
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
 export async function runOpencode(
   prompt: string,
   options: RunOpencodeOptions,
@@ -490,7 +554,7 @@ export async function runOpencode(
     let lastResult: OpencodeResult = { stdout: '', stderr: '', exitCode: -1 }
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      const result = Bun.spawnSync(
+      lastResult = await spawnOpencodeChild(
         [
           'bunx',
           `opencode-ai@${EXACT_OPENCODE_VERSION}`,
@@ -499,18 +563,8 @@ export async function runOpencode(
           `${SCRIPTED_PROVIDER_ID}/${SCRIPTED_MODEL_ID}`,
           prompt,
         ],
-        {
-          cwd: fixture.projectDir,
-          env: childEnv,
-          timeout: TIMEOUT_MS,
-        },
+        { cwd: fixture.projectDir, env: childEnv, timeoutMs: TIMEOUT_MS },
       )
-
-      lastResult = {
-        stdout: result.stdout.toString(),
-        stderr: result.stderr.toString(),
-        exitCode: result.exitCode ?? -1,
-      }
 
       const isTimeout =
         lastResult.exitCode === -1 || lastResult.stderr.includes('ETIMEDOUT')
@@ -583,10 +637,6 @@ export function isProbeSystemEvent(
 
 export function isProbeToolEvent(value: ProbeEvent): value is ProbeToolEvent {
   return value.type === 'tool'
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function isStringArray(value: unknown): value is string[] {
