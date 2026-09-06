@@ -43,7 +43,9 @@ interface MockModelServer {
  */
 function unwrapData<T>(result: { data?: T; error?: unknown }): T {
   if (result.data === undefined) {
-    throw new Error(`opencode client call failed: ${String(result.error)}`)
+    throw new Error(
+      `opencode client call failed: ${JSON.stringify(result.error)}`,
+    )
   }
   return result.data
 }
@@ -909,12 +911,12 @@ describe.skipIf(!OPENCODE_AVAILABLE)('OpenCode Question attestation', () => {
         const request = pending[0]
         expect(request).toBeDefined()
         if (!request) throw new Error('disablement question missing')
-        const beforeReply = (
+        const beforeReply = unwrapData(
           await client.session.messages({
             sessionID,
             directory: fixture.projectDir,
-          })
-        ).data
+          }),
+        )
         expect(JSON.stringify(beforeReply)).toContain('question-attestation')
         expect(JSON.stringify(beforeReply)).not.toContain('"state":"disabled"')
 

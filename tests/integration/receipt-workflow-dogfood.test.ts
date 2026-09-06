@@ -36,7 +36,9 @@ type ModelResponse = { text?: string; toolCalls?: ToolCall[] }
  */
 function unwrapData<T>(result: { data?: T; error?: unknown }): T {
   if (result.data === undefined) {
-    throw new Error(`opencode client call failed: ${String(result.error)}`)
+    throw new Error(
+      `opencode client call failed: ${JSON.stringify(result.error)}`,
+    )
   }
   return result.data
 }
