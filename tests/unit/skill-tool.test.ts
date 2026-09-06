@@ -2,12 +2,23 @@ import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import type { ToolResult } from '@opencode-ai/plugin'
 import { createSkillTool } from '../../src/lib/skill-tool.ts'
 
 const mockContext = {
   ask: async () => {},
   metadata: () => {},
 } as never
+
+/** `ToolDefinition['execute']` returns the SDK's `ToolResult` union; the skill tool always resolves the string branch. */
+function expectStringToolResult(result: ToolResult): string {
+  if (typeof result !== 'string') {
+    throw new Error(
+      'Expected the skill tool to return a string ToolResult, got a structured result instead.',
+    )
+  }
+  return result
+}
 
 describe('skill-tool', () => {
   let testDir: string
@@ -480,9 +491,8 @@ description: Test file limit
         disabledSkills: [],
       })
 
-      const result = await tool.execute(
-        { name: 'file-limit-test' },
-        mockContext,
+      const result = expectStringToolResult(
+        await tool.execute({ name: 'file-limit-test' }, mockContext),
       )
 
       // Count the number of <file> tags

@@ -23,6 +23,31 @@ afterAll(() => {
   }
 })
 
+type SessionModel = NonNullable<CreateAgentSessionOptions['model']>
+
+/**
+ * Builds a complete SDK-shaped `Model<any>` fixture (all required fields
+ * from `@earendil-works/pi-ai`'s `Model<TApi>` interface populated with
+ * inert defaults) so tests can override only the fields they assert on.
+ */
+function createModelFixture(
+  overrides: Partial<SessionModel> = {},
+): SessionModel {
+  return {
+    id: 'm',
+    name: 'm',
+    api: 'anthropic-messages',
+    provider: 'p',
+    baseUrl: 'https://example.invalid',
+    reasoning: false,
+    input: ['text'],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow: 1,
+    maxTokens: 1,
+    ...overrides,
+  }
+}
+
 function makeTempAgentsDir(files: Record<string, string>): string {
   const dir = fs.mkdtempSync(
     path.join(os.tmpdir(), 'pi-delegate-session-recursion-test-'),
@@ -61,14 +86,14 @@ describe('buildDelegateResourceLoaderOptions', () => {
 
 describe('buildDelegateAgentSessionOptions', () => {
   test('requests parent model/cwd, exact mapped tools, empty customTools, and the given loader/session manager', () => {
-    const model = { provider: 'anthropic', id: 'claude' }
+    const model = createModelFixture({ provider: 'anthropic', id: 'claude' })
     const resourceLoader = { marker: 'resource-loader' } as never
     const sessionManager = { marker: 'session-manager' } as never
 
     const options = buildDelegateAgentSessionOptions({
       cwd: '/parent/cwd',
       agentDir: '/agent/dir',
-      model: model as CreateAgentSessionOptions['model'],
+      model,
       allowedToolNames: ['read', 'grep'],
       resourceLoader,
       sessionManager,
@@ -87,7 +112,7 @@ describe('buildDelegateAgentSessionOptions', () => {
     const options = buildDelegateAgentSessionOptions({
       cwd: '/parent/cwd',
       agentDir: '/agent/dir',
-      model: { provider: 'p', id: 'm' } as CreateAgentSessionOptions['model'],
+      model: createModelFixture(),
       thinkingLevel: 'high',
       allowedToolNames: ['read'],
       resourceLoader: {} as never,
@@ -101,7 +126,7 @@ describe('buildDelegateAgentSessionOptions', () => {
     const options = buildDelegateAgentSessionOptions({
       cwd: '/parent/cwd',
       agentDir: '/agent/dir',
-      model: { provider: 'p', id: 'm' } as CreateAgentSessionOptions['model'],
+      model: createModelFixture(),
       allowedToolNames: ['read'],
       resourceLoader: {} as never,
       sessionManager: {} as never,
@@ -176,10 +201,10 @@ describe('createDelegateSessionWith: live adapter contract, no provider required
     const { runtime, calls } = createFakeRuntime()
     const createSession = createDelegateSessionWith(runtime)
 
-    const model = { provider: 'anthropic', id: 'claude' }
+    const model = createModelFixture({ provider: 'anthropic', id: 'claude' })
     const session = await createSession({
       agentName: 'git-analyzer',
-      model: model as CreateAgentSessionOptions['model'],
+      model,
       cwd: '/parent/cwd',
       systemPromptOverride: 'Persona body.',
       allowedToolNames: ['read', 'grep'],
@@ -230,7 +255,7 @@ describe('createDelegateSessionWith: live adapter contract, no provider required
 
     await createSession({
       agentName: 'git-analyzer',
-      model: { provider: 'p', id: 'm' } as CreateAgentSessionOptions['model'],
+      model: createModelFixture(),
       thinkingLevel: 'high',
       cwd: '/parent/cwd',
       systemPromptOverride: 'Persona body.',
@@ -245,7 +270,7 @@ describe('createDelegateSessionWith: live adapter contract, no provider required
     const createSession2 = createDelegateSessionWith(runtime2)
     await createSession2({
       agentName: 'git-analyzer',
-      model: { provider: 'p', id: 'm' } as CreateAgentSessionOptions['model'],
+      model: createModelFixture(),
       cwd: '/parent/cwd',
       systemPromptOverride: 'Persona body.',
       allowedToolNames: ['read'],
@@ -263,7 +288,7 @@ describe('createDelegateSessionWith: live adapter contract, no provider required
     await expect(
       createSession({
         agentName: 'malicious',
-        model: { provider: 'p', id: 'm' } as CreateAgentSessionOptions['model'],
+        model: createModelFixture(),
         cwd: '/cwd',
         systemPromptOverride: 'x',
         allowedToolNames: ['read', DELEGATE_TOOL_NAME],
@@ -337,10 +362,7 @@ describe('systematic_delegate child-session boundary: noExtensions + re-entry gu
 
     await createSession({
       agentName: 'any-persona',
-      model: {
-        provider: 'anthropic',
-        id: 'claude',
-      } as CreateAgentSessionOptions['model'],
+      model: createModelFixture({ provider: 'anthropic', id: 'claude' }),
       cwd: '/parent/cwd',
       systemPromptOverride: 'Persona body.',
       allowedToolNames: ['read'],
@@ -394,10 +416,7 @@ describe('systematic_delegate child-session boundary: noExtensions + re-entry gu
     await expect(
       createSession({
         agentName: 'any-persona',
-        model: {
-          provider: 'p',
-          id: 'm',
-        } as CreateAgentSessionOptions['model'],
+        model: createModelFixture(),
         cwd: '/cwd',
         systemPromptOverride: 'body',
         // Including DELEGATE_TOOL_NAME triggers the fail-closed guard.

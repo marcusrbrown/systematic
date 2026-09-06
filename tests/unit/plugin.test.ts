@@ -375,7 +375,12 @@ describe('per-invocation plugin registration', () => {
       const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
         default: (args: ReturnType<typeof makeInput>) => Promise<{
           config: unknown
-          tool: { systematic_skill: unknown }
+          tool: {
+            systematic_skill: unknown
+            systematic_workflow_start: unknown
+          }
+          'tool.execute.before': unknown
+          'tool.execute.after': unknown
           'experimental.chat.system.transform': unknown
         }>
       }
