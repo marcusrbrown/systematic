@@ -5,6 +5,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+
 import {
   type BoundedProbeEvent,
   createOpencodeProbe,
@@ -14,11 +15,13 @@ import {
   observePromptComposition,
 } from '../../scripts/eval-cases/opencode.ts'
 import {
+  type CaseId,
   capturePrimaryCheckout,
   cleanupEvalFixture,
   createEvalFixture,
   type EvalFixture,
   type EvalSelectionRunnerInput,
+  type EvalSubcode,
   EXPECTED_OPENCODE_VERSION,
   installEvalSignalHandlers,
   normalizeResult,
@@ -79,18 +82,29 @@ function syntheticExecution(
   }
 }
 
+const SYNTHETIC_CASE_ASSERTIONS = {
+  'bootstrap-loading': ['bootstrap-observed'],
+  'fixture-local-write': ['fixture-file-content', 'fixture-file-created'],
+  'host-skill-coverage': ['host-catalog-covered'],
+  'model-inheritance': [
+    'agents-inherit-invoking-model',
+    'explicit-model-overlay-wins',
+    'model-null-restores-inheritance',
+    'project-model-trust-boundary',
+  ],
+} as const satisfies Record<CaseId, readonly string[]>
+
+// Does not build the 'model-inheritance' evidence branch; passing that
+// caseId throws in normalizeEvidence.
 function syntheticResult(options: {
-  caseId: 'bootstrap-loading' | 'fixture-local-write'
+  caseId: CaseId
   mode: 'source' | 'installed'
   runId: string
   outcome: 'success' | 'task_failure' | 'infra_failure'
   subcode: 'none' | 'write_mismatch' | 'identity_drift' | 'artifact_resolution'
 }): ReturnType<typeof normalizeResult> {
   const installed = options.mode === 'installed'
-  const assertionIds =
-    options.caseId === 'bootstrap-loading'
-      ? ['bootstrap-observed']
-      : ['fixture-file-content', 'fixture-file-created']
+  const assertionIds = SYNTHETIC_CASE_ASSERTIONS[options.caseId]
   return normalizeResult({
     resultSchemaVersion: 1,
     caseSchemaVersion: 1,
@@ -242,6 +256,13 @@ function normalizeRunIdentity<T>(value: T, runIds: readonly string[]): T {
   return value
 }
 
+function requireSubcode(subcode: EvalSubcode | undefined): EvalSubcode {
+  if (subcode === undefined) {
+    throw new Error('expected result.subcode to be defined')
+  }
+  return subcode
+}
+
 async function waitForMarker(
   markerPath: string,
   timeoutMs: number,
@@ -274,7 +295,7 @@ describe('local OpenCode eval runner', () => {
 
       if (normalized.outcome === 'infra_failure') {
         expect(['opencode_unavailable', 'identity_drift']).toContain(
-          normalized.subcode,
+          requireSubcode(normalized.subcode),
         )
       } else {
         expect(normalized.identity.opencodeVersion).toBe(
@@ -1009,7 +1030,7 @@ describe('local OpenCode eval runner', () => {
       )
       expect(result.outcome).toBe('infra_failure')
       expect(['opencode_unavailable', 'identity_drift']).toContain(
-        result.subcode,
+        requireSubcode(result.subcode),
       )
       expect(result.cleanup).toEqual({ status: 'clean', residue: 'none' })
       expect(fs.readdirSync(parentDir)).toEqual([])
