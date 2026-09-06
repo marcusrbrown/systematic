@@ -2,6 +2,8 @@ import { describe, expect, test } from 'bun:test'
 
 import {
   createReceiptLedger,
+  type FinalizeObservationResult,
+  type PrepareObservationResult,
   type ReceiptClassification,
   type ReceiptContext,
   type ReceiptOperation,
@@ -108,6 +110,52 @@ function finalizeLedgerObservation(
   })
 }
 
+/**
+ * Narrows a `FinalizeObservationResult` to its `finalized` branch, throwing
+ * with a descriptive message when the result was rejected instead. Tests use
+ * this to access `.receipt` without a non-null assertion.
+ */
+function expectFinalized(
+  result: FinalizeObservationResult,
+): Extract<FinalizeObservationResult, { status: 'finalized' }> {
+  if (result.status !== 'finalized') {
+    throw new Error(
+      `expected a finalized observation result, got status: ${result.status}`,
+    )
+  }
+  return result
+}
+
+/**
+ * Narrows a `PrepareObservationResult` to its `prepared` branch, throwing
+ * with a descriptive message when the result was duplicate/rejected instead.
+ */
+function expectPrepared(
+  result: PrepareObservationResult,
+): Extract<PrepareObservationResult, { status: 'prepared' }> {
+  if (result.status !== 'prepared') {
+    throw new Error(
+      `expected a prepared observation result, got status: ${result.status}`,
+    )
+  }
+  return result
+}
+
+/**
+ * Narrows a `FinalizeObservationResult` to its `rejected` branch, throwing
+ * with a descriptive message when the result unexpectedly finalized instead.
+ */
+function expectRejected(
+  result: FinalizeObservationResult,
+): Extract<FinalizeObservationResult, { status: 'rejected' }> {
+  if (result.status !== 'rejected') {
+    throw new Error(
+      `expected a rejected observation result, got status: ${result.status}`,
+    )
+  }
+  return result
+}
+
 describe('receipt ledger', () => {
   test('mints a v2 receipt with its operation target identity', () => {
     const ledger = createReceiptLedger({
@@ -118,10 +166,10 @@ describe('receipt ledger', () => {
 
     const result = finalizeLedgerObservation(ledger)
 
-    expect(result).toMatchObject({ status: 'finalized' })
-    expect(result.receipt?.schemaVersion).toBe(2)
-    expect(result.receipt?.protocolVersion).toBe(2)
-    expect(result.receipt?.canonical.operationTargetIdentity).toBe(
+    const finalized = expectFinalized(result)
+    expect(finalized.receipt.schemaVersion).toBe(2)
+    expect(finalized.receipt.protocolVersion).toBe(2)
+    expect(finalized.receipt.canonical.operationTargetIdentity).toBe(
       OPERATION_TARGET_IDENTITY,
     )
   })
@@ -179,8 +227,8 @@ describe('receipt ledger', () => {
 
     const result = finalizeLedgerObservation(ledger)
 
-    expect(result.status).toBe('finalized')
-    expect(result.receipt).toMatchObject({
+    const finalized = expectFinalized(result)
+    expect(finalized.receipt).toMatchObject({
       compatibility: 'compatible',
       canonical: {
         operation: 'implementation',
@@ -189,11 +237,11 @@ describe('receipt ledger', () => {
         source: 'runtime-verified',
       },
     })
-    expect(result.receipt?.canonical.receiptId).toBeString()
-    expect(JSON.stringify(result.receipt)).not.toContain(RAW_REPOSITORY)
-    expect(JSON.stringify(result.receipt)).not.toContain(RAW_WORKTREE)
-    expect(JSON.stringify(result.receipt)).not.toContain(RAW_COMMAND)
-    expect(JSON.stringify(result.receipt)).not.toContain(RAW_OUTPUT)
+    expect(finalized.receipt.canonical.receiptId).toBeString()
+    expect(JSON.stringify(finalized.receipt)).not.toContain(RAW_REPOSITORY)
+    expect(JSON.stringify(finalized.receipt)).not.toContain(RAW_WORKTREE)
+    expect(JSON.stringify(finalized.receipt)).not.toContain(RAW_COMMAND)
+    expect(JSON.stringify(finalized.receipt)).not.toContain(RAW_OUTPUT)
   })
 
   test('deduplicates a call and consumes its receipt exactly once', () => {
@@ -204,14 +252,13 @@ describe('receipt ledger', () => {
     expect(prepareLedgerObservation(ledger).status).toBe('prepared')
     expect(prepareLedgerObservation(ledger).status).toBe('duplicate')
 
-    const finalized = finalizeLedgerObservation(ledger)
-    expect(finalized.status).toBe('finalized')
+    const finalizedResult = finalizeLedgerObservation(ledger)
+    const finalized = expectFinalized(finalizedResult)
 
-    const replay = finalizeLedgerObservation(ledger)
-    expect(replay.status).toBe('rejected')
-    expect(replay.reasonCode).toBe('duplicate-finalization')
+    const replayResult = expectRejected(finalizeLedgerObservation(ledger))
+    expect(replayResult.reasonCode).toBe('duplicate-finalization')
 
-    const receiptId = finalized.receipt?.canonical.receiptId
+    const receiptId = finalized.receipt.canonical.receiptId
     expect(receiptId).toBeString()
     expect(
       ledger.consumeReceipt(receiptId ?? '', {
@@ -355,11 +402,11 @@ describe('receipt ledger', () => {
       classification: classification(),
       terminal: { status: 'success', output: 'non-empty', noOp: false },
     })
-    expect(result).toMatchObject({ status: 'finalized' })
-    expect(result.receipt?.canonical.workspaceDigest).toBe(
+    const finalized = expectFinalized(result)
+    expect(finalized.receipt.canonical.workspaceDigest).toBe(
       ledger.digestIdentity('workspace', RAW_WORKSPACE_BEFORE),
     )
-    expect(result.receipt?.canonical.worktreeDigest).toBe(
+    expect(finalized.receipt.canonical.worktreeDigest).toBe(
       ledger.digestIdentity('worktree', 'worktree-after'),
     )
   })
@@ -668,8 +715,8 @@ describe('receipt ledger', () => {
       registrationIdentity: 'registration-a',
     })
     prepareLedgerObservation(ledger)
-    const finalized = finalizeLedgerObservation(ledger)
-    const receiptId = finalized.receipt?.canonical.receiptId ?? ''
+    const finalized = expectFinalized(finalizeLedgerObservation(ledger))
+    const receiptId = finalized.receipt.canonical.receiptId
 
     expect(
       ledger.consumeReceipt(receiptId, {
@@ -727,9 +774,8 @@ describe('receipt ledger', () => {
       registrationIdentity: 'registration-a',
     })
     prepareLedgerObservation(first)
-    const finalized = finalizeLedgerObservation(first)
+    const finalized = expectFinalized(finalizeLedgerObservation(first))
     const envelope = finalized.receipt
-    expect(envelope).toBeDefined()
     expect(first.validateEnvelope(envelope)).toMatchObject({
       compatibility: 'compatible',
     })
@@ -740,7 +786,7 @@ describe('receipt ledger', () => {
     })
     expect(
       first.validateEnvelope({
-        ...(envelope ?? {}),
+        ...envelope,
         schemaVersion: 999,
       }),
     ).toMatchObject({
@@ -749,7 +795,7 @@ describe('receipt ledger', () => {
     })
     expect(
       first.validateEnvelope({
-        ...(envelope ?? {}),
+        ...envelope,
         capabilityFlags: undefined,
       }),
     ).toMatchObject({
@@ -772,7 +818,7 @@ describe('receipt ledger', () => {
       capabilityFlags: ['zeta', 'alpha', 'zeta'],
     })
     prepareLedgerObservation(ledger)
-    const finalized = finalizeLedgerObservation(ledger)
+    const finalized = expectFinalized(finalizeLedgerObservation(ledger))
     const envelope = finalized.receipt
 
     expect(ledger.metadata.capabilityFlags).toEqual(['alpha', 'zeta'])
@@ -799,7 +845,7 @@ describe('receipt ledger', () => {
     for (const capabilityFlags of mismatches) {
       expect(
         ledger.validateEnvelope({
-          ...(envelope ?? {}),
+          ...envelope,
           capabilityFlags,
         }),
       ).toMatchObject({
@@ -886,7 +932,7 @@ describe('receipt ledger', () => {
     expect(first.digestIdentity('repository', RAW_REPOSITORY)).toBe(firstDigest)
 
     prepareLedgerObservation(first)
-    const finalized = finalizeLedgerObservation(first)
+    const finalized = expectFinalized(finalizeLedgerObservation(first))
     const saltHex = Buffer.from(SUPPLIED_SALT).toString('hex')
     expect(JSON.stringify(finalized.receipt)).not.toContain(saltHex)
     expect(JSON.stringify(first.listReceipts())).not.toContain(saltHex)
@@ -904,11 +950,10 @@ describe('receipt ledger', () => {
     const ledger = createReceiptLedger({
       registrationIdentity: 'registration-a',
     })
-    const prepared = prepareLedgerObservation(ledger)
-    expect(prepared.status).toBe('prepared')
+    const prepared = expectPrepared(prepareLedgerObservation(ledger))
     expect(ledger.listReceipts()).toHaveLength(0)
     expect(
-      ledger.consumeReceipt(prepared.preparationId ?? '', {
+      ledger.consumeReceipt(prepared.preparationId, {
         epochId: 'epoch-1',
         unitId: 'unit-1',
         workspaceIdentity: RAW_WORKSPACE_BEFORE,
@@ -939,24 +984,18 @@ describe('receipt ledger', () => {
     prepareLedgerObservation(ledger, 'call-epoch-1', context('epoch-1'))
     prepareLedgerObservation(ledger, 'call-epoch-2', context('epoch-2'))
 
-    const first = finalizeLedgerObservation(
-      ledger,
-      'call-epoch-1',
-      context('epoch-1'),
+    const first = expectFinalized(
+      finalizeLedgerObservation(ledger, 'call-epoch-1', context('epoch-1')),
     )
-    const second = finalizeLedgerObservation(
-      ledger,
-      'call-epoch-2',
-      context('epoch-2'),
+    const second = expectFinalized(
+      finalizeLedgerObservation(ledger, 'call-epoch-2', context('epoch-2')),
     )
 
-    expect(first.status).toBe('finalized')
-    expect(second.status).toBe('finalized')
-    expect(first.receipt?.canonical.epochDigest).not.toBe(
-      second.receipt?.canonical.epochDigest,
+    expect(first.receipt.canonical.epochDigest).not.toBe(
+      second.receipt.canonical.epochDigest,
     )
     expect(
-      ledger.consumeReceipt(first.receipt?.canonical.receiptId ?? '', {
+      ledger.consumeReceipt(first.receipt.canonical.receiptId, {
         epochId: 'epoch-1',
         unitId: 'unit-1',
         workspaceIdentity: RAW_WORKSPACE_BEFORE,
@@ -967,7 +1006,7 @@ describe('receipt ledger', () => {
       }).status,
     ).toBe('consumed')
     expect(
-      ledger.consumeReceipt(second.receipt?.canonical.receiptId ?? '', {
+      ledger.consumeReceipt(second.receipt.canonical.receiptId, {
         epochId: 'epoch-2',
         unitId: 'unit-1',
         workspaceIdentity: RAW_WORKSPACE_BEFORE,

@@ -78,6 +78,21 @@ function sseChunk(value: unknown): string {
   return `data: ${JSON.stringify(value)}\n\n`
 }
 
+/**
+ * The OpenCode SDK client types every response as `{ data?: T; error?:
+ * unknown }` to model transport failures. These recovery tests always run
+ * against a live host and expect success; this asserts that at the call
+ * site instead of accessing `.data` with `?.`/`!` at every downstream read.
+ */
+function unwrapData<T>(result: { data?: T; error?: unknown }): T {
+  if (result.data === undefined) {
+    throw new Error(
+      `opencode client call failed: ${JSON.stringify(result.error)}`,
+    )
+  }
+  return result.data
+}
+
 function buildToolCallChunks(
   response: ScriptedResponse,
   id: string,
@@ -530,12 +545,14 @@ async function createSession(
   title: string,
   permission = [{ permission: '*', pattern: '*', action: 'allow' as const }],
 ): Promise<string> {
-  const created = await client.session.create({
-    directory,
-    title,
-    permission,
-  })
-  return created.data.id
+  const created = unwrapData(
+    await client.session.create({
+      directory,
+      title,
+      permission,
+    }),
+  )
+  return created.id
 }
 
 function initializeIsolatedRepository(
@@ -614,12 +631,14 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
           baseUrl: firstHost.url,
           directory: fixture.projectDir,
         })
-        const created = await firstClient.session.create({
-          directory: fixture.projectDir,
-          title: 'receipt metadata probe',
-          permission: [{ permission: '*', pattern: '*', action: 'allow' }],
-        })
-        const sessionID = created.data.id
+        const created = unwrapData(
+          await firstClient.session.create({
+            directory: fixture.projectDir,
+            title: 'receipt metadata probe',
+            permission: [{ permission: '*', pattern: '*', action: 'allow' }],
+          }),
+        )
+        const sessionID = created.id
         await firstClient.session.prompt({
           sessionID,
           directory: fixture.projectDir,
@@ -627,11 +646,13 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
           parts: [{ type: 'text', text: 'Run the built-in bash tool once.' }],
         })
 
-        const firstMessages = await firstClient.session.messages({
-          sessionID,
-          directory: fixture.projectDir,
-        })
-        const firstBashParts = completedBashParts(firstMessages.data)
+        const firstMessages = unwrapData(
+          await firstClient.session.messages({
+            sessionID,
+            directory: fixture.projectDir,
+          }),
+        )
+        const firstBashParts = completedBashParts(firstMessages)
         expect(firstBashParts).toHaveLength(1)
         const firstState = firstBashParts[0]?.state as Record<string, unknown>
         const firstMetadata = firstState.metadata as Record<string, unknown>
@@ -665,11 +686,13 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
             baseUrl: secondHost.url,
             directory: fixture.projectDir,
           })
-          const secondMessages = await secondClient.session.messages({
-            sessionID,
-            directory: fixture.projectDir,
-          })
-          const secondBashParts = completedBashParts(secondMessages.data)
+          const secondMessages = unwrapData(
+            await secondClient.session.messages({
+              sessionID,
+              directory: fixture.projectDir,
+            }),
+          )
+          const secondBashParts = completedBashParts(secondMessages)
           expect(secondBashParts).toHaveLength(1)
           const secondState = secondBashParts[0]?.state as Record<
             string,
@@ -721,50 +744,60 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
             baseUrl: host.url,
             directory: localFixture.projectDir,
           })
-          const created = await client.session.create({
-            directory: localFixture.projectDir,
-            title: 'receipt fork probe',
-            permission: [{ permission: '*', pattern: '*', action: 'allow' }],
-          })
-          const sessionID = created.data.id
+          const created = unwrapData(
+            await client.session.create({
+              directory: localFixture.projectDir,
+              title: 'receipt fork probe',
+              permission: [{ permission: '*', pattern: '*', action: 'allow' }],
+            }),
+          )
+          const sessionID = created.id
           await client.session.prompt({
             sessionID,
             directory: localFixture.projectDir,
             model: { providerID: MOCK_PROVIDER_ID, modelID: MOCK_MODEL_ID },
             parts: [{ type: 'text', text: 'Run the built-in bash tool once.' }],
           })
-          const secondPrompt = await client.session.prompt({
-            sessionID,
-            directory: localFixture.projectDir,
-            model: { providerID: MOCK_PROVIDER_ID, modelID: MOCK_MODEL_ID },
-            parts: [{ type: 'text', text: 'Reply with one short sentence.' }],
-          })
+          const secondPrompt = unwrapData(
+            await client.session.prompt({
+              sessionID,
+              directory: localFixture.projectDir,
+              model: { providerID: MOCK_PROVIDER_ID, modelID: MOCK_MODEL_ID },
+              parts: [{ type: 'text', text: 'Reply with one short sentence.' }],
+            }),
+          )
 
-          const sourceMessages = await client.session.messages({
-            sessionID,
-            directory: localFixture.projectDir,
-          })
-          const sourcePart = completedBashParts(sourceMessages.data)[0]
+          const sourceMessages = unwrapData(
+            await client.session.messages({
+              sessionID,
+              directory: localFixture.projectDir,
+            }),
+          )
+          const sourcePart = completedBashParts(sourceMessages)[0]
           expect(sourcePart).toBeDefined()
           const sourceState = sourcePart?.state as Record<string, unknown>
           const sourceMetadata = sourceState.metadata as Record<string, unknown>
 
-          const forked = await client.session.fork({
-            sessionID,
-            directory: localFixture.projectDir,
-            messageID: secondPrompt.data.info.id,
-          })
-          expect(forked.data.id).not.toBe(sessionID)
+          const forked = unwrapData(
+            await client.session.fork({
+              sessionID,
+              directory: localFixture.projectDir,
+              messageID: secondPrompt.info.id,
+            }),
+          )
+          expect(forked.id).not.toBe(sessionID)
           expect({
-            parentIDPresent: typeof forked.data.parentID === 'string',
-            parentIDMatchesSource: forked.data.parentID === sessionID,
+            parentIDPresent: typeof forked.parentID === 'string',
+            parentIDMatchesSource: forked.parentID === sessionID,
           }).toEqual({ parentIDPresent: false, parentIDMatchesSource: false })
 
-          const childMessages = await client.session.messages({
-            sessionID: forked.data.id,
-            directory: localFixture.projectDir,
-          })
-          const childPart = completedBashParts(childMessages.data)[0]
+          const childMessages = unwrapData(
+            await client.session.messages({
+              sessionID: forked.id,
+              directory: localFixture.projectDir,
+            }),
+          )
+          const childPart = completedBashParts(childMessages)[0]
           expect(childPart).toBeDefined()
           const childState = childPart?.state as Record<string, unknown>
           const childMetadata = childState.metadata as Record<string, unknown>
@@ -788,13 +821,13 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
             partIDReassigned: true,
           })
 
-          const children = await client.session.children({
-            sessionID,
-            directory: localFixture.projectDir,
-          })
-          expect(
-            children.data.some((child) => child.id === forked.data.id),
-          ).toBe(false)
+          const children = unwrapData(
+            await client.session.children({
+              sessionID,
+              directory: localFixture.projectDir,
+            }),
+          )
+          expect(children.some((child) => child.id === forked.id)).toBe(false)
         } finally {
           await host.stop()
           model.stop()
@@ -839,12 +872,14 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
             baseUrl: host.url,
             directory: localFixture.projectDir,
           })
-          const created = await client.session.create({
-            directory: localFixture.projectDir,
-            title: 'receipt task lineage probe',
-            permission: [{ permission: '*', pattern: '*', action: 'allow' }],
-          })
-          const sessionID = created.data.id
+          const created = unwrapData(
+            await client.session.create({
+              directory: localFixture.projectDir,
+              title: 'receipt task lineage probe',
+              permission: [{ permission: '*', pattern: '*', action: 'allow' }],
+            }),
+          )
+          const sessionID = created.id
           await client.session.prompt({
             sessionID,
             directory: localFixture.projectDir,
@@ -878,22 +913,24 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
             afterMetadataParentMatches: true,
           })
 
-          const children = await client.session.children({
-            sessionID,
-            directory: localFixture.projectDir,
-          })
-          const child = children.data.find(
-            (entry) => entry.id === childSessionID,
+          const children = unwrapData(
+            await client.session.children({
+              sessionID,
+              directory: localFixture.projectDir,
+            }),
           )
+          const child = children.find((entry) => entry.id === childSessionID)
           expect(child).toBeDefined()
           expect(child?.parentID).toBe(sessionID)
 
-          const childMessages = await client.session.messages({
-            sessionID: childSessionID,
-            directory: localFixture.projectDir,
-          })
-          expect(childMessages.data.length).toBeGreaterThan(0)
-          const childTextPartCount = childMessages.data.reduce(
+          const childMessages = unwrapData(
+            await client.session.messages({
+              sessionID: childSessionID,
+              directory: localFixture.projectDir,
+            }),
+          )
+          expect(childMessages.length).toBeGreaterThan(0)
+          const childTextPartCount = childMessages.reduce(
             (count, message) =>
               count +
               message.parts.filter((part) => part.type === 'text').length,
@@ -901,14 +938,13 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
           )
           expect(childTextPartCount).toBeGreaterThan(0)
 
-          const parentMessages = await client.session.messages({
-            sessionID,
-            directory: localFixture.projectDir,
-          })
-          const parentTaskParts = completedToolParts(
-            parentMessages.data,
-            'task',
+          const parentMessages = unwrapData(
+            await client.session.messages({
+              sessionID,
+              directory: localFixture.projectDir,
+            }),
           )
+          const parentTaskParts = completedToolParts(parentMessages, 'task')
           expect(parentTaskParts).toHaveLength(1)
           const parentTaskState = parentTaskParts[0]?.state as Record<
             string,
@@ -961,13 +997,15 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
             baseUrl: host.url,
             directory: localFixture.projectDir,
           })
-          const created = await client.session.create({
-            directory: localFixture.projectDir,
-            title: 'receipt privacy probe',
-            permission: [{ permission: '*', pattern: '*', action: 'allow' }],
-          })
+          const created = unwrapData(
+            await client.session.create({
+              directory: localFixture.projectDir,
+              title: 'receipt privacy probe',
+              permission: [{ permission: '*', pattern: '*', action: 'allow' }],
+            }),
+          )
           await client.session.prompt({
-            sessionID: created.data.id,
+            sessionID: created.id,
             directory: localFixture.projectDir,
             model: { providerID: MOCK_PROVIDER_ID, modelID: MOCK_MODEL_ID },
             parts: [{ type: 'text', text: 'Reply once.' }],
@@ -1085,12 +1123,14 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
             'Run the guarded workflow and make one implementation change.',
           )
 
-          const beforeRestart = await firstClient.session.messages({
-            sessionID,
-            directory: localFixture.projectDir,
-          })
+          const beforeRestart = unwrapData(
+            await firstClient.session.messages({
+              sessionID,
+              directory: localFixture.projectDir,
+            }),
+          )
           const beforeSkillParts = completedToolParts(
-            beforeRestart.data,
+            beforeRestart,
             'systematic_skill',
           )
           expect(beforeSkillParts).toHaveLength(1)
@@ -1103,7 +1143,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
           expect(beforeSkillOutput).toContain('<skill_content name="ce:work">')
           expect(beforeSkillOutput).toContain('# Skill: ce:work')
           expect(beforeSkillOutput).toContain('Base directory for this skill:')
-          const beforeMarkers = systematicMarkers(beforeRestart.data)
+          const beforeMarkers = systematicMarkers(beforeRestart)
           expect(
             readProbeEvents(hookProbe.capturePath).filter(
               (event) => event.type === 'after-shape',
@@ -1187,7 +1227,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
             },
           ])
           expect(beforeMarkers.length).toBeGreaterThan(0)
-          assertPrivacySafeMarkers(beforeRestart.data)
+          assertPrivacySafeMarkers(beforeRestart)
           const firstPID = firstHost.pid
           await firstHost.stop()
           firstHost = undefined
@@ -1198,25 +1238,27 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
             baseUrl: secondHost.url,
             directory: localFixture.projectDir,
           })
-          const persisted = await secondClient.session.messages({
-            sessionID,
-            directory: localFixture.projectDir,
-          })
-          expect(systematicMarkers(persisted.data).length).toBe(
-            beforeMarkers.length,
+          const persisted = unwrapData(
+            await secondClient.session.messages({
+              sessionID,
+              directory: localFixture.projectDir,
+            }),
           )
+          expect(systematicMarkers(persisted).length).toBe(beforeMarkers.length)
           await promptSession(
             secondClient,
             sessionID,
             localFixture.projectDir,
             'Read the recovered workflow status, then complete the unit.',
           )
-          const afterRecovery = await secondClient.session.messages({
-            sessionID,
-            directory: localFixture.projectDir,
-          })
+          const afterRecovery = unwrapData(
+            await secondClient.session.messages({
+              sessionID,
+              directory: localFixture.projectDir,
+            }),
+          )
           const completionParts = completedToolParts(
-            afterRecovery.data,
+            afterRecovery,
             'systematic_workflow_complete',
           )
           expect(completionParts.length).toBeGreaterThan(0)
@@ -1227,7 +1269,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
             return typeof output === 'string' && output.includes('completed')
           })
           expect(completionSucceeded).toBe(true)
-          assertPrivacySafeMarkers(afterRecovery.data)
+          assertPrivacySafeMarkers(afterRecovery)
         } finally {
           if (firstHost) await firstHost.stop()
           if (secondHost) await secondHost.stop()
@@ -1297,12 +1339,14 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
             localFixture.projectDir,
             'Check workflow status only.',
           )
-          const messages = await secondClient.session.messages({
-            sessionID,
-            directory: localFixture.projectDir,
-          })
+          const messages = unwrapData(
+            await secondClient.session.messages({
+              sessionID,
+              directory: localFixture.projectDir,
+            }),
+          )
           const statusParts = completedToolParts(
-            messages.data,
+            messages,
             'systematic_workflow_status',
           )
           expect(statusParts.length).toBeGreaterThan(0)
@@ -1423,47 +1467,53 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
             'Start a guarded unit and run one foreground child.',
           )
 
-          const parentMessages = await client.session.messages({
-            sessionID: parentSessionID,
-            directory: localFixture.projectDir,
-          })
-          const taskParts = completedToolParts(parentMessages.data, 'task')
+          const parentMessages = unwrapData(
+            await client.session.messages({
+              sessionID: parentSessionID,
+              directory: localFixture.projectDir,
+            }),
+          )
+          const taskParts = completedToolParts(parentMessages, 'task')
           expect(taskParts).toHaveLength(1)
           const taskState = taskParts[0]?.state as Record<string, unknown>
           const taskMetadata = taskState.metadata as Record<string, unknown>
           const childSessionID = taskMetadata.sessionId
           expect(typeof childSessionID).toBe('string')
 
-          const children = await client.session.children({
-            sessionID: parentSessionID,
-            directory: localFixture.projectDir,
-          })
-          const child = children.data.find(
-            (entry) => entry.id === childSessionID,
+          const children = unwrapData(
+            await client.session.children({
+              sessionID: parentSessionID,
+              directory: localFixture.projectDir,
+            }),
           )
+          const child = children.find((entry) => entry.id === childSessionID)
           expect(child).toBeDefined()
           expect(child?.parentID).toBe(parentSessionID)
 
-          const childMessages = await client.session.messages({
-            sessionID: childSessionID as string,
-            directory: localFixture.projectDir,
-          })
-          const childMarkers = systematicMarkers(childMessages.data)
+          const childMessages = unwrapData(
+            await client.session.messages({
+              sessionID: childSessionID as string,
+              directory: localFixture.projectDir,
+            }),
+          )
+          const childMarkers = systematicMarkers(childMessages)
           expect(childMarkers.length).toBeGreaterThan(0)
-          assertPrivacySafeMarkers(childMessages.data)
+          assertPrivacySafeMarkers(childMessages)
 
-          const parentMints = receiptMintSummaries(parentMessages.data)
+          const parentMints = receiptMintSummaries(parentMessages)
           expect(parentMints).toHaveLength(1)
           expect(parentMints[0]?.operation).toBe('implementation')
-          const repeatedParentMessages = await client.session.messages({
-            sessionID: parentSessionID,
-            directory: localFixture.projectDir,
-          })
+          const repeatedParentMessages = unwrapData(
+            await client.session.messages({
+              sessionID: parentSessionID,
+              directory: localFixture.projectDir,
+            }),
+          )
           const repeatedParentMints = receiptMintSummaries(
-            repeatedParentMessages.data,
+            repeatedParentMessages,
           )
           expect(repeatedParentMints).toEqual(parentMints)
-          assertPrivacySafeMarkers(parentMessages.data)
+          assertPrivacySafeMarkers(parentMessages)
         } finally {
           if (host) await host.stop()
           model.stop()
@@ -1612,35 +1662,39 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
             'Start a guarded unit and run one foreground child that commits a change.',
           )
 
-          const parentMessages = await client.session.messages({
-            sessionID: parentSessionID,
-            directory: localFixture.projectDir,
-          })
-          const taskParts = completedToolParts(parentMessages.data, 'task')
+          const parentMessages = unwrapData(
+            await client.session.messages({
+              sessionID: parentSessionID,
+              directory: localFixture.projectDir,
+            }),
+          )
+          const taskParts = completedToolParts(parentMessages, 'task')
           expect(taskParts).toHaveLength(1)
           const taskState = taskParts[0]?.state as Record<string, unknown>
           const taskMetadata = taskState.metadata as Record<string, unknown>
           const childSessionID = taskMetadata.sessionId
           expect(typeof childSessionID).toBe('string')
 
-          const children = await client.session.children({
-            sessionID: parentSessionID,
-            directory: localFixture.projectDir,
-          })
-          const child = children.data.find(
-            (entry) => entry.id === childSessionID,
+          const children = unwrapData(
+            await client.session.children({
+              sessionID: parentSessionID,
+              directory: localFixture.projectDir,
+            }),
           )
+          const child = children.find((entry) => entry.id === childSessionID)
           expect(child).toBeDefined()
           expect(child?.parentID).toBe(parentSessionID)
 
-          const childMessages = await client.session.messages({
-            sessionID: childSessionID as string,
-            directory: localFixture.projectDir,
-          })
-          const childMarkers = systematicMarkers(childMessages.data)
+          const childMessages = unwrapData(
+            await client.session.messages({
+              sessionID: childSessionID as string,
+              directory: localFixture.projectDir,
+            }),
+          )
+          const childMarkers = systematicMarkers(childMessages)
           expect(childMarkers.length).toBeGreaterThan(0)
-          assertPrivacySafeMarkers(childMessages.data)
-          const childSessionSalts = receiptMintSessionSalts(childMessages.data)
+          assertPrivacySafeMarkers(childMessages)
+          const childSessionSalts = receiptMintSessionSalts(childMessages)
           expect(childSessionSalts.length).toBeGreaterThan(0)
           const childSessionSalt = childSessionSalts[0]
           if (childSessionSalt === undefined) {
@@ -1657,12 +1711,14 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
             localFixture.projectDir,
             'Check workflow status only.',
           )
-          const afterStatusMessages = await client.session.messages({
-            sessionID: parentSessionID,
-            directory: localFixture.projectDir,
-          })
+          const afterStatusMessages = unwrapData(
+            await client.session.messages({
+              sessionID: parentSessionID,
+              directory: localFixture.projectDir,
+            }),
+          )
           const statusParts = completedToolParts(
-            afterStatusMessages.data,
+            afterStatusMessages,
             'systematic_workflow_status',
           )
           expect(statusParts.length).toBeGreaterThan(0)
@@ -1684,7 +1740,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
           expect(parsedStatus.state).not.toBe('unavailable')
           expect(parsedStatus.reasonCode).not.toBe('guard-unavailable')
           expect(parsedStatus.satisfiedOperations).toContain('commit')
-          assertPrivacySafeMarkers(afterStatusMessages.data)
+          assertPrivacySafeMarkers(afterStatusMessages)
         } finally {
           if (host) await host.stop()
           model.stop()
@@ -1931,11 +1987,13 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
             'Start a guarded unit, write in the nested worktree, then commit it.',
           )
 
-          const parentMessages = await client.session.messages({
-            sessionID: parentSessionID,
-            directory: localFixture.projectDir,
-          })
-          const taskParts = completedToolParts(parentMessages.data, 'task')
+          const parentMessages = unwrapData(
+            await client.session.messages({
+              sessionID: parentSessionID,
+              directory: localFixture.projectDir,
+            }),
+          )
+          const taskParts = completedToolParts(parentMessages, 'task')
           expect(taskParts).toHaveLength(2)
           const childSessionIDs = taskParts.map((part) => {
             const state = part.state as Record<string, unknown>
@@ -1945,35 +2003,35 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
             return childSessionID as string
           })
 
-          const children = await client.session.children({
-            sessionID: parentSessionID,
-            directory: localFixture.projectDir,
-          })
+          const children = unwrapData(
+            await client.session.children({
+              sessionID: parentSessionID,
+              directory: localFixture.projectDir,
+            }),
+          )
           for (const childSessionID of childSessionIDs) {
-            const child = children.data.find(
-              (entry) => entry.id === childSessionID,
-            )
+            const child = children.find((entry) => entry.id === childSessionID)
             expect(child).toBeDefined()
             expect(child?.parentID).toBe(parentSessionID)
-            const childMessages = await client.session.messages({
-              sessionID: childSessionID,
-              directory: localFixture.projectDir,
-            })
-            expect(
-              systematicMarkers(childMessages.data).length,
-            ).toBeGreaterThan(0)
-            assertPrivacySafeMarkers(childMessages.data)
+            const childMessages = unwrapData(
+              await client.session.messages({
+                sessionID: childSessionID,
+                directory: localFixture.projectDir,
+              }),
+            )
+            expect(systematicMarkers(childMessages).length).toBeGreaterThan(0)
+            assertPrivacySafeMarkers(childMessages)
           }
 
           expect(fs.existsSync(targetFile)).toBe(true)
-          const parentMints = receiptMintSummaries(parentMessages.data)
+          const parentMints = receiptMintSummaries(parentMessages)
           expect(parentMints.map(({ operation }) => operation)).toEqual([
             'implementation',
             'verification',
             'commit',
           ])
           const completionParts = completedToolParts(
-            parentMessages.data,
+            parentMessages,
             'systematic_workflow_complete',
           )
           expect(completionParts).toHaveLength(1)
@@ -1984,8 +2042,8 @@ describe.skipIf(!OPENCODE_AVAILABLE)(
           expect(completionState.output).toContain(
             'workflow guard completed unit',
           )
-          expect(receiptMintSummaries(parentMessages.data)).toEqual(parentMints)
-          assertPrivacySafeMarkers(parentMessages.data)
+          expect(receiptMintSummaries(parentMessages)).toEqual(parentMints)
+          assertPrivacySafeMarkers(parentMessages)
         } finally {
           if (host) await host.stop()
           model.stop()

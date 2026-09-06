@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 
 import {
   createReceiptClassifier,
+  type ReceiptClassifier,
   type ReceiptOperation,
 } from '../../src/lib/receipt-classifier.js'
 import {
@@ -22,6 +23,52 @@ const successTerminal = {
   status: 'success' as const,
   output: 'non-empty' as const,
   noOp: false,
+}
+
+/**
+ * Identity, resource, and PR-shaped fields shared by the `context` and
+ * `after` payloads built by `operationInput`. Carries an index signature so
+ * fixtures can re-shape one payload from another (e.g. seeding `after` from
+ * `context`, or a case-table injecting an arbitrary field name) without
+ * excess-property errors, while still typing the field as a real object so
+ * it can be spread instead of tripping TS2698.
+ */
+interface OperationFields {
+  workspaceIdentity?: string
+  repositoryIdentity?: string
+  worktreeIdentity?: string
+  operationTargetIdentity?: string
+  resourceIdentity?: string
+  resourceRevisionIdentity?: string
+  commitClosure?: boolean
+  pullRequest?: { identity: string; state: string }
+  checkState?: string
+  reviewDecision?: string
+  epochId?: string
+  unitId?: string
+  [key: string]: unknown
+}
+
+interface OperationTerminal {
+  status: string
+  output: string
+  noOp: boolean
+}
+
+/**
+ * Shape returned by `operationInput`/`operationWithRevision`. Carries an
+ * index signature so deliberately malformed overrides (extra/omitted fields
+ * exercised by negative tests below) stay assignable without `any`.
+ */
+interface OperationInput {
+  callId: string
+  operation: ReceiptOperation
+  tool: string
+  command?: string
+  context: OperationFields
+  after: OperationFields
+  terminal: OperationTerminal
+  [key: string]: unknown
 }
 
 const REVISION_A =
@@ -88,24 +135,27 @@ interface OperationClassifier {
   classifyOperation(input: unknown): Promise<ReceiptClassification>
 }
 
-interface ReadbackResult {
-  status: 'accepted' | 'rejected'
-  changed?: boolean
-  reasonCode?: string
-}
-
-interface OperationWorkflowGuard extends WorkflowGuard {
-  observeOperation(input: unknown): Promise<EvidenceObservationResult>
-  observeTrustedRecoveredOperation(
-    input: unknown,
-  ): Promise<EvidenceObservationResult>
-  observeReadback(input: unknown): ReadbackResult
+/**
+ * `ReceiptClassifier.classifyOperation` is declared optional in the source
+ * interface because some classifier implementations only support
+ * `classify`. The classifier this suite constructs via
+ * `createReceiptClassifier()` always implements it; this asserts that
+ * runtime guarantee for the type checker instead of using `!`.
+ */
+function requireClassifyOperation(
+  classifier: ReceiptClassifier,
+): NonNullable<ReceiptClassifier['classifyOperation']> {
+  const { classifyOperation } = classifier
+  if (!classifyOperation) {
+    throw new Error('expected classifier to implement classifyOperation')
+  }
+  return classifyOperation.bind(classifier)
 }
 
 function operationInput(
   operation: ReceiptOperation,
-  overrides: Record<string, unknown> = {},
-): Record<string, unknown> {
+  overrides: Partial<OperationInput> = {},
+): OperationInput {
   const commands: Partial<Record<ReceiptOperation, string>> = {
     implementation: undefined,
     verification: 'bun test tests/unit/receipt-operations.test.ts',
@@ -124,7 +174,7 @@ function operationInput(
     'check-readback': 'gh',
     'review-readback': 'gh',
   }
-  const after = {
+  const after: OperationFields = {
     workspaceIdentity: WORKSPACE_CURRENT,
     repositoryIdentity: REPOSITORY_CURRENT,
     worktreeIdentity:
@@ -163,7 +213,7 @@ function operationInput(
         }
       : {}),
   }
-  const context = {
+  const context: OperationFields = {
     ...baseContext,
     ...(operation === 'push'
       ? {
@@ -204,7 +254,7 @@ function createScenario(
   classifier: unknown,
   requiredOperations: readonly ReceiptOperation[] = [],
 ): {
-  guard: OperationWorkflowGuard
+  guard: WorkflowGuard
   ledger: ReturnType<typeof createReceiptLedger>
 } {
   const ledger = createReceiptLedger({
@@ -229,24 +279,23 @@ function createScenario(
     runtimeRequiredOperations: requiredOperations,
     runtimeResourceScopes: resourceScopes,
   } as WorkflowGuardOptions)
-  const operationGuard = guard as OperationWorkflowGuard
   expect(
-    operationGuard.activate({
+    guard.activate({
       event: 'guarded-skill',
       skill: 'ce-work',
       outcome: 'success',
     }),
   ).toMatchObject({ status: 'activated' })
   expect(
-    operationGuard.startUnit({ expectedOperations: requiredOperations }),
+    guard.startUnit({ expectedOperations: requiredOperations }),
   ).toMatchObject({
     status: 'started',
   })
-  return { guard: operationGuard, ledger }
+  return { guard, ledger }
 }
 
 function bindOperation(
-  guard: OperationWorkflowGuard,
+  guard: WorkflowGuard,
   input: Record<string, unknown>,
 ): Record<string, unknown> {
   const status = guard.status()
@@ -273,7 +322,7 @@ function bindOperation(
 }
 
 async function observeTrustedRecoveredOperation(
-  guard: OperationWorkflowGuard,
+  guard: WorkflowGuard,
   input: Record<string, unknown>,
 ): Promise<EvidenceObservationResult> {
   if (typeof guard.observeTrustedRecoveredOperation !== 'function') {
@@ -283,7 +332,7 @@ async function observeTrustedRecoveredOperation(
 }
 
 function mintSyntheticReceipt(
-  guard: OperationWorkflowGuard,
+  guard: WorkflowGuard,
   ledger: ReturnType<typeof createReceiptLedger>,
   operation: ReceiptOperation,
 ): ReceiptEnvelope {
@@ -330,18 +379,18 @@ function operationWithRevision(
   resourceIdentity: string,
   beforeRevision: string | undefined,
   afterRevision: string | undefined,
-  overrides: Record<string, unknown> = {},
-): Record<string, unknown> {
+  overrides: Partial<OperationInput> = {},
+): OperationInput {
   const input = operationInput(operation, overrides)
   return {
     ...input,
     context: {
-      ...(input.context as Record<string, unknown>),
+      ...input.context,
       resourceIdentity,
       ...(beforeRevision ? { resourceRevisionIdentity: beforeRevision } : {}),
     },
     after: {
-      ...(input.after as Record<string, unknown>),
+      ...input.after,
       resourceIdentity,
       ...(afterRevision ? { resourceRevisionIdentity: afterRevision } : {}),
     },
@@ -403,7 +452,7 @@ function coherentFinalReadbacks(
 
 async function buildFullOperationScenario(): Promise<{
   classifier: ReturnType<typeof createReceiptClassifier>
-  guard: OperationWorkflowGuard
+  guard: WorkflowGuard
   ledger: ReturnType<typeof createReceiptLedger>
 }> {
   const classifier = createReceiptClassifier()
@@ -837,10 +886,12 @@ describe('receipt operation adapters', () => {
         resourceIdentity: RESOURCE_WRONG,
       },
     })
-    expect(await classifier.classifyOperation(unrelated)).toMatchObject({
-      outcome: 'rejected',
-      category: 'push',
-    })
+    expect(await requireClassifyOperation(classifier)(unrelated)).toMatchObject(
+      {
+        outcome: 'rejected',
+        category: 'push',
+      },
+    )
 
     const { guard, ledger } = createScenario(classifier, ['push'])
     expect(
@@ -945,7 +996,7 @@ describe('receipt operation adapters', () => {
       REVISION_A,
       REVISION_B,
     )
-    expect(await classifier.classifyOperation(valid)).toMatchObject({
+    expect(await requireClassifyOperation(classifier)(valid)).toMatchObject({
       outcome: 'accepted',
       category: 'push',
     })
@@ -955,7 +1006,7 @@ describe('receipt operation adapters', () => {
       'https://example.test/repo',
       'main',
     ]) {
-      const result = await classifier.classifyOperation(
+      const result = await requireClassifyOperation(classifier)(
         operationWithRevision('push', identity, identity, REVISION_B),
       )
       expect(result).toMatchObject({ outcome: 'rejected' })
@@ -996,12 +1047,14 @@ describe('receipt operation adapters', () => {
           [field]: raw,
         },
       })
-      const result = await classifier.classifyOperation(input)
+      const result = await requireClassifyOperation(classifier)(input)
       expect(result).toMatchObject({ outcome: 'rejected' })
       expect(JSON.stringify(result)).not.toContain(raw)
     }
     expect(
-      await classifier.classifyOperation(operationInput('verification')),
+      await requireClassifyOperation(classifier)(
+        operationInput('verification'),
+      ),
     ).toMatchObject({ outcome: 'accepted' })
     await classifier.close()
   })
@@ -1229,7 +1282,7 @@ describe('receipt operation adapters', () => {
         'check-readback': RESOURCE_PR,
         'review-readback': RESOURCE_PR,
       },
-    } as WorkflowGuardOptions) as OperationWorkflowGuard
+    } as WorkflowGuardOptions)
     expect(
       guard.activate({
         event: 'guarded-skill',
