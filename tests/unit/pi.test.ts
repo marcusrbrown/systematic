@@ -12,6 +12,7 @@ import type {
   ExtensionHandler,
   ToolDefinition,
 } from '@earendil-works/pi-coding-agent'
+import type { ToolResult } from '@opencode-ai/plugin'
 import type { Config } from '@opencode-ai/sdk'
 import { createConfigHandler } from '../../src/lib/config-handler.ts'
 import { formatSkillCommandName } from '../../src/lib/skill-loader.ts'
@@ -27,6 +28,16 @@ import piExtension from '../../src/pi.ts'
 
 const bundledSkillsDir = fileURLToPath(new URL('../../skills', import.meta.url))
 const resolverOptions = { bundledSkillsDir, disabledSkills: [] }
+
+/** `ToolDefinition['execute']` returns the SDK's `ToolResult` union; the skill tool always resolves the string branch. */
+function expectStringToolResult(result: ToolResult): string {
+  if (typeof result !== 'string') {
+    throw new Error(
+      'Expected the skill tool to return a string ToolResult, got a structured result instead.',
+    )
+  }
+  return result
+}
 
 interface RegisterToolSpy {
   registeredTools: ToolDefinition[]
@@ -230,7 +241,9 @@ describe('src/pi.ts systematic_skill tool registration', () => {
       {} as unknown as Parameters<ToolDefinition['execute']>[4],
     )) as AgentToolResult<{ skillDir: string }>
 
-    expect(piResult.content).toEqual([{ type: 'text', text: openCodeResult }])
+    expect(piResult.content).toEqual([
+      { type: 'text', text: expectStringToolResult(openCodeResult) },
+    ])
     expect(metadataCalls).toEqual([
       {
         title: 'Loaded skill: ce:plan',
@@ -284,13 +297,26 @@ describe('src/pi.ts before_agent_start bootstrap injection', () => {
     )
     const originalReadFileSync = fs.readFileSync
     const readFileSyncSpy = spyOn(fs, 'readFileSync').mockImplementation(
-      (...args) => {
-        const filePath = String(args[0])
+      // Cast to the overloaded `readFileSync` type: every readFileSync call
+      // reachable from piExtension()'s bootstrap computation (src/lib/bootstrap.ts,
+      // agent-resolver.ts, config-handler.ts, config.ts) passes an explicit
+      // 'utf8'/'utf-8' encoding, so this fixture only needs to honor the
+      // string-returning overload; the cast avoids re-declaring all native fs
+      // overloads here. (src/lib/setup.ts reads a Buffer via a bare fd with no
+      // encoding, but that path is not exercised by piExtension().)
+      ((
+        path: fs.PathOrFileDescriptor,
+        options?: Parameters<typeof fs.readFileSync>[1],
+      ): string => {
+        const filePath = String(path)
         if (filePath.endsWith('using-systematic/SKILL.md')) {
           throw new Error('bootstrap failure')
         }
-        return originalReadFileSync(...args)
-      },
+        return originalReadFileSync(
+          path,
+          options as unknown as BufferEncoding,
+        ) as string
+      }) as unknown as typeof fs.readFileSync,
     )
 
     await expect(piExtension(api)).resolves.toBeUndefined()

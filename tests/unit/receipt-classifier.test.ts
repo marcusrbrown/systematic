@@ -3,9 +3,37 @@ import { fileURLToPath } from 'node:url'
 
 import {
   createReceiptClassifier,
+  type ReceiptClassifier,
   type ReceiptOperation,
 } from '../../src/lib/receipt-classifier.js'
-import { createReceiptLedger } from '../../src/lib/receipt-ledger.js'
+import {
+  createReceiptLedger,
+  type FinalizeObservationResult,
+  type ReceiptClassification,
+} from '../../src/lib/receipt-ledger.js'
+
+/** `classifyOperation` is optional on the interface (some classifiers only support `classify`), but `createReceiptClassifier` always implements it. */
+function callClassifyOperation(
+  classifier: ReceiptClassifier,
+  input: unknown,
+): Promise<ReceiptClassification> {
+  const { classifyOperation } = classifier
+  if (!classifyOperation) {
+    throw new Error('Expected classifier.classifyOperation to be defined')
+  }
+  return classifyOperation.call(classifier, input)
+}
+
+function assertFinalized(
+  result: FinalizeObservationResult,
+): asserts result is Extract<
+  FinalizeObservationResult,
+  { status: 'finalized' }
+> {
+  if (result.status !== 'finalized') {
+    throw new Error(`Expected a finalized result, got status: ${result.status}`)
+  }
+}
 
 const successfulTerminal = {
   status: 'success' as const,
@@ -228,7 +256,7 @@ describe('receipt classifier', () => {
       },
       terminal: successfulTerminal,
     }
-    const open = await classifier.classifyOperation({
+    const open = await callClassifyOperation(classifier, {
       ...base,
       after: {
         workspaceIdentity: identity,
@@ -243,7 +271,7 @@ describe('receipt classifier', () => {
       reasonCode: 'no-op-resource',
     })
 
-    const closed = await classifier.classifyOperation({
+    const closed = await callClassifyOperation(classifier, {
       ...base,
       after: {
         workspaceIdentity: identity,
@@ -262,7 +290,7 @@ describe('receipt classifier', () => {
   test('accepts implementation observations with the optional closure field', async () => {
     const classifier = createReceiptClassifier()
     const identity = 'a'.repeat(64)
-    const result = await classifier.classifyOperation({
+    const result = await callClassifyOperation(classifier, {
       callId: 'implementation-closure-field',
       operation: 'implementation',
       tool: 'write',
@@ -291,7 +319,7 @@ describe('receipt classifier', () => {
   test('does not let a non-shell write claim a commit operation', async () => {
     const classifier = createReceiptClassifier()
     const identity = 'a'.repeat(64)
-    const result = await classifier.classifyOperation({
+    const result = await callClassifyOperation(classifier, {
       callId: 'non-shell-commit-claim',
       operation: 'commit',
       tool: 'write',
@@ -443,8 +471,10 @@ describe('receipt classifier', () => {
     const secondReceipt = second.finalizeObservation(finalizeInput)
     expect(firstReceipt.status).toBe('finalized')
     expect(secondReceipt.status).toBe('finalized')
-    expect(firstReceipt.receipt?.canonical.registrationDigest).not.toBe(
-      secondReceipt.receipt?.canonical.registrationDigest,
+    assertFinalized(firstReceipt)
+    assertFinalized(secondReceipt)
+    expect(firstReceipt.receipt.canonical.registrationDigest).not.toBe(
+      secondReceipt.receipt.canonical.registrationDigest,
     )
 
     const rejectedLedger = createReceiptLedger({

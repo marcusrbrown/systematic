@@ -8,6 +8,14 @@ import { applyBootstrapContent } from '../../src/lib/bootstrap.js'
 const SRC_DIR = path.resolve(import.meta.dirname, '../../src')
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
 
+/** Narrows an optional `Hooks` member (e.g. `tool`) that the plugin always registers. */
+function expectDefined<T>(value: T | undefined, message: string): T {
+  if (value === undefined) {
+    throw new Error(message)
+  }
+  return value
+}
+
 describe('plugin loading', () => {
   test('plugin file exists at src/index.ts', () => {
     const pluginPath = path.join(SRC_DIR, 'index.ts')
@@ -373,27 +381,33 @@ describe('per-invocation plugin registration', () => {
     try {
       const pluginPath = path.join(SRC_DIR, 'index.ts')
       const pluginModule = (await import(pathToFileURL(pluginPath).href)) as {
-        default: (args: ReturnType<typeof makeInput>) => Promise<{
-          config: unknown
-          tool: { systematic_skill: unknown }
-          'experimental.chat.system.transform': unknown
-        }>
+        default: (
+          args: ReturnType<typeof makeInput>,
+        ) => Promise<
+          Awaited<ReturnType<typeof import('../../src/index.js').default>>
+        >
       }
       const input = makeInput(tempDir)
       const result1 = await pluginModule.default(input)
       const result2 = await pluginModule.default(input)
-      expect(result1.tool.systematic_skill).not.toBe(
-        result2.tool.systematic_skill,
+      const tool1 = expectDefined(
+        result1.tool,
+        'Expected result1.tool to be defined',
       )
-      expect(Object.keys(result1.tool).sort()).toEqual([
+      const tool2 = expectDefined(
+        result2.tool,
+        'Expected result2.tool to be defined',
+      )
+      expect(tool1.systematic_skill).not.toBe(tool2.systematic_skill)
+      expect(Object.keys(tool1).sort()).toEqual([
         'systematic_skill',
         'systematic_workflow_complete',
         'systematic_workflow_control',
         'systematic_workflow_start',
         'systematic_workflow_status',
       ])
-      expect(result1.tool.systematic_workflow_start).not.toBe(
-        result2.tool.systematic_workflow_start,
+      expect(tool1.systematic_workflow_start).not.toBe(
+        tool2.systematic_workflow_start,
       )
       expect(result1['tool.execute.before']).not.toBe(
         result2['tool.execute.before'],

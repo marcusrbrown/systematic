@@ -6,10 +6,27 @@ import path from 'node:path'
 
 import {
   createOpencodeOperationObserver,
+  type OpencodeOperationObserver,
   type OperationObserverCommandResult,
   type OperationObserverLimits,
   type OperationObserverRemoteCommandResult,
+  type OperationObserverRemoteResult,
+  type RemoteOperation,
+  type RemoteReadbackPhase,
 } from '../../src/lib/opencode-operation-observer.js'
+
+/** `remoteSnapshot` is optional on the interface (implementations that never do readbacks may omit it), but every fixture observer here always implements it. */
+function callRemoteSnapshot(
+  observer: OpencodeOperationObserver,
+  operation: RemoteOperation,
+  phase: RemoteReadbackPhase,
+): Promise<OperationObserverRemoteResult> {
+  const { remoteSnapshot } = observer
+  if (!remoteSnapshot) {
+    throw new Error('Expected observer.remoteSnapshot to be defined')
+  }
+  return remoteSnapshot.call(observer, operation, phase)
+}
 
 interface GitFixture {
   root: string
@@ -891,7 +908,9 @@ describe('OpenCode operation observer', () => {
               timeout: timeoutMs,
             },
           )
-          const timedOut = child.error?.code === 'ETIMEDOUT'
+          const timedOut =
+            (child.error as NodeJS.ErrnoException | undefined)?.code ===
+            'ETIMEDOUT'
           return {
             status: child.status ?? -1,
             stdout: secret,
@@ -1002,7 +1021,7 @@ describe('OpenCode operation observer', () => {
         },
       })
       await expect(
-        remote.remoteSnapshot('pr-creation', 'after'),
+        callRemoteSnapshot(remote, 'pr-creation', 'after'),
       ).resolves.toMatchObject({ status: 'available' })
       expect(remoteTimeouts.length).toBeGreaterThan(0)
       expect(new Set(remoteTimeouts)).toEqual(new Set([1_000]))
@@ -1138,7 +1157,11 @@ describe('OpenCode operation observer', () => {
         targetDirectory: fixture.root,
         remoteCommandRunner,
       })
-      const result = await observer.remoteSnapshot('check-readback', 'after')
+      const result = await callRemoteSnapshot(
+        observer,
+        'check-readback',
+        'after',
+      )
       expect(result.status).toBe('available')
       if (result.status !== 'available') return
       expect(result.snapshot.resourceIdentity).toMatch(/^[0-9a-f]{64}$/)
@@ -1169,7 +1192,7 @@ describe('OpenCode operation observer', () => {
         limits: { maxCommandOutputBytes: 4096 },
       })
       await expect(
-        oversized.remoteSnapshot('review-readback', 'after'),
+        callRemoteSnapshot(oversized, 'review-readback', 'after'),
       ).resolves.toEqual({
         status: 'unavailable',
         reasonCode: 'remote-command-output-limit',
@@ -1184,7 +1207,8 @@ describe('OpenCode operation observer', () => {
           _maxOutputBytes: number,
         ) => ({ status: 0, stdout: '{bad', stderr: '' }),
       })
-      const malformedResult = await malformed.remoteSnapshot(
+      const malformedResult = await callRemoteSnapshot(
+        malformed,
         'pr-creation',
         'after',
       )
