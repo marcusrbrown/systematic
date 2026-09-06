@@ -15,6 +15,12 @@ import {
   observePromptComposition,
 } from '../../scripts/eval-cases/opencode.ts'
 import {
+  type OpencodeAvailabilityClassification,
+  probeOpencodeAvailability,
+  requireOpencodeAvailable,
+  resolveBunInstallCacheDir,
+} from '../../scripts/lib/opencode-availability.ts'
+import {
   type CaseId,
   capturePrimaryCheckout,
   cleanupEvalFixture,
@@ -34,6 +40,53 @@ import {
   validateSerializedRunManifest,
 } from '../../scripts/run-evals.ts'
 import { buildCatalogEntries } from '../../src/lib/skill-catalog.js'
+
+// This module has no fixture at module scope (unlike the five suites built on
+// tests/integration/fixtures/receipt-workflow-host.ts), so it computes its own
+// availability gate once here: a minimal explicit env (parent PATH/HOME/XDG,
+// a throwaway TMPDIR, and the shared BUN_INSTALL_CACHE_DIR so the gate shares
+// one bunx download rather than paying its own), removed afterwards. Never at
+// the fixture module's scope, so `bun test tests/unit` never spawns `bunx`.
+function computeOpencodeAvailability(): OpencodeAvailabilityClassification {
+  const probeRoot = fs.mkdtempSync(
+    path.join(os.tmpdir(), 'systematic-eval-runner-probe-'),
+  )
+  try {
+    return probeOpencodeAvailability({
+      pin: EXPECTED_OPENCODE_VERSION,
+      env: {
+        PATH: process.env.PATH ?? '',
+        HOME: probeRoot,
+        XDG_CONFIG_HOME: probeRoot,
+        XDG_DATA_HOME: probeRoot,
+        XDG_CACHE_HOME: probeRoot,
+        XDG_STATE_HOME: probeRoot,
+        TMPDIR: probeRoot,
+        // Mirrors buildEvalChildEnv's real-host env so a first-run
+        // autoupdate/models fetch can't pollute the probe's stdout or add
+        // network latency the real hosts don't pay.
+        OPENCODE_DISABLE_AUTOUPDATE: '1',
+        OPENCODE_DISABLE_LSP_DOWNLOAD: '1',
+        OPENCODE_DISABLE_MODELS_FETCH: '1',
+        OPENCODE_DISABLE_PRUNE: '1',
+        BUN_INSTALL_CACHE_DIR: resolveBunInstallCacheDir({
+          pin: EXPECTED_OPENCODE_VERSION,
+        }),
+      },
+    })
+  } finally {
+    fs.rmSync(probeRoot, { recursive: true, force: true })
+  }
+}
+
+const OPENCODE_AVAILABILITY = computeOpencodeAvailability()
+requireOpencodeAvailable(OPENCODE_AVAILABILITY)
+const OPENCODE_AVAILABLE = OPENCODE_AVAILABILITY.status === 'available'
+if (!OPENCODE_AVAILABLE) {
+  console.warn(
+    `[systematic] skipping OpenCode-dependent tests in eval-runner.test.ts: ${OPENCODE_AVAILABILITY.reason}`,
+  )
+}
 
 const FIXED_CLOCK = '2026-08-13T00:00:00.000Z'
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
@@ -282,132 +335,153 @@ describe('local OpenCode eval runner', () => {
     expect(() => expectRuntimeOutcome(result)).toThrow()
   })
 
-  test('gates grading on exact OpenCode runtime identity without silently skipping', async () => {
-    const parentDir = runParent()
-    try {
-      const result = await runSourceEval({
-        caseId: 'bootstrap-loading',
-        fixtureSeed: 'runner-runtime-gate',
-        normalizedClock: FIXED_CLOCK,
-        parentDir,
-      })
-      const normalized = normalizeResult(result)
-
-      if (normalized.outcome === 'infra_failure') {
-        expect(['opencode_unavailable', 'identity_drift']).toContain(
-          requireSubcode(normalized.subcode),
-        )
-      } else {
-        expect(normalized.identity.opencodeVersion).toBe(
-          EXPECTED_OPENCODE_VERSION,
-        )
-      }
-    } finally {
-      fs.rmSync(parentDir, { recursive: true, force: true })
-    }
-  }, 360_000)
-
-  test('runs bootstrap-loading from bounded probe evidence when exact runtime is available', async () => {
-    const parentDir = runParent()
-    try {
-      const result = normalizeResult(
-        await runSourceEval({
+  // This test itself is skipped offline (test.skipIf below) since it starts
+  // a real host; the tolerant infra_failure branch inside it is not a local
+  // skip mechanism, it's the CI fail-closed boundary from Unit 3 (an
+  // opencode_unavailable/identity_drift outcome tightens to a hard failure
+  // under SYSTEMATIC_REQUIRE_OPENCODE=1). The offline "doesn't silently
+  // skip" guarantee for the unavailable path is covered instead by the
+  // ungated `timeoutMs: 1` test below, which runs with no host required.
+  test.skipIf(!OPENCODE_AVAILABLE)(
+    'gates grading on exact OpenCode runtime identity without silently skipping (online only; see the ungated timeoutMs:1 test for the offline path)',
+    async () => {
+      const parentDir = runParent()
+      try {
+        const result = await runSourceEval({
           caseId: 'bootstrap-loading',
-          fixtureSeed: 'runner-bootstrap',
+          fixtureSeed: 'runner-runtime-gate',
           normalizedClock: FIXED_CLOCK,
           parentDir,
-        }),
-      )
-      expectRuntimeOutcome(result)
-      expect(result.mode).toBe('source')
-      expect(result.fixtureSeed).toBe('runner-bootstrap')
-      expect(result.normalizedClock).toBe(FIXED_CLOCK)
-      expect(result.assertionIds).toEqual(['bootstrap-observed'])
-      expect(result.evidence.sanity).toBe('passed')
-      expect(result.evidence.process).toBe('completed')
-      expect(result.evidence.assertionIds).toEqual(['bootstrap-observed'])
-      const promptComposition = result.evidence.promptComposition
-      if (!promptComposition) {
-        throw new Error('bootstrap prompt composition evidence missing')
+        })
+        const normalized = normalizeResult(result)
+
+        if (normalized.outcome === 'infra_failure') {
+          expect(['opencode_unavailable', 'identity_drift']).toContain(
+            requireSubcode(normalized.subcode),
+          )
+        } else {
+          expect(normalized.identity.opencodeVersion).toBe(
+            EXPECTED_OPENCODE_VERSION,
+          )
+        }
+      } finally {
+        fs.rmSync(parentDir, { recursive: true, force: true })
       }
-      expect(promptComposition).toMatchObject({
-        systematicCatalog: {
-          state: 'absent',
-          entryCount: 0,
-          skillNames: [],
-        },
-        hostCatalog: {
-          state: 'present',
-        },
-      })
-      expect(promptComposition.hostCatalog.entryCount).toBeGreaterThan(0)
-      expect(promptComposition.hostCatalog.skillNames.length).toBeGreaterThan(0)
+    },
+    360_000,
+  )
 
-      // OpenCode renders raw SKILL.md names; the Systematic prefix belongs only
-      // to the retained systematic_skill description surface.
-      const expectedHostSkillNames = buildCatalogEntries({
-        bundledSkillsDir: path.join(ROOT_DIR, 'skills'),
-        disabledSkills: [],
-      }).map((entry) => entry.name)
-      expect(expectedHostSkillNames.length).toBeGreaterThan(0)
-      const hostCoverage = gradeHostSkillCoverage(
-        [
-          { type: 'loaded', status: 'ok' },
-          {
-            type: 'transform',
-            kind: 'chat',
-            status: 'healthy',
-            blockCount: 1,
-            promptComposition,
+  test.skipIf(!OPENCODE_AVAILABLE)(
+    'runs bootstrap-loading from bounded probe evidence when exact runtime is available',
+    async () => {
+      const parentDir = runParent()
+      try {
+        const result = normalizeResult(
+          await runSourceEval({
+            caseId: 'bootstrap-loading',
+            fixtureSeed: 'runner-bootstrap',
+            normalizedClock: FIXED_CLOCK,
+            parentDir,
+          }),
+        )
+        expectRuntimeOutcome(result)
+        expect(result.mode).toBe('source')
+        expect(result.fixtureSeed).toBe('runner-bootstrap')
+        expect(result.normalizedClock).toBe(FIXED_CLOCK)
+        expect(result.assertionIds).toEqual(['bootstrap-observed'])
+        expect(result.evidence.sanity).toBe('passed')
+        expect(result.evidence.process).toBe('completed')
+        expect(result.evidence.assertionIds).toEqual(['bootstrap-observed'])
+        const promptComposition = result.evidence.promptComposition
+        if (!promptComposition) {
+          throw new Error('bootstrap prompt composition evidence missing')
+        }
+        expect(promptComposition).toMatchObject({
+          systematicCatalog: {
+            state: 'absent',
+            entryCount: 0,
+            skillNames: [],
           },
-        ],
-        expectedHostSkillNames,
-      )
-      expect(hostCoverage).toMatchObject({
-        outcome: 'success',
-        subcode: 'none',
-        hostCatalogCoverage: {
-          state: 'present',
-          missingSkillNames: [],
-        },
-      })
-      expect(result.evidence).toMatchObject({
-        sanity: 'passed',
-        process: 'completed',
-        assertionIds: ['bootstrap-observed'],
-      })
-      expect(result.cleanup).toEqual({ status: 'clean', residue: 'none' })
-      expect(result.provenance.kind).toBe('source')
-      expect(JSON.stringify(result)).not.toContain('stdout')
-      expect(JSON.stringify(result)).not.toContain('stderr')
-    } finally {
-      fs.rmSync(parentDir, { recursive: true, force: true })
-    }
-  }, 360_000)
+          hostCatalog: {
+            state: 'present',
+          },
+        })
+        expect(promptComposition.hostCatalog.entryCount).toBeGreaterThan(0)
+        expect(promptComposition.hostCatalog.skillNames.length).toBeGreaterThan(
+          0,
+        )
 
-  test('writes and grades fixture-local-write exact content when runtime is available', async () => {
-    const parentDir = runParent()
-    try {
-      const result = normalizeResult(
-        await runSourceEval({
-          caseId: 'fixture-local-write',
-          fixtureSeed: 'runner-local-write',
-          normalizedClock: FIXED_CLOCK,
-          parentDir,
-        }),
-      )
-      expectRuntimeOutcome(result)
-      expect(result.assertionIds).toEqual([
-        'fixture-file-content',
-        'fixture-file-created',
-      ])
-      expect(result.provenance.kind).toBe('source')
-      expect(result.cleanup).toEqual({ status: 'clean', residue: 'none' })
-      expect(JSON.stringify(result)).not.toContain('fixture-local-write-v1')
-    } finally {
-      fs.rmSync(parentDir, { recursive: true, force: true })
-    }
-  }, 360_000)
+        // OpenCode renders raw SKILL.md names; the Systematic prefix belongs only
+        // to the retained systematic_skill description surface.
+        const expectedHostSkillNames = buildCatalogEntries({
+          bundledSkillsDir: path.join(ROOT_DIR, 'skills'),
+          disabledSkills: [],
+        }).map((entry) => entry.name)
+        expect(expectedHostSkillNames.length).toBeGreaterThan(0)
+        const hostCoverage = gradeHostSkillCoverage(
+          [
+            { type: 'loaded', status: 'ok' },
+            {
+              type: 'transform',
+              kind: 'chat',
+              status: 'healthy',
+              blockCount: 1,
+              promptComposition,
+            },
+          ],
+          expectedHostSkillNames,
+        )
+        expect(hostCoverage).toMatchObject({
+          outcome: 'success',
+          subcode: 'none',
+          hostCatalogCoverage: {
+            state: 'present',
+            missingSkillNames: [],
+          },
+        })
+        expect(result.evidence).toMatchObject({
+          sanity: 'passed',
+          process: 'completed',
+          assertionIds: ['bootstrap-observed'],
+        })
+        expect(result.cleanup).toEqual({ status: 'clean', residue: 'none' })
+        expect(result.provenance.kind).toBe('source')
+        expect(JSON.stringify(result)).not.toContain('stdout')
+        expect(JSON.stringify(result)).not.toContain('stderr')
+      } finally {
+        fs.rmSync(parentDir, { recursive: true, force: true })
+      }
+    },
+    360_000,
+  )
+
+  test.skipIf(!OPENCODE_AVAILABLE)(
+    'writes and grades fixture-local-write exact content when runtime is available',
+    async () => {
+      const parentDir = runParent()
+      try {
+        const result = normalizeResult(
+          await runSourceEval({
+            caseId: 'fixture-local-write',
+            fixtureSeed: 'runner-local-write',
+            normalizedClock: FIXED_CLOCK,
+            parentDir,
+          }),
+        )
+        expectRuntimeOutcome(result)
+        expect(result.assertionIds).toEqual([
+          'fixture-file-content',
+          'fixture-file-created',
+        ])
+        expect(result.provenance.kind).toBe('source')
+        expect(result.cleanup).toEqual({ status: 'clean', residue: 'none' })
+        expect(JSON.stringify(result)).not.toContain('fixture-local-write-v1')
+      } finally {
+        fs.rmSync(parentDir, { recursive: true, force: true })
+      }
+    },
+    360_000,
+  )
 
   test('classifies missing or unhealthy probe and missing fixture output with bounded results', () => {
     const missingProbe = gradeBootstrapProbe([])
@@ -1039,221 +1113,241 @@ describe('local OpenCode eval runner', () => {
     }
   }, 30_000)
 
-  test('classifies a started-host case timeout as task failure and cleans every root', async () => {
-    const parentDir = runParent()
-    const processCountBefore = countEvalServeProcesses()
-    try {
-      const options = {
-        caseId: 'bootstrap-loading' as const,
-        fixtureSeed: 'runner-started-timeout',
-        normalizedClock: FIXED_CLOCK,
-        parentDir,
-        timeoutMs: 360_000,
-        caseTimeoutMs: 1,
+  test.skipIf(!OPENCODE_AVAILABLE)(
+    'classifies a started-host case timeout as task failure and cleans every root',
+    async () => {
+      const parentDir = runParent()
+      const processCountBefore = countEvalServeProcesses()
+      try {
+        const options = {
+          caseId: 'bootstrap-loading' as const,
+          fixtureSeed: 'runner-started-timeout',
+          normalizedClock: FIXED_CLOCK,
+          parentDir,
+          timeoutMs: 360_000,
+          caseTimeoutMs: 1,
+        }
+        const result = normalizeResult(await runSourceEval(options))
+
+        expect(result.outcome).toBe('task_failure')
+        expect(result.subcode).toBe('unexpected_exit')
+        expect(result.cleanup).toEqual({ status: 'clean', residue: 'none' })
+        expect(fs.readdirSync(parentDir)).toEqual([])
+        expect(countEvalServeProcesses()).toBe(processCountBefore)
+      } finally {
+        fs.rmSync(parentDir, { recursive: true, force: true })
       }
-      const result = normalizeResult(await runSourceEval(options))
+    },
+    360_000,
+  )
 
-      expect(result.outcome).toBe('task_failure')
-      expect(result.subcode).toBe('unexpected_exit')
-      expect(result.cleanup).toEqual({ status: 'clean', residue: 'none' })
-      expect(fs.readdirSync(parentDir)).toEqual([])
-      expect(countEvalServeProcesses()).toBe(processCountBefore)
-    } finally {
-      fs.rmSync(parentDir, { recursive: true, force: true })
-    }
-  }, 360_000)
+  test.skipIf(!OPENCODE_AVAILABLE)(
+    'repeated source runs normalize to equal evidence and preserve checkout identity',
+    async () => {
+      const before = capturePrimaryCheckout()
+      const parentDir = runParent()
+      try {
+        const first = normalizeResult(
+          await runSourceEval({
+            caseId: 'bootstrap-loading',
+            fixtureSeed: 'runner-repeat',
+            normalizedClock: FIXED_CLOCK,
+            parentDir,
+          }),
+        )
+        const second = normalizeResult(
+          await runSourceEval({
+            caseId: 'bootstrap-loading',
+            fixtureSeed: 'runner-repeat',
+            normalizedClock: FIXED_CLOCK,
+            parentDir,
+          }),
+        )
 
-  test('repeated source runs normalize to equal evidence and preserve checkout identity', async () => {
-    const before = capturePrimaryCheckout()
-    const parentDir = runParent()
-    try {
-      const first = normalizeResult(
-        await runSourceEval({
-          caseId: 'bootstrap-loading',
-          fixtureSeed: 'runner-repeat',
-          normalizedClock: FIXED_CLOCK,
-          parentDir,
-        }),
-      )
-      const second = normalizeResult(
-        await runSourceEval({
-          caseId: 'bootstrap-loading',
-          fixtureSeed: 'runner-repeat',
-          normalizedClock: FIXED_CLOCK,
-          parentDir,
-        }),
-      )
-
-      expect(withoutOpaqueRunId(first)).toEqual(withoutOpaqueRunId(second))
-      expect(capturePrimaryCheckout()).toEqual(before)
-      expect(first.artifactRefs).not.toContain(first.runId)
-      expect(second.artifactRefs).not.toContain(second.runId)
-    } finally {
-      fs.rmSync(parentDir, { recursive: true, force: true })
-    }
-  }, 720_000)
-
-  test('source and installed bootstrap runs succeed with disjoint provenance and matching catalog evidence', async () => {
-    const sourceParent = runParent()
-    const installedParent = runParent()
-    try {
-      const source = normalizeResult(
-        await runSourceEval({
-          caseId: 'bootstrap-loading',
-          fixtureSeed: 'runner-installed-bootstrap',
-          normalizedClock: FIXED_CLOCK,
-          parentDir: sourceParent,
-        }),
-      )
-      const installed = normalizeResult(
-        await runInstalledEval({
-          caseId: 'bootstrap-loading',
-          fixtureSeed: 'runner-installed-bootstrap',
-          normalizedClock: FIXED_CLOCK,
-          parentDir: installedParent,
-        }),
-      )
-
-      expectRuntimeOutcome(source)
-      expectRuntimeOutcome(installed)
-      expect(source.evidence).toMatchObject({
-        sanity: 'passed',
-        process: 'completed',
-        assertionIds: ['bootstrap-observed'],
-      })
-      expect(installed.evidence).toMatchObject({
-        sanity: 'passed',
-        process: 'completed',
-        assertionIds: ['bootstrap-observed'],
-      })
-      expect(source.evidence.promptComposition?.systematicCatalog).toEqual(
-        installed.evidence.promptComposition?.systematicCatalog,
-      )
-      expect(source.evidence.promptComposition?.hostCatalog).toEqual(
-        installed.evidence.promptComposition?.hostCatalog,
-      )
-      expect(
-        source.evidence.promptComposition?.bootstrapPayloadSize,
-      ).toBeGreaterThan(0)
-      expect(
-        installed.evidence.promptComposition?.bootstrapPayloadSize,
-      ).toBeGreaterThan(0)
-      expect(source.mode).toBe('source')
-      expect(installed.mode).toBe('installed')
-      expect(source.provenance).toMatchObject({
-        kind: 'source',
-        checkoutRelativeSource: 'src/index.ts',
-        canonicalSourceEntryId: 'source-entry',
-        opencodeConfigEntryId: 'source-config',
-      })
-      expect(installed.provenance).toMatchObject({
-        kind: 'installed',
-        packageName: '@fro.bot/systematic',
-        packageVersion: expect.stringMatching(/^\d+\.\d+\.\d+/),
-        tarballDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
-        extractedPackageRootId: 'installed-package-root',
-        canonicalResolvedModuleEntryId: 'dist/index.js',
-        opencodeConfigEntryId: 'installed-config',
-      })
-      expect(installed.identity.artifactId).toBe('installed-entry')
-      expect(JSON.stringify(installed)).not.toContain(sourceParent)
-      expect(JSON.stringify(installed)).not.toContain('src/index.ts')
-    } finally {
-      fs.rmSync(sourceParent, { recursive: true, force: true })
-      fs.rmSync(installedParent, { recursive: true, force: true })
-    }
-  }, 720_000)
-
-  test('host-skill-coverage passes in source and installed modes with complete observed coverage', async () => {
-    const sourceParent = runParent()
-    const installedParent = runParent()
-    try {
-      const source = normalizeResult(
-        await runSourceEval({
-          caseId: 'host-skill-coverage',
-          fixtureSeed: 'runner-host-skill-coverage',
-          normalizedClock: FIXED_CLOCK,
-          parentDir: sourceParent,
-        }),
-      )
-      const installed = normalizeResult(
-        await runInstalledEval({
-          caseId: 'host-skill-coverage',
-          fixtureSeed: 'runner-host-skill-coverage',
-          normalizedClock: FIXED_CLOCK,
-          parentDir: installedParent,
-        }),
-      )
-
-      expectRuntimeOutcome(source)
-      expectRuntimeOutcome(installed)
-      expect(source.assertionIds).toEqual(['host-catalog-covered'])
-      expect(installed.assertionIds).toEqual(['host-catalog-covered'])
-      const sourceCoverage = source.evidence.hostCatalogCoverage
-      const installedCoverage = installed.evidence.hostCatalogCoverage
-      if (!sourceCoverage || !installedCoverage) {
-        throw new Error('host catalog coverage evidence missing')
+        expect(withoutOpaqueRunId(first)).toEqual(withoutOpaqueRunId(second))
+        expect(capturePrimaryCheckout()).toEqual(before)
+        expect(first.artifactRefs).not.toContain(first.runId)
+        expect(second.artifactRefs).not.toContain(second.runId)
+      } finally {
+        fs.rmSync(parentDir, { recursive: true, force: true })
       }
-      expect(sourceCoverage).toMatchObject({
-        state: 'present',
-        missingSkillNames: [],
-      })
-      expect(installedCoverage).toMatchObject({
-        state: 'present',
-        missingSkillNames: [],
-      })
-      expect(sourceCoverage.expectedSkillNames.length).toBeGreaterThan(0)
-      expect(installedCoverage.expectedSkillNames.length).toBeGreaterThan(0)
-      expect(
-        sourceCoverage.expectedSkillNames.every((name) =>
-          sourceCoverage.observedSkillNames.includes(name),
-        ),
-      ).toBe(true)
-      expect(
-        installedCoverage.expectedSkillNames.every((name) =>
-          installedCoverage.observedSkillNames.includes(name),
-        ),
-      ).toBe(true)
-      expect(sourceCoverage).toEqual(installedCoverage)
-      expect(source.evidence.promptComposition?.hostCatalog.state).toBe(
-        'present',
-      )
-      expect(installed.evidence.promptComposition?.hostCatalog.state).toBe(
-        'present',
-      )
-      expect(JSON.stringify(source)).not.toContain('<available_skills>')
-      expect(JSON.stringify(installed)).not.toContain('<available_skills>')
-    } finally {
-      fs.rmSync(sourceParent, { recursive: true, force: true })
-      fs.rmSync(installedParent, { recursive: true, force: true })
-    }
-  }, 720_000)
+    },
+    720_000,
+  )
 
-  test('installed fixture-local-write grades exact content without source fallback', async () => {
-    const parentDir = runParent()
-    try {
-      const result = normalizeResult(
-        await runInstalledEval({
-          caseId: 'fixture-local-write',
-          fixtureSeed: 'runner-installed-write',
-          normalizedClock: FIXED_CLOCK,
-          parentDir,
-        }),
-      )
-      expectRuntimeOutcome(result)
-      expect(result.mode).toBe('installed')
-      expect(result.assertionIds).toEqual([
-        'fixture-file-content',
-        'fixture-file-created',
-      ])
-      expect(result.provenance.kind).toBe('installed')
-      expect(result.cleanup).toEqual({ status: 'clean', residue: 'none' })
-      expect(JSON.stringify(result)).not.toContain(parentDir)
-      expect(JSON.stringify(result)).not.toContain('src/index.ts')
-    } finally {
-      fs.rmSync(parentDir, { recursive: true, force: true })
-    }
-  }, 360_000)
+  test.skipIf(!OPENCODE_AVAILABLE)(
+    'source and installed bootstrap runs succeed with disjoint provenance and matching catalog evidence',
+    async () => {
+      const sourceParent = runParent()
+      const installedParent = runParent()
+      try {
+        const source = normalizeResult(
+          await runSourceEval({
+            caseId: 'bootstrap-loading',
+            fixtureSeed: 'runner-installed-bootstrap',
+            normalizedClock: FIXED_CLOCK,
+            parentDir: sourceParent,
+          }),
+        )
+        const installed = normalizeResult(
+          await runInstalledEval({
+            caseId: 'bootstrap-loading',
+            fixtureSeed: 'runner-installed-bootstrap',
+            normalizedClock: FIXED_CLOCK,
+            parentDir: installedParent,
+          }),
+        )
+
+        expectRuntimeOutcome(source)
+        expectRuntimeOutcome(installed)
+        expect(source.evidence).toMatchObject({
+          sanity: 'passed',
+          process: 'completed',
+          assertionIds: ['bootstrap-observed'],
+        })
+        expect(installed.evidence).toMatchObject({
+          sanity: 'passed',
+          process: 'completed',
+          assertionIds: ['bootstrap-observed'],
+        })
+        expect(source.evidence.promptComposition?.systematicCatalog).toEqual(
+          installed.evidence.promptComposition?.systematicCatalog,
+        )
+        expect(source.evidence.promptComposition?.hostCatalog).toEqual(
+          installed.evidence.promptComposition?.hostCatalog,
+        )
+        expect(
+          source.evidence.promptComposition?.bootstrapPayloadSize,
+        ).toBeGreaterThan(0)
+        expect(
+          installed.evidence.promptComposition?.bootstrapPayloadSize,
+        ).toBeGreaterThan(0)
+        expect(source.mode).toBe('source')
+        expect(installed.mode).toBe('installed')
+        expect(source.provenance).toMatchObject({
+          kind: 'source',
+          checkoutRelativeSource: 'src/index.ts',
+          canonicalSourceEntryId: 'source-entry',
+          opencodeConfigEntryId: 'source-config',
+        })
+        expect(installed.provenance).toMatchObject({
+          kind: 'installed',
+          packageName: '@fro.bot/systematic',
+          packageVersion: expect.stringMatching(/^\d+\.\d+\.\d+/),
+          tarballDigest: expect.stringMatching(/^[a-f0-9]{64}$/),
+          extractedPackageRootId: 'installed-package-root',
+          canonicalResolvedModuleEntryId: 'dist/index.js',
+          opencodeConfigEntryId: 'installed-config',
+        })
+        expect(installed.identity.artifactId).toBe('installed-entry')
+        expect(JSON.stringify(installed)).not.toContain(sourceParent)
+        expect(JSON.stringify(installed)).not.toContain('src/index.ts')
+      } finally {
+        fs.rmSync(sourceParent, { recursive: true, force: true })
+        fs.rmSync(installedParent, { recursive: true, force: true })
+      }
+    },
+    720_000,
+  )
+
+  test.skipIf(!OPENCODE_AVAILABLE)(
+    'host-skill-coverage passes in source and installed modes with complete observed coverage',
+    async () => {
+      const sourceParent = runParent()
+      const installedParent = runParent()
+      try {
+        const source = normalizeResult(
+          await runSourceEval({
+            caseId: 'host-skill-coverage',
+            fixtureSeed: 'runner-host-skill-coverage',
+            normalizedClock: FIXED_CLOCK,
+            parentDir: sourceParent,
+          }),
+        )
+        const installed = normalizeResult(
+          await runInstalledEval({
+            caseId: 'host-skill-coverage',
+            fixtureSeed: 'runner-host-skill-coverage',
+            normalizedClock: FIXED_CLOCK,
+            parentDir: installedParent,
+          }),
+        )
+
+        expectRuntimeOutcome(source)
+        expectRuntimeOutcome(installed)
+        expect(source.assertionIds).toEqual(['host-catalog-covered'])
+        expect(installed.assertionIds).toEqual(['host-catalog-covered'])
+        const sourceCoverage = source.evidence.hostCatalogCoverage
+        const installedCoverage = installed.evidence.hostCatalogCoverage
+        if (!sourceCoverage || !installedCoverage) {
+          throw new Error('host catalog coverage evidence missing')
+        }
+        expect(sourceCoverage).toMatchObject({
+          state: 'present',
+          missingSkillNames: [],
+        })
+        expect(installedCoverage).toMatchObject({
+          state: 'present',
+          missingSkillNames: [],
+        })
+        expect(sourceCoverage.expectedSkillNames.length).toBeGreaterThan(0)
+        expect(installedCoverage.expectedSkillNames.length).toBeGreaterThan(0)
+        expect(
+          sourceCoverage.expectedSkillNames.every((name) =>
+            sourceCoverage.observedSkillNames.includes(name),
+          ),
+        ).toBe(true)
+        expect(
+          installedCoverage.expectedSkillNames.every((name) =>
+            installedCoverage.observedSkillNames.includes(name),
+          ),
+        ).toBe(true)
+        expect(sourceCoverage).toEqual(installedCoverage)
+        expect(source.evidence.promptComposition?.hostCatalog.state).toBe(
+          'present',
+        )
+        expect(installed.evidence.promptComposition?.hostCatalog.state).toBe(
+          'present',
+        )
+        expect(JSON.stringify(source)).not.toContain('<available_skills>')
+        expect(JSON.stringify(installed)).not.toContain('<available_skills>')
+      } finally {
+        fs.rmSync(sourceParent, { recursive: true, force: true })
+        fs.rmSync(installedParent, { recursive: true, force: true })
+      }
+    },
+    720_000,
+  )
+
+  test.skipIf(!OPENCODE_AVAILABLE)(
+    'installed fixture-local-write grades exact content without source fallback',
+    async () => {
+      const parentDir = runParent()
+      try {
+        const result = normalizeResult(
+          await runInstalledEval({
+            caseId: 'fixture-local-write',
+            fixtureSeed: 'runner-installed-write',
+            normalizedClock: FIXED_CLOCK,
+            parentDir,
+          }),
+        )
+        expectRuntimeOutcome(result)
+        expect(result.mode).toBe('installed')
+        expect(result.assertionIds).toEqual([
+          'fixture-file-content',
+          'fixture-file-created',
+        ])
+        expect(result.provenance.kind).toBe('installed')
+        expect(result.cleanup).toEqual({ status: 'clean', residue: 'none' })
+        expect(JSON.stringify(result)).not.toContain(parentDir)
+        expect(JSON.stringify(result)).not.toContain('src/index.ts')
+      } finally {
+        fs.rmSync(parentDir, { recursive: true, force: true })
+      }
+    },
+    360_000,
+  )
 
   test('cleanup runs after success, task failure, and a started-child interruption', async () => {
     const parentDir = runParent()
@@ -2091,67 +2185,74 @@ describe('local OpenCode eval runner', () => {
     })
   })
 
-  test('source direct CLI success emits one JSON object and validator-parseable artifacts', async () => {
-    const rootDir = path.resolve(import.meta.dirname, '../..')
-    const child = spawn(
-      process.execPath,
-      [
-        'scripts/run-evals.ts',
-        '--case',
-        'bootstrap-loading',
-        '--mode',
-        'source',
-        '--seed',
-        'direct-cli-success',
-        '--clock',
-        FIXED_CLOCK,
-      ],
-      { cwd: rootDir, stdio: ['ignore', 'pipe', 'pipe'] },
-    )
-    let stdout = ''
-    let stderr = ''
-    child.stdout.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString()
-    })
-    child.stderr.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString()
-    })
+  // Spawns the real CLI, which starts a real OpenCode host; gated like the
+  // other real-eval tests so it skips offline instead of hard-failing on
+  // exitCode/outcome !== success.
+  test.skipIf(!OPENCODE_AVAILABLE)(
+    'source direct CLI success emits one JSON object and validator-parseable artifacts',
+    async () => {
+      const rootDir = path.resolve(import.meta.dirname, '../..')
+      const child = spawn(
+        process.execPath,
+        [
+          'scripts/run-evals.ts',
+          '--case',
+          'bootstrap-loading',
+          '--mode',
+          'source',
+          '--seed',
+          'direct-cli-success',
+          '--clock',
+          FIXED_CLOCK,
+        ],
+        { cwd: rootDir, stdio: ['ignore', 'pipe', 'pipe'] },
+      )
+      let stdout = ''
+      let stderr = ''
+      child.stdout.on('data', (chunk: Buffer) => {
+        stdout += chunk.toString()
+      })
+      child.stderr.on('data', (chunk: Buffer) => {
+        stderr += chunk.toString()
+      })
 
-    const [exitCode] = (await once(child, 'exit')) as [number | null]
-    expect(exitCode).toBe(0)
-    expect(stderr).toBe('')
-    const lines = stdout.trim().split(/\r?\n/)
-    expect(lines).toHaveLength(1)
-    const summary = JSON.parse(lines[0] ?? '') as {
-      status: string
-      exitCode: number
-      runId: string
-      manifestArtifactId: string
-    }
-    expect(summary).toMatchObject({
-      status: 'written',
-      exitCode: 0,
-      manifestArtifactId: `evals/runs/${summary.runId}/manifest.json`,
-    })
+      const [exitCode] = (await once(child, 'exit')) as [number | null]
+      expect(exitCode).toBe(0)
+      expect(stderr).toBe('')
+      const lines = stdout.trim().split(/\r?\n/)
+      expect(lines).toHaveLength(1)
+      const summary = JSON.parse(lines[0] ?? '') as {
+        status: string
+        exitCode: number
+        runId: string
+        manifestArtifactId: string
+      }
+      expect(summary).toMatchObject({
+        status: 'written',
+        exitCode: 0,
+        manifestArtifactId: `evals/runs/${summary.runId}/manifest.json`,
+      })
 
-    const runRoot = path.join(rootDir, 'evals/runs', summary.runId)
-    try {
-      expect(
-        validateSerializedRunManifest(
-          fs.readFileSync(path.join(runRoot, 'manifest.json')),
-        ).partial,
-      ).toBe(false)
-      expect(
-        validateSerializedResult(
-          fs.readFileSync(
-            path.join(runRoot, 'results/bootstrap-loading/source.json'),
-          ),
-        ).outcome,
-      ).toBe('success')
-    } finally {
-      fs.rmSync(runRoot, { recursive: true, force: true })
-    }
-  }, 360_000)
+      const runRoot = path.join(rootDir, 'evals/runs', summary.runId)
+      try {
+        expect(
+          validateSerializedRunManifest(
+            fs.readFileSync(path.join(runRoot, 'manifest.json')),
+          ).partial,
+        ).toBe(false)
+        expect(
+          validateSerializedResult(
+            fs.readFileSync(
+              path.join(runRoot, 'results/bootstrap-loading/source.json'),
+            ),
+          ).outcome,
+        ).toBe('success')
+      } finally {
+        fs.rmSync(runRoot, { recursive: true, force: true })
+      }
+    },
+    360_000,
+  )
 
   test('direct CLI interruption cleans started children and run-owned roots', async () => {
     const parentDir = runParent()

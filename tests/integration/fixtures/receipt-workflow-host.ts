@@ -1,16 +1,20 @@
-import { type ChildProcess, spawn, spawnSync } from 'node:child_process'
+import { type ChildProcess, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
+import {
+  type OpencodeAvailabilityClassification,
+  probeOpencodeAvailability,
+  resolveBunInstallCacheDir,
+} from '../../../scripts/lib/opencode-availability.js'
 import { readOpencodeSdkPin } from '../../../scripts/lib/opencode-pin.js'
 import { stopProcessGroup } from '../../../scripts/lib/process-group.js'
 
 export const TIMEOUT_MS = 180_000
 // `string`, read from package.json at import time; throws if the pin is missing or not exact.
 export const EXACT_OPENCODE_VERSION = readOpencodeSdkPin()
-let exactNpmCacheDir: string | undefined
 export const MAX_RETRIES = 1
 export const RETRY_DELAY_MS = 3_000
 export const OPENCODE_TEST_MODEL = 'opencode/big-pickle'
@@ -133,44 +137,63 @@ export function buildChildEnv(
     const value = process.env[key]
     if (value !== undefined) base[key] = value
   }
-  return { ...base, ...overrides }
+  return {
+    ...base,
+    BUN_INSTALL_CACHE_DIR: resolveBunInstallCacheDir({
+      pin: EXACT_OPENCODE_VERSION,
+    }),
+    ...overrides,
+  }
 }
 
-export const OPENCODE_AVAILABLE = (() => {
+// Computed lazily and memoized only by `getOpencodeAvailability()` below, never
+// eagerly at module scope: this module must do no probing and no throwing at
+// import time, so `tests/unit/*` importers (and the required `test` job) never
+// spawn `bunx`. Each integration test module that gates on the host calls
+// `getOpencodeAvailability()` / `isOpencodeAvailable()` at its own module
+// scope and passes the result to `requireOpencodeAvailable()` itself.
+let cachedOpencodeAvailability: OpencodeAvailabilityClassification | undefined
+
+function computeOpencodeAvailability(): OpencodeAvailabilityClassification {
   const probeRoot = fs.mkdtempSync(
     path.join(os.tmpdir(), 'systematic-opencode-probe-'),
   )
   try {
-    // Fixtures redirect HOME/XDG paths, so a PATH shim must also run in that environment.
-    const result = spawnSync('opencode', ['--version'], {
+    // Fixtures redirect HOME/XDG paths, so the probe must also run in that
+    // environment. The OPENCODE_DISABLE_* flags mirror buildIsolatedOpencodeEnv
+    // below (the real hosts' env) so a first-run autoupdate/models fetch can't
+    // pollute the probe's stdout or add network latency the real hosts don't pay.
+    return probeOpencodeAvailability({
+      pin: EXACT_OPENCODE_VERSION,
       env: buildChildEnv({
+        OPENCODE_DISABLE_AUTOUPDATE: '1',
+        OPENCODE_DISABLE_LSP_DOWNLOAD: '1',
+        OPENCODE_DISABLE_MODELS_FETCH: '1',
+        OPENCODE_DISABLE_PRUNE: '1',
         HOME: probeRoot,
         XDG_CONFIG_HOME: probeRoot,
         XDG_DATA_HOME: probeRoot,
         XDG_CACHE_HOME: probeRoot,
         XDG_STATE_HOME: probeRoot,
       }),
-      encoding: 'utf8',
-      timeout: 15_000,
     })
-    const available =
-      !result.error &&
-      result.status === 0 &&
-      /\d+\.\d+\.\d+/.test(result.stdout ?? '')
-    if (!available) {
-      const stderr = (result.stderr ?? '')
-        .slice(0, 200)
-        .replaceAll(/\s+/g, ' ')
-        .trim()
-      console.warn(
-        `[systematic] opencode availability probe failed: status=${result.status ?? 'null'} signal=${result.signal ?? 'null'} error=${result.error?.message ?? 'none'} stderr=${stderr}`,
-      )
-    }
-    return available
   } finally {
     fs.rmSync(probeRoot, { recursive: true, force: true })
   }
-})()
+}
+
+export function getOpencodeAvailability(): OpencodeAvailabilityClassification {
+  cachedOpencodeAvailability ??= computeOpencodeAvailability()
+  return cachedOpencodeAvailability
+}
+
+export function isOpencodeAvailable(): boolean {
+  return getOpencodeAvailability().status === 'available'
+}
+
+export function opencodeAvailabilityReason(): string {
+  return getOpencodeAvailability().reason
+}
 
 export function buildIsolatedOpencodeEnv(
   fixture: IsolatedFixture,
@@ -193,34 +216,6 @@ export function buildIsolatedOpencodeEnv(
   })
 }
 
-function getExactNpmCacheDir(): string {
-  exactNpmCacheDir ??= fs.mkdtempSync(
-    path.join(os.tmpdir(), 'systematic-opencode-npm-cache-'),
-  )
-  return exactNpmCacheDir
-}
-
-export function prewarmExactOpencode(
-  version = EXACT_OPENCODE_VERSION,
-  timeoutMs = 300_000,
-): OpencodeResult {
-  const result = Bun.spawnSync(
-    ['npx', '--yes', `opencode-ai@${version}`, '--version'],
-    {
-      env: buildChildEnv({
-        NPM_CONFIG_CACHE: getExactNpmCacheDir(),
-        npm_config_update_notifier: 'false',
-      }),
-      timeout: timeoutMs,
-    },
-  )
-  return {
-    stdout: result.stdout.toString(),
-    stderr: result.stderr.toString(),
-    exitCode: result.exitCode ?? -1,
-  }
-}
-
 export interface RunOpencodeOptions {
   fixture: IsolatedFixture
   configContent: string
@@ -237,7 +232,14 @@ export async function runOpencode(
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     const result = Bun.spawnSync(
-      ['opencode', 'run', '--model', OPENCODE_TEST_MODEL, prompt],
+      [
+        'bunx',
+        `opencode-ai@${EXACT_OPENCODE_VERSION}`,
+        'run',
+        '--model',
+        OPENCODE_TEST_MODEL,
+        prompt,
+      ],
       {
         cwd: fixture.projectDir,
         env: childEnv,
@@ -611,8 +613,14 @@ export async function startOpencodeServer(
 ): Promise<OpencodeServer> {
   return startOpencodeProcess(
     fixture,
-    'opencode',
-    ['serve', '--port', '0', '--print-logs'],
+    'bunx',
+    [
+      `opencode-ai@${EXACT_OPENCODE_VERSION}`,
+      'serve',
+      '--port',
+      '0',
+      '--print-logs',
+    ],
     buildIsolatedOpencodeEnv(fixture, configContent, extraEnv),
   )
 }
@@ -626,13 +634,9 @@ export async function startExactOpencodeServer(
 ): Promise<OpencodeServer> {
   return startOpencodeProcess(
     fixture,
-    'npx',
-    ['--yes', `opencode-ai@${version}`, 'serve', '--port', '0', '--print-logs'],
-    buildIsolatedOpencodeEnv(fixture, configContent, {
-      NPM_CONFIG_CACHE: getExactNpmCacheDir(),
-      npm_config_update_notifier: 'false',
-      ...extraEnv,
-    }),
+    'bunx',
+    [`opencode-ai@${version}`, 'serve', '--port', '0', '--print-logs'],
+    buildIsolatedOpencodeEnv(fixture, configContent, extraEnv),
     timeoutMs,
   )
 }

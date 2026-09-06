@@ -3,18 +3,33 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createOpencodeClient } from '@opencode-ai/sdk/v2'
 
+import { requireOpencodeAvailable } from '../../scripts/lib/opencode-availability.js'
 import {
   cleanupPackedTarball,
   createIsolatedFixture,
   destroyIsolatedFixture,
   extractPackagedPlugin,
+  getOpencodeAvailability,
   type IsolatedFixture,
-  OPENCODE_AVAILABLE,
+  isOpencodeAvailable,
+  opencodeAvailabilityReason,
   packTarballOnce,
   startOpencodeServer,
   stopAllOpencodeHosts,
   TIMEOUT_MS,
 } from './fixtures/receipt-workflow-host.js'
+
+// Computed once at this module's own scope, never at the fixture module's
+// scope, so `bun test tests/unit` never spawns `bunx`. Under
+// SYSTEMATIC_REQUIRE_OPENCODE=1 (CI's fail-closed flag) an unavailable or
+// mismatched host makes this module fail to load instead of silently
+// skipping.
+requireOpencodeAvailable(getOpencodeAvailability())
+if (!isOpencodeAvailable()) {
+  console.warn(
+    `[systematic] skipping OpenCode-dependent tests in question-attestation-opencode.test.ts: ${opencodeAvailabilityReason()}`,
+  )
+}
 
 const MOCK_PROVIDER_ID = 'u6-question-provider'
 const MOCK_MODEL_ID = 'u6-question-model'
@@ -428,7 +443,7 @@ async function promptSession(
   })
 }
 
-describe.skipIf(!OPENCODE_AVAILABLE)('OpenCode Question attestation', () => {
+describe.skipIf(!isOpencodeAvailable())('OpenCode Question attestation', () => {
   beforeAll(() => {
     packTarballOnce()
   }, 200_000)

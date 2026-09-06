@@ -6,6 +6,10 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { gunzipSync } from 'node:zlib'
 
+import {
+  probeOpencodeAvailability,
+  resolveBunInstallCacheDir,
+} from './lib/opencode-availability.js'
 import { readOpencodeSdkPin } from './lib/opencode-pin.js'
 
 const CASE_SCHEMA_VERSION = 1 as const
@@ -2900,6 +2904,9 @@ export function buildEvalChildEnv(
     npm_config_prefix: options.fixture.npmPrefixRoot,
     NPM_CONFIG_USERCONFIG: options.fixture.npmUserConfigPath,
     npm_config_update_notifier: 'false',
+    BUN_INSTALL_CACHE_DIR: resolveBunInstallCacheDir({
+      pin: EXPECTED_OPENCODE_VERSION,
+    }),
     EVAL_MODEL_BASE_URL: options.modelBaseUrl,
   }
 }
@@ -2944,11 +2951,6 @@ function readCaseManifest(rootDir: string, caseId: CaseId): EvalCaseManifest {
   )
 }
 
-function extractVersion(output: string): string | undefined {
-  const matches = output.match(/\b\d+\.\d+\.\d+(?:-[A-Za-z0-9.-]+)?\b/g)
-  return matches?.at(-1)
-}
-
 export function verifyExactOpencodeRuntime(options: {
   fixture: EvalFixture
   parentEnv?: Readonly<Record<string, string | undefined>>
@@ -2960,34 +2962,25 @@ export function verifyExactOpencodeRuntime(options: {
     modelBaseUrl: 'http://127.0.0.1:1/v1',
     parentEnv: options.parentEnv,
   })
-  const result = spawnSync(
-    'npx',
-    ['--yes', `opencode-ai@${EXPECTED_OPENCODE_VERSION}`, '--version'],
-    {
-      cwd: options.fixture.projectRoot,
-      env,
-      encoding: 'utf8',
-      timeout: options.timeoutMs ?? 300_000,
-    },
-  )
-  if (result.error || result.status !== 0) {
-    return {
-      status: 'unavailable',
-      expectedVersion: EXPECTED_OPENCODE_VERSION,
-    }
-  }
-  const reportedVersion = extractVersion(result.stdout)
-  if (!reportedVersion) {
+  // Reuses the shared classification rather than keeping its own probe; the
+  // per-case `timeoutMs` still bounds a deliberately impossible timeout to
+  // `unavailable`, and nothing here memoizes across cases.
+  const classification = probeOpencodeAvailability({
+    pin: EXPECTED_OPENCODE_VERSION,
+    env,
+    cwd: options.fixture.projectRoot,
+    timeoutMs: options.timeoutMs ?? 300_000,
+  })
+  if (classification.status === 'unavailable') {
     return {
       status: 'unavailable',
       expectedVersion: EXPECTED_OPENCODE_VERSION,
     }
   }
   return {
-    status:
-      reportedVersion === EXPECTED_OPENCODE_VERSION ? 'available' : 'mismatch',
+    status: classification.status,
     expectedVersion: EXPECTED_OPENCODE_VERSION,
-    reportedVersion,
+    reportedVersion: classification.reportedVersion,
   }
 }
 

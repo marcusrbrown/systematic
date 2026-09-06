@@ -4,19 +4,31 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createOpencodeClient } from '@opencode-ai/sdk/v2'
 
+import { requireOpencodeAvailable } from '../../scripts/lib/opencode-availability.js'
 import {
   cleanupPackedTarball,
   createIsolatedFixture,
   destroyIsolatedFixture,
   extractPackagedPlugin,
+  getOpencodeAvailability,
   type IsolatedFixture,
-  OPENCODE_AVAILABLE,
+  isOpencodeAvailable,
+  opencodeAvailabilityReason,
   packTarballOnce,
   REPO_ROOT,
   startOpencodeServer,
   stopAllOpencodeHosts,
   TIMEOUT_MS,
 } from './fixtures/receipt-workflow-host.js'
+
+// See question-attestation-opencode.test.ts for why this call lives here
+// rather than in the fixture module.
+requireOpencodeAvailable(getOpencodeAvailability())
+if (!isOpencodeAvailable()) {
+  console.warn(
+    `[systematic] skipping OpenCode-dependent tests in receipt-workflow-recovery.test.ts: ${opencodeAvailabilityReason()}`,
+  )
+}
 
 const MOCK_PROVIDER_ID = 'systematic-receipt-probe'
 const MOCK_MODEL_ID = 'receipt-probe-model'
@@ -588,7 +600,7 @@ async function promptSession(
   })
 }
 
-describe.skipIf(!OPENCODE_AVAILABLE)(
+describe.skipIf(!isOpencodeAvailable())(
   'receipt workflow host characterization',
   () => {
     let fixture: IsolatedFixture

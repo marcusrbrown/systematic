@@ -1214,9 +1214,8 @@ async function startOpencodeHost(
   timeoutMs: number,
 ): Promise<OpencodeHost> {
   const child = spawn(
-    'npx',
+    'bunx',
     [
-      '--yes',
       `opencode-ai@${EXPECTED_OPENCODE_VERSION}`,
       'serve',
       '--port',
