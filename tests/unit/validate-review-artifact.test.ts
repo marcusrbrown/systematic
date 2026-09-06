@@ -75,7 +75,7 @@ describe('systematic validate-review-artifact', () => {
       )
 
       expect(result.exitCode).toBe(0)
-      expect(result.stdout).toContain('Review artifact is valid')
+      expect(result.stdout).toBe('Review artifact is valid\n')
       expect(result.stderr).toBe('')
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true })
@@ -377,7 +377,9 @@ describe('systematic validate-review-artifact', () => {
       )
 
       expect(result.exitCode).toBe(0)
-      expect(result.stdout).toContain('Review artifact is valid')
+      expect(result.stdout).toBe(
+        'Review artifact is valid (validated outside the run directory; not evidence for this run)\n',
+      )
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true })
       fs.rmSync(outsideDir, { recursive: true, force: true })
@@ -404,7 +406,9 @@ describe('systematic validate-review-artifact', () => {
       )
 
       expect(result.exitCode).toBe(0)
-      expect(result.stdout).toContain('Review artifact is valid')
+      expect(result.stdout).toBe(
+        'Review artifact is valid (validated outside the run directory; not evidence for this run)\n',
+      )
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true })
       fs.rmSync(outsideDir, { recursive: true, force: true })
