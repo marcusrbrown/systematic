@@ -297,16 +297,25 @@ describe('src/pi.ts before_agent_start bootstrap injection', () => {
     )
     const originalReadFileSync = fs.readFileSync
     const readFileSyncSpy = spyOn(fs, 'readFileSync').mockImplementation(
-      // Cast to the overloaded `readFileSync` type: every production call site
-      // in this repo passes an explicit 'utf8' encoding (see grep across
-      // src/lib/*.ts), so this fixture only needs to honor the string-returning
-      // overload; the cast avoids re-declaring all native fs overloads here.
-      ((path: fs.PathOrFileDescriptor): string => {
+      // Cast to the overloaded `readFileSync` type: every readFileSync call
+      // reachable from piExtension()'s bootstrap computation (src/lib/bootstrap.ts,
+      // agent-resolver.ts, config-handler.ts, config.ts) passes an explicit
+      // 'utf8'/'utf-8' encoding, so this fixture only needs to honor the
+      // string-returning overload; the cast avoids re-declaring all native fs
+      // overloads here. (src/lib/setup.ts reads a Buffer via a bare fd with no
+      // encoding, but that path is not exercised by piExtension().)
+      ((
+        path: fs.PathOrFileDescriptor,
+        options?: Parameters<typeof fs.readFileSync>[1],
+      ): string => {
         const filePath = String(path)
         if (filePath.endsWith('using-systematic/SKILL.md')) {
           throw new Error('bootstrap failure')
         }
-        return originalReadFileSync(path, 'utf8')
+        return originalReadFileSync(
+          path,
+          options as unknown as BufferEncoding,
+        ) as string
       }) as unknown as typeof fs.readFileSync,
     )
 
