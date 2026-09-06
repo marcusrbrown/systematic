@@ -167,10 +167,12 @@ describe('re-exports stay in sync with the helper', () => {
 })
 
 describe('R1: no hardcoded OpenCode pin literal', () => {
-  const EXCLUDED_DIR = path.join(REPO_ROOT, 'tests', 'fixtures')
-
   function isExcludedDir(dirPath: string): boolean {
-    return dirPath.includes('node_modules') || dirPath === EXCLUDED_DIR
+    return path.basename(dirPath) === 'node_modules'
+  }
+
+  function escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
   }
 
   function collectTsFiles(rootDir: string): string[] {
@@ -197,8 +199,11 @@ describe('R1: no hardcoded OpenCode pin literal', () => {
       ...collectTsFiles(path.join(REPO_ROOT, 'tests')),
     ]
 
+    expect(files.length).toBeGreaterThan(0)
+
+    const pinPattern = new RegExp(`(?<![\\d.])${escapeRegExp(pin)}(?![\\d.])`)
     const offenders = files.filter((file) =>
-      fs.readFileSync(file, 'utf8').includes(pin),
+      pinPattern.test(fs.readFileSync(file, 'utf8')),
     )
 
     if (offenders.length > 0) {
