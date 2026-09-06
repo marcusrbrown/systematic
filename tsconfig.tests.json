@@ -1,0 +1,10 @@
+{
+  "extends": "./tsconfig.scripts.json",
+  // allowImportingTsExtensions is inherited from tsconfig.scripts.json, where
+  // it's required for scripts/ imports unrelated to this file. It also
+  // silences ~44 tests/ files using `.ts`-suffixed relative imports — that
+  // part is temporary, tied to #897's burn-down. Do not read the flag itself
+  // as removable once that lands; only reconsider whether tests/ still needs
+  // it.
+  "include": ["src/**/*", "scripts/**/*", "tests/**/*", "docs/scripts/**/*"]
+}

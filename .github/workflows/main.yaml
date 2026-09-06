@@ -113,6 +113,18 @@ jobs:
       - name: Typecheck
         run: bun run typecheck
 
+      # Required: src/, scripts/, and docs/scripts/ are clean today, so this
+      # gate has no backlog to work through.
+      - name: Typecheck scripts and docs scripts
+        run: bun run typecheck:scripts
+
+      # Advisory until #897's burn-down lands: tests/ carries a real error
+      # backlog (see PR #914), so this stays continue-on-error until that
+      # backlog is cleared, then becomes a required step in its own right.
+      - name: Typecheck tests and scripts (advisory)
+        run: bun run typecheck:all
+        continue-on-error: true
+
   lint:
     name: Lint
     runs-on: ubuntu-latest

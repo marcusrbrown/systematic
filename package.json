@@ -40,6 +40,8 @@
     "test:integration": "bun test tests/integration",
     "test:all": "bun test",
     "typecheck": "tsc --noEmit",
+    "typecheck:scripts": "tsc -p tsconfig.scripts.json",
+    "typecheck:all": "tsc -p tsconfig.tests.json",
     "lint": "biome check .",
     "fix": "bun run lint --fix",
     "docs:dev": "bun run --cwd docs dev",
