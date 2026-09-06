@@ -1,13 +1,14 @@
 import {
   formatReviewArtifactIssuePath,
+  formatReviewArtifactSuccessMessage,
   isLegacyReviewArtifact,
+  parseValidateReviewArtifactArguments,
   readReviewArtifact,
   resolveReviewArtifactPath,
+  VALIDATE_REVIEW_ARTIFACT_USAGE,
 } from './lib/review-artifact-path.js'
 import { ReviewArtifactSchema } from './lib/review-artifact-schema.js'
 
-const VALIDATE_REVIEW_ARTIFACT_USAGE =
-  'Usage: systematic validate-review-artifact <path>'
 const REVIEW_ARTIFACT_SCHEMA_RELATIVE_PATH =
   'skills/ce-review/references/review-summary-schema.json'
 
@@ -18,27 +19,21 @@ interface ValidatorOptions {
   readonly errorSink?: (message: string) => void
 }
 
-function validateReviewArtifactArgument(
-  argv: readonly string[],
-): string | undefined {
-  if (argv.length !== 1) return undefined
-  return argv[0]
-}
-
 export function runClaudeCodeValidator(options: ValidatorOptions): number {
   const outputSink =
     options.outputSink ?? ((message: string) => console.log(message))
   const errorSink =
     options.errorSink ?? ((message: string) => console.error(message))
-  const input = validateReviewArtifactArgument(options.argv)
-  if (input === undefined) {
+  const parsedArgs = parseValidateReviewArtifactArguments(options.argv)
+  if (parsedArgs === undefined) {
     errorSink(VALIDATE_REVIEW_ARTIFACT_USAGE)
     return 2
   }
 
   const resolved = resolveReviewArtifactPath(
-    input,
+    parsedArgs.path,
     options.cwd ?? process.cwd(),
+    { allowOutsideArtifactRoot: parsedArgs.allowOutsideArtifactRoot },
   )
   if (!resolved.ok) {
     errorSink(resolved.message)
@@ -73,7 +68,9 @@ export function runClaudeCodeValidator(options: ValidatorOptions): number {
     return 1
   }
 
-  outputSink('Review artifact is valid')
+  outputSink(
+    formatReviewArtifactSuccessMessage(parsedArgs.allowOutsideArtifactRoot),
+  )
   return 0
 }
 

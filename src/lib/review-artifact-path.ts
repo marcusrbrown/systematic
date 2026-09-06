@@ -52,6 +52,51 @@ export function hasParentDirectoryTraversal(input: string): boolean {
   return input.split(/[\\/]+/).some((segment) => segment === '..')
 }
 
+// Shared CLI argument surface for both the standalone CLI and the bundled
+// validator entry, so the two stay structurally identical rather than
+// hand-maintained copies.
+export const ALLOW_OUTSIDE_ARTIFACT_ROOT_FLAG = '--allow-outside-artifact-root'
+export const VALIDATE_REVIEW_ARTIFACT_USAGE =
+  'Usage: systematic validate-review-artifact <path> [--allow-outside-artifact-root]'
+
+export interface ValidateReviewArtifactArguments {
+  readonly path: string
+  readonly allowOutsideArtifactRoot: boolean
+}
+
+// Filters every occurrence of the flag rather than removing only the first,
+// so a repeated flag is accepted (idempotent) instead of being treated as an
+// extra positional argument and rejected. Any other unrecognized token still
+// fails the single-positional check below.
+export function parseValidateReviewArtifactArguments(
+  argv: readonly string[],
+): ValidateReviewArtifactArguments | undefined {
+  const allowOutsideArtifactRoot = argv.includes(
+    ALLOW_OUTSIDE_ARTIFACT_ROOT_FLAG,
+  )
+  const positional = argv.filter(
+    (arg) => arg !== ALLOW_OUTSIDE_ARTIFACT_ROOT_FLAG,
+  )
+  if (positional.length !== 1) return undefined
+  const path = positional[0]
+  if (path === undefined) return undefined
+  return { allowOutsideArtifactRoot, path }
+}
+
+const REVIEW_ARTIFACT_VALID_MESSAGE = 'Review artifact is valid'
+const REVIEW_ARTIFACT_VALID_EXTERNAL_MESSAGE =
+  'Review artifact is valid (validated outside the run directory; not evidence for this run)'
+
+// Keeps a transcript from mistaking an --allow-outside-artifact-root success
+// for evidence about the current ce:review run.
+export function formatReviewArtifactSuccessMessage(
+  allowOutsideArtifactRoot: boolean,
+): string {
+  return allowOutsideArtifactRoot
+    ? REVIEW_ARTIFACT_VALID_EXTERNAL_MESSAGE
+    : REVIEW_ARTIFACT_VALID_MESSAGE
+}
+
 // Deliberately redundant with the realpath + containment check below. That pair
 // rejects a symlink whose target escapes the artifact root; this rejects every
 // symlink in the path outright, which also narrows the window between the
@@ -83,10 +128,21 @@ function isWithinDirectory(candidate: string, directory: string): boolean {
   )
 }
 
+export interface ResolveReviewArtifactPathOptions {
+  // When true, skip the containment check that requires the resolved path to
+  // stay inside .context/systematic/ce-review, and do not require that
+  // directory to exist. Lexical `..` rejection, symlink rejection, realpath
+  // canonicalization, and the regular-file check still apply. Default false.
+  readonly allowOutsideArtifactRoot?: boolean
+}
+
 export function resolveReviewArtifactPath(
   input: string,
   cwd: string,
+  options: ResolveReviewArtifactPathOptions = {},
 ): ArtifactPathResult {
+  const allowOutsideArtifactRoot = options.allowOutsideArtifactRoot ?? false
+
   if (hasParentDirectoryTraversal(input)) {
     return {
       message:
@@ -95,24 +151,32 @@ export function resolveReviewArtifactPath(
     }
   }
 
-  const artifactRoot = path.resolve(cwd, '.context', 'systematic', 'ce-review')
-  let canonicalRoot: string
-  try {
-    canonicalRoot = fs.realpathSync(artifactRoot)
-    if (!fs.statSync(canonicalRoot).isDirectory()) {
-      return {
-        message: 'Review artifact directory is not a directory',
-        ok: false,
+  let canonicalRoot: string | undefined
+  if (!allowOutsideArtifactRoot) {
+    const artifactRoot = path.resolve(
+      cwd,
+      '.context',
+      'systematic',
+      'ce-review',
+    )
+    try {
+      canonicalRoot = fs.realpathSync(artifactRoot)
+      if (!fs.statSync(canonicalRoot).isDirectory()) {
+        return {
+          message: 'Review artifact directory is not a directory',
+          ok: false,
+        }
       }
+    } catch {
+      return { message: 'Review artifact directory is unavailable', ok: false }
     }
-  } catch {
-    return { message: 'Review artifact directory is unavailable', ok: false }
   }
 
   const candidate = path.resolve(cwd, input)
   if (pathContainsSymlink(candidate)) {
     return {
-      message: 'Review artifact path must not contain symlinks',
+      message:
+        'Review artifact path must not contain symlinks; pass a fully resolved path',
       ok: false,
     }
   }
@@ -124,7 +188,10 @@ export function resolveReviewArtifactPath(
     return { message: 'Review artifact file was not found', ok: false }
   }
 
-  if (!isWithinDirectory(canonicalTarget, canonicalRoot)) {
+  if (
+    canonicalRoot !== undefined &&
+    !isWithinDirectory(canonicalTarget, canonicalRoot)
+  ) {
     return {
       message:
         'Review artifact path must remain inside .context/systematic/ce-review',
