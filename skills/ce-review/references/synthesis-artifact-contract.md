@@ -247,6 +247,18 @@ validation, and it does not delete the artifact to escape the check. A failing
 artifact is evidence and stays on disk; an absent artifact is never evidence
 of a clean run.
 
+Both commands also accept `--allow-outside-artifact-root`, which skips the
+containment check so a copy fetched from CI, an issue attachment, or a fixture
+can be validated from outside `.context/systematic/ce-review`. It also drops
+the requirement that `.context/systematic/ce-review` exist at all. That is not
+a workaround for the "directory is unavailable" degradation described above:
+that degradation is deliberate visible failure for the parent's own run
+artifact, and the flag does not change how the parent's own validation run is
+judged. This is an external-validation mode for artifacts the parent did not
+just produce. The parent must never pass this flag when validating its own
+run's `review-summary.json`; doing so would silently accept a mismatched or
+misplaced artifact as this run's evidence.
+
 This is enforcement by visible failure, not by containment. An agent that
 never runs the command can still finalize an artifact, but produces no evidence
 in either direction. That is why the command exists as an independently
