@@ -2,11 +2,11 @@ import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import type { ToolContext, ToolResult } from '@opencode-ai/plugin'
 import { z } from 'zod'
 
 import type {
   OpencodeOperationObserver,
-  OpencodeWorkflowHostReadback,
   OperationObserverRemoteResult,
   OperationObserverSnapshot,
 } from '../../src/lib/opencode-operation-observer.js'
@@ -17,6 +17,7 @@ import {
   deriveOpencodeOperationTarget,
   isWorkflowGuardBlockedError,
   type OpencodeWorkflowGuard,
+  type OpencodeWorkflowHostReadback,
   SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY,
 } from '../../src/lib/opencode-workflow-guard.js'
 import {
@@ -54,11 +55,43 @@ function ledger(
   return value
 }
 
-function toolContext(sessionID = SESSION_A): {
-  sessionID: string
-  metadata: () => void
-} {
-  return { sessionID, metadata: () => {} }
+/**
+ * Local shape for a mutable `tool.execute.after` output fixture. The real
+ * `ToolResult` from `@opencode-ai/plugin` is `string | {..., metadata?: {
+ * [key: string]: any }}`; these fixtures always use the object variant and
+ * read `metadata` back by bracket key after the hook mutates it in place, so
+ * the field is typed as a real record instead of an inferred empty object.
+ */
+interface RecordedToolOutput {
+  title?: string
+  output: string
+  metadata: Record<string, unknown>
+}
+
+/**
+ * `ToolContext.execute()` returns `ToolResult`, a `string |
+ * {output, metadata?, ...}` union. Every tool under test here always
+ * returns the structured object variant; this narrows for `.output`/
+ * `.metadata` access instead of casting.
+ */
+function expectToolOutput(result: ToolResult): Exclude<ToolResult, string> {
+  if (typeof result === 'string') {
+    throw new Error('expected a structured tool result, got a bare string')
+  }
+  return result
+}
+
+function toolContext(sessionID = SESSION_A): ToolContext {
+  return {
+    sessionID,
+    messageID: `message-${sessionID}`,
+    agent: 'systematic',
+    directory: process.cwd(),
+    worktree: process.cwd(),
+    abort: new AbortController().signal,
+    metadata: () => {},
+    ask: async () => {},
+  }
 }
 
 const SCOPE = {
@@ -216,7 +249,7 @@ function createAdapter(
   mode: 'observe' | 'protected' | 'disabled' = 'protected',
   debug = false,
   observer?: OpencodeOperationObserver,
-  runtimeRequiredOperations: readonly string[] = [],
+  runtimeRequiredOperations: readonly ReceiptOperation[] = [],
   observations?: ReceiptOperationObservation[],
   hostReadback?: OpencodeWorkflowHostReadback,
   sharedRecovery = false,
@@ -239,7 +272,13 @@ function createAdapter(
                 ...classifier,
                 classifyOperation: async (input: unknown) => {
                   observations.push(input as ReceiptOperationObservation)
-                  return classifier.classifyOperation?.(input)
+                  const classify = classifier.classifyOperation
+                  if (!classify) {
+                    throw new Error(
+                      'expected classifier to implement classifyOperation',
+                    )
+                  }
+                  return classify(input)
                 },
               }
             : classifier,
@@ -267,7 +306,7 @@ async function observeOperationTool(
   adapter: OpencodeWorkflowGuard,
   tool: 'write' | 'edit' | 'apply_patch' | 'bash',
   args: Record<string, unknown>,
-  output: Record<string, unknown>,
+  output: unknown,
   callID = `${tool}-operation`,
   sessionID = SESSION_A,
 ): Promise<void> {
@@ -285,7 +324,7 @@ async function observeOperationToolWithArgs(
   adapter: OpencodeWorkflowGuard,
   beforeArgs: Record<string, unknown>,
   afterArgs: Record<string, unknown>,
-  output: Record<string, unknown>,
+  output: unknown,
   callID = 'apply_patch-operation',
   sessionID = SESSION_A,
 ): Promise<void> {
@@ -525,7 +564,7 @@ async function createPinnedRecoveryAdapter(): Promise<{
   const sessionSalt = new Uint8Array(32).fill(137)
   let parentMarkers: readonly unknown[] = []
   const adapter = createOpencodeWorkflowGuard({
-    config: { mode: 'observe' },
+    config: { mode: 'observe', debug: false },
     workspaceIdentity: initial.snapshot.targetDigest,
     repositoryIdentity: targetInitial.snapshot.repositoryRevisionDigest,
     worktreeIdentity: targetInitial.snapshot.worktreeRevisionDigest,
@@ -577,7 +616,7 @@ async function createPinnedRecoveryAdapter(): Promise<{
   )
   await adapter.tools.systematic_workflow_status.execute(
     {},
-    { sessionID: SESSION_A, metadata: () => {} },
+    toolContext(SESSION_A),
   )
 
   return {
@@ -617,7 +656,7 @@ async function createFreshPinnedAdapter(
     throw new Error('parent unavailable')
   }
   const adapter = createOpencodeWorkflowGuard({
-    config: { mode: 'observe' },
+    config: { mode: 'observe', debug: false },
     workspaceIdentity: initial.snapshot.targetDigest,
     repositoryIdentity: initial.snapshot.repositoryRevisionDigest,
     worktreeIdentity: initial.snapshot.worktreeRevisionDigest,
@@ -1126,7 +1165,7 @@ describe('OpenCode workflow guard adapter', () => {
   test('projects the upgraded declaration with its actual operations and resource scopes', async () => {
     const adapter = createAdapter('observe')
     await observeSkill(adapter, 'systematic_skill', 'ce:work')
-    const output = {
+    const output: RecordedToolOutput = {
       title: 'pending',
       output: 'start complete',
       metadata: {},
@@ -1208,7 +1247,7 @@ describe('OpenCode workflow guard adapter', () => {
   test('does not emit a second progression marker for a no-growth start', async () => {
     const adapter = createAdapter('observe')
     await observeSkill(adapter, 'systematic_skill', 'ce:work')
-    const output = {
+    const output: RecordedToolOutput = {
       title: 'pending',
       output: 'start complete',
       metadata: {},
@@ -1242,13 +1281,23 @@ describe('OpenCode workflow guard adapter', () => {
     const source = createAdapter(
       'observe',
       false,
-      sequenceObserver([{ targetDigest: 'a'.repeat(64) }]),
+      sequenceObserver([
+        {
+          targetDigest: 'a'.repeat(64),
+          repositoryRevisionDigest: 'a'.repeat(64),
+          worktreeRevisionDigest: 'a'.repeat(64),
+        },
+      ]),
       [],
       undefined,
       undefined,
       true,
     )
-    const skillOutput = { title: 'skill', output: 'loaded', metadata: {} }
+    const skillOutput: RecordedToolOutput = {
+      title: 'skill',
+      output: 'loaded',
+      metadata: {},
+    }
     await observeSkill(
       source,
       'systematic_skill',
@@ -1257,7 +1306,7 @@ describe('OpenCode workflow guard adapter', () => {
       SESSION_A,
       skillOutput,
     )
-    const startOutput = {
+    const startOutput: RecordedToolOutput = {
       title: 'start',
       output: 'started',
       metadata: {},
@@ -1302,7 +1351,13 @@ describe('OpenCode workflow guard adapter', () => {
     const restored = createAdapter(
       'observe',
       false,
-      sequenceObserver([{ targetDigest: 'a'.repeat(64) }]),
+      sequenceObserver([
+        {
+          targetDigest: 'a'.repeat(64),
+          repositoryRevisionDigest: 'a'.repeat(64),
+          worktreeRevisionDigest: 'a'.repeat(64),
+        },
+      ]),
       [],
       undefined,
       {
@@ -1479,9 +1534,9 @@ describe('OpenCode workflow guard adapter', () => {
       toolContext(),
     )
 
-    expect(start.output).toContain('pending')
-    expect(statusOutput.output).toContain(statusBefore.state)
-    expect(control.output).toContain('question-attestation')
+    expect(expectToolOutput(start).output).toContain('pending')
+    expect(expectToolOutput(statusOutput).output).toContain(statusBefore.state)
+    expect(expectToolOutput(control).output).toContain('question-attestation')
     expect(status(adapter).epoch).toBeNull()
   })
 
@@ -1631,7 +1686,7 @@ describe('OpenCode workflow guard adapter', () => {
       {},
       toolContext(),
     )
-    expect(status.metadata).toMatchObject({
+    expect(expectToolOutput(status).metadata).toMatchObject({
       questionAttestation: { status: 'attested', requestId: 'request-1' },
     })
   })
@@ -1671,7 +1726,7 @@ describe('OpenCode workflow guard adapter', () => {
       { mode: 'disabled' },
       toolContext(),
     )
-    expect(first.output).toContain('question-attestation')
+    expect(expectToolOutput(first).output).toContain('question-attestation')
     expect(adapter.status(SESSION_A).state).not.toBe('disabled')
 
     const questionOutput = { args: {} as Record<string, unknown> }
@@ -1694,7 +1749,7 @@ describe('OpenCode workflow guard adapter', () => {
       { mode: 'disabled' },
       toolContext(),
     )
-    expect(second.output).toContain('disabled')
+    expect(expectToolOutput(second).output).toContain('disabled')
     expect(adapter.status(SESSION_A).state).toBe('disabled')
   })
 
@@ -2339,8 +2394,9 @@ describe('OpenCode workflow guard adapter', () => {
     const worst = document.sources.find(
       (source) => source.state === 'unavailable',
     )
+    if (!worst) throw new Error('expected an unavailable source')
     expect(document.aggregate.state).toBe('unavailable')
-    expect(document.aggregate.statusDigest).toBe(worst?.statusDigest)
+    expect(document.aggregate.statusDigest).toBe(worst.statusDigest)
   })
 
   test('fails closed on bounded marker overflow while retaining the current source', async () => {
@@ -2403,7 +2459,7 @@ describe('OpenCode workflow guard adapter', () => {
         observations,
       )
       await observeSkill(adapter, 'systematic_skill', 'ce:work')
-      const output = {
+      const output: RecordedToolOutput = {
         title: `${tool} complete`,
         output: 'local result',
         metadata: { hostMetadata: 'preserved' },
@@ -2462,7 +2518,7 @@ describe('OpenCode workflow guard adapter', () => {
 
     test('appends progression markers in order while preserving unrelated metadata', async () => {
       const adapter = createAdapter('observe')
-      const output = {
+      const output: RecordedToolOutput = {
         title: 'Loaded skill',
         output: 'skill result',
         metadata: { hostMetadata: 'preserved' },
@@ -2754,7 +2810,7 @@ describe('OpenCode workflow guard adapter', () => {
       const observations: ReceiptOperationObservation[] = []
       const classifier = createReceiptClassifier()
       const adapter = createOpencodeWorkflowGuard({
-        config: { mode: 'observe' },
+        config: { mode: 'observe', debug: false },
         workspaceIdentity: initial.snapshot.targetDigest,
         repositoryIdentity: initial.snapshot.repositoryRevisionDigest,
         worktreeIdentity: initial.snapshot.worktreeRevisionDigest,
@@ -2764,7 +2820,13 @@ describe('OpenCode workflow guard adapter', () => {
           ...classifier,
           classifyOperation: async (input: unknown) => {
             observations.push(input as ReceiptOperationObservation)
-            return classifier.classifyOperation?.(input)
+            const classify = classifier.classifyOperation
+            if (!classify) {
+              throw new Error(
+                'expected classifier to implement classifyOperation',
+              )
+            }
+            return classify(input)
           },
         },
       })
@@ -2817,7 +2879,7 @@ describe('OpenCode workflow guard adapter', () => {
       const initial = await parentObserver.snapshot()
       if (initial.status !== 'available') throw new Error('parent unavailable')
       const adapter = createOpencodeWorkflowGuard({
-        config: { mode: 'observe' },
+        config: { mode: 'observe', debug: false },
         workspaceIdentity: initial.snapshot.targetDigest,
         repositoryIdentity: initial.snapshot.repositoryRevisionDigest,
         worktreeIdentity: initial.snapshot.worktreeRevisionDigest,
@@ -2873,7 +2935,7 @@ describe('OpenCode workflow guard adapter', () => {
       const initial = await parentObserver.snapshot()
       if (initial.status !== 'available') throw new Error('parent unavailable')
       const adapter = createOpencodeWorkflowGuard({
-        config: { mode: 'observe' },
+        config: { mode: 'observe', debug: false },
         workspaceIdentity: initial.snapshot.targetDigest,
         repositoryIdentity: initial.snapshot.repositoryRevisionDigest,
         worktreeIdentity: initial.snapshot.worktreeRevisionDigest,
@@ -2919,7 +2981,7 @@ describe('OpenCode workflow guard adapter', () => {
       const initial = await parentObserver.snapshot()
       if (initial.status !== 'available') throw new Error('parent unavailable')
       const adapter = createOpencodeWorkflowGuard({
-        config: { mode: 'observe' },
+        config: { mode: 'observe', debug: false },
         workspaceIdentity: initial.snapshot.targetDigest,
         repositoryIdentity: initial.snapshot.repositoryRevisionDigest,
         worktreeIdentity: initial.snapshot.worktreeRevisionDigest,
@@ -3264,7 +3326,7 @@ describe('OpenCode workflow guard adapter', () => {
       observations,
     )
     await observeSkill(adapter, 'systematic_skill', 'ce:work')
-    const output = {
+    const output: RecordedToolOutput = {
       title: 'push',
       output: 'pushed',
       metadata: { hostMetadata: 'preserved', exit: 0 },
@@ -3800,7 +3862,7 @@ describe('OpenCode workflow guard adapter', () => {
         },
       }
       const adapter = createOpencodeWorkflowGuard({
-        config: { mode: 'observe' },
+        config: { mode: 'observe', debug: false },
         workspaceIdentity: initial.snapshot.targetDigest,
         repositoryIdentity: initial.snapshot.repositoryRevisionDigest,
         worktreeIdentity: initial.snapshot.worktreeRevisionDigest,
@@ -3864,7 +3926,7 @@ describe('OpenCode workflow guard adapter', () => {
         },
       }
       const adapter = createOpencodeWorkflowGuard({
-        config: { mode: 'observe' },
+        config: { mode: 'observe', debug: false },
         workspaceIdentity: initial.snapshot.targetDigest,
         repositoryIdentity: initial.snapshot.repositoryRevisionDigest,
         worktreeIdentity: initial.snapshot.worktreeRevisionDigest,
@@ -3986,7 +4048,11 @@ describe('OpenCode workflow guard adapter', () => {
       undefined,
       true,
     )
-    const skillOutput = { title: 'skill', output: 'loaded', metadata: {} }
+    const skillOutput: RecordedToolOutput = {
+      title: 'skill',
+      output: 'loaded',
+      metadata: {},
+    }
     await observeSkill(
       source,
       'systematic_skill',
@@ -3995,7 +4061,7 @@ describe('OpenCode workflow guard adapter', () => {
       SESSION_A,
       skillOutput,
     )
-    const output = {
+    const output: RecordedToolOutput = {
       title: 'write',
       output: 'changed',
       metadata: {},
@@ -4173,7 +4239,7 @@ describe('OpenCode workflow guard adapter', () => {
 
       await restored.tools.systematic_workflow_status.execute(
         {},
-        { sessionID: SESSION_A, metadata: () => {} },
+        toolContext(SESSION_A),
       )
 
       // BEFORE FIX: guard would be 'unavailable' due to conflicting-seed
@@ -4282,7 +4348,7 @@ describe('OpenCode workflow guard adapter', () => {
 
       await restored.tools.systematic_workflow_status.execute(
         {},
-        { sessionID: SESSION_A, metadata: () => {} },
+        toolContext(SESSION_A),
       )
 
       const s = restored.status(SESSION_A)
@@ -4333,7 +4399,7 @@ describe('OpenCode workflow guard adapter', () => {
 
       await restored.tools.systematic_workflow_status.execute(
         {},
-        { sessionID: SESSION_A, metadata: () => {} },
+        toolContext(SESSION_A),
       )
 
       const s = restored.status(SESSION_A)
@@ -4384,7 +4450,7 @@ describe('OpenCode workflow guard adapter', () => {
 
       await restored.tools.systematic_workflow_status.execute(
         {},
-        { sessionID: SESSION_A, metadata: () => {} },
+        toolContext(SESSION_A),
       )
 
       // A fresh guard (no epoch activated yet) has state 'unavailable' / 'no-active-epoch'.
@@ -4468,7 +4534,7 @@ describe('OpenCode workflow guard adapter', () => {
 
       await adapter.tools.systematic_workflow_status.execute(
         {},
-        { sessionID: SESSION_A, metadata: () => {} },
+        toolContext(SESSION_A),
       )
 
       const s = adapter.status(SESSION_A)
@@ -4548,7 +4614,7 @@ describe('OpenCode workflow guard adapter', () => {
 
       await adapter.tools.systematic_workflow_status.execute(
         {},
-        { sessionID: SESSION_A, metadata: () => {} },
+        toolContext(SESSION_A),
       )
 
       const s = adapter.status(SESSION_A)
@@ -4590,7 +4656,7 @@ describe('OpenCode workflow guard adapter', () => {
 
       await adapter.tools.systematic_workflow_status.execute(
         {},
-        { sessionID: SESSION_A, metadata: () => {} },
+        toolContext(SESSION_A),
       )
 
       const s = adapter.status(SESSION_A)
@@ -4627,7 +4693,7 @@ describe('OpenCode workflow guard adapter', () => {
 
       await adapter.tools.systematic_workflow_status.execute(
         {},
-        { sessionID: SESSION_A, metadata: () => {} },
+        toolContext(SESSION_A),
       )
 
       const s = adapter.status(SESSION_A)
@@ -4837,12 +4903,14 @@ describe('OpenCode workflow guard adapter', () => {
         output: 'done',
         metadata: { sessionId: childSessionID },
       }
-      await adapter.hooks['tool.execute.before']({
-        tool: 'task',
-        sessionID,
-        callID: 'task-call-1',
-        args: {},
-      })
+      await adapter.hooks['tool.execute.before'](
+        {
+          tool: 'task',
+          sessionID,
+          callID: 'task-call-1',
+        },
+        { args: {} },
+      )
       await adapter.hooks['tool.execute.after'](
         {
           tool: 'task',
@@ -4908,6 +4976,14 @@ describe('OpenCode workflow guard adapter', () => {
         sessionSalt: ownSalt,
         observer: {
           targetDigest: OPERATION_SCOPE.workspaceIdentity,
+          validateRegisteredWorktree(candidateDirectory) {
+            return {
+              status: 'ok',
+              targetRoot: candidateDirectory,
+              gitDir: path.join(candidateDirectory, '.git'),
+              commonDir: path.join(candidateDirectory, '.git'),
+            }
+          },
           async snapshot() {
             snapshotCalled = true
             return {
@@ -5877,7 +5953,7 @@ describe('OpenCode workflow guard adapter', () => {
           parentSessionID,
         )
 
-        const childSkillOutput = {
+        const childSkillOutput: RecordedToolOutput = {
           title: 'Loaded skill',
           output: 'child skill result',
           metadata: {},
@@ -5898,7 +5974,7 @@ describe('OpenCode workflow guard adapter', () => {
           callID: 'registered-worktree-child-write',
           args: { filePath, content: 'changed' },
         }
-        const childWriteOutput = {
+        const childWriteOutput: RecordedToolOutput = {
           title: 'write complete',
           output: 'changed',
           metadata: {},
