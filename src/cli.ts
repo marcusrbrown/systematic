@@ -155,7 +155,7 @@ Scope:
 const REVIEW_ARTIFACT_SCHEMA_RELATIVE_PATH =
   'skills/ce-review/references/review-summary-schema.json'
 
-interface CapabilityCliRoots {
+export interface CapabilityCliRoots {
   readonly agentsRoot: string
   readonly cwd: string
   readonly homeDir: string

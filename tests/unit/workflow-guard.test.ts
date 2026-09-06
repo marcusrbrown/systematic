@@ -12,6 +12,7 @@ import {
 } from '../../src/lib/receipt-readback.js'
 import {
   createWorkflowGuard,
+  type RepairKind,
   type WorkflowGuard,
   type WorkflowGuardOptions,
 } from '../../src/lib/workflow-guard.js'
@@ -106,7 +107,13 @@ function mintReceiptWithContext(
   ledger: ReturnType<typeof createReceiptLedger>,
   operation: ReceiptOperation,
   context: ReceiptContext,
-  after = RECEIPT_AFTER_SCOPE,
+  after: {
+    readonly workspaceIdentity: string
+    readonly repositoryIdentity: string
+    readonly worktreeIdentity: string
+    readonly operationTargetIdentity: string
+    readonly resourceIdentity?: string
+  } = RECEIPT_AFTER_SCOPE,
 ): ReceiptEnvelope {
   const callId = `host-call-${++callSequence}`
   expect(ledger.prepareObservation({ callId, operation, context }).status).toBe(
@@ -160,11 +167,12 @@ function completeUnit(
   expectedOperations: readonly ReceiptOperation[] = [],
   callId = `unit-transition-${++callSequence}`,
 ) {
-  for (const operation of [
+  const operations: ReceiptOperation[] = [
     'implementation',
     'verification',
     ...expectedOperations,
-  ]) {
+  ]
+  for (const operation of operations) {
     guard.observeReceipt(mintReceipt(guard, ledger, operation))
   }
   const prepared = guard.prepareTransition({ callId, target: 'unit' })
@@ -526,7 +534,7 @@ describe('workflow guard', () => {
   test('supports exactly one repair path and becomes unavailable without one', () => {
     const configurations: Array<{
       supportedRepairs: WorkflowGuardOptions['supportedRepairs']
-      expected: string
+      expected: RepairKind | 'unavailable'
     }> = [
       { supportedRepairs: ['fresh-readback'], expected: 'fresh-readback' },
       { supportedRepairs: ['rerun-operation'], expected: 'rerun-operation' },

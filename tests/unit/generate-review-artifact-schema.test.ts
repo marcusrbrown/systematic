@@ -23,7 +23,9 @@ function runGenerator(...args: string[]): ReturnType<typeof Bun.spawnSync> {
 }
 
 function output(result: ReturnType<typeof Bun.spawnSync>): string {
-  return `${result.stdout.toString()}${result.stderr.toString()}`
+  const stdout = result.stdout ?? Buffer.alloc(0)
+  const stderr = result.stderr ?? Buffer.alloc(0)
+  return `${stdout.toString()}${stderr.toString()}`
 }
 
 function withSchemaContent(content: string, callback: () => void): void {

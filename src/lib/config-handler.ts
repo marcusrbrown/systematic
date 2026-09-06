@@ -360,6 +360,42 @@ function applyPermissionOverlay(
   }
 }
 
+/**
+ * Per-tool permission rule map as actually emitted by {@link permissionFromRules}:
+ * each key is a match pattern (`'*'` or an exact name) mapped to a setting.
+ */
+export type AgentPermissionRuleMap = Record<string, PermissionSetting>
+
+/**
+ * Agent permission shape as emitted onto `AgentConfig.permission`, narrowed at
+ * this module's boundary to include `skill`. The `@opencode-ai/sdk` v1 `Config`
+ * type this module targets omits `skill` from `AgentConfig['permission']`
+ * (it only appears on the SDK's v2 `PermissionRuleConfig` surface), but
+ * `applyPermissionOverlay`/`addManagedSkillRules` genuinely write a `skill`
+ * rule map identical in shape to `bash`. This type documents and reads that
+ * real runtime shape without migrating the module to the v2 type surface.
+ */
+export interface EmittedAgentPermission {
+  edit?: AgentPermissionRuleMap
+  bash?: AgentPermissionRuleMap
+  webfetch?: AgentPermissionRuleMap
+  doom_loop?: AgentPermissionRuleMap
+  external_directory?: AgentPermissionRuleMap
+  skill?: AgentPermissionRuleMap
+}
+
+/**
+ * Read an agent's emitted permission map, narrowed to include `skill` (see
+ * {@link EmittedAgentPermission}). Use this instead of `AgentConfig['permission']`
+ * when a caller needs to observe the `skill` rule map this module writes.
+ */
+export function readEmittedAgentPermission(
+  agent: AgentConfig | undefined,
+): EmittedAgentPermission | undefined {
+  if (agent?.permission === undefined) return undefined
+  return agent.permission as EmittedAgentPermission
+}
+
 function overlayControlsPermission(
   overlay: Record<string, unknown> | undefined,
 ): boolean {

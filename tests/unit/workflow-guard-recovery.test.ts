@@ -105,7 +105,7 @@ function createRecoveredFixture(
   const folded = foldReceiptReadback(readback, {
     registrationDigest: recoveredLedger.metadata.registrationDigest,
     capabilityFlags: recoveredLedger.metadata.capabilityFlags,
-    expectedSource: 'runtime-verified',
+    source: 'runtime-verified',
     sessionSalt: SESSION_SALT,
   })
   expect(folded.status).toBe('reconstructed')
@@ -293,7 +293,7 @@ function createResourceRecoveredFixture(): {
   const folded = foldReceiptReadback(markers, {
     registrationDigest: recoveredLedger.metadata.registrationDigest,
     capabilityFlags: recoveredLedger.metadata.capabilityFlags,
-    expectedSource: 'runtime-verified',
+    source: 'runtime-verified',
     sessionSalt: SESSION_SALT,
   })
   expect(folded.status).toBe('reconstructed')
@@ -733,7 +733,7 @@ describe('workflow guard recovery', () => {
     const folded = foldReceiptReadback(markers, {
       registrationDigest: recoveredLedger.metadata.registrationDigest,
       capabilityFlags: recoveredLedger.metadata.capabilityFlags,
-      expectedSource: 'runtime-verified',
+      source: 'runtime-verified',
       sessionSalt: SESSION_SALT,
     })
     expect(folded.status).toBe('reconstructed')

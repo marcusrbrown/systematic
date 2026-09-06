@@ -14,6 +14,8 @@ import {
   projectReceiptMintMarker,
   projectReceiptProgressionMarker,
   type ReceiptMarker,
+  type ReceiptProgressionMarker,
+  type ReceiptReadbackFailureCategory,
   receiptReadbackExpectationFromMetadata,
   validateReceiptMarker,
 } from '../../src/lib/receipt-readback.js'
@@ -65,6 +67,28 @@ function required<T>(value: T | undefined, name: string): T {
   return value
 }
 
+// `projectReceiptProgressionMarker` returns the `ReceiptProgressionMarker`
+// union regardless of the input's `target` discriminant (it is not
+// overloaded per-target). These helpers narrow the union to the specific
+// variant the caller already knows it asked for.
+function requiredEpochMarker(
+  value: ReceiptProgressionMarker | undefined,
+  name: string,
+): EpochMarker {
+  const marker = required(value, name)
+  if (marker.target !== 'epoch') throw new Error(`${name}-not-epoch`)
+  return marker
+}
+
+function requiredUnitMarker(
+  value: ReceiptProgressionMarker | undefined,
+  name: string,
+): UnitMarker {
+  const marker = required(value, name)
+  if (marker.target !== 'unit') throw new Error(`${name}-not-unit`)
+  return marker
+}
+
 function createFixture(options: ReceiptFixtureOptions = {}): ReceiptFixture {
   const sessionSalt = options.sessionSalt ?? SESSION_SALT
   const ledger = createReceiptLedger({
@@ -114,7 +138,7 @@ function createFixture(options: ReceiptFixtureOptions = {}): ReceiptFixture {
   )
   const transition = (identity: string) =>
     ledger.digestIdentity('call', identity)
-  const epochStart = required(
+  const epochStart = requiredEpochMarker(
     projectReceiptProgressionMarker(ledger, {
       target: 'epoch',
       state: 'started',
@@ -125,7 +149,7 @@ function createFixture(options: ReceiptFixtureOptions = {}): ReceiptFixture {
     }),
     'epoch-start-not-projected',
   )
-  const unitStart = required(
+  const unitStart = requiredUnitMarker(
     projectReceiptProgressionMarker(ledger, {
       target: 'unit',
       state: 'started',
@@ -147,7 +171,7 @@ function createFixture(options: ReceiptFixtureOptions = {}): ReceiptFixture {
     ),
     'consume-marker-not-projected',
   )
-  const unitComplete = required(
+  const unitComplete = requiredUnitMarker(
     projectReceiptProgressionMarker(ledger, {
       target: 'unit',
       state: 'completed',
@@ -161,7 +185,7 @@ function createFixture(options: ReceiptFixtureOptions = {}): ReceiptFixture {
     }),
     'unit-complete-not-projected',
   )
-  const epochComplete = required(
+  const epochComplete = requiredEpochMarker(
     projectReceiptProgressionMarker(ledger, {
       target: 'epoch',
       state: 'completed',
@@ -972,7 +996,7 @@ describe('receipt readback', () => {
     const cases: Array<{
       readonly name: string
       readonly inputs: readonly unknown[]
-      readonly category: string
+      readonly category: ReceiptReadbackFailureCategory
     }> = [
       { name: 'malformed', inputs: [null], category: 'malformed' },
       {
