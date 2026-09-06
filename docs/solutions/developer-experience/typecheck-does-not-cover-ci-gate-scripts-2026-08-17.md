@@ -22,7 +22,7 @@ tags:
 
 # Typecheck covers src/ only, so every CI gate is unchecked
 
-## Current State (as of PR #914)
+## Current State
 
 The gap this doc originally reported — `scripts/` typechecking nothing — is
 closed. Three tiers now exist:
@@ -59,7 +59,7 @@ required root-level gate — the inverse direction of this doc's original
 finding, and worth knowing before assuming "docs build passed" says anything
 about `typecheck:scripts`.
 
-## Context (historical — the state before PR #914)
+## Context (the original gap)
 
 `tsconfig.json` scoped the compiler to one directory:
 
@@ -84,8 +84,7 @@ invariants:
 | `run-evals.ts` | the eval harness |
 
 So the code that gated every other change was, at the time, the least
-verified code in the repository. `typecheck:scripts` (added in PR #914,
-tracked under #897) is the fix.
+verified code in the repository. `typecheck:scripts` (tracked under #897) is the fix.
 
 ## Guidance
 
@@ -116,7 +115,7 @@ typechecking proves nothing — `/tmp` is outside every `include` no matter how
 the project is configured, so that variant passes whether or not `scripts/`
 is covered.
 
-**Result as of PR #914:** `bun run typecheck` still exits 0 (it only ever
+**Result today:** `bun run typecheck` still exits 0 (it only ever
 covered `src/`, unchanged) — but `bun run typecheck:scripts` now exits 1 with
 `TS2322: Type 'string' is not assignable to type 'number'` and `TS2304:
 Cannot find name 'thisDoesNotExist'`. The same probe run against a `tests/`
