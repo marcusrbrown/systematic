@@ -25,6 +25,7 @@ import {
   createIsolatedFixture,
   createProbePlugin,
   destroyIsolatedFixture,
+  EXACT_OPENCODE_VERSION,
   extractPackagedPlugin,
   getOpencodeAvailability,
   type IsolatedFixture,
@@ -795,7 +796,15 @@ function runOpencodeDebugConfig(
 ): OpencodeResult {
   const childEnv = buildIsolatedOpencodeEnv(fixture, configContent)
   const result = Bun.spawnSync(
-    ['opencode', 'debug', 'config', '--print-logs', '--log-level', 'ERROR'],
+    [
+      'bunx',
+      `opencode-ai@${EXACT_OPENCODE_VERSION}`,
+      'debug',
+      'config',
+      '--print-logs',
+      '--log-level',
+      'ERROR',
+    ],
     { cwd: fixture.projectDir, env: childEnv, timeout: TIMEOUT_MS },
   )
   return {

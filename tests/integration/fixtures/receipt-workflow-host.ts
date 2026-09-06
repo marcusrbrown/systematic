@@ -507,6 +507,16 @@ export interface RunOpencodeOptions {
  * below. Killing the group closes every descendant's pipes, so this
  * function's stream listeners finish and the promise resolves instead of
  * hanging.
+ *
+ * stdin is explicitly `'ignore'`, never the node default open pipe. Against
+ * a real `opencode-ai` host (confirmed empirically: identical argv/env hangs
+ * to the full timeout with a default `spawn` and returns in seconds once
+ * stdin is ignored), `opencode run`'s stdin handling blocks on that pipe
+ * never reaching EOF — the parent here has no writer for it and never
+ * closes it, so the child waits forever for input it will never receive.
+ * Ignoring stdin closes it from the start, matching how a real terminal
+ * invocation's stdin behaves for a one-shot `run` command with the prompt
+ * passed as an argument.
  */
 export async function spawnOpencodeChild(
   argv: readonly string[],
@@ -520,6 +530,7 @@ export async function spawnOpencodeChild(
       cwd: options.cwd,
       env: options.env,
       detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
     })
 
     let stdout = ''

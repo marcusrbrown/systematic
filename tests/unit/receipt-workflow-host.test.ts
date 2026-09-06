@@ -322,6 +322,45 @@ describe('scripted server survives an async-spawned child (deadlock regression)'
   }, 10_000)
 })
 
+// Pins the third spawnOpencodeChild stdio invariant: stdin must be
+// explicitly closed (`'ignore'`), never left as node's default open pipe.
+// Against a real opencode-ai host, an open, unclosed stdin pipe made
+// `opencode run` block waiting for EOF it would never receive — the 180s
+// `runOpencode` hang this PR fixes. This test pins that fix without needing
+// `opencode`, `bunx`, or network: the spawned child itself waits for stdin
+// EOF and only then prints a marker and exits. With the shipped
+// `stdio: ['ignore', ...]`, the child's stdin is `/dev/null` and reaches EOF
+// immediately, so the child exits fast, well inside its own `timeoutMs`.
+// Reverting to node's default open stdin pipe makes the child hang to its
+// own `timeoutMs` and get killed (`exitCode -1`), exactly like the real
+// host did — confirmed by temporarily removing the `'ignore'` and observing
+// this test fail/time out, then restoring it and observing this test pass.
+describe('spawnOpencodeChild stdin invariant', () => {
+  test('closes stdin so the child sees EOF immediately instead of hanging', async () => {
+    const script = `
+      process.stdin.resume()
+      process.stdin.on('end', () => {
+        process.stdout.write('stdin-eof\\n')
+        process.exit(0)
+      })
+    `
+
+    const start = Date.now()
+    const result = await spawnOpencodeChild(['bun', '-e', script], {
+      cwd: process.cwd(),
+      env: TEST_CHILD_ENV,
+      timeoutMs: 3_000,
+    })
+    const elapsedMs = Date.now() - start
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('stdin-eof')
+    // A closed stdin resolves near-instantly; a hang would only resolve at
+    // (or past) the child's own timeoutMs above.
+    expect(elapsedMs).toBeLessThan(3_000)
+  }, 10_000)
+})
+
 // Pins the fix for the leak/hang `proc.kill()` alone would cause: a
 // deliberately long-lived child that itself spawns a long-lived grandchild,
 // both outliving a short `timeoutMs`. If `spawnOpencodeChild` only signaled
