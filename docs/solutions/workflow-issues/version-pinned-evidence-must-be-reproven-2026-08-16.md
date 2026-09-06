@@ -23,18 +23,16 @@ applies_when:
 
 Some claims in this repository are only true relative to a specific external runtime version. The clearest case is host skill discovery: Systematic can delete its own bootstrap skill catalog *because* OpenCode renders an equivalent catalog itself. That is not a property of Systematic's code — it is a property of the OpenCode build being run against. Change the build, and the evidence is no longer evidence.
 
-`tests/unit/eval-contract.test.ts` guards the pins:
+`scripts/lib/opencode-pin.ts` reads `@opencode-ai/sdk` out of `package.json` `devDependencies` at runtime; `EXPECTED_OPENCODE_VERSION` (`scripts/run-evals.ts`) and `EXACT_OPENCODE_VERSION` (`tests/integration/fixtures/receipt-workflow-host.ts`) are re-exports of that value, not hand-edited copies. `tests/unit/eval-contract.test.ts` keeps a single backstop assertion on top of that:
 
 ```ts
-// EXPECTED_OPENCODE_VERSION  (scripts/run-evals.ts)
-// EXACT_OPENCODE_VERSION     (tests/integration/fixtures/receipt-workflow-host.ts)
-// must both equal the @opencode-ai/sdk devDependency, and
-// @opencode-ai/sdk must equal @opencode-ai/plugin.
+// @opencode-ai/sdk must equal @opencode-ai/plugin in package.json devDependencies.
+// (@opencode-ai/plugin's peerDependencies range is a separate, unrelated field.)
 ```
 
 Its failure message is deliberately more than a diff report:
 
-> `OpenCode host pin drift: <name> is <pin>, but package.json devDependencies @opencode-ai/sdk and @opencode-ai/plugin are <version>. Change <name> to <version>, then re-run the host-coverage eval before relying on bootstrap catalog deletion evidence.`
+> `OpenCode devDependency versions disagree: @opencode-ai/sdk is <sdk version>, but @opencode-ai/plugin is <plugin version>. Align both dependencies before re-running the host-coverage eval.`
 
 ## Guidance
 
@@ -42,7 +40,7 @@ Its failure message is deliberately more than a diff report:
 
 The sequence when a pinned runtime moves:
 
-1. Bump every pin in lockstep — `EXPECTED_OPENCODE_VERSION`, `EXACT_OPENCODE_VERSION`, and the `@opencode-ai/sdk` / `@opencode-ai/plugin` devDependencies must all agree.
+1. Bump `@opencode-ai/sdk` and `@opencode-ai/plugin` together in `package.json` `devDependencies` (Renovate's `OpenCode` group already does this in one PR). `EXPECTED_OPENCODE_VERSION` and `EXACT_OPENCODE_VERSION` derive from `@opencode-ai/sdk` automatically — there is no separate constant to edit or forget.
 2. Re-run the version-dependent suite against the real host:
 
    ```bash
@@ -76,25 +74,24 @@ The guard is worth having precisely because it is inconvenient at exactly the ri
 
 ## Examples
 
-### Wrong: satisfy the guard, keep the old result
+### Wrong: bump the pin, keep the old result
 
 ```diff
--export const EXPECTED_OPENCODE_VERSION = '1.18.17' as const
-+export const EXPECTED_OPENCODE_VERSION = '1.18.18' as const
+-    "@opencode-ai/plugin": "1.18.17",
+-    "@opencode-ai/sdk": "1.18.17",
++    "@opencode-ai/plugin": "1.18.18",
++    "@opencode-ai/sdk": "1.18.18",
 ```
 
-Tests pass. The host-coverage claim still rests on a 1.18.17 observation. The guard has been converted into a formality.
+`EXPECTED_OPENCODE_VERSION` and `EXACT_OPENCODE_VERSION` follow automatically (they derive from `@opencode-ai/sdk`), and the unit suite passes. The host-coverage claim still rests on a 1.18.17 observation. The pin moved; the evidence did not.
 
 ### Right: move the pin and re-collect the evidence
 
 ```diff
--export const EXPECTED_OPENCODE_VERSION = '1.18.17' as const
-+export const EXPECTED_OPENCODE_VERSION = '1.18.18' as const
-```
-
-```diff
--export const EXACT_OPENCODE_VERSION = '1.18.17'
-+export const EXACT_OPENCODE_VERSION = '1.18.18'
+-    "@opencode-ai/plugin": "1.18.17",
+-    "@opencode-ai/sdk": "1.18.17",
++    "@opencode-ai/plugin": "1.18.18",
++    "@opencode-ai/sdk": "1.18.18",
 ```
 
 ```bash
@@ -107,15 +104,16 @@ bun test tests/integration/eval-runner.test.ts \
 ### Write the follow-up into the guard itself
 
 ```ts
-throw new Error(
-  `OpenCode host pin drift: ${name} is ${pin}, but package.json devDependencies ` +
-  `@opencode-ai/sdk and @opencode-ai/plugin are ${sdkVersion}. Change ${name} to ` +
-  `${sdkVersion}, then re-run the host-coverage eval before relying on bootstrap ` +
-  `catalog deletion evidence.`,
-)
+if (sdkVersion !== pluginVersion) {
+  throw new Error(
+    `OpenCode devDependency versions disagree: @opencode-ai/sdk is ${sdkVersion}, ` +
+    `but @opencode-ai/plugin is ${pluginVersion}. Align both dependencies before ` +
+    `re-running the host-coverage eval.`,
+  )
+}
 ```
 
-The instruction is the load-bearing part. The comparison only detects drift; the message is what prevents the drift from being papered over.
+The instruction is the load-bearing part. The comparison only detects drift; the message is what prevents the drift from being papered over. The re-proof requirement in Guidance above is unchanged by where the pin lives — it is a property of the evidence, not of how the constant is written.
 
 ## Related
 

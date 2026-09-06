@@ -155,7 +155,7 @@ Two adjacent facts shaped the design. `mise.toml` prepends `./node_modules/.bin`
 
 ## Implementation Units
 
-- [ ] **Unit 1: Derive the OpenCode pin from `package.json`**
+- [x] **Unit 1: Derive the OpenCode pin from `package.json`**
 
 **Goal:** One readable source of the pinned OpenCode version, with the two former constants and the lockstep test reduced to it.
 
