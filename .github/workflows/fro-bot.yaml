@@ -240,6 +240,11 @@ env:
         - Run `bun run schema:drift` and report drift (the JSON Schema
           emitted from the Zod source must stay aligned with the
           committed artifact).
+        - Run `bun run review-schema:drift` and report drift (the review
+          schema must stay aligned with its committed artifact).
+        - Run `bun run agent-browser:drift` and report drift
+          (`skills/agent-browser/SKILL.md` and `ATTRIBUTIONS.md` must stay
+          aligned with the pinned `agent-browser` package generator).
         - Run `bun run docs:build` and report any docs build regressions
           (especially MDX parse errors, Starlight config-shape breaks).
         - Verify convention compliance:
@@ -292,8 +297,10 @@ env:
        e. `bun scripts/content-integrity.ts` — 0 violations.
         f. `bun run registry:drift` — 0 drift.
         g. `bun run schema:drift` — 0 drift.
-        h. `bun run docs:verify` — completes without error.
-        i. Node ESM smoke test:
+        h. `bun run review-schema:drift` — 0 drift.
+        i. `bun run agent-browser:drift` — 0 drift.
+        j. `bun run docs:verify` — completes without error.
+        k. Node ESM smoke test:
            `node --input-type=module -e "import('./dist/index.js').then(m => console.log(Object.keys(m).sort()))"`
            — exports only `['default']` (regression contract from v2.5.2/v2.12.2;
            a named export of `SystematicPlugin` breaks OpenCode plugin loading).
@@ -707,5 +714,15 @@ jobs:
           model: ${{ vars.FRO_BOT_MODEL }}
           omo-providers: ${{ secrets.OMO_PROVIDERS }}
           opencode-config: ${{ secrets.OPENCODE_CONFIG }}
+          # branch-pr only for the daily autoheal schedule and autoheal-mode
+          # dispatch runs, so the agent's file changes land on a branch instead
+          # of being discarded. Prompt-only dispatches (release-notes-narrative
+          # automation via scripts/dispatch-release-notes.sh) carry inputs.prompt
+          # and must stay comment-only, so this uses the same `inputs.prompt ==
+          # ''` guard and cron predicate as the PROMPT ladder above. PR-review
+          # and comment-triggered runs never match either branch, so the ''
+          # fallback there is defensive only: the action consults output-mode
+          # solely on schedule/workflow_dispatch runs.
+          output-mode: ${{ ((github.event_name == 'schedule' && github.event.schedule == '30 3 * * *') || (github.event_name == 'workflow_dispatch' && inputs.prompt == '' && inputs.mode == 'autoheal')) && 'branch-pr' || '' }}
           prompt: ${{ env.PROMPT }}
           timeout: 0

@@ -222,6 +222,47 @@ describe('Fro Bot workflow contracts', () => {
     )
   })
 
+  test('requests branch-pr output only for schedule and autoheal-mode dispatch runs', () => {
+    const { workflow } = readWorkflow()
+    const jobs = asRecord(workflow.jobs, 'jobs')
+    const froBot = asRecord(jobs['fro-bot'], 'fro-bot job')
+    const steps = asArray(froBot.steps, 'fro-bot steps')
+    const runFroBot = findStep(steps, 'Run Fro Bot')
+    const runFroBotWith = asRecord(runFroBot.with, 'Run Fro Bot with')
+    const outputMode = asString(
+      runFroBotWith['output-mode'],
+      'Run Fro Bot with.output-mode',
+    )
+
+    expect(outputMode).toContain('branch-pr')
+    expect(outputMode).toContain("github.event_name == 'schedule'")
+    expect(outputMode).toContain("inputs.mode == 'autoheal'")
+    expect(outputMode).toContain("|| ''")
+    expect(outputMode).toContain("inputs.prompt == ''")
+    expect(outputMode).toContain("github.event.schedule == '30 3 * * *'")
+  })
+
+  test('agrees with the PROMPT ladder that prompt-only dispatches stay comment-only', () => {
+    const { workflow } = readWorkflow()
+    const jobs = asRecord(workflow.jobs, 'jobs')
+    const froBot = asRecord(jobs['fro-bot'], 'fro-bot job')
+    const steps = asArray(froBot.steps, 'fro-bot steps')
+    const runFroBot = findStep(steps, 'Run Fro Bot')
+    const runFroBotEnv = asRecord(runFroBot.env, 'Run Fro Bot env')
+    const runFroBotWith = asRecord(runFroBot.with, 'Run Fro Bot with')
+    const promptExpression = asString(
+      runFroBotEnv.PROMPT,
+      'Run Fro Bot env.PROMPT',
+    )
+    const outputMode = asString(
+      runFroBotWith['output-mode'],
+      'Run Fro Bot with.output-mode',
+    )
+
+    expect(promptExpression).toContain("inputs.prompt != ''")
+    expect(outputMode).toContain("inputs.prompt == ''")
+  })
+
   test('retains the exact issue_comment pull_request fork guard', () => {
     const { workflow } = readWorkflow()
     const jobs = asRecord(workflow.jobs, 'jobs')
@@ -286,6 +327,17 @@ describe('Fro Bot workflow contracts', () => {
       /(?:no|do not|never) named-agent follow-up tasks/i,
     )
     expect(autohealPrompt).not.toContain('### Tasks for Agents')
+  })
+
+  test('names all four drift-check commands in the autoheal prompt', () => {
+    const { workflow } = readWorkflow()
+    const env = asRecord(workflow.env, 'workflow env')
+    const autohealPrompt = asString(env.AUTOHEAL_PROMPT, 'AUTOHEAL_PROMPT')
+
+    expect(autohealPrompt).toContain('bun run registry:drift')
+    expect(autohealPrompt).toContain('bun run schema:drift')
+    expect(autohealPrompt).toContain('bun run review-schema:drift')
+    expect(autohealPrompt).toContain('bun run agent-browser:drift')
   })
 
   test('limits reactive healing and deferred notes to their safe execution model', () => {
