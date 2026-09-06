@@ -5047,11 +5047,13 @@ describe('OpenCode workflow guard adapter', () => {
           targetDigest: OPERATION_SCOPE.workspaceIdentity,
           // Required by `OpencodeOperationObserver`; this fixture previously
           // omitted it, which only compiled because Bun strips types at
-          // runtime. Verified this does not change this test's own
-          // behaviour: the task-lineage rollup path exercised below never
-          // calls `validateRegisteredWorktree` (that seam is only reached by
-          // file/command target derivation for write/edit/bash operations),
-          // so `snapshotCalled` reaches the same value with or without it.
+          // runtime. It IS exercised here: rollupForegroundTask calls it
+          // (opencode-workflow-guard.ts:2145). The `snapshotCalled` assertion
+          // is unaffected because `options.observer?.snapshot()` (line 2100)
+          // runs first; previously the missing member threw a swallowed
+          // TypeError that aborted the rollup, so the rollup now runs to
+          // completion (end state rejected/rejected-operation rather than
+          // unavailable/guard-unavailable).
           validateRegisteredWorktree(candidateDirectory) {
             return {
               status: 'ok',
@@ -5101,7 +5103,8 @@ describe('OpenCode workflow guard adapter', () => {
       // Fire task after hook → triggers rollupForegroundTask
       // BEFORE FIX: extractReceiptReadbackSeed sees two differing seeds → conflicting-seed → markUnavailable
       //   before snapshot is ever called → snapshotCalled stays false.
-      // AFTER FIX: foreign markers filtered out → own markers only → seed ready → snapshot called.
+      // AFTER FIX: foreign markers filtered out → own markers only → seed ready → snapshot called,
+      //   then worktree validation runs and the rollup completes (see the observer fixture above).
       await fireTaskAfter(ownAdapter, childSessionID, parentSessionID)
 
       // Key assertion: snapshot must have been called, proving rollup got past the conflicting-seed gate.

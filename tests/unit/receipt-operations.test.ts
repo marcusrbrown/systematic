@@ -279,20 +279,19 @@ function createScenario(
     runtimeRequiredOperations: requiredOperations,
     runtimeResourceScopes: resourceScopes,
   } as WorkflowGuardOptions)
-  const operationGuard = guard
   expect(
-    operationGuard.activate({
+    guard.activate({
       event: 'guarded-skill',
       skill: 'ce-work',
       outcome: 'success',
     }),
   ).toMatchObject({ status: 'activated' })
   expect(
-    operationGuard.startUnit({ expectedOperations: requiredOperations }),
+    guard.startUnit({ expectedOperations: requiredOperations }),
   ).toMatchObject({
     status: 'started',
   })
-  return { guard: operationGuard, ledger }
+  return { guard, ledger }
 }
 
 function bindOperation(
