@@ -3,19 +3,24 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createOpencodeClient } from '@opencode-ai/sdk/v2'
 
+import { requireOpencodeAvailable } from '../../scripts/lib/opencode-availability.js'
 import {
   cleanupPackedTarball,
   createIsolatedFixture,
   destroyIsolatedFixture,
   EXACT_OPENCODE_VERSION,
   extractPackagedPlugin,
-  OPENCODE_AVAILABLE,
+  getOpencodeAvailability,
+  isOpencodeAvailable,
   packTarballOnce,
-  prewarmExactOpencode,
   startExactOpencodeServer,
   stopAllOpencodeHosts,
   TIMEOUT_MS,
 } from './fixtures/receipt-workflow-host.js'
+
+// See tests/integration/question-attestation-opencode.test.ts for why this
+// call lives here rather than in the fixture module.
+requireOpencodeAvailable(getOpencodeAvailability())
 
 const PROVIDER = 'u7-focused-provider'
 const MODEL = 'u7-focused-model'
@@ -499,16 +504,13 @@ async function runScenario(
   }
 }
 
-describe.skipIf(!OPENCODE_AVAILABLE)('focused real-host dogfood', () => {
+describe.skipIf(!isOpencodeAvailable())('focused real-host dogfood', () => {
   beforeAll(() => {
+    // No separate prewarm step: the module-scope availability probe above
+    // already ran `bunx opencode-ai@<pin> --version`, which populates the
+    // same uid+package-keyed bunx cache under $TMPDIR that the real hosts
+    // started below reuse.
     packTarballOnce()
-    const warm = prewarmExactOpencode(EXACT_OPENCODE_VERSION, 300_000)
-    if (warm.exitCode !== 0 || !warm.stdout.includes(EXACT_OPENCODE_VERSION)) {
-      throw new Error(
-        `OpenCode prewarm failed: exit=${warm.exitCode} stdout=${warm.stdout.slice(-500)} stderr=${warm.stderr.slice(-500)}`,
-      )
-    }
-    console.log(`U7_PREWARM ${warm.stdout.trim()}`)
   }, 360_000)
   afterAll(async () => {
     await stopAllOpencodeHosts()

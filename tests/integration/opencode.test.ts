@@ -13,6 +13,7 @@ import os from 'node:os'
 import path from 'node:path'
 import type { Config, PluginInput } from '@opencode-ai/plugin'
 
+import { requireOpencodeAvailable } from '../../scripts/lib/opencode-availability.js'
 import SystematicPlugin from '../../src/index.js'
 import {
   assertMixedVersionProbeEvents,
@@ -25,10 +26,11 @@ import {
   createProbePlugin,
   destroyIsolatedFixture,
   extractPackagedPlugin,
+  getOpencodeAvailability,
   type IsolatedFixture,
+  isOpencodeAvailable,
   isProbeToolEvent,
   MAX_RETRIES,
-  OPENCODE_AVAILABLE,
   type OpencodeResult,
   packTarballOnce,
   parseProbeEvent,
@@ -36,6 +38,10 @@ import {
   runOpencode,
   TIMEOUT_MS,
 } from './fixtures/receipt-workflow-host.js'
+
+// See tests/integration/question-attestation-opencode.test.ts for why this
+// call lives here rather than in the fixture module.
+requireOpencodeAvailable(getOpencodeAvailability())
 
 // Snapshot the repo's .opencode tree at module load so tests can assert that
 // live OpenCode subprocesses do not mutate the real repository state.
@@ -656,7 +662,7 @@ describe('SystematicPlugin config hook integration', () => {
   })
 })
 
-describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
+describe.skipIf(!isOpencodeAvailable())('opencode integration', () => {
   let fixture: IsolatedFixture
 
   beforeEach(() => {
@@ -788,7 +794,7 @@ function runOpencodeDebugConfig(
 }
 
 // Requires real `tar` and symlink semantics for artifact extraction; POSIX only.
-describe.skipIf(!OPENCODE_AVAILABLE || process.platform === 'win32')(
+describe.skipIf(!isOpencodeAvailable() || process.platform === 'win32')(
   'packaged-plugin runtime validation',
   () => {
     let fixture: IsolatedFixture
@@ -899,7 +905,7 @@ function buildMixedVersionConfig(probePluginUrl: string): string {
   })
 }
 
-describe.skipIf(!OPENCODE_AVAILABLE)(
+describe.skipIf(!isOpencodeAvailable())(
   'opencode mixed-version integration',
   () => {
     let fixture: IsolatedFixture

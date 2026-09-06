@@ -4,17 +4,23 @@ import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { createOpencodeClient } from '@opencode-ai/sdk/v2'
 
+import { requireOpencodeAvailable } from '../../scripts/lib/opencode-availability.js'
 import {
   cleanupPackedTarball,
   createIsolatedFixture,
   destroyIsolatedFixture,
   extractPackagedPlugin,
-  OPENCODE_AVAILABLE,
+  getOpencodeAvailability,
+  isOpencodeAvailable,
   packTarballOnce,
   startExactOpencodeServer,
   stopAllOpencodeHosts,
   TIMEOUT_MS,
 } from './fixtures/receipt-workflow-host.js'
+
+// See question-attestation-opencode.test.ts for why this call lives here
+// rather than in the fixture module.
+requireOpencodeAvailable(getOpencodeAvailability())
 
 const MOCK_PROVIDER_ID = 'u7-real-host-provider'
 const MOCK_MODEL_ID = 'u7-real-host-model'
@@ -542,7 +548,7 @@ async function runObserveCell(
   }
 }
 
-describe.skipIf(!OPENCODE_AVAILABLE)('U7a real host', () => {
+describe.skipIf(!isOpencodeAvailable())('U7a real host', () => {
   beforeAll(() => {
     packTarballOnce()
   }, 200_000)

@@ -188,7 +188,7 @@ Two adjacent facts shaped the design. `mise.toml` prepends `./node_modules/.bin`
 - No literal OpenCode version remains in `scripts/` or `tests/` other than through the helper (a grep for the current pin finds only `package.json`, `bun.lock`, historical docs, and the repo's own OpenCode workspace under `.opencode/`, which pins `@opencode-ai/plugin` for a different purpose and is outside R1's scope).
 - Unit suite green.
 
-- [ ] **Unit 2: Launch every OpenCode host through `bunx opencode-ai@<pin>`**
+- [x] **Unit 2: Launch every OpenCode host through `bunx opencode-ai@<pin>`**
 
 **Goal:** Remove `npx` and PATH lookup from all three spawn sites; make the availability probe executable-based and version-checked with skip-or-fail semantics.
 
