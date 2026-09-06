@@ -1,16 +1,16 @@
 import {
   formatReviewArtifactIssuePath,
+  formatReviewArtifactSuccessMessage,
   isLegacyReviewArtifact,
+  parseValidateReviewArtifactArguments,
   readReviewArtifact,
   resolveReviewArtifactPath,
+  VALIDATE_REVIEW_ARTIFACT_USAGE,
 } from './lib/review-artifact-path.js'
 import { ReviewArtifactSchema } from './lib/review-artifact-schema.js'
 
-const VALIDATE_REVIEW_ARTIFACT_USAGE =
-  'Usage: systematic validate-review-artifact <path> [--allow-outside-artifact-root]'
 const REVIEW_ARTIFACT_SCHEMA_RELATIVE_PATH =
   'skills/ce-review/references/review-summary-schema.json'
-const ALLOW_OUTSIDE_ARTIFACT_ROOT_FLAG = '--allow-outside-artifact-root'
 
 interface ValidatorOptions {
   readonly argv: readonly string[]
@@ -19,32 +19,12 @@ interface ValidatorOptions {
   readonly errorSink?: (message: string) => void
 }
 
-interface ValidateReviewArtifactArguments {
-  readonly path: string
-  readonly allowOutsideArtifactRoot: boolean
-}
-
-function validateReviewArtifactArgument(
-  argv: readonly string[],
-): ValidateReviewArtifactArguments | undefined {
-  const flagIndex = argv.indexOf(ALLOW_OUTSIDE_ARTIFACT_ROOT_FLAG)
-  const allowOutsideArtifactRoot = flagIndex !== -1
-  const positional =
-    flagIndex === -1
-      ? argv
-      : [...argv.slice(0, flagIndex), ...argv.slice(flagIndex + 1)]
-  if (positional.length !== 1) return undefined
-  const path = positional[0]
-  if (path === undefined) return undefined
-  return { allowOutsideArtifactRoot, path }
-}
-
 export function runClaudeCodeValidator(options: ValidatorOptions): number {
   const outputSink =
     options.outputSink ?? ((message: string) => console.log(message))
   const errorSink =
     options.errorSink ?? ((message: string) => console.error(message))
-  const parsedArgs = validateReviewArtifactArgument(options.argv)
+  const parsedArgs = parseValidateReviewArtifactArguments(options.argv)
   if (parsedArgs === undefined) {
     errorSink(VALIDATE_REVIEW_ARTIFACT_USAGE)
     return 2
@@ -88,7 +68,9 @@ export function runClaudeCodeValidator(options: ValidatorOptions): number {
     return 1
   }
 
-  outputSink('Review artifact is valid')
+  outputSink(
+    formatReviewArtifactSuccessMessage(parsedArgs.allowOutsideArtifactRoot),
+  )
   return 0
 }
 

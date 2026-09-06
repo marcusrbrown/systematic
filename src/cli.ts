@@ -33,9 +33,13 @@ import {
 } from './lib/pi-subagents-export.js'
 import {
   formatReviewArtifactIssuePath,
+  formatReviewArtifactSuccessMessage,
   isLegacyReviewArtifact,
+  parseValidateReviewArtifactArguments,
   readReviewArtifact,
   resolveReviewArtifactPath,
+  VALIDATE_REVIEW_ARTIFACT_USAGE,
+  type ValidateReviewArtifactArguments,
 } from './lib/review-artifact-path.js'
 import { ReviewArtifactSchema } from './lib/review-artifact-schema.js'
 import {
@@ -114,7 +118,7 @@ Examples:
   systematic list skills
   systematic capabilities
   systematic validate-review-artifact .context/systematic/ce-review/review-summary.json
-  systematic validate-review-artifact --allow-outside-artifact-root /tmp/external-artifact.json
+  systematic validate-review-artifact --allow-outside-artifact-root /path/to/external-artifact.json
   systematic list agents
   systematic config show
   systematic config show --json
@@ -148,11 +152,8 @@ Scope:
   global    $PI_CODING_AGENT_DIR/agents or ~/.pi/agent/agents
 `
 
-const VALIDATE_REVIEW_ARTIFACT_USAGE =
-  'Usage: systematic validate-review-artifact <path> [--allow-outside-artifact-root]'
 const REVIEW_ARTIFACT_SCHEMA_RELATIVE_PATH =
   'skills/ce-review/references/review-summary-schema.json'
-const ALLOW_OUTSIDE_ARTIFACT_ROOT_FLAG = '--allow-outside-artifact-root'
 
 interface CapabilityCliRoots {
   readonly agentsRoot: string
@@ -377,27 +378,12 @@ interface ValidateReviewArtifactCliOptions {
   readonly errorSink?: (message: string) => void
 }
 
-interface ValidateReviewArtifactArguments {
-  readonly path: string
-  readonly allowOutsideArtifactRoot: boolean
-}
-
 function validateReviewArtifactArgument(
   argv: readonly string[],
 ): ValidateReviewArtifactArguments | undefined {
   const commandIndex = argv[0] === 'systematic' ? 1 : 0
   if (argv[commandIndex] !== 'validate-review-artifact') return undefined
-  const rest = argv.slice(commandIndex + 1)
-  const flagIndex = rest.indexOf(ALLOW_OUTSIDE_ARTIFACT_ROOT_FLAG)
-  const allowOutsideArtifactRoot = flagIndex !== -1
-  const positional =
-    flagIndex === -1
-      ? rest
-      : [...rest.slice(0, flagIndex), ...rest.slice(flagIndex + 1)]
-  if (positional.length !== 1) return undefined
-  const path = positional[0]
-  if (path === undefined) return undefined
-  return { allowOutsideArtifactRoot, path }
+  return parseValidateReviewArtifactArguments(argv.slice(commandIndex + 1))
 }
 
 function runValidateReviewArtifact(
@@ -451,7 +437,9 @@ function runValidateReviewArtifact(
     return 1
   }
 
-  outputSink('Review artifact is valid')
+  outputSink(
+    formatReviewArtifactSuccessMessage(parsedArgs.allowOutsideArtifactRoot),
+  )
   return 0
 }
 

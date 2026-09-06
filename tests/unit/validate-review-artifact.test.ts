@@ -352,8 +352,88 @@ describe('systematic validate-review-artifact', () => {
       )
 
       expect(result.exitCode).toBe(0)
-      expect(result.stdout).toContain('Review artifact is valid')
+      expect(result.stdout).toBe(
+        'Review artifact is valid (validated outside the run directory; not evidence for this run)\n',
+      )
       expect(result.stderr).toBe('')
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+      fs.rmSync(outsideDir, { recursive: true, force: true })
+    }
+  })
+
+  it('accepts the flag before the path (the advertised ordering)', () => {
+    const cwd = makeCwd()
+    const outsideDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-external-artifact-')),
+    )
+    try {
+      const target = path.join(outsideDir, 'external.json')
+      fs.copyFileSync(CONFORMING_FIXTURE, target)
+
+      const result = runCli(
+        ['validate-review-artifact', '--allow-outside-artifact-root', target],
+        cwd,
+      )
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('Review artifact is valid')
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+      fs.rmSync(outsideDir, { recursive: true, force: true })
+    }
+  })
+
+  it('accepts the flag repeated more than once (idempotent)', () => {
+    const cwd = makeCwd()
+    const outsideDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-external-artifact-')),
+    )
+    try {
+      const target = path.join(outsideDir, 'external.json')
+      fs.copyFileSync(CONFORMING_FIXTURE, target)
+
+      const result = runCli(
+        [
+          'validate-review-artifact',
+          target,
+          '--allow-outside-artifact-root',
+          '--allow-outside-artifact-root',
+        ],
+        cwd,
+      )
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('Review artifact is valid')
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+      fs.rmSync(outsideDir, { recursive: true, force: true })
+    }
+  })
+
+  it('still rejects an unknown flag alongside the recognized flag', () => {
+    const cwd = makeCwd()
+    const outsideDir = fs.realpathSync(
+      fs.mkdtempSync(path.join(os.tmpdir(), 'systematic-external-artifact-')),
+    )
+    try {
+      const target = path.join(outsideDir, 'external.json')
+      fs.copyFileSync(CONFORMING_FIXTURE, target)
+
+      const result = runCli(
+        [
+          'validate-review-artifact',
+          target,
+          '--allow-outside-artifact-root',
+          '--unknown-flag',
+        ],
+        cwd,
+      )
+
+      expect(result.exitCode).toBe(2)
+      expect(result.stderr).toBe(
+        'Usage: systematic validate-review-artifact <path> [--allow-outside-artifact-root]\n',
+      )
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true })
       fs.rmSync(outsideDir, { recursive: true, force: true })
@@ -399,7 +479,9 @@ describe('systematic validate-review-artifact', () => {
       )
 
       expect(result.exitCode).toBe(0)
-      expect(result.stdout).toContain('Review artifact is valid')
+      expect(result.stdout).toContain(
+        'Review artifact is valid (validated outside the run directory; not evidence for this run)',
+      )
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true })
       fs.rmSync(outsideDir, { recursive: true, force: true })
