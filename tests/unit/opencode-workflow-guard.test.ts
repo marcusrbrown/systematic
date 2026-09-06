@@ -62,7 +62,7 @@ function ledger(
  * read `metadata` back by bracket key after the hook mutates it in place, so
  * the field is typed as a real record instead of an inferred empty object.
  */
-interface RecordedToolOutput {
+type RecordedToolOutput = {
   title?: string
   output: string
   metadata: Record<string, unknown>
@@ -306,7 +306,7 @@ async function observeOperationTool(
   adapter: OpencodeWorkflowGuard,
   tool: 'write' | 'edit' | 'apply_patch' | 'bash',
   args: Record<string, unknown>,
-  output: unknown,
+  output: Record<string, unknown>,
   callID = `${tool}-operation`,
   sessionID = SESSION_A,
 ): Promise<void> {
@@ -324,7 +324,7 @@ async function observeOperationToolWithArgs(
   adapter: OpencodeWorkflowGuard,
   beforeArgs: Record<string, unknown>,
   afterArgs: Record<string, unknown>,
-  output: unknown,
+  output: Record<string, unknown>,
   callID = 'apply_patch-operation',
   sessionID = SESSION_A,
 ): Promise<void> {
@@ -1278,6 +1278,11 @@ describe('OpenCode workflow guard adapter', () => {
   })
 
   test('replays an expanded parent declaration without becoming unavailable', async () => {
+    // `repositoryRevisionDigest`/`worktreeRevisionDigest` are required by
+    // `OperationObserverSnapshot`; the fixture previously omitted them,
+    // which typed at runtime as `undefined` rather than a real digest. They
+    // are filled in here with matching placeholder hex strings so the
+    // snapshot shape is honest instead of relying on optional fields.
     const source = createAdapter(
       'observe',
       false,
@@ -1348,6 +1353,8 @@ describe('OpenCode workflow guard adapter', () => {
         ],
       },
     ]
+    // Same fixture-typing fix as above: real (placeholder) revision digests
+    // instead of the previously-omitted, effectively-undefined fields.
     const restored = createAdapter(
       'observe',
       false,
@@ -2064,6 +2071,68 @@ describe('OpenCode workflow guard adapter', () => {
     )
     expect(status(complete).state).toBe('unavailable')
     expect(status(complete).unit?.status).toBe('active')
+  })
+
+  test('tool.execute.before reads args from its second (output) argument, not the first', async () => {
+    // The real `ToolContext.execute()` hook signature is
+    // `(args, context)`, and the plugin's `tool.execute.before` hook
+    // forwards them as `(input, output)` where `output.args` carries the
+    // tool arguments; `input` only carries call identity (tool/session/call
+    // ID). Args placed on `input` instead are never read.
+    const misplaced = createAdapter('observe')
+    await observeSkill(misplaced, 'systematic_skill', 'ce:work')
+    await misplaced.hooks['tool.execute.before'](
+      {
+        tool: 'systematic_workflow_start',
+        sessionID: SESSION_A,
+        callID: 'arg-contract-misplaced',
+        args: { expected_operations: ['commit'] },
+      },
+      {},
+    )
+    await misplaced.hooks['tool.execute.after'](
+      {
+        tool: 'systematic_workflow_start',
+        sessionID: SESSION_A,
+        callID: 'arg-contract-misplaced',
+        args: { expected_operations: ['commit'] },
+      },
+      { title: 'started', output: 'ok', metadata: {} },
+    )
+    // No pending start was ever registered, so the paired after call finds
+    // nothing to complete and fails closed, leaving the skill-activated
+    // unit's default required operations un-expanded by `['commit']`.
+    expect(status(misplaced).state).toBe('unavailable')
+    expect(status(misplaced).unit?.requiredOperations).toEqual([
+      'implementation',
+      'verification',
+    ])
+
+    const correct = createAdapter('observe')
+    await observeSkill(correct, 'systematic_skill', 'ce:work')
+    await correct.hooks['tool.execute.before'](
+      {
+        tool: 'systematic_workflow_start',
+        sessionID: SESSION_A,
+        callID: 'arg-contract-correct',
+      },
+      { args: { expected_operations: ['commit'] } },
+    )
+    await correct.hooks['tool.execute.after'](
+      {
+        tool: 'systematic_workflow_start',
+        sessionID: SESSION_A,
+        callID: 'arg-contract-correct',
+        args: { expected_operations: ['commit'] },
+      },
+      { title: 'started', output: 'ok', metadata: {} },
+    )
+    expect(status(correct).state).not.toBe('unavailable')
+    expect(status(correct).unit?.requiredOperations).toEqual([
+      'implementation',
+      'verification',
+      'commit',
+    ])
   })
 
   test('protected same-call target conflicts veto execution and mark unavailable', async () => {
@@ -4976,6 +5045,13 @@ describe('OpenCode workflow guard adapter', () => {
         sessionSalt: ownSalt,
         observer: {
           targetDigest: OPERATION_SCOPE.workspaceIdentity,
+          // Required by `OpencodeOperationObserver`; this fixture previously
+          // omitted it, which only compiled because Bun strips types at
+          // runtime. Verified this does not change this test's own
+          // behaviour: the task-lineage rollup path exercised below never
+          // calls `validateRegisteredWorktree` (that seam is only reached by
+          // file/command target derivation for write/edit/bash operations),
+          // so `snapshotCalled` reaches the same value with or without it.
           validateRegisteredWorktree(candidateDirectory) {
             return {
               status: 'ok',

@@ -152,12 +152,6 @@ function requireClassifyOperation(
   return classifyOperation.bind(classifier)
 }
 
-// `WorkflowGuard` already declares `observeOperation`,
-// `observeTrustedRecoveredOperation`, and `observeReadback` with the exact
-// shapes exercised by these tests; this alias just names the narrowed cast
-// target used at call sites below.
-type OperationWorkflowGuard = WorkflowGuard
-
 function operationInput(
   operation: ReceiptOperation,
   overrides: Partial<OperationInput> = {},
@@ -260,7 +254,7 @@ function createScenario(
   classifier: unknown,
   requiredOperations: readonly ReceiptOperation[] = [],
 ): {
-  guard: OperationWorkflowGuard
+  guard: WorkflowGuard
   ledger: ReturnType<typeof createReceiptLedger>
 } {
   const ledger = createReceiptLedger({
@@ -285,7 +279,7 @@ function createScenario(
     runtimeRequiredOperations: requiredOperations,
     runtimeResourceScopes: resourceScopes,
   } as WorkflowGuardOptions)
-  const operationGuard = guard as OperationWorkflowGuard
+  const operationGuard = guard
   expect(
     operationGuard.activate({
       event: 'guarded-skill',
@@ -302,7 +296,7 @@ function createScenario(
 }
 
 function bindOperation(
-  guard: OperationWorkflowGuard,
+  guard: WorkflowGuard,
   input: Record<string, unknown>,
 ): Record<string, unknown> {
   const status = guard.status()
@@ -329,7 +323,7 @@ function bindOperation(
 }
 
 async function observeTrustedRecoveredOperation(
-  guard: OperationWorkflowGuard,
+  guard: WorkflowGuard,
   input: Record<string, unknown>,
 ): Promise<EvidenceObservationResult> {
   if (typeof guard.observeTrustedRecoveredOperation !== 'function') {
@@ -339,7 +333,7 @@ async function observeTrustedRecoveredOperation(
 }
 
 function mintSyntheticReceipt(
-  guard: OperationWorkflowGuard,
+  guard: WorkflowGuard,
   ledger: ReturnType<typeof createReceiptLedger>,
   operation: ReceiptOperation,
 ): ReceiptEnvelope {
@@ -459,7 +453,7 @@ function coherentFinalReadbacks(
 
 async function buildFullOperationScenario(): Promise<{
   classifier: ReturnType<typeof createReceiptClassifier>
-  guard: OperationWorkflowGuard
+  guard: WorkflowGuard
   ledger: ReturnType<typeof createReceiptLedger>
 }> {
   const classifier = createReceiptClassifier()
@@ -1289,7 +1283,7 @@ describe('receipt operation adapters', () => {
         'check-readback': RESOURCE_PR,
         'review-readback': RESOURCE_PR,
       },
-    } as WorkflowGuardOptions) as OperationWorkflowGuard
+    } as WorkflowGuardOptions)
     expect(
       guard.activate({
         event: 'guarded-skill',

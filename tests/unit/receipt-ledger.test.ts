@@ -141,6 +141,21 @@ function expectPrepared(
   return result
 }
 
+/**
+ * Narrows a `FinalizeObservationResult` to its `rejected` branch, throwing
+ * with a descriptive message when the result unexpectedly finalized instead.
+ */
+function expectRejected(
+  result: FinalizeObservationResult,
+): Extract<FinalizeObservationResult, { status: 'rejected' }> {
+  if (result.status !== 'rejected') {
+    throw new Error(
+      `expected a rejected observation result, got status: ${result.status}`,
+    )
+  }
+  return result
+}
+
 describe('receipt ledger', () => {
   test('mints a v2 receipt with its operation target identity', () => {
     const ledger = createReceiptLedger({
@@ -240,11 +255,7 @@ describe('receipt ledger', () => {
     const finalizedResult = finalizeLedgerObservation(ledger)
     const finalized = expectFinalized(finalizedResult)
 
-    const replayResult = finalizeLedgerObservation(ledger)
-    expect(replayResult.status).toBe('rejected')
-    if (replayResult.status !== 'rejected') {
-      throw new Error('expected a rejected replay result')
-    }
+    const replayResult = expectRejected(finalizeLedgerObservation(ledger))
     expect(replayResult.reasonCode).toBe('duplicate-finalization')
 
     const receiptId = finalized.receipt.canonical.receiptId
@@ -765,7 +776,6 @@ describe('receipt ledger', () => {
     prepareLedgerObservation(first)
     const finalized = expectFinalized(finalizeLedgerObservation(first))
     const envelope = finalized.receipt
-    expect(envelope).toBeDefined()
     expect(first.validateEnvelope(envelope)).toMatchObject({
       compatibility: 'compatible',
     })
@@ -776,7 +786,7 @@ describe('receipt ledger', () => {
     })
     expect(
       first.validateEnvelope({
-        ...(envelope ?? {}),
+        ...envelope,
         schemaVersion: 999,
       }),
     ).toMatchObject({
@@ -785,7 +795,7 @@ describe('receipt ledger', () => {
     })
     expect(
       first.validateEnvelope({
-        ...(envelope ?? {}),
+        ...envelope,
         capabilityFlags: undefined,
       }),
     ).toMatchObject({
@@ -835,7 +845,7 @@ describe('receipt ledger', () => {
     for (const capabilityFlags of mismatches) {
       expect(
         ledger.validateEnvelope({
-          ...(envelope ?? {}),
+          ...envelope,
           capabilityFlags,
         }),
       ).toMatchObject({
