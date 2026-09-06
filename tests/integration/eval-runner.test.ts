@@ -2332,7 +2332,25 @@ describe('local OpenCode eval runner', () => {
     const parentDir = runParent()
     const events: string[] = []
     const previousExitCode = process.exitCode
+    // `process` is a single process-wide EventEmitter shared by every test
+    // file in this `bun test` worker. A real `process.emit('SIGINT')` would
+    // invoke every 'SIGINT' listener currently registered on it -- including
+    // the real-host fixture's terminal-signal safety net (installed once,
+    // for the life of the worker, by any earlier test file that started an
+    // opencode host) -- which force-exits the whole test runner. Instead,
+    // diff the listener list before/after installing this test's handler and
+    // invoke only the listener `installEvalSignalHandlers` just registered,
+    // so unrelated SIGINT listeners elsewhere in the worker are untouched.
+    const priorSigintListeners = new Set(process.listeners('SIGINT'))
     const removeSignalHandlers = installEvalSignalHandlers()
+    const [installedSigintListener] = process
+      .listeners('SIGINT')
+      .filter((listener) => !priorSigintListeners.has(listener))
+    if (!installedSigintListener) {
+      throw new Error(
+        'installEvalSignalHandlers did not register a SIGINT listener',
+      )
+    }
     try {
       const result = normalizeResult(
         await runSourceEval({
@@ -2342,7 +2360,7 @@ describe('local OpenCode eval runner', () => {
           parentDir,
           lifecycleHooks: {
             executeCase: async () => {
-              process.emit('SIGINT')
+              installedSigintListener('SIGINT')
               return syntheticExecution('success', 'none')
             },
             cleanupFixture: () => {
