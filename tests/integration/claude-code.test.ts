@@ -225,8 +225,8 @@ describe('claude-code bundle — artifact self-containment', () => {
     expect(validator.subarray(0, Buffer.byteLength(shebang)).toString()).toBe(
       shebang,
     )
-    expect(validator.subarray(Buffer.byteLength(shebang))).toEqual(
-      VALIDATOR_BUNDLE,
+    expect(Buffer.from(validator.subarray(Buffer.byteLength(shebang)))).toEqual(
+      Buffer.from(VALIDATOR_BUNDLE),
     )
     expect(fs.statSync(validatorPath).mode & 0o111).toBe(0o111)
   })

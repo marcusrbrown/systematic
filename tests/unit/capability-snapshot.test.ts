@@ -195,7 +195,9 @@ describe('capability snapshot contract', () => {
     expect(() =>
       buildCapabilitySnapshot(
         baseOptions({
-          facts: [{ factId: 'discovery-summary', status: 'available' }],
+          facts: [
+            { factId: 'discovery-summary', status: 'available' } as never,
+          ],
         }),
       ),
     ).toThrow(/discovery/i)

@@ -665,7 +665,7 @@ describe('Zod-backed overlay validation', () => {
     // trust-protected too, but SECURITY_OVERLAY_FIELDS only needs to name
     // the block itself since a project source cannot set any of it).
     const derived = Array.from(SECURITY_OVERLAY_FIELDS)
-    const expected = [
+    const expected: Array<(typeof SECURITY_OVERLAY_FIELDS)[number]> = [
       'model',
       'variant',
       'skills',

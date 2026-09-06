@@ -491,6 +491,7 @@ describe('checkSchemaFiles — drift detection', () => {
       previousAgentCount?: number
       previousSkillCount?: number
       allowShrink?: boolean
+      agentQualifiedIds?: string[]
     },
   ) => string
   let checkSchemaFilesFn: (
@@ -1436,8 +1437,8 @@ describe('--check path and write path produce byte-identical bundled-names conte
     opts?: { agentQualifiedIds?: string[] },
   ) => string
   let readCommittedFn: (rootDir: string) => {
-    previousAgentCount: number
-    previousSkillCount: number
+    previousAgentCount?: number
+    previousSkillCount?: number
   }
 
   beforeAll(async () => {

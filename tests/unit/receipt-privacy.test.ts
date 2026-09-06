@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import type { ToolContext } from '@opencode-ai/plugin'
 
 import type {
   OpencodeOperationObserver,
@@ -36,6 +37,19 @@ const SECRET_ENV = 'SUPER_SECRET_ENV_VALUE'
 const SECRET_PROSE = 'private user prose must never be persisted'
 const SESSION_SALT = new Uint8Array(32).fill(7)
 const OPERATION_TARGET_IDENTITY = 'd'.repeat(64)
+
+function toolContext(sessionID = SESSION_ID): ToolContext {
+  return {
+    sessionID,
+    messageID: `message-${sessionID}`,
+    agent: 'systematic',
+    directory: process.cwd(),
+    worktree: process.cwd(),
+    abort: new AbortController().signal,
+    metadata: () => {},
+    ask: async () => {},
+  }
+}
 
 const DIGEST = /^[0-9a-f]{64}$/
 const IDENTIFIER = /^[A-Za-z0-9_.:-]{1,256}$/
@@ -194,7 +208,7 @@ describe('receipt privacy projections', () => {
     const mintMarker = projectReceiptMintMarker(receipt, SESSION_SALT)
     const consumeMarker = projectReceiptConsumptionMarker(
       receipt,
-      ledger.digestIdentity('transition', SECRET_PR_BODY),
+      ledger.digestIdentity('call', SECRET_PR_BODY),
       123,
     )
 
@@ -290,7 +304,11 @@ describe('receipt privacy projections', () => {
         ...classifier,
         classifyOperation: async (input: unknown) => {
           observations.push(input as ReceiptOperationObservation)
-          return classifier.classifyOperation?.(input)
+          const result = await classifier.classifyOperation?.(input)
+          if (!result) {
+            throw new Error('classifier.classifyOperation must be defined')
+          }
+          return result
         },
       },
       runtimeRequiredOperations: [],
@@ -317,7 +335,11 @@ describe('receipt privacy projections', () => {
         metadata: { status: 'success' },
       },
     )
-    const output = {
+    const output: {
+      title: string
+      output: string
+      metadata: Record<string, unknown>
+    } = {
       title: 'operation complete',
       output: 'bounded host result',
       metadata: {},
@@ -353,9 +375,10 @@ describe('receipt privacy projections', () => {
     const marker = output.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]
     const toolResult = await adapter.tools.systematic_workflow_status.execute(
       {},
-      { sessionID: SESSION_ID, metadata: () => {} },
+      toolContext(),
     )
-    const toolMetadata = toolResult.metadata
+    const toolMetadata =
+      typeof toolResult === 'string' ? undefined : toolResult.metadata
     const values = [marker, adapter.status(SESSION_ID), toolMetadata]
     for (const value of values) {
       expect(value).toBeDefined()

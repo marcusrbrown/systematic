@@ -11,6 +11,7 @@ import type { ConfigObservationMetadata } from '../../src/lib/capability-snapsho
 import {
   createConfigHandler,
   formatAgentDescription,
+  readEmittedAgentPermission,
   toTitleCase,
 } from '../../src/lib/config-handler.js'
 import { formatFrontmatter } from '../../src/lib/frontmatter.js'
@@ -1388,12 +1389,13 @@ model: gpt-4
       const config: Config = {}
       await handler(config)
 
-      expect(config.agent?.['correctness-reviewer']?.permission?.skill).toEqual(
-        {
-          '*': 'deny',
-          'ce:review': 'allow',
-        },
-      )
+      expect(
+        readEmittedAgentPermission(config.agent?.['correctness-reviewer'])
+          ?.skill,
+      ).toEqual({
+        '*': 'deny',
+        'ce:review': 'allow',
+      })
     })
 
     test('managed empty skills emits deny-all and omitted skills inherit weaker behavior', async () => {
@@ -1421,13 +1423,16 @@ model: gpt-4
       const config: Config = {}
       await handler(config)
 
-      expect(config.agent?.['correctness-reviewer']?.permission?.skill).toEqual(
-        {
-          'ce:review': 'allow',
-          '*': 'deny',
-        },
-      )
-      expect(config.agent?.['security-reviewer']?.permission?.skill).toEqual({
+      expect(
+        readEmittedAgentPermission(config.agent?.['correctness-reviewer'])
+          ?.skill,
+      ).toEqual({
+        'ce:review': 'allow',
+        '*': 'deny',
+      })
+      expect(
+        readEmittedAgentPermission(config.agent?.['security-reviewer'])?.skill,
+      ).toEqual({
         '*': 'deny',
         'ce:review': 'allow',
       })
@@ -1457,13 +1462,14 @@ model: gpt-4
       const config: Config = {}
       await handler(config)
 
-      expect(config.agent?.['correctness-reviewer']?.permission?.skill).toEqual(
-        {
-          'skill-b': 'allow',
-          '*': 'deny',
-          'skill-a': 'allow',
-        },
-      )
+      expect(
+        readEmittedAgentPermission(config.agent?.['correctness-reviewer'])
+          ?.skill,
+      ).toEqual({
+        'skill-b': 'allow',
+        '*': 'deny',
+        'skill-a': 'allow',
+      })
     })
 
     test('exact permission.skill can override category skills and exact skills can override category permission.skill', async () => {
@@ -1501,19 +1507,24 @@ model: gpt-4
       const config: Config = {}
       await handler(config)
 
-      expect(config.agent?.['security-reviewer']?.permission?.skill).toEqual({
+      expect(
+        readEmittedAgentPermission(config.agent?.['security-reviewer'])?.skill,
+      ).toEqual({
         '*': 'deny',
         'skill-a': 'deny',
       })
-      expect(config.agent?.['security-reviewer']?.permission?.bash).toEqual({
+      expect(
+        readEmittedAgentPermission(config.agent?.['security-reviewer'])?.bash,
+      ).toEqual({
         '*': 'deny',
       })
-      expect(config.agent?.['performance-reviewer']?.permission?.skill).toEqual(
-        {
-          '*': 'deny',
-          'skill-a': 'allow',
-        },
-      )
+      expect(
+        readEmittedAgentPermission(config.agent?.['performance-reviewer'])
+          ?.skill,
+      ).toEqual({
+        '*': 'deny',
+        'skill-a': 'allow',
+      })
     })
 
     test('exact managed skills override category permission.skill denial through last-match order', async () => {
@@ -1543,12 +1554,13 @@ model: gpt-4
       const config: Config = {}
       await handler(config)
 
-      expect(config.agent?.['performance-reviewer']?.permission?.skill).toEqual(
-        {
-          '*': 'deny',
-          'skill-a': 'allow',
-        },
-      )
+      expect(
+        readEmittedAgentPermission(config.agent?.['performance-reviewer'])
+          ?.skill,
+      ).toEqual({
+        '*': 'deny',
+        'skill-a': 'allow',
+      })
     })
 
     test('category overlay skips native replacement and applies to other bundled agents', async () => {

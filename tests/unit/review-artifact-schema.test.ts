@@ -584,7 +584,7 @@ describe('review artifact schema', () => {
       'historical-review-summary-20260817.json',
     ]
 
-    const expectedIssues: Record<string, readonly string[]> = {
+    const expectedIssues: Record<string, string[]> = {
       'historical-review-summary-20260713.json': [
         'schema_version invalid_value',
         'branch invalid_type',
@@ -775,7 +775,7 @@ describe('review artifact schema', () => {
   })
 
   test('all custom schema issues use authored literal messages', () => {
-    const customMessages = new Set(REVIEW_ARTIFACT_CUSTOM_MESSAGES)
+    const customMessages = new Set<string>(REVIEW_ARTIFACT_CUSTOM_MESSAGES)
     const cases = [
       artifactWith({
         input_findings: [

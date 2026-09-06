@@ -456,7 +456,8 @@ describe('exportPersonas', () => {
 
     const manifest = readManifest(agentsRoot)
     expect(manifest).not.toBeNull()
-    const exported = manifest?.files.filter(
+    if (!manifest) throw new Error('expected manifest to be non-null')
+    const exported = manifest.files.filter(
       (f) => f.status === 'exported' || f.status === 'exported-with-warning',
     )
     expect(exported.length).toBeGreaterThan(0)
@@ -1201,6 +1202,8 @@ describe('readManifest: absent vs malformed distinction', () => {
     writeManifest(agentsRoot, dup)
     const result = readManifestStrict(agentsRoot)
     expect(result.kind).toBe('malformed')
+    if (result.kind !== 'malformed')
+      throw new Error('expected malformed result')
     expect(result.error).toMatch(/duplicate/i)
   })
 

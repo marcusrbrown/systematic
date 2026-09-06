@@ -10,10 +10,11 @@ import fs from 'node:fs'
 import type { Plugin } from '@opencode-ai/plugin'
 import { tool } from '@opencode-ai/plugin/tool'
 
-const logFile = process.env.PROBE_TOOL_LOG
-if (!logFile) {
+const logFileEnv = process.env.PROBE_TOOL_LOG
+if (!logFileEnv) {
   throw new Error('PROBE_TOOL_LOG env var must be set')
 }
+const logFile: string = logFileEnv
 
 const condition = process.env.PROBE_CONDITION ?? 'unknown'
 const sessionLabel = process.env.PROBE_SESSION_LABEL ?? '?'

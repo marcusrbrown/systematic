@@ -152,7 +152,7 @@ describe('receipt duplicate and replay matrix', () => {
     const marker = projectReceiptMintMarker(original.receipt, SESSION_SALT)
     const consumeMarker = projectReceiptConsumptionMarker(
       original.receipt,
-      original.ledger.digestIdentity('transition', 'unit-complete'),
+      original.ledger.digestIdentity('call', 'unit-complete'),
       10,
     )
     expect(marker && consumeMarker).toBeTruthy()
