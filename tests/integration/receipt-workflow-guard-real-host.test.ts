@@ -58,6 +58,21 @@ interface MintMarkerEvidence {
   receiptId: string
 }
 
+/**
+ * The OpenCode SDK client types every response as `{ data?: T; error?:
+ * unknown }` to model transport failures. These tests always run against a
+ * live host and expect success; this asserts that at the call site instead
+ * of accessing `.data` with `?.`/`!` at every downstream read.
+ */
+function unwrapData<T>(result: { data?: T; error?: unknown }): T {
+  if (result.data === undefined) {
+    throw new Error(
+      `opencode client call failed: ${JSON.stringify(result.error)}`,
+    )
+  }
+  return result.data
+}
+
 function sseChunk(value: unknown): string {
   return `data: ${JSON.stringify(value)}\n\n`
 }
@@ -229,7 +244,7 @@ async function createSession(
     title: 'U7 real host',
     permission: [{ permission: '*', pattern: '*', action: 'allow' }],
   })
-  return session.data.id
+  return unwrapData(session).id
 }
 
 async function promptSession(
@@ -483,12 +498,12 @@ async function runObserveCell(
       fixture.projectDir,
       'Run the guarded workflow and ship the local change.',
     )
-    const messages = (
+    const messages = unwrapData(
       await client.session.messages({
         sessionID,
         directory: fixture.projectDir,
-      })
-    ).data
+      }),
+    )
     const markers = markerKinds(messages)
     console.log(
       `U7_CELL_EVIDENCE ${JSON.stringify({
@@ -587,7 +602,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)('U7a real host', () => {
       console.log(`U7_HOST_MATRIX ${JSON.stringify(cells)}`)
       expect(cells).toHaveLength(HOST_VERSIONS.length)
       for (const cell of cells) {
-        expect(['pass', 'blocked']).toContain(cell.status)
+        expect(['pass', 'blocked'] as unknown[]).toContain(cell.status)
       }
     },
     TIMEOUT_MS * 12,

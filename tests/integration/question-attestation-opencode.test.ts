@@ -35,6 +35,21 @@ interface MockModelServer {
   stop(): void
 }
 
+/**
+ * The OpenCode SDK client types every response as `{ data?: T; error?:
+ * unknown }` to model transport failures. These tests always run against a
+ * live host and expect success; this asserts that at the call site instead
+ * of accessing `.data` with `?.`/`!` at every downstream read.
+ */
+function unwrapData<T>(result: { data?: T; error?: unknown }): T {
+  if (result.data === undefined) {
+    throw new Error(
+      `opencode client call failed: ${JSON.stringify(result.error)}`,
+    )
+  }
+  return result.data
+}
+
 function sseChunk(value: unknown): string {
   return `data: ${JSON.stringify(value)}\n\n`
 }
@@ -396,7 +411,7 @@ async function createSession(
     title: 'U6 question attestation',
     permission: [{ permission: '*', pattern: '*', action: 'allow' }],
   })
-  return created.data.id
+  return unwrapData(created).id
 }
 
 async function promptSession(
@@ -519,7 +534,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)('OpenCode Question attestation', () => {
               const response = await client.question.list({
                 directory: fixture.projectDir,
               })
-              return response.data.filter(
+              return unwrapData(response).filter(
                 (request) => request.sessionID === sessionID,
               )
             },
@@ -536,8 +551,8 @@ describe.skipIf(!OPENCODE_AVAILABLE)('OpenCode Question attestation', () => {
           throw new Error(
             `U6_PENDING ${JSON.stringify({
               events: readEvents(probe.capturePath),
-              globalQuestionCount: globalQuestions.data.length,
-              parts: summarizeParts(messages.data),
+              globalQuestionCount: unwrapData(globalQuestions).length,
+              parts: summarizeParts(unwrapData(messages)),
             })}`,
           )
         }
@@ -604,12 +619,12 @@ describe.skipIf(!OPENCODE_AVAILABLE)('OpenCode Question attestation', () => {
         expect(repliedIndex).toBeGreaterThan(askedIndex)
 
         await prompt
-        const messages = (
+        const messages = unwrapData(
           await client.session.messages({
             sessionID,
             directory: fixture.projectDir,
-          })
-        ).data
+          }),
+        )
         const markers = systemMarkers(messages)
         expect(markers.length).toBeGreaterThan(0)
         expect(JSON.stringify(markers)).not.toContain('wrong')
@@ -714,7 +729,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)('OpenCode Question attestation', () => {
             const response = await client.question.list({
               directory: fixture.projectDir,
             })
-            return response.data.filter(
+            return unwrapData(response).filter(
               (request) => request.sessionID === sessionID,
             )
           },
@@ -737,12 +752,12 @@ describe.skipIf(!OPENCODE_AVAILABLE)('OpenCode Question attestation', () => {
           requestIDType: 'string',
           sessionIDType: 'string',
         })
-        const messages = (
+        const messages = unwrapData(
           await client.session.messages({
             sessionID,
             directory: fixture.projectDir,
-          })
-        ).data
+          }),
+        )
         const serializedMarkers = JSON.stringify(systemMarkers(messages))
         expect(serializedMarkers).not.toContain('attested')
         expect(serializedMarkers).not.toContain('declined')
@@ -887,7 +902,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)('OpenCode Question attestation', () => {
             const response = await client.question.list({
               directory: fixture.projectDir,
             })
-            return response.data.filter(
+            return unwrapData(response).filter(
               (request) => request.sessionID === sessionID,
             )
           },
@@ -911,12 +926,12 @@ describe.skipIf(!OPENCODE_AVAILABLE)('OpenCode Question attestation', () => {
           answers: [['confirm']],
         })
         await prompt
-        const afterReply = (
+        const afterReply = unwrapData(
           await client.session.messages({
             sessionID,
             directory: fixture.projectDir,
-          })
-        ).data
+          }),
+        )
         const controlParts = workflowParts(afterReply).filter(
           (part) => part.tool === 'systematic_workflow_control',
         )
