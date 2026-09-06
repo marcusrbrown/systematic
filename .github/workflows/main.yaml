@@ -159,6 +159,183 @@ jobs:
       - name: Run tests
         run: bun test tests/unit
 
+  host-contract:
+    name: Host Contract
+    runs-on: ubuntu-latest
+    # Measured on the first real CI run; not summed from per-test ceilings
+    # (see the plan's Key Technical Decisions / Unit 4). Re-tune once this
+    # job has actually run against a live OpenCode host.
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # Path gating applies only to pull requests, and only at step level:
+      # this job has no top-level `if:`, so it always runs to completion and
+      # reports a status. A `needs` dependency that were skipped would skip
+      # `release` too, silently publishing nothing on a docs-only PR.
+      - name: Detect relevant path changes
+        id: filter
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
+        with:
+          filters: |
+            host-contract:
+              - 'src/**'
+              - 'tests/**'
+              - 'scripts/**'
+              - 'evals/**'
+              - 'package.json'
+              - 'bun.lock'
+              - '.github/workflows/main.yaml'
+
+      # On push to main the filter step above is bypassed entirely, so this
+      # always resolves to true there. On a pull request it mirrors the
+      # filter's verdict. Every later step reads this single output instead
+      # of repeating the push-vs-pull_request branch.
+      - name: Determine whether to run the host contract suite
+        id: gate
+        run: |
+          if [[ "${{ github.event_name }}" != "pull_request" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=${{ steps.filter.outputs.host-contract }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Setup Node.js
+        if: steps.gate.outputs.run == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Setup Bun
+        if: steps.gate.outputs.run == 'true'
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Install dependencies
+        if: steps.gate.outputs.run == 'true'
+        run: bun install --frozen-lockfile
+
+      # Load-bearing: dist/ is gitignored, opencode.test.ts computes
+      # DIST_LOCAL_AVAILABLE from dist/index.js at module scope, and
+      # packTarballOnce() builds inside a beforeAll — too late for that gate.
+      # Building first makes the dist-local assertion run for real and turns
+      # the in-beforeAll build into a warm no-op.
+      - name: Build
+        if: steps.gate.outputs.run == 'true'
+        run: bun run build
+
+      - name: Run host contract suite
+        id: host-contract-run
+        if: steps.gate.outputs.run == 'true'
+        env:
+          SYSTEMATIC_REQUIRE_OPENCODE: '1'
+        run: |
+          set -o pipefail
+          bun test tests/integration \
+            --reporter=junit --reporter-outfile=host-contract-junit.xml \
+            2>&1 | tee host-contract-log.txt
+
+      # The module-scope throw (SYSTEMATIC_REQUIRE_OPENCODE=1) already covers
+      # a missing or mismatched host. This guard covers what it cannot: a
+      # per-test gate such as test.skipIf(!DIST_LOCAL_AVAILABLE) skipping for
+      # an unexpected reason while the job stays green. The exempt set lives
+      # here, next to the guard, so adding an entry is a reviewed change.
+      - name: Guard skipped tests and pass floor
+        if: steps.gate.outputs.run == 'true'
+        run: |
+          cat <<'EOF' > host-contract-guard.mjs
+          import { readFileSync } from 'node:fs'
+
+          // The only test allowed to skip today: the mixed-version test stays
+          // opt-in because enabling it would put a fetch of a published
+          // @fro.bot/systematic release on the path that gates publishing the
+          // next one.
+          const EXEMPT_SKIPS = [
+            {
+              classname: 'opencode mixed-version integration',
+              name: 'pinned package plus local source keep systematic_skill deterministic and converge bootstrap',
+            },
+          ]
+
+          // Conservative placeholder floor. Re-tune upward from the actual
+          // pass count once this job has run against a live OpenCode host
+          // (see the plan's Unit 4 deferred item on the measured floor).
+          const PASS_FLOOR = 50
+
+          const [, , junitPath, logPath] = process.argv
+          const xml = readFileSync(junitPath, 'utf8')
+
+          const testcaseRe = /<testcase\b([^>]*?)(\/>|>[\s\S]*?<\/testcase>)/g
+          const attrRe = /(\w+)="([^"]*)"/g
+
+          function parseAttrs(str) {
+            const attrs = {}
+            let m
+            attrRe.lastIndex = 0
+            while ((m = attrRe.exec(str))) attrs[m[1]] = m[2]
+            return attrs
+          }
+
+          const skipped = []
+          let match
+          while ((match = testcaseRe.exec(xml))) {
+            const [, attrStr, rest] = match
+            const attrs = parseAttrs(attrStr)
+            if (rest.includes('<skipped')) {
+              skipped.push({ classname: attrs.classname ?? '', name: attrs.name ?? '' })
+            }
+          }
+
+          const key = (s) => `${s.classname}::${s.name}`
+          const exemptKeys = new Set(EXEMPT_SKIPS.map(key))
+          const actualKeys = skipped.map(key)
+
+          const unexpected = actualKeys.filter((k) => !exemptKeys.has(k))
+          const missingExempt = [...exemptKeys].filter((k) => !actualKeys.includes(k))
+
+          let failed = false
+
+          if (unexpected.length > 0) {
+            console.error('Unexpected skipped test(s) (not in the known-exempt set):')
+            for (const k of unexpected) console.error(`  - ${k}`)
+            failed = true
+          }
+
+          if (missingExempt.length > 0) {
+            console.error('Known-exempt skip(s) not found in this run (exempt set is stale):')
+            for (const k of missingExempt) console.error(`  - ${k}`)
+            failed = true
+          }
+
+          const log = readFileSync(logPath, 'utf8')
+          const passMatch = log.match(/^\s*(\d+)\s+pass\s*$/m)
+          if (!passMatch) {
+            console.error('Could not find a "<N> pass" summary line in the captured test output.')
+            failed = true
+          } else {
+            const passCount = Number(passMatch[1])
+            console.log(`Observed pass count: ${passCount} (floor: ${PASS_FLOOR})`)
+            if (passCount < PASS_FLOOR) {
+              console.error(`Pass count ${passCount} is below the floor of ${PASS_FLOOR}.`)
+              failed = true
+            }
+          }
+
+          if (failed) process.exit(1)
+          console.log('host-contract skip/pass guard passed.')
+          EOF
+          bun host-contract-guard.mjs host-contract-junit.xml host-contract-log.txt
+
+      - name: Upload test log on failure
+        if: failure() && steps.gate.outputs.run == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: host-contract-log
+          path: |
+            host-contract-log.txt
+            host-contract-junit.xml
+          if-no-files-found: ignore
+
   registry:
     name: Registry
     runs-on: ubuntu-latest
@@ -225,7 +402,7 @@ jobs:
       # override here silently turns a requested dry run into a real release.
       DRY_RUN: ${{ (github.event_name == 'pull_request' || github.event.inputs.dry-run == 'true') && 'true' || 'false' }}
     name: Release
-    needs: [build, typecheck, lint, test]
+    needs: [build, typecheck, lint, test, host-contract]
     outputs:
       new-release-published: ${{ steps.semantic-release.outputs.new-release-published }}
       new-release-version: ${{ steps.semantic-release.outputs.new-release-version }}

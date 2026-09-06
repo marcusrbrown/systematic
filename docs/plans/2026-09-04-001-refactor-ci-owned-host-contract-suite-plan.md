@@ -262,7 +262,7 @@ Two adjacent facts shaped the design. `mise.toml` prepends `./node_modules/.bin`
 - Neither `OPENCODE_TEST_MODEL` nor `big-pickle` appears anywhere under `tests/integration/` (`tests/manual/` legitimately keeps its hosted-model scripts).
 - Under `SYSTEMATIC_REQUIRE_OPENCODE=1`, no test in `tests/integration/` has an assertion that admits every outcome. Locally, two eval-runner shapes stay tolerant by design — the gate test's `infra_failure` branch and the repeated-runs equality test (two `infra_failure` envelopes compare equal) — and both are unreachable offline once Unit 2 gates them. In CI the host is available (the module-scope throw guarantees it), so both tests run against a real host and their assertions are live.
 
-- [ ] **Unit 4: Add the `host-contract` CI job**
+- [x] **Unit 4: Add the `host-contract` CI job**
 
 **Goal:** Run the integration suite in CI on the PRs that can change its outcome, fail closed, and gate release on it.
 

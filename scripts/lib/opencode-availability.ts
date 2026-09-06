@@ -91,6 +91,17 @@ export function probeOpencodeAvailability(
   const command = options.command ?? 'bunx'
   const args = options.args ?? [`opencode-ai@${options.pin}`, '--version']
 
+  // Only the real launcher path logs: every unit test override supplies its
+  // own `command`, and this line would otherwise fire once per fake-launcher
+  // case. A wedged package registry blocks synchronously for the full
+  // timeout with no other output, so this line is what makes that stall
+  // attributable in CI logs rather than a silent multi-minute pause.
+  if (options.command === undefined) {
+    console.warn(
+      `[opencode-availability] probing bunx opencode-ai@${options.pin} --version`,
+    )
+  }
+
   // spawnSync's own timeout sends SIGTERM (then SIGKILL) to the direct child
   // only, not its process group; this function is deliberately synchronous
   // (every caller computes availability once, inline, before deciding
