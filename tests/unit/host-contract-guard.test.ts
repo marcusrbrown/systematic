@@ -36,6 +36,41 @@ function makeTempDir(): string {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'host-contract-guard-'))
 }
 
+const INTEGRATION_DIR = path.join(REPO_ROOT, 'tests/integration')
+
+/**
+ * Every `*.test.ts` file directly under `tests/integration/`. Deliberately
+ * non-recursive: `tests/integration/` is flat (verified -- its only
+ * subdirectory is `fixtures/`, which holds shared test scaffolding, not
+ * suite files, and a non-recursive `.test.ts` filter already excludes it
+ * since `fixtures` itself doesn't end in `.test.ts`).
+ */
+function listIntegrationSuiteFiles(): string[] {
+  return fs
+    .readdirSync(INTEGRATION_DIR, { withFileTypes: true })
+    .filter((entry) => entry.isFile() && entry.name.endsWith('.test.ts'))
+    .map((entry) => `tests/integration/${entry.name}`)
+    .sort()
+}
+
+// ---------------------------------------------------------------------------
+// EXPECTED_SUITE_FILES drift against the real directory
+// ---------------------------------------------------------------------------
+
+describe('EXPECTED_SUITE_FILES', () => {
+  test('matches the real contents of tests/integration/ (a new or removed suite file must update this list)', () => {
+    // EXPECTED_SUITE_FILES is deliberately hardcoded (see the module-level
+    // doc comment on it) rather than derived at guard runtime, so this
+    // test is what keeps it honest: without it, a newly added integration
+    // test file would silently escape condition 1 ("an expected suite file
+    // produced no JUnit entry") -- the guard would stay green while no
+    // longer requiring that file to have run at all, which is exactly the
+    // class of drift the guard exists to catch.
+    const actual = listIntegrationSuiteFiles()
+    expect([...EXPECTED_SUITE_FILES].sort()).toEqual(actual)
+  })
+})
+
 // ---------------------------------------------------------------------------
 // Fixture builders
 // ---------------------------------------------------------------------------
