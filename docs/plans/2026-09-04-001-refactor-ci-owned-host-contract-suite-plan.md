@@ -1,7 +1,7 @@
 ---
 title: "refactor: Make the OpenCode host-contract suite CI-owned with a single version pin"
 type: refactor
-status: active
+status: completed
 date: 2026-09-04
 deepened: 2026-09-04
 ---
@@ -290,7 +290,7 @@ Two adjacent facts shaped the design. `mise.toml` prepends `./node_modules/.bin`
 - A deliberate break (for example, a wrong pin in a throwaway commit) turns the job red rather than green-with-skips; revert before merge.
 - `release` lists `host-contract` in `needs`.
 
-- [ ] **Unit 5: Supersede the local re-run rule and correct its citations**
+- [x] **Unit 5: Supersede the local re-run rule and correct its citations**
 
 **Goal:** `docs/solutions/` says what is true after this lands.
 

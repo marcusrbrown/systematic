@@ -135,7 +135,7 @@ These are corpus entries 013 and 014, described in `tests/fixtures/config-corpus
 ## Related
 
 - [`docs/solutions/best-practices/provider-availability-source-defaults-2026-05-12.md`](provider-availability-source-defaults-2026-05-12.md) — the mechanism this gate guards, now retired
-- [`docs/solutions/workflow-issues/version-pinned-evidence-must-be-reproven-2026-08-16.md`](../workflow-issues/version-pinned-evidence-must-be-reproven-2026-08-16.md) — the other half of trusting a gate: its evidence expires when the pinned runtime moves
+- [`docs/solutions/workflow-issues/host-contract-evidence-is-ci-owned-2026-09-04.md`](../workflow-issues/host-contract-evidence-is-ci-owned-2026-09-04.md) — the other half of trusting a gate: its evidence expires when the pinned runtime moves
 - [`docs/solutions/best-practices/a-perfect-measurement-means-a-broken-instrument-2026-08-16.md`](a-perfect-measurement-means-a-broken-instrument-2026-08-16.md) — a zero-difference result is evidence about the corpus before it is evidence about the rewrite
 - `tests/fixtures/config-corpus/README.md` — the corpus, its canonical-serialization assertion, and the pre-change reconstruction method
 - PR #790 — where the absence-gate gap was found and closed
