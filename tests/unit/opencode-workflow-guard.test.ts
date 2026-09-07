@@ -2341,7 +2341,7 @@ describe('OpenCode workflow guard adapter', () => {
     expect(output.metadata).not.toMatchObject({ reasonCode: 'unit-ready' })
     expect(output.metadata.workflowGuard).toMatchObject({
       status: 'unavailable',
-      reasonCode: 'abandoned-transition',
+      reasonCode: 'invalid-transition',
       target: 'unit',
     })
   })
@@ -2393,11 +2393,66 @@ describe('OpenCode workflow guard adapter', () => {
     expect(output.title).toBe(hostErrorTitle)
     expect(output.output).toBe(hostErrorText)
     expect(output.metadata).not.toEqual({ status: 'error' })
+    // The host's own failure sentinel must survive alongside the guard's
+    // corrected metadata — it is what a second shared-output instance
+    // relies on via isSuccessfulAfter() to avoid taking the success path.
+    expect(output.metadata.status).toBe('error')
     expect(output.metadata.workflowGuard).toMatchObject({
       status: 'unavailable',
-      reasonCode: 'abandoned-transition',
+      reasonCode: 'failed-operation',
       target: 'unit',
     })
+  })
+
+  test('a shared output across two guard instances keeps the host failure sentinel visible to the second instance', async () => {
+    const first = createAdapter('protected')
+    const second = createAdapter('protected')
+    await observeSkill(first, 'systematic_skill', 'ce:work')
+    await observeSkill(second, 'systematic_skill', 'ce:work')
+    mintReceipt(first, 'implementation')
+    mintReceipt(first, 'verification')
+    mintReceipt(second, 'implementation')
+    mintReceipt(second, 'verification')
+
+    const input = {
+      tool: 'systematic_workflow_complete',
+      sessionID: SESSION_A,
+      callID: 'shared-host-failure-complete',
+    }
+    await first.hooks['tool.execute.before'](input, {
+      args: { target: 'unit' },
+    })
+    await second.hooks['tool.execute.before'](input, {
+      args: { target: 'unit' },
+    })
+
+    // One host output object shared by both guard instances — mirrors how
+    // OpenCode invokes every registered plugin's `tool.execute.after` hook
+    // against the same result reference (see the `partial registration
+    // finalization…` test above for the established sharing pattern).
+    const sharedOutput: RecordedToolOutput = {
+      title: 'Bash command failed',
+      output: 'permission denied: /var/run/lock',
+      metadata: { status: 'error' },
+    }
+    await first.hooks['tool.execute.after'](
+      { ...input, args: { target: 'unit' } },
+      sharedOutput,
+    )
+    // (a) the host's failure sentinel survives in the shared metadata.
+    expect(sharedOutput.metadata.status).toBe('error')
+
+    await second.hooks['tool.execute.after'](
+      { ...input, args: { target: 'unit' } },
+      sharedOutput,
+    )
+    // (b) the second instance still reads the host failure via
+    // isSuccessfulAfter() and does not take the success path — it must not
+    // report a completed unit, and must not overwrite the terminal title
+    // with a completion title.
+    expect(status(second).unit?.status).not.toBe('completed')
+    expect(sharedOutput.title).not.toBe('Workflow transition completed')
+    expect(sharedOutput.metadata.status).toBe('error')
   })
 
   test('markers upsert one source entry and aggregate worst precedence', async () => {

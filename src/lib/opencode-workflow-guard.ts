@@ -2535,10 +2535,12 @@ function createSessionRuntime(
     target: TransitionTarget,
   ): void {
     if (!isRecord(output)) return
+    const existingMetadata = isRecord(output.metadata) ? output.metadata : {}
     if (result.status === 'completed' || result.status === 'duplicate') {
       output.title = 'Workflow transition completed'
       output.output = `workflow guard completed ${target}`
       output.metadata = {
+        ...existingMetadata,
         ...metadata(),
         workflowGuard: { status: 'completed', target },
       }
@@ -2554,6 +2556,7 @@ function createSessionRuntime(
       reasonCode,
     })
     output.metadata = {
+      ...existingMetadata,
       ...metadata(),
       workflowGuard: {
         status: resultStatus,
@@ -2586,13 +2589,24 @@ function createSessionRuntime(
   // error title/text, which is evidence and must not be destroyed. Only the
   // metadata is corrected, using a fresh metadata() read taken after
   // guard.abandonTransition() so it reflects the corrected guard state.
+  //
+  // The host's existing metadata is preserved (spread first, lowest
+  // precedence) rather than replaced outright: on this path the host's own
+  // metadata carries the failure sentinel (`status: 'error' | 'failure' |
+  // 'cancelled'`) that `isSuccessfulAfter()` reads. Guard instances share
+  // the `output` reference across `tool.execute.after` calls, so replacing
+  // the metadata wholesale would erase that sentinel for any later
+  // instance and make it misclassify the call as successful — the exact
+  // fail-open inversion this fix exists to prevent.
   function writeAbandonedCompletionMetadata(
     output: unknown,
     target: TransitionTarget,
     reasonCode: WorkflowReasonCode,
   ): void {
     if (!isRecord(output)) return
+    const existingMetadata = isRecord(output.metadata) ? output.metadata : {}
     output.metadata = {
+      ...existingMetadata,
       ...metadata(),
       workflowGuard: { status: 'unavailable', target, reasonCode },
     }
@@ -3153,7 +3167,7 @@ function createSessionRuntime(
       writeAbandonedCompletionMetadata(
         output,
         pending.target,
-        'abandoned-transition',
+        'failed-operation',
       )
       return
     }
@@ -3370,11 +3384,7 @@ function createSessionRuntime(
   ): void {
     abandonComplete(callDigest, pending, false)
     markUnavailable()
-    writeAbandonedCompletionResult(
-      output,
-      pending.target,
-      'abandoned-transition',
-    )
+    writeAbandonedCompletionResult(output, pending.target, 'invalid-transition')
   }
 
   function finishUnreplayableComplete(
@@ -3385,7 +3395,11 @@ function createSessionRuntime(
     // No pending transition and nothing replayable: the target is unknown,
     // so 'unit' is used as the required TransitionTarget field on this
     // synthetic terminal result — display-only in this branch.
-    writeAbandonedCompletionResult(output, finalTarget ?? 'unit', 'guard-unavailable')
+    writeAbandonedCompletionResult(
+      output,
+      finalTarget ?? 'unit',
+      'guard-unavailable',
+    )
   }
 
   function finishUnavailableReadback(
