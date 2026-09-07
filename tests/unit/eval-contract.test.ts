@@ -69,7 +69,12 @@ function validResult(mode: EvalMode = 'source'): EvalResult {
     normalizedClock: '2026-08-13T00:00:00.000Z',
     assertionIds: fixtureAssertions,
     identity: {
-      opencodeVersion: '1.18.16',
+      // Unpinnable sentinel: this identity fixture never validates against
+      // the real OpenCode pin, so a realistic-looking literal here would
+      // collide with tests/unit/opencode-pin.test.ts's R1 guard on a future
+      // Renovate bump. See tests/unit/opencode-availability.test.ts for the
+      // full rationale.
+      opencodeVersion: '9999.0.0',
       opencodeBuildId: 'build-001',
       probeId: 'probe-opencode-v1',
       probeDigest: 'c'.repeat(64),

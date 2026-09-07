@@ -70,6 +70,12 @@ describe('readPackageJson error branches (via readOpencodeSdkPin)', () => {
   })
 })
 
+// The devDependency fixture values below ("9999.0.0", "9999.0.1") are
+// deliberately unpinnable sentinel versions: they exercise the parser
+// against fake package.json content and never need to equal the real pin.
+// A realistic-looking literal here would collide with this very file's own
+// R1 guard the moment a Renovate bump reached it -- see
+// tests/unit/opencode-availability.test.ts for the full rationale.
 describe('readOpencodeSdkPin', () => {
   test('returns the exact @opencode-ai/sdk devDependency from the real package.json', () => {
     const realPackageJson = JSON.parse(
@@ -105,7 +111,7 @@ describe('readOpencodeSdkPin', () => {
   test('throws "not listed in" when the sdk entry is missing', () => {
     const dir = makeTempDir()
     const pkgPath = writeDevDependencies(dir, {
-      '@opencode-ai/plugin': '9.9.0',
+      '@opencode-ai/plugin': '9999.0.0',
     })
 
     expect(() => readOpencodeSdkPin(pkgPath)).toThrow(/not listed in/)
@@ -114,8 +120,8 @@ describe('readOpencodeSdkPin', () => {
   test('throws "must be an exact version" when the sdk entry is a range', () => {
     const dir = makeTempDir()
     const pkgPath = writeDevDependencies(dir, {
-      '@opencode-ai/sdk': '^9.9.0',
-      '@opencode-ai/plugin': '9.9.0',
+      '@opencode-ai/sdk': '^9999.0.0',
+      '@opencode-ai/plugin': '9999.0.0',
     })
 
     expect(() => readOpencodeSdkPin(pkgPath)).toThrow(
@@ -128,21 +134,21 @@ describe('readOpencodeDevDependencyPins', () => {
   test('returns matching sdk and plugin devDependency versions', () => {
     const dir = makeTempDir()
     const pkgPath = writeDevDependencies(dir, {
-      '@opencode-ai/sdk': '9.9.1',
-      '@opencode-ai/plugin': '9.9.1',
+      '@opencode-ai/sdk': '9999.0.1',
+      '@opencode-ai/plugin': '9999.0.1',
     })
 
     expect(readOpencodeDevDependencyPins(pkgPath)).toEqual({
-      sdk: '9.9.1',
-      plugin: '9.9.1',
+      sdk: '9999.0.1',
+      plugin: '9999.0.1',
     })
   })
 
   test('the equality check fails when sdk and plugin devDependencies disagree', () => {
     const dir = makeTempDir()
     const pkgPath = writeDevDependencies(dir, {
-      '@opencode-ai/sdk': '9.9.1',
-      '@opencode-ai/plugin': '9.9.0',
+      '@opencode-ai/sdk': '9999.0.1',
+      '@opencode-ai/plugin': '9999.0.0',
     })
 
     const { sdk, plugin } = readOpencodeDevDependencyPins(pkgPath)
@@ -207,12 +213,18 @@ describe('R1: no hardcoded OpenCode pin literal', () => {
     )
 
     if (offenders.length > 0) {
+      const offenderList = offenders
+        .map((file) => path.relative(REPO_ROOT, file))
+        .join(', ')
       throw new Error(
-        `Found the hardcoded OpenCode pin "${pin}" in: ${offenders
-          .map((file) => path.relative(REPO_ROOT, file))
-          .join(
-            ', ',
-          )}. Read it via readOpencodeSdkPin() / readOpencodeDevDependencyPins() from scripts/lib/opencode-pin.ts instead.`,
+        `Found the hardcoded OpenCode pin "${pin}" in: ${offenderList}. ` +
+          'If this code genuinely needs the real pin, read it via ' +
+          'readOpencodeSdkPin() / readOpencodeDevDependencyPins() from ' +
+          'scripts/lib/opencode-pin.ts instead of hardcoding it. If this is ' +
+          'an arbitrary fixture value that never needed to be the real pin (e.g. ' +
+          "a parameterised test helper's `pin` argument), use an unpinnable " +
+          'sentinel version such as 9999.0.0 instead of a realistic-looking ' +
+          'version literal.',
       )
     }
 
