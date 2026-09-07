@@ -1,6 +1,6 @@
 ---
 title: "Host-contract evidence is CI-owned: nobody re-runs the suite by hand"
-module: ".github/workflows/main.yaml host-contract job + scripts/lib/opencode-pin.ts"
+module: ".github/workflows/main.yaml host-contract job + scripts/host-contract-guard.ts + scripts/lib/opencode-pin.ts"
 date: 2026-09-04
 problem_type: workflow_issue
 component: testing_framework
@@ -50,18 +50,16 @@ memoizes. Every fixture-consuming suite wraps it in a memoizing
 `isOpencodeAvailable()` (`tests/integration/fixtures/receipt-workflow-host.ts:199`).
 
 The evidence itself is the required `host-contract` job in
-`.github/workflows/main.yaml:162-407`. It sets
-`SYSTEMATIC_REQUIRE_OPENCODE=1` (`.github/workflows/main.yaml:244`) and runs
-`bun test tests/integration` with a JUnit reporter
-(`.github/workflows/main.yaml:247-249`). `host-contract` is a required entry
-in the `release` job's `needs` (`.github/workflows/main.yaml:475`), so a red
-`host-contract` job blocks release the same way a red `test` or `typecheck`
-job does. For pull requests the job is path-gated on `src/**`, `tests/**`,
-`scripts/**`, `evals/**`, `skills/**`, `agents/**`, `registry/**`,
-`package.json`, `bun.lock`, and the workflow file itself
-(`.github/workflows/main.yaml:182-192`); on push to `main` it always runs. A
-Renovate OpenCode-group bump touches `package.json`, so it always triggers the
-job.
+`.github/workflows/main.yaml`. Its "Run host contract suite" step sets
+`SYSTEMATIC_REQUIRE_OPENCODE=1` and runs `bun test tests/integration` with a
+JUnit reporter. `host-contract` is a required entry in the `release` job's
+`needs` key, so a red `host-contract` job blocks release the same way a red
+`test` or `typecheck` job does. For pull requests the job is path-gated on
+`src/**`, `tests/**`, `scripts/**`, `evals/**`, `skills/**`, `agents/**`,
+`registry/**`, `package.json`, `bun.lock`, and the workflow file itself, via
+the job's "Detect relevant path changes" step; on push to `main` it always
+runs. A Renovate OpenCode-group bump touches `package.json`, so it always
+triggers the job.
 
 ## Guidance
 
@@ -72,13 +70,13 @@ doc, and no background process to babysit — the job already did that, against
 the exact pin the PR proposes, on a clean checkout.
 
 **Green is evidence only when the suite actually ran.** The job has no
-top-level `if:` — gating happens per step, at
-`.github/workflows/main.yaml:198-216` — so on a PR that the path filter
-excludes (a docs-only change, for example) every gated step is skipped and
-the job still reports success. A green check on an unrelated PR is not host
-evidence; it is the job correctly declining to run. This never undermines a
-Renovate OpenCode bump specifically: the filter at
-`.github/workflows/main.yaml:182-192` includes `package.json`, which a pin
+top-level `if:` — gating happens per step, in the job's "Determine whether to
+run the host contract suite" step (`id: gate`) — so on a PR that the path
+filter excludes (a docs-only change, for example) every gated step is skipped
+and the job still reports success. A green check on an unrelated PR is not
+host evidence; it is the job correctly declining to run. This never
+undermines a Renovate OpenCode bump specifically: the path filter in the
+"Detect relevant path changes" step includes `package.json`, which a pin
 bump always touches (and `bun.lock`, which it touches in practice), so that
 PR's `host-contract` green always means the suite ran. The qualifier matters for
 any other PR whose green check might be mistaken for host coverage.
@@ -105,21 +103,24 @@ consequence differs by design:
 
 That module-scope throw covers a missing or mismatched host, but not a
 narrower failure: a single `test.skipIf(...)` inside an otherwise-loaded file
-skipping for an unrelated reason while the job still reports green. The guard
-step at `.github/workflows/main.yaml:259-397` closes that gap. It parses the
-JUnit output and fails the job (`failed = true`, then `process.exit(1)`) on
-any of five independent conditions:
+skipping for an unrelated reason while the job still reports green. The
+host-contract job's "Guard skipped tests and pass floor" step closes that
+gap by running `scripts/host-contract-guard.ts`, a standalone, unit-tested
+script (extracted from an inline heredoc in #949) — not YAML. It parses the
+JUnit output (`parseJUnitXml()`) and fails the job — `evaluate()` returns one
+or more violations, and the script's CLI wrapper exits non-zero — on any of
+five independent conditions:
 
 1. `missingFiles.length > 0` — a known integration test file (the eleven
-   listed in `EXPECTED_SUITE_FILES`, `.github/workflows/main.yaml:282-294`)
+   listed in `scripts/host-contract-guard.ts`'s `EXPECTED_SUITE_FILES`)
    produced no `<testsuite>` entry at all, meaning `bun test` never actually
    ran it.
 2. `unexpected.length > 0` — a skipped test case is outside the exempt set.
 3. `missingExempt.length > 0` — a known-exempt case did **not** skip. The
-   exempt set (`.github/workflows/main.yaml:269-274`, today exactly one
-   entry: the mixed-version test, which stays opt-in because running it
-   would put a fetch of a published `@fro.bot/systematic` release on the
-   path that gates publishing the next one) is bidirectional: it both
+   exempt set (`scripts/host-contract-guard.ts`'s `EXEMPT_SKIPS`, today
+   exactly one entry: the mixed-version test, which stays opt-in because
+   running it would put a fetch of a published `@fro.bot/systematic` release
+   on the path that gates publishing the next one) is bidirectional: it both
    permits that skip and asserts it happens. A future change that enables
    the mixed-version test without pruning the exempt set trips this branch
    instead of silently passing.
@@ -127,7 +128,7 @@ any of five independent conditions:
    captured log at all. This fails independently of the floor below; a log
    with zero parseable summary lines never reaches the floor comparison.
 5. `passCount < PASS_FLOOR` — the parsed pass count is below
-   `PASS_FLOOR = 120` (`.github/workflows/main.yaml:303`).
+   `scripts/host-contract-guard.ts`'s `PASS_FLOOR = 120`.
 
 The combination — module-scope throw for "no host at all", five-way JUnit
 guard for every shape of "host present but the run didn't actually cover
@@ -136,8 +137,9 @@ reachable state for this job. The bidirectional exempt check (condition 3)
 makes that stronger than a permission list would: it is not enough for an
 unexpected skip to be absent, the one expected skip must also be present, so
 an exempt-set entry that silently stops applying is itself a red job.
-Widening the exempt set or lowering the floor means editing the guard script
-inline in the workflow, which is a reviewed diff, not a silent loosening.
+Widening the exempt set or lowering the floor means editing
+`scripts/host-contract-guard.ts`, a reviewed diff with its own unit tests
+(`tests/unit/host-contract-guard.test.ts`), not a silent loosening.
 
 ## Why This Matters
 
