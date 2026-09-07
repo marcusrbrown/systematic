@@ -82,11 +82,17 @@ bugs no offline gate could reach; one of them had passed a full local real-host 
 4. **A green local run on one OS is not evidence for another.** The pid assertion passed 137/137
    on macOS and failed only on Ubuntu. Treat the CI host as its own contract.
 
-5. **When the real-host job finds a bug, pin it with a host-free test.** The host job proves the
-   integration; a unit test protects `main` without a host. Each bug above has one in
-   `tests/unit/receipt-workflow-host.test.ts` (stdin EOF, spawn-thread deadlock, group reap on
-   timeout) or `tests/unit/receipt-workflow-host-no-spawn.test.ts` (no launcher spawn at import).
-   Prove each bidirectionally: fails with the fix reverted, passes with it restored.
+5. **When the real-host job finds a bug, pin it with a host-free test where the mechanism is
+   reachable without a host.** The host job proves the integration; a unit test protects `main`
+   without one. The stdin hang is pinned that way in `tests/unit/receipt-workflow-host.test.ts`,
+   alongside pins for two hazards the same fixture work surfaced (a `Bun.serve` + sync-spawn
+   deadlock on the test thread, and group reaping on timeout) and, in
+   `tests/unit/receipt-workflow-host-no-spawn.test.ts`, the invariant that importing the fixture
+   spawns nothing. The other three bugs are guarded only by the integration tests that fixed
+   them; the bare-binary and `process.emit` classes are pinnable host-free by a source scan over
+   `tests/` (no argv beginning with bare `opencode`; no `process.emit` of a terminal signal),
+   which is queued follow-up. Prove each pin bidirectionally: fails with the fix reverted, passes
+   with it restored.
 
 Diagnostic traps:
 
@@ -154,4 +160,5 @@ under test (Guidance 3) and invoke it directly instead of `process.emit('SIGINT'
   — a positive local result does not identify the mechanism; the macOS pass here is an instance.
 - [Verify installed artifacts, not just build gates](./verify-installed-artifacts-not-just-build-gates-2026-07-18.md)
   — probe runtime channels empirically before designing around them.
-- #935 — moving the job's inline guard script into `scripts/` with tests.
+- [#935](https://github.com/marcusrbrown/systematic/issues/935) — open follow-up: move the job's
+  inline guard script into `scripts/` under lint, typecheck, and unit tests.
