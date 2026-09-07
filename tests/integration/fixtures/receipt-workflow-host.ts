@@ -1042,12 +1042,24 @@ function killProcessGroupSync(pid: number): void {
   }
 }
 
-function isProcessGroupAlive(pid: number): boolean {
+/**
+ * `process.kill(-pid, 0)` throwing is not on its own proof the group is
+ * gone: POSIX `kill(2)` also throws EPERM when the group still exists but
+ * this process lacks permission to signal it -- that means ALIVE, not dead.
+ * Only ESRCH (no such process/group) means dead. For any other or unknown
+ * error code this is a reaper: it must never drop an entry it cannot prove
+ * is actually gone, so it fails CLOSED (treats it as alive) rather than
+ * risk leaking a live `opencode` process group past process exit.
+ */
+export function isProcessGroupAlive(pid: number): boolean {
   try {
     process.kill(-pid, 0)
     return true
-  } catch {
-    return false
+  } catch (error) {
+    if (isRecord(error) && error.code === 'ESRCH') {
+      return false
+    }
+    return true
   }
 }
 

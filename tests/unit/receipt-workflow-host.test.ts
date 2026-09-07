@@ -7,6 +7,7 @@ import {
   assertMixedVersionProbeEvents,
   buildDetachedChildSpawnOptions,
   extractSkillNameFromPrompt,
+  isProcessGroupAlive,
   type ProbeEvent,
   scriptedResponseChunks,
   spawnOpencodeChild,
@@ -690,4 +691,90 @@ describe('stale run-child pid pruning (item 1 regression: grandchild still drain
     expect(stdout).toContain('HAS_LIVE_BEFORE_KILL=true')
     expect(stdout).toContain('HAS_LIVE_AFTER_KILL=false')
   }, 20_000)
+})
+
+// Pin for the EPERM/ESRCH classification fix: `process.kill(-pid, 0)`
+// throwing is not on its own proof a process group is gone. POSIX kill(2)
+// also throws EPERM when the group still EXISTS but this process lacks
+// permission to signal it -- that means alive, not dead. Only ESRCH (no
+// such process/group) means dead. Anything else must fail closed (treated
+// as alive), because this function backs a reaper that must never drop an
+// entry it cannot prove is actually gone.
+//
+// Bidirectional proof: temporarily reverting `isProcessGroupAlive` to its
+// catch-all `catch { return false }` form was confirmed to make both the
+// EPERM and unknown-error-code cases below fail (each expects `true`, the
+// catch-all returns `false`) -- before restoring the fix.
+describe('isProcessGroupAlive error classification (ESRCH vs EPERM vs unknown)', () => {
+  test('a real live process group is reported alive', async () => {
+    const child = spawn('sleep', ['30'], {
+      detached: true,
+      stdio: 'ignore',
+    })
+    const pid = child.pid
+    if (!pid) throw new Error('sleep child did not expose a process id')
+
+    try {
+      // Give the OS a brief moment to finish establishing the group.
+      await Bun.sleep(100)
+      expect(isProcessGroupAlive(pid)).toBe(true)
+    } finally {
+      try {
+        process.kill(-pid, 'SIGKILL')
+      } catch {
+        // best effort
+      }
+    }
+  }, 10_000)
+
+  test('a definitely-dead process group is reported dead (ESRCH)', async () => {
+    const child = spawn('bun', ['-e', 'process.exit(0)'], {
+      detached: true,
+      stdio: 'ignore',
+    })
+    const pid = child.pid
+    if (!pid) throw new Error('child did not expose a process id')
+
+    await new Promise<void>((resolve) => {
+      child.once('exit', () => resolve())
+    })
+    // Give the OS a brief moment to finish reaping the group after exit.
+    await Bun.sleep(300)
+
+    expect(isProcessGroupAlive(pid)).toBe(false)
+  }, 10_000)
+
+  test('EPERM (group exists, not ours to signal) is reported alive', () => {
+    // Simulating a real EPERM target (e.g. a root-owned process group) is
+    // unreliable in CI/sandboxed environments, so this monkey-patches
+    // `process.kill` for the duration of this single assertion only,
+    // restoring it in `finally` immediately after.
+    const originalKill = process.kill
+    process.kill = ((_pid: number, _signal?: string | number) => {
+      const error = new Error('EPERM') as NodeJS.ErrnoException
+      error.code = 'EPERM'
+      throw error
+    }) as typeof process.kill
+
+    try {
+      expect(isProcessGroupAlive(999_999)).toBe(true)
+    } finally {
+      process.kill = originalKill
+    }
+  })
+
+  test('an unknown/unclassified error code fails closed (reported alive)', () => {
+    const originalKill = process.kill
+    process.kill = ((_pid: number, _signal?: string | number) => {
+      const error = new Error('EWEIRD') as NodeJS.ErrnoException
+      error.code = 'EWEIRD'
+      throw error
+    }) as typeof process.kill
+
+    try {
+      expect(isProcessGroupAlive(999_999)).toBe(true)
+    } finally {
+      process.kill = originalKill
+    }
+  })
 })
