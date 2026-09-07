@@ -45,10 +45,10 @@ measurement found.
 
 1. **Measure a scanner's blind spots by planting a violation at every line position.** Insert the
    forbidden literal at each line of each scanned file in turn and assert the scanner reports it
-   every time. A *position* here is one insertion point per line, plus one before the first line
-   and one after the last, so a file of N lines gives N+2 positions. Reading the code found none of
-   the three holes below; this found all of them. Measured at `dbe2b12`, the four allowlisted files
-   gave 0 genuine misses over 402 / 654 / 646 / 661 positions.
+   every time. A *position* is an insertion point in the file, counted so that these four files of
+   400 / 652 / 644 / 659 lines yielded 402 / 654 / 646 / 661 positions; the exact convention lives
+   in the probe, and pinning it is part of landing that probe as a test. Reading the code found
+   none of the three holes below; this found all of them. Measured at `dbe2b12`: 0 genuine misses.
 
    Those counts are a measurement taken at one commit, not a standing property: the files and the
    scanner both change. The probe was run ad hoc, which is its weakness — a technique the reader
