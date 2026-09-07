@@ -1042,12 +1042,30 @@ function killProcessGroupSync(pid: number): void {
   }
 }
 
-function isProcessGroupAlive(pid: number): boolean {
+/**
+ * Only ESRCH (no such process/group) is proof a process group is gone.
+ * Everything else -- including EPERM, which POSIX `kill(2)` throws when
+ * the group still exists but this process lacks permission to signal it
+ * -- is NOT proof of death.
+ */
+export function isKillErrorProofOfDeath(error: unknown): boolean {
+  return isRecord(error) && error.code === 'ESRCH'
+}
+
+/**
+ * `process.kill(-pid, 0)` throwing is not on its own proof the group is
+ * gone -- see `isKillErrorProofOfDeath`. This is a reaper: it must never
+ * drop an entry it cannot prove is actually gone, so any error that isn't
+ * proof of death fails CLOSED (treats it as alive) rather than risk
+ * leaking a live `opencode` process group past process exit. The negative
+ * `-pid` probes the process GROUP, not the single pid.
+ */
+export function isProcessGroupAlive(pid: number): boolean {
   try {
     process.kill(-pid, 0)
     return true
-  } catch {
-    return false
+  } catch (error) {
+    return !isKillErrorProofOfDeath(error)
   }
 }
 
@@ -1064,8 +1082,20 @@ function isProcessGroupAlive(pid: number): boolean {
  * is always live) and leaving a now-stale, recyclable pgid in
  * `killLiveOpencodeHostsSync`'s SIGKILL sweep, which could wrongly signal
  * an unrelated later process holding that recycled pgid. Both call sites
- * below re-probe and prune stale entries before acting, so a late-draining
- * group costs one extra `process.kill(pid, 0)` call, never a stuck entry.
+ * below re-probe and prune stale entries before acting: an entry is
+ * removed only when the group is provably gone (ESRCH from
+ * `process.kill(-pid, 0)`). Two cases are retained instead, for different
+ * reasons. EPERM (group exists, not ours to signal) is retained AND
+ * provably harmless in the sweep: the sweep's own
+ * `process.kill(-pid, 'SIGKILL')` against that same pgid is rejected with
+ * EPERM too and swallowed, so a retained entry never lets this worker
+ * signal a group it has no permission to touch. An unrecognized error
+ * code is retained on the general reaper principle -- never drop an entry
+ * you cannot prove is gone -- though for a valid integer pid with signal
+ * 0, POSIX `kill(2)` yields only EPERM or ESRCH, so this branch is
+ * effectively unreachable; anything else Node could throw here
+ * (`ERR_INVALID_ARG_TYPE`, `ERR_OUT_OF_RANGE`) would be a programming
+ * error, not a runtime process-group state.
  */
 function pruneLiveOpencodeProcesses(): void {
   for (const host of liveOpencodeHosts) {
