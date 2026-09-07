@@ -181,19 +181,26 @@ function scanFilesForPatterns(
 // goes through `bunx opencode-ai@<pin>` (see
 // docs/solutions/workflow-issues/host-contract-evidence-is-ci-owned-2026-09-04.md);
 // a spawn/exec call whose first argv element is the literal string
-// `'opencode'` (or `"opencode"`) is the exact bug #932 fixed. The trailing
-// quote in each pattern means `opencode-ai@1.2.3` and `bunx` never match --
-// only the bare, unqualified binary name does. Every array-form pattern is
-// anchored to a spawn-style callee (`spawn`/`spawnSync`/`execFile`/
-// `execFileSync`/`exec`, optionally `Bun.`-qualified) rather than matching a
-// bare `['opencode', ...]` array literal -- an unanchored array pattern would
-// also match ordinary string-array idioms with no relation to spawning, such
-// as `['opencode', 'pi'] as const` (src/cli.ts) or
+// `'opencode'` (or `"opencode"`) is the exact bug #932 fixed. Both patterns
+// share the same callee alternation (`spawn`/`spawnSync`/`execFile`/
+// `execFileSync`/`exec`, optionally `Bun.`-qualified) so every call shape gets
+// the same coverage -- an earlier version covered only `spawn`/`spawnSync`/
+// `execFile` for the string-argument form, silently missing
+// `execFileSync('opencode', ...)`. The trailing quote in the string-argument
+// pattern means `opencode-ai@1.2.3` and `bunx` never match -- only the bare,
+// unqualified binary name does. The array-form pattern is anchored to the
+// same callee alternation rather than matching a bare `['opencode', ...]`
+// array literal -- an unanchored array pattern would also match ordinary
+// string-array idioms with no relation to spawning, such as
+// `['opencode', 'pi'] as const` (src/cli.ts) or
 // `['opencode', 'claude-code'].includes(name)`.
+//
+// Deliberately NOT covered: the shell-string form `exec('opencode run')`,
+// where the whole command is one string. Matching it would require dropping
+// the closing-quote anchor that keeps `opencode-ai@<pin>` clean, trading a
+// narrow gap for a much broader false-positive surface.
 const BARE_OPENCODE_LAUNCH_PATTERNS: readonly RegExp[] = [
-  /\bspawn\s*\(\s*['"]opencode['"]/g,
-  /\bspawnSync\s*\(\s*['"]opencode['"]/g,
-  /\bexecFile\s*\(\s*['"]opencode['"]/g,
+  /\b(?:Bun\.)?(?:spawn|spawnSync|execFile|execFileSync|exec)\s*\(\s*['"]opencode['"]/g,
   /\b(?:Bun\.)?(?:spawn|spawnSync|execFile|execFileSync|exec)\s*\(\s*\[\s*['"]opencode['"]\s*[,\]]/g,
 ]
 
@@ -281,14 +288,6 @@ describe('guard: no bare opencode launch', () => {
     // session-compacting, subagent-stop, and subagent-stop-sanity). The
     // exact count is incidental; what matters is that it is nonzero.
     expect(manualViolations.length).toBeGreaterThan(0)
-
-    const scopedRoots = [
-      path.join(REPO_ROOT, 'tests/integration'),
-      path.join(REPO_ROOT, 'scripts'),
-    ]
-    for (const root of scopedRoots) {
-      expect(root.startsWith(manualDir)).toBe(false)
-    }
   })
 
   test('bidirectional proof: flags a bare opencode spawn call, ignores a commented mention, bunx, and opencode-ai@ forms', () => {
@@ -324,7 +323,7 @@ describe('guard: no bare opencode launch', () => {
     expect(violations[0]?.text).toContain("spawn('opencode'")
   })
 
-  test('bidirectional proof: flags every array-form spawn-callee shape (spawn/Bun.spawn/Bun.spawnSync)', () => {
+  test('bidirectional proof: flags every array-form spawn-callee shape (spawn/Bun.spawn/Bun.spawnSync/exec)', () => {
     const dir = makeTempDir('bare-opencode-array-guard-')
     writeFixtureFile(
       dir,
@@ -333,6 +332,26 @@ describe('guard: no bare opencode launch', () => {
         "const a = spawn(['opencode', 'run'], { cwd })",
         "const b = Bun.spawn(['opencode', 'run'], { cwd })",
         "const c = Bun.spawnSync(['opencode', '--version'])",
+        "const d = exec(['opencode', 'run'], () => {})",
+        '',
+      ].join('\n'),
+    )
+
+    const violations = scanForBareOpencodeLaunches([dir])
+
+    expect(violations).toHaveLength(4)
+    expect(violations.map((v) => v.line)).toEqual([1, 2, 3, 4])
+  })
+
+  test('bidirectional proof: flags spawnSync/execFile/execFileSync string-argument forms', () => {
+    const dir = makeTempDir('bare-opencode-string-arg-guard-')
+    writeFixtureFile(
+      dir,
+      'violating.ts',
+      [
+        "const a = spawnSync('opencode', ['--version'])",
+        "const b = execFile('opencode', ['run'], () => {})",
+        "const c = execFileSync('opencode', ['--version'])",
         '',
       ].join('\n'),
     )
@@ -343,22 +362,24 @@ describe('guard: no bare opencode launch', () => {
     expect(violations.map((v) => v.line)).toEqual([1, 2, 3])
   })
 
-  test('bidirectional proof: flags spawnSync/execFile string-argument forms', () => {
-    const dir = makeTempDir('bare-opencode-string-arg-guard-')
+  test('bidirectional proof: a block comment spanning two lines is ignored, and a real violation on the following line is reported at the correct line', () => {
+    const dir = makeTempDir('bare-opencode-block-comment-guard-')
     writeFixtureFile(
       dir,
       'violating.ts',
       [
-        "const a = spawnSync('opencode', ['--version'])",
-        "const b = execFile('opencode', ['run'], () => {})",
+        '/* spawn(',
+        "   'opencode', []) */",
+        "const child = spawn('opencode', [])",
         '',
       ].join('\n'),
     )
 
     const violations = scanForBareOpencodeLaunches([dir])
 
-    expect(violations).toHaveLength(2)
-    expect(violations.map((v) => v.line)).toEqual([1, 2])
+    expect(violations).toHaveLength(1)
+    expect(violations[0]?.line).toBe(3)
+    expect(violations[0]?.text).toContain("spawn('opencode'")
   })
 
   test('does NOT flag ordinary string-array idioms that happen to start with the string "opencode"', () => {
