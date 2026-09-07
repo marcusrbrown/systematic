@@ -238,6 +238,8 @@ describe('R1: no hardcoded OpenCode pin literal', () => {
  * collide with the real pin the way a realistic-looking literal can.
  */
 const SENTINEL_PREFIX = '9999.'
+/** Anchored so a version merely *containing* "9999." isn't mistaken for one that starts with it. */
+const SENTINEL_PATTERN = /^9999\./
 
 /**
  * Files whose OpenCode-shaped version literals are, by design, always
@@ -358,12 +360,24 @@ function tryConsumeLineComment(source: string, i: number): number | null {
   return end === -1 ? source.length : end
 }
 
+/**
+ * A `'` or `"` string literal cannot span a real newline in JS/TS (an
+ * unescaped line break inside one is a syntax error); a backtick template
+ * literal can. This asymmetry is what bounds the blast radius of a
+ * mis-detected `'`/`"` open quote -- whatever caused the tokenizer to think
+ * a quote opened a string here (a `//` inside an unrelated string, an
+ * apostrophe in a comment, an unrecognised regex position, or a cause not
+ * yet found), the resulting phantom span can never extend past the end of
+ * the current line, so at most one line's real content is ever lost.
+ */
 function tryConsumeStringLiteral(source: string, i: number): number | null {
   const quote = source[i]
   if (quote !== "'" && quote !== '"' && quote !== '`') return null
+  const spansNewlines = quote === '`'
   const n = source.length
   let j = i + 1
   while (j < n && source[j] !== quote) {
+    if (!spansNewlines && source[j] === '\n') return null
     j += source[j] === '\\' ? 2 : 1
   }
   return Math.min(j + 1, n) // consume the closing quote, if the string is well-formed
@@ -459,7 +473,7 @@ function scanSpanForVersions(
 
   for (const versionMatch of span.text.matchAll(versionPattern)) {
     const literal = versionMatch[0].replaceAll('\\', '')
-    if (literal.startsWith(SENTINEL_PREFIX)) continue
+    if (SENTINEL_PATTERN.test(literal)) continue
 
     const absoluteIndex = span.start + (versionMatch.index ?? 0)
     const lineNumber = content.slice(0, absoluteIndex).split('\n').length
@@ -569,6 +583,76 @@ describe('R2: fixture version literals stay in the unpinnable sentinel range', (
         file: 'tests/unit/eval-contract.test.ts',
         line: 2,
         literal: SYNTHETIC_EXEMPT_VERSION,
+      },
+    ])
+  })
+
+  // These three tests pin the exact hazards that broke this scanner's first
+  // two designs (see tokenizeCodeSpans's doc comment), plus the newline
+  // bound added to contain any hazard neither of us has found yet. They are
+  // the durable regression record: if any of these three starts failing, a
+  // future edit has reopened a real blindness, not a cosmetic change.
+
+  test('a // inside an earlier string does not blind the scanner to a version on a later line', () => {
+    const violations = findFixtureVersionLiteralViolations([
+      {
+        file: 'synthetic.test.ts',
+        content:
+          "const hazard = '//host/share/path'\n" +
+          `const expectedVersion = '${SYNTHETIC_REALISTIC_VERSION}'\n`,
+      },
+    ])
+
+    expect(violations).toEqual([
+      {
+        file: 'synthetic.test.ts',
+        line: 2,
+        literal: SYNTHETIC_REALISTIC_VERSION,
+      },
+    ])
+  })
+
+  test('a contraction apostrophe in comment prose does not open a phantom string that blinds a later version', () => {
+    const violations = findFixtureVersionLiteralViolations([
+      {
+        file: 'synthetic.test.ts',
+        content:
+          "// This suite's helper doesn't spawn a real process.\n" +
+          `const expectedVersion = '${SYNTHETIC_REALISTIC_VERSION}'\n`,
+      },
+    ])
+
+    expect(violations).toEqual([
+      {
+        file: 'synthetic.test.ts',
+        line: 2,
+        literal: SYNTHETIC_REALISTIC_VERSION,
+      },
+    ])
+  })
+
+  test('an apostrophe inside a regex literal in an unrecognised position cannot blind past the current line', () => {
+    // /don't/ here sits after `&&`, not after one of
+    // REGEX_LITERAL_PRECEDING_CHARS, so it is not recognised as a regex
+    // literal -- the apostrophe inside it is exactly the kind of
+    // mis-detected quote the newline bound on tryConsumeStringLiteral
+    // exists to contain. Without that bound, the phantom string it opens
+    // would search past the end of this line for a closing quote and could
+    // swallow the real version literal below.
+    const violations = findFixtureVersionLiteralViolations([
+      {
+        file: 'synthetic.test.ts',
+        content:
+          "if (a && /don't/.test(b)) {}\n" +
+          `const expectedVersion = '${SYNTHETIC_REALISTIC_VERSION}'\n`,
+      },
+    ])
+
+    expect(violations).toEqual([
+      {
+        file: 'synthetic.test.ts',
+        line: 2,
+        literal: SYNTHETIC_REALISTIC_VERSION,
       },
     ])
   })
