@@ -38,6 +38,7 @@ import {
   parseProbeEvent,
   REPO_ROOT,
   runOpencode,
+  spawnOpencodeChild,
   TIMEOUT_MS,
 } from './fixtures/receipt-workflow-host.js'
 
@@ -789,13 +790,19 @@ describe.skipIf(!isOpencodeAvailable())('opencode integration', () => {
   )
 })
 
-/** Model-free `opencode debug config` invocation, isolated the same way as `runOpencode`. */
-function runOpencodeDebugConfig(
+/**
+ * Model-free `opencode debug config` invocation, isolated the same way as
+ * `runOpencode`. Routed through `spawnOpencodeChild` (not `Bun.spawnSync`)
+ * for the same reason `runOpencode` is: `Bun.spawnSync` signals only the
+ * direct `bunx` process on timeout, leaving a `opencode-ai` grandchild
+ * orphaned; `spawnOpencodeChild` reaps the whole process group instead.
+ */
+async function runOpencodeDebugConfig(
   fixture: IsolatedFixture,
   configContent: string,
-): OpencodeResult {
+): Promise<OpencodeResult> {
   const childEnv = buildIsolatedOpencodeEnv(fixture, configContent)
-  const result = Bun.spawnSync(
+  return spawnOpencodeChild(
     [
       'bunx',
       `opencode-ai@${EXACT_OPENCODE_VERSION}`,
@@ -805,13 +812,8 @@ function runOpencodeDebugConfig(
       '--log-level',
       'ERROR',
     ],
-    { cwd: fixture.projectDir, env: childEnv, timeout: TIMEOUT_MS },
+    { cwd: fixture.projectDir, env: childEnv, timeoutMs: TIMEOUT_MS },
   )
-  return {
-    stdout: result.stdout.toString(),
-    stderr: result.stderr.toString(),
-    exitCode: result.exitCode ?? -1,
-  }
 }
 
 // Requires real `tar` and symlink semantics for artifact extraction; POSIX only.
@@ -886,7 +888,7 @@ describe.skipIf(!isOpencodeAvailable() || process.platform === 'win32')(
 
     test(
       'packaged plugin rejects an unrecognized disabled_skills name, model-free',
-      () => {
+      async () => {
         const { pluginUrl } = extractPackagedPlugin(fixture)
         fs.mkdirSync(path.join(fixture.projectDir, '.opencode'), {
           recursive: true,
@@ -897,7 +899,7 @@ describe.skipIf(!isOpencodeAvailable() || process.platform === 'win32')(
         )
         const configContent = JSON.stringify({ plugin: [pluginUrl] })
 
-        const result = runOpencodeDebugConfig(fixture, configContent)
+        const result = await runOpencodeDebugConfig(fixture, configContent)
 
         // OpenCode 1.17.18 host contract: plugin-factory rejections are
         // caught and logged, hooks omitted, host exits 0
