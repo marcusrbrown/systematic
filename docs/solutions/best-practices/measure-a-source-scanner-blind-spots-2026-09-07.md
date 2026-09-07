@@ -45,8 +45,15 @@ measurement found.
 
 1. **Measure a scanner's blind spots by planting a violation at every line position.** Insert the
    forbidden literal at each line of each scanned file in turn and assert the scanner reports it
-   every time. Reading the code found none of the three holes below; this found all of them. Final
-   state across the four allowlisted files: 0 genuine misses over 402 / 654 / 646 / 661 positions.
+   every time. A *position* here is one insertion point per line, plus one before the first line
+   and one after the last, so a file of N lines gives N+2 positions. Reading the code found none of
+   the three holes below; this found all of them. Measured at `dbe2b12`, the four allowlisted files
+   gave 0 genuine misses over 402 / 654 / 646 / 661 positions.
+
+   Those counts are a measurement taken at one commit, not a standing property: the files and the
+   scanner both change. The probe was run ad hoc, which is its weakness — a technique the reader
+   cannot re-run is a technique they will not use. Prefer landing the probe as a test so coverage
+   is re-proven on every change rather than asserted from a snapshot.
 
 2. **Prefer a structural bound over another heuristic patch.** A `'` or `"` string cannot span a
    newline in JS/TS, so an unterminated string ends at the line break
@@ -115,8 +122,11 @@ existed to skip comment prose. Measured on a draft: 166–580 missed positions, 
 in ordinary prose (`doesn't`) opens a phantom string span. The same desync class, arrived at from
 the opposite direction.
 
-The shipped design is a single-pass tokenizer plus the newline bound from Guidance 2, with three
-regression tests pinning both hazards and the bound (`tests/unit/opencode-pin.test.ts:638`).
+The shipped design keeps comment awareness — `tryConsumeLineComment` and `tryConsumeBlockComment`
+remain — but as a single pass over the source rather than a separate stripping pass, plus the
+newline bound from Guidance 2. Three regression tests pin both hazards and the bound
+(`tests/unit/opencode-pin.test.ts:638`). What was removed was the two-pass stripper, not comment
+handling itself.
 
 ## Related
 
