@@ -231,3 +231,83 @@ describe('R1: no hardcoded OpenCode pin literal', () => {
     expect(offenders).toEqual([])
   })
 })
+
+describe('R2: fixture pin literals stay in the unpinnable sentinel range', () => {
+  /**
+   * R1 only forbids the *current* real pin literal, so a fixture using a
+   * different realistic-looking version (the exact failure mode this file's
+   * git history already hit once in PR #928, and again via PR #944) still
+   * passes R1 today and only breaks later, once a future Renovate bump
+   * reaches that literal. R2 closes that gap by refusing to let those
+   * fixture files use anything other than an unpinnable "9999.x" sentinel
+   * for an OpenCode-shaped version in the first place, so there is no
+   * literal left for a future pin to ever collide with.
+   */
+  const SENTINEL_PREFIX = '9999.'
+
+  /**
+   * Files whose OpenCode-shaped version literals are, by design, always
+   * arbitrary fixture values -- never a value that is compared against the
+   * real pin. This is deliberately an explicit allowlist rather than every
+   * file R1 scans: most files under scripts/ and tests/ never mention an
+   * OpenCode version at all, and some legitimately need the real one (e.g.
+   * tests/integration/eval-runner.test.ts reads it via
+   * `EXPECTED_OPENCODE_VERSION`) or a real historical reference in a
+   * comment (e.g. tests/integration/opencode.test.ts's "OpenCode 1.17.18
+   * host contract" note) -- see this repo's PR #947 sweep for the full
+   * accounting of what was and wasn't sentinel-ised and why.
+   */
+  const ALLOWLISTED_FIXTURE_FILES = [
+    'tests/unit/opencode-availability.test.ts',
+    'tests/unit/eval-contract.test.ts',
+    'tests/unit/eval-redaction.test.ts',
+    'tests/unit/opencode-pin.test.ts',
+  ]
+
+  /**
+   * Matches an OpenCode-shaped version literal only where it appears
+   * immediately after a marker that makes it a pin/version *value* --
+   * `pin:`, `opencodeVersion:`, `sdk:`/`plugin:` (bare or as a quoted
+   * `@opencode-ai/sdk`/`@opencode-ai/plugin` devDependency key),
+   * `opencode-ai@`, or a `SENTINEL_PIN =` / `SENTINEL_MISMATCH_PIN =`
+   * constant declaration -- rather than banning every `\d+\.\d+\.\d+`
+   * literal in the file. A blanket ban would false-positive on unrelated
+   * version fields these same fixture files legitimately contain, e.g.
+   * eval-contract.test.ts's `packageVersion: '1.2.3'` for the
+   * @fro.bot/systematic package (a different versioning domain entirely).
+   */
+  const OPENCODE_VERSION_CONTEXT_PATTERN =
+    /(?:\bpin\s*:\s*|\bopencodeVersion\s*:\s*|\bsdk\s*:\s*|\bplugin\s*:\s*|'@opencode-ai\/(?:sdk|plugin)'\s*:\s*|opencode-ai@|\bSENTINEL_(?:PIN|MISMATCH_PIN)\s*=\s*)['"]?\^?(\d+\.\d+\.\d+)/g
+
+  test('every OpenCode-shaped version literal in the allowlisted fixture files uses the 9999.x sentinel range', () => {
+    const offenders: string[] = []
+
+    for (const relativePath of ALLOWLISTED_FIXTURE_FILES) {
+      const filePath = path.join(REPO_ROOT, relativePath)
+      const content = fs.readFileSync(filePath, 'utf8')
+      const pattern = new RegExp(OPENCODE_VERSION_CONTEXT_PATTERN.source, 'g')
+      let match: RegExpExecArray | null
+      // biome-ignore lint/suspicious/noAssignInExpressions: standard exec-loop idiom
+      while ((match = pattern.exec(content)) !== null) {
+        const version = match[1]
+        if (version === undefined || version.startsWith(SENTINEL_PREFIX)) {
+          continue
+        }
+        const line = content.slice(0, match.index).split('\n').length
+        offenders.push(`${relativePath}:${line} ("${version}")`)
+      }
+    }
+
+    if (offenders.length > 0) {
+      throw new Error(
+        'Found a realistic-looking OpenCode version literal outside the ' +
+          `${SENTINEL_PREFIX}x sentinel range in: ${offenders.join(', ')}. ` +
+          'These fixture files never validate against the real OpenCode pin, ' +
+          `so use an unpinnable sentinel version (e.g. "${SENTINEL_PREFIX}0.0") ` +
+          'instead of a realistic-looking version literal.',
+      )
+    }
+
+    expect(offenders).toEqual([])
+  })
+})
