@@ -41,7 +41,10 @@ function validResult(): Record<string, unknown> {
     normalizedClock: '2026-08-13T00:00:00.000Z',
     assertionIds: ['bootstrap-observed'],
     identity: {
-      opencodeVersion: '1.18.16',
+      // Unpinnable sentinel: see tests/unit/opencode-availability.test.ts
+      // for why fixture identity data uses a version that can never be a
+      // real published opencode-ai release.
+      opencodeVersion: '9999.0.0',
       opencodeBuildId: 'build-002',
       probeId: 'probe-opencode-v1',
       probeDigest: 'a'.repeat(64),
