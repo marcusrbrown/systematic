@@ -24,13 +24,6 @@ interface SourceViolation {
   readonly text: string
 }
 
-/**
- * Replaces comments with whitespace (preserving newlines and therefore line
- * numbers) while leaving string/template literal contents untouched, so a
- * scan for a literal like `'opencode'` inside a call expression does not
- * false-positive on the same text appearing inside a `//` or `/* *\/`
- * comment.
- */
 function consumeLineComment(
   source: string,
   start: number,
@@ -84,6 +77,20 @@ function consumeStringLiteral(
   return { next: i, text }
 }
 
+/**
+ * Replaces comments with whitespace (preserving newlines and therefore line
+ * numbers) while leaving string/template literal contents untouched, so a
+ * scan for a literal like `'opencode'` inside a call expression does not
+ * false-positive on the same text appearing inside a `//` or `/* *\/`
+ * comment.
+ *
+ * Known limitation: this is a character-class tokenizer, not a real
+ * lexer -- it does not track regex literals, so a `/` inside a regex
+ * literal such as `/opencode\//` could be misread as a comment opener.
+ * None of the patterns below scan for anything resembling a regex
+ * literal, so this has not produced a false positive in practice; treat
+ * it as a documented limitation rather than something to fix here.
+ */
 function stripComments(source: string): string {
   let result = ''
   let i = 0
@@ -127,7 +134,7 @@ function collectTsFiles(roots: readonly string[]): string[] {
   for (const root of roots) {
     files.push(
       ...walkDir(root, {
-        maxDepth: 20,
+        maxDepth: Number.MAX_SAFE_INTEGER,
         filter: (entry) =>
           !entry.isDirectory &&
           entry.path.endsWith('.ts') &&
@@ -176,14 +183,18 @@ function scanFilesForPatterns(
 // a spawn/exec call whose first argv element is the literal string
 // `'opencode'` (or `"opencode"`) is the exact bug #932 fixed. The trailing
 // quote in each pattern means `opencode-ai@1.2.3` and `bunx` never match --
-// only the bare, unqualified binary name does.
+// only the bare, unqualified binary name does. Every array-form pattern is
+// anchored to a spawn-style callee (`spawn`/`spawnSync`/`execFile`/
+// `execFileSync`/`exec`, optionally `Bun.`-qualified) rather than matching a
+// bare `['opencode', ...]` array literal -- an unanchored array pattern would
+// also match ordinary string-array idioms with no relation to spawning, such
+// as `['opencode', 'pi'] as const` (src/cli.ts) or
+// `['opencode', 'claude-code'].includes(name)`.
 const BARE_OPENCODE_LAUNCH_PATTERNS: readonly RegExp[] = [
   /\bspawn\s*\(\s*['"]opencode['"]/g,
   /\bspawnSync\s*\(\s*['"]opencode['"]/g,
-  /\bBun\.spawn\s*\(\s*\[\s*['"]opencode['"]/g,
-  /\bBun\.spawnSync\s*\(\s*\[\s*['"]opencode['"]/g,
   /\bexecFile\s*\(\s*['"]opencode['"]/g,
-  /\[\s*['"]opencode['"]\s*,/g,
+  /\b(?:Bun\.)?(?:spawn|spawnSync|execFile|execFileSync|exec)\s*\(\s*\[\s*['"]opencode['"]\s*[,\]]/g,
 ]
 
 function scanForBareOpencodeLaunches(
@@ -258,11 +269,18 @@ describe('guard: no bare opencode launch', () => {
 
   test('tests/manual/ is intentionally excluded from the bare opencode launch guard', () => {
     // tests/manual/ hosts human-run probes that intentionally invoke the
-    // developer's own opencode on PATH, not the pinned bunx launcher. This
-    // is a deliberate exception, documented here and in the guard test
-    // above so a future reader does not "fix" the exclusion away.
+    // developer's own opencode on PATH, not the pinned bunx launcher --
+    // this is a load-bearing assertion, not a tautology: it proves the
+    // scanner WOULD flag tests/manual/ if the real guard's roots included
+    // it, which is exactly why the real guard above deliberately omits it.
     const manualDir = path.join(REPO_ROOT, 'tests/manual')
     expect(fs.existsSync(manualDir)).toBe(true)
+
+    const manualViolations = scanForBareOpencodeLaunches([manualDir])
+    // Four human-run probes spawn a bare 'opencode' today (companion-aware,
+    // session-compacting, subagent-stop, and subagent-stop-sanity). The
+    // exact count is incidental; what matters is that it is nonzero.
+    expect(manualViolations.length).toBeGreaterThan(0)
 
     const scopedRoots = [
       path.join(REPO_ROOT, 'tests/integration'),
@@ -306,18 +324,66 @@ describe('guard: no bare opencode launch', () => {
     expect(violations[0]?.text).toContain("spawn('opencode'")
   })
 
-  test('bidirectional proof: flags the array-form first-element case', () => {
+  test('bidirectional proof: flags every array-form spawn-callee shape (spawn/Bun.spawn/Bun.spawnSync)', () => {
     const dir = makeTempDir('bare-opencode-array-guard-')
     writeFixtureFile(
       dir,
       'violating.ts',
-      ["const child = Bun.spawn(['opencode', 'run'], { cwd })", ''].join('\n'),
+      [
+        "const a = spawn(['opencode', 'run'], { cwd })",
+        "const b = Bun.spawn(['opencode', 'run'], { cwd })",
+        "const c = Bun.spawnSync(['opencode', '--version'])",
+        '',
+      ].join('\n'),
     )
 
     const violations = scanForBareOpencodeLaunches([dir])
 
-    expect(violations).toHaveLength(1)
-    expect(violations[0]?.line).toBe(1)
+    expect(violations).toHaveLength(3)
+    expect(violations.map((v) => v.line)).toEqual([1, 2, 3])
+  })
+
+  test('bidirectional proof: flags spawnSync/execFile string-argument forms', () => {
+    const dir = makeTempDir('bare-opencode-string-arg-guard-')
+    writeFixtureFile(
+      dir,
+      'violating.ts',
+      [
+        "const a = spawnSync('opencode', ['--version'])",
+        "const b = execFile('opencode', ['run'], () => {})",
+        '',
+      ].join('\n'),
+    )
+
+    const violations = scanForBareOpencodeLaunches([dir])
+
+    expect(violations).toHaveLength(2)
+    expect(violations.map((v) => v.line)).toEqual([1, 2])
+  })
+
+  test('does NOT flag ordinary string-array idioms that happen to start with the string "opencode"', () => {
+    const dir = makeTempDir('bare-opencode-negative-guard-')
+    writeFixtureFile(
+      dir,
+      'benign.ts',
+      [
+        "const harnesses = ['opencode', 'pi'] as const",
+        '',
+        'function isKnown(name: string): boolean {',
+        "  return ['opencode', 'claude-code'].includes(name)",
+        '}',
+        '',
+        'const HARNESSES = [',
+        "  'opencode',",
+        "  'pi',",
+        ']',
+        '',
+      ].join('\n'),
+    )
+
+    const violations = scanForBareOpencodeLaunches([dir])
+
+    expect(violations).toEqual([])
   })
 })
 
@@ -348,21 +414,29 @@ describe('guard: no process.emit of a terminal signal (SIGINT/SIGTERM/SIGHUP/SIG
     expect(violations).toEqual([])
   })
 
-  test('does not trip on the documented prose mention in tests/integration/eval-runner.test.ts', () => {
-    const eventRunnerPath = path.join(
-      REPO_ROOT,
-      'tests/integration/eval-runner.test.ts',
+  test('does not trip on a comment-only prose mention of process.emit(SIGINT)', () => {
+    // The real-tree assertion above already proves this guard is clean on
+    // the whole tests/ tree, including the actual comment-only mention at
+    // tests/integration/eval-runner.test.ts (~:2336). This fixture proves
+    // the underlying mechanism directly instead of coupling to that file's
+    // exact wording, which could change independently of this guard.
+    const dir = makeTempDir('process-emit-comment-only-guard-')
+    writeFixtureFile(
+      dir,
+      'benign.test.ts',
+      [
+        "// ... a real `process.emit('SIGINT')` would reach every listener",
+        '// in this bun test worker, so this is prose, not a call.',
+        "test('is unaffected by the comment above', () => {",
+        '  expect(true).toBe(true)',
+        '})',
+        '',
+      ].join('\n'),
     )
-    const source = fs.readFileSync(eventRunnerPath, 'utf8')
-    expect(source).toContain("process.emit('SIGINT')")
 
-    const violations = scanForProcessEmitSignals([
-      path.join(REPO_ROOT, 'tests/integration'),
-    ])
-    const eventRunnerViolations = violations.filter(
-      (v) => v.file === eventRunnerPath,
-    )
-    expect(eventRunnerViolations).toEqual([])
+    const violations = scanForProcessEmitSignals([dir])
+
+    expect(violations).toEqual([])
   })
 
   test('bidirectional proof: flags process.emit of SIGINT/SIGTERM, ignores a commented mention', () => {
