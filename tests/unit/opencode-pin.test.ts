@@ -232,82 +232,264 @@ describe('R1: no hardcoded OpenCode pin literal', () => {
   })
 })
 
-describe('R2: fixture pin literals stay in the unpinnable sentinel range', () => {
+/**
+ * The unpinnable sentinel range: no real `opencode-ai` release will ever
+ * reach a major version this high, so a literal in this range can never
+ * collide with the real pin the way a realistic-looking literal can.
+ */
+const SENTINEL_PREFIX = '9999.'
+
+/**
+ * Files whose OpenCode-shaped version literals are, by design, always
+ * arbitrary fixture values -- never a value that is compared against the
+ * real pin. probeOpencodeAvailability, resolveBunInstallCacheDir, and
+ * readOpencodeSdkPin/readOpencodeDevDependencyPins all take the version as a
+ * parameter or read it from a temp package.json, so nothing in these files
+ * needs the real pin. This is deliberately an explicit allowlist rather than
+ * every file R1 scans: most files under scripts/ and tests/ never mention an
+ * OpenCode version at all, and some legitimately need the real one (e.g.
+ * tests/integration/eval-runner.test.ts reads it via
+ * `EXPECTED_OPENCODE_VERSION`) or a real historical reference in a comment.
+ */
+const ALLOWLISTED_FIXTURE_FILES = [
+  'tests/unit/opencode-availability.test.ts',
+  'tests/unit/eval-contract.test.ts',
+  'tests/unit/eval-redaction.test.ts',
+  'tests/unit/opencode-pin.test.ts',
+]
+
+interface FixtureVersionLiteralViolation {
+  file: string
+  line: number
+  literal: string
+}
+
+interface FixtureFileContent {
+  file: string
+  content: string
+}
+
+interface VersionExemption {
+  file: string
+  literal: string
   /**
-   * R1 only forbids the *current* real pin literal, so a fixture using a
-   * different realistic-looking version (the exact failure mode this file's
-   * git history already hit once in PR #928, and again via PR #944) still
-   * passes R1 today and only breaks later, once a future Renovate bump
-   * reaches that literal. R2 closes that gap by refusing to let those
-   * fixture files use anything other than an unpinnable "9999.x" sentinel
-   * for an OpenCode-shaped version in the first place, so there is no
-   * literal left for a future pin to ever collide with.
+   * A substring that must appear on the offending line for this exemption to
+   * apply, so it cannot silently cover a *different* occurrence of the same
+   * literal in a different context in that file.
    */
-  const SENTINEL_PREFIX = '9999.'
+  contextSubstring: string
+  reason: string
+}
 
-  /**
-   * Files whose OpenCode-shaped version literals are, by design, always
-   * arbitrary fixture values -- never a value that is compared against the
-   * real pin. This is deliberately an explicit allowlist rather than every
-   * file R1 scans: most files under scripts/ and tests/ never mention an
-   * OpenCode version at all, and some legitimately need the real one (e.g.
-   * tests/integration/eval-runner.test.ts reads it via
-   * `EXPECTED_OPENCODE_VERSION`) or a real historical reference in a
-   * comment (e.g. tests/integration/opencode.test.ts's "OpenCode 1.17.18
-   * host contract" note) -- see this repo's PR #947 sweep for the full
-   * accounting of what was and wasn't sentinel-ised and why.
-   */
-  const ALLOWLISTED_FIXTURE_FILES = [
-    'tests/unit/opencode-availability.test.ts',
-    'tests/unit/eval-contract.test.ts',
-    'tests/unit/eval-redaction.test.ts',
-    'tests/unit/opencode-pin.test.ts',
-  ]
+// Built from parts rather than as a single quoted literal, so this exemption
+// entry's own value doesn't itself read as a version literal to R2's scan of
+// this file (this file is on R2's own allowlist below).
+const EVAL_CONTRACT_PACKAGE_VERSION = ['1', '2', '3'].join('.')
 
-  /**
-   * Matches an OpenCode-shaped version literal only where it appears
-   * immediately after a marker that makes it a pin/version *value* --
-   * `pin:`, `opencodeVersion:`, `sdk:`/`plugin:` (bare or as a quoted
-   * `@opencode-ai/sdk`/`@opencode-ai/plugin` devDependency key),
-   * `opencode-ai@`, or a `SENTINEL_PIN =` / `SENTINEL_MISMATCH_PIN =`
-   * constant declaration -- rather than banning every `\d+\.\d+\.\d+`
-   * literal in the file. A blanket ban would false-positive on unrelated
-   * version fields these same fixture files legitimately contain, e.g.
-   * eval-contract.test.ts's `packageVersion: '1.2.3'` for the
-   * @fro.bot/systematic package (a different versioning domain entirely).
-   */
-  const OPENCODE_VERSION_CONTEXT_PATTERN =
-    /(?:\bpin\s*:\s*|\bopencodeVersion\s*:\s*|\bsdk\s*:\s*|\bplugin\s*:\s*|'@opencode-ai\/(?:sdk|plugin)'\s*:\s*|opencode-ai@|\bSENTINEL_(?:PIN|MISMATCH_PIN)\s*=\s*)['"]?\^?(\d+\.\d+\.\d+)/g
+/**
+ * Version-shaped literals in the allowlisted files that are a real version,
+ * just never an OpenCode one -- a different versioning domain entirely.
+ * Every entry needs its own reason; an unexplained exemption is how this
+ * guard rots.
+ */
+const VERSION_EXEMPTIONS: VersionExemption[] = [
+  {
+    file: 'tests/unit/eval-contract.test.ts',
+    literal: EVAL_CONTRACT_PACKAGE_VERSION,
+    contextSubstring: 'packageVersion:',
+    reason:
+      'the installed-provenance fixture for the @fro.bot/systematic package version, unrelated to opencode-ai',
+  },
+]
 
-  test('every OpenCode-shaped version literal in the allowlisted fixture files uses the 9999.x sentinel range', () => {
-    const offenders: string[] = []
+/**
+ * Blanks out every `//` line comment and `/* *\/` block comment, replacing
+ * their characters with spaces (never removing a newline), so line numbers
+ * and column positions in the result line up exactly with the original
+ * source. Doc comments in these files use markdown code spans that can
+ * themselves contain a quoted, version-shaped string purely as prose (this
+ * function's own doc comment is an example) -- scanning comment text with
+ * the same string/regex tokenizer used for real code would misread that
+ * prose as a fixture literal, so comments are removed before tokenizing.
+ */
+function stripComments(source: string): string {
+  const withoutBlockComments = source.replace(/\/\*[\s\S]*?\*\//g, (m) =>
+    m.replace(/[^\n]/g, ' '),
+  )
+  return withoutBlockComments.replace(/\/\/[^\n]*/g, (m) =>
+    ' '.repeat(m.length),
+  )
+}
 
-    for (const relativePath of ALLOWLISTED_FIXTURE_FILES) {
-      const filePath = path.join(REPO_ROOT, relativePath)
-      const content = fs.readFileSync(filePath, 'utf8')
-      const pattern = new RegExp(OPENCODE_VERSION_CONTEXT_PATTERN.source, 'g')
-      let match: RegExpExecArray | null
-      // biome-ignore lint/suspicious/noAssignInExpressions: standard exec-loop idiom
-      while ((match = pattern.exec(content)) !== null) {
-        const version = match[1]
-        if (version === undefined || version.startsWith(SENTINEL_PREFIX)) {
-          continue
-        }
-        const line = content.slice(0, match.index).split('\n').length
-        offenders.push(`${relativePath}:${line} ("${version}")`)
-      }
+// Matches a quoted string or template literal in full.
+const STRING_TOKEN_PATTERN =
+  /'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`/g
+
+// Matches a `/regex/` literal, but only where it appears in a position a
+// regex literal actually can -- immediately (allowing a little whitespace)
+// after `(`, `,`, `=`, or `[` -- so this does not also match a stray
+// division operator.
+const REGEX_TOKEN_PATTERN = /(?<=[(,=[]\s{0,20})\/(?:[^/\\\n]|\\.)+\//g
+
+// Inside an ordinary string/template literal, a version looks like a plain
+// dotted-digit run. Inside a regex literal it is usually written with
+// escaped dots (each dot preceded by a backslash, since a dot is a regex
+// metacharacter), so this tolerates an optional backslash before each dot.
+const VERSION_IN_STRING_PATTERN = /\d+\.\d+\.\d+/g
+const VERSION_IN_REGEX_PATTERN = /\d+\\?\.\d+\\?\.\d+/g
+
+function isExempt(file: string, literal: string, line: string): boolean {
+  return VERSION_EXEMPTIONS.some(
+    (exemption) =>
+      exemption.file === file &&
+      exemption.literal === literal &&
+      line.includes(exemption.contextSubstring),
+  )
+}
+
+function scanSpanForVersions(
+  file: string,
+  content: string,
+  spanStart: number,
+  spanText: string,
+  versionPattern: RegExp,
+  violations: FixtureVersionLiteralViolation[],
+): void {
+  for (const versionMatch of spanText.matchAll(versionPattern)) {
+    const literal = versionMatch[0].replaceAll('\\', '')
+    if (literal.startsWith(SENTINEL_PREFIX)) continue
+
+    const absoluteIndex = spanStart + (versionMatch.index ?? 0)
+    const lineNumber = content.slice(0, absoluteIndex).split('\n').length
+    const lineText = content.split('\n')[lineNumber - 1] ?? ''
+    if (isExempt(file, literal, lineText)) continue
+
+    violations.push({ file, line: lineNumber, literal })
+  }
+}
+
+/**
+ * Pure scanner: given file contents, returns every OpenCode-shaped version
+ * literal that falls outside the unpinnable sentinel range and is not
+ * explicitly exempted. Takes `{ file, content }` pairs (not paths) so it is
+ * directly testable against synthetic content, independent of the real
+ * repository tree -- see the negative-path test below.
+ *
+ * Scans every quoted string, template literal, and regex literal in each
+ * file for a version-shaped run of digits, rather than only literals that
+ * follow a recognised marker like `pin:` or `opencodeVersion:`. A
+ * marker-anchored scan misses exactly the shapes this suite used before its
+ * fixtures were sentinel-ised: a version assigned straight to a
+ * classification field with no `pin`/`opencodeVersion` keyword in sight, a
+ * version embedded partway through a launcher script string, and a version
+ * embedded inside a `.toThrow(/.../ )` regex literal (where it's typically
+ * written with escaped dots) -- none of which sit next to one of those
+ * markers. Deliberately not spelling out a realistic-looking example version
+ * here, for the same reason the rest of this file avoids one: it would
+ * itself become a hardcoded-pin false positive the moment a Renovate bump
+ * reached it.
+ */
+function findFixtureVersionLiteralViolations(
+  files: readonly FixtureFileContent[],
+): FixtureVersionLiteralViolation[] {
+  const violations: FixtureVersionLiteralViolation[] = []
+
+  for (const { file, content } of files) {
+    // Same length and line/column layout as `content`, with comment text
+    // blanked out, so positions found here are also valid offsets into the
+    // original `content` (used below for line-number and exemption lookups).
+    const codeOnly = stripComments(content)
+
+    for (const stringMatch of codeOnly.matchAll(STRING_TOKEN_PATTERN)) {
+      scanSpanForVersions(
+        file,
+        content,
+        stringMatch.index ?? 0,
+        stringMatch[0],
+        VERSION_IN_STRING_PATTERN,
+        violations,
+      )
     }
+    for (const regexMatch of codeOnly.matchAll(REGEX_TOKEN_PATTERN)) {
+      scanSpanForVersions(
+        file,
+        content,
+        regexMatch.index ?? 0,
+        regexMatch[0],
+        VERSION_IN_REGEX_PATTERN,
+        violations,
+      )
+    }
+  }
 
-    if (offenders.length > 0) {
+  return violations
+}
+
+describe('R2: fixture version literals stay in the unpinnable sentinel range', () => {
+  test('every OpenCode-shaped version literal in the allowlisted fixture files uses the 9999.x sentinel range', () => {
+    const files: FixtureFileContent[] = ALLOWLISTED_FIXTURE_FILES.map(
+      (relativePath) => ({
+        file: relativePath,
+        content: fs.readFileSync(path.join(REPO_ROOT, relativePath), 'utf8'),
+      }),
+    )
+    const violations = findFixtureVersionLiteralViolations(files)
+
+    if (violations.length > 0) {
+      const offenderList = violations
+        .map((v) => `${v.file}:${v.line} ("${v.literal}")`)
+        .join(', ')
       throw new Error(
         'Found a realistic-looking OpenCode version literal outside the ' +
-          `${SENTINEL_PREFIX}x sentinel range in: ${offenders.join(', ')}. ` +
+          `${SENTINEL_PREFIX}x sentinel range in: ${offenderList}. ` +
           'These fixture files never validate against the real OpenCode pin, ' +
           `so use an unpinnable sentinel version (e.g. "${SENTINEL_PREFIX}0.0") ` +
           'instead of a realistic-looking version literal.',
       )
     }
 
-    expect(offenders).toEqual([])
+    expect(violations).toEqual([])
+  })
+
+  // Built from parts rather than as a single quoted literal, so this
+  // synthetic "realistic-looking version" used to exercise the scanner below
+  // doesn't itself read as a version literal to R2's own scan of this file.
+  const SYNTHETIC_REALISTIC_VERSION = ['1', '18', '28'].join('.')
+  // Deliberately equal to the real VERSION_EXEMPTIONS entry's literal, so
+  // the second test below exercises that exact exemption.
+  const SYNTHETIC_EXEMPT_VERSION = ['1', '2', '3'].join('.')
+
+  test('the scanner flags a realistic literal with no recognised pin/version keyword nearby', () => {
+    const violations = findFixtureVersionLiteralViolations([
+      {
+        file: 'synthetic.test.ts',
+        content: `const expectedVersion = '${SYNTHETIC_REALISTIC_VERSION}'\n`,
+      },
+    ])
+
+    expect(violations).toEqual([
+      {
+        file: 'synthetic.test.ts',
+        line: 1,
+        literal: SYNTHETIC_REALISTIC_VERSION,
+      },
+    ])
+  })
+
+  test('the scanner respects an exact (file, literal, context) exemption but not the same literal in a different context', () => {
+    const violations = findFixtureVersionLiteralViolations([
+      {
+        file: 'tests/unit/eval-contract.test.ts',
+        content: `    packageVersion: '${SYNTHETIC_EXEMPT_VERSION}',\n    pin: '${SYNTHETIC_EXEMPT_VERSION}',\n`,
+      },
+    ])
+
+    expect(violations).toEqual([
+      {
+        file: 'tests/unit/eval-contract.test.ts',
+        line: 2,
+        literal: SYNTHETIC_EXEMPT_VERSION,
+      },
+    ])
   })
 })
