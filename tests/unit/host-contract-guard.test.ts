@@ -368,6 +368,68 @@ describe('parseJUnitXml entity decoding', () => {
     expect(violations.some((v) => v.kind === 'unexpected-skips')).toBe(true)
     expect(violations.some((v) => v.kind === 'missing-exempt-skips')).toBe(true)
   })
+
+  describe('out-of-range numeric character references (must not crash the guard)', () => {
+    // `String.fromCodePoint` throws a RangeError above 0x10FFFF (the
+    // highest valid Unicode code point) rather than returning a sentinel.
+    // These go through the real exported `parseJUnitXml` entry point, not
+    // a copy of the private `decodeXmlEntities`, so a regression that
+    // reintroduces the crash is caught exactly where a real JUnit report
+    // would trigger it.
+    test('an out-of-range hex reference (&#x110000;) is left as literal text, not thrown', () => {
+      const xml = testsuite(
+        'f',
+        testcase('c', 'broken &#x110000; reference', { skipped: true }),
+      )
+      expect(() => parseJUnitXml(xml)).not.toThrow()
+      const parsed = parseJUnitXml(xml)
+      expect(parsed.skipped).toEqual([
+        { classname: 'c', name: 'broken &#x110000; reference' },
+      ])
+    })
+
+    test('an out-of-range decimal reference (&#9999999999;) is left as literal text, not thrown', () => {
+      const xml = testsuite(
+        'f',
+        testcase('c', 'broken &#9999999999; reference', { skipped: true }),
+      )
+      expect(() => parseJUnitXml(xml)).not.toThrow()
+      const parsed = parseJUnitXml(xml)
+      expect(parsed.skipped).toEqual([
+        { classname: 'c', name: 'broken &#9999999999; reference' },
+      ])
+    })
+
+    test('a non-numeric, non-predefined reference is left as literal text, not thrown', () => {
+      // &nbsp; is a valid HTML entity but not one of the five XML
+      // predefined entities and not numeric, so the regex in
+      // decodeXmlEntities never matches it at all -- included as a
+      // baseline "not decoded, definitely not thrown" case alongside the
+      // numeric out-of-range cases above.
+      const xml = testsuite(
+        'f',
+        testcase('c', 'broken &nbsp; reference', { skipped: true }),
+      )
+      expect(() => parseJUnitXml(xml)).not.toThrow()
+      const parsed = parseJUnitXml(xml)
+      expect(parsed.skipped).toEqual([
+        { classname: 'c', name: 'broken &nbsp; reference' },
+      ])
+    })
+
+    test('valid references still decode correctly alongside the range check', () => {
+      const xml = testsuite(
+        'f',
+        testcase('c', 'valid &lt; and &#60; and &#x3C; all decode', {
+          skipped: true,
+        }),
+      )
+      const parsed = parseJUnitXml(xml)
+      expect(parsed.skipped).toEqual([
+        { classname: 'c', name: 'valid < and < and < all decode' },
+      ])
+    })
+  })
 })
 
 // ---------------------------------------------------------------------------

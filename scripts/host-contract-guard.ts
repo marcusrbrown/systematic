@@ -109,7 +109,18 @@ function decodeXmlEntities(str: string): string {
           const codePoint = entity.startsWith('#x')
             ? Number.parseInt(entity.slice(2), 16)
             : Number.parseInt(entity.slice(1), 10)
-          return Number.isNaN(codePoint)
+          // `String.fromCodePoint` throws a RangeError above 0x10FFFF (the
+          // highest valid Unicode code point) instead of returning a
+          // sentinel, so an out-of-range numeric reference -- malformed
+          // input, not something Bun's own reporter would ever emit -- is
+          // left as the literal source text rather than crashing this
+          // guard. Surrogate-range code points (0xD800-0xDFFF) are
+          // deliberately NOT excluded: `String.fromCodePoint` accepts them
+          // without throwing (producing a lone surrogate in the string,
+          // unlike the stricter validation some Unicode-aware APIs apply),
+          // so there is no crash to prevent, and no test name a real `bun
+          // test` JUnit run could plausibly produce would contain one.
+          return Number.isNaN(codePoint) || codePoint > 0x10ffff
             ? match
             : String.fromCodePoint(codePoint)
         }
