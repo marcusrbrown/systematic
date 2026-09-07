@@ -2341,17 +2341,25 @@ describe('local OpenCode eval runner', () => {
     // diff the listener list before/after installing this test's handler and
     // invoke only the listener `installEvalSignalHandlers` just registered,
     // so unrelated SIGINT listeners elsewhere in the worker are untouched.
-    const priorSigintListeners = new Set(process.listeners('SIGINT'))
-    const removeSignalHandlers = installEvalSignalHandlers()
-    const [installedSigintListener] = process
-      .listeners('SIGINT')
-      .filter((listener) => !priorSigintListeners.has(listener))
-    if (!installedSigintListener) {
-      throw new Error(
-        'installEvalSignalHandlers did not register a SIGINT listener',
-      )
-    }
+    //
+    // Both the install and the listener-capture live inside this `try` (not
+    // before it) so a throw from either still reaches `finally` and calls
+    // `removeSignalHandlers`, instead of leaking the listener for the rest
+    // of this worker's life.
+    let removeSignalHandlers: (() => void) | undefined
     try {
+      const priorSigintListeners = new Set(process.listeners('SIGINT'))
+      removeSignalHandlers = installEvalSignalHandlers()
+      const installedSigintListeners = process
+        .listeners('SIGINT')
+        .filter((listener) => !priorSigintListeners.has(listener))
+      if (installedSigintListeners.length !== 1) {
+        throw new Error(
+          `installEvalSignalHandlers registered ${installedSigintListeners.length} SIGINT listeners, expected exactly 1`,
+        )
+      }
+      const [installedSigintListener] = installedSigintListeners
+
       const result = normalizeResult(
         await runSourceEval({
           caseId: 'bootstrap-loading',
@@ -2386,7 +2394,7 @@ describe('local OpenCode eval runner', () => {
           .filter((entry) => entry.startsWith('systematic-eval-')),
       ).toHaveLength(1)
     } finally {
-      removeSignalHandlers()
+      removeSignalHandlers?.()
       process.exitCode = previousExitCode ?? 0
       fs.rmSync(parentDir, { recursive: true, force: true })
     }

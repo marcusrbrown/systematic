@@ -1,4 +1,6 @@
 import { describe, expect, test } from 'bun:test'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 
 import {
   assertMixedVersionProbeEvents,
@@ -9,6 +11,17 @@ import {
   startScriptedSkillModelServer,
   withScriptedProvider,
 } from '../integration/fixtures/receipt-workflow-host.js'
+
+// Absolute file:// URL to the real fixture source, resolved from THIS file
+// so the isolated child process spawned below (its own fresh module graph,
+// its own empty `process.listeners('SIGINT')`) can `import()` the exact
+// same module under test.
+const FIXTURE_MODULE_URL = pathToFileURL(
+  path.join(
+    import.meta.dirname,
+    '../integration/fixtures/receipt-workflow-host.ts',
+  ),
+).href
 
 const WORKFLOW_OPEN = '<SYSTEMATIC_WORKFLOWS>'
 const WORKFLOW_CLOSE = '</SYSTEMATIC_WORKFLOWS>'
@@ -397,4 +410,103 @@ describe('spawnOpencodeChild timeout path', () => {
     await Bun.sleep(300)
     expect(() => process.kill(grandchildPid, 0)).toThrow()
   }, 15_000)
+})
+
+// Item 6 pinning test: `installTerminalSignalHandlers`'s SIGINT listener
+// must NOT force-exit when nothing is live (this is the fix for the root
+// cause of a spurious full-suite exit 130 -- the handler used to reap and
+// `process.exit(130)` unconditionally, even with nothing to reap), but
+// must still reap-and-exit when something (a registered
+// `spawnOpencodeChild` child, per item 1) is live.
+//
+// Runs entirely inside an isolated `bun -e` child process: that process's
+// own `process.listeners('SIGINT')` starts empty, so the before/after diff
+// below cannot be confused by any other SIGINT listener already installed
+// elsewhere in this bun test worker, and the listener is captured and
+// invoked directly -- never via `process.emit` -- mirroring the technique
+// documented in eval-runner.test.ts's "signal cleanup" test.
+//
+// Bidirectional proof: reverting the `if (!hasLiveOpencodeProcesses())
+// return` early-return in `installTerminalSignalHandlers` makes case A
+// below also reap-and-exit, flipping `CASE_A_EXIT_CALLS` to `1` and
+// `CASE_A_THREW` to `true` -- this test then fails.
+describe('terminal-signal safety net (nothing-live vs something-live)', () => {
+  test('does not force-exit with an empty live set, but reaps and exits with a live child', () => {
+    const script = `
+      const priorSigintListeners = new Set(process.listeners('SIGINT'))
+      const mod = await import(${JSON.stringify(FIXTURE_MODULE_URL)})
+
+      const exitCalls = []
+      const originalExit = process.exit
+      process.exit = (code) => {
+        exitCalls.push(code ?? 0)
+        throw new Error('process.exit stub invoked')
+      }
+
+      // Triggers installTerminalSignalHandlers as a side effect and is
+      // fully awaited, so its pid is evicted before this resolves -- the
+      // live set is empty again by the time case A invokes the listener.
+      await mod.spawnOpencodeChild(['bun', '-e', 'process.exit(0)'], {
+        cwd: process.cwd(),
+        env: { PATH: process.env.PATH ?? '' },
+        timeoutMs: 5000,
+      })
+
+      const installed = process
+        .listeners('SIGINT')
+        .filter((listener) => !priorSigintListeners.has(listener))
+      if (installed.length !== 1) {
+        throw new Error(
+          'expected exactly 1 new SIGINT listener, got ' + installed.length,
+        )
+      }
+      const [listener] = installed
+
+      let threwA = false
+      try {
+        listener()
+      } catch {
+        threwA = true
+      }
+      process.stdout.write('CASE_A_EXIT_CALLS=' + exitCalls.length + '\\n')
+      process.stdout.write('CASE_A_THREW=' + threwA + '\\n')
+
+      // Case B: register one real live child (deliberately not awaited
+      // before invoking the listener), so the reap path has something to
+      // actually kill.
+      const longLived = mod.spawnOpencodeChild(
+        ['bun', '-e', 'setInterval(() => {}, 1000)'],
+        {
+          cwd: process.cwd(),
+          env: { PATH: process.env.PATH ?? '' },
+          timeoutMs: 60000,
+        },
+      )
+      await new Promise((resolve) => setTimeout(resolve, 300))
+
+      let threwB = false
+      try {
+        listener()
+      } catch {
+        threwB = true
+      }
+      process.stdout.write('CASE_B_EXIT_CALLS=' + exitCalls.length + '\\n')
+      process.stdout.write('CASE_B_THREW=' + threwB + '\\n')
+
+      await longLived
+      process.exit = originalExit
+    `
+
+    const result = Bun.spawnSync(['bun', '-e', script], {
+      env: TEST_CHILD_ENV,
+      timeout: 15_000,
+    })
+    const stdout = result.stdout.toString()
+
+    expect(result.exitCode).toBe(0)
+    expect(stdout).toContain('CASE_A_EXIT_CALLS=0')
+    expect(stdout).toContain('CASE_A_THREW=false')
+    expect(stdout).toContain('CASE_B_EXIT_CALLS=1')
+    expect(stdout).toContain('CASE_B_THREW=true')
+  }, 20_000)
 })
