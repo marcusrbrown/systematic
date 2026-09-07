@@ -1,9 +1,11 @@
 import { describe, expect, test } from 'bun:test'
+import { spawn } from 'node:child_process'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 import {
   assertMixedVersionProbeEvents,
+  buildDetachedChildSpawnOptions,
   extractSkillNameFromPrompt,
   type ProbeEvent,
   scriptedResponseChunks,
@@ -502,11 +504,190 @@ describe('terminal-signal safety net (nothing-live vs something-live)', () => {
       timeout: 15_000,
     })
     const stdout = result.stdout.toString()
+    const stderr = result.stderr.toString()
 
-    expect(result.exitCode).toBe(0)
+    // Fails with the harness's own stderr attached: a failure here means the
+    // *harness script* threw or crashed, and without stderr that failure is
+    // otherwise undiagnosable (stdout alone would just show which of the
+    // later CASE_A/CASE_B markers never got written).
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `harness script exited with code ${result.exitCode}: ${stderr}`,
+      )
+    }
     expect(stdout).toContain('CASE_A_EXIT_CALLS=0')
     expect(stdout).toContain('CASE_A_THREW=false')
     expect(stdout).toContain('CASE_B_EXIT_CALLS=1')
     expect(stdout).toContain('CASE_B_THREW=true')
+  }, 20_000)
+})
+
+// Pin for item 2: multi-byte UTF-8 characters can split across chunk
+// boundaries. Without `setEncoding('utf8')`, each `Buffer` arriving on
+// `data` is decoded independently, so an incomplete lead byte in one chunk
+// becomes a replacement character (U+FFFD) instead of being buffered until
+// the rest of the sequence arrives in the next chunk.
+//
+// Bidirectional proof: temporarily removing spawnOpencodeChild's two
+// `setEncoding('utf8')` calls (and reverting its data handlers to
+// `chunk.toString()` on the raw `Buffer`) was confirmed to make this test
+// fail -- `result.stdout` then contains U+FFFD instead of '€' -- before
+// restoring the fix.
+describe('spawnOpencodeChild UTF-8 chunk reassembly (item 2 pin)', () => {
+  test('reassembles a multi-byte character split across two stdout chunks', async () => {
+    // '€' (U+20AC) is 0xE2 0x82 0xAC in UTF-8. Writing the lead byte, then
+    // sleeping, then the two continuation bytes forces two separate `data`
+    // events on the receiving end instead of one coalesced read.
+    const script = `
+      process.stdout.write(Buffer.from([0xe2]))
+      await new Promise((resolve) => setTimeout(resolve, 50))
+      process.stdout.write(Buffer.from([0x82, 0xac]))
+    `
+    const result = await spawnOpencodeChild(['bun', '-e', script], {
+      cwd: process.cwd(),
+      env: TEST_CHILD_ENV,
+      timeoutMs: 5_000,
+    })
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toBe('\u20ac')
+  }, 10_000)
+})
+
+// Pin for item 5: startOpencodeProcess isn't directly testable host-free
+// (its promise only resolves once a real `opencode serve` prints a listen
+// URL), so this tests the shared `buildDetachedChildSpawnOptions` builder
+// both `spawnOpencodeChild` and `startOpencodeProcess` construct their
+// `spawn` options through -- proving the invariant for both call sites at
+// once, and guaranteeing they cannot diverge (they call the same function).
+describe('buildDetachedChildSpawnOptions (shared by spawnOpencodeChild and startOpencodeProcess, item 5 pin)', () => {
+  test('always closes stdin and always keeps stdout/stderr piped, detached into its own group', () => {
+    const options = buildDetachedChildSpawnOptions('/tmp/example', {
+      PATH: '/usr/bin',
+    })
+
+    expect(options.detached).toBe(true)
+    expect(options.stdio).toEqual(['ignore', 'pipe', 'pipe'])
+    expect(options.cwd).toBe('/tmp/example')
+    expect(options.env).toEqual({ PATH: '/usr/bin' })
+  })
+
+  // Mirrors the existing spawnOpencodeChild stdin-invariant test above
+  // (~line 339): a real child spawned with these exact options must see
+  // stdin EOF immediately, never node's default open pipe.
+  test('a real child spawned with these options sees stdin EOF immediately instead of hanging', async () => {
+    const script = `
+      process.stdin.resume()
+      process.stdin.on('end', () => {
+        process.stdout.write('stdin-eof\\n')
+        process.exit(0)
+      })
+    `
+
+    const start = Date.now()
+    const result = await new Promise<{ stdout: string; exitCode: number }>(
+      (resolve) => {
+        const child = spawn(
+          'bun',
+          ['-e', script],
+          buildDetachedChildSpawnOptions(process.cwd(), TEST_CHILD_ENV),
+        )
+        let stdout = ''
+        child.stdout?.setEncoding('utf8')
+        child.stdout?.on('data', (chunk: string) => {
+          stdout += chunk
+        })
+        child.once('close', (code) => resolve({ stdout, exitCode: code ?? -1 }))
+      },
+    )
+    const elapsedMs = Date.now() - start
+
+    expect(result.exitCode).toBe(0)
+    expect(result.stdout).toContain('stdin-eof')
+    expect(elapsedMs).toBeLessThan(3_000)
+  }, 10_000)
+})
+
+// Regression test for item 1's stale-pid bug: `finish()`'s at-settle
+// eviction (evictRunOpencodeChildPid) only re-probes once, at the instant
+// the direct child's stdio pipes close. If the child's own process group
+// still has a member (e.g. a detached grandchild it spawned and then
+// exited without waiting for) at that exact instant, the pid is retained
+// -- and without pruning, stays retained for the rest of the worker's life
+// even after that grandchild later exits on its own, permanently pinning
+// `hasLiveOpencodeProcesses()` to true.
+//
+// Runs entirely inside an isolated `bun -e` harness process (its own fresh
+// module graph, its own empty live-pid set) so this test's own real
+// grandchild process can't be confused with anything another test file in
+// this worker may have registered.
+//
+// Bidirectional proof: temporarily reverting `hasLiveOpencodeProcesses` (and
+// `killLiveOpencodeHostsSync`) to skip `pruneLiveOpencodeProcesses()` was
+// confirmed to make this test fail -- `HAS_LIVE_AFTER_KILL` stays `true`
+// instead of flipping to `false` -- before restoring the fix.
+describe('stale run-child pid pruning (item 1 regression: grandchild still draining at settle time)', () => {
+  test('hasLiveOpencodeProcesses re-probes and prunes a pid once its process group has since emptied', () => {
+    const script = `
+      const mod = await import(${JSON.stringify(FIXTURE_MODULE_URL)})
+
+      const childScript = \`
+        const { spawn } = require('node:child_process')
+        const grandchild = spawn('sleep', ['30'], { stdio: 'ignore' })
+        process.stdout.write('grandchild-pid:' + grandchild.pid + '\\\\n')
+        process.exit(0)
+      \`
+
+      let grandchildPid
+      try {
+        const result = await mod.spawnOpencodeChild(['bun', '-e', childScript], {
+          cwd: process.cwd(),
+          env: { PATH: process.env.PATH ?? '' },
+          timeoutMs: 5000,
+        })
+        const match = /grandchild-pid:(\\d+)/.exec(result.stdout)
+        if (!match) {
+          throw new Error('no grandchild pid in stdout: ' + JSON.stringify(result))
+        }
+        grandchildPid = Number(match[1])
+
+        // The direct child already exited (its stdio closed, so
+        // spawnOpencodeChild's promise above already resolved), but the
+        // grandchild -- still in the same process group -- is a 30s sleep,
+        // so the group is still non-empty right now.
+        process.stdout.write(
+          'HAS_LIVE_BEFORE_KILL=' + mod.hasLiveOpencodeProcesses() + '\\n',
+        )
+
+        process.kill(grandchildPid, 'SIGKILL')
+        // Give the OS a brief moment to finish reaping after the signal.
+        await new Promise((resolve) => setTimeout(resolve, 300))
+
+        process.stdout.write(
+          'HAS_LIVE_AFTER_KILL=' + mod.hasLiveOpencodeProcesses() + '\\n',
+        )
+      } finally {
+        if (grandchildPid) {
+          try {
+            process.kill(grandchildPid, 'SIGKILL')
+          } catch {}
+        }
+      }
+    `
+
+    const result = Bun.spawnSync(['bun', '-e', script], {
+      env: TEST_CHILD_ENV,
+      timeout: 15_000,
+    })
+    const stdout = result.stdout.toString()
+    const stderr = result.stderr.toString()
+
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `harness script exited with code ${result.exitCode}: ${stderr}`,
+      )
+    }
+    expect(stdout).toContain('HAS_LIVE_BEFORE_KILL=true')
+    expect(stdout).toContain('HAS_LIVE_AFTER_KILL=false')
   }, 20_000)
 })

@@ -2328,6 +2328,18 @@ describe('local OpenCode eval runner', () => {
     }
   }, 360_000)
 
+  // Removes any listener on `signal` not present in `priorListeners` -- the
+  // fallback path used when installEvalSignalHandlers throws partway through
+  // registering its SIGINT/SIGTERM pair, before it can return a remover.
+  function removeListenersNotIn(
+    signal: 'SIGINT' | 'SIGTERM',
+    priorListeners: Set<unknown> | undefined,
+  ): void {
+    for (const listener of process.listeners(signal)) {
+      if (!priorListeners?.has(listener)) process.off(signal, listener)
+    }
+  }
+
   test('signal cleanup uses registered hooks and quarantines residue before returning', async () => {
     const parentDir = runParent()
     const events: string[] = []
@@ -2343,16 +2355,26 @@ describe('local OpenCode eval runner', () => {
     // so unrelated SIGINT listeners elsewhere in the worker are untouched.
     //
     // Both the install and the listener-capture live inside this `try` (not
-    // before it) so a throw from either still reaches `finally` and calls
-    // `removeSignalHandlers`, instead of leaking the listener for the rest
-    // of this worker's life.
+    // before it) so a throw from either still reaches `finally`, instead of
+    // leaking a listener for the rest of this worker's life. That covers a
+    // throw during capture, but `installEvalSignalHandlers` itself registers
+    // SIGINT then SIGTERM as two separate `process.on` calls before
+    // returning its remover -- a throw between those two registrations (or
+    // before the return) would leave whichever listener(s) it managed to
+    // attach with no remover reference left to remove them. Both signals'
+    // prior listeners are snapshotted before the call so `finally` can fall
+    // back to removing anything new, by name, when `removeSignalHandlers`
+    // itself was never assigned.
     let removeSignalHandlers: (() => void) | undefined
+    let priorSigintListeners: Set<unknown> | undefined
+    let priorSigtermListeners: Set<unknown> | undefined
     try {
-      const priorSigintListeners = new Set(process.listeners('SIGINT'))
+      priorSigintListeners = new Set(process.listeners('SIGINT'))
+      priorSigtermListeners = new Set(process.listeners('SIGTERM'))
       removeSignalHandlers = installEvalSignalHandlers()
       const installedSigintListeners = process
         .listeners('SIGINT')
-        .filter((listener) => !priorSigintListeners.has(listener))
+        .filter((listener) => !priorSigintListeners?.has(listener))
       if (installedSigintListeners.length !== 1) {
         throw new Error(
           `installEvalSignalHandlers registered ${installedSigintListeners.length} SIGINT listeners, expected exactly 1`,
@@ -2394,7 +2416,12 @@ describe('local OpenCode eval runner', () => {
           .filter((entry) => entry.startsWith('systematic-eval-')),
       ).toHaveLength(1)
     } finally {
-      removeSignalHandlers?.()
+      if (removeSignalHandlers) {
+        removeSignalHandlers()
+      } else {
+        removeListenersNotIn('SIGINT', priorSigintListeners)
+        removeListenersNotIn('SIGTERM', priorSigtermListeners)
+      }
       process.exitCode = previousExitCode ?? 0
       fs.rmSync(parentDir, { recursive: true, force: true })
     }
