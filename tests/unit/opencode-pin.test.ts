@@ -302,34 +302,135 @@ const VERSION_EXEMPTIONS: VersionExemption[] = [
   },
 ]
 
+type CodeSpanKind = 'string' | 'regex'
+
+interface CodeSpan {
+  kind: CodeSpanKind
+  start: number
+  text: string
+}
+
+const WHITESPACE_PATTERN = /\s/
+const REGEX_LITERAL_PRECEDING_CHARS = new Set(['(', ',', '=', '['])
+
 /**
- * Blanks out every `//` line comment and `/* *\/` block comment, replacing
- * their characters with spaces (never removing a newline), so line numbers
- * and column positions in the result line up exactly with the original
- * source. Doc comments in these files use markdown code spans that can
- * themselves contain a quoted, version-shaped string purely as prose (this
- * function's own doc comment is an example) -- scanning comment text with
- * the same string/regex tokenizer used for real code would misread that
- * prose as a fixture literal, so comments are removed before tokenizing.
+ * Single left-to-right pass over `source` that yields every quoted
+ * string/template literal and every `/regex/` literal, skipping `//` and
+ * `/* *\/` comments entirely -- never by blanking or regexing comment text
+ * out first, but by tracking which of those five states (line comment,
+ * block comment, string, regex, plain code) the cursor is in as it walks
+ * the source once, character by character.
+ *
+ * This file has had two narrower designs, both broken by a real hazard in
+ * this repository's own fixture files:
+ *
+ * 1. A separate `stripComments` pass that blanked `//`-to-end-of-line on
+ *    raw source *before* tokenizing strings. That misreads a `//` that
+ *    occurs inside a real string (e.g. a `'//host/share/path'` fixture
+ *    value in tests/unit/eval-redaction.test.ts) as a comment start,
+ *    eating that string's closing quote and desynchronizing quote parity
+ *    for the rest of the file -- silently blinding the scanner to
+ *    everything after it.
+ * 2. No comment awareness at all, tokenizing strings directly against raw
+ *    source. That misreads a contraction apostrophe in comment prose
+ *    ("suite's", "doesn't", "it's" -- all present in these files' own
+ *    comments) as a string's opening quote, which then greedily consumes
+ *    forward to the *next* quote it finds -- typically the opening quote
+ *    of the next real fixture string -- corrupting parity the same way.
+ *
+ * Tracking state explicitly avoids both: a comment's content, including
+ * any `/`, `'`, or `"` it contains, is never inspected as anything but
+ * comment content, and a string's content is never inspected as anything
+ * but string content. Each `tryConsume*` helper below either returns the
+ * index just past its construct or `null` if `source[i]` doesn't start
+ * that construct, so the main loop is a flat try-each-kind-in-turn walk
+ * with no nested branching of its own.
  */
-function stripComments(source: string): string {
-  const withoutBlockComments = source.replace(/\/\*[\s\S]*?\*\//g, (m) =>
-    m.replace(/[^\n]/g, ' '),
-  )
-  return withoutBlockComments.replace(/\/\/[^\n]*/g, (m) =>
-    ' '.repeat(m.length),
+function tryConsumeBlockComment(source: string, i: number): number | null {
+  if (source[i] !== '/' || source[i + 1] !== '*') return null
+  const end = source.indexOf('*/', i + 2)
+  return end === -1 ? source.length : end + 2
+}
+
+function tryConsumeLineComment(source: string, i: number): number | null {
+  if (source[i] !== '/' || source[i + 1] !== '/') return null
+  const end = source.indexOf('\n', i)
+  return end === -1 ? source.length : end
+}
+
+function tryConsumeStringLiteral(source: string, i: number): number | null {
+  const quote = source[i]
+  if (quote !== "'" && quote !== '"' && quote !== '`') return null
+  const n = source.length
+  let j = i + 1
+  while (j < n && source[j] !== quote) {
+    j += source[j] === '\\' ? 2 : 1
+  }
+  return Math.min(j + 1, n) // consume the closing quote, if the string is well-formed
+}
+
+function precedesRegexLiteral(source: string, i: number): boolean {
+  let j = i - 1
+  while (j >= 0 && WHITESPACE_PATTERN.test(source[j] ?? '')) j--
+  const precedingChar = j >= 0 ? source[j] : undefined
+  return (
+    precedingChar !== undefined &&
+    REGEX_LITERAL_PRECEDING_CHARS.has(precedingChar)
   )
 }
 
-// Matches a quoted string or template literal in full.
-const STRING_TOKEN_PATTERN =
-  /'(?:[^'\\]|\\.)*'|"(?:[^"\\]|\\.)*"|`(?:[^`\\]|\\.)*`/g
+function tryConsumeRegexLiteral(source: string, i: number): number | null {
+  if (source[i] !== '/' || !precedesRegexLiteral(source, i)) return null
+  const n = source.length
+  let k = i + 1
+  while (k < n && source[k] !== '\n') {
+    if (source[k] === '\\') {
+      k += 2
+      continue
+    }
+    if (source[k] === '/') return k + 1
+    k++
+  }
+  return null // unterminated on this line: not a regex literal
+}
 
-// Matches a `/regex/` literal, but only where it appears in a position a
-// regex literal actually can -- immediately (allowing a little whitespace)
-// after `(`, `,`, `=`, or `[` -- so this does not also match a stray
-// division operator.
-const REGEX_TOKEN_PATTERN = /(?<=[(,=[]\s{0,20})\/(?:[^/\\\n]|\\.)+\//g
+function tokenizeCodeSpans(source: string): CodeSpan[] {
+  const spans: CodeSpan[] = []
+  const n = source.length
+  let i = 0
+
+  while (i < n) {
+    const blockCommentEnd = tryConsumeBlockComment(source, i)
+    if (blockCommentEnd !== null) {
+      i = blockCommentEnd
+      continue
+    }
+
+    const lineCommentEnd = tryConsumeLineComment(source, i)
+    if (lineCommentEnd !== null) {
+      i = lineCommentEnd
+      continue
+    }
+
+    const stringEnd = tryConsumeStringLiteral(source, i)
+    if (stringEnd !== null) {
+      spans.push({ kind: 'string', start: i, text: source.slice(i, stringEnd) })
+      i = stringEnd
+      continue
+    }
+
+    const regexEnd = tryConsumeRegexLiteral(source, i)
+    if (regexEnd !== null) {
+      spans.push({ kind: 'regex', start: i, text: source.slice(i, regexEnd) })
+      i = regexEnd
+      continue
+    }
+
+    i++
+  }
+
+  return spans
+}
 
 // Inside an ordinary string/template literal, a version looks like a plain
 // dotted-digit run. Inside a regex literal it is usually written with
@@ -350,16 +451,17 @@ function isExempt(file: string, literal: string, line: string): boolean {
 function scanSpanForVersions(
   file: string,
   content: string,
-  spanStart: number,
-  spanText: string,
-  versionPattern: RegExp,
+  span: CodeSpan,
   violations: FixtureVersionLiteralViolation[],
 ): void {
-  for (const versionMatch of spanText.matchAll(versionPattern)) {
+  const versionPattern =
+    span.kind === 'regex' ? VERSION_IN_REGEX_PATTERN : VERSION_IN_STRING_PATTERN
+
+  for (const versionMatch of span.text.matchAll(versionPattern)) {
     const literal = versionMatch[0].replaceAll('\\', '')
     if (literal.startsWith(SENTINEL_PREFIX)) continue
 
-    const absoluteIndex = spanStart + (versionMatch.index ?? 0)
+    const absoluteIndex = span.start + (versionMatch.index ?? 0)
     const lineNumber = content.slice(0, absoluteIndex).split('\n').length
     const lineText = content.split('\n')[lineNumber - 1] ?? ''
     if (isExempt(file, literal, lineText)) continue
@@ -395,30 +497,8 @@ function findFixtureVersionLiteralViolations(
   const violations: FixtureVersionLiteralViolation[] = []
 
   for (const { file, content } of files) {
-    // Same length and line/column layout as `content`, with comment text
-    // blanked out, so positions found here are also valid offsets into the
-    // original `content` (used below for line-number and exemption lookups).
-    const codeOnly = stripComments(content)
-
-    for (const stringMatch of codeOnly.matchAll(STRING_TOKEN_PATTERN)) {
-      scanSpanForVersions(
-        file,
-        content,
-        stringMatch.index ?? 0,
-        stringMatch[0],
-        VERSION_IN_STRING_PATTERN,
-        violations,
-      )
-    }
-    for (const regexMatch of codeOnly.matchAll(REGEX_TOKEN_PATTERN)) {
-      scanSpanForVersions(
-        file,
-        content,
-        regexMatch.index ?? 0,
-        regexMatch[0],
-        VERSION_IN_REGEX_PATTERN,
-        violations,
-      )
+    for (const span of tokenizeCodeSpans(content)) {
+      scanSpanForVersions(file, content, span, violations)
     }
   }
 
