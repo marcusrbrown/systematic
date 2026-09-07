@@ -2970,6 +2970,10 @@ export function verifyExactOpencodeRuntime(options: {
     env,
     cwd: options.fixture.projectRoot,
     timeoutMs: options.timeoutMs ?? 300_000,
+    // The eval runner CLI's own stderr is asserted clean by
+    // eval-runner.test.ts's direct-CLI tests; the pre-probe diagnostic is
+    // for the module-scope gates that run inside the parent test process.
+    quiet: true,
   })
   if (classification.status === 'unavailable') {
     return {

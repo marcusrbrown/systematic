@@ -55,6 +55,13 @@ export interface ProbeOpencodeAvailabilityOptions {
    * `[opencode-ai@<pin>, --version]`. Production callers must not set this.
    */
   args?: readonly string[]
+  /**
+   * Suppresses the pre-probe diagnostic (see below). Set by callers whose
+   * output is itself asserted to be clean, such as `verifyExactOpencodeRuntime`'s
+   * per-case probe inside the eval runner CLI child — its stderr is asserted
+   * empty by `eval-runner.test.ts`'s direct-CLI tests. Defaults to `false`.
+   */
+  quiet?: boolean
 }
 
 const DEFAULT_PROBE_TIMEOUT_MS = 300_000
@@ -78,6 +85,20 @@ function extractReportedVersion(output: string): string | undefined {
 }
 
 /**
+ * True only on the real launcher path: every unit test override supplies its
+ * own `command`, and logging would otherwise fire once per fake-launcher
+ * case. Callers whose own output must stay clean (the eval runner CLI
+ * child) pass `quiet: true` to suppress it. Split out from
+ * {@link probeOpencodeAvailability} to keep that function's cognitive
+ * complexity under the project's lint ceiling.
+ */
+function shouldLogProbeDiagnostic(
+  options: ProbeOpencodeAvailabilityOptions,
+): boolean {
+  return options.command === undefined && !options.quiet
+}
+
+/**
  * Runs `bunx opencode-ai@<pin> --version` (or the test-only override) under
  * the given environment and classifies the outcome. Never throws; never
  * memoizes. `available` requires exit 0 and the last stdout line to equal
@@ -90,6 +111,15 @@ export function probeOpencodeAvailability(
 ): OpencodeAvailabilityClassification {
   const command = options.command ?? 'bunx'
   const args = options.args ?? [`opencode-ai@${options.pin}`, '--version']
+
+  // A wedged package registry blocks synchronously for the full timeout
+  // with no other output, so this line is what makes that stall
+  // attributable in CI logs rather than a silent multi-minute pause.
+  if (shouldLogProbeDiagnostic(options)) {
+    console.warn(
+      `[opencode-availability] probing bunx opencode-ai@${options.pin} --version`,
+    )
+  }
 
   // spawnSync's own timeout sends SIGTERM (then SIGKILL) to the direct child
   // only, not its process group; this function is deliberately synchronous
