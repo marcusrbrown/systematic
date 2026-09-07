@@ -90,8 +90,9 @@ bugs no offline gate could reach; one of them had passed a full local real-host 
    `tests/unit/receipt-workflow-host-no-spawn.test.ts`, the invariant that importing the fixture
    spawns nothing. The other three bugs are guarded only by the integration tests that fixed
    them; the bare-binary and `process.emit` classes are pinnable host-free by a source scan over
-   `tests/` (no argv beginning with bare `opencode`; no `process.emit` of a terminal signal),
-   which is queued follow-up. Prove each pin bidirectionally: fails with the fix reverted, passes
+   `tests/integration/` and `scripts/` (no argv beginning with bare `opencode`; no `process.emit`
+   of a terminal signal) — `tests/manual/` is excluded because its human-run probes intentionally
+   use the developer's own `opencode`. That guard is queued follow-up. Prove each pin bidirectionally: fails with the fix reverted, passes
    with it restored.
 
 Diagnostic traps:
