@@ -1,4 +1,4 @@
-import { type ChildProcess, spawn } from 'node:child_process'
+import { type ChildProcess, type SpawnOptions, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -487,6 +487,23 @@ export interface RunOpencodeOptions {
 }
 
 /**
+ * Shared `spawn` options for every real `opencode`-launching child process in
+ * this module (`spawnOpencodeChild`, `startOpencodeProcess`): `detached: true`
+ * (its own process group, so the whole group can be reaped by pgid) and
+ * `stdio: ['ignore', 'pipe', 'pipe']` (stdin closed from the start, so
+ * `opencode run`'s stdin handling can't block on a pipe this fixture never
+ * writes to or closes -- see spawnOpencodeChild's doc comment below for the
+ * empirical evidence). Both call sites build their options through this one
+ * function so they cannot quietly diverge on either point.
+ */
+export function buildDetachedChildSpawnOptions(
+  cwd: string,
+  env: Record<string, string>,
+): SpawnOptions {
+  return { cwd, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] }
+}
+
+/**
  * Runs an argv async via node's `spawn`, never `Bun.spawnSync`. This function
  * (and every other real `opencode` child process in this module) shares the
  * event loop with `startScriptedSkillModelServer`'s `Bun.serve` instance: a
@@ -517,6 +534,12 @@ export interface RunOpencodeOptions {
  * Ignoring stdin closes it from the start, matching how a real terminal
  * invocation's stdin behaves for a one-shot `run` command with the prompt
  * passed as an argument.
+ *
+ * The child's pid is registered in `liveRunOpencodeChildPids` for the
+ * lifetime of this call and evicted the moment it settles. That is what
+ * lets an *interactive* Ctrl-C during a live call reap the `bunx` group too
+ * (previously only a timeout or CI cancellation did): the terminal-signal
+ * handler below walks that same set.
  */
 export async function spawnOpencodeChild(
   argv: readonly string[],
@@ -526,12 +549,22 @@ export async function spawnOpencodeChild(
   if (!command) throw new Error('spawnOpencodeChild requires a non-empty argv')
 
   return new Promise<OpencodeResult>((resolve) => {
-    const child = spawn(command, rest, {
-      cwd: options.cwd,
-      env: options.env,
-      detached: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    })
+    const child = spawn(
+      command,
+      rest,
+      buildDetachedChildSpawnOptions(options.cwd, options.env),
+    )
+    // Multi-byte UTF-8 characters can split across chunk boundaries; letting
+    // the stream decode with an encoding set keeps partial sequences buffered
+    // internally instead of corrupting stdout/stderr text (and error tails).
+    child.stdout?.setEncoding('utf8')
+    child.stderr?.setEncoding('utf8')
+
+    const pid = child.pid
+    if (pid) {
+      liveRunOpencodeChildPids.add(pid)
+      installTerminalSignalHandlers()
+    }
 
     let stdout = ''
     let stderr = ''
@@ -541,6 +574,7 @@ export async function spawnOpencodeChild(
       if (settled) return
       settled = true
       clearTimeout(timeout)
+      if (pid) evictRunOpencodeChildPid(pid)
       resolve({ stdout, stderr, exitCode })
     }
 
@@ -548,11 +582,11 @@ export async function spawnOpencodeChild(
       void stopProcessGroup(child, 10_000).then(() => finish(-1))
     }, options.timeoutMs)
 
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString()
+    child.stdout?.on('data', (chunk: string) => {
+      stdout += chunk
     })
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderr += chunk.toString()
+    child.stderr?.on('data', (chunk: string) => {
+      stderr += chunk
     })
     child.once('error', (error) => {
       stderr += `\n${String(error)}`
@@ -879,11 +913,11 @@ async function startOpencodeProcess(
   env: Record<string, string>,
   timeoutMs = TIMEOUT_MS,
 ): Promise<OpencodeServer> {
-  const server = spawn(command, [...args], {
-    env,
-    cwd: fixture.projectDir,
-    detached: true,
-  })
+  const server = spawn(
+    command,
+    [...args],
+    buildDetachedChildSpawnOptions(fixture.projectDir, env),
+  )
   const pid = server.pid
   if (!pid) throw new Error('opencode server did not expose a process id')
 
@@ -939,11 +973,10 @@ async function startOpencodeProcess(
     // ownership probe. Only evict once the group is actually empty; otherwise
     // the launcher exited but the opencode grandchild is still alive and
     // needs to stay reachable for stopAllOpencodeHosts/the terminal-signal guard.
-    try {
-      process.kill(-pid, 0)
-    } catch {
-      liveOpencodeHosts.delete(host)
-    }
+    // This is the fast path; pruneLiveOpencodeProcesses (see its doc comment)
+    // is the fallback for the case where the group was still non-empty at
+    // this exact instant.
+    if (!isProcessGroupAlive(pid)) liveOpencodeHosts.delete(host)
   })
   installTerminalSignalHandlers()
   return host
@@ -991,31 +1024,106 @@ export interface OpencodeServer {
 }
 
 const liveOpencodeHosts = new Set<OpencodeServer>()
+// Parallel to liveOpencodeHosts: pids of in-flight spawnOpencodeChild
+// children (runOpencode, runOpencodeDebugConfig). A startOpencodeServer host
+// outlives its call and is reaped through its own stop()/exit bookkeeping;
+// a spawnOpencodeChild child has no long-lived handle, so its pid lives here
+// instead, for the terminal-signal safety net below, and is evicted the
+// moment the child settles (see evictRunOpencodeChildPid).
+const liveRunOpencodeChildPids = new Set<number>()
 
 let terminalSignalHandlersInstalled = false
 
-function killLiveOpencodeHostsSync(): void {
-  for (const host of liveOpencodeHosts) {
-    try {
-      process.kill(-host.pid, 'SIGKILL')
-    } catch {
-      // Cleanup is best effort; the process may already be gone.
-    }
+function killProcessGroupSync(pid: number): void {
+  try {
+    process.kill(-pid, 'SIGKILL')
+  } catch {
+    // Cleanup is best effort; the process may already be gone.
   }
 }
 
+function isProcessGroupAlive(pid: number): boolean {
+  try {
+    process.kill(-pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Both `liveOpencodeHosts` (startOpencodeProcess's own `exit` handler) and
+ * `liveRunOpencodeChildPids` (evictRunOpencodeChildPid) are also evicted by
+ * a one-shot probe at the instant their launcher process exits, as a fast
+ * path. That probe only ever runs once: if the process group still has a
+ * member draining at that exact instant (e.g. a grandchild not yet reaped),
+ * the entry is never evicted by the fast path and would otherwise survive
+ * for the rest of the worker's life -- permanently pinning
+ * `hasLiveOpencodeProcesses()` to true (silently re-arming the
+ * force-exit-on-signal path forever, since it would then believe something
+ * is always live) and leaving a now-stale, recyclable pgid in
+ * `killLiveOpencodeHostsSync`'s SIGKILL sweep, which could wrongly signal
+ * an unrelated later process holding that recycled pgid. Both call sites
+ * below re-probe and prune stale entries before acting, so a late-draining
+ * group costs one extra `process.kill(pid, 0)` call, never a stuck entry.
+ */
+function pruneLiveOpencodeProcesses(): void {
+  for (const host of liveOpencodeHosts) {
+    if (!isProcessGroupAlive(host.pid)) liveOpencodeHosts.delete(host)
+  }
+  for (const pid of liveRunOpencodeChildPids) {
+    if (!isProcessGroupAlive(pid)) liveRunOpencodeChildPids.delete(pid)
+  }
+}
+
+function killLiveOpencodeHostsSync(): void {
+  pruneLiveOpencodeProcesses()
+  for (const host of liveOpencodeHosts) killProcessGroupSync(host.pid)
+  for (const pid of liveRunOpencodeChildPids) killProcessGroupSync(pid)
+}
+
+function evictRunOpencodeChildPid(pid: number): void {
+  // Mirrors startOpencodeProcess's own exit-handler eviction probe: a pgid
+  // cannot be recycled while its group still has members, so this pid is
+  // only forgotten once the group is provably empty. Otherwise a recycled
+  // pgid from some unrelated later process could be mistaken for still-live
+  // and wrongly signalled by killLiveOpencodeHostsSync. This is the fast
+  // path; pruneLiveOpencodeProcesses is the fallback for the case where the
+  // group was still non-empty at this exact instant (see its doc comment).
+  if (!isProcessGroupAlive(pid)) liveRunOpencodeChildPids.delete(pid)
+}
+
+export function hasLiveOpencodeProcesses(): boolean {
+  pruneLiveOpencodeProcesses()
+  return liveOpencodeHosts.size > 0 || liveRunOpencodeChildPids.size > 0
+}
+
+/**
+ * Terminal-signal safety net for every real `opencode` process this fixture
+ * spawns: long-lived hosts in `liveOpencodeHosts`, one-shot
+ * `spawnOpencodeChild` children in `liveRunOpencodeChildPids`. This is the
+ * root-cause fix for a full-suite exit 130: the handler used to reap and
+ * force-exit(130) unconditionally, even with nothing live, so a Ctrl-C
+ * during ANY part of the suite -- not just a live host run -- looked
+ * indistinguishable from an interrupted host and killed the whole runner.
+ * Now, when nothing is live it returns without exiting, leaving other
+ * SIGINT/SIGTERM listeners to run. Only when something is actually live
+ * does it reap the group(s) and force-exit -- skipping remaining afterAll
+ * hooks (temp dirs may leak) is an acceptable tradeoff only when there is a
+ * real orphaned-host-process risk to avoid.
+ */
 function installTerminalSignalHandlers(): void {
   if (terminalSignalHandlersInstalled) return
   terminalSignalHandlersInstalled = true
 
   process.on('SIGINT', () => {
+    if (!hasLiveOpencodeProcesses()) return
     killLiveOpencodeHostsSync()
-    // Exiting here skips remaining afterAll hooks (temp dirs may leak); orphaned host processes cost more than temp dirs.
     process.exit(130)
   })
   process.on('SIGTERM', () => {
+    if (!hasLiveOpencodeProcesses()) return
     killLiveOpencodeHostsSync()
-    // Exiting here skips remaining afterAll hooks (temp dirs may leak); orphaned host processes cost more than temp dirs.
     process.exit(143)
   })
   process.on('exit', killLiveOpencodeHostsSync)

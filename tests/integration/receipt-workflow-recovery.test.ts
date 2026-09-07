@@ -468,9 +468,26 @@ function readProbeEvents(capturePath: string): Array<Record<string, unknown>> {
  * either way, membership in *that* host's group is topology-independent
  * evidence that a given in-process pid came from that host generation.
  */
-function processGroupMemberPids(pgid: number): number[] {
-  const result = Bun.spawnSync(['ps', '-eo', 'pid,pgid'])
-  const lines = result.stdout.toString().trim().split('\n').slice(1)
+async function processGroupMemberPids(pgid: number): Promise<number[]> {
+  // Async, not Bun.spawnSync: this fixture documents a sync-spawn hazard
+  // (a synchronous spawn blocks the very thread the scripted model server
+  // needs to answer the child's own HTTP request on, see spawnOpencodeChild's
+  // doc comment). `ps` is not a client of that server so it cannot itself
+  // deadlock, but staying async keeps every spawn in this file consistent
+  // with the one rule that matters everywhere else in it.
+  const proc = Bun.spawn(['ps', '-eo', 'pid,pgid'], {
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ])
+  if (exitCode !== 0) {
+    throw new Error(`ps -eo pid,pgid exited with code ${exitCode}: ${stderr}`)
+  }
+  const lines = stdout.trim().split('\n').slice(1)
   const pids: number[] = []
   for (const line of lines) {
     const fields = line.trim().split(/\s+/)
@@ -721,7 +738,7 @@ describe.skipIf(!isOpencodeAvailable())(
         // id. This snapshot is every pid that belonged to host 1's group
         // while it was alive -- the only evidence available once host 1
         // stops that a given in-process pid actually came from it.
-        const firstHostGroup = processGroupMemberPids(firstPid)
+        const firstHostGroup = await processGroupMemberPids(firstPid)
         await firstHost.stop()
 
         const secondHost = await startOpencodeServer(fixture, configContent)
@@ -746,7 +763,7 @@ describe.skipIf(!isOpencodeAvailable())(
           const secondMetadata = secondState.metadata as Record<string, unknown>
           expect(secondMetadata[RECEIPT_MARKER_KEY]).toBe(RECEIPT_MARKER_VALUE)
           // Captured before stopping host 2, same reasoning as firstHostGroup.
-          const secondHostGroup = processGroupMemberPids(secondHost.pid)
+          const secondHostGroup = await processGroupMemberPids(secondHost.pid)
           const loadedPids = readProbeEvents(probe.capturePath)
             .filter((event) => event.type === 'loaded')
             .map((event) => Number(event.pid))
