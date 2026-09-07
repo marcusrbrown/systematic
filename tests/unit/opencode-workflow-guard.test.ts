@@ -2455,6 +2455,60 @@ describe('OpenCode workflow guard adapter', () => {
     expect(sharedOutput.metadata.status).toBe('error')
   })
 
+  test('a shared output across two DEBUG-mode guard instances keeps the host failure sentinel visible to the second instance', async () => {
+    // Debug mode flattens the guard's own epoch status onto `metadata` too
+    // (alongside operations/satisfiedCount/missingCount/family). Before the
+    // fix this used a bare `status` key that collided with — and in debug
+    // mode silently overwrote — the host's own `status: 'error'` failure
+    // sentinel, letting a second guard instance finalize a unit off a
+    // failed host result.
+    const first = createAdapter('protected', true)
+    const second = createAdapter('protected', true)
+    await observeSkill(first, 'systematic_skill', 'ce:work')
+    await observeSkill(second, 'systematic_skill', 'ce:work')
+    mintReceipt(first, 'implementation')
+    mintReceipt(first, 'verification')
+    mintReceipt(second, 'implementation')
+    mintReceipt(second, 'verification')
+
+    const input = {
+      tool: 'systematic_workflow_complete',
+      sessionID: SESSION_A,
+      callID: 'shared-host-failure-complete-debug',
+    }
+    await first.hooks['tool.execute.before'](input, {
+      args: { target: 'unit' },
+    })
+    await second.hooks['tool.execute.before'](input, {
+      args: { target: 'unit' },
+    })
+
+    const sharedOutput: RecordedToolOutput = {
+      title: 'Bash command failed',
+      output: 'permission denied: /var/run/lock',
+      metadata: { status: 'error' },
+    }
+    await first.hooks['tool.execute.after'](
+      { ...input, args: { target: 'unit' } },
+      sharedOutput,
+    )
+    // (a) the host's failure sentinel survives in the shared metadata, even
+    // though debug mode is on and writes its own epoch status field.
+    expect(sharedOutput.metadata.status).toBe('error')
+    expect(sharedOutput.metadata.debugEpochStatus).not.toBe('error')
+
+    await second.hooks['tool.execute.after'](
+      { ...input, args: { target: 'unit' } },
+      sharedOutput,
+    )
+    // (b) the second instance does not finalize a unit off a failed host
+    // result, and (c) the title/output are not rewritten to success wording.
+    expect(status(second).unit?.status).not.toBe('completed')
+    expect(sharedOutput.title).not.toBe('Workflow transition completed')
+    expect(sharedOutput.output).not.toContain('workflow guard completed')
+    expect(sharedOutput.metadata.status).toBe('error')
+  })
+
   test('markers upsert one source entry and aggregate worst precedence', async () => {
     const first = createAdapter('protected')
     const second = createAdapter('protected')

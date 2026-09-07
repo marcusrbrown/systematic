@@ -2480,7 +2480,11 @@ function createSessionRuntime(
       result.satisfiedCount = source.debug.satisfiedCount
       result.missingCount = source.debug.missingCount
       result.family = source.debug.family
-      result.status = source.debug.status
+      // Guard-owned name, not a bare `status`: a bare key here would
+      // collide with (and in debug mode silently overwrite) a host tool's
+      // own `status` field — the exact field `isSuccessfulAfter()` reads
+      // to detect a failed host result (see parseHostOutput()).
+      result.debugEpochStatus = source.debug.status
     }
     return result
   }
