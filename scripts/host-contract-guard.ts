@@ -81,12 +81,51 @@ export interface ParsedJUnit {
   readonly skipped: readonly SkippedTestCase[]
 }
 
+/**
+ * Decodes the five XML predefined entities plus numeric character
+ * references. Bun's JUnit reporter XML-escapes attribute values, so a test
+ * name containing `<`, `&`, etc. (this repo has one: the "payload &lt;=
+ * 10000 chars" test in claude-code.test.ts, confirmed by generating a real
+ * JUnit report) round-trips through `&lt;` in the report. Decoding here
+ * keeps comparisons against literal `EXEMPT_SKIPS` strings correct and
+ * keeps violation messages readable instead of printing raw entities.
+ */
+function decodeXmlEntities(str: string): string {
+  return str.replaceAll(
+    /&(amp|lt|gt|quot|apos|#x[0-9a-fA-F]+|#\d+);/g,
+    (match, entity: string) => {
+      switch (entity) {
+        case 'amp':
+          return '&'
+        case 'lt':
+          return '<'
+        case 'gt':
+          return '>'
+        case 'quot':
+          return '"'
+        case 'apos':
+          return "'"
+        default: {
+          const codePoint = entity.startsWith('#x')
+            ? Number.parseInt(entity.slice(2), 16)
+            : Number.parseInt(entity.slice(1), 10)
+          return Number.isNaN(codePoint)
+            ? match
+            : String.fromCodePoint(codePoint)
+        }
+      }
+    },
+  )
+}
+
 function parseAttrs(str: string): Record<string, string> {
   const attrs: Record<string, string> = {}
   const attrRe = /(\w+)="([^"]*)"/g
   for (const m of str.matchAll(attrRe)) {
     const [, key, value] = m
-    if (key !== undefined && value !== undefined) attrs[key] = value
+    if (key !== undefined && value !== undefined) {
+      attrs[key] = decodeXmlEntities(value)
+    }
   }
   return attrs
 }
@@ -225,17 +264,39 @@ export function evaluate(input: EvaluateInput): GuardViolation[] {
   return violations
 }
 
-function isNodeError(err: unknown): err is NodeJS.ErrnoException {
-  return err instanceof Error
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
 }
 
-function readFileOrExit(path: string): string {
+export interface ArtifactRead {
+  /** File content, or `''` when the file could not be read. */
+  readonly content: string
+  /**
+   * Set when the file could not be read (missing, unreadable, etc). `''` is
+   * a legitimate empty-file content on success, so a separate field (rather
+   * than treating `''` as failure) is what makes an empty-but-present file
+   * distinguishable from a missing one.
+   */
+  readonly readError?: string
+}
+
+/**
+ * Reads an artifact file, converting any read failure into a `readError`
+ * instead of throwing or exiting. This is what lets a missing artifact be
+ * evaluated as the contract failure it is (via {@link evaluate}, which
+ * already treats empty JUnit/log content as `missing-files` /
+ * `missing-exempt-skips` / `no-pass-line`) rather than surfacing as an
+ * unrelated filesystem error -- the exact path the guard step's `failure()`
+ * gating newly reaches when the suite step dies before writing its output.
+ */
+export function readArtifact(path: string): ArtifactRead {
   try {
-    return readFileSync(path, 'utf8')
+    return { content: readFileSync(path, 'utf8') }
   } catch (err) {
-    const message = isNodeError(err) ? err.message : String(err)
-    console.error(`Failed to read ${path}: ${message}`)
-    process.exit(1)
+    return {
+      content: '',
+      readError: `Could not read ${path}: ${errorMessage(err)}`,
+    }
   }
 }
 
@@ -248,11 +309,24 @@ function main(): void {
     process.exit(1)
   }
 
-  const xml = readFileOrExit(junitPath)
-  const log = readFileOrExit(logPath)
+  const junit = readArtifact(junitPath)
+  const log = readArtifact(logPath)
 
-  const parsed = parseJUnitXml(xml)
-  const passCount = parseLogPassCount(log)
+  if (junit.readError !== undefined) {
+    console.error(junit.readError)
+    console.error(
+      'Treating this as the suite producing no test evidence, not as a guard pass.',
+    )
+  }
+  if (log.readError !== undefined) {
+    console.error(log.readError)
+    console.error(
+      'Treating this as the suite producing no pass-count evidence, not as a guard pass.',
+    )
+  }
+
+  const parsed = parseJUnitXml(junit.content)
+  const passCount = parseLogPassCount(log.content)
 
   if (passCount !== undefined) {
     console.log(`Observed pass count: ${passCount} (floor: ${PASS_FLOOR})`)
@@ -265,7 +339,9 @@ function main(): void {
     for (const detail of violation.details) console.error(`  - ${detail}`)
   }
 
-  if (violations.length > 0) process.exit(1)
+  const hadReadError =
+    junit.readError !== undefined || log.readError !== undefined
+  if (hadReadError || violations.length > 0) process.exit(1)
   console.log('host-contract skip/pass guard passed.')
 }
 

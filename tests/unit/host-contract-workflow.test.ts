@@ -80,21 +80,39 @@ describe('host-contract workflow structural invariants', () => {
     expect(env.SYSTEMATIC_REQUIRE_OPENCODE).toBe('1')
   })
 
-  test('the "Guard skipped tests and pass floor" step still runs when the suite step fails', () => {
+  test('the "Run host contract suite" step has the id the guard step depends on', () => {
+    const workflow = readWorkflow()
+    const jobs = asRecord(workflow.jobs, 'jobs')
+    const hostContract = asRecord(jobs['host-contract'], 'host-contract job')
+    const steps = asArray(hostContract.steps, 'host-contract steps')
+    const suiteStep = findStep(steps, 'Run host contract suite')
+
+    expect(suiteStep.id).toBe('suite')
+  })
+
+  test('the "Guard skipped tests and pass floor" step runs on both suite outcomes, gated on the suite step specifically', () => {
     const workflow = readWorkflow()
     const jobs = asRecord(workflow.jobs, 'jobs')
     const hostContract = asRecord(jobs['host-contract'], 'host-contract job')
     const steps = asArray(hostContract.steps, 'host-contract steps')
     const guardStep = findStep(steps, 'Guard skipped tests and pass floor')
     const condition = String(guardStep.if ?? '')
+      .replace(/\s+/g, ' ')
+      .trim()
 
-    // Must still be gated on the path filter (so it stays skipped on a
-    // path-gated-out pull request) ...
-    expect(condition).toContain("steps.gate.outputs.run == 'true'")
-    // ... but must NOT be limited to the implicit success()-only default,
-    // since that is exactly what previously caused this step to be skipped
-    // when the suite step failed -- the moment its diagnosis matters most.
-    expect(condition).toContain('failure()')
+    // Asserts the exact expression rather than substring-checking for
+    // 'failure()' alone: a lone substring check also passes for the
+    // opposite-meaning `!failure()`, which would silently reintroduce the
+    // bug this condition exists to fix (the guard step skipped exactly
+    // when the suite step fails). Also asserts the condition is scoped to
+    // steps.suite specifically (not the job-wide success()/failure()
+    // status functions), so an unrelated earlier-step failure (Install
+    // dependencies, Build) -- which leaves the suite step itself
+    // 'skipped' -- also skips this step, instead of running it against
+    // artifacts the suite step never produced.
+    expect(condition).toBe(
+      "steps.gate.outputs.run == 'true' && (steps.suite.outcome == 'success' || steps.suite.outcome == 'failure')",
+    )
   })
 
   test('the "Guard skipped tests and pass floor" step does not run on cancellation', () => {
@@ -105,10 +123,11 @@ describe('host-contract workflow structural invariants', () => {
     const guardStep = findStep(steps, 'Guard skipped tests and pass floor')
     const condition = String(guardStep.if ?? '')
 
-    // `always()` would also run during a cancellation; this asserts the
-    // narrower `success() || failure()` form (or an equivalent that
-    // excludes cancelled()) is used instead, so a cancelled run does not
-    // spuriously report a guard failure.
+    // `always()` would also run during a cancellation. A cancelled suite
+    // step's outcome is neither 'success' nor 'failure' either, so the
+    // steps.suite.outcome-scoped condition asserted above already excludes
+    // cancellation -- this asserts `always()` specifically isn't used, since
+    // that would be a strictly broader (and wrong) condition.
     expect(condition).not.toContain('always()')
   })
 
