@@ -2309,6 +2309,206 @@ describe('OpenCode workflow guard adapter', () => {
     ).toEqual(consumption)
   })
 
+  const staleReadyOutput = (): RecordedToolOutput => ({
+    title: 'Workflow unit ready',
+    output: JSON.stringify({ status: 'ready' }),
+    metadata: {
+      protocolVersion: 2,
+      state: 'protected',
+      reasonCode: 'unit-ready',
+      enforcement: 'protected',
+    },
+  })
+
+  test('a mismatched completion target writes an abandoned terminal result instead of stale ready metadata', async () => {
+    const adapter = createAdapter('protected')
+    await observeSkill(adapter, 'systematic_skill', 'ce:work')
+    mintReceipt(adapter, 'implementation')
+    mintReceipt(adapter, 'verification')
+    const input = {
+      tool: 'systematic_workflow_complete',
+      sessionID: SESSION_A,
+      callID: 'mismatched-target-complete',
+    }
+    await adapter.hooks['tool.execute.before'](input, {
+      args: { target: 'unit' },
+    })
+    const output = staleReadyOutput()
+    await adapter.hooks['tool.execute.after'](
+      { ...input, args: { target: 'epoch' } },
+      output,
+    )
+    expect(output.metadata).not.toMatchObject({ reasonCode: 'unit-ready' })
+    expect(output.metadata.workflowGuard).toMatchObject({
+      status: 'unavailable',
+      reasonCode: 'invalid-transition',
+      target: 'unit',
+    })
+  })
+
+  test('a completion call with no pending transition and no replayable outcome writes an unavailable terminal result', async () => {
+    const adapter = createAdapter('protected')
+    const input = {
+      tool: 'systematic_workflow_complete',
+      sessionID: SESSION_A,
+      callID: 'no-pending-complete',
+    }
+    const output = staleReadyOutput()
+    await adapter.hooks['tool.execute.after'](
+      { ...input, args: { target: 'unit' } },
+      output,
+    )
+    expect(output.metadata).not.toMatchObject({ reasonCode: 'unit-ready' })
+    expect(output.metadata.workflowGuard).toMatchObject({
+      status: 'unavailable',
+      reasonCode: 'guard-unavailable',
+      target: 'unit',
+    })
+  })
+
+  test('a failed host completion tool preserves the host error text and only corrects the metadata', async () => {
+    const adapter = createAdapter('protected')
+    await observeSkill(adapter, 'systematic_skill', 'ce:work')
+    mintReceipt(adapter, 'implementation')
+    mintReceipt(adapter, 'verification')
+    const input = {
+      tool: 'systematic_workflow_complete',
+      sessionID: SESSION_A,
+      callID: 'host-failure-complete',
+    }
+    await adapter.hooks['tool.execute.before'](input, {
+      args: { target: 'unit' },
+    })
+    const hostErrorTitle = 'Bash command failed'
+    const hostErrorText = 'permission denied: /var/run/lock'
+    const output: RecordedToolOutput = {
+      title: hostErrorTitle,
+      output: hostErrorText,
+      metadata: { status: 'error' },
+    }
+    await adapter.hooks['tool.execute.after'](
+      { ...input, args: { target: 'unit' } },
+      output,
+    )
+    expect(output.title).toBe(hostErrorTitle)
+    expect(output.output).toBe(hostErrorText)
+    expect(output.metadata).not.toEqual({ status: 'error' })
+    // The host's own failure sentinel must survive alongside the guard's
+    // corrected metadata — it is what a second shared-output instance
+    // relies on via isSuccessfulAfter() to avoid taking the success path.
+    expect(output.metadata.status).toBe('error')
+    expect(output.metadata.workflowGuard).toMatchObject({
+      status: 'unavailable',
+      reasonCode: 'failed-operation',
+      target: 'unit',
+    })
+  })
+
+  test('a shared output across two guard instances keeps the host failure sentinel visible to the second instance', async () => {
+    const first = createAdapter('protected')
+    const second = createAdapter('protected')
+    await observeSkill(first, 'systematic_skill', 'ce:work')
+    await observeSkill(second, 'systematic_skill', 'ce:work')
+    mintReceipt(first, 'implementation')
+    mintReceipt(first, 'verification')
+    mintReceipt(second, 'implementation')
+    mintReceipt(second, 'verification')
+
+    const input = {
+      tool: 'systematic_workflow_complete',
+      sessionID: SESSION_A,
+      callID: 'shared-host-failure-complete',
+    }
+    await first.hooks['tool.execute.before'](input, {
+      args: { target: 'unit' },
+    })
+    await second.hooks['tool.execute.before'](input, {
+      args: { target: 'unit' },
+    })
+
+    // One host output object shared by both guard instances — mirrors how
+    // OpenCode invokes every registered plugin's `tool.execute.after` hook
+    // against the same result reference (see the `partial registration
+    // finalization…` test above for the established sharing pattern).
+    const sharedOutput: RecordedToolOutput = {
+      title: 'Bash command failed',
+      output: 'permission denied: /var/run/lock',
+      metadata: { status: 'error' },
+    }
+    await first.hooks['tool.execute.after'](
+      { ...input, args: { target: 'unit' } },
+      sharedOutput,
+    )
+    // (a) the host's failure sentinel survives in the shared metadata.
+    expect(sharedOutput.metadata.status).toBe('error')
+
+    await second.hooks['tool.execute.after'](
+      { ...input, args: { target: 'unit' } },
+      sharedOutput,
+    )
+    // (b) the second instance still reads the host failure via
+    // isSuccessfulAfter() and does not take the success path — it must not
+    // report a completed unit, and must not overwrite the terminal title
+    // with a completion title.
+    expect(status(second).unit?.status).not.toBe('completed')
+    expect(sharedOutput.title).not.toBe('Workflow transition completed')
+    expect(sharedOutput.metadata.status).toBe('error')
+  })
+
+  test('a shared output across two DEBUG-mode guard instances keeps the host failure sentinel visible to the second instance', async () => {
+    // Debug mode flattens the guard's own epoch status onto `metadata` too
+    // (alongside operations/satisfiedCount/missingCount/family). Before the
+    // fix this used a bare `status` key that collided with — and in debug
+    // mode silently overwrote — the host's own `status: 'error'` failure
+    // sentinel, letting a second guard instance finalize a unit off a
+    // failed host result.
+    const first = createAdapter('protected', true)
+    const second = createAdapter('protected', true)
+    await observeSkill(first, 'systematic_skill', 'ce:work')
+    await observeSkill(second, 'systematic_skill', 'ce:work')
+    mintReceipt(first, 'implementation')
+    mintReceipt(first, 'verification')
+    mintReceipt(second, 'implementation')
+    mintReceipt(second, 'verification')
+
+    const input = {
+      tool: 'systematic_workflow_complete',
+      sessionID: SESSION_A,
+      callID: 'shared-host-failure-complete-debug',
+    }
+    await first.hooks['tool.execute.before'](input, {
+      args: { target: 'unit' },
+    })
+    await second.hooks['tool.execute.before'](input, {
+      args: { target: 'unit' },
+    })
+
+    const sharedOutput: RecordedToolOutput = {
+      title: 'Bash command failed',
+      output: 'permission denied: /var/run/lock',
+      metadata: { status: 'error' },
+    }
+    await first.hooks['tool.execute.after'](
+      { ...input, args: { target: 'unit' } },
+      sharedOutput,
+    )
+    // (a) the host's failure sentinel survives in the shared metadata, even
+    // though debug mode is on and writes its own epoch status field.
+    expect(sharedOutput.metadata.status).toBe('error')
+    expect(sharedOutput.metadata.debugEpochStatus).not.toBe('error')
+
+    await second.hooks['tool.execute.after'](
+      { ...input, args: { target: 'unit' } },
+      sharedOutput,
+    )
+    // (b) the second instance does not finalize a unit off a failed host
+    // result, and (c) the title/output are not rewritten to success wording.
+    expect(status(second).unit?.status).not.toBe('completed')
+    expect(sharedOutput.title).not.toBe('Workflow transition completed')
+    expect(sharedOutput.output).not.toContain('workflow guard completed')
+    expect(sharedOutput.metadata.status).toBe('error')
+  })
+
   test('markers upsert one source entry and aggregate worst precedence', async () => {
     const first = createAdapter('protected')
     const second = createAdapter('protected')
@@ -3744,6 +3944,56 @@ describe('OpenCode workflow guard adapter', () => {
         .listReceipts()
         .some((receipt) => receipt.canonical.consumption === 'consumed'),
     ).toBe(false)
+  })
+
+  test('an interleaved-digest completion readback writes an unavailable terminal result instead of stale ready metadata', async () => {
+    const adapter = createAdapter(
+      'observe',
+      false,
+      sequenceObserver([
+        operationSnapshot(),
+        operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+        operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+        operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+        operationSnapshot('b'.repeat(64), 'f'.repeat(64)),
+        operationSnapshot('b'.repeat(64), 'g'.repeat(64)),
+      ]),
+    )
+    await observeSkill(adapter, 'systematic_skill', 'ce:work')
+    await observeOperationTool(
+      adapter,
+      'write',
+      { filePath: 'a.ts', content: 'a' },
+      { title: 'write', output: 'changed', metadata: {} },
+      'readback-unavailable-implementation',
+    )
+    await observeOperationTool(
+      adapter,
+      'bash',
+      { command: 'bun test tests/unit/example.test.ts' },
+      { title: 'tests', output: 'pass', metadata: { exit: 0 } },
+      'readback-unavailable-verification',
+    )
+    const input = {
+      tool: 'systematic_workflow_complete',
+      sessionID: SESSION_A,
+      callID: 'readback-unavailable-completion',
+    }
+    await adapter.hooks['tool.execute.before'](input, {
+      args: { target: 'unit' },
+    })
+    const output = staleReadyOutput()
+    await adapter.hooks['tool.execute.after'](
+      { ...input, args: { target: 'unit' } },
+      output,
+    )
+    expect(status(adapter).unit?.status).toBe('active')
+    expect(output.metadata).not.toMatchObject({ reasonCode: 'unit-ready' })
+    expect(output.metadata.workflowGuard).toMatchObject({
+      status: 'unavailable',
+      reasonCode: 'finalization-failed',
+      target: 'unit',
+    })
   })
 
   test('requalifies a pinned worktree target during completion readback', async () => {
