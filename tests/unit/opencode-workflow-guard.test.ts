@@ -2309,6 +2309,97 @@ describe('OpenCode workflow guard adapter', () => {
     ).toEqual(consumption)
   })
 
+  const staleReadyOutput = (): RecordedToolOutput => ({
+    title: 'Workflow unit ready',
+    output: JSON.stringify({ status: 'ready' }),
+    metadata: {
+      protocolVersion: 2,
+      state: 'protected',
+      reasonCode: 'unit-ready',
+      enforcement: 'protected',
+    },
+  })
+
+  test('a mismatched completion target writes an abandoned terminal result instead of stale ready metadata', async () => {
+    const adapter = createAdapter('protected')
+    await observeSkill(adapter, 'systematic_skill', 'ce:work')
+    mintReceipt(adapter, 'implementation')
+    mintReceipt(adapter, 'verification')
+    const input = {
+      tool: 'systematic_workflow_complete',
+      sessionID: SESSION_A,
+      callID: 'mismatched-target-complete',
+    }
+    await adapter.hooks['tool.execute.before'](input, {
+      args: { target: 'unit' },
+    })
+    const output = staleReadyOutput()
+    await adapter.hooks['tool.execute.after'](
+      { ...input, args: { target: 'epoch' } },
+      output,
+    )
+    expect(output.metadata).not.toMatchObject({ reasonCode: 'unit-ready' })
+    expect(output.metadata.workflowGuard).toMatchObject({
+      status: 'unavailable',
+      reasonCode: 'abandoned-transition',
+      target: 'unit',
+    })
+  })
+
+  test('a completion call with no pending transition and no replayable outcome writes an unavailable terminal result', async () => {
+    const adapter = createAdapter('protected')
+    const input = {
+      tool: 'systematic_workflow_complete',
+      sessionID: SESSION_A,
+      callID: 'no-pending-complete',
+    }
+    const output = staleReadyOutput()
+    await adapter.hooks['tool.execute.after'](
+      { ...input, args: { target: 'unit' } },
+      output,
+    )
+    expect(output.metadata).not.toMatchObject({ reasonCode: 'unit-ready' })
+    expect(output.metadata.workflowGuard).toMatchObject({
+      status: 'unavailable',
+      reasonCode: 'guard-unavailable',
+      target: 'unit',
+    })
+  })
+
+  test('a failed host completion tool preserves the host error text and only corrects the metadata', async () => {
+    const adapter = createAdapter('protected')
+    await observeSkill(adapter, 'systematic_skill', 'ce:work')
+    mintReceipt(adapter, 'implementation')
+    mintReceipt(adapter, 'verification')
+    const input = {
+      tool: 'systematic_workflow_complete',
+      sessionID: SESSION_A,
+      callID: 'host-failure-complete',
+    }
+    await adapter.hooks['tool.execute.before'](input, {
+      args: { target: 'unit' },
+    })
+    const hostErrorTitle = 'Bash command failed'
+    const hostErrorText = 'permission denied: /var/run/lock'
+    const output: RecordedToolOutput = {
+      title: hostErrorTitle,
+      output: hostErrorText,
+      metadata: { status: 'error' },
+    }
+    await adapter.hooks['tool.execute.after'](
+      { ...input, args: { target: 'unit' } },
+      output,
+    )
+    expect(output.title).toBe(hostErrorTitle)
+    expect(output.output).toBe(hostErrorText)
+    expect(output.metadata).not.toEqual({ status: 'error' })
+    expect(output.metadata.workflowGuard).toMatchObject({
+      status: 'unavailable',
+      reasonCode: 'abandoned-transition',
+      target: 'unit',
+    })
+  })
+
   test('markers upsert one source entry and aggregate worst precedence', async () => {
     const first = createAdapter('protected')
     const second = createAdapter('protected')
@@ -3744,6 +3835,56 @@ describe('OpenCode workflow guard adapter', () => {
         .listReceipts()
         .some((receipt) => receipt.canonical.consumption === 'consumed'),
     ).toBe(false)
+  })
+
+  test('an interleaved-digest completion readback writes an unavailable terminal result instead of stale ready metadata', async () => {
+    const adapter = createAdapter(
+      'observe',
+      false,
+      sequenceObserver([
+        operationSnapshot(),
+        operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+        operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+        operationSnapshot('b'.repeat(64), 'd'.repeat(64)),
+        operationSnapshot('b'.repeat(64), 'f'.repeat(64)),
+        operationSnapshot('b'.repeat(64), 'g'.repeat(64)),
+      ]),
+    )
+    await observeSkill(adapter, 'systematic_skill', 'ce:work')
+    await observeOperationTool(
+      adapter,
+      'write',
+      { filePath: 'a.ts', content: 'a' },
+      { title: 'write', output: 'changed', metadata: {} },
+      'readback-unavailable-implementation',
+    )
+    await observeOperationTool(
+      adapter,
+      'bash',
+      { command: 'bun test tests/unit/example.test.ts' },
+      { title: 'tests', output: 'pass', metadata: { exit: 0 } },
+      'readback-unavailable-verification',
+    )
+    const input = {
+      tool: 'systematic_workflow_complete',
+      sessionID: SESSION_A,
+      callID: 'readback-unavailable-completion',
+    }
+    await adapter.hooks['tool.execute.before'](input, {
+      args: { target: 'unit' },
+    })
+    const output = staleReadyOutput()
+    await adapter.hooks['tool.execute.after'](
+      { ...input, args: { target: 'unit' } },
+      output,
+    )
+    expect(status(adapter).unit?.status).toBe('active')
+    expect(output.metadata).not.toMatchObject({ reasonCode: 'unit-ready' })
+    expect(output.metadata.workflowGuard).toMatchObject({
+      status: 'unavailable',
+      reasonCode: 'finalization-failed',
+      target: 'unit',
+    })
   })
 
   test('requalifies a pinned worktree target during completion readback', async () => {

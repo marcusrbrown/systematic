@@ -2563,6 +2563,41 @@ function createSessionRuntime(
     }
   }
 
+  // A completion that never reached `guard.finalizeTransition` (mismatched
+  // target, no replayable transition, or a failed readback bundle) must not
+  // leave the tool result carrying whatever pre-finalization metadata was
+  // written earlier in the request. Writes a full terminal result through
+  // `writeCompletionResult()` so the shape and reason-code vocabulary match
+  // every other non-success completion outcome.
+  function writeAbandonedCompletionResult(
+    output: unknown,
+    target: TransitionTarget,
+    reasonCode: WorkflowReasonCode,
+  ): void {
+    writeCompletionResult(
+      output,
+      { target, status: 'unavailable', reasonCode },
+      target,
+    )
+  }
+
+  // Companion to writeAbandonedCompletionResult() for the case where the
+  // HOST tool itself failed: the output already carries the host's own
+  // error title/text, which is evidence and must not be destroyed. Only the
+  // metadata is corrected, using a fresh metadata() read taken after
+  // guard.abandonTransition() so it reflects the corrected guard state.
+  function writeAbandonedCompletionMetadata(
+    output: unknown,
+    target: TransitionTarget,
+    reasonCode: WorkflowReasonCode,
+  ): void {
+    if (!isRecord(output)) return
+    output.metadata = {
+      ...metadata(),
+      workflowGuard: { status: 'unavailable', target, reasonCode },
+    }
+  }
+
   function prepareSkill(host: HostToolBefore, args: unknown): void {
     const skill = normalizeSkill(host.tool, args)
     if (!skill) return
@@ -3115,6 +3150,11 @@ function createSessionRuntime(
         callId: pending.callID,
         transitionId: pending.transitionId,
       })
+      writeAbandonedCompletionMetadata(
+        output,
+        pending.target,
+        'abandoned-transition',
+      )
       return
     }
     const result = guard.finalizeTransition({
@@ -3323,6 +3363,45 @@ function createSessionRuntime(
     return readbacks
   }
 
+  function finishMismatchedTarget(
+    callDigest: string,
+    pending: PendingComplete,
+    output: unknown,
+  ): void {
+    abandonComplete(callDigest, pending, false)
+    markUnavailable()
+    writeAbandonedCompletionResult(
+      output,
+      pending.target,
+      'abandoned-transition',
+    )
+  }
+
+  function finishUnreplayableComplete(
+    finalTarget: TransitionTarget | undefined,
+    output: unknown,
+  ): void {
+    markUnavailable()
+    // No pending transition and nothing replayable: the target is unknown,
+    // so 'unit' is used as the required TransitionTarget field on this
+    // synthetic terminal result — display-only in this branch.
+    writeAbandonedCompletionResult(output, finalTarget ?? 'unit', 'guard-unavailable')
+  }
+
+  function finishUnavailableReadback(
+    callDigest: string,
+    pending: PendingComplete,
+    output: unknown,
+  ): void {
+    abandonComplete(callDigest, pending, true)
+    markUnavailable()
+    writeAbandonedCompletionResult(
+      output,
+      pending.target,
+      'finalization-failed',
+    )
+  }
+
   async function finishComplete(
     host: HostToolAfter,
     output: unknown,
@@ -3331,13 +3410,12 @@ function createSessionRuntime(
     const pending = pendingCompletes.get(callDigest)
     const finalTarget = normalizeTarget(host.args)
     if (pending && (!finalTarget || finalTarget !== pending.target)) {
-      abandonComplete(callDigest, pending, false)
-      markUnavailable()
+      finishMismatchedTarget(callDigest, pending, output)
       return
     }
     if (!pending) {
       if (replayTerminalComplete(callDigest, finalTarget, output)) return
-      markUnavailable()
+      finishUnreplayableComplete(finalTarget, output)
       return
     }
     if (!options.observer) {
@@ -3346,8 +3424,7 @@ function createSessionRuntime(
     }
     const readbacks = await completionReadbacks()
     if (readbacks.status === 'unavailable') {
-      abandonComplete(callDigest, pending, true)
-      markUnavailable()
+      finishUnavailableReadback(callDigest, pending, output)
       return
     }
     finalizeComplete(
