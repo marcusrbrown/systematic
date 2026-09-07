@@ -73,14 +73,14 @@ the exact pin the PR proposes, on a clean checkout.
 
 **Green is evidence only when the suite actually ran.** The job has no
 top-level `if:` — gating happens per step, at
-`.github/workflows/main.yaml:198-216` — so on a PR the path filter excludes
-(docs-only, registry-only, etc.) every gated step is skipped and the job
-still reports success. A green check on an unrelated PR is not host
+`.github/workflows/main.yaml:198-216` — so on a PR that the path filter
+excludes (a docs-only change, for example) every gated step is skipped and
+the job still reports success. A green check on an unrelated PR is not host
 evidence; it is the job correctly declining to run. This never undermines a
 Renovate OpenCode bump specifically: the filter at
-`.github/workflows/main.yaml:182-192` includes `package.json` and
-`bun.lock`, both of which a pin bump always touches, so that PR's
-`host-contract` green always means the suite ran. The qualifier matters for
+`.github/workflows/main.yaml:182-192` includes `package.json`, which a pin
+bump always touches (and `bun.lock`, which it touches in practice), so that
+PR's `host-contract` green always means the suite ran. The qualifier matters for
 any other PR whose green check might be mistaken for host coverage.
 
 ### Skip-vs-fail is the mechanism that makes this safe
