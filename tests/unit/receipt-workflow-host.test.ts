@@ -7,6 +7,7 @@ import {
   assertMixedVersionProbeEvents,
   buildDetachedChildSpawnOptions,
   extractSkillNameFromPrompt,
+  isKillErrorProofOfDeath,
   isProcessGroupAlive,
   type ProbeEvent,
   scriptedResponseChunks,
@@ -701,10 +702,16 @@ describe('stale run-child pid pruning (item 1 regression: grandchild still drain
 // as alive), because this function backs a reaper that must never drop an
 // entry it cannot prove is actually gone.
 //
-// Bidirectional proof: temporarily reverting `isProcessGroupAlive` to its
-// catch-all `catch { return false }` form was confirmed to make both the
-// EPERM and unknown-error-code cases below fail (each expects `true`, the
-// catch-all returns `false`) -- before restoring the fix.
+// The EPERM and unknown-code branches are pinned directly against the pure
+// `isKillErrorProofOfDeath` classifier (no real syscall involved), so this
+// suite never reassigns the shared `process.kill` global -- see Guard 2 in
+// tests/unit/spawn-and-signal-conventions.test.ts for why that global is
+// off-limits for worker-shared mutation.
+//
+// Bidirectional proof: temporarily reverting the classifier's ESRCH check
+// to a catch-all (`return false` unconditionally) was confirmed to make
+// both the EPERM and unknown-error-code cases below fail (each expects
+// `true`, the catch-all returns `false`) -- before restoring the fix.
 describe('isProcessGroupAlive error classification (ESRCH vs EPERM vs unknown)', () => {
   test('a real live process group is reported alive', async () => {
     const child = spawn('sleep', ['30'], {
@@ -744,37 +751,18 @@ describe('isProcessGroupAlive error classification (ESRCH vs EPERM vs unknown)',
     expect(isProcessGroupAlive(pid)).toBe(false)
   }, 10_000)
 
-  test('EPERM (group exists, not ours to signal) is reported alive', () => {
-    // Simulating a real EPERM target (e.g. a root-owned process group) is
-    // unreliable in CI/sandboxed environments, so this monkey-patches
-    // `process.kill` for the duration of this single assertion only,
-    // restoring it in `finally` immediately after.
-    const originalKill = process.kill
-    process.kill = ((_pid: number, _signal?: string | number) => {
-      const error = new Error('EPERM') as NodeJS.ErrnoException
-      error.code = 'EPERM'
-      throw error
-    }) as typeof process.kill
-
-    try {
-      expect(isProcessGroupAlive(999_999)).toBe(true)
-    } finally {
-      process.kill = originalKill
-    }
+  test('EPERM (group exists, not ours to signal) is classified as not proof of death', () => {
+    const error = Object.assign(new Error('EPERM'), { code: 'EPERM' })
+    expect(isKillErrorProofOfDeath(error)).toBe(false)
   })
 
-  test('an unknown/unclassified error code fails closed (reported alive)', () => {
-    const originalKill = process.kill
-    process.kill = ((_pid: number, _signal?: string | number) => {
-      const error = new Error('EWEIRD') as NodeJS.ErrnoException
-      error.code = 'EWEIRD'
-      throw error
-    }) as typeof process.kill
+  test('an unknown/unclassified error code is classified as not proof of death (fail closed)', () => {
+    const error = Object.assign(new Error('EWEIRD'), { code: 'EWEIRD' })
+    expect(isKillErrorProofOfDeath(error)).toBe(false)
+  })
 
-    try {
-      expect(isProcessGroupAlive(999_999)).toBe(true)
-    } finally {
-      process.kill = originalKill
-    }
+  test('ESRCH (no such process/group) is classified as proof of death', () => {
+    const error = Object.assign(new Error('ESRCH'), { code: 'ESRCH' })
+    expect(isKillErrorProofOfDeath(error)).toBe(true)
   })
 })

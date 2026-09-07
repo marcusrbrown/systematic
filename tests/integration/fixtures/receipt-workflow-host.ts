@@ -1051,15 +1051,16 @@ function killProcessGroupSync(pid: number): void {
  * is actually gone, so it fails CLOSED (treats it as alive) rather than
  * risk leaking a live `opencode` process group past process exit.
  */
+export function isKillErrorProofOfDeath(error: unknown): boolean {
+  return isRecord(error) && error.code === 'ESRCH'
+}
+
 export function isProcessGroupAlive(pid: number): boolean {
   try {
     process.kill(-pid, 0)
     return true
   } catch (error) {
-    if (isRecord(error) && error.code === 'ESRCH') {
-      return false
-    }
-    return true
+    return !isKillErrorProofOfDeath(error)
   }
 }
 
@@ -1076,8 +1077,16 @@ export function isProcessGroupAlive(pid: number): boolean {
  * is always live) and leaving a now-stale, recyclable pgid in
  * `killLiveOpencodeHostsSync`'s SIGKILL sweep, which could wrongly signal
  * an unrelated later process holding that recycled pgid. Both call sites
- * below re-probe and prune stale entries before acting, so a late-draining
- * group costs one extra `process.kill(pid, 0)` call, never a stuck entry.
+ * below re-probe and prune stale entries before acting: an entry is
+ * removed only when the group is provably gone (ESRCH from
+ * `process.kill(-pid, 0)`). Anything else -- EPERM or an unrecognized
+ * error code -- is retained deliberately for the rest of the worker's
+ * life, because a retained bookkeeping entry is strictly safer than
+ * dropping a live host from the reaper. In the EPERM case this is not a
+ * functional leak either: the sweep's own `process.kill(-pid, 'SIGKILL')`
+ * against that same pgid is rejected with EPERM too and swallowed, so a
+ * retained entry never lets this worker signal a group it has no
+ * permission to touch.
  */
 function pruneLiveOpencodeProcesses(): void {
   for (const host of liveOpencodeHosts) {
