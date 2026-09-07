@@ -454,6 +454,33 @@ function readProbeEvents(capturePath: string): Array<Record<string, unknown>> {
     .map((line) => JSON.parse(line) as Record<string, unknown>)
 }
 
+/**
+ * Returns every pid currently belonging to the process group led by `pgid`,
+ * via `ps -eo pid,pgid` -- the one column set both BSD `ps` (macOS) and GNU
+ * procps `ps` (Linux CI) agree on. `-g <pgid>` is NOT portable: on Linux it
+ * selects by session/group *name*, not process-group id, so it cannot be
+ * used here.
+ *
+ * The fixture spawns each host `detached: true`, making the launcher pid
+ * its own process-group leader (pgid == launcher pid). That group contains
+ * only the launcher itself when `bunx` execs the opencode binary in place,
+ * or the launcher plus its opencode child when `bunx` forks instead --
+ * either way, membership in *that* host's group is topology-independent
+ * evidence that a given in-process pid came from that host generation.
+ */
+function processGroupMemberPids(pgid: number): number[] {
+  const result = Bun.spawnSync(['ps', '-eo', 'pid,pgid'])
+  const lines = result.stdout.toString().trim().split('\n').slice(1)
+  const pids: number[] = []
+  for (const line of lines) {
+    const fields = line.trim().split(/\s+/)
+    const pid = Number(fields[0])
+    const groupId = Number(fields[1])
+    if (Number.isFinite(pid) && groupId === pgid) pids.push(pid)
+  }
+  return pids
+}
+
 function completedBashParts(
   messages: unknown[],
 ): Array<Record<string, unknown>> {
@@ -689,6 +716,12 @@ describe.skipIf(!isOpencodeAvailable())(
           },
         ])
         const firstPid = firstHost.pid
+        // Captured before stopping host 1: the fixture spawns each host
+        // `detached: true`, so `firstPid` is also that host's process-group
+        // id. This snapshot is every pid that belonged to host 1's group
+        // while it was alive -- the only evidence available once host 1
+        // stops that a given in-process pid actually came from it.
+        const firstHostGroup = processGroupMemberPids(firstPid)
         await firstHost.stop()
 
         const secondHost = await startOpencodeServer(fixture, configContent)
@@ -712,10 +745,33 @@ describe.skipIf(!isOpencodeAvailable())(
           >
           const secondMetadata = secondState.metadata as Record<string, unknown>
           expect(secondMetadata[RECEIPT_MARKER_KEY]).toBe(RECEIPT_MARKER_VALUE)
+          // Captured before stopping host 2, same reasoning as firstHostGroup.
+          const secondHostGroup = processGroupMemberPids(secondHost.pid)
           const loadedPids = readProbeEvents(probe.capturePath)
             .filter((event) => event.type === 'loaded')
-            .map((event) => event.pid)
-          expect(loadedPids).toEqual([firstPid, secondHost.pid])
+            .map((event) => Number(event.pid))
+
+          // `loadedPids` is `process.pid` read from INSIDE the running
+          // opencode process, not the fixture's launcher pid. The two are
+          // only the same pid when `bunx` execs the opencode binary in
+          // place of itself, which is what this repo's macOS runners do
+          // (measured directly: a single process, PPID 1, own PGID). On
+          // Linux CI, `bunx` instead forks opencode-ai as a child of the
+          // launcher, so the in-process pid is the launcher pid plus one
+          // (measured in CI: launcher/in-process pairs like [6419, 6420]
+          // and [6447, 6448]) -- asserting `loadedPids` equals the launcher
+          // pids only ever held by accident of the macOS exec-in-place
+          // behavior, never cross-platform. What this test actually needs
+          // to prove -- the probe fired exactly once per host generation,
+          // for two distinct generations, and each firing genuinely came
+          // from that generation's own host -- holds regardless of
+          // exec-vs-fork topology: two distinct in-process pids, each a
+          // member of its own host's process group captured while that
+          // host was still alive.
+          expect(loadedPids).toHaveLength(2)
+          expect(loadedPids[0]).not.toBe(loadedPids[1])
+          expect(firstHostGroup).toContain(loadedPids[0])
+          expect(secondHostGroup).toContain(loadedPids[1])
         } finally {
           await secondHost.stop()
           model.stop()
