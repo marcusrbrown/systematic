@@ -71,6 +71,18 @@ to.** There is no follow-up command to run, no pass count to transcribe into a
 doc, and no background process to babysit — the job already did that, against
 the exact pin the PR proposes, on a clean checkout.
 
+**Green is evidence only when the suite actually ran.** The job has no
+top-level `if:` — gating happens per step, at
+`.github/workflows/main.yaml:198-216` — so on a PR the path filter excludes
+(docs-only, registry-only, etc.) every gated step is skipped and the job
+still reports success. A green check on an unrelated PR is not host
+evidence; it is the job correctly declining to run. This never undermines a
+Renovate OpenCode bump specifically: the filter at
+`.github/workflows/main.yaml:182-192` includes `package.json` and
+`bun.lock`, both of which a pin bump always touches, so that PR's
+`host-contract` green always means the suite ran. The qualifier matters for
+any other PR whose green check might be mistaken for host coverage.
+
 ### Skip-vs-fail is the mechanism that makes this safe
 
 The same fail-closed/fail-open split applies in both environments, but the
@@ -95,24 +107,37 @@ That module-scope throw covers a missing or mismatched host, but not a
 narrower failure: a single `test.skipIf(...)` inside an otherwise-loaded file
 skipping for an unrelated reason while the job still reports green. The guard
 step at `.github/workflows/main.yaml:259-397` closes that gap. It parses the
-JUnit output and fails the job if any of three things are true:
+JUnit output and fails the job (`failed = true`, then `process.exit(1)`) on
+any of five independent conditions:
 
-1. A known integration test file (the eleven listed in `EXPECTED_SUITE_FILES`,
-   `.github/workflows/main.yaml:282-294`) produced no `<testsuite>` entry at
-   all — meaning `bun test` never actually ran it.
-2. Any skipped test case is outside the exempt set. Today that set has exactly
-   one entry: the mixed-version test
-   (`.github/workflows/main.yaml:269-274`), which stays opt-in because running
-   it would put a fetch of a published `@fro.bot/systematic` release on the
-   path that gates publishing the next one.
-3. The final `<N> pass` count in the captured log is below `PASS_FLOOR = 120`
-   (`.github/workflows/main.yaml:303`).
+1. `missingFiles.length > 0` — a known integration test file (the eleven
+   listed in `EXPECTED_SUITE_FILES`, `.github/workflows/main.yaml:282-294`)
+   produced no `<testsuite>` entry at all, meaning `bun test` never actually
+   ran it.
+2. `unexpected.length > 0` — a skipped test case is outside the exempt set.
+3. `missingExempt.length > 0` — a known-exempt case did **not** skip. The
+   exempt set (`.github/workflows/main.yaml:269-274`, today exactly one
+   entry: the mixed-version test, which stays opt-in because running it
+   would put a fetch of a published `@fro.bot/systematic` release on the
+   path that gates publishing the next one) is bidirectional: it both
+   permits that skip and asserts it happens. A future change that enables
+   the mixed-version test without pruning the exempt set trips this branch
+   instead of silently passing.
+4. `!lastPassMatch` — no `<N> pass` summary line could be parsed from the
+   captured log at all. This fails independently of the floor below; a log
+   with zero parseable summary lines never reaches the floor comparison.
+5. `passCount < PASS_FLOOR` — the parsed pass count is below
+   `PASS_FLOOR = 120` (`.github/workflows/main.yaml:303`).
 
-The combination — module-scope throw for "no host at all", JUnit skip-set
-guard for "host present but a test silently opted out" — is why "green with
-everything skipped" is not a reachable state for this job. Widening the
-exempt set or lowering the floor means editing the guard script inline in the
-workflow, which is a reviewed diff, not a silent loosening.
+The combination — module-scope throw for "no host at all", five-way JUnit
+guard for every shape of "host present but the run didn't actually cover
+what it claims to" — is why "green with everything skipped" is not a
+reachable state for this job. The bidirectional exempt check (condition 3)
+makes that stronger than a permission list would: it is not enough for an
+unexpected skip to be absent, the one expected skip must also be present, so
+an exempt-set entry that silently stops applying is itself a red job.
+Widening the exempt set or lowering the floor means editing the guard script
+inline in the workflow, which is a reviewed diff, not a silent loosening.
 
 ## Why This Matters
 

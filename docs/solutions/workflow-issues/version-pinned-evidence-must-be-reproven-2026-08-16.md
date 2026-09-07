@@ -16,7 +16,7 @@ applies_when:
   - Recorded evidence depends on that runtime's own behavior rather than on this repo's code
   - A dependency bump lands on main while a PR carrying version-dependent evidence is open
 status: superseded
-superseded_by: host-contract-evidence-is-ci-owned-2026-09-04.md
+superseded_by: docs/solutions/workflow-issues/host-contract-evidence-is-ci-owned-2026-09-04.md
 superseded_date: 2026-09-04
 ---
 
