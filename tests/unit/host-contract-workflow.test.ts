@@ -46,6 +46,62 @@ function findStep(steps: readonly unknown[], name: string): RecordValue {
   return step
 }
 
+function normalizeCondition(condition: string): string {
+  return condition.replace(/\s+/g, ' ').trim()
+}
+
+/**
+ * The GitHub Actions status check functions. Per GitHub's own docs: "if
+ * conditional [that doesn't contain] a status check function ... will be
+ * substituted with `success()`", i.e. an `if:` with none of these applies
+ * an IMPLICIT `success()` -- which is job-scoped and false once an earlier
+ * step in the job fails, so a condition relying only on
+ * `steps.<id>.outcome` comparisons (no status check function) would still
+ * get skipped on exactly the failing run it was written to diagnose. This
+ * is the defect that shipped twice in a row on this guard step (first a
+ * job-scoped `failure()`, then no status check function at all), which is
+ * why it is pinned here as its own mechanical check rather than trusted to
+ * manual review.
+ */
+const STATUS_CHECK_FUNCTIONS = [
+  'always()',
+  'success()',
+  'failure()',
+  'cancelled()',
+]
+
+interface GuardConditionAnalysis {
+  /** Contains at least one of the four status check functions, in any
+   * form (bare or negated) -- this is what overrides GitHub's implicit
+   * `success()` default. */
+  readonly hasStatusCheckFunction: boolean
+  /** References the given step id's `.outcome`, which is what actually
+   * excludes "an earlier step failed, so this step never ran"
+   * (`outcome == 'skipped'`) from the cases where the guard runs. */
+  readonly referencesStepOutcome: boolean
+  /** Still requires the path-gate output, so a path-gated-out pull
+   * request continues to skip this step. */
+  readonly requiresPathGate: boolean
+  /** Uses a bare (non-negated) `always()`, which would also run during
+   * job cancellation -- broader than intended. */
+  readonly usesBareAlways: boolean
+}
+
+function analyzeGuardCondition(
+  condition: string,
+  suiteStepId: string,
+): GuardConditionAnalysis {
+  const normalized = normalizeCondition(condition)
+  return {
+    hasStatusCheckFunction: STATUS_CHECK_FUNCTIONS.some((fn) =>
+      normalized.includes(fn),
+    ),
+    referencesStepOutcome: normalized.includes(`steps.${suiteStepId}.outcome`),
+    requiresPathGate: normalized.includes("steps.gate.outputs.run == 'true'"),
+    usesBareAlways: /(?<!!)\balways\(\)/.test(normalized),
+  }
+}
+
 describe('host-contract workflow structural invariants', () => {
   test('the host-contract job has no job-level `if:`', () => {
     const workflow = readWorkflow()
@@ -90,45 +146,105 @@ describe('host-contract workflow structural invariants', () => {
     expect(suiteStep.id).toBe('suite')
   })
 
-  test('the "Guard skipped tests and pass floor" step runs on both suite outcomes, gated on the suite step specifically', () => {
+  test('the "Guard skipped tests and pass floor" step condition is exactly the intended expression', () => {
     const workflow = readWorkflow()
     const jobs = asRecord(workflow.jobs, 'jobs')
     const hostContract = asRecord(jobs['host-contract'], 'host-contract job')
     const steps = asArray(hostContract.steps, 'host-contract steps')
     const guardStep = findStep(steps, 'Guard skipped tests and pass floor')
-    const condition = String(guardStep.if ?? '')
-      .replace(/\s+/g, ' ')
-      .trim()
+    const condition = normalizeCondition(String(guardStep.if ?? ''))
 
-    // Asserts the exact expression rather than substring-checking for
-    // 'failure()' alone: a lone substring check also passes for the
-    // opposite-meaning `!failure()`, which would silently reintroduce the
-    // bug this condition exists to fix (the guard step skipped exactly
-    // when the suite step fails). Also asserts the condition is scoped to
-    // steps.suite specifically (not the job-wide success()/failure()
-    // status functions), so an unrelated earlier-step failure (Install
-    // dependencies, Build) -- which leaves the suite step itself
-    // 'skipped' -- also skips this step, instead of running it against
-    // artifacts the suite step never produced.
+    // Pinned to the exact expression, not a substring, so no individual
+    // clause can quietly regress (e.g. `!failure()` instead of `failure()`,
+    // or dropping `!cancelled()` and losing the status-check-function
+    // override -- both shipped as real regressions on this same step in
+    // prior rounds). `!cancelled()` is what overrides GitHub's implicit
+    // `success()` default (see analyzeGuardCondition's doc comment) while
+    // staying true on both a passing and a failing suite; the
+    // steps.suite.outcome checks do the rest, excluding both 'skipped'
+    // (an earlier step failed first) and 'cancelled' (the suite step
+    // itself was interrupted).
     expect(condition).toBe(
-      "steps.gate.outputs.run == 'true' && (steps.suite.outcome == 'success' || steps.suite.outcome == 'failure')",
+      "steps.gate.outputs.run == 'true' && !cancelled() && (steps.suite.outcome == 'success' || steps.suite.outcome == 'failure')",
     )
   })
 
-  test('the "Guard skipped tests and pass floor" step does not run on cancellation', () => {
-    const workflow = readWorkflow()
-    const jobs = asRecord(workflow.jobs, 'jobs')
-    const hostContract = asRecord(jobs['host-contract'], 'host-contract job')
-    const steps = asArray(hostContract.steps, 'host-contract steps')
-    const guardStep = findStep(steps, 'Guard skipped tests and pass floor')
-    const condition = String(guardStep.if ?? '')
+  describe('guard condition properties (mechanically pinned, proven bidirectionally)', () => {
+    function realCondition(): string {
+      const workflow = readWorkflow()
+      const jobs = asRecord(workflow.jobs, 'jobs')
+      const hostContract = asRecord(jobs['host-contract'], 'host-contract job')
+      const steps = asArray(hostContract.steps, 'host-contract steps')
+      const guardStep = findStep(steps, 'Guard skipped tests and pass floor')
+      return normalizeCondition(String(guardStep.if ?? ''))
+    }
 
-    // `always()` would also run during a cancellation. A cancelled suite
-    // step's outcome is neither 'success' nor 'failure' either, so the
-    // steps.suite.outcome-scoped condition asserted above already excludes
-    // cancellation -- this asserts `always()` specifically isn't used, since
-    // that would be a strictly broader (and wrong) condition.
-    expect(condition).not.toContain('always()')
+    test('(a) the real condition contains a status check function', () => {
+      expect(
+        analyzeGuardCondition(realCondition(), 'suite').hasStatusCheckFunction,
+      ).toBe(true)
+    })
+
+    test('(a) bidirectional: a condition with no status check function fails this property (the exact bug that shipped)', () => {
+      // Mutates the extracted condition STRING, not the real workflow file
+      // -- this is what "an `if:` with no status check function silently
+      // gets an implicit success()" looks like once written out.
+      const mutated = realCondition().replace('!cancelled() && ', '')
+      expect(mutated).not.toContain('cancelled()')
+      expect(
+        analyzeGuardCondition(mutated, 'suite').hasStatusCheckFunction,
+      ).toBe(false)
+    })
+
+    test('(b) the real condition references steps.suite.outcome', () => {
+      expect(
+        analyzeGuardCondition(realCondition(), 'suite').referencesStepOutcome,
+      ).toBe(true)
+    })
+
+    test('(b) bidirectional: a condition referencing a different step id fails this property (the earlier-step-failure exclusion would be silently dropped)', () => {
+      const mutated = realCondition().replaceAll(
+        'steps.suite.outcome',
+        'steps.build.outcome',
+      )
+      expect(
+        analyzeGuardCondition(mutated, 'suite').referencesStepOutcome,
+      ).toBe(false)
+    })
+
+    test('(c) the real condition still requires the path gate', () => {
+      expect(
+        analyzeGuardCondition(realCondition(), 'suite').requiresPathGate,
+      ).toBe(true)
+    })
+
+    test('(c) bidirectional: a condition without the path gate fails this property (a path-gated-out pull request would no longer skip this step)', () => {
+      const mutated = realCondition().replace(
+        "steps.gate.outputs.run == 'true' && ",
+        '',
+      )
+      expect(mutated).not.toContain('steps.gate.outputs.run')
+      expect(analyzeGuardCondition(mutated, 'suite').requiresPathGate).toBe(
+        false,
+      )
+    })
+
+    test('(d) the real condition does not use a bare always()', () => {
+      expect(
+        analyzeGuardCondition(realCondition(), 'suite').usesBareAlways,
+      ).toBe(false)
+    })
+
+    test('(d) bidirectional: a condition using always() instead of !cancelled() fails this property (it would also run during cancellation)', () => {
+      const mutated = realCondition().replace('!cancelled()', 'always()')
+      expect(analyzeGuardCondition(mutated, 'suite').usesBareAlways).toBe(true)
+      // A bare always() is still a status check function, so it would
+      // pass property (a) -- proving (d) is catching something (a) alone
+      // cannot.
+      expect(
+        analyzeGuardCondition(mutated, 'suite').hasStatusCheckFunction,
+      ).toBe(true)
+    })
   })
 
   test('the guard step invokes the extracted script, not an inline heredoc', () => {

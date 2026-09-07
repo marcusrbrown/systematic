@@ -265,23 +265,27 @@ jobs:
       # expected-file list, and the floor all live in scripts/host-contract-guard.ts,
       # next to the guard, so widening any of them is a reviewed change.
       #
-      # Gated on steps.suite.outcome specifically (not the job-wide success()
-      # / failure() status functions) so this step runs precisely when "Run
-      # host contract suite" itself produced a result -- whether that result
-      # was a pass or a fail, since diagnosis matters most on the fail path.
-      # If an earlier step (Install dependencies, Build) fails instead, "Run
-      # host contract suite" is skipped by its own `if:` and its outcome is
-      # 'skipped', so this step is skipped too rather than running against
-      # artifacts that were never produced. It also does not run on
-      # cancellation, since a cancelled suite step's outcome is neither
-      # 'success' nor 'failure'. It is also gated on steps.gate.outputs.run
-      # so it still does not run on a path-gated-out pull request. This step
-      # only reports additional diagnosis: it does not (and cannot) flip the
+      # `!cancelled()` is load-bearing, not decorative: an `if:` with no
+      # status check function gets an IMPLICIT `success()` ANDed in by
+      # GitHub Actions, which would make this step skip on exactly the
+      # failing suite run it exists to diagnose (success() is job-scoped and
+      # goes false the moment "Run host contract suite" fails). Any status
+      # check function in the expression overrides that implicit default;
+      # `!cancelled()` is the one that does so while staying true on both a
+      # passing AND a failing suite, and false only when the run itself was
+      # cancelled. The steps.suite.outcome check does the rest of the work:
+      # it requires "Run host contract suite" to have actually executed and
+      # concluded (excluding 'skipped', which is what its outcome is when an
+      # earlier step such as Install dependencies or Build fails first, and
+      # excluding 'cancelled', which is what its outcome is if it was
+      # cancelled mid-run). It is also gated on steps.gate.outputs.run so it
+      # still does not run on a path-gated-out pull request. This step only
+      # reports additional diagnosis: it does not (and cannot) flip the
       # suite step's own conclusion, so a red suite still fails the job
       # regardless of what this step finds.
       - name: Guard skipped tests and pass floor
         if: |
-          steps.gate.outputs.run == 'true' &&
+          steps.gate.outputs.run == 'true' && !cancelled() &&
           (steps.suite.outcome == 'success' || steps.suite.outcome == 'failure')
         run: bun scripts/host-contract-guard.ts host-contract-junit.xml host-contract-log.txt
 
