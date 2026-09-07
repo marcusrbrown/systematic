@@ -159,11 +159,12 @@ three. Enumerate the matches and check the count.
 
 ## Related
 
-- [Version-pinned evidence must be re-proven when the pinned runtime moves](version-pinned-evidence-must-be-reproven-2026-08-16.md)
+- [Host-contract evidence is CI-owned](host-contract-evidence-is-ci-owned-2026-09-04.md)
   — the third PR in this batch was an OpenCode bump, and that document already covers it
   completely. It is the reason the bump went straight to the latest published version
-  rather than the next patch: moving the pin costs a seventeen-minute real-host suite run,
-  and landing one patch behind current would have meant paying it twice more.
+  rather than the next patch: the required `host-contract` job re-runs the suite against
+  the new pin on every PR that touches a gated path, so landing one patch behind current
+  would have meant paying that job twice rather than once.
 - [A green release job is not evidence that anything was published](../integration-issues/green-job-is-not-proof-of-publication-2026-08-18.md)
   — the same shape at the CI layer: a reported state standing in for an unverified fact.
 - [Availability guards must check executability, not PATH presence](../integration-issues/availability-guards-must-check-executability-2026-08-16.md)

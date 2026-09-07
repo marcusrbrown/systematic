@@ -133,5 +133,5 @@ After:
 - [A perfect measurement means a broken instrument](../best-practices/a-perfect-measurement-means-a-broken-instrument-2026-08-16.md)
   — a clean result indicting the instrument. Adjacent: that one distrusts the result, this one
   distrusts the attribution.
-- [Version-pinned evidence must be re-proven](../workflow-issues/version-pinned-evidence-must-be-reproven-2026-08-16.md)
+- [Host-contract evidence is CI-owned](../workflow-issues/host-contract-evidence-is-ci-owned-2026-09-04.md)
   — evidence and the version it was taken at move together.

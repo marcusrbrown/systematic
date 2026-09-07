@@ -101,6 +101,6 @@ Collapsing them makes every subsequent overlap measurement over-count, and the e
 
 ## Related
 
-- [`docs/solutions/workflow-issues/version-pinned-evidence-must-be-reproven-2026-08-16.md`](../workflow-issues/version-pinned-evidence-must-be-reproven-2026-08-16.md) — evidence valid under one pinned runtime is not evidence under another.
+- [`docs/solutions/workflow-issues/host-contract-evidence-is-ci-owned-2026-09-04.md`](../workflow-issues/host-contract-evidence-is-ci-owned-2026-09-04.md) — evidence valid under one pinned runtime is not evidence under another; the required `host-contract` job is what proves it now.
 - [`docs/solutions/best-practices/comments-and-commit-messages-are-claims-not-evidence-2026-08-16.md`](comments-and-commit-messages-are-claims-not-evidence-2026-08-16.md) — a written claim is not evidence about the code.
 - [`docs/solutions/best-practices/deletion-gates-must-observe-every-field-the-deleted-code-wrote-2026-08-16.md`](deletion-gates-must-observe-every-field-the-deleted-code-wrote-2026-08-16.md) — a gate blind to a field cannot prove that field is safe to delete.

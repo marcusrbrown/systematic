@@ -15,7 +15,12 @@ applies_when:
   - A test asserts an external runtime version pin
   - Recorded evidence depends on that runtime's own behavior rather than on this repo's code
   - A dependency bump lands on main while a PR carrying version-dependent evidence is open
+status: superseded
+superseded_by: docs/solutions/workflow-issues/host-contract-evidence-is-ci-owned-2026-09-04.md
+superseded_date: 2026-09-04
 ---
+
+> **Superseded (2026-09-04):** The invariant below still holds — evidence gathered at one pinned OpenCode version is not evidence at another. The *mechanism* this doc prescribes (bump the pin, then manually re-run the three-file suite and transcribe a pass count) no longer exists: it was replaced by the required `host-contract` CI job. See [`host-contract-evidence-is-ci-owned-2026-09-04.md`](host-contract-evidence-is-ci-owned-2026-09-04.md) for what actually ships. The body below is preserved as history.
 
 # Version-pinned evidence must be re-proven when the pinned runtime moves
 
