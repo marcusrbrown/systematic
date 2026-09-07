@@ -765,4 +765,13 @@ describe('isProcessGroupAlive error classification (ESRCH vs EPERM vs unknown)',
     const error = Object.assign(new Error('ESRCH'), { code: 'ESRCH' })
     expect(isKillErrorProofOfDeath(error)).toBe(true)
   })
+
+  // Non-object throws are not proof of death via `isRecord`'s explicit
+  // null/non-object check -- pinned so a future `isRecord` change can't
+  // silently reclassify a non-object throw as proof the group is gone.
+  test('non-object throws are classified as not proof of death (fail closed)', () => {
+    expect(isKillErrorProofOfDeath(null)).toBe(false)
+    expect(isKillErrorProofOfDeath(undefined)).toBe(false)
+    expect(isKillErrorProofOfDeath('boom')).toBe(false)
+  })
 })
