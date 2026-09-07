@@ -78,6 +78,13 @@ jobs:
               throw new Error('Pi entry default export must be a function. Got: ' + typeof piModule.default);
             }
             console.log('Pi entry loaded: default export is a function.');
+
+            const cliModule = await import('./dist/cli.js');
+            const cliExportKeys = Object.keys(cliModule).sort();
+            if (cliExportKeys.length === 0) {
+              throw new Error('CLI entry loaded but exported nothing. package.json declares bin.systematic -> ./dist/cli.js, so this entry must resolve under plain Node ESM.');
+            }
+            console.log('CLI entry loaded: ' + JSON.stringify(cliExportKeys));
           "
 
       - name: Content integrity gate
