@@ -237,7 +237,8 @@ validate-review-artifact <path>` (`src/cli.ts`) validates any artifact against i
 `dist/`. `ce:review` stamps `schema_version` on the artifact it writes and runs the validator against
 it before reporting a verdict; a failing artifact is repaired and re-validated, never deleted or
 reported over. Artifacts without `schema_version` predate the contract and are excluded (exit 3,
-"legacy").
+"legacy"). By default the target must resolve inside `.context/systematic/ce-review`; pass
+`--allow-outside-artifact-root` to validate an artifact elsewhere.
 
 **Claude Code plugin build** (`scripts/build-claude-code-plugin.ts`) — generates the CC bundle from
 `skills/` and `agents/` on every CI run; the build fails on any leftover source-namespace identifier
@@ -253,3 +254,19 @@ regardless of what the user writes.
 **Config priority** — `$OPENCODE_CONFIG_DIR/systematic.json` > project `.opencode/systematic.json`
 > user `~/.config/opencode/systematic.json` > defaults. Disabled lists union-merge across all
 sources; bootstrap config shallow-merges.
+
+**Named model profiles** (`src/lib/config.ts` `resolveActiveProfile`/`resolveProfileSelector`,
+`ProfileOverlaySchema` in `src/lib/config-schema.ts`) — a top-level `profile` key selects a named
+entry from a `profiles` map (routing-only `agents`/`categories` overlays) defined in
+`$OPENCODE_CONFIG_DIR` or user config; the selected bundle merges ahead of per-target routing
+resolution. `profiles` is itself in `PROJECT_PROTECTED_FIELDS` alongside `workflow_guard`: a
+project `systematic.json` may select a profile but a `profiles` map it defines is ignored with a
+warning, not merged.
+
+**Host-contract gate** (`.github/workflows/main.yaml` `host-contract` job,
+`scripts/host-contract-guard.ts`, `scripts/lib/opencode-pin.ts`) — runs `tests/integration` against
+a real OpenCode host pinned to the `@opencode-ai/sdk` devDependency version
+(`SYSTEMATIC_REQUIRE_OPENCODE=1`), then guards the run's JUnit output and console log against a
+fixed exempt-skip list and pass floor (`scripts/host-contract-guard.ts`). `host-contract` is a
+required predecessor of `release`; evidence gathered at one pinned OpenCode version is not evidence
+at another, so a Renovate OpenCode bump is only complete when this job is green on that bump.
