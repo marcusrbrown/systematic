@@ -630,7 +630,7 @@ describe('applyBootstrapContent marker-based idempotency', () => {
     }
     applyBootstrapContent(output, wrap('NEW CONTENT'))
     expect(output.system).toHaveLength(1)
-    const result = output.system[0]
+    const [result = ''] = output.system
     const openTagCount = (result.match(new RegExp(MARKER_OPEN, 'g')) ?? [])
       .length
     expect(openTagCount).toBe(1)
@@ -699,12 +699,11 @@ describe('applyBootstrapContent marker-based idempotency', () => {
     expect(output.system[0]).toContain('trailing content with no close')
     expect(output.system[0]).toContain('NEW CONTENT')
     // Exactly one complete block (the appended one)
-    const openTagCount = (
-      output.system[0].match(new RegExp(MARKER_OPEN, 'g')) ?? []
-    ).length
-    const closeTagCount = (
-      output.system[0].match(new RegExp(MARKER_CLOSE, 'g')) ?? []
-    ).length
+    const [slot0 = ''] = output.system
+    const openTagCount = (slot0.match(new RegExp(MARKER_OPEN, 'g')) ?? [])
+      .length
+    const closeTagCount = (slot0.match(new RegExp(MARKER_CLOSE, 'g')) ?? [])
+      .length
     expect(closeTagCount).toBe(1)
     // Two open tags: one from the malformed fragment, one from the appended block
     expect(openTagCount).toBe(2)
@@ -717,7 +716,7 @@ describe('applyBootstrapContent marker-based idempotency', () => {
     applyBootstrapContent(output, wrap('FIRST REGISTRATION'))
     applyBootstrapContent(output, wrap('SECOND REGISTRATION'))
 
-    const result = output.system[0]
+    const [result = ''] = output.system
     expect(result).toContain(malformed)
     expect(result).toContain('SECOND REGISTRATION')
     expect(result).not.toContain('FIRST REGISTRATION')
@@ -781,13 +780,12 @@ describe('applyBootstrapContent marker-based idempotency', () => {
     // The appended block exists
     expect(output.system[0]).toContain('NEW')
     // The inner block is removed — only fragment + appended block remain
-    const openTagCount = (
-      output.system[0].match(new RegExp(MARKER_OPEN, 'g')) ?? []
-    ).length
+    const [slot0 = ''] = output.system
+    const openTagCount = (slot0.match(new RegExp(MARKER_OPEN, 'g')) ?? [])
+      .length
     expect(openTagCount).toBe(2)
-    const closeTagCount = (
-      output.system[0].match(new RegExp(MARKER_CLOSE, 'g')) ?? []
-    ).length
+    const closeTagCount = (slot0.match(new RegExp(MARKER_CLOSE, 'g')) ?? [])
+      .length
     expect(closeTagCount).toBe(1)
   })
 
@@ -805,9 +803,9 @@ describe('applyBootstrapContent marker-based idempotency', () => {
     expect(output.system[0]).toContain('SECOND')
     expect(output.system[0]).not.toContain('FIRST')
     // One complete block (the appended second one)
-    const closeTagCount = (
-      output.system[0].match(new RegExp(MARKER_CLOSE, 'g')) ?? []
-    ).length
+    const [slot0 = ''] = output.system
+    const closeTagCount = (slot0.match(new RegExp(MARKER_CLOSE, 'g')) ?? [])
+      .length
     expect(closeTagCount).toBe(1)
   })
 

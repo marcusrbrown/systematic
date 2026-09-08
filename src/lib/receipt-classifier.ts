@@ -1053,7 +1053,7 @@ function parseCommand(node: Node): ParsedCommand | undefined {
   if (node.type !== 'command') return undefined
   const commandName = node.childForFieldName('name')
   if (commandName?.type !== 'command_name') return undefined
-  const executable = parsePlainToken(commandName.namedChildren[0])
+  const executable = parsePlainToken(commandName.namedChildren[0] ?? null)
   if (!executable) return undefined
   if (!hasSafeCommandChildren(node)) return undefined
   const argumentsList = parseArguments(node)
@@ -1138,11 +1138,12 @@ function containsDynamicSyntax(node: Node): boolean {
 function classifyCommands(
   commands: readonly ParsedCommand[],
 ): ReceiptOperation | undefined {
-  if (commands.length === 0) return undefined
+  const lastCommand = commands.at(-1)
+  if (lastCommand === undefined) return undefined
   for (const prefix of commands.slice(0, -1)) {
     if (!isAllowedPrefix(prefix)) return undefined
   }
-  return classifyFinalCommand(commands[commands.length - 1])
+  return classifyFinalCommand(lastCommand)
 }
 
 function isAllowedPrefix(command: ParsedCommand): boolean {
@@ -1244,9 +1245,9 @@ function classifyGhCommand(
     args.length === 6 &&
     args[1] === 'create' &&
     args[2] === '--title' &&
-    args[3]?.length > 0 &&
+    (args[3]?.length ?? 0) > 0 &&
     args[4] === '--body' &&
-    args[5]?.length > 0 &&
+    (args[5]?.length ?? 0) > 0 &&
     !isEmptyShellString(args[3]) &&
     !isEmptyShellString(args[5])
   ) {

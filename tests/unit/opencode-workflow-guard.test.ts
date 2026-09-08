@@ -2,7 +2,11 @@ import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
-import type { ToolContext, ToolResult } from '@opencode-ai/plugin'
+import type {
+  ToolContext,
+  ToolDefinition,
+  ToolResult,
+} from '@opencode-ai/plugin'
 import { z } from 'zod'
 
 import type {
@@ -53,6 +57,18 @@ function ledger(
   const value = adapter.ledger(sessionID)
   if (!value) throw new Error('session ledger missing')
   return value
+}
+
+/**
+ * Look up a registered guard tool by name. All names used in this suite are
+ * always registered by `createOpencodeWorkflowGuard`; this narrows the
+ * `Record<string, ToolDefinition>` index access to a real `ToolDefinition`
+ * instead of silencing the possibly-undefined type.
+ */
+function getTool(adapter: OpencodeWorkflowGuard, name: string): ToolDefinition {
+  const tool = adapter.tools[name]
+  if (!tool) throw new Error(`tool not registered: ${name}`)
+  return tool
 }
 
 /**
@@ -225,7 +241,11 @@ function sequenceObserver(
       }
       const current = remoteIndexes.get(key) ?? 0
       remoteIndexes.set(key, current + 1)
-      return values[Math.min(current, values.length - 1)]
+      const result = values[Math.min(current, values.length - 1)]
+      if (!result) {
+        return { status: 'unavailable', reasonCode: 'remote-missing-field' }
+      }
+      return result
     },
   }
 }
@@ -614,7 +634,7 @@ async function createPinnedRecoveryAdapter(): Promise<{
     targetResult.snapshot.repositoryRevisionDigest,
     targetResult.snapshot.worktreeRevisionDigest,
   )
-  await adapter.tools.systematic_workflow_status.execute(
+  await getTool(adapter, 'systematic_workflow_status').execute(
     {},
     toolContext(SESSION_A),
   )
@@ -1373,7 +1393,10 @@ describe('OpenCode workflow guard adapter', () => {
       },
       true,
     )
-    await restored.tools.systematic_workflow_status.execute({}, toolContext())
+    await getTool(restored, 'systematic_workflow_status').execute(
+      {},
+      toolContext(),
+    )
 
     expect(status(restored)).toMatchObject({
       state: 'waiting',
@@ -1500,7 +1523,7 @@ describe('OpenCode workflow guard adapter', () => {
       systematic_workflow_control: ['mode'],
     }
     for (const [id, keys] of Object.entries(expectedShapes)) {
-      const args = adapter.tools[id].args as Record<string, unknown>
+      const args = getTool(adapter, id).args as Record<string, unknown>
       expect(Object.keys(args).sort()).toEqual([...keys].sort())
       expect(() => z.object(args).strict()).not.toThrow()
       for (const value of Object.values(args)) {
@@ -1508,7 +1531,7 @@ describe('OpenCode workflow guard adapter', () => {
       }
     }
 
-    const result = await adapter.tools.systematic_workflow_status.execute(
+    const result = await getTool(adapter, 'systematic_workflow_status').execute(
       {},
       toolContext(),
     )
@@ -1527,19 +1550,19 @@ describe('OpenCode workflow guard adapter', () => {
 
   test('start and status tools are non-authoritative while control requires attestation', async () => {
     const adapter = createAdapter()
-    const start = await adapter.tools.systematic_workflow_start.execute(
+    const start = await getTool(adapter, 'systematic_workflow_start').execute(
       { expected_operations: ['commit'] },
       toolContext(),
     )
     const statusBefore = status(adapter)
-    const statusOutput = await adapter.tools.systematic_workflow_status.execute(
-      {},
-      toolContext(),
-    )
-    const control = await adapter.tools.systematic_workflow_control.execute(
-      { mode: 'disabled' },
-      toolContext(),
-    )
+    const statusOutput = await getTool(
+      adapter,
+      'systematic_workflow_status',
+    ).execute({}, toolContext())
+    const control = await getTool(
+      adapter,
+      'systematic_workflow_control',
+    ).execute({ mode: 'disabled' }, toolContext())
 
     expect(expectToolOutput(start).output).toContain('pending')
     expect(expectToolOutput(statusOutput).output).toContain(statusBefore.state)
@@ -1689,7 +1712,7 @@ describe('OpenCode workflow guard adapter', () => {
       answers: [['yes']],
     })
 
-    const status = await adapter.tools.systematic_workflow_status.execute(
+    const status = await getTool(adapter, 'systematic_workflow_status').execute(
       {},
       toolContext(),
     )
@@ -1729,7 +1752,7 @@ describe('OpenCode workflow guard adapter', () => {
 
   test('session disablement requires the native question reply', async () => {
     const adapter = createAdapter('observe')
-    const first = await adapter.tools.systematic_workflow_control.execute(
+    const first = await getTool(adapter, 'systematic_workflow_control').execute(
       { mode: 'disabled' },
       toolContext(),
     )
@@ -1752,10 +1775,10 @@ describe('OpenCode workflow guard adapter', () => {
       requestID: 'disable-request',
       answers: [['confirm']],
     })
-    const second = await adapter.tools.systematic_workflow_control.execute(
-      { mode: 'disabled' },
-      toolContext(),
-    )
+    const second = await getTool(
+      adapter,
+      'systematic_workflow_control',
+    ).execute({ mode: 'disabled' }, toolContext())
     expect(expectToolOutput(second).output).toContain('disabled')
     expect(adapter.status(SESSION_A).state).toBe('disabled')
   })
@@ -1786,7 +1809,7 @@ describe('OpenCode workflow guard adapter', () => {
     let selectedExecutions = 0
     const selectedExecute = async () => {
       selectedExecutions += 1
-      return first.tools.systematic_workflow_complete.execute(
+      return getTool(first, 'systematic_workflow_complete').execute(
         { target: 'unit' },
         toolContext(SESSION_A),
       )
@@ -1838,7 +1861,7 @@ describe('OpenCode workflow guard adapter', () => {
     let selectedExecutions = 0
     const selectedExecute = async () => {
       selectedExecutions += 1
-      return ready.tools.systematic_workflow_complete.execute(
+      return getTool(ready, 'systematic_workflow_complete').execute(
         { target: 'unit' },
         toolContext(SESSION_A),
       )
@@ -1880,7 +1903,10 @@ describe('OpenCode workflow guard adapter', () => {
   test('disabled mode is visible and does not activate or mutate from tool calls', async () => {
     const adapter = createAdapter('disabled')
     await observeSkill(adapter, 'systematic_skill', 'ce:work')
-    await adapter.tools.systematic_workflow_start.execute({}, toolContext())
+    await getTool(adapter, 'systematic_workflow_start').execute(
+      {},
+      toolContext(),
+    )
     expect(status(adapter)).toMatchObject({ state: 'disabled', epoch: null })
   })
 
@@ -1967,7 +1993,10 @@ describe('OpenCode workflow guard adapter', () => {
       { tool: 'systematic_skill', sessionID: '', callID: 'missing-session' },
       { args: { name: 'ce:work' } },
     )
-    await adapter.tools.systematic_workflow_status.execute({}, toolContext())
+    await getTool(adapter, 'systematic_workflow_status').execute(
+      {},
+      toolContext(),
+    )
     expect(status(adapter, SESSION_A).epoch).toBeNull()
     expect(status(adapter, '').state).toBe('unavailable')
     expect(adapter.ledger('')).toBeUndefined()
@@ -3826,7 +3855,10 @@ describe('OpenCode workflow guard adapter', () => {
       worktreeIdentity: 'd'.repeat(64),
     })
 
-    await adapter.tools.systematic_workflow_status.execute({}, toolContext())
+    await getTool(adapter, 'systematic_workflow_status').execute(
+      {},
+      toolContext(),
+    )
     const current = status(adapter)
     expect(['stale-receipt', 'receipt-mismatch']).toContain(current.reasonCode)
     expect(current.reasonCode).not.toBe('workspace-mismatch')
@@ -4178,7 +4210,10 @@ describe('OpenCode workflow guard adapter', () => {
       { tool: 'write', sessionID: SESSION_A, callID: 'before-only' },
       { args: { filePath: 'pending.ts', content: 'pending' } },
     )
-    await adapter.tools.systematic_workflow_status.execute({}, toolContext())
+    await getTool(adapter, 'systematic_workflow_status').execute(
+      {},
+      toolContext(),
+    )
     await adapter.hooks['tool.execute.after'](
       {
         tool: 'write',
@@ -4859,11 +4894,17 @@ describe('OpenCode workflow guard adapter', () => {
       },
       true,
     )
-    await restored.tools.systematic_workflow_status.execute({}, toolContext())
+    await getTool(restored, 'systematic_workflow_status').execute(
+      {},
+      toolContext(),
+    )
     expect(status(restored).epoch).not.toBeNull()
     expect(status(restored).unit).not.toBeNull()
     expect(status(restored).satisfiedOperations).toContain('implementation')
-    await restored.tools.systematic_workflow_status.execute({}, toolContext())
+    await getTool(restored, 'systematic_workflow_status').execute(
+      {},
+      toolContext(),
+    )
     expect(status(restored).epoch).not.toBeNull()
   })
 
@@ -4992,7 +5033,7 @@ describe('OpenCode workflow guard adapter', () => {
         },
       })
 
-      await restored.tools.systematic_workflow_status.execute(
+      await getTool(restored, 'systematic_workflow_status').execute(
         {},
         toolContext(SESSION_A),
       )
@@ -5101,7 +5142,7 @@ describe('OpenCode workflow guard adapter', () => {
         },
       })
 
-      await restored.tools.systematic_workflow_status.execute(
+      await getTool(restored, 'systematic_workflow_status').execute(
         {},
         toolContext(SESSION_A),
       )
@@ -5152,7 +5193,7 @@ describe('OpenCode workflow guard adapter', () => {
         },
       })
 
-      await restored.tools.systematic_workflow_status.execute(
+      await getTool(restored, 'systematic_workflow_status').execute(
         {},
         toolContext(SESSION_A),
       )
@@ -5203,7 +5244,7 @@ describe('OpenCode workflow guard adapter', () => {
         },
       })
 
-      await restored.tools.systematic_workflow_status.execute(
+      await getTool(restored, 'systematic_workflow_status').execute(
         {},
         toolContext(SESSION_A),
       )
@@ -5287,7 +5328,7 @@ describe('OpenCode workflow guard adapter', () => {
         },
       })
 
-      await adapter.tools.systematic_workflow_status.execute(
+      await getTool(adapter, 'systematic_workflow_status').execute(
         {},
         toolContext(SESSION_A),
       )
@@ -5367,7 +5408,7 @@ describe('OpenCode workflow guard adapter', () => {
         },
       })
 
-      await adapter.tools.systematic_workflow_status.execute(
+      await getTool(adapter, 'systematic_workflow_status').execute(
         {},
         toolContext(SESSION_A),
       )
@@ -5409,7 +5450,7 @@ describe('OpenCode workflow guard adapter', () => {
         },
       })
 
-      await adapter.tools.systematic_workflow_status.execute(
+      await getTool(adapter, 'systematic_workflow_status').execute(
         {},
         toolContext(SESSION_A),
       )
@@ -5446,7 +5487,7 @@ describe('OpenCode workflow guard adapter', () => {
         },
       })
 
-      await adapter.tools.systematic_workflow_status.execute(
+      await getTool(adapter, 'systematic_workflow_status').execute(
         {},
         toolContext(SESSION_A),
       )
@@ -7172,7 +7213,7 @@ describe('OpenCode workflow guard adapter', () => {
         'optional-boot-identities-skill',
         parentSessionID,
       )
-      await adapter.tools.systematic_workflow_status.execute(
+      await getTool(adapter, 'systematic_workflow_status').execute(
         {},
         toolContext(parentSessionID),
       )

@@ -76,9 +76,15 @@ describe('EXPECTED_SUITE_FILES', () => {
 // ---------------------------------------------------------------------------
 
 /** The exempt skip's key fields, reused so fixtures stay in sync with the
- * real exempt set instead of hardcoding a copy that could drift. */
-const EXEMPT = EXEMPT_SKIPS[0]
-if (EXEMPT === undefined) throw new Error('EXEMPT_SKIPS must be non-empty')
+ * real exempt set instead of hardcoding a copy that could drift. This is a
+ * function (not a bare index access) so the non-optional return type holds
+ * across the hoisted function declarations below that reference `EXEMPT`. */
+function requireFirstExemptSkip(): (typeof EXEMPT_SKIPS)[number] {
+  const exempt = EXEMPT_SKIPS[0]
+  if (exempt === undefined) throw new Error('EXEMPT_SKIPS must be non-empty')
+  return exempt
+}
+const EXEMPT = requireFirstExemptSkip()
 
 function testcase(
   classname: string,

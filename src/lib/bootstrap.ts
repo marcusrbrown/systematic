@@ -91,16 +91,16 @@ export const applyBootstrapContent = (
   content: string,
 ): void => {
   // Remove every complete marker block from every entry.
-  for (let i = 0; i < output.system.length; i++) {
-    output.system[i] = removeCompleteBootstrapBlocks(output.system[i])
-  }
+  output.system = output.system.map((entry) =>
+    removeCompleteBootstrapBlocks(entry),
+  )
 
   if (output.system.length === 0) {
     output.system.push(content)
     return
   }
 
-  const first = output.system[0]
+  const [first = ''] = output.system
   output.system[0] = first.length > 0 ? `${first}\n\n${content}` : content
 }
 

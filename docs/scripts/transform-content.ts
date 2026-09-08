@@ -176,7 +176,8 @@ function escapeAttr(value: string): string {
 function firstSentence(text: string): string {
   const cleaned = cleanDescription(text)
   const match = cleaned.match(/^[^.!?]+[.!?]/)
-  return match ? match[0].trim() : cleaned.split('\n')[0].trim()
+  const [firstLine = ''] = cleaned.split('\n')
+  return match ? match[0].trim() : firstLine.trim()
 }
 
 const AGENT_CATEGORY_ORDER = [

@@ -57,7 +57,8 @@ export function extractSkillBody(wrappedTemplate: string): string {
   const match = wrappedTemplate.match(
     /<skill-instruction>([\s\S]*?)<\/skill-instruction>/,
   )
-  return match ? match[1].trim() : wrappedTemplate
+  const [, body] = match ?? []
+  return body !== undefined ? body.trim() : wrappedTemplate
 }
 
 export function loadSkill(skillInfo: SkillInfo): LoadedSkill | null {

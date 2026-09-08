@@ -173,8 +173,8 @@ export function resolveVersion(
  * Examples: "2.11.0" → "2", "3.0.0-rc.1" → "3"
  */
 export function getMajorVersion(version: string): string {
-  const parts = version.split('.')
-  return parts[0]
+  const [major = ''] = version.split('.')
+  return major
 }
 
 /**
@@ -645,8 +645,12 @@ export function readCommittedBundledNamesCounts(rootDir: string): {
   )
 
   return {
-    previousAgentCount: agentMatch ? countEntries(agentMatch[1]) : undefined,
-    previousSkillCount: skillMatch ? countEntries(skillMatch[1]) : undefined,
+    previousAgentCount: agentMatch
+      ? countEntries(agentMatch[1] ?? '')
+      : undefined,
+    previousSkillCount: skillMatch
+      ? countEntries(skillMatch[1] ?? '')
+      : undefined,
   }
 }
 
@@ -822,6 +826,7 @@ function parseArgs(argv: string[]): {
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
+    if (arg === undefined) continue
     if (arg === '--check') {
       check = true
     } else if (arg === '--allow-shrink') {

@@ -373,10 +373,10 @@ describe('receipt privacy projections', () => {
     )
 
     const marker = output.metadata[SYSTEMATIC_WORKFLOW_RECEIPT_METADATA_KEY]
-    const toolResult = await adapter.tools.systematic_workflow_status.execute(
-      {},
-      toolContext(),
-    )
+    const statusTool = adapter.tools.systematic_workflow_status
+    if (!statusTool)
+      throw new Error('tool not registered: systematic_workflow_status')
+    const toolResult = await statusTool.execute({}, toolContext())
     const toolMetadata =
       typeof toolResult === 'string' ? undefined : toolResult.metadata
     const values = [marker, adapter.status(SESSION_ID), toolMetadata]

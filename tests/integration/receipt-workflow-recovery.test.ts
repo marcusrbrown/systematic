@@ -786,9 +786,13 @@ describe.skipIf(!isOpencodeAvailable())(
           // member of its own host's process group captured while that
           // host was still alive.
           expect(loadedPids).toHaveLength(2)
-          expect(loadedPids[0]).not.toBe(loadedPids[1])
-          expect(firstHostGroup).toContain(loadedPids[0])
-          expect(secondHostGroup).toContain(loadedPids[1])
+          const [firstLoadedPid, secondLoadedPid] = loadedPids
+          if (firstLoadedPid === undefined || secondLoadedPid === undefined) {
+            throw new Error('expected exactly two loaded pids')
+          }
+          expect(firstLoadedPid).not.toBe(secondLoadedPid)
+          expect(firstHostGroup).toContain(firstLoadedPid)
+          expect(secondHostGroup).toContain(secondLoadedPid)
         } finally {
           await secondHost.stop()
           model.stop()

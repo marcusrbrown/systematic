@@ -487,9 +487,10 @@ function readGitfileTarget(
   }
   const match = /^gitdir:\s*(.+?)\s*$/im.exec(contents)
   if (!match) return undefined
-  const target = path.isAbsolute(match[1])
-    ? match[1]
-    : path.resolve(path.dirname(gitfilePath), match[1])
+  const [, gitdirTarget = ''] = match
+  const target = path.isAbsolute(gitdirTarget)
+    ? gitdirTarget
+    : path.resolve(path.dirname(gitfilePath), gitdirTarget)
   return canonicalPath(target, realPath)
 }
 

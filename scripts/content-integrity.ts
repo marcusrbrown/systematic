@@ -2020,9 +2020,11 @@ function isDispatchArgumentInstruction(rawLine: string): boolean {
     return false
 
   for (const span of rawLine.matchAll(INLINE_CODE_SPAN)) {
-    const assignment = MODEL_ARGUMENT_ASSIGNMENT.exec(span[1])
+    const [, codeSpanText = ''] = span
+    const assignment = MODEL_ARGUMENT_ASSIGNMENT.exec(codeSpanText)
     if (assignment === null) continue
-    if (FRONTMATTER_ONLY_MODEL_VALUES.has(assignment[1].toLowerCase())) continue
+    const [, modelArgument = ''] = assignment
+    if (FRONTMATTER_ONLY_MODEL_VALUES.has(modelArgument.toLowerCase())) continue
     return true
   }
 

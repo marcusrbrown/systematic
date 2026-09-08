@@ -19,6 +19,17 @@ import {
   validateConfig,
 } from '../../src/lib/config-schema.js'
 
+/**
+ * Zod's `SafeParseError` always carries at least one issue; this narrows the
+ * `issues[0]` index access to a real `$ZodIssue` for tests that assert on
+ * the first reported failure.
+ */
+function firstIssue(issues: readonly z.core.$ZodIssue[]): z.core.$ZodIssue {
+  const issue = issues[0]
+  if (!issue) throw new Error('expected at least one zod issue')
+  return issue
+}
+
 const EXPECTED_COLOR_TOKENS = [
   'primary',
   'secondary',
@@ -75,7 +86,7 @@ describe('SystematicConfigSchema', () => {
       expect(overlay?.temperature).toBe(0.3)
       expect(overlay?.mode).toBe('subagent')
       expect(overlay?.color).toBe('primary')
-      expect(parsed.categories.review.model).toBe('anthropic/claude-3')
+      expect(parsed.categories.review?.model).toBe('anthropic/claude-3')
       expect(result.data.disabled_skills).toEqual(['ce:plan'])
       expect(result.data.disabled_agents).toEqual(['correctness-reviewer'])
       expect(result.data.disabled_commands).toEqual(['cmd-1'])
@@ -242,7 +253,7 @@ describe('SystematicConfigSchema', () => {
     })
     expect(result.success).toBe(false)
     if (!result.success) {
-      const issue = result.error.issues[0]
+      const issue = firstIssue(result.error.issues)
       expect(issue.path).toEqual([
         'agents',
         'correctness-reviewer',
@@ -258,7 +269,7 @@ describe('SystematicConfigSchema', () => {
     })
     expect(result.success).toBe(false)
     if (!result.success) {
-      const issue = result.error.issues[0]
+      const issue = firstIssue(result.error.issues)
       expect(issue.path).toEqual(['agents', 'correctness-reviewer', 'top_p'])
       expect(issue.message).toMatch(/<=1|too big|max/i)
     }
@@ -287,7 +298,7 @@ describe('SystematicConfigSchema', () => {
     })
     expect(result.success).toBe(false)
     if (!result.success) {
-      const issue = result.error.issues[0]
+      const issue = firstIssue(result.error.issues)
       expect(issue.path).toEqual(['agents', 'correctness-reviewer', 'mode'])
       const message = issue.message.toLowerCase()
       expect(message).toContain('subagent')
@@ -302,7 +313,7 @@ describe('SystematicConfigSchema', () => {
     })
     expect(result.success).toBe(false)
     if (!result.success) {
-      const issue = result.error.issues[0]
+      const issue = firstIssue(result.error.issues)
       expect(issue.path).toEqual(['agents', 'correctness-reviewer', 'steps'])
     }
   })
@@ -313,7 +324,7 @@ describe('SystematicConfigSchema', () => {
     })
     expect(result.success).toBe(false)
     if (!result.success) {
-      const issue = result.error.issues[0]
+      const issue = firstIssue(result.error.issues)
       expect(issue.path).toEqual(['agents', 'correctness-reviewer', 'steps'])
       // positive means > 0
       expect(issue.message).toMatch(/0|positive|>0|minimum/i)
@@ -326,7 +337,7 @@ describe('SystematicConfigSchema', () => {
     })
     expect(result.success).toBe(false)
     if (!result.success) {
-      const issue = result.error.issues[0]
+      const issue = firstIssue(result.error.issues)
       expect(issue.path).toEqual(['agents', 'correctness-reviewer', 'hidden'])
       expect(issue.message).toMatch(/boolean/i)
     }
@@ -338,7 +349,7 @@ describe('SystematicConfigSchema', () => {
     })
     expect(result.success).toBe(false)
     if (!result.success) {
-      const issue = result.error.issues[0]
+      const issue = firstIssue(result.error.issues)
       expect(issue.path).toEqual([
         'agents',
         'correctness-reviewer',
@@ -353,7 +364,7 @@ describe('SystematicConfigSchema', () => {
     })
     expect(result.success).toBe(false)
     if (!result.success) {
-      const issue = result.error.issues[0]
+      const issue = firstIssue(result.error.issues)
       expect(issue.path).toEqual(['categories', 'review', 'model'])
       expect(issue.message).toMatch(/1|empty|min/i)
     }
@@ -496,7 +507,7 @@ describe('AgentOverlaySchema', () => {
     })
     expect(result.success).toBe(false)
     if (!result.success) {
-      expect(result.error.issues[0].code).toBe('unrecognized_keys')
+      expect(firstIssue(result.error.issues).code).toBe('unrecognized_keys')
     }
   })
 

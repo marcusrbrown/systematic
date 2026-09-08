@@ -699,7 +699,13 @@ export const SystematicConfigSchema = createSystematicConfigSchema({
  * one. An added `.optional()` field with no default — like `$schema` —
  * drifts silently, since `undefined` satisfies both the type and an
  * omitted key. Consumers reading nested fields for their own logic should
- * still narrow/validate at the boundary rather than trust exhaustiveness.
+ * still narrow/validate at the boundary rather than trust exhaustiveness —
+ * for the `categories` and `profiles` record fields (each
+ * `z.record(z.string(), ...)`), `noUncheckedIndexedAccess` in tsconfig.json
+ * now makes this compiler-enforced rather than a style convention: an index
+ * access like `parsed.categories[key]` types as `V | undefined`, so an
+ * unnarrowed read fails to typecheck instead of type-checking clean and
+ * throwing at runtime on a missing key.
  */
 export type SystematicConfigParsed = z.infer<typeof SystematicConfigSchema>
 

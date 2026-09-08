@@ -269,8 +269,18 @@ function parseOverlayShape(
 
 function throwOverlaySchemaError(
   overlay: { sourcePath: string; keyPath: string },
-  issue: z.core.$ZodIssue,
+  issue: z.core.$ZodIssue | undefined,
 ): never {
+  if (!issue) {
+    // Zod's SafeParseError always carries at least one issue on failure; this
+    // branch guards against that contract changing without a type-level signal.
+    throwConfigError(
+      overlay.sourcePath,
+      overlay.keyPath,
+      'schema validation failed',
+    )
+  }
+
   const zodPath =
     issue.code === 'unrecognized_keys'
       ? (issue.message.match(/"([^"]+)"/)?.[1] ?? issue.path.join('.'))

@@ -767,8 +767,12 @@ describe('review artifact schema', () => {
         const issueSignatures = result.error.issues.map(
           (issue) => `${issue.path.join('.') || '$'} ${issue.code}`,
         )
+        const expected = expectedIssues[fixture]
+        if (!expected) {
+          throw new Error(`${fixture}: missing entry in expectedIssues`)
+        }
         expect(issueSignatures, `${fixture}: unexpected issue set`).toEqual(
-          expectedIssues[fixture],
+          expected,
         )
       }
     }

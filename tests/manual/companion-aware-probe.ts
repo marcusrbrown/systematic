@@ -32,7 +32,7 @@ const REPO_ROOT = path.resolve(
   '../..',
 )
 const MODEL = 'opencode/big-pickle'
-const [PROVIDER_ID, MODEL_ID] = MODEL.split('/')
+const [PROVIDER_ID = 'opencode', MODEL_ID = 'big-pickle'] = MODEL.split('/')
 const SESSIONS_PER_CONDITION = 5
 
 // Companion content draft (the V1 candidate). If the probe passes, this is the
@@ -117,9 +117,10 @@ async function startServer(env: NodeJS.ProcessEnv): Promise<{
     const onChunk = (chunk: Buffer) => {
       buf += chunk.toString()
       const match = buf.match(/(http:\/\/[\d.:]+)/)
-      if (match) {
+      const [, url] = match ?? []
+      if (url !== undefined) {
         clearTimeout(timeout)
-        resolve(match[1])
+        resolve(url)
       }
     }
     server.stdout?.on('data', onChunk)

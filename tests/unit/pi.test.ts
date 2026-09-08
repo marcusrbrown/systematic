@@ -253,7 +253,9 @@ describe('src/pi.ts systematic_skill tool registration', () => {
         },
       },
     ])
-    expect(piResult.details.skillDir).toBe(metadataCalls[0]?.metadata.dir)
+    const [firstMetadataCall] = metadataCalls
+    if (!firstMetadataCall) throw new Error('expected a recorded metadata call')
+    expect(piResult.details.skillDir).toBe(firstMetadataCall.metadata.dir)
 
     const unknownName = '__missing_skill__'
     const openCodeError = await (async () => {
