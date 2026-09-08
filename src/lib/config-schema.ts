@@ -691,6 +691,15 @@ export const SystematicConfigSchema = createSystematicConfigSchema({
  * A field added to `createSystematicConfigSchema`'s object shape is
  * reflected here automatically — there is no separate declaration that can
  * drift out of sync with the schema.
+ *
+ * That guarantee is strongest for fields that are required in the parsed
+ * output (no `.optional()`, or defaulted via `.default()`): a test that
+ * asserts a literal object against `z.infer<typeof SystematicConfigSchema>`
+ * (e.g. via `bun:test`'s `toEqual`) fails to typecheck if the literal omits
+ * one. An added `.optional()` field with no default — like `$schema` —
+ * drifts silently, since `undefined` satisfies both the type and an
+ * omitted key. Consumers reading nested fields for their own logic should
+ * still narrow/validate at the boundary rather than trust exhaustiveness.
  */
 export type SystematicConfigParsed = z.infer<typeof SystematicConfigSchema>
 
