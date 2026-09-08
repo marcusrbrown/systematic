@@ -2404,6 +2404,442 @@ describe('OpenCode workflow guard adapter', () => {
     })
   })
 
+  test('a mismatched completion target replayed on the same callID keeps the original reason code', async () => {
+    const adapter = createAdapter('protected')
+    await observeSkill(adapter, 'systematic_skill', 'ce:work')
+    mintReceipt(adapter, 'implementation')
+    mintReceipt(adapter, 'verification')
+    const input = {
+      tool: 'systematic_workflow_complete',
+      sessionID: SESSION_A,
+      callID: 'mismatched-target-replay',
+    }
+    await adapter.hooks['tool.execute.before'](input, {
+      args: { target: 'unit' },
+    })
+    const output = staleReadyOutput()
+    await adapter.hooks['tool.execute.after'](
+      { ...input, args: { target: 'epoch' } },
+      output,
+    )
+    expect(output.metadata.workflowGuard).toMatchObject({
+      status: 'unavailable',
+      reasonCode: 'invalid-transition',
+      target: 'unit',
+    })
+    // Replay against a FRESH result object (not the same shared `output`
+    // reused above): a same-object replay would pass even if the second
+    // pass writes nothing at all, since the first pass's metadata would
+    // simply still be sitting there. A fresh object can only carry
+    // 'invalid-transition' if the replay path actually wrote it.
+    const replayOutput = staleReadyOutput()
+    await adapter.hooks['tool.execute.after'](
+      { ...input, args: { target: 'epoch' } },
+      replayOutput,
+    )
+    expect(replayOutput.metadata).not.toMatchObject({
+      reasonCode: 'unit-ready',
+    })
+    expect(replayOutput.metadata.workflowGuard).toMatchObject({
+      status: 'unavailable',
+      reasonCode: 'invalid-transition',
+      target: 'unit',
+    })
+  })
+
+  test('a failed host completion replayed on the same callID keeps the original reason code and does not touch title/output', async () => {
+    const adapter = createAdapter('protected')
+    await observeSkill(adapter, 'systematic_skill', 'ce:work')
+    mintReceipt(adapter, 'implementation')
+    mintReceipt(adapter, 'verification')
+    const input = {
+      tool: 'systematic_workflow_complete',
+      sessionID: SESSION_A,
+      callID: 'host-failure-replay',
+    }
+    await adapter.hooks['tool.execute.before'](input, {
+      args: { target: 'unit' },
+    })
+    const hostErrorTitle = 'Bash command failed'
+    const hostErrorText = 'permission denied: /var/run/lock'
+    const output: RecordedToolOutput = {
+      title: hostErrorTitle,
+      output: hostErrorText,
+      metadata: { status: 'error' },
+    }
+    await adapter.hooks['tool.execute.after'](
+      { ...input, args: { target: 'unit' } },
+      output,
+    )
+    expect(output.metadata.workflowGuard).toMatchObject({
+      status: 'unavailable',
+      reasonCode: 'failed-operation',
+      target: 'unit',
+    })
+    // A host-tool failure deliberately does NOT mark the session
+    // unavailable (unlike an invalid-transition or a finalizeTransition
+    // rejection, both of which do): the guard lets the agent retry the
+    // same unit after a transient host failure. A replay of the same
+    // failed call must not change that disposition either.
+    expect(status(adapter).state).not.toBe('unavailable')
+    const beforeReplay = {
+      ...(output.metadata.workflowGuard as Record<string, unknown>),
+    }
+    // Replay of the identical call (same callID, same host failure) must
+    // not fall through to finishUnreplayableComplete()'s generic
+    // 'guard-unavailable', and must not overwrite the host's own
+    // title/output with a generic terminal-result title.
+    await adapter.hooks['tool.execute.after'](
+      { ...input, args: { target: 'unit' } },
+      output,
+    )
+    expect(output.title).toBe(hostErrorTitle)
+    expect(output.output).toBe(hostErrorText)
+    expect(output.metadata.status).toBe('error')
+    expect(output.metadata.workflowGuard).toEqual(beforeReplay)
+    expect(status(adapter).state).not.toBe('unavailable')
+  })
+
+  test('a completion call with no pending transition and no target in its own args omits target rather than fabricating one', async () => {
+    const adapter = createAdapter('protected')
+    const input = {
+      tool: 'systematic_workflow_complete',
+      sessionID: SESSION_A,
+      callID: 'no-pending-no-target-complete',
+    }
+    const output = staleReadyOutput()
+    await adapter.hooks['tool.execute.after']({ ...input, args: {} }, output)
+    expect(output.metadata).not.toMatchObject({ reasonCode: 'unit-ready' })
+    expect(output.metadata.workflowGuard).toMatchObject({
+      status: 'unavailable',
+      reasonCode: 'guard-unavailable',
+    })
+    expect(output.metadata.workflowGuard).not.toHaveProperty('target')
+  })
+
+  test('a shared output across two guard instances does not erase questionAttestation evidence from the other instance', async () => {
+    const first = createAdapter('observe')
+    const second = createAdapter('observe')
+
+    // First instance obtains an attested question challenge for completing
+    // target 'unit' — same flow as "native question flow binds and accepts
+    // only a correlated affirmative reply" above.
+    await observeSkill(first, 'systematic_skill', 'ce:work')
+    const gateOutput = { title: 'complete', output: 'complete', metadata: {} }
+    await first.hooks['tool.execute.before'](
+      {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'attest-complete',
+      },
+      { args: { target: 'unit' } },
+    )
+    await first.hooks['tool.execute.after'](
+      {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'attest-complete',
+        args: { target: 'unit' },
+      },
+      gateOutput,
+    )
+    const questionOutput = { args: {} as Record<string, unknown> }
+    await first.hooks['tool.execute.before'](
+      { tool: 'question', sessionID: SESSION_A, callID: 'attest-question' },
+      questionOutput,
+    )
+    await observeQuestionEvent(first, 'question.asked', {
+      id: 'attest-request',
+      sessionID: SESSION_A,
+      questions: [],
+      tool: { messageID: 'attest-message', callID: 'attest-question' },
+    })
+    await observeQuestionEvent(first, 'question.replied', {
+      sessionID: SESSION_A,
+      requestID: 'attest-request',
+      answers: [['yes']],
+    })
+    // Resolve first's own missing-evidence gate (independent of the
+    // question challenge above) so its next completion attempt actually
+    // registers a pending transition instead of being rejected before
+    // reaching branch A.
+    mintReceipt(first, 'implementation')
+    mintReceipt(first, 'verification')
+
+    // First instance now writes a shared output that carries its attested
+    // questionAttestation — a mismatched-target completion (branch A) is a
+    // convenient vehicle: any of the five metadata-merge sites proves the
+    // point.
+    await first.hooks['tool.execute.before'](
+      {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'first-shared-write',
+      },
+      { args: { target: 'unit' } },
+    )
+    const sharedOutput: RecordedToolOutput = {
+      title: 'stale',
+      output: 'stale',
+      metadata: {},
+    }
+    await first.hooks['tool.execute.after'](
+      {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'first-shared-write',
+        args: { target: 'epoch' },
+      },
+      sharedOutput,
+    )
+    expect(sharedOutput.metadata.questionAttestation).toMatchObject({
+      status: 'attested',
+    })
+
+    // A second, independent guard instance (different
+    // ledger.metadata.registrationDigest, no attestation of its own) now
+    // writes into the SAME shared output for its own, unrelated
+    // mismatched-target completion. Its own metadata() call does not emit
+    // questionAttestation — the first instance's evidence must survive the
+    // strip in withoutStaleConditionalMetadata().
+    await observeSkill(second, 'systematic_skill', 'ce:work')
+    mintReceipt(second, 'implementation')
+    mintReceipt(second, 'verification')
+    await second.hooks['tool.execute.before'](
+      {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'second-shared-write',
+      },
+      { args: { target: 'unit' } },
+    )
+    await second.hooks['tool.execute.after'](
+      {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'second-shared-write',
+        args: { target: 'epoch' },
+      },
+      sharedOutput,
+    )
+    expect(sharedOutput.metadata.questionAttestation).toMatchObject({
+      status: 'attested',
+    })
+  })
+
+  test('converged-recovery instances share a sourceDigest, so the questionAttestation gate does not protect them from each other (documented trade-off)', async () => {
+    // `sharedRecovery: true` pins BOTH `registrationIdentity` and
+    // `sessionSalt`, the same pinning `recoverPersistedMarkers()` uses when
+    // a second instance recovers its own prior registration from markers
+    // seeded by the first. Two instances that converge this way compute the
+    // SAME `ledger.metadata.registrationDigest` — and therefore the same
+    // `sourceDigest` — as each other, which is exactly the identifier
+    // `withoutStaleConditionalMetadata()`'s gate compares. The gate cannot
+    // tell these two apart, so it does NOT protect a converged instance's
+    // questionAttestation from being stripped by the other. This is
+    // accepted rather than fixed: `questionAttestation` in written metadata
+    // is display-only (verified: no consumer reads it back as evidence of
+    // a fresh attestation — see the sourceDigest-gate commit), so losing it
+    // here is a fidelity gap, not a security one.
+    const first = createAdapter(
+      'observe',
+      false,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      true,
+    )
+    const second = createAdapter(
+      'observe',
+      false,
+      undefined,
+      [],
+      undefined,
+      undefined,
+      true,
+    )
+
+    await observeSkill(first, 'systematic_skill', 'ce:work')
+    const gateOutput = { title: 'complete', output: 'complete', metadata: {} }
+    await first.hooks['tool.execute.before'](
+      {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'converged-attest-complete',
+      },
+      { args: { target: 'unit' } },
+    )
+    await first.hooks['tool.execute.after'](
+      {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'converged-attest-complete',
+        args: { target: 'unit' },
+      },
+      gateOutput,
+    )
+    const questionOutput = { args: {} as Record<string, unknown> }
+    await first.hooks['tool.execute.before'](
+      {
+        tool: 'question',
+        sessionID: SESSION_A,
+        callID: 'converged-attest-question',
+      },
+      questionOutput,
+    )
+    await observeQuestionEvent(first, 'question.asked', {
+      id: 'converged-attest-request',
+      sessionID: SESSION_A,
+      questions: [],
+      tool: {
+        messageID: 'converged-attest-message',
+        callID: 'converged-attest-question',
+      },
+    })
+    await observeQuestionEvent(first, 'question.replied', {
+      sessionID: SESSION_A,
+      requestID: 'converged-attest-request',
+      answers: [['yes']],
+    })
+    mintReceipt(first, 'implementation')
+    mintReceipt(first, 'verification')
+
+    await first.hooks['tool.execute.before'](
+      {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'converged-first-shared-write',
+      },
+      { args: { target: 'unit' } },
+    )
+    const sharedOutput: RecordedToolOutput = {
+      title: 'stale',
+      output: 'stale',
+      metadata: {},
+    }
+    await first.hooks['tool.execute.after'](
+      {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'converged-first-shared-write',
+        args: { target: 'epoch' },
+      },
+      sharedOutput,
+    )
+    expect(sharedOutput.metadata.questionAttestation).toMatchObject({
+      status: 'attested',
+    })
+
+    // Both instances share `registrationIdentity`/`sessionSalt`, so
+    // `second`'s own `sourceDigest` equals `first`'s. The gate matches on
+    // sourceDigest equality alone and cannot tell that this write belongs
+    // to a DIFFERENT instance — it strips the attestation exactly as if
+    // `first` were correcting its own stale metadata.
+    await observeSkill(second, 'systematic_skill', 'ce:work')
+    mintReceipt(second, 'implementation')
+    mintReceipt(second, 'verification')
+    await second.hooks['tool.execute.before'](
+      {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'converged-second-shared-write',
+      },
+      { args: { target: 'unit' } },
+    )
+    await second.hooks['tool.execute.after'](
+      {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'converged-second-shared-write',
+        args: { target: 'epoch' },
+      },
+      sharedOutput,
+    )
+    expect(sharedOutput.metadata.questionAttestation).toBeUndefined()
+  })
+
+  test('branch E (a finalizeTransition rejection) replays its own recorded reason code against a fresh result object', async () => {
+    // Same partial-registration fixture as "partial registration
+    // finalization fails closed and remains replay-idempotent" — that test
+    // is left untouched; this one adds the fresh-output replay discipline
+    // the branch A regression exposed as missing last round.
+    const first = createAdapter('observe')
+    const second = createAdapter('observe')
+    await observeSkill(first, 'systematic_skill', 'ce:work')
+    await observeSkill(second, 'systematic_skill', 'ce:work')
+    mintReceipt(first, 'implementation')
+    mintReceipt(first, 'verification')
+    mintReceipt(second, 'implementation')
+    mintReceipt(second, 'verification')
+
+    const input = {
+      tool: 'systematic_workflow_complete',
+      sessionID: SESSION_A,
+      callID: 'branch-e-replay',
+    }
+    await first.hooks['tool.execute.before'](input, {
+      args: { target: 'unit' },
+    })
+    await second.hooks['tool.execute.before'](input, {
+      args: { target: 'unit' },
+    })
+
+    const secondStatus = status(second)
+    const secondReceipt = ledger(second)
+      .listReceipts()
+      .find((receipt) => receipt.canonical.operation === 'implementation')
+    if (!secondReceipt || !secondStatus.epoch || !secondStatus.unit) {
+      throw new Error('branch E fixture missing')
+    }
+    ledger(second).consumeReceipt(secondReceipt.canonical.receiptId, {
+      epochId: secondStatus.epoch.epochId,
+      unitId: secondStatus.unit.unitId,
+      workspaceIdentity: SCOPE.workspaceIdentity,
+      repositoryIdentity: SCOPE.repositoryIdentity,
+      worktreeIdentity: SCOPE.worktreeIdentity,
+      operationTargetIdentity: OPERATION_SCOPE.operationTargetIdentity,
+    })
+
+    const firstOutput = { title: 'pending', output: 'pending', metadata: {} }
+    await first.hooks['tool.execute.after'](
+      { ...input, args: { target: 'unit' } },
+      firstOutput,
+    )
+    const secondOutput: RecordedToolOutput = {
+      title: 'pending',
+      output: 'pending',
+      metadata: {},
+    }
+    await second.hooks['tool.execute.after'](
+      { ...input, args: { target: 'unit' } },
+      secondOutput,
+    )
+    expect(secondOutput.metadata.workflowGuard).toMatchObject({
+      status: 'rejected',
+      reasonCode: 'consumed-receipt',
+      target: 'unit',
+    })
+
+    // Replay against a FRESH result object, not the reused `secondOutput`:
+    // an absent write cannot pass this assertion the way a reused object
+    // could.
+    const replayOutput: RecordedToolOutput = {
+      title: 'pending',
+      output: 'pending',
+      metadata: {},
+    }
+    await second.hooks['tool.execute.after'](
+      { ...input, args: { target: 'unit' } },
+      replayOutput,
+    )
+    expect(replayOutput.metadata.workflowGuard).toMatchObject({
+      status: 'rejected',
+      reasonCode: 'consumed-receipt',
+      target: 'unit',
+    })
+  })
+
   test('a shared output across two guard instances keeps the host failure sentinel visible to the second instance', async () => {
     const first = createAdapter('protected')
     const second = createAdapter('protected')

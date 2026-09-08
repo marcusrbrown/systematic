@@ -44,7 +44,6 @@ import {
   type EvidenceObservationResult,
   type RuntimeUnitPolicy,
   type StartUnitResult,
-  type TransitionFinalizeResult,
   type TransitionPrepareResult,
   type TransitionTarget,
   type WorkflowGuard,
@@ -336,9 +335,21 @@ interface SealedOperation {
 }
 
 interface TerminalComplete {
-  target: TransitionTarget
+  // Optional: some terminal outcomes (see `finishUnreplayableComplete()`)
+  // are recorded without ever having observed a real target. `target` is
+  // not read back out of this record by `writeTerminalCompletionResult()`
+  // — the target actually written to the tool result always comes from
+  // that function's own `target` parameter — so leaving it unset here
+  // costs nothing and avoids a fabricated placeholder in the evidence
+  // record.
+  target?: TransitionTarget
   status: 'rejected' | 'unavailable'
   reasonCode: WorkflowReasonCode
+  // When true, a replay of this terminal outcome must only correct the
+  // metadata (`writeAbandonedCompletionMetadata()`), never rewrite the
+  // tool result's title/output. Set for outcomes where the host tool's
+  // own title/output is evidence that must survive replay untouched.
+  metadataOnly?: boolean
 }
 
 type OperationCompletionResult =
@@ -2451,6 +2462,35 @@ function createSessionRuntime(
     return source
   }
 
+  // A conditional metadata key from an earlier `metadata()` call — notably
+  // `questionAttestation` — must not silently outlive the result that
+  // produced it: `metadata()` only adds keys when the current guard state
+  // warrants them, it never deletes stale ones, and every writer below
+  // spreads `existingMetadata` first (lowest precedence) then the current
+  // `metadata()` read. Stripping known conditional keys from the carried-
+  // over metadata before that spread lets the current metadata() call
+  // reinstate them when still valid and drop them otherwise, instead of a
+  // stale value leaking forward into a result that no longer emits it.
+  function withoutStaleConditionalMetadata(
+    existingMetadata: Record<string, unknown>,
+  ): Record<string, unknown> {
+    if (!('questionAttestation' in existingMetadata)) return existingMetadata
+    // `existingMetadata` may belong to the host tool's own raw metadata, or
+    // to ANOTHER guard instance sharing this `output` reference (see the
+    // cross-instance sharing note on writeAbandonedCompletionMetadata()) —
+    // never safe to strip from. `sourceDigest` is this instance's
+    // `ledger.metadata.registrationDigest`: fixed for the instance's
+    // lifetime, and distinct per instance (random unless
+    // `registrationIdentity` is pinned). Matching it against the existing
+    // metadata's own `sourceDigest` is how "did THIS instance write this"
+    // is verified before deleting anything from it.
+    if (existingMetadata.sourceDigest !== currentMarkerSource().source) {
+      return existingMetadata
+    }
+    const { questionAttestation: _stale, ...rest } = existingMetadata
+    return rest
+  }
+
   function metadata(): Record<string, unknown> {
     const source = currentMarkerSource()
     const result: Record<string, unknown> = {
@@ -2510,7 +2550,7 @@ function createSessionRuntime(
       output.title = 'Workflow unit started'
       output.output = JSON.stringify({ status: 'started' })
       output.metadata = {
-        ...existingMetadata,
+        ...withoutStaleConditionalMetadata(existingMetadata),
         ...metadata(),
         workflowGuard: { status: 'started' },
       }
@@ -2524,7 +2564,7 @@ function createSessionRuntime(
       reasonCode,
     })
     output.metadata = {
-      ...existingMetadata,
+      ...withoutStaleConditionalMetadata(existingMetadata),
       ...metadata(),
       workflowGuard: {
         status: 'rejected',
@@ -2533,39 +2573,63 @@ function createSessionRuntime(
     }
   }
 
-  function writeCompletionResult(
+  // Only the terminal writer below can ever see `target === undefined`
+  // (via `finishUnreplayableComplete()`, where the target is genuinely
+  // unknown). Omitted from the returned fragment rather than filled with a
+  // placeholder so the written record never claims to know a target it
+  // does not.
+  function targetMetadataField(
+    target: TransitionTarget | undefined,
+  ): { target: TransitionTarget } | Record<string, never> {
+    return target ? { target } : {}
+  }
+
+  // A successful completion always has a real, known target — this is the
+  // ONLY writer `finalizeComplete()`'s `completed`/`duplicate` branch calls,
+  // and that branch is only ever reached with a concrete `pending.target`.
+  // Requiring `target: TransitionTarget` here (not `| undefined`) makes
+  // that invariant a compile error to violate, instead of a comment next
+  // to a type that allowed both.
+  function writeSuccessfulCompletionResult(
     output: unknown,
-    result: TransitionFinalizeResult | TerminalComplete,
     target: TransitionTarget,
   ): void {
     if (!isRecord(output)) return
     const existingMetadata = isRecord(output.metadata) ? output.metadata : {}
-    if (result.status === 'completed' || result.status === 'duplicate') {
-      output.title = 'Workflow transition completed'
-      output.output = `workflow guard completed ${target}`
-      output.metadata = {
-        ...existingMetadata,
-        ...metadata(),
-        workflowGuard: { status: 'completed', target },
-      }
-      return
+    output.title = 'Workflow transition completed'
+    output.output = `workflow guard completed ${target}`
+    output.metadata = {
+      ...withoutStaleConditionalMetadata(existingMetadata),
+      ...metadata(),
+      workflowGuard: { status: 'completed', target },
     }
-    const reasonCode =
-      'reasonCode' in result ? result.reasonCode : 'guard-unavailable'
-    const resultStatus =
-      result.status === 'waiting' ? 'unavailable' : result.status
+  }
+
+  // Every non-success completion outcome (abandoned, mismatched target,
+  // failed readback, or a finalizeTransition rejection) shares this shape.
+  // `result: TerminalComplete` — not `TransitionFinalizeResult |
+  // TerminalComplete` — means the type system, not a runtime `if`, rules
+  // out ever being called with a `completed`/`duplicate` result:
+  // `TerminalComplete.status` cannot hold those values.
+  function writeTerminalCompletionResult(
+    output: unknown,
+    result: TerminalComplete,
+    target: TransitionTarget | undefined,
+  ): void {
+    if (!isRecord(output)) return
+    const existingMetadata = isRecord(output.metadata) ? output.metadata : {}
     output.title = 'Workflow transition unavailable'
     output.output = JSON.stringify({
-      status: resultStatus,
-      reasonCode,
+      status: result.status,
+      reasonCode: result.reasonCode,
     })
     output.metadata = {
-      ...existingMetadata,
+      ...withoutStaleConditionalMetadata(existingMetadata),
       ...metadata(),
       workflowGuard: {
-        status: resultStatus,
-        target,
-        reasonCode,
+        status: result.status,
+        ...targetMetadataField(target),
+        reasonCode: result.reasonCode,
       },
     }
   }
@@ -2574,14 +2638,14 @@ function createSessionRuntime(
   // target, no replayable transition, or a failed readback bundle) must not
   // leave the tool result carrying whatever pre-finalization metadata was
   // written earlier in the request. Writes a full terminal result through
-  // `writeCompletionResult()` so the shape and reason-code vocabulary match
-  // every other non-success completion outcome.
+  // `writeTerminalCompletionResult()` so the shape and reason-code
+  // vocabulary match every other non-success completion outcome.
   function writeAbandonedCompletionResult(
     output: unknown,
-    target: TransitionTarget,
+    target: TransitionTarget | undefined,
     reasonCode: WorkflowReasonCode,
   ): void {
-    writeCompletionResult(
+    writeTerminalCompletionResult(
       output,
       { target, status: 'unavailable', reasonCode },
       target,
@@ -2610,7 +2674,7 @@ function createSessionRuntime(
     if (!isRecord(output)) return
     const existingMetadata = isRecord(output.metadata) ? output.metadata : {}
     output.metadata = {
-      ...existingMetadata,
+      ...withoutStaleConditionalMetadata(existingMetadata),
       ...metadata(),
       workflowGuard: { status: 'unavailable', target, reasonCode },
     }
@@ -3173,6 +3237,19 @@ function createSessionRuntime(
         pending.target,
         'failed-operation',
       )
+      // Remembered so a replay of this callID reproduces the same
+      // 'failed-operation' reason code instead of falling through to
+      // finishUnreplayableComplete()'s generic 'guard-unavailable'.
+      // metadataOnly: true because the host tool's own title/output are
+      // evidence here and a replay must correct only the metadata, the
+      // same way this first pass did.
+      abandonedCompletes.set(callDigest, pending.target)
+      terminalCompletes.set(callDigest, {
+        target: pending.target,
+        status: 'unavailable',
+        reasonCode: 'failed-operation',
+        metadataOnly: true,
+      })
       return
     }
     const result = guard.finalizeTransition({
@@ -3182,7 +3259,7 @@ function createSessionRuntime(
     })
     if (result.status === 'completed' || result.status === 'duplicate') {
       finalizedCompletes.set(callDigest, pending)
-      writeCompletionResult(output, result, pending.target)
+      writeSuccessfulCompletionResult(output, pending.target)
       return
     }
     markUnavailable()
@@ -3195,7 +3272,23 @@ function createSessionRuntime(
     }
     abandonedCompletes.set(callDigest, pending.target)
     terminalCompletes.set(callDigest, terminal)
-    writeCompletionResult(output, terminal, pending.target)
+    writeTerminalCompletionResult(output, terminal, pending.target)
+  }
+
+  // metadataOnly outcomes (see TerminalComplete) came from a branch where
+  // the host's own title/output are evidence and must not be rewritten by
+  // writeTerminalCompletionResult()'s generic terminal-result shape — only
+  // the metadata is corrected, matching the first pass.
+  function writeTerminalReplay(
+    output: unknown,
+    terminal: TerminalComplete,
+    target: TransitionTarget,
+  ): void {
+    if (terminal.metadataOnly) {
+      writeAbandonedCompletionMetadata(output, target, terminal.reasonCode)
+      return
+    }
+    writeTerminalCompletionResult(output, terminal, target)
   }
 
   function replayTerminalComplete(
@@ -3211,10 +3304,26 @@ function createSessionRuntime(
         return true
       }
     }
+    // A recorded TerminalComplete means THIS call digest already reached a
+    // terminal, non-success outcome (invalid-transition, failed-operation,
+    // or any other non-`completed`/`duplicate` finalizeTransition result).
+    // Unlike `replay` (a finalized success, replayed by re-driving the
+    // real transition) and `blockedTarget` (a still-live question gate),
+    // there is no live transition left here for a mismatched `finalTarget`
+    // to hijack into: writeTerminalReplay() can only ever reproduce the
+    // same non-success result, never a success one, and consumes nothing.
+    // So the target that PRODUCED this terminal (`terminal.target`) is
+    // used to replay it, without gating on whatever `finalTarget` this
+    // particular delivery happens to carry.
+    const terminal = terminalCompletes.get(callDigest)
+    if (terminal?.target) {
+      writeTerminalReplay(output, terminal, terminal.target)
+      blockedCompletes.delete(callDigest)
+      return true
+    }
     const replay = finalizedCompletes.get(callDigest)
     const abandonedTarget = abandonedCompletes.get(callDigest)
     const blockedTarget = blockedCompletes.get(callDigest)
-    const terminal = terminalCompletes.get(callDigest)
     const expectedTarget = replay?.target ?? abandonedTarget ?? blockedTarget
     if (!expectedTarget) return false
     if (finalTarget !== expectedTarget) {
@@ -3222,7 +3331,6 @@ function createSessionRuntime(
       return true
     }
     if (replay) replayComplete(callDigest)
-    if (terminal) writeCompletionResult(output, terminal, expectedTarget)
     blockedCompletes.delete(callDigest)
     return true
   }
@@ -3386,7 +3494,16 @@ function createSessionRuntime(
     pending: PendingComplete,
     output: unknown,
   ): void {
-    abandonComplete(callDigest, pending, false)
+    // remember=true (and the paired terminalCompletes entry below) so a
+    // replay of this callID reproduces 'invalid-transition' instead of
+    // falling through to finishUnreplayableComplete()'s generic
+    // 'guard-unavailable'.
+    abandonComplete(callDigest, pending, true)
+    terminalCompletes.set(callDigest, {
+      target: pending.target,
+      status: 'unavailable',
+      reasonCode: 'invalid-transition',
+    })
     markUnavailable()
     writeAbandonedCompletionResult(output, pending.target, 'invalid-transition')
   }
@@ -3396,14 +3513,13 @@ function createSessionRuntime(
     output: unknown,
   ): void {
     markUnavailable()
-    // No pending transition and nothing replayable: the target is unknown,
-    // so 'unit' is used as the required TransitionTarget field on this
-    // synthetic terminal result — display-only in this branch.
-    writeAbandonedCompletionResult(
-      output,
-      finalTarget ?? 'unit',
-      'guard-unavailable',
-    )
+    // No pending transition and nothing replayable: `finalTarget` is
+    // whatever normalizeTarget() could read out of this call's own args
+    // (real, when the args named a valid target) and is passed through
+    // as-is. When it is also undefined the target is genuinely unknown,
+    // and writeAbandonedCompletionResult()/writeTerminalCompletionResult()
+    // omit the `target` key entirely rather than guessing one.
+    writeAbandonedCompletionResult(output, finalTarget, 'guard-unavailable')
   }
 
   function finishUnavailableReadback(
