@@ -95,12 +95,12 @@ export const applyBootstrapContent = (
     removeCompleteBootstrapBlocks(entry),
   )
 
-  if (output.system.length === 0) {
+  const [first] = output.system
+  if (first === undefined) {
     output.system.push(content)
     return
   }
 
-  const [first = ''] = output.system
   output.system[0] = first.length > 0 ? `${first}\n\n${content}` : content
 }
 

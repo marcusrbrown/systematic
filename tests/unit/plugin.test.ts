@@ -624,6 +624,26 @@ describe('applyBootstrapContent marker-based idempotency', () => {
     expect(output.system[1]).toBe('slot 1 content')
   })
 
+  /**
+   * Regression pin for the `noUncheckedIndexedAccess` narrowing: an
+   * `output.system` array that is non-empty but whose first entry is a
+   * leading empty string must go through the "replace" branch (`first.length
+   * > 0` is false), not the "array is empty" branch. These are genuinely
+   * different code paths in `applyBootstrapContent` — `output.system.length
+   * === 0` (push a new entry) vs. `first.length > 0` (join-vs-replace an
+   * existing entry) — that a careless collapse of the two undefined/empty
+   * checks into one could conflate. A leading blank entry must be replaced
+   * outright, not joined with `\n\n`, which would leave a stray leading
+   * blank line in the rendered system prompt.
+   */
+  test('replaces (not joins) a leading empty-string system[0] entry, and leaves system.length at 1', () => {
+    const output = { system: [''] }
+    applyBootstrapContent(output, wrap('NEW CONTENT'))
+    expect(output.system).toHaveLength(1)
+    expect(output.system[0]).toBe(wrap('NEW CONTENT'))
+    expect(output.system[0]).not.toBe(`\n\n${wrap('NEW CONTENT')}`)
+  })
+
   test('removes existing marker block from system[0] then appends current content', () => {
     const output = {
       system: [`existing prompt with ${wrap('OLD CONTENT')} embedded`],
