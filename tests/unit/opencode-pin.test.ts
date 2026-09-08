@@ -666,20 +666,73 @@ describe('R2: fixture version literals stay in the unpinnable sentinel range', (
 // ---------------------------------------------------------------------------
 
 /**
- * Injection shape for the probe below: an object-literal-style
- * `opencodeVersion:` field on its own line. This is unambiguously in R2's
- * scope -- an OpenCode-shaped version key, not `packageVersion:` or another
- * versioning domain -- and, unlike a multi-line launcher template string or
- * a `.toThrow(/x\.y\.z/)` regex assertion, it is a single self-contained
- * string literal whose tokenization never depends on neighbouring lines, so
- * every planted position behaves the same way. It also matches one of R1's
- * own historical trigger shapes (`scripts/lib/opencode-pin.ts`'s
- * `pin`/`opencodeVersion` vocabulary), keeping the injected literal on R2's
- * "string" code-span path rather than its separate "regex" path.
+ * Injection shapes for the probe below, one function per historical shape
+ * the guard must detect. Guidance Example 1 in
+ * docs/solutions/best-practices/measure-a-source-scanner-blind-spots-2026-09-07.md
+ * names the four shapes a context-anchored (marker-recognising) design
+ * missed: `expectedVersion:`/`reportedVersion:`-style fields with no
+ * recognised keyword, a version inside a launcher template string, and a
+ * bare `.toThrow(/.../ )` regex assertion -- plus the `opencodeVersion:`/
+ * `pin:` shape that same design *did* recognise. Sweeping all four (not
+ * just the one recognised shape) is what makes the probe able to fail
+ * against that design; sweeping only `opencodeVersion:` cannot, since a
+ * context-anchored scanner would still catch it.
+ *
+ * Each shape is a single self-contained literal whose tokenization never
+ * depends on neighbouring lines, so every planted position behaves the
+ * same way regardless of where it lands.
  */
-function probeInjectionLine(literal: string): string {
+function injectPlainAssignment(literal: string): string {
+  // Unrecognised by any marker-anchored design: no `pin`/`opencodeVersion`
+  // keyword nearby, the exact shape a context-anchored scanner missed.
+  return `  const expectedVersion = '${literal}'`
+}
+
+function injectObjectField(literal: string): string {
+  // The one shape a context-anchored design *did* recognise -- included so
+  // the sweep still measures this shape's own coverage, not just the gaps.
   return `  opencodeVersion: '${literal}',`
 }
+
+function injectLauncherTemplate(literal: string): string {
+  // A version embedded partway through a launcher script string, in the
+  // `opencode-ai@<version>` form -- no marker keyword precedes the version
+  // itself, only free text inside a template literal.
+  return `  const launcherCmd = \`bunx opencode-ai@${literal} start\``
+}
+
+function injectRegexAssertion(literal: string): string {
+  // A version inside a `.toThrow(/.../ )` regex literal, escaped-dot form,
+  // matching VERSION_IN_REGEX_PATTERN -- the only shape that drives
+  // scanSpanForVersions's `span.kind === 'regex'` branch rather than its
+  // string-span branch. Preceded by `(`, one of REGEX_LITERAL_PRECEDING_CHARS,
+  // so precedesRegexLiteral recognises it.
+  return `  expect(() => run()).toThrow(/${literal.replaceAll('.', '\\.')}/)`
+}
+
+interface InjectionShape {
+  name: string
+  injectLine: (literal: string) => string
+}
+
+const INJECTION_SHAPES: readonly InjectionShape[] = [
+  {
+    name: 'plain assignment (expectedVersion-style, no marker keyword)',
+    injectLine: injectPlainAssignment,
+  },
+  {
+    name: 'object field (opencodeVersion:, a marker-recognised shape)',
+    injectLine: injectObjectField,
+  },
+  {
+    name: 'launcher template string (opencode-ai@<version>)',
+    injectLine: injectLauncherTemplate,
+  },
+  {
+    name: 'bare regex assertion (.toThrow(/.../ ), drives the regex-span path)',
+    injectLine: injectRegexAssertion,
+  },
+]
 
 /**
  * Byte ranges of every `/* ... *\/` block comment in `source`, found with
@@ -753,11 +806,24 @@ interface BlindSpotSummary {
  * is supposed to ignore comment text, so not reporting a violation there is
  * correct behaviour, not a blind spot.
  *
- * Generic over `scan` and the file contents (rather than closing over R2's
- * `findFixtureVersionLiteralViolations` and `ALLOWLISTED_FIXTURE_FILES`
- * directly), so a second scanner-backed guard (e.g.
+ * Generic over `scan`, the file contents, and the injection shape (rather
+ * than closing over R2's `findFixtureVersionLiteralViolations` and
+ * `ALLOWLISTED_FIXTURE_FILES` directly, or a single hardcoded shape), so a
+ * second scanner-backed guard (e.g.
  * tests/unit/spawn-and-signal-conventions.test.ts) can reuse this probe
  * later without a rewrite.
+ *
+ * What this proves and what it does not: a clean sweep re-proves that, for
+ * every shape in `INJECTION_SHAPES` and every line position in *today's*
+ * allowlisted files, the scanner detects a planted violation. It does not
+ * prove there is no injection shape outside that list the scanner would
+ * miss, and it cannot expose a hazard that depends on a trigger no current
+ * file contains (see the newline-bound regression tests below, and the
+ * bidirectional-proof note in this file's history: reverting
+ * `tryConsumeStringLiteral`'s newline bound does not fail this sweep,
+ * because none of the four allowlisted files currently contain the
+ * apostrophe-in-unrecognised-regex-position trigger that bound guards
+ * against -- only the synthetic regression tests below do).
  */
 function probeScannerBlindSpots(
   scan: (files: FixtureFileContent[]) => FixtureVersionLiteralViolation[],
@@ -809,56 +875,74 @@ function probeScannerBlindSpots(
   }
 }
 
-describe('probe: R2 catches a planted violation at every line position', () => {
+describe('probe: R2 catches a planted violation, in every historical shape, at every line position', () => {
   // Built from parts, like SYNTHETIC_REALISTIC_VERSION above, so this
   // literal never appears as a quoted string in this file's own source --
   // this file is itself on ALLOWLISTED_FIXTURE_FILES, so a literal written
   // directly here would trip R2's real scan of this file.
   const PROBE_LITERAL = ['2', '4', '17'].join('.')
 
-  test('every allowlisted file reports a violation at every planted position, except inside comments', () => {
-    const summaries: BlindSpotSummary[] = []
+  test('every allowlisted file reports a violation at every planted position, in every shape, except inside comments', () => {
     const start = performance.now()
+    const perShapeSummaries: Array<{
+      shape: string
+      summaries: BlindSpotSummary[]
+    }> = []
 
-    for (const relativePath of ALLOWLISTED_FIXTURE_FILES) {
-      const content = fs.readFileSync(
-        path.join(REPO_ROOT, relativePath),
-        'utf8',
-      )
-      summaries.push(
-        probeScannerBlindSpots(
-          findFixtureVersionLiteralViolations,
-          relativePath,
-          content,
-          PROBE_LITERAL,
-          probeInjectionLine,
-        ),
-      )
+    for (const shape of INJECTION_SHAPES) {
+      const summaries: BlindSpotSummary[] = []
+      for (const relativePath of ALLOWLISTED_FIXTURE_FILES) {
+        const content = fs.readFileSync(
+          path.join(REPO_ROOT, relativePath),
+          'utf8',
+        )
+        summaries.push(
+          probeScannerBlindSpots(
+            findFixtureVersionLiteralViolations,
+            relativePath,
+            content,
+            PROBE_LITERAL,
+            shape.injectLine,
+          ),
+        )
+      }
+      perShapeSummaries.push({ shape: shape.name, summaries })
     }
 
     const elapsedMs = performance.now() - start
-    const totalPositions = summaries.reduce(
-      (sum, s) => sum + s.totalPositions,
+    const totalPositions = perShapeSummaries.reduce(
+      (sum, s) => sum + s.summaries.reduce((n, f) => n + f.totalPositions, 0),
       0,
     )
-    const totalMisses = summaries.reduce((sum, s) => sum + s.misses.length, 0)
-
-    console.log(
-      `[blind-spot probe] ${totalPositions} positions across ${summaries.length} files in ${elapsedMs.toFixed(1)}ms (full sweep, no sampling): ` +
-        summaries
-          .map(
-            (s) =>
-              `${s.file}: ${s.detected} detected, ${s.legitimateNonDetections} legitimately not detected (inside a comment), ${s.misses.length} missed`,
-          )
-          .join('; '),
+    const totalMisses = perShapeSummaries.reduce(
+      (sum, s) => sum + s.summaries.reduce((n, f) => n + f.misses.length, 0),
+      0,
     )
 
+    console.log(
+      `[blind-spot probe] ${totalPositions} positions across ${INJECTION_SHAPES.length} shapes x ${ALLOWLISTED_FIXTURE_FILES.length} files in ${elapsedMs.toFixed(1)}ms (full sweep, no sampling):`,
+    )
+    for (const { shape, summaries } of perShapeSummaries) {
+      console.log(
+        `  [${shape}] ` +
+          summaries
+            .map(
+              (s) =>
+                `${s.file}: ${s.detected} detected, ${s.legitimateNonDetections} legitimately not detected (inside a comment), ${s.misses.length} missed`,
+            )
+            .join('; '),
+      )
+    }
+
     if (totalMisses > 0) {
-      const missReport = summaries
-        .filter((s) => s.misses.length > 0)
-        .map(
-          (s) =>
-            `${s.file}: missed line(s) ${s.misses.map((m) => m.line).join(', ')}`,
+      const missReport = perShapeSummaries
+        .flatMap(({ shape, summaries }) =>
+          summaries
+            .filter((s) => s.misses.length > 0)
+            .map(
+              (s) =>
+                `[${shape}] ${s.file}: missed line(s) ${s.misses.map((m) => m.line).join(', ')}`,
+            ),
         )
         .join('; ')
 

@@ -50,13 +50,24 @@ measurement found.
    this found all of them.
 
    This is landed as a test, not a one-off measurement: `probeScannerBlindSpots`
-   (`tests/unit/opencode-pin.test.ts:812`) plants a realistic version literal at every position of
+   (`tests/unit/opencode-pin.test.ts:828`) plants a realistic version literal at every position of
    every allowlisted fixture file and re-runs the real scanner on each mutated copy, on every test
-   run. A position whose insertion point falls inside an already-open block comment is classified
-   as a legitimate non-detection rather than a miss — the scanner is supposed to ignore comment
-   text. The probe is generic over the scanner function and file contents, so a second
-   scanner-backed guard can reuse it without a rewrite. Coverage is re-proven on every change
-   instead of asserted from a snapshot that goes stale the moment the files or the scanner change.
+   run — swept across every historical injection shape the guard must detect (a plain assignment,
+   an object field, a launcher template string, and a bare regex assertion), not just one, so a
+   regression confined to a single shape or a single scanner code path cannot hide behind the
+   others passing. A position whose insertion point falls inside an already-open block comment is
+   classified as a legitimate non-detection rather than a miss — the scanner is supposed to ignore
+   comment text. The probe is generic over the scanner function, the file contents, and the
+   injection shape, so a second scanner-backed guard can reuse it without a rewrite. Coverage is
+   re-proven on every change instead of asserted from a snapshot that goes stale the moment the
+   files or the scanner change.
+
+   The probe re-proves detection for the shapes and positions in *today's* files; it cannot prove
+   no other shape would evade the scanner, and it cannot expose a hazard whose trigger no current
+   file contains — reverting the newline bound in Guidance 2 below does not fail this sweep, because
+   none of the four allowlisted files currently contain the apostrophe-in-unrecognised-regex-position
+   trigger that bound guards against. That prophylactic case is covered instead by this file's
+   synthetic regression tests, which construct the trigger directly.
 
 2. **Prefer a structural bound over another heuristic patch.** A `'` or `"` string cannot span a
    newline in JS/TS, so an unterminated string ends at the line break
