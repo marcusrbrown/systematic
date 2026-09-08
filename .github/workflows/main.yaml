@@ -246,6 +246,7 @@ jobs:
         run: bun run build
 
       - name: Run host contract suite
+        id: suite
         if: steps.gate.outputs.run == 'true'
         env:
           SYSTEMATIC_REQUIRE_OPENCODE: '1'
@@ -261,147 +262,32 @@ jobs:
       # an unexpected reason while the job stays green, or a whole-file
       # collapse (a crash or an early exit) that still leaves the console
       # summary and pass floor looking plausible. The exempt set, the
-      # expected-file list, and the floor all live here, next to the guard,
-      # so widening any of them is a reviewed change.
+      # expected-file list, and the floor all live in scripts/host-contract-guard.ts,
+      # next to the guard, so widening any of them is a reviewed change.
+      #
+      # `!cancelled()` is load-bearing, not decorative: an `if:` with no
+      # status check function gets an IMPLICIT `success()` ANDed in by
+      # GitHub Actions, which would make this step skip on exactly the
+      # failing suite run it exists to diagnose (success() is job-scoped and
+      # goes false the moment "Run host contract suite" fails). Any status
+      # check function in the expression overrides that implicit default;
+      # `!cancelled()` is the one that does so while staying true on both a
+      # passing AND a failing suite, and false only when the run itself was
+      # cancelled. The steps.suite.outcome check does the rest of the work:
+      # it requires "Run host contract suite" to have actually executed and
+      # concluded (excluding 'skipped', which is what its outcome is when an
+      # earlier step such as Install dependencies or Build fails first, and
+      # excluding 'cancelled', which is what its outcome is if it was
+      # cancelled mid-run). It is also gated on steps.gate.outputs.run so it
+      # still does not run on a path-gated-out pull request. This step only
+      # reports additional diagnosis: it does not (and cannot) flip the
+      # suite step's own conclusion, so a red suite still fails the job
+      # regardless of what this step finds.
       - name: Guard skipped tests and pass floor
-        if: steps.gate.outputs.run == 'true'
-        run: |
-          cat <<'EOF' > host-contract-guard.mjs
-          import { readFileSync } from 'node:fs'
-
-          // The only test allowed to skip today: the mixed-version test stays
-          // opt-in because enabling it would put a fetch of a published
-          // @fro.bot/systematic release on the path that gates publishing the
-          // next one.
-          const EXEMPT_SKIPS = [
-            {
-              classname: 'opencode mixed-version integration',
-              name: 'pinned package plus local source keep systematic_skill deterministic and converge bootstrap',
-            },
-          ]
-
-          // Every test file under tests/integration/, enumerated by hand and
-          // verified against `ls tests/integration/*.test.ts`. A file
-          // producing zero JUnit testsuite entries means bun test never
-          // actually ran it -- the exact failure mode a mass-skip or an
-          // early crash would produce while the console summary and pass
-          // floor alone could still look plausible.
-          const EXPECTED_SUITE_FILES = [
-            'tests/integration/claude-code.test.ts',
-            'tests/integration/eval-artifact.test.ts',
-            'tests/integration/eval-fixture.test.ts',
-            'tests/integration/eval-runner.test.ts',
-            'tests/integration/opencode.test.ts',
-            'tests/integration/pi.test.ts',
-            'tests/integration/question-attestation-opencode.test.ts',
-            'tests/integration/receipt-workflow-dogfood.test.ts',
-            'tests/integration/receipt-workflow-guard-real-host.test.ts',
-            'tests/integration/receipt-workflow-recovery.test.ts',
-            'tests/integration/release-notes-ci.test.ts',
-          ]
-
-          // Measured: 138 test()/it() call sites exist across the eleven
-          // integration files as of this writing. The prior floor of 50
-          // exactly equalled the host-free test count (claude-code 18 +
-          // eval-artifact 7 + eval-fixture 5 + release-notes-ci 20 = 50), so
-          // a total collapse of every host-touching file could still clear
-          // it silently. Raise this floor as the suite grows; do not lower
-          // it without a documented reason.
-          const PASS_FLOOR = 120
-
-          const [, , junitPath, logPath] = process.argv
-          const xml = readFileSync(junitPath, 'utf8')
-
-          const attrRe = /(\w+)="([^"]*)"/g
-
-          function parseAttrs(str) {
-            const attrs = {}
-            let m
-            attrRe.lastIndex = 0
-            while ((m = attrRe.exec(str))) attrs[m[1]] = m[2]
-            return attrs
-          }
-
-          // Bun emits one outer <testsuite> per test file, plus one nested
-          // <testsuite> per describe block, all sharing that file's file=
-          // attribute -- so collecting every testsuite's file attribute and
-          // taking the unique set recovers exactly the set of files bun
-          // actually loaded and ran, regardless of describe nesting.
-          // <testsuite\b never matches the closing </testsuite> tag (a /
-          // immediately follows <, not t), and never matches the plural
-          // <testsuites container (no word boundary between testsuite and
-          // the trailing s).
-          const testsuiteRe = /<testsuite\b([^>]*)>/g
-          const producedFiles = new Set()
-          let suiteMatch
-          while ((suiteMatch = testsuiteRe.exec(xml))) {
-            const attrs = parseAttrs(suiteMatch[1])
-            if (attrs.file) producedFiles.add(attrs.file)
-          }
-
-          const missingFiles = EXPECTED_SUITE_FILES.filter((f) => !producedFiles.has(f))
-
-          const testcaseRe = /<testcase\b([^>]*?)(\/>|>[\s\S]*?<\/testcase>)/g
-          const skipped = []
-          let caseMatch
-          while ((caseMatch = testcaseRe.exec(xml))) {
-            const [, attrStr, rest] = caseMatch
-            const attrs = parseAttrs(attrStr)
-            if (rest.includes('<skipped')) {
-              skipped.push({ classname: attrs.classname ?? '', name: attrs.name ?? '' })
-            }
-          }
-
-          const key = (s) => `${s.classname}::${s.name}`
-          const exemptKeys = new Set(EXEMPT_SKIPS.map(key))
-          const actualKeys = skipped.map(key)
-
-          const unexpected = actualKeys.filter((k) => !exemptKeys.has(k))
-          const missingExempt = [...exemptKeys].filter((k) => !actualKeys.includes(k))
-
-          let failed = false
-
-          if (missingFiles.length > 0) {
-            console.error('Expected integration test file(s) produced no JUnit suite (bun test never ran them):')
-            for (const f of missingFiles) console.error(`  - ${f}`)
-            failed = true
-          }
-
-          if (unexpected.length > 0) {
-            console.error('Unexpected skipped test(s) (not in the known-exempt set):')
-            for (const k of unexpected) console.error(`  - ${k}`)
-            failed = true
-          }
-
-          if (missingExempt.length > 0) {
-            console.error('Known-exempt skip(s) not found in this run (exempt set is stale):')
-            for (const k of missingExempt) console.error(`  - ${k}`)
-            failed = true
-          }
-
-          const log = readFileSync(logPath, 'utf8')
-          // Bun's default reporter prints one "<N> pass" summary line per
-          // run; take the last match rather than the first so a captured
-          // log containing more than one summary is scored on the final,
-          // authoritative count.
-          const passMatches = [...log.matchAll(/^\s*(\d+)\s+pass\s*$/gm)]
-          const lastPassMatch = passMatches.at(-1)
-          if (!lastPassMatch) {
-            console.error('Could not find a "<N> pass" summary line in the captured test output.')
-            failed = true
-          } else {
-            const passCount = Number(lastPassMatch[1])
-            console.log(`Observed pass count: ${passCount} (floor: ${PASS_FLOOR})`)
-            if (passCount < PASS_FLOOR) {
-              console.error(`Pass count ${passCount} is below the floor of ${PASS_FLOOR}.`)
-              failed = true
-            }
-          }
-
-          if (failed) process.exit(1)
-          console.log('host-contract skip/pass guard passed.')
-          EOF
-          bun host-contract-guard.mjs host-contract-junit.xml host-contract-log.txt
+        if: |
+          steps.gate.outputs.run == 'true' && !cancelled() &&
+          (steps.suite.outcome == 'success' || steps.suite.outcome == 'failure')
+        run: bun scripts/host-contract-guard.ts host-contract-junit.xml host-contract-log.txt
 
       - name: Upload test log on failure
         if: failure() && steps.gate.outputs.run == 'true'
