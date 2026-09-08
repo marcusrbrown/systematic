@@ -644,13 +644,22 @@ export function readCommittedBundledNamesCounts(rootDir: string): {
     /export const BUNDLED_SKILL_NAMES = \[([\s\S]*?)\] as const/,
   )
 
+  // `agentMatch[1]`/`skillMatch[1]` are the regexes' only capture group, so
+  // they are always present when the outer match succeeds — but this feeds
+  // the shrink-detection gate below, so a captured-but-defaulted-to-empty-
+  // string fallback (`?? ''`) would be the wrong failure mode here: a
+  // genuinely empty committed array (`[] as const`) also captures `''`, so
+  // collapsing "capture group didn't participate" and "captured an empty
+  // string" into the same `''` would make a real zero-entries count
+  // indistinguishable from a parse failure. Check participation explicitly
+  // (`!== undefined`) and treat non-participation the same as no match at
+  // all (`undefined`, matching this function's own documented
+  // first-run/unparseable contract) rather than silently reading as zero.
   return {
-    previousAgentCount: agentMatch
-      ? countEntries(agentMatch[1] ?? '')
-      : undefined,
-    previousSkillCount: skillMatch
-      ? countEntries(skillMatch[1] ?? '')
-      : undefined,
+    previousAgentCount:
+      agentMatch?.[1] !== undefined ? countEntries(agentMatch[1]) : undefined,
+    previousSkillCount:
+      skillMatch?.[1] !== undefined ? countEntries(skillMatch[1]) : undefined,
   }
 }
 

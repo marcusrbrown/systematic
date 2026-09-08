@@ -2020,10 +2020,21 @@ function isDispatchArgumentInstruction(rawLine: string): boolean {
     return false
 
   for (const span of rawLine.matchAll(INLINE_CODE_SPAN)) {
-    const [, codeSpanText = ''] = span
+    // Both regexes' capture groups are mandatory (`[^`]+`, `[A-Za-z0-9][\w./-]*`)
+    // so `span[1]`/`assignment[1]` always participate when the outer match
+    // succeeds — but a `?? ''` fallback here would be the wrong failure mode
+    // for a content-integrity scan: it would silently treat a genuinely
+    // missing capture the same as an empty one and keep scanning, instead of
+    // skipping a span the regex contract says can't actually occur. Skip
+    // (`continue`) rather than default, so a future change to either regex
+    // that makes the group optional fails visibly (missed detections) rather
+    // than silently.
+    const codeSpanText = span[1]
+    if (codeSpanText === undefined) continue
     const assignment = MODEL_ARGUMENT_ASSIGNMENT.exec(codeSpanText)
     if (assignment === null) continue
-    const [, modelArgument = ''] = assignment
+    const modelArgument = assignment[1]
+    if (modelArgument === undefined) continue
     if (FRONTMATTER_ONLY_MODEL_VALUES.has(modelArgument.toLowerCase())) continue
     return true
   }

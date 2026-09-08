@@ -644,6 +644,25 @@ describe('applyBootstrapContent marker-based idempotency', () => {
     expect(output.system[0]).not.toBe(`\n\n${wrap('NEW CONTENT')}`)
   })
 
+  /**
+   * `applyBootstrapContent` receives `output` from OpenCode's
+   * `experimental.chat.system.transform` hook, and a sibling hook in the
+   * same pipeline (`opencode-workflow-guard.ts`'s `appendMarker`) captures
+   * `output.system` by reference and mutates it directly. If this function
+   * ever reassigns `output.system` to a new array instead of mutating the
+   * existing one in place, a caller holding the original reference (the
+   * host, or that sibling hook) would silently stop seeing the injected
+   * bootstrap content — no error, just missing `<SYSTEMATIC_WORKFLOWS>`
+   * content. Array identity is part of this function's real contract with
+   * its caller, not an implementation detail.
+   */
+  test('mutates output.system in place rather than replacing the array reference', () => {
+    const output = { system: ['existing system prompt'] }
+    const originalRef = output.system
+    applyBootstrapContent(output, wrap('NEW CONTENT'))
+    expect(output.system).toBe(originalRef)
+  })
+
   test('removes existing marker block from system[0] then appends current content', () => {
     const output = {
       system: [`existing prompt with ${wrap('OLD CONTENT')} embedded`],

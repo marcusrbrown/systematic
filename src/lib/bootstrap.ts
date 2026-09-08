@@ -90,10 +90,13 @@ export const applyBootstrapContent = (
   output: { system: string[] },
   content: string,
 ): void => {
-  // Remove every complete marker block from every entry.
-  output.system = output.system.map((entry) =>
-    removeCompleteBootstrapBlocks(entry),
-  )
+  // Remove every complete marker block from every entry. Mutates in place
+  // rather than reassigning `output.system` — the host may hold its own
+  // reference to this array across the hook boundary, and a reassignment
+  // would silently detach that reference from further mutations below.
+  for (const [i, entry] of output.system.entries()) {
+    output.system[i] = removeCompleteBootstrapBlocks(entry)
+  }
 
   const [first] = output.system
   if (first === undefined) {
