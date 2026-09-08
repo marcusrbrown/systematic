@@ -258,15 +258,20 @@ sources; bootstrap config shallow-merges.
 **Named model profiles** (`src/lib/config.ts` `resolveActiveProfile`/`resolveProfileSelector`,
 `ProfileOverlaySchema` in `src/lib/config-schema.ts`) — a top-level `profile` key selects a named
 entry from a `profiles` map (routing-only `agents`/`categories` overlays) defined in
-`$OPENCODE_CONFIG_DIR` or user config; the selected bundle merges ahead of per-target routing
-resolution. `profiles` is itself in `PROJECT_PROTECTED_FIELDS` alongside `workflow_guard`: a
-project `systematic.json` may select a profile but a `profiles` map it defines is ignored with a
+`$OPENCODE_CONFIG_DIR` or user config. The selected bundle enters the overlay merge as a fourth
+chain entry between user base and project (`user base > active profile > project > custom`), so a
+project or custom overlay still overrides a profile-supplied routing choice; every other merge in
+`loadConfigWithSources` keeps the three-source chain above. `profiles` is in
+`PROJECT_PROTECTED_FIELDS` (`src/lib/config.ts`) alongside `workflow_guard` — a distinct,
+top-level-key list from `SECURITY_OVERLAY_FIELDS` above, which strips fields *within* an overlay:
+a project `systematic.json` may select a profile but a `profiles` map it defines is ignored with a
 warning, not merged.
 
 **Host-contract gate** (`.github/workflows/main.yaml` `host-contract` job,
 `scripts/host-contract-guard.ts`, `scripts/lib/opencode-pin.ts`) — runs `tests/integration` against
 a real OpenCode host pinned to the `@opencode-ai/sdk` devDependency version
 (`SYSTEMATIC_REQUIRE_OPENCODE=1`), then guards the run's JUnit output and console log against a
-fixed exempt-skip list and pass floor (`scripts/host-contract-guard.ts`). `host-contract` is a
+fixed expected-suite-file list, an exempt-skip list, and a pass floor
+(`scripts/host-contract-guard.ts`). `host-contract` is a
 required predecessor of `release`; evidence gathered at one pinned OpenCode version is not evidence
 at another, so a Renovate OpenCode bump is only complete when this job is green on that bump.
