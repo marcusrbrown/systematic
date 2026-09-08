@@ -335,7 +335,7 @@ export const ProfileOverlaySchema = z
 function createProfileBundleSchema(
   agentNames: readonly string[],
   qualifiedAgentIds: readonly string[],
-): z.ZodObject<z.core.$ZodLooseShape> {
+) {
   return z
     .object({
       agents: z
@@ -534,7 +534,7 @@ export interface SystematicConfigSchemaOptions {
  */
 export function createSystematicConfigSchema(
   opts: SystematicConfigSchemaOptions,
-): z.ZodObject<z.core.$ZodLooseShape> {
+) {
   const {
     agentNames,
     qualifiedAgentIds,
@@ -685,8 +685,26 @@ export const SystematicConfigSchema = createSystematicConfigSchema({
   removedAgentNames: REMOVED_BUNDLED_AGENT_NAMES,
 })
 
+/**
+ * Fully-typed shape of a parsed `SystematicConfigSchema` result, inferred
+ * directly from the schema's own field builders rather than hand-mirrored.
+ * A field added to `createSystematicConfigSchema`'s object shape is
+ * reflected here automatically — there is no separate declaration that can
+ * drift out of sync with the schema.
+ *
+ * That guarantee is strongest for fields that are required in the parsed
+ * output (no `.optional()`, or defaulted via `.default()`): a test that
+ * asserts a literal object against `z.infer<typeof SystematicConfigSchema>`
+ * (e.g. via `bun:test`'s `toEqual`) fails to typecheck if the literal omits
+ * one. An added `.optional()` field with no default — like `$schema` —
+ * drifts silently, since `undefined` satisfies both the type and an
+ * omitted key. Consumers reading nested fields for their own logic should
+ * still narrow/validate at the boundary rather than trust exhaustiveness.
+ */
+export type SystematicConfigParsed = z.infer<typeof SystematicConfigSchema>
+
 export type ValidationResult =
-  | { success: true; data: z.infer<typeof SystematicConfigSchema> }
+  | { success: true; data: SystematicConfigParsed }
   | { success: false; errors: readonly z.ZodIssue[] }
 
 export function validateConfig(input: unknown): ValidationResult {

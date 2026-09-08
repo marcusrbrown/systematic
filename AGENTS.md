@@ -49,7 +49,7 @@ bun run registry:validate  # Validate registry without building
 
 - **Formatting (Biome):** 2 spaces, single quotes, semicolons as-needed. Warns: `noExcessiveCognitiveComplexity`, `noNonNullAssertion`
 - **Imports:** `node:` protocol for builtins, `.js` extension for internal, `import type` for types
-- **TypeScript:** Functions over classes (zero classes). Explicit return types on exports. `unknown` + type guards, never `any`. Interfaces for data, union types + const enums for constraints
+- **TypeScript:** Functions over classes (zero classes). Explicit return types on exports, except Zod schema builders — annotating those erases the inferred shape. `unknown` + type guards, never `any`. Interfaces for data, union types + const enums for constraints
 - **Error handling:** Return null/empty for non-critical, throw with context for critical, early return guards
 - **Naming:** Files: kebab-case | Functions: camelCase | Types: PascalCase | Tests: `*.test.ts`
 - **Testing:** `bun:test` with `describe`/`it`. Real temp dirs for FS isolation, no mocking libraries. Integration tests skip if deps unavailable

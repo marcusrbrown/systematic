@@ -60,6 +60,14 @@ function processInput(value: unknown): string {
 // ✅ Do: explicit return types on exports
 export function findSkills(dir: string): Promise<SkillDefinition[]> { ... }
 
+// ✅ Do: let Zod schema builders infer their return type
+export function createConfigSchema(opts: Options) {
+  return z.object({ ... })
+}
+
+// ❌ Don't: annotate a schema builder's return type — it erases the parsed shape
+export function createConfigSchema(opts: Options): z.ZodObject<z.core.$ZodLooseShape> { ... }
+
 // ❌ Don't: any, @ts-ignore, @ts-expect-error, non-null assertions (!)
 function processInput(value: any) { ... }
 // @ts-ignore
