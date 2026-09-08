@@ -25,6 +25,7 @@ import {
   checkReferenceIntegrity,
   checkRemovedNamesOverlap,
   checkSkillReferenceIntegrity,
+  checkStalePlanStatus,
   checkSubfileReferences,
   collectScanTargets,
   discoverCategories,
@@ -801,6 +802,83 @@ describe('checkLibModuleTableCompleteness', () => {
       )
 
       expect(checkLibModuleTableCompleteness(root)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('checkStalePlanStatus', () => {
+  test('flags an active plan whose units are all ticked', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/plans/2026-01-01-001-feat-example-plan.md',
+        '---\ntitle: "feat: example"\nstatus: active\ndate: 2026-01-01\n---\n\n' +
+          '## Units\n\n- [x] Unit one\n- [x] Unit two\n',
+      )
+
+      const violations = checkStalePlanStatus(root)
+
+      expect(violations).toMatchObject([
+        {
+          kind: 'active-with-no-remaining-units',
+          file: 'docs/plans/2026-01-01-001-feat-example-plan.md',
+        },
+      ])
+      expect(violations[0]?.message).toContain(
+        'docs/plans/2026-01-01-001-feat-example-plan.md',
+      )
+      expect(violations[0]?.message).toContain('completed')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('leaves an active plan with at least one unticked unit clean', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/plans/2026-01-01-001-feat-example-plan.md',
+        '---\ntitle: "feat: example"\nstatus: active\ndate: 2026-01-01\n---\n\n' +
+          '## Units\n\n- [x] Unit one\n- [ ] Unit two\n',
+      )
+
+      expect(checkStalePlanStatus(root)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('leaves a completed plan with zero unticked units clean', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/plans/2026-01-01-001-feat-example-plan.md',
+        '---\ntitle: "feat: example"\nstatus: completed\ndate: 2026-01-01\n---\n\n' +
+          '## Units\n\n- [x] Unit one\n- [x] Unit two\n',
+      )
+
+      expect(checkStalePlanStatus(root)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('leaves an active plan with no checkboxes at all clean', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/plans/2026-01-01-001-refactor-program-plan.md',
+        '---\ntitle: "refactor: program"\nstatus: active\ndate: 2026-01-01\n---\n\n' +
+          '## Overview\n\nThis is a program document that delegates work to child plans.\n',
+      )
+
+      expect(checkStalePlanStatus(root)).toEqual([])
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
