@@ -907,6 +907,30 @@ interface BlindSpotSummary {
  *   claims to test, or does it just test the probe's own insertion
  *   mechanics?
  */
+/**
+ * The byte offset of every line boundary in `lines` -- before the first
+ * line, between every pair of lines, and after the last -- as one array of
+ * `lines.length + 1` offsets, computed with a single running sum rather
+ * than a per-position `lines.slice(0, position).reduce(...)` (which would
+ * be O(n^2) in allocations across the sweep below). `boundaryOffsets[p]`
+ * is the offset for probe position `p`, for every `p` in
+ * `0..lines.length` inclusive -- a legitimately in-range index for every
+ * position the sweep visits, so the sweep never has to read `lines[p]`
+ * itself (which, at `p === lines.length`, is one past the last line and
+ * always `undefined`) just to decide whether to advance the running sum.
+ */
+function computeBoundaryOffsets(lines: readonly string[]): number[] {
+  const offsets = [0]
+  let running = 0
+
+  for (const line of lines) {
+    running += line.length + 1
+    offsets.push(running)
+  }
+
+  return offsets
+}
+
 function probeScannerBlindSpots(
   scan: (
     files: readonly FixtureFileContent[],
@@ -918,19 +942,17 @@ function probeScannerBlindSpots(
 ): BlindSpotSummary {
   const lines = content.split('\n')
   const nonPlantableRanges = findNonPlantableRanges(content)
+  const boundaryOffsets = computeBoundaryOffsets(lines)
   const misses: Array<{ position: number; line: number }> = []
   let detected = 0
   let legitimateNonDetections = 0
-  let boundaryOffset = 0
 
   for (let position = 0; position <= lines.length; position++) {
-    const line = lines[position]
     const legitimateHere = isLegitimateNonDetection(
-      boundaryOffset,
+      boundaryOffsets[position],
       nonPlantableRanges,
       shape,
     )
-    if (line !== undefined) boundaryOffset += line.length + 1
 
     const mutatedLines = [
       ...lines.slice(0, position),
