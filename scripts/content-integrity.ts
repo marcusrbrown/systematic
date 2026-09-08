@@ -1795,8 +1795,8 @@ function collectPlanFiles(rootDir: string, plansDir: string): string[] {
     .sort()
 }
 
-const UNTICKED_UNIT_CHECKBOX_REGEX = /^\s*-\s\[ \]/m
-const TICKED_UNIT_CHECKBOX_REGEX = /^\s*-\s\[x\]/m
+const UNTICKED_UNIT_CHECKBOX_REGEX = /^\s*-\s\[ \]/im
+const TICKED_UNIT_CHECKBOX_REGEX = /^\s*-\s\[x\]/im
 
 /**
  * A plan under `docs/plans/` with frontmatter `status: active` and zero
@@ -1813,6 +1813,16 @@ const TICKED_UNIT_CHECKBOX_REGEX = /^\s*-\s\[x\]/m
  * - Any `status` other than `active` (`completed`, `superseded`, etc.) is
  *   ignored entirely; this check only targets plans currently claiming to be
  *   in progress.
+ * - Checkboxes inside fenced code blocks (documentation examples) are
+ *   stripped before counting, so an illustrative `- [x]` in a program doc's
+ *   example fence cannot trigger a flag.
+ *
+ * Deliberately NOT covered: a plan whose units are ALL unticked, however
+ * long it has sat `active`, is never flagged. Ticked-count zero is
+ * indistinguishable from "not started yet" using frontmatter and checkboxes
+ * alone — telling "shipped but nobody ticked the boxes" apart from "not
+ * started" needs verifying deliverables against the working tree, which this
+ * gate deliberately does not do.
  */
 export function checkStalePlanStatus(
   rootDir: string,
@@ -1827,8 +1837,9 @@ export function checkStalePlanStatus(
     const parsed = parseFrontmatter(content)
     if (!isRecord(parsed.data) || parsed.data.status !== 'active') continue
 
-    if (UNTICKED_UNIT_CHECKBOX_REGEX.test(parsed.body)) continue
-    if (!TICKED_UNIT_CHECKBOX_REGEX.test(parsed.body)) continue
+    const body = stripFencedCodeBlocks(parsed.body)
+    if (UNTICKED_UNIT_CHECKBOX_REGEX.test(body)) continue
+    if (!TICKED_UNIT_CHECKBOX_REGEX.test(body)) continue
 
     violations.push({
       kind: 'active-with-no-remaining-units',

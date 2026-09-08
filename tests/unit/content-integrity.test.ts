@@ -883,6 +883,44 @@ describe('checkStalePlanStatus', () => {
       fs.rmSync(root, { recursive: true, force: true })
     }
   })
+
+  test('leaves a program doc clean when its only ticked checkbox is an illustration inside a fence', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/plans/2026-01-01-001-refactor-program-plan.md',
+        '---\ntitle: "refactor: program"\nstatus: active\ndate: 2026-01-01\n---\n\n' +
+          '## Overview\n\nChild plans use this checkbox format:\n\n' +
+          '```md\n- [x] Unit one\n```\n\n' +
+          'This document itself has no real units.\n',
+      )
+
+      expect(checkStalePlanStatus(root)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('deliberate non-goal: an active plan whose units are ALL unticked is never flagged', () => {
+    // Pins the gate's known limitation: "shipped, nothing ticked" is
+    // indistinguishable from "not started" using frontmatter + checkboxes
+    // alone, so it is intentionally out of scope. This is not an oversight —
+    // do not tighten this check to close it without tree inspection.
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/plans/2026-01-01-001-feat-shipped-but-unticked-plan.md',
+        '---\ntitle: "feat: shipped but unticked"\nstatus: active\ndate: 2026-01-01\n---\n\n' +
+          '## Units\n\n- [ ] Unit one\n- [ ] Unit two\n',
+      )
+
+      expect(checkStalePlanStatus(root)).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
 })
 
 describe('checkContentIntegrity — library module-table completeness wiring', () => {
