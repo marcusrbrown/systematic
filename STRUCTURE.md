@@ -112,6 +112,10 @@ bundled assets before editing or building the docs site.
 
 **Key files:**
 - `scripts/content-integrity.ts` — CI gate: validates frontmatter contracts, catches phantom refs
+- `scripts/host-contract-guard.ts` — CI gate for the `host-contract` job: parses its JUnit XML and
+  console log, then fails on any unexpected test skip, a listed exempt skip that went missing, a
+  listed integration suite file that produced no results at all, or a pass count under
+  `PASS_FLOOR`; invoked directly in `.github/workflows/main.yaml`, not via a `bun run` script
 - `scripts/generate-registry.ts` — regenerates `registry/registry.jsonc` from skill/agent frontmatter
   (source of truth); pass `--check` for drift detection (`bun run registry:drift`)
 - `scripts/build-registry.ts` — builds the OCX registry output packument from `registry/registry.jsonc`;
@@ -155,7 +159,9 @@ coverage, model inheritance) against a real OpenCode runtime, in both source and
 **Contains:**
 - `tests/unit/` — unit tests covering `src/lib/` modules, `scripts/` build/codegen scripts, and
   `docs/scripts/` generation scripts
-- `tests/integration/` — integration tests (skip automatically if deps unavailable)
+- `tests/integration/` — integration tests (skip automatically if deps unavailable locally;
+  `SYSTEMATIC_REQUIRE_OPENCODE=1` in the required `host-contract` CI job turns those skips into
+  failures against a real, pinned OpenCode host)
 
 **Pattern:** Tests use `bun:test` with `describe`/`it`. Filesystem tests use real temp directories;
 no mocking libraries.
