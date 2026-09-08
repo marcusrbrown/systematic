@@ -14,64 +14,10 @@ import {
   BootstrapSchema,
   CategoryOverlaySchema,
   createSystematicConfigSchema,
-  type PiSubagentsSchema,
-  type ProfileOverlaySchema,
   SECURITY_OVERLAY_FIELDS,
   SystematicConfigSchema,
   validateConfig,
-  type WorkflowGuardSchema,
 } from '../../src/lib/config-schema.js'
-
-/**
- * `createSystematicConfigSchema` (and its private `createProfileBundleSchema`
- * helper) intentionally return `z.ZodObject<z.core.$ZodLooseShape>` so the
- * same factory type-checks for both the frozen runtime schema and the
- * filesystem-discovered generator-time schema (see its docstring in
- * `src/lib/config-schema.ts`). That erases per-field shape info from
- * `z.infer<typeof SystematicConfigSchema>`, so accessing a nested property
- * (not just the field itself) types as `unknown`. This locally-reconstructed
- * shape — built from the schema's own exported field schemas — lets tests
- * read those nested fields without widening the production factory's return
- * type.
- */
-interface ParsedSystematicConfig {
-  readonly agents: Record<
-    string,
-    z.infer<typeof AgentOverlaySchema> | undefined
-  >
-  readonly categories: Record<string, z.infer<typeof CategoryOverlaySchema>>
-  readonly profiles: Record<
-    string,
-    {
-      readonly agents?: Record<
-        string,
-        z.infer<typeof ProfileOverlaySchema> | undefined
-      >
-      readonly categories?: Record<string, z.infer<typeof ProfileOverlaySchema>>
-    }
-  >
-  readonly disabled_skills: string[]
-  readonly disabled_agents: string[]
-  readonly disabled_commands: string[]
-  readonly bootstrap: z.infer<typeof BootstrapSchema>
-  readonly workflow_guard: z.infer<typeof WorkflowGuardSchema>
-  readonly pi_subagents: z.infer<typeof PiSubagentsSchema>
-  readonly skills_as_commands: boolean
-}
-
-/**
- * Narrow a successful `SystematicConfigSchema.safeParse`/`validateConfig`
- * result's `data` to {@link ParsedSystematicConfig}. See that type's doc for
- * why the assertion is necessary. The parameter stays typed as the schema's
- * own (loose) inferred output — not `unknown` — so this compiles only if
- * `ValidationResult`/`safeParse`'s result stays a discriminated union on
- * `success`; the `as` cast is confined to this one boundary.
- */
-function narrowParsedConfig(
-  data: z.infer<typeof SystematicConfigSchema>,
-): ParsedSystematicConfig {
-  return data as unknown as ParsedSystematicConfig
-}
 
 const EXPECTED_COLOR_TOKENS = [
   'primary',
@@ -123,7 +69,7 @@ describe('SystematicConfigSchema', () => {
     const result = SystematicConfigSchema.safeParse(input)
     expect(result.success).toBe(true)
     if (result.success) {
-      const parsed = narrowParsedConfig(result.data)
+      const parsed = result.data
       const overlay = parsed.agents['correctness-reviewer']
       expect(overlay?.model).toBe('openai/gpt-4')
       expect(overlay?.temperature).toBe(0.3)
@@ -149,7 +95,7 @@ describe('SystematicConfigSchema', () => {
       expect(result.data.disabled_skills).toEqual([])
       expect(result.data.disabled_agents).toEqual([])
       expect(result.data.disabled_commands).toEqual([])
-      expect(narrowParsedConfig(result.data).bootstrap.enabled).toBe(true)
+      expect(result.data.bootstrap.enabled).toBe(true)
       expect(result.data.agents).toEqual({})
       expect(result.data.categories).toEqual({})
       expect(result.data.profiles).toEqual({})
@@ -199,7 +145,7 @@ describe('SystematicConfigSchema', () => {
         })
         expect(result.success).toBe(true)
         if (result.success) {
-          const parsed = narrowParsedConfig(result.data)
+          const parsed = result.data
           expect(parsed.workflow_guard.mode).toBe(mode)
           expect(parsed.workflow_guard.debug).toBe(false)
         }
@@ -445,7 +391,7 @@ describe('validateConfig wrapper', () => {
     expect(result.success).toBe(true)
     if (result.success) {
       expect(result.data).toBeDefined()
-      expect(narrowParsedConfig(result.data).bootstrap.enabled).toBe(true)
+      expect(result.data.bootstrap.enabled).toBe(true)
     }
   })
 
@@ -463,7 +409,7 @@ describe('validateConfig wrapper', () => {
     if (result.success) {
       // After narrowing via result.success, result.data is non-optional.
       // This test compiles only if ValidationResult is a discriminated union.
-      const enabled: boolean = narrowParsedConfig(result.data).bootstrap.enabled
+      const enabled: boolean = result.data.bootstrap.enabled
       expect(enabled).toBe(true)
     } else {
       throw new Error('Expected success')
@@ -492,9 +438,7 @@ describe('validateConfig wrapper', () => {
     })
     expect(result.success).toBe(true)
     if (result.success) {
-      expect(
-        narrowParsedConfig(result.data).agents['correctness-reviewer']?.variant,
-      ).toBe('high')
+      expect(result.data.agents['correctness-reviewer']?.variant).toBe('high')
     }
   })
 
@@ -504,9 +448,7 @@ describe('validateConfig wrapper', () => {
     })
     expect(result.success).toBe(true)
     if (result.success) {
-      expect(narrowParsedConfig(result.data).categories.review?.variant).toBe(
-        'high',
-      )
+      expect(result.data.categories.review?.variant).toBe('high')
     }
   })
 })
@@ -801,7 +743,7 @@ describe('pi_subagents schema', () => {
     })
     expect(result.success).toBe(true)
     if (result.success) {
-      const parsed = narrowParsedConfig(result.data)
+      const parsed = result.data
       expect(parsed.pi_subagents.categories.research).toEqual({
         thinking: 'high',
         max_turns: 10,
@@ -909,7 +851,7 @@ describe('pi_subagents schema', () => {
     })
     expect(agentResult.success).toBe(true)
     if (agentResult.success) {
-      const parsed = narrowParsedConfig(agentResult.data)
+      const parsed = agentResult.data
       expect(Object.hasOwn(parsed.pi_subagents.agents.x ?? {}, 'model')).toBe(
         false,
       )
@@ -1363,7 +1305,7 @@ describe('profiles and profile selector', () => {
     })
     expect(result.success).toBe(true)
     if (result.success) {
-      const parsed = narrowParsedConfig(result.data)
+      const parsed = result.data
       expect(result.data.profile).toBe('personal')
       expect(
         parsed.profiles.personal?.agents?.['correctness-reviewer']?.model,
