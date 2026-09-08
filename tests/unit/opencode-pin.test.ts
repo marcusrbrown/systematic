@@ -304,7 +304,7 @@ const VERSION_EXEMPTIONS: VersionExemption[] = [
   },
 ]
 
-type CodeSpanKind = 'string' | 'regex'
+type CodeSpanKind = 'string' | 'regex' | 'comment'
 
 interface CodeSpan {
   kind: CodeSpanKind
@@ -416,12 +416,22 @@ function tokenizeCodeSpans(source: string): CodeSpan[] {
   while (i < n) {
     const blockCommentEnd = tryConsumeBlockComment(source, i)
     if (blockCommentEnd !== null) {
+      spans.push({
+        kind: 'comment',
+        start: i,
+        text: source.slice(i, blockCommentEnd),
+      })
       i = blockCommentEnd
       continue
     }
 
     const lineCommentEnd = tryConsumeLineComment(source, i)
     if (lineCommentEnd !== null) {
+      spans.push({
+        kind: 'comment',
+        start: i,
+        text: source.slice(i, lineCommentEnd),
+      })
       i = lineCommentEnd
       continue
     }
@@ -512,6 +522,7 @@ function findFixtureVersionLiteralViolations(
 
   for (const { file, content } of files) {
     for (const span of tokenizeCodeSpans(content)) {
+      if (span.kind === 'comment') continue
       scanSpanForVersions(file, content, span, violations)
     }
   }
@@ -713,79 +724,109 @@ function injectRegexAssertion(literal: string): string {
 interface InjectionShape {
   name: string
   injectLine: (literal: string) => string
+  /**
+   * Whether this shape is still expected to be detected when planted at a
+   * boundary that falls *inside* an already-open multi-line template
+   * literal. A boundary there is string content, not a code-injection
+   * point: the planted text becomes part of the enclosing template rather
+   * than new top-level code, so shapes that only work as top-level code
+   * cannot be expected to survive it.
+   *
+   * `injectPlainAssignment` and `injectObjectField` plant no backtick, so
+   * their text just becomes more of the enclosing template's content --
+   * and the enclosing template's *own* span still gets scanned for version
+   * digits normally (see `scanSpanForVersions`), so the literal is still
+   * detected. `injectLauncherTemplate` plants its own pair of backticks,
+   * which closes the enclosing template early and reopens a new one,
+   * stranding the version in a plain-code gap outside every span.
+   * `injectRegexAssertion` plants no backtick either, so its text also
+   * becomes template content -- but its escaped-dot literal only matches
+   * `VERSION_IN_REGEX_PATTERN`, and a boundary inside a template is always
+   * scanned as `kind: 'string'` (`VERSION_IN_STRING_PATTERN`), which never
+   * matches an escaped dot. Both failures are real, structural
+   * consequences of the shape, not scanner defects -- see
+   * `findNonPlantableRanges` below for where this is enforced.
+   */
+  plantableInsideMultilineTemplate: boolean
 }
 
 const INJECTION_SHAPES: readonly InjectionShape[] = [
   {
     name: 'plain assignment (expectedVersion-style, no marker keyword)',
     injectLine: injectPlainAssignment,
+    plantableInsideMultilineTemplate: true,
   },
   {
     name: 'object field (opencodeVersion:, a marker-recognised shape)',
     injectLine: injectObjectField,
+    plantableInsideMultilineTemplate: true,
   },
   {
     name: 'launcher template string (opencode-ai@<version>)',
     injectLine: injectLauncherTemplate,
+    plantableInsideMultilineTemplate: false,
   },
   {
     name: 'bare regex assertion (.toThrow(/.../ ), drives the regex-span path)',
     injectLine: injectRegexAssertion,
+    plantableInsideMultilineTemplate: false,
   },
 ]
 
+type NonPlantableReason = 'comment' | 'multiline-template'
+
+interface NonPlantableRange {
+  start: number
+  end: number
+  reason: NonPlantableReason
+}
+
 /**
- * Byte ranges of every `/* ... *\/` block comment in `source`, found with
- * the same left-to-right walk `tokenizeCodeSpans` uses -- reusing its
- * `tryConsume*` primitives rather than re-deriving the tokenizing rules --
- * so a `/*` inside a real string or regex is never mistaken for a comment
- * start. Used only to classify probe positions below; not part of R2
- * itself.
+ * Byte ranges of the probe below where an inserted line is not scanned as
+ * new top-level code: every comment span, and every multi-line template
+ * literal span (a backtick string whose text contains a newline). Derived
+ * directly from `tokenizeCodeSpans`'s own output -- the same function R2
+ * itself scans with -- rather than an independent walk, so a construct
+ * added to that tokenizer can never silently diverge from what this
+ * classifier knows about.
+ *
+ * Both reasons matter, and differently:
+ *
+ * - Inside a `'comment'` span, no shape is ever detected: comment text is
+ *   filtered out before `scanSpanForVersions` ever sees it (see
+ *   `findFixtureVersionLiteralViolations`), so nothing planted there can
+ *   be detected by any shape, and none should be.
+ * - Inside a `'multiline-template'` span, whether a shape is detected
+ *   depends on the shape itself -- see each `InjectionShape`'s
+ *   `plantableInsideMultilineTemplate` doc comment above for why. This is
+ *   why the reason is threaded through instead of collapsed into one
+ *   boolean: the caller decides per shape, not per range.
  */
-function findBlockCommentByteRanges(
-  source: string,
-): Array<{ start: number; end: number }> {
-  const ranges: Array<{ start: number; end: number }> = []
-  const n = source.length
-  let i = 0
+function findNonPlantableRanges(source: string): NonPlantableRange[] {
+  const ranges: NonPlantableRange[] = []
 
-  while (i < n) {
-    const blockCommentEnd = tryConsumeBlockComment(source, i)
-    if (blockCommentEnd !== null) {
-      ranges.push({ start: i, end: blockCommentEnd })
-      i = blockCommentEnd
-      continue
+  for (const span of tokenizeCodeSpans(source)) {
+    const end = span.start + span.text.length
+    if (span.kind === 'comment') {
+      ranges.push({ start: span.start, end, reason: 'comment' })
+    } else if (span.kind === 'string' && span.text.includes('\n')) {
+      ranges.push({ start: span.start, end, reason: 'multiline-template' })
     }
-
-    const lineCommentEnd = tryConsumeLineComment(source, i)
-    if (lineCommentEnd !== null) {
-      i = lineCommentEnd
-      continue
-    }
-
-    const stringEnd = tryConsumeStringLiteral(source, i)
-    if (stringEnd !== null) {
-      i = stringEnd
-      continue
-    }
-
-    const regexEnd = tryConsumeRegexLiteral(source, i)
-    if (regexEnd !== null) {
-      i = regexEnd
-      continue
-    }
-
-    i++
   }
 
   return ranges
 }
 
-function isWithinAnyRange(
+function isLegitimateNonDetection(
   offset: number,
-  ranges: readonly { start: number; end: number }[],
+  ranges: readonly NonPlantableRange[],
+  shape: InjectionShape,
 ): boolean {
-  return ranges.some((range) => offset > range.start && offset < range.end)
+  return ranges.some((range) => {
+    if (offset <= range.start || offset >= range.end) return false
+    if (range.reason === 'comment') return true
+    return !shape.plantableInsideMultilineTemplate
+  })
 }
 
 interface BlindSpotSummary {
@@ -797,14 +838,15 @@ interface BlindSpotSummary {
 }
 
 /**
- * For one file's content, inserts `literal` (via `injectLine`) as a new
- * standalone line at every line boundary -- before the first line, between
- * every pair of lines, and after the last line -- and asks `scan` whether it
- * reports a violation at that line. A boundary whose insertion point falls
- * inside an already-open block comment in the *original* content is
- * classified as a legitimate non-detection rather than a miss: the scanner
- * is supposed to ignore comment text, so not reporting a violation there is
- * correct behaviour, not a blind spot.
+ * For one file's content, inserts `literal` (via `shape.injectLine`) as a
+ * new standalone line at every line boundary -- before the first line,
+ * between every pair of lines, and after the last line -- and asks `scan`
+ * whether it reports a violation at that line. A boundary whose insertion
+ * point falls inside a comment, or inside a multi-line template literal in
+ * a way `shape` cannot survive, is classified as a legitimate
+ * non-detection rather than a miss -- see `findNonPlantableRanges` and
+ * `isLegitimateNonDetection` above for exactly which boundaries and shapes
+ * that covers, and why.
  *
  * Generic over `scan`, the file contents, and the injection shape (rather
  * than closing over R2's `findFixtureVersionLiteralViolations` and
@@ -813,40 +855,61 @@ interface BlindSpotSummary {
  * tests/unit/spawn-and-signal-conventions.test.ts) can reuse this probe
  * later without a rewrite.
  *
- * What this proves and what it does not: a clean sweep re-proves that, for
- * every shape in `INJECTION_SHAPES` and every line position in *today's*
- * allowlisted files, the scanner detects a planted violation. It does not
- * prove there is no injection shape outside that list the scanner would
- * miss, and it cannot expose a hazard that depends on a trigger no current
- * file contains (see the newline-bound regression tests below, and the
- * bidirectional-proof note in this file's history: reverting
- * `tryConsumeStringLiteral`'s newline bound does not fail this sweep,
- * because none of the four allowlisted files currently contain the
- * apostrophe-in-unrecognised-regex-position trigger that bound guards
- * against -- only the synthetic regression tests below do).
+ * What this proves, what it does not, and what it can wrongly flag:
+ *
+ * - A clean sweep re-proves that, for every shape in `INJECTION_SHAPES` and
+ *   every line position in *today's* allowlisted files, the scanner
+ *   detects a planted violation.
+ * - It does not prove there is no injection shape outside that list the
+ *   scanner would miss, and it cannot expose a hazard that depends on a
+ *   trigger no current file contains (see the newline-bound regression
+ *   tests below, and the bidirectional-proof note in this file's history:
+ *   reverting `tryConsumeStringLiteral`'s newline bound does not fail this
+ *   sweep, because none of the four allowlisted files currently contain
+ *   the apostrophe-in-unrecognised-regex-position trigger that bound
+ *   guards against -- only the synthetic regression tests below do).
+ * - It can also report a *false* miss if a boundary is not a genuine
+ *   code-injection point for a given shape and that is not accounted for
+ *   in the classifier -- e.g. a boundary inside a multi-line template
+ *   literal is string content, not top-level code, so a shape whose own
+ *   syntax cannot survive landing there (see each shape's
+ *   `plantableInsideMultilineTemplate` doc comment) will legitimately go
+ *   undetected there. Before `findNonPlantableRanges` accounted for this,
+ *   the sweep reported real-looking misses for exactly this reason,
+ *   pointing at a scanner defect that did not exist. Any future injection
+ *   shape or scanned file construct needs the same question asked of it:
+ *   does landing this text at this boundary still test what the shape
+ *   claims to test, or does it just test the probe's own insertion
+ *   mechanics?
  */
 function probeScannerBlindSpots(
-  scan: (files: FixtureFileContent[]) => FixtureVersionLiteralViolation[],
+  scan: (
+    files: readonly FixtureFileContent[],
+  ) => FixtureVersionLiteralViolation[],
   file: string,
   content: string,
   literal: string,
-  injectLine: (literal: string) => string,
+  shape: InjectionShape,
 ): BlindSpotSummary {
   const lines = content.split('\n')
-  const commentRanges = findBlockCommentByteRanges(content)
+  const nonPlantableRanges = findNonPlantableRanges(content)
   const misses: Array<{ position: number; line: number }> = []
   let detected = 0
   let legitimateNonDetections = 0
+  let boundaryOffset = 0
 
   for (let position = 0; position <= lines.length; position++) {
-    const boundaryOffset = lines
-      .slice(0, position)
-      .reduce((offset, line) => offset + line.length + 1, 0)
-    const insideComment = isWithinAnyRange(boundaryOffset, commentRanges)
+    const line = lines[position]
+    const legitimateHere = isLegitimateNonDetection(
+      boundaryOffset,
+      nonPlantableRanges,
+      shape,
+    )
+    if (line !== undefined) boundaryOffset += line.length + 1
 
     const mutatedLines = [
       ...lines.slice(0, position),
-      injectLine(literal),
+      shape.injectLine(literal),
       ...lines.slice(position),
     ]
     const mutatedContent = mutatedLines.join('\n')
@@ -859,7 +922,7 @@ function probeScannerBlindSpots(
 
     if (wasDetected) {
       detected++
-    } else if (insideComment) {
+    } else if (legitimateHere) {
       legitimateNonDetections++
     } else {
       misses.push({ position, line: injectedLine })
@@ -882,30 +945,32 @@ describe('probe: R2 catches a planted violation, in every historical shape, at e
   // directly here would trip R2's real scan of this file.
   const PROBE_LITERAL = ['2', '4', '17'].join('.')
 
-  test('every allowlisted file reports a violation at every planted position, in every shape, except inside comments', () => {
+  test('every allowlisted file reports a violation at every planted position, in every shape, except where the shape cannot survive the boundary', () => {
     const start = performance.now()
+
+    // Each file is read once, not once per shape: every shape sweeps the
+    // same on-disk content, so re-reading per shape only adds a way for a
+    // sweep to disagree with itself if the file changed mid-run.
+    const fileContents = ALLOWLISTED_FIXTURE_FILES.map((relativePath) => ({
+      relativePath,
+      content: fs.readFileSync(path.join(REPO_ROOT, relativePath), 'utf8'),
+    }))
+
     const perShapeSummaries: Array<{
       shape: string
       summaries: BlindSpotSummary[]
     }> = []
 
     for (const shape of INJECTION_SHAPES) {
-      const summaries: BlindSpotSummary[] = []
-      for (const relativePath of ALLOWLISTED_FIXTURE_FILES) {
-        const content = fs.readFileSync(
-          path.join(REPO_ROOT, relativePath),
-          'utf8',
-        )
-        summaries.push(
-          probeScannerBlindSpots(
-            findFixtureVersionLiteralViolations,
-            relativePath,
-            content,
-            PROBE_LITERAL,
-            shape.injectLine,
-          ),
-        )
-      }
+      const summaries = fileContents.map(({ relativePath, content }) =>
+        probeScannerBlindSpots(
+          findFixtureVersionLiteralViolations,
+          relativePath,
+          content,
+          PROBE_LITERAL,
+          shape,
+        ),
+      )
       perShapeSummaries.push({ shape: shape.name, summaries })
     }
 
@@ -919,22 +984,23 @@ describe('probe: R2 catches a planted violation, in every historical shape, at e
       0,
     )
 
-    console.log(
-      `[blind-spot probe] ${totalPositions} positions across ${INJECTION_SHAPES.length} shapes x ${ALLOWLISTED_FIXTURE_FILES.length} files in ${elapsedMs.toFixed(1)}ms (full sweep, no sampling):`,
-    )
-    for (const { shape, summaries } of perShapeSummaries) {
-      console.log(
-        `  [${shape}] ` +
-          summaries
-            .map(
-              (s) =>
-                `${s.file}: ${s.detected} detected, ${s.legitimateNonDetections} legitimately not detected (inside a comment), ${s.misses.length} missed`,
-            )
-            .join('; '),
-      )
-    }
-
     if (totalMisses > 0) {
+      // The per-shape breakdown is only diagnostic when something failed;
+      // logging it unconditionally would add five wide lines to every
+      // passing run, and this is the only console output under
+      // tests/unit/.
+      const breakdown = perShapeSummaries
+        .map(
+          ({ shape, summaries }) =>
+            `  [${shape}] ` +
+            summaries
+              .map(
+                (s) =>
+                  `${s.file}: ${s.detected} detected, ${s.legitimateNonDetections} legitimately not detected, ${s.misses.length} missed`,
+              )
+              .join('; '),
+        )
+        .join('\n')
       const missReport = perShapeSummaries
         .flatMap(({ shape, summaries }) =>
           summaries
@@ -947,10 +1013,104 @@ describe('probe: R2 catches a planted violation, in every historical shape, at e
         .join('; ')
 
       throw new Error(
-        `R2 failed to detect a planted "${PROBE_LITERAL}" literal at ${totalMisses} position(s) it should have caught: ${missReport}`,
+        `R2 failed to detect a planted "${PROBE_LITERAL}" literal at ${totalMisses} position(s) it should have caught (full sweep, no sampling, ${totalPositions} positions across ${INJECTION_SHAPES.length} shapes x ${ALLOWLISTED_FIXTURE_FILES.length} files in ${elapsedMs.toFixed(1)}ms):\n${breakdown}\nMisses: ${missReport}`,
       )
     }
 
     expect(totalMisses).toBe(0)
+  })
+})
+
+describe('probe classifier: a multi-line template literal is not a code-injection point for every shape', () => {
+  // A minimal reproduction of the failure mode this classifier exists to
+  // prevent: a five-line host with one multi-line template. Before
+  // `findNonPlantableRanges` accounted for multi-line templates, sweeping
+  // this host with the launcher and regex shapes reported real-looking
+  // misses at the lines inside the template -- not because the scanner has
+  // a blind spot, but because those two shapes plant syntax that cannot
+  // survive landing inside an already-open template literal (see each
+  // shape's `plantableInsideMultilineTemplate` doc comment). The
+  // plain-assignment and object-field shapes plant no backtick, so their
+  // text just becomes more of the template's own content, which is still
+  // scanned normally -- they are expected to keep being detected there.
+  const MULTILINE_TEMPLATE_HOST =
+    'const help = `\n' +
+    'first line of help text\n' +
+    'second line of help text\n' +
+    '`\n' +
+    'module.exports = help\n'
+
+  test('every shape reports zero misses against a host containing one multi-line template', () => {
+    const literal = ['6', '11', '23'].join('.')
+
+    for (const shape of INJECTION_SHAPES) {
+      const summary = probeScannerBlindSpots(
+        findFixtureVersionLiteralViolations,
+        'synthetic.test.ts',
+        MULTILINE_TEMPLATE_HOST,
+        literal,
+        shape,
+      )
+
+      expect(summary.misses).toEqual([])
+    }
+  })
+})
+
+describe('probe sensitivity: probeScannerBlindSpots can report a real miss', () => {
+  // Pins the probe's ability to FAIL without hand-reconstructing a
+  // historical design again: a deliberately crippled stub scanner,
+  // marker-anchored like the first historical design (Guidance Example 1
+  // in the blind-spots doc), recognising a version only on a line
+  // containing `opencodeVersion`. The plain-assignment shape plants no
+  // such marker, so this stub must miss it -- if `probeScannerBlindSpots`'s
+  // detection predicate ever broke such that `wasDetected` were always
+  // true, this is the test that would catch it, not a hand-run sweep.
+  function markerAnchoredStubScanner(
+    files: readonly FixtureFileContent[],
+  ): FixtureVersionLiteralViolation[] {
+    const violations: FixtureVersionLiteralViolation[] = []
+    for (const { file, content } of files) {
+      content.split('\n').forEach((line, index) => {
+        if (!line.includes('opencodeVersion')) return
+        for (const match of line.matchAll(VERSION_IN_STRING_PATTERN)) {
+          violations.push({ file, line: index + 1, literal: match[0] })
+        }
+      })
+    }
+    return violations
+  }
+
+  test('a marker-anchored stub scanner misses the plain-assignment shape', () => {
+    const plainAssignmentShape = INJECTION_SHAPES.find(
+      (shape) => shape.injectLine === injectPlainAssignment,
+    )
+    if (plainAssignmentShape === undefined) {
+      throw new Error('expected the plain-assignment shape to be registered')
+    }
+
+    const summary = probeScannerBlindSpots(
+      markerAnchoredStubScanner,
+      'synthetic.test.ts',
+      'const noop = true\n',
+      ['3', '7', '11'].join('.'),
+      plainAssignmentShape,
+    )
+
+    expect(summary.misses.length).toBeGreaterThan(0)
+  })
+})
+
+describe('findNonPlantableRanges: comment detection does not misfire inside strings or regexes', () => {
+  test('a /* inside a real string or a real regex is never mistaken for a block comment start', () => {
+    const content =
+      "const marker = '/* not a real comment */'\n" +
+      'const pattern = /a\\/\\*b/\n'
+
+    const commentRanges = findNonPlantableRanges(content).filter(
+      (range) => range.reason === 'comment',
+    )
+
+    expect(commentRanges).toEqual([])
   })
 })

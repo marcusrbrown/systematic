@@ -49,15 +49,17 @@ measurement found.
    every pair of lines, and after the last. Reading the code found none of the three holes below;
    this found all of them.
 
-   This is landed as a test, not a one-off measurement: `probeScannerBlindSpots`
-   (`tests/unit/opencode-pin.test.ts:828`) plants a realistic version literal at every position of
+   This is landed as a test, not a one-off measurement: `probeScannerBlindSpots` (in
+   `tests/unit/opencode-pin.test.ts`) plants a realistic version literal at every position of
    every allowlisted fixture file and re-runs the real scanner on each mutated copy, on every test
    run — swept across every historical injection shape the guard must detect (a plain assignment,
    an object field, a launcher template string, and a bare regex assertion), not just one, so a
    regression confined to a single shape or a single scanner code path cannot hide behind the
-   others passing. A position whose insertion point falls inside an already-open block comment is
-   classified as a legitimate non-detection rather than a miss — the scanner is supposed to ignore
-   comment text. The probe is generic over the scanner function, the file contents, and the
+   others passing. A position whose insertion point falls inside a comment, or inside a multi-line
+   template literal in a way a given shape cannot survive landing in, is classified as a legitimate
+   non-detection rather than a miss — that classification is itself derived from the scanner's own
+   tokenizer, not a second hand-written walk, so it cannot silently diverge from what the scanner
+   actually recognises. The probe is generic over the scanner function, the file contents, and the
    injection shape, so a second scanner-backed guard can reuse it without a rewrite. Coverage is
    re-proven on every change instead of asserted from a snapshot that goes stale the moment the
    files or the scanner change.
@@ -68,6 +70,16 @@ measurement found.
    none of the four allowlisted files currently contain the apostrophe-in-unrecognised-regex-position
    trigger that bound guards against. That prophylactic case is covered instead by this file's
    synthetic regression tests, which construct the trigger directly.
+
+   The probe can also produce a *false* miss, not just a false pass: a boundary is only a genuine
+   code-injection point if the planted text still parses the way the shape intends once it lands
+   there. A boundary inside an already-open multi-line template literal is string content, not
+   top-level code, so a shape whose own syntax cannot survive that (a shape that plants its own
+   backticks, or one whose literal only matches when read as a regex) will legitimately go
+   undetected there without the scanner being at fault. Before that was accounted for, sweeping a
+   file with a multi-line template reported real-looking misses for exactly this reason — a red
+   build pointing at a defect that did not exist. A probe whose whole value is that its measurement
+   can be trusted has to get this right, or a misleading red costs more than the coverage it buys.
 
 2. **Prefer a structural bound over another heuristic patch.** A `'` or `"` string cannot span a
    newline in JS/TS, so an unterminated string ends at the line break
