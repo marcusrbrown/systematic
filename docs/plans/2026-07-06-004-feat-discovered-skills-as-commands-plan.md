@@ -1,7 +1,7 @@
 ---
 title: "feat: discovered skills as commands + systematic_skill permission parity"
 type: feat
-status: active
+status: completed
 date: 2026-07-06
 origin: docs/brainstorms/2026-07-06-discovered-skills-as-commands-requirements.md
 ---
@@ -98,7 +98,7 @@ Carried from the origin brainstorm:
 
 ## Implementation Units
 
-- [ ] **Unit 1: Discovery of non-bundled skills across the six roots**
+- [x] **Unit 1: Discovery of non-bundled skills across the six roots**
 
 **Goal:** A pure function that discovers user/project skills exactly as upstream does — same roots, same order, same later-wins duplicate rule — returning name, description, frontmatter (incl. `disable-model-invocation`), and body path.
 
@@ -126,7 +126,7 @@ Carried from the origin brainstorm:
 
 **Verification:** unit tests green; discovery output for a fixture tree matches upstream's documented winner for every duplicate case.
 
-- [ ] **Unit 2: Command emission in the config hook**
+- [x] **Unit 2: Command emission in the config hook**
 
 **Goal:** Convert discovered skills into `config.command` entries — shim template for model-invocable, inline body for command-only — behind the `skills_as_commands` toggle, never clobbering existing commands.
 
@@ -155,7 +155,7 @@ Carried from the origin brainstorm:
 
 **Verification:** unit suite green; schema drift check passes; a fixture project shows `/skill-name` entries in emitted config exactly once per skill.
 
-- [ ] **Unit 3: Docs for the feature**
+- [x] **Unit 3: Docs for the feature**
 
 **Goal:** Committed docs covering discovery roots, naming, replace-by-name collision policy, the toggle, command-only semantics, and the honest upstream/trust framing.
 
@@ -172,7 +172,7 @@ Carried from the origin brainstorm:
 
 **Verification:** docs build passes; page states the trust model and upstream context plainly.
 
-- [ ] **Unit 4 (separate PR): `systematic_skill` permission parity + sampling alignment**
+- [x] **Unit 4 (separate PR): `systematic_skill` permission parity + sampling alignment**
 
 **Goal:** `systematic_skill` loads gate through `permission.skill` semantics via the bridged `ask()`; file sampling matches upstream behavior.
 

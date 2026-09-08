@@ -1,7 +1,7 @@
 ---
 title: 'refactor!: v3 bundle curation — remove niche assets, consolidate overlaps'
 type: refactor
-status: active
+status: completed
 date: 2026-07-11
 origin: docs/brainstorms/2026-07-11-v3-bundle-curation-requirements.md
 ---
@@ -86,7 +86,7 @@ The bundle grew by accretion; every asset ships to every install (including head
 
 ## Implementation Units
 
-- [ ] **Unit 1: Remove 12 peripheral/vertical skills**
+- [x] **Unit 1: Remove 12 peripheral/vertical skills**
 
 **Goal:** Delete `dspy-ruby`, `dhh-rails-style`, `andrew-kane-gem-writer`, `every-style-editor`, `rclone`, `gemini-imagegen`, `test-xcode`, `proof`, `feature-video`, `changelog`, `generate_command`, `setup`; rewire live references; extend removed-names; regenerate.
 
@@ -107,7 +107,7 @@ The bundle grew by accretion; every asset ships to every install (including head
 
 **Verification:** full unit suite, typecheck, content-integrity, schema+registry drift clean, docs build.
 
-- [ ] **Unit 2: Remove 14 agents, rewire reviewer references**
+- [x] **Unit 2: Remove 14 agents, rewire reviewer references**
 
 **Goal:** Delete the 6 stack-specific personas (`kieran-rails-reviewer`, `kieran-python-reviewer`, `dhh-rails-reviewer`, `julik-frontend-races-reviewer`, `schema-drift-detector`, `lint`), 5 duplicate standalones (`security-sentinel`, `performance-oracle`, `data-integrity-guardian`, `data-migration-expert`, `cli-agent-readiness-reviewer`), 2 Figma agents (`figma-design-sync`, `design-implementation-reviewer`), and `ankane-readme-writer`; rewire every inbound reference; populate `REMOVED_BUNDLED_AGENT_NAMES`.
 
@@ -128,7 +128,7 @@ The bundle grew by accretion; every asset ships to every install (including head
 
 **Verification:** full gates as Unit 1.
 
-- [ ] **Unit 3: Merge todo trio into `todos`**
+- [x] **Unit 3: Merge todo trio into `todos`**
 
 **Goal:** Create `skills/todos/SKILL.md` (Create/Triage/Resolve sections merging the three bodies); delete the three dirs; rewire; removed-names.
 
@@ -150,7 +150,7 @@ The bundle grew by accretion; every asset ships to every install (including head
 
 **Verification:** full gates.
 
-- [ ] **Unit 4: Fold writing-systematic-skills into writing-skills**
+- [x] **Unit 4: Fold writing-systematic-skills into writing-skills**
 
 **Goal:** Append a "Systematic bundled skills" section to `skills/writing-skills/SKILL.md` carrying the Systematic-specific contracts (frontmatter rules, content-integrity, reference-file conventions); delete `skills/writing-systematic-skills/`; update the content-integrity remediation string.
 
@@ -170,7 +170,7 @@ The bundle grew by accretion; every asset ships to every install (including head
 
 **Verification:** full gates.
 
-- [ ] **Unit 5: Docs sweep + final verification**
+- [x] **Unit 5: Docs sweep + final verification**
 
 **Goal:** Regenerate docs reference content; verify orphaned reference pages are gone (delete manually if generator is add-only); update the migration guidance started by 002 Unit 5 with the curation removals table; full-suite final verification across all gates.
 

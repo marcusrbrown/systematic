@@ -327,6 +327,12 @@ export interface LibModuleTableCompletenessViolation {
   message: string
 }
 
+export interface StalePlanStatusViolation {
+  kind: 'active-with-no-remaining-units'
+  file: string
+  message: string
+}
+
 export interface CheckResult {
   rootDir: string
   categories: string[]
@@ -349,6 +355,7 @@ export interface CheckResult {
   hookParityViolations: HookParityViolation[]
   codemapCompletenessViolations: CodemapCompletenessViolation[]
   libModuleTableCompletenessViolations: LibModuleTableCompletenessViolation[]
+  stalePlanStatusViolations: StalePlanStatusViolation[]
   dispatchArgumentViolations: DispatchArgumentViolation[]
   exemptHits: ExemptHit[]
   scanStats: {
@@ -609,6 +616,7 @@ export const CODEMAP_DOCUMENT = 'ARCHITECTURE.md'
 export const CODEMAP_EXCLUSION_HEADING = '## Codemap exclusions'
 export const LIB_MODULE_TABLE_DOCUMENT = 'src/lib/AGENTS.md'
 export const LIB_MODULE_TABLE_EXCLUSION_HEADING = '## Module table exclusions'
+export const PLANS_DIR = 'docs/plans'
 
 const HOOK_ASSERTION_REGEX =
   /\b(?:registers?|exposes?)\b(?:[^\n]*\n){0,2}?\s*(?:these|every|all|one|two|three|four|five|six|seven|eight|nine|ten|\d+)(?:\s+(?:one|two|three|four|five|six|seven|eight|nine|ten|\d+))?\s+(?:OpenCode\s+)?hooks?\b/i
@@ -1775,6 +1783,77 @@ export function checkLibModuleTableCompleteness(
   return violations
 }
 
+function collectPlanFiles(rootDir: string, plansDir: string): string[] {
+  const absPlansDir = path.join(rootDir, plansDir)
+  if (!fs.existsSync(absPlansDir)) return []
+
+  return walkDir(absPlansDir, {
+    maxDepth: 10,
+    filter: (entry) => !entry.isDirectory && entry.name.endsWith('.md'),
+  })
+    .map((entry) => path.relative(rootDir, entry.path))
+    .sort()
+}
+
+const UNTICKED_UNIT_CHECKBOX_REGEX = /^\s*-\s\[ \]/im
+const TICKED_UNIT_CHECKBOX_REGEX = /^\s*-\s\[x\]/im
+
+/**
+ * A plan under `docs/plans/` with frontmatter `status: active` and zero
+ * remaining `- [ ]` unit checkboxes is almost certainly stale: the work
+ * shipped but nobody flipped `status` to `completed`. This is pure
+ * frontmatter + checkbox counting — it does not inspect the working tree to
+ * verify claimed deliverables actually exist.
+ *
+ * Edge cases handled deliberately:
+ * - A plan with no checkboxes at all (a program/strategy document that is
+ *   only prose) is never flagged — flagging requires at least one ticked
+ *   `- [x]` unit alongside zero unticked ones, so a plan can't be flagged
+ *   just for lacking checkbox syntax entirely.
+ * - Any `status` other than `active` (`completed`, `superseded`, etc.) is
+ *   ignored entirely; this check only targets plans currently claiming to be
+ *   in progress.
+ * - Checkboxes inside fenced code blocks (documentation examples) are
+ *   stripped before counting, so an illustrative `- [x]` in a program doc's
+ *   example fence cannot trigger a flag.
+ *
+ * Deliberately NOT covered: a plan whose units are ALL unticked, however
+ * long it has sat `active`, is never flagged. Ticked-count zero is
+ * indistinguishable from "not started yet" using frontmatter and checkboxes
+ * alone — telling "shipped but nobody ticked the boxes" apart from "not
+ * started" needs verifying deliverables against the working tree, which this
+ * gate deliberately does not do.
+ */
+export function checkStalePlanStatus(
+  rootDir: string,
+  plansDir = PLANS_DIR,
+): StalePlanStatusViolation[] {
+  const violations: StalePlanStatusViolation[] = []
+
+  for (const relPath of collectPlanFiles(rootDir, plansDir)) {
+    const content = readFileSafe(path.join(rootDir, relPath))
+    if (content === null) continue
+
+    const parsed = parseFrontmatter(content)
+    if (!isRecord(parsed.data) || parsed.data.status !== 'active') continue
+
+    const body = stripFencedCodeBlocks(parsed.body)
+    if (UNTICKED_UNIT_CHECKBOX_REGEX.test(body)) continue
+    if (!TICKED_UNIT_CHECKBOX_REGEX.test(body)) continue
+
+    violations.push({
+      kind: 'active-with-no-remaining-units',
+      file: relPath,
+      message:
+        `${relPath} is marked \`status: active\` but has no remaining unticked ` +
+        'unit checkboxes — every `- [x]` unit is already ticked. Flip `status` ' +
+        'to `completed`, or tick the units that genuinely remain incomplete.',
+    })
+  }
+
+  return violations
+}
+
 /**
  * Strip fenced code blocks (``` or ~~~) from a markdown body string.
  * Returns the body with all fenced regions replaced by empty strings so that
@@ -2317,6 +2396,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
   const codemapCompletenessViolations = checkCodemapCompleteness(rootDir)
   const libModuleTableCompletenessViolations =
     checkLibModuleTableCompleteness(rootDir)
+  const stalePlanStatusViolations = checkStalePlanStatus(rootDir)
   const dispatchArgumentViolations = checkDispatchArguments(
     rootDir,
     targets.markdown,
@@ -2349,6 +2429,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     hookParityViolations,
     codemapCompletenessViolations,
     libModuleTableCompletenessViolations,
+    stalePlanStatusViolations,
     dispatchArgumentViolations,
     exemptHits,
     scanStats: {
@@ -2411,6 +2492,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
   printLibModuleTableCompletenessViolations(
     result.libModuleTableCompletenessViolations,
   )
+  printStalePlanStatusViolations(result.stalePlanStatusViolations)
   printDispatchArgumentViolations(result.dispatchArgumentViolations)
 
   if (totalViolations(result) === 0) {
@@ -2658,6 +2740,18 @@ function printLibModuleTableCompletenessViolations(
   }
 }
 
+function printStalePlanStatusViolations(
+  violations: readonly StalePlanStatusViolation[],
+): void {
+  if (violations.length === 0) return
+  process.stderr.write(
+    `\nStale plan status violations (${violations.length}):\n`,
+  )
+  for (const violation of violations) {
+    process.stderr.write(`  [${violation.kind}] ${violation.message}\n`)
+  }
+}
+
 function totalViolations(result: CheckResult): number {
   return (
     result.phantomRefs.length +
@@ -2678,6 +2772,7 @@ function totalViolations(result: CheckResult): number {
     result.hookParityViolations.length +
     result.codemapCompletenessViolations.length +
     result.libModuleTableCompletenessViolations.length +
+    result.stalePlanStatusViolations.length +
     result.dispatchArgumentViolations.length
   )
 }
