@@ -2404,6 +2404,104 @@ describe('OpenCode workflow guard adapter', () => {
     })
   })
 
+  test('a mismatched completion target replayed on the same callID keeps the original reason code', async () => {
+    const adapter = createAdapter('protected')
+    await observeSkill(adapter, 'systematic_skill', 'ce:work')
+    mintReceipt(adapter, 'implementation')
+    mintReceipt(adapter, 'verification')
+    const input = {
+      tool: 'systematic_workflow_complete',
+      sessionID: SESSION_A,
+      callID: 'mismatched-target-replay',
+    }
+    await adapter.hooks['tool.execute.before'](input, {
+      args: { target: 'unit' },
+    })
+    const output = staleReadyOutput()
+    await adapter.hooks['tool.execute.after'](
+      { ...input, args: { target: 'epoch' } },
+      output,
+    )
+    expect(output.metadata.workflowGuard).toMatchObject({
+      status: 'unavailable',
+      reasonCode: 'invalid-transition',
+      target: 'unit',
+    })
+    const beforeReplay = {
+      ...(output.metadata.workflowGuard as Record<string, unknown>),
+    }
+    // Replay of the identical call (same callID, same args) must not fall
+    // through to finishUnreplayableComplete()'s generic 'guard-unavailable'.
+    await adapter.hooks['tool.execute.after'](
+      { ...input, args: { target: 'epoch' } },
+      output,
+    )
+    expect(output.metadata.workflowGuard).toEqual(beforeReplay)
+  })
+
+  test('a failed host completion replayed on the same callID keeps the original reason code and does not touch title/output', async () => {
+    const adapter = createAdapter('protected')
+    await observeSkill(adapter, 'systematic_skill', 'ce:work')
+    mintReceipt(adapter, 'implementation')
+    mintReceipt(adapter, 'verification')
+    const input = {
+      tool: 'systematic_workflow_complete',
+      sessionID: SESSION_A,
+      callID: 'host-failure-replay',
+    }
+    await adapter.hooks['tool.execute.before'](input, {
+      args: { target: 'unit' },
+    })
+    const hostErrorTitle = 'Bash command failed'
+    const hostErrorText = 'permission denied: /var/run/lock'
+    const output: RecordedToolOutput = {
+      title: hostErrorTitle,
+      output: hostErrorText,
+      metadata: { status: 'error' },
+    }
+    await adapter.hooks['tool.execute.after'](
+      { ...input, args: { target: 'unit' } },
+      output,
+    )
+    expect(output.metadata.workflowGuard).toMatchObject({
+      status: 'unavailable',
+      reasonCode: 'failed-operation',
+      target: 'unit',
+    })
+    const beforeReplay = {
+      ...(output.metadata.workflowGuard as Record<string, unknown>),
+    }
+    // Replay of the identical call (same callID, same host failure) must
+    // not fall through to finishUnreplayableComplete()'s generic
+    // 'guard-unavailable', and must not overwrite the host's own
+    // title/output with a generic terminal-result title.
+    await adapter.hooks['tool.execute.after'](
+      { ...input, args: { target: 'unit' } },
+      output,
+    )
+    expect(output.title).toBe(hostErrorTitle)
+    expect(output.output).toBe(hostErrorText)
+    expect(output.metadata.status).toBe('error')
+    expect(output.metadata.workflowGuard).toEqual(beforeReplay)
+  })
+
+  test('a completion call with no pending transition and no target in its own args omits target rather than fabricating one', async () => {
+    const adapter = createAdapter('protected')
+    const input = {
+      tool: 'systematic_workflow_complete',
+      sessionID: SESSION_A,
+      callID: 'no-pending-no-target-complete',
+    }
+    const output = staleReadyOutput()
+    await adapter.hooks['tool.execute.after']({ ...input, args: {} }, output)
+    expect(output.metadata).not.toMatchObject({ reasonCode: 'unit-ready' })
+    expect(output.metadata.workflowGuard).toMatchObject({
+      status: 'unavailable',
+      reasonCode: 'guard-unavailable',
+    })
+    expect(output.metadata.workflowGuard).not.toHaveProperty('target')
+  })
+
   test('a shared output across two guard instances keeps the host failure sentinel visible to the second instance', async () => {
     const first = createAdapter('protected')
     const second = createAdapter('protected')
