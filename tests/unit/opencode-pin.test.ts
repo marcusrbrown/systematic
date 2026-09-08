@@ -657,3 +657,216 @@ describe('R2: fixture version literals stay in the unpinnable sentinel range', (
     ])
   })
 })
+
+// ---------------------------------------------------------------------------
+// Blind-spot probe: measure R2's coverage on every run instead of asserting
+// it from a hand-run snapshot. See
+// docs/solutions/best-practices/measure-a-source-scanner-blind-spots-2026-09-07.md
+// (Guidance 1) for why a scanner's blind spots need measuring, not reviewing.
+// ---------------------------------------------------------------------------
+
+/**
+ * Injection shape for the probe below: an object-literal-style
+ * `opencodeVersion:` field on its own line. This is unambiguously in R2's
+ * scope -- an OpenCode-shaped version key, not `packageVersion:` or another
+ * versioning domain -- and, unlike a multi-line launcher template string or
+ * a `.toThrow(/x\.y\.z/)` regex assertion, it is a single self-contained
+ * string literal whose tokenization never depends on neighbouring lines, so
+ * every planted position behaves the same way. It also matches one of R1's
+ * own historical trigger shapes (`scripts/lib/opencode-pin.ts`'s
+ * `pin`/`opencodeVersion` vocabulary), keeping the injected literal on R2's
+ * "string" code-span path rather than its separate "regex" path.
+ */
+function probeInjectionLine(literal: string): string {
+  return `  opencodeVersion: '${literal}',`
+}
+
+/**
+ * Byte ranges of every `/* ... *\/` block comment in `source`, found with
+ * the same left-to-right walk `tokenizeCodeSpans` uses -- reusing its
+ * `tryConsume*` primitives rather than re-deriving the tokenizing rules --
+ * so a `/*` inside a real string or regex is never mistaken for a comment
+ * start. Used only to classify probe positions below; not part of R2
+ * itself.
+ */
+function findBlockCommentByteRanges(
+  source: string,
+): Array<{ start: number; end: number }> {
+  const ranges: Array<{ start: number; end: number }> = []
+  const n = source.length
+  let i = 0
+
+  while (i < n) {
+    const blockCommentEnd = tryConsumeBlockComment(source, i)
+    if (blockCommentEnd !== null) {
+      ranges.push({ start: i, end: blockCommentEnd })
+      i = blockCommentEnd
+      continue
+    }
+
+    const lineCommentEnd = tryConsumeLineComment(source, i)
+    if (lineCommentEnd !== null) {
+      i = lineCommentEnd
+      continue
+    }
+
+    const stringEnd = tryConsumeStringLiteral(source, i)
+    if (stringEnd !== null) {
+      i = stringEnd
+      continue
+    }
+
+    const regexEnd = tryConsumeRegexLiteral(source, i)
+    if (regexEnd !== null) {
+      i = regexEnd
+      continue
+    }
+
+    i++
+  }
+
+  return ranges
+}
+
+function isWithinAnyRange(
+  offset: number,
+  ranges: readonly { start: number; end: number }[],
+): boolean {
+  return ranges.some((range) => offset > range.start && offset < range.end)
+}
+
+interface BlindSpotSummary {
+  file: string
+  totalPositions: number
+  detected: number
+  legitimateNonDetections: number
+  misses: Array<{ position: number; line: number }>
+}
+
+/**
+ * For one file's content, inserts `literal` (via `injectLine`) as a new
+ * standalone line at every line boundary -- before the first line, between
+ * every pair of lines, and after the last line -- and asks `scan` whether it
+ * reports a violation at that line. A boundary whose insertion point falls
+ * inside an already-open block comment in the *original* content is
+ * classified as a legitimate non-detection rather than a miss: the scanner
+ * is supposed to ignore comment text, so not reporting a violation there is
+ * correct behaviour, not a blind spot.
+ *
+ * Generic over `scan` and the file contents (rather than closing over R2's
+ * `findFixtureVersionLiteralViolations` and `ALLOWLISTED_FIXTURE_FILES`
+ * directly), so a second scanner-backed guard (e.g.
+ * tests/unit/spawn-and-signal-conventions.test.ts) can reuse this probe
+ * later without a rewrite.
+ */
+function probeScannerBlindSpots(
+  scan: (files: FixtureFileContent[]) => FixtureVersionLiteralViolation[],
+  file: string,
+  content: string,
+  literal: string,
+  injectLine: (literal: string) => string,
+): BlindSpotSummary {
+  const lines = content.split('\n')
+  const commentRanges = findBlockCommentByteRanges(content)
+  const misses: Array<{ position: number; line: number }> = []
+  let detected = 0
+  let legitimateNonDetections = 0
+
+  for (let position = 0; position <= lines.length; position++) {
+    const boundaryOffset = lines
+      .slice(0, position)
+      .reduce((offset, line) => offset + line.length + 1, 0)
+    const insideComment = isWithinAnyRange(boundaryOffset, commentRanges)
+
+    const mutatedLines = [
+      ...lines.slice(0, position),
+      injectLine(literal),
+      ...lines.slice(position),
+    ]
+    const mutatedContent = mutatedLines.join('\n')
+    const injectedLine = position + 1
+
+    const wasDetected = scan([{ file, content: mutatedContent }]).some(
+      (violation) =>
+        violation.line === injectedLine && violation.literal === literal,
+    )
+
+    if (wasDetected) {
+      detected++
+    } else if (insideComment) {
+      legitimateNonDetections++
+    } else {
+      misses.push({ position, line: injectedLine })
+    }
+  }
+
+  return {
+    file,
+    totalPositions: lines.length + 1,
+    detected,
+    legitimateNonDetections,
+    misses,
+  }
+}
+
+describe('probe: R2 catches a planted violation at every line position', () => {
+  // Built from parts, like SYNTHETIC_REALISTIC_VERSION above, so this
+  // literal never appears as a quoted string in this file's own source --
+  // this file is itself on ALLOWLISTED_FIXTURE_FILES, so a literal written
+  // directly here would trip R2's real scan of this file.
+  const PROBE_LITERAL = ['2', '4', '17'].join('.')
+
+  test('every allowlisted file reports a violation at every planted position, except inside comments', () => {
+    const summaries: BlindSpotSummary[] = []
+    const start = performance.now()
+
+    for (const relativePath of ALLOWLISTED_FIXTURE_FILES) {
+      const content = fs.readFileSync(
+        path.join(REPO_ROOT, relativePath),
+        'utf8',
+      )
+      summaries.push(
+        probeScannerBlindSpots(
+          findFixtureVersionLiteralViolations,
+          relativePath,
+          content,
+          PROBE_LITERAL,
+          probeInjectionLine,
+        ),
+      )
+    }
+
+    const elapsedMs = performance.now() - start
+    const totalPositions = summaries.reduce(
+      (sum, s) => sum + s.totalPositions,
+      0,
+    )
+    const totalMisses = summaries.reduce((sum, s) => sum + s.misses.length, 0)
+
+    console.log(
+      `[blind-spot probe] ${totalPositions} positions across ${summaries.length} files in ${elapsedMs.toFixed(1)}ms (full sweep, no sampling): ` +
+        summaries
+          .map(
+            (s) =>
+              `${s.file}: ${s.detected} detected, ${s.legitimateNonDetections} legitimately not detected (inside a comment), ${s.misses.length} missed`,
+          )
+          .join('; '),
+    )
+
+    if (totalMisses > 0) {
+      const missReport = summaries
+        .filter((s) => s.misses.length > 0)
+        .map(
+          (s) =>
+            `${s.file}: missed line(s) ${s.misses.map((m) => m.line).join(', ')}`,
+        )
+        .join('; ')
+
+      throw new Error(
+        `R2 failed to detect a planted "${PROBE_LITERAL}" literal at ${totalMisses} position(s) it should have caught: ${missReport}`,
+      )
+    }
+
+    expect(totalMisses).toBe(0)
+  })
+})

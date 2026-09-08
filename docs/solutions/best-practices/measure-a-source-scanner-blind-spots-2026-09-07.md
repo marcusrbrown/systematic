@@ -45,15 +45,18 @@ measurement found.
 
 1. **Measure a scanner's blind spots by planting a violation at every line position.** Insert the
    forbidden literal at each line of each scanned file in turn and assert the scanner reports it
-   every time. A *position* is an insertion point in the file, counted so that these four files of
-   400 / 652 / 644 / 659 lines yielded 402 / 654 / 646 / 661 positions; the exact convention lives
-   in the probe, and pinning it is part of landing that probe as a test. Reading the code found
-   none of the three holes below; this found all of them. Measured at `dbe2b12`: 0 genuine misses.
+   every time. A *position* is an insertion point in the file — before the first line, between
+   every pair of lines, and after the last. Reading the code found none of the three holes below;
+   this found all of them.
 
-   Those counts are a measurement taken at one commit, not a standing property: the files and the
-   scanner both change. The probe was run ad hoc, which is its weakness — a technique the reader
-   cannot re-run is a technique they will not use. Prefer landing the probe as a test so coverage
-   is re-proven on every change rather than asserted from a snapshot.
+   This is landed as a test, not a one-off measurement: `probeScannerBlindSpots`
+   (`tests/unit/opencode-pin.test.ts:812`) plants a realistic version literal at every position of
+   every allowlisted fixture file and re-runs the real scanner on each mutated copy, on every test
+   run. A position whose insertion point falls inside an already-open block comment is classified
+   as a legitimate non-detection rather than a miss — the scanner is supposed to ignore comment
+   text. The probe is generic over the scanner function and file contents, so a second
+   scanner-backed guard can reuse it without a rewrite. Coverage is re-proven on every change
+   instead of asserted from a snapshot that goes stale the moment the files or the scanner change.
 
 2. **Prefer a structural bound over another heuristic patch.** A `'` or `"` string cannot span a
    newline in JS/TS, so an unterminated string ends at the line break
