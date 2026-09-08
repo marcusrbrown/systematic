@@ -1,7 +1,7 @@
 ---
 title: 'fix: Observe worktree-targeted child operations in the receipt guard'
 type: fix
-status: active
+status: completed
 date: 2026-08-01
 deepened: 2026-08-01
 ---
@@ -294,7 +294,7 @@ task.after (foreground child rollup)                                  # U5
 - **`repositoryIdentity` / `worktreeIdentity`** — mutable revision digests of the
   target's HEAD/tree; staleness is skippable, target identity mismatch is not.
 
-- [ ] **Unit 1: Git-sanitized observer with worktree-structure validation**
+- [x] **Unit 1: Git-sanitized observer with worktree-structure validation**
 
 **Goal:** Give the observer a trustworthy way to validate that an arbitrary
 candidate directory is a registered worktree of the parent repository, with
@@ -348,7 +348,7 @@ shape; `createSeparatedGitFixture` for exotic git layouts.
 worktrees and rejects every spoof fixture; all git subprocesses run with `GIT_*`
 stripped.
 
-- [ ] **Unit 2: Host tool target derivation**
+- [x] **Unit 2: Host tool target derivation**
 
 **Goal:** Resolve the canonical directory a guarded tool actually operated on
 from host-observed arguments, or the parent checkout when there is no override.
@@ -400,7 +400,7 @@ closed vs fast-path fork are the core correctness surface.
 the parent for no-override cases, and fails closed for invalid explicit targets
 with no fixed-observer fallback.
 
-- [ ] **Unit 3: `operationTargetIdentity` authenticated canonical field**
+- [x] **Unit 3: `operationTargetIdentity` authenticated canonical field**
 
 **Goal:** Add a target identity to the receipt's canonical fields so it is
 covered by the salted integrity digest and survives serialize → marker →
@@ -477,7 +477,7 @@ the exact template — mirror it at every site above.
 v1 shim admits only parent-target legacy evidence, and version/closed-set checks
 reject incompatible or field-omitting envelopes.
 
-- [ ] **Unit 4: Per-operation observer wiring and unit target pinning**
+- [x] **Unit 4: Per-operation observer wiring and unit target pinning**
 
 **Goal:** Use a derived-target observer for before/after, bind
 `operationTargetIdentity` into the observation, and pin one local target per unit.
@@ -546,7 +546,7 @@ test proving the durable pin survives, before wiring worktree targets.
 **Verification:** worktree-targeted operations mint; parent-targeted operations
 are unchanged; target switches and between-hook tampering fail closed.
 
-- [ ] **Unit 5: Worktree-aware foreground child rollup**
+- [x] **Unit 5: Worktree-aware foreground child rollup**
 
 **Goal:** Roll up child receipts against each receipt's authenticated target
 instead of the fixed parent observer, preserving the fatal-vs-skippable
@@ -598,7 +598,7 @@ in the 2026-07-31 solution doc.
 shared-parent u5 is unchanged; every spoof/malformed case fails closed without
 partial mutation.
 
-- [ ] **Unit 6: Dogfood reproduction and attack-matrix consolidation**
+- [x] **Unit 6: Dogfood reproduction and attack-matrix consolidation**
 
 **Goal:** Lock in a failing-then-passing reproduction of #678 and consolidate the
 negative/attack matrix into durable regression coverage.
