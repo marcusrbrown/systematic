@@ -2427,16 +2427,24 @@ describe('OpenCode workflow guard adapter', () => {
       reasonCode: 'invalid-transition',
       target: 'unit',
     })
-    const beforeReplay = {
-      ...(output.metadata.workflowGuard as Record<string, unknown>),
-    }
-    // Replay of the identical call (same callID, same args) must not fall
-    // through to finishUnreplayableComplete()'s generic 'guard-unavailable'.
+    // Replay against a FRESH result object (not the same shared `output`
+    // reused above): a same-object replay would pass even if the second
+    // pass writes nothing at all, since the first pass's metadata would
+    // simply still be sitting there. A fresh object can only carry
+    // 'invalid-transition' if the replay path actually wrote it.
+    const replayOutput = staleReadyOutput()
     await adapter.hooks['tool.execute.after'](
       { ...input, args: { target: 'epoch' } },
-      output,
+      replayOutput,
     )
-    expect(output.metadata.workflowGuard).toEqual(beforeReplay)
+    expect(replayOutput.metadata).not.toMatchObject({
+      reasonCode: 'unit-ready',
+    })
+    expect(replayOutput.metadata.workflowGuard).toMatchObject({
+      status: 'unavailable',
+      reasonCode: 'invalid-transition',
+      target: 'unit',
+    })
   })
 
   test('a failed host completion replayed on the same callID keeps the original reason code and does not touch title/output', async () => {
@@ -2468,6 +2476,12 @@ describe('OpenCode workflow guard adapter', () => {
       reasonCode: 'failed-operation',
       target: 'unit',
     })
+    // A host-tool failure deliberately does NOT mark the session
+    // unavailable (unlike an invalid-transition or a finalizeTransition
+    // rejection, both of which do): the guard lets the agent retry the
+    // same unit after a transient host failure. A replay of the same
+    // failed call must not change that disposition either.
+    expect(status(adapter).state).not.toBe('unavailable')
     const beforeReplay = {
       ...(output.metadata.workflowGuard as Record<string, unknown>),
     }
@@ -2483,6 +2497,7 @@ describe('OpenCode workflow guard adapter', () => {
     expect(output.output).toBe(hostErrorText)
     expect(output.metadata.status).toBe('error')
     expect(output.metadata.workflowGuard).toEqual(beforeReplay)
+    expect(status(adapter).state).not.toBe('unavailable')
   })
 
   test('a completion call with no pending transition and no target in its own args omits target rather than fabricating one', async () => {
@@ -2500,6 +2515,116 @@ describe('OpenCode workflow guard adapter', () => {
       reasonCode: 'guard-unavailable',
     })
     expect(output.metadata.workflowGuard).not.toHaveProperty('target')
+  })
+
+  test('a shared output across two guard instances does not erase questionAttestation evidence from the other instance', async () => {
+    const first = createAdapter('observe')
+    const second = createAdapter('observe')
+
+    // First instance obtains an attested question challenge for completing
+    // target 'unit' — same flow as "native question flow binds and accepts
+    // only a correlated affirmative reply" above.
+    await observeSkill(first, 'systematic_skill', 'ce:work')
+    const gateOutput = { title: 'complete', output: 'complete', metadata: {} }
+    await first.hooks['tool.execute.before'](
+      {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'attest-complete',
+      },
+      { args: { target: 'unit' } },
+    )
+    await first.hooks['tool.execute.after'](
+      {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'attest-complete',
+        args: { target: 'unit' },
+      },
+      gateOutput,
+    )
+    const questionOutput = { args: {} as Record<string, unknown> }
+    await first.hooks['tool.execute.before'](
+      { tool: 'question', sessionID: SESSION_A, callID: 'attest-question' },
+      questionOutput,
+    )
+    await observeQuestionEvent(first, 'question.asked', {
+      id: 'attest-request',
+      sessionID: SESSION_A,
+      questions: [],
+      tool: { messageID: 'attest-message', callID: 'attest-question' },
+    })
+    await observeQuestionEvent(first, 'question.replied', {
+      sessionID: SESSION_A,
+      requestID: 'attest-request',
+      answers: [['yes']],
+    })
+    // Resolve first's own missing-evidence gate (independent of the
+    // question challenge above) so its next completion attempt actually
+    // registers a pending transition instead of being rejected before
+    // reaching branch A.
+    mintReceipt(first, 'implementation')
+    mintReceipt(first, 'verification')
+
+    // First instance now writes a shared output that carries its attested
+    // questionAttestation — a mismatched-target completion (branch A) is a
+    // convenient vehicle: any of the five metadata-merge sites proves the
+    // point.
+    await first.hooks['tool.execute.before'](
+      {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'first-shared-write',
+      },
+      { args: { target: 'unit' } },
+    )
+    const sharedOutput: RecordedToolOutput = {
+      title: 'stale',
+      output: 'stale',
+      metadata: {},
+    }
+    await first.hooks['tool.execute.after'](
+      {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'first-shared-write',
+        args: { target: 'epoch' },
+      },
+      sharedOutput,
+    )
+    expect(sharedOutput.metadata.questionAttestation).toMatchObject({
+      status: 'attested',
+    })
+
+    // A second, independent guard instance (different
+    // ledger.metadata.registrationDigest, no attestation of its own) now
+    // writes into the SAME shared output for its own, unrelated
+    // mismatched-target completion. Its own metadata() call does not emit
+    // questionAttestation — the first instance's evidence must survive the
+    // strip in withoutStaleConditionalMetadata().
+    await observeSkill(second, 'systematic_skill', 'ce:work')
+    mintReceipt(second, 'implementation')
+    mintReceipt(second, 'verification')
+    await second.hooks['tool.execute.before'](
+      {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'second-shared-write',
+      },
+      { args: { target: 'unit' } },
+    )
+    await second.hooks['tool.execute.after'](
+      {
+        tool: 'systematic_workflow_complete',
+        sessionID: SESSION_A,
+        callID: 'second-shared-write',
+        args: { target: 'epoch' },
+      },
+      sharedOutput,
+    )
+    expect(sharedOutput.metadata.questionAttestation).toMatchObject({
+      status: 'attested',
+    })
   })
 
   test('a shared output across two guard instances keeps the host failure sentinel visible to the second instance', async () => {

@@ -2475,6 +2475,18 @@ function createSessionRuntime(
     existingMetadata: Record<string, unknown>,
   ): Record<string, unknown> {
     if (!('questionAttestation' in existingMetadata)) return existingMetadata
+    // `existingMetadata` may belong to the host tool's own raw metadata, or
+    // to ANOTHER guard instance sharing this `output` reference (see the
+    // cross-instance sharing note on writeAbandonedCompletionMetadata()) —
+    // never safe to strip from. `sourceDigest` is this instance's
+    // `ledger.metadata.registrationDigest`: fixed for the instance's
+    // lifetime, and distinct per instance (random unless
+    // `registrationIdentity` is pinned). Matching it against the existing
+    // metadata's own `sourceDigest` is how "did THIS instance write this"
+    // is verified before deleting anything from it.
+    if (existingMetadata.sourceDigest !== currentMarkerSource().source) {
+      return existingMetadata
+    }
     const { questionAttestation: _stale, ...rest } = existingMetadata
     return rest
   }
@@ -2561,37 +2573,36 @@ function createSessionRuntime(
     }
   }
 
-  // `target` is `undefined` only when `finishUnreplayableComplete()` calls
-  // through with a genuinely unknown target — every other caller passes a
-  // real `TransitionTarget`. Omitted from the returned fragment rather than
-  // filled with a placeholder so the written record never claims to know a
-  // target it does not.
+  // Only the non-success path can reach this with `target === undefined`
+  // (via `finishUnreplayableComplete()`, where the target is genuinely
+  // unknown). Omitted from the returned fragment rather than filled with a
+  // placeholder so the written record never claims to know a target it
+  // does not.
   function targetMetadataField(
     target: TransitionTarget | undefined,
   ): { target: TransitionTarget } | Record<string, never> {
     return target ? { target } : {}
   }
 
-  function completedOutputText(target: TransitionTarget | undefined): string {
-    return target
-      ? `workflow guard completed ${target}`
-      : 'workflow guard completed'
-  }
-
   function writeCompletionResult(
     output: unknown,
     result: TransitionFinalizeResult | TerminalComplete,
+    // `undefined` is only meaningful for the non-success branch below; the
+    // `completed`/`duplicate` branch is only ever reached from
+    // `finalizeComplete()` with a concrete `pending.target`, so it treats
+    // `target` as always present rather than adding unreachable fallback
+    // handling for a case that branch can never see.
     target: TransitionTarget | undefined,
   ): void {
     if (!isRecord(output)) return
     const existingMetadata = isRecord(output.metadata) ? output.metadata : {}
     if (result.status === 'completed' || result.status === 'duplicate') {
       output.title = 'Workflow transition completed'
-      output.output = completedOutputText(target)
+      output.output = `workflow guard completed ${target}`
       output.metadata = {
         ...withoutStaleConditionalMetadata(existingMetadata),
         ...metadata(),
-        workflowGuard: { status: 'completed', ...targetMetadataField(target) },
+        workflowGuard: { status: 'completed', target },
       }
       return
     }
@@ -3285,10 +3296,26 @@ function createSessionRuntime(
         return true
       }
     }
+    // A recorded TerminalComplete means THIS call digest already reached a
+    // terminal, non-success outcome (invalid-transition, failed-operation,
+    // or any other non-`completed`/`duplicate` finalizeTransition result).
+    // Unlike `replay` (a finalized success, replayed by re-driving the
+    // real transition) and `blockedTarget` (a still-live question gate),
+    // there is no live transition left here for a mismatched `finalTarget`
+    // to hijack into: writeTerminalReplay() can only ever reproduce the
+    // same non-success result, never a success one, and consumes nothing.
+    // So the target that PRODUCED this terminal (`terminal.target`) is
+    // used to replay it, without gating on whatever `finalTarget` this
+    // particular delivery happens to carry.
+    const terminal = terminalCompletes.get(callDigest)
+    if (terminal?.target) {
+      writeTerminalReplay(output, terminal, terminal.target)
+      blockedCompletes.delete(callDigest)
+      return true
+    }
     const replay = finalizedCompletes.get(callDigest)
     const abandonedTarget = abandonedCompletes.get(callDigest)
     const blockedTarget = blockedCompletes.get(callDigest)
-    const terminal = terminalCompletes.get(callDigest)
     const expectedTarget = replay?.target ?? abandonedTarget ?? blockedTarget
     if (!expectedTarget) return false
     if (finalTarget !== expectedTarget) {
@@ -3296,7 +3323,6 @@ function createSessionRuntime(
       return true
     }
     if (replay) replayComplete(callDigest)
-    if (terminal) writeTerminalReplay(output, terminal, expectedTarget)
     blockedCompletes.delete(callDigest)
     return true
   }
