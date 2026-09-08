@@ -118,9 +118,10 @@ async function startServer(env: NodeJS.ProcessEnv): Promise<{
     const onChunk = (chunk: Buffer) => {
       buf += chunk.toString()
       const match = buf.match(/(http:\/\/[\d.:]+)/)
-      if (match) {
+      const [, url] = match ?? []
+      if (url !== undefined) {
         clearTimeout(timeout)
-        resolve(match[1])
+        resolve(url)
       }
     }
     server.stdout?.on('data', onChunk)

@@ -3498,7 +3498,11 @@ describe('TYPED_VALIDATION_DOCS_URL', () => {
     if (!match) {
       throw new Error('Could not locate TYPED_VALIDATION_DOCS_URL in config.ts')
     }
-    return match[1]
+    const [, url] = match
+    if (url === undefined) {
+      throw new Error('Could not locate TYPED_VALIDATION_DOCS_URL in config.ts')
+    }
+    return url
   }
 
   test('URL points at fro.bot/systematic (host drift regression)', () => {
@@ -3526,7 +3530,8 @@ describe('TYPED_VALIDATION_DOCS_URL', () => {
     for (const line of mdx.split('\n')) {
       const m = line.match(/^#{1,6}\s+(.+)$/)
       if (m) {
-        slugs.add(slugify(m[1].trim()))
+        const [, heading] = m
+        if (heading !== undefined) slugs.add(slugify(heading.trim()))
       }
     }
     return slugs

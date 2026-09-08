@@ -20,7 +20,8 @@ function collectSectionHeadings(content: string): Set<string> {
   for (const line of content.split('\n')) {
     const match = line.match(/^##(#?)\s+(.+)$/)
     if (match) {
-      headings.add(match[2].trim())
+      const [, , heading = ''] = match
+      headings.add(heading.trim())
     }
   }
   return headings
@@ -39,9 +40,9 @@ function checkAllSectionsHaveDescriptions(content: string): boolean {
     const lines = section.split('\n')
     let headingIdx = -1
     let typeIdx = -1
-    for (let i = 0; i < lines.length; i++) {
-      if (/^#{2,3}\s+/.test(lines[i])) headingIdx = i
-      if (lines[i].includes('**Type:**')) typeIdx = i
+    for (const [i, line] of lines.entries()) {
+      if (/^#{2,3}\s+/.test(line)) headingIdx = i
+      if (line.includes('**Type:**')) typeIdx = i
     }
     if (headingIdx === -1 || typeIdx === -1) continue
     // Text between heading and **Type:** should have non-whitespace

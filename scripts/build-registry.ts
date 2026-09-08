@@ -112,6 +112,7 @@ function parseArgs(): { version: string | null; validateOnly: boolean } {
 
   for (let i = 0; i < args.length; i++) {
     const arg = args[i]
+    if (arg === undefined) continue
     if (arg === '--validate-only') {
       validateOnly = true
     } else if (arg === '--version') {

@@ -339,13 +339,17 @@ function resolveOpencodeModelAndVariant(
       readOpencodeLayerField(agentOverlay, categoryOverlay, layer, 'model') !==
       undefined,
   )
-  const rawModel =
+  const modelLayer =
     modelLayerIndex === -1
+      ? undefined
+      : OPENCODE_MODEL_VARIANT_LAYERS[modelLayerIndex]
+  const rawModel =
+    modelLayer === undefined
       ? undefined
       : readOpencodeLayerField(
           agentOverlay,
           categoryOverlay,
-          OPENCODE_MODEL_VARIANT_LAYERS[modelLayerIndex],
+          modelLayer,
           'model',
         )
   const model = narrowModelValue(rawModel)
@@ -361,8 +365,10 @@ function resolveOpencodeModelAndVariant(
     const eligibleLayerCount = hasModel
       ? modelLayerIndex + 1
       : OPENCODE_MODEL_VARIANT_LAYERS.length
-    for (let i = 0; i < eligibleLayerCount; i++) {
-      const layer = OPENCODE_MODEL_VARIANT_LAYERS[i]
+    for (const layer of OPENCODE_MODEL_VARIANT_LAYERS.slice(
+      0,
+      eligibleLayerCount,
+    )) {
       const narrowed = narrowQualifierValue(
         readOpencodeLayerField(agentOverlay, categoryOverlay, layer, 'variant'),
       )

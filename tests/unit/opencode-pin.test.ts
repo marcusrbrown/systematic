@@ -948,8 +948,14 @@ function probeScannerBlindSpots(
   let legitimateNonDetections = 0
 
   for (let position = 0; position <= lines.length; position++) {
+    const offset = boundaryOffsets[position]
+    if (offset === undefined) {
+      throw new Error(
+        `boundaryOffsets is documented to have lines.length + 1 entries; missing offset at position ${position}`,
+      )
+    }
     const legitimateHere = isLegitimateNonDetection(
-      boundaryOffsets[position],
+      offset,
       nonPlantableRanges,
       shape,
     )

@@ -47,8 +47,7 @@ export function parseFrontmatter<T = Record<string, unknown>>(
     }
   }
 
-  const yamlContent = match[1]
-  const body = match[2]
+  const [, yamlContent = '', body = ''] = match
 
   try {
     const parsed = yaml.load(yamlContent, { schema: yaml.JSON_SCHEMA })

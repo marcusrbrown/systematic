@@ -63,7 +63,7 @@ function consumeStringLiteral(
   let text = quote ?? ''
   while (i < source.length && source[i] !== quote) {
     if (source[i] === '\\' && i + 1 < source.length) {
-      text += source[i] + source[i + 1]
+      text += (source[i] ?? '') + (source[i + 1] ?? '')
       i += 2
       continue
     }

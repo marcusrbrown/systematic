@@ -2446,12 +2446,14 @@ function validateTarHeaderChecksum(header: Buffer): void {
   const stored = readTarOctal(header, 148, 8)
   let actual = 0
   for (let index = 0; index < header.length; index += 1) {
-    actual += index >= 148 && index < 156 ? 0x20 : header[index]
+    actual += index >= 148 && index < 156 ? 0x20 : (header[index] ?? 0)
   }
   if (actual !== stored) artifactFailure('artifact_resolution')
 }
 
-function readNpmTarEntryType(typeFlag: number): 'file' | 'directory' {
+function readNpmTarEntryType(
+  typeFlag: number | undefined,
+): 'file' | 'directory' {
   if (typeFlag === 0 || typeFlag === 0x30) return 'file'
   if (typeFlag === 0x35) return 'directory'
   artifactFailure('artifact_resolution')

@@ -624,13 +624,52 @@ describe('applyBootstrapContent marker-based idempotency', () => {
     expect(output.system[1]).toBe('slot 1 content')
   })
 
+  /**
+   * Regression pin for the `noUncheckedIndexedAccess` narrowing: an
+   * `output.system` array that is non-empty but whose first entry is a
+   * leading empty string must go through the "replace" branch (`first.length
+   * > 0` is false), not the "array is empty" branch. These are genuinely
+   * different code paths in `applyBootstrapContent` — `output.system.length
+   * === 0` (push a new entry) vs. `first.length > 0` (join-vs-replace an
+   * existing entry) — that a careless collapse of the two undefined/empty
+   * checks into one could conflate. A leading blank entry must be replaced
+   * outright, not joined with `\n\n`, which would leave a stray leading
+   * blank line in the rendered system prompt.
+   */
+  test('replaces (not joins) a leading empty-string system[0] entry, and leaves system.length at 1', () => {
+    const output = { system: [''] }
+    applyBootstrapContent(output, wrap('NEW CONTENT'))
+    expect(output.system).toHaveLength(1)
+    expect(output.system[0]).toBe(wrap('NEW CONTENT'))
+    expect(output.system[0]).not.toBe(`\n\n${wrap('NEW CONTENT')}`)
+  })
+
+  /**
+   * `applyBootstrapContent` receives `output` from OpenCode's
+   * `experimental.chat.system.transform` hook, and a sibling hook in the
+   * same pipeline (`opencode-workflow-guard.ts`'s `appendMarker`) captures
+   * `output.system` by reference and mutates it directly. If this function
+   * ever reassigns `output.system` to a new array instead of mutating the
+   * existing one in place, a caller holding the original reference (the
+   * host, or that sibling hook) would silently stop seeing the injected
+   * bootstrap content — no error, just missing `<SYSTEMATIC_WORKFLOWS>`
+   * content. Array identity is part of this function's real contract with
+   * its caller, not an implementation detail.
+   */
+  test('mutates output.system in place rather than replacing the array reference', () => {
+    const output = { system: ['existing system prompt'] }
+    const originalRef = output.system
+    applyBootstrapContent(output, wrap('NEW CONTENT'))
+    expect(output.system).toBe(originalRef)
+  })
+
   test('removes existing marker block from system[0] then appends current content', () => {
     const output = {
       system: [`existing prompt with ${wrap('OLD CONTENT')} embedded`],
     }
     applyBootstrapContent(output, wrap('NEW CONTENT'))
     expect(output.system).toHaveLength(1)
-    const result = output.system[0]
+    const [result = ''] = output.system
     const openTagCount = (result.match(new RegExp(MARKER_OPEN, 'g')) ?? [])
       .length
     expect(openTagCount).toBe(1)
@@ -699,12 +738,11 @@ describe('applyBootstrapContent marker-based idempotency', () => {
     expect(output.system[0]).toContain('trailing content with no close')
     expect(output.system[0]).toContain('NEW CONTENT')
     // Exactly one complete block (the appended one)
-    const openTagCount = (
-      output.system[0].match(new RegExp(MARKER_OPEN, 'g')) ?? []
-    ).length
-    const closeTagCount = (
-      output.system[0].match(new RegExp(MARKER_CLOSE, 'g')) ?? []
-    ).length
+    const [slot0 = ''] = output.system
+    const openTagCount = (slot0.match(new RegExp(MARKER_OPEN, 'g')) ?? [])
+      .length
+    const closeTagCount = (slot0.match(new RegExp(MARKER_CLOSE, 'g')) ?? [])
+      .length
     expect(closeTagCount).toBe(1)
     // Two open tags: one from the malformed fragment, one from the appended block
     expect(openTagCount).toBe(2)
@@ -717,7 +755,7 @@ describe('applyBootstrapContent marker-based idempotency', () => {
     applyBootstrapContent(output, wrap('FIRST REGISTRATION'))
     applyBootstrapContent(output, wrap('SECOND REGISTRATION'))
 
-    const result = output.system[0]
+    const [result = ''] = output.system
     expect(result).toContain(malformed)
     expect(result).toContain('SECOND REGISTRATION')
     expect(result).not.toContain('FIRST REGISTRATION')
@@ -781,13 +819,12 @@ describe('applyBootstrapContent marker-based idempotency', () => {
     // The appended block exists
     expect(output.system[0]).toContain('NEW')
     // The inner block is removed — only fragment + appended block remain
-    const openTagCount = (
-      output.system[0].match(new RegExp(MARKER_OPEN, 'g')) ?? []
-    ).length
+    const [slot0 = ''] = output.system
+    const openTagCount = (slot0.match(new RegExp(MARKER_OPEN, 'g')) ?? [])
+      .length
     expect(openTagCount).toBe(2)
-    const closeTagCount = (
-      output.system[0].match(new RegExp(MARKER_CLOSE, 'g')) ?? []
-    ).length
+    const closeTagCount = (slot0.match(new RegExp(MARKER_CLOSE, 'g')) ?? [])
+      .length
     expect(closeTagCount).toBe(1)
   })
 
@@ -805,9 +842,9 @@ describe('applyBootstrapContent marker-based idempotency', () => {
     expect(output.system[0]).toContain('SECOND')
     expect(output.system[0]).not.toContain('FIRST')
     // One complete block (the appended second one)
-    const closeTagCount = (
-      output.system[0].match(new RegExp(MARKER_CLOSE, 'g')) ?? []
-    ).length
+    const [slot0 = ''] = output.system
+    const closeTagCount = (slot0.match(new RegExp(MARKER_CLOSE, 'g')) ?? [])
+      .length
     expect(closeTagCount).toBe(1)
   })
 

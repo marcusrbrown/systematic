@@ -998,8 +998,7 @@ function canonicalPatchText(
 ): string | undefined {
   if (patchTextFileTargets(patchText) === undefined) return undefined
   const segments = patchText.split(/(\r?\n)/)
-  for (let index = 0; index < segments.length; index += 1) {
-    const line = segments[index]
+  for (const [index, line] of segments.entries()) {
     if (line === '\n' || line === '\r\n') continue
     const prefix = PATCH_FILE_PREFIXES.find((candidate) =>
       line.startsWith(candidate),

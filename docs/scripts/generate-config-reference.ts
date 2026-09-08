@@ -760,10 +760,12 @@ function main(): void {
   let version: string | null = null
 
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--version') {
+    const arg = args[i]
+    if (arg === undefined) continue
+    if (arg === '--version') {
       version = args[++i] ?? null
-    } else if (args[i].startsWith('--version=')) {
-      version = args[i].slice('--version='.length)
+    } else if (arg.startsWith('--version=')) {
+      version = arg.slice('--version='.length)
     }
   }
 

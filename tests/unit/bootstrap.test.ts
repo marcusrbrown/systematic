@@ -465,8 +465,9 @@ describe('getBootstrapContent', () => {
     applyBootstrapContent(output, bootstrap)
     applyBootstrapContent(output, bootstrap)
 
-    expect(output.system[0].split(profile)).toHaveLength(2)
-    expect(output.system[0].split('<SYSTEMATIC_WORKFLOWS>')).toHaveLength(2)
+    const [systemPrompt = ''] = output.system
+    expect(systemPrompt.split(profile)).toHaveLength(2)
+    expect(systemPrompt.split('<SYSTEMATIC_WORKFLOWS>')).toHaveLength(2)
   })
 
   test('config.bootstrap.enabled = false returns null', () => {
@@ -733,7 +734,7 @@ describe('using-systematic SKILL.md structural invariants', () => {
     const output = { system: ['You are a primary agent. Do the work.'] }
     applyBootstrapContent(output, content as string)
 
-    const rendered = output.system[0]
+    const [rendered = ''] = output.system
     const subagentStop = rendered.indexOf('<SUBAGENT-STOP>')
     const extremelyImportant = rendered.indexOf('<EXTREMELY-IMPORTANT>')
     expect(subagentStop).toBeGreaterThan(-1)

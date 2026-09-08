@@ -42,7 +42,7 @@ const REPO_ROOT = path.resolve(
   '../..',
 )
 const MODEL = 'opencode/big-pickle'
-const [PROVIDER_ID, MODEL_ID] = MODEL.split('/')
+const [PROVIDER_ID = 'opencode', MODEL_ID = 'big-pickle'] = MODEL.split('/')
 
 interface ProbeResult {
   hookFired: boolean
@@ -92,9 +92,10 @@ async function runProbe(): Promise<ProbeResult> {
     const onChunk = (chunk: Buffer) => {
       buffer += chunk.toString()
       const match = buffer.match(/(http:\/\/[\d.:]+)/)
-      if (match) {
+      const [, url] = match ?? []
+      if (url !== undefined) {
         clearTimeout(timeout)
-        resolve(match[1])
+        resolve(url)
       }
     }
     server.stdout?.on('data', onChunk)

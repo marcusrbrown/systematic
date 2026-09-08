@@ -145,6 +145,37 @@ Body`
         expect(result.hadFrontmatter).toBe(true)
         expect(result.data).toEqual({ name: 'test' })
       })
+
+      /**
+       * Regression pin for the `noUncheckedIndexedAccess` narrowing:
+       * `parseFrontmatter` destructures the regex match as
+       * `const [, yamlContent = '', body = ''] = match`. Both capture
+       * groups always participate when the overall match succeeds, so the
+       * `= ''` defaults never actually fire — but a future edit that
+       * reorders or mis-assigns the destructured names would silently swap
+       * which value lands in `data` vs. `body`. This content has non-empty
+       * frontmatter and a genuinely empty body (the document ends right
+       * after the closing delimiter's newline), so a reordering mistake is
+       * directly observable: `body` would come back as the YAML text
+       * instead of `''`.
+       */
+      test('parses a document with empty body content as an empty string, not the frontmatter text', () => {
+        const content = '---\nname: test\n---\n'
+        const result = parseFrontmatter(content)
+        expect(result.hadFrontmatter).toBe(true)
+        expect(result.parseError).toBe(false)
+        expect(result.data).toEqual({ name: 'test' })
+        expect(result.body).toBe('')
+      })
+
+      test('parses a document with both empty frontmatter content and empty body', () => {
+        const content = '---\n---\n'
+        const result = parseFrontmatter(content)
+        expect(result.hadFrontmatter).toBe(true)
+        expect(result.parseError).toBe(false)
+        expect(result.data).toEqual({})
+        expect(result.body).toBe('')
+      })
     })
 
     describe('error handling', () => {

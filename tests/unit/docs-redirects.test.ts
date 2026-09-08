@@ -15,7 +15,7 @@ function extractRedirects(source: string): Record<string, string> {
   const redirectsMatch = source.match(/redirects:\s*\{([^}]+)\}/)
   if (!redirectsMatch) return {}
 
-  const block = redirectsMatch[1]
+  const [, block = ''] = redirectsMatch
   const result: Record<string, string> = {}
 
   // Match 'key': 'value' or "key": "value" pairs
@@ -23,7 +23,8 @@ function extractRedirects(source: string): Record<string, string> {
   for (;;) {
     const m = pairRe.exec(block)
     if (m === null) break
-    result[m[1]] = m[2]
+    const [, key, value] = m
+    if (key !== undefined && value !== undefined) result[key] = value
   }
   return result
 }

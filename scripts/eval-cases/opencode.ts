@@ -974,7 +974,12 @@ export function gradeModelInheritance(
         (event) =>
           event.availability === availability && event.policy === policy,
       )
-      return matches.length === 1 && gradeModelObservation(matches[0], manifest)
+      const [onlyMatch] = matches
+      return (
+        matches.length === 1 &&
+        onlyMatch !== undefined &&
+        gradeModelObservation(onlyMatch, manifest)
+      )
     })
   return {
     outcome: healthy ? 'success' : 'task_failure',

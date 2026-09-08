@@ -76,7 +76,7 @@ const REPO_ROOT = path.resolve(
   '../..',
 )
 const MODEL = 'opencode/big-pickle'
-const [PROVIDER_ID, MODEL_ID] = MODEL.split('/')
+const [PROVIDER_ID = 'opencode', MODEL_ID = 'big-pickle'] = MODEL.split('/')
 const SESSIONS_PER_CONDITION = 5
 // Per-run wall-time cap. If one session's primary prompt hangs (slow model, stuck
 // inference, hook deadlock), the run is killed and marked errored rather than
@@ -220,9 +220,10 @@ async function startServer(env: NodeJS.ProcessEnv): Promise<{
     const onChunk = (chunk: Buffer) => {
       buf += chunk.toString()
       const match = buf.match(/(http:\/\/[\d.:]+)/)
-      if (match) {
+      const [, url] = match ?? []
+      if (url !== undefined) {
         clearTimeout(timeout)
-        resolve(match[1])
+        resolve(url)
       }
     }
     server.stdout?.on('data', onChunk)

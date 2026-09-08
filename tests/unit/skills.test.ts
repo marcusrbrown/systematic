@@ -227,7 +227,7 @@ description: Test skill
 
       const result = skills.findSkillsInDir(testDir)
       expect(result).toHaveLength(1)
-      expect(result[0].name).toBe('my-skill')
+      expect(result[0]?.name).toBe('my-skill')
     })
 
     test('returns empty array for non-existent directory', () => {
@@ -242,7 +242,7 @@ description: Test skill
 
       const result = skills.findSkillsInDir(testDir)
       expect(result).toHaveLength(1)
-      expect(result[0].name).toBe('unnamed-skill')
+      expect(result[0]?.name).toBe('unnamed-skill')
     })
   })
 })
@@ -290,7 +290,7 @@ description: Test agent
 
       const result = agents.findAgentsInDir(testDir)
       expect(result).toHaveLength(1)
-      expect(result[0].name).toBe('my-agent')
+      expect(result[0]?.name).toBe('my-agent')
     })
   })
 })
@@ -319,7 +319,7 @@ description: Test command
 
       const result = commands.findCommandsInDir(testDir)
       expect(result).toHaveLength(1)
-      expect(result[0].name).toBe('/sys-test')
+      expect(result[0]?.name).toBe('/sys-test')
     })
 
     test('handles non-sys commands', () => {
@@ -327,7 +327,7 @@ description: Test command
 
       const result = commands.findCommandsInDir(testDir)
       expect(result).toHaveLength(1)
-      expect(result[0].name).toBe('/other-cmd')
+      expect(result[0]?.name).toBe('/other-cmd')
     })
   })
 })

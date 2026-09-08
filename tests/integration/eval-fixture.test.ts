@@ -146,10 +146,12 @@ describe('eval fixture isolation', () => {
       expect(childEnv.NPM_CONFIG_CACHE).toBe(fixture.npmCacheRoot)
       expect(childEnv.OPENCODE_CONFIG_DIR).toBe(fixture.opencodeConfigRoot)
       expect(childEnv.EVAL_MODEL_BASE_URL).toBe('http://127.0.0.1:1/v1')
-      expect(childEnv.BUN_INSTALL_CACHE_DIR).toBeDefined()
-      expect(path.relative(parentHome, childEnv.BUN_INSTALL_CACHE_DIR)).toMatch(
-        /^\.\./,
-      )
+      const bunInstallCacheDir = childEnv.BUN_INSTALL_CACHE_DIR
+      expect(bunInstallCacheDir).toBeDefined()
+      if (bunInstallCacheDir === undefined) {
+        throw new Error('expected BUN_INSTALL_CACHE_DIR to be set')
+      }
+      expect(path.relative(parentHome, bunInstallCacheDir)).toMatch(/^\.\./)
       expect(childEnv.TMPDIR).toBe(fixture.tmpRoot)
 
       const inspection = spawnSync(

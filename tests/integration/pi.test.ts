@@ -582,9 +582,10 @@ function spawnPiRpc(options: {
     }
     messages.push(parsed)
     for (let i = waiters.length - 1; i >= 0; i--) {
-      if (waiters[i].predicate(parsed)) {
+      const candidate = waiters[i]
+      if (candidate?.predicate(parsed)) {
         const [waiter] = waiters.splice(i, 1)
-        waiter.resolve(parsed)
+        if (waiter) waiter.resolve(parsed)
       }
     }
   }

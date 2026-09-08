@@ -934,9 +934,10 @@ async function startOpencodeProcess(
     const onChunk = (chunk: Buffer): void => {
       buffer += chunk.toString()
       const match = buffer.match(/(http:\/\/[\d.:]+)/)
-      if (!match) return
+      const [, serverUrl] = match ?? []
+      if (serverUrl === undefined) return
       clearTimeout(timeout)
-      resolve(match[1])
+      resolve(serverUrl)
     }
 
     server.stdout?.on('data', onChunk)

@@ -922,13 +922,13 @@ describe('receipt ledger', () => {
     expect(second.digestIdentity('repository', RAW_REPOSITORY)).toBe(
       firstDigest,
     )
-    supplied[0] = supplied[0] ^ 0xff
+    supplied[0] = (supplied[0] ?? 0) ^ 0xff
     expect(first.digestIdentity('repository', RAW_REPOSITORY)).toBe(firstDigest)
 
     const returned = getSessionSalt(first)
     expect(returned).toBeInstanceOf(Uint8Array)
     if (!returned) return
-    returned[1] = returned[1] ^ 0xff
+    returned[1] = (returned[1] ?? 0) ^ 0xff
     expect(first.digestIdentity('repository', RAW_REPOSITORY)).toBe(firstDigest)
 
     prepareLedgerObservation(first)

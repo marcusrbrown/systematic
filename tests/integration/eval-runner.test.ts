@@ -586,8 +586,9 @@ describe('local OpenCode eval runner', () => {
         skillNames: ['agent-browser', 'ce:brainstorm', 'extra-skill'],
       },
     }
+    const loadedEvent: BoundedProbeEvent = { type: 'loaded', status: 'ok' }
     const presentEvents: BoundedProbeEvent[] = [
-      { type: 'loaded', status: 'ok' },
+      loadedEvent,
       {
         type: 'transform',
         kind: 'chat',
@@ -699,7 +700,7 @@ describe('local OpenCode eval runner', () => {
     expect(
       gradeHostSkillCoverage(
         [
-          presentEvents[0],
+          loadedEvent,
           {
             type: 'transform',
             kind: 'chat',
@@ -2381,6 +2382,9 @@ describe('local OpenCode eval runner', () => {
         )
       }
       const [installedSigintListener] = installedSigintListeners
+      if (!installedSigintListener) {
+        throw new Error('expected exactly one SIGINT listener to be installed')
+      }
 
       const result = normalizeResult(
         await runSourceEval({
