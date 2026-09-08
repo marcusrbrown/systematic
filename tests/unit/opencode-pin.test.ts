@@ -312,6 +312,31 @@ interface CodeSpan {
   text: string
 }
 
+/**
+ * The subset of `CodeSpan` that `scanSpanForVersions` is allowed to scan.
+ * Comment spans exist (`tokenizeCodeSpans` emits them so a classifier can
+ * find them; see the blind-spot probe below) but were never meant to be
+ * scanned for version literals -- comment text is exactly where false
+ * version literals live. Narrowing the parameter to this type turns
+ * passing a comment span into a compile error instead of a silent
+ * mis-scan: the call site's `if (span.kind === 'comment') continue` is
+ * what narrows `CodeSpan` down to this type, so the runtime check and the
+ * type boundary enforce the same exclusion in two different ways.
+ */
+type ScannableCodeSpan = CodeSpan & { kind: 'string' | 'regex' }
+
+/**
+ * Type guard, not a bare `span.kind !== 'comment'` check: a plain literal
+ * comparison narrows `span.kind` at the point it's read, but does not
+ * narrow the *type of `span` itself* to `ScannableCodeSpan` for a
+ * subsequent call -- `CodeSpan` is one interface with a union-typed field,
+ * not a discriminated union of variant interfaces, so TS has nothing to
+ * narrow `span`'s own type against. A named predicate does.
+ */
+function isScannableCodeSpan(span: CodeSpan): span is ScannableCodeSpan {
+  return span.kind !== 'comment'
+}
+
 const WHITESPACE_PATTERN = /\s/
 const REGEX_LITERAL_PRECEDING_CHARS = new Set(['(', ',', '=', '['])
 
@@ -475,7 +500,7 @@ function isExempt(file: string, literal: string, line: string): boolean {
 function scanSpanForVersions(
   file: string,
   content: string,
-  span: CodeSpan,
+  span: ScannableCodeSpan,
   violations: FixtureVersionLiteralViolation[],
 ): void {
   const versionPattern =
@@ -522,7 +547,7 @@ function findFixtureVersionLiteralViolations(
 
   for (const { file, content } of files) {
     for (const span of tokenizeCodeSpans(content)) {
-      if (span.kind === 'comment') continue
+      if (!isScannableCodeSpan(span)) continue
       scanSpanForVersions(file, content, span, violations)
     }
   }
@@ -1040,10 +1065,15 @@ describe('probe classifier: a multi-line template literal is not a code-injectio
     '`\n' +
     'module.exports = help\n'
 
-  test('every shape reports zero misses against a host containing one multi-line template', () => {
-    const literal = ['6', '11', '23'].join('.')
+  // A separate case per shape, not one test looping over all four: the
+  // whole point of this test is that the four shapes behave differently
+  // inside a multi-line template, so a failure needs to name which shape
+  // broke rather than report a single undifferentiated assertion.
+  test.each(INJECTION_SHAPES.map((shape) => [shape.name, shape] as const))(
+    'reports zero misses for the %s shape',
+    (_name, shape) => {
+      const literal = ['6', '11', '23'].join('.')
 
-    for (const shape of INJECTION_SHAPES) {
       const summary = probeScannerBlindSpots(
         findFixtureVersionLiteralViolations,
         'synthetic.test.ts',
@@ -1053,8 +1083,8 @@ describe('probe classifier: a multi-line template literal is not a code-injectio
       )
 
       expect(summary.misses).toEqual([])
-    }
-  })
+    },
+  )
 })
 
 describe('probe sensitivity: probeScannerBlindSpots can report a real miss', () => {
