@@ -259,13 +259,16 @@ sources; bootstrap config shallow-merges.
 `ProfileOverlaySchema` in `src/lib/config-schema.ts`) — a top-level `profile` key selects a named
 entry from a `profiles` map (routing-only `agents`/`categories` overlays) defined in
 `$OPENCODE_CONFIG_DIR` or user config. The selected bundle enters the overlay merge as a fourth
-chain entry between user base and project (`user base > active profile > project > custom`), so a
-project or custom overlay still overrides a profile-supplied routing choice; every other merge in
-`loadConfigWithSources` keeps the three-source chain above. `profiles` is in
-`PROJECT_PROTECTED_FIELDS` (`src/lib/config.ts`) alongside `workflow_guard` — a distinct,
-top-level-key list from `SECURITY_OVERLAY_FIELDS` above, which strips fields *within* an overlay:
-a project `systematic.json` may select a profile but a `profiles` map it defines is ignored with a
-warning, not merged.
+chain entry between user base and project (`user base → active profile → project → custom`, later
+wins); every other merge in `loadConfigWithSources` keeps the three-source chain above. Only a
+**custom** overlay can override a profile-supplied routing choice. A **project** overlay cannot:
+routing fields are exactly `SECURITY_OVERLAY_FIELDS`, which a project file may not set at all
+(`rejectProjectSecurityOverlay` fails the load rather than stripping), and which
+`preserveSecurityFields` carries over from the profile if a non-file project source supplies them.
+`profiles` is in `PROJECT_PROTECTED_FIELDS` (`src/lib/config.ts`) alongside `workflow_guard` — a
+top-level-key list distinct from the per-overlay `SECURITY_OVERLAY_FIELDS` above: a project
+`systematic.json` may select a profile, but a `profiles` map it defines is ignored with a warning,
+not merged.
 
 **Host-contract gate** (`.github/workflows/main.yaml` `host-contract` job,
 `scripts/host-contract-guard.ts`, `scripts/lib/opencode-pin.ts`) — runs `tests/integration` against
