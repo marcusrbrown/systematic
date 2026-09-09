@@ -464,6 +464,15 @@ describe('npm-packed archive: real execution from an extracted, isolated copy', 
     expect(fs.existsSync(reviewRoot)).toBe(true)
   })
 
+  test('packaged cleanup.mjs static help runs with no --root and no scan, from the real extracted archive', () => {
+    const helperPath = path.join(extractDir, 'package', CLEANUP_REL)
+    const help = runNode(helperPath, ['help'])
+    expect(help.exitCode).toBe(0)
+    const helpResponse = parseJsonRecord(help.stdout)
+    expect(helpResponse.result).toBe('help')
+    expect(help.stdout).not.toContain(extractDir)
+  })
+
   test('Pi native skill-relative-path discovery resolves from the same extracted tarball (does not claim a real Pi host was exercised)', () => {
     const pkgRaw = fs.readFileSync(
       path.join(extractDir, 'package/package.json'),

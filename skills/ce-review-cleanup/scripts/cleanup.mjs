@@ -1077,13 +1077,52 @@ export function runExecute(options) {
 // ── CLI entry point ──────────────────────────────────────────────────────
 
 /**
+ * Strictly parses `preview`'s fixed argument set: only `--root <value>`,
+ * `--age <value>`, and the boolean `--ack-offline` are recognized. Any
+ * unknown flag, unexpected positional token, duplicate flag, a flag
+ * missing its value, or a value that is itself another recognized flag
+ * (e.g. `--root --age`) is rejected outright, before any filesystem scan
+ * begins. Absence of a flag is not an error here -- `runPreview` reports
+ * the specific `missing-root-argument`/`missing-age`/
+ * `missing-acknowledgment` diagnostics for that.
  * @param {readonly string[]} args
- * @param {string} name
- * @returns {string | undefined}
+ * @returns {{ ok: true, root: string | undefined, age: string | undefined, ackOffline: boolean } | { ok: false }}
  */
-function getFlag(args, name) {
-  const i = args.indexOf(name)
-  return i !== -1 ? args[i + 1] : undefined
+function parsePreviewArgs(args) {
+  let root
+  let age
+  let ackOffline = false
+  let rootSeen = false
+  let ageSeen = false
+  let ackSeen = false
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]
+    if (arg === '--root' || arg === '--age') {
+      const seen = arg === '--root' ? rootSeen : ageSeen
+      if (seen) return { ok: false }
+      const value = args[i + 1]
+      if (value === undefined || value.startsWith('--')) return { ok: false }
+      if (arg === '--root') {
+        root = value
+        rootSeen = true
+      } else {
+        age = value
+        ageSeen = true
+      }
+      i += 1
+      continue
+    }
+    if (arg === '--ack-offline') {
+      if (ackSeen) return { ok: false }
+      ackSeen = true
+      ackOffline = true
+      continue
+    }
+    return { ok: false }
+  }
+
+  return { ackOffline, age, ok: true, root }
 }
 
 /**
@@ -1131,12 +1170,95 @@ function parseExecuteArgs(args) {
   return { ackOffline, ok: true, root, token }
 }
 
+// ── Static help (no scan, no state, no deletion) ────────────────────────
+
+const HELP_COMMANDS = Object.freeze({
+  execute: Object.freeze({
+    description:
+      'Deletes only the exact candidates approved by an unexpired preview token. Rescans the whole selection and each individual candidate immediately before deleting it, and refuses on any drift.',
+    flags: Object.freeze([
+      '--root <path>     (required) The same project root the preview token was issued against.',
+      '--ack-offline      (required) Operator assertion that this run is offline; not independently verified by this tool.',
+      '--token <token>    (required) The bounded token returned by a prior preview.',
+    ]),
+    usage: 'cleanup.mjs execute --root <path> --ack-offline --token <token>',
+  }),
+  preview: Object.freeze({
+    description:
+      'Read-only preview of historical ce:review run directories older than an age cutoff. Never mutates the filesystem.',
+    flags: Object.freeze([
+      '--root <path>     (required) Project root containing .context/systematic/ce-review.',
+      '--age <N|Nd|Nw>    (required) Positive integer age cutoff in days (default) or weeks (w suffix).',
+      '--ack-offline      (required) Operator assertion that this run is offline; not independently verified by this tool.',
+    ]),
+    usage: 'cleanup.mjs preview --root <path> --age <N|Nd|Nw> --ack-offline',
+  }),
+})
+
+const HELP_EXIT_CODES = Object.freeze({
+  0: 'Preview complete, all approved deletions completed, or an absent review root (no-op).',
+  1: 'Partial: at least one approved candidate was skipped (drift detected) or failed (deletion error) during execute; other candidates in the same run still completed.',
+  2: 'Invalid, ambiguous, or unrecognized arguments; missing offline acknowledgment; or an unsafe/invalid root -- no scan or deletion begins.',
+  3: 'preview-stale: the execute-time rescan no longer matches the preview token (changed root, membership, or candidate). Zero deletions; a renewed preview and approval are required.',
+})
+
+const HELP_NOTES = Object.freeze([
+  '--ack-offline is an operator assertion that this invocation is running offline; it is not independently verified by this tool.',
+  'A valid --token for execute proves the rescanned tree still matches the earlier preview snapshot. It is not authenticated human approval -- the caller must still ask the operator to confirm deletion separately.',
+])
+
+/**
+ * Builds the static, read-only help payload. Never touches the filesystem,
+ * never reads `--root`/`--age`/`--ack-offline`/`--token`, and never reveals
+ * the invoking process's cwd or environment.
+ * @param {'help' | 'preview' | 'execute'} scope
+ * @returns {Record<string, unknown>}
+ */
+function buildHelpResponse(scope) {
+  if (scope === 'help') {
+    return {
+      commands: HELP_COMMANDS,
+      exitCodes: HELP_EXIT_CODES,
+      notes: HELP_NOTES,
+      operation: 'help',
+      result: 'help',
+      schema_version: SCHEMA_VERSION,
+      usage: {
+        execute: HELP_COMMANDS.execute.usage,
+        preview: HELP_COMMANDS.preview.usage,
+      },
+    }
+  }
+  return {
+    ...HELP_COMMANDS[scope],
+    exitCodes: HELP_EXIT_CODES,
+    notes: HELP_NOTES,
+    operation: scope,
+    result: 'help',
+    schema_version: SCHEMA_VERSION,
+  }
+}
+
+function emitHelpAndExit(scope) {
+  process.stdout.write(`${JSON.stringify(buildHelpResponse(scope))}\n`)
+  process.exit(0)
+}
+
 function main() {
   const argv = process.argv.slice(2)
   const operation = argv[0]
   const rest = argv.slice(1)
 
+  if ((operation === 'help' || operation === '--help') && rest.length === 0) {
+    emitHelpAndExit('help')
+    return
+  }
+
   if (operation === 'execute') {
+    if (rest.length === 1 && rest[0] === '--help') {
+      emitHelpAndExit('execute')
+      return
+    }
     const parsedArgs = parseExecuteArgs(rest)
     if (!parsedArgs.ok) {
       emitAndExit(
@@ -1164,15 +1286,25 @@ function main() {
     return
   }
 
-  const root = getFlag(rest, '--root')
-  const age = getFlag(rest, '--age')
-  const ackOffline = rest.includes('--ack-offline')
+  if (rest.length === 1 && rest[0] === '--help') {
+    emitHelpAndExit('preview')
+    return
+  }
+
+  const parsedArgs = parsePreviewArgs(rest)
+  if (!parsedArgs.ok) {
+    emitAndExit(
+      errorResultFor('preview', CATEGORY.INVALID_ARGUMENTS),
+      'preview',
+    )
+    return
+  }
 
   const outcome = runPreview({
-    ackOffline,
-    age,
+    ackOffline: parsedArgs.ackOffline,
+    age: parsedArgs.age,
     referenceTimeMs: Date.now(),
-    root,
+    root: parsedArgs.root,
   })
   process.stdout.write(`${JSON.stringify(outcome.response)}\n`)
   process.exit(outcome.exitCode)

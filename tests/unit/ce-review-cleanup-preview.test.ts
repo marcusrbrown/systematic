@@ -28,6 +28,9 @@ function isCliResponse(value: unknown): value is {
   readonly token?: unknown
   readonly referenceTime?: unknown
   readonly cutoff?: unknown
+  readonly usage?: unknown
+  readonly exitCodes?: unknown
+  readonly notes?: unknown
 } {
   if (!isJsonObject(value)) return false
   if (typeof value.schema_version !== 'number') return false
@@ -334,6 +337,183 @@ describe('ce-review-cleanup preview: operation and argument gate', () => {
     if (!isCliResponse(result.response))
       throw new Error('expected JSON response')
     expect(result.response.category).toBe('invalid-root')
+  })
+
+  it('rejects an unknown flag rather than silently ignoring it', () => {
+    const { projectRoot } = makeTempProject()
+    try {
+      const result = runCli([
+        'preview',
+        '--root',
+        projectRoot,
+        '--age',
+        '30',
+        '--ack-offline',
+        '--force',
+      ])
+      expect(result.exitCode).toBe(2)
+      if (!isCliResponse(result.response))
+        throw new Error('expected JSON response')
+      expect(result.response.category).toBe('invalid-arguments')
+    } finally {
+      cleanupTemp(projectRoot)
+    }
+  })
+
+  it('rejects an unexpected positional token rather than silently ignoring it', () => {
+    const { projectRoot } = makeTempProject()
+    try {
+      const result = runCli([
+        'preview',
+        '--root',
+        projectRoot,
+        '--age',
+        '30',
+        '--ack-offline',
+        'unexpected-positional',
+      ])
+      expect(result.exitCode).toBe(2)
+      if (!isCliResponse(result.response))
+        throw new Error('expected JSON response')
+      expect(result.response.category).toBe('invalid-arguments')
+    } finally {
+      cleanupTemp(projectRoot)
+    }
+  })
+
+  it('rejects a duplicated --root flag', () => {
+    const { projectRoot } = makeTempProject()
+    try {
+      const result = runCli([
+        'preview',
+        '--root',
+        projectRoot,
+        '--root',
+        projectRoot,
+        '--age',
+        '30',
+        '--ack-offline',
+      ])
+      expect(result.exitCode).toBe(2)
+      if (!isCliResponse(result.response))
+        throw new Error('expected JSON response')
+      expect(result.response.category).toBe('invalid-arguments')
+    } finally {
+      cleanupTemp(projectRoot)
+    }
+  })
+
+  it('rejects a duplicated --age flag', () => {
+    const { projectRoot } = makeTempProject()
+    try {
+      const result = runCli([
+        'preview',
+        '--root',
+        projectRoot,
+        '--age',
+        '30',
+        '--age',
+        '30',
+        '--ack-offline',
+      ])
+      expect(result.exitCode).toBe(2)
+      if (!isCliResponse(result.response))
+        throw new Error('expected JSON response')
+      expect(result.response.category).toBe('invalid-arguments')
+    } finally {
+      cleanupTemp(projectRoot)
+    }
+  })
+
+  it('rejects a duplicated --ack-offline flag', () => {
+    const { projectRoot } = makeTempProject()
+    try {
+      const result = runCli([
+        'preview',
+        '--root',
+        projectRoot,
+        '--age',
+        '30',
+        '--ack-offline',
+        '--ack-offline',
+      ])
+      expect(result.exitCode).toBe(2)
+      if (!isCliResponse(result.response))
+        throw new Error('expected JSON response')
+      expect(result.response.category).toBe('invalid-arguments')
+    } finally {
+      cleanupTemp(projectRoot)
+    }
+  })
+
+  it('rejects a --root flag with a dangling (missing) value at the end of argv, rather than treating the run as rootless', () => {
+    const result = runCli(['preview', '--age', '30', '--ack-offline', '--root'])
+    expect(result.exitCode).toBe(2)
+    if (!isCliResponse(result.response))
+      throw new Error('expected JSON response')
+    expect(result.response.category).toBe('invalid-arguments')
+  })
+
+  it('rejects a --root flag whose "value" is actually the next flag, rather than silently consuming it as the path', () => {
+    const { projectRoot } = makeTempProject()
+    try {
+      const result = runCli([
+        'preview',
+        '--root',
+        '--age', // --root's value would wrongly become the literal string "--age"
+        '30',
+        '--ack-offline',
+      ])
+      expect(result.exitCode).toBe(2)
+      if (!isCliResponse(result.response))
+        throw new Error('expected JSON response')
+      expect(result.response.category).toBe('invalid-arguments')
+    } finally {
+      cleanupTemp(projectRoot)
+    }
+  })
+
+  it('rejects an --age flag whose "value" is actually the next flag', () => {
+    const { projectRoot } = makeTempProject()
+    try {
+      const result = runCli([
+        'preview',
+        '--root',
+        projectRoot,
+        '--age',
+        '--ack-offline', // --age's value would wrongly become "--ack-offline"
+      ])
+      expect(result.exitCode).toBe(2)
+      if (!isCliResponse(result.response))
+        throw new Error('expected JSON response')
+      expect(result.response.category).toBe('invalid-arguments')
+    } finally {
+      cleanupTemp(projectRoot)
+    }
+  })
+
+  it('accepts the documented happy path unchanged: --root, --age (day/week/bare-integer), --ack-offline in any argument order', () => {
+    const { projectRoot, reviewRoot } = makeTempProject()
+    try {
+      createCandidate(reviewRoot, 'old-run', { ageDays: 40 })
+      // Deliberately reordered relative to the other happy-path tests.
+      const result = runCli([
+        'preview',
+        '--ack-offline',
+        '--age',
+        '30d',
+        '--root',
+        projectRoot,
+      ])
+      expect(result.exitCode).toBe(0)
+      if (!isCliResponse(result.response))
+        throw new Error('expected JSON response')
+      expect(result.response.result).toBe('preview')
+      if (!isCounts(result.response.counts)) throw new Error('expected counts')
+      expect(result.response.counts.selected).toBe(1)
+    } finally {
+      cleanupTemp(projectRoot)
+    }
   })
 
   it('is a read-only no-op that creates nothing when the review root is missing', () => {
@@ -1680,5 +1860,154 @@ describe('ce-review-cleanup preview: stale-snapshot status re-verification', () 
     expect(result.stderr).toBe('')
     expect(result.stdout.trim()).toBe('OK')
     expect(result.status).toBe(0)
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════
+// Static, read-only help: `help`, `--help`, `preview --help`, `execute --help`
+// ═══════════════════════════════════════════════════════════════════════
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((v) => typeof v === 'string')
+}
+
+describe('ce-review-cleanup CLI: static help', () => {
+  it('top-level "help" returns a structured static response, not unknown-operation', () => {
+    const result = runCli(['help'])
+    expect(result.exitCode).toBe(0)
+    if (!isCliResponse(result.response))
+      throw new Error('expected JSON response')
+    expect(result.response.result).toBe('help')
+    expect(result.response.operation).toBe('help')
+  })
+
+  it('top-level "--help" returns the same structured static response', () => {
+    const result = runCli(['--help'])
+    expect(result.exitCode).toBe(0)
+    if (!isCliResponse(result.response))
+      throw new Error('expected JSON response')
+    expect(result.response.result).toBe('help')
+    expect(result.response.operation).toBe('help')
+  })
+
+  it('top-level help documents both preview and execute usage, required flags, and exit-code meanings', () => {
+    const result = runCli(['help'])
+    if (!isCliResponse(result.response))
+      throw new Error('expected JSON response')
+    const usage = result.response.usage
+    if (!isJsonObject(usage)) throw new Error('expected a usage object')
+    expect(typeof usage.preview).toBe('string')
+    expect(typeof usage.execute).toBe('string')
+    if (typeof usage.preview === 'string') {
+      expect(usage.preview).toContain('--root')
+      expect(usage.preview).toContain('--age')
+      expect(usage.preview).toContain('--ack-offline')
+    }
+    if (typeof usage.execute === 'string') {
+      expect(usage.execute).toContain('--root')
+      expect(usage.execute).toContain('--token')
+      expect(usage.execute).toContain('--ack-offline')
+    }
+    const exitCodes = result.response.exitCodes
+    if (!isJsonObject(exitCodes))
+      throw new Error('expected an exitCodes object')
+    expect(Object.keys(exitCodes).sort()).toEqual(['0', '1', '2', '3'])
+  })
+
+  it('top-level help explains --ack-offline is an unverified operator assertion, and a token is not authenticated human approval', () => {
+    const result = runCli(['help'])
+    if (!isCliResponse(result.response))
+      throw new Error('expected JSON response')
+    const notes = result.response.notes
+    if (!isStringArray(notes)) throw new Error('expected a notes string array')
+    const joined = notes.join(' ').toLowerCase()
+    expect(joined).toContain('ack-offline')
+    expect(joined).toContain('assertion')
+    expect(joined).toContain('not') // "not independently verified" / "not ... approval"
+    expect(joined).toContain('token')
+    expect(joined).toContain('approval')
+  })
+
+  it('"preview --help" returns scoped help without requiring --root/--age/--ack-offline', () => {
+    const result = runCli(['preview', '--help'])
+    expect(result.exitCode).toBe(0)
+    if (!isCliResponse(result.response))
+      throw new Error('expected JSON response')
+    expect(result.response.result).toBe('help')
+    expect(result.response.operation).toBe('preview')
+  })
+
+  it('"execute --help" returns scoped help without requiring --root/--token/--ack-offline', () => {
+    const result = runCli(['execute', '--help'])
+    expect(result.exitCode).toBe(0)
+    if (!isCliResponse(result.response))
+      throw new Error('expected JSON response')
+    expect(result.response.result).toBe('help')
+    expect(result.response.operation).toBe('execute')
+  })
+
+  it('rejects help mixed with execution options as ambiguous rather than silently running or silently ignoring --help', () => {
+    const { projectRoot } = makeTempProject()
+    try {
+      const result = runCli([
+        'preview',
+        '--help',
+        '--root',
+        projectRoot,
+        '--age',
+        '30',
+        '--ack-offline',
+      ])
+      expect(result.exitCode).not.toBe(0)
+      if (!isCliResponse(result.response))
+        throw new Error('expected JSON response')
+      expect(result.response.result).toBe('error')
+      // Must not have scanned or produced a preview result.
+      expect(result.response.result).not.toBe('preview')
+    } finally {
+      cleanupTemp(projectRoot)
+    }
+  })
+
+  it('rejects "execute --help" combined with --token as ambiguous rather than silently running execute or silently ignoring --help', () => {
+    const result = runCli([
+      'execute',
+      '--help',
+      '--token',
+      'x',
+      '--ack-offline',
+    ])
+    expect(result.exitCode).not.toBe(0)
+    if (!isCliResponse(result.response))
+      throw new Error('expected JSON response')
+    expect(result.response.result).toBe('error')
+  })
+
+  it('help never scans the filesystem: an otherwise-invalid/nonexistent root passed alongside --help is still rejected as ambiguous, never triggering root resolution', () => {
+    const result = runCli([
+      'preview',
+      '--root',
+      '/definitely/does/not/exist/anywhere-help-test',
+      '--help',
+    ])
+    expect(result.exitCode).not.toBe(0)
+    if (!isCliResponse(result.response))
+      throw new Error('expected JSON response')
+    // Must be an argument-shape rejection, not a root-resolution outcome.
+    expect(result.response.result).toBe('error')
+  })
+
+  it('help output never echoes the invoking process cwd or environment values', () => {
+    const result = runCli(['help'])
+    expect(result.stdout).not.toContain(process.cwd())
+    if (process.env.HOME) {
+      expect(result.stdout).not.toContain(process.env.HOME)
+    }
+  })
+
+  it('help is idempotent and produces byte-identical output across repeated invocations (no timestamps, no state)', () => {
+    const first = runCli(['help'])
+    const second = runCli(['help'])
+    expect(first.stdout).toBe(second.stdout)
   })
 })

@@ -45,6 +45,7 @@ The helper uses explicit exit codes and structured result fields:
 
 | Exit | Result | Meaning |
 |---:|---|---|
+| `0` | `help` | Read-only usage information. No project root or offline acknowledgment is required. |
 | `0` | `preview` | Candidates are ready for review. Nothing has been deleted; separate approval is still required. |
 | `0` | `deleted`, `nothing-eligible`, or `root-missing` | The operation completed with its explicit result. Report per-candidate outcomes when deletion occurred. |
 | `1` | `partial` | At least one confirmed candidate was skipped or failed. Report every `deleted`, `skipped`, and `failed` outcome. Do not summarize this as an all-clear. |

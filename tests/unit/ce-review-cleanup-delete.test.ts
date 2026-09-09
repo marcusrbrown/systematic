@@ -387,12 +387,17 @@ describe('ce-review-cleanup execute: argument and token validation', () => {
   })
 
   it('rejects a token whose reference time is in the future relative to now', () => {
+    // Capture the base time once: deriving both timestamps from a single
+    // reading (instead of two separate `Date.now()` calls) removes any
+    // theoretical millisecond-boundary tear between them, keeping the
+    // token's own cutoff/duration/reference-time relationship exact.
+    const nowMs = Date.now()
     const futureToken = Buffer.from(
       JSON.stringify({
         ageDurationMs: 1000,
-        cutoffTimeMs: Date.now() + 365 * 86_400_000 - 1000,
+        cutoffTimeMs: nowMs + 365 * 86_400_000 - 1000,
         digest: 'a'.repeat(64),
-        referenceTimeMs: Date.now() + 365 * 86_400_000,
+        referenceTimeMs: nowMs + 365 * 86_400_000,
         v: 1,
       }),
       'utf8',
