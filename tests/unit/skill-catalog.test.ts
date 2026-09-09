@@ -200,13 +200,31 @@ describe('skill-catalog', () => {
       expect(result).toContain('No Systematic skills are currently available.')
     })
 
-    test('retains all 23 bundled skills in the compact catalog', () => {
-      const result = renderCatalogCompact({
+    test('rendered bullet identities match the independently discovered, model-invocable bundled catalog and include ce:review-cleanup', () => {
+      const options = {
         bundledSkillsDir: path.resolve(process.cwd(), 'skills'),
         disabledSkills: [],
-      })
+      }
 
-      expect(result.match(/^- /gm)).toHaveLength(23)
+      // Ground truth: the exported discovery API, not a re-render or a
+      // hand-maintained numeric literal. buildCatalogEntries already applies
+      // the intended catalog filter (excludes disabled skills and skills
+      // with disable-model-invocation: true), so this is the same filter
+      // the compact renderer uses internally -- exercised independently here.
+      const expectedEntries = buildCatalogEntries(options)
+      expect(expectedEntries.length).toBeGreaterThan(0)
+      const expectedIdentities = expectedEntries
+        .map((entry) => entry.prefixedName)
+        .sort()
+
+      const result = renderCatalogCompact(options)
+      const renderedIdentities = [...result.matchAll(/^- (\S+):/gm)]
+        .map((match) => match[1])
+        .filter((name): name is string => typeof name === 'string')
+        .sort()
+
+      expect(renderedIdentities).toEqual(expectedIdentities)
+      expect(renderedIdentities).toContain('ce:review-cleanup')
     })
   })
 })

@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import type { ToolResult } from '@opencode-ai/plugin'
+import { buildCatalogEntries } from '../../src/lib/skill-catalog.ts'
 import { createSkillTool } from '../../src/lib/skill-tool.ts'
 
 const mockContext = {
@@ -53,13 +54,31 @@ description: A test skill for unit testing
       expect(tool.description).toContain('A test skill for unit testing')
     })
 
-    test('retains all 23 bundled skills in the systematic_skill description', () => {
-      const tool = createSkillTool({
+    test('description bullet identities match the independently discovered, model-invocable bundled catalog and include ce:review-cleanup', () => {
+      const options = {
         bundledSkillsDir: path.resolve(process.cwd(), 'skills'),
         disabledSkills: [],
-      })
+      }
 
-      expect(tool.description.match(/^- /gm)).toHaveLength(23)
+      // Ground truth: the exported discovery API, not a re-render of the
+      // tool description or a hand-maintained numeric literal.
+      // buildCatalogEntries already applies the intended catalog filter
+      // (excludes disabled skills and skills with
+      // disable-model-invocation: true).
+      const expectedEntries = buildCatalogEntries(options)
+      expect(expectedEntries.length).toBeGreaterThan(0)
+      const expectedIdentities = expectedEntries
+        .map((entry) => entry.prefixedName)
+        .sort()
+
+      const tool = createSkillTool(options)
+      const renderedIdentities = [...tool.description.matchAll(/^- (\S+):/gm)]
+        .map((match) => match[1])
+        .filter((name): name is string => typeof name === 'string')
+        .sort()
+
+      expect(renderedIdentities).toEqual(expectedIdentities)
+      expect(renderedIdentities).toContain('ce:review-cleanup')
     })
 
     test('description uses compact catalog format, not verbose XML', () => {

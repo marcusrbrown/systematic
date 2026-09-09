@@ -1,7 +1,7 @@
 ---
 title: 'feat: Add review artifact cleanup'
 type: feat
-status: active
+status: completed
 date: 2026-09-08
 origin: docs/brainstorms/2026-09-08-review-artifact-cleanup-requirements.md
 deepened: 2026-09-08
@@ -274,15 +274,17 @@ flowchart TB
 
 **Verification:** Regenerate with `bun scripts/generate-registry.ts` and `bun run schema:generate`; check registry/schema drift and content integrity. The generated `docs/public/schemas/latest/systematic-config.schema.json` and `dist/schemas/systematic-config.schema.json` are verification outputs, not new committed files. Existing generator walks remain unchanged.
 
-- [ ] **Unit 5: Verify packaged execution and publish the operator guide**
+- [x] **Unit 5: Verify packaged execution and publish the operator guide**
 
 **Goal:** Prove consumer reach and document the exact safety contract.
 
 **Requirements:** R1-R3, R7-R8, R11-R20. **Acceptance examples:** AE3, AE7-AE9, AE11 at installed boundaries. **Dependencies:** Unit 4.
 
-**Files:** Extend `tests/unit/generate-registry.test.ts`, `tests/unit/build-claude-code-plugin.test.ts`, and `tests/unit/package-exports.test.ts`; create `tests/unit/ce-review-cleanup-packaging.test.ts` and `docs/src/content/docs/guides/review-artifact-cleanup.mdx`.
+**Files:** Create `tests/unit/ce-review-cleanup-packaging.test.ts` and `docs/src/content/docs/guides/review-artifact-cleanup.mdx`; update `evals/cases/opencode/host-skill-coverage.json`, `tests/unit/skill-catalog.test.ts`, and `tests/unit/skill-tool.test.ts`.
 
 **Approach:** Run helpers from isolated copies of the actual distributed files under Node, without source-tree imports or `node_modules`. Test producer-only OCX content, npm-packed skill files, and generated Claude Code files. Pi's native skill delivery must resolve the same relative helper path. Do not equate file presence or a successful build with executable reach.
+
+Keep the package-boundary assertions together in the new test file, using the existing registry, Claude Code build, and package-export tests as patterns rather than duplicating their fixtures across files. Add the new skill to the explicit host-coverage manifest. Catalog and tool-description tests compare rendered identities with the catalog API and explicitly include the new skill; do not retain a hardcoded skill count.
 
 **Test scenarios:** Producer-only file selection runs ignore preparation; cleanup-only file selection runs preview; npm and Claude Code packaged helpers run the same synthetic offline cleanup; Claude Code JavaScript bytes are unchanged by namespace translation; missing Node/helper gives an actionable failure rather than unsafe fallback; fixtures isolate HOME/XDG/Git configuration; no evidence canary reaches stdout/stderr.
 
