@@ -239,7 +239,12 @@ describe('ce-review-cleanup preview: operation and argument gate', () => {
     expect(result.response.category).toBe('missing-acknowledgment')
   })
 
-  it('refuses execute as unimplemented rather than silently previewing', () => {
+  it('refuses execute given preview-shaped arguments (an unrecognized --age flag) rather than silently previewing', () => {
+    // Unit 3 note: execute has its own strict, disjoint argument contract
+    // (--root/--token/--ack-offline only, no --age). This proves it never
+    // falls back to interpreting preview-style flags -- see
+    // tests/unit/ce-review-cleanup-delete.test.ts for the full execute
+    // contract (missing/malformed token, stale digest, etc.).
     const { projectRoot } = makeTempProject()
     try {
       const result = runCli([
@@ -254,7 +259,7 @@ describe('ce-review-cleanup preview: operation and argument gate', () => {
       if (!isCliResponse(result.response))
         throw new Error('expected JSON response')
       expect(result.response.result).toBe('error')
-      expect(result.response.category).toBe('execute-not-implemented')
+      expect(result.response.category).toBe('invalid-arguments')
     } finally {
       cleanupTemp(projectRoot)
     }

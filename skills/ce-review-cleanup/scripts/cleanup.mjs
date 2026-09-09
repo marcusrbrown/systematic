@@ -1,17 +1,23 @@
 #!/usr/bin/env node
 
-// Read-only preview scanner for historical `ce:review` run directories.
+// Preview and snapshot-bound deletion scanner for historical `ce:review`
+// run directories.
 //
-// This helper NEVER mutates the filesystem. It resolves a caller-supplied
+// `preview` never mutates the filesystem: it resolves a caller-supplied
 // project root, canonicalizes it, and walks direct child directories of
 // `.context/systematic/ce-review` to report which are older than a
-// caller-supplied age cutoff. Deletion (`execute`) is a separate operation
-// implemented in a later unit; invoking it here is explicitly refused rather
-// than silently falling back to a preview.
+// caller-supplied age cutoff, returning a bounded token over that scan.
+//
+// `execute` deletes only the exact candidates the token was built from. It
+// rescans using the token's own fixed time boundary (never "now"), and
+// deletes nothing at all if that rescan's digest no longer matches the
+// token -- a changed root, changed membership, or changed candidate
+// invalidates the whole approval. A token is not proof of human consent;
+// the caller (a skill) must still ask separately before invoking execute.
 //
 // Usage:
 //   node cleanup.mjs preview --root <path> --age <Nd|Nw|N> --ack-offline
-//   node cleanup.mjs execute ...   (refused: not yet implemented)
+//   node cleanup.mjs execute --root <path> --ack-offline --token <token>
 //
 // Output: a single bounded JSON object on stdout. No absolute paths, nested
 // relative paths, subprocess errors, or artifact contents are ever emitted --
@@ -28,6 +34,7 @@ import {
   readdirSync,
   readSync,
   realpathSync,
+  rmSync,
 } from 'node:fs'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -51,12 +58,14 @@ const KNOWN_RUN_STATUSES = new Set([
 
 // Fixed diagnostic categories. Never combine with dynamic/raw text.
 const CATEGORY = Object.freeze({
-  EXECUTE_NOT_IMPLEMENTED: 'execute-not-implemented',
   INVALID_AGE: 'invalid-age',
+  INVALID_ARGUMENTS: 'invalid-arguments',
   INVALID_ROOT: 'invalid-root',
+  INVALID_TOKEN: 'invalid-token',
   MISSING_ACKNOWLEDGMENT: 'missing-acknowledgment',
   MISSING_AGE: 'missing-age',
   MISSING_ROOT: 'missing-root-argument',
+  MISSING_TOKEN: 'missing-token',
   ROOT_ENUMERATION_FAILED: 'root-enumeration-failed',
   UNKNOWN_OPERATION: 'unknown-operation',
   UNSAFE_REVIEW_ROOT: 'unsafe-review-root',
@@ -474,94 +483,42 @@ export function computeSnapshotDigest(
     .digest('hex')
 }
 
-// ── Preview operation ────────────────────────────────────────────────────
+// ── Shared scan core (used by both preview and execute) ────────────────────
 
 /**
  * @typedef {{
- *   root: string | undefined,
- *   age: string | undefined,
- *   ackOffline: boolean,
- *   referenceTimeMs: number,
- * }} PreviewOptions
+ *   ok: true,
+ *   rootIdentity: { dev: string, ino: string },
+ *   directChildren: { name: string, type: string }[],
+ *   selected: { name: string, label: string, lastModifiedMs: number, entries: SnapshotEntry[] }[],
+ *   excludedRecent: { name: string, label: string, lastModifiedMs: number }[],
+ *   skippedUnknownUnsafe: { name: string, reason: string }[],
+ * } | { ok: false, category: string }} ScanResult
  */
 
 /**
- * @param {string} category
- * @returns {{ exitCode: number, response: Record<string, unknown> }}
+ * Enumerates direct children of an already-resolved, already-safety-checked
+ * review root and classifies every candidate directory by age and status.
+ * Both `runPreview` and `runExecute` call this so their selection logic can
+ * never drift apart; `runExecute` passes the token's fixed `cutoffTimeMs`
+ * and `referenceTimeMs` instead of the current wall clock, so elapsed real
+ * time cannot silently expand or shrink the approved set -- any actual
+ * difference in the underlying tree shows up as a digest mismatch instead.
+ * @param {string} reviewRoot
+ * @param {number} cutoffTimeMs
+ * @param {number} referenceTimeMs
+ * @returns {ScanResult}
  */
-function errorResult(category) {
-  return {
-    exitCode: 2,
-    response: {
-      category,
-      operation: 'preview',
-      result: 'error',
-      schema_version: SCHEMA_VERSION,
-    },
-  }
-}
-
-/**
- * Executes the read-only preview scan. Pure with respect to time (the
- * reference time is an explicit input), so tests can exercise exact-cutoff
- * and future-timestamp scenarios deterministically without sleeping.
- * @param {PreviewOptions} options
- * @returns {{ exitCode: number, response: Record<string, unknown> }}
- */
-export function runPreview(options) {
-  if (!options.ackOffline) {
-    return errorResult(CATEGORY.MISSING_ACKNOWLEDGMENT)
-  }
-
-  if (options.age === undefined) {
-    return errorResult(CATEGORY.MISSING_AGE)
-  }
-  const ageCutoff = parseAgeCutoff(options.age)
-  if (!ageCutoff) {
-    return errorResult(CATEGORY.INVALID_AGE)
-  }
-
-  if (!options.root) {
-    return errorResult(CATEGORY.MISSING_ROOT)
-  }
-
-  let canonicalRoot
-  try {
-    canonicalRoot = realpathSync(options.root)
-    if (!lstatSync(canonicalRoot).isDirectory()) {
-      return errorResult(CATEGORY.INVALID_ROOT)
-    }
-  } catch {
-    return errorResult(CATEGORY.INVALID_ROOT)
-  }
-
-  const chain = resolveSegmentChain(canonicalRoot, REVIEW_ROOT_SEGMENTS)
-  if (chain.status === 'missing') {
-    return {
-      exitCode: 0,
-      response: {
-        operation: 'preview',
-        result: 'root-missing',
-        schema_version: SCHEMA_VERSION,
-      },
-    }
-  }
-  if (chain.status !== 'ok') {
-    return errorResult(CATEGORY.UNSAFE_REVIEW_ROOT)
-  }
-  const reviewRoot = chain.path
-
+function scanReviewRoot(reviewRoot, cutoffTimeMs, referenceTimeMs) {
   let rootStat
   let directEntries
   try {
     rootStat = lstatSync(reviewRoot, { bigint: true })
     directEntries = readdirSync(reviewRoot, { withFileTypes: true })
   } catch {
-    return errorResult(CATEGORY.ROOT_ENUMERATION_FAILED)
+    return { category: CATEGORY.ROOT_ENUMERATION_FAILED, ok: false }
   }
 
-  const referenceTimeMs = options.referenceTimeMs
-  const cutoffTimeMs = computeCutoffTimeMs(referenceTimeMs, ageCutoff.ms)
   // Comparisons happen in nanosecond BigInt space (see walkCandidateSubtree)
   // to avoid float64 precision loss at exact-boundary inputs.
   const referenceTimeNs = BigInt(referenceTimeMs) * 1_000_000n
@@ -590,12 +547,10 @@ export function runPreview(options) {
     directChildren.push({ name: dirent.name, type: 'other' })
   }
 
-  /** @type {{ name: string; label: string; lastModifiedMs: number }[]} */
+  /** @type {{ name: string; label: string; lastModifiedMs: number; entries: SnapshotEntry[] }[]} */
   const selected = []
   /** @type {{ name: string; label: string; lastModifiedMs: number }[]} */
   const excludedRecent = []
-  /** @type {{ name: string; entries: SnapshotEntry[] }[]} */
-  const selectedSnapshots = []
 
   for (const name of candidateDirNames) {
     const candidateAbsPath = join(reviewRoot, name)
@@ -621,28 +576,142 @@ export function runPreview(options) {
     const lastModifiedMs = Number(maxMtimeNs / 1_000_000n)
 
     if (maxMtimeNs < cutoffTimeNs) {
-      selected.push({ label, lastModifiedMs, name })
-      selectedSnapshots.push({ entries: walked.entries, name })
+      selected.push({ entries: walked.entries, label, lastModifiedMs, name })
     } else {
       excludedRecent.push({ label, lastModifiedMs, name })
     }
   }
 
+  return {
+    directChildren,
+    excludedRecent,
+    ok: true,
+    rootIdentity: {
+      dev: rootStat.dev.toString(),
+      ino: rootStat.ino.toString(),
+    },
+    selected,
+    skippedUnknownUnsafe,
+  }
+}
+
+// ── Preview operation ────────────────────────────────────────────────────
+
+/**
+ * @typedef {{
+ *   root: string | undefined,
+ *   age: string | undefined,
+ *   ackOffline: boolean,
+ *   referenceTimeMs: number,
+ * }} PreviewOptions
+ */
+
+/**
+ * @param {string} operation
+ * @param {string} category
+ * @returns {{ exitCode: number, response: Record<string, unknown> }}
+ */
+function errorResultFor(operation, category) {
+  return {
+    exitCode: 2,
+    response: {
+      category,
+      operation,
+      result: 'error',
+      schema_version: SCHEMA_VERSION,
+    },
+  }
+}
+
+/**
+ * Resolves a caller-supplied project root to the canonical, symlink-free
+ * review root, shared by preview and execute.
+ * @param {string | undefined} rootArg
+ * @returns {{ status: 'ok', path: string } | { status: 'missing' } | { status: 'invalid-root' } | { status: 'unsafe' }}
+ */
+function resolveReviewRoot(rootArg) {
+  if (!rootArg) return { status: 'invalid-root' }
+  let canonicalRoot
+  try {
+    canonicalRoot = realpathSync(rootArg)
+    if (!lstatSync(canonicalRoot).isDirectory()) {
+      return { status: 'invalid-root' }
+    }
+  } catch {
+    return { status: 'invalid-root' }
+  }
+  const chain = resolveSegmentChain(canonicalRoot, REVIEW_ROOT_SEGMENTS)
+  if (chain.status === 'missing') return { status: 'missing' }
+  if (chain.status !== 'ok') return { status: 'unsafe' }
+  return { canonicalProjectRoot: canonicalRoot, path: chain.path, status: 'ok' }
+}
+
+/**
+ * Executes the read-only preview scan. Pure with respect to time (the
+ * reference time is an explicit input), so tests can exercise exact-cutoff
+ * and future-timestamp scenarios deterministically without sleeping.
+ * @param {PreviewOptions} options
+ * @returns {{ exitCode: number, response: Record<string, unknown> }}
+ */
+export function runPreview(options) {
+  if (!options.ackOffline) {
+    return errorResultFor('preview', CATEGORY.MISSING_ACKNOWLEDGMENT)
+  }
+
+  if (options.age === undefined) {
+    return errorResultFor('preview', CATEGORY.MISSING_AGE)
+  }
+  const ageCutoff = parseAgeCutoff(options.age)
+  if (!ageCutoff) {
+    return errorResultFor('preview', CATEGORY.INVALID_AGE)
+  }
+
+  if (!options.root) {
+    return errorResultFor('preview', CATEGORY.MISSING_ROOT)
+  }
+
+  const resolved = resolveReviewRoot(options.root)
+  if (resolved.status === 'invalid-root') {
+    return errorResultFor('preview', CATEGORY.INVALID_ROOT)
+  }
+  if (resolved.status === 'missing') {
+    return {
+      exitCode: 0,
+      response: {
+        operation: 'preview',
+        result: 'root-missing',
+        schema_version: SCHEMA_VERSION,
+      },
+    }
+  }
+  if (resolved.status === 'unsafe') {
+    return errorResultFor('preview', CATEGORY.UNSAFE_REVIEW_ROOT)
+  }
+  const reviewRoot = resolved.path
+
+  const referenceTimeMs = options.referenceTimeMs
+  const cutoffTimeMs = computeCutoffTimeMs(referenceTimeMs, ageCutoff.ms)
+
+  const scan = scanReviewRoot(reviewRoot, cutoffTimeMs, referenceTimeMs)
+  if (!scan.ok) {
+    return errorResultFor('preview', scan.category)
+  }
+
   const allNames = [
-    ...selected.map((c) => c.name),
-    ...excludedRecent.map((c) => c.name),
-    ...skippedUnknownUnsafe.map((c) => c.name),
+    ...scan.selected.map((c) => c.name),
+    ...scan.excludedRecent.map((c) => c.name),
+    ...scan.skippedUnknownUnsafe.map((c) => c.name),
   ]
   const displayIds = deriveDisplayIds(allNames)
 
   const digest = computeSnapshotDigest(
-    { dev: rootStat.dev.toString(), ino: rootStat.ino.toString() },
-    directChildren,
-    selectedSnapshots,
+    scan.rootIdentity,
+    scan.directChildren,
+    scan.selected.map((c) => ({ entries: c.entries, name: c.name })),
   )
 
   const token =
-    selected.length > 0
+    scan.selected.length > 0
       ? buildPreviewToken({
           ageDurationMs: ageCutoff.ms,
           cutoffTimeMs,
@@ -651,34 +720,34 @@ export function runPreview(options) {
         })
       : null
 
-  const result = selected.length === 0 ? 'nothing-eligible' : 'preview'
+  const result = scan.selected.length === 0 ? 'nothing-eligible' : 'preview'
 
   return {
     exitCode: 0,
     response: {
       candidates: {
-        excludedRecent: excludedRecent.map((c) => ({
+        excludedRecent: scan.excludedRecent.map((c) => ({
           displayId: displayIds.get(c.name),
           label: c.label,
           lastModified: new Date(c.lastModifiedMs).toISOString(),
           name: boundedName(c.name),
         })),
-        selected: selected.map((c) => ({
+        selected: scan.selected.map((c) => ({
           displayId: displayIds.get(c.name),
           label: c.label,
           lastModified: new Date(c.lastModifiedMs).toISOString(),
           name: boundedName(c.name),
         })),
-        skippedUnknownUnsafe: skippedUnknownUnsafe.map((c) => ({
+        skippedUnknownUnsafe: scan.skippedUnknownUnsafe.map((c) => ({
           displayId: displayIds.get(c.name),
           name: boundedName(c.name),
           reason: c.reason,
         })),
       },
       counts: {
-        excludedRecent: excludedRecent.length,
-        selected: selected.length,
-        skippedUnknownUnsafe: skippedUnknownUnsafe.length,
+        excludedRecent: scan.excludedRecent.length,
+        selected: scan.selected.length,
+        skippedUnknownUnsafe: scan.skippedUnknownUnsafe.length,
       },
       cutoff: new Date(cutoffTimeMs).toISOString(),
       operation: 'preview',
@@ -686,6 +755,321 @@ export function runPreview(options) {
       result,
       schema_version: SCHEMA_VERSION,
       token,
+    },
+  }
+}
+
+// ── Execute (deletion) token ─────────────────────────────────────────────
+
+const MAX_TOKEN_LENGTH = 4096
+
+/**
+ * Decodes and structurally validates a preview token: correct version,
+ * every field present with the expected type, all integers finite/safe,
+ * the cutoff/duration/reference-time relationship internally consistent,
+ * and the digest shaped like a SHA-256 hex string. Does not check the
+ * digest against any scan -- that happens once the review root is known.
+ * @param {unknown} token
+ * @returns {{ v: number, referenceTimeMs: number, ageDurationMs: number, cutoffTimeMs: number, digest: string } | undefined}
+ */
+const TOKEN_FIELDS = Object.freeze([
+  'v',
+  'referenceTimeMs',
+  'ageDurationMs',
+  'cutoffTimeMs',
+  'digest',
+])
+
+export function decodeExecutionToken(token) {
+  if (typeof token !== 'string' || token.length === 0) return undefined
+  if (token.length > MAX_TOKEN_LENGTH) return undefined
+
+  let decodedBytes
+  try {
+    decodedBytes = Buffer.from(token, 'base64url')
+  } catch {
+    return undefined
+  }
+  // Buffer.from(..., 'base64url') is permissive: it silently drops
+  // characters outside the base64url alphabet and tolerates missing
+  // padding. Re-encoding the decoded bytes and requiring an exact match
+  // rejects any input that is not itself the canonical base64url form.
+  if (decodedBytes.toString('base64url') !== token) return undefined
+
+  let parsed
+  try {
+    parsed = JSON.parse(decodedBytes.toString('utf8'))
+  } catch {
+    return undefined
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return undefined
+  }
+
+  // Structural guard, not authentication: reject any payload that does not
+  // carry exactly the fixed field set (no extra/unknown keys, none absent).
+  const keys = Object.keys(parsed)
+  if (
+    keys.length !== TOKEN_FIELDS.length ||
+    !TOKEN_FIELDS.every((field) => keys.includes(field))
+  ) {
+    return undefined
+  }
+
+  const { v, referenceTimeMs, ageDurationMs, cutoffTimeMs, digest } = parsed
+  if (v !== TOKEN_VERSION) return undefined
+  if (!Number.isSafeInteger(referenceTimeMs) || referenceTimeMs < 0) {
+    return undefined
+  }
+  if (!Number.isSafeInteger(ageDurationMs) || ageDurationMs <= 0) {
+    return undefined
+  }
+  if (!Number.isSafeInteger(cutoffTimeMs)) return undefined
+  if (cutoffTimeMs !== referenceTimeMs - ageDurationMs) return undefined
+  if (typeof digest !== 'string' || !/^[0-9a-f]{64}$/.test(digest)) {
+    return undefined
+  }
+
+  return { ageDurationMs, cutoffTimeMs, digest, referenceTimeMs, v }
+}
+
+// ── Execute (deletion) per-candidate primitive ──────────────────────────
+
+/**
+ * Immediately before removing one previously-approved candidate, re-walks
+ * the fixed `.context/systematic/ce-review` segment chain from the
+ * canonical project root -- never trusting a previously-resolved review
+ * root path string, which could since traverse an ancestor symlink even
+ * when the review directory's own device/inode identity is unchanged
+ * (e.g. the whole `.context` tree relocated and a symlink left in its
+ * place still resolves to the same underlying directory). Also rechecks
+ * this candidate's entire subtree against its approved snapshot, then
+ * removes only that exact direct-child path -- never a path derived from
+ * a display name or supplied by the token.
+ *
+ * Deliberately does not re-diff the whole root's membership: a caller's
+ * own prior deletions earlier in the same batch legitimately change the
+ * root's mtime and child list, and re-checking that here would misclassify
+ * expected self-induced change as external drift. The ancestor chain,
+ * root identity (device/inode, not-a-symlink), and this one candidate's
+ * full metadata are the only things rechecked.
+ * @param {{ canonicalProjectRoot: string, rootIdentity: { dev: string, ino: string }, candidate: { name: string, entries: SnapshotEntry[] } }} input
+ * @returns {{ status: 'deleted' } | { status: 'skipped', reason: string } | { status: 'failed', reason: string }}
+ */
+export function executeApprovedCandidate({
+  canonicalProjectRoot,
+  rootIdentity,
+  candidate,
+}) {
+  if (
+    !candidate.name ||
+    candidate.name === '.' ||
+    candidate.name === '..' ||
+    candidate.name.includes('/')
+  ) {
+    return { reason: 'refused-unsafe-name', status: 'failed' }
+  }
+
+  const chain = resolveSegmentChain(canonicalProjectRoot, REVIEW_ROOT_SEGMENTS)
+  if (chain.status !== 'ok') {
+    return { reason: 'root-identity-changed', status: 'failed' }
+  }
+  const reviewRoot = chain.path
+
+  let freshRootStat
+  try {
+    freshRootStat = lstatSync(reviewRoot, { bigint: true })
+  } catch {
+    return { reason: 'root-unavailable', status: 'failed' }
+  }
+  if (
+    freshRootStat.isSymbolicLink() ||
+    freshRootStat.dev.toString() !== rootIdentity.dev ||
+    freshRootStat.ino.toString() !== rootIdentity.ino
+  ) {
+    return { reason: 'root-identity-changed', status: 'failed' }
+  }
+
+  const candidateAbsPath = join(reviewRoot, candidate.name)
+  const rewalked = walkCandidateSubtree(candidateAbsPath)
+  if (!rewalked.ok) {
+    return { reason: 'drift-detected', status: 'skipped' }
+  }
+  if (JSON.stringify(rewalked.entries) !== JSON.stringify(candidate.entries)) {
+    return { reason: 'drift-detected', status: 'skipped' }
+  }
+
+  try {
+    rmSync(candidateAbsPath, { recursive: true })
+  } catch {
+    return { reason: 'deletion-failed', status: 'failed' }
+  }
+
+  return { status: 'deleted' }
+}
+
+// ── Execute (deletion) operation ─────────────────────────────────────────
+
+/**
+ * @typedef {{
+ *   root: string | undefined,
+ *   ackOffline: boolean,
+ *   token: string | undefined,
+ *   nowMs: number,
+ * }} ExecuteOptions
+ */
+
+/**
+ * @returns {{ exitCode: number, response: Record<string, unknown> }}
+ */
+function previewStaleResult() {
+  return {
+    exitCode: 3,
+    response: {
+      operation: 'execute',
+      result: 'preview-stale',
+      schema_version: SCHEMA_VERSION,
+    },
+  }
+}
+
+/**
+ * Validates the token and offline acknowledgment, rescans the review root
+ * using the token's fixed time boundary (never the current wall clock),
+ * and -- only if the fresh digest still matches the token -- deletes each
+ * originally-selected candidate via {@link executeApprovedCandidate}.
+ *
+ * `nowMs` is used only to reject a token whose reference time is in the
+ * future; it never substitutes for the token's own fixed reference time in
+ * the rescan itself, so elapsed real time cannot silently expand the
+ * approved set.
+ * @param {ExecuteOptions} options
+ * @returns {{ exitCode: number, response: Record<string, unknown> }}
+ */
+export function runExecute(options) {
+  if (!options.ackOffline) {
+    return errorResultFor('execute', CATEGORY.MISSING_ACKNOWLEDGMENT)
+  }
+  if (options.token === undefined) {
+    return errorResultFor('execute', CATEGORY.MISSING_TOKEN)
+  }
+  const decoded = decodeExecutionToken(options.token)
+  if (!decoded) {
+    return errorResultFor('execute', CATEGORY.INVALID_TOKEN)
+  }
+  if (decoded.referenceTimeMs > options.nowMs) {
+    return errorResultFor('execute', CATEGORY.INVALID_TOKEN)
+  }
+
+  if (!options.root) {
+    return errorResultFor('execute', CATEGORY.MISSING_ROOT)
+  }
+
+  const resolved = resolveReviewRoot(options.root)
+  if (resolved.status === 'invalid-root') {
+    return errorResultFor('execute', CATEGORY.INVALID_ROOT)
+  }
+  if (resolved.status === 'missing') {
+    // The review root existed at preview time (a token was issued) but is
+    // gone now: membership changed, not a fresh no-op.
+    return previewStaleResult()
+  }
+  if (resolved.status === 'unsafe') {
+    return errorResultFor('execute', CATEGORY.UNSAFE_REVIEW_ROOT)
+  }
+  const reviewRoot = resolved.path
+  const canonicalProjectRoot = resolved.canonicalProjectRoot
+
+  const scan = scanReviewRoot(
+    reviewRoot,
+    decoded.cutoffTimeMs,
+    decoded.referenceTimeMs,
+  )
+  if (!scan.ok) {
+    return errorResultFor('execute', scan.category)
+  }
+
+  const digest = computeSnapshotDigest(
+    scan.rootIdentity,
+    scan.directChildren,
+    scan.selected.map((c) => ({ entries: c.entries, name: c.name })),
+  )
+  if (digest !== decoded.digest) {
+    return previewStaleResult()
+  }
+
+  /** @type {{ name: string }[]} */
+  const deleted = []
+  /** @type {{ name: string; reason: string }[]} */
+  const skipped = []
+  /** @type {{ name: string; reason: string }[]} */
+  const failed = []
+
+  for (const candidate of scan.selected) {
+    const outcome = executeApprovedCandidate({
+      candidate,
+      canonicalProjectRoot,
+      rootIdentity: scan.rootIdentity,
+    })
+    if (outcome.status === 'deleted') {
+      deleted.push({ name: candidate.name })
+    } else if (outcome.status === 'skipped') {
+      skipped.push({ name: candidate.name, reason: outcome.reason })
+    } else {
+      failed.push({ name: candidate.name, reason: outcome.reason })
+    }
+  }
+
+  const allNames = [
+    ...scan.selected.map((c) => c.name),
+    ...scan.excludedRecent.map((c) => c.name),
+    ...scan.skippedUnknownUnsafe.map((c) => c.name),
+  ]
+  const displayIds = deriveDisplayIds(allNames)
+
+  const partial = skipped.length > 0 || failed.length > 0
+
+  return {
+    exitCode: partial ? 1 : 0,
+    response: {
+      candidates: {
+        deleted: deleted.map((c) => ({
+          displayId: displayIds.get(c.name),
+          name: boundedName(c.name),
+        })),
+        excludedRecent: scan.excludedRecent.map((c) => ({
+          displayId: displayIds.get(c.name),
+          label: c.label,
+          lastModified: new Date(c.lastModifiedMs).toISOString(),
+          name: boundedName(c.name),
+        })),
+        failed: failed.map((c) => ({
+          displayId: displayIds.get(c.name),
+          name: boundedName(c.name),
+          reason: c.reason,
+        })),
+        skipped: skipped.map((c) => ({
+          displayId: displayIds.get(c.name),
+          name: boundedName(c.name),
+          reason: c.reason,
+        })),
+        skippedUnknownUnsafe: scan.skippedUnknownUnsafe.map((c) => ({
+          displayId: displayIds.get(c.name),
+          name: boundedName(c.name),
+          reason: c.reason,
+        })),
+      },
+      counts: {
+        deleted: deleted.length,
+        excludedRecent: scan.excludedRecent.length,
+        failed: failed.length,
+        selected: scan.selected.length,
+        skipped: skipped.length,
+        skippedUnknownUnsafe: scan.skippedUnknownUnsafe.length,
+      },
+      operation: 'execute',
+      result: partial ? 'partial' : 'deleted',
+      schema_version: SCHEMA_VERSION,
     },
   }
 }
@@ -702,18 +1086,81 @@ function getFlag(args, name) {
   return i !== -1 ? args[i + 1] : undefined
 }
 
+/**
+ * Strictly parses `execute`'s fixed argument set: only `--root <value>`,
+ * `--token <value>`, and the boolean `--ack-offline` are recognized. Any
+ * unknown flag, a duplicate flag, or a flag missing its value is rejected
+ * outright -- there is no `--force` or other extra deletion path.
+ * @param {readonly string[]} args
+ * @returns {{ ok: true, root: string | undefined, token: string | undefined, ackOffline: boolean } | { ok: false }}
+ */
+function parseExecuteArgs(args) {
+  let root
+  let token
+  let ackOffline = false
+  let rootSeen = false
+  let tokenSeen = false
+  let ackSeen = false
+
+  for (let i = 0; i < args.length; i += 1) {
+    const arg = args[i]
+    if (arg === '--root' || arg === '--token') {
+      const seen = arg === '--root' ? rootSeen : tokenSeen
+      if (seen) return { ok: false }
+      const value = args[i + 1]
+      if (value === undefined || value.startsWith('--')) return { ok: false }
+      if (arg === '--root') {
+        root = value
+        rootSeen = true
+      } else {
+        token = value
+        tokenSeen = true
+      }
+      i += 1
+      continue
+    }
+    if (arg === '--ack-offline') {
+      if (ackSeen) return { ok: false }
+      ackSeen = true
+      ackOffline = true
+      continue
+    }
+    return { ok: false }
+  }
+
+  return { ackOffline, ok: true, root, token }
+}
+
 function main() {
   const argv = process.argv.slice(2)
   const operation = argv[0]
   const rest = argv.slice(1)
 
   if (operation === 'execute') {
-    emitAndExit(errorResult(CATEGORY.EXECUTE_NOT_IMPLEMENTED), 'execute')
+    const parsedArgs = parseExecuteArgs(rest)
+    if (!parsedArgs.ok) {
+      emitAndExit(
+        errorResultFor('execute', CATEGORY.INVALID_ARGUMENTS),
+        'execute',
+      )
+      return
+    }
+    const outcome = runExecute({
+      ackOffline: parsedArgs.ackOffline,
+      nowMs: Date.now(),
+      root: parsedArgs.root,
+      token: parsedArgs.token,
+    })
+    process.stdout.write(`${JSON.stringify(outcome.response)}\n`)
+    process.exit(outcome.exitCode)
     return
   }
 
   if (operation !== 'preview') {
-    emitAndExit(errorResult(CATEGORY.UNKNOWN_OPERATION), operation)
+    emitAndExit(
+      errorResultFor('preview', CATEGORY.UNKNOWN_OPERATION),
+      operation,
+    )
     return
   }
 

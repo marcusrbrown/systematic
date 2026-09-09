@@ -242,7 +242,7 @@ flowchart TB
 
 **Verification:** Preview is read-only and repeatable for the same tree and fixed reference time. Old artifactless and in-progress runs are selectable under the operator precondition, without asserting inactivity.
 
-- [ ] **Unit 3: Add snapshot-bound deletion and result reporting**
+- [x] **Unit 3: Add snapshot-bound deletion and result reporting**
 
 **Goal:** Delete only the approved, unchanged selection and report actual outcomes.
 
