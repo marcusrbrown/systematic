@@ -345,7 +345,8 @@
         "skills/ce-review/references/review-summary-schema.json",
         "skills/ce-review/references/subagent-template.md",
         "skills/ce-review/references/synthesis-artifact-contract.md",
-        "skills/ce-review/references/validator-template.md"
+        "skills/ce-review/references/validator-template.md",
+        "skills/ce-review/scripts/ensure-ignore.mjs"
       ]
     },
     {
