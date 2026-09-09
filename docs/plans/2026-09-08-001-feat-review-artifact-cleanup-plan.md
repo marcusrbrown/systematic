@@ -258,7 +258,7 @@ flowchart TB
 
 **Verification:** The identity/nested-change regressions fail when snapshot fields or the final recheck are removed. All mutation tests operate only on their own temporary directories, not the developer's review store.
 
-- [ ] **Unit 4: Integrate skills and register every generated surface**
+- [x] **Unit 4: Integrate skills and register every generated surface**
 
 **Goal:** Make the completed helpers reachable without breaking producer-only installations.
 

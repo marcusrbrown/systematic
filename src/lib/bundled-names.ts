@@ -95,6 +95,7 @@ export const BUNDLED_SKILL_NAMES = [
   'ce:ideate',
   'ce:plan',
   'ce:review',
+  'ce:review-cleanup',
   'ce:work',
   'compound-docs',
   'deepen-plan',
