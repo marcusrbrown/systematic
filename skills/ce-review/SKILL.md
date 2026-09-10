@@ -391,6 +391,22 @@ The same applies to CE always-on agents (`systematic:agent-native-reviewer`, `sy
 
 The orchestrator (this skill) stays on the default model because it handles intent discovery, reviewer selection, finding merge/dedup, and synthesis -- tasks that benefit from stronger reasoning.
 
+#### Ignore preparation (writing modes only)
+
+Before the first artifact-directory creation in interactive, autofix, or headless mode, invoke the producer-local ignore-preparation helper:
+
+```bash
+# Resolve helper scripts relative to this skill's directory.
+SKILL_DIR="<skill directory stated when this skill loads>";
+node "$SKILL_DIR/scripts/ensure-ignore.mjs" --root "."
+```
+
+`--root "."` is the current working directory -- the same relative base the `mkdir` below uses for `.context/systematic/ce-review/$RUN_ID`. Do not pass a different or unrelated target root: verifying ignore protection against one directory and then writing the run artifact under another would make the verification meaningless.
+
+Exit 0 with `status: "protected"` or `status: "not-applicable"` permits persistence to continue. Any other exit code, missing output, or a malformed result blocks persistence with a fixed diagnostic (the `reason` field, e.g. `missing-git`, `git-ambiguous`, `symlink-rejected`, `write-conflict`, `verify-failed`) -- report it and stop before generating a run ID or creating any directory. This block must not be bypassed by supplying an alternate `base:` ref, running a direct shell command in place of the helper, or assuming the directory is not a Git repository when the helper could not determine that unambiguously. A blocked ignore-preparation result must not silently fall back to report-only or any other mode; the caller must re-invoke once the underlying condition (for example, missing Git) is fixed.
+
+**Report-only mode:** Skip run-id generation, directory creation, and ignore preparation entirely; the ignore helper is never invoked in this mode, consistent with report-only's no-write contract.
+
 #### Run ID
 
 Generate a unique run identifier before dispatching any agents. This ID scopes the parent-owned per-agent records and the post-review run artifact to the same directory.
@@ -403,8 +419,6 @@ mkdir -p ".context/systematic/ce-review/$RUN_ID"
 Keep `{run_id}` in the parent orchestrator. Do not pass it, an artifact path, or any write instruction to persona sub-agents. The parent writes a per-agent record only after the returned payload passes validation.
 
 Capture the actual invoking harness once in the parent (`opencode`, `pi`, or `claude-code`). Do not infer it from persona metadata or declared tools. Add this parent-owned value to each persisted record and to the synthesis artifact so R6 remains explicit. `mode:report-only` still records nothing because it has no run artifact.
-
-**Report-only mode:** Skip run-id generation and directory creation. Agents return the same full JSON payload, with no file write, consistent with report-only's no-write contract.
 
 #### Spawning
 

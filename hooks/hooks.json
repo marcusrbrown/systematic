@@ -5,7 +5,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "printf '%s' 'Systematic active. 31 skills and 37 subagents are available via Claude Code'\\''s native Skill and subagent tools; the \"systematic\" output style carries workflow-enforcement discipline.'"
+            "command": "printf '%s' 'Systematic active. 32 skills and 37 subagents are available via Claude Code'\\''s native Skill and subagent tools; the \"systematic\" output style carries workflow-enforcement discipline.'"
           }
         ]
       }

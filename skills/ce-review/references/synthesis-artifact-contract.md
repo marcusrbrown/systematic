@@ -11,6 +11,12 @@ For interactive, autofix, and headless runs, the parent writes
 `review-summary.json` even when every selected persona returns `empty` and no
 finding survives. `mode:report-only` is the deliberate no-write exception.
 
+Ignore preparation is a prerequisite check, not a run stage: when it blocks
+(see `systematic:ce-review`'s Ignore preparation section), the run stops before any
+run ID, directory, or dispatch exists. This is no artifact at all, not an
+abnormal or partial one -- the parent never fabricates or claims a validated
+run artifact for a run that never started.
+
 The parent initializes the artifact as `in_progress` before dispatch, with all
 selected personas initialized as `never_returned`, and updates each dispatch
 entry as returns arrive. A completed run becomes `completed` or `degraded`. An
