@@ -29,6 +29,7 @@ export const BLOCK = Object.freeze({
   GIT_AMBIGUOUS: 'git-ambiguous',
   GIT_ERROR: 'git-error',
   GIT_TIMEOUT: 'git-timeout',
+  IGNORE_FILE_TOO_LARGE: 'ignore-file-too-large',
   INVALID_ARGUMENTS: 'invalid-arguments',
   INVALID_ROOT: 'invalid-root',
   MISSING_GIT: 'missing-git',
@@ -37,6 +38,10 @@ export const BLOCK = Object.freeze({
   WRITE_CONFLICT: 'write-conflict',
   WRITE_FAILED: 'write-failed',
 })
+
+// Fixed upper bound on the `.context/.gitignore` file this helper will read
+// or produce. Rejected before allocation, not truncated.
+export const IGNORE_FILE_MAX_BYTES = 1024 * 1024
 
 // Ordinary staging only: tracked files, force-add, and copies elsewhere are
 // unaffected by this ignore entry (R3, R19).
@@ -134,14 +139,44 @@ export function readTrustedFile(filePath) {
   } catch (error) {
     if (error && error.code === 'ENOENT') return { exists: false }
     if (error && error.code === 'ELOOP') return { exists: true, symlink: true }
-    return { exists: true, symlink: true }
+    // Any other open error (EACCES, EPERM, resource limits, ...) is not
+    // evidence of a symlink -- rethrow for the caller's fixed-category catch.
+    throw error
   }
   try {
     const stat = fs.fstatSync(fd)
     if (!stat.isFile()) return { exists: true, symlink: true }
     if (!sameFileIdentity(stat, preStat)) return { exists: true, symlink: true }
+
+    // Reject before allocating a buffer for an oversize file.
+    if (stat.size > IGNORE_FILE_MAX_BYTES) {
+      return oversizeResult(stat)
+    }
+
+    const bytes = readExactBounded(fd, stat.size)
+    if (bytes === null) {
+      // Fewer bytes were available than `fstat` reported (a concurrent
+      // shrink mid-read): the snapshot is untrustworthy. This is an
+      // observed change, not evidence of a symlink -- no partial buffer is
+      // returned in its place.
+      return { changed: true, exists: true }
+    }
+
+    // The read window is not atomic: the file could have grown past the cap,
+    // grown or shrunk within the cap, or had its mode changed, between the
+    // `fstat` above and the read completing. Recheck the same descriptor
+    // before trusting the bytes just read -- an exact match on size and
+    // mode is required, not just "still under the cap".
+    const afterStat = fs.fstatSync(fd)
+    if (afterStat.size > IGNORE_FILE_MAX_BYTES) {
+      return oversizeResult(afterStat)
+    }
+    if (afterStat.size !== stat.size || afterStat.mode !== stat.mode) {
+      return { changed: true, exists: true }
+    }
+
     return {
-      bytes: fs.readFileSync(fd),
+      bytes,
       dev: stat.dev,
       exists: true,
       ino: stat.ino,
@@ -150,6 +185,29 @@ export function readTrustedFile(filePath) {
   } finally {
     fs.closeSync(fd)
   }
+}
+
+function oversizeResult(stat) {
+  return {
+    dev: stat.dev,
+    exists: true,
+    ino: stat.ino,
+    mode: stat.mode & 0o777,
+    tooLarge: true,
+  }
+}
+
+/** Reads exactly `size` bytes from `fd` at fixed positions, or null if the descriptor produced fewer bytes than expected (a concurrent shrink). Never returns a silently short buffer. */
+function readExactBounded(fd, size) {
+  if (size === 0) return Buffer.alloc(0)
+  const buffer = Buffer.allocUnsafe(size)
+  let offset = 0
+  while (offset < size) {
+    const bytesRead = fs.readSync(fd, buffer, offset, size - offset, offset)
+    if (bytesRead === 0) return null
+    offset += bytesRead
+  }
+  return buffer
 }
 
 // ── Content composition (byte-exact, never decoded to a string) ────────────
@@ -393,16 +451,29 @@ function protectedResult(status) {
   return { exitCode: 0, result: { caveats: CAVEATS, status } }
 }
 
+/** Converts any propagated non-ENOENT stat failure from `findUnsafeComponent` into the fixed blocked contract instead of an uncaught exception. */
+function findUnsafeComponentOrBlock(root, segments) {
+  try {
+    return { unsafe: findUnsafeComponent(root, segments) }
+  } catch {
+    return { blockedResult: blocked(BLOCK.WRITE_FAILED) }
+  }
+}
+
 export function ensureIgnore(rawRoot) {
   const root = canonicalizeRoot(rawRoot)
   if (!root) return blocked(BLOCK.INVALID_ROOT)
 
-  if (findUnsafeComponent(root, ['.context'])) {
-    return blocked(BLOCK.SYMLINK_REJECTED)
-  }
-  if (findUnsafeComponent(root, ['.context', '.gitignore'])) {
-    return blocked(BLOCK.SYMLINK_REJECTED)
-  }
+  const contextCheck = findUnsafeComponentOrBlock(root, ['.context'])
+  if (contextCheck.blockedResult) return contextCheck.blockedResult
+  if (contextCheck.unsafe) return blocked(BLOCK.SYMLINK_REJECTED)
+
+  const ignoreCheck = findUnsafeComponentOrBlock(root, [
+    '.context',
+    '.gitignore',
+  ])
+  if (ignoreCheck.blockedResult) return ignoreCheck.blockedResult
+  if (ignoreCheck.unsafe) return blocked(BLOCK.SYMLINK_REJECTED)
 
   const classification = classifyGitWorkTree(root)
   if (classification.kind === 'missing-git') return blocked(BLOCK.MISSING_GIT)
@@ -420,9 +491,9 @@ export function ensureIgnore(rawRoot) {
   }
   // The directory may have been replaced by a symlink between the earlier
   // check and this creation; re-verify before touching the nested file.
-  if (findUnsafeComponent(root, ['.context'])) {
-    return blocked(BLOCK.SYMLINK_REJECTED)
-  }
+  const recheck = findUnsafeComponentOrBlock(root, ['.context'])
+  if (recheck.blockedResult) return recheck.blockedResult
+  if (recheck.unsafe) return blocked(BLOCK.SYMLINK_REJECTED)
 
   let existing
   try {
@@ -431,12 +502,19 @@ export function ensureIgnore(rawRoot) {
     return blocked(BLOCK.WRITE_FAILED)
   }
   if (existing.symlink) return blocked(BLOCK.SYMLINK_REJECTED)
+  if (existing.tooLarge) return blocked(BLOCK.IGNORE_FILE_TOO_LARGE)
+  if (existing.changed) return blocked(BLOCK.WRITE_CONFLICT)
 
   const existingBytes =
     existing.exists && existing.bytes ? existing.bytes : undefined
 
   if (!isEntryEffectiveInBytes(existingBytes)) {
     const newContent = composeAppendedBytes(existingBytes)
+    // The prospective composed length -- not an approximation -- must fit
+    // the cap before any write is attempted.
+    if (newContent.length > IGNORE_FILE_MAX_BYTES) {
+      return blocked(BLOCK.IGNORE_FILE_TOO_LARGE)
+    }
     const writeResult = writeIgnoreFileIfUnchanged(
       ignorePath,
       existing,
@@ -475,7 +553,9 @@ export function parseArgs(argv) {
     if (!KNOWN_FLAGS.has(token)) return null
     if (root !== undefined) return null // duplicate --root
     const value = argv[i + 1]
-    if (value === undefined) return null
+    // Reject a missing value or any value starting with `--` (an option
+    // consumed as a path); `./--name` remains a valid literal path.
+    if (value === undefined || value.startsWith('--')) return null
     root = value
     i += 1
   }
@@ -492,7 +572,20 @@ function main() {
     return
   }
 
-  const { exitCode, result } = ensureIgnore(root)
+  // Final boundary: any unanticipated exception still maps to the fixed
+  // blocked contract, never a raw error.
+  let outcome
+  try {
+    outcome = ensureIgnore(root)
+  } catch {
+    process.stdout.write(
+      `${JSON.stringify({ reason: BLOCK.WRITE_FAILED, status: 'blocked' })}\n`,
+    )
+    process.exit(2)
+    return
+  }
+
+  const { exitCode, result } = outcome
   process.stdout.write(`${JSON.stringify(result)}\n`)
   process.exit(exitCode)
 }

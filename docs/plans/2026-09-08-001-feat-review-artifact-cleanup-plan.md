@@ -144,6 +144,8 @@ Writable review modes run the producer-local helper before creating a run direct
 
 Resolve the supplied project root to its canonical directory first. Below that root, refuse symlink components and a symlink/non-regular `.context/.gitignore`. Preserve existing bytes and mode, adding a line separator if needed and appending `/systematic/ce-review/`. Even when the repository already ignores `.context/`, the explicit nested entry must exist. Effective existing protection plus an existing exact entry is a no-write success.
 
+Limit `.context/.gitignore` to 1 MiB. Check the opened descriptor's size, use bounded reads, and detect size changes or incomplete reads before accepting its bytes. An already-oversized file blocks with `ignore-file-too-large`, even if it already contains the required entry. Refuse an append that would cross the limit without modifying the file; never truncate content to fit. Changes detected during the write recheck remain conflicts.
+
 Use exclusive temporary-file creation, recheck the original file identity/content before replacement, and clean up only the helper's own temporary file on failure. Never overwrite an observed conflicting edit. This is a single-file update, not a merge of concurrent edits or a cross-process transaction. A detected conflict or failed write blocks persistence. If the append succeeds but later Git verification fails, the intended append may remain; report failure without erasing a later editor's changes through rollback.
 
 Invoke Git with argument arrays, a bounded timeout, controlled locale, and repository-redirection environment overrides removed. Do not print raw Git stderr or ignore-file contents. Classify conservatively:
@@ -220,7 +222,7 @@ flowchart TB
 
 **Approach:** Implement the canonical-root, preserved-byte update, Git classification, and effective-pattern checks above. Keep the helper independently executable under Node; no cross-skill import or runtime module. Follow `setup.ts`'s trusted-file reasoning and onboarding's helper delivery pattern, without copying their unrelated APIs.
 
-**Execution note:** Implement test-first with real temporary Git/filesystem fixtures. Use controlled executable fixtures for timeout/missing-command diagnostics; no global monkeypatches or mocking library.
+**Execution note:** Implement test-first with real temporary Git/filesystem fixtures. Use controlled executable fixtures for timeout/missing-command diagnostics. Failure-path tests may inject faults through standard Node APIs only inside disposable Node child processes; never mutate builtins in the shared test worker, add production test hooks, or use a mocking library.
 
 **Test scenarios:** Fresh repository and missing `.context`; root already ignores context but nested entry is absent; existing bytes with/without final newline; idempotent second invocation; same-file negation; deeper conflict; tracked-path caveat; linked worktree and nested root; Git-confirmed non-repository; ENOENT/timeout/corrupt metadata/unsafe repository block; symlink ancestors/file; observed file replacement conflict; source/diagnostic canaries never echoed.
 

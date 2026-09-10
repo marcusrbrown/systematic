@@ -11,6 +11,8 @@ const HELPER_PATH = path.resolve(
 const HELPER_URL = `file://${HELPER_PATH}`
 
 const REQUIRED_ENTRY = '/systematic/ce-review/'
+const IGNORE_FILE_MAX_BYTES = 1024 * 1024
+const ENTRY_LINE_LENGTH = Buffer.byteLength(`${REQUIRED_ENTRY}\n`, 'utf8')
 
 // Resolves a real Node binary via the runtime's own `-p process.execPath`,
 // using the original (unmodified) environment, before any test below
@@ -482,6 +484,30 @@ describe('ensure-ignore CLI: argument validation', () => {
       status: 'blocked',
     })
   })
+
+  it('rejects a second --root flag used as the first --root value, rather than treating it as a literal path', () => {
+    const result = spawnSync(NODE_BIN, [HELPER_PATH, '--root', '--root'], {
+      encoding: 'utf8',
+    })
+
+    expect(result.status).toBe(2)
+    expect(parseJsonRecord(result.stdout ?? '')).toEqual({
+      reason: 'invalid-arguments',
+      status: 'blocked',
+    })
+  })
+
+  it('rejects an unknown option consumed as a --root value, rather than treating it as a literal path', () => {
+    const result = spawnSync(NODE_BIN, [HELPER_PATH, '--root', '--unknown'], {
+      encoding: 'utf8',
+    })
+
+    expect(result.status).toBe(2)
+    expect(parseJsonRecord(result.stdout ?? '')).toEqual({
+      reason: 'invalid-arguments',
+      status: 'blocked',
+    })
+  })
 })
 
 // ── Byte-exactness regression (R2: preserve existing bytes) ────────────────
@@ -716,6 +742,76 @@ describe('ensure-ignore internals: readTrustedFile rejects non-regular files bef
   })
 })
 
+describe('ensure-ignore CLI: filesystem error propagation (non-ENOENT)', () => {
+  const isRoot = typeof process.getuid === 'function' && process.getuid() === 0
+
+  it('blocks with a fixed category (not a crash) on EACCES during unsafe-component detection, with no absolute path or stack leaked', () => {
+    if (isRoot) {
+      // Root bypasses Unix permission bits on most filesystems, so denying
+      // read/execute on `.context` would not reproduce EACCES here. This
+      // case is honestly skipped rather than faked with a mock.
+      return
+    }
+    const root = makeDir('ensure-ignore-eacces-context-')
+    initRepo(root)
+    const contextDir = path.join(root, '.context')
+    fs.mkdirSync(contextDir)
+    fs.writeFileSync(path.join(contextDir, '.gitignore'), 'x\n')
+    // Denying execute on `.context` makes `lstat` on its child fail with
+    // EACCES rather than the ENOENT the helper already tolerates.
+    fs.chmodSync(contextDir, 0o000)
+
+    try {
+      const { exitCode, stdout, stderr } = runHelper(root)
+
+      // Contract: exit 2 with a fixed blocked reason -- never exit 1 from an
+      // uncaught exception, and never a bare crash.
+      expect(exitCode).toBe(2)
+      const parsed = parseJsonRecord(stdout)
+      expect(parsed.status).toBe('blocked')
+      expect(typeof parsed.reason).toBe('string')
+      // No raw Node error message, stack trace, or absolute path anywhere in
+      // stdout/stderr.
+      expect(stdout).not.toContain(root)
+      expect(stderr).not.toContain(root)
+      expect(stderr).not.toContain('EACCES')
+      expect(stderr).not.toContain('    at ')
+      expect(stderr).toBe('')
+    } finally {
+      fs.chmodSync(contextDir, 0o700)
+    }
+  })
+
+  it('blocks (not symlink-rejected) on EACCES opening the ignore file itself', () => {
+    if (isRoot) {
+      return
+    }
+    const root = makeDir('ensure-ignore-eacces-file-')
+    initRepo(root)
+    const contextDir = path.join(root, '.context')
+    fs.mkdirSync(contextDir)
+    const ignorePath = path.join(contextDir, '.gitignore')
+    fs.writeFileSync(ignorePath, 'existing\n')
+    // Deny read on the file itself: lstat still succeeds (mode is readable
+    // via directory listing) but `open()` for read fails with EACCES. This
+    // must not be misclassified as a symlink.
+    fs.chmodSync(ignorePath, 0o000)
+
+    try {
+      const { exitCode, stdout, stderr } = runHelper(root)
+
+      expect(exitCode).toBe(2)
+      const parsed = parseJsonRecord(stdout)
+      expect(parsed.status).toBe('blocked')
+      expect(parsed.reason).not.toBe('symlink-rejected')
+      expect(stdout).not.toContain(root)
+      expect(stderr).toBe('')
+    } finally {
+      fs.chmodSync(ignorePath, 0o644)
+    }
+  })
+})
+
 describe('ensure-ignore internals: Git timeout classification', () => {
   it('classifies an injected short timeout distinctly from other Git errors', () => {
     const fakeBin = makeDir('ensure-ignore-fake-bin-')
@@ -750,6 +846,371 @@ describe('ensure-ignore internals: Git timeout classification', () => {
 
       const result = classifyGitWorkTree(${JSON.stringify(root)}, { timeoutMs: 200 })
       assert.deepEqual(result, { kind: 'work-tree' })
+      process.exit(0)
+    `
+
+    const { exitCode, stderr } = runNodeHarness(script)
+
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+  })
+})
+
+describe('ensure-ignore CLI: bounded read / size cap on the ignore file', () => {
+  it('blocks an oversize unprotected ignore file rather than reading and appending to it', () => {
+    const root = makeDir('ensure-ignore-cap-oversize-')
+    initRepo(root)
+    fs.mkdirSync(path.join(root, '.context'))
+    const ignorePath = path.join(root, '.context', '.gitignore')
+    const oversize = Buffer.alloc(IGNORE_FILE_MAX_BYTES + 100, 'x')
+    fs.writeFileSync(ignorePath, oversize)
+
+    const { exitCode, stdout } = runHelper(root)
+
+    expect(exitCode).toBe(2)
+    expect(parseJsonRecord(stdout)).toEqual({
+      reason: 'ignore-file-too-large',
+      status: 'blocked',
+    })
+    // Never mutated: same size, same bytes.
+    expect(fs.statSync(ignorePath).size).toBe(IGNORE_FILE_MAX_BYTES + 100)
+    expect(fs.readFileSync(ignorePath).equals(oversize)).toBe(true)
+  })
+
+  it('blocks an oversize ignore file that already contains the required entry (already-protected overcap still blocks)', () => {
+    const root = makeDir('ensure-ignore-cap-oversize-protected-')
+    initRepo(root)
+    fs.mkdirSync(path.join(root, '.context'))
+    const ignorePath = path.join(root, '.context', '.gitignore')
+    const filler = Buffer.alloc(
+      IGNORE_FILE_MAX_BYTES + 1 - ENTRY_LINE_LENGTH,
+      'x',
+    )
+    const content = Buffer.concat([
+      filler,
+      Buffer.from('\n', 'utf8'),
+      Buffer.from(`${REQUIRED_ENTRY}\n`, 'utf8'),
+    ])
+    fs.writeFileSync(ignorePath, content)
+    expect(fs.statSync(ignorePath).size).toBeGreaterThan(IGNORE_FILE_MAX_BYTES)
+
+    const { exitCode, stdout } = runHelper(root)
+
+    expect(exitCode).toBe(2)
+    expect(parseJsonRecord(stdout)).toEqual({
+      reason: 'ignore-file-too-large',
+      status: 'blocked',
+    })
+  })
+
+  it('blocks (unchanged) when the existing file is unprotected and near the cap such that the entry cannot fit', () => {
+    const root = makeDir('ensure-ignore-cap-near-')
+    initRepo(root)
+    fs.mkdirSync(path.join(root, '.context'))
+    const ignorePath = path.join(root, '.context', '.gitignore')
+    // No trailing newline, so composing needs a 1-byte separator plus the
+    // full entry line -- pushing the composed length just past the cap.
+    const existing = Buffer.alloc(IGNORE_FILE_MAX_BYTES - 5, 'x')
+    fs.writeFileSync(ignorePath, existing)
+
+    const { exitCode, stdout } = runHelper(root)
+
+    expect(exitCode).toBe(2)
+    expect(parseJsonRecord(stdout)).toEqual({
+      reason: 'ignore-file-too-large',
+      status: 'blocked',
+    })
+    // No temp file left behind, and the original file is byte-for-byte
+    // unchanged -- the block happens before any write is attempted.
+    expect(fs.readFileSync(ignorePath).equals(existing)).toBe(true)
+    expect(fs.readdirSync(path.join(root, '.context'))).toEqual(['.gitignore'])
+  })
+
+  it('passes and is idempotent for an already-protected file at exactly the cap', () => {
+    const root = makeDir('ensure-ignore-cap-exact-')
+    initRepo(root)
+    fs.mkdirSync(path.join(root, '.context'))
+    const ignorePath = path.join(root, '.context', '.gitignore')
+    const entryLine = Buffer.from(`${REQUIRED_ENTRY}\n`, 'utf8')
+    const filler = Buffer.alloc(
+      IGNORE_FILE_MAX_BYTES - entryLine.length - 1,
+      'x',
+    )
+    // A separating newline puts the entry on its own line, distinct from
+    // the filler "line" that precedes it.
+    const content = Buffer.concat([
+      filler,
+      Buffer.from('\n', 'utf8'),
+      entryLine,
+    ])
+    fs.writeFileSync(ignorePath, content)
+    expect(fs.statSync(ignorePath).size).toBe(IGNORE_FILE_MAX_BYTES)
+
+    const { exitCode, stdout } = runHelper(root)
+
+    expect(exitCode).toBe(0)
+    expect(parseJsonRecord(stdout).status).toBe('protected')
+    // Idempotent: bytes are untouched since the entry was already effective.
+    expect(fs.readFileSync(ignorePath).equals(content)).toBe(true)
+  })
+
+  it('preserves non-UTF-8 bytes in a large-but-under-cap ignore file while appending the entry', () => {
+    const root = makeDir('ensure-ignore-cap-nonutf8-')
+    initRepo(root)
+    fs.mkdirSync(path.join(root, '.context'))
+    const ignorePath = path.join(root, '.context', '.gitignore')
+    const invalidUtf8Prefix = Buffer.from([0xff, 0xfe, 0x41, 0x42])
+    const filler = Buffer.alloc(1024 * 512, 'x')
+    const existing = Buffer.concat([
+      invalidUtf8Prefix,
+      Buffer.from('\n', 'utf8'),
+      filler,
+      Buffer.from('\n', 'utf8'),
+    ])
+    fs.writeFileSync(ignorePath, existing)
+
+    const { exitCode } = runHelper(root)
+
+    expect(exitCode).toBe(0)
+    const resultBytes = fs.readFileSync(ignorePath)
+    const expected = Buffer.concat([
+      existing,
+      Buffer.from(`${REQUIRED_ENTRY}\n`, 'utf8'),
+    ])
+    expect(resultBytes.equals(expected)).toBe(true)
+  })
+})
+
+// ── Mid-read change detection: fault-injected in an isolated Node child ────
+//
+// Each script below monkeypatches `fs.readSync` on the shared `node:fs`
+// default-export object *inside its own disposable child process* -- the
+// helper module (`ensure-ignore.mjs`) imports the same `fs` default export
+// via ESM sync-builtin-exports, so the patch reaches its calls too, without
+// touching production source or any shared Bun worker. The patch is
+// restored before the script exits. This is real `fs` I/O on a real temp
+// fixture at a controlled point, not a timing-dependent race.
+
+describe('ensure-ignore internals: mid-read change detection (fault-injected)', () => {
+  it('does not return a stale prefix as trusted bytes when the file grows within the cap during the read', () => {
+    const root = makeDir('ensure-ignore-fault-grow-')
+    const filePath = path.join(root, '.gitignore')
+    fs.writeFileSync(filePath, 'original-content\n')
+
+    const script = `
+      import assert from 'node:assert/strict'
+      import fs from 'node:fs'
+      import { readTrustedFile } from '${HELPER_URL}'
+
+      const filePath = ${JSON.stringify(filePath)}
+      const originalReadSync = fs.readSync
+      fs.readSync = function fault(...args) {
+        const bytesRead = originalReadSync.apply(fs, args)
+        fs.readSync = originalReadSync
+        fs.appendFileSync(filePath, 'grown-during-read\\n')
+        return bytesRead
+      }
+
+      let result
+      try {
+        result = readTrustedFile(filePath)
+      } finally {
+        fs.readSync = originalReadSync
+      }
+
+      assert.equal(result.exists, true)
+      assert.equal(result.changed, true, 'expected an explicit changed result')
+      assert.equal(result.symlink, undefined, 'must not be misclassified as symlink')
+      assert.equal(result.tooLarge, undefined)
+      assert.equal(result.bytes, undefined, 'must not hand back a stale/partial buffer')
+      process.exit(0)
+    `
+
+    const { exitCode, stderr } = runNodeHarness(script)
+
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+  })
+
+  it('classifies growth-within-cap as a fixed failure (not symlink-rejected) at the ensureIgnore level', () => {
+    const root = makeDir('ensure-ignore-fault-grow-ensure-')
+    initRepo(root)
+    fs.mkdirSync(path.join(root, '.context'))
+    const ignorePath = path.join(root, '.context', '.gitignore')
+    fs.writeFileSync(ignorePath, 'unrelated-existing-line\n')
+
+    const script = `
+      import assert from 'node:assert/strict'
+      import fs from 'node:fs'
+      import { ensureIgnore } from '${HELPER_URL}'
+
+      const ignorePath = ${JSON.stringify(ignorePath)}
+      const originalReadSync = fs.readSync
+      fs.readSync = function fault(...args) {
+        const bytesRead = originalReadSync.apply(fs, args)
+        fs.readSync = originalReadSync
+        fs.appendFileSync(ignorePath, 'grown-during-read\\n')
+        return bytesRead
+      }
+
+      let outcome
+      try {
+        outcome = ensureIgnore(${JSON.stringify(root)})
+      } finally {
+        fs.readSync = originalReadSync
+      }
+
+      assert.equal(outcome.exitCode, 2)
+      assert.equal(outcome.result.status, 'blocked')
+      assert.notEqual(outcome.result.reason, 'symlink-rejected', 'must not misclassify an observed change as a symlink')
+      process.exit(0)
+    `
+
+    const { exitCode, stderr } = runNodeHarness(script)
+
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+  })
+
+  it('does not misclassify a concurrent shrink (short read) as a symlink', () => {
+    const root = makeDir('ensure-ignore-fault-shrink-')
+    const filePath = path.join(root, '.gitignore')
+    fs.writeFileSync(filePath, 'x'.repeat(2000))
+
+    const script = `
+      import assert from 'node:assert/strict'
+      import fs from 'node:fs'
+      import { readTrustedFile } from '${HELPER_URL}'
+
+      const filePath = ${JSON.stringify(filePath)}
+      const originalReadSync = fs.readSync
+      fs.readSync = function fault(...args) {
+        fs.readSync = originalReadSync
+        fs.truncateSync(filePath, 10)
+        return originalReadSync.apply(fs, args)
+      }
+
+      let result
+      try {
+        result = readTrustedFile(filePath)
+      } finally {
+        fs.readSync = originalReadSync
+      }
+
+      assert.equal(result.exists, true)
+      assert.equal(result.changed, true, 'expected an explicit changed result, not a default empty buffer')
+      assert.equal(result.symlink, undefined, 'must not recreate the N5 misclassification class')
+      assert.equal(result.bytes, undefined)
+      process.exit(0)
+    `
+
+    const { exitCode, stderr } = runNodeHarness(script)
+
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+  })
+
+  it('classifies a concurrent shrink as a fixed failure (not symlink-rejected) at the ensureIgnore level', () => {
+    const root = makeDir('ensure-ignore-fault-shrink-ensure-')
+    initRepo(root)
+    fs.mkdirSync(path.join(root, '.context'))
+    const ignorePath = path.join(root, '.context', '.gitignore')
+    fs.writeFileSync(ignorePath, 'x'.repeat(2000))
+
+    const script = `
+      import assert from 'node:assert/strict'
+      import fs from 'node:fs'
+      import { ensureIgnore } from '${HELPER_URL}'
+
+      const ignorePath = ${JSON.stringify(ignorePath)}
+      const originalReadSync = fs.readSync
+      fs.readSync = function fault(...args) {
+        fs.readSync = originalReadSync
+        fs.truncateSync(ignorePath, 10)
+        return originalReadSync.apply(fs, args)
+      }
+
+      let outcome
+      try {
+        outcome = ensureIgnore(${JSON.stringify(root)})
+      } finally {
+        fs.readSync = originalReadSync
+      }
+
+      assert.equal(outcome.exitCode, 2)
+      assert.equal(outcome.result.status, 'blocked')
+      assert.notEqual(outcome.result.reason, 'symlink-rejected')
+      process.exit(0)
+    `
+
+    const { exitCode, stderr } = runNodeHarness(script)
+
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+  })
+
+  it('still classifies growth that crosses the cap during the read as the oversize category (unchanged behavior, now proven under real fault injection)', () => {
+    const root = makeDir('ensure-ignore-fault-cross-cap-')
+    const filePath = path.join(root, '.gitignore')
+    const nearCap = Buffer.alloc(IGNORE_FILE_MAX_BYTES - 100, 'x')
+    fs.writeFileSync(filePath, nearCap)
+
+    const script = `
+      import assert from 'node:assert/strict'
+      import fs from 'node:fs'
+      import { readTrustedFile } from '${HELPER_URL}'
+
+      const filePath = ${JSON.stringify(filePath)}
+      const originalReadSync = fs.readSync
+      fs.readSync = function fault(...args) {
+        const bytesRead = originalReadSync.apply(fs, args)
+        fs.readSync = originalReadSync
+        fs.appendFileSync(filePath, Buffer.alloc(500, 'y'))
+        return bytesRead
+      }
+
+      let result
+      try {
+        result = readTrustedFile(filePath)
+      } finally {
+        fs.readSync = originalReadSync
+      }
+
+      assert.equal(result.exists, true)
+      assert.equal(result.tooLarge, true)
+      assert.equal(result.changed, undefined)
+      assert.equal(result.symlink, undefined)
+      assert.equal(result.bytes, undefined)
+      process.exit(0)
+    `
+
+    const { exitCode, stderr } = runNodeHarness(script)
+
+    expect(stderr).toBe('')
+    expect(exitCode).toBe(0)
+  })
+
+  it('refuses to rename when the file crosses oversize between the write snapshot and the pre-rename recheck', () => {
+    const root = makeDir('ensure-ignore-fault-recheck-oversize-')
+    const filePath = path.join(root, '.gitignore')
+    fs.writeFileSync(filePath, 'original\n')
+
+    const script = `
+      import assert from 'node:assert/strict'
+      import fs from 'node:fs'
+      import { readTrustedFile, writeIgnoreFileIfUnchanged } from '${HELPER_URL}'
+
+      const filePath = ${JSON.stringify(filePath)}
+      const snapshot = readTrustedFile(filePath)
+
+      // Real growth past the cap, performed directly (no readSync patch
+      // needed: writeIgnoreFileIfUnchanged's recheck naturally observes
+      // whatever is on disk at recheck time via the existing oversize path).
+      fs.writeFileSync(filePath, Buffer.alloc(${1024 * 1024} + 1, 'z'))
+
+      const result = writeIgnoreFileIfUnchanged(filePath, snapshot, 'original\\nappended\\n')
+      assert.deepEqual(result, { ok: false, reason: 'conflict' })
+      assert.equal(fs.readFileSync(filePath).length, ${1024 * 1024} + 1)
       process.exit(0)
     `
 

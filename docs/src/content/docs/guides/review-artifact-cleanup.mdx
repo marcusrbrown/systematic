@@ -68,6 +68,8 @@ Writable `ce:review` modes now prepare the targeted `.context/.gitignore` entry 
 
 Existing ignore entries are preserved. The protection is for ordinary staging only: tracked files, force-add, and copies elsewhere are unaffected. It is not backup protection.
 
+The helper reads and writes `.context/.gitignore` under a fixed 1 MiB cap. An existing file over the cap blocks with a fixed diagnostic -- even if it already contains the required entry -- rather than being read. A composed write (existing bytes plus the required entry) that would exceed the cap also blocks, leaving the existing file unchanged; the file is never truncated to fit.
+
 Git-confirmed non-Git directories may continue after preparation with `not-applicable`. Missing Git, ambiguous Git results, or preparation and verification failures are not treated as non-Git and block the writing mode with an actionable diagnostic.
 
 `ce:review` report-only mode remains the no-write alternative. It does not create artifacts, prepare or verify ignore rules, or invoke cleanup. Its existing environment-value screening behavior is unchanged.

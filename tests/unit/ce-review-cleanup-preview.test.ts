@@ -11,6 +11,23 @@ const SCRIPT_PATH = path.join(
   'skills/ce-review-cleanup/scripts/cleanup.mjs',
 )
 const SCRIPT_URL = pathToFileURL(SCRIPT_PATH).href
+const DATE_FAULT_FIXTURE_PATH = path.join(
+  ROOT_DIR,
+  'tests/fixtures/ce-review-cleanup/run-preview-with-injected-date-fault.mjs',
+)
+
+// mkfifo is a standard POSIX utility (not an installed dependency); some
+// CI/sandbox environments may still lack it. Checked once at module load
+// so the FIFO-hang test can skip with an honest reason instead of failing
+// the whole suite on an unrelated platform gap.
+const mkfifoAvailable = (() => {
+  try {
+    const probe = spawnSync('which', ['mkfifo'], { encoding: 'utf8' })
+    return probe.status === 0 && probe.stdout.trim().length > 0
+  } catch {
+    return false
+  }
+})()
 
 // ── Unknown-JSON narrowing (no `as` casts) ─────────────────────────────────
 
@@ -108,17 +125,29 @@ function runCli(args: readonly string[]): CliResult {
 /** Runs an exported pure function through a real Node subprocess (proving
  * no node_modules dependency), for cases where explicit control over an
  * input (e.g. a fixed reference time, or a synthetic digest list) is
- * needed rather than relying on wall-clock or manufactured collisions. */
+ * needed rather than relying on wall-clock or manufactured collisions.
+ *
+ * The `-e` script text is fixed for a given `exportName` (a literal picked
+ * by the caller, not test data): it never interpolates `argsJson` into the
+ * evaluated source. Test data is instead passed as a single argv value and
+ * JSON.parsed inside the fixed script, so arbitrary test fixtures (unsafe
+ * names, control bytes, synthetic digests) are never themselves executed
+ * as code. */
 function callExportViaNode(exportName: string, argsJson: unknown): unknown {
   const script = `
 import { ${exportName} } from ${JSON.stringify(SCRIPT_URL)};
-const result = ${exportName}(${JSON.stringify(argsJson)});
+const args = JSON.parse(process.argv[1]);
+const result = ${exportName}(args);
 process.stdout.write(JSON.stringify(result === undefined ? { __undefined: true } : result));
 `
-  const result = spawnSync('node', ['--input-type=module', '-e', script], {
-    encoding: 'utf8',
-    timeout: 30_000,
-  })
+  const result = spawnSync(
+    'node',
+    ['--input-type=module', '-e', script, '--', JSON.stringify(argsJson)],
+    {
+      encoding: 'utf8',
+      timeout: 30_000,
+    },
+  )
   if (result.status !== 0) {
     throw new Error(
       `subprocess for ${exportName} failed: ${result.stderr ?? ''}`,
@@ -209,6 +238,36 @@ function cleanupTemp(projectRoot: string): void {
   fs.rmSync(projectRoot, { force: true, recursive: true })
 }
 
+/** Reads a file's content and mtime from a single open file descriptor
+ * (fstat + read on the same fd), rather than a path-based stat followed by
+ * a separate path-based open/read -- avoiding a check-then-open gap on our
+ * own fixture path. */
+function readFileSnapshot(filePath: string): {
+  readonly content: Buffer
+  readonly mtimeMs: number
+} {
+  const fd = fs.openSync(filePath, 'r')
+  try {
+    const stat = fs.fstatSync(fd)
+    const buffer = Buffer.alloc(stat.size)
+    let readTotal = 0
+    while (readTotal < buffer.length) {
+      const bytesRead = fs.readSync(
+        fd,
+        buffer,
+        readTotal,
+        buffer.length - readTotal,
+        readTotal,
+      )
+      if (bytesRead <= 0) break
+      readTotal += bytesRead
+    }
+    return { content: buffer.subarray(0, readTotal), mtimeMs: stat.mtimeMs }
+  } finally {
+    fs.closeSync(fd)
+  }
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // Slice 1: operation/argument gate (ack, age, root) and root-missing no-op
 // ═══════════════════════════════════════════════════════════════════════
@@ -276,6 +335,18 @@ describe('ce-review-cleanup preview: operation and argument gate', () => {
     expect(result.response.category).toBe('unknown-operation')
   })
 
+  it('never echoes a long/unsafe unrecognized operation back into the response', () => {
+    const unsafeOperation = `rm -rf / ; ${'x'.repeat(5_000)}`
+    const result = runCli([unsafeOperation, '--ack-offline'])
+    expect(result.exitCode).toBe(2)
+    if (!isCliResponse(result.response))
+      throw new Error('expected JSON response')
+    expect(result.response.category).toBe('unknown-operation')
+    expect(result.response.operation).toBe('unknown')
+    expect(result.stdout).not.toContain(unsafeOperation)
+    expect(result.stdout.length).toBeLessThan(1_000)
+  })
+
   it('requires an age cutoff', () => {
     const { projectRoot } = makeTempProject()
     try {
@@ -311,6 +382,91 @@ describe('ce-review-cleanup preview: operation and argument gate', () => {
       if (!isCliResponse(result.response))
         throw new Error('expected JSON response')
       expect(result.response.category).toBe('invalid-age')
+    } finally {
+      cleanupTemp(projectRoot)
+    }
+  })
+
+  it('rejects an age against the real clock whose derived cutoff would not be a representable Date, instead of crashing', () => {
+    const { projectRoot } = makeTempProject()
+    try {
+      // Before the fix this reached `new Date(cutoffTimeMs)` and threw a
+      // RangeError, caught only by the generic internal-error boundary.
+      const result = runCli([
+        'preview',
+        '--root',
+        projectRoot,
+        '--age',
+        '102000000',
+        '--ack-offline',
+      ])
+      expect(result.exitCode).toBe(2)
+      if (!isCliResponse(result.response))
+        throw new Error('expected JSON response')
+      expect(result.response.result).toBe('error')
+      expect(result.response.category).toBe('invalid-age')
+    } finally {
+      cleanupTemp(projectRoot)
+    }
+  })
+
+  it('rejects a duration whose cutoff at referenceTimeMs 0 exceeds the representable-Date boundary', () => {
+    const { projectRoot } = makeTempProject()
+    try {
+      // 100,000,001 days at referenceTimeMs 0 -> cutoff -8,640,000,086,400,000,
+      // 86,400,000ms past Date's representable minimum.
+      const result = runPreviewViaNode({
+        ackOffline: true,
+        age: '100000001',
+        referenceTimeMs: 0,
+        root: projectRoot,
+      })
+      expect(result.exitCode).toBe(2)
+      if (!isCliResponse(result.response))
+        throw new Error('expected JSON response')
+      expect(result.response.category).toBe('invalid-age')
+    } finally {
+      cleanupTemp(projectRoot)
+    }
+  })
+
+  it('accepts the same 100,000,001-day duration when the reference time makes the derived cutoff exactly representable', () => {
+    const { projectRoot } = makeTempProject()
+    try {
+      // Counterexample to duration-only rejection: this duration alone
+      // exceeds MAX_REPRESENTABLE_DATE_MS by 86,400,000ms, but at
+      // referenceTimeMs 86,400,000 the derived cutoff is exactly
+      // -8,640,000,000,000,000 -- Date's own inclusive minimum, valid.
+      const result = runPreviewViaNode({
+        ackOffline: true,
+        age: '100000001',
+        referenceTimeMs: 86_400_000,
+        root: projectRoot,
+      })
+      expect(result.exitCode).toBe(0)
+      if (!isCliResponse(result.response))
+        throw new Error('expected JSON response')
+      expect(result.response.category).toBeUndefined()
+    } finally {
+      cleanupTemp(projectRoot)
+    }
+  })
+
+  it('accepts the exact boundary day count whose cutoff is still a representable Date', () => {
+    const { projectRoot } = makeTempProject()
+    try {
+      // At referenceTimeMs 0, exactly 100,000,000 days is Date's own
+      // documented minimum representable value (inclusive boundary).
+      const result = runPreviewViaNode({
+        ackOffline: true,
+        age: '100000000',
+        referenceTimeMs: 0,
+        root: projectRoot,
+      })
+      expect(result.exitCode).toBe(0)
+      if (!isCliResponse(result.response))
+        throw new Error('expected JSON response')
+      expect(result.response.category).toBeUndefined()
     } finally {
       cleanupTemp(projectRoot)
     }
@@ -1161,15 +1317,13 @@ describe('ce-review-cleanup preview: read-only guarantee', () => {
         summary: { run_status: 'completed', schema_version: 1 },
       })
       const summaryPath = path.join(dir, 'review-summary.json')
-      const before = fs.readFileSync(summaryPath)
-      const statBefore = fs.statSync(summaryPath)
+      const before = readFileSnapshot(summaryPath)
 
       runCli(['preview', '--root', projectRoot, '--age', '30', '--ack-offline'])
 
-      const after = fs.readFileSync(summaryPath)
-      const statAfter = fs.statSync(summaryPath)
-      expect(after.equals(before)).toBe(true)
-      expect(statAfter.mtimeMs).toBe(statBefore.mtimeMs)
+      const after = readFileSnapshot(summaryPath)
+      expect(after.content.equals(before.content)).toBe(true)
+      expect(after.mtimeMs).toBe(before.mtimeMs)
     } finally {
       cleanupTemp(projectRoot)
     }
@@ -1860,6 +2014,226 @@ describe('ce-review-cleanup preview: stale-snapshot status re-verification', () 
     expect(result.stderr).toBe('')
     expect(result.stdout.trim()).toBe('OK')
     expect(result.status).toBe(0)
+  })
+})
+
+// ════════════════════════════════════════════════════════════════════════
+// FIFO-substitution hang window (CodeQL js/file-system-race, cleanup.mjs
+// deriveStatusLabel open)
+// ═══════════════════════════════════════════════════════════════════════
+
+describe('ce-review-cleanup preview: FIFO-substitution open no longer hangs', () => {
+  const maybeIt = mkfifoAvailable ? it : it.skip
+
+  maybeIt(
+    'derives "unknown" (not a hang) from the real deriveStatusLabel when the checked path is swapped for a FIFO at the actual lstat->open syscall boundary',
+    () => {
+      const { projectRoot, reviewRoot } = makeTempProject()
+      try {
+        const dir = createCandidate(reviewRoot, 'fifo-swap-run', {
+          ageDays: 40,
+          summary: { run_status: 'completed', schema_version: 1 },
+        })
+        const summaryPath = path.join(dir, 'review-summary.json')
+
+        // Fixed script; the candidate/summary paths are the only
+        // per-run data, passed via argv. Intercepting the default `fs`
+        // export's lstatSync (mutable CJS module object) and syncing it
+        // into cleanup.mjs's named ESM binding lets this child perform
+        // the filesystem swap from inside the real, single call
+        // deriveStatusLabel makes for its pre-open check -- the actual
+        // syscall boundary, not a timed race and not a production seam.
+        const lines = [
+          "import fs from 'node:fs';",
+          "import { syncBuiltinESMExports } from 'node:module';",
+          "import { execFileSync } from 'node:child_process';",
+          `import { deriveStatusLabel, walkCandidateSubtree } from ${JSON.stringify(SCRIPT_URL)};`,
+          '',
+          'const candidateAbsPath = process.argv[1];',
+          'const summaryPath = process.argv[2];',
+          '',
+          'const walked = walkCandidateSubtree(candidateAbsPath);',
+          'if (!walked.ok) {',
+          '  process.stdout.write(JSON.stringify({ setupError: walked.reason }));',
+          '  process.exit(3);',
+          '}',
+          '',
+          'const originalLstatSync = fs.lstatSync;',
+          'const originalCloseSync = fs.closeSync;',
+          'let closeCallCount = 0;',
+          'fs.closeSync = function (fd) {',
+          '  closeCallCount += 1;',
+          '  return originalCloseSync(fd);',
+          '};',
+          'fs.lstatSync = function (p, options) {',
+          '  if (p !== summaryPath) return originalLstatSync(p, options);',
+          '  const stat = originalLstatSync(p, options);',
+          "  fs.renameSync(p, p + '.aside');",
+          "  execFileSync('mkfifo', [p]);",
+          '  return stat;',
+          '};',
+          'syncBuiltinESMExports();',
+          '',
+          'const label = deriveStatusLabel(candidateAbsPath, walked.entries);',
+          'const closeCallCountObserved = closeCallCount;',
+          '',
+          'fs.lstatSync = originalLstatSync;',
+          'fs.closeSync = originalCloseSync;',
+          'syncBuiltinESMExports();',
+          '',
+          'process.stdout.write(JSON.stringify({ label, closeCallCountObserved }));',
+        ]
+        const script = lines.join('\n')
+        const result = spawnSync(
+          'node',
+          ['--input-type=module', '-e', script, '--', dir, summaryPath],
+          { encoding: 'utf8', timeout: 5_000 },
+        )
+        expect(result.stderr).toBe('')
+        let parsed: unknown
+        try {
+          parsed = JSON.parse(result.stdout)
+        } catch {
+          throw new Error(`expected JSON stdout, got: ${result.stdout}`)
+        }
+        if (!isJsonObject(parsed))
+          throw new Error('expected a JSON object from the FIFO-swap child')
+        expect(parsed.label).toBe('unknown')
+        expect(parsed.closeCallCountObserved).toBe(1)
+      } finally {
+        cleanupTemp(projectRoot)
+      }
+    },
+  )
+
+  if (!mkfifoAvailable) {
+    it('skips: mkfifo is not available on this platform/sandbox', () => {
+      expect(mkfifoAvailable).toBe(false)
+    })
+  }
+})
+
+// ════════════════════════════════════════════════════════════════════════
+// deriveStatusLabel: read-time failure never escapes as an uncaught exception
+// ═══════════════════════════════════════════════════════════════════════
+
+describe('ce-review-cleanup preview: read-time failure does not escape deriveStatusLabel', () => {
+  it('returns "unknown" (not a thrown exception) when node:fs.readSync fails mid-read, and still closes the fd', () => {
+    const { projectRoot, reviewRoot } = makeTempProject()
+    try {
+      const dir = createCandidate(reviewRoot, 'injected-eio-run', {
+        ageDays: 40,
+        summary: { run_status: 'completed', schema_version: 1 },
+      })
+
+      const lines = [
+        "import fs from 'node:fs';",
+        "import { syncBuiltinESMExports } from 'node:module';",
+        `import { deriveStatusLabel, walkCandidateSubtree } from ${JSON.stringify(SCRIPT_URL)};`,
+        '',
+        'const candidateAbsPath = process.argv[1];',
+        '',
+        'const walked = walkCandidateSubtree(candidateAbsPath);',
+        'if (!walked.ok) {',
+        '  process.stdout.write(JSON.stringify({ setupError: walked.reason }));',
+        '  process.exit(3);',
+        '}',
+        '',
+        'const originalReadSync = fs.readSync;',
+        'const originalCloseSync = fs.closeSync;',
+        'let closeCallCount = 0;',
+        'fs.closeSync = function (fd) {',
+        '  closeCallCount += 1;',
+        '  return originalCloseSync(fd);',
+        '};',
+        'fs.readSync = function () {',
+        "  throw Object.assign(new Error('injected EIO'), { code: 'EIO' });",
+        '};',
+        'syncBuiltinESMExports();',
+        '',
+        'const injectedLabel = deriveStatusLabel(candidateAbsPath, walked.entries);',
+        'const closeCallCountDuringInjection = closeCallCount;',
+        '',
+        'fs.readSync = originalReadSync;',
+        'fs.closeSync = originalCloseSync;',
+        'syncBuiltinESMExports();',
+        '',
+        'const restoredWalked = walkCandidateSubtree(candidateAbsPath);',
+        'const restoredLabel = restoredWalked.ok',
+        '  ? deriveStatusLabel(candidateAbsPath, restoredWalked.entries)',
+        "  : 'walk-failed';",
+        '',
+        'process.stdout.write(JSON.stringify({',
+        '  injectedLabel,',
+        '  closeCallCountDuringInjection,',
+        '  restoredLabel,',
+        '}));',
+      ]
+      const script = lines.join('\n')
+      const result = spawnSync(
+        'node',
+        ['--input-type=module', '-e', script, '--', dir],
+        { encoding: 'utf8', timeout: 15_000 },
+      )
+      expect(result.stderr).toBe('')
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(result.stdout)
+      } catch {
+        throw new Error(`expected JSON stdout, got: ${result.stdout}`)
+      }
+      if (!isJsonObject(parsed))
+        throw new Error('expected a JSON object from the injection child')
+      expect(parsed.injectedLabel).toBe('unknown')
+      expect(parsed.closeCallCountDuringInjection).toBe(1)
+      expect(parsed.restoredLabel).toBe('completed')
+    } finally {
+      cleanupTemp(projectRoot)
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════
+// main()'s top-level error boundary: a deterministic exception never
+// leaves a raw stack trace on stderr or an undefined exit code
+// ═══════════════════════════════════════════════════════════════════════
+
+describe('ce-review-cleanup CLI: top-level error boundary', () => {
+  it('emits the fixed internal-error JSON contract, not a raw stack trace, when a deterministic exception escapes main()', () => {
+    const { projectRoot } = makeTempProject()
+    try {
+      const result = spawnSync(
+        'node',
+        [
+          DATE_FAULT_FIXTURE_PATH,
+          'preview',
+          '--root',
+          projectRoot,
+          '--age',
+          '30',
+          '--ack-offline',
+        ],
+        { encoding: 'utf8', timeout: 15_000 },
+      )
+
+      expect(result.stderr).toBe('')
+      expect(result.status).toBe(2)
+      let parsed: unknown
+      try {
+        parsed = JSON.parse(result.stdout)
+      } catch {
+        throw new Error(`expected JSON stdout, got: ${result.stdout}`)
+      }
+      if (!isCliResponse(parsed))
+        throw new Error('expected a CLI response object')
+      expect(parsed.result).toBe('error')
+      expect(parsed.category).toBe('internal-error')
+      expect(parsed.operation).toBe('unknown')
+      // The injected error's own message must never leak into output.
+      expect(result.stdout).not.toContain('injected-fault')
+    } finally {
+      cleanupTemp(projectRoot)
+    }
   })
 })
 

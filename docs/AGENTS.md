@@ -31,8 +31,8 @@ docs/
 │   ├── styles/custom.css     # Theme overrides
 │   └── content/docs/
 │       ├── index.mdx         # Landing page
-│       ├── getting-started/  # 2 manual pages (installation, quick-start)
-│       ├── guides/           # 5 manual pages (philosophy, main-loop, agent-install, architecture, ocx-registry)
+│       ├── getting-started/  # Manual onboarding pages
+│       ├── guides/           # Manual conceptual/how-to guides
 │       └── reference/
 │           ├── skills/       # Generated — gitignored (from skills/)
 │           ├── agents/       # Generated — gitignored (from agents/)

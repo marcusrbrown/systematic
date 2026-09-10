@@ -954,6 +954,88 @@ describe('ce-review-cleanup execute: symlink substitution refused', () => {
 })
 
 // ═══════════════════════════════════════════════════════════════════════
+// Native child-name defense-in-depth (basename(name) === name)
+// ═══════════════════════════════════════════════════════════════════════
+
+describe('ce-review-cleanup execute: native child-name guard', () => {
+  it('still deletes a legitimate run directory whose name contains a literal backslash', () => {
+    const lines = [
+      "import assert from 'node:assert/strict';",
+      "import fs from 'node:fs';",
+      "import os from 'node:os';",
+      "import path from 'node:path';",
+      `import { walkCandidateSubtree, executeApprovedCandidate } from ${JSON.stringify(SCRIPT_URL)};`,
+      '',
+      "const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ce-review-cleanup-backslash-name-'));",
+      'try {',
+      "  const reviewRoot = path.join(dir, '.context', 'systematic', 'ce-review');",
+      '  fs.mkdirSync(reviewRoot, { recursive: true });',
+      "  const name = 'run-a\\\\b';",
+      '  const candidate = path.join(reviewRoot, name);',
+      '  fs.mkdirSync(candidate);',
+      '  const walked = walkCandidateSubtree(candidate);',
+      '  assert.equal(walked.ok, true);',
+      '',
+      '  const rootStat = fs.lstatSync(reviewRoot, { bigint: true });',
+      '  const rootIdentity = { dev: rootStat.dev.toString(), ino: rootStat.ino.toString() };',
+      '  const canonicalProjectRoot = fs.realpathSync(dir);',
+      '',
+      '  const outcome = executeApprovedCandidate({ candidate: { entries: walked.entries, name }, canonicalProjectRoot, rootIdentity });',
+      "  assert.equal(outcome.status, 'deleted', 'a literal backslash is a legitimate POSIX filename byte and must not be refused; got: ' + JSON.stringify(outcome));",
+      '  assert.equal(fs.existsSync(candidate), false);',
+      '',
+      "  process.stdout.write('OK');",
+      '} finally {',
+      '  fs.rmSync(dir, { force: true, recursive: true });',
+      '}',
+    ]
+    const script = lines.join('\n')
+    const result = spawnSync('node', ['--input-type=module', '-e', script], {
+      encoding: 'utf8',
+      timeout: 15_000,
+    })
+    expect(result.stderr).toBe('')
+    expect(result.stdout.trim()).toBe('OK')
+    expect(result.status).toBe(0)
+  })
+
+  it('refuses names already caught by the pre-existing dot/dotdot/slash checks, unaffected by the added basename guard', () => {
+    const lines = [
+      "import assert from 'node:assert/strict';",
+      "import fs from 'node:fs';",
+      "import os from 'node:os';",
+      "import path from 'node:path';",
+      `import { executeApprovedCandidate } from ${JSON.stringify(SCRIPT_URL)};`,
+      '',
+      "const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ce-review-cleanup-name-guard-'));",
+      'try {',
+      "  const reviewRoot = path.join(dir, '.context', 'systematic', 'ce-review');",
+      '  fs.mkdirSync(reviewRoot, { recursive: true });',
+      '  const rootStat = fs.lstatSync(reviewRoot, { bigint: true });',
+      '  const rootIdentity = { dev: rootStat.dev.toString(), ino: rootStat.ino.toString() };',
+      '  const canonicalProjectRoot = fs.realpathSync(dir);',
+      "  for (const name of ['', '.', '..', 'nested/escape']) {",
+      '    const outcome = executeApprovedCandidate({ candidate: { entries: [], name }, canonicalProjectRoot, rootIdentity });',
+      "    assert.equal(outcome.status, 'failed', 'expected refusal for ' + JSON.stringify(name));",
+      "    assert.equal(outcome.reason, 'refused-unsafe-name', 'expected refusal for ' + JSON.stringify(name));",
+      '  }',
+      "  process.stdout.write('OK');",
+      '} finally {',
+      '  fs.rmSync(dir, { force: true, recursive: true });',
+      '}',
+    ]
+    const script = lines.join('\n')
+    const result = spawnSync('node', ['--input-type=module', '-e', script], {
+      encoding: 'utf8',
+      timeout: 15_000,
+    })
+    expect(result.stderr).toBe('')
+    expect(result.stdout.trim()).toBe('OK')
+    expect(result.status).toBe(0)
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════
 // Real deletion failure (permission-based; this sandbox runs unprivileged)
 // ═══════════════════════════════════════════════════════════════════════
 

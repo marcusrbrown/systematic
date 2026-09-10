@@ -19,10 +19,15 @@
 //   node cleanup.mjs preview --root <path> --age <Nd|Nw|N> --ack-offline
 //   node cleanup.mjs execute --root <path> --ack-offline --token <token>
 //
-// Output: a single bounded JSON object on stdout. No absolute paths, nested
-// relative paths, subprocess errors, or artifact contents are ever emitted --
-// only fixed diagnostic categories, bounded/JSON-escaped run names, and
-// hash-derived display ids.
+// Output: a single JSON object on stdout. Each reported name is
+// length-bounded via boundedName(), and each candidate's subtree is bounded
+// via MAX_ENTRIES/MAX_DEPTH -- but the root's direct-child and
+// selected/excluded/skipped candidate *counts* are not separately capped,
+// so overall output size scales with the number of ce-review run
+// directories under the root. No absolute paths, nested relative paths,
+// subprocess errors, or artifact contents are ever emitted -- only fixed
+// diagnostic categories, bounded/JSON-escaped run names, and hash-derived
+// display ids.
 
 import { createHash } from 'node:crypto'
 import {
@@ -36,7 +41,7 @@ import {
   realpathSync,
   rmSync,
 } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
 // ── Constants ─────────────────────────────────────────────────────────────
@@ -47,6 +52,11 @@ const MAX_DEPTH = 32
 const MAX_ENTRIES = 10_000
 const MAX_SUMMARY_BYTES = 1 * 1024 * 1024 // 1 MiB
 const MAX_NAME_LENGTH = 200
+// ECMA-262 Date's representable range is exactly +/-100,000,000 days (ms)
+// from the epoch. An age cutoff whose duration would push a valid "now"
+// reference time's cutoff outside that range must be rejected up front,
+// before any Date is ever constructed from it.
+const MAX_REPRESENTABLE_DATE_MS = 8_640_000_000_000_000
 const REVIEW_ROOT_SEGMENTS = ['.context', 'systematic', 'ce-review']
 const SUMMARY_FILE_NAME = 'review-summary.json'
 const KNOWN_RUN_STATUSES = new Set([
@@ -66,6 +76,7 @@ const CATEGORY = Object.freeze({
   MISSING_AGE: 'missing-age',
   MISSING_ROOT: 'missing-root-argument',
   MISSING_TOKEN: 'missing-token',
+  INTERNAL_ERROR: 'internal-error',
   ROOT_ENUMERATION_FAILED: 'root-enumeration-failed',
   UNKNOWN_OPERATION: 'unknown-operation',
   UNSAFE_REVIEW_ROOT: 'unsafe-review-root',
@@ -76,7 +87,10 @@ const CATEGORY = Object.freeze({
 /**
  * Parses a positive-integer age cutoff, optionally suffixed with `d` (days,
  * default) or `w` (weeks). Rejects zero, decimals, negative values,
- * malformed text, and arithmetic that would overflow a safe integer.
+ * malformed text, and arithmetic that would overflow a safe integer. Does
+ * not reject a large duration by itself -- whether the *derived cutoff*
+ * (which also depends on the reference time) is a representable `Date` is
+ * checked by the caller once both are known; see MAX_REPRESENTABLE_DATE_MS.
  * @param {unknown} input
  * @returns {{ days: number, ms: number } | undefined}
  */
@@ -352,6 +366,13 @@ export function walkCandidateSubtree(candidateAbsPath) {
  * This narrows ordinary stale-state drift (a file resized, replaced, or
  * symlinked between the walk and this call). It is not an atomic guarantee
  * against an adversarial writer racing every check.
+ *
+ * The open also sets O_NONBLOCK (where defined): a regular file's reads are
+ * unaffected by this flag, but it closes one specific hang window -- an
+ * attacker swapping the path for a FIFO between the lstat above and this
+ * open would otherwise block this open indefinitely waiting for a writer.
+ * With O_NONBLOCK the open returns immediately regardless, and the fd's
+ * post-open identity/type check below then rejects it as non-regular.
  * @param {string} candidateAbsPath
  * @param {readonly SnapshotEntry[]} entries
  * @returns {'in_progress' | 'completed' | 'degraded' | 'abnormal' | 'legacy' | 'artifactless' | 'unknown'}
@@ -372,7 +393,8 @@ export function deriveStatusLabel(candidateAbsPath, entries) {
 
   const openFlags =
     fsConstants.O_RDONLY |
-    (typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0)
+    (typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0) |
+    (typeof fsConstants.O_NONBLOCK === 'number' ? fsConstants.O_NONBLOCK : 0)
 
   let fd
   try {
@@ -402,16 +424,24 @@ export function deriveStatusLabel(candidateAbsPath, entries) {
     const size = Number(fdStat.size)
     const buffer = Buffer.alloc(size)
     let readTotal = 0
-    while (readTotal < buffer.length) {
-      const bytesRead = readSync(
-        fd,
-        buffer,
-        readTotal,
-        buffer.length - readTotal,
-        readTotal,
-      )
-      if (bytesRead <= 0) break
-      readTotal += bytesRead
+    try {
+      while (readTotal < buffer.length) {
+        const bytesRead = readSync(
+          fd,
+          buffer,
+          readTotal,
+          buffer.length - readTotal,
+          readTotal,
+        )
+        if (bytesRead <= 0) break
+        readTotal += bytesRead
+      }
+    } catch {
+      // A read-time failure (e.g. EIO/EBADF from the underlying storage) is
+      // not authoritative about run status -- report it the same as any
+      // other unreadable/ambiguous summary file instead of throwing out of
+      // this non-authoritative label projection.
+      return 'unknown'
     }
     const raw = buffer.subarray(0, readTotal).toString('utf8')
 
@@ -627,7 +657,7 @@ function errorResultFor(operation, category) {
  * Resolves a caller-supplied project root to the canonical, symlink-free
  * review root, shared by preview and execute.
  * @param {string | undefined} rootArg
- * @returns {{ status: 'ok', path: string } | { status: 'missing' } | { status: 'invalid-root' } | { status: 'unsafe' }}
+ * @returns {{ status: 'ok', path: string, canonicalProjectRoot: string } | { status: 'missing' } | { status: 'invalid-root' } | { status: 'unsafe' }}
  */
 function resolveReviewRoot(rootArg) {
   if (!rootArg) return { status: 'invalid-root' }
@@ -691,6 +721,12 @@ export function runPreview(options) {
 
   const referenceTimeMs = options.referenceTimeMs
   const cutoffTimeMs = computeCutoffTimeMs(referenceTimeMs, ageCutoff.ms)
+  // Duration alone doesn't determine representability -- it combines with
+  // referenceTimeMs. Checked here, on the actual derived value, before any
+  // Date is constructed from it below.
+  if (Math.abs(cutoffTimeMs) > MAX_REPRESENTABLE_DATE_MS) {
+    return errorResultFor('preview', CATEGORY.INVALID_AGE)
+  }
 
   const scan = scanReviewRoot(reviewRoot, cutoffTimeMs, referenceTimeMs)
   if (!scan.ok) {
@@ -865,7 +901,13 @@ export function executeApprovedCandidate({
     !candidate.name ||
     candidate.name === '.' ||
     candidate.name === '..' ||
-    candidate.name.includes('/')
+    candidate.name.includes('/') ||
+    // Defense-in-depth: a direct-child name must equal its own basename
+    // under the platform's own path semantics (the same module `join`
+    // above uses) -- catches any other single-segment-violating name
+    // without a hardcoded platform ban and without rejecting legitimate
+    // names containing a literal backslash character on this platform.
+    basename(candidate.name) !== candidate.name
   ) {
     return { reason: 'refused-unsafe-name', status: 'failed' }
   }
@@ -1279,9 +1321,12 @@ function main() {
   }
 
   if (operation !== 'preview') {
+    // Never echo the caller-supplied operation text back into the response:
+    // it is unbounded, attacker-controlled input and this is an error path
+    // that must stay within the fixed-vocabulary output contract.
     emitAndExit(
       errorResultFor('preview', CATEGORY.UNKNOWN_OPERATION),
-      operation,
+      'unknown',
     )
     return
   }
@@ -1311,6 +1356,23 @@ function main() {
 }
 
 /**
+ * Top-level error boundary around {@link main}. Any exception that escapes
+ * the operation handlers (e.g. an unexpected filesystem error surfacing
+ * through a non-authoritative read path) is caught here so the process
+ * still emits the one fixed, bounded JSON object on stdout with a defined
+ * exit code -- never a raw Node stack trace (which would include absolute
+ * paths) on stderr, and never a silent success/deletion. The underlying
+ * error's message and stack are deliberately never read or emitted.
+ */
+function runMain() {
+  try {
+    main()
+  } catch {
+    emitAndExit(errorResultFor('unknown', CATEGORY.INTERNAL_ERROR), 'unknown')
+  }
+}
+
+/**
  * @param {{ exitCode: number, response: Record<string, unknown> }} outcome
  * @param {string | undefined} operation
  */
@@ -1325,5 +1387,5 @@ const isDirectInvocation =
   import.meta.url === pathToFileURL(process.argv[1]).href
 
 if (isDirectInvocation) {
-  main()
+  runMain()
 }
