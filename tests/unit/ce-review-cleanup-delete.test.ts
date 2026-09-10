@@ -629,10 +629,18 @@ describe('ce-review-cleanup execute: initial staleness invalidates the whole pre
       const token = extractToken(preview.response)
       const originalIno = fs.lstatSync(original).ino
 
-      fs.rmSync(original, { force: true, recursive: true })
+      // ext4 (and other filesystems) reuse a freed inode number for the very
+      // next allocation, so deleting first and re-creating can hand the
+      // replacement the original inode and defeat the premise of this test.
+      // Rename the original aside instead: its inode stays allocated while the
+      // replacement is created, guaranteeing a distinct one, and only then is
+      // it removed.
+      const heldOriginal = path.join(projectRoot, 'held-original')
+      fs.renameSync(original, heldOriginal)
       const replacement = createCandidate(reviewRoot, 'old-run', {
         ageDays: 40,
       })
+      fs.rmSync(heldOriginal, { force: true, recursive: true })
       expect(fs.lstatSync(replacement).ino).not.toBe(originalIno)
 
       const result = runCli([
