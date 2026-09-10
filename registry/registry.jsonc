@@ -345,7 +345,17 @@
         "skills/ce-review/references/review-summary-schema.json",
         "skills/ce-review/references/subagent-template.md",
         "skills/ce-review/references/synthesis-artifact-contract.md",
-        "skills/ce-review/references/validator-template.md"
+        "skills/ce-review/references/validator-template.md",
+        "skills/ce-review/scripts/ensure-ignore.mjs"
+      ]
+    },
+    {
+      "name": "ce-review-cleanup",
+      "type": "skill",
+      "description": "Use when the operator wants to delete old ce:review run directories under .context/systematic/ce-review/ to free disk space or purge stale local review evidence. Use when asked to clean up, prune, or remove old review runs, review artifacts, or review-summary.json history.",
+      "files": [
+        "skills/ce-review-cleanup/SKILL.md",
+        "skills/ce-review-cleanup/scripts/cleanup.mjs"
       ]
     },
     {
@@ -542,6 +552,7 @@
         "ce-ideate",
         "ce-plan",
         "ce-review",
+        "ce-review-cleanup",
         "ce-work",
         "compound-docs",
         "deepen-plan",

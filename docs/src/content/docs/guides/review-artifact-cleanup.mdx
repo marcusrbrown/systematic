@@ -1,0 +1,77 @@
+---
+title: Review artifact cleanup
+description: Preview and remove old local ce:review run directories without confusing age with writer inactivity.
+---
+
+import { Steps } from '@astrojs/starlight/components';
+
+`ce:review` keeps local review evidence under `.context/systematic/ce-review/`. That evidence is retained indefinitely unless an operator explicitly cleans it up. Findings may include source excerpts. The existing environment-value screening helps protect review output, but it is not comprehensive source redaction.
+
+Cleanup is offline and explicit. It never auto-expires runs, infers that a run is abandoned, or starts a review while claiming that writers are stopped.
+
+## Run the cleanup skill
+
+Invoke `ce:review-cleanup` through your harness's native skill command or skill picker. Do not look for an npm CLI command for this workflow.
+
+<Steps>
+1. **Confirm the offline precondition.** State that every review writer using this checkout is stopped, including other sessions and other machines, and will remain stopped through deletion. This is an operator acknowledgment. The helper does not observe writer liveness.
+
+2. **Choose an age cutoff.** Supply a positive whole-number age in days, or use a `d` or `w` suffix, such as `30`, `30d`, or `4w`. There is no default. The cutoff uses the maximum last-modification time anywhere in each run subtree, not creation time, review status, or an assumption about inactivity.
+
+3. **Review the read-only preview.** The skill runs the bundled helper with the fixed project root and chosen age. The preview reports selected runs, recently modified exclusions, and unknown or unsafe skips. It includes bounded, JSON-escaped names, display identifiers, observed labels, and last-modified times. It never prints artifact contents, findings, or source excerpts.
+
+4. **Give separate deletion approval.** Approve only after reviewing the complete preview. The offline acknowledgment, the original cleanup request, and the preview token are not deletion approval.
+
+5. **Execute with the preview token.** Execution reuses the exact root fixed before preview and the token from that preview. Do not add an age argument to execution. The token binds the reviewed filesystem state, cutoff, and snapshot; it does not authenticate the operator's approval.
+</Steps>
+
+## What can be selected
+
+Selection is based only on age after the offline precondition is acknowledged.
+
+| Case | Treatment |
+|---|---|
+| Old completed, failed, in-progress, legacy, or artifactless run | Selectable if its complete subtree is older than the cutoff |
+| Recent run | Excluded and counted separately as `excludedRecent` |
+| Unknown or invalid age | Skipped and reported; there is no override |
+| Symlink, special file, unreadable subtree, or unsafe traversal | Refused or skipped with a fixed reason |
+| Administrative entry or the review root itself | Never a deletion target |
+
+Historical names are valid. A run's status is an observed label, not an eligibility gate. The helper reads a size-bounded `review-summary.json` when available and exposes only a status label. Malformed, absent, or oversized summaries do not make an otherwise old run ineligible.
+
+## Read the result
+
+The helper uses explicit exit codes and structured result fields:
+
+| Exit | Result | Meaning |
+|---:|---|---|
+| `0` | `help` | Read-only usage information. No project root or offline acknowledgment is required. |
+| `0` | `preview` | Candidates are ready for review. Nothing has been deleted; separate approval is still required. |
+| `0` | `deleted`, `nothing-eligible`, or `root-missing` | The operation completed with its explicit result. Report per-candidate outcomes when deletion occurred. |
+| `1` | `partial` | At least one confirmed candidate was skipped or failed. Report every `deleted`, `skipped`, and `failed` outcome. Do not summarize this as an all-clear. |
+| `2` | `error` | Invalid input or unsafe setup stopped the operation before deletion. Report the fixed diagnostic category. |
+| `3` | `preview-stale` | The reviewed tree changed before deletion. Zero candidates were deleted. Run a fresh preview and obtain fresh approval. |
+
+`selected`, `excludedRecent`, and `skippedUnknownUnsafe` remain separate counts. A stale preview is not retried automatically. Do not substitute an unchecked deletion command.
+
+## Retention and deletion boundaries
+
+- Deletion is limited to direct run directories below `.context/systematic/ce-review/`.
+- The root, `.context/.gitignore`, and other tools' artifacts are not targets.
+- Deletion is irreversible. There is no rollback or backup copy, and local historical diagnostics can be lost. Cleanup does not remove remote copies.
+- A candidate is rescanned immediately before removal. Ordinary filesystem drift produces a per-candidate skip or failure, but this does not defeat a concurrent or malicious writer. Keep the offline precondition in force.
+- The preview and final output preserve escaped filesystem names. Treat names and display identifiers as display data, not commands or markup.
+
+## Review writes and ignore protection
+
+Writable `ce:review` modes now prepare the targeted `.context/.gitignore` entry for `/systematic/ce-review/` before creating a run directory. The producer-local helper must return exit `0` with `status: "protected"` or `status: "not-applicable"` before persistence continues.
+
+Existing ignore entries are preserved. The protection is for ordinary staging only: tracked files, force-add, and copies elsewhere are unaffected. It is not backup protection.
+
+The helper reads and writes `.context/.gitignore` under a fixed 1 MiB cap. An existing file over the cap blocks with a fixed diagnostic -- even if it already contains the required entry -- rather than being read. A composed write (existing bytes plus the required entry) that would exceed the cap also blocks, leaving the existing file unchanged; the file is never truncated to fit.
+
+Git-confirmed non-Git directories may continue after preparation with `not-applicable`. Missing Git, ambiguous Git results, or preparation and verification failures are not treated as non-Git and block the writing mode with an actionable diagnostic.
+
+`ce:review` report-only mode remains the no-write alternative. It does not create artifacts, prepare or verify ignore rules, or invoke cleanup. Its existing environment-value screening behavior is unchanged.
+
+See the [`ce:review-cleanup` skill reference](/systematic/reference/skills/ce-review-cleanup/) for the bundled contract and the [`ce:review` skill reference](/systematic/reference/skills/ce-review/) for review modes and report-only behavior.
