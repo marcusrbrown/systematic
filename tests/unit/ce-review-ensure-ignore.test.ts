@@ -95,6 +95,39 @@ function readIgnoreFile(root: string): string {
 }
 
 /**
+ * Reads a file's size and bytes from a single open descriptor -- `fstat`
+ * and the read both observe the same fd, so there is no separate
+ * stat-by-path followed by a read-by-path for a racing writer to land
+ * between. Used only where a test asserts byte-for-byte content against a
+ * size it also verifies, immediately after invoking the helper under test.
+ */
+function readFileSnapshotFd(filePath: string): {
+  readonly bytes: Buffer
+  readonly size: number
+} {
+  const fd = fs.openSync(filePath, 'r')
+  try {
+    const stat = fs.fstatSync(fd)
+    const buffer = Buffer.allocUnsafe(stat.size)
+    let offset = 0
+    while (offset < stat.size) {
+      const bytesRead = fs.readSync(
+        fd,
+        buffer,
+        offset,
+        stat.size - offset,
+        offset,
+      )
+      if (bytesRead === 0) break
+      offset += bytesRead
+    }
+    return { bytes: buffer.subarray(0, offset), size: stat.size }
+  } finally {
+    fs.closeSync(fd)
+  }
+}
+
+/**
  * Runs `scriptSource` as a standalone Node ESM module (`--input-type=module`)
  * so internal functions can be exercised with `node:assert` without a static
  * TypeScript import of the untyped `.mjs` helper (which would need
@@ -872,9 +905,12 @@ describe('ensure-ignore CLI: bounded read / size cap on the ignore file', () => 
       reason: 'ignore-file-too-large',
       status: 'blocked',
     })
-    // Never mutated: same size, same bytes.
-    expect(fs.statSync(ignorePath).size).toBe(IGNORE_FILE_MAX_BYTES + 100)
-    expect(fs.readFileSync(ignorePath).equals(oversize)).toBe(true)
+    // Never mutated: same size, same bytes -- observed from a single open
+    // descriptor so the size and content checks can't race a concurrent
+    // writer against separate stat-by-path/read-by-path calls.
+    const snapshot = readFileSnapshotFd(ignorePath)
+    expect(snapshot.size).toBe(IGNORE_FILE_MAX_BYTES + 100)
+    expect(snapshot.bytes.equals(oversize)).toBe(true)
   })
 
   it('blocks an oversize ignore file that already contains the required entry (already-protected overcap still blocks)', () => {
@@ -950,8 +986,11 @@ describe('ensure-ignore CLI: bounded read / size cap on the ignore file', () => 
 
     expect(exitCode).toBe(0)
     expect(parseJsonRecord(stdout).status).toBe('protected')
-    // Idempotent: bytes are untouched since the entry was already effective.
-    expect(fs.readFileSync(ignorePath).equals(content)).toBe(true)
+    // Idempotent: bytes are untouched since the entry was already effective,
+    // observed from a single open descriptor (see readFileSnapshotFd).
+    const snapshot = readFileSnapshotFd(ignorePath)
+    expect(snapshot.size).toBe(IGNORE_FILE_MAX_BYTES)
+    expect(snapshot.bytes.equals(content)).toBe(true)
   })
 
   it('preserves non-UTF-8 bytes in a large-but-under-cap ignore file while appending the entry', () => {

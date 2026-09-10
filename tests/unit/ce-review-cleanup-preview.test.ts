@@ -15,6 +15,14 @@ const DATE_FAULT_FIXTURE_PATH = path.join(
   ROOT_DIR,
   'tests/fixtures/ce-review-cleanup/run-preview-with-injected-date-fault.mjs',
 )
+const CALL_EXPORT_FIXTURE_PATH = path.join(
+  ROOT_DIR,
+  'tests/fixtures/ce-review-cleanup/call-export-via-node.mjs',
+)
+const RUN_PREVIEW_FIXTURE_PATH = path.join(
+  ROOT_DIR,
+  'tests/fixtures/ce-review-cleanup/run-preview-via-node.mjs',
+)
 
 // mkfifo is a standard POSIX utility (not an installed dependency); some
 // CI/sandbox environments may still lack it. Checked once at module load
@@ -122,27 +130,12 @@ function runCli(args: readonly string[]): CliResult {
   }
 }
 
-/** Runs an exported pure function through a real Node subprocess (proving
- * no node_modules dependency), for cases where explicit control over an
- * input (e.g. a fixed reference time, or a synthetic digest list) is
- * needed rather than relying on wall-clock or manufactured collisions.
- *
- * The `-e` script text is fixed for a given `exportName` (a literal picked
- * by the caller, not test data): it never interpolates `argsJson` into the
- * evaluated source. Test data is instead passed as a single argv value and
- * JSON.parsed inside the fixed script, so arbitrary test fixtures (unsafe
- * names, control bytes, synthetic digests) are never themselves executed
- * as code. */
+/** Runs an exported pure function through the fixed `call-export-via-node.mjs`
+ * fixture: program and data are separate from process start (no `-e`). */
 function callExportViaNode(exportName: string, argsJson: unknown): unknown {
-  const script = `
-import { ${exportName} } from ${JSON.stringify(SCRIPT_URL)};
-const args = JSON.parse(process.argv[1]);
-const result = ${exportName}(args);
-process.stdout.write(JSON.stringify(result === undefined ? { __undefined: true } : result));
-`
   const result = spawnSync(
     'node',
-    ['--input-type=module', '-e', script, '--', JSON.stringify(argsJson)],
+    [CALL_EXPORT_FIXTURE_PATH, exportName, JSON.stringify(argsJson)],
     {
       encoding: 'utf8',
       timeout: 30_000,
@@ -156,21 +149,22 @@ process.stdout.write(JSON.stringify(result === undefined ? { __undefined: true }
   return JSON.parse(result.stdout ?? 'null')
 }
 
+/** Runs cleanup.mjs's runPreview() through the fixed `run-preview-via-node.mjs`
+ * fixture: program and data are separate from process start (no `-e`). */
 function runPreviewViaNode(options: {
   readonly root?: string
   readonly age?: string
   readonly ackOffline: boolean
   readonly referenceTimeMs: number
 }): { readonly exitCode: number; readonly response: unknown } {
-  const script = `
-import { runPreview } from ${JSON.stringify(SCRIPT_URL)};
-const result = runPreview(${JSON.stringify(options)});
-process.stdout.write(JSON.stringify(result));
-`
-  const result = spawnSync('node', ['--input-type=module', '-e', script], {
-    encoding: 'utf8',
-    timeout: 30_000,
-  })
+  const result = spawnSync(
+    'node',
+    [RUN_PREVIEW_FIXTURE_PATH, JSON.stringify(options)],
+    {
+      encoding: 'utf8',
+      timeout: 30_000,
+    },
+  )
   let parsed: unknown
   try {
     parsed = JSON.parse(result.stdout ?? '')
