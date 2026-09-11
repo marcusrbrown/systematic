@@ -10,7 +10,7 @@ systematic/
 ├── src/              # TypeScript plugin + CLI source
 │   ├── index.ts      # OpenCode plugin entry — default export only
 │   ├── pi.ts         # Pi extension entry — default export only
-│   ├── cli.ts        # CLI entry (list / capabilities / validate-review-artifact / config / setup --harness / pi-subagents)
+│   ├── cli.ts        # CLI entry (list / capabilities / validate-review-artifact / validate-review-return / config / setup --harness / pi-subagents)
 │   ├── claude-code-validator.ts # Claude Code bundled review-artifact validator entry
 │   └── lib/          # Core modules
 ├── skills/           # Bundled skills (one directory per skill, SKILL.md format)
@@ -46,7 +46,8 @@ subdirectory of core modules.
 - `src/pi.ts` — Pi extension factory (`systematicPiExtension`), registers `before_agent_start` for
   bootstrap injection plus the `systematic_skill` and `systematic_delegate` tools. No workflow guard.
 - `src/cli.ts` — CLI commands: `list`, `capabilities`, `validate-review-artifact <path>`,
-  `config show/path`, `setup --harness opencode|pi`, `pi-subagents <subcommand>` (Claude Code has no
+  `validate-review-return` (raw persona return from stdin), `config show/path`,
+  `setup --harness opencode|pi`, `pi-subagents <subcommand>` (Claude Code has no
   CLI setup step — it installs as a prebuilt plugin via marketplace, see `scripts/`)
 - `src/claude-code-validator.ts` — purpose-built Claude Code bundle entry for validating review artifacts
 - `src/lib/setup.ts` — `setupHarness`: atomic/backed-up/idempotent, project-local-only harness config writes
@@ -63,6 +64,9 @@ subdirectory of core modules.
 - `src/lib/walk-dir.ts` — `walkDir` (foundation for all asset discovery)
 - `src/lib/validation.ts` — agent config validation + type guards
 - `src/lib/agent-colors.ts` — `isValidAgentColor`, `OPENCODE_AGENT_COLOR_TOKENS`
+- `src/lib/review-return-validator.ts` — bounded stdin validator for one raw `ce:review` persona
+  return, backing `systematic validate-review-return` (`runReviewReturnValidator`,
+  `validateReviewReturnValue`)
 
 ### `skills/`
 
@@ -194,7 +198,7 @@ branch ref. Users install via `claude plugin marketplace add marcusrbrown/system
 |------|------|
 | `src/index.ts` | OpenCode plugin entry — `SystematicPlugin` default export |
 | `src/pi.ts` | Pi extension entry — `systematicPiExtension` default export |
-| `src/cli.ts` | CLI entry — `list`, `capabilities`, `validate-review-artifact`, `config`, `setup --harness`, `pi-subagents` commands |
+| `src/cli.ts` | CLI entry — `list`, `capabilities`, `validate-review-artifact`, `validate-review-return`, `config`, `setup --harness`, `pi-subagents` commands |
 | `src/claude-code-validator.ts` | Claude Code bundled validator entry — review-artifact validation with isolated dependencies |
 
 ### Configuration

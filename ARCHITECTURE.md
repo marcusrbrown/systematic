@@ -33,7 +33,8 @@ The last four are the receipt-backed workflow guard (see Cross-Cutting Concerns)
 is authoritative in `src/index.ts`; do not restate a count here.
 
 The CLI (`src/cli.ts`) is a separate entry point exposing `list`, `capabilities`,
-`validate-review-artifact`, `config`, `setup --harness`, and `pi-subagents` subcommands. It does not
+`validate-review-artifact`, `validate-review-return`, `config`, `setup --harness`, and `pi-subagents`
+subcommands. It does not
 participate in the plugin hook lifecycle. `setup --harness opencode|pi` performs project-local,
 atomic, idempotent config writes for those two harnesses; Claude Code has no equivalent CLI setup
 step because it is delivered as a prebuilt plugin (see below), not a runtime config write.
@@ -116,6 +117,7 @@ Workflow guard and evidence
 Review artifact contract
   src/lib/review-artifact-schema.ts      — Zod source of truth for the ce:review run-level artifact
   src/lib/review-artifact-path.ts        — bounded artifact path, JSON reading, and issue projection helpers
+  src/lib/review-return-validator.ts     — bounded stdin validator for one raw persona return (validate-review-return)
 
 ```
 
@@ -240,7 +242,11 @@ validate-review-artifact <path>` (`src/cli.ts`) validates any artifact against i
 it before reporting a verdict; a failing artifact is repaired and re-validated, never deleted or
 reported over. Artifacts without `schema_version` predate the contract and are excluded (exit 3,
 "legacy"). By default the target must resolve inside `.context/systematic/ce-review`; pass
-`--allow-outside-artifact-root` to validate an artifact elsewhere.
+  `--allow-outside-artifact-root` to validate an artifact elsewhere. The companion `systematic
+validate-review-return` command (`src/lib/review-return-validator.ts`) validates exactly one raw
+persona return from stdin — 1 MiB byte cap, no writes, three exit classes (0 valid, 1
+empty/oversized/invalid-UTF-8/malformed/schema-invalid, 2 usage/TTY/read failure) — and projects only
+safe Zod paths and issue codes, never payload-derived keys or values.
 
 **Review artifact cleanup** (`skills/ce-review-cleanup/SKILL.md`,
 `skills/ce-review-cleanup/scripts/cleanup.mjs`) — offline, operator-initiated deletion of old
