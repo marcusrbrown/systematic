@@ -157,8 +157,9 @@ coverage, model inheritance) against a real OpenCode runtime, in both source and
 **Purpose:** Test suite for the TypeScript source.
 
 **Contains:**
-- `tests/unit/` — unit tests covering `src/lib/` modules, `scripts/` build/codegen scripts, and
-  `docs/scripts/` generation scripts
+- `tests/unit/` — unit tests covering `src/lib/` modules, `scripts/` build/codegen scripts,
+  `docs/scripts/` generation scripts, and bundled skill helper scripts under `skills/*/scripts/`
+  (e.g. `ce-review-cleanup-*.test.ts`, `ce-review-ensure-ignore.test.ts`)
 - `tests/integration/` — integration tests (skip automatically if deps unavailable locally;
   `SYSTEMATIC_REQUIRE_OPENCODE=1` in the required `host-contract` CI job turns those skips into
   failures against a real, pinned OpenCode host)
