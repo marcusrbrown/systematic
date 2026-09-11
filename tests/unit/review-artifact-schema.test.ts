@@ -358,9 +358,9 @@ describe('review artifact schema', () => {
     expect(requirement).toBe(true)
   })
 
-  test('accepts an artifact with an empty input_findings array', () => {
+  test('accepts an artifact with an empty input_findings array and no synthesized evidence', () => {
     const result = ReviewArtifactSchema.safeParse(
-      artifactWith({ input_findings: [] }),
+      artifactWith({ findings: [], input_findings: [] }),
     )
 
     expect(result.success).toBe(true)
@@ -962,6 +962,126 @@ describe('review artifact schema', () => {
           },
         ],
       }),
+      // Duplicate admitted input IDs.
+      artifactWith({
+        input_findings: [
+          admittedFinding,
+          {
+            ...admittedFinding,
+            reason: 'Duplicate row for the same input ID.',
+          },
+        ],
+      }),
+      // Duplicate submitters.
+      artifactWith({
+        findings: [
+          {
+            ...baseFinding,
+            input_finding_ids: ['correctness#1'],
+            provenance: {
+              fingerprint: 'src/example.ts|42',
+              submitters: ['correctness', 'correctness'],
+              agreement_credit: [],
+            },
+          },
+        ],
+      }),
+      // Duplicate agreement credit.
+      artifactWith({
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'findings',
+            input_finding_count: 1,
+          },
+          {
+            persona: 'testing',
+            dispatch_outcome: 'findings',
+            input_finding_count: 1,
+          },
+        ],
+        input_findings: [
+          admittedFinding,
+          {
+            record_type: 'admitted',
+            input_id: 'testing#1',
+            reviewer: 'testing',
+            confidence: 0.8,
+            disposition: 'surviving',
+            reason: 'The finding passed the confidence gate.',
+          },
+        ],
+        findings: [
+          {
+            ...baseFinding,
+            input_finding_ids: ['correctness#1'],
+            provenance: {
+              fingerprint: 'src/example.ts|42',
+              submitters: ['correctness'],
+              agreement_credit: ['testing', 'testing'],
+            },
+          },
+        ],
+      }),
+      // Agreement credit overlaps a submitter.
+      artifactWith({
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'findings',
+            input_finding_count: 1,
+          },
+        ],
+        findings: [
+          {
+            ...baseFinding,
+            input_finding_ids: ['correctness#1'],
+            provenance: {
+              fingerprint: 'src/example.ts|42',
+              submitters: ['correctness'],
+              agreement_credit: ['correctness'],
+            },
+          },
+        ],
+      }),
+      // Agreement credit names an ineligible persona.
+      artifactWith({
+        findings: [
+          {
+            ...baseFinding,
+            input_finding_ids: ['correctness#1'],
+            provenance: {
+              fingerprint: 'src/example.ts|42',
+              submitters: ['correctness'],
+              agreement_credit: ['ghost'],
+            },
+          },
+        ],
+      }),
+      // Satisfied risk coverage cites evidence outside the lost surface.
+      artifactWith({
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'findings',
+            input_finding_count: 1,
+          },
+          {
+            persona: 'security',
+            dispatch_outcome: 'malformed',
+            input_finding_count: 0,
+            rejection_reason: 'The persona return failed schema validation.',
+            selection_surface: ['src/auth.ts'],
+          },
+        ],
+        risk_coverage: [
+          {
+            persona: 'security',
+            satisfied: true,
+            input_finding_id: 'correctness#1',
+          },
+        ],
+      }),
     ]
 
     const issues = cases.flatMap((value) => {
@@ -972,10 +1092,12 @@ describe('review artifact schema', () => {
         : result.error.issues.filter((issue) => issue.code === 'custom')
     })
 
-    expect(issues.length).toBe(14)
+    const observed = new Set(issues.map((issue) => issue.message))
     for (const issue of issues) {
       expect(customMessages.has(issue.message)).toBe(true)
     }
+    // Every authored diagnostic must be exercised by at least one case.
+    expect([...observed].sort()).toEqual([...customMessages].sort())
   })
 
   test('accepts the committed conforming fixture', () => {
@@ -1680,7 +1802,7 @@ describe('dispatch outcome validation_unavailable (KTD8 amendment)', () => {
     }
   })
 
-  test('accepts an unavailable run whose finding cites an admitted row from another persona', () => {
+  test('accepts eligible agreement credit from an admitted persona without a cited row', () => {
     const result = ReviewArtifactSchema.safeParse(
       artifactWith({
         run_status: 'degraded',
@@ -1693,7 +1815,7 @@ describe('dispatch outcome validation_unavailable (KTD8 amendment)', () => {
           {
             persona: 'security',
             dispatch_outcome: 'findings',
-            input_finding_count: 0,
+            input_finding_count: 1,
             selection_surface: ['src/auth.ts'],
           },
         ],
@@ -1706,6 +1828,14 @@ describe('dispatch outcome validation_unavailable (KTD8 amendment)', () => {
             disposition: 'surviving',
             reason: 'The finding passed the confidence gate.',
           },
+          {
+            record_type: 'admitted',
+            input_id: 'security#1',
+            reviewer: 'security',
+            confidence: 0.8,
+            disposition: 'surviving',
+            reason: 'The finding passed the confidence gate.',
+          },
         ],
         findings: [
           {
@@ -1714,16 +1844,9 @@ describe('dispatch outcome validation_unavailable (KTD8 amendment)', () => {
             provenance: {
               fingerprint: 'src/example.ts|42',
               submitters: ['testing'],
-              // Agreement credit is permitted without an input row.
+              // Agreement credit needs an eligible admitted persona, not a cited row.
               agreement_credit: ['security'],
             },
-          },
-        ],
-        risk_coverage: [
-          {
-            persona: 'security',
-            satisfied: true,
-            input_finding_id: 'testing#1',
           },
         ],
       }),
@@ -1805,6 +1928,7 @@ describe('dispatch outcome validation_unavailable (KTD8 amendment)', () => {
     // this row even though new writers must never emit it.
     const result = ReviewArtifactSchema.safeParse(
       artifactWith({
+        findings: [],
         input_findings: [
           { ...rejectedSummary, dispatch_outcome: 'never_returned' },
         ],
@@ -1820,6 +1944,7 @@ describe('dispatch outcome validation_unavailable (KTD8 amendment)', () => {
     // prose contract continues to forbid it.
     const result = ReviewArtifactSchema.safeParse(
       artifactWith({
+        findings: [],
         input_findings: [{ ...rejectedSummary, dispatch_outcome: 'empty' }],
       }),
     )
@@ -1848,5 +1973,383 @@ describe('dispatch outcome validation_unavailable (KTD8 amendment)', () => {
 
       expect(result.success, dispatch_outcome).toBe(true)
     }
+  })
+})
+
+describe('referential integrity across the artifact ledger and synthesis', () => {
+  const admittedRow = (inputId: string, reviewer: string): JsonObject => ({
+    record_type: 'admitted',
+    input_id: inputId,
+    reviewer,
+    confidence: 0.8,
+    disposition: 'surviving',
+    reason: 'The finding passed the confidence gate.',
+  })
+
+  const provenanceWith = (
+    submitters: string[],
+    agreementCredit: string[] = [],
+  ): JsonObject => ({
+    fingerprint: 'src/example.ts|42',
+    submitters,
+    agreement_credit: agreementCredit,
+  })
+
+  const findingCiting = (
+    inputFindingIds: string[],
+    submitters: string[],
+    overrides: JsonObject = {},
+  ): JsonObject => ({
+    ...baseFinding,
+    input_finding_ids: inputFindingIds,
+    provenance: provenanceWith(submitters),
+    ...overrides,
+  })
+
+  test('rejects a ghost input ID in a normal run with no unavailable evidence', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({ findings: [findingCiting(['ghost#1'], [])] }),
+    )
+
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(
+        result.error.issues.some(
+          (issue) =>
+            issue.path.join('.') === 'findings.0.input_finding_ids.0' &&
+            issue.message === REVIEW_ARTIFACT_CUSTOM_MESSAGES[9],
+        ),
+      ).toBe(true)
+    }
+  })
+
+  test('rejects an unsupported submitter in a normal run', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        findings: [
+          findingCiting(['correctness#1'], ['correctness', 'security']),
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(
+        result.error.issues.some(
+          (issue) =>
+            issue.path.join('.') === 'findings.0.provenance.submitters.1' &&
+            issue.message === REVIEW_ARTIFACT_CUSTOM_MESSAGES[10],
+        ),
+      ).toBe(true)
+    }
+  })
+
+  test('rejects omitting a cited admitted reviewer from provenance.submitters', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({ findings: [findingCiting(['correctness#1'], [])] }),
+    )
+
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(
+        result.error.issues.some(
+          (issue) =>
+            issue.path.join('.') === 'findings.0.provenance.submitters' &&
+            issue.message === REVIEW_ARTIFACT_CUSTOM_MESSAGES[13],
+        ),
+      ).toBe(true)
+    }
+  })
+
+  test('rejects duplicate provenance.submitters entries', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        findings: [
+          findingCiting(['correctness#1'], ['correctness', 'correctness']),
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(
+        result.error.issues.some(
+          (issue) =>
+            issue.path.join('.') === 'findings.0.provenance.submitters.1' &&
+            issue.message === REVIEW_ARTIFACT_CUSTOM_MESSAGES[14],
+        ),
+      ).toBe(true)
+    }
+  })
+
+  test('rejects duplicate admitted input IDs rather than letting ownership depend on order', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        input_findings: [
+          admittedRow('correctness#1', 'correctness'),
+          admittedRow('correctness#1', 'testing'),
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(
+        result.error.issues.some(
+          (issue) =>
+            issue.path.join('.') === 'input_findings.1.input_id' &&
+            issue.message === REVIEW_ARTIFACT_CUSTOM_MESSAGES[12],
+        ),
+      ).toBe(true)
+    }
+  })
+
+  test('rejects a satisfied risk-coverage citation outside the lost persona selection surface', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'findings',
+            input_finding_count: 1,
+          },
+          {
+            persona: 'security',
+            dispatch_outcome: 'malformed',
+            input_finding_count: 0,
+            rejection_reason: 'The persona return failed schema validation.',
+            selection_surface: ['src/auth.ts'],
+          },
+        ],
+        risk_coverage: [
+          {
+            persona: 'security',
+            satisfied: true,
+            input_finding_id: 'correctness#1',
+          },
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(
+        result.error.issues.some(
+          (issue) =>
+            issue.path.join('.') === 'risk_coverage.0.input_finding_id' &&
+            issue.message === REVIEW_ARTIFACT_CUSTOM_MESSAGES[18],
+        ),
+      ).toBe(true)
+    }
+  })
+
+  test('rejects a satisfied risk-coverage citation backed only by a non-validated finding', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'findings',
+            input_finding_count: 1,
+          },
+          {
+            persona: 'security',
+            dispatch_outcome: 'malformed',
+            input_finding_count: 0,
+            rejection_reason: 'The persona return failed schema validation.',
+            selection_surface: ['src/auth.ts'],
+          },
+        ],
+        findings: [
+          findingCiting(['correctness#1'], ['correctness'], {
+            file: 'src/auth.ts',
+            validated: false,
+            validation_reason: 'The cited evidence could not be verified.',
+          }),
+        ],
+        risk_coverage: [
+          {
+            persona: 'security',
+            satisfied: true,
+            input_finding_id: 'correctness#1',
+          },
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(
+        result.error.issues.some(
+          (issue) =>
+            issue.path.join('.') === 'risk_coverage.0.input_finding_id' &&
+            issue.message === REVIEW_ARTIFACT_CUSTOM_MESSAGES[18],
+        ),
+      ).toBe(true)
+    }
+  })
+
+  test('rejects nonexistent and unavailable agreement_credit personas', () => {
+    const nonexistent = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        findings: [
+          findingCiting(['correctness#1'], ['correctness'], {
+            provenance: provenanceWith(['correctness'], ['ghost']),
+          }),
+        ],
+      }),
+    )
+    expect(nonexistent.success).toBe(false)
+    if (!nonexistent.success) {
+      expect(
+        nonexistent.error.issues.some(
+          (issue) =>
+            issue.path.join('.') ===
+              'findings.0.provenance.agreement_credit.0' &&
+            issue.message === REVIEW_ARTIFACT_CUSTOM_MESSAGES[17],
+        ),
+      ).toBe(true)
+    }
+
+    const unavailable = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        run_status: 'degraded',
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'findings',
+            input_finding_count: 1,
+          },
+          {
+            persona: 'security',
+            dispatch_outcome: 'validation_unavailable',
+            input_finding_count: 0,
+            selection_surface: ['src/auth.ts'],
+          },
+        ],
+        findings: [
+          findingCiting(['correctness#1'], ['correctness'], {
+            provenance: provenanceWith(['correctness'], ['security']),
+          }),
+        ],
+      }),
+    )
+    expect(unavailable.success).toBe(false)
+    if (!unavailable.success) {
+      expect(
+        unavailable.error.issues.some(
+          (issue) =>
+            issue.path.join('.') ===
+              'findings.0.provenance.agreement_credit.0' &&
+            issue.message === REVIEW_ARTIFACT_CUSTOM_MESSAGES[17],
+        ),
+      ).toBe(true)
+    }
+  })
+
+  test('rejects duplicate and submitter-overlapping agreement_credit entries', () => {
+    const duplicate = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'findings',
+            input_finding_count: 1,
+          },
+          {
+            persona: 'testing',
+            dispatch_outcome: 'findings',
+            input_finding_count: 1,
+          },
+        ],
+        input_findings: [
+          admittedRow('correctness#1', 'correctness'),
+          admittedRow('testing#1', 'testing'),
+        ],
+        findings: [
+          findingCiting(['correctness#1'], ['correctness'], {
+            provenance: provenanceWith(['correctness'], ['testing', 'testing']),
+          }),
+        ],
+      }),
+    )
+    expect(duplicate.success).toBe(false)
+    if (!duplicate.success) {
+      expect(
+        duplicate.error.issues.some(
+          (issue) =>
+            issue.path.join('.') ===
+              'findings.0.provenance.agreement_credit.1' &&
+            issue.message === REVIEW_ARTIFACT_CUSTOM_MESSAGES[15],
+        ),
+      ).toBe(true)
+    }
+
+    const overlap = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'findings',
+            input_finding_count: 1,
+          },
+        ],
+        findings: [
+          findingCiting(['correctness#1'], ['correctness'], {
+            provenance: provenanceWith(['correctness'], ['correctness']),
+          }),
+        ],
+      }),
+    )
+    expect(overlap.success).toBe(false)
+    if (!overlap.success) {
+      expect(
+        overlap.error.issues.some(
+          (issue) =>
+            issue.path.join('.') ===
+              'findings.0.provenance.agreement_credit.0' &&
+            issue.message === REVIEW_ARTIFACT_CUSTOM_MESSAGES[16],
+        ),
+      ).toBe(true)
+    }
+  })
+
+  test('accepts a normal merged finding with complete provenance', () => {
+    expect(ReviewArtifactSchema.safeParse(baseArtifact).success).toBe(true)
+  })
+
+  test('accepts satisfied risk coverage backed by a validated finding on the lost surface', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'findings',
+            input_finding_count: 1,
+          },
+          {
+            persona: 'security',
+            dispatch_outcome: 'malformed',
+            input_finding_count: 0,
+            rejection_reason: 'The persona return failed schema validation.',
+            selection_surface: ['src/auth.ts'],
+          },
+        ],
+        findings: [
+          findingCiting(['correctness#1'], ['correctness'], {
+            file: 'src/auth.ts',
+          }),
+        ],
+        risk_coverage: [
+          {
+            persona: 'security',
+            satisfied: true,
+            input_finding_id: 'correctness#1',
+          },
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(true)
   })
 })

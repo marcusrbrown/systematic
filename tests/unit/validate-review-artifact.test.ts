@@ -716,4 +716,34 @@ describe('systematic validate-review-artifact: validation_unavailable amendment'
       fs.rmSync(cwd, { recursive: true, force: true })
     }
   })
+
+  it('rejects a normal artifact whose synthesized evidence cites a ghost input ID', () => {
+    const cwd = makeCwd()
+    try {
+      const target = copyFixture(cwd, CONFORMING_FIXTURE)
+      const artifact = readJsonObject(target)
+      const findings = artifact.findings as Array<Record<string, unknown>>
+      const firstFinding = findings[0]
+      if (firstFinding === undefined) {
+        throw new Error('conforming fixture must contain a finding')
+      }
+      firstFinding.input_finding_ids = ['ghost#1']
+      fs.writeFileSync(target, JSON.stringify(artifact))
+
+      const result = runCli(
+        [
+          'validate-review-artifact',
+          '.context/systematic/ce-review/review-summary.json',
+        ],
+        cwd,
+      )
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain(
+        'findings.0.input_finding_ids.0 custom: every synthesized input finding ID must resolve to an admitted ledger row',
+      )
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  })
 })

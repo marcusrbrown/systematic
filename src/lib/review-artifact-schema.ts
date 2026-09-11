@@ -21,6 +21,13 @@ export const REVIEW_ARTIFACT_CUSTOM_MESSAGES = [
   'every synthesized input finding ID must resolve to an admitted ledger row',
   'every provenance submitter must be represented by a cited admitted ledger row',
   'satisfied risk coverage must cite an admitted ledger row',
+  'duplicate admitted input finding IDs are not allowed',
+  'every cited admitted reviewer must appear in provenance.submitters',
+  'provenance.submitters must not contain duplicate reviewers',
+  'provenance.agreement_credit must not contain duplicate reviewers',
+  'provenance.agreement_credit must not overlap provenance.submitters',
+  'provenance.agreement_credit requires an eligible returned persona with admitted evidence',
+  'satisfied risk coverage must cite a validated finding on the lost persona selection surface',
 ] as const
 
 const boundedText = (maxLength: number) =>
@@ -389,54 +396,74 @@ export const ReviewArtifactSchema = z
         .map((dispatch) => dispatch.persona),
     )
 
-    if (unavailablePersonas.size === 0) {
-      return
-    }
+    // Unavailable-specific lifecycle rules are the only checks gated on
+    // withheld evidence. Referential integrity below applies to every artifact.
+    if (unavailablePersonas.size > 0) {
+      // Unavailable evidence can never finalize as a clean, completed run.
+      if (artifact.run_status === 'completed') {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['run_status'],
+          message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[7],
+        })
+      }
 
-    // Unavailable evidence can never finalize as a clean, completed run.
-    if (artifact.run_status === 'completed') {
-      ctx.addIssue({
-        code: 'custom',
-        path: ['run_status'],
-        message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[7],
+      artifact.dispatches.forEach((dispatch, index) => {
+        if (
+          dispatch.dispatch_outcome === 'validation_unavailable' &&
+          dispatch.input_finding_count !== 0
+        ) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['dispatches', index, 'input_finding_count'],
+            message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[6],
+          })
+        }
+      })
+
+      artifact.input_findings.forEach((finding, index) => {
+        // No ledger row of either record type may name a persona whose payload
+        // was withheld: unavailable evidence is neither admitted nor rejected.
+        if (unavailablePersonas.has(finding.reviewer)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['input_findings', index, 'reviewer'],
+            message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[8],
+          })
+        }
       })
     }
 
-    artifact.dispatches.forEach((dispatch, index) => {
-      if (
-        dispatch.dispatch_outcome === 'validation_unavailable' &&
-        dispatch.input_finding_count !== 0
-      ) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['dispatches', index, 'input_finding_count'],
-          message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[6],
-        })
-      }
-    })
-
-    artifact.input_findings.forEach((finding, index) => {
-      // No ledger row of either record type may name a persona whose payload
-      // was withheld: unavailable evidence is neither admitted nor rejected.
-      if (unavailablePersonas.has(finding.reviewer)) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['input_findings', index, 'reviewer'],
-          message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[8],
-        })
-      }
-    })
-
-    // Withheld evidence must not survive through synthesis. Every finding and
-    // risk-coverage citation must resolve to an admitted ledger row, and every
-    // submitter must be backed by a cited admitted row. `agreement_credit` is
-    // deliberately exempt: the contract permits credit without an input row.
+    // Global referential integrity: synthesized evidence must resolve back to
+    // the admitted ledger regardless of whether any return was withheld. Build
+    // the ownership map only after rejecting duplicate IDs so evidence
+    // ownership never depends on row order.
     const admittedById = new Map<string, string>()
-    artifact.input_findings.forEach((finding) => {
-      if (finding.record_type === 'admitted') {
-        admittedById.set(finding.input_id, finding.reviewer)
+    artifact.input_findings.forEach((finding, index) => {
+      if (finding.record_type !== 'admitted') {
+        return
       }
+      if (admittedById.has(finding.input_id)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['input_findings', index, 'input_id'],
+          message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[12],
+        })
+        return
+      }
+      admittedById.set(finding.input_id, finding.reviewer)
     })
+
+    const admittedReviewers = new Set(admittedById.values())
+    const eligibleAgreementPersonas = new Set(
+      artifact.dispatches
+        .filter(
+          (dispatch) =>
+            dispatch.dispatch_outcome === 'findings' &&
+            admittedReviewers.has(dispatch.persona),
+        )
+        .map((dispatch) => dispatch.persona),
+    )
 
     artifact.findings.forEach((finding, findingIndex) => {
       const citedAdmittedReviewers = new Set<string>()
@@ -453,7 +480,25 @@ export const ReviewArtifactSchema = z
         citedAdmittedReviewers.add(owner)
       })
 
+      // Submitter set equality: reject unsupported, missing, and duplicate
+      // entries against the reviewers implied by the cited admitted rows.
+      const seenSubmitters = new Set<string>()
       finding.provenance.submitters.forEach((submitter, submitterIndex) => {
+        if (seenSubmitters.has(submitter)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [
+              'findings',
+              findingIndex,
+              'provenance',
+              'submitters',
+              submitterIndex,
+            ],
+            message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[14],
+          })
+        }
+        seenSubmitters.add(submitter)
+
         if (!citedAdmittedReviewers.has(submitter)) {
           ctx.addIssue({
             code: 'custom',
@@ -468,19 +513,104 @@ export const ReviewArtifactSchema = z
           })
         }
       })
+
+      for (const reviewer of citedAdmittedReviewers) {
+        if (!seenSubmitters.has(reviewer)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['findings', findingIndex, 'provenance', 'submitters'],
+            message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[13],
+          })
+        }
+      }
+
+      // Agreement credit: unique, disjoint from submitters, and backed by an
+      // eligible returned persona with admitted evidence. It need not cite a
+      // row of its own -- the contract permits credit without an input finding
+      // in the merge.
+      const seenAgreementCredit = new Set<string>()
+      finding.provenance.agreement_credit.forEach((credit, creditIndex) => {
+        if (seenAgreementCredit.has(credit)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [
+              'findings',
+              findingIndex,
+              'provenance',
+              'agreement_credit',
+              creditIndex,
+            ],
+            message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[15],
+          })
+        }
+        seenAgreementCredit.add(credit)
+
+        if (seenSubmitters.has(credit)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [
+              'findings',
+              findingIndex,
+              'provenance',
+              'agreement_credit',
+              creditIndex,
+            ],
+            message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[16],
+          })
+        }
+
+        if (!eligibleAgreementPersonas.has(credit)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [
+              'findings',
+              findingIndex,
+              'provenance',
+              'agreement_credit',
+              creditIndex,
+            ],
+            message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[17],
+          })
+        }
+      })
     })
 
     artifact.risk_coverage?.forEach((coverage, coverageIndex) => {
-      if (!coverage.satisfied || coverage.input_finding_id === undefined) {
+      if (!coverage.satisfied) {
+        return
+      }
+      const citedId = coverage.input_finding_id
+      if (citedId === undefined) {
         return
       }
 
-      const owner = admittedById.get(coverage.input_finding_id)
+      const owner = admittedById.get(citedId)
       if (owner === undefined || unavailablePersonas.has(owner)) {
         ctx.addIssue({
           code: 'custom',
           path: ['risk_coverage', coverageIndex, 'input_finding_id'],
           message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[11],
+        })
+        return
+      }
+
+      // The citation must resolve to a validated synthesized finding whose file
+      // belongs to the failed persona's recorded selection surface.
+      const lostDispatch = artifact.dispatches.find(
+        (dispatch) => dispatch.persona === coverage.persona,
+      )
+      const surface = lostDispatch?.selection_surface ?? []
+      const covered = artifact.findings.some(
+        (finding) =>
+          finding.input_finding_ids.includes(citedId) &&
+          finding.validated !== false &&
+          surface.includes(finding.file),
+      )
+      if (!covered) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['risk_coverage', coverageIndex, 'input_finding_id'],
+          message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[18],
         })
       }
     })
