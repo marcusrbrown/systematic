@@ -553,3 +553,50 @@ describe('generateRegistryContent — idempotence', () => {
     expect(generated).toContain('"name": "foo"')
   })
 })
+
+describe('real registry: ce:review validator inventory', () => {
+  const VALIDATOR_REL = 'skills/ce-review/scripts/validate-review.mjs'
+
+  function readRealComponents(): Array<{
+    name: string
+    files: string[]
+  }> {
+    const parsed: unknown = parseJsonc(
+      fs.readFileSync(path.join(REPO_ROOT, 'registry/registry.jsonc'), 'utf8'),
+    )
+    if (
+      typeof parsed !== 'object' ||
+      parsed === null ||
+      !Array.isArray((parsed as { components?: unknown }).components)
+    ) {
+      throw new Error('registry.jsonc missing components array')
+    }
+    return (parsed as { components: Array<Record<string, unknown>> }).components
+      .filter((component) => typeof component.name === 'string')
+      .map((component) => ({
+        files: Array.isArray(component.files)
+          ? component.files.filter(
+              (file): file is string => typeof file === 'string',
+            )
+          : [],
+        name: component.name as string,
+      }))
+  }
+
+  test('only the ce-review component declares the generated validator shim', () => {
+    const declared = readRealComponents()
+      .filter((component) => component.files.includes(VALIDATOR_REL))
+      .map((component) => component.name)
+
+    expect(declared).toEqual(['ce-review'])
+  })
+
+  test('generated validator bytes are the committed source bytes', () => {
+    const committed = fs.readFileSync(
+      path.join(REPO_ROOT, VALIDATOR_REL),
+      'utf8',
+    )
+    expect(committed).not.toMatch(/from\s+['"]\.{1,2}\//)
+    expect(committed.startsWith('#!')).toBe(false)
+  })
+})

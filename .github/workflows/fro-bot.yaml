@@ -242,6 +242,9 @@ env:
           committed artifact).
         - Run `bun run review-schema:drift` and report drift (the review
           schema must stay aligned with its committed artifact).
+        - Run `bun run ce-review-validator:drift` and report drift (the
+          committed Node validator shim under `skills/ce-review/scripts/` must
+          stay aligned with `src/ce-review-validator.ts`).
         - Run `bun run agent-browser:drift` and report drift
           (`skills/agent-browser/SKILL.md` and `ATTRIBUTIONS.md` must stay
           aligned with the pinned `agent-browser` package generator).
@@ -299,8 +302,9 @@ env:
         g. `bun run schema:drift` — 0 drift.
         h. `bun run review-schema:drift` — 0 drift.
         i. `bun run agent-browser:drift` — 0 drift.
-        j. `bun run docs:verify` — completes without error.
-        k. Node ESM smoke test:
+        j. `bun run ce-review-validator:drift` — 0 drift.
+        k. `bun run docs:verify` — completes without error.
+        l. Node ESM smoke test:
            `node --input-type=module -e "import('./dist/index.js').then(m => console.log(Object.keys(m).sort()))"`
            — exports only `['default']` (regression contract from v2.5.2/v2.12.2;
            a named export of `SystematicPlugin` breaks OpenCode plugin loading).

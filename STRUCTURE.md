@@ -67,6 +67,8 @@ subdirectory of core modules.
 - `src/lib/review-return-validator.ts` — bounded stdin validator for one raw `ce:review` persona
   return, backing `systematic validate-review-return` (`runReviewReturnValidator`,
   `validateReviewReturnValue`)
+- `src/ce-review-validator.ts` — skill-local Node shim (`runCeReviewValidator`) dispatching
+  `return`/`artifact`; bundled to `skills/ce-review/scripts/validate-review.mjs`
 
 ### `skills/`
 
@@ -132,6 +134,9 @@ bundled assets before editing or building the docs site.
 - `scripts/generate-review-artifact-schema.ts` — regenerates
   `skills/ce-review/references/review-summary-schema.json` from the Zod schema in
   `src/lib/review-artifact-schema.ts`; pass `--check` for drift detection (`bun run review-schema:drift`)
+- `scripts/generate-ce-review-validator.ts` — bundles `src/ce-review-validator.ts` into the
+  committed `skills/ce-review/scripts/validate-review.mjs`; pass `--check` for drift detection
+  (`bun run ce-review-validator:drift`)
 - `scripts/build-claude-code-plugin.ts` — generates the self-contained Claude Code plugin bundle
   (`claude-code/`, gitignored staging) from `skills/` and `agents/`; CI publishes the output to the
   orphan `claude-code-plugin` branch, never committed to `main`

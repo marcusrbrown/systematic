@@ -105,3 +105,16 @@ describe('bundled skill script invocation', () => {
     ).toEqual([])
   })
 })
+
+describe('ce:review validator shim invocation', () => {
+  // The generated helper is Node-target and must be invoked through an explicit
+  // runtime plus a model-filled SKILL_DIR anchor. This guard is vacuous until
+  // the ce:review prose that calls it lands; it then pins the invocation shape.
+  test('any validate-review.mjs reference uses node through a SKILL_DIR anchor', () => {
+    const offenders = linesMatching(/validate-review\.mjs/).filter(
+      (hit) => !hit.includes('node "$SKILL_DIR/scripts/validate-review.mjs"'),
+    )
+
+    expect(offenders).toEqual([])
+  })
+})

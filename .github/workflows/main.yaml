@@ -105,6 +105,9 @@ jobs:
       - name: Review artifact schema drift check
         run: bun run review-schema:drift
 
+      - name: ce:review validator bundle drift check
+        run: bun run ce-review-validator:drift
+
   typecheck:
     name: Typecheck
     runs-on: ubuntu-latest
