@@ -182,6 +182,42 @@ describe('runReviewReturnValidator', () => {
     expect(result.stderr).toBe('')
   })
 
+  test('reuses one chunk buffer across transient reads before a successful read', () => {
+    const payload = Buffer.from(JSON.stringify(VALID_RETURN), 'utf8')
+    const seen: Buffer[] = []
+    let transientThrows = 0
+    let offset = 0
+    const result = runWith(payload, {
+      readChunk: (_fd, buffer, bufferOffset, length) => {
+        seen.push(buffer)
+        if (transientThrows < 3) {
+          transientThrows += 1
+          const error = new Error('no data yet') as Error & { code?: string }
+          error.code = transientThrows % 2 === 1 ? 'EAGAIN' : 'EWOULDBLOCK'
+          throw error
+        }
+        if (offset >= payload.length) return 0
+        const bytes = Math.min(length, payload.length - offset)
+        payload.copy(buffer, bufferOffset, offset, offset + bytes)
+        offset += bytes
+        return bytes
+      },
+    })
+
+    expect(result.status).toBe(0)
+    // Three transient failures then one successful read must all reuse the same
+    // allocated chunk buffer rather than allocating a fresh 64 KiB buffer per
+    // retry.
+    expect(seen.length).toBeGreaterThanOrEqual(4)
+    const firstChunkBuffer = seen[0]
+    if (firstChunkBuffer === undefined) {
+      throw new Error('expected at least one chunk buffer')
+    }
+    for (const buffer of seen.slice(0, 4)) {
+      expect(buffer).toBe(firstChunkBuffer)
+    }
+  })
+
   test('rejects empty and whitespace-only input', () => {
     for (const input of ['', '   \n\t ']) {
       const result = runWith(Buffer.from(input, 'utf8'))

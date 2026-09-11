@@ -6116,9 +6116,12 @@ var REVIEW_ARTIFACT_CUSTOM_MESSAGES = [
   'validation_unavailable dispatches must record zero input findings',
   'a completed run must not contain validation_unavailable evidence',
   'a validation_unavailable persona must not have an input finding',
+  'every synthesized input finding ID must resolve to an admitted ledger row',
+  'every provenance submitter must be represented by a cited admitted ledger row',
+  'satisfied risk coverage must cite an admitted ledger row',
 ]
 var boundedText = (maxLength) => string2().min(1).max(maxLength).regex(/\S/)
-var LineNumberSchema = number2().min(1).multipleOf(1)
+var LineNumberSchema = number2().int().positive()
 var DispatchOutcomeSchema = _enum([
   'findings',
   'empty',
@@ -6415,6 +6418,55 @@ var ReviewArtifactSchema = object({
         })
       }
     })
+    const admittedById = new Map()
+    artifact.input_findings.forEach((finding) => {
+      if (finding.record_type === 'admitted') {
+        admittedById.set(finding.input_id, finding.reviewer)
+      }
+    })
+    artifact.findings.forEach((finding, findingIndex) => {
+      const citedAdmittedReviewers = new Set()
+      finding.input_finding_ids.forEach((inputId, idIndex) => {
+        const owner = admittedById.get(inputId)
+        if (owner === undefined) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['findings', findingIndex, 'input_finding_ids', idIndex],
+            message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[9],
+          })
+          return
+        }
+        citedAdmittedReviewers.add(owner)
+      })
+      finding.provenance.submitters.forEach((submitter, submitterIndex) => {
+        if (!citedAdmittedReviewers.has(submitter)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [
+              'findings',
+              findingIndex,
+              'provenance',
+              'submitters',
+              submitterIndex,
+            ],
+            message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[10],
+          })
+        }
+      })
+    })
+    artifact.risk_coverage?.forEach((coverage, coverageIndex) => {
+      if (!coverage.satisfied || coverage.input_finding_id === undefined) {
+        return
+      }
+      const owner = admittedById.get(coverage.input_finding_id)
+      if (owner === undefined || unavailablePersonas.has(owner)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['risk_coverage', coverageIndex, 'input_finding_id'],
+          message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[11],
+        })
+      }
+    })
   })
 var MAX_RAW_RISK_LENGTH = 1024
 var RAW_FINDINGS_LIST_DESCRIPTION =
@@ -6611,6 +6663,19 @@ function isTransientReadError(error) {
 function sleepSync(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds)
 }
+function readChunkWithRetry(fd, buffer, toRead, readChunk) {
+  for (;;) {
+    try {
+      return {
+        bytesRead: readChunk(fd, buffer, 0, toRead, null),
+        status: 'ok',
+      }
+    } catch (error) {
+      if (!isTransientReadError(error)) return { status: 'read-error' }
+      sleepSync(TRANSIENT_READ_RETRY_MS)
+    }
+  }
+}
 function readBoundedStdin(fd, readChunk) {
   const chunks = []
   let total = 0
@@ -6619,19 +6684,11 @@ function readBoundedStdin(fd, readChunk) {
     if (remaining <= 0) return { status: 'oversized' }
     const toRead = Math.min(READ_CHUNK_BYTES, remaining)
     const buffer = Buffer.allocUnsafe(toRead)
-    let bytesRead
-    try {
-      bytesRead = readChunk(fd, buffer, 0, toRead, null)
-    } catch (error) {
-      if (isTransientReadError(error)) {
-        sleepSync(TRANSIENT_READ_RETRY_MS)
-        continue
-      }
-      return { status: 'read-error' }
-    }
-    if (bytesRead <= 0) break
-    total += bytesRead
-    chunks.push(buffer.subarray(0, bytesRead))
+    const read = readChunkWithRetry(fd, buffer, toRead, readChunk)
+    if (read.status === 'read-error') return { status: 'read-error' }
+    if (read.bytesRead <= 0) break
+    total += read.bytesRead
+    chunks.push(buffer.subarray(0, read.bytesRead))
     if (total > MAX_REVIEW_RETURN_BYTES) return { status: 'oversized' }
   }
   return { buffer: Buffer.concat(chunks, total), status: 'ok' }

@@ -159,6 +159,37 @@ describe('review artifact schema generator', () => {
     expect(generateSchemaContent()).not.toContain('document-review')
   })
 
+  test('keeps the shared final-v1 safe-integer line bound in both committed schemas', () => {
+    const expected = {
+      type: 'integer',
+      exclusiveMinimum: 0,
+      maximum: Number.MAX_SAFE_INTEGER,
+    }
+    const summary = JSON.parse(fs.readFileSync(SCHEMA_PATH, 'utf8')) as {
+      readonly properties: {
+        readonly findings: {
+          readonly items: {
+            readonly properties: { readonly line: unknown }
+          }
+        }
+      }
+    }
+    const findings = JSON.parse(
+      fs.readFileSync(FINDINGS_SCHEMA_PATH, 'utf8'),
+    ) as {
+      readonly definitions: {
+        readonly subAgentFinding: {
+          readonly properties: { readonly line: unknown }
+        }
+      }
+    }
+
+    expect(summary.properties.findings.items.properties.line).toEqual(expected)
+    expect(findings.definitions.subAgentFinding.properties.line).toMatchObject(
+      expected,
+    )
+  })
+
   test('the CI workflow invokes the review schema drift gate', () => {
     const workflow = fs.readFileSync(
       path.join(REPO_ROOT, '.github/workflows/main.yaml'),

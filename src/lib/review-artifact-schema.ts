@@ -18,16 +18,20 @@ export const REVIEW_ARTIFACT_CUSTOM_MESSAGES = [
   'validation_unavailable dispatches must record zero input findings',
   'a completed run must not contain validation_unavailable evidence',
   'a validation_unavailable persona must not have an input finding',
+  'every synthesized input finding ID must resolve to an admitted ledger row',
+  'every provenance submitter must be represented by a cited admitted ledger row',
+  'satisfied risk coverage must cite an admitted ledger row',
 ] as const
 
 const boundedText = (maxLength: number) =>
   z.string().min(1).max(maxLength).regex(/\S/)
 
-// The raw-return and synthesized contracts share exactly one line-number schema
-// so every admitted raw line is representable by the final artifact. It uses
-// `multipleOf(1)` rather than `int()` because Zod's `int()` silently caps at
-// `Number.MAX_SAFE_INTEGER`, which the committed raw-v1 contract does not.
-const LineNumberSchema = z.number().min(1).multipleOf(1)
+// Final schema-version-1 line identity: a safe positive integer shared by the
+// raw/parent and synthesized finding contracts. Keeping the bound on both sides
+// preserves the published v1 behavior and ensures every admitted raw line is
+// representable in the final artifact without distinct lexical citations
+// collapsing past Number.MAX_SAFE_INTEGER.
+const LineNumberSchema = z.number().int().positive()
 
 export const DispatchOutcomeSchema = z.enum([
   'findings',
@@ -419,6 +423,64 @@ export const ReviewArtifactSchema = z
           code: 'custom',
           path: ['input_findings', index, 'reviewer'],
           message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[8],
+        })
+      }
+    })
+
+    // Withheld evidence must not survive through synthesis. Every finding and
+    // risk-coverage citation must resolve to an admitted ledger row, and every
+    // submitter must be backed by a cited admitted row. `agreement_credit` is
+    // deliberately exempt: the contract permits credit without an input row.
+    const admittedById = new Map<string, string>()
+    artifact.input_findings.forEach((finding) => {
+      if (finding.record_type === 'admitted') {
+        admittedById.set(finding.input_id, finding.reviewer)
+      }
+    })
+
+    artifact.findings.forEach((finding, findingIndex) => {
+      const citedAdmittedReviewers = new Set<string>()
+      finding.input_finding_ids.forEach((inputId, idIndex) => {
+        const owner = admittedById.get(inputId)
+        if (owner === undefined) {
+          ctx.addIssue({
+            code: 'custom',
+            path: ['findings', findingIndex, 'input_finding_ids', idIndex],
+            message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[9],
+          })
+          return
+        }
+        citedAdmittedReviewers.add(owner)
+      })
+
+      finding.provenance.submitters.forEach((submitter, submitterIndex) => {
+        if (!citedAdmittedReviewers.has(submitter)) {
+          ctx.addIssue({
+            code: 'custom',
+            path: [
+              'findings',
+              findingIndex,
+              'provenance',
+              'submitters',
+              submitterIndex,
+            ],
+            message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[10],
+          })
+        }
+      })
+    })
+
+    artifact.risk_coverage?.forEach((coverage, coverageIndex) => {
+      if (!coverage.satisfied || coverage.input_finding_id === undefined) {
+        return
+      }
+
+      const owner = admittedById.get(coverage.input_finding_id)
+      if (owner === undefined || unavailablePersonas.has(owner)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['risk_coverage', coverageIndex, 'input_finding_id'],
+          message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[11],
         })
       }
     })

@@ -663,8 +663,10 @@ describe('systematic validate-review-artifact: validation_unavailable amendment'
         rejection_reason: 'Raw validator command could not run.',
       }
       // A validation_unavailable persona was withheld before admission, so the
-      // truthful fixture admits no finding for it.
+      // truthful fixture admits no finding for it and cites no synthesized
+      // evidence that would have to resolve back to an admitted ledger row.
       artifact.input_findings = []
+      artifact.findings = []
       fs.writeFileSync(target, JSON.stringify(artifact))
 
       const result = runCli(

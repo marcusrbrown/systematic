@@ -848,6 +848,7 @@ describe('review artifact schema', () => {
           },
         ],
         input_findings: [],
+        findings: [],
       }),
       artifactWith({
         run_status: 'completed',
@@ -859,6 +860,7 @@ describe('review artifact schema', () => {
           },
         ],
         input_findings: [],
+        findings: [],
       }),
       artifactWith({
         run_status: 'degraded',
@@ -880,6 +882,85 @@ describe('review artifact schema', () => {
           },
         ],
         input_findings: [{ ...rejectedSummary, reviewer: 'correctness' }],
+        findings: [],
+      }),
+      artifactWith({
+        run_status: 'degraded',
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'validation_unavailable',
+            input_finding_count: 0,
+          },
+        ],
+        input_findings: [],
+        findings: [
+          {
+            ...baseFinding,
+            input_finding_ids: ['correctness#1'],
+            provenance: {
+              fingerprint: 'src/example.ts|42',
+              submitters: [],
+              agreement_credit: [],
+            },
+          },
+        ],
+      }),
+      artifactWith({
+        run_status: 'degraded',
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'validation_unavailable',
+            input_finding_count: 0,
+          },
+        ],
+        input_findings: [
+          {
+            record_type: 'admitted',
+            input_id: 'testing#1',
+            reviewer: 'testing',
+            confidence: 0.8,
+            disposition: 'surviving',
+            reason: 'The finding passed the confidence gate.',
+          },
+        ],
+        findings: [
+          {
+            ...baseFinding,
+            input_finding_ids: ['testing#1'],
+            provenance: {
+              fingerprint: 'src/example.ts|42',
+              submitters: ['security'],
+              agreement_credit: [],
+            },
+          },
+        ],
+      }),
+      artifactWith({
+        run_status: 'degraded',
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'validation_unavailable',
+            input_finding_count: 0,
+          },
+          {
+            persona: 'security',
+            dispatch_outcome: 'findings',
+            input_finding_count: 0,
+            selection_surface: ['src/auth.ts'],
+          },
+        ],
+        input_findings: [],
+        findings: [],
+        risk_coverage: [
+          {
+            persona: 'security',
+            satisfied: true,
+            input_finding_id: 'ghost#1',
+          },
+        ],
       }),
     ]
 
@@ -891,7 +972,7 @@ describe('review artifact schema', () => {
         : result.error.issues.filter((issue) => issue.code === 'custom')
     })
 
-    expect(issues.length).toBe(11)
+    expect(issues.length).toBe(14)
     for (const issue of issues) {
       expect(customMessages.has(issue.message)).toBe(true)
     }
@@ -1086,37 +1167,23 @@ describe('raw reviewer return and parent record schemas', () => {
     }
   })
 
-  test('preserves integer >= 1 line semantics without a safe-integer maximum', () => {
-    expect(
-      SubAgentReturnSchema.safeParse(rawWithFinding({ line: 9007199254740992 }))
-        .success,
-    ).toBe(true)
-    expect(
-      ParentRecordSchema.safeParse({
-        ...parentRecordFixture,
-        findings: [{ ...parentFindingFixture, line: 9007199254740992 }],
-      }).success,
-    ).toBe(true)
-
-    for (const line of [1.5, 0, -1]) {
-      expect(
-        SubAgentReturnSchema.safeParse(rawWithFinding({ line })).success,
-        `${line}`,
-      ).toBe(false)
-    }
-  })
-
-  test('shares one line-number schema so every admitted raw line is representable in the artifact', () => {
-    const unsafeLine = 9007199254740992
+  test('uses one shared safe-positive-integer line schema across raw and synthesized findings', () => {
+    const maxSafe = Number.MAX_SAFE_INTEGER
     const provenance = {
-      fingerprint: `src/example.ts|${unsafeLine}`,
+      fingerprint: `src/example.ts|${maxSafe}`,
       submitters: ['correctness'],
       agreement_credit: [],
     }
 
+    // The largest safe integer is representable in raw, parent, and aggregate.
     expect(
-      SubAgentReturnSchema.safeParse(rawWithFinding({ line: unsafeLine }))
-        .success,
+      SubAgentReturnSchema.safeParse(rawWithFinding({ line: maxSafe })).success,
+    ).toBe(true)
+    expect(
+      ParentRecordSchema.safeParse({
+        ...parentRecordFixture,
+        findings: [{ ...parentFindingFixture, line: maxSafe }],
+      }).success,
     ).toBe(true)
     expect(
       ReviewArtifactSchema.safeParse(
@@ -1124,7 +1191,7 @@ describe('raw reviewer return and parent record schemas', () => {
           findings: [
             {
               ...baseFinding,
-              line: unsafeLine,
+              line: maxSafe,
               input_finding_ids: ['correctness#1'],
               provenance,
             },
@@ -1133,7 +1200,14 @@ describe('raw reviewer return and parent record schemas', () => {
       ).success,
     ).toBe(true)
 
-    for (const line of [1.5, 0, -1]) {
+    // max+1, fractions, and non-positive values are rejected on both sides; the
+    // final schema-version-1 contract keeps its safe-integer bound so distinct
+    // lexical citations cannot collapse onto one identity.
+    for (const line of [maxSafe + 1, 1.5, 0, -1]) {
+      expect(
+        SubAgentReturnSchema.safeParse(rawWithFinding({ line })).success,
+        `raw ${line}`,
+      ).toBe(false)
       expect(
         ReviewArtifactSchema.safeParse(
           artifactWith({
@@ -1147,7 +1221,7 @@ describe('raw reviewer return and parent record schemas', () => {
             ],
           }),
         ).success,
-        `aggregate line ${line}`,
+        `aggregate ${line}`,
       ).toBe(false)
     }
   })
@@ -1377,6 +1451,7 @@ describe('dispatch outcome validation_unavailable (KTD8 amendment)', () => {
           },
         ],
         input_findings: [],
+        findings: [],
       }),
     )
 
@@ -1483,6 +1558,180 @@ describe('dispatch outcome validation_unavailable (KTD8 amendment)', () => {
     }
   })
 
+  test('rejects a synthesized finding that cites a validation_unavailable persona', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        run_status: 'degraded',
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'validation_unavailable',
+            input_finding_count: 0,
+          },
+        ],
+        input_findings: [],
+        findings: [
+          {
+            ...baseFinding,
+            input_finding_ids: ['correctness#1'],
+            provenance: {
+              fingerprint: 'src/example.ts|42',
+              submitters: [],
+              agreement_credit: [],
+            },
+          },
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(
+        result.error.issues.some(
+          (issue) => issue.path.join('.') === 'findings.0.input_finding_ids.0',
+        ),
+      ).toBe(true)
+    }
+  })
+
+  test('rejects a provenance submitter not represented by a cited admitted row', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        run_status: 'degraded',
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'validation_unavailable',
+            input_finding_count: 0,
+          },
+        ],
+        input_findings: [
+          {
+            record_type: 'admitted',
+            input_id: 'testing#1',
+            reviewer: 'testing',
+            confidence: 0.8,
+            disposition: 'surviving',
+            reason: 'The finding passed the confidence gate.',
+          },
+        ],
+        findings: [
+          {
+            ...baseFinding,
+            input_finding_ids: ['testing#1'],
+            provenance: {
+              fingerprint: 'src/example.ts|42',
+              submitters: ['security'],
+              agreement_credit: [],
+            },
+          },
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(
+        result.error.issues.some(
+          (issue) =>
+            issue.path.join('.') === 'findings.0.provenance.submitters.0',
+        ),
+      ).toBe(true)
+    }
+  })
+
+  test('rejects a satisfied risk-coverage citation that does not resolve to an admitted row', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        run_status: 'degraded',
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'validation_unavailable',
+            input_finding_count: 0,
+          },
+          {
+            persona: 'security',
+            dispatch_outcome: 'findings',
+            input_finding_count: 0,
+            selection_surface: ['src/auth.ts'],
+          },
+        ],
+        input_findings: [],
+        findings: [],
+        risk_coverage: [
+          {
+            persona: 'security',
+            satisfied: true,
+            input_finding_id: 'ghost#1',
+          },
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(
+        result.error.issues.some(
+          (issue) =>
+            issue.path.join('.') === 'risk_coverage.0.input_finding_id',
+        ),
+      ).toBe(true)
+    }
+  })
+
+  test('accepts an unavailable run whose finding cites an admitted row from another persona', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        run_status: 'degraded',
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'validation_unavailable',
+            input_finding_count: 0,
+          },
+          {
+            persona: 'security',
+            dispatch_outcome: 'findings',
+            input_finding_count: 0,
+            selection_surface: ['src/auth.ts'],
+          },
+        ],
+        input_findings: [
+          {
+            record_type: 'admitted',
+            input_id: 'testing#1',
+            reviewer: 'testing',
+            confidence: 0.8,
+            disposition: 'surviving',
+            reason: 'The finding passed the confidence gate.',
+          },
+        ],
+        findings: [
+          {
+            ...baseFinding,
+            input_finding_ids: ['testing#1'],
+            provenance: {
+              fingerprint: 'src/example.ts|42',
+              submitters: ['testing'],
+              // Agreement credit is permitted without an input row.
+              agreement_credit: ['security'],
+            },
+          },
+        ],
+        risk_coverage: [
+          {
+            persona: 'security',
+            satisfied: true,
+            input_finding_id: 'testing#1',
+          },
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(true)
+  })
+
   test('accepts truthful in_progress and abnormal runs carrying validation_unavailable', () => {
     for (const run_status of ['in_progress', 'abnormal'] as const) {
       const result = ReviewArtifactSchema.safeParse(
@@ -1496,6 +1745,7 @@ describe('dispatch outcome validation_unavailable (KTD8 amendment)', () => {
             },
           ],
           input_findings: [],
+          findings: [],
         }),
       )
 

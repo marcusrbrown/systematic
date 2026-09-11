@@ -919,11 +919,13 @@ describe('generated findings document', () => {
       expect(definitions[name], name).toBeDefined()
     }
 
-    // Raw line-number contract: integer >= 1 with no safe-integer maximum.
+    // Raw line-number contract: the shared schema-version-1 safe positive
+    // integer identity, matching the synthesized finding contract.
     const rawLine = asRecord(
       asRecord(asRecord(definitions.subAgentFinding).properties).line,
     )
-    expect(rawLine.minimum).toBe(1)
-    expect(rawLine.maximum).toBeUndefined()
+    expect(rawLine.type).toBe('integer')
+    expect(rawLine.exclusiveMinimum).toBe(0)
+    expect(rawLine.maximum).toBe(Number.MAX_SAFE_INTEGER)
   })
 })

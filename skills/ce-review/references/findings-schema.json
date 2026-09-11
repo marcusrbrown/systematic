@@ -36,9 +36,9 @@
           "description": "Relative file path from repository root; absolute POSIX, drive-letter, and UNC paths are rejected"
         },
         "line": {
-          "type": "number",
-          "minimum": 1,
-          "multipleOf": 1,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
           "description": "Primary line number of the issue"
         },
         "why_it_matters": {
@@ -186,9 +186,9 @@
           "description": "Relative file path from repository root; absolute POSIX, drive-letter, and UNC paths are rejected"
         },
         "line": {
-          "type": "number",
-          "minimum": 1,
-          "multipleOf": 1,
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "maximum": 9007199254740991,
           "description": "Primary line number of the issue"
         },
         "why_it_matters": {

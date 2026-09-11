@@ -114,18 +114,32 @@ describe('ce:review raw-return admission contract', () => {
     expect(mergeIndex).toBeGreaterThan(identityIndex)
   })
 
-  test('environment screening runs after structural admission and parent parsing, before persistence', () => {
+  test('orders identity binding after structural admission/parse and before screening, persistence, and synthesis', () => {
     const admissionIndex = SKILL_NORM.search(/structurally admitted/i)
     const parseIndex = SKILL_NORM.search(
       /parse the already structurally validated JSON/i,
     )
-    const screenIndex = SKILL_NORM.search(/environment-value screen/i)
-    const persistIndex = SKILL_NORM.search(/before persistence/i)
+    const identityIndex = SKILL_NORM.search(/dispatch identity binding/i)
+    // Anchor screening/persistence to the Stage 5 fixed-order restatement.
+    // The earlier exit-0 paragraph mentions screening and persistence before
+    // the identity gate is defined, so its offsets cannot prove that the gate
+    // precedes them; the restatement states the required order explicitly.
+    const screenIndex = SKILL_NORM.search(
+      /run the unchanged environment-value screen/i,
+    )
+    const persistIndex = SKILL_NORM.search(
+      /only then add parent annotations, persist, or synthesize/i,
+    )
+    const synthesisIndex = SKILL_NORM.search(/### Stage 5: Merge findings/i)
 
     expect(admissionIndex).toBeGreaterThanOrEqual(0)
+    expect(identityIndex).toBeGreaterThanOrEqual(0)
+    expect(synthesisIndex).toBeGreaterThanOrEqual(0)
     expect(parseIndex).toBeGreaterThan(admissionIndex)
-    expect(screenIndex).toBeGreaterThan(parseIndex)
+    expect(identityIndex).toBeGreaterThan(parseIndex)
+    expect(screenIndex).toBeGreaterThan(identityIndex)
     expect(persistIndex).toBeGreaterThan(screenIndex)
+    expect(synthesisIndex).toBeGreaterThan(identityIndex)
   })
 
   test('coverage distinguishes every admission state without new artifact fields', () => {

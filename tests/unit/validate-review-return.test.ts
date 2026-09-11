@@ -118,6 +118,52 @@ describe('systematic validate-review-return', () => {
     }
   })
 
+  it('accepts the largest safe line identity from raw JSON', () => {
+    const cwd = makeCwd()
+    try {
+      const result = runCli(
+        ['validate-review-return'],
+        cwd,
+        JSON.stringify({
+          ...VALID_RETURN,
+          findings: [{ ...BASE_FINDING, line: Number.MAX_SAFE_INTEGER }],
+        }),
+      )
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toBe(`${VALID_MESSAGE}\n`)
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects unsafe and lexically collapsing line identities from raw JSON', () => {
+    const cwd = makeCwd()
+    try {
+      const base = JSON.stringify({
+        ...VALID_RETURN,
+        findings: [{ ...BASE_FINDING, line: 0 }],
+      })
+
+      for (const lexicalLine of [
+        '"line":9007199254740992', // Number.MAX_SAFE_INTEGER + 1
+        '"line":9007199254740993', // distinct lexical integer that JSON.parse collapses
+        '"line":9007199254740993.5', // fraction that JSON.parse rounds to an integer
+      ]) {
+        const result = runCli(
+          ['validate-review-return'],
+          cwd,
+          base.replace('"line":0', lexicalLine),
+        )
+
+        expect(result.exitCode, lexicalLine).toBe(1)
+        expect(result.stderr, lexicalLine).toContain('findings.0.line')
+      }
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
   it('rejects a parent-owned annotation as schema-invalid without echoing the key', () => {
     const cwd = makeCwd()
     try {

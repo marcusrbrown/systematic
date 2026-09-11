@@ -131,6 +131,38 @@ function sleepSync(milliseconds: number): void {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds)
 }
 
+type ChunkRead =
+  | { readonly status: 'ok'; readonly bytesRead: number }
+  | { readonly status: 'read-error' }
+
+/**
+ * Read one bounded chunk, retrying transient nonblocking-pipe states.
+ *
+ * Reuses `buffer` across retries so a stalled but still-open producer waits
+ * without allocating a fresh chunk buffer on every poll. Returns `read-error`
+ * only for a permanent failure; `EAGAIN`/`EWOULDBLOCK` retry indefinitely,
+ * matching blocking `read(2)` semantics. There is deliberately no timeout:
+ * callers own any outer lifecycle bound.
+ */
+function readChunkWithRetry(
+  fd: number,
+  buffer: Buffer,
+  toRead: number,
+  readChunk: ReadChunk,
+): ChunkRead {
+  for (;;) {
+    try {
+      return {
+        bytesRead: readChunk(fd, buffer, 0, toRead, null),
+        status: 'ok',
+      }
+    } catch (error) {
+      if (!isTransientReadError(error)) return { status: 'read-error' }
+      sleepSync(TRANSIENT_READ_RETRY_MS)
+    }
+  }
+}
+
 /**
  * Read stdin in bounded chunks, stopping at the cap plus one byte so an
  * oversized payload is rejected without buffering the whole document.
@@ -146,23 +178,16 @@ function readBoundedStdin(fd: number, readChunk: ReadChunk): StdinRead {
     const toRead = Math.min(READ_CHUNK_BYTES, remaining)
     const buffer = Buffer.allocUnsafe(toRead)
 
-    let bytesRead: number
-    try {
-      bytesRead = readChunk(fd, buffer, 0, toRead, null)
-    } catch (error) {
-      if (isTransientReadError(error)) {
-        // A nonblocking pipe with no data yet: wait briefly and retry rather
-        // than reporting a permanent stdin failure.
-        sleepSync(TRANSIENT_READ_RETRY_MS)
-        continue
-      }
-      return { status: 'read-error' }
-    }
+    // `readChunkWithRetry` reuses this one chunk buffer across transient
+    // retries so a stalled but still-open producer waits without allocating a
+    // fresh 64 KiB buffer on every poll. Only a completed read (or EOF)
+    // advances to the next chunk.
+    const read = readChunkWithRetry(fd, buffer, toRead, readChunk)
+    if (read.status === 'read-error') return { status: 'read-error' }
+    if (read.bytesRead <= 0) break
 
-    if (bytesRead <= 0) break
-
-    total += bytesRead
-    chunks.push(buffer.subarray(0, bytesRead))
+    total += read.bytesRead
+    chunks.push(buffer.subarray(0, read.bytesRead))
     if (total > MAX_REVIEW_RETURN_BYTES) return { status: 'oversized' }
   }
 
