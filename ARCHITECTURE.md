@@ -215,9 +215,9 @@ version is not evidence for another.
 
 **Content-integrity gate** (`scripts/content-integrity.ts`) — runs in the CI build job. Catches
 phantom `systematic:*` references, dispatch identifier integrity issues, frontmatter/model
-contract violations, banned CC/CEP patterns, and stale `docs/plans/` status. It flags plans marked
-`status: active` with at least one ticked checkbox and no unticked checkboxes outside fenced code
-blocks. It does not inspect deliverables or verify that work shipped. Must pass before any release.
+contract violations, banned CC/CEP patterns, and stale `docs/plans/` status. Ignoring fenced code
+blocks, it flags plans marked `status: active` with at least one ticked checkbox and no unticked
+checkboxes. It does not inspect deliverables or verify that work shipped. Must pass before any release.
 
 **Receipt-backed workflow guard** (`src/lib/workflow-guard.ts` plus the OpenCode adapter in
 `src/lib/opencode-workflow-guard.ts`, `opencode-operation-observer.ts`, and `receipt-classifier.ts`
