@@ -2,9 +2,13 @@ import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
+  ParentFindingSchema,
+  ParentRecordSchema,
   REVIEW_ARTIFACT_CUSTOM_MESSAGES,
   type ReviewArtifact,
   ReviewArtifactSchema,
+  SubAgentFindingSchema,
+  SubAgentReturnSchema,
 } from '../../src/lib/review-artifact-schema.js'
 
 type JsonObject = Record<string, unknown>
@@ -856,5 +860,416 @@ describe('review artifact schema', () => {
     )
 
     expect(result.success).toBe(true)
+  })
+})
+
+const rawFindingFixture = {
+  title: 'Example issue',
+  severity: 'P1',
+  file: 'src/example.ts',
+  line: 42,
+  why_it_matters: 'The example path can fail during normal execution.',
+  autofix_class: 'gated_auto',
+  owner: 'downstream-resolver',
+  requires_verification: true,
+  confidence: 0.85,
+  evidence: ['src/example.ts:42 demonstrates the failure path.'],
+  pre_existing: false,
+  suggested_fix: 'Handle the failure before continuing.',
+}
+
+const rawReturnFixture = {
+  reviewer: 'correctness',
+  findings: [rawFindingFixture],
+  residual_risks: [],
+  testing_gaps: [],
+}
+
+const parentFindingFixture = {
+  ...rawFindingFixture,
+  disposition: 'surviving',
+}
+
+const parentRecordFixture = {
+  reviewer: 'correctness',
+  harness: 'opencode',
+  dispatch_outcome: 'findings',
+  findings: [parentFindingFixture],
+  residual_risks: [],
+  testing_gaps: [],
+}
+
+function rawWithFinding(changes: JsonObject): JsonObject {
+  return {
+    ...rawReturnFixture,
+    findings: [{ ...rawFindingFixture, ...changes }],
+  }
+}
+
+describe('raw reviewer return and parent record schemas', () => {
+  test('accepts a conforming empty raw return', () => {
+    const result = SubAgentReturnSchema.safeParse({
+      ...rawReturnFixture,
+      findings: [],
+    })
+
+    expect(result.success).toBe(true)
+  })
+
+  test('accepts a conforming findings raw return with bounded overflow evidence', () => {
+    const result = SubAgentReturnSchema.safeParse({
+      ...rawReturnFixture,
+      findings: [
+        {
+          ...rawFindingFixture,
+          evidence: [{ overflow: true, excerpt: 'src/example.ts excerpt' }],
+        },
+      ],
+    })
+
+    expect(result.success).toBe(true)
+  })
+
+  test('accepts every raw severity from P0 through P3', () => {
+    for (const severity of ['P0', 'P1', 'P2', 'P3'] as const) {
+      const result = SubAgentReturnSchema.safeParse(
+        rawWithFinding({ severity }),
+      )
+
+      expect(result.success, severity).toBe(true)
+    }
+  })
+
+  test('rejects medium and the parent-only unknown severity on raw findings', () => {
+    for (const severity of ['medium', 'unknown']) {
+      const result = SubAgentReturnSchema.safeParse(
+        rawWithFinding({ severity }),
+      )
+
+      expect(result.success, severity).toBe(false)
+    }
+  })
+
+  test('rejects parent-owned reviewer and dispatch fields on raw returns', () => {
+    for (const annotation of [
+      { harness: 'opencode' },
+      { dispatch_outcome: 'findings' },
+      { reviewer: 'correctness', harness: 'opencode' },
+    ]) {
+      const result = SubAgentReturnSchema.safeParse({
+        ...rawReturnFixture,
+        ...annotation,
+      })
+
+      expect(result.success, JSON.stringify(annotation)).toBe(false)
+    }
+  })
+
+  test('rejects parent-owned disposition and validation annotations on raw findings', () => {
+    for (const annotation of [
+      { disposition: 'surviving' },
+      { validated: true },
+      { validation_reason: 'The finding was validated.' },
+      { input_finding_ids: ['correctness#1'] },
+      { provenance: {} },
+    ]) {
+      const result = SubAgentReturnSchema.safeParse(rawWithFinding(annotation))
+
+      expect(result.success, JSON.stringify(annotation)).toBe(false)
+    }
+  })
+
+  test('accepts a conforming parent record with harness, dispatch, and disposition', () => {
+    const result = ParentRecordSchema.safeParse(parentRecordFixture)
+
+    expect(result.success).toBe(true)
+  })
+
+  test('accepts an empty parent record', () => {
+    const result = ParentRecordSchema.safeParse({
+      ...parentRecordFixture,
+      findings: [],
+    })
+
+    expect(result.success).toBe(true)
+  })
+
+  test('requires dispatch_outcome and harness on parent records', () => {
+    for (const field of ['dispatch_outcome', 'harness'] as const) {
+      const parent: Record<string, unknown> = { ...parentRecordFixture }
+      delete parent[field]
+
+      expect(ParentRecordSchema.safeParse(parent).success, field).toBe(false)
+    }
+  })
+
+  test('requires disposition on parent findings but not raw findings', () => {
+    expect(
+      ParentRecordSchema.safeParse({
+        ...parentRecordFixture,
+        findings: [rawFindingFixture],
+      }).success,
+    ).toBe(false)
+    expect(SubAgentFindingSchema.safeParse(rawFindingFixture).success).toBe(
+      true,
+    )
+    expect(ParentFindingSchema.safeParse(parentFindingFixture).success).toBe(
+      true,
+    )
+  })
+
+  test('does not accept a raw return as a parent record or vice versa', () => {
+    expect(ParentRecordSchema.safeParse(rawReturnFixture).success).toBe(false)
+    expect(SubAgentReturnSchema.safeParse(parentRecordFixture).success).toBe(
+      false,
+    )
+  })
+
+  test('rejects malformed nested findings', () => {
+    for (const finding of [
+      { ...rawFindingFixture, line: 0 },
+      { ...rawFindingFixture, line: -1 },
+      { ...rawFindingFixture, confidence: 1.5 },
+      { ...rawFindingFixture, evidence: [] },
+      { ...rawFindingFixture, evidence: [{ overflow: true }] },
+      { ...rawFindingFixture, severity: 'medium' },
+    ]) {
+      const result = SubAgentReturnSchema.safeParse({
+        ...rawReturnFixture,
+        findings: [finding],
+      })
+
+      expect(result.success, JSON.stringify(finding)).toBe(false)
+    }
+  })
+
+  test('preserves integer >= 1 line semantics without a safe-integer maximum', () => {
+    expect(
+      SubAgentReturnSchema.safeParse(rawWithFinding({ line: 9007199254740992 }))
+        .success,
+    ).toBe(true)
+    expect(
+      ParentRecordSchema.safeParse({
+        ...parentRecordFixture,
+        findings: [{ ...parentFindingFixture, line: 9007199254740992 }],
+      }).success,
+    ).toBe(true)
+
+    for (const line of [1.5, 0, -1]) {
+      expect(
+        SubAgentReturnSchema.safeParse(rawWithFinding({ line })).success,
+        `${line}`,
+      ).toBe(false)
+    }
+  })
+
+  test('rejects unknown top-level and nested fields', () => {
+    expect(
+      SubAgentReturnSchema.safeParse({ ...rawReturnFixture, rogue: true })
+        .success,
+    ).toBe(false)
+    expect(
+      SubAgentReturnSchema.safeParse(rawWithFinding({ rogue: true })).success,
+    ).toBe(false)
+    expect(
+      ParentRecordSchema.safeParse({ ...parentRecordFixture, rogue: true })
+        .success,
+    ).toBe(false)
+    expect(
+      ParentRecordSchema.safeParse({
+        ...parentRecordFixture,
+        findings: [{ ...parentFindingFixture, rogue: true }],
+      }).success,
+    ).toBe(false)
+  })
+
+  test('enforces reviewer, title, why_it_matters, suggested_fix, and confidence bounds', () => {
+    expect(
+      SubAgentReturnSchema.safeParse({
+        ...rawReturnFixture,
+        reviewer: 'x'.repeat(64),
+      }).success,
+    ).toBe(true)
+    expect(
+      SubAgentReturnSchema.safeParse({
+        ...rawReturnFixture,
+        reviewer: 'x'.repeat(65),
+      }).success,
+    ).toBe(false)
+
+    expect(
+      SubAgentReturnSchema.safeParse(rawWithFinding({ title: 'x'.repeat(256) }))
+        .success,
+    ).toBe(true)
+    expect(
+      SubAgentReturnSchema.safeParse(rawWithFinding({ title: 'x'.repeat(257) }))
+        .success,
+    ).toBe(false)
+
+    expect(
+      SubAgentReturnSchema.safeParse(
+        rawWithFinding({ why_it_matters: 'x'.repeat(2048) }),
+      ).success,
+    ).toBe(true)
+    expect(
+      SubAgentReturnSchema.safeParse(
+        rawWithFinding({ why_it_matters: 'x'.repeat(2049) }),
+      ).success,
+    ).toBe(false)
+
+    expect(
+      SubAgentReturnSchema.safeParse(
+        rawWithFinding({ suggested_fix: 'x'.repeat(2048) }),
+      ).success,
+    ).toBe(true)
+    expect(
+      SubAgentReturnSchema.safeParse(
+        rawWithFinding({ suggested_fix: 'x'.repeat(2049) }),
+      ).success,
+    ).toBe(false)
+    expect(
+      SubAgentReturnSchema.safeParse(rawWithFinding({ suggested_fix: null }))
+        .success,
+    ).toBe(true)
+
+    for (const confidence of [0, 1]) {
+      expect(
+        SubAgentReturnSchema.safeParse(rawWithFinding({ confidence })).success,
+        `${confidence}`,
+      ).toBe(true)
+    }
+    for (const confidence of [-0.1, 1.1]) {
+      expect(
+        SubAgentReturnSchema.safeParse(rawWithFinding({ confidence })).success,
+        `${confidence}`,
+      ).toBe(false)
+    }
+  })
+
+  test('enforces evidence count and entry bounds', () => {
+    expect(
+      SubAgentReturnSchema.safeParse(
+        rawWithFinding({
+          evidence: Array.from({ length: 5 }, (_, index) => `e${index}`),
+        }),
+      ).success,
+    ).toBe(true)
+    for (const evidence of [
+      [],
+      Array.from({ length: 6 }, (_, index) => `e${index}`),
+    ]) {
+      expect(
+        SubAgentReturnSchema.safeParse(rawWithFinding({ evidence })).success,
+      ).toBe(false)
+    }
+
+    expect(
+      SubAgentReturnSchema.safeParse(
+        rawWithFinding({ evidence: ['x'.repeat(500)] }),
+      ).success,
+    ).toBe(true)
+    expect(
+      SubAgentReturnSchema.safeParse(
+        rawWithFinding({ evidence: ['x'.repeat(501)] }),
+      ).success,
+    ).toBe(false)
+
+    expect(
+      SubAgentReturnSchema.safeParse(
+        rawWithFinding({
+          evidence: [{ overflow: true, excerpt: 'x'.repeat(500) }],
+        }),
+      ).success,
+    ).toBe(true)
+    expect(
+      SubAgentReturnSchema.safeParse(
+        rawWithFinding({
+          evidence: [{ overflow: true, excerpt: 'x'.repeat(501) }],
+        }),
+      ).success,
+    ).toBe(false)
+  })
+
+  test('enforces the findings array bound', () => {
+    expect(
+      SubAgentReturnSchema.safeParse({
+        ...rawReturnFixture,
+        findings: Array.from({ length: 32 }, () => rawFindingFixture),
+      }).success,
+    ).toBe(true)
+    expect(
+      SubAgentReturnSchema.safeParse({
+        ...rawReturnFixture,
+        findings: Array.from({ length: 33 }, () => rawFindingFixture),
+      }).success,
+    ).toBe(false)
+  })
+
+  test('preserves residual-risk and testing-gap acceptance semantics', () => {
+    // Empty and whitespace-only strings remain acceptable; these fields must
+    // not inherit the ReasonSchema non-empty/pattern restrictions.
+    expect(
+      SubAgentReturnSchema.safeParse({
+        ...rawReturnFixture,
+        residual_risks: [''],
+        testing_gaps: ['   '],
+      }).success,
+    ).toBe(true)
+
+    expect(
+      SubAgentReturnSchema.safeParse({
+        ...rawReturnFixture,
+        residual_risks: ['x'.repeat(1024)],
+        testing_gaps: ['x'.repeat(1024)],
+      }).success,
+    ).toBe(true)
+    for (const key of ['residual_risks', 'testing_gaps'] as const) {
+      expect(
+        SubAgentReturnSchema.safeParse({
+          ...rawReturnFixture,
+          [key]: ['x'.repeat(1025)],
+        }).success,
+        `${key} maxLength`,
+      ).toBe(false)
+      expect(
+        SubAgentReturnSchema.safeParse({
+          ...rawReturnFixture,
+          [key]: Array.from({ length: 65 }, () => 'risk'),
+        }).success,
+        `${key} maxItems`,
+      ).toBe(false)
+    }
+  })
+
+  test('enforces repository-relative path conventions for files and evidence', () => {
+    const absolutePaths = [
+      '/Users/example/repo/src/file.ts',
+      'C:\\repo\\src\\file.ts',
+      'C:/repo/src/file.ts',
+      '\\\\server\\share\\file.ts',
+    ]
+
+    for (const file of absolutePaths) {
+      expect(
+        SubAgentReturnSchema.safeParse(rawWithFinding({ file })).success,
+        file,
+      ).toBe(false)
+      expect(
+        SubAgentReturnSchema.safeParse(rawWithFinding({ evidence: [file] }))
+          .success,
+        `evidence: ${file}`,
+      ).toBe(false)
+    }
+
+    expect(
+      SubAgentReturnSchema.safeParse(rawWithFinding({ file: 'src/file.ts' }))
+        .success,
+    ).toBe(true)
+  })
+
+  test('does not regress the aggregate review artifact contract', () => {
+    expect(ReviewArtifactSchema.safeParse(baseArtifact).success).toBe(true)
+    // A raw return is not an aggregate artifact: the boundary is preserved.
+    expect(ReviewArtifactSchema.safeParse(rawReturnFixture).success).toBe(false)
   })
 })

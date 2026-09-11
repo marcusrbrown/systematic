@@ -357,3 +357,149 @@ export const ReviewArtifactSchema = z
   .strict()
 
 export type ReviewArtifact = z.infer<typeof ReviewArtifactSchema>
+
+// --- Raw reviewer return and parent-persisted record contracts --------------
+//
+// These schemas are the executable source for the `ce:review`
+// `subAgentReturn` and `parentRecord` JSON Schema contracts. Descriptions are
+// attached to dedicated schema instances so prompt-facing metadata is preserved
+// without changing the aggregate `ReviewArtifactSchema` projection.
+
+const MAX_RAW_RISK_LENGTH = 1024
+const RAW_FINDINGS_LIST_DESCRIPTION =
+  'List of code review findings. Empty array if no issues found.'
+
+const RawReviewerSchema = ReviewerSchema.describe(
+  "Persona name that produced this output (e.g., 'correctness', 'security')",
+)
+const RawHarnessSchema = HarnessSchema.describe(
+  'Harness that produced the artifact; populated by the parent orchestrator',
+)
+const RawDispatchOutcomeSchema = DispatchOutcomeSchema.describe(
+  'What a persona returned: findings, empty, malformed, or never returned',
+)
+const RawDispositionSchema = DispositionSchema.describe(
+  'What happened to an input finding: surviving, merged, suppressed, filtered, or rejected',
+)
+
+const RawResidualRisksSchema = z
+  .array(z.string().max(MAX_RAW_RISK_LENGTH))
+  .max(MAX_PERSONAS)
+  .describe('Risks the reviewer noticed but could not confirm as findings')
+const RawTestingGapsSchema = z
+  .array(z.string().max(MAX_RAW_RISK_LENGTH))
+  .max(MAX_PERSONAS)
+  .describe('Missing test coverage the reviewer identified')
+
+const RawEvidenceStringSchema = BoundedEvidenceStringSchema.describe(
+  'Bounded code-grounded evidence; absolute POSIX, drive-letter, and UNC paths are rejected',
+)
+const RawOverflowExcerptSchema = BoundedEvidenceStringSchema.describe(
+  'Bounded excerpt retained when evidence must be shortened',
+)
+const RawOverflowEvidenceSchema = z
+  .object({
+    overflow: z
+      .literal(true)
+      .describe(
+        'Explicit marker that the complete evidence did not fit in one bounded entry',
+      ),
+    excerpt: RawOverflowExcerptSchema,
+  })
+  .strict()
+const RawEvidenceSchema = z
+  .array(z.union([RawEvidenceStringSchema, RawOverflowEvidenceSchema]))
+  .min(1)
+  .max(5)
+  .describe(
+    'Code-grounded evidence. At least 1 and at most 5 bounded entries; split evidence across entries or use an explicit overflow marker rather than silently truncating it.',
+  )
+
+const RawFindingFieldsSchema = z
+  .object({
+    title: FindingTitleSchema.describe(
+      'Short, specific issue title. 10 words or fewer.',
+    ),
+    severity: FindingSeveritySchema.describe('Issue severity level'),
+    file: RepoRelativePathSchema.describe(
+      'Relative file path from repository root; absolute POSIX, drive-letter, and UNC paths are rejected',
+    ),
+    // Integer >= 1 without Zod's implicit safe-integer maximum, which the
+    // committed raw/parent contract does not impose. `multipleOf(1)` enforces
+    // the integer constraint at the JSON Schema boundary.
+    line: z
+      .number()
+      .min(1)
+      .multipleOf(1)
+      .describe('Primary line number of the issue'),
+    why_it_matters: boundedText(2048).describe(
+      "Non-empty impact and failure mode -- not 'what is wrong' but 'what breaks'",
+    ),
+    autofix_class: AutofixClassSchema.describe(
+      "Reviewer's conservative recommendation for how this issue should be handled after synthesis",
+    ),
+    owner: OwnerSchema.describe(
+      'Who should own the next action for this finding after synthesis',
+    ),
+    requires_verification: z
+      .boolean()
+      .describe(
+        'Whether any fix for this finding must be re-verified with targeted tests or a follow-up review pass',
+      ),
+    suggested_fix: z
+      .string()
+      .max(2048)
+      .nullable()
+      .optional()
+      .describe(
+        'Concrete minimal fix. Omit or null if no good fix is obvious -- a bad suggestion is worse than none.',
+      ),
+    confidence: z
+      .number()
+      .min(0)
+      .max(1)
+      .describe('Reviewer confidence in this finding, calibrated per persona'),
+    evidence: RawEvidenceSchema,
+    pre_existing: z
+      .boolean()
+      .describe(
+        'True if this issue exists in unchanged code unrelated to the current diff',
+      ),
+  })
+  .strict()
+
+/** A single finding as returned by a reviewer persona. */
+export const SubAgentFindingSchema = RawFindingFieldsSchema
+
+/** A finding after the parent adds its disposition; parent-owned. */
+export const ParentFindingSchema = RawFindingFieldsSchema.extend({
+  disposition: RawDispositionSchema,
+}).strict()
+
+/** The raw return contract a reviewer persona must satisfy. */
+export const SubAgentReturnSchema = z
+  .object({
+    reviewer: RawReviewerSchema,
+    findings: z
+      .array(SubAgentFindingSchema)
+      .max(MAX_FINDINGS)
+      .describe(RAW_FINDINGS_LIST_DESCRIPTION),
+    residual_risks: RawResidualRisksSchema,
+    testing_gaps: RawTestingGapsSchema,
+  })
+  .strict()
+
+/** The parent-persisted record contract; adds harness and dispatch outcome. */
+export const ParentRecordSchema = z
+  .object({
+    reviewer: RawReviewerSchema,
+    harness: RawHarnessSchema,
+    dispatch_outcome: RawDispatchOutcomeSchema,
+    findings: z
+      .array(ParentFindingSchema)
+      .max(MAX_FINDINGS)
+      .describe(RAW_FINDINGS_LIST_DESCRIPTION),
+    residual_risks: RawResidualRisksSchema,
+    testing_gaps: RawTestingGapsSchema,
+  })
+  .strict()

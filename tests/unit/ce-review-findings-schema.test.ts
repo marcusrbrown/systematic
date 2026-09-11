@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
 import Ajv from 'ajv'
+import { z } from 'zod'
 
 const schemaPath = path.resolve(
   import.meta.dir,
@@ -494,5 +495,314 @@ describe('ce:review findings schema', () => {
   test('rejects unknown harness provenance', () => {
     expect(validateParent({ ...baseArtifact, harness: 'unknown' })).toBe(false)
     expect(errorMentions(validateParent, '/harness')).toBe(true)
+  })
+})
+
+function omitKey(
+  value: Record<string, unknown>,
+  key: string,
+): Record<string, unknown> {
+  const copy = { ...value }
+  delete copy[key]
+  return copy
+}
+
+function collectDescriptions(node: unknown): string[] {
+  if (Array.isArray(node)) {
+    return node.flatMap(collectDescriptions)
+  }
+  if (node && typeof node === 'object') {
+    const record = node as Record<string, unknown>
+    const own =
+      typeof record.description === 'string' ? [record.description] : []
+    return [...own, ...Object.values(record).flatMap(collectDescriptions)]
+  }
+  return []
+}
+
+async function importSchemaModule(): Promise<Record<string, unknown>> {
+  return (await import(
+    '../../src/lib/review-artifact-schema.js'
+  )) as unknown as Record<string, unknown>
+}
+
+function compileGenerated(schemaValue: unknown) {
+  const jsonSchema = z.toJSONSchema(schemaValue as z.ZodType, {
+    target: 'draft-7',
+  }) as Record<string, unknown>
+  const ajv = new Ajv({ strict: false })
+  const validate = ajv.compile(jsonSchema)
+  return (value: unknown): boolean => validate(value) as boolean
+}
+
+const parityCorpus: Array<{
+  name: string
+  root: 'raw' | 'parent'
+  value: unknown
+}> = [
+  // Accepted raw returns.
+  {
+    name: 'raw empty',
+    root: 'raw',
+    value: { ...baseSubAgentArtifact, findings: [] },
+  },
+  { name: 'raw findings', root: 'raw', value: baseSubAgentArtifact },
+  {
+    name: 'raw overflow evidence',
+    root: 'raw',
+    value: subAgentWithFinding({
+      evidence: [{ overflow: true, excerpt: 'src/file.ts excerpt' }],
+    }),
+  },
+  {
+    name: 'raw severity P0',
+    root: 'raw',
+    value: subAgentWithFinding({ severity: 'P0' }),
+  },
+  {
+    name: 'raw empty risk and gap strings',
+    root: 'raw',
+    value: {
+      ...baseSubAgentArtifact,
+      residual_risks: [''],
+      testing_gaps: [''],
+    },
+  },
+  {
+    name: 'raw risk at 1024',
+    root: 'raw',
+    value: { ...baseSubAgentArtifact, residual_risks: ['x'.repeat(1024)] },
+  },
+  // Rejected raw returns (#964 boundaries).
+  {
+    name: 'raw severity medium',
+    root: 'raw',
+    value: subAgentWithFinding({ severity: 'medium' }),
+  },
+  {
+    name: 'raw severity unknown',
+    root: 'raw',
+    value: subAgentWithFinding({ severity: 'unknown' }),
+  },
+  {
+    name: 'raw parent harness annotation',
+    root: 'raw',
+    value: { ...baseSubAgentArtifact, harness: 'opencode' },
+  },
+  {
+    name: 'raw parent dispatch_outcome annotation',
+    root: 'raw',
+    value: { ...baseSubAgentArtifact, dispatch_outcome: 'findings' },
+  },
+  {
+    name: 'raw finding disposition annotation',
+    root: 'raw',
+    value: subAgentWithFinding({ disposition: 'surviving' }),
+  },
+  {
+    name: 'raw unknown top-level',
+    root: 'raw',
+    value: { ...baseSubAgentArtifact, ROGUE_TOP_LEVEL: 'x' },
+  },
+  {
+    name: 'raw unknown finding field',
+    root: 'raw',
+    value: subAgentWithFinding({ EXTRA_INJECTED_FIELD: 'x' }),
+  },
+  {
+    name: 'raw missing reviewer',
+    root: 'raw',
+    value: omitKey(baseSubAgentArtifact, 'reviewer'),
+  },
+  {
+    name: 'raw absolute posix file',
+    root: 'raw',
+    value: subAgentWithFinding({ file: '/Users/example/repo/src/file.ts' }),
+  },
+  {
+    name: 'raw windows drive file',
+    root: 'raw',
+    value: subAgentWithFinding({ file: 'C:/repo/src/file.ts' }),
+  },
+  {
+    name: 'raw unc file',
+    root: 'raw',
+    value: subAgentWithFinding({ file: '\\\\server\\share\\file.ts' }),
+  },
+  {
+    name: 'raw empty evidence',
+    root: 'raw',
+    value: subAgentWithFinding({ evidence: [] }),
+  },
+  {
+    name: 'raw evidence over cap',
+    root: 'raw',
+    value: subAgentWithFinding({
+      evidence: Array.from({ length: 6 }, (_, index) => `e${index}`),
+    }),
+  },
+  {
+    name: 'raw evidence string over cap',
+    root: 'raw',
+    value: subAgentWithFinding({ evidence: ['x'.repeat(501)] }),
+  },
+  {
+    name: 'raw object risk entry',
+    root: 'raw',
+    value: { ...baseSubAgentArtifact, residual_risks: [{ reason: 'x' }] },
+  },
+  {
+    name: 'raw risk over cap',
+    root: 'raw',
+    value: { ...baseSubAgentArtifact, residual_risks: ['x'.repeat(1025)] },
+  },
+  {
+    name: 'raw testing gap over cap',
+    root: 'raw',
+    value: { ...baseSubAgentArtifact, testing_gaps: ['x'.repeat(1025)] },
+  },
+  {
+    name: 'raw findings over cap',
+    root: 'raw',
+    value: {
+      ...baseSubAgentArtifact,
+      findings: Array.from({ length: 33 }, () => baseSubAgentFinding),
+    },
+  },
+  {
+    name: 'raw line above max safe integer',
+    root: 'raw',
+    value: subAgentWithFinding({ line: 9007199254740992 }),
+  },
+  {
+    name: 'raw title over cap',
+    root: 'raw',
+    value: subAgentWithFinding({ title: 'x'.repeat(257) }),
+  },
+  {
+    name: 'raw reviewer over cap',
+    root: 'raw',
+    value: { ...baseSubAgentArtifact, reviewer: 'x'.repeat(65) },
+  },
+  {
+    name: 'raw suggested_fix over cap',
+    root: 'raw',
+    value: subAgentWithFinding({ suggested_fix: 'x'.repeat(2049) }),
+  },
+  {
+    name: 'raw confidence over cap',
+    root: 'raw',
+    value: subAgentWithFinding({ confidence: 1.1 }),
+  },
+  // Parent records.
+  { name: 'parent valid', root: 'parent', value: baseArtifact },
+  {
+    name: 'parent empty findings',
+    root: 'parent',
+    value: { ...baseArtifact, findings: [] },
+  },
+  {
+    name: 'parent unknown dispatch outcome',
+    root: 'parent',
+    value: { ...baseArtifact, dispatch_outcome: 'dropped' },
+  },
+  {
+    name: 'parent missing dispatch outcome',
+    root: 'parent',
+    value: omitKey(baseArtifact, 'dispatch_outcome'),
+  },
+  {
+    name: 'parent finding missing disposition',
+    root: 'parent',
+    value: { ...baseArtifact, findings: [baseSubAgentFinding] },
+  },
+  {
+    name: 'parent unknown top-level',
+    root: 'parent',
+    value: { ...baseArtifact, ROGUE_TOP_LEVEL: 1 },
+  },
+  {
+    name: 'parent unknown finding field',
+    root: 'parent',
+    value: artifactWithFinding({ EXTRA_INJECTED_FIELD: 1 }),
+  },
+  {
+    name: 'parent absolute file',
+    root: 'parent',
+    value: artifactWithFinding({ file: '/abs/file.ts' }),
+  },
+  {
+    name: 'parent risk over cap',
+    root: 'parent',
+    value: { ...baseArtifact, residual_risks: ['x'.repeat(1025)] },
+  },
+  {
+    name: 'parent severity medium',
+    root: 'parent',
+    value: artifactWithFinding({ severity: 'medium' }),
+  },
+  {
+    name: 'parent line above max safe integer',
+    root: 'parent',
+    value: artifactWithFinding({ line: 9007199254740992 }),
+  },
+]
+
+describe('canonical Zod schema parity', () => {
+  test('exports canonical raw-return and parent-record schemas', async () => {
+    const schemaModule = await importSchemaModule()
+
+    expect(
+      schemaModule.SubAgentReturnSchema,
+      'SubAgentReturnSchema export',
+    ).toBeDefined()
+    expect(
+      schemaModule.ParentRecordSchema,
+      'ParentRecordSchema export',
+    ).toBeDefined()
+  })
+
+  test('generated schemas match committed accept/reject over the corpus', async () => {
+    const schemaModule = await importSchemaModule()
+    const candidateRaw = compileGenerated(schemaModule.SubAgentReturnSchema)
+    const candidateParent = compileGenerated(schemaModule.ParentRecordSchema)
+
+    for (const entry of parityCorpus) {
+      const committed = entry.root === 'raw' ? validateSubAgent : validateParent
+      const candidate = entry.root === 'raw' ? candidateRaw : candidateParent
+      const committedAccepts = committed(entry.value)
+      const candidateAccepts = candidate(entry.value)
+
+      expect(
+        candidateAccepts,
+        `${entry.name}: committed=${committedAccepts} candidate=${candidateAccepts}`,
+      ).toBe(committedAccepts)
+    }
+  })
+
+  test('generated schemas preserve every committed prompt-facing description', async () => {
+    const schemaModule = await importSchemaModule()
+    // The document-level title/description envelope is assembled by the
+    // generator (U2); prompt-facing descriptions live on the definitions.
+    const committedDescriptions = new Set(
+      collectDescriptions(schema.definitions),
+    )
+    const generatedDescriptions = new Set(
+      [
+        z.toJSONSchema(schemaModule.SubAgentReturnSchema as z.ZodType, {
+          target: 'draft-7',
+        }),
+        z.toJSONSchema(schemaModule.ParentRecordSchema as z.ZodType, {
+          target: 'draft-7',
+        }),
+      ].flatMap(collectDescriptions),
+    )
+
+    for (const description of committedDescriptions) {
+      expect(
+        generatedDescriptions.has(description),
+        `missing description: ${description}`,
+      ).toBe(true)
+    }
   })
 })
