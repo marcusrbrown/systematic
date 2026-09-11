@@ -78,6 +78,10 @@ Reviewer name: {reviewer_name}
 
 Intent: {intent_summary}
 
+Selection reason: {selection_reason}
+
+Selection surface: {selection_surface}
+
 Changed files: {file_list}
 
 Diff:
@@ -97,3 +101,5 @@ Diff:
 | `{file_list}` | Stage 1 output | List of changed files from the scope step |
 | `{diff}` | Stage 1 output | The actual diff content to review |
 | `{reviewer_name}` | Stage 3 output | Persona name used in the returned `reviewer` field |
+| `{selection_reason}` | Stage 3 output | One-line reason this conditional persona was selected. Empty for core personas, which have no selection condition |
+| `{selection_surface}` | Stage 3 output | Non-empty repository-relative paths/surfaces that triggered selection. Empty for core personas. These are bounded domain hints for the reviewer, not fields of the returned payload |

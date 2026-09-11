@@ -315,3 +315,21 @@ describe('persisted validation_unavailable outcome (KTD8 amendment)', () => {
     expect(OUTPUT_NORM).toContain('validation_unavailable')
   })
 })
+
+describe('core-plus-risk selection (U6 acceptance)', () => {
+  test('selects exactly the three core reviewers before conditionals', () => {
+    expect(SKILL_NORM).toMatch(
+      /exactly the three always-on personas: `correctness`, `testing`, and `project-standards`/i,
+    )
+    // Reviewer count is an outcome, not a manufactured floor.
+    expect(SKILL_NORM).toMatch(
+      /reviewer count is an outcome, not a target or a success metric/i,
+    )
+  })
+
+  test('all four modes share the selection policy and probes stay separate', () => {
+    expect(SKILL_NORM).toMatch(/same reviewer-selection policy/i)
+    expect(SKILL_NORM).toMatch(/execution probe[^.]*separate parent decision/i)
+    expect(SKILL_NORM).toMatch(/probe[^.]*permission boundary/i)
+  })
+})

@@ -1,7 +1,7 @@
 ---
 title: "fix: Validate reviewer returns and select reviewers by risk"
 type: fix
-status: active
+status: completed
 date: 2026-09-10
 ---
 
@@ -767,8 +767,9 @@ flowchart TB
   validator before existing privacy screening, evidence assessment, synthesis,
   and aggregate artifact validation.
 - **Error propagation:** Payload defects become `malformed`; invocation defects
-  become validation-unavailable coverage. Neither is rewritten as task timeout
-  or evidence verification.
+  persist `dispatch_outcome: "validation_unavailable"` with zero findings and
+  degraded Coverage. Neither is rewritten as task timeout (`never_returned`),
+  malformed, or evidence verification.
 - **State lifecycle risks:** Report-only remains in memory. Writing modes retain
   the existing single parent-owned artifact write and post-write validation
   contract.
@@ -802,10 +803,13 @@ flowchart TB
   evidence resolves the mismatch.
 - AE5. Report-only processes conforming and malformed returns and renders the
   result without creating `.context`, an artifact, or an ignore entry.
-- AE6. A small documentation correction selects correctness, testing, and
-  project standards only, and Coverage explains that no conditional risk
-  surface triggered. A small renderer change may add design or reliability
-  coverage and a focused runtime probe without selecting six static reviewers.
+- AE6. A small non-agent-facing documentation correction with no structural or
+  other specialist surface selects only the three core reviewers (`correctness`,
+  `testing`, `project-standards`), and Coverage explains that no conditional
+  surface triggered. A renderer or asset-delivery change may independently
+  require a focused execution probe; conditionals such as `agent-native-reviewer`
+  or `reliability` are selected only when their own changed surface triggers
+  them, and no reviewer floor returns.
 - AE7. A selected security reviewer never returns and no validated alternative
   covers its risk surface. The run is blocked or degraded according to the
   existing risk-critical contract and cannot be reported clean.
