@@ -118,7 +118,7 @@ describe('ce:review raw-return admission contract', () => {
       'environment-screen',
       'validation unavailable',
     ]) {
-      expect(OUTPUT_NORM + ' ' + SKILL_NORM).toContain(token)
+      expect(`${OUTPUT_NORM} ${SKILL_NORM}`).toContain(token)
     }
     expect(SYNTH_NORM).toContain('schema_version')
   })
