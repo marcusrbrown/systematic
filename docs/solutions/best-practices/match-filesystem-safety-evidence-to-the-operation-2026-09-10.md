@@ -68,7 +68,7 @@ The deletion preflight instead compared exact `mtimeNs`/`ctimeNs` and device/ino
 
 Path checks and descriptor checks serve different purposes. Where `O_NONBLOCK` is unavailable,
 opening a substituted FIFO can block before an fd exists to inspect; where it is available, the
-pre-open regular-file check remains portability and defense-in-depth. `O_NOFOLLOW` alone does not
+pre-open regular-file check remains a portability and defense-in-depth measure. `O_NOFOLLOW` alone does not
 prevent FIFO blocking, while `O_NONBLOCK` closes that window before the subsequent type and identity
 checks reject the substituted object.
 
@@ -113,9 +113,9 @@ const label = deriveStatusLabel(candidateAbsPath, walked.entries);
 
 `mkfifo` is an external fixture capability, not a Node filesystem API. The test explicitly skips
 when it is unavailable. On those hosts, the guard-removal/anti-regression proof does not run, so
-that signal is CI-platform-dependent rather than universal. The injected fault and
-production-mutation check establish this reader's
-behavior on the exercised platform, not a universal guarantee for every device or filesystem.
+that signal is CI-platform-dependent rather than universal. The injected fault and production-mutation
+check establish this reader's behavior on the exercised platform, not a universal guarantee for every
+device or filesystem.
 
 ### Classify cache files through their current consumer
 
