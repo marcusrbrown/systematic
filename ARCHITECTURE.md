@@ -215,7 +215,9 @@ version is not evidence for another.
 
 **Content-integrity gate** (`scripts/content-integrity.ts`) — runs in the CI build job. Catches
 phantom `systematic:*` references, dispatch identifier integrity issues, frontmatter/model
-contract violations, and banned CC/CEP patterns. Must pass before any release.
+contract violations, banned CC/CEP patterns, and stale `docs/plans/` status. Ignoring fenced code
+blocks, it flags plans marked `status: active` with at least one ticked checkbox and no unticked
+checkboxes. It does not inspect deliverables or verify that work shipped. Must pass before any release.
 
 **Receipt-backed workflow guard** (`src/lib/workflow-guard.ts` plus the OpenCode adapter in
 `src/lib/opencode-workflow-guard.ts`, `opencode-operation-observer.ts`, and `receipt-classifier.ts`
@@ -239,6 +241,21 @@ it before reporting a verdict; a failing artifact is repaired and re-validated, 
 reported over. Artifacts without `schema_version` predate the contract and are excluded (exit 3,
 "legacy"). By default the target must resolve inside `.context/systematic/ce-review`; pass
 `--allow-outside-artifact-root` to validate an artifact elsewhere.
+
+**Review artifact cleanup** (`skills/ce-review-cleanup/SKILL.md`,
+`skills/ce-review-cleanup/scripts/cleanup.mjs`) — offline, operator-initiated deletion of old
+`.context/systematic/ce-review/` run directories through a bundled Node helper invoked in two
+steps: `preview` (read-only, age-cutoff scan that returns a token bound to a snapshot digest) and
+`execute` (token validation, a whole-selection rescan, and per-candidate revalidation including the
+ancestor chain). A preview-digest mismatch returns `preview-stale` before any deletion; mid-batch
+drift or deletion failures return `partial`, which can include completed deletions. The skill
+requires separate offline acknowledgment and explicit deletion approval after preview. The helper
+requires the acknowledgment flag and preview token; neither authenticates human approval.
+Persistence has a paired prerequisite: the `ce:review` workflow invokes
+`skills/ce-review/scripts/ensure-ignore.mjs` to verify or add the `.context/.gitignore` entry for
+`.context/systematic/ce-review/` before creating a run directory in interactive, autofix, or
+headless mode. A blocked or malformed result stops the workflow before allocating a run ID or
+creating its directory; report-only mode never invokes the helper.
 
 **Claude Code plugin build** (`scripts/build-claude-code-plugin.ts`) — generates the CC bundle from
 `skills/` and `agents/` on every CI run; the build fails on any leftover source-namespace identifier
