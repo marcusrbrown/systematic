@@ -2,7 +2,7 @@
 title: Match filesystem safety evidence to the operation being guarded
 date: "2026-09-10"
 category: best-practices
-module: ce-review-cleanup
+module: ce-review-cleanup + ce-review
 problem_type: best_practice
 component: testing_framework
 severity: high
@@ -11,14 +11,15 @@ applies_when:
   - "A test copies a production guard instead of invoking the guarded operation"
   - "Fault injection would otherwise mutate a shared test worker"
   - "Using filenames, timestamps, or cache metadata to justify maintenance"
+  - "Reviewing deriveStatusLabel and ensure-ignore behavior around O_NONBLOCK"
 tags:
   - ce-review-cleanup
   - filesystem-safety
   - fault-injection
   - node-fs
   - fifo
-  - inode
-  - timestamps
+  - ce-review
+  - o-nonblock
   - aft
 ---
 
@@ -65,10 +66,11 @@ The deletion preflight instead compared exact `mtimeNs`/`ctimeNs` and device/ino
 
 ## Why This Matters
 
-Path checks and descriptor checks serve different purposes. Keep the pre-open regular-file
-check: opening first can block before an fd is available to inspect. `O_NOFOLLOW` does not
-prevent a FIFO open from blocking. Where available, `O_NONBLOCK` closes that particular window;
-the subsequent type and identity checks reject the substituted object.
+Path checks and descriptor checks serve different purposes. Where `O_NONBLOCK` is unavailable,
+opening a substituted FIFO can block before an fd exists to inspect; where it is available, the
+pre-open regular-file check remains portability and defense-in-depth. `O_NOFOLLOW` alone does not
+prevent FIFO blocking, while `O_NONBLOCK` closes that window before the subsequent type and identity
+checks reject the substituted object.
 
 Likewise, bounded reads must reject incomplete or changed snapshots. In the ignore helper,
 growth that stayed below the cap initially returned a stale prefix, and a short read was
@@ -110,7 +112,9 @@ const label = deriveStatusLabel(candidateAbsPath, walked.entries);
 ```
 
 `mkfifo` is an external fixture capability, not a Node filesystem API. The test explicitly skips
-when it is unavailable. The injected fault and production-mutation check establish this reader's
+when it is unavailable. On those hosts, the guard-removal/anti-regression proof does not run, so
+that signal is CI-platform-dependent rather than universal. The injected fault and
+production-mutation check establish this reader's
 behavior on the exercised platform, not a universal guarantee for every device or filesystem.
 
 ### Classify cache files through their current consumer
@@ -122,10 +126,12 @@ established that the current reader uses self-contained `cache.bin`, not old sta
 `lookup.bin` and `postings.bin` companions.
 
 After explicit approval and fresh identity/handle checks, only those two companions in one
-temporary-workspace cache were removed: about 11.7 GiB, with `cache.bin` verified unchanged.
-That version-specific decision did not authorize other deletions. The preceding ten-minute
-measurement showed only about 1.5 MiB of store growth; the retained footprint did not prove a
-runaway growth mechanism or identify the migration that left the files behind.
+temporary-workspace cache were removed: about 11.7 GiB, a recorded one-time observation, with
+`cache.bin` verified unchanged. That version-specific, explicitly deletion-approved decision did
+not authorize other deletions. The preceding ten-minute measurement was also a recorded one-time
+observation, showing only about 1.5 MiB of store growth; readers cannot re-derive either figure from
+this repository. The retained footprint did not prove a runaway growth mechanism or identify the
+migration that left the files behind.
 
 ## Related
 
