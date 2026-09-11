@@ -171,7 +171,7 @@
               },
               "dispatch_outcome": {
                 "type": "string",
-                "enum": ["findings", "empty", "malformed"]
+                "enum": ["findings", "empty", "malformed", "never_returned"]
               },
               "rejected_finding_count": {
                 "type": "integer",
@@ -243,9 +243,9 @@
             ]
           },
           "line": {
-            "type": "integer",
-            "exclusiveMinimum": 0,
-            "maximum": 9007199254740991
+            "type": "number",
+            "minimum": 1,
+            "multipleOf": 1
           },
           "why_it_matters": {
             "type": "string",

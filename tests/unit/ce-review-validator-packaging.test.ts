@@ -315,7 +315,9 @@ describe('OCX-selected ce-review skill tree', () => {
       path.join(consumerRoot, 'skills/ce-review'),
     )
     expect(fs.existsSync(scriptPath)).toBe(true)
-    expect(fs.readFileSync(scriptPath).equals(fs.readFileSync(VALIDATOR_SRC)))
+    expect(
+      fs.readFileSync(scriptPath).equals(fs.readFileSync(VALIDATOR_SRC)),
+    ).toBe(true)
 
     exercisePackagedScript(scriptPath, 'ocx')
     assertRunsUnderRealNode(scriptPath, 'ocx')
@@ -362,7 +364,9 @@ describe('npm-packed archive', () => {
   test('tarball ships the validator byte-identical at its skill path', () => {
     const packaged = path.join(extractDir, 'package', VALIDATOR_REL)
     expect(fs.existsSync(packaged)).toBe(true)
-    expect(fs.readFileSync(packaged).equals(fs.readFileSync(VALIDATOR_SRC)))
+    expect(
+      fs.readFileSync(packaged).equals(fs.readFileSync(VALIDATOR_SRC)),
+    ).toBe(true)
   })
 
   test('executes both subcommands from the extracted archive', () => {
@@ -393,7 +397,9 @@ describe('Claude Code generated plugin', () => {
   test('bundle includes the validator byte-identical at its skill path', () => {
     const packaged = path.join(outDir, VALIDATOR_REL)
     expect(fs.existsSync(packaged)).toBe(true)
-    expect(fs.readFileSync(packaged).equals(fs.readFileSync(VALIDATOR_SRC)))
+    expect(
+      fs.readFileSync(packaged).equals(fs.readFileSync(VALIDATOR_SRC)),
+    ).toBe(true)
   })
 
   test('executes both subcommands from the written output tree', () => {

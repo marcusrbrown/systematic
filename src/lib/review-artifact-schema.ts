@@ -15,10 +15,19 @@ export const REVIEW_ARTIFACT_CUSTOM_MESSAGES = [
   'satisfied risk coverage requires a citing input finding ID',
   'unsatisfied risk coverage must not cite an input finding ID',
   'passed validation must not include a reason; non-passed validation requires a reason',
+  'validation_unavailable dispatches must record zero input findings',
+  'a completed run must not contain validation_unavailable evidence',
+  'a validation_unavailable persona must not have an input finding',
 ] as const
 
 const boundedText = (maxLength: number) =>
   z.string().min(1).max(maxLength).regex(/\S/)
+
+// The raw-return and synthesized contracts share exactly one line-number schema
+// so every admitted raw line is representable by the final artifact. It uses
+// `multipleOf(1)` rather than `int()` because Zod's `int()` silently caps at
+// `Number.MAX_SAFE_INTEGER`, which the committed raw-v1 contract does not.
+const LineNumberSchema = z.number().min(1).multipleOf(1)
 
 export const DispatchOutcomeSchema = z.enum([
   'findings',
@@ -30,12 +39,12 @@ export const DispatchOutcomeSchema = z.enum([
 
 // A rejected-payload summary requires at least one rejected finding, so it has
 // no meaning for an outcome where no payload was returned or enumerated:
-// `never_returned` and `validation_unavailable` can never carry one. `empty`
-// is intentionally accepted only for backward compatibility with schema_version
-// 1 artifacts, which permitted it; it is not a semantically valid rejected-summary
-// outcome and the prose contract still forbids it.
+// `validation_unavailable` can never carry one. `never_returned` and `empty`
+// are intentionally accepted only for backward compatibility with historical
+// schema_version 1 artifacts, which permitted them; neither is a semantically
+// valid rejected-summary outcome and the prose contract still forbids new
+// writers from emitting them.
 const RejectedSummaryDispatchOutcomeSchema = DispatchOutcomeSchema.exclude([
-  'never_returned',
   'validation_unavailable',
 ])
 
@@ -150,7 +159,7 @@ const SynthesizedFindingFieldsSchema = z
     title: FindingTitleSchema,
     severity: FindingSeveritySchema,
     file: RepoRelativePathSchema,
-    line: z.number().int().positive(),
+    line: LineNumberSchema,
     why_it_matters: boundedText(2048),
     autofix_class: AutofixClassSchema,
     owner: OwnerSchema,
@@ -367,6 +376,53 @@ export const ReviewArtifactSchema = z
     validation: ValidationSchema.optional(),
   })
   .strict()
+  .superRefine((artifact, ctx) => {
+    const unavailablePersonas = new Set(
+      artifact.dispatches
+        .filter(
+          (dispatch) => dispatch.dispatch_outcome === 'validation_unavailable',
+        )
+        .map((dispatch) => dispatch.persona),
+    )
+
+    if (unavailablePersonas.size === 0) {
+      return
+    }
+
+    // Unavailable evidence can never finalize as a clean, completed run.
+    if (artifact.run_status === 'completed') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['run_status'],
+        message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[7],
+      })
+    }
+
+    artifact.dispatches.forEach((dispatch, index) => {
+      if (
+        dispatch.dispatch_outcome === 'validation_unavailable' &&
+        dispatch.input_finding_count !== 0
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['dispatches', index, 'input_finding_count'],
+          message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[6],
+        })
+      }
+    })
+
+    artifact.input_findings.forEach((finding, index) => {
+      // No ledger row of either record type may name a persona whose payload
+      // was withheld: unavailable evidence is neither admitted nor rejected.
+      if (unavailablePersonas.has(finding.reviewer)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['input_findings', index, 'reviewer'],
+          message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[8],
+        })
+      }
+    })
+  })
 
 export type ReviewArtifact = z.infer<typeof ReviewArtifactSchema>
 
@@ -436,14 +492,7 @@ const RawFindingFieldsSchema = z
     file: RepoRelativePathSchema.describe(
       'Relative file path from repository root; absolute POSIX, drive-letter, and UNC paths are rejected',
     ),
-    // Integer >= 1 without Zod's implicit safe-integer maximum, which the
-    // committed raw/parent contract does not impose. `multipleOf(1)` enforces
-    // the integer constraint at the JSON Schema boundary.
-    line: z
-      .number()
-      .min(1)
-      .multipleOf(1)
-      .describe('Primary line number of the issue'),
+    line: LineNumberSchema.describe('Primary line number of the issue'),
     why_it_matters: boundedText(2048).describe(
       "Non-empty impact and failure mode -- not 'what is wrong' but 'what breaks'",
     ),

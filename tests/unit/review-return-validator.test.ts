@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -155,6 +155,31 @@ describe('runReviewReturnValidator', () => {
     expect(result.status).toBe(2)
     expect(result.stderr).toBe(REVIEW_RETURN_READ_FAILED_MESSAGE)
     expect(result.stderr).not.toContain('EIO')
+  })
+
+  test('retries transient EAGAIN/EWOULDBLOCK reads instead of failing', () => {
+    const payload = Buffer.from(JSON.stringify(VALID_RETURN), 'utf8')
+    let offset = 0
+    let transientThrows = 0
+    const result = runWith(payload, {
+      readChunk: (_fd, buffer, bufferOffset, length) => {
+        if (transientThrows < 3) {
+          transientThrows += 1
+          const error = new Error('no data yet') as Error & { code?: string }
+          error.code = transientThrows === 1 ? 'EAGAIN' : 'EWOULDBLOCK'
+          throw error
+        }
+        if (offset >= payload.length) return 0
+        const bytes = Math.min(length, payload.length - offset)
+        payload.copy(buffer, bufferOffset, offset, offset + bytes)
+        offset += bytes
+        return bytes
+      },
+    })
+
+    expect(result.status).toBe(0)
+    expect(result.stdout).toBe(REVIEW_RETURN_VALID_MESSAGE)
+    expect(result.stderr).toBe('')
   })
 
   test('rejects empty and whitespace-only input', () => {
@@ -329,6 +354,101 @@ console.log('node-ok')
 
       expect(run.status, run.stderr).toBe(0)
       expect(run.stdout).toContain('node-ok')
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  test('accepts a slow, chunked stdin producer without treating EAGAIN as failure', async () => {
+    if (!nodeBinary) {
+      console.warn(
+        'skipping real-Node slow-producer test: no Node binary on PATH',
+      )
+      return
+    }
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'review-return-slow-'))
+    try {
+      const bundlePath = path.join(dir, 'validator.mjs')
+      const build = spawnSync(
+        'bun',
+        [
+          'build',
+          VALIDATOR_ENTRY,
+          '--target=node',
+          '--format=esm',
+          `--outfile=${bundlePath}`,
+        ],
+        { cwd: ROOT_DIR, encoding: 'utf8', timeout: 30_000 },
+      )
+      expect(build.status, build.stderr).toBe(0)
+
+      // Mirror `src/cli.ts`, which reads `process.stdin.isTTY` before dispatch.
+      // That lazily constructs Node's stdin socket and puts fd 0 into
+      // nonblocking mode, so a producer that pauses between bytes makes
+      // `fs.readSync` raise EAGAIN/EWOULDBLOCK. The bounded reader must treat
+      // those as transient instead of as a permanent stdin failure.
+      const driver = `
+const mod = await import(${JSON.stringify(pathToFileURL(bundlePath).href)})
+if (typeof Bun !== 'undefined') {
+  console.error('driver ran under Bun, not Node')
+  process.exit(3)
+}
+process.stdin.isTTY
+const status = mod.runReviewReturnValidator({
+  argv: ['systematic', 'validate-review-return'],
+  isTTY: false,
+  outputSink: (message) => process.stdout.write(message + '\\n'),
+  errorSink: (message) => process.stderr.write(message + '\\n'),
+})
+process.exit(status)
+`
+      const payload = Buffer.from(JSON.stringify(VALID_RETURN), 'utf8')
+      const result = await new Promise<{
+        readonly status: number
+        readonly stdout: string
+        readonly stderr: string
+      }>((resolve, reject) => {
+        const child = spawn(nodeBinary, ['--input-type=module', '-e', driver], {
+          cwd: dir,
+        })
+        const stdoutChunks: Buffer[] = []
+        const stderrChunks: Buffer[] = []
+        let closed = false
+        child.stdout.on('data', (chunk: Buffer) => stdoutChunks.push(chunk))
+        child.stderr.on('data', (chunk: Buffer) => stderrChunks.push(chunk))
+        child.on('error', reject)
+        child.on('close', (code) => {
+          closed = true
+          resolve({
+            status: code ?? -1,
+            stderr: Buffer.concat(stderrChunks).toString('utf8'),
+            stdout: Buffer.concat(stdoutChunks).toString('utf8'),
+          })
+        })
+        // The producer is this process, so a validator that exits early makes
+        // these writes raise EPIPE; swallow it rather than fail the test runner.
+        child.stdin.on('error', () => {
+          closed = true
+        })
+
+        let offset = 0
+        const writeNext = (): void => {
+          if (closed) return
+          if (offset >= payload.length) {
+            child.stdin.end()
+            return
+          }
+          child.stdin.write(payload.subarray(offset, offset + 1))
+          offset += 1
+          setTimeout(writeNext, 2)
+        }
+        writeNext()
+      })
+
+      expect(result.status, result.stderr).toBe(0)
+      expect(result.stdout).toContain(REVIEW_RETURN_VALID_MESSAGE)
+      expect(result.stderr).toBe('')
     } finally {
       fs.rmSync(dir, { recursive: true, force: true })
     }

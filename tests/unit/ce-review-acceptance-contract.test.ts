@@ -95,6 +95,25 @@ describe('ce:review raw-return admission contract', () => {
     )
   })
 
+  test('binds the admitted return reviewer to the dispatched persona before screening or persistence', () => {
+    for (const doc of [SKILL_NORM, SYNTH_NORM]) {
+      // The parent must compare the returned identity to the dispatch identity.
+      expect(doc).toMatch(
+        /reviewer[^.]*(?:equals|matches|match)[^.]*dispatched persona/i,
+      )
+      // A mismatch is rejected or degraded before persistence/synthesis.
+      expect(doc).toMatch(
+        /identity mismatch[^.]*(?:reject|malformed|degrad)|(?:reject|malformed|degrad)[^.]*identity mismatch/i,
+      )
+    }
+
+    // The binding gate lives in the raw-admission stage, before synthesis.
+    const identityIndex = SKILL_NORM.search(/dispatch identity binding/i)
+    const mergeIndex = SKILL_NORM.search(/### Stage 5: Merge findings/i)
+    expect(identityIndex).toBeGreaterThanOrEqual(0)
+    expect(mergeIndex).toBeGreaterThan(identityIndex)
+  })
+
   test('environment screening runs after structural admission and parent parsing, before persistence', () => {
     const admissionIndex = SKILL_NORM.search(/structurally admitted/i)
     const parseIndex = SKILL_NORM.search(
@@ -175,22 +194,26 @@ describe('ce:review raw-return admission contract', () => {
     try {
       const skillDir = path.join(REPO_ROOT, 'skills/ce-review')
       // Adversarial payload: partial JSON, the long-documented fixed delimiter
-      // as a complete line, then a canary shell command.
+      // as a complete line, then a canary shell command. The canary and skill
+      // directory travel through the child environment so no uncontrolled
+      // absolute path is interpolated into a shell command string (CodeQL
+      // js/shell-command-injection-from-environment).
       const payload = [
         '{ "reviewer": "correctness",',
         'SYSTEMATIC_REVIEW_RETURN_EOF',
-        `touch ${JSON.stringify(canary)}`,
+        'touch "$CANARY"',
       ].join('\n')
-      const command = [
-        `SKILL_DIR=${JSON.stringify(skillDir)};`,
+      const script = [
         `node "$SKILL_DIR/scripts/validate-review.mjs" return <<'${documentedDelimiter}'`,
         payload,
         documentedDelimiter,
       ].join('\n')
 
-      const result = spawnSync('sh', ['-c', command], {
+      const result = spawnSync('sh', [], {
         cwd: projectDir,
         encoding: 'utf8',
+        env: { ...process.env, CANARY: canary, SKILL_DIR: skillDir },
+        input: script,
         timeout: 30_000,
       })
 
@@ -290,15 +313,16 @@ describe('persisted validation_unavailable outcome (KTD8 amendment)', () => {
     expect(SYNTH_NORM).toMatch(
       /new writers[^.]*rejected-summary row only for `findings` or `malformed`/i,
     )
-    // Reader contract: historical `empty` rows are accepted for backward
-    // compatibility, explicitly not as authoring permission.
+    // Reader contract: historical `empty` and `never_returned` rows are accepted
+    // for backward compatibility, explicitly not as authoring permission.
     expect(SYNTH_NORM).toMatch(
-      /validator[^.]*continues to accept a historical `empty` rejected-summary row[^.]*backward compatibility/i,
+      /validator[^.]*continues to accept a historical `(?:empty|never_returned)`[^.]*backward compatibility/i,
     )
     expect(SYNTH_NORM).toMatch(/reader leniency is not authoring permission/i)
-    // Unavailable outcomes stay rejected by the schema and forbidden for writers.
+    // `validation_unavailable` is additive to this contract, so no historical
+    // artifact can carry it: the reader rejects it outright.
     expect(SYNTH_NORM).toMatch(
-      /validator rejects rejected-summary rows for `never_returned` and `validation_unavailable`[^.]*writers must never emit/i,
+      /validator rejects (?:a )?rejected-summary row for `validation_unavailable`[^.]*writers must never emit/i,
     )
   })
 

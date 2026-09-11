@@ -662,6 +662,9 @@ describe('systematic validate-review-artifact: validation_unavailable amendment'
         input_finding_count: 0,
         rejection_reason: 'Raw validator command could not run.',
       }
+      // A validation_unavailable persona was withheld before admission, so the
+      // truthful fixture admits no finding for it.
+      artifact.input_findings = []
       fs.writeFileSync(target, JSON.stringify(artifact))
 
       const result = runCli(

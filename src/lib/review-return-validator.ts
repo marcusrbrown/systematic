@@ -109,6 +109,29 @@ function defaultReadChunk(
 }
 
 /**
+ * Backoff between retries of a transient stdin read.
+ *
+ * Node puts a pipe-backed fd 0 into nonblocking mode as soon as its stdin
+ * stream is materialized, so a producer that pauses between chunks makes
+ * `fs.readSync` raise `EAGAIN`/`EWOULDBLOCK` even though the pipe is still open
+ * and more data is coming. Those codes mean "nothing yet", not "read failed".
+ * There is deliberately no total timeout: a slow writer must be allowed to
+ * finish, matching blocking `read(2)` semantics.
+ */
+const TRANSIENT_READ_RETRY_MS = 1
+
+function isTransientReadError(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false
+  const code = (error as { readonly code?: unknown }).code
+  return code === 'EAGAIN' || code === 'EWOULDBLOCK'
+}
+
+/** Block the current thread without busy-spinning (portable Node/Bun sleep). */
+function sleepSync(milliseconds: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds)
+}
+
+/**
  * Read stdin in bounded chunks, stopping at the cap plus one byte so an
  * oversized payload is rejected without buffering the whole document.
  */
@@ -126,7 +149,13 @@ function readBoundedStdin(fd: number, readChunk: ReadChunk): StdinRead {
     let bytesRead: number
     try {
       bytesRead = readChunk(fd, buffer, 0, toRead, null)
-    } catch {
+    } catch (error) {
+      if (isTransientReadError(error)) {
+        // A nonblocking pipe with no data yet: wait briefly and retry rather
+        // than reporting a permanent stdin failure.
+        sleepSync(TRANSIENT_READ_RETRY_MS)
+        continue
+      }
       return { status: 'read-error' }
     }
 

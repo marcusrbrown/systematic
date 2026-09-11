@@ -838,6 +838,49 @@ describe('review artifact schema', () => {
       artifactWith({
         validation: { status: 'passed', reason: 'The check completed.' },
       }),
+      artifactWith({
+        run_status: 'degraded',
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'validation_unavailable',
+            input_finding_count: 2,
+          },
+        ],
+        input_findings: [],
+      }),
+      artifactWith({
+        run_status: 'completed',
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'validation_unavailable',
+            input_finding_count: 0,
+          },
+        ],
+        input_findings: [],
+      }),
+      artifactWith({
+        run_status: 'degraded',
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'validation_unavailable',
+            input_finding_count: 0,
+          },
+        ],
+      }),
+      artifactWith({
+        run_status: 'degraded',
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'validation_unavailable',
+            input_finding_count: 0,
+          },
+        ],
+        input_findings: [{ ...rejectedSummary, reviewer: 'correctness' }],
+      }),
     ]
 
     const issues = cases.flatMap((value) => {
@@ -848,7 +891,7 @@ describe('review artifact schema', () => {
         : result.error.issues.filter((issue) => issue.code === 'custom')
     })
 
-    expect(issues.length).toBe(7)
+    expect(issues.length).toBe(11)
     for (const issue of issues) {
       expect(customMessages.has(issue.message)).toBe(true)
     }
@@ -1059,6 +1102,52 @@ describe('raw reviewer return and parent record schemas', () => {
       expect(
         SubAgentReturnSchema.safeParse(rawWithFinding({ line })).success,
         `${line}`,
+      ).toBe(false)
+    }
+  })
+
+  test('shares one line-number schema so every admitted raw line is representable in the artifact', () => {
+    const unsafeLine = 9007199254740992
+    const provenance = {
+      fingerprint: `src/example.ts|${unsafeLine}`,
+      submitters: ['correctness'],
+      agreement_credit: [],
+    }
+
+    expect(
+      SubAgentReturnSchema.safeParse(rawWithFinding({ line: unsafeLine }))
+        .success,
+    ).toBe(true)
+    expect(
+      ReviewArtifactSchema.safeParse(
+        artifactWith({
+          findings: [
+            {
+              ...baseFinding,
+              line: unsafeLine,
+              input_finding_ids: ['correctness#1'],
+              provenance,
+            },
+          ],
+        }),
+      ).success,
+    ).toBe(true)
+
+    for (const line of [1.5, 0, -1]) {
+      expect(
+        ReviewArtifactSchema.safeParse(
+          artifactWith({
+            findings: [
+              {
+                ...baseFinding,
+                line,
+                input_finding_ids: ['correctness#1'],
+                provenance,
+              },
+            ],
+          }),
+        ).success,
+        `aggregate line ${line}`,
       ).toBe(false)
     }
   })
@@ -1275,9 +1364,10 @@ describe('raw reviewer return and parent record schemas', () => {
 })
 
 describe('dispatch outcome validation_unavailable (KTD8 amendment)', () => {
-  test('accepts a zero-count validation_unavailable dispatch entry', () => {
+  test('accepts a zero-count validation_unavailable dispatch entry in a degraded run', () => {
     const result = ReviewArtifactSchema.safeParse(
       artifactWith({
+        run_status: 'degraded',
         dispatches: [
           {
             persona: 'correctness',
@@ -1286,10 +1376,131 @@ describe('dispatch outcome validation_unavailable (KTD8 amendment)', () => {
             rejection_reason: 'Raw validator command could not run.',
           },
         ],
+        input_findings: [],
       }),
     )
 
     expect(result.success).toBe(true)
+  })
+
+  test('rejects a completed run carrying validation_unavailable evidence', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        run_status: 'completed',
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'validation_unavailable',
+            input_finding_count: 0,
+          },
+        ],
+        input_findings: [],
+      }),
+    )
+
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(
+        result.error.issues.some(
+          (issue) => issue.path.join('.') === 'run_status',
+        ),
+      ).toBe(true)
+    }
+  })
+
+  test('rejects a validation_unavailable dispatch with a nonzero input finding count', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        run_status: 'degraded',
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'validation_unavailable',
+            input_finding_count: 3,
+          },
+        ],
+        input_findings: [],
+      }),
+    )
+
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(
+        result.error.issues.some(
+          (issue) =>
+            issue.path.join('.') === 'dispatches.0.input_finding_count',
+        ),
+      ).toBe(true)
+    }
+  })
+
+  test('rejects an admitted input finding for a validation_unavailable persona', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        run_status: 'degraded',
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'validation_unavailable',
+            input_finding_count: 0,
+          },
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(
+        result.error.issues.some(
+          (issue) => issue.path.join('.') === 'input_findings.0.reviewer',
+        ),
+      ).toBe(true)
+    }
+  })
+
+  test('rejects a rejected-summary row for a validation_unavailable persona', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        run_status: 'degraded',
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'validation_unavailable',
+            input_finding_count: 0,
+          },
+        ],
+        input_findings: [{ ...rejectedSummary, reviewer: 'correctness' }],
+      }),
+    )
+
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(
+        result.error.issues.some(
+          (issue) => issue.path.join('.') === 'input_findings.0.reviewer',
+        ),
+      ).toBe(true)
+    }
+  })
+
+  test('accepts truthful in_progress and abnormal runs carrying validation_unavailable', () => {
+    for (const run_status of ['in_progress', 'abnormal'] as const) {
+      const result = ReviewArtifactSchema.safeParse(
+        artifactWith({
+          run_status,
+          dispatches: [
+            {
+              persona: 'correctness',
+              dispatch_outcome: 'validation_unavailable',
+              input_finding_count: 0,
+            },
+          ],
+          input_findings: [],
+        }),
+      )
+
+      expect(result.success, run_status).toBe(true)
+    }
   })
 
   test('accepts a degraded run carrying validation_unavailable', () => {
@@ -1339,7 +1550,9 @@ describe('dispatch outcome validation_unavailable (KTD8 amendment)', () => {
     expect(result.success).toBe(false)
   })
 
-  test('rejects a rejected-summary row carrying never_returned', () => {
+  test('accepts a legacy schema_version 1 rejected-summary row carrying never_returned', () => {
+    // Reader compatibility: historical schema_version 1 artifacts could carry
+    // this row even though new writers must never emit it.
     const result = ReviewArtifactSchema.safeParse(
       artifactWith({
         input_findings: [
@@ -1348,7 +1561,7 @@ describe('dispatch outcome validation_unavailable (KTD8 amendment)', () => {
       }),
     )
 
-    expect(result.success).toBe(false)
+    expect(result.success).toBe(true)
   })
 
   test('accepts a legacy schema_version 1 rejected-summary row carrying empty', () => {

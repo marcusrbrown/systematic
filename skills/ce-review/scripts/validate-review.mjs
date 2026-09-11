@@ -6113,8 +6113,12 @@ var REVIEW_ARTIFACT_CUSTOM_MESSAGES = [
   'satisfied risk coverage requires a citing input finding ID',
   'unsatisfied risk coverage must not cite an input finding ID',
   'passed validation must not include a reason; non-passed validation requires a reason',
+  'validation_unavailable dispatches must record zero input findings',
+  'a completed run must not contain validation_unavailable evidence',
+  'a validation_unavailable persona must not have an input finding',
 ]
 var boundedText = (maxLength) => string2().min(1).max(maxLength).regex(/\S/)
+var LineNumberSchema = number2().min(1).multipleOf(1)
 var DispatchOutcomeSchema = _enum([
   'findings',
   'empty',
@@ -6123,7 +6127,6 @@ var DispatchOutcomeSchema = _enum([
   'validation_unavailable',
 ])
 var RejectedSummaryDispatchOutcomeSchema = DispatchOutcomeSchema.exclude([
-  'never_returned',
   'validation_unavailable',
 ])
 var DispositionSchema = _enum([
@@ -6218,7 +6221,7 @@ var SynthesizedFindingFieldsSchema = object({
   title: FindingTitleSchema,
   severity: FindingSeveritySchema,
   file: RepoRelativePathSchema,
-  line: number2().int().positive(),
+  line: LineNumberSchema,
   why_it_matters: boundedText(2048),
   autofix_class: AutofixClassSchema,
   owner: OwnerSchema,
@@ -6371,7 +6374,48 @@ var ReviewArtifactSchema = object({
   advisory_outputs: array(ReasonSchema).max(MAX_FINDINGS),
   coverage: CoverageSchema,
   validation: ValidationSchema.optional(),
-}).strict()
+})
+  .strict()
+  .superRefine((artifact, ctx) => {
+    const unavailablePersonas = new Set(
+      artifact.dispatches
+        .filter(
+          (dispatch) => dispatch.dispatch_outcome === 'validation_unavailable',
+        )
+        .map((dispatch) => dispatch.persona),
+    )
+    if (unavailablePersonas.size === 0) {
+      return
+    }
+    if (artifact.run_status === 'completed') {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['run_status'],
+        message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[7],
+      })
+    }
+    artifact.dispatches.forEach((dispatch, index) => {
+      if (
+        dispatch.dispatch_outcome === 'validation_unavailable' &&
+        dispatch.input_finding_count !== 0
+      ) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['dispatches', index, 'input_finding_count'],
+          message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[6],
+        })
+      }
+    })
+    artifact.input_findings.forEach((finding, index) => {
+      if (unavailablePersonas.has(finding.reviewer)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['input_findings', index, 'reviewer'],
+          message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[8],
+        })
+      }
+    })
+  })
 var MAX_RAW_RISK_LENGTH = 1024
 var RAW_FINDINGS_LIST_DESCRIPTION =
   'List of code review findings. Empty array if no issues found.'
@@ -6421,10 +6465,7 @@ var RawFindingFieldsSchema = object({
   file: RepoRelativePathSchema.describe(
     'Relative file path from repository root; absolute POSIX, drive-letter, and UNC paths are rejected',
   ),
-  line: number2()
-    .min(1)
-    .multipleOf(1)
-    .describe('Primary line number of the issue'),
+  line: LineNumberSchema.describe('Primary line number of the issue'),
   why_it_matters: boundedText(2048).describe(
     "Non-empty impact and failure mode -- not 'what is wrong' but 'what breaks'",
   ),
@@ -6561,6 +6602,15 @@ var READ_CHUNK_BYTES = 64 * 1024
 function defaultReadChunk(fd, buffer, offset, length, position) {
   return fs2.readSync(fd, buffer, offset, length, position)
 }
+var TRANSIENT_READ_RETRY_MS = 1
+function isTransientReadError(error) {
+  if (typeof error !== 'object' || error === null) return false
+  const code = error.code
+  return code === 'EAGAIN' || code === 'EWOULDBLOCK'
+}
+function sleepSync(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds)
+}
 function readBoundedStdin(fd, readChunk) {
   const chunks = []
   let total = 0
@@ -6572,7 +6622,11 @@ function readBoundedStdin(fd, readChunk) {
     let bytesRead
     try {
       bytesRead = readChunk(fd, buffer, 0, toRead, null)
-    } catch {
+    } catch (error) {
+      if (isTransientReadError(error)) {
+        sleepSync(TRANSIENT_READ_RETRY_MS)
+        continue
+      }
       return { status: 'read-error' }
     }
     if (bytesRead <= 0) break

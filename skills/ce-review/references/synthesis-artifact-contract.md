@@ -135,10 +135,11 @@ The artifact must preserve these distinctions:
   summary entry while admitted findings from that return continue normally.
   New writers must emit a rejected-summary row only for `findings` or
   `malformed`. The schema_version 1 validator deliberately continues to accept a
-  historical `empty` rejected-summary row for backward compatibility with
-  existing artifacts, but that reader leniency is not authoring permission to
-  emit one. The validator rejects rejected-summary rows for `never_returned` and
-  `validation_unavailable`, and writers must never emit them either.
+  historical `empty` or `never_returned` rejected-summary row for backward
+  compatibility with existing artifacts, but that reader leniency is not
+  authoring permission to emit either. The validator rejects a rejected-summary
+  row for `validation_unavailable`, the additive outcome this contract
+  introduces, and writers must never emit it.
   Disposition counts are weighted by `rejected_finding_count` for that summary
   entry, so their sum equals the total number of findings observed, not the
   number of ledger rows. A malformed JSON return with no safely enumerable
@@ -235,8 +236,21 @@ validity, environment screening, and evidence assessment separate:
   task-lifecycle fact for a task that did not return. Validation unavailable is
   not malformed and is not never_returned.
 
+**Dispatch identity binding.** Structural admission does not prove who produced a
+return. Immediately after `exit 0` and before the environment-value screen,
+persistence, or synthesis, the parent parses the admitted return's `reviewer`
+field and confirms it equals the dispatched persona. A return whose `reviewer`
+does not match the dispatched persona is an identity mismatch: reject the whole
+return as `dispatch_outcome: "malformed"`, record only a bounded rejection reason
+naming the expected persona, set `run_status` to `degraded`, and do not admit,
+screen, persist, or synthesize its payload.
+
 `validation_unavailable` is an additive enum value: `schema_version` stays `1`,
 existing v1 artifacts remain valid, and no new field or migration is introduced.
+A run that contains `validation_unavailable` evidence records a zero
+`input_finding_count`, no admitted input finding for that persona, and a
+non-`completed` run status; unavailable evidence can never finalize as a clean,
+completed run.
 The word `unavailable` also names the artifact-level `validation.status` value;
 that is a different object and phase, and these fields are never repurposed for
 raw-dispatch availability. These admission states are surfaced in the report's
