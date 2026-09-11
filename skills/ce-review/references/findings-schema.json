@@ -4,57 +4,7 @@
   "description": "Structured output schemas for code review sub-agent returns and parent-persisted records",
   "$ref": "#/definitions/parentRecord",
   "definitions": {
-    "dispatchOutcome": {
-      "type": "string",
-      "enum": ["findings", "empty", "malformed", "never_returned"],
-      "description": "What a persona returned: findings, empty, malformed, or never returned"
-    },
-    "disposition": {
-      "type": "string",
-      "enum": ["surviving", "merged", "suppressed", "filtered", "rejected"],
-      "description": "What happened to an input finding: surviving, merged, suppressed, filtered, or rejected"
-    },
-    "harness": {
-      "type": "string",
-      "enum": ["opencode", "pi", "claude-code"],
-      "description": "Harness that produced the artifact; populated by the parent orchestrator"
-    },
-    "repoRelativePath": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 256,
-      "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!\\\\).+",
-      "description": "Relative file path from repository root; absolute POSIX, drive-letter, and UNC paths are rejected"
-    },
-    "boundedEvidenceString": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 500,
-      "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!\\\\).+",
-      "description": "Bounded code-grounded evidence; absolute POSIX, drive-letter, and UNC paths are rejected"
-    },
-    "overflowExcerpt": {
-      "type": "string",
-      "minLength": 1,
-      "maxLength": 500,
-      "pattern": "^(?!/)(?![A-Za-z]:[\\\\/])(?!\\\\).+",
-      "description": "Bounded excerpt retained when evidence must be shortened"
-    },
-    "overflowEvidence": {
-      "type": "object",
-      "required": ["overflow", "excerpt"],
-      "properties": {
-        "overflow": {
-          "const": true,
-          "description": "Explicit marker that the complete evidence did not fit in one bounded entry"
-        },
-        "excerpt": {
-          "$ref": "#/definitions/overflowExcerpt"
-        }
-      },
-      "additionalProperties": false
-    },
-    "findingProperties": {
+    "subAgentFinding": {
       "type": "object",
       "properties": {
         "title": {
@@ -70,11 +20,25 @@
           "description": "Issue severity level"
         },
         "file": {
-          "$ref": "#/definitions/repoRelativePath"
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "allOf": [
+            {
+              "type": "string",
+              "pattern": "\\S"
+            },
+            {
+              "type": "string",
+              "pattern": "^(?!\\/)(?![A-Za-z]:[\\\\/])(?!\\\\).+"
+            }
+          ],
+          "description": "Relative file path from repository root; absolute POSIX, drive-letter, and UNC paths are rejected"
         },
         "line": {
-          "type": "integer",
+          "type": "number",
           "minimum": 1,
+          "multipleOf": 1,
           "description": "Primary line number of the issue"
         },
         "why_it_matters": {
@@ -99,42 +63,294 @@
           "description": "Whether any fix for this finding must be re-verified with targeted tests or a follow-up review pass"
         },
         "suggested_fix": {
-          "type": ["string", "null"],
-          "maxLength": 2048,
-          "description": "Concrete minimal fix. Omit or null if no good fix is obvious -- a bad suggestion is worse than none."
+          "description": "Concrete minimal fix. Omit or null if no good fix is obvious -- a bad suggestion is worse than none.",
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 2048
+            },
+            {
+              "type": "null"
+            }
+          ]
         },
         "confidence": {
           "type": "number",
-          "minimum": 0.0,
-          "maximum": 1.0,
+          "minimum": 0,
+          "maximum": 1,
           "description": "Reviewer confidence in this finding, calibrated per persona"
         },
         "evidence": {
-          "type": "array",
           "minItems": 1,
           "maxItems": 5,
-          "description": "Code-grounded evidence. At least 1 and at most 5 bounded entries; split evidence across entries or use an explicit overflow marker rather than silently truncating it.",
+          "type": "array",
           "items": {
-            "oneOf": [
+            "anyOf": [
               {
-                "$ref": "#/definitions/boundedEvidenceString"
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500,
+                "allOf": [
+                  {
+                    "type": "string",
+                    "pattern": "\\S"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^(?!\\/)(?![A-Za-z]:[\\\\/])(?!\\\\).+"
+                  }
+                ],
+                "description": "Bounded code-grounded evidence; absolute POSIX, drive-letter, and UNC paths are rejected"
               },
               {
-                "$ref": "#/definitions/overflowEvidence"
+                "type": "object",
+                "properties": {
+                  "overflow": {
+                    "type": "boolean",
+                    "const": true,
+                    "description": "Explicit marker that the complete evidence did not fit in one bounded entry"
+                  },
+                  "excerpt": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500,
+                    "allOf": [
+                      {
+                        "type": "string",
+                        "pattern": "\\S"
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^(?!\\/)(?![A-Za-z]:[\\\\/])(?!\\\\).+"
+                      }
+                    ],
+                    "description": "Bounded excerpt retained when evidence must be shortened"
+                  }
+                },
+                "required": ["overflow", "excerpt"],
+                "additionalProperties": false
               }
             ]
-          }
-        },
-        "disposition": {
-          "$ref": "#/definitions/disposition"
+          },
+          "description": "Code-grounded evidence. At least 1 and at most 5 bounded entries; split evidence across entries or use an explicit overflow marker rather than silently truncating it."
         },
         "pre_existing": {
           "type": "boolean",
           "description": "True if this issue exists in unchanged code unrelated to the current diff"
         }
-      }
+      },
+      "required": [
+        "title",
+        "severity",
+        "file",
+        "line",
+        "why_it_matters",
+        "autofix_class",
+        "owner",
+        "requires_verification",
+        "confidence",
+        "evidence",
+        "pre_existing"
+      ],
+      "additionalProperties": false
     },
-    "artifactProperties": {
+    "parentFinding": {
+      "type": "object",
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "\\S",
+          "description": "Short, specific issue title. 10 words or fewer."
+        },
+        "severity": {
+          "type": "string",
+          "enum": ["P0", "P1", "P2", "P3"],
+          "description": "Issue severity level"
+        },
+        "file": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "allOf": [
+            {
+              "type": "string",
+              "pattern": "\\S"
+            },
+            {
+              "type": "string",
+              "pattern": "^(?!\\/)(?![A-Za-z]:[\\\\/])(?!\\\\).+"
+            }
+          ],
+          "description": "Relative file path from repository root; absolute POSIX, drive-letter, and UNC paths are rejected"
+        },
+        "line": {
+          "type": "number",
+          "minimum": 1,
+          "multipleOf": 1,
+          "description": "Primary line number of the issue"
+        },
+        "why_it_matters": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2048,
+          "pattern": "\\S",
+          "description": "Non-empty impact and failure mode -- not 'what is wrong' but 'what breaks'"
+        },
+        "autofix_class": {
+          "type": "string",
+          "enum": ["safe_auto", "gated_auto", "manual", "advisory"],
+          "description": "Reviewer's conservative recommendation for how this issue should be handled after synthesis"
+        },
+        "owner": {
+          "type": "string",
+          "enum": ["review-fixer", "downstream-resolver", "human", "release"],
+          "description": "Who should own the next action for this finding after synthesis"
+        },
+        "requires_verification": {
+          "type": "boolean",
+          "description": "Whether any fix for this finding must be re-verified with targeted tests or a follow-up review pass"
+        },
+        "suggested_fix": {
+          "description": "Concrete minimal fix. Omit or null if no good fix is obvious -- a bad suggestion is worse than none.",
+          "anyOf": [
+            {
+              "type": "string",
+              "maxLength": 2048
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "confidence": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Reviewer confidence in this finding, calibrated per persona"
+        },
+        "evidence": {
+          "minItems": 1,
+          "maxItems": 5,
+          "type": "array",
+          "items": {
+            "anyOf": [
+              {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 500,
+                "allOf": [
+                  {
+                    "type": "string",
+                    "pattern": "\\S"
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^(?!\\/)(?![A-Za-z]:[\\\\/])(?!\\\\).+"
+                  }
+                ],
+                "description": "Bounded code-grounded evidence; absolute POSIX, drive-letter, and UNC paths are rejected"
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "overflow": {
+                    "type": "boolean",
+                    "const": true,
+                    "description": "Explicit marker that the complete evidence did not fit in one bounded entry"
+                  },
+                  "excerpt": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 500,
+                    "allOf": [
+                      {
+                        "type": "string",
+                        "pattern": "\\S"
+                      },
+                      {
+                        "type": "string",
+                        "pattern": "^(?!\\/)(?![A-Za-z]:[\\\\/])(?!\\\\).+"
+                      }
+                    ],
+                    "description": "Bounded excerpt retained when evidence must be shortened"
+                  }
+                },
+                "required": ["overflow", "excerpt"],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "description": "Code-grounded evidence. At least 1 and at most 5 bounded entries; split evidence across entries or use an explicit overflow marker rather than silently truncating it."
+        },
+        "pre_existing": {
+          "type": "boolean",
+          "description": "True if this issue exists in unchanged code unrelated to the current diff"
+        },
+        "disposition": {
+          "type": "string",
+          "enum": ["surviving", "merged", "suppressed", "filtered", "rejected"],
+          "description": "What happened to an input finding: surviving, merged, suppressed, filtered, or rejected"
+        }
+      },
+      "required": [
+        "title",
+        "severity",
+        "file",
+        "line",
+        "why_it_matters",
+        "autofix_class",
+        "owner",
+        "requires_verification",
+        "confidence",
+        "evidence",
+        "pre_existing",
+        "disposition"
+      ],
+      "additionalProperties": false
+    },
+    "subAgentReturn": {
+      "type": "object",
+      "properties": {
+        "reviewer": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "\\S",
+          "description": "Persona name that produced this output (e.g., 'correctness', 'security')"
+        },
+        "findings": {
+          "maxItems": 32,
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/subAgentFinding"
+          },
+          "description": "List of code review findings. Empty array if no issues found."
+        },
+        "residual_risks": {
+          "maxItems": 64,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "description": "Risks the reviewer noticed but could not confirm as findings"
+        },
+        "testing_gaps": {
+          "maxItems": 64,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "maxLength": 1024
+          },
+          "description": "Missing test coverage the reviewer identified"
+        }
+      },
+      "required": ["reviewer", "findings", "residual_risks", "testing_gaps"],
+      "additionalProperties": false
+    },
+    "parentRecord": {
       "type": "object",
       "properties": {
         "reviewer": {
@@ -145,160 +361,42 @@
           "description": "Persona name that produced this output (e.g., 'correctness', 'security')"
         },
         "harness": {
-          "$ref": "#/definitions/harness"
+          "type": "string",
+          "enum": ["opencode", "pi", "claude-code"],
+          "description": "Harness that produced the artifact; populated by the parent orchestrator"
         },
         "dispatch_outcome": {
-          "$ref": "#/definitions/dispatchOutcome"
+          "type": "string",
+          "enum": ["findings", "empty", "malformed", "never_returned"],
+          "description": "What a persona returned: findings, empty, malformed, or never returned"
         },
         "findings": {
-          "type": "array",
           "maxItems": 32,
+          "type": "array",
+          "items": {
+            "$ref": "#/definitions/parentFinding"
+          },
           "description": "List of code review findings. Empty array if no issues found."
         },
         "residual_risks": {
-          "type": "array",
           "maxItems": 64,
-          "description": "Risks the reviewer noticed but could not confirm as findings",
+          "type": "array",
           "items": {
             "type": "string",
             "maxLength": 1024
-          }
+          },
+          "description": "Risks the reviewer noticed but could not confirm as findings"
         },
         "testing_gaps": {
-          "type": "array",
           "maxItems": 64,
-          "description": "Missing test coverage the reviewer identified",
+          "type": "array",
           "items": {
             "type": "string",
             "maxLength": 1024
-          }
-        }
-      }
-    },
-    "subAgentFinding": {
-      "type": "object",
-      "required": [
-        "title",
-        "severity",
-        "file",
-        "line",
-        "why_it_matters",
-        "autofix_class",
-        "owner",
-        "requires_verification",
-        "confidence",
-        "evidence",
-        "pre_existing"
-      ],
-      "properties": {
-        "title": { "$ref": "#/definitions/findingProperties/properties/title" },
-        "severity": {
-          "$ref": "#/definitions/findingProperties/properties/severity"
-        },
-        "file": { "$ref": "#/definitions/findingProperties/properties/file" },
-        "line": { "$ref": "#/definitions/findingProperties/properties/line" },
-        "why_it_matters": {
-          "$ref": "#/definitions/findingProperties/properties/why_it_matters"
-        },
-        "autofix_class": {
-          "$ref": "#/definitions/findingProperties/properties/autofix_class"
-        },
-        "owner": { "$ref": "#/definitions/findingProperties/properties/owner" },
-        "requires_verification": {
-          "$ref": "#/definitions/findingProperties/properties/requires_verification"
-        },
-        "suggested_fix": {
-          "$ref": "#/definitions/findingProperties/properties/suggested_fix"
-        },
-        "confidence": {
-          "$ref": "#/definitions/findingProperties/properties/confidence"
-        },
-        "evidence": {
-          "$ref": "#/definitions/findingProperties/properties/evidence"
-        },
-        "pre_existing": {
-          "$ref": "#/definitions/findingProperties/properties/pre_existing"
+          },
+          "description": "Missing test coverage the reviewer identified"
         }
       },
-      "additionalProperties": false
-    },
-    "parentFinding": {
-      "type": "object",
-      "required": [
-        "title",
-        "severity",
-        "file",
-        "line",
-        "why_it_matters",
-        "autofix_class",
-        "owner",
-        "requires_verification",
-        "confidence",
-        "evidence",
-        "disposition",
-        "pre_existing"
-      ],
-      "properties": {
-        "title": { "$ref": "#/definitions/findingProperties/properties/title" },
-        "severity": {
-          "$ref": "#/definitions/findingProperties/properties/severity"
-        },
-        "file": { "$ref": "#/definitions/findingProperties/properties/file" },
-        "line": { "$ref": "#/definitions/findingProperties/properties/line" },
-        "why_it_matters": {
-          "$ref": "#/definitions/findingProperties/properties/why_it_matters"
-        },
-        "autofix_class": {
-          "$ref": "#/definitions/findingProperties/properties/autofix_class"
-        },
-        "owner": { "$ref": "#/definitions/findingProperties/properties/owner" },
-        "requires_verification": {
-          "$ref": "#/definitions/findingProperties/properties/requires_verification"
-        },
-        "suggested_fix": {
-          "$ref": "#/definitions/findingProperties/properties/suggested_fix"
-        },
-        "confidence": {
-          "$ref": "#/definitions/findingProperties/properties/confidence"
-        },
-        "evidence": {
-          "$ref": "#/definitions/findingProperties/properties/evidence"
-        },
-        "disposition": {
-          "$ref": "#/definitions/findingProperties/properties/disposition"
-        },
-        "pre_existing": {
-          "$ref": "#/definitions/findingProperties/properties/pre_existing"
-        }
-      },
-      "additionalProperties": false
-    },
-    "subAgentReturn": {
-      "type": "object",
-      "required": ["reviewer", "findings", "residual_risks", "testing_gaps"],
-      "properties": {
-        "reviewer": {
-          "$ref": "#/definitions/artifactProperties/properties/reviewer"
-        },
-        "findings": {
-          "allOf": [
-            { "$ref": "#/definitions/artifactProperties/properties/findings" },
-            {
-              "items": { "$ref": "#/definitions/subAgentFinding" }
-            }
-          ]
-        },
-        "residual_risks": {
-          "$ref": "#/definitions/artifactProperties/properties/residual_risks"
-        },
-        "testing_gaps": {
-          "$ref": "#/definitions/artifactProperties/properties/testing_gaps"
-        }
-      },
-      "additionalProperties": false
-    },
-    "parentRecord": {
-      "type": "object",
       "required": [
         "reviewer",
         "harness",
@@ -307,31 +405,6 @@
         "residual_risks",
         "testing_gaps"
       ],
-      "properties": {
-        "reviewer": {
-          "$ref": "#/definitions/artifactProperties/properties/reviewer"
-        },
-        "harness": {
-          "$ref": "#/definitions/artifactProperties/properties/harness"
-        },
-        "dispatch_outcome": {
-          "$ref": "#/definitions/artifactProperties/properties/dispatch_outcome"
-        },
-        "findings": {
-          "allOf": [
-            { "$ref": "#/definitions/artifactProperties/properties/findings" },
-            {
-              "items": { "$ref": "#/definitions/parentFinding" }
-            }
-          ]
-        },
-        "residual_risks": {
-          "$ref": "#/definitions/artifactProperties/properties/residual_risks"
-        },
-        "testing_gaps": {
-          "$ref": "#/definitions/artifactProperties/properties/testing_gaps"
-        }
-      },
       "additionalProperties": false
     }
   }

@@ -3,6 +3,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import Ajv from 'ajv'
 import { z } from 'zod'
+import { generateFindingsSchemaContent } from '../../scripts/generate-review-artifact-schema.js'
 
 const schemaPath = path.resolve(
   import.meta.dir,
@@ -804,5 +805,112 @@ describe('canonical Zod schema parity', () => {
         `missing description: ${description}`,
       ).toBe(true)
     }
+  })
+})
+
+function asRecord(value: unknown): Record<string, unknown> {
+  return value as Record<string, unknown>
+}
+
+describe('generated findings document', () => {
+  const generated = JSON.parse(generateFindingsSchemaContent()) as Record<
+    string,
+    unknown
+  >
+  const generatedAjv = new Ajv({ strict: false })
+  const generatedParent = generatedAjv.compile(generated)
+  const generatedSubAgent = generatedAjv.compile({
+    ...generated,
+    $ref: '#/definitions/subAgentReturn',
+  })
+
+  test('the committed schema matches the generator output over the corpus', () => {
+    for (const entry of parityCorpus) {
+      const committed = entry.root === 'raw' ? validateSubAgent : validateParent
+      const generatedValidate =
+        entry.root === 'raw' ? generatedSubAgent : generatedParent
+      const committedAccepts = committed(entry.value)
+      const generatedAccepts = generatedValidate(entry.value)
+
+      expect(
+        generatedAccepts,
+        `${entry.name}: committed=${committedAccepts} generated=${generatedAccepts}`,
+      ).toBe(committedAccepts)
+    }
+  })
+
+  test('preserves the published envelope, named definitions, and strict closure', () => {
+    expect(generated.$schema).toBe('http://json-schema.org/draft-07/schema#')
+    expect(generated.title).toBe('Code Review Findings')
+    expect(generated.description).toBe(
+      'Structured output schemas for code review sub-agent returns and parent-persisted records',
+    )
+    expect(generated.$ref).toBe('#/definitions/parentRecord')
+
+    const definitions = asRecord(generated.definitions)
+    for (const name of [
+      'subAgentFinding',
+      'parentFinding',
+      'subAgentReturn',
+      'parentRecord',
+    ]) {
+      expect(definitions[name], name).toBeDefined()
+    }
+
+    const subAgentReturnProps = asRecord(
+      asRecord(definitions.subAgentReturn).properties,
+    )
+    expect(asRecord(subAgentReturnProps.findings).items).toEqual({
+      $ref: '#/definitions/subAgentFinding',
+    })
+    const parentRecordProps = asRecord(
+      asRecord(definitions.parentRecord).properties,
+    )
+    expect(asRecord(parentRecordProps.findings).items).toEqual({
+      $ref: '#/definitions/parentFinding',
+    })
+
+    expect(asRecord(definitions.subAgentFinding).additionalProperties).toBe(
+      false,
+    )
+    expect(asRecord(definitions.parentFinding).additionalProperties).toBe(false)
+    expect(asRecord(definitions.subAgentReturn).additionalProperties).toBe(
+      false,
+    )
+    expect(asRecord(definitions.parentRecord).additionalProperties).toBe(false)
+  })
+
+  test('the reviewer prompt consumes the committed generated schema payload', () => {
+    const templatePath = path.resolve(
+      import.meta.dir,
+      '../../skills/ce-review/references/subagent-template.md',
+    )
+    const template = fs.readFileSync(templatePath, 'utf8')
+    const committed = fs.readFileSync(schemaPath, 'utf8')
+    const prompt = template.replace('{schema}', committed)
+
+    expect(template).toContain('{schema}')
+    expect(prompt).toContain(committed)
+
+    for (const description of collectDescriptions(schema.definitions)) {
+      expect(prompt).toContain(description)
+    }
+
+    const definitions = asRecord(schema.definitions)
+    for (const name of [
+      'subAgentFinding',
+      'parentFinding',
+      'subAgentReturn',
+      'parentRecord',
+    ]) {
+      expect(definitions[name], name).toBeDefined()
+    }
+
+    // Raw line-number contract: integer >= 1 with no safe-integer maximum.
+    const rawLine = asRecord(
+      asRecord(asRecord(definitions.subAgentFinding).properties).line,
+    )
+    expect(rawLine.minimum).toBe(1)
+    expect(rawLine.maximum).toBeUndefined()
   })
 })
