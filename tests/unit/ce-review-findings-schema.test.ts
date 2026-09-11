@@ -129,6 +129,7 @@ describe('ce:review findings schema', () => {
       'empty',
       'malformed',
       'never_returned',
+      'validation_unavailable',
     ]) {
       expect(validateParent({ ...baseArtifact, dispatch_outcome })).toBe(true)
     }
@@ -185,6 +186,18 @@ describe('ce:review findings schema', () => {
     ).toBe(false)
     expect(
       hasAdditionalProperty(validateSubAgent, 'disposition', '/findings/0'),
+    ).toBe(true)
+  })
+
+  test('rejects a raw sub-agent return annotated with validation_unavailable', () => {
+    expect(
+      validateSubAgent({
+        ...baseSubAgentArtifact,
+        dispatch_outcome: 'validation_unavailable',
+      }),
+    ).toBe(false)
+    expect(
+      hasAdditionalProperty(validateSubAgent, 'dispatch_outcome', ''),
     ).toBe(true)
   })
 

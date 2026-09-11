@@ -18,6 +18,7 @@ var __export = (target, all) => {
 }
 
 // src/ce-review-validator.ts
+import fs3 from 'node:fs'
 import { fileURLToPath } from 'node:url'
 
 // src/lib/review-artifact-path.ts
@@ -6119,6 +6120,11 @@ var DispatchOutcomeSchema = _enum([
   'empty',
   'malformed',
   'never_returned',
+  'validation_unavailable',
+])
+var RejectedSummaryDispatchOutcomeSchema = DispatchOutcomeSchema.exclude([
+  'never_returned',
+  'validation_unavailable',
 ])
 var DispositionSchema = _enum([
   'surviving',
@@ -6183,7 +6189,7 @@ var AdmittedInputFindingSchema = object({
 var RejectedInputFindingSchema = object({
   record_type: literal('rejected_summary'),
   reviewer: ReviewerSchema,
-  dispatch_outcome: DispatchOutcomeSchema,
+  dispatch_outcome: RejectedSummaryDispatchOutcomeSchema,
   rejected_finding_count: number2().int().positive().max(MAX_FINDINGS),
   rejected_severities: array(SeveritySchema).max(MAX_FINDINGS),
   disposition: DispositionSchema.extract(['rejected']),
@@ -6662,9 +6668,20 @@ function runCeReviewValidator(options) {
   errorSink(CE_REVIEW_VALIDATOR_USAGE)
   return 2
 }
+function resolveRealPath(candidate) {
+  if (candidate === undefined) return
+  try {
+    return fs3.realpathSync(candidate)
+  } catch {
+    return
+  }
+}
+var entryPath = resolveRealPath(process.argv[1])
+var modulePath = resolveRealPath(fileURLToPath(import.meta.url))
 var isMainModule =
-  process.argv[1] !== undefined &&
-  fileURLToPath(import.meta.url) === process.argv[1]
+  entryPath !== undefined &&
+  modulePath !== undefined &&
+  entryPath === modulePath
 if (isMainModule) {
   process.exitCode = runCeReviewValidator({ argv: process.argv.slice(2) })
 }

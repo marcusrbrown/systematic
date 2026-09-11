@@ -55,6 +55,7 @@ All tokens are optional. Each one present means one less thing to infer. When ab
 
 - **Skip all user questions.** Infer intent conservatively if the diff metadata is thin.
 - **Never edit files or externalize work.** Do not write `.context/systematic/ce-review/<run-id>/`, do not create todo files, and do not commit, push, or create a PR.
+- **Report-only runs in memory.** Run raw-return structural validation, environment screening, synthesis, and reporting without writing a run directory, artifact, or ignore file.
 - **Safe for parallel read-only verification.** `mode:report-only` is the only mode that is safe to run concurrently with browser testing on the same checkout.
 - **Do not switch the shared checkout.** If the caller passes an explicit PR or branch target, `mode:report-only` must run in an isolated checkout/worktree or stop instead of running `gh pr checkout` / `git checkout`.
 - **Do not overlap mutating review with browser testing on the same checkout.** If a future orchestrator wants fixes, run the mutating review phase after browser testing or in an isolated checkout/worktree.
@@ -474,6 +475,30 @@ Returning the detail tier inline increases parent context per persona. The previ
 
 **CE conditional agents** (deployment-verification-agent) are also dispatched as standard Agent calls when applicable. Pass the same review context bundle plus the applicability reason (for example, which migration files triggered the agent). Their output is unstructured and must be preserved for Stage 6 synthesis just like the CE always-on agents.
 
+#### Raw return admission (all modes)
+
+Before parsing a persona return into fields, screening it for environment values, assessing evidence, synthesizing, or persisting anything, admit it with the packaged structural validator. Invoke the validator through this skill's own installed directory so every harness resolves the same committed bytes:
+
+```bash
+# Resolve the validator relative to this skill's directory.
+SKILL_DIR="<skill directory stated when this skill loads>";
+node "$SKILL_DIR/scripts/validate-review.mjs" return <<'REVIEW_RETURN_A1B2C3D4'
+<the persona's returned JSON payload, copied verbatim>
+REVIEW_RETURN_A1B2C3D4
+```
+
+Before each invocation, choose a fresh delimiter for that exact raw payload over a safe token alphabet (`A-Z`, `0-9`, `_`), for example a random hex token. Verify the delimiter is absent as a complete line in that exact raw payload before running. The `REVIEW_RETURN_A1B2C3D4` token above is only an illustration; never reuse a fixed delimiter, and choose a new token for every payload. Open the heredoc with a single-quoted heredoc opener (`<<'DELIM'`) so the payload is never interpolated, and close it with a line containing exactly that delimiter. Feed the payload on stdin (never as a command argument) so it cannot appear in argv or a process listing; never use unquoted interpolation or command substitution to pass the payload, and never write it to a temp file. This block is self-contained for one-block execution: each fenced block re-assigns `SKILL_DIR` and terminates the assignment with `;`.
+
+Read the exit status:
+
+- **exit 0** — structurally admitted. Parse the already structurally validated JSON without logging the raw text, then run the existing environment-value screen unchanged over that parsed object before persistence; only after parsing and a clean screen may the parent add `harness`, `dispatch_outcome`, and finding `disposition`. `exit 0` with zero findings is `dispatch_outcome: "empty"`; `exit 0` with findings is `dispatch_outcome: "findings"`.
+- **exit 1** — the whole return is `dispatch_outcome: "malformed"`. Retain only the bounded validator diagnostics in Coverage; never parse, screen, or persist its payload fields or values.
+- **exit 2**, a missing or unreadable helper, or a command launch failure — validation unavailable. Withhold the return and report the exact unavailability and what was withheld. Update that selected persona's preinitialized dispatch entry from `never_returned` to `dispatch_outcome: "validation_unavailable"` with `input_finding_count: 0` and, optionally, a safe `rejection_reason` naming the exit status, missing helper, or launch failure without payload values; set `run_status` to `degraded`. Never omit the dispatch entry, never leave it as `never_returned`, never label it `malformed`, never admit the payload, and never fabricate a reviewer record or a rejected-summary ledger row. The word `unavailable` also names the artifact-level self-validation status, a different object and phase; never repurpose the artifact-level `validation` fields.
+
+A task that did not return is `never_returned`: a task-lifecycle fact recorded without invoking the validator. Validation unavailable is not malformed and is not never_returned; they are distinct coverage states. The public `systematic validate-review-return` command is an operator/development fallback selected before invocation, never a fallback chosen because a validator run exited 1 or 2.
+
+Structural validity never implies evidence validity. A return that passes the validator is admitted structurally only; its claims still require evidence assessment, and a wrong-checkout or unsupported citation remains unverified until current-target evidence resolves it.
+
 ### Stage 5: Merge findings
 
 The parent-owned artifact and its reconciliation rules are defined in the [synthesis artifact contract](./references/synthesis-artifact-contract.md). The stages below describe when synthesis decisions are made.
@@ -482,7 +507,7 @@ Convert multiple reviewer JSON returns into one deduplicated, confidence-gated f
 
 Before applying the confidence gate, keep the parent-owned ledger through every later stage. See the [synthesis artifact contract](./references/synthesis-artifact-contract.md) for the input-ID and reconciliation rules.
 
-1. **Validate before any write.** Treat every persona return as untrusted input. Parse the returned text as JSON without logging the raw text, then validate the complete parsed object against `references/findings-schema.json`, including `why_it_matters` and `evidence`.
+1. **Validate before any write.** Treat every persona return as untrusted input. The order is fixed: the packaged raw validator (Stage 4's Raw return admission) must exit 0 before the parent parses anything. Then parse the already structurally validated JSON without logging the raw text, run the unchanged environment-value screen over that parsed object, assess evidence, and only then add parent annotations, persist, or synthesize. The executable validator already enforces `references/findings-schema.json` (including `why_it_matters` and `evidence`), so confirming the parsed object is a cross-check, not the admission gate. On exit 1 the return is `malformed`: do not parse, screen, or persist it.
    - **Top-level required:** reviewer (string), findings (array), residual_risks (array), testing_gaps (array). Reject the entire persona return if any are missing or wrong type.
    - **Per-finding required:** title, severity, file, line, why_it_matters, confidence, evidence, autofix_class, owner, requires_verification, pre_existing.
    - **Schema constraints:** enforce every enum, type, confidence, line, path, evidence count, evidence length, and explicit overflow-marker bound from the schema. Empty evidence, absolute paths, and over-bound evidence are rejection cases, not truncation cases.
@@ -544,7 +569,7 @@ Assemble the final report using **pipe-delimited markdown tables for findings** 
 8. **Learnings & Past Solutions.** Surface learnings-researcher results: if past solutions are relevant, flag them as "Known Pattern" with links to docs/solutions/ files.
 9. **Agent-Native Gaps.** Surface agent-native-reviewer results. Omit section if no gaps found.
 10. **Deployment Notes.** If deployment-verification-agent ran, surface the key Go/No-Go items: blocking pre-deploy checks, the most important verification queries, rollback caveats, and monitoring focus areas. Keep the checklist actionable rather than dropping it into Coverage.
-11. **Coverage.** Suppressed count, residual risks, testing gaps, failed/timed-out reviewers, validator failures, risk-coverage entries with citing input finding IDs and exit conditions for blocked entries, and any intent uncertainty carried by non-interactive modes.
+11. **Coverage.** Suppressed count, residual risks, testing gaps, failed/timed-out reviewers, validator failures, risk-coverage entries with citing input finding IDs and exit conditions for blocked entries, and any intent uncertainty carried by non-interactive modes. For raw returns, state each selected persona's admission state — `findings`, `empty`, `malformed`, `never_returned`, `validation_unavailable` (the persisted raw dispatch outcome; distinct from the artifact-level `validation.status: "unavailable"`), `environment-screen` rejection — and what was admitted or withheld. Report admission states here only; do not add fields to `review-summary.v1`.
 12. **Verdict.** Ready to merge / Ready with fixes / Not ready. Fix order if applicable. When an `explicit` plan has unaddressed requirements, the verdict must reflect it — a PR that's code-clean but missing planned requirements is "Not ready" unless the omission is intentional. When an `inferred` plan has unaddressed requirements, note it in the verdict reasoning but do not block on it alone. Apply the risk-aware degraded verdict rule from the [synthesis artifact contract](./references/synthesis-artifact-contract.md), including the recorded exit condition for a blocked risk-critical verdict.
 
 Do not include time estimates.

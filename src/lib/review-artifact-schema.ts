@@ -25,7 +25,19 @@ export const DispatchOutcomeSchema = z.enum([
   'empty',
   'malformed',
   'never_returned',
+  'validation_unavailable',
 ] as const)
+
+// A rejected-payload summary requires at least one rejected finding, so it has
+// no meaning for an outcome where no payload was returned or enumerated:
+// `never_returned` and `validation_unavailable` can never carry one. `empty`
+// is intentionally accepted only for backward compatibility with schema_version
+// 1 artifacts, which permitted it; it is not a semantically valid rejected-summary
+// outcome and the prose contract still forbids it.
+const RejectedSummaryDispatchOutcomeSchema = DispatchOutcomeSchema.exclude([
+  'never_returned',
+  'validation_unavailable',
+])
 
 export const DispositionSchema = z.enum([
   'surviving',
@@ -103,7 +115,7 @@ const RejectedInputFindingSchema = z
   .object({
     record_type: z.literal('rejected_summary'),
     reviewer: ReviewerSchema,
-    dispatch_outcome: DispatchOutcomeSchema,
+    dispatch_outcome: RejectedSummaryDispatchOutcomeSchema,
     rejected_finding_count: z.number().int().positive().max(MAX_FINDINGS),
     rejected_severities: z.array(SeveritySchema).max(MAX_FINDINGS),
     disposition: DispositionSchema.extract(['rejected']),

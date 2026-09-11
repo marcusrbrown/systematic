@@ -1,3 +1,4 @@
+import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { runClaudeCodeValidator } from './claude-code-validator.js'
 import {
@@ -63,13 +64,28 @@ export function runCeReviewValidator(
   return 2
 }
 
-// Explicit direct-execution guard, portable across Bun and Node: only run when
-// this file is the process entry point. This also keeps `import()` of the
-// bundle side-effect free for tests and tooling, without depending on the
-// Bun-specific `import.meta.main`.
+/** Resolve a path to its real location without throwing on missing input. */
+function resolveRealPath(candidate: string | undefined): string | undefined {
+  if (candidate === undefined) return undefined
+  try {
+    return fs.realpathSync(candidate)
+  } catch {
+    return undefined
+  }
+}
+
+// Explicit direct-execution guard, portable across Bun and Node and insensitive
+// to the path spelling used to reach this file (for example macOS `/var` ->
+// `/private/var` symlinks). Fail-closed: when either side is missing or
+// unresolvable the module does not self-execute, so `import()` stays
+// side-effect free for tests and tooling without depending on the Bun-specific
+// `import.meta.main`.
+const entryPath = resolveRealPath(process.argv[1])
+const modulePath = resolveRealPath(fileURLToPath(import.meta.url))
 const isMainModule =
-  process.argv[1] !== undefined &&
-  fileURLToPath(import.meta.url) === process.argv[1]
+  entryPath !== undefined &&
+  modulePath !== undefined &&
+  entryPath === modulePath
 
 if (isMainModule) {
   process.exitCode = runCeReviewValidator({ argv: process.argv.slice(2) })

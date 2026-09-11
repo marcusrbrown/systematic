@@ -367,7 +367,13 @@
         },
         "dispatch_outcome": {
           "type": "string",
-          "enum": ["findings", "empty", "malformed", "never_returned"],
+          "enum": [
+            "findings",
+            "empty",
+            "malformed",
+            "never_returned",
+            "validation_unavailable"
+          ],
           "description": "What a persona returned: findings, empty, malformed, or never returned"
         },
         "findings": {

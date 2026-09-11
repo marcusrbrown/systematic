@@ -1273,3 +1273,117 @@ describe('raw reviewer return and parent record schemas', () => {
     expect(ReviewArtifactSchema.safeParse(rawReturnFixture).success).toBe(false)
   })
 })
+
+describe('dispatch outcome validation_unavailable (KTD8 amendment)', () => {
+  test('accepts a zero-count validation_unavailable dispatch entry', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'validation_unavailable',
+            input_finding_count: 0,
+            rejection_reason: 'Raw validator command could not run.',
+          },
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(true)
+  })
+
+  test('accepts a degraded run carrying validation_unavailable', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        run_status: 'degraded',
+        dispatches: [
+          {
+            persona: 'security',
+            dispatch_outcome: 'validation_unavailable',
+            input_finding_count: 0,
+            selection_surface: ['src/auth.ts'],
+            selection_reason: 'Authentication surface changed.',
+          },
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(true)
+  })
+
+  test('rejects a risk-critical validation_unavailable dispatch without a selection surface', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        dispatches: [
+          {
+            persona: 'security',
+            dispatch_outcome: 'validation_unavailable',
+            input_finding_count: 0,
+          },
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(false)
+  })
+
+  test('rejects a rejected-summary row carrying validation_unavailable', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        input_findings: [
+          { ...rejectedSummary, dispatch_outcome: 'validation_unavailable' },
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(false)
+  })
+
+  test('rejects a rejected-summary row carrying never_returned', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        input_findings: [
+          { ...rejectedSummary, dispatch_outcome: 'never_returned' },
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(false)
+  })
+
+  test('accepts a legacy schema_version 1 rejected-summary row carrying empty', () => {
+    // `empty` is preserved solely so existing schema_version 1 artifacts stay
+    // valid; it is not a semantically valid rejected-summary outcome and the
+    // prose contract continues to forbid it.
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        input_findings: [{ ...rejectedSummary, dispatch_outcome: 'empty' }],
+      }),
+    )
+
+    expect(result.success).toBe(true)
+  })
+
+  test('keeps the existing four dispatch outcomes valid', () => {
+    for (const dispatch_outcome of [
+      'findings',
+      'empty',
+      'malformed',
+      'never_returned',
+    ] as const) {
+      const result = ReviewArtifactSchema.safeParse(
+        artifactWith({
+          dispatches: [
+            {
+              persona: 'correctness',
+              dispatch_outcome,
+              input_finding_count: 0,
+            },
+          ],
+        }),
+      )
+
+      expect(result.success, dispatch_outcome).toBe(true)
+    }
+  })
+})

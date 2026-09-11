@@ -647,3 +647,68 @@ describe('systematic validate-review-artifact', () => {
     }
   })
 })
+
+describe('systematic validate-review-artifact: validation_unavailable amendment', () => {
+  it('accepts a degraded artifact with a zero-count validation_unavailable dispatch', () => {
+    const cwd = makeCwd()
+    try {
+      const target = copyFixture(cwd, CONFORMING_FIXTURE)
+      const artifact = readJsonObject(target)
+      artifact.run_status = 'degraded'
+      const dispatches = artifact.dispatches as Array<Record<string, unknown>>
+      dispatches[0] = {
+        persona: 'correctness',
+        dispatch_outcome: 'validation_unavailable',
+        input_finding_count: 0,
+        rejection_reason: 'Raw validator command could not run.',
+      }
+      fs.writeFileSync(target, JSON.stringify(artifact))
+
+      const result = runCli(
+        [
+          'validate-review-artifact',
+          '.context/systematic/ce-review/review-summary.json',
+        ],
+        cwd,
+      )
+
+      expect(result.exitCode, result.stderr).toBe(0)
+      expect(result.stdout).toContain('Review artifact is valid')
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a rejected-summary ledger row carrying validation_unavailable', () => {
+    const cwd = makeCwd()
+    try {
+      const target = copyFixture(cwd, CONFORMING_FIXTURE)
+      const artifact = readJsonObject(target)
+      artifact.input_findings = [
+        {
+          record_type: 'rejected_summary',
+          reviewer: 'testing',
+          dispatch_outcome: 'validation_unavailable',
+          rejected_finding_count: 1,
+          rejected_severities: ['P1'],
+          disposition: 'rejected',
+          reason: 'Raw validator did not run.',
+        },
+      ]
+      fs.writeFileSync(target, JSON.stringify(artifact))
+
+      const result = runCli(
+        [
+          'validate-review-artifact',
+          '.context/systematic/ce-review/review-summary.json',
+        ],
+        cwd,
+      )
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain('input_findings.0.dispatch_outcome')
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+})

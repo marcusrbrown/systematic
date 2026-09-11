@@ -24,7 +24,7 @@ The supplied diff is the primary source of truth. Use the supplied paths and lin
 <output-contract>
 Return exactly one JSON payload to the parent. The payload contains the complete schema for every finding, including both the merge tier and the detail tier (`why_it_matters`, `evidence`, and `suggested_fix` when present).
 
-Do not write any file. Do not use a Run ID or an artifact path. Persistence is owned by the parent orchestrator: it validates this returned payload, adds parent-owned provenance, and writes only conforming data. This rule is the same in every supported harness.
+Do not write any file. Do not use a Run ID or an artifact path. Persistence is owned by the parent orchestrator: it structurally validates this returned payload with the packaged validator before it parses any field, adds parent-owned provenance, and writes only conforming data. Return exactly one JSON payload; never wrap it in prose, markdown, or a parent-owned annotation. This rule is the same in every supported harness.
 
 The schema below defines the payload's fields and bounds. Its transport is inline for this contract; any schema metadata describing a compact return or a separate detail artifact is superseded by this output contract.
 
@@ -53,7 +53,7 @@ Rules:
 - Every returned finding MUST include at least one evidence item grounded in the actual code. Detail fields are part of the returned payload, not a second output.
 - Evidence is bounded to at most 5 entries of at most 500 characters each. Split a longer trail across entries when it fits; otherwise retain a bounded `excerpt` with `{ "overflow": true, "excerpt": "..." }`. Never silently truncate evidence.
 - Finding paths MUST be repository-relative. The schema rejects absolute paths, while the parent-side validator in Unit 3 detects environment values because JSON Schema cannot infer where a string came from.
-- The parent adds `harness`, `dispatch_outcome`, and `disposition` after validating the return. Do not invent those parent-owned fields. The parent uses only the canonical values defined by the schema (`findings`, `empty`, `malformed`, `never_returned` and `surviving`, `merged`, `suppressed`, `filtered`, `rejected`).
+- The parent adds `harness`, `dispatch_outcome`, and `disposition` after validating the return. Do not invent those parent-owned fields. The parent uses only the canonical values defined by the schema (`findings`, `empty`, `malformed`, `never_returned`, `validation_unavailable` and `surviving`, `merged`, `suppressed`, `filtered`, `rejected`).
 - Set pre_existing to true ONLY for issues in unchanged code that are unrelated to this diff. If the diff makes the issue newly relevant, it is NOT pre-existing.
 - You are operationally read-only. You may use non-mutating inspection commands, including read-oriented `git` / `gh` commands, to gather evidence. Do not write files, edit project files, change branches, commit, push, create PRs, or otherwise mutate the checkout or repository state.
 - Set `autofix_class` accurately -- not every finding is `advisory`. Use this decision guide:

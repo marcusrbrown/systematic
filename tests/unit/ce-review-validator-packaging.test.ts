@@ -507,3 +507,51 @@ describe('generator drift', () => {
     }
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Symlinked invocation: the direct-entry guard must not depend on the path
+// spelling used to reach the script (macOS `/var` -> `/private/var`).
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe('symlinked invocation', () => {
+  test('executes when the skill directory is reached through a symlinked path', () => {
+    const projectRoot = makeFakeProject()
+    const linkRoot = makeTempDir('ce-review-validator-symlink-')
+    const linkSkillDir = path.join(linkRoot, 'ce-review')
+    fs.symlinkSync(
+      path.join(REPO_ROOT, 'skills/ce-review'),
+      linkSkillDir,
+      'dir',
+    )
+    const scriptPath = skillDirScriptPath(linkSkillDir)
+
+    expect(fs.existsSync(scriptPath)).toBe(true)
+    const result = runNode(scriptPath, ['return'], {
+      cwd: projectRoot,
+      input: VALID_RETURN,
+    })
+
+    expect(result.exitCode, result.stderr).toBe(0)
+    expect(result.stdout).toContain('Review return is valid')
+  })
+
+  test('importing through a symlinked path stays side-effect-free', () => {
+    const linkRoot = makeTempDir('ce-review-validator-symlink-import-')
+    const linkScript = path.join(linkRoot, 'validate-review.mjs')
+    fs.symlinkSync(VALIDATOR_SRC, linkScript)
+
+    const driver = `
+const mod = await import(${JSON.stringify(pathToFileURL(linkScript).href)})
+if (typeof Bun !== 'undefined') process.exit(3)
+if (typeof mod.runCeReviewValidator !== 'function') process.exit(4)
+console.log('node-ok')
+`
+    const result = spawnSync(NODE_BIN, ['--input-type=module', '-e', driver], {
+      encoding: 'utf8',
+      timeout: 30_000,
+    })
+
+    expect(result.status, result.stderr).toBe(0)
+    expect(result.stdout).toContain('node-ok')
+  })
+})

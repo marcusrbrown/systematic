@@ -57,7 +57,13 @@
           },
           "dispatch_outcome": {
             "type": "string",
-            "enum": ["findings", "empty", "malformed", "never_returned"]
+            "enum": [
+              "findings",
+              "empty",
+              "malformed",
+              "never_returned",
+              "validation_unavailable"
+            ]
           },
           "input_finding_count": {
             "type": "integer",
@@ -165,7 +171,7 @@
               },
               "dispatch_outcome": {
                 "type": "string",
-                "enum": ["findings", "empty", "malformed", "never_returned"]
+                "enum": ["findings", "empty", "malformed"]
               },
               "rejected_finding_count": {
                 "type": "integer",

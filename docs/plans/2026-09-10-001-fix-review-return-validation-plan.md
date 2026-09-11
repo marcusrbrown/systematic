@@ -119,9 +119,10 @@ merge pipeline remains prose-owned work tracked by issue #795.
 - Removal of the existing Claude Code
   `systematic-validate-review-artifact` binary may be considered only after the
   skill-local aggregate validation path has shipped and accumulated evidence.
-- Persisting raw-validator unavailability would require an aggregate artifact
-  schema decision; this plan reports the limitation without changing schema
-  version 1.
+- The approved KTD8 amendment persists raw-validator unavailability as an
+  additive artifact-v1 enum value (`dispatch_outcome: "validation_unavailable"`);
+  no aggregate schema-version decision or migration is required. Earlier notes
+  that described this as deferred are superseded.
 
 ---
 
@@ -281,11 +282,17 @@ patterns without introducing a new framework or dependency.
   The raw command performs only bounded parse and schema checks. The parent
   retains environment-value screening before persistence and separately
   assesses checkout identity, cited source, command output, and uncertainty.
-- KTD8. **Validator unavailability is not malformed input.** The parent never
-  maps exit 2, a missing Node runtime, or a missing helper to `malformed` or
-  `never_returned`. Because artifact v1 has no raw-validator availability field,
-  writing modes and report-only surface the degraded state in Coverage without
-  repurposing persisted fields.
+- KTD8. **Validator unavailability is not malformed input, and it is persisted
+  additively.** The parent never maps exit 2, a missing Node runtime, or a
+  missing helper to `malformed` or `never_returned`. A returned-but-unverifiable
+  reviewer's preinitialized dispatch entry is updated from `never_returned` to
+  `dispatch_outcome: "validation_unavailable"` with `input_finding_count: 0`,
+  an optional safe `rejection_reason`, and a `degraded` run status; it is never
+  omitted and no rejected-summary ledger row is fabricated. This is an additive
+  enum value: `schema_version` stays `1`, existing v1 artifacts remain valid,
+  and no field or migration is added. Coverage still reports the exact
+  unavailability and what was withheld, and the artifact-level `validation`
+  fields are never repurposed.
 - KTD9. **Selection stays model-owned but contract-bounded.** The three core
   reviewers always run. Conditional triggers and risk-critical fallback rules
   remain explicit and test-pinned, but no numeric risk score attempts to replace
@@ -312,9 +319,12 @@ patterns without introducing a new framework or dependency.
 - **Does structural validation scan environment values?** No. Diagnostics are
   non-echoing, and the existing parent privacy screen remains authoritative
   before any persistence.
-- **How is raw-validator unavailability persisted?** It is not persisted in
-  artifact v1. Surface it honestly in the rendered Coverage section and retain
-  the existing aggregate validation fields unchanged.
+- **How is raw-validator unavailability persisted?** As
+  `dispatch_outcome: "validation_unavailable"` on the selected persona's
+  preinitialized dispatch entry, additively within artifact v1 (no new field, no
+  migration, `schema_version` stays `1`). Coverage reports the exact
+  unavailability and what was withheld; the artifact-level `validation` fields
+  are unchanged and never repurposed.
 - **Does risk selection become deterministic code?** No. Tests pin mandatory
   core membership, explicit conditional triggers, selection metadata, and
   conservative failure handling while leaving relevance judgment with the
@@ -623,7 +633,10 @@ synthesis while preserving existing privacy, evidence, and mode boundaries.
 - Map exit 0 plus empty/non-empty findings to `empty`/`findings`; map exit 1 to
   `malformed`; preserve `never_returned` as a task-lifecycle fact only.
 - On exit 2 or unavailable runtime, do not admit the payload and do not call it
-  malformed. Surface degraded coverage and retain explicit uncertainty.
+  malformed. Update the selected persona's dispatch entry to
+  `validation_unavailable` with `input_finding_count: 0` and a `degraded` run
+  status, surface degraded coverage and what was withheld, and retain explicit
+  uncertainty.
 - Keep the existing environment-value detector after structural admission and
   before any persistence. Reject whole malformed payloads with the existing
   non-echoing summary ledger convention.
@@ -779,9 +792,11 @@ flowchart TB
 - AE2. A reviewer returns malformed JSON containing a secret-shaped string.
   Validation exits 1, the parent records a safe malformed summary, and no output
   or artifact contains the supplied string.
-- AE3. Node or the generated helper is unavailable. The parent reports degraded
-  validation coverage, admits no payload, and does not label the reviewer
-  malformed or never-returned.
+- AE3. Node or the generated helper is unavailable. The parent persists
+  `dispatch_outcome: "validation_unavailable"` (zero findings, degraded run
+  status) on the selected persona's dispatch entry, reports degraded validation
+  coverage and what was withheld, admits no payload, and does not label the
+  reviewer malformed or never-returned.
 - AE4. A structurally valid finding cites the wrong checkout. The return is
   admitted structurally, but the claim remains unverified until current-target
   evidence resolves the mismatch.
