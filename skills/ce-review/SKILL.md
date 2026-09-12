@@ -55,6 +55,7 @@ All tokens are optional. Each one present means one less thing to infer. When ab
 
 - **Skip all user questions.** Infer intent conservatively if the diff metadata is thin.
 - **Never edit files or externalize work.** Do not write `.context/systematic/ce-review/<run-id>/`, do not create todo files, and do not commit, push, or create a PR.
+- **Report-only runs in memory.** Run raw-return structural validation, environment screening, synthesis, and reporting without writing a run directory, artifact, or ignore file.
 - **Safe for parallel read-only verification.** `mode:report-only` is the only mode that is safe to run concurrently with browser testing on the same checkout.
 - **Do not switch the shared checkout.** If the caller passes an explicit PR or branch target, `mode:report-only` must run in an isolated checkout/worktree or stop instead of running `gh pr checkout` / `git checkout`.
 - **Do not overlap mutating review with browser testing on the same checkout.** If a future orchestrator wants fixes, run the mutating review phase after browser testing or in an isolated checkout/worktree.
@@ -103,7 +104,7 @@ Routing rules:
 
 ## Reviewers
 
-13 reviewer personas in layered conditionals, plus CE-specific agents. See the persona catalog included below for the full catalog.
+13 reviewer personas in layered conditionals, plus CE-specific conditional agents. See the persona catalog included below for the full catalog.
 
 **Always-on (every review):**
 
@@ -111,21 +112,19 @@ Routing rules:
 |-------|-------|
 | `systematic:correctness-reviewer` | Logic errors, edge cases, state bugs, error propagation |
 | `systematic:testing-reviewer` | Coverage gaps, weak assertions, brittle tests |
-| `systematic:maintainability-reviewer` | Coupling, complexity, naming, dead code, abstraction debt |
 | `systematic:project-standards-reviewer` | AGENTS.md compliance -- frontmatter, references, naming, portability |
-| `systematic:agent-native-reviewer` | Verify new features are agent-accessible |
-| `systematic:learnings-researcher` | Search docs/solutions/ for past issues related to this PR |
 
 **Cross-cutting conditional (selected per diff):**
 
 | Agent | Select when diff touches... |
 |-------|---------------------------|
+| `systematic:maintainability-reviewer` | Materially adds/reshapes abstractions, coupling, state/control-flow complexity, naming/ownership, dead code, or a broad refactor |
 | `systematic:security-reviewer` | Auth, public endpoints, user input, permissions |
 | `systematic:performance-reviewer` | DB queries, data transforms, caching, async |
 | `systematic:api-contract-reviewer` | Routes, serializers, type signatures, versioning |
 | `systematic:data-migrations-reviewer` | Migrations, schema changes, backfills |
 | `systematic:reliability-reviewer` | Error handling, retries, timeouts, background jobs |
-| `systematic:adversarial-reviewer` | Diff >=50 changed non-test/non-generated/non-lockfile lines, or auth, payments, data mutations, external APIs |
+| `systematic:adversarial-reviewer` | >=50 changed lines of executable production code, excluding tests, generated files, lockfiles, instruction/prose Markdown, JSON schemas, and config; OR regardless of file type for auth, payments, data mutations, external APIs, or another explicitly high-risk domain |
 | `systematic:cli-readiness-reviewer` | CLI command definitions, argument parsing, CLI framework usage, command handler implementations |
 | `systematic:previous-comments-reviewer` | Reviewing a PR that has existing review comments or threads |
 
@@ -135,15 +134,17 @@ Routing rules:
 |-------|---------------------------|
 | `systematic:kieran-typescript-reviewer` | TypeScript components, services, hooks, utilities, or shared types |
 
-**CE conditional (migration-specific):**
+**CE conditional (selected per diff):**
 
-| Agent | Select when diff includes migration files |
-|-------|------------------------------------------|
-| `systematic:deployment-verification-agent` | Produces deployment checklist with SQL verification queries |
+| Agent | Select when diff includes... |
+|-------|------------------------------|
+| `systematic:agent-native-reviewer` | User- or agent-facing UI/CLI/tool/workflow capability, or a changed access path where agent parity/discoverability is material |
+| `systematic:learnings-researcher` | Bug/regression/hardening work, a recurring failure class, a documented solution/module change, or a plan/PR citing relevant prior art |
+| `systematic:deployment-verification-agent` | Database migrations, schema changes, or data backfills |
 
 ## Review Scope
 
-Every review spawns all 4 always-on personas plus the 2 CE always-on agents, then adds whichever cross-cutting and stack-specific conditionals fit the diff. The model naturally right-sizes: a small config change triggers 0 conditionals = 6 reviewers. An auth feature touching data migrations might trigger security + reliability + data-migrations = 9 reviewers.
+Every review selects exactly the three always-on personas -- `correctness`, `testing`, and `project-standards` -- then adds the cross-cutting, stack-specific, and CE conditional agents that fit the diff. A tiny prose or fixture correction with no structural decision and no user- or agent-facing or other specialist surface selects only the core three; a structural refactor may add `maintainability`; an auth feature may add `security` and `reliability`. Reviewer count is an outcome, not a target or a success metric. All four modes (interactive, autofix, report-only, and headless) use the same reviewer-selection policy; only mutation and output behavior differ.
 
 ## Protected Artifacts
 
@@ -315,7 +316,7 @@ Intent: Simplify tax calculation by replacing the multi-tier rate lookup
 with a flat-rate computation. Must not regress edge cases in tax-exempt handling.
 ```
 
-Pass this to every reviewer in their spawn prompt. Intent shapes *how hard each reviewer looks*, not which reviewers are selected.
+Pass this to every reviewer in their spawn prompt. Intent shapes *how hard each reviewer looks* and may clarify *what kind of surface* a change represents -- for example whether it is a bug/regression, an agent-facing capability, or a risk domain -- but it never selects a reviewer without a corresponding changed repository surface.
 
 **When intent is ambiguous:**
 
@@ -340,35 +341,43 @@ If a plan is found, read its **Requirements Trace** (R1, R2, etc.) and **Impleme
 
 ### Stage 3: Select reviewers
 
-Read the diff and file list from Stage 1. The 4 always-on personas and 2 CE always-on agents are automatic. For each cross-cutting and stack-specific conditional persona in the persona catalog included below, decide whether the diff warrants it. This is agent judgment, not keyword matching.
+Read the diff and file list from Stage 1. Always select exactly the three always-on personas: `correctness`, `testing`, and `project-standards`. For each cross-cutting, stack-specific, and CE conditional in the persona catalog included below, decide whether the diff warrants it. This is agent judgment, not keyword matching. Intent, PR, and plan context may clarify whether a changed surface is a bug/regression, an agent-facing capability, or a risk domain, but they never select a reviewer without a corresponding changed repository surface.
 
-**File-type awareness for conditional selection:** Instruction-prose files (Markdown skill definitions, JSON schemas, config files) are product code but do not benefit from runtime-focused reviewers. The adversarial reviewer's techniques (race conditions, cascade failures, abuse cases) target executable code behavior. For diffs that only change instruction-prose files, skip adversarial unless the prose describes auth, payment, or data-mutation behavior. Count only executable code lines toward line-count thresholds.
+- **`maintainability`** -- select when the diff materially adds or reshapes abstractions, raises cross-module coupling, adds state/control-flow complexity, changes naming or ownership structure, removes dead code, or performs a broad refactor. Do not select it for a tiny prose or fixture correction with no structural decision.
+- **CE `agent-native-reviewer`** -- select for user- or agent-facing UI/CLI/tool/workflow capabilities or changed access paths where agent parity or discoverability is material.
+- **CE `learnings-researcher`** -- select for bug, regression, or hardening work, a recurring failure class, a change to a documented solution or module, or a plan/PR that cites relevant prior art.
+- **CE `deployment-verification-agent`** -- select for migrations, schema changes, or data backfills.
+- **All other conditionals** -- preserve their catalog triggers: `security`, `performance`, `api-contract`, `data-migrations`, `reliability`, `adversarial`, `cli-readiness`, `previous-comments`, and `kieran-typescript`.
+
+**File-type awareness for conditional selection:** Instruction-prose files (Markdown skill definitions, JSON schemas, config files) are product code but do not benefit from runtime-focused reviewers. The adversarial reviewer's techniques (race conditions, cascade failures, abuse cases) target executable code behavior. Select it for >=50 changed lines of executable production code -- excluding tests, generated files, lockfiles, instruction/prose Markdown, JSON schemas, and config -- or regardless of file type when the diff touches auth, payments, data mutations, external APIs, or another explicitly high-risk domain; count only executable production code lines toward the line-count threshold.
 
 **`previous-comments` is PR-only.** Only select this persona when Stage 1 gathered PR metadata (PR number or URL was provided as an argument, or `gh pr view` returned metadata for the current branch). Skip it entirely for standalone branch reviews with no associated PR -- there are no prior comments to check.
 
 Stack-specific personas are additive. A TypeScript API diff may warrant `kieran-typescript` plus `api-contract` and `reliability`.
 
-For CE conditional agents, check if the diff includes files matching `db/migrate/*.rb`, `db/schema.rb`, or data backfill scripts.
+Record `selection_reason` and a non-empty `selection_surface` for each selected structured conditional persona; core personas may omit both. Pass the selection reason and surface into the structured reviewer prompt. CE conditional agents receive the same reason/surface in their unstructured prompt and report it in the team and Coverage; they never receive a raw-return dispatch record.
+
+A selected risk-critical reviewer's failure (`malformed`, `never_returned`, or `validation_unavailable`) remains blocking and cannot disappear from Coverage by shrinking the reported team; it stays blocking unless a qualifying validated finding from another persona covers the lost surface.
 
 Announce the team before spawning:
 
 ```
-Review team:
-- correctness (always)
-- testing (always)
-- maintainability (always)
-- project-standards (always)
-- agent-native-reviewer (always)
-- learnings-researcher (always)
-- security -- new endpoint in routes.rb accepts user-provided redirect URL
+Review team (all four modes use the same reviewer-selection policy):
+- correctness (core)
+- testing (core)
+- project-standards (core)
+- maintainability -- structural refactor reshaped the merge pipeline
+- security -- new endpoint in routes.rb accepts a user-provided redirect URL
 - data-migrations -- adds migration 20260303_add_index_to_orders
+- agent-native-reviewer -- new export CLI capability
+- No other conditional selected: no additional surface triggered
 ```
 
-This is progress reporting, not a blocking confirmation.
+This is progress reporting, not a blocking confirmation. Distinguish core reviewers, each selected conditional with a one-line rationale and its triggering repository-relative paths/surfaces, an explicit "no conditional selected" case, and any selected-but-failed/malformed/validation-unavailable reviewer. Never label an unselected reviewer as failed.
 
-Record each conditional persona's selection reason and triggering file paths
-on its dispatch record; see the [synthesis artifact contract](./references/synthesis-artifact-contract.md)
-for the field semantics.
+Record each structured conditional persona's selection reason and triggering repository-relative paths on its dispatch record; see the [synthesis artifact contract](./references/synthesis-artifact-contract.md) for the field semantics.
+
+**Execution probes.** An execution probe is a separate parent decision, independent of reviewer selection, not a reviewer and not a substitute for risk-critical coverage. A pure renderer or asset-delivery change with no conditional surface may warrant one focused runtime or browser probe, but a change that separately triggers `agent-native-reviewer`, `security`, or another conditional still selects those reviewers. A probe never adds `maintainability` and never restores a reviewer floor; when selected, record the probe target and its permission boundary in Coverage.
 
 ### Stage 3b: Discover project standards paths
 
@@ -387,7 +396,7 @@ Persona sub-agents do focused, scoped work. Dispatch the named bundled agent for
 
 Dispatch named bundled agents for all persona and CE sub-agents. The named agent applies the user's configured model assignment; model policy is user-owned configuration, not a skill-level dispatch parameter.
 
-The same applies to CE always-on agents (`systematic:agent-native-reviewer`, `systematic:learnings-researcher`) and CE conditional agents (`systematic:deployment-verification-agent`): dispatch each by its bundled name so its configured assignment applies.
+The same applies to CE conditional agents (`systematic:agent-native-reviewer`, `systematic:learnings-researcher`, `systematic:deployment-verification-agent`): dispatch each by its bundled name so its configured assignment applies.
 
 The orchestrator (this skill) stays on the default model because it handles intent discovery, reviewer selection, finding merge/dedup, and synthesis -- tasks that benefit from stronger reasoning.
 
@@ -432,7 +441,8 @@ Spawn each selected persona reviewer as a parallel sub-agent using the subagent 
 4. PR metadata: title, body, and URL when reviewing a PR (empty string otherwise). Passed in a `<pr-context>` block so reviewers can verify code against stated intent
 5. Review context: intent summary, file list, diff
 6. Reviewer name for the returned `reviewer` field
-7. **For `project-standards` only:** the standards file path list from Stage 3b, wrapped in a `<standards-paths>` block appended to the review context
+7. **Selected structured conditionals only:** the `selection_reason` and non-empty `selection_surface` from Stage 3, passed into the review context. Core personas receive empty values for both
+8. **For `project-standards` only:** the standards file path list from Stage 3b, wrapped in a `<standards-paths>` block appended to the review context
 
 Persona sub-agents are **read-only** with respect to the project: they review and return structured JSON. They do not edit project files, write artifacts, or propose refactors. The parent orchestrator owns all persistence.
 
@@ -470,9 +480,35 @@ Each persona sub-agent returns one full JSON payload (all schema fields) to the 
 
 Returning the detail tier inline increases parent context per persona. The previous compact/detail split kept synthesis context lean, so this is an intentional cost of deleting the sub-agent write path. Verify it against a real multi-persona run. If it materially degrades synthesis, use a second targeted request per persona and keep the write parent-side; never restore sub-agent disk access.
 
-**CE always-on agents** (agent-native-reviewer, learnings-researcher) are dispatched as standard Agent calls in parallel with the persona agents. Give them the same review context bundle the personas receive: entry mode, any PR metadata gathered in Stage 1, intent summary, review base branch name when known, `BASE:` marker, file list, diff, and `UNTRACKED:` scope notes. Do not invoke them with a generic "review this" prompt. Their output is unstructured and synthesized separately in Stage 6.
+**CE conditional agents** (agent-native-reviewer, learnings-researcher) are dispatched as standard Agent calls when their Stage 3 triggers apply, in parallel with the persona agents. Give them the same review context bundle the personas receive (entry mode, any PR metadata gathered in Stage 1, intent summary, review base branch name when known, `BASE:` marker, file list, diff, and `UNTRACKED:` scope notes) plus the selection reason and triggering surface. Do not invoke them with a generic "review this" prompt. Their output is unstructured and synthesized separately in Stage 6; they never receive a raw-return dispatch record.
 
-**CE conditional agents** (deployment-verification-agent) are also dispatched as standard Agent calls when applicable. Pass the same review context bundle plus the applicability reason (for example, which migration files triggered the agent). Their output is unstructured and must be preserved for Stage 6 synthesis just like the CE always-on agents.
+**CE conditional agents** (deployment-verification-agent) are also dispatched as standard Agent calls when applicable. Pass the same review context bundle plus the selection reason and triggering surface (for example, which migration files triggered the agent). Their output is unstructured and must be preserved for Stage 6 synthesis just like the other CE conditional agents.
+
+#### Raw return admission (all modes)
+
+Before parsing a persona return into fields, screening it for environment values, assessing evidence, synthesizing, or persisting anything, admit it with the packaged structural validator. Invoke the validator through this skill's own installed directory so every harness resolves the same committed bytes:
+
+```bash
+# Resolve the validator relative to this skill's directory.
+SKILL_DIR="<skill directory stated when this skill loads>";
+node "$SKILL_DIR/scripts/validate-review.mjs" return <<'REVIEW_RETURN_A1B2C3D4'
+<the persona's returned JSON payload, copied verbatim>
+REVIEW_RETURN_A1B2C3D4
+```
+
+Before each invocation, choose a fresh delimiter for that exact raw payload over a safe token alphabet (`A-Z`, `0-9`, `_`), for example a random hex token. Verify the delimiter is absent as a complete line in that exact raw payload before running. The `REVIEW_RETURN_A1B2C3D4` token above is only an illustration; never reuse a fixed delimiter, and choose a new token for every payload. Open the heredoc with a single-quoted heredoc opener (`<<'DELIM'`) so the payload is never interpolated, and close it with a line containing exactly that delimiter. Feed the payload on stdin (never as a command argument) so it cannot appear in argv or a process listing; never use unquoted interpolation or command substitution to pass the payload, and never write it to a temp file. This block is self-contained for one-block execution: each fenced block re-assigns `SKILL_DIR` and terminates the assignment with `;`.
+
+Read the exit status:
+
+- **exit 0** — structurally admitted. Parse the already structurally validated JSON without logging the raw text, then run the existing environment-value screen unchanged over that parsed object before persistence; only after parsing and a clean screen may the parent add `harness`, `dispatch_outcome`, and finding `disposition`. `exit 0` with zero findings is `dispatch_outcome: "empty"`; `exit 0` with findings is `dispatch_outcome: "findings"`.
+- **exit 1** — the whole return is `dispatch_outcome: "malformed"`. Retain only the bounded validator diagnostics in Coverage; never parse, screen, or persist its payload fields or values.
+- **exit 2**, a missing or unreadable helper, or a command launch failure — validation unavailable. Withhold the return and report the exact unavailability and what was withheld. Update that selected persona's preinitialized dispatch entry from `never_returned` to `dispatch_outcome: "validation_unavailable"` with `input_finding_count: 0` and, optionally, a safe `rejection_reason` naming the exit status, missing helper, or launch failure without payload values; set `run_status` to `degraded`. A run that contains `validation_unavailable` evidence can never finalize as `completed`, and that persona must not have an admitted input finding. Never omit the dispatch entry, never leave it as `never_returned`, never label it `malformed`, never admit the payload, and never fabricate a reviewer record or a rejected-summary ledger row. The word `unavailable` also names the artifact-level self-validation status, a different object and phase; never repurpose the artifact-level `validation` fields.
+
+**Dispatch identity binding.** Structural admission does not prove who produced a return. Immediately after `exit 0` and before the environment-value screen, persistence, or synthesis, parse the admitted return's `reviewer` field and confirm it equals the dispatched persona. A return whose `reviewer` does not match the dispatched persona is an identity mismatch: reject the whole return as `dispatch_outcome: "malformed"`, record only a bounded rejection reason naming the expected persona, set `run_status` to `degraded`, and do not admit, screen, persist, or synthesize its payload. The stdin-only, argument-free validator cannot see the dispatch identity, so this comparison stays the parent's responsibility.
+
+A task that did not return is `never_returned`: a task-lifecycle fact recorded without invoking the validator. Validation unavailable is not malformed and is not never_returned; they are distinct coverage states. The public `systematic validate-review-return` command is an operator/development fallback selected before invocation, never a fallback chosen because a validator run exited 1 or 2.
+
+Structural validity never implies evidence validity. A return that passes the validator is admitted structurally only; its claims still require evidence assessment, and a wrong-checkout or unsupported citation remains unverified until current-target evidence resolves it.
 
 ### Stage 5: Merge findings
 
@@ -482,7 +518,7 @@ Convert multiple reviewer JSON returns into one deduplicated, confidence-gated f
 
 Before applying the confidence gate, keep the parent-owned ledger through every later stage. See the [synthesis artifact contract](./references/synthesis-artifact-contract.md) for the input-ID and reconciliation rules.
 
-1. **Validate before any write.** Treat every persona return as untrusted input. Parse the returned text as JSON without logging the raw text, then validate the complete parsed object against `references/findings-schema.json`, including `why_it_matters` and `evidence`.
+1. **Validate before any write.** Treat every persona return as untrusted input. The order is fixed: the packaged raw validator (Stage 4's Raw return admission) must exit 0 before the parent parses anything. Then parse the already structurally validated JSON without logging the raw text, run the unchanged environment-value screen over that parsed object, assess evidence, and only then add parent annotations, persist, or synthesize. The executable validator already enforces `references/findings-schema.json` (including `why_it_matters` and `evidence`), so confirming the parsed object is a cross-check, not the admission gate. On exit 1 the return is `malformed`: do not parse, screen, or persist it.
    - **Top-level required:** reviewer (string), findings (array), residual_risks (array), testing_gaps (array). Reject the entire persona return if any are missing or wrong type.
    - **Per-finding required:** title, severity, file, line, why_it_matters, confidence, evidence, autofix_class, owner, requires_verification, pre_existing.
    - **Schema constraints:** enforce every enum, type, confidence, line, path, evidence count, evidence length, and explicit overflow-marker bound from the schema. Empty evidence, absolute paths, and over-bound evidence are rejection cases, not truncation cases.
@@ -505,7 +541,7 @@ Before applying the confidence gate, keep the parent-owned ledger through every 
    - report-only queue: `advisory` findings plus anything owned by `human` or `release`
 9. **Sort.** Order by severity (P0 first) -> confidence (descending) -> file path -> line number.
 10. **Collect coverage data.** Union residual_risks and testing_gaps across reviewers.
-11. **Preserve CE agent artifacts.** Keep the learnings, agent-native, schema-drift, and deployment-verification outputs alongside the merged finding set. Do not drop unstructured agent output just because it does not match the persona JSON schema.
+11. **Preserve CE agent artifacts.** Keep the outputs of the selected learnings, agent-native, schema-drift, and deployment-verification agents alongside the merged finding set. Do not drop unstructured agent output just because it does not match the persona JSON schema.
 12. **Keep the input ledger complete.** Reconcile admitted findings and rejected-payload summaries according to the [synthesis artifact contract](./references/synthesis-artifact-contract.md).
 
 ### Stage 5b: Validation pass
@@ -541,10 +577,10 @@ Assemble the final report using **pipe-delimited markdown tables for findings** 
 5. **Residual Actionable Work.** Include when unresolved actionable findings were handed off or should be handed off.
 6. **Pre-existing.** Separate section, does not count toward verdict.
 7. **Filtered (not validated).** Include when Stage 5b produced any findings with `validated: false`. Render as a pipe-delimited table with columns `#`, `File`, `Issue`, `Reviewer`, `Confidence`, `Validator reason`. These findings are surfaced for human review — they are not removed from the report. The validator found evidence that the issue may not be real in the code as written, was not introduced by this diff, or is already handled elsewhere; the human reviewer makes the final call. Omit this section when no findings were filtered.
-8. **Learnings & Past Solutions.** Surface learnings-researcher results: if past solutions are relevant, flag them as "Known Pattern" with links to docs/solutions/ files.
-9. **Agent-Native Gaps.** Surface agent-native-reviewer results. Omit section if no gaps found.
+8. **Learnings & Past Solutions.** Render only when CE `learnings-researcher` was selected and returned relevant output: if past solutions are relevant, flag them as "Known Pattern" with links to docs/solutions/ files. Omit the section otherwise.
+9. **Agent-Native Gaps.** Render only when CE `agent-native-reviewer` was selected and returned relevant output. Omit the section otherwise.
 10. **Deployment Notes.** If deployment-verification-agent ran, surface the key Go/No-Go items: blocking pre-deploy checks, the most important verification queries, rollback caveats, and monitoring focus areas. Keep the checklist actionable rather than dropping it into Coverage.
-11. **Coverage.** Suppressed count, residual risks, testing gaps, failed/timed-out reviewers, validator failures, risk-coverage entries with citing input finding IDs and exit conditions for blocked entries, and any intent uncertainty carried by non-interactive modes.
+11. **Coverage.** Suppressed count, residual risks, testing gaps, failed/timed-out reviewers, validator failures, risk-coverage entries with citing input finding IDs and exit conditions for blocked entries, and any intent uncertainty carried by non-interactive modes. For raw returns, state each selected persona's admission state — `findings`, `empty`, `malformed`, `never_returned`, `validation_unavailable` (the persisted raw dispatch outcome; distinct from the artifact-level `validation.status: "unavailable"`), `environment-screen` rejection — and what was admitted or withheld. Report admission states here only; do not add fields to `review-summary.v1`. Distinguish core reviewers, each selected conditional with its one-line rationale and triggering repository-relative paths, an explicit "no conditional selected" case, and any selected-but-failed/malformed/validation-unavailable reviewer; never label an unselected reviewer as failed.
 12. **Verdict.** Ready to merge / Ready with fixes / Not ready. Fix order if applicable. When an `explicit` plan has unaddressed requirements, the verdict must reflect it — a PR that's code-clean but missing planned requirements is "Not ready" unless the omission is intentional. When an `inferred` plan has unaddressed requirements, note it in the verdict reasoning but do not block on it alone. Apply the risk-aware degraded verdict rule from the [synthesis artifact contract](./references/synthesis-artifact-contract.md), including the recorded exit condition for a blocked risk-critical verdict.
 
 Do not include time estimates.
@@ -650,7 +686,7 @@ Before delivering the review, verify:
 
 ## Language-Aware Conditionals
 
-This skill uses stack-specific reviewer agents when the diff clearly warrants them. Keep those agents opinionated. They are not generic language checkers; they add a distinct review lens on top of the always-on and cross-cutting personas.
+This skill uses stack-specific reviewer agents when the diff clearly warrants them. Keep those agents opinionated. They are not generic language checkers; they add a distinct review lens on top of the core and cross-cutting personas.
 
 Do not spawn them mechanically from file extensions alone. The trigger is meaningful changed behavior, architecture, or UI state in that stack.
 

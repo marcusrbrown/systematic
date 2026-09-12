@@ -134,10 +134,10 @@ This fails because: no pipe-delimited tables, no severity-grouped `###` headers,
 - **Residual Actionable Work section** -- include only when unresolved actionable findings were handed off for later work
 - **Pre-existing section** -- separate table, no confidence column (these are informational)
 - **Filtered (not validated) section** -- findings where Stage 5b returned `validated: false`. Rendered as a pipe-delimited table with columns `#`, `File`, `Issue`, `Reviewer`, `Confidence`, `Validator reason`. These findings are surfaced for human review, not removed. Omit this section when Stage 5b produced no filtered findings.
-- **Learnings & Past Solutions section** -- results from learnings-researcher, with links to docs/solutions/ files
-- **Agent-Native Gaps section** -- results from agent-native-reviewer. Omit if no gaps found.
+- **Learnings & Past Solutions section** -- render only when CE `learnings-researcher` was selected and returned relevant output; results with links to docs/solutions/ files. Omit otherwise.
+- **Agent-Native Gaps section** -- render only when CE `agent-native-reviewer` was selected and returned relevant output. Omit otherwise.
 - **Deployment Notes section** -- key checklist items from deployment-verification-agent. Omit if the agent did not run.
-- **Coverage section** -- suppressed count with original confidences, residual risks, testing gaps, failed reviewers, disposition reconciliation, and risk-coverage entries with their citing input finding IDs and blocked-entry exit conditions
+- **Coverage section** -- suppressed count with original confidences, residual risks, testing gaps, failed reviewers, disposition reconciliation, and risk-coverage entries with their citing input finding IDs and blocked-entry exit conditions. For raw returns, distinguish `findings`, `empty`, `malformed`, `never_returned`, `validation_unavailable` (the persisted raw dispatch outcome, distinct from the artifact-level `validation.status: "unavailable"`), and `environment-screen` rejection, and state what was admitted or withheld
 - **Summary uses blockquotes** for verdict, reasoning, and fix order
 - **Horizontal rule** (`---`) separates findings from verdict
 - **`###` headers** for each section -- never plain text headers
