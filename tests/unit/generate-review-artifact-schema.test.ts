@@ -5,6 +5,7 @@ import {
   generateSchemaContent,
   normalizeForCompare,
   REVIEW_SCHEMA_RELATIVE_PATH,
+  REVIEW_SCHEMA_TARGETS,
 } from '../../scripts/generate-review-artifact-schema.js'
 
 const REPO_ROOT = path.resolve(import.meta.dir, '../..')
@@ -13,6 +14,20 @@ const GENERATOR = path.join(
   'scripts/generate-review-artifact-schema.ts',
 )
 const SCHEMA_PATH = path.join(REPO_ROOT, REVIEW_SCHEMA_RELATIVE_PATH)
+
+const FINDINGS_SCHEMA_RELATIVE_PATH =
+  'skills/ce-review/references/findings-schema.json'
+const FINDINGS_SCHEMA_PATH = path.join(REPO_ROOT, FINDINGS_SCHEMA_RELATIVE_PATH)
+
+function withFindingsContent(content: string, callback: () => void): void {
+  const original = fs.readFileSync(FINDINGS_SCHEMA_PATH, 'utf8')
+  try {
+    fs.writeFileSync(FINDINGS_SCHEMA_PATH, content, 'utf8')
+    callback()
+  } finally {
+    fs.writeFileSync(FINDINGS_SCHEMA_PATH, original, 'utf8')
+  }
+}
 
 function runGenerator(...args: string[]): ReturnType<typeof Bun.spawnSync> {
   return Bun.spawnSync(['bun', GENERATOR, ...args], {
@@ -106,6 +121,73 @@ describe('review artifact schema generator', () => {
     expect(normalizeForCompare('foo\r\nbar\r\n')).toBe('foo\nbar\n')
     expect(normalizeForCompare('foo\n\n')).toBe('foo\n\n')
     expect(normalizeForCompare('foo \n')).toBe('foo \n')
+  })
+
+  test('--check exits nonzero and names the committed findings schema on drift', () => {
+    const schema = JSON.parse(
+      fs.readFileSync(FINDINGS_SCHEMA_PATH, 'utf8'),
+    ) as Record<string, unknown>
+    withFindingsContent(
+      `${JSON.stringify({ ...schema, title: 'Drifted findings schema' }, null, 2)}\n`,
+      () => {
+        const result = runGenerator('--check')
+
+        expect(result.exitCode).toBe(1)
+        expect(output(result)).toContain(FINDINGS_SCHEMA_RELATIVE_PATH)
+      },
+    )
+  })
+
+  test('generation writes the findings schema and reports both targets', () => {
+    const result = runGenerator()
+
+    expect(result.exitCode, output(result)).toBe(0)
+    expect(output(result)).toContain(REVIEW_SCHEMA_RELATIVE_PATH)
+    expect(output(result)).toContain(FINDINGS_SCHEMA_RELATIVE_PATH)
+  })
+
+  test('owns exactly the two ce:review schemas and isolates document-review', () => {
+    const targets = REVIEW_SCHEMA_TARGETS.map((target) => target.relativePath)
+
+    expect(targets).toEqual([
+      'skills/ce-review/references/review-summary-schema.json',
+      'skills/ce-review/references/findings-schema.json',
+    ])
+    expect(targets).not.toContain(
+      'skills/document-review/references/findings-schema.json',
+    )
+    expect(generateSchemaContent()).not.toContain('document-review')
+  })
+
+  test('keeps the shared final-v1 safe-integer line bound in both committed schemas', () => {
+    const expected = {
+      type: 'integer',
+      exclusiveMinimum: 0,
+      maximum: Number.MAX_SAFE_INTEGER,
+    }
+    const summary = JSON.parse(fs.readFileSync(SCHEMA_PATH, 'utf8')) as {
+      readonly properties: {
+        readonly findings: {
+          readonly items: {
+            readonly properties: { readonly line: unknown }
+          }
+        }
+      }
+    }
+    const findings = JSON.parse(
+      fs.readFileSync(FINDINGS_SCHEMA_PATH, 'utf8'),
+    ) as {
+      readonly definitions: {
+        readonly subAgentFinding: {
+          readonly properties: { readonly line: unknown }
+        }
+      }
+    }
+
+    expect(summary.properties.findings.items.properties.line).toEqual(expected)
+    expect(findings.definitions.subAgentFinding.properties.line).toMatchObject(
+      expected,
+    )
   })
 
   test('the CI workflow invokes the review schema drift gate', () => {

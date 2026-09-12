@@ -48,6 +48,7 @@ export const EXEMPT_SKIPS: readonly {
  * console summary and pass floor alone could still look plausible.
  */
 export const EXPECTED_SUITE_FILES: readonly string[] = [
+  'tests/integration/ce-review-return-validation.test.ts',
   'tests/integration/claude-code.test.ts',
   'tests/integration/eval-artifact.test.ts',
   'tests/integration/eval-fixture.test.ts',
@@ -62,7 +63,7 @@ export const EXPECTED_SUITE_FILES: readonly string[] = [
 ]
 
 /**
- * Measured: 138 test()/it() call sites exist across the eleven integration
+ * Measured: 139 test()/it() call sites exist across the twelve integration
  * files as of this writing. The prior floor of 50 exactly equalled the
  * host-free test count (claude-code 18 + eval-artifact 7 + eval-fixture 5 +
  * release-notes-ci 20 = 50), so a total collapse of every host-touching

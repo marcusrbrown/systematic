@@ -882,3 +882,16 @@ describe('build — real repo, temp dir', () => {
     }
   })
 })
+
+describe('real repo: ce:review validator ships in the Claude Code skill tree', () => {
+  test('collectSkillFiles includes the generated validator byte-identically', () => {
+    const rel = 'skills/ce-review/scripts/validate-review.mjs'
+    const files = collectSkillFiles(REPO_ROOT)
+    const packaged = files.get(rel)
+
+    expect(packaged).toBeDefined()
+    expect(packaged?.equals(fs.readFileSync(path.join(REPO_ROOT, rel)))).toBe(
+      true,
+    )
+  })
+})

@@ -19,7 +19,10 @@ run artifact for a run that never started.
 
 The parent initializes the artifact as `in_progress` before dispatch, with all
 selected personas initialized as `never_returned`, and updates each dispatch
-entry as returns arrive. A completed run becomes `completed` or `degraded`. An
+entry as returns arrive. A persona that returned but whose raw validator could
+not run is updated from `never_returned` to `dispatch_outcome:
+"validation_unavailable"`; it is never omitted and never left as
+`never_returned`. A completed run becomes `completed` or `degraded`. An
 interrupted or failed run becomes `abnormal` with its stated termination
 reason. An unfinished `in_progress` artifact is evidence of an abnormal run,
 not evidence of a clean run. Never infer a clean run from an absent artifact.
@@ -28,8 +31,8 @@ The artifact is parent-owned. Per-agent full-detail JSON files are written
 only for findings admitted after the parent completes schema and
 environment-value validation. A finding rejected by environment-value
 detection is not persisted; other findings from the same return may proceed.
-A payload rejected at top level, or a rejected or never-returned persona,
-does not produce a per-agent file. If a later confidence or validation stage
+A payload rejected at top level, or a rejected, never-returned, or
+validation-unavailable persona, does not produce a per-agent file. If a later confidence or validation stage
 changes an input disposition, the parent updates the record and synthesis
 ledger before finalizing the artifact.
 
@@ -108,8 +111,9 @@ The artifact must preserve these distinctions:
 ```
 
 - `dispatches` has an entry for every selected persona. `dispatch_outcome`
-  records what a persona returned: `findings`, `empty`, `malformed`, or
-  `never_returned`. A rejection reason is the exact safe validation reason,
+  records what a persona returned: `findings`, `empty`, `malformed`,
+  `never_returned`, or `validation_unavailable`. A rejection reason is the exact
+  safe validation reason,
   naming persona and field without echoing the offending value. Dispatch
   outcome is separate from finding disposition. Conditional selections record
   their triggering changed-file paths in `selection_surface` and the announced
@@ -129,6 +133,13 @@ The artifact must preserve these distinctions:
   never includes the offending value. Do not enumerate rejected findings or
   assign them input IDs. A finding-level environment rejection uses the same
   summary entry while admitted findings from that return continue normally.
+  New writers must emit a rejected-summary row only for `findings` or
+  `malformed`. The schema_version 1 validator deliberately continues to accept a
+  historical `empty` or `never_returned` rejected-summary row for backward
+  compatibility with existing artifacts, but that reader leniency is not
+  authoring permission to emit either. The validator rejects a rejected-summary
+  row for `validation_unavailable`, the additive outcome this contract
+  introduces, and writers must never emit it.
   Disposition counts are weighted by `rejected_finding_count` for that summary
   entry, so their sum equals the total number of findings observed, not the
   number of ledger rows. A malformed JSON return with no safely enumerable
@@ -180,6 +191,71 @@ the review degrades while conforming returns continue through synthesis. Only
 an orchestration or storage failure that prevents the parent from producing the
 required run artifact is run-fatal.
 
+## Raw-return admission and validation availability
+
+Before a persona return is parsed into fields, screened for environment values,
+assessed for evidence, synthesized, or persisted, the parent admits it with the
+packaged structural validator:
+
+```bash
+# Resolve the validator relative to the skill's own directory.
+SKILL_DIR="<skill directory stated when this skill loads>";
+node "$SKILL_DIR/scripts/validate-review.mjs" return <<'REVIEW_RETURN_A1B2C3D4'
+<the persona's returned JSON payload, copied verbatim>
+REVIEW_RETURN_A1B2C3D4
+```
+
+Before each invocation, choose a fresh delimiter for that exact raw payload from
+a safe token alphabet (`A-Z`, `0-9`, `_`), verify the delimiter is absent as a
+complete line in that exact payload, and never reuse a fixed delimiter. The
+`REVIEW_RETURN_A1B2C3D4` token above is only an illustration. Open the heredoc
+with a single-quoted heredoc opener (`<<'DELIM'`) and close it with a line
+containing exactly that delimiter. The payload travels on stdin, never in argv;
+never use unquoted interpolation or command substitution, and never write the
+payload to a temp file.
+
+The parent maps the result to `dispatch_outcome`, keeping lifecycle, structural
+validity, environment screening, and evidence assessment separate:
+
+- **exit 0** — structurally admitted. Parse the already structurally validated
+  JSON without logging the raw text, then run the existing environment-value
+  screen over that parsed object before persistence. Zero findings is `empty`;
+  one or more findings is `findings`. Admission is structural only: it never
+  asserts that a finding's claims or cited evidence are true.
+- **exit 1** — `malformed`. Record bounded validator diagnostics only; do not
+  parse, screen, or persist payload fields or values.
+- **exit 2**, a missing or unreadable helper, or a launch failure — validation
+  unavailable. Withhold the return and report the exact unavailability and what
+  was withheld. Update that selected persona's preinitialized dispatch entry
+  from `never_returned` to `dispatch_outcome: "validation_unavailable"` with
+  `input_finding_count: 0` and, optionally, a safe `rejection_reason` naming the
+  exit status, missing helper, or launch failure without payload values. Set
+  `run_status` to `degraded`. Never omit the dispatch entry, never leave it as
+  `never_returned`, never label it `malformed`, never admit the payload, and
+  never fabricate a rejected-summary ledger row. `never_returned` is a
+  task-lifecycle fact for a task that did not return. Validation unavailable is
+  not malformed and is not never_returned.
+
+**Dispatch identity binding.** Structural admission does not prove who produced a
+return. Immediately after `exit 0` and before the environment-value screen,
+persistence, or synthesis, the parent parses the admitted return's `reviewer`
+field and confirms it equals the dispatched persona. A return whose `reviewer`
+does not match the dispatched persona is an identity mismatch: reject the whole
+return as `dispatch_outcome: "malformed"`, record only a bounded rejection reason
+naming the expected persona, set `run_status` to `degraded`, and do not admit,
+screen, persist, or synthesize its payload.
+
+`validation_unavailable` is an additive enum value: `schema_version` stays `1`,
+existing v1 artifacts remain valid, and no new field or migration is introduced.
+A run that contains `validation_unavailable` evidence records a zero
+`input_finding_count`, no admitted input finding for that persona, and a
+non-`completed` run status; unavailable evidence can never finalize as a clean,
+completed run.
+The word `unavailable` also names the artifact-level `validation.status` value;
+that is a different object and phase, and these fields are never repurposed for
+raw-dispatch availability. These admission states are surfaced in the report's
+Coverage, which reports the exact unavailability and what was withheld.
+
 ## Environment-value validation
 
 The parent recursively inspects every string leaf without logging the raw
@@ -217,10 +293,18 @@ validating it. This ordering makes the artifact validatable at all: without
 a real validation result.
 
 After writing `review-summary.json`, the parent resolves and runs a validator
-in this order: the bundled `systematic-validate-review-artifact <path>` command
-first, then the npm-installed `systematic validate-review-artifact <path>`
-command. Both can be present at once. The bundled command ships beside the
-prose being executed, so it is the one whose behavior matches the contract.
+in this order: the skill-local helper first, then the bundled
+`systematic-validate-review-artifact <path>` command, then the npm-installed
+`systematic validate-review-artifact <path>` command. All can be present at
+once. The skill-local helper ships beside the prose being executed, so it is
+the one whose behavior matches the contract; the other two remain fallbacks.
+
+```bash
+# Resolve the validator relative to the skill's own directory.
+SKILL_DIR="<skill directory stated when this skill loads>";
+ARTIFACT_PATH="<review-summary.json path>";
+node "$SKILL_DIR/scripts/validate-review.mjs" artifact "$ARTIFACT_PATH"
+```
 The parent runs the first command it resolves and reads its result; it does not
 merely test whether a name is on `PATH`, because a version-manager shim can be
 present there and fail on every invocation.
@@ -296,8 +380,9 @@ against at all.
 The risk-critical surfaces are `security`, `data-migrations`, `api-contract`,
 `reliability`, and `performance`. They are the conditional personas selected
 specifically for the matching diff shape in Stage 3. If one of those selected
-personas has `dispatch_outcome: "malformed"` or
-`dispatch_outcome: "never_returned"`, the review verdict must not be clean:
+personas has `dispatch_outcome: "malformed"`,
+`dispatch_outcome: "never_returned"`, or `dispatch_outcome:
+"validation_unavailable"`, the review verdict must not be clean:
 it is blocking unless another persona covered the lost surface with validated
 evidence. For this rule, a validated finding from another persona covers a
 lost risk-critical surface if and only if the finding's `file` appears in the

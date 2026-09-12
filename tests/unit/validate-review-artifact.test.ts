@@ -647,3 +647,103 @@ describe('systematic validate-review-artifact', () => {
     }
   })
 })
+
+describe('systematic validate-review-artifact: validation_unavailable amendment', () => {
+  it('accepts a degraded artifact with a zero-count validation_unavailable dispatch', () => {
+    const cwd = makeCwd()
+    try {
+      const target = copyFixture(cwd, CONFORMING_FIXTURE)
+      const artifact = readJsonObject(target)
+      artifact.run_status = 'degraded'
+      const dispatches = artifact.dispatches as Array<Record<string, unknown>>
+      dispatches[0] = {
+        persona: 'correctness',
+        dispatch_outcome: 'validation_unavailable',
+        input_finding_count: 0,
+        rejection_reason: 'Raw validator command could not run.',
+      }
+      // A validation_unavailable persona was withheld before admission, so the
+      // truthful fixture admits no finding for it and cites no synthesized
+      // evidence that would have to resolve back to an admitted ledger row.
+      artifact.input_findings = []
+      artifact.findings = []
+      fs.writeFileSync(target, JSON.stringify(artifact))
+
+      const result = runCli(
+        [
+          'validate-review-artifact',
+          '.context/systematic/ce-review/review-summary.json',
+        ],
+        cwd,
+      )
+
+      expect(result.exitCode, result.stderr).toBe(0)
+      expect(result.stdout).toContain('Review artifact is valid')
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a rejected-summary ledger row carrying validation_unavailable', () => {
+    const cwd = makeCwd()
+    try {
+      const target = copyFixture(cwd, CONFORMING_FIXTURE)
+      const artifact = readJsonObject(target)
+      artifact.input_findings = [
+        {
+          record_type: 'rejected_summary',
+          reviewer: 'testing',
+          dispatch_outcome: 'validation_unavailable',
+          rejected_finding_count: 1,
+          rejected_severities: ['P1'],
+          disposition: 'rejected',
+          reason: 'Raw validator did not run.',
+        },
+      ]
+      fs.writeFileSync(target, JSON.stringify(artifact))
+
+      const result = runCli(
+        [
+          'validate-review-artifact',
+          '.context/systematic/ce-review/review-summary.json',
+        ],
+        cwd,
+      )
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain('input_findings.0.dispatch_outcome')
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a normal artifact whose synthesized evidence cites a ghost input ID', () => {
+    const cwd = makeCwd()
+    try {
+      const target = copyFixture(cwd, CONFORMING_FIXTURE)
+      const artifact = readJsonObject(target)
+      const findings = artifact.findings as Array<Record<string, unknown>>
+      const firstFinding = findings[0]
+      if (firstFinding === undefined) {
+        throw new Error('conforming fixture must contain a finding')
+      }
+      firstFinding.input_finding_ids = ['ghost#1']
+      fs.writeFileSync(target, JSON.stringify(artifact))
+
+      const result = runCli(
+        [
+          'validate-review-artifact',
+          '.context/systematic/ce-review/review-summary.json',
+        ],
+        cwd,
+      )
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain(
+        'findings.0.input_finding_ids.0 custom: every synthesized input finding ID must resolve to an admitted ledger row',
+      )
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+})

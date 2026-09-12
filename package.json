@@ -53,13 +53,15 @@
     "schema:drift": "bun scripts/generate-config-schema.ts --check",
     "review-schema:generate": "bun scripts/generate-review-artifact-schema.ts",
     "review-schema:drift": "bun scripts/generate-review-artifact-schema.ts --check",
+    "ce-review-validator:build": "bun scripts/generate-ce-review-validator.ts",
+    "ce-review-validator:drift": "bun scripts/generate-ce-review-validator.ts --check",
     "agent-browser:build": "bun scripts/generate-agent-browser-skill.ts",
     "agent-browser:drift": "bun scripts/generate-agent-browser-skill.ts --check",
     "registry:build": "bun scripts/build-registry.ts",
     "registry:drift": "bun scripts/generate-registry.ts --check",
     "registry:validate": "bun scripts/build-registry.ts --validate-only",
     "claude-code:build": "bun scripts/build-claude-code-plugin.ts",
-    "postupgrade": "bun run build && bun run agent-browser:build && bun run schema:generate && bun run review-schema:generate && bun scripts/generate-registry.ts",
+    "postupgrade": "bun run build && bun run agent-browser:build && bun run schema:generate && bun run review-schema:generate && bun run ce-review-validator:build && bun scripts/generate-registry.ts",
     "prepublishOnly": "bun run build && bun run schema:generate"
   },
   "keywords": [

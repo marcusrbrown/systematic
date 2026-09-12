@@ -43,6 +43,10 @@ import {
 } from './lib/review-artifact-path.js'
 import { ReviewArtifactSchema } from './lib/review-artifact-schema.js'
 import {
+  type ReadChunk,
+  runReviewReturnValidator,
+} from './lib/review-return-validator.js'
+import {
   type RoutingFieldSource,
   type RoutingResolution,
   resolveRouting,
@@ -100,6 +104,12 @@ Commands:
                                CI, issues, or fixtures. Not for the ce:review parent's own run artifact.
                                Exit statuses: 0 valid artifact, 1 validation failure,
                                2 operational failure, 3 legacy artifact with no schema_version
+  validate-review-return       Validate one raw ce:review persona return read from stdin
+                               Reads exactly one JSON document (max 1 MiB) and checks it against the
+                               raw reviewer return schema. No files are read or written; accepts no
+                               arguments or output flags.
+                               Exit statuses: 0 valid return, 1 malformed/empty/oversized/schema-invalid,
+                               2 operational failure (usage, TTY, stdin read)
   config [subcommand]          Configuration management
     show [--json]              Show configuration (--json for a machine-readable resolved view)
     path                       Print config file locations
@@ -119,6 +129,7 @@ Examples:
   systematic capabilities
   systematic validate-review-artifact .context/systematic/ce-review/review-summary.json
   systematic validate-review-artifact --allow-outside-artifact-root /path/to/external-artifact.json
+  systematic validate-review-return < reviewer-return.json
   systematic list agents
   systematic config show
   systematic config show --json
@@ -447,6 +458,34 @@ export function runValidateReviewArtifactCli(
   options: ValidateReviewArtifactCliOptions,
 ): number {
   return runValidateReviewArtifact(options)
+}
+
+interface ValidateReviewReturnCliOptions {
+  readonly argv: readonly string[]
+  readonly fd?: number
+  readonly isTTY?: boolean
+  readonly readChunk?: ReadChunk
+  readonly outputSink?: (message: string) => void
+  readonly errorSink?: (message: string) => void
+}
+
+function runValidateReviewReturn(
+  options: ValidateReviewReturnCliOptions,
+): number {
+  return runReviewReturnValidator({
+    argv: options.argv,
+    fd: options.fd ?? 0,
+    isTTY: options.isTTY ?? process.stdin.isTTY === true,
+    readChunk: options.readChunk,
+    outputSink: options.outputSink ?? ((message) => console.log(message)),
+    errorSink: options.errorSink ?? ((message) => console.error(message)),
+  })
+}
+
+export function runValidateReviewReturnCli(
+  options: ValidateReviewReturnCliOptions,
+): number {
+  return runValidateReviewReturn(options)
 }
 
 function isHarness(value: string): value is Harness {
@@ -1016,6 +1055,16 @@ function runLegacyCli(args: string[]): void {
         argv: ['systematic', ...args],
         cwd: process.cwd(),
         errorSink: console.error,
+        outputSink: console.log,
+      })
+      if (status !== 0) process.exit(status)
+      break
+    }
+    case 'validate-review-return': {
+      const status = runValidateReviewReturnCli({
+        argv: ['systematic', ...args],
+        errorSink: console.error,
+        isTTY: process.stdin.isTTY === true,
         outputSink: console.log,
       })
       if (status !== 0) process.exit(status)

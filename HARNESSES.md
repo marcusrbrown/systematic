@@ -55,6 +55,30 @@ Behavioral enforcement rides a plugin output style (`force-for-plugin: true`), w
 
 Honest capability boundary: output-style enforcement is real and applies automatically on install, but it operates at the system-prompt level — the same layer as any other instruction the model receives — so it is strong guidance, not a hard gate the model cannot violate. Coverage also differs by surface: plugin-bundled hooks fire app-wide, including in Cowork, while a project-local `.claude/settings.json` hook fires in the Code tab but not in Cowork — state or enforcement reaching Cowork sessions has to come through the plugin, not a project-local hook. Integration coverage lives in `tests/integration/claude-code.test.ts` [CC-10].
 
+## Review-return validator — packaged paths
+
+The raw-return and aggregate validators ship as one self-contained Node bundle,
+`skills/ce-review/scripts/validate-review.mjs`, generated from
+`src/ce-review-validator.ts` by `scripts/generate-ce-review-validator.ts` and
+gated by `bun run ce-review-validator:drift`. Recorded execution evidence for
+this surface:
+
+- **npm / OpenCode / Pi package layout** — real Node execution from an extracted
+  `npm pack --ignore-scripts` archive, resolving the script through its packaged
+  `skills/ce-review` directory [RV-1].
+- **OCX-selected tree** — real Node execution from the `ce-review` component's
+  declared file selection [RV-1].
+- **Claude Code generated bundle** — real Node execution from the output written
+  by `generatePluginFiles`/`writePluginFiles` [RV-1].
+- **OpenCode scripted host** — a real scripted-host session loads the packaged
+  `ce:review` skill and invokes the packaged script's `return` subcommand through
+  its `SKILL_DIR` anchor [RV-2].
+
+No live Pi, OCX, or Claude Code runtime host was executed for this check; those
+layouts are proven by package-tree execution under real Node, not by running the
+harness. This is package-tree execution plus one real OpenCode scripted host,
+not cross-harness runtime parity.
+
 ## Codex CLI — Tier 2 documented portability target
 
 The supplied evidence verifies only `request_user_input`: its definition names the tool [CX-1], and its handler blocks while restricting use to the root thread, rejecting subagents [CX-2]. Delegation, task tracking, skill loading, and skills-file support were not checked and remain **UNVERIFIED**. Systematic ships no Codex adapter or profile.
@@ -120,3 +144,5 @@ Migrated-skill discipline is enforced by the [content-integrity gate](scripts/co
 - **GH-6** — [Copilot CLI skills](https://docs.github.com/en/copilot/how-tos/copilot-cli/customize-copilot/add-skills).
 - **GH-7** — [Copilot best-practices instructions](https://docs.github.com/en/copilot/get-started/best-practices).
 - **GH-8** — [Copilot `AGENTS.md` support](https://github.blog/changelog/2025-08-28-copilot-coding-agent-now-supports-agents-md-custom-instructions/).
+- **RV-1** — `tests/unit/ce-review-validator-packaging.test.ts` (real Node execution from the npm/OpenCode/Pi package tree, the OCX-selected tree, and the Claude Code generated bundle).
+- **RV-2** — `tests/integration/ce-review-return-validation.test.ts` (real OpenCode scripted host invoking the packaged `skills/ce-review/scripts/validate-review.mjs` through its `SKILL_DIR` anchor).

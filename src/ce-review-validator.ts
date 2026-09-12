@@ -1,0 +1,92 @@
+import fs from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { runClaudeCodeValidator } from './claude-code-validator.js'
+import {
+  type ReadChunk,
+  runReviewReturnValidator,
+} from './lib/review-return-validator.js'
+
+/**
+ * Entry point for the generated, self-contained `ce:review` skill-local
+ * validator shim (`skills/ce-review/scripts/validate-review.mjs`).
+ *
+ * This is a thin packaging compatibility shim, not a public extension point:
+ * it dispatches exactly two subcommands and owns no validation logic itself.
+ * - `return`   -> the bounded raw persona-return validator (stdin).
+ * - `artifact` -> the existing aggregate review-artifact validator.
+ *
+ * It exists because shipped skill layouts cannot all rely on the npm CLI or
+ * `dist/`; every harness invokes the committed bundle through `SKILL_DIR`.
+ */
+
+export const CE_REVIEW_VALIDATOR_USAGE =
+  'Usage: node validate-review.mjs <return|artifact> [...]'
+
+export interface CeReviewValidatorOptions {
+  readonly argv: readonly string[]
+  readonly cwd?: string
+  readonly isTTY?: boolean
+  readonly readChunk?: ReadChunk
+  readonly outputSink?: (message: string) => void
+  readonly errorSink?: (message: string) => void
+}
+
+export function runCeReviewValidator(
+  options: CeReviewValidatorOptions,
+): number {
+  const outputSink =
+    options.outputSink ?? ((message: string) => console.log(message))
+  const errorSink =
+    options.errorSink ?? ((message: string) => console.error(message))
+
+  const subcommand = options.argv[0]
+
+  if (subcommand === 'return') {
+    return runReviewReturnValidator({
+      argv: ['systematic', 'validate-review-return', ...options.argv.slice(1)],
+      isTTY: options.isTTY,
+      readChunk: options.readChunk,
+      outputSink,
+      errorSink,
+    })
+  }
+
+  if (subcommand === 'artifact') {
+    return runClaudeCodeValidator({
+      argv: options.argv.slice(1),
+      cwd: options.cwd,
+      outputSink,
+      errorSink,
+    })
+  }
+
+  errorSink(CE_REVIEW_VALIDATOR_USAGE)
+  return 2
+}
+
+/** Resolve a path to its real location without throwing on missing input. */
+function resolveRealPath(candidate: string | undefined): string | undefined {
+  if (candidate === undefined) return undefined
+  try {
+    return fs.realpathSync(candidate)
+  } catch {
+    return undefined
+  }
+}
+
+// Explicit direct-execution guard, portable across Bun and Node and insensitive
+// to the path spelling used to reach this file (for example macOS `/var` ->
+// `/private/var` symlinks). Fail-closed: when either side is missing or
+// unresolvable the module does not self-execute, so `import()` stays
+// side-effect free for tests and tooling without depending on the Bun-specific
+// `import.meta.main`.
+const entryPath = resolveRealPath(process.argv[1])
+const modulePath = resolveRealPath(fileURLToPath(import.meta.url))
+const isMainModule =
+  entryPath !== undefined &&
+  modulePath !== undefined &&
+  entryPath === modulePath
+
+if (isMainModule) {
+  process.exitCode = runCeReviewValidator({ argv: process.argv.slice(2) })
+}
