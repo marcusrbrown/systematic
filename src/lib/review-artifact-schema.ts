@@ -28,6 +28,7 @@ export const REVIEW_ARTIFACT_CUSTOM_MESSAGES = [
   'provenance.agreement_credit must not overlap provenance.submitters',
   'provenance.agreement_credit requires an eligible returned persona with admitted evidence',
   'satisfied risk coverage must cite a validated finding on the lost persona selection surface',
+  'satisfied risk coverage must cite an admitted ledger row owned by another persona',
 ] as const
 
 const boundedText = (maxLength: number) =>
@@ -590,6 +591,18 @@ export const ReviewArtifactSchema = z
           code: 'custom',
           path: ['risk_coverage', coverageIndex, 'input_finding_id'],
           message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[11],
+        })
+        return
+      }
+
+      // Satisfied coverage must come from another persona: a lost risk-critical
+      // persona cannot clear its own surface with its own surviving evidence
+      // while part of its return was rejected or withheld.
+      if (owner === coverage.persona) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['risk_coverage', coverageIndex, 'input_finding_id'],
+          message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[19],
         })
         return
       }

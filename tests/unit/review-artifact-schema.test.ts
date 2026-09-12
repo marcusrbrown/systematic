@@ -1082,6 +1082,53 @@ describe('review artifact schema', () => {
           },
         ],
       }),
+      // Satisfied risk coverage cites the lost persona's own evidence.
+      artifactWith({
+        dispatches: [
+          {
+            persona: 'security',
+            dispatch_outcome: 'findings',
+            input_finding_count: 1,
+            selection_surface: ['src/auth.ts'],
+          },
+        ],
+        input_findings: [
+          {
+            record_type: 'admitted',
+            input_id: 'security#1',
+            reviewer: 'security',
+            confidence: 0.8,
+            disposition: 'surviving',
+            reason: 'The finding passed the confidence gate.',
+          },
+          {
+            ...rejectedSummary,
+            reviewer: 'security',
+            dispatch_outcome: 'findings',
+            rejected_finding_count: 1,
+            rejected_severities: ['P0'],
+          },
+        ],
+        findings: [
+          {
+            ...baseFinding,
+            file: 'src/auth.ts',
+            input_finding_ids: ['security#1'],
+            provenance: {
+              fingerprint: 'src/auth.ts|42',
+              submitters: ['security'],
+              agreement_credit: [],
+            },
+          },
+        ],
+        risk_coverage: [
+          {
+            persona: 'security',
+            satisfied: true,
+            input_finding_id: 'security#1',
+          },
+        ],
+      }),
     ]
 
     const issues = cases.flatMap((value) => {
@@ -2316,6 +2363,52 @@ describe('referential integrity across the artifact ledger and synthesis', () =>
 
   test('accepts a normal merged finding with complete provenance', () => {
     expect(ReviewArtifactSchema.safeParse(baseArtifact).success).toBe(true)
+  })
+
+  test('rejects satisfied risk coverage citing the lost persona own surviving evidence', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        dispatches: [
+          {
+            persona: 'security',
+            dispatch_outcome: 'findings',
+            input_finding_count: 1,
+            selection_surface: ['src/auth.ts'],
+          },
+        ],
+        input_findings: [
+          admittedRow('security#1', 'security'),
+          {
+            ...rejectedSummary,
+            reviewer: 'security',
+            dispatch_outcome: 'findings',
+            rejected_finding_count: 1,
+            rejected_severities: ['P0'],
+          },
+        ],
+        findings: [
+          findingCiting(['security#1'], ['security'], { file: 'src/auth.ts' }),
+        ],
+        risk_coverage: [
+          {
+            persona: 'security',
+            satisfied: true,
+            input_finding_id: 'security#1',
+          },
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(false)
+    if (!result.success) {
+      expect(
+        result.error.issues.some(
+          (issue) =>
+            issue.path.join('.') === 'risk_coverage.0.input_finding_id' &&
+            issue.message === REVIEW_ARTIFACT_CUSTOM_MESSAGES[19],
+        ),
+      ).toBe(true)
+    }
   })
 
   test('accepts satisfied risk coverage backed by a validated finding on the lost surface', () => {

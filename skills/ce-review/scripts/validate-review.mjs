@@ -6126,6 +6126,7 @@ var REVIEW_ARTIFACT_CUSTOM_MESSAGES = [
   'provenance.agreement_credit must not overlap provenance.submitters',
   'provenance.agreement_credit requires an eligible returned persona with admitted evidence',
   'satisfied risk coverage must cite a validated finding on the lost persona selection surface',
+  'satisfied risk coverage must cite an admitted ledger row owned by another persona',
 ]
 var boundedText = (maxLength) => string2().min(1).max(maxLength).regex(/\S/)
 var LineNumberSchema = number2().int().positive()
@@ -6560,6 +6561,14 @@ var ReviewArtifactSchema = object({
           code: 'custom',
           path: ['risk_coverage', coverageIndex, 'input_finding_id'],
           message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[11],
+        })
+        return
+      }
+      if (owner === coverage.persona) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['risk_coverage', coverageIndex, 'input_finding_id'],
+          message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[19],
         })
         return
       }
