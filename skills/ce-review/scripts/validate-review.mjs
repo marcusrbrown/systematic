@@ -172,7 +172,7 @@ function resolveReviewArtifactPath(input, cwd, options = {}) {
   return { ok: true, path: canonicalTarget }
 }
 
-// node_modules/.bun/zod@4.5.4/node_modules/zod/v4/core/util.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/util.js
 function getEnumValues(entries) {
   const numericValues = Object.values(entries).filter(
     (v) => typeof v === 'number',
@@ -189,18 +189,23 @@ function jsonStringifyReplacer(_, value) {
   if (typeof value === 'bigint') return value.toString()
   return value
 }
-function cached(getter) {
-  const set = false
-  return {
-    get value() {
-      if (!set) {
-        const value = getter()
-        Object.defineProperty(this, 'value', { value })
-        return value
-      }
-      throw new Error('cached value already set')
-    },
+
+class Cached {
+  constructor(getter) {
+    this._getter = getter
+    this._value = undefined
   }
+  get value() {
+    const getter = this._getter
+    if (getter !== undefined) {
+      this._value = getter()
+      this._getter = undefined
+    }
+    return this._value
+  }
+}
+function cached(getter) {
+  return new Cached(getter)
 }
 function nullish(input) {
   return input === null || input === undefined
@@ -224,6 +229,49 @@ function assignProp(target, prop, value) {
     enumerable: true,
     configurable: true,
   })
+}
+function rawShape(def) {
+  const desc = Object.getOwnPropertyDescriptor(def, 'shape')
+  return desc?.get ? desc.get.raw : desc?.value
+}
+function sourceShape(schema) {
+  return rawShape(schema._zod.def) ?? schema._zod.def.shape
+}
+function deferProp(target, key, getter) {
+  Object.defineProperty(target, key, {
+    get() {
+      const value = getter()
+      assignProp(this, key, value)
+      return value
+    },
+    enumerable: true,
+    configurable: true,
+  })
+}
+function putProp(target, key, value) {
+  if (key in target) assignProp(target, key, value)
+  else target[key] = value
+}
+function mirrorShape(target, source, keys, wrap) {
+  const raw = sourceShape(source)
+  for (const key of keys) {
+    const desc = Object.getOwnPropertyDescriptor(raw, key)
+    if (!desc.enumerable) continue
+    if (desc.get) {
+      deferProp(target, key, () => {
+        const value = source._zod.def.shape[key]
+        return wrap ? wrap(value, key) : value
+      })
+    } else putProp(target, key, wrap ? wrap(desc.value, key) : desc.value)
+  }
+}
+function mirrorProps(target, source) {
+  for (const key of Reflect.ownKeys(source)) {
+    const desc = Object.getOwnPropertyDescriptor(source, key)
+    if (!desc.enumerable) continue
+    if (desc.get) deferProp(target, key, () => source[key])
+    else putProp(target, key, desc.value)
+  }
 }
 function mergeDefs(...defs) {
   const mergedDescriptors = {}
@@ -331,6 +379,16 @@ var NUMBER_FORMAT_RANGES = /* @__PURE__ */ (() => ({
   ],
   float64: [-Number.MAX_VALUE, Number.MAX_VALUE],
 }))()
+var BIGINT_FORMAT_RANGES = {
+  int64: [
+    /* @__PURE__ */ BigInt('-9223372036854775808'),
+    /* @__PURE__ */ BigInt('9223372036854775807'),
+  ],
+  uint64: [
+    /* @__PURE__ */ BigInt(0),
+    /* @__PURE__ */ BigInt('18446744073709551615'),
+  ],
+}
 function pick(schema, mask) {
   const currDef = schema._zod.def
   const checks = currDef.checks
@@ -340,22 +398,20 @@ function pick(schema, mask) {
       '.pick() cannot be used on object schemas containing refinements',
     )
   }
-  const def = mergeDefs(schema._zod.def, {
-    get shape() {
-      const newShape = {}
-      for (const key of Reflect.ownKeys(mask)) {
-        if (!Object.prototype.hasOwnProperty.call(currDef.shape, key)) {
-          throw new Error(`Unrecognized key: "${String(key)}"`)
-        }
-        if (!mask[key]) continue
-        assignProp(newShape, key, currDef.shape[key])
-      }
-      assignProp(this, 'shape', newShape)
-      return newShape
-    },
-    checks: [],
-  })
-  return clone(schema, def)
+  const newShape = {}
+  mirrorShape(newShape, schema, maskedKeys(schema, mask))
+  return clone(schema, mergeDefs(currDef, { shape: newShape, checks: [] }))
+}
+function maskedKeys(schema, mask) {
+  const raw = sourceShape(schema)
+  const keys = []
+  for (const key of Reflect.ownKeys(mask)) {
+    if (!Object.getOwnPropertyDescriptor(raw, key)?.enumerable) {
+      throw new Error(`Unrecognized key: "${String(key)}"`)
+    }
+    if (mask[key]) keys.push(key)
+  }
+  return keys
 }
 function omit(schema, mask) {
   const currDef = schema._zod.def
@@ -366,22 +422,14 @@ function omit(schema, mask) {
       '.omit() cannot be used on object schemas containing refinements',
     )
   }
-  const def = mergeDefs(schema._zod.def, {
-    get shape() {
-      const newShape = { ...schema._zod.def.shape }
-      for (const key of Reflect.ownKeys(mask)) {
-        if (!Object.prototype.hasOwnProperty.call(currDef.shape, key)) {
-          throw new Error(`Unrecognized key: "${String(key)}"`)
-        }
-        if (!mask[key]) continue
-        delete newShape[key]
-      }
-      assignProp(this, 'shape', newShape)
-      return newShape
-    },
-    checks: [],
-  })
-  return clone(schema, def)
+  const omitted = new Set(maskedKeys(schema, mask))
+  const newShape = {}
+  mirrorShape(
+    newShape,
+    schema,
+    Reflect.ownKeys(sourceShape(schema)).filter((key) => !omitted.has(key)),
+  )
+  return clone(schema, mergeDefs(currDef, { shape: newShape, checks: [] }))
 }
 function extend(schema, shape) {
   if (!isPlainObject(shape)) {
@@ -390,7 +438,7 @@ function extend(schema, shape) {
   const checks = schema._zod.def.checks
   const hasChecks = checks && checks.length > 0
   if (hasChecks) {
-    const existingShape = schema._zod.def.shape
+    const existingShape = sourceShape(schema)
     for (const key of Reflect.ownKeys(shape)) {
       if (Object.getOwnPropertyDescriptor(existingShape, key) !== undefined) {
         throw new Error(
@@ -399,27 +447,25 @@ function extend(schema, shape) {
       }
     }
   }
-  const def = mergeDefs(schema._zod.def, {
-    get shape() {
-      const _shape = { ...schema._zod.def.shape, ...shape }
-      assignProp(this, 'shape', _shape)
-      return _shape
-    },
-  })
-  return clone(schema, def)
+  return clone(
+    schema,
+    mergeDefs(schema._zod.def, { shape: extended(schema, shape) }),
+  )
+}
+function extended(schema, shape) {
+  const newShape = {}
+  mirrorShape(newShape, schema, Reflect.ownKeys(sourceShape(schema)))
+  mirrorProps(newShape, shape)
+  return newShape
 }
 function safeExtend(schema, shape) {
   if (!isPlainObject(shape)) {
     throw new Error('Invalid input to safeExtend: expected a plain object')
   }
-  const def = mergeDefs(schema._zod.def, {
-    get shape() {
-      const _shape = { ...schema._zod.def.shape, ...shape }
-      assignProp(this, 'shape', _shape)
-      return _shape
-    },
-  })
-  return clone(schema, def)
+  return clone(
+    schema,
+    mergeDefs(schema._zod.def, { shape: extended(schema, shape) }),
+  )
 }
 function merge(a, b) {
   if (!b?._zod?.def) {
@@ -432,12 +478,11 @@ function merge(a, b) {
       '.merge() cannot be used on object schemas containing refinements. Use .safeExtend() instead.',
     )
   }
+  const newShape = {}
+  mirrorShape(newShape, a, Reflect.ownKeys(sourceShape(a)))
+  mirrorShape(newShape, b, Reflect.ownKeys(sourceShape(b)))
   const def = mergeDefs(a._zod.def, {
-    get shape() {
-      const _shape = { ...a._zod.def.shape, ...b._zod.def.shape }
-      assignProp(this, 'shape', _shape)
-      return _shape
-    },
+    shape: newShape,
     get catchall() {
       return b._zod.def.catchall
     },
@@ -454,69 +499,36 @@ function partial(Class, schema, mask, name = 'partial') {
       `.${name}() cannot be used on object schemas containing refinements`,
     )
   }
-  const def = mergeDefs(schema._zod.def, {
-    get shape() {
-      const oldShape = schema._zod.def.shape
-      const shape = { ...oldShape }
-      if (mask) {
-        for (const key of Reflect.ownKeys(mask)) {
-          if (!Object.prototype.hasOwnProperty.call(oldShape, key)) {
-            throw new Error(`Unrecognized key: "${String(key)}"`)
-          }
-          if (!mask[key]) continue
-          shape[key] = Class
-            ? new Class({
-                type: 'optional',
-                innerType: oldShape[key],
-              })
-            : oldShape[key]
-        }
-      } else {
-        for (const key of Reflect.ownKeys(oldShape)) {
-          shape[key] = Class
-            ? new Class({
-                type: 'optional',
-                innerType: oldShape[key],
-              })
-            : oldShape[key]
-        }
-      }
-      assignProp(this, 'shape', shape)
-      return shape
-    },
-    checks: [],
-  })
-  return clone(schema, def)
+  const selected = mask ? new Set(maskedKeys(schema, mask)) : undefined
+  const newShape = {}
+  mirrorShape(
+    newShape,
+    schema,
+    Reflect.ownKeys(sourceShape(schema)),
+    Class &&
+      ((value, key) =>
+        selected && !selected.has(key)
+          ? value
+          : new Class({ type: 'optional', innerType: value })),
+  )
+  return clone(
+    schema,
+    mergeDefs(schema._zod.def, { shape: newShape, checks: [] }),
+  )
 }
 function required(Class, schema, mask) {
-  const def = mergeDefs(schema._zod.def, {
-    get shape() {
-      const oldShape = schema._zod.def.shape
-      const shape = { ...oldShape }
-      if (mask) {
-        for (const key of Reflect.ownKeys(mask)) {
-          if (!Object.prototype.hasOwnProperty.call(shape, key)) {
-            throw new Error(`Unrecognized key: "${String(key)}"`)
-          }
-          if (!mask[key]) continue
-          shape[key] = new Class({
-            type: 'nonoptional',
-            innerType: oldShape[key],
-          })
-        }
-      } else {
-        for (const key of Reflect.ownKeys(oldShape)) {
-          shape[key] = new Class({
-            type: 'nonoptional',
-            innerType: oldShape[key],
-          })
-        }
-      }
-      assignProp(this, 'shape', shape)
-      return shape
-    },
-  })
-  return clone(schema, def)
+  const selected = mask ? new Set(maskedKeys(schema, mask)) : undefined
+  const newShape = {}
+  mirrorShape(
+    newShape,
+    schema,
+    Reflect.ownKeys(sourceShape(schema)),
+    (value, key) =>
+      selected && !selected.has(key)
+        ? value
+        : new Class({ type: 'nonoptional', innerType: value }),
+  )
+  return clone(schema, mergeDefs(schema._zod.def, { shape: newShape }))
 }
 function aborted(x, startIndex = 0) {
   if (x.aborted === true) return true
@@ -570,19 +582,24 @@ function finalizeIssue(iss, ctx, config) {
       unwrapMessage(config.customError?.(iss)) ??
       unwrapMessage(config.localeError?.(iss)) ??
       'Invalid input')
-  const {
-    inst: _inst,
-    schema: _schema,
-    continue: _continue,
-    input: _input,
-    ...rest
-  } = iss
-  rest.path ?? (rest.path = [])
-  rest.message = message
-  if (ctx?.reportInput) {
-    rest.input = _input
+  const full = {}
+  for (const k of Object.keys(iss)) {
+    if (
+      k === 'inst' ||
+      k === 'schema' ||
+      k === 'continue' ||
+      k === 'input' ||
+      k === '__proto__'
+    )
+      continue
+    full[k] = iss[k]
   }
-  return rest
+  full.path ?? (full.path = [])
+  full.message = message
+  if (ctx?.reportInput) {
+    full.input = iss.input
+  }
+  return full
 }
 var highSurrogate = /[\uD800-\uDBFF]/
 function codePointLength(str) {
@@ -650,6 +667,9 @@ function members(proto, table) {
       Object.defineProperty(proto, key, { ...desc, enumerable: false })
     else defineBound(proto, key, desc.value)
   }
+  for (const sym of Object.getOwnPropertySymbols(table)) {
+    defineBound(proto, sym, table[sym])
+  }
 }
 function own(inst, key, value, enumerable = true) {
   Object.defineProperty(inst, key, {
@@ -662,6 +682,22 @@ function own(inst, key, value, enumerable = true) {
 }
 function hide(inst, key, value) {
   return own(inst, key, value, false)
+}
+function derived(computes, table) {
+  for (const key in computes) {
+    const compute = computes[key]
+    Object.defineProperty(table, key, {
+      configurable: true,
+      enumerable: true,
+      get() {
+        return own(this, key, compute(this))
+      },
+      set(value) {
+        own(this, key, value)
+      },
+    })
+  }
+  return table
 }
 function defineBound(proto, key, fn) {
   Object.defineProperty(proto, key, {
@@ -760,7 +796,7 @@ function constantCatch(value) {
   return fn
 }
 
-// node_modules/.bun/zod@4.5.4/node_modules/zod/v4/core/core.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/core.js
 var _a
 var _zodDesc = { value: undefined, enumerable: false }
 var _E = 'captureStackTrace' in Error ? Error : null
@@ -875,7 +911,7 @@ function config(newConfig) {
   if (newConfig) Object.assign(globalConfig, newConfig)
   return globalConfig
 }
-// node_modules/.bun/zod@4.5.4/node_modules/zod/v4/core/errors.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/errors.js
 function _getMessage() {
   const internals = this._zod
   internals.message ??
@@ -895,7 +931,6 @@ var _messageDesc = {
   enumerable: true,
   configurable: true,
 }
-var _zodDesc2 = { value: undefined, enumerable: false }
 var _issuesDesc = { value: undefined, enumerable: false }
 var _installedToString = /* @__PURE__ */ new WeakSet([
   Object.prototype,
@@ -903,11 +938,8 @@ var _installedToString = /* @__PURE__ */ new WeakSet([
 ])
 var initializer = (inst, def) => {
   inst.name = '$ZodError'
-  _zodDesc2.value = inst._zod
-  Object.defineProperty(inst, '_zod', _zodDesc2)
   _issuesDesc.value = def
   Object.defineProperty(inst, 'issues', _issuesDesc)
-  _zodDesc2.value = undefined
   _issuesDesc.value = undefined
   Object.defineProperty(inst, 'message', _messageDesc)
   const proto = Object.getPrototypeOf(inst)
@@ -1016,7 +1048,7 @@ function formatError(error, mapper = (issue) => issue.message) {
   return fieldErrors
 }
 
-// node_modules/.bun/zod@4.5.4/node_modules/zod/v4/core/parse.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/parse.js
 function finalizeParams(callee, params) {
   return { callee: params?.callee ?? callee, Err: params?.Err }
 }
@@ -1061,29 +1093,71 @@ var _safeParse = (_Err) => (schema, value, _ctx) => {
     throw new $ZodAsyncError()
   }
   return result.issues.length
-    ? {
-        success: false,
-        error: new (_Err ?? $ZodError)(
-          result.issues.map((iss) => finalizeIssue(iss, ctx, config())),
-        ),
-      }
+    ? failure(_Err, result.issues, ctx)
     : { success: true, data: result.value }
 }
-var safeParse = /* @__PURE__ */ _safeParse($ZodRealError)
+function failure(Err, issues, ctx) {
+  let error
+  return {
+    success: false,
+    get error() {
+      if (!error) {
+        error = new Err(issues.map((iss) => finalizeIssue(iss, ctx, config())))
+        issues = undefined
+        ctx = undefined
+      }
+      return error
+    },
+    set error(e) {
+      error = e
+      issues = undefined
+      ctx = undefined
+    },
+  }
+}
 var _safeParseAsync = (_Err) => async (schema, value, _ctx) => {
   const ctx = _ctx ? { ..._ctx, async: true } : { async: true }
   let result = schema._zod.run({ value, issues: [] }, ctx)
   if (result instanceof Promise) result = await result
   return result.issues.length
-    ? {
-        success: false,
-        error: new _Err(
-          result.issues.map((iss) => finalizeIssue(iss, ctx, config())),
-        ),
-      }
+    ? failure(_Err, result.issues, ctx)
     : { success: true, data: result.value }
 }
-var safeParseAsync = /* @__PURE__ */ _safeParseAsync($ZodRealError)
+var COMPILE_INVALID = /* @__PURE__ */ Symbol.for('zod.compile.invalid')
+var COMPILE_FALLBACK = /* @__PURE__ */ Symbol.for('zod.compile.fallback')
+var validate = (schema, value, _ctx) => {
+  const validator = schema._zod.bag.validator
+  if (validator !== undefined) {
+    if (validator(value) !== COMPILE_INVALID) return true
+    if (validator.definite === true && _ctx === undefined) return false
+  }
+  return validateFallback(schema, value, _ctx)
+}
+function validateFallback(schema, value, _ctx) {
+  const ctx = _ctx
+    ? { ..._ctx, async: false, abortEarly: true }
+    : { async: false, abortEarly: true }
+  const fallbackRun = schema._zod.bag.fallbackRun
+  let result
+  if (fallbackRun) {
+    ctx[COMPILE_FALLBACK] = true
+    result = fallbackRun({ value, issues: [] }, ctx)
+  } else {
+    result = schema._zod.run({ value, issues: [] }, ctx)
+  }
+  if (result instanceof Promise) {
+    throw new $ZodAsyncError()
+  }
+  return result.issues.length === 0
+}
+var validateAsync = async (schema, value, _ctx) => {
+  const ctx = _ctx
+    ? { ..._ctx, async: true, abortEarly: true }
+    : { async: true, abortEarly: true }
+  let result = schema._zod.run({ value, issues: [] }, ctx)
+  if (result instanceof Promise) result = await result
+  return result.issues.length === 0
+}
 var _encode = (_Err) => {
   const parse = _parse(_Err)
   const fn = (schema, value, _ctx, _params) => {
@@ -1136,7 +1210,7 @@ var _safeEncodeAsync = (_Err) => async (schema, value, _ctx) => {
 var _safeDecodeAsync = (_Err) => async (schema, value, _ctx) => {
   return _safeParseAsync(_Err)(schema, value, _ctx)
 }
-// node_modules/.bun/zod@4.5.4/node_modules/zod/v4/core/regexes.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/regexes.js
 var cuid = /^[cC][0-9a-z]{6,}$/
 var cuid2 = /^[0-9a-z]+$/
 var ulid = /^[0-7][0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{25}$/
@@ -1158,8 +1232,8 @@ var uuid = (version) => {
   )
 }
 var email =
-  /^(?!\.)(?!.*\.\.)([A-Za-z0-9_'+\-\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$/
-var _emoji = `^[\\p{Extended_Pictographic}\\p{Emoji_Component}]+$`
+  /^(?:[A-Za-z0-9_'+\-]+\.)*[A-Za-z0-9_'+\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\-]*\.)+[A-Za-z]{2,}$/
+var _emoji = `^(?=[\\s\\S]*[\\p{Extended_Pictographic}\\p{Regional_Indicator}\\u20E3])[\\p{Extended_Pictographic}\\p{Emoji_Component}]+$`
 function emoji() {
   return new RegExp(_emoji, 'u')
 }
@@ -1173,7 +1247,7 @@ var cidrv6 =
   /^(([0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,7}:|([0-9a-fA-F]{1,4}:){1,6}:[0-9a-fA-F]{1,4}|([0-9a-fA-F]{1,4}:){1,5}(:[0-9a-fA-F]{1,4}){1,2}|([0-9a-fA-F]{1,4}:){1,4}(:[0-9a-fA-F]{1,4}){1,3}|([0-9a-fA-F]{1,4}:){1,3}(:[0-9a-fA-F]{1,4}){1,4}|([0-9a-fA-F]{1,4}:){1,2}(:[0-9a-fA-F]{1,4}){1,5}|[0-9a-fA-F]{1,4}:((:[0-9a-fA-F]{1,4}){1,6})|:((:[0-9a-fA-F]{1,4}){1,7}|:))\/(12[0-8]|1[01][0-9]|[1-9]?[0-9])$/
 var base64 =
   /^$|^(?:[0-9a-zA-Z+/]{4})*(?:(?:[0-9a-zA-Z+/]{2}==)|(?:[0-9a-zA-Z+/]{3}=))?$/
-var base64url = /^[A-Za-z0-9_-]*$/
+var base64url = /^(?:[A-Za-z0-9_-]{4})*(?:[A-Za-z0-9_-]{2,3})?$/
 var httpProtocol = /^https?$/
 var e164 = /^\+[1-9]\d{6,14}$/
 var dateSource = `(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))`
@@ -1207,19 +1281,13 @@ function datetime(args) {
     : qualified
   return new RegExp(`^${dateSource}T(?:${timeRegex})$`)
 }
-var string = (params) => {
-  const regex = params
-    ? `[\\s\\S]{${params?.minimum ?? 0},${params?.maximum ?? ''}}`
-    : `[\\s\\S]*`
-  return new RegExp(`^${regex}$`)
-}
-var integer = /^-?\d+$/
+var anyString = /^[\s\S]{0,}$/
 var number = /^-?\d+(?:\.\d+)?$/
 var boolean = /^(?:true|false)$/i
 var lowercase = /^[^A-Z]*$/
 var uppercase = /^[^a-z]*$/
 
-// node_modules/.bun/zod@4.5.4/node_modules/zod/v4/core/checks.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/checks.js
 var $ZodCheck = /* @__PURE__ */ $constructor('$ZodCheck', (inst, def) => {
   var _a
   inst._zod ?? (inst._zod = {})
@@ -1240,16 +1308,6 @@ var $ZodCheckLessThan = /* @__PURE__ */ $constructor(
   (inst, def) => {
     $ZodCheck.init(inst, def)
     const origin = numericOriginMap[typeof def.value]
-    inst._zod.onattach.push((inst) => {
-      const bag = inst._zod.bag
-      const curr =
-        (def.inclusive ? bag.maximum : bag.exclusiveMaximum) ??
-        Number.POSITIVE_INFINITY
-      if (def.value < curr) {
-        if (def.inclusive) bag.maximum = def.value
-        else bag.exclusiveMaximum = def.value
-      }
-    })
     inst._zod.check = (payload) => {
       if (
         def.inclusive ? payload.value <= def.value : payload.value < def.value
@@ -1274,16 +1332,6 @@ var $ZodCheckGreaterThan = /* @__PURE__ */ $constructor(
   (inst, def) => {
     $ZodCheck.init(inst, def)
     const origin = numericOriginMap[typeof def.value]
-    inst._zod.onattach.push((inst) => {
-      const bag = inst._zod.bag
-      const curr =
-        (def.inclusive ? bag.minimum : bag.exclusiveMinimum) ??
-        Number.NEGATIVE_INFINITY
-      if (def.value > curr) {
-        if (def.inclusive) bag.minimum = def.value
-        else bag.exclusiveMinimum = def.value
-      }
-    })
     inst._zod.check = (payload) => {
       if (
         def.inclusive ? payload.value >= def.value : payload.value > def.value
@@ -1307,10 +1355,6 @@ var $ZodCheckMultipleOf = /* @__PURE__ */ $constructor(
   '$ZodCheckMultipleOf',
   (inst, def) => {
     $ZodCheck.init(inst, def)
-    inst._zod.onattach.push((inst) => {
-      var _a
-      ;(_a = inst._zod.bag).multipleOf ?? (_a.multipleOf = def.value)
-    })
     inst._zod.check = (payload) => {
       if (typeof payload.value !== typeof def.value)
         throw new Error('Cannot mix number and bigint in multiple_of check.')
@@ -1338,13 +1382,6 @@ var $ZodCheckNumberFormat = /* @__PURE__ */ $constructor(
     const isInt = def.format?.includes('int')
     const origin = isInt ? 'int' : 'number'
     const [minimum, maximum] = NUMBER_FORMAT_RANGES[def.format]
-    inst._zod.onattach.push((inst) => {
-      const bag = inst._zod.bag
-      bag.format = def.format
-      bag.minimum = minimum
-      bag.maximum = maximum
-      if (isInt) bag.pattern = integer
-    })
     inst._zod.check = (payload) => {
       const input = payload.value
       if (isInt) {
@@ -1417,10 +1454,6 @@ var $ZodCheckMaxLength = /* @__PURE__ */ $constructor(
     var _a
     $ZodCheck.init(inst, def)
     ;(_a = inst._zod.def).when ?? (_a.when = _whenHasLength)
-    inst._zod.onattach.push((inst) => {
-      const curr = inst._zod.bag.maximum ?? Number.POSITIVE_INFINITY
-      if (def.maximum < curr) inst._zod.bag.maximum = def.maximum
-    })
     inst._zod.check = (payload) => {
       const input = payload.value
       const units = input.length
@@ -1448,10 +1481,6 @@ var $ZodCheckMinLength = /* @__PURE__ */ $constructor(
     var _a
     $ZodCheck.init(inst, def)
     ;(_a = inst._zod.def).when ?? (_a.when = _whenHasLength)
-    inst._zod.onattach.push((inst) => {
-      const curr = inst._zod.bag.minimum ?? Number.NEGATIVE_INFINITY
-      if (def.minimum > curr) inst._zod.bag.minimum = def.minimum
-    })
     inst._zod.check = (payload) => {
       const input = payload.value
       const units = input.length
@@ -1481,12 +1510,6 @@ var $ZodCheckLengthEquals = /* @__PURE__ */ $constructor(
     var _a
     $ZodCheck.init(inst, def)
     ;(_a = inst._zod.def).when ?? (_a.when = _whenHasLength)
-    inst._zod.onattach.push((inst) => {
-      const bag = inst._zod.bag
-      bag.minimum = def.length
-      bag.maximum = def.length
-      bag.length = def.length
-    })
     inst._zod.check = (payload) => {
       const input = payload.value
       const units = input.length
@@ -1518,14 +1541,6 @@ var $ZodCheckStringFormat = /* @__PURE__ */ $constructor(
   (inst, def) => {
     var _a, _b
     $ZodCheck.init(inst, def)
-    inst._zod.onattach.push((inst) => {
-      const bag = inst._zod.bag
-      bag.format = def.format
-      if (def.pattern) {
-        bag.patterns ?? (bag.patterns = new Set())
-        bag.patterns.add(def.pattern)
-      }
-    })
     if (def.pattern)
       (_a = inst._zod).check ??
         (_a.check = (payload) => {
@@ -1588,11 +1603,6 @@ var $ZodCheckIncludes = /* @__PURE__ */ $constructor(
         : escapedRegex,
     )
     def.pattern = pattern
-    inst._zod.onattach.push((inst) => {
-      const bag = inst._zod.bag
-      bag.patterns ?? (bag.patterns = new Set())
-      bag.patterns.add(pattern)
-    })
     inst._zod.check = (payload) => {
       if (payload.value.includes(def.includes, def.position)) return
       payload.issues.push({
@@ -1613,11 +1623,6 @@ var $ZodCheckStartsWith = /* @__PURE__ */ $constructor(
     $ZodCheck.init(inst, def)
     const pattern = new RegExp(`^${escapeRegex(def.prefix)}.*`)
     def.pattern ?? (def.pattern = pattern)
-    inst._zod.onattach.push((inst) => {
-      const bag = inst._zod.bag
-      bag.patterns ?? (bag.patterns = new Set())
-      bag.patterns.add(pattern)
-    })
     inst._zod.check = (payload) => {
       if (payload.value.startsWith(def.prefix)) return
       payload.issues.push({
@@ -1638,11 +1643,6 @@ var $ZodCheckEndsWith = /* @__PURE__ */ $constructor(
     $ZodCheck.init(inst, def)
     const pattern = new RegExp(`.*${escapeRegex(def.suffix)}$`)
     def.pattern ?? (def.pattern = pattern)
-    inst._zod.onattach.push((inst) => {
-      const bag = inst._zod.bag
-      bag.patterns ?? (bag.patterns = new Set())
-      bag.patterns.add(pattern)
-    })
     inst._zod.check = (payload) => {
       if (payload.value.endsWith(def.suffix)) return
       payload.issues.push({
@@ -1667,7 +1667,7 @@ var $ZodCheckOverwrite = /* @__PURE__ */ $constructor(
   },
 )
 
-// node_modules/.bun/zod@4.5.4/node_modules/zod/v4/core/doc.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/doc.js
 class Doc {
   constructor(args = [], closed = {}) {
     this.content = []
@@ -1677,8 +1677,11 @@ class Doc {
   }
   indented(fn) {
     this.indent += 1
-    fn(this)
-    this.indent -= 1
+    try {
+      fn(this)
+    } finally {
+      this.indent -= 1
+    }
   }
   write(arg) {
     if (typeof arg === 'function') {
@@ -1715,14 +1718,14 @@ ${content.join(`
   }
 }
 
-// node_modules/.bun/zod@4.5.4/node_modules/zod/v4/core/versions.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/versions.js
 var version = {
   major: 4,
-  minor: 5,
-  patch: 4,
+  minor: 6,
+  patch: 1,
 }
 
-// node_modules/.bun/zod@4.5.4/node_modules/zod/v4/core/schemas.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/schemas.js
 var $ZodType = /* @__PURE__ */ $constructor(
   '$ZodType',
   (inst, def) => {
@@ -1835,16 +1838,23 @@ var $ZodType = /* @__PURE__ */ $constructor(
     },
   },
 )
-var toStandardResult = (r) =>
-  r.success ? { value: r.data } : { issues: r.error?.issues }
+var toStandardResult = (r, ctx) =>
+  r.issues.length
+    ? { issues: r.issues.map((iss) => finalizeIssue(iss, ctx, config())) }
+    : { value: r.value }
+async function validateAsync2(inst, value) {
+  const ctx = { async: true }
+  return toStandardResult(await inst._zod.run({ value, issues: [] }, ctx), ctx)
+}
 function standardProps(inst) {
   return {
     validate: (value) => {
+      const ctx = { async: false }
       try {
-        return toStandardResult(safeParse(inst, value))
-      } catch (_) {
-        return safeParseAsync(inst, value).then(toStandardResult)
-      }
+        const r = inst._zod.run({ value, issues: [] }, ctx)
+        if (!(r instanceof Promise)) return toStandardResult(r, ctx)
+      } catch (_) {}
+      return validateAsync2(inst, value)
     },
     vendor: 'zod',
     version: 1,
@@ -1852,8 +1862,7 @@ function standardProps(inst) {
 }
 var $ZodString = /* @__PURE__ */ $constructor('$ZodString', (inst, def) => {
   $ZodType.init(inst, def)
-  inst._zod.pattern =
-    [...(inst?._zod.bag?.patterns ?? [])].pop() ?? string(inst._zod.bag)
+  inst._zod.pattern = def.pattern ?? anyString
   inst._zod.parse = (payload, _) => {
     if (def.coerce)
       try {
@@ -2035,12 +2044,6 @@ var $ZodISODateTime = /* @__PURE__ */ $constructor(
   (inst, def) => {
     def.pattern ?? (def.pattern = datetime(def))
     $ZodStringFormat.init(inst, def)
-    if (def.local || def.precision === -1) {
-      inst._zod.bag.laxFormat = true
-      inst._zod.onattach.push((s) => {
-        s._zod.bag.laxFormat = true
-      })
-    }
   },
 )
 var $ZodISODate = /* @__PURE__ */ $constructor('$ZodISODate', (inst, def) => {
@@ -2061,7 +2064,6 @@ var $ZodISODuration = /* @__PURE__ */ $constructor(
 var $ZodIPv4 = /* @__PURE__ */ $constructor('$ZodIPv4', (inst, def) => {
   def.pattern ?? (def.pattern = ipv4)
   $ZodStringFormat.init(inst, def)
-  inst._zod.bag.format = `ipv4`
 })
 var ipv6Alphabet = /^[0-9a-fA-F:.]+$/
 function isValidIPv6(value) {
@@ -2076,7 +2078,6 @@ function isValidIPv6(value) {
 var $ZodIPv6 = /* @__PURE__ */ $constructor('$ZodIPv6', (inst, def) => {
   def.pattern ?? (def.pattern = ipv6)
   $ZodStringFormat.init(inst, def)
-  inst._zod.bag.format = `ipv6`
   inst._zod.check = (payload) => {
     if (!isValidIPv6(payload.value)) {
       payload.issues.push({
@@ -2129,10 +2130,10 @@ function isValidBase64(data) {
     return false
   }
 }
+var base64Charset = /^[0-9a-zA-Z+/]*={0,2}$/
 var $ZodBase64 = /* @__PURE__ */ $constructor('$ZodBase64', (inst, def) => {
-  def.pattern ?? (def.pattern = base64)
+  def.pattern ?? (def.pattern = base64Charset)
   $ZodStringFormat.init(inst, def)
-  inst._zod.bag.contentEncoding = 'base64'
   inst._zod.check = (payload) => {
     if (isValidBase64(payload.value)) return
     payload.issues.push({
@@ -2144,8 +2145,9 @@ var $ZodBase64 = /* @__PURE__ */ $constructor('$ZodBase64', (inst, def) => {
     })
   }
 })
+var base64urlCharset = /^[A-Za-z0-9_-]*$/
 function isValidBase64URL(data) {
-  if (!base64url.test(data)) return false
+  if (!base64urlCharset.test(data)) return false
   const base64 = data.replace(/[-_]/g, (c) => (c === '-' ? '+' : '/'))
   const padded = base64.padEnd(Math.ceil(base64.length / 4) * 4, '=')
   return isValidBase64(padded)
@@ -2153,9 +2155,8 @@ function isValidBase64URL(data) {
 var $ZodBase64URL = /* @__PURE__ */ $constructor(
   '$ZodBase64URL',
   (inst, def) => {
-    def.pattern ?? (def.pattern = base64url)
+    def.pattern ?? (def.pattern = base64urlCharset)
     $ZodStringFormat.init(inst, def)
-    inst._zod.bag.contentEncoding = 'base64url'
     inst._zod.check = (payload) => {
       if (isValidBase64URL(payload.value)) return
       payload.issues.push({
@@ -2206,7 +2207,7 @@ var $ZodJWT = /* @__PURE__ */ $constructor('$ZodJWT', (inst, def) => {
 })
 var $ZodNumber = /* @__PURE__ */ $constructor('$ZodNumber', (inst, def) => {
   $ZodType.init(inst, def)
-  inst._zod.pattern = inst._zod.bag.pattern ?? number
+  inst._zod.pattern = number
   inst._zod.parse = (payload, _ctx) => {
     if (def.coerce)
       try {
@@ -2305,6 +2306,7 @@ var $ZodArray = /* @__PURE__ */ $constructor('$ZodArray', (inst, def) => {
       ? memo.alloc(inst, payload, Array(input.length), ctx)
       : Array(input.length)
     const proms = []
+    const abortEarly = ctx?.abortEarly
     for (let i = 0; i < input.length; i++) {
       const item = input[i]
       const result = def.element._zod.run(
@@ -2320,6 +2322,7 @@ var $ZodArray = /* @__PURE__ */ $constructor('$ZodArray', (inst, def) => {
         )
       } else {
         handleArrayResult(result, payload, i)
+        if (abortEarly && result.issues.length !== 0 && aborted(result)) break
       }
     }
     if (proms.length) {
@@ -2382,14 +2385,19 @@ function normalizeDef(def) {
     optionalKeys: new Set(okeys),
   }
 }
-function handleCatchall(proms, input, payload, ctx, def, inst) {
+function handleCatchall(proms, input, payload, ctx, def, inst, abortEarly) {
   const unrecognized = []
   const keySet = def.keySet
   const _catchall = def.catchall._zod
   const t = _catchall.def.type
   const optin = _catchall.optin
   const optout = _catchall.optout
+  let seen = 0
   for (const key in input) {
+    if (abortEarly && payload.issues.length !== seen) {
+      if (aborted(payload, seen)) break
+      seen = payload.issues.length
+    }
     if (keySet.has(key)) continue
     if (key === '__proto__') {
       if (t === 'never') unrecognized.push(key)
@@ -2424,23 +2432,19 @@ function handleCatchall(proms, input, payload, ctx, def, inst) {
     return payload
   })
 }
-var propShapes = new WeakMap()
 var $ZodObject = /* @__PURE__ */ $constructor('$ZodObject', (inst, def) => {
   $ZodType.init(inst, def)
   const desc = Object.getOwnPropertyDescriptor(def, 'shape')
-  if (!desc?.get) {
-    const sh = def.shape
-    propShapes.set(def, sh)
-    Object.defineProperty(def, 'shape', {
-      get: () => {
-        const newSh = { ...sh }
-        Object.defineProperty(def, 'shape', {
-          value: newSh,
-        })
-        propShapes.set(def, newSh)
-        return newSh
-      },
-    })
+  const sh = desc?.get ? desc.get.raw : (def.shape ?? {})
+  if (sh) {
+    const get = () => {
+      const newSh = { ...sh }
+      Object.defineProperty(def, 'shape', { value: newSh })
+      get.raw = newSh
+      return newSh
+    }
+    get.raw = sh
+    Object.defineProperty(def, 'shape', { get })
   }
   const _normalized = cached(() => normalizeDef(def))
   defineLazyInternal(inst, 'propValues', (zod) => {
@@ -2478,7 +2482,13 @@ var $ZodObject = /* @__PURE__ */ $constructor('$ZodObject', (inst, def) => {
     payload.value = memo ? memo.alloc(inst, payload, {}, ctx) : {}
     const proms = []
     const shape = value.shape
+    const abortEarly = ctx?.abortEarly
+    let seen = payload.issues.length
     for (const key of value.allKeys) {
+      if (abortEarly && payload.issues.length !== seen) {
+        if (aborted(payload, seen)) break
+        seen = payload.issues.length
+      }
       if (key === '__proto__') continue
       const el = shape[key]
       const optin = el._zod.optin
@@ -2497,7 +2507,15 @@ var $ZodObject = /* @__PURE__ */ $constructor('$ZodObject', (inst, def) => {
     if (!catchall) {
       return proms.length ? Promise.all(proms).then(() => payload) : payload
     }
-    return handleCatchall(proms, input, payload, ctx, _normalized.value, inst)
+    return handleCatchall(
+      proms,
+      input,
+      payload,
+      ctx,
+      _normalized.value,
+      inst,
+      abortEarly === true,
+    )
   }
 })
 var $ZodObjectJIT = /* @__PURE__ */ $constructor(
@@ -2514,10 +2532,16 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor(
       const parseStr = (k) =>
         `shape[${k}]._zod.run({ value: input[${k}], issues: [] }, ctx)`
       const prefixStr = (id, k) => `
+          let ${id}_ab = false;
           for (let i = 0; i < ${id}.issues.length; i++) {
             const iss = ${id}.issues[i];
             iss.path = iss.path ? [${k}, ...iss.path] : [${k}];
             payload.issues.push(iss);
+            if (iss.continue !== true) ${id}_ab = true;
+          }
+          if (${id}_ab && ctx && ctx.abortEarly) {
+            payload.value = newResult;
+            return payload;
           }`
       doc.write(`const input = payload.value;`)
       const ids = Object.create(null)
@@ -2570,6 +2594,10 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor(
             input: undefined,
             path: [${k}]
           });
+          if (ctx && ctx.abortEarly) {
+            payload.value = newResult;
+            return payload;
+          }
         }
 
         if (${id}_present) {
@@ -2620,7 +2648,15 @@ var $ZodObjectJIT = /* @__PURE__ */ $constructor(
         if (!fastpass) fastpass = generateFastpass(def.shape)
         payload = fastpass(payload, ctx)
         if (!catchall) return payload
-        return handleCatchall([], input, payload, ctx, value, inst)
+        return handleCatchall(
+          [],
+          input,
+          payload,
+          ctx,
+          value,
+          inst,
+          ctx?.abortEarly === true,
+        )
       }
       return superParse(payload, ctx)
     }
@@ -2708,6 +2744,26 @@ var $ZodUnion = /* @__PURE__ */ $constructor('$ZodUnion', (inst, def) => {
     })
   }
 })
+function discriminatorMap(def) {
+  const map = new Map()
+  for (const option of def.options) {
+    const values = option._zod.propValues?.[def.discriminator]
+    if (!values || values.size === 0)
+      throw new Error(
+        `Invalid discriminated union option at index "${def.options.indexOf(option)}"`,
+      )
+    for (const value of values) {
+      if (map.has(value)) {
+        if (value !== undefined)
+          throw new Error(`Duplicate discriminator value "${String(value)}"`)
+        map.set(value, null)
+      } else {
+        map.set(value, option)
+      }
+    }
+  }
+  return map
+}
 var $ZodDiscriminatedUnion = /* @__PURE__ */ $constructor(
   '$ZodDiscriminatedUnion',
   (inst, def) => {
@@ -2716,12 +2772,14 @@ var $ZodDiscriminatedUnion = /* @__PURE__ */ $constructor(
     const _super = inst._zod.parse
     defineLazyInternal(inst, 'propValues', (zod) => {
       const propValues = {}
+      let undefinedCount = 0
       for (const option of zod.def.options) {
         const pv = option._zod.propValues
         if (!pv || Object.keys(pv).length === 0)
           throw new Error(
             `Invalid discriminated union option at index "${zod.def.options.indexOf(option)}"`,
           )
+        if (pv[zod.def.discriminator]?.has(undefined)) undefinedCount++
         for (const [k, v] of Object.entries(pv)) {
           if (!Object.prototype.hasOwnProperty.call(propValues, k)) {
             assignProp(propValues, k, new Set())
@@ -2731,10 +2789,12 @@ var $ZodDiscriminatedUnion = /* @__PURE__ */ $constructor(
           }
         }
       }
+      if (!zod.def.unionFallback && undefinedCount > 1)
+        propValues[zod.def.discriminator]?.delete(undefined)
       return propValues
     })
     def.options.forEach((option, i) => {
-      const propShape = propShapes.get(option._zod.def)
+      const propShape = rawShape(option._zod.def)
       if (
         propShape &&
         !Object.prototype.hasOwnProperty.call(propShape, def.discriminator)
@@ -2742,24 +2802,7 @@ var $ZodDiscriminatedUnion = /* @__PURE__ */ $constructor(
         throw new Error(`Invalid discriminated union option at index "${i}"`)
       }
     })
-    const disc = cached(() => {
-      const opts = def.options
-      const map = new Map()
-      for (const o of opts) {
-        const values = o._zod.propValues?.[def.discriminator]
-        if (!values || values.size === 0)
-          throw new Error(
-            `Invalid discriminated union option at index "${def.options.indexOf(o)}"`,
-          )
-        for (const v of values) {
-          if (map.has(v)) {
-            throw new Error(`Duplicate discriminator value "${String(v)}"`)
-          }
-          map.set(v, o)
-        }
-      }
-      return map
-    })
+    const disc = cached(() => discriminatorMap(def))
     inst._zod.parse = (payload, ctx) => {
       const input = payload.value
       if (!isObject(input)) {
@@ -2771,8 +2814,9 @@ var $ZodDiscriminatedUnion = /* @__PURE__ */ $constructor(
         })
         return payload
       }
-      const opt = disc.value.get(input?.[def.discriminator])
-      if (opt) {
+      const value = input?.[def.discriminator]
+      const opt = disc.value.get(value)
+      if (opt && (value !== undefined || ctx.direction !== 'backward')) {
         return opt._zod.run(payload, ctx)
       }
       if (def.unionFallback || ctx.direction === 'backward') {
@@ -2783,7 +2827,9 @@ var $ZodDiscriminatedUnion = /* @__PURE__ */ $constructor(
         errors: [],
         note: 'No matching discriminator',
         discriminator: def.discriminator,
-        options: Array.from(disc.value.keys()),
+        options: Array.from(disc.value.keys()).filter(
+          (value) => disc.value.get(value) !== null,
+        ),
         input,
         path: [def.discriminator],
         inst,
@@ -2917,12 +2963,16 @@ var $ZodEnum = /* @__PURE__ */ $constructor('$ZodEnum', (inst, def) => {
   const values = getEnumValues(def.entries)
   const valuesSet = new Set(values)
   inst._zod.values = valuesSet
-  const patternValues = values.filter((k) => propertyKeyTypes.has(typeof k))
-  inst._zod.pattern = new RegExp(
-    patternValues.length
-      ? `^(${patternValues.map((o) => escapeRegex(o.toString())).join('|')})$`
-      : '^[^\\s\\S]$',
-  )
+  defineLazyInternal(inst, 'pattern', (zod) => {
+    const patternValues = getEnumValues(zod.def.entries).filter((k) =>
+      propertyKeyTypes.has(typeof k),
+    )
+    return new RegExp(
+      patternValues.length
+        ? `^(${patternValues.map((o) => escapeRegex(o.toString())).join('|')})$`
+        : '^[^\\s\\S]$',
+    )
+  })
   inst._zod.parse = (payload, _ctx) => {
     const input = payload.value
     if (valuesSet.has(input)) {
@@ -2941,11 +2991,14 @@ var $ZodLiteral = /* @__PURE__ */ $constructor('$ZodLiteral', (inst, def) => {
   $ZodType.init(inst, def)
   const values = new Set(def.values)
   inst._zod.values = values
-  inst._zod.pattern = new RegExp(
-    def.values.length
-      ? `^(${def.values.map((o) => (typeof o === 'string' ? escapeRegex(o) : o ? escapeRegex(o.toString()) : String(o))).join('|')})$`
-      : '^[^\\s\\S]$',
-  )
+  defineLazyInternal(inst, 'pattern', (zod) => {
+    const vals = zod.def.values
+    return new RegExp(
+      vals.length
+        ? `^(${vals.map((o) => (typeof o === 'string' ? escapeRegex(o) : o ? escapeRegex(o.toString()) : String(o))).join('|')})$`
+        : '^[^\\s\\S]$',
+    )
+  })
   inst._zod.parse = (payload, _ctx) => {
     const input = payload.value
     if (values.has(input)) {
@@ -3239,7 +3292,85 @@ function handleRefineResult(result, payload, input, inst) {
     payload.issues.push(issue(_iss))
   }
 }
-// node_modules/.bun/zod@4.5.4/node_modules/zod/v4/core/memoizer.js
+function handlePropertiesResult(result, payload, key) {
+  if (result.issues.length) {
+    payload.issues.push(...prefixIssues(key, result.issues))
+  }
+}
+var $ZodProperties = /* @__PURE__ */ $constructor(
+  '$ZodProperties',
+  (inst, def) => {
+    $ZodType.init(inst, def)
+    $ZodCheck.init(inst, def)
+    const memo = globalConfig.memoizer
+    memo?.attach(inst)
+    let entries
+    const runShape = (payload, ctx) => {
+      entries ??
+        (entries = Reflect.ownKeys(def.shape).map((key) => [
+          key,
+          def.shape[key],
+        ]))
+      const input = payload.value
+      let proms
+      for (const [key, schema] of entries) {
+        const result = schema._zod.run({ value: input[key], issues: [] }, ctx)
+        if (result instanceof Promise) {
+          proms ?? (proms = [])
+          proms.push(
+            result.then((result) =>
+              handlePropertiesResult(result, payload, key),
+            ),
+          )
+        } else {
+          handlePropertiesResult(result, payload, key)
+        }
+      }
+      if (proms)
+        return Promise.all(proms).then(() => {
+          return
+        })
+      return
+    }
+    inst._zod.parse = (payload, ctx) => {
+      const input = payload.value
+      if (
+        input === null ||
+        (typeof input !== 'object' && typeof input !== 'function')
+      ) {
+        payload.issues.push({
+          expected: 'object',
+          code: 'invalid_type',
+          input,
+          inst,
+        })
+        return payload
+      }
+      if (ctx.direction === 'backward') ctx = { ...ctx, direction: 'forward' }
+      if (memo) memo.alloc(inst, payload, input, ctx)
+      const result = runShape(payload, ctx)
+      return result instanceof Promise ? result.then(() => payload) : payload
+    }
+    inst._zod.check = (payload) => {
+      if (payload.value == null) {
+        payload.issues.push({
+          expected: 'object',
+          code: 'invalid_type',
+          input: payload.value,
+          inst,
+        })
+        return
+      }
+      return runShape(payload, {})
+    }
+  },
+  {
+    *[Symbol.iterator]() {
+      yield this
+    },
+  },
+)
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/memoizer.js
 class $ZodCyclicError extends Error {
   constructor() {
     super(`Cannot parse a reference cycle that closes through a transform`)
@@ -3248,29 +3379,61 @@ class $ZodCyclicError extends Error {
 }
 var STATE = '~memo'
 var NO_ISSUES = []
+function isRef(value) {
+  return (
+    value !== null && (typeof value === 'object' || typeof value === 'function')
+  )
+}
 function cloneIssues(issues) {
   return issues.map((iss) =>
     iss.path ? { ...iss, path: iss.path.slice() } : { ...iss },
   )
 }
 var recursive = /* @__PURE__ */ new WeakMap()
-function isRecursive(inst, stack) {
+var NONE = 0
+var ASSUMED = 1
+var PROVEN = 2
+function isRecursive(inst, stack, resolve) {
   const cached = recursive.get(inst)
-  if (cached !== undefined) return cached
-  if (stack.has(inst)) return true
+  if (cached !== undefined) return cached ? PROVEN : NONE
+  if (stack.has(inst)) return PROVEN
   stack.add(inst)
-  let result = false
+  let result = NONE
   const check = (child) => {
-    if (!result && child?._zod && isRecursive(child, stack)) result = true
+    if (result !== PROVEN && child?._zod) {
+      const answer = isRecursive(child, stack, resolve)
+      if (answer > result) result = answer
+    }
+  }
+  const shape = (sh, spread) => {
+    let answer = NONE
+    for (const key of Reflect.ownKeys(sh)) {
+      const desc = Object.getOwnPropertyDescriptor(sh, key)
+      if (spread && !desc.enumerable) continue
+      const child = desc.get
+        ? ASSUMED
+        : desc.value?._zod
+          ? isRecursive(desc.value, stack, resolve)
+          : NONE
+      if (child > answer) answer = child
+    }
+    return answer
+  }
+  const merge = (answer) => {
+    if (answer > result) result = answer
   }
   const def = inst._zod.def
   const kind = def.type
   switch (kind) {
     case 'object': {
-      for (const key of Reflect.ownKeys(def.shape)) check(def.shape[key])
+      const raw = rawShape(def)
+      merge(raw ? shape(raw, true) : ASSUMED)
       check(def.catchall)
       break
     }
+    case 'properties':
+      merge(shape(def.shape, false))
+      break
     case 'array':
       check(def.element)
       break
@@ -3312,9 +3475,12 @@ function isRecursive(inst, stack) {
       check(def.input)
       check(def.output)
       break
-    case 'lazy':
-      check(inst._zod.innerType)
+    case 'lazy': {
+      const inner =
+        def._cachedInner ?? (resolve ? inst._zod.innerType : undefined)
+      merge(inner ? isRecursive(inner, stack, false) : ASSUMED)
       break
+    }
     case 'template_literal':
     case 'string':
     case 'number':
@@ -3348,13 +3514,16 @@ function isRecursive(inst, stack) {
     }
   }
   stack.delete(inst)
-  recursive.set(inst, result)
-  return result
+  return settle(inst, result)
+}
+function settle(inst, answer) {
+  if (answer !== ASSUMED) recursive.set(inst, answer === PROVEN)
+  return answer
 }
 function bucketFor(state, inst) {
   let bucket = state.buckets.get(inst)
   if (!bucket) {
-    bucket = new Map()
+    bucket = new WeakMap()
     state.buckets.set(inst, bucket)
   }
   return bucket
@@ -3388,6 +3557,7 @@ var memo = {
   attach(inst) {
     var _a
     let isRecursiveInst
+    let rechecked = false
     let lastCtx
     let lastBucket
     ;(_a = inst._zod).deferred ?? (_a.deferred = [])
@@ -3395,19 +3565,20 @@ var memo = {
       const base = inst._zod.parse
       const wrapped = (payload, ctx) => {
         if (isRecursiveInst === undefined) {
-          isRecursiveInst = isRecursive(inst, new Set())
-          if (!isRecursiveInst) {
+          const walked = isRecursive(inst, new Set(), false)
+          if (walked === NONE) {
             inst._zod.parse = base
             if (inst._zod.run === wrapped) inst._zod.run = base
             return base(payload, ctx)
           }
+          if (walked === PROVEN || rechecked) isRecursiveInst = true
+          else rechecked = true
         }
         const input = payload.value
-        if (input === null || typeof input !== 'object')
-          return base(payload, ctx)
+        if (!isRef(input)) return base(payload, ctx)
         let state = ctx[STATE]
         if (!state) {
-          state = { buckets: new Map(), backEdges: undefined }
+          state = { buckets: new WeakMap(), backEdges: undefined }
           ctx[STATE] = state
         }
         let bucket
@@ -3426,7 +3597,7 @@ var memo = {
               payload.issues.push(...cloneIssues(hit.issues))
           } else {
             payload.memo = true
-            state.backEdges ?? (state.backEdges = new Set())
+            state.backEdges ?? (state.backEdges = new WeakSet())
             state.backEdges.add(hit.value)
           }
           return payload
@@ -3459,14 +3630,9 @@ function memoizer() {
 }
 function isBackEdge(ctx, value) {
   const backEdges = ctx[STATE]?.backEdges
-  return (
-    backEdges !== undefined &&
-    value !== null &&
-    typeof value === 'object' &&
-    backEdges.has(value)
-  )
+  return backEdges !== undefined && isRef(value) && backEdges.has(value)
 }
-// node_modules/.bun/zod@4.5.4/node_modules/zod/v4/locales/en.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/locales/en.js
 var error = () => {
   const Sizable = {
     string: { unit: 'characters', verb: 'to have' },
@@ -3507,6 +3673,7 @@ var error = () => {
     json_string: 'JSON string',
     e164: 'E.164 number',
     credit_card: 'credit card number',
+    iban: 'IBAN',
     jwt: 'JWT',
     template_literal: 'input',
   }
@@ -3594,7 +3761,7 @@ function en_default() {
     localeError: error(),
   }
 }
-// node_modules/.bun/zod@4.5.4/node_modules/zod/v4/core/registries.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/registries.js
 var _a2
 class $ZodRegistry {
   constructor() {
@@ -3642,7 +3809,7 @@ function registry() {
 ;(_a2 = globalThis).__zod_globalRegistry ??
   (_a2.__zod_globalRegistry = registry())
 var globalRegistry = globalThis.__zod_globalRegistry
-// node_modules/.bun/zod@4.5.4/node_modules/zod/v4/core/api.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/api.js
 function _string(Class, params) {
   return new Class({
     type: 'string',
@@ -4090,7 +4257,7 @@ function _check(fn, params) {
   ch._zod.check = fn
   return ch
 }
-// node_modules/.bun/zod@4.5.4/node_modules/zod/v4/core/to-json-schema.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/to-json-schema.js
 function assignProps(target, ...sources) {
   for (const source of sources) {
     for (const key of Reflect.ownKeys(source)) {
@@ -4133,7 +4300,7 @@ function handleUnrepresentable(schema, ctx, json, params, message) {
   Object.assign(json, result)
   return true
 }
-function process2(schema, ctx, _params = { path: [], schemaPath: [] }) {
+function processSchema(schema, ctx, _params = { path: [], schemaPath: [] }) {
   var _a
   const def = schema._zod.def
   const seen = ctx.seen.get(schema)
@@ -4173,7 +4340,7 @@ function process2(schema, ctx, _params = { path: [], schemaPath: [] }) {
     const parent = schema._zod.parent
     if (parent) {
       if (!result.ref) result.ref = parent
-      process2(parent, ctx, params)
+      processSchema(parent, ctx, params)
       ctx.seen.get(parent).isParent = true
     }
   }
@@ -4284,7 +4451,6 @@ function extractDefs(ctx, schema) {
     if (seen.count > 1) {
       if (ctx.reused === 'ref') {
         extractToDef(entry)
-        continue
       }
     }
   }
@@ -4628,7 +4794,7 @@ var createToJSONSchemaMethod =
   (schema, processors = {}) =>
   (params) => {
     const ctx = initializeContext({ ...params, processors })
-    process2(schema, ctx)
+    processSchema(schema, ctx)
     extractDefs(ctx, schema)
     return finalize(ctx, schema)
   }
@@ -4642,11 +4808,90 @@ var createStandardJSONSchemaMethod =
       io,
       processors,
     })
-    process2(schema, ctx)
+    processSchema(schema, ctx)
     extractDefs(ctx, schema)
     return finalize(ctx, schema)
   }
-// node_modules/.bun/zod@4.5.4/node_modules/zod/v4/core/json-schema-processors.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/json-schema-processors.js
+var narrowMin = (agg, key, value) => {
+  if (agg[key] === undefined || value > agg[key]) agg[key] = value
+}
+var narrowMax = (agg, key, value) => {
+  if (agg[key] === undefined || value < agg[key]) agg[key] = value
+}
+var narrowBoth = (agg, value) => {
+  narrowMin(agg, 'minimum', value)
+  narrowMax(agg, 'maximum', value)
+}
+var addDivisor = (agg, value) => {
+  agg.multipleOf ?? (agg.multipleOf = [])
+  if (!agg.multipleOf.includes(value)) agg.multipleOf.push(value)
+}
+var addPattern = (agg, pattern) => {
+  agg.patterns ?? (agg.patterns = new Set())
+  agg.patterns.add(pattern)
+}
+var intersectMime = (agg, mime) => {
+  agg.mime = agg.mime ? agg.mime.filter((m) => mime.includes(m)) : [...mime]
+}
+var setFormat = (agg, format) => {
+  agg.format = format
+  if (format.includes('int')) agg.isInt = true
+}
+var minContributor = (agg, def) => narrowMin(agg, 'minimum', def.minimum)
+var maxContributor = (agg, def) => narrowMax(agg, 'maximum', def.maximum)
+var formatContributor = (ranges) => (agg, def) => {
+  setFormat(agg, def.format)
+  const [minimum, maximum] = ranges[def.format]
+  narrowMin(agg, 'minimum', minimum)
+  narrowMax(agg, 'maximum', maximum)
+}
+var contributors = {
+  greater_than: (agg, def) =>
+    narrowMin(agg, def.inclusive ? 'minimum' : 'exclusiveMinimum', def.value),
+  less_than: (agg, def) =>
+    narrowMax(agg, def.inclusive ? 'maximum' : 'exclusiveMaximum', def.value),
+  multiple_of: (agg, def) => addDivisor(agg, def.value),
+  number_format: formatContributor(NUMBER_FORMAT_RANGES),
+  bigint_format: formatContributor(BIGINT_FORMAT_RANGES),
+  min_length: minContributor,
+  max_length: maxContributor,
+  length_equals: (agg, def) => narrowBoth(agg, def.length),
+  min_size: minContributor,
+  max_size: maxContributor,
+  size_equals: (agg, def) => narrowBoth(agg, def.size),
+  string_format: (agg, def) => {
+    setFormat(agg, def.format)
+    if (def.pattern) addPattern(agg, def.pattern)
+    if (def.format === 'base64' || def.format === 'base64url')
+      agg.contentEncoding = def.format
+    if (def.local || def.precision === -1) agg.laxFormat = true
+  },
+  mime_type: (agg, def) => intersectMime(agg, def.mime),
+}
+function aggregateChecks(schema) {
+  const agg = {}
+  const def = schema._zod.def
+  const list = schema._zod.traits.has('$ZodCheck')
+    ? [schema, ...(def.checks ?? [])]
+    : (def.checks ?? [])
+  for (const ch of list) contributors[ch._zod.def.check]?.(agg, ch._zod.def)
+  const bag = schema._zod.bag
+  if (bag.minimum !== undefined) narrowMin(agg, 'minimum', bag.minimum)
+  if (bag.exclusiveMinimum !== undefined)
+    narrowMin(agg, 'exclusiveMinimum', bag.exclusiveMinimum)
+  if (bag.maximum !== undefined) narrowMax(agg, 'maximum', bag.maximum)
+  if (bag.exclusiveMaximum !== undefined)
+    narrowMax(agg, 'exclusiveMaximum', bag.exclusiveMaximum)
+  if (bag.multipleOf !== undefined) addDivisor(agg, bag.multipleOf)
+  if (bag.format !== undefined) {
+    agg.format ?? (agg.format = bag.format)
+    if (bag.format.includes('int')) agg.isInt = true
+  }
+  if (bag.mime) intersectMime(agg, bag.mime)
+  for (const pattern of bag.patterns ?? []) addPattern(agg, pattern)
+  return agg
+}
 var formatMap = {
   guid: 'uuid',
   url: 'uri',
@@ -4654,11 +4899,16 @@ var formatMap = {
   json_string: 'json-string',
   regex: '',
 }
+var exactPatterns = new Map([
+  [base64Charset, base64],
+  [base64urlCharset, base64url],
+])
+var exactPattern = (p) => exactPatterns.get(p) ?? p
 var stringProcessor = (schema, ctx, _json, _params) => {
   const json = _json
   json.type = 'string'
   const { minimum, maximum, format, patterns, contentEncoding, laxFormat } =
-    schema._zod.bag
+    aggregateChecks(schema)
   if (typeof minimum === 'number') json.minLength = minimum
   if (typeof maximum === 'number') json.maxLength = maximum
   if (format) {
@@ -4670,7 +4920,7 @@ var stringProcessor = (schema, ctx, _json, _params) => {
   }
   if (contentEncoding) json.contentEncoding = contentEncoding
   if (patterns && patterns.size > 0) {
-    const patternList = [...patterns]
+    const patternList = [...patterns].map(exactPattern)
     if (patternList.length === 1) json.pattern = patternList[0].source
     else if (patternList.length > 1) {
       json.allOf = [
@@ -4691,14 +4941,12 @@ var numberProcessor = (schema, ctx, _json, params) => {
   const {
     minimum,
     maximum,
-    format,
     multipleOf,
     exclusiveMaximum,
     exclusiveMinimum,
-  } = schema._zod.bag
-  if (typeof format === 'string' && format.includes('int'))
-    json.type = 'integer'
-  else json.type = 'number'
+    isInt,
+  } = aggregateChecks(schema)
+  json.type = isInt ? 'integer' : 'number'
   const exMin =
     typeof exclusiveMinimum === 'number' &&
     exclusiveMinimum >= (minimum ?? Number.NEGATIVE_INFINITY)
@@ -4726,17 +4974,27 @@ var numberProcessor = (schema, ctx, _json, params) => {
   } else if (typeof maximum === 'number') {
     json.maximum = maximum
   }
-  if (typeof multipleOf === 'number') {
-    if (Number.isFinite(multipleOf) && multipleOf !== 0)
-      json.multipleOf = Math.abs(multipleOf)
-    else
-      handleUnrepresentable(
-        schema,
-        ctx,
-        json,
-        params,
-        `A multipleOf divisor of ${multipleOf} cannot be represented in JSON Schema`,
-      )
+  if (multipleOf) {
+    const divisors = new Set()
+    for (const divisor of multipleOf) {
+      if (Number.isFinite(divisor) && divisor !== 0)
+        divisors.add(Math.abs(divisor))
+      else
+        handleUnrepresentable(
+          schema,
+          ctx,
+          json,
+          params,
+          `A multipleOf divisor of ${divisor} cannot be represented in JSON Schema`,
+        )
+    }
+    const [first, ...rest] = divisors
+    if (first !== undefined) json.multipleOf = first
+    if (rest.length)
+      json.allOf = [
+        ...(json.allOf ?? []),
+        ...rest.map((m) => ({ multipleOf: m })),
+      ]
   }
 }
 var booleanProcessor = (_schema, _ctx, json, _params) => {
@@ -4830,11 +5088,11 @@ var transformProcessor = (schema, ctx, json, params) => {
 var arrayProcessor = (schema, ctx, _json, params) => {
   const json = _json
   const def = schema._zod.def
-  const { minimum, maximum } = schema._zod.bag
+  const { minimum, maximum } = aggregateChecks(schema)
   if (typeof minimum === 'number') json.minItems = minimum
   if (typeof maximum === 'number') json.maxItems = maximum
   json.type = 'array'
-  json.items = process2(def.element, ctx, {
+  json.items = processSchema(def.element, ctx, {
     ...params,
     path: [...params.path, 'items'],
   })
@@ -4872,7 +5130,7 @@ var objectProcessor = (schema, ctx, _json, params) => {
     assignProp(
       json.properties,
       key,
-      process2(shape[key], ctx, {
+      processSchema(shape[key], ctx, {
         ...params,
         path: [...params.path, 'properties', key],
       }),
@@ -4897,7 +5155,7 @@ var objectProcessor = (schema, ctx, _json, params) => {
   } else if (!def.catchall) {
     if (ctx.io === 'output') json.additionalProperties = false
   } else if (def.catchall) {
-    json.additionalProperties = process2(def.catchall, ctx, {
+    json.additionalProperties = processSchema(def.catchall, ctx, {
       ...params,
       path: [...params.path, 'additionalProperties'],
     })
@@ -4907,7 +5165,7 @@ var unionProcessor = (schema, ctx, json, params) => {
   const def = schema._zod.def
   const isExclusive = def.inclusive === false
   const options = def.options.map((x, i) =>
-    process2(x, ctx, {
+    processSchema(x, ctx, {
       ...params,
       path: [...params.path, isExclusive ? 'oneOf' : 'anyOf', i],
     }),
@@ -4920,11 +5178,11 @@ var unionProcessor = (schema, ctx, json, params) => {
 }
 var intersectionProcessor = (schema, ctx, json, params) => {
   const def = schema._zod.def
-  const a = process2(def.left, ctx, {
+  const a = processSchema(def.left, ctx, {
     ...params,
     path: [...params.path, 'allOf', 0],
   })
-  const b = process2(def.right, ctx, {
+  const b = processSchema(def.right, ctx, {
     ...params,
     path: [...params.path, 'allOf', 1],
   })
@@ -4940,7 +5198,7 @@ var intersectionProcessor = (schema, ctx, json, params) => {
 var pendingRecords = new WeakMap()
 var nullableProcessor = (schema, ctx, json, params) => {
   const def = schema._zod.def
-  const inner = process2(def.innerType, ctx, params)
+  const inner = processSchema(def.innerType, ctx, params)
   const seen = ctx.seen.get(schema)
   if (ctx.target === 'openapi-3.0') {
     seen.ref = def.innerType
@@ -4951,7 +5209,7 @@ var nullableProcessor = (schema, ctx, json, params) => {
 }
 var nonoptionalProcessor = (schema, ctx, _json, params) => {
   const def = schema._zod.def
-  process2(def.innerType, ctx, params)
+  processSchema(def.innerType, ctx, params)
   const seen = ctx.seen.get(schema)
   seen.ref = def.innerType
 }
@@ -4975,7 +5233,7 @@ function serializeDefaultValue(value, schema, ctx, json, params) {
 }
 var defaultProcessor = (schema, ctx, json, params) => {
   const def = schema._zod.def
-  process2(def.innerType, ctx, params)
+  processSchema(def.innerType, ctx, params)
   const seen = ctx.seen.get(schema)
   seen.ref = def.innerType
   const value = serializeDefaultValue(
@@ -4989,7 +5247,7 @@ var defaultProcessor = (schema, ctx, json, params) => {
 }
 var prefaultProcessor = (schema, ctx, json, params) => {
   const def = schema._zod.def
-  process2(def.innerType, ctx, params)
+  processSchema(def.innerType, ctx, params)
   const seen = ctx.seen.get(schema)
   seen.ref = def.innerType
   if (ctx.io !== 'input') return
@@ -5004,7 +5262,7 @@ var prefaultProcessor = (schema, ctx, json, params) => {
 }
 var catchProcessor = (schema, ctx, json, params) => {
   const def = schema._zod.def
-  process2(def.innerType, ctx, params)
+  processSchema(def.innerType, ctx, params)
   const seen = ctx.seen.get(schema)
   seen.ref = def.innerType
   let catchValue
@@ -5027,24 +5285,24 @@ var pipeProcessor = (schema, ctx, _json, params) => {
   const inIsTransform = def.in._zod.traits.has('$ZodTransform')
   const innerType =
     ctx.io === 'input' ? (inIsTransform ? def.out : def.in) : def.out
-  process2(innerType, ctx, params)
+  processSchema(innerType, ctx, params)
   const seen = ctx.seen.get(schema)
   seen.ref = innerType
 }
 var readonlyProcessor = (schema, ctx, json, params) => {
   const def = schema._zod.def
-  process2(def.innerType, ctx, params)
+  processSchema(def.innerType, ctx, params)
   const seen = ctx.seen.get(schema)
   seen.ref = def.innerType
   json.readOnly = true
 }
 var optionalProcessor = (schema, ctx, _json, params) => {
   const def = schema._zod.def
-  process2(def.innerType, ctx, params)
+  processSchema(def.innerType, ctx, params)
   const seen = ctx.seen.get(schema)
   seen.ref = def.innerType
 }
-// node_modules/.bun/zod@4.5.4/node_modules/zod/v4/classic/errors.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/classic/errors.js
 var _installedErrorProtos = /* @__PURE__ */ new WeakSet([
   Object.prototype,
   Error.prototype,
@@ -5108,11 +5366,11 @@ var ZodRealError = /* @__PURE__ */ $constructor(
   },
 )
 
-// node_modules/.bun/zod@4.5.4/node_modules/zod/v4/classic/parse.js
-var parse3 = /* @__PURE__ */ _parse(ZodRealError)
-var parseAsync2 = /* @__PURE__ */ _parseAsync(ZodRealError)
-var safeParse2 = /* @__PURE__ */ _safeParse(ZodRealError)
-var safeParseAsync2 = /* @__PURE__ */ _safeParseAsync(ZodRealError)
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/classic/parse.js
+var parse2 = /* @__PURE__ */ _parse(ZodRealError)
+var parseAsync = /* @__PURE__ */ _parseAsync(ZodRealError)
+var safeParse = /* @__PURE__ */ _safeParse(ZodRealError)
+var safeParseAsync = /* @__PURE__ */ _safeParseAsync(ZodRealError)
 var encode = /* @__PURE__ */ _encode(ZodRealError)
 var decode = /* @__PURE__ */ _decode(ZodRealError)
 var encodeAsync = /* @__PURE__ */ _encodeAsync(ZodRealError)
@@ -5122,7 +5380,7 @@ var safeDecode = /* @__PURE__ */ _safeDecode(ZodRealError)
 var safeEncodeAsync = /* @__PURE__ */ _safeEncodeAsync(ZodRealError)
 var safeDecodeAsync = /* @__PURE__ */ _safeDecodeAsync(ZodRealError)
 
-// node_modules/.bun/zod@4.5.4/node_modules/zod/v4/classic/schemas.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/classic/schemas.js
 function _ensureDefaultLocale() {
   if (!globalConfig.localeError) config(en_default())
 }
@@ -5254,22 +5512,28 @@ var ZodType = /* @__PURE__ */ $constructor(
       own(this, '~standard', value)
     },
     parse: function _parse(data, params) {
-      return parse3(this, data, params, { callee: _parse })
+      return parse2(this, data, params, { callee: _parse })
     },
     parseAsync: async function _parseAsync(data, params) {
-      return await parseAsync2(this, data, params, { callee: _parseAsync })
+      return await parseAsync(this, data, params, { callee: _parseAsync })
     },
     safeParse(data, params) {
-      return safeParse2(this, data, params)
+      return safeParse(this, data, params)
     },
     async safeParseAsync(data, params) {
-      return safeParseAsync2(this, data, params)
+      return safeParseAsync(this, data, params)
     },
     get spa() {
       return this?.safeParseAsync
     },
     set spa(value) {
       own(this, 'spa', value)
+    },
+    validate(data, params) {
+      return validate(this, data, params)
+    },
+    validateAsync(data, params) {
+      return validateAsync(this, data, params)
     },
     encode: function _encode(data, params) {
       return encode(this, data, params, { callee: _encode })
@@ -5313,58 +5577,61 @@ var _ZodString = /* @__PURE__ */ $constructor(
     ZodType.init(inst, def)
     inst._zod.processJSONSchema = (ctx, json, params) =>
       stringProcessor(inst, ctx, json, params)
-    const bag = inst._zod.bag
-    inst.format = bag.format ?? null
-    inst.minLength = bag.minimum ?? null
-    inst.maxLength = bag.maximum ?? null
   },
-  {
-    regex(...args) {
-      return this.check(_regex(...args))
+  /* @__PURE__ */ derived(
+    {
+      format: (inst) => aggregateChecks(inst).format ?? null,
+      minLength: (inst) => aggregateChecks(inst).minimum ?? null,
+      maxLength: (inst) => aggregateChecks(inst).maximum ?? null,
     },
-    includes(...args) {
-      return this.check(_includes(...args))
+    {
+      regex(...args) {
+        return this.check(_regex(...args))
+      },
+      includes(...args) {
+        return this.check(_includes(...args))
+      },
+      startsWith(...args) {
+        return this.check(_startsWith(...args))
+      },
+      endsWith(...args) {
+        return this.check(_endsWith(...args))
+      },
+      min(...args) {
+        return this.check(_minLength(...args))
+      },
+      max(...args) {
+        return this.check(_maxLength(...args))
+      },
+      length(...args) {
+        return this.check(_length(...args))
+      },
+      nonempty(...args) {
+        return this.check(_minLength(1, ...args))
+      },
+      lowercase(params) {
+        return this.check(_lowercase(params))
+      },
+      uppercase(params) {
+        return this.check(_uppercase(params))
+      },
+      trim() {
+        return this.check(_trim())
+      },
+      normalize(...args) {
+        return this.check(_normalize(...args))
+      },
+      toLowerCase() {
+        return this.check(_toLowerCase())
+      },
+      toUpperCase() {
+        return this.check(_toUpperCase())
+      },
+      slugify() {
+        return this.check(_slugify())
+      },
     },
-    startsWith(...args) {
-      return this.check(_startsWith(...args))
-    },
-    endsWith(...args) {
-      return this.check(_endsWith(...args))
-    },
-    min(...args) {
-      return this.check(_minLength(...args))
-    },
-    max(...args) {
-      return this.check(_maxLength(...args))
-    },
-    length(...args) {
-      return this.check(_length(...args))
-    },
-    nonempty(...args) {
-      return this.check(_minLength(1, ...args))
-    },
-    lowercase(params) {
-      return this.check(_lowercase(params))
-    },
-    uppercase(params) {
-      return this.check(_uppercase(params))
-    },
-    trim() {
-      return this.check(_trim())
-    },
-    normalize(...args) {
-      return this.check(_normalize(...args))
-    },
-    toLowerCase() {
-      return this.check(_toLowerCase())
-    },
-    toUpperCase() {
-      return this.check(_toUpperCase())
-    },
-    slugify() {
-      return this.check(_slugify())
-    },
-  },
+  ),
 )
 var ZodString = /* @__PURE__ */ $constructor(
   'ZodString',
@@ -5568,70 +5835,78 @@ var ZodNumber = /* @__PURE__ */ $constructor(
     ZodType.init(inst, def)
     inst._zod.processJSONSchema = (ctx, json, params) =>
       numberProcessor(inst, ctx, json, params)
-    const bag = inst._zod.bag
-    inst.minValue =
-      Math.max(
-        bag.minimum ?? Number.NEGATIVE_INFINITY,
-        bag.exclusiveMinimum ?? Number.NEGATIVE_INFINITY,
-      ) ?? null
-    inst.maxValue =
-      Math.min(
-        bag.maximum ?? Number.POSITIVE_INFINITY,
-        bag.exclusiveMaximum ?? Number.POSITIVE_INFINITY,
-      ) ?? null
-    inst.isInt =
-      (bag.format ?? '').includes('int') ||
-      Number.isSafeInteger(bag.multipleOf ?? 0.5)
     inst.isFinite = true
-    inst.format = bag.format ?? null
   },
-  {
-    gt(value, params) {
-      return this.check(_gt(value, params))
+  /* @__PURE__ */ derived(
+    {
+      minValue: (inst) => {
+        const { minimum, exclusiveMinimum } = aggregateChecks(inst)
+        return Math.max(
+          minimum ?? Number.NEGATIVE_INFINITY,
+          exclusiveMinimum ?? Number.NEGATIVE_INFINITY,
+        )
+      },
+      maxValue: (inst) => {
+        const { maximum, exclusiveMaximum } = aggregateChecks(inst)
+        return Math.min(
+          maximum ?? Number.POSITIVE_INFINITY,
+          exclusiveMaximum ?? Number.POSITIVE_INFINITY,
+        )
+      },
+      isInt: (inst) => {
+        const { isInt, multipleOf } = aggregateChecks(inst)
+        return !!isInt || !!multipleOf?.some(Number.isSafeInteger)
+      },
+      format: (inst) => aggregateChecks(inst).format ?? null,
     },
-    gte(value, params) {
-      return this.check(_gte(value, params))
+    {
+      gt(value, params) {
+        return this.check(_gt(value, params))
+      },
+      gte(value, params) {
+        return this.check(_gte(value, params))
+      },
+      min(value, params) {
+        return this.check(_gte(value, params))
+      },
+      lt(value, params) {
+        return this.check(_lt(value, params))
+      },
+      lte(value, params) {
+        return this.check(_lte(value, params))
+      },
+      max(value, params) {
+        return this.check(_lte(value, params))
+      },
+      int(params) {
+        return this.check(int(params))
+      },
+      safe(params) {
+        return this.check(int(params))
+      },
+      positive(params) {
+        return this.check(_gt(0, params))
+      },
+      nonnegative(params) {
+        return this.check(_gte(0, params))
+      },
+      negative(params) {
+        return this.check(_lt(0, params))
+      },
+      nonpositive(params) {
+        return this.check(_lte(0, params))
+      },
+      multipleOf(value, params) {
+        return this.check(_multipleOf(value, params))
+      },
+      step(value, params) {
+        return this.check(_multipleOf(value, params))
+      },
+      finite() {
+        return this
+      },
     },
-    min(value, params) {
-      return this.check(_gte(value, params))
-    },
-    lt(value, params) {
-      return this.check(_lt(value, params))
-    },
-    lte(value, params) {
-      return this.check(_lte(value, params))
-    },
-    max(value, params) {
-      return this.check(_lte(value, params))
-    },
-    int(params) {
-      return this.check(int(params))
-    },
-    safe(params) {
-      return this.check(int(params))
-    },
-    positive(params) {
-      return this.check(_gt(0, params))
-    },
-    nonnegative(params) {
-      return this.check(_gte(0, params))
-    },
-    negative(params) {
-      return this.check(_lt(0, params))
-    },
-    nonpositive(params) {
-      return this.check(_lte(0, params))
-    },
-    multipleOf(value, params) {
-      return this.check(_multipleOf(value, params))
-    },
-    step(value, params) {
-      return this.check(_multipleOf(value, params))
-    },
-    finite() {
-      return this
-    },
-  },
+  ),
 )
 function number2(params) {
   return _number(ZodNumber, params)
@@ -5719,19 +5994,19 @@ var ZodObject = /* @__PURE__ */ $constructor(
       return _enum(Object.keys(this._zod.def.shape))
     },
     catchall(catchall) {
-      return this.clone({ ...this._zod.def, catchall })
+      return this.clone(mergeDefs(this._zod.def, { catchall }))
     },
     passthrough() {
-      return this.clone({ ...this._zod.def, catchall: unknown() })
+      return this.clone(mergeDefs(this._zod.def, { catchall: unknown() }))
     },
     loose() {
-      return this.clone({ ...this._zod.def, catchall: unknown() })
+      return this.clone(mergeDefs(this._zod.def, { catchall: unknown() }))
     },
     strict() {
-      return this.clone({ ...this._zod.def, catchall: never() })
+      return this.clone(mergeDefs(this._zod.def, { catchall: never() }))
     },
     strip() {
-      return this.clone({ ...this._zod.def, catchall: undefined })
+      return this.clone(mergeDefs(this._zod.def, { catchall: undefined }))
     },
     extend(incoming) {
       return extend(this, incoming)
@@ -5818,7 +6093,7 @@ var ZodEnum = /* @__PURE__ */ $constructor('ZodEnum', (inst, def) => {
   inst._zod.processJSONSchema = (ctx, json, params) =>
     enumProcessor(inst, ctx, json, params)
   inst.enum = def.entries
-  inst.options = Object.values(def.entries)
+  inst.options = [...inst._zod.values]
   const keys = new Set(Object.keys(def.entries))
   inst.extract = (values, params) => {
     const newEntries = {}
@@ -6074,7 +6349,7 @@ function refine(fn, _params = {}) {
 function superRefine(fn, params) {
   return _superRefine(fn, params)
 }
-// node_modules/.bun/zod@4.5.4/node_modules/zod/v4/classic/iso.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/classic/iso.js
 var exports_iso = {}
 __export(exports_iso, {
   ZodISODate: () => ZodISODate,
