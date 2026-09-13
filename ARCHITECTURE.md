@@ -119,7 +119,7 @@ Review artifact contract
   src/lib/review-artifact-path.ts        — bounded artifact path, JSON reading, and issue projection helpers
   src/lib/review-return-validator.ts     — bounded stdin validator for one raw persona return (validate-review-return)
   src/lib/review-pipeline-contract.ts    — review-pipeline.v1 strict Zod contracts for the screen/prepare phase envelopes, composed from review-artifact-schema.ts
-  src/lib/review-pipeline.ts             — pure screenReviewReturn: binds a raw persona return to the expected reviewer and validates its structure; admission never depends on the process environment
+  src/lib/review-pipeline.ts             — pure screenReviewReturn (binds a raw persona return to the expected reviewer) and prepareReviewCandidates (confidence-gates admitted findings, then groups them into candidate pairs via normalizeRepoRelativePath, never merging); neither depends on the process environment
   src/ce-review-validator.ts             — skill-local Node shim dispatching `return`/`artifact`; bundled to skills/ce-review/scripts/validate-review.mjs
 
 ```

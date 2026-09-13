@@ -7381,9 +7381,11 @@ function runReviewReturnValidator(options) {
 
 // src/lib/review-pipeline.ts
 var JSON_ROOT_PATH = '$'
-function formatDiagnostic(persona, path, reason) {
+function formatDiagnostic(persona, fieldPath, reason) {
   const jsonPath =
-    typeof path === 'string' ? path : formatReviewArtifactIssuePath(path)
+    typeof fieldPath === 'string'
+      ? fieldPath
+      : formatReviewArtifactIssuePath(fieldPath)
   return `Rejected persona ${persona} return: field ${jsonPath} failed ${reason}.`
 }
 function truncateReason(reason) {
@@ -7398,13 +7400,13 @@ function parseRawReturn(rawReturn) {
     return { ok: false }
   }
 }
-function wholePayloadRejection(persona, path, reason, knownFindingsCount) {
+function wholePayloadRejection(persona, fieldPath, reason, knownFindingsCount) {
   return ScreenOutputSchema.parse({
     admitted_findings: [],
     dispatch_outcome: 'malformed',
     rejected_summary: {
       dispatch_outcome: 'malformed',
-      reason: truncateReason(formatDiagnostic(persona, path, reason)),
+      reason: truncateReason(formatDiagnostic(persona, fieldPath, reason)),
       rejected_finding_count: Math.max(1, knownFindingsCount),
     },
     residual_risks: [],
@@ -7419,8 +7421,8 @@ function screenReviewReturn(input) {
   }
   const validation = validateReviewReturnValue(parsed.value)
   if (!validation.ok) {
-    const path = validation.issues[0]?.path ?? JSON_ROOT_PATH
-    return wholePayloadRejection(persona, path, 'schema validation', 0)
+    const fieldPath = validation.issues[0]?.path ?? JSON_ROOT_PATH
+    return wholePayloadRejection(persona, fieldPath, 'schema validation', 0)
   }
   const raw = SubAgentReturnSchema.parse(parsed.value)
   if (raw.reviewer !== persona) {
