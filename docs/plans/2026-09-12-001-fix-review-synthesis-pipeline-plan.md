@@ -685,12 +685,15 @@ skill prose calls yet. Treat Units 2-6 as one release train and do not cut a
 release between them. If the train has to be interrupted, stop after Unit 1,
 which adds only contracts and a generated reference.
 
-- [ ] **Unit 1: Define the strict pipeline contract and generated schema**
+- [x] **Unit 1: Define the strict pipeline contract and generated schema**
 
   **Files:**
-  - Add `src/lib/review-pipeline-contract.ts` (schema family) and
-    `src/lib/review-pipeline.ts` (phase functions).
-  - Add `tests/unit/review-pipeline-schema.test.ts`.
+  - Add `src/lib/review-pipeline-contract.ts` (schema family). Landed.
+    `src/lib/review-pipeline.ts` (phase functions) moves to Unit 2, where the
+    first phase implementation gives it real content — an empty module would
+    have carried stub bodies that lie about behavior.
+  - Add `tests/unit/review-pipeline-contract.test.ts`, mirroring the module name
+    per repo convention.
   - Extend `scripts/generate-review-artifact-schema.ts` by adding the new schema
     to `REVIEW_SCHEMA_TARGETS`; `review-schema:generate`, `review-schema:drift`,
     and `postupgrade` then cover it without further script changes.
