@@ -5,6 +5,7 @@
  * Targets:
  *   - skills/ce-review/references/review-summary-schema.json (aggregate artifact)
  *   - skills/ce-review/references/findings-schema.json (raw return + parent record)
+ *   - skills/ce-review/references/review-pipeline-schema.json (model-authored pipeline envelopes)
  *
  * Usage:
  *   bun scripts/generate-review-artifact-schema.ts         # Write every target
@@ -22,6 +23,11 @@ import {
   SubAgentFindingSchema,
   SubAgentReturnSchema,
 } from '../src/lib/review-artifact-schema.js'
+import {
+  AdjudicationEnvelopeSchema,
+  PlanAssessmentEnvelopeSchema,
+  ValidatorLifecycleResultSchema,
+} from '../src/lib/review-pipeline-contract.js'
 
 const __filename = fileURLToPath(import.meta.url)
 const __dirname = path.dirname(__filename)
@@ -31,11 +37,16 @@ export const REVIEW_SCHEMA_RELATIVE_PATH =
   'skills/ce-review/references/review-summary-schema.json'
 export const FINDINGS_SCHEMA_RELATIVE_PATH =
   'skills/ce-review/references/findings-schema.json'
+export const PIPELINE_SCHEMA_RELATIVE_PATH =
+  'skills/ce-review/references/review-pipeline-schema.json'
 
 const DRAFT_7_URI = 'http://json-schema.org/draft-07/schema#'
 const FINDINGS_SCHEMA_TITLE = 'Code Review Findings'
 const FINDINGS_SCHEMA_DESCRIPTION =
   'Structured output schemas for code review sub-agent returns and parent-persisted records'
+const PIPELINE_SCHEMA_TITLE = 'Code Review Pipeline Envelopes'
+const PIPELINE_SCHEMA_DESCRIPTION =
+  'Structured output schemas for the model-authored envelopes of the ce:review synthesis pipeline (adjudication decisions, validator lifecycle results, and plan assessment). Helper-produced internal phase state (screen output, prepared state, merge output, finalize output) is intentionally excluded: it is TypeScript/Zod-only and never authored by a model.'
 
 /**
  * Keep JSON Schema generation options in one place so generation and drift
@@ -151,6 +162,39 @@ export function generateFindingsSchemaContent(): string {
   return ensureTrailingNewline(formatted)
 }
 
+/**
+ * Generate the formatted JSON Schema for the model-authored pipeline
+ * envelopes (adjudication decisions, validator lifecycle results, and plan
+ * assessment) from the canonical Zod source.
+ *
+ * Helper-produced internal phase state (screen output, prepared state,
+ * merge output, finalize output) is deliberately excluded: the committed
+ * file feeds a model prompt, so it must contain only what the model is
+ * asked to write.
+ */
+export function generatePipelineSchemaContent(): string {
+  const adjudicationEnvelope = toDefinition(AdjudicationEnvelopeSchema)
+  const validatorLifecycleResult = toDefinition(ValidatorLifecycleResultSchema)
+  const planAssessmentEnvelope = toDefinition(PlanAssessmentEnvelopeSchema)
+
+  const document = {
+    $schema: DRAFT_7_URI,
+    title: PIPELINE_SCHEMA_TITLE,
+    description: PIPELINE_SCHEMA_DESCRIPTION,
+    definitions: {
+      adjudicationEnvelope,
+      validatorLifecycleResult,
+      planAssessmentEnvelope,
+    },
+  }
+
+  const formatted = formatJsonWithBiome(
+    `${JSON.stringify(document, null, 2)}\n`,
+    'review-pipeline-schema.json',
+  )
+  return ensureTrailingNewline(formatted)
+}
+
 export interface ReviewSchemaTarget {
   relativePath: string
   generate: () => string
@@ -165,6 +209,10 @@ export const REVIEW_SCHEMA_TARGETS: readonly ReviewSchemaTarget[] = [
   {
     relativePath: FINDINGS_SCHEMA_RELATIVE_PATH,
     generate: generateFindingsSchemaContent,
+  },
+  {
+    relativePath: PIPELINE_SCHEMA_RELATIVE_PATH,
+    generate: generatePipelineSchemaContent,
   },
 ]
 

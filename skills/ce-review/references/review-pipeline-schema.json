@@ -1,0 +1,329 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Code Review Pipeline Envelopes",
+  "description": "Structured output schemas for the model-authored envelopes of the ce:review synthesis pipeline (adjudication decisions, validator lifecycle results, and plan assessment). Helper-produced internal phase state (screen output, prepared state, merge output, finalize output) is intentionally excluded: it is TypeScript/Zod-only and never authored by a model.",
+  "definitions": {
+    "adjudicationEnvelope": {
+      "type": "object",
+      "properties": {
+        "decisions": {
+          "maxItems": 32,
+          "type": "array",
+          "items": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "decision_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "\\S"
+                  },
+                  "disposition": {
+                    "type": "string",
+                    "const": "merged"
+                  },
+                  "input_finding_ids": {
+                    "minItems": 2,
+                    "maxItems": 32,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 128,
+                      "pattern": "\\S"
+                    }
+                  },
+                  "title": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 256,
+                    "pattern": "\\S",
+                    "description": "Short, specific issue title. 10 words or fewer."
+                  },
+                  "why_it_matters": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "pattern": "\\S",
+                    "description": "Non-empty impact and failure mode -- not 'what is wrong' but 'what breaks'"
+                  },
+                  "evidence": {
+                    "minItems": 1,
+                    "maxItems": 5,
+                    "type": "array",
+                    "items": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1,
+                          "maxLength": 500,
+                          "allOf": [
+                            {
+                              "type": "string",
+                              "pattern": "\\S"
+                            },
+                            {
+                              "type": "string",
+                              "pattern": "^(?!\\/)(?![A-Za-z]:[\\\\/])(?!\\\\).+"
+                            }
+                          ],
+                          "description": "Bounded code-grounded evidence; absolute POSIX, drive-letter, and UNC paths are rejected"
+                        },
+                        {
+                          "type": "object",
+                          "properties": {
+                            "overflow": {
+                              "type": "boolean",
+                              "const": true,
+                              "description": "Explicit marker that the complete evidence did not fit in one bounded entry"
+                            },
+                            "excerpt": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 500,
+                              "allOf": [
+                                {
+                                  "type": "string",
+                                  "pattern": "\\S"
+                                },
+                                {
+                                  "type": "string",
+                                  "pattern": "^(?!\\/)(?![A-Za-z]:[\\\\/])(?!\\\\).+"
+                                }
+                              ],
+                              "description": "Bounded excerpt retained when evidence must be shortened"
+                            }
+                          },
+                          "required": ["overflow", "excerpt"],
+                          "additionalProperties": false
+                        }
+                      ]
+                    },
+                    "description": "Code-grounded evidence. At least 1 and at most 5 bounded entries; split evidence across entries or use an explicit overflow marker rather than silently truncating it."
+                  },
+                  "suggested_fix": {
+                    "description": "Concrete minimal fix. Omit or null if no good fix is obvious -- a bad suggestion is worse than none.",
+                    "anyOf": [
+                      {
+                        "type": "string",
+                        "maxLength": 2048
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "line": {
+                    "type": "integer",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "description": "Primary line number of the issue"
+                  },
+                  "disagreement_facts": {
+                    "maxItems": 32,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048,
+                      "pattern": "\\S"
+                    }
+                  },
+                  "eligible_agreement_credit": {
+                    "maxItems": 64,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 64,
+                      "pattern": "\\S",
+                      "description": "Persona name that produced this output (e.g., 'correctness', 'security')"
+                    }
+                  },
+                  "route_narrowing_reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "pattern": "\\S"
+                  }
+                },
+                "required": [
+                  "decision_id",
+                  "disposition",
+                  "input_finding_ids",
+                  "title",
+                  "why_it_matters",
+                  "evidence",
+                  "line"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "decision_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "\\S"
+                  },
+                  "disposition": {
+                    "type": "string",
+                    "const": "declined"
+                  },
+                  "input_finding_id": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 128,
+                    "pattern": "\\S"
+                  },
+                  "declined_reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "pattern": "\\S"
+                  },
+                  "disagreement_facts": {
+                    "maxItems": 32,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 2048,
+                      "pattern": "\\S"
+                    }
+                  },
+                  "route_narrowing_reason": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 2048,
+                    "pattern": "\\S"
+                  }
+                },
+                "required": [
+                  "decision_id",
+                  "disposition",
+                  "input_finding_id",
+                  "declined_reason"
+                ],
+                "additionalProperties": false
+              }
+            ]
+          }
+        }
+      },
+      "required": ["decisions"],
+      "additionalProperties": false
+    },
+    "validatorLifecycleResult": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "true"
+            }
+          },
+          "required": ["outcome"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "false"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048,
+              "pattern": "\\S"
+            }
+          },
+          "required": ["outcome", "reason"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "failed"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048,
+              "pattern": "\\S"
+            }
+          },
+          "required": ["outcome", "reason"],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "outcome": {
+              "type": "string",
+              "const": "unavailable"
+            },
+            "reason": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 2048,
+              "pattern": "\\S"
+            }
+          },
+          "required": ["outcome", "reason"],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "planAssessmentEnvelope": {
+      "type": "object",
+      "properties": {
+        "verdict": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256,
+          "pattern": "\\S"
+        },
+        "run_status": {
+          "type": "string",
+          "enum": ["in_progress", "completed", "degraded", "abnormal"]
+        },
+        "residual_actionable_work": {
+          "maxItems": 32,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "\\S"
+          }
+        },
+        "advisory_outputs": {
+          "maxItems": 32,
+          "type": "array",
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "\\S"
+          }
+        }
+      },
+      "required": [
+        "verdict",
+        "run_status",
+        "residual_actionable_work",
+        "advisory_outputs"
+      ],
+      "additionalProperties": false
+    }
+  }
+}
