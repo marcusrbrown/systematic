@@ -349,6 +349,7 @@ function applyConfidenceGate(screenResults: readonly PrepareScreenResult[]): {
         confidenceDispositions.push({
           input_id: finding.input_id,
           disposition: 'surviving',
+          confidence: finding.confidence,
         })
         survivors.push({
           inputId: finding.input_id,
@@ -360,6 +361,7 @@ function applyConfidenceGate(screenResults: readonly PrepareScreenResult[]): {
         confidenceDispositions.push({
           input_id: finding.input_id,
           disposition: 'suppressed',
+          confidence: finding.confidence,
           reason: CONFIDENCE_GATE_SUPPRESSED_REASON,
         })
       }

@@ -7018,6 +7018,9 @@ function runClaudeCodeValidator(options) {
 if (false) {
 }
 
+// src/lib/review-pipeline.ts
+import path2 from 'node:path'
+
 // src/lib/review-pipeline-contract.ts
 var boundedText2 = (maxLength) => string2().min(1).max(maxLength).regex(/\S/)
 var PipelineInputIdSchema = boundedText2(MAX_INPUT_ID_LENGTH)
@@ -7063,6 +7066,7 @@ var PrepareInputSchema = object({
 var ConfidenceDispositionSchema = object({
   input_id: PipelineInputIdSchema,
   disposition: DispositionSchema.extract(['surviving', 'suppressed']),
+  confidence: ParentFindingSchema.shape.confidence,
   reason: PipelineReasonSchema.optional(),
 }).strict()
 var CandidateGroupSchema = object({
@@ -7303,11 +7307,11 @@ function readChunkWithRetry(fd, buffer, toRead, readChunk) {
     }
   }
 }
-function readBoundedStdin(fd, readChunk) {
+function readBoundedStdin(fd, readChunk, maxBytes = MAX_REVIEW_RETURN_BYTES) {
   const chunks = []
   let total = 0
   while (true) {
-    const remaining = MAX_REVIEW_RETURN_BYTES + 1 - total
+    const remaining = maxBytes + 1 - total
     if (remaining <= 0) return { status: 'oversized' }
     const toRead = Math.min(READ_CHUNK_BYTES, remaining)
     const buffer = Buffer.allocUnsafe(toRead)
@@ -7316,7 +7320,7 @@ function readBoundedStdin(fd, readChunk) {
     if (read.bytesRead <= 0) break
     total += read.bytesRead
     chunks.push(buffer.subarray(0, read.bytesRead))
-    if (total > MAX_REVIEW_RETURN_BYTES) return { status: 'oversized' }
+    if (total > maxBytes) return { status: 'oversized' }
   }
   return { buffer: Buffer.concat(chunks, total), status: 'ok' }
 }
@@ -7446,10 +7450,215 @@ function screenReviewReturn(input) {
     testing_gaps: raw.testing_gaps,
   })
 }
+var STANDARD_CONFIDENCE_FLOOR = 0.6
+var P0_CONFIDENCE_FLOOR = 0.5
+var CONFIDENCE_GATE_SUPPRESSED_REASON = 'confidence below gate threshold'
+function rejectPrepare(path, reason) {
+  return { ok: false, rejection: { path, reason } }
+}
+function compareStrings(a, b) {
+  if (a < b) return -1
+  if (a > b) return 1
+  return 0
+}
+function normalizeRepoRelativePath(filePath) {
+  return path2.posix.normalize(filePath.replaceAll('\\', '/'))
+}
+function payloadByteLength(rawInput) {
+  if (typeof rawInput === 'string') return Buffer.byteLength(rawInput, 'utf8')
+  try {
+    return Buffer.byteLength(JSON.stringify(rawInput), 'utf8')
+  } catch {
+    return
+  }
+}
+function survivesConfidenceGate(finding) {
+  if (finding.confidence >= STANDARD_CONFIDENCE_FLOOR) return true
+  return finding.severity === 'P0' && finding.confidence >= P0_CONFIDENCE_FLOOR
+}
+function validatePrepareStructure(screenResults, selectedDispatches) {
+  const seenPersonas = new Set()
+  for (const [index, entry] of screenResults.entries()) {
+    if (seenPersonas.has(entry.reviewer)) {
+      return {
+        path: formatReviewArtifactIssuePath([
+          'screen_results',
+          index,
+          'reviewer',
+        ]),
+        reason: 'duplicate persona outcome',
+      }
+    }
+    seenPersonas.add(entry.reviewer)
+  }
+  const seenInputIds = new Set()
+  for (const [screenIndex, entry] of screenResults.entries()) {
+    for (const [
+      findingIndex,
+      finding,
+    ] of entry.result.admitted_findings.entries()) {
+      if (seenInputIds.has(finding.input_id)) {
+        return {
+          path: formatReviewArtifactIssuePath([
+            'screen_results',
+            screenIndex,
+            'result',
+            'admitted_findings',
+            findingIndex,
+            'input_id',
+          ]),
+          reason: 'duplicate input id',
+        }
+      }
+      seenInputIds.add(finding.input_id)
+    }
+  }
+  const selectedPersonas = new Set(
+    selectedDispatches.map((dispatch) => dispatch.persona),
+  )
+  for (const [index, entry] of screenResults.entries()) {
+    if (!selectedPersonas.has(entry.reviewer)) {
+      return {
+        path: formatReviewArtifactIssuePath([
+          'screen_results',
+          index,
+          'reviewer',
+        ]),
+        reason: 'unselected persona screen result',
+      }
+    }
+  }
+  const screenedPersonas = new Set(screenResults.map((entry) => entry.reviewer))
+  for (const [index, dispatch] of selectedDispatches.entries()) {
+    if (!screenedPersonas.has(dispatch.persona)) {
+      return {
+        path: formatReviewArtifactIssuePath([
+          'selected_dispatches',
+          index,
+          'persona',
+        ]),
+        reason: 'missing screen result for selected dispatch',
+      }
+    }
+  }
+  return
+}
+function applyConfidenceGate(screenResults) {
+  const confidenceDispositions = []
+  const survivors = []
+  for (const entry of screenResults) {
+    for (const finding of entry.result.admitted_findings) {
+      if (survivesConfidenceGate(finding)) {
+        confidenceDispositions.push({
+          input_id: finding.input_id,
+          disposition: 'surviving',
+          confidence: finding.confidence,
+        })
+        survivors.push({
+          inputId: finding.input_id,
+          persona: entry.reviewer,
+          normalizedFile: normalizeRepoRelativePath(finding.file),
+          line: finding.line,
+        })
+      } else {
+        confidenceDispositions.push({
+          input_id: finding.input_id,
+          disposition: 'suppressed',
+          confidence: finding.confidence,
+          reason: CONFIDENCE_GATE_SUPPRESSED_REASON,
+        })
+      }
+    }
+  }
+  confidenceDispositions.sort((a, b) => compareStrings(a.input_id, b.input_id))
+  return { confidenceDispositions, survivors }
+}
+function computeCoverageUnion(selectedDispatches) {
+  const coverageSet = new Set()
+  for (const dispatch of selectedDispatches) {
+    for (const surface of dispatch.selection_surface ?? []) {
+      coverageSet.add(surface)
+    }
+  }
+  return [...coverageSet].sort(compareStrings)
+}
+function groupCandidates(survivors) {
+  const groupsByFile = new Map()
+  for (const survivor of survivors) {
+    const bucket = groupsByFile.get(survivor.normalizedFile)
+    if (bucket) {
+      bucket.push(survivor)
+    } else {
+      groupsByFile.set(survivor.normalizedFile, [survivor])
+    }
+  }
+  const candidateGroups = []
+  const singletonIds = []
+  for (const [file, members] of groupsByFile) {
+    const distinctPersonas = new Set(members.map((member) => member.persona))
+    if (distinctPersonas.size >= 2) {
+      const sortedMembers = [...members].sort((a, b) => {
+        if (a.line !== b.line) return a.line - b.line
+        return compareStrings(a.inputId, b.inputId)
+      })
+      candidateGroups.push({
+        file,
+        input_finding_ids: sortedMembers.map((member) => member.inputId),
+      })
+    } else {
+      for (const member of members) {
+        singletonIds.push(member.inputId)
+      }
+    }
+  }
+  candidateGroups.sort((a, b) => compareStrings(a.file, b.file))
+  singletonIds.sort(compareStrings)
+  return { candidateGroups, singletonIds }
+}
+function prepareReviewCandidates(input) {
+  const byteLength = payloadByteLength(input.raw_input)
+  if (byteLength !== undefined && byteLength > AGGREGATE_STDIN_BYTE_CAP) {
+    return rejectPrepare(JSON_ROOT_PATH, 'aggregate payload exceeds byte cap')
+  }
+  const parsed = parseRawReturn(input.raw_input)
+  if (!parsed.ok) {
+    return rejectPrepare(JSON_ROOT_PATH, 'malformed JSON')
+  }
+  const validation = PrepareInputSchema.safeParse(parsed.value)
+  if (!validation.success) {
+    const issue = validation.error.issues[0]
+    const issuePath = issue
+      ? formatReviewArtifactIssuePath(issue.path)
+      : JSON_ROOT_PATH
+    return rejectPrepare(issuePath, 'schema validation')
+  }
+  const {
+    screen_results: screenResults,
+    selected_dispatches: selectedDispatches,
+  } = validation.data
+  const structuralViolation = validatePrepareStructure(
+    screenResults,
+    selectedDispatches,
+  )
+  if (structuralViolation) {
+    return rejectPrepare(structuralViolation.path, structuralViolation.reason)
+  }
+  const { confidenceDispositions, survivors } =
+    applyConfidenceGate(screenResults)
+  const coverageUnion = computeCoverageUnion(selectedDispatches)
+  const { candidateGroups, singletonIds } = groupCandidates(survivors)
+  const output = PrepareOutputSchema.parse({
+    candidate_groups: candidateGroups,
+    confidence_dispositions: confidenceDispositions,
+    coverage_union: coverageUnion,
+    singletons: singletonIds,
+  })
+  return { ok: true, value: output }
+}
 
 // src/ce-review-validator.ts
 var CE_REVIEW_VALIDATOR_USAGE =
-  'Usage: node validate-review.mjs <return|artifact|screen> [...]'
+  'Usage: node validate-review.mjs <return|artifact|screen|prepare> [...]'
 var CE_REVIEW_SCREEN_USAGE =
   'Usage: node validate-review.mjs screen --reviewer <name> --harness <name>'
 var CE_REVIEW_SCREEN_STDIN_TTY_MESSAGE =
@@ -7463,6 +7672,17 @@ var CE_REVIEW_SCREEN_STDIN_INVALID_UTF8_MESSAGE =
 var CE_REVIEW_SCREEN_REJECTED_MESSAGE = 'screen rejected the reviewer return'
 var CE_REVIEW_SCREEN_INTERNAL_ERROR_MESSAGE =
   'ce-review-validator: internal error'
+var CE_REVIEW_PREPARE_USAGE = 'Usage: node validate-review.mjs prepare'
+var CE_REVIEW_PREPARE_STDIN_TTY_MESSAGE =
+  'prepare reads one aggregate JSON envelope from stdin; interactive input is not supported'
+var CE_REVIEW_PREPARE_STDIN_READ_FAILED_MESSAGE =
+  'prepare could not read the aggregate envelope from stdin'
+var CE_REVIEW_PREPARE_STDIN_OVERSIZED_MESSAGE =
+  'prepare input exceeds the aggregate byte cap'
+var CE_REVIEW_PREPARE_STDIN_INVALID_UTF8_MESSAGE =
+  'prepare input is not valid UTF-8'
+var CE_REVIEW_PREPARE_REJECTED_MESSAGE =
+  'prepare rejected the aggregate envelope'
 var SCREEN_FLAGS = ['--reviewer', '--harness']
 function isScreenFlag(token) {
   return SCREEN_FLAGS.includes(token)
@@ -7526,6 +7746,45 @@ function runScreenSubcommand(options, outputSink, errorSink) {
   outputSink(JSON.stringify(result))
   return 0
 }
+function runPrepareSubcommand(options, outputSink, errorSink) {
+  if (options.argv.slice(1).length > 0) {
+    errorSink(CE_REVIEW_PREPARE_USAGE)
+    return 2
+  }
+  const fd = 0
+  const isTTY = options.isTTY ?? process.stdin.isTTY === true
+  if (isTTY) {
+    errorSink(CE_REVIEW_PREPARE_STDIN_TTY_MESSAGE)
+    return 2
+  }
+  const read = readBoundedStdin(
+    fd,
+    options.readChunk ?? defaultReadChunk,
+    AGGREGATE_STDIN_BYTE_CAP,
+  )
+  if (read.status === 'read-error') {
+    errorSink(CE_REVIEW_PREPARE_STDIN_READ_FAILED_MESSAGE)
+    return 2
+  }
+  if (read.status === 'oversized') {
+    errorSink(CE_REVIEW_PREPARE_STDIN_OVERSIZED_MESSAGE)
+    return 1
+  }
+  let text
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(read.buffer)
+  } catch {
+    errorSink(CE_REVIEW_PREPARE_STDIN_INVALID_UTF8_MESSAGE)
+    return 1
+  }
+  const result = prepareReviewCandidates({ raw_input: text })
+  if (!result.ok) {
+    errorSink(CE_REVIEW_PREPARE_REJECTED_MESSAGE)
+    return 1
+  }
+  outputSink(JSON.stringify(result.value))
+  return 0
+}
 var processExceptionBoundaryInstalled = false
 function installProcessExceptionBoundary(errorSink) {
   if (processExceptionBoundaryInstalled) return
@@ -7567,6 +7826,9 @@ function runCeReviewValidator(options) {
     if (subcommand === 'screen') {
       return runScreenSubcommand(options, outputSink, errorSink)
     }
+    if (subcommand === 'prepare') {
+      return runPrepareSubcommand(options, outputSink, errorSink)
+    }
     errorSink(CE_REVIEW_VALIDATOR_USAGE)
     return 2
   } catch {
@@ -7592,6 +7854,12 @@ if (isMainModule) {
   process.exitCode = runCeReviewValidator({ argv: process.argv.slice(2) })
 }
 export {
+  CE_REVIEW_PREPARE_REJECTED_MESSAGE,
+  CE_REVIEW_PREPARE_STDIN_INVALID_UTF8_MESSAGE,
+  CE_REVIEW_PREPARE_STDIN_OVERSIZED_MESSAGE,
+  CE_REVIEW_PREPARE_STDIN_READ_FAILED_MESSAGE,
+  CE_REVIEW_PREPARE_STDIN_TTY_MESSAGE,
+  CE_REVIEW_PREPARE_USAGE,
   CE_REVIEW_SCREEN_INTERNAL_ERROR_MESSAGE,
   CE_REVIEW_SCREEN_REJECTED_MESSAGE,
   CE_REVIEW_SCREEN_STDIN_INVALID_UTF8_MESSAGE,

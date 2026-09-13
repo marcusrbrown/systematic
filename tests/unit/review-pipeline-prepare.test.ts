@@ -178,6 +178,42 @@ describe('prepareReviewCandidates -- confidence gate', () => {
     expect(suppressed[0]?.reason).toBeDefined()
     expect(suppressed[0]?.reason).toBe(suppressed[1]?.reason)
   })
+
+  test('two findings suppressed at different confidences each report their own original value, and a surviving finding reports its value too', () => {
+    const lowConfidence = makeAdmittedFinding({
+      confidence: 0.1,
+      input_id: 'correctness#0',
+      severity: 'P2',
+    })
+    const nearMiss = makeAdmittedFinding({
+      confidence: 0.59,
+      input_id: 'correctness#1',
+      severity: 'P1',
+    })
+    const surviving = makeAdmittedFinding({
+      confidence: 0.85,
+      input_id: 'correctness#2',
+      severity: 'P1',
+    })
+    const result = prepareReviewCandidates(
+      buildInput(
+        [makeScreenResult('correctness', [lowConfidence, nearMiss, surviving])],
+        [makeSelectedDispatch('correctness')],
+      ),
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error('expected acceptance')
+    const byId = new Map(
+      result.value.confidence_dispositions.map((entry) => [
+        entry.input_id,
+        entry,
+      ]),
+    )
+    expect(byId.get('correctness#0')?.confidence).toBe(0.1)
+    expect(byId.get('correctness#1')?.confidence).toBe(0.59)
+    expect(byId.get('correctness#2')?.confidence).toBe(0.85)
+  })
 })
 
 describe('prepareReviewCandidates -- candidate grouping', () => {

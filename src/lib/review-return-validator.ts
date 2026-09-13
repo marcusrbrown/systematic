@@ -166,13 +166,22 @@ function readChunkWithRetry(
 /**
  * Read stdin in bounded chunks, stopping at the cap plus one byte so an
  * oversized payload is rejected without buffering the whole document.
+ *
+ * `maxBytes` defaults to {@link MAX_REVIEW_RETURN_BYTES} (the `return`/`screen`
+ * 1 MiB cap); callers with a different bound -- such as `prepare`'s larger
+ * aggregate envelope cap -- pass it explicitly. The default preserves
+ * `return` and `screen`'s existing behavior byte-for-byte.
  */
-export function readBoundedStdin(fd: number, readChunk: ReadChunk): StdinRead {
+export function readBoundedStdin(
+  fd: number,
+  readChunk: ReadChunk,
+  maxBytes: number = MAX_REVIEW_RETURN_BYTES,
+): StdinRead {
   const chunks: Buffer[] = []
   let total = 0
 
   while (true) {
-    const remaining = MAX_REVIEW_RETURN_BYTES + 1 - total
+    const remaining = maxBytes + 1 - total
     if (remaining <= 0) return { status: 'oversized' }
 
     const toRead = Math.min(READ_CHUNK_BYTES, remaining)
@@ -188,7 +197,7 @@ export function readBoundedStdin(fd: number, readChunk: ReadChunk): StdinRead {
 
     total += read.bytesRead
     chunks.push(buffer.subarray(0, read.bytesRead))
-    if (total > MAX_REVIEW_RETURN_BYTES) return { status: 'oversized' }
+    if (total > maxBytes) return { status: 'oversized' }
   }
 
   return { buffer: Buffer.concat(chunks, total), status: 'ok' }

@@ -109,6 +109,7 @@ const ConfidenceDispositionSchema = z
   .object({
     input_id: PipelineInputIdSchema,
     disposition: DispositionSchema.extract(['surviving', 'suppressed']),
+    confidence: ParentFindingSchema.shape.confidence,
     reason: PipelineReasonSchema.optional(),
   })
   .strict()

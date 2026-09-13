@@ -1,7 +1,11 @@
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { runClaudeCodeValidator } from './claude-code-validator.js'
-import { screenReviewReturn } from './lib/review-pipeline.js'
+import {
+  prepareReviewCandidates,
+  screenReviewReturn,
+} from './lib/review-pipeline.js'
+import { AGGREGATE_STDIN_BYTE_CAP } from './lib/review-pipeline-contract.js'
 import {
   defaultReadChunk,
   type ReadChunk,
@@ -14,19 +18,22 @@ import {
  * validator shim (`skills/ce-review/scripts/validate-review.mjs`).
  *
  * This is a thin packaging compatibility shim, not a public extension point:
- * it dispatches exactly three subcommands and owns no validation logic
+ * it dispatches exactly four subcommands and owns no validation logic
  * beyond `screen`'s flag parsing and stdin plumbing.
  * - `return`   -> the bounded raw persona-return validator (stdin).
  * - `artifact` -> the existing aggregate review-artifact validator.
  * - `screen`   -> executable reviewer-return admission (`screenReviewReturn`),
  *                 reusing the same bounded stdin reader as `return`.
+ * - `prepare`  -> executable candidate preparation (`prepareReviewCandidates`),
+ *                 reusing the same bounded stdin reader with the larger
+ *                 aggregate byte cap.
  *
  * It exists because shipped skill layouts cannot all rely on the npm CLI or
  * `dist/`; every harness invokes the committed bundle through `SKILL_DIR`.
  */
 
 export const CE_REVIEW_VALIDATOR_USAGE =
-  'Usage: node validate-review.mjs <return|artifact|screen> [...]'
+  'Usage: node validate-review.mjs <return|artifact|screen|prepare> [...]'
 
 export const CE_REVIEW_SCREEN_USAGE =
   'Usage: node validate-review.mjs screen --reviewer <name> --harness <name>'
@@ -48,6 +55,23 @@ export const CE_REVIEW_SCREEN_REJECTED_MESSAGE =
 
 export const CE_REVIEW_SCREEN_INTERNAL_ERROR_MESSAGE =
   'ce-review-validator: internal error'
+
+export const CE_REVIEW_PREPARE_USAGE = 'Usage: node validate-review.mjs prepare'
+
+export const CE_REVIEW_PREPARE_STDIN_TTY_MESSAGE =
+  'prepare reads one aggregate JSON envelope from stdin; interactive input is not supported'
+
+export const CE_REVIEW_PREPARE_STDIN_READ_FAILED_MESSAGE =
+  'prepare could not read the aggregate envelope from stdin'
+
+export const CE_REVIEW_PREPARE_STDIN_OVERSIZED_MESSAGE =
+  'prepare input exceeds the aggregate byte cap'
+
+export const CE_REVIEW_PREPARE_STDIN_INVALID_UTF8_MESSAGE =
+  'prepare input is not valid UTF-8'
+
+export const CE_REVIEW_PREPARE_REJECTED_MESSAGE =
+  'prepare rejected the aggregate envelope'
 
 export interface CeReviewValidatorOptions {
   readonly argv: readonly string[]
@@ -151,6 +175,55 @@ function runScreenSubcommand(
   return 0
 }
 
+function runPrepareSubcommand(
+  options: CeReviewValidatorOptions,
+  outputSink: (message: string) => void,
+  errorSink: (message: string) => void,
+): number {
+  if (options.argv.slice(1).length > 0) {
+    errorSink(CE_REVIEW_PREPARE_USAGE)
+    return 2
+  }
+
+  const fd = 0
+  const isTTY = options.isTTY ?? process.stdin.isTTY === true
+  if (isTTY) {
+    errorSink(CE_REVIEW_PREPARE_STDIN_TTY_MESSAGE)
+    return 2
+  }
+
+  const read = readBoundedStdin(
+    fd,
+    options.readChunk ?? defaultReadChunk,
+    AGGREGATE_STDIN_BYTE_CAP,
+  )
+  if (read.status === 'read-error') {
+    errorSink(CE_REVIEW_PREPARE_STDIN_READ_FAILED_MESSAGE)
+    return 2
+  }
+  if (read.status === 'oversized') {
+    errorSink(CE_REVIEW_PREPARE_STDIN_OVERSIZED_MESSAGE)
+    return 1
+  }
+
+  let text: string
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(read.buffer)
+  } catch {
+    errorSink(CE_REVIEW_PREPARE_STDIN_INVALID_UTF8_MESSAGE)
+    return 1
+  }
+
+  const result = prepareReviewCandidates({ raw_input: text })
+  if (!result.ok) {
+    errorSink(CE_REVIEW_PREPARE_REJECTED_MESSAGE)
+    return 1
+  }
+
+  outputSink(JSON.stringify(result.value))
+  return 0
+}
+
 let processExceptionBoundaryInstalled = false
 
 /**
@@ -212,6 +285,10 @@ export function runCeReviewValidator(
 
     if (subcommand === 'screen') {
       return runScreenSubcommand(options, outputSink, errorSink)
+    }
+
+    if (subcommand === 'prepare') {
+      return runPrepareSubcommand(options, outputSink, errorSink)
     }
 
     errorSink(CE_REVIEW_VALIDATOR_USAGE)

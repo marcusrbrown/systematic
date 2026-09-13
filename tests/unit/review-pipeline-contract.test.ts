@@ -86,6 +86,7 @@ const prepareOutputFixture: JsonObject = {
     {
       input_id: 'correctness-0',
       disposition: 'surviving',
+      confidence: 0.85,
     },
   ],
   coverage_union: ['src/example.ts'],

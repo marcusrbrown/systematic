@@ -18,6 +18,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { AGGREGATE_STDIN_BYTE_CAP } from '../../src/lib/review-pipeline-contract.js'
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
 const VALIDATOR_ENTRY = path.join(ROOT_DIR, 'src/ce-review-validator.ts')
@@ -130,6 +131,35 @@ const SCREEN_ARGS = [
   '--harness',
   'claude-code',
 ] as const
+
+const ADMITTED_FINDING = {
+  ...BASE_FINDING,
+  disposition: 'surviving',
+  input_id: 'correctness#0',
+}
+
+const VALID_PREPARE_INPUT = {
+  screen_results: [
+    {
+      result: {
+        admitted_findings: [ADMITTED_FINDING],
+        dispatch_outcome: 'findings',
+        residual_risks: [],
+        testing_gaps: [],
+      },
+      reviewer: 'correctness',
+    },
+  ],
+  selected_dispatches: [
+    {
+      dispatch_outcome: 'findings',
+      persona: 'correctness',
+      selection_surface: ['src/example.ts'],
+    },
+  ],
+}
+
+const PREPARE_ARGS = ['prepare'] as const
 
 describe('screen: conforming input', () => {
   test('exits 0 with a parseable envelope and writes nothing to the cwd', () => {
@@ -319,6 +349,157 @@ describe('screen: exception boundary', () => {
       let offset = 0
       const exitCode = mod.runCeReviewValidator({
         argv: ${JSON.stringify([...SCREEN_ARGS])},
+        isTTY: false,
+        readChunk: (_fd, buffer, bufferOffset, length) => {
+          if (offset >= bytes.length) return 0
+          const n = Math.min(length, bytes.length - offset)
+          bytes.copy(buffer, bufferOffset, offset, offset + n)
+          offset += n
+          return n
+        },
+        outputSink: () => {},
+        errorSink: (message) => console.error(message),
+      })
+      console.log('SYNC_EXIT:' + exitCode)
+      Promise.reject(new Error('boom from rejected promise: should never reach stderr'))
+    `
+    const result = spawnSync('bun', ['-e', driver], {
+      encoding: 'utf8',
+      env: SAFE_ENV,
+      timeout: 30_000,
+    })
+
+    expect(result.stdout).toContain('SYNC_EXIT:0')
+    expect(result.stderr).toContain('internal error')
+    expect(result.stderr).not.toContain('boom from rejected promise')
+    expect(result.stderr).not.toContain('Error:')
+    expect(result.stderr).not.toContain('.ts:')
+    expect(result.stderr).not.toMatch(/at\s+\S+\s+\(/)
+    expect(result.status).toBe(1)
+  })
+})
+
+describe('prepare: conforming input', () => {
+  test('exits 0 with a parseable envelope and writes nothing to the cwd', () => {
+    const cwd = makeCwd()
+    const before = snapshotTree(cwd)
+
+    const result = runValidator([...PREPARE_ARGS], {
+      cwd,
+      input: JSON.stringify(VALID_PREPARE_INPUT),
+    })
+
+    expect(result.exitCode, result.stderr).toBe(0)
+    expect(result.stderr).toBe('')
+    const parsed = JSON.parse(result.stdout) as {
+      confidence_dispositions: readonly unknown[]
+    }
+    expect(parsed.confidence_dispositions).toHaveLength(1)
+    expect(snapshotTree(cwd)).toBe(before)
+  })
+})
+
+describe('prepare: argument parsing', () => {
+  test('an unknown flag exits 2', () => {
+    const result = runValidator([...PREPARE_ARGS, '--bogus', 'x'], {
+      input: JSON.stringify(VALID_PREPARE_INPUT),
+    })
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('Usage:')
+    expect(result.stdout).toBe('')
+  })
+
+  test('a stray positional argument exits 2', () => {
+    const result = runValidator([...PREPARE_ARGS, 'extra'], {
+      input: JSON.stringify(VALID_PREPARE_INPUT),
+    })
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('Usage:')
+    expect(result.stdout).toBe('')
+  })
+})
+
+describe('prepare: stdin bounds', () => {
+  test('an over-cap payload exits 1 without echoing content', () => {
+    const oversized = Buffer.alloc(AGGREGATE_STDIN_BYTE_CAP + 1, 0x20)
+    const result = runValidator([...PREPARE_ARGS], { input: oversized })
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain('byte cap')
+    expect(result.stdout).toBe('')
+  })
+})
+
+describe('prepare: rejection outcomes', () => {
+  test('a malformed envelope exits 1', () => {
+    const result = runValidator([...PREPARE_ARGS], { input: '{ not json' })
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain('rejected the aggregate envelope')
+    expect(result.stdout).toBe('')
+  })
+})
+
+describe('prepare: environment invariance', () => {
+  test('preparation is byte-identical under a clean environment and a polluted one', () => {
+    const payload = JSON.stringify(VALID_PREPARE_INPUT)
+
+    const clean = runValidator([...PREPARE_ARGS], {
+      env: SAFE_ENV,
+      input: payload,
+    })
+    const polluted = runValidator([...PREPARE_ARGS], {
+      env: POLLUTED_ENV,
+      input: payload,
+    })
+
+    expect(clean.exitCode, clean.stderr).toBe(0)
+    expect(polluted.exitCode, polluted.stderr).toBe(0)
+    expect(polluted.stdout).toBe(clean.stdout)
+  })
+})
+
+describe('prepare: exception boundary', () => {
+  test('a thrown error during output exits through the boundary with no stack text on stderr', () => {
+    const driver = `
+      const mod = await import(${JSON.stringify(pathToFileURL(VALIDATOR_ENTRY).href)})
+      const bytes = Buffer.from(${JSON.stringify(JSON.stringify(VALID_PREPARE_INPUT))})
+      let offset = 0
+      const exitCode = mod.runCeReviewValidator({
+        argv: ${JSON.stringify([...PREPARE_ARGS])},
+        isTTY: false,
+        readChunk: (_fd, buffer, bufferOffset, length) => {
+          if (offset >= bytes.length) return 0
+          const n = Math.min(length, bytes.length - offset)
+          bytes.copy(buffer, bufferOffset, offset, offset + n)
+          offset += n
+          return n
+        },
+        outputSink: () => { throw new Error('boom from outputSink: should never reach stderr') },
+        errorSink: (message) => console.error(message),
+      })
+      console.log('EXIT:' + exitCode)
+    `
+    const result = spawnSync('bun', ['-e', driver], {
+      encoding: 'utf8',
+      env: SAFE_ENV,
+      timeout: 30_000,
+    })
+
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('EXIT:1')
+    expect(result.stderr).toContain('internal error')
+    expect(result.stderr).not.toContain('boom from outputSink')
+    expect(result.stderr).not.toContain('Error:')
+    expect(result.stderr).not.toContain('.ts:')
+    expect(result.stderr).not.toMatch(/at\s+\S+\s+\(/)
+  })
+
+  test('an unhandled rejected promise exits through the boundary with no stack text on stderr', () => {
+    const driver = `
+      const mod = await import(${JSON.stringify(pathToFileURL(VALIDATOR_ENTRY).href)})
+      const bytes = Buffer.from(${JSON.stringify(JSON.stringify(VALID_PREPARE_INPUT))})
+      let offset = 0
+      const exitCode = mod.runCeReviewValidator({
+        argv: ${JSON.stringify([...PREPARE_ARGS])},
         isTTY: false,
         readChunk: (_fd, buffer, bufferOffset, length) => {
           if (offset >= bytes.length) return 0
