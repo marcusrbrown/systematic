@@ -172,7 +172,7 @@ function resolveReviewArtifactPath(input, cwd, options = {}) {
   return { ok: true, path: canonicalTarget }
 }
 
-// node_modules/.bun/zod@4.6.0/node_modules/zod/v4/core/util.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/util.js
 function getEnumValues(entries) {
   const numericValues = Object.values(entries).filter(
     (v) => typeof v === 'number',
@@ -796,7 +796,7 @@ function constantCatch(value) {
   return fn
 }
 
-// node_modules/.bun/zod@4.6.0/node_modules/zod/v4/core/core.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/core.js
 var _a
 var _zodDesc = { value: undefined, enumerable: false }
 var _E = 'captureStackTrace' in Error ? Error : null
@@ -911,7 +911,7 @@ function config(newConfig) {
   if (newConfig) Object.assign(globalConfig, newConfig)
   return globalConfig
 }
-// node_modules/.bun/zod@4.6.0/node_modules/zod/v4/core/errors.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/errors.js
 function _getMessage() {
   const internals = this._zod
   internals.message ??
@@ -1048,7 +1048,7 @@ function formatError(error, mapper = (issue) => issue.message) {
   return fieldErrors
 }
 
-// node_modules/.bun/zod@4.6.0/node_modules/zod/v4/core/parse.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/parse.js
 function finalizeParams(callee, params) {
   return { callee: params?.callee ?? callee, Err: params?.Err }
 }
@@ -1210,7 +1210,7 @@ var _safeEncodeAsync = (_Err) => async (schema, value, _ctx) => {
 var _safeDecodeAsync = (_Err) => async (schema, value, _ctx) => {
   return _safeParseAsync(_Err)(schema, value, _ctx)
 }
-// node_modules/.bun/zod@4.6.0/node_modules/zod/v4/core/regexes.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/regexes.js
 var cuid = /^[cC][0-9a-z]{6,}$/
 var cuid2 = /^[0-9a-z]+$/
 var ulid = /^[0-7][0-9A-HJKMNP-TV-Za-hjkmnp-tv-z]{25}$/
@@ -1287,7 +1287,7 @@ var boolean = /^(?:true|false)$/i
 var lowercase = /^[^A-Z]*$/
 var uppercase = /^[^a-z]*$/
 
-// node_modules/.bun/zod@4.6.0/node_modules/zod/v4/core/checks.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/checks.js
 var $ZodCheck = /* @__PURE__ */ $constructor('$ZodCheck', (inst, def) => {
   var _a
   inst._zod ?? (inst._zod = {})
@@ -1667,7 +1667,7 @@ var $ZodCheckOverwrite = /* @__PURE__ */ $constructor(
   },
 )
 
-// node_modules/.bun/zod@4.6.0/node_modules/zod/v4/core/doc.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/doc.js
 class Doc {
   constructor(args = [], closed = {}) {
     this.content = []
@@ -1718,14 +1718,14 @@ ${content.join(`
   }
 }
 
-// node_modules/.bun/zod@4.6.0/node_modules/zod/v4/core/versions.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/versions.js
 var version = {
   major: 4,
   minor: 6,
-  patch: 0,
+  patch: 1,
 }
 
-// node_modules/.bun/zod@4.6.0/node_modules/zod/v4/core/schemas.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/schemas.js
 var $ZodType = /* @__PURE__ */ $constructor(
   '$ZodType',
   (inst, def) => {
@@ -2744,6 +2744,26 @@ var $ZodUnion = /* @__PURE__ */ $constructor('$ZodUnion', (inst, def) => {
     })
   }
 })
+function discriminatorMap(def) {
+  const map = new Map()
+  for (const option of def.options) {
+    const values = option._zod.propValues?.[def.discriminator]
+    if (!values || values.size === 0)
+      throw new Error(
+        `Invalid discriminated union option at index "${def.options.indexOf(option)}"`,
+      )
+    for (const value of values) {
+      if (map.has(value)) {
+        if (value !== undefined)
+          throw new Error(`Duplicate discriminator value "${String(value)}"`)
+        map.set(value, null)
+      } else {
+        map.set(value, option)
+      }
+    }
+  }
+  return map
+}
 var $ZodDiscriminatedUnion = /* @__PURE__ */ $constructor(
   '$ZodDiscriminatedUnion',
   (inst, def) => {
@@ -2752,12 +2772,14 @@ var $ZodDiscriminatedUnion = /* @__PURE__ */ $constructor(
     const _super = inst._zod.parse
     defineLazyInternal(inst, 'propValues', (zod) => {
       const propValues = {}
+      let undefinedCount = 0
       for (const option of zod.def.options) {
         const pv = option._zod.propValues
         if (!pv || Object.keys(pv).length === 0)
           throw new Error(
             `Invalid discriminated union option at index "${zod.def.options.indexOf(option)}"`,
           )
+        if (pv[zod.def.discriminator]?.has(undefined)) undefinedCount++
         for (const [k, v] of Object.entries(pv)) {
           if (!Object.prototype.hasOwnProperty.call(propValues, k)) {
             assignProp(propValues, k, new Set())
@@ -2767,6 +2789,8 @@ var $ZodDiscriminatedUnion = /* @__PURE__ */ $constructor(
           }
         }
       }
+      if (!zod.def.unionFallback && undefinedCount > 1)
+        propValues[zod.def.discriminator]?.delete(undefined)
       return propValues
     })
     def.options.forEach((option, i) => {
@@ -2778,24 +2802,7 @@ var $ZodDiscriminatedUnion = /* @__PURE__ */ $constructor(
         throw new Error(`Invalid discriminated union option at index "${i}"`)
       }
     })
-    const disc = cached(() => {
-      const opts = def.options
-      const map = new Map()
-      for (const o of opts) {
-        const values = o._zod.propValues?.[def.discriminator]
-        if (!values || values.size === 0)
-          throw new Error(
-            `Invalid discriminated union option at index "${def.options.indexOf(o)}"`,
-          )
-        for (const v of values) {
-          if (map.has(v)) {
-            throw new Error(`Duplicate discriminator value "${String(v)}"`)
-          }
-          map.set(v, o)
-        }
-      }
-      return map
-    })
+    const disc = cached(() => discriminatorMap(def))
     inst._zod.parse = (payload, ctx) => {
       const input = payload.value
       if (!isObject(input)) {
@@ -2807,8 +2814,9 @@ var $ZodDiscriminatedUnion = /* @__PURE__ */ $constructor(
         })
         return payload
       }
-      const opt = disc.value.get(input?.[def.discriminator])
-      if (opt) {
+      const value = input?.[def.discriminator]
+      const opt = disc.value.get(value)
+      if (opt && (value !== undefined || ctx.direction !== 'backward')) {
         return opt._zod.run(payload, ctx)
       }
       if (def.unionFallback || ctx.direction === 'backward') {
@@ -2819,7 +2827,9 @@ var $ZodDiscriminatedUnion = /* @__PURE__ */ $constructor(
         errors: [],
         note: 'No matching discriminator',
         discriminator: def.discriminator,
-        options: Array.from(disc.value.keys()),
+        options: Array.from(disc.value.keys()).filter(
+          (value) => disc.value.get(value) !== null,
+        ),
         input,
         path: [def.discriminator],
         inst,
@@ -3360,7 +3370,7 @@ var $ZodProperties = /* @__PURE__ */ $constructor(
     },
   },
 )
-// node_modules/.bun/zod@4.6.0/node_modules/zod/v4/core/memoizer.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/memoizer.js
 class $ZodCyclicError extends Error {
   constructor() {
     super(`Cannot parse a reference cycle that closes through a transform`)
@@ -3622,7 +3632,7 @@ function isBackEdge(ctx, value) {
   const backEdges = ctx[STATE]?.backEdges
   return backEdges !== undefined && isRef(value) && backEdges.has(value)
 }
-// node_modules/.bun/zod@4.6.0/node_modules/zod/v4/locales/en.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/locales/en.js
 var error = () => {
   const Sizable = {
     string: { unit: 'characters', verb: 'to have' },
@@ -3751,7 +3761,7 @@ function en_default() {
     localeError: error(),
   }
 }
-// node_modules/.bun/zod@4.6.0/node_modules/zod/v4/core/registries.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/registries.js
 var _a2
 class $ZodRegistry {
   constructor() {
@@ -3799,7 +3809,7 @@ function registry() {
 ;(_a2 = globalThis).__zod_globalRegistry ??
   (_a2.__zod_globalRegistry = registry())
 var globalRegistry = globalThis.__zod_globalRegistry
-// node_modules/.bun/zod@4.6.0/node_modules/zod/v4/core/api.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/api.js
 function _string(Class, params) {
   return new Class({
     type: 'string',
@@ -4247,7 +4257,7 @@ function _check(fn, params) {
   ch._zod.check = fn
   return ch
 }
-// node_modules/.bun/zod@4.6.0/node_modules/zod/v4/core/to-json-schema.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/to-json-schema.js
 function assignProps(target, ...sources) {
   for (const source of sources) {
     for (const key of Reflect.ownKeys(source)) {
@@ -4802,7 +4812,7 @@ var createStandardJSONSchemaMethod =
     extractDefs(ctx, schema)
     return finalize(ctx, schema)
   }
-// node_modules/.bun/zod@4.6.0/node_modules/zod/v4/core/json-schema-processors.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/core/json-schema-processors.js
 var narrowMin = (agg, key, value) => {
   if (agg[key] === undefined || value > agg[key]) agg[key] = value
 }
@@ -5292,7 +5302,7 @@ var optionalProcessor = (schema, ctx, _json, params) => {
   const seen = ctx.seen.get(schema)
   seen.ref = def.innerType
 }
-// node_modules/.bun/zod@4.6.0/node_modules/zod/v4/classic/errors.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/classic/errors.js
 var _installedErrorProtos = /* @__PURE__ */ new WeakSet([
   Object.prototype,
   Error.prototype,
@@ -5356,7 +5366,7 @@ var ZodRealError = /* @__PURE__ */ $constructor(
   },
 )
 
-// node_modules/.bun/zod@4.6.0/node_modules/zod/v4/classic/parse.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/classic/parse.js
 var parse2 = /* @__PURE__ */ _parse(ZodRealError)
 var parseAsync = /* @__PURE__ */ _parseAsync(ZodRealError)
 var safeParse = /* @__PURE__ */ _safeParse(ZodRealError)
@@ -5370,7 +5380,7 @@ var safeDecode = /* @__PURE__ */ _safeDecode(ZodRealError)
 var safeEncodeAsync = /* @__PURE__ */ _safeEncodeAsync(ZodRealError)
 var safeDecodeAsync = /* @__PURE__ */ _safeDecodeAsync(ZodRealError)
 
-// node_modules/.bun/zod@4.6.0/node_modules/zod/v4/classic/schemas.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/classic/schemas.js
 function _ensureDefaultLocale() {
   if (!globalConfig.localeError) config(en_default())
 }
@@ -6339,7 +6349,7 @@ function refine(fn, _params = {}) {
 function superRefine(fn, params) {
   return _superRefine(fn, params)
 }
-// node_modules/.bun/zod@4.6.0/node_modules/zod/v4/classic/iso.js
+// node_modules/.bun/zod@4.6.1/node_modules/zod/v4/classic/iso.js
 var exports_iso = {}
 __export(exports_iso, {
   ZodISODate: () => ZodISODate,
