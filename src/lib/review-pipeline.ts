@@ -1,10 +1,12 @@
 import path from 'node:path'
+import type { z } from 'zod'
 import { formatReviewArtifactIssuePath } from './review-artifact-path.js'
 import {
   MAX_REASON_LENGTH,
   SubAgentReturnSchema,
 } from './review-artifact-schema.js'
 import {
+  type AdjudicationEnvelopeSchema,
   AGGREGATE_STDIN_BYTE_CAP,
   PrepareInputSchema,
   PrepareOutputSchema,
@@ -494,4 +496,430 @@ export function prepareReviewCandidates(
   })
 
   return { ok: true, value: output }
+}
+
+// --- merge phase: adjudication validation -----------------------------------
+//
+// Pure, side-effect-free validation of the model-authored adjudication
+// envelope against the prepared candidate state. This checks only that the
+// decisions form a valid *partition* over the eligible candidate set --
+// every eligible input ID lands in exactly one merge group or as exactly one
+// declined singleton. It never computes merged-finding fields (severity,
+// confidence, provenance, routing); that is a later derivation step's job.
+// Never reads `process.env`, the filesystem, or the clock.
+
+/**
+ * One candidate-group member as needed for adjudication validation: the
+ * stable input ID plus the file and line the member's original finding
+ * carried. `PrepareOutputSchema`'s wire-level `candidate_groups` intentionally
+ * omit this (the model already saw it during screening and re-sending it
+ * would bloat the adjudication payload for no reason) but validation needs it
+ * to check group membership, file consistency, and representative-line
+ * validity without re-deriving it from screen results.
+ */
+export interface AdjudicationCandidateMember {
+  readonly input_id: string
+  readonly file: string
+  readonly line: number
+}
+
+/** One candidate group as needed for adjudication validation: the file every
+ * member was grouped under, plus each member's own file/line for the
+ * consistency checks below. */
+export interface AdjudicationCandidateGroup {
+  readonly file: string
+  readonly members: readonly AdjudicationCandidateMember[]
+}
+
+/** The prepared state `validateAdjudication` checks decisions against:
+ * confidence dispositions (to detect a decision citing a suppressed ID),
+ * the true singletons that never needed a decision, and the candidate groups
+ * eligible for adjudication. */
+export interface PreparedAdjudicationState {
+  readonly confidence_dispositions: PrepareOutput['confidence_dispositions']
+  readonly singletons: readonly string[]
+  readonly candidate_groups: readonly AdjudicationCandidateGroup[]
+}
+
+type AdjudicationDecisions = z.infer<
+  typeof AdjudicationEnvelopeSchema
+>['decisions']
+type MergeDecision = AdjudicationDecisions[number]
+type MergedMergeDecision = Extract<MergeDecision, { disposition: 'merged' }>
+type DeclinedMergeDecision = Extract<MergeDecision, { disposition: 'declined' }>
+
+/** One validated merge group: the model's merge decision plus the file its
+ * members were grouped under, so a later derivation step does not need to
+ * re-scan the candidate groups to recover it. */
+export interface ValidatedMergedGroup {
+  readonly decision: MergedMergeDecision
+  readonly file: string
+}
+
+/** One validated declined singleton: the model's decline decision plus the
+ * file its input finding was grouped under. */
+export interface ValidatedDeclinedSingleton {
+  readonly decision: DeclinedMergeDecision
+  readonly file: string
+}
+
+/** The validated partition: every eligible candidate accounted for, plus the
+ * true singletons passed through untouched. Sorted by `decision_id` /
+ * input ID so the result is byte-identical regardless of input decision
+ * order. */
+export interface ValidatedAdjudication {
+  readonly merged: readonly ValidatedMergedGroup[]
+  readonly declined: readonly ValidatedDeclinedSingleton[]
+  readonly singletons: readonly string[]
+}
+
+type AdjudicationRejectReason =
+  | 'unknown input id'
+  | 'suppressed input id'
+  | 'duplicate input id citation'
+  | 'omitted eligible input id'
+  | 'cross-group input id citation'
+  | 'file mismatch'
+  | 'representative line mismatch'
+  | 'unexpected decisions for empty candidate set'
+
+/** One bounded, payload-safe rejection diagnostic: a fixed reason code and a
+ * safe JSON path only. Never payload content, never a finding title, never
+ * exception text. */
+export interface AdjudicationRejection {
+  readonly path: string
+  readonly reason: AdjudicationRejectReason
+}
+
+export type ValidateAdjudicationResult =
+  | { readonly ok: true; readonly value: ValidatedAdjudication }
+  | { readonly ok: false; readonly rejection: AdjudicationRejection }
+
+function rejectAdjudication(
+  path: string,
+  reason: AdjudicationRejectReason,
+): { readonly ok: false; readonly rejection: AdjudicationRejection } {
+  return { ok: false, rejection: { path, reason } }
+}
+
+function citedInputIds(decision: MergeDecision): readonly string[] {
+  return decision.disposition === 'merged'
+    ? decision.input_finding_ids
+    : [decision.input_finding_id]
+}
+
+function citationPath(
+  decision: MergeDecision,
+  decisionIndex: number,
+  citedIndex: number,
+): string {
+  return decision.disposition === 'merged'
+    ? formatReviewArtifactIssuePath([
+        'decisions',
+        decisionIndex,
+        'input_finding_ids',
+        citedIndex,
+      ])
+    : formatReviewArtifactIssuePath([
+        'decisions',
+        decisionIndex,
+        'input_finding_id',
+      ])
+}
+
+interface CandidateIndex {
+  readonly groupIndexByInputId: ReadonlyMap<string, number>
+  readonly memberByInputId: ReadonlyMap<string, AdjudicationCandidateMember>
+}
+
+function buildCandidateIndex(
+  candidateGroups: readonly AdjudicationCandidateGroup[],
+): CandidateIndex {
+  const groupIndexByInputId = new Map<string, number>()
+  const memberByInputId = new Map<string, AdjudicationCandidateMember>()
+  candidateGroups.forEach((group, groupIndex) => {
+    for (const member of group.members) {
+      groupIndexByInputId.set(member.input_id, groupIndex)
+      memberByInputId.set(member.input_id, member)
+    }
+  })
+  return { groupIndexByInputId, memberByInputId }
+}
+
+function buildSuppressedSet(
+  confidenceDispositions: PreparedAdjudicationState['confidence_dispositions'],
+): ReadonlySet<string> {
+  const suppressed = new Set<string>()
+  for (const disposition of confidenceDispositions) {
+    if (disposition.disposition === 'suppressed') {
+      suppressed.add(disposition.input_id)
+    }
+  }
+  return suppressed
+}
+
+/**
+ * Checks every cited input ID, in decision order, for: citing a suppressed
+ * ID, citing an ID that is not an eligible candidate-group member at all,
+ * and citing an ID already claimed by an earlier decision. Returns the first
+ * violation found, or `undefined` when every citation is sound.
+ */
+function validateCitations(
+  decisions: AdjudicationDecisions,
+  index: CandidateIndex,
+  suppressed: ReadonlySet<string>,
+): AdjudicationRejection | undefined {
+  const seen = new Set<string>()
+  for (const [decisionIndex, decision] of decisions.entries()) {
+    for (const [citedIndex, inputId] of citedInputIds(decision).entries()) {
+      const path = citationPath(decision, decisionIndex, citedIndex)
+      if (suppressed.has(inputId)) {
+        return { path, reason: 'suppressed input id' }
+      }
+      if (!index.groupIndexByInputId.has(inputId)) {
+        return { path, reason: 'unknown input id' }
+      }
+      if (seen.has(inputId)) {
+        return { path, reason: 'duplicate input id citation' }
+      }
+      seen.add(inputId)
+    }
+  }
+  return undefined
+}
+
+/**
+ * Every eligible candidate-group member must be cited by exactly one
+ * decision. `validateCitations` already rejects double-citation; this
+ * catches the opposite failure -- an eligible member cited by no decision at
+ * all. The diagnostic path points at the omitted member's location in the
+ * prepared candidate groups, since no decision references it.
+ */
+function validateNoOmissions(
+  candidateGroups: readonly AdjudicationCandidateGroup[],
+  citedIds: ReadonlySet<string>,
+): AdjudicationRejection | undefined {
+  for (const [groupIndex, group] of candidateGroups.entries()) {
+    for (const [memberIndex, member] of group.members.entries()) {
+      if (!citedIds.has(member.input_id)) {
+        return {
+          path: formatReviewArtifactIssuePath([
+            'candidate_groups',
+            groupIndex,
+            'members',
+            memberIndex,
+            'input_id',
+          ]),
+          reason: 'omitted eligible input id',
+        }
+      }
+    }
+  }
+  return undefined
+}
+
+function collectCitedIds(
+  decisions: AdjudicationDecisions,
+): ReadonlySet<string> {
+  const cited = new Set<string>()
+  for (const decision of decisions) {
+    for (const inputId of citedInputIds(decision)) cited.add(inputId)
+  }
+  return cited
+}
+
+/**
+ * Validates one merged decision's internal consistency: every cited member
+ * must belong to the same candidate group (never a cross-group merge the
+ * model invented), every member's own file must match that group's file, and
+ * the decision's representative `line` must be one of the group members'
+ * lines.
+ */
+function validateMergedDecisionConsistency(
+  decision: MergedMergeDecision,
+  decisionIndex: number,
+  index: CandidateIndex,
+  candidateGroups: readonly AdjudicationCandidateGroup[],
+): AdjudicationRejection | undefined {
+  const ids = decision.input_finding_ids
+  const firstId = ids[0]
+  if (firstId === undefined) return undefined
+  const expectedGroupIndex = index.groupIndexByInputId.get(firstId)
+  if (expectedGroupIndex === undefined) return undefined
+
+  for (const [citedIndex, inputId] of ids.entries()) {
+    const groupIndex = index.groupIndexByInputId.get(inputId)
+    if (groupIndex !== expectedGroupIndex) {
+      return {
+        path: formatReviewArtifactIssuePath([
+          'decisions',
+          decisionIndex,
+          'input_finding_ids',
+          citedIndex,
+        ]),
+        reason: 'cross-group input id citation',
+      }
+    }
+
+    const member = index.memberByInputId.get(inputId)
+    const group = candidateGroups[groupIndex]
+    if (member && group && member.file !== group.file) {
+      return {
+        path: formatReviewArtifactIssuePath([
+          'decisions',
+          decisionIndex,
+          'input_finding_ids',
+          citedIndex,
+        ]),
+        reason: 'file mismatch',
+      }
+    }
+  }
+
+  const group = candidateGroups[expectedGroupIndex]
+  if (group && !group.members.some((member) => member.line === decision.line)) {
+    return {
+      path: formatReviewArtifactIssuePath(['decisions', decisionIndex, 'line']),
+      reason: 'representative line mismatch',
+    }
+  }
+  return undefined
+}
+
+/**
+ * Validates every merged decision's group/file/line consistency, in
+ * decision order. Returns the first violation found, or `undefined` when
+ * every merged decision is sound.
+ */
+function validateMergedDecisions(
+  decisions: AdjudicationDecisions,
+  index: CandidateIndex,
+  candidateGroups: readonly AdjudicationCandidateGroup[],
+): AdjudicationRejection | undefined {
+  for (const [decisionIndex, decision] of decisions.entries()) {
+    if (decision.disposition !== 'merged') continue
+    const violation = validateMergedDecisionConsistency(
+      decision,
+      decisionIndex,
+      index,
+      candidateGroups,
+    )
+    if (violation) return violation
+  }
+  return undefined
+}
+
+function resolveDecisionFile(
+  decision: MergeDecision,
+  index: CandidateIndex,
+): string | undefined {
+  const firstId = citedInputIds(decision)[0]
+  if (firstId === undefined) return undefined
+  return index.memberByInputId.get(firstId)?.file
+}
+
+/**
+ * Builds the validated, sorted partition once every check has passed: one
+ * entry per merge group and one per declined singleton, each carrying the
+ * file its input findings were grouped under, plus the true singletons
+ * passed through untouched. Sorting by ID makes the result byte-identical
+ * regardless of the input decision order.
+ */
+function buildValidatedPartition(
+  decisions: AdjudicationDecisions,
+  index: CandidateIndex,
+  singletons: readonly string[],
+): ValidatedAdjudication {
+  const merged: ValidatedMergedGroup[] = []
+  const declined: ValidatedDeclinedSingleton[] = []
+
+  for (const decision of decisions) {
+    const file = resolveDecisionFile(decision, index) ?? ''
+    if (decision.disposition === 'merged') {
+      merged.push({ decision, file })
+    } else {
+      declined.push({ decision, file })
+    }
+  }
+
+  merged.sort((a, b) =>
+    compareStrings(a.decision.decision_id, b.decision.decision_id),
+  )
+  declined.sort((a, b) =>
+    compareStrings(a.decision.decision_id, b.decision.decision_id),
+  )
+
+  return {
+    merged,
+    declined,
+    singletons: [...singletons].sort(compareStrings),
+  }
+}
+
+/**
+ * Validates that the model's adjudication decisions form a valid partition
+ * over `prepared`'s eligible candidate set: every eligible input ID (one
+ * that appears in a candidate group) is cited by exactly one decision --
+ * either inside a merge group or as a declined singleton. Never repairs a
+ * malformed partition; any violation rejects the whole envelope with no
+ * partial output, since a repaired partition would silently invent a merge
+ * decision the model never made.
+ *
+ * A decision set is required to be empty when there are no candidate groups
+ * (a legitimate, non-error state); a non-empty decision set against zero
+ * candidates is rejected. This function never computes merged-finding
+ * fields (severity, confidence, provenance, routing) -- only structural
+ * partition validity.
+ */
+export function validateAdjudication(
+  prepared: PreparedAdjudicationState,
+  decisions: AdjudicationDecisions,
+): ValidateAdjudicationResult {
+  if (prepared.candidate_groups.length === 0) {
+    if (decisions.length > 0) {
+      return rejectAdjudication(
+        formatReviewArtifactIssuePath(['decisions']),
+        'unexpected decisions for empty candidate set',
+      )
+    }
+    return {
+      ok: true,
+      value: buildValidatedPartition(
+        decisions,
+        buildCandidateIndex([]),
+        prepared.singletons,
+      ),
+    }
+  }
+
+  const index = buildCandidateIndex(prepared.candidate_groups)
+  const suppressed = buildSuppressedSet(prepared.confidence_dispositions)
+
+  const citationViolation = validateCitations(decisions, index, suppressed)
+  if (citationViolation) {
+    return { ok: false, rejection: citationViolation }
+  }
+
+  const citedIds = collectCitedIds(decisions)
+  const omissionViolation = validateNoOmissions(
+    prepared.candidate_groups,
+    citedIds,
+  )
+  if (omissionViolation) {
+    return { ok: false, rejection: omissionViolation }
+  }
+
+  const mergedViolation = validateMergedDecisions(
+    decisions,
+    index,
+    prepared.candidate_groups,
+  )
+  if (mergedViolation) {
+    return { ok: false, rejection: mergedViolation }
+  }
+
+  return {
+    ok: true,
+    value: buildValidatedPartition(decisions, index, prepared.singletons),
+  }
 }
