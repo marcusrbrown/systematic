@@ -9,6 +9,7 @@ import {
   MAX_REASON_LENGTH,
   ParentFindingSchema,
   RepoRelativePathSchema,
+  ReviewArtifactSchema,
   SubAgentReturnSchema,
 } from './review-artifact-schema.js'
 
@@ -240,3 +241,251 @@ export const isRouteTransitionAllowed = (
 
   return autofixAllowed && ownerAllowed && verificationAllowed
 }
+
+// --- Merge envelope ---------------------------------------------------------
+//
+// Input: the prepared state from `prepare`, plus a model-authored
+// adjudication envelope. The adjudication envelope expresses a partition:
+// every eligible candidate input ID lands in exactly one merge group or as
+// exactly one declined singleton. Which input IDs are actually eligible is
+// the phase implementation's job, not this contract -- here we only enforce
+// structural shape: unknown keys rejected, decision IDs unique, no input ID
+// claimed by two decisions, and every decision carries a disposition via a
+// discriminated union (not an optional flag that could be left unset).
+
+const AgreementCreditSchema = SubAgentReturnSchema.shape.reviewer
+
+const DisagreementFactsSchema = z.array(PipelineReasonSchema).max(MAX_FINDINGS)
+
+const MergedDecisionSchema = z
+  .object({
+    decision_id: PipelineInputIdSchema,
+    disposition: z.literal('merged'),
+    input_finding_ids: z.array(PipelineInputIdSchema).min(2).max(MAX_FINDINGS),
+    title: ParentFindingSchema.shape.title,
+    why_it_matters: ParentFindingSchema.shape.why_it_matters,
+    evidence: ParentFindingSchema.shape.evidence,
+    suggested_fix: ParentFindingSchema.shape.suggested_fix,
+    line: ParentFindingSchema.shape.line,
+    disagreement_facts: DisagreementFactsSchema.optional(),
+    eligible_agreement_credit: z
+      .array(AgreementCreditSchema)
+      .max(MAX_PERSONAS)
+      .optional(),
+    route_narrowing_reason: PipelineReasonSchema.optional(),
+  })
+  .strict()
+
+const DeclinedDecisionSchema = z
+  .object({
+    decision_id: PipelineInputIdSchema,
+    disposition: z.literal('declined'),
+    input_finding_id: PipelineInputIdSchema,
+    declined_reason: PipelineReasonSchema,
+    disagreement_facts: DisagreementFactsSchema.optional(),
+    route_narrowing_reason: PipelineReasonSchema.optional(),
+  })
+  .strict()
+
+const MergeDecisionSchema = z.discriminatedUnion('disposition', [
+  MergedDecisionSchema,
+  DeclinedDecisionSchema,
+])
+
+export const AdjudicationEnvelopeSchema = z
+  .object({
+    decisions: z.array(MergeDecisionSchema).max(MAX_FINDINGS),
+  })
+  .strict()
+  .superRefine((envelope, ctx) => {
+    const seenDecisionIds = new Set<string>()
+    const seenInputIds = new Set<string>()
+
+    envelope.decisions.forEach((decision, decisionIndex) => {
+      if (seenDecisionIds.has(decision.decision_id)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['decisions', decisionIndex, 'decision_id'],
+          message: 'duplicate decision ID',
+        })
+      }
+      seenDecisionIds.add(decision.decision_id)
+
+      if (decision.disposition === 'merged') {
+        decision.input_finding_ids.forEach((inputId, inputIndex) => {
+          if (seenInputIds.has(inputId)) {
+            ctx.addIssue({
+              code: 'custom',
+              path: [
+                'decisions',
+                decisionIndex,
+                'input_finding_ids',
+                inputIndex,
+              ],
+              message: 'input finding ID already claimed by another decision',
+            })
+          }
+          seenInputIds.add(inputId)
+        })
+        return
+      }
+
+      if (seenInputIds.has(decision.input_finding_id)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['decisions', decisionIndex, 'input_finding_id'],
+          message: 'input finding ID already claimed by another decision',
+        })
+      }
+      seenInputIds.add(decision.input_finding_id)
+    })
+  })
+
+export const MergeInputSchema = z
+  .object({
+    prepared: PrepareOutputSchema,
+    adjudication: AdjudicationEnvelopeSchema,
+  })
+  .strict()
+
+const ValidatorRequestSchema = z
+  .object({
+    finding_id: PipelineInputIdSchema,
+    file: RepoRelativePathSchema,
+    line: ParentFindingSchema.shape.line,
+  })
+  .strict()
+
+const MergedFindingSchema = z
+  .object({
+    finding_id: PipelineInputIdSchema,
+    file: RepoRelativePathSchema,
+    title: ParentFindingSchema.shape.title,
+    why_it_matters: ParentFindingSchema.shape.why_it_matters,
+    line: ParentFindingSchema.shape.line,
+    autofix_class: ParentFindingSchema.shape.autofix_class,
+    owner: ParentFindingSchema.shape.owner,
+    requires_verification: ParentFindingSchema.shape.requires_verification,
+    evidence: ParentFindingSchema.shape.evidence,
+    suggested_fix: ParentFindingSchema.shape.suggested_fix,
+    input_finding_ids: z.array(PipelineInputIdSchema).min(1).max(MAX_FINDINGS),
+    agreement_credit: z
+      .array(AgreementCreditSchema)
+      .max(MAX_PERSONAS)
+      .optional(),
+  })
+  .strict()
+
+export const MergeOutputSchema = z
+  .object({
+    merged_findings: z.array(MergedFindingSchema).max(MAX_FINDINGS),
+    validator_requests: z.array(ValidatorRequestSchema).max(MAX_FINDINGS),
+    disagreement_facts: DisagreementFactsSchema,
+  })
+  .strict()
+
+// --- Finalize envelope -------------------------------------------------------
+//
+// Input: the merge phase's output state, the dispatch records available to
+// the parent, per-finding validator lifecycle results, a model-authored
+// plan-assessment envelope, and a closed set of parent-captured run
+// metadata. Output: a discriminated union between a writing-mode result
+// (the full persisted `ReviewArtifactSchema` artifact plus a report
+// projection) and a report-only result (the same report projection alone,
+// with no artifact wrapper and none of the artifact's persistence-only
+// fields).
+
+// A validator lifecycle result distinguishes four states -- validated true,
+// validated false, a failure/timeout non-answer, and an unavailable
+// non-answer -- as four mutually exclusive branches of one discriminated
+// union. This makes it structurally impossible for either non-answer branch
+// to also assert `outcome: 'true'`: the discriminant is a single field, so a
+// value can only ever satisfy one branch's shape, never two at once.
+export const ValidatorLifecycleResultSchema = z.discriminatedUnion('outcome', [
+  z.object({ outcome: z.literal('true') }).strict(),
+  z
+    .object({ outcome: z.literal('false'), reason: PipelineReasonSchema })
+    .strict(),
+  z
+    .object({ outcome: z.literal('failed'), reason: PipelineReasonSchema })
+    .strict(),
+  z
+    .object({
+      outcome: z.literal('unavailable'),
+      reason: PipelineReasonSchema,
+    })
+    .strict(),
+])
+
+const ValidatorLifecycleRecordSchema = z
+  .object({
+    finding_id: PipelineInputIdSchema,
+    result: ValidatorLifecycleResultSchema,
+  })
+  .strict()
+
+export const ValidatorLifecycleResultsSchema = z
+  .array(ValidatorLifecycleRecordSchema)
+  .max(MAX_FINDINGS)
+
+export const PlanAssessmentEnvelopeSchema = z
+  .object({
+    verdict: ReviewArtifactSchema.shape.verdict,
+    run_status: ReviewArtifactSchema.shape.run_status,
+    residual_actionable_work:
+      ReviewArtifactSchema.shape.residual_actionable_work,
+    advisory_outputs: ReviewArtifactSchema.shape.advisory_outputs,
+  })
+  .strict()
+
+export const ParentRunMetadataSchema = z
+  .object({
+    run_id: ReviewArtifactSchema.shape.run_id,
+    mode: ReviewArtifactSchema.shape.mode,
+    harness: ReviewArtifactSchema.shape.harness,
+    branch: ReviewArtifactSchema.shape.branch,
+    head_sha: ReviewArtifactSchema.shape.head_sha,
+    selected_dispatches: z.array(SelectedDispatchSchema).max(MAX_PERSONAS),
+    timestamps: z
+      .object({
+        started_at: ReviewArtifactSchema.shape.completed_at,
+        completed_at: ReviewArtifactSchema.shape.completed_at,
+      })
+      .strict(),
+    validation: ReviewArtifactSchema.shape.validation.unwrap(),
+    applied_fixes: ReviewArtifactSchema.shape.applied_fixes,
+  })
+  .strict()
+
+export const FinalizeInputSchema = z
+  .object({
+    merge: MergeOutputSchema,
+    dispatch_records: z.array(SelectedDispatchSchema).max(MAX_PERSONAS),
+    validator_lifecycle_results: ValidatorLifecycleResultsSchema,
+    plan_assessment: PlanAssessmentEnvelopeSchema,
+    parent_run_metadata: ParentRunMetadataSchema,
+  })
+  .strict()
+
+const ReportProjectionSchema = z
+  .object({
+    verdict: ReviewArtifactSchema.shape.verdict,
+    findings: ReviewArtifactSchema.shape.findings,
+    applied_fixes: ReviewArtifactSchema.shape.applied_fixes,
+    residual_actionable_work:
+      ReviewArtifactSchema.shape.residual_actionable_work,
+    advisory_outputs: ReviewArtifactSchema.shape.advisory_outputs,
+    coverage: ReviewArtifactSchema.shape.coverage,
+  })
+  .strict()
+
+export const FinalizeOutputSchema = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.literal('writing'),
+      artifact: ReviewArtifactSchema,
+      report: ReportProjectionSchema,
+    })
+    .strict(),
+  ReportProjectionSchema.extend({ kind: z.literal('report_only') }).strict(),
+])
