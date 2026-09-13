@@ -93,12 +93,12 @@ export interface ReviewReturnValidatorOptions {
 
 const READ_CHUNK_BYTES = 64 * 1024
 
-type StdinRead =
+export type StdinRead =
   | { readonly status: 'ok'; readonly buffer: Buffer }
   | { readonly status: 'oversized' }
   | { readonly status: 'read-error' }
 
-function defaultReadChunk(
+export function defaultReadChunk(
   fd: number,
   buffer: Buffer,
   offset: number,
@@ -167,7 +167,7 @@ function readChunkWithRetry(
  * Read stdin in bounded chunks, stopping at the cap plus one byte so an
  * oversized payload is rejected without buffering the whole document.
  */
-function readBoundedStdin(fd: number, readChunk: ReadChunk): StdinRead {
+export function readBoundedStdin(fd: number, readChunk: ReadChunk): StdinRead {
   const chunks: Buffer[] = []
   let total = 0
 

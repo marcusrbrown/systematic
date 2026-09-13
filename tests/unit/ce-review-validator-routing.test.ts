@@ -1,0 +1,371 @@
+// U4 routing proof: `src/ce-review-validator.ts`'s `screen` subcommand wires
+// `screenReviewReturn` to real stdin/argv/env, reuses the existing bounded
+// stdin reader from `review-return-validator.ts`, matches the established
+// exit-code convention, and never echoes a stack trace, exception message,
+// or environment value on any non-success path. `return` and `artifact`
+// keep their pre-existing behavior unchanged.
+//
+// The whole battery runs the real entry point (`src/ce-review-validator.ts`)
+// as a subprocess -- never by importing and calling the exported function
+// in-process -- so routing bugs that only show up under genuine process
+// execution (argv/stdin/env plumbing, process-scope exception handlers)
+// are actually exercised.
+
+import { describe, expect, test } from 'bun:test'
+import { spawnSync } from 'node:child_process'
+import fs from 'node:fs'
+import os from 'node:os'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
+
+const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
+const VALIDATOR_ENTRY = path.join(ROOT_DIR, 'src/ce-review-validator.ts')
+const CONFORMING_ARTIFACT_FIXTURE = path.join(
+  ROOT_DIR,
+  'tests/fixtures/review-artifacts/conforming-review-summary.json',
+)
+
+const BASE_FINDING = {
+  autofix_class: 'gated_auto',
+  confidence: 0.85,
+  evidence: ['src/example.ts:42 demonstrates the failure path.'],
+  file: 'src/example.ts',
+  line: 42,
+  owner: 'downstream-resolver',
+  pre_existing: false,
+  requires_verification: true,
+  severity: 'P1',
+  suggested_fix: 'Handle the failure before continuing.',
+  title: 'Example issue',
+  why_it_matters: 'The example path can fail during normal execution.',
+}
+
+const VALID_RETURN = {
+  findings: [BASE_FINDING],
+  residual_risks: [],
+  reviewer: 'correctness',
+  testing_gaps: [],
+}
+
+interface RunResult {
+  readonly exitCode: number
+  readonly stdout: string
+  readonly stderr: string
+}
+
+// A minimal, fixed environment for every subprocess invocation. `screen`
+// screens findings against the real `process.env`, and this dev/CI
+// environment can carry short-valued secret-named variables (for example
+// `KEYTIMEOUT=1`) that would otherwise nondeterministically reject fixture
+// findings containing common short substrings. Only PATH is required to
+// resolve `bun`.
+const SAFE_ENV: Readonly<Record<string, string>> = {
+  PATH: process.env.PATH ?? '',
+}
+
+function runValidator(
+  args: readonly string[],
+  options: {
+    readonly cwd?: string
+    readonly input?: string | Buffer
+    readonly env?: Readonly<Record<string, string>>
+  } = {},
+): RunResult {
+  const result = spawnSync('bun', [VALIDATOR_ENTRY, ...args], {
+    cwd: options.cwd,
+    encoding: 'utf8',
+    env: options.env ?? SAFE_ENV,
+    input: options.input,
+    timeout: 30_000,
+  })
+  return {
+    exitCode: result.status ?? -1,
+    stderr: result.stderr ?? '',
+    stdout: result.stdout ?? '',
+  }
+}
+
+function makeCwd(): string {
+  return fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), 'ce-review-validator-routing-')),
+  )
+}
+
+function snapshotTree(root: string): string {
+  const entries: string[] = []
+  function visit(directory: string, relative = ''): void {
+    for (const child of fs
+      .readdirSync(directory, { withFileTypes: true })
+      .sort((left, right) => left.name.localeCompare(right.name))) {
+      const childRelative = path.join(relative, child.name)
+      const childPath = path.join(directory, child.name)
+      if (child.isDirectory()) {
+        entries.push(`${childRelative}/`)
+        visit(childPath, childRelative)
+      } else {
+        entries.push(
+          `${childRelative}:${fs.readFileSync(childPath).toString('base64')}`,
+        )
+      }
+    }
+  }
+  visit(root)
+  return entries.join('\n')
+}
+
+const SCREEN_ARGS = [
+  'screen',
+  '--reviewer',
+  'correctness',
+  '--harness',
+  'claude-code',
+] as const
+
+describe('screen: conforming input', () => {
+  test('exits 0 with a parseable envelope and writes nothing to the cwd', () => {
+    const cwd = makeCwd()
+    const before = snapshotTree(cwd)
+
+    const result = runValidator(SCREEN_ARGS, {
+      cwd,
+      input: JSON.stringify(VALID_RETURN),
+    })
+
+    expect(result.exitCode, result.stderr).toBe(0)
+    expect(result.stderr).toBe('')
+    const parsed = JSON.parse(result.stdout) as {
+      dispatch_outcome: string
+      admitted_findings: readonly unknown[]
+    }
+    expect(parsed.dispatch_outcome).toBe('findings')
+    expect(parsed.admitted_findings).toHaveLength(1)
+    expect(snapshotTree(cwd)).toBe(before)
+  })
+})
+
+describe('screen: flag parsing', () => {
+  test('missing --reviewer exits 2 with a usage message', () => {
+    const result = runValidator(['screen', '--harness', 'claude-code'], {
+      input: JSON.stringify(VALID_RETURN),
+    })
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('Usage:')
+    expect(result.stdout).toBe('')
+  })
+
+  test('missing --harness exits 2 with a usage message', () => {
+    const result = runValidator(['screen', '--reviewer', 'correctness'], {
+      input: JSON.stringify(VALID_RETURN),
+    })
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('Usage:')
+  })
+
+  test('duplicate --reviewer exits 2', () => {
+    const result = runValidator(
+      [
+        'screen',
+        '--reviewer',
+        'correctness',
+        '--reviewer',
+        'security',
+        '--harness',
+        'claude-code',
+      ],
+      { input: JSON.stringify(VALID_RETURN) },
+    )
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('Usage:')
+  })
+
+  test('an unknown flag exits 2', () => {
+    const result = runValidator([...SCREEN_ARGS, '--bogus', 'x'], {
+      input: JSON.stringify(VALID_RETURN),
+    })
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('Usage:')
+  })
+
+  test('a stray positional argument exits 2', () => {
+    const result = runValidator(['screen', 'extra', ...SCREEN_ARGS.slice(1)], {
+      input: JSON.stringify(VALID_RETURN),
+    })
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('Usage:')
+  })
+
+  test('a flag consumed as another flag value exits 2', () => {
+    // `--harness` would otherwise be swallowed as `--reviewer`'s value,
+    // leaving no `--harness` flag at all.
+    const result = runValidator(
+      ['screen', '--reviewer', '--harness', 'claude-code'],
+      { input: JSON.stringify(VALID_RETURN) },
+    )
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('Usage:')
+  })
+})
+
+describe('screen: stdin bounds', () => {
+  test('oversized stdin exits 1 without echoing content', () => {
+    const oversized = Buffer.alloc(1024 * 1024 + 1, 0x20)
+    const result = runValidator(SCREEN_ARGS, { input: oversized })
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain('1 MiB')
+    expect(result.stdout).toBe('')
+  })
+})
+
+describe('screen: rejection outcomes', () => {
+  test('malformed JSON exits 1', () => {
+    const result = runValidator(SCREEN_ARGS, { input: '{ not json' })
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain('malformed JSON')
+    expect(result.stdout).toBe('')
+  })
+
+  test('a reviewer identity mismatch exits 1', () => {
+    const result = runValidator(SCREEN_ARGS, {
+      input: JSON.stringify({ ...VALID_RETURN, reviewer: 'security' }),
+    })
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain('field reviewer')
+    expect(result.stdout).toBe('')
+  })
+
+  test('a completed screen that rejects a finding on an env-value match still exits 0', () => {
+    const secret = 'sk-live-abcdef1234567890'
+    const raw = {
+      ...VALID_RETURN,
+      findings: [
+        { ...BASE_FINDING, why_it_matters: `Leaks ${secret} in a log line.` },
+      ],
+    }
+    const result = runValidator(SCREEN_ARGS, {
+      env: { ...SAFE_ENV, API_TOKEN: secret },
+      input: JSON.stringify(raw),
+    })
+    expect(result.exitCode, result.stderr).toBe(0)
+    const parsed = JSON.parse(result.stdout) as {
+      admitted_findings: readonly unknown[]
+      rejected_summary?: { reason: string }
+    }
+    expect(parsed.admitted_findings).toHaveLength(0)
+    expect(parsed.rejected_summary?.reason).not.toContain(secret)
+  })
+})
+
+describe('screen: exception boundary', () => {
+  test('a thrown error during output exits through the boundary with no stack text on stderr', () => {
+    const driver = `
+      const mod = await import(${JSON.stringify(pathToFileURL(VALIDATOR_ENTRY).href)})
+      const bytes = Buffer.from(${JSON.stringify(JSON.stringify(VALID_RETURN))})
+      let offset = 0
+      const exitCode = mod.runCeReviewValidator({
+        argv: ${JSON.stringify([...SCREEN_ARGS])},
+        isTTY: false,
+        readChunk: (_fd, buffer, bufferOffset, length) => {
+          if (offset >= bytes.length) return 0
+          const n = Math.min(length, bytes.length - offset)
+          bytes.copy(buffer, bufferOffset, offset, offset + n)
+          offset += n
+          return n
+        },
+        outputSink: () => { throw new Error('boom from outputSink: should never reach stderr') },
+        errorSink: (message) => console.error(message),
+      })
+      console.log('EXIT:' + exitCode)
+    `
+    const result = spawnSync('bun', ['-e', driver], {
+      encoding: 'utf8',
+      env: SAFE_ENV,
+      timeout: 30_000,
+    })
+
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('EXIT:1')
+    expect(result.stderr).toContain('internal error')
+    expect(result.stderr).not.toContain('boom from outputSink')
+    expect(result.stderr).not.toContain('Error:')
+    expect(result.stderr).not.toContain('.ts:')
+    expect(result.stderr).not.toMatch(/at\s+\S+\s+\(/)
+  })
+
+  test('an unhandled rejected promise exits through the boundary with no stack text on stderr', () => {
+    const driver = `
+      const mod = await import(${JSON.stringify(pathToFileURL(VALIDATOR_ENTRY).href)})
+      const bytes = Buffer.from(${JSON.stringify(JSON.stringify(VALID_RETURN))})
+      let offset = 0
+      const exitCode = mod.runCeReviewValidator({
+        argv: ${JSON.stringify([...SCREEN_ARGS])},
+        isTTY: false,
+        readChunk: (_fd, buffer, bufferOffset, length) => {
+          if (offset >= bytes.length) return 0
+          const n = Math.min(length, bytes.length - offset)
+          bytes.copy(buffer, bufferOffset, offset, offset + n)
+          offset += n
+          return n
+        },
+        outputSink: () => {},
+        errorSink: (message) => console.error(message),
+      })
+      console.log('SYNC_EXIT:' + exitCode)
+      Promise.reject(new Error('boom from rejected promise: should never reach stderr'))
+    `
+    const result = spawnSync('bun', ['-e', driver], {
+      encoding: 'utf8',
+      env: SAFE_ENV,
+      timeout: 30_000,
+    })
+
+    expect(result.stdout).toContain('SYNC_EXIT:0')
+    expect(result.stderr).toContain('internal error')
+    expect(result.stderr).not.toContain('boom from rejected promise')
+    expect(result.stderr).not.toContain('Error:')
+    expect(result.stderr).not.toContain('.ts:')
+    expect(result.stderr).not.toMatch(/at\s+\S+\s+\(/)
+    expect(result.status).toBe(1)
+  })
+})
+
+describe('return and artifact keep their existing behavior', () => {
+  test('return still validates a conforming payload from stdin', () => {
+    const result = runValidator(['return'], {
+      input: JSON.stringify(VALID_RETURN),
+    })
+    expect(result.exitCode, result.stderr).toBe(0)
+    expect(result.stdout).toContain('Review return is valid')
+  })
+
+  test('return still rejects malformed JSON from stdin (exit 1)', () => {
+    const result = runValidator(['return'], { input: '{ not json' })
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain('not valid JSON')
+  })
+
+  test('artifact still validates a conforming path argument, no stdin used', () => {
+    const cwd = makeCwd()
+    const artifactDir = path.join(cwd, '.context/systematic/ce-review')
+    fs.mkdirSync(artifactDir, { recursive: true })
+    fs.copyFileSync(
+      CONFORMING_ARTIFACT_FIXTURE,
+      path.join(artifactDir, 'review-summary.json'),
+    )
+    const before = snapshotTree(cwd)
+
+    const result = runValidator(
+      ['artifact', '.context/systematic/ce-review/review-summary.json'],
+      { cwd },
+    )
+
+    expect(result.exitCode, result.stderr).toBe(0)
+    expect(result.stdout).toContain('Review artifact is valid')
+    expect(snapshotTree(cwd)).toBe(before)
+  })
+
+  test('unknown subcommands still exit 2 and mention return|artifact', () => {
+    const result = runValidator([])
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('return|artifact')
+  })
+})

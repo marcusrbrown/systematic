@@ -7018,6 +7018,235 @@ function runClaudeCodeValidator(options) {
 if (false) {
 }
 
+// src/lib/review-pipeline-contract.ts
+var boundedText2 = (maxLength) => string2().min(1).max(maxLength).regex(/\S/)
+var PipelineInputIdSchema = boundedText2(MAX_INPUT_ID_LENGTH)
+var PipelineReasonSchema = boundedText2(MAX_REASON_LENGTH)
+var RejectedSummaryDispatchOutcomeSchema2 = DispatchOutcomeSchema.exclude([
+  'validation_unavailable',
+])
+var AdmittedScreenDispositionSchema = DispositionSchema.exclude(['rejected'])
+var ScreenInputSchema = object({
+  raw_return: SubAgentReturnSchema,
+  expected_reviewer: SubAgentReturnSchema.shape.reviewer,
+  invoking_harness: HarnessSchema,
+}).strict()
+var AdmittedScreenFindingSchema = ParentFindingSchema.extend({
+  input_id: PipelineInputIdSchema,
+  disposition: AdmittedScreenDispositionSchema,
+}).strict()
+var ScreenRejectedSummarySchema = object({
+  dispatch_outcome: RejectedSummaryDispatchOutcomeSchema2,
+  rejected_finding_count: number2().int().positive().max(MAX_FINDINGS),
+  reason: PipelineReasonSchema,
+}).strict()
+var ScreenOutputSchema = object({
+  dispatch_outcome: DispatchOutcomeSchema,
+  admitted_findings: array(AdmittedScreenFindingSchema).max(MAX_FINDINGS),
+  rejected_summary: ScreenRejectedSummarySchema.optional(),
+  residual_risks: SubAgentReturnSchema.shape.residual_risks,
+  testing_gaps: SubAgentReturnSchema.shape.testing_gaps,
+}).strict()
+var ScreenResultSchema = object({
+  reviewer: SubAgentReturnSchema.shape.reviewer,
+  result: ScreenOutputSchema,
+}).strict()
+var SelectedDispatchSchema = object({
+  persona: SubAgentReturnSchema.shape.reviewer,
+  dispatch_outcome: DispatchOutcomeSchema,
+  selection_surface: array(RepoRelativePathSchema).max(MAX_FINDINGS).optional(),
+}).strict()
+var PrepareInputSchema = object({
+  screen_results: array(ScreenResultSchema).max(MAX_PERSONAS),
+  selected_dispatches: array(SelectedDispatchSchema).max(MAX_PERSONAS),
+}).strict()
+var ConfidenceDispositionSchema = object({
+  input_id: PipelineInputIdSchema,
+  disposition: DispositionSchema.extract(['surviving', 'suppressed']),
+  reason: PipelineReasonSchema.optional(),
+}).strict()
+var CandidateGroupSchema = object({
+  file: RepoRelativePathSchema,
+  input_finding_ids: array(PipelineInputIdSchema).min(2).max(MAX_FINDINGS),
+}).strict()
+var PrepareOutputSchema = object({
+  confidence_dispositions: array(ConfidenceDispositionSchema).max(
+    MAX_FINDINGS * MAX_PERSONAS,
+  ),
+  coverage_union: array(RepoRelativePathSchema).max(
+    MAX_FINDINGS * MAX_PERSONAS,
+  ),
+  singletons: array(PipelineInputIdSchema).max(MAX_FINDINGS * MAX_PERSONAS),
+  candidate_groups: array(CandidateGroupSchema).max(MAX_FINDINGS),
+}).strict()
+var PER_FINDING_BYTE_ASSUMPTION = 8192
+var AGGREGATE_BYTE_CAP_HEADROOM = 65536
+var AGGREGATE_STDIN_BYTE_CAP =
+  MAX_PERSONAS * MAX_FINDINGS * PER_FINDING_BYTE_ASSUMPTION +
+  AGGREGATE_BYTE_CAP_HEADROOM
+var AutofixClassRouteSchema = ParentFindingSchema.shape.autofix_class
+var OwnerRouteSchema = ParentFindingSchema.shape.owner
+var AgreementCreditSchema = SubAgentReturnSchema.shape.reviewer
+var DisagreementFactsSchema = array(PipelineReasonSchema).max(MAX_FINDINGS)
+var MergedDecisionSchema = object({
+  decision_id: PipelineInputIdSchema,
+  disposition: literal('merged'),
+  input_finding_ids: array(PipelineInputIdSchema).min(2).max(MAX_FINDINGS),
+  title: ParentFindingSchema.shape.title,
+  why_it_matters: ParentFindingSchema.shape.why_it_matters,
+  evidence: ParentFindingSchema.shape.evidence,
+  suggested_fix: ParentFindingSchema.shape.suggested_fix,
+  line: ParentFindingSchema.shape.line,
+  disagreement_facts: DisagreementFactsSchema.optional(),
+  eligible_agreement_credit: array(AgreementCreditSchema)
+    .max(MAX_PERSONAS)
+    .optional(),
+  route_narrowing_reason: PipelineReasonSchema.optional(),
+}).strict()
+var DeclinedDecisionSchema = object({
+  decision_id: PipelineInputIdSchema,
+  disposition: literal('declined'),
+  input_finding_id: PipelineInputIdSchema,
+  declined_reason: PipelineReasonSchema,
+  disagreement_facts: DisagreementFactsSchema.optional(),
+  route_narrowing_reason: PipelineReasonSchema.optional(),
+}).strict()
+var MergeDecisionSchema = discriminatedUnion('disposition', [
+  MergedDecisionSchema,
+  DeclinedDecisionSchema,
+])
+var AdjudicationEnvelopeSchema = object({
+  decisions: array(MergeDecisionSchema).max(MAX_FINDINGS),
+})
+  .strict()
+  .superRefine((envelope, ctx) => {
+    const seenDecisionIds = new Set()
+    const seenInputIds = new Set()
+    envelope.decisions.forEach((decision, decisionIndex) => {
+      if (seenDecisionIds.has(decision.decision_id)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['decisions', decisionIndex, 'decision_id'],
+          message: 'duplicate decision ID',
+        })
+      }
+      seenDecisionIds.add(decision.decision_id)
+      if (decision.disposition === 'merged') {
+        decision.input_finding_ids.forEach((inputId, inputIndex) => {
+          if (seenInputIds.has(inputId)) {
+            ctx.addIssue({
+              code: 'custom',
+              path: [
+                'decisions',
+                decisionIndex,
+                'input_finding_ids',
+                inputIndex,
+              ],
+              message: 'input finding ID already claimed by another decision',
+            })
+          }
+          seenInputIds.add(inputId)
+        })
+        return
+      }
+      if (seenInputIds.has(decision.input_finding_id)) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['decisions', decisionIndex, 'input_finding_id'],
+          message: 'input finding ID already claimed by another decision',
+        })
+      }
+      seenInputIds.add(decision.input_finding_id)
+    })
+  })
+var MergeInputSchema = object({
+  prepared: PrepareOutputSchema,
+  adjudication: AdjudicationEnvelopeSchema,
+}).strict()
+var ValidatorRequestSchema = object({
+  finding_id: PipelineInputIdSchema,
+  file: RepoRelativePathSchema,
+  line: ParentFindingSchema.shape.line,
+}).strict()
+var MergedFindingSchema = object({
+  finding_id: PipelineInputIdSchema,
+  file: RepoRelativePathSchema,
+  title: ParentFindingSchema.shape.title,
+  why_it_matters: ParentFindingSchema.shape.why_it_matters,
+  line: ParentFindingSchema.shape.line,
+  autofix_class: ParentFindingSchema.shape.autofix_class,
+  owner: ParentFindingSchema.shape.owner,
+  requires_verification: ParentFindingSchema.shape.requires_verification,
+  evidence: ParentFindingSchema.shape.evidence,
+  suggested_fix: ParentFindingSchema.shape.suggested_fix,
+  input_finding_ids: array(PipelineInputIdSchema).min(1).max(MAX_FINDINGS),
+  agreement_credit: array(AgreementCreditSchema).max(MAX_PERSONAS).optional(),
+}).strict()
+var MergeOutputSchema = object({
+  merged_findings: array(MergedFindingSchema).max(MAX_FINDINGS),
+  validator_requests: array(ValidatorRequestSchema).max(MAX_FINDINGS),
+  disagreement_facts: DisagreementFactsSchema,
+}).strict()
+var ValidatorLifecycleResultSchema = discriminatedUnion('outcome', [
+  object({ outcome: literal('true') }).strict(),
+  object({ outcome: literal('false'), reason: PipelineReasonSchema }).strict(),
+  object({ outcome: literal('failed'), reason: PipelineReasonSchema }).strict(),
+  object({
+    outcome: literal('unavailable'),
+    reason: PipelineReasonSchema,
+  }).strict(),
+])
+var ValidatorLifecycleRecordSchema = object({
+  finding_id: PipelineInputIdSchema,
+  result: ValidatorLifecycleResultSchema,
+}).strict()
+var ValidatorLifecycleResultsSchema = array(ValidatorLifecycleRecordSchema).max(
+  MAX_FINDINGS,
+)
+var PlanAssessmentEnvelopeSchema = object({
+  verdict: ReviewArtifactSchema.shape.verdict,
+  run_status: ReviewArtifactSchema.shape.run_status,
+  residual_actionable_work: ReviewArtifactSchema.shape.residual_actionable_work,
+  advisory_outputs: ReviewArtifactSchema.shape.advisory_outputs,
+}).strict()
+var ParentRunMetadataSchema = object({
+  run_id: ReviewArtifactSchema.shape.run_id,
+  mode: ReviewArtifactSchema.shape.mode,
+  harness: ReviewArtifactSchema.shape.harness,
+  branch: ReviewArtifactSchema.shape.branch,
+  head_sha: ReviewArtifactSchema.shape.head_sha,
+  selected_dispatches: array(SelectedDispatchSchema).max(MAX_PERSONAS),
+  timestamps: object({
+    started_at: ReviewArtifactSchema.shape.completed_at,
+    completed_at: ReviewArtifactSchema.shape.completed_at,
+  }).strict(),
+  validation: ReviewArtifactSchema.shape.validation.unwrap(),
+  applied_fixes: ReviewArtifactSchema.shape.applied_fixes,
+}).strict()
+var FinalizeInputSchema = object({
+  merge: MergeOutputSchema,
+  dispatch_records: array(SelectedDispatchSchema).max(MAX_PERSONAS),
+  validator_lifecycle_results: ValidatorLifecycleResultsSchema,
+  plan_assessment: PlanAssessmentEnvelopeSchema,
+  parent_run_metadata: ParentRunMetadataSchema,
+}).strict()
+var ReportProjectionSchema = object({
+  verdict: ReviewArtifactSchema.shape.verdict,
+  findings: ReviewArtifactSchema.shape.findings,
+  applied_fixes: ReviewArtifactSchema.shape.applied_fixes,
+  residual_actionable_work: ReviewArtifactSchema.shape.residual_actionable_work,
+  advisory_outputs: ReviewArtifactSchema.shape.advisory_outputs,
+  coverage: ReviewArtifactSchema.shape.coverage,
+}).strict()
+var FinalizeOutputSchema = discriminatedUnion('kind', [
+  object({
+    kind: literal('writing'),
+    artifact: ReviewArtifactSchema,
+    report: ReportProjectionSchema,
+  }).strict(),
+  ReportProjectionSchema.extend({ kind: literal('report_only') }).strict(),
+])
+
 // src/lib/review-return-validator.ts
 import fs2 from 'node:fs'
 var VALIDATE_REVIEW_RETURN_USAGE = 'Usage: systematic validate-review-return'
@@ -7150,32 +7379,318 @@ function runReviewReturnValidator(options) {
   return 1
 }
 
+// src/lib/review-pipeline.ts
+var JSON_ROOT_PATH = '$'
+var SECRET_NAME_KEYWORDS = [
+  'TOKEN',
+  'SECRET',
+  'KEY',
+  'PASSWORD',
+  'PASSWD',
+  'CREDENTIAL',
+  'AUTH',
+  'SESSION',
+  'COOKIE',
+  'PRIVATE',
+  '_PASS',
+  '_PWD',
+  'PASSPHRASE',
+  '_SALT',
+]
+var NUMERIC_OR_PATH_ONLY = /^[0-9.\-/\\]+$/
+function escapeRegExp(value) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+function isValueQualifying(name, value) {
+  if (value.length === 0) return false
+  const upperName = name.toUpperCase()
+  if (SECRET_NAME_KEYWORDS.some((keyword) => upperName.includes(keyword))) {
+    return true
+  }
+  if (value.length < 16) return false
+  return !NUMERIC_OR_PATH_ONLY.test(value)
+}
+function buildStructuralPatterns(name) {
+  const escaped = escapeRegExp(name)
+  return [
+    new RegExp(`(?<![A-Za-z0-9_])\\$${escaped}(?![A-Za-z0-9_])`),
+    new RegExp(`\\$\\{${escaped}\\}`),
+    new RegExp(`process\\.env\\.${escaped}(?![A-Za-z0-9_])`),
+    new RegExp(`os\\.environ\\[\\s*['"]?${escaped}['"]?\\s*\\]`),
+    new RegExp(`(?<![A-Za-z0-9_])${escaped}=(?!=)`),
+  ]
+}
+function hasStructuralEnvReference(leaf, envNames) {
+  return envNames.some((name) =>
+    buildStructuralPatterns(name).some((pattern) => pattern.test(leaf)),
+  )
+}
+function hasEnvValueMatch(leaf, env) {
+  return Object.entries(env).some(
+    ([name, value]) => isValueQualifying(name, value) && leaf.includes(value),
+  )
+}
+function leafIsOffending(leaf, env, envNames) {
+  return (
+    hasStructuralEnvReference(leaf, envNames) || hasEnvValueMatch(leaf, env)
+  )
+}
+function collectStringLeaves(value, path = []) {
+  if (typeof value === 'string') {
+    return [{ path, value }]
+  }
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) =>
+      collectStringLeaves(item, [...path, index]),
+    )
+  }
+  if (value !== null && typeof value === 'object') {
+    return Object.entries(value).flatMap(([key, val]) =>
+      collectStringLeaves(val, [...path, key]),
+    )
+  }
+  return []
+}
+function findOffendingLeaf(value, path, env, envNames) {
+  return collectStringLeaves(value, path).find((leaf) =>
+    leafIsOffending(leaf.value, env, envNames),
+  )
+}
+function formatDiagnostic(persona, path, reason) {
+  const jsonPath =
+    typeof path === 'string' ? path : formatReviewArtifactIssuePath(path)
+  return `Rejected persona ${persona} return: field ${jsonPath} failed ${reason}.`
+}
+function truncateReason(reason) {
+  if (reason.length <= MAX_REASON_LENGTH) return reason
+  return reason.slice(0, MAX_REASON_LENGTH)
+}
+function parseRawReturn(rawReturn) {
+  if (typeof rawReturn !== 'string') return { ok: true, value: rawReturn }
+  try {
+    return { ok: true, value: JSON.parse(rawReturn) }
+  } catch {
+    return { ok: false }
+  }
+}
+function wholePayloadRejection(persona, path, reason, knownFindingsCount) {
+  return ScreenOutputSchema.parse({
+    admitted_findings: [],
+    dispatch_outcome: 'malformed',
+    rejected_summary: {
+      dispatch_outcome: 'malformed',
+      reason: truncateReason(formatDiagnostic(persona, path, reason)),
+      rejected_finding_count: Math.max(1, knownFindingsCount),
+    },
+    residual_risks: [],
+    testing_gaps: [],
+  })
+}
+function screenReviewReturn(input, env) {
+  const persona = input.expected_reviewer
+  const envNames = Object.keys(env)
+  const parsed = parseRawReturn(input.raw_return)
+  if (!parsed.ok) {
+    return wholePayloadRejection(persona, JSON_ROOT_PATH, 'malformed JSON', 0)
+  }
+  const validation = validateReviewReturnValue(parsed.value)
+  if (!validation.ok) {
+    const path = validation.issues[0]?.path ?? JSON_ROOT_PATH
+    return wholePayloadRejection(persona, path, 'schema validation', 0)
+  }
+  const raw = SubAgentReturnSchema.parse(parsed.value)
+  if (raw.reviewer !== persona) {
+    return wholePayloadRejection(
+      persona,
+      'reviewer',
+      'schema validation',
+      raw.findings.length,
+    )
+  }
+  const outsideOffense =
+    findOffendingLeaf(raw.reviewer, ['reviewer'], env, envNames) ??
+    findOffendingLeaf(raw.residual_risks, ['residual_risks'], env, envNames) ??
+    findOffendingLeaf(raw.testing_gaps, ['testing_gaps'], env, envNames)
+  if (outsideOffense) {
+    return wholePayloadRejection(
+      persona,
+      outsideOffense.path,
+      'environment-value detection',
+      raw.findings.length,
+    )
+  }
+  const admittedFindings = []
+  const diagnostics = []
+  raw.findings.forEach((finding, originalIndex) => {
+    const offense = findOffendingLeaf(
+      finding,
+      ['findings', originalIndex],
+      env,
+      envNames,
+    )
+    if (offense) {
+      diagnostics.push(
+        formatDiagnostic(persona, offense.path, 'environment-value detection'),
+      )
+      return
+    }
+    admittedFindings.push({
+      ...finding,
+      disposition: 'surviving',
+      input_id: `${persona}#${originalIndex}`,
+    })
+  })
+  const dispatchOutcome = raw.findings.length === 0 ? 'empty' : 'findings'
+  return ScreenOutputSchema.parse({
+    admitted_findings: admittedFindings,
+    dispatch_outcome: dispatchOutcome,
+    ...(diagnostics.length > 0
+      ? {
+          rejected_summary: {
+            dispatch_outcome: dispatchOutcome,
+            reason: truncateReason(diagnostics.join('; ')),
+            rejected_finding_count: diagnostics.length,
+          },
+        }
+      : {}),
+    residual_risks: raw.residual_risks,
+    testing_gaps: raw.testing_gaps,
+  })
+}
+
 // src/ce-review-validator.ts
 var CE_REVIEW_VALIDATOR_USAGE =
-  'Usage: node validate-review.mjs <return|artifact> [...]'
+  'Usage: node validate-review.mjs <return|artifact|screen> [...]'
+var CE_REVIEW_SCREEN_USAGE =
+  'Usage: node validate-review.mjs screen --reviewer <name> --harness <name>'
+var CE_REVIEW_SCREEN_STDIN_TTY_MESSAGE =
+  'screen reads one raw reviewer return from stdin; interactive input is not supported'
+var CE_REVIEW_SCREEN_STDIN_READ_FAILED_MESSAGE =
+  'screen could not read the reviewer return from stdin'
+var CE_REVIEW_SCREEN_STDIN_OVERSIZED_MESSAGE =
+  'screen input exceeds the 1 MiB limit'
+var CE_REVIEW_SCREEN_STDIN_INVALID_UTF8_MESSAGE =
+  'screen input is not valid UTF-8'
+var CE_REVIEW_SCREEN_REJECTED_MESSAGE = 'screen rejected the reviewer return'
+var CE_REVIEW_SCREEN_INTERNAL_ERROR_MESSAGE =
+  'ce-review-validator: internal error'
+var SCREEN_FLAGS = ['--reviewer', '--harness']
+function isScreenFlag(token) {
+  return SCREEN_FLAGS.includes(token)
+}
+function parseScreenFlags(argv) {
+  const values = new Map()
+  let index = 0
+  while (index < argv.length) {
+    const token = argv[index]
+    if (token === undefined) break
+    if (!isScreenFlag(token)) return { ok: false }
+    if (values.has(token)) return { ok: false }
+    const value = argv[index + 1]
+    if (value === undefined || value.startsWith('--')) return { ok: false }
+    values.set(token, value)
+    index += 2
+  }
+  const reviewer = values.get('--reviewer')
+  const harness = values.get('--harness')
+  if (reviewer === undefined || harness === undefined) return { ok: false }
+  return { harness, ok: true, reviewer }
+}
+function readEnvSnapshot() {
+  const snapshot = {}
+  for (const [name, value] of Object.entries(process.env)) {
+    if (typeof value === 'string') snapshot[name] = value
+  }
+  return snapshot
+}
+function runScreenSubcommand(options, outputSink, errorSink) {
+  const flags = parseScreenFlags(options.argv.slice(1))
+  if (!flags.ok) {
+    errorSink(CE_REVIEW_SCREEN_USAGE)
+    return 2
+  }
+  const fd = 0
+  const isTTY = options.isTTY ?? process.stdin.isTTY === true
+  if (isTTY) {
+    errorSink(CE_REVIEW_SCREEN_STDIN_TTY_MESSAGE)
+    return 2
+  }
+  const read = readBoundedStdin(fd, options.readChunk ?? defaultReadChunk)
+  if (read.status === 'read-error') {
+    errorSink(CE_REVIEW_SCREEN_STDIN_READ_FAILED_MESSAGE)
+    return 2
+  }
+  if (read.status === 'oversized') {
+    errorSink(CE_REVIEW_SCREEN_STDIN_OVERSIZED_MESSAGE)
+    return 1
+  }
+  let text
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(read.buffer)
+  } catch {
+    errorSink(CE_REVIEW_SCREEN_STDIN_INVALID_UTF8_MESSAGE)
+    return 1
+  }
+  const result = screenReviewReturn(
+    { expected_reviewer: flags.reviewer, raw_return: text },
+    readEnvSnapshot(),
+  )
+  if (result.dispatch_outcome === 'malformed') {
+    errorSink(
+      result.rejected_summary?.reason ?? CE_REVIEW_SCREEN_REJECTED_MESSAGE,
+    )
+    return 1
+  }
+  outputSink(JSON.stringify(result))
+  return 0
+}
+var processExceptionBoundaryInstalled = false
+function installProcessExceptionBoundary(errorSink) {
+  if (processExceptionBoundaryInstalled) return
+  processExceptionBoundaryInstalled = true
+  const handleFatal = () => {
+    errorSink(CE_REVIEW_SCREEN_INTERNAL_ERROR_MESSAGE)
+    process.exitCode = 1
+  }
+  process.on('unhandledRejection', handleFatal)
+  process.on('uncaughtException', handleFatal)
+}
 function runCeReviewValidator(options) {
   const outputSink = options.outputSink ?? ((message) => console.log(message))
   const errorSink = options.errorSink ?? ((message) => console.error(message))
-  const subcommand = options.argv[0]
-  if (subcommand === 'return') {
-    return runReviewReturnValidator({
-      argv: ['systematic', 'validate-review-return', ...options.argv.slice(1)],
-      isTTY: options.isTTY,
-      readChunk: options.readChunk,
-      outputSink,
-      errorSink,
-    })
+  installProcessExceptionBoundary(errorSink)
+  try {
+    const subcommand = options.argv[0]
+    if (subcommand === 'return') {
+      return runReviewReturnValidator({
+        argv: [
+          'systematic',
+          'validate-review-return',
+          ...options.argv.slice(1),
+        ],
+        isTTY: options.isTTY,
+        readChunk: options.readChunk,
+        outputSink,
+        errorSink,
+      })
+    }
+    if (subcommand === 'artifact') {
+      return runClaudeCodeValidator({
+        argv: options.argv.slice(1),
+        cwd: options.cwd,
+        outputSink,
+        errorSink,
+      })
+    }
+    if (subcommand === 'screen') {
+      return runScreenSubcommand(options, outputSink, errorSink)
+    }
+    errorSink(CE_REVIEW_VALIDATOR_USAGE)
+    return 2
+  } catch {
+    errorSink(CE_REVIEW_SCREEN_INTERNAL_ERROR_MESSAGE)
+    return 1
   }
-  if (subcommand === 'artifact') {
-    return runClaudeCodeValidator({
-      argv: options.argv.slice(1),
-      cwd: options.cwd,
-      outputSink,
-      errorSink,
-    })
-  }
-  errorSink(CE_REVIEW_VALIDATOR_USAGE)
-  return 2
 }
 function resolveRealPath(candidate) {
   if (candidate === undefined) return
@@ -7194,4 +7709,14 @@ var isMainModule =
 if (isMainModule) {
   process.exitCode = runCeReviewValidator({ argv: process.argv.slice(2) })
 }
-export { CE_REVIEW_VALIDATOR_USAGE, runCeReviewValidator }
+export {
+  CE_REVIEW_SCREEN_INTERNAL_ERROR_MESSAGE,
+  CE_REVIEW_SCREEN_REJECTED_MESSAGE,
+  CE_REVIEW_SCREEN_STDIN_INVALID_UTF8_MESSAGE,
+  CE_REVIEW_SCREEN_STDIN_OVERSIZED_MESSAGE,
+  CE_REVIEW_SCREEN_STDIN_READ_FAILED_MESSAGE,
+  CE_REVIEW_SCREEN_STDIN_TTY_MESSAGE,
+  CE_REVIEW_SCREEN_USAGE,
+  CE_REVIEW_VALIDATOR_USAGE,
+  runCeReviewValidator,
+}
