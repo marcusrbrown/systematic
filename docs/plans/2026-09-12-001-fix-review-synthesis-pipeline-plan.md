@@ -14,7 +14,7 @@ Replace `ce:review`'s prose-executed deterministic merge and synthesis steps
 with a strict, side-effect-free TypeScript pipeline that the parent invokes
 through the existing skill-local Node helper in every harness.
 
-The executable pipeline will screen structurally admitted reviewer returns,
+The executable pipeline will admit structurally valid reviewer returns,
 assign parent-owned identities, apply the confidence gate, form candidate
 groups, consume explicit model-owned adjudication decisions, derive merged
 provenance and conservative routing, reconcile finding-validator outcomes,
@@ -40,8 +40,7 @@ executable bookkeeping makes model judgment better.
 ## Problem Frame
 
 Issue #964 made raw reviewer-return validation executable and bound admitted
-returns to the dispatched persona before environment screening, persistence, or
-synthesis. It also strengthened `ReviewArtifactSchema` so final artifacts reject
+returns to the dispatched persona before persistence or synthesis. It also strengthened `ReviewArtifactSchema` so final artifacts reject
 ghost finding IDs, duplicate ledger IDs, incomplete provenance, invalid
 agreement credit, and unsupported risk-coverage citations.
 
@@ -76,21 +75,21 @@ needs explicit phase contracts rather than one opaque "synthesize" function.
 - R1. Preserve the existing bounded raw-return structural validation contract,
   including the 1 MiB byte cap, EOF framing, exits 0/1/2, safe projected
   diagnostics, and no payload-derived error output.
-- R2. Execute reviewer identity binding and environment-value screening inside
-  the packaged helper on behalf of the parent, before any screened finding can
-  reach a persisted record or later pipeline phase.
-- R3. Read eligible environment values from the helper process's own
-  environment using the current exact eligibility rule: include values at least
-  16 characters long that are not solely digits/dots/dashes/separators, plus
-  values whose variable name matches the existing secret-name substring list.
-  Never serialize environment values, variable names, matcher parameters, or
-  dynamic exception text into an input envelope, stdout result, diagnostic,
-  artifact, or log; all rejection and internal-error paths use fixed reason
-  codes and schema-safe paths only.
-- R4. Preserve finding-granularity environment rejection: reject a matched
-  finding while admitting clean siblings; reject the whole return when the
-  matched string is outside a finding; emit only the existing safe persona,
-  JSON-path, and fixed-reason diagnostic.
+- R2. Execute reviewer identity binding inside the packaged helper on behalf of
+  the parent, before any admitted finding can reach a persisted record or later
+  pipeline phase.
+- R3. Admission is environment-invariant. No pipeline phase reads the process
+  environment, and the same structurally valid return produces byte-identical
+  admission regardless of the shell that launched the helper. Never serialize
+  environment values, variable names, or dynamic exception text into an input
+  envelope, stdout result, diagnostic, artifact, or log; all rejection and
+  internal-error paths use fixed reason codes and schema-safe paths only.
+- R4. Rejection is whole-return only, because schema failure and identity
+  mismatch are the sole remaining triggers and both are properties of the return
+  rather than of one finding. The rejected-summary entry, degraded status, and
+  risk-critical coverage consequences stay exactly as they are; only their
+  environment trigger is gone. Diagnostics remain persona, JSON path, and one
+  fixed reason from `schema validation` or `malformed JSON`.
 - R5. Assign stable input IDs from the original reviewer finding index and add
   only parent-attested `reviewer`, `harness`, and `dispatch_outcome` metadata;
   never trust those values from a reviewer payload.
@@ -161,18 +160,15 @@ needs explicit phase contracts rather than one opaque "synthesize" function.
   correction cycle. Exhaustion stops visibly. Finding-validator task failures
   retain their existing uncertainty path and are not redispatched implicitly.
 
-### Post-screen containment and failure boundaries
+### Sensitive-evidence policy and failure boundaries
 
-- R24. Screen every model-owned string leaf accepted by `merge` and `finalize`
-  against the same environment rule before it can reach a persisted artifact or
-  report projection. Merged title, why-it-matters, suggested fix,
-  declined-separation reason, route-narrowing reason, disagreement facts,
-  plan-assessment text, verdict rationale, and CE summaries are authored after
-  `screen` has already run, so reviewer-return screening never sees them. Without
-  this, the executable pipeline leaves the one remaining path by which an
-  eligible environment value reaches `review-summary.json`. Reuse the identical
-  eligibility rule and the identical fixed-reason diagnostic contract; do not
-  introduce a second screening policy.
+- R24. State plainly, in the contract and in the reviewer template, that review
+  artifacts may contain sensitive source-derived information and are not
+  certified secret-free. Instruct reviewers to describe credential defects
+  without reproducing credential values, and record that a source-level
+  environment reference is valid evidence rather than a rejection trigger. These
+  are instructions that reduce accidental disclosure, not technical containment;
+  the plan must not claim otherwise.
 - R25. Terminate every subcommand entry point in one exception boundary that maps
   any unexpected throw to a fixed reason code and safe path list. Cover async
   failure at process scope too — `unhandledRejection` and `uncaughtException`
@@ -213,8 +209,9 @@ needs explicit phase contracts rather than one opaque "synthesize" function.
   requirements completeness assessment, and report wording model-owned.
 - Do not infer semantic equivalence from matching files, lines, titles, or
   fingerprints. Candidate formation is deterministic; merging is not.
-- Do not add entropy heuristics, redaction, environment allowlists, or revised
-  secret-name policy. Implement the current environment-screen contract exactly.
+- Do not add an entropy heuristic, a redaction pass, an environment allowlist, a
+  revised secret-name list, or any replacement secret scanner. The environment
+  screen is removed outright; nothing takes its place inside this pipeline.
 - Do not expand the OpenCode-only workflow guard, add receipts, or claim
   provenance that the helper cannot observe.
 - Do not add dependencies, a daemon, database state, lock files, or a second
@@ -228,6 +225,16 @@ needs explicit phase contracts rather than one opaque "synthesize" function.
   and stable data ordering are executable here.
 
 ### Deferred to Separate Tasks
+
+- Sensitive-evidence handling beyond documentation: preserving a finding's
+  identity while requesting a rewritten version that carries no credential
+  literal, keeping the replacement linked to the original so it is not
+  double-counted, and blocking a clean verdict when evidence stays unresolved.
+  This is the real replacement for the deleted screen, and it is a feature with
+  its own design surface rather than a rider on this one. If a demonstrated need
+  later justifies automatic protection, it belongs at the artifact-write boundary
+  over explicitly supplied protected values, never at reviewer admission over
+  ambient environment contents.
 
 - Real multi-persona inline-transport and synthesis-load characterization.
 - Live Pi and Claude Code end-to-end review runs.
@@ -246,7 +253,7 @@ needs explicit phase contracts rather than one opaque "synthesize" function.
   Stage 5b validator dispatch, Stage 6 presentation, and mode-specific action
   flow.
 - `skills/ce-review/references/synthesis-artifact-contract.md` owns dispatch,
-  ledger, provenance, environment-screening, artifact-validation, and
+  ledger, provenance, sensitive-evidence handling, artifact-validation, and
   risk-coverage semantics.
 - `src/lib/review-artifact-schema.ts` is the executable Zod source for raw
   reviewer returns, parent records, and `review-summary.v1`, including global
@@ -310,7 +317,7 @@ introducing a new dependency or unfamiliar API.
     },
     {
       "path_or_symbol": "skills/ce-review/references/synthesis-artifact-contract.md",
-      "description": "Owns dispatch, ledger, provenance, privacy-screening, validation, and risk-coverage semantics consumed by the executable pipeline.",
+      "description": "Owns dispatch, ledger, provenance, sensitive-evidence, validation, and risk-coverage semantics consumed by the executable pipeline.",
       "disposition": "extend"
     },
     {
@@ -368,28 +375,45 @@ introducing a new dependency or unfamiliar API.
   The phase split follows the real judgment boundaries;
   collapsing phases would either ask the model to adjudicate hidden candidates
   or require finalization before validator results exist. `screen` and `prepare`
-  stay separate despite having no model decision between them: `screen` is the
-  untrusted-ingress and safe-rejection boundary operating on one raw payload,
-  while `prepare` consumes only already-screened output across all personas.
-  Rejected alternative: a single merged pre-adjudication phase, which would blur
-  the raw-payload trust boundary and make per-persona screening evidence harder
-  to attribute. The contract/orchestration split keeps either file reviewable;
+  stay separate despite having no model decision between them: `screen` admits
+  one raw payload at a time and binds it to its dispatched persona, while
+  `prepare` consumes only already-admitted output across all personas. Rejected
+  alternative: a single merged pre-adjudication phase, which would blur the
+  raw-payload trust boundary and make per-persona admission outcomes harder to
+  attribute. The contract/orchestration split keeps either file reviewable;
   promote a phase to `src/lib/review-pipeline-<phase>.ts` if its logic outgrows
   thin routing, and add that file's registration rows in the same unit.
 - KTD2. **Extend the existing helper bundle.** Add `screen`, `prepare`, `merge`,
   and `finalize` subcommands to `src/ce-review-validator.ts`, preserving the
   existing `return` and `artifact` subcommands. Do not rename the generated file
   or create another bundle and drift matrix.
-- KTD3. **Screen raw text once.** `screen` receives one reviewer payload verbatim
+- KTD3. **Admit raw text once.** `screen` receives one reviewer payload verbatim
   on stdin and strict non-secret arguments for expected reviewer and invoking
-  harness. It reuses raw structural validation internally, performs identity and
-  environment checks, and emits a strict result envelope. The skill replaces
-  its separate `return` invocation with `screen`; the public raw validator and
-  `return` subcommand remain unchanged for compatibility.
-- KTD4. **Environment values stay process-local.** The pure function accepts an
-  injected environment snapshot for tests; the runner supplies its own
-  `process.env`. Success output contains only admitted payload data. Rejection
-  output contains only authored reason categories and safe JSON paths.
+  harness. It reuses raw structural validation internally, binds dispatch
+  identity, and emits a strict result envelope. The skill replaces its separate
+  `return` invocation with `screen`; the public raw validator and `return`
+  subcommand remain unchanged for compatibility.
+- KTD4. **The pipeline never reads the environment.** Admission depends only on
+  the payload, the expected reviewer, and the harness name. Nothing in any phase
+  reads `process.env`, so the same return admits identically on every machine.
+  Success output contains only admitted payload data. Rejection output contains
+  only authored reason categories and safe JSON paths.
+
+  Rejected alternative, with evidence: keeping the environment screen and
+  repairing its keyword list. The control made review completeness a function of
+  ambient shell contents, which is incompatible with a pipeline whose purpose is
+  deterministic synthesis. It also conflated three distinct things — an
+  environment reference in reviewed source is ordinary evidence, an exported
+  value is not necessarily sensitive, and a secret is not necessarily exported,
+  so a clean screen never meant more than "these patterns did not match." Its
+  reach was bounded by whatever the launching shell happened to export, which
+  excluded repository secrets, credential stores, and any encoded bypass. The
+  cost of that partial reach was destroying real review evidence: with the
+  default macOS `KEYTIMEOUT=1`, every finding containing the digit `1` was
+  rejected, including on severity `P1`. Underscore-guarding the keyword list,
+  adding a length floor, requiring whole-token matches, and matching on entropy
+  were each considered and rejected; every one preserves the shell dependency
+  while narrowing only the specific collisions already known.
 - KTD5. **Every post-screen envelope is strict, bounded, and versioned.** Add a
   `review-pipeline.v1` discriminated Zod schema family for screen results,
   preparation state, adjudication decisions, merge results, validator lifecycle
@@ -494,7 +518,7 @@ introducing a new dependency or unfamiliar API.
   dispatch entry unchanged with `input_finding_count: 0`, no admitted or
   rejected-summary ledger row naming the persona, degraded status, and lost-
   risk coverage evaluation when the persona is risk-critical. Failure or
-  unavailability after screening is an orchestration failure: retry the same
+  unavailability after admission is an orchestration failure: retry the same
   pure invocation once for launch/exit-2 failures, then stop with visible
   degraded/abnormal state, retain any in-progress artifact, and do not
   reconstruct pipeline output manually.
@@ -548,10 +572,12 @@ introducing a new dependency or unfamiliar API.
 - **Do existing artifacts need migration?** No. `schema_version: 1` and
   `review-summary-schema.json` are unchanged (KTD17), and artifacts predating the
   contract are already excluded as legacy by the existing validator.
-- **Is environment screening complete secret detection?** No, and the plan should
-  not be read as claiming it is. The pinned rule misses short values in
-  non-secret-named variables by design. It is one control on one ingress path,
-  now extended to model-authored fields (R24), not a guarantee.
+- **Does anything stop a secret reaching the artifact?** No, and the plan must
+  not be read as claiming otherwise. The environment screen was removed because
+  its reach was set by whatever the launching shell exported, which is neither a
+  security boundary nor compatible with deterministic synthesis. What remains is
+  guidance: artifacts are not certified secret-free, and reviewers are told not
+  to reproduce credential values.
 
 ### Accepted Gaps
 
@@ -628,7 +654,7 @@ flowchart TB
 
 | Phase | Deterministic input | Model-owned input | Deterministic output |
 |---|---|---|---|
-| `screen` | Raw return bytes, expected persona, harness, helper environment | Reviewer claims | Dispatch outcome, admitted parent findings with stable IDs, safe rejected summary, residual risks/testing gaps |
+| `screen` | Raw return bytes, expected persona, harness | Reviewer claims | Dispatch outcome, admitted parent findings with stable IDs, safe rejected summary, residual risks/testing gaps |
 | `prepare` | All screen results and selected dispatch metadata | None | Confidence dispositions, exact coverage union, stable singletons, complete candidate groups |
 | `merge` | Prepared state | Candidate partition, merged narrative, decline reasons, route narrowing, agreement credit | Derived severity/confidence/provenance/routes, merged findings, validator requests, disagreement facts |
 | `finalize` | Merge state, dispatches, validator lifecycle results, parent-attested run metadata | Plan assessment, verdict request/rationale, CE summaries, applied-fix outcomes | Filtered/surviving findings, queues, risk coverage, counts, stable order, and a writing-mode artifact or report-only projection |
@@ -660,8 +686,7 @@ flowchart TB
 | Condition | Required behavior |
 |---|---|
 | `screen` structural/schema failure or identity mismatch | Exit 1; map to `malformed`; no payload fields are admitted; diagnostics remain bounded and payload-safe. |
-| Finding-level environment match | Exit 0 with clean siblings plus one rejected-summary ledger contribution; matched value and environment key never leave the helper. |
-| Whole-return environment match | Exit 0 with no admitted fields from that return, safe rejection state, and enumerable finding count/severities when available. |
+| Reviewer identity mismatch | Exit 1; map to `malformed`; no admitted fields; the diagnostic names the expected persona and nothing from the payload. |
 | `screen` launch/read/TTY failure | Exit 2 or launch failure; map to `validation_unavailable`; zero admitted findings; degraded run. |
 | Invalid `prepare`/`merge`/`finalize` envelope | Exit 1 with authored path/code diagnostics; fix the model-owned envelope and retry within the existing bounded repair discipline. |
 | Aggregate stdin read/usage failure | Exit 2; do not parse partial data or fall back to prose execution. |
@@ -724,7 +749,7 @@ which adds only contracts and a generated reference.
   - Pin that the generated pipeline schema changes when the Zod decision
     contract changes, while `review-summary-schema.json` remains byte-identical.
 
-- [ ] **Unit 2: Implement side-effect-free return screening**
+- [x] **Unit 2: Implement side-effect-free return admission**
 
   **Files:**
   - Extend `src/lib/review-pipeline.ts`.
@@ -743,19 +768,19 @@ which adds only contracts and a generated reference.
   - Require strict `--reviewer` and `--harness` arguments; reject duplicate,
     missing, unknown, flag-as-value, and positional arguments.
   - Bind the parsed reviewer to the parent-supplied expected reviewer.
-  - Recursively screen string leaves against the exact environment contract,
-    using injected environment data in unit tests and `process.env` only in the
-    CLI runner.
-  - Assign stable input IDs from original positions, produce admitted
-    `ParentRecordSchema` values, and return safe rejected summaries without any
-    filesystem write.
+  - Read no environment state at any point. Admission depends only on the
+    payload, the expected reviewer, and the harness name.
+  - Assign stable input IDs from original positions, produce admitted findings,
+    and return safe rejected summaries without any filesystem write.
 
   **Test-first proof:**
   - Cover conforming/empty/malformed/oversized/multibyte input, transient stdin
-    retry behavior, reviewer mismatch, clean siblings around a rejected finding,
-    whole-return rejection, short/common environment false positives, secret-
-    named variables below the normal length threshold, structural detector
-    shapes, and byte-for-byte no-echo diagnostics.
+    retry behavior, reviewer mismatch, and byte-for-byte no-echo diagnostics.
+  - Pin environment invariance both in process and through a real subprocess:
+    the same payload admits byte-identically under a clean environment and under
+    one carrying `KEYTIMEOUT=1`, `SECURITYSESSIONID`, and a long high-entropy
+    value. Admit a finding whose evidence quotes `process.env.API_KEY` from
+    reviewed source, and a finding containing the digit `1`.
   - Snapshot the checkout before and after the subprocess to prove no writes.
 
 - [ ] **Unit 3: Prepare confidence-gated candidate groups**
@@ -796,9 +821,7 @@ which adds only contracts and a generated reference.
     automatically.
   - Accept model-owned title, why-it-matters, bounded evidence selection,
     suggested fix, representative line, declined-separation reason, disagreement
-    facts, eligible agreement credit, and route narrowing reason. Screen every
-    one of those string leaves against the same environment rule `screen` uses
-    before admitting them (R24); these fields never passed through `screen`.
+    facts, eligible agreement credit, and route narrowing reason.
   - Derive severity, confidence/boost, fingerprint, submitters, pre-existing
     state, conservative route floor, and `requires_verification` constraints.
   - Produce the exact Stage 5b validator request set and a merge state that no
@@ -835,9 +858,7 @@ which adds only contracts and a generated reference.
     machine-consumed list stably.
   - Derive risk-critical replacement coverage and deterministic citation IDs.
   - Route explicit and inferred plan-assessment results without fabricating
-    reviewer findings. Screen plan-assessment text, verdict rationale, CE
-    summaries, and applied-fix outcome strings against the environment rule
-    before they can reach an artifact or report projection (R24).
+    reviewer findings.
   - Create the writing-mode temp file with exclusive creation and owner-only
     permissions inside the run directory, and remove it on every non-success
     exit (R26).
@@ -1047,10 +1068,11 @@ flowchart LR
   findings, and does not imply the reviewer disproved all risk.
 - AE2. A malformed return containing a secret-shaped string exits through the
   structural rejection path without parsing or echoing the string.
-- AE3. One finding contains an eligible environment value while a sibling is
-  clean. The matched finding becomes one rejected-summary contribution, the
-  sibling keeps its original input index, and no matched value or environment
-  key appears in output.
+- AE3. The same structurally valid return is screened under a clean environment
+  and under one carrying `KEYTIMEOUT=1`, `SECURITYSESSIONID`, and a long
+  high-entropy value. Admission is byte-identical across all of them. A finding
+  whose evidence quotes `process.env.API_KEY` from reviewed source is admitted,
+  and so is a finding containing the digit `1`.
 - AE4. A P0 finding at `0.50` survives preparation while a P1 at `0.59` is
   suppressed; neither result depends on candidate adjudication.
 - AE5. Two reviewers report different defects on the same line. `prepare` emits
@@ -1097,10 +1119,10 @@ flowchart LR
 - AE18. A fixture derived from the prior ghost-ID, omitted-submitter, and self-
   coverage repair failures produces a schema-valid artifact on the first
   authoritative finalization with no parent-written repair pass.
-- AE19. A model-authored merge narrative or plan-assessment string contains an
-  eligible environment value. The phase rejects that envelope with a fixed reason
-  code and safe path, and no persisted artifact or report projection ever carries
-  the value.
+- AE19. The contract, the skill, and the reviewer template each state that
+  artifacts are not certified secret-free, instruct reviewers not to reproduce
+  credential values, and permit source-level environment references as evidence.
+  No document claims the pipeline screens for secrets.
 - AE20. Each of `prepare`, `merge`, and `finalize` hits an unexpected internal
   error, once as a synchronous throw and once as a rejected promise. Every case
   exits through the shared boundary with a fixed reason code and emits no stack
@@ -1133,10 +1155,11 @@ flowchart LR
 | Full integration tests are repeatedly rerun locally | Use targeted unit/subprocess tests per unit, one targeted real-host run after integration, and leave the full pinned suite to CI. |
 | Transient helper failures cause either infinite retry or unnecessary abandonment | Retry one side-effect-free launch/exit-2 failure with identical bytes, allow one model-envelope correction, then stop visibly. |
 | Caller metadata silently perturbs deterministic output | Admit only the named metadata fields, reject unknown keys, and replay fixtures with varied incidental caller state. |
-| Model-authored prose written after screening carries a secret into the artifact | Screen every model-owned string leaf in `merge` and `finalize` with the same rule and the same safe diagnostics (R24). |
+| A reviewer reproduces a credential literal in a finding | Instruct reviewers not to, state plainly that artifacts are not certified secret-free, and keep raw returns out of logs, caches, and temp files. Accept that this is guidance, not containment (R24). |
 | An unexpected exception bypasses the fixed-reason contract | Wrap every subcommand entry point in one exception boundary that projects to reason codes and safe paths (R25). |
 | A crashed parent leaves a readable temp artifact | Create the temp file with exclusive creation and owner-only permissions inside the run directory and clean it on non-success exit; the accepted worst case is a stale temp file, never a truncated artifact (R26). |
-| Short secrets in non-secret-named variables are read as complete coverage | Record the false-negative class explicitly: the pinned eligibility rule misses values under 16 characters in variables whose name does not match the secret-name list. Environment screening is one control, not proof that an artifact is secret-free. |
+| Removing the screen is read as a regression in protection | Record what the screen actually reached: only values exported into the helper subprocess, matched literally. It never covered repository secrets, credential stores, or any encoded bypass, and a clean result never meant an artifact was safe to share. |
+| Review completeness varies by machine | Assert environment-invariant admission directly: identical payloads admit byte-identically under clean and polluted environments, in-process and through a real subprocess. |
 | The two contract families hand-mirror the same bounded leaves | Compose `review-pipeline.v1` from the canonical schemas in `src/lib/review-artifact-schema.ts` and test that a shared bound change moves both. |
 
 ---
@@ -1156,6 +1179,31 @@ flowchart LR
   adjudication encoded as heuristics.
 - Known uncertainties are bounded implementation details inside named contracts,
   not unresolved architecture forks.
+
+### Environment-screen removal (2026-09-12)
+
+Making the screen executable exposed that it was unshippable, and the defect was
+its shape rather than its keyword list. The rule made an environment value
+eligible regardless of length whenever its variable name contained a
+secret-bearing substring, and matched embedded. With the default macOS
+`KEYTIMEOUT=1`, every finding containing the digit `1` was rejected — including
+on severity `P1`. Reproduced directly: the same payload admits one finding under
+`env -i PATH=$PATH` and zero with `KEYTIMEOUT=1` added.
+
+The history makes the pattern clear. The 16-character floor in `f615006` was
+added to fix exactly this false-rejection class, and that commit explicitly
+warned that bare `PASS` or `PWD` entries would reinstate it. Four entries were
+underscore-guarded for that reason; ten were not. `KEY` is the same failure
+arriving through an unguarded entry.
+
+Repairing the list was rejected. The control made review completeness depend on
+ambient shell contents, which contradicts the purpose of this plan, and its
+reach was bounded by whatever the launching shell exported rather than by any
+security boundary. What survives is admission that depends only on the payload:
+bounded input, schema validation, identity binding, stable original-index IDs,
+allowlisted diagnostics, and unchanged degraded-run accounting. What replaces
+the deleted promise is documentation that states artifacts are not certified
+secret-free and asks reviewers not to reproduce credential values.
 
 ### Deepening disposition (2026-09-12)
 
