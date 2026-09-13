@@ -3,10 +3,14 @@ import { z } from 'zod'
 const MAX_REVIEWER_LENGTH = 64
 const MAX_RUN_ID_LENGTH = 64
 const MAX_BRANCH_LENGTH = 256
-const MAX_INPUT_ID_LENGTH = 128
-const MAX_REASON_LENGTH = 2048
-const MAX_FINDINGS = 32
-const MAX_PERSONAS = 64
+
+// Exported for reuse by `review-pipeline-contract.ts`, which composes its
+// screen/prepare envelopes from these same bounds so a change here propagates
+// to the pipeline contract instead of drifting behind a duplicated literal.
+export const MAX_INPUT_ID_LENGTH = 128
+export const MAX_REASON_LENGTH = 2048
+export const MAX_FINDINGS = 32
+export const MAX_PERSONAS = 64
 
 export const REVIEW_ARTIFACT_CUSTOM_MESSAGES = [
   'severity count must match rejected finding count',

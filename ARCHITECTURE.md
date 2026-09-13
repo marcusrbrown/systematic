@@ -118,6 +118,7 @@ Review artifact contract
   src/lib/review-artifact-schema.ts      — Zod source of truth for the ce:review run-level artifact
   src/lib/review-artifact-path.ts        — bounded artifact path, JSON reading, and issue projection helpers
   src/lib/review-return-validator.ts     — bounded stdin validator for one raw persona return (validate-review-return)
+  src/lib/review-pipeline-contract.ts    — review-pipeline.v1 strict Zod contracts for the screen/prepare phase envelopes, composed from review-artifact-schema.ts
   src/ce-review-validator.ts             — skill-local Node shim dispatching `return`/`artifact`; bundled to skills/ce-review/scripts/validate-review.mjs
 
 ```
