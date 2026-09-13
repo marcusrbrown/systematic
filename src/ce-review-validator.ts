@@ -18,9 +18,8 @@ import {
  * beyond `screen`'s flag parsing and stdin plumbing.
  * - `return`   -> the bounded raw persona-return validator (stdin).
  * - `artifact` -> the existing aggregate review-artifact validator.
- * - `screen`   -> executable reviewer-return screening against the real
- *                 environment (`screenReviewReturn`), reusing the same
- *                 bounded stdin reader as `return`.
+ * - `screen`   -> executable reviewer-return admission (`screenReviewReturn`),
+ *                 reusing the same bounded stdin reader as `return`.
  *
  * It exists because shipped skill layouts cannot all rely on the npm CLI or
  * `dist/`; every harness invokes the committed bundle through `SKILL_DIR`.
@@ -100,20 +99,6 @@ function parseScreenFlags(argv: readonly string[]): ScreenFlagParse {
   return { harness, ok: true, reviewer }
 }
 
-/**
- * Snapshot only string-valued environment entries, matching
- * `screenReviewReturn`'s `Readonly<Record<string, string>>` contract. This
- * is the only place in this codebase that reads the real environment for
- * screening.
- */
-function readEnvSnapshot(): Readonly<Record<string, string>> {
-  const snapshot: Record<string, string> = {}
-  for (const [name, value] of Object.entries(process.env)) {
-    if (typeof value === 'string') snapshot[name] = value
-  }
-  return snapshot
-}
-
 function runScreenSubcommand(
   options: CeReviewValidatorOptions,
   outputSink: (message: string) => void,
@@ -150,10 +135,10 @@ function runScreenSubcommand(
     return 1
   }
 
-  const result = screenReviewReturn(
-    { expected_reviewer: flags.reviewer, raw_return: text },
-    readEnvSnapshot(),
-  )
+  const result = screenReviewReturn({
+    expected_reviewer: flags.reviewer,
+    raw_return: text,
+  })
 
   if (result.dispatch_outcome === 'malformed') {
     errorSink(

@@ -1,9 +1,10 @@
 // U4 routing proof: `src/ce-review-validator.ts`'s `screen` subcommand wires
-// `screenReviewReturn` to real stdin/argv/env, reuses the existing bounded
+// `screenReviewReturn` to real stdin/argv, reuses the existing bounded
 // stdin reader from `review-return-validator.ts`, matches the established
 // exit-code convention, and never echoes a stack trace, exception message,
-// or environment value on any non-success path. `return` and `artifact`
-// keep their pre-existing behavior unchanged.
+// or payload content on any non-success path. Admission is invariant to the
+// subprocess's environment -- `screen` never reads `process.env`. `return`
+// and `artifact` keep their pre-existing behavior unchanged.
 //
 // The whole battery runs the real entry point (`src/ce-review-validator.ts`)
 // as a subprocess -- never by importing and calling the exported function
@@ -53,14 +54,23 @@ interface RunResult {
   readonly stderr: string
 }
 
-// A minimal, fixed environment for every subprocess invocation. `screen`
-// screens findings against the real `process.env`, and this dev/CI
-// environment can carry short-valued secret-named variables (for example
-// `KEYTIMEOUT=1`) that would otherwise nondeterministically reject fixture
-// findings containing common short substrings. Only PATH is required to
-// resolve `bun`.
+// A minimal, fixed environment for most subprocess invocations here. Only
+// PATH is required to resolve `bun`; `screen` no longer reads `process.env`
+// for admission, so this is not a workaround for nondeterminism -- it is
+// just a small, predictable spawn environment.
 const SAFE_ENV: Readonly<Record<string, string>> = {
   PATH: process.env.PATH ?? '',
+}
+
+// Deliberately polluted environment -- including a short secret-named
+// variable (KEYTIMEOUT=1, present by default in macOS/zsh shells) and a long
+// high-entropy value -- used to prove admission is environment-invariant now
+// that `screen` never reads `process.env`.
+const POLLUTED_ENV: Readonly<Record<string, string>> = {
+  HIGH_ENTROPY_TOKEN: 'q7Z3xR9mK2pL8vN4wJ6tH1sF5dG0cB3yA',
+  KEYTIMEOUT: '1',
+  PATH: process.env.PATH ?? '',
+  SECURITYSESSIONID: '186b1',
 }
 
 function runValidator(
@@ -232,26 +242,37 @@ describe('screen: rejection outcomes', () => {
     expect(result.stderr).toContain('field reviewer')
     expect(result.stdout).toBe('')
   })
+})
 
-  test('a completed screen that rejects a finding on an env-value match still exits 0', () => {
-    const secret = 'sk-live-abcdef1234567890'
+describe('screen: environment invariance', () => {
+  test('admission is byte-identical under a clean environment and a polluted one', () => {
     const raw = {
       ...VALID_RETURN,
       findings: [
-        { ...BASE_FINDING, why_it_matters: `Leaks ${secret} in a log line.` },
+        {
+          ...BASE_FINDING,
+          severity: 'P1',
+          why_it_matters:
+            'process.env.API_KEY is logged in plaintext at startup.',
+        },
       ],
     }
-    const result = runValidator(SCREEN_ARGS, {
-      env: { ...SAFE_ENV, API_TOKEN: secret },
-      input: JSON.stringify(raw),
+    const payload = JSON.stringify(raw)
+
+    const clean = runValidator(SCREEN_ARGS, { env: SAFE_ENV, input: payload })
+    const polluted = runValidator(SCREEN_ARGS, {
+      env: POLLUTED_ENV,
+      input: payload,
     })
-    expect(result.exitCode, result.stderr).toBe(0)
-    const parsed = JSON.parse(result.stdout) as {
+
+    expect(clean.exitCode, clean.stderr).toBe(0)
+    expect(polluted.exitCode, polluted.stderr).toBe(0)
+    expect(polluted.stdout).toBe(clean.stdout)
+
+    const parsed = JSON.parse(clean.stdout) as {
       admitted_findings: readonly unknown[]
-      rejected_summary?: { reason: string }
     }
-    expect(parsed.admitted_findings).toHaveLength(0)
-    expect(parsed.rejected_summary?.reason).not.toContain(secret)
+    expect(parsed.admitted_findings).toHaveLength(1)
   })
 })
 

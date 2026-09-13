@@ -7381,81 +7381,6 @@ function runReviewReturnValidator(options) {
 
 // src/lib/review-pipeline.ts
 var JSON_ROOT_PATH = '$'
-var SECRET_NAME_KEYWORDS = [
-  'TOKEN',
-  'SECRET',
-  'KEY',
-  'PASSWORD',
-  'PASSWD',
-  'CREDENTIAL',
-  'AUTH',
-  'SESSION',
-  'COOKIE',
-  'PRIVATE',
-  '_PASS',
-  '_PWD',
-  'PASSPHRASE',
-  '_SALT',
-]
-var NUMERIC_OR_PATH_ONLY = /^[0-9.\-/\\]+$/
-function escapeRegExp(value) {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-}
-function isValueQualifying(name, value) {
-  if (value.length === 0) return false
-  const upperName = name.toUpperCase()
-  if (SECRET_NAME_KEYWORDS.some((keyword) => upperName.includes(keyword))) {
-    return true
-  }
-  if (value.length < 16) return false
-  return !NUMERIC_OR_PATH_ONLY.test(value)
-}
-function buildStructuralPatterns(name) {
-  const escaped = escapeRegExp(name)
-  return [
-    new RegExp(`(?<![A-Za-z0-9_])\\$${escaped}(?![A-Za-z0-9_])`),
-    new RegExp(`\\$\\{${escaped}\\}`),
-    new RegExp(`process\\.env\\.${escaped}(?![A-Za-z0-9_])`),
-    new RegExp(`os\\.environ\\[\\s*['"]?${escaped}['"]?\\s*\\]`),
-    new RegExp(`(?<![A-Za-z0-9_])${escaped}=(?!=)`),
-  ]
-}
-function hasStructuralEnvReference(leaf, envNames) {
-  return envNames.some((name) =>
-    buildStructuralPatterns(name).some((pattern) => pattern.test(leaf)),
-  )
-}
-function hasEnvValueMatch(leaf, env) {
-  return Object.entries(env).some(
-    ([name, value]) => isValueQualifying(name, value) && leaf.includes(value),
-  )
-}
-function leafIsOffending(leaf, env, envNames) {
-  return (
-    hasStructuralEnvReference(leaf, envNames) || hasEnvValueMatch(leaf, env)
-  )
-}
-function collectStringLeaves(value, path = []) {
-  if (typeof value === 'string') {
-    return [{ path, value }]
-  }
-  if (Array.isArray(value)) {
-    return value.flatMap((item, index) =>
-      collectStringLeaves(item, [...path, index]),
-    )
-  }
-  if (value !== null && typeof value === 'object') {
-    return Object.entries(value).flatMap(([key, val]) =>
-      collectStringLeaves(val, [...path, key]),
-    )
-  }
-  return []
-}
-function findOffendingLeaf(value, path, env, envNames) {
-  return collectStringLeaves(value, path).find((leaf) =>
-    leafIsOffending(leaf.value, env, envNames),
-  )
-}
 function formatDiagnostic(persona, path, reason) {
   const jsonPath =
     typeof path === 'string' ? path : formatReviewArtifactIssuePath(path)
@@ -7486,9 +7411,8 @@ function wholePayloadRejection(persona, path, reason, knownFindingsCount) {
     testing_gaps: [],
   })
 }
-function screenReviewReturn(input, env) {
+function screenReviewReturn(input) {
   const persona = input.expected_reviewer
-  const envNames = Object.keys(env)
   const parsed = parseRawReturn(input.raw_return)
   if (!parsed.ok) {
     return wholePayloadRejection(persona, JSON_ROOT_PATH, 'malformed JSON', 0)
@@ -7507,52 +7431,15 @@ function screenReviewReturn(input, env) {
       raw.findings.length,
     )
   }
-  const outsideOffense =
-    findOffendingLeaf(raw.reviewer, ['reviewer'], env, envNames) ??
-    findOffendingLeaf(raw.residual_risks, ['residual_risks'], env, envNames) ??
-    findOffendingLeaf(raw.testing_gaps, ['testing_gaps'], env, envNames)
-  if (outsideOffense) {
-    return wholePayloadRejection(
-      persona,
-      outsideOffense.path,
-      'environment-value detection',
-      raw.findings.length,
-    )
-  }
-  const admittedFindings = []
-  const diagnostics = []
-  raw.findings.forEach((finding, originalIndex) => {
-    const offense = findOffendingLeaf(
-      finding,
-      ['findings', originalIndex],
-      env,
-      envNames,
-    )
-    if (offense) {
-      diagnostics.push(
-        formatDiagnostic(persona, offense.path, 'environment-value detection'),
-      )
-      return
-    }
-    admittedFindings.push({
-      ...finding,
-      disposition: 'surviving',
-      input_id: `${persona}#${originalIndex}`,
-    })
-  })
+  const admittedFindings = raw.findings.map((finding, originalIndex) => ({
+    ...finding,
+    disposition: 'surviving',
+    input_id: `${persona}#${originalIndex}`,
+  }))
   const dispatchOutcome = raw.findings.length === 0 ? 'empty' : 'findings'
   return ScreenOutputSchema.parse({
     admitted_findings: admittedFindings,
     dispatch_outcome: dispatchOutcome,
-    ...(diagnostics.length > 0
-      ? {
-          rejected_summary: {
-            dispatch_outcome: dispatchOutcome,
-            reason: truncateReason(diagnostics.join('; ')),
-            rejected_finding_count: diagnostics.length,
-          },
-        }
-      : {}),
     residual_risks: raw.residual_risks,
     testing_gaps: raw.testing_gaps,
   })
@@ -7596,13 +7483,6 @@ function parseScreenFlags(argv) {
   if (reviewer === undefined || harness === undefined) return { ok: false }
   return { harness, ok: true, reviewer }
 }
-function readEnvSnapshot() {
-  const snapshot = {}
-  for (const [name, value] of Object.entries(process.env)) {
-    if (typeof value === 'string') snapshot[name] = value
-  }
-  return snapshot
-}
 function runScreenSubcommand(options, outputSink, errorSink) {
   const flags = parseScreenFlags(options.argv.slice(1))
   if (!flags.ok) {
@@ -7631,10 +7511,10 @@ function runScreenSubcommand(options, outputSink, errorSink) {
     errorSink(CE_REVIEW_SCREEN_STDIN_INVALID_UTF8_MESSAGE)
     return 1
   }
-  const result = screenReviewReturn(
-    { expected_reviewer: flags.reviewer, raw_return: text },
-    readEnvSnapshot(),
-  )
+  const result = screenReviewReturn({
+    expected_reviewer: flags.reviewer,
+    raw_return: text,
+  })
   if (result.dispatch_outcome === 'malformed') {
     errorSink(
       result.rejected_summary?.reason ?? CE_REVIEW_SCREEN_REJECTED_MESSAGE,

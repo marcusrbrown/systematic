@@ -17,6 +17,10 @@ function readIfExists(filePath: string): string | undefined {
   return fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf8') : undefined
 }
 
+function normalize(text: string): string {
+  return text.replace(/\s+/g, ' ').trim()
+}
+
 describe('ce:review-cleanup skill contract', () => {
   test('SKILL.md exists with correct frontmatter identity', () => {
     const text = readIfExists(CLEANUP_SKILL_PATH)
@@ -238,10 +242,16 @@ describe('ce:review producer -- ignore preparation gate', () => {
     )
   })
 
-  test('existing environment-value validation instructions remain present and unpruned', () => {
-    const text = readIfExists(REVIEW_SKILL_PATH)
+  test('the sensitive-evidence handling section replacing the removed environment-value screen remains present and unpruned', () => {
+    const text = readIfExists(CONTRACT_PATH)
     expect(text).toBeDefined()
-    expect(text).toContain('environment-value')
+    const body = normalize(text ?? '')
+    expect(body).toContain('## Sensitive-evidence handling')
+    expect(body).toContain('not certified secret-free')
+    expect(body).toContain('without reproducing credential values')
+    expect(body).toMatch(
+      /environment-variable reference[\s\S]*?is valid evidence/,
+    )
   })
 
   test('ensure-ignore is invoked with the cwd-relative root, consistent with the cwd-relative RUN_ID mkdir', () => {
@@ -263,10 +273,13 @@ describe('synthesis-artifact-contract -- ignore-preparation reconciliation', () 
     expect(lower).toContain('no artifact')
   })
 
-  test('the existing environment-value validation and parent-side persistence rules remain intact', () => {
+  test('the sensitive-evidence handling guarantees and parent-side persistence rules remain intact', () => {
     const text = readIfExists(CONTRACT_PATH)
     expect(text).toBeDefined()
-    expect(text).toContain('Environment-value validation')
+    const body = normalize(text ?? '')
+    expect(body).toContain('## Sensitive-evidence handling')
+    expect(body).toContain('not certified secret-free')
+    expect(body).toContain('without reproducing credential values')
     expect(text).toContain('Validation and persistence remain parent-side')
   })
 })

@@ -47,13 +47,13 @@ const rawValidatorBlock = fencedBlocks(SKILL).find((block) =>
 )
 
 describe('ce:review raw-return admission contract', () => {
-  test('feeds returned payloads to the skill-local validator before parsing or screening', () => {
+  test('feeds returned payloads to the skill-local validator before parsing, synthesis, or persistence', () => {
     expect(rawValidatorBlock).toBeDefined()
     expect(SKILL_NORM).toContain(
       'node "$SKILL_DIR/scripts/validate-review.mjs" return',
     )
     expect(SKILL_NORM).toMatch(
-      /before (?:parsing|any field parse|environment-value screening|synthesis|persistence)/i,
+      /before (?:parsing|any field parse|synthesis|persistence)/i,
     )
   })
 
@@ -114,19 +114,15 @@ describe('ce:review raw-return admission contract', () => {
     expect(mergeIndex).toBeGreaterThan(identityIndex)
   })
 
-  test('orders identity binding after structural admission/parse and before screening, persistence, and synthesis', () => {
+  test('orders raw-return admission as structural validation, parse, identity binding, evidence assessment, then persistence/synthesis', () => {
     const admissionIndex = SKILL_NORM.search(/structurally admitted/i)
     const parseIndex = SKILL_NORM.search(
       /parse the already structurally validated JSON/i,
     )
     const identityIndex = SKILL_NORM.search(/dispatch identity binding/i)
-    // Anchor screening/persistence to the Stage 5 fixed-order restatement.
-    // The earlier exit-0 paragraph mentions screening and persistence before
-    // the identity gate is defined, so its offsets cannot prove that the gate
-    // precedes them; the restatement states the required order explicitly.
-    const screenIndex = SKILL_NORM.search(
-      /run the unchanged environment-value screen/i,
-    )
+    // Anchor evidence assessment/persistence to the Stage 5 fixed-order
+    // restatement, which states the required order explicitly.
+    const assessIndex = SKILL_NORM.search(/assess evidence/i)
     const persistIndex = SKILL_NORM.search(
       /only then add parent annotations, persist, or synthesize/i,
     )
@@ -137,9 +133,9 @@ describe('ce:review raw-return admission contract', () => {
     expect(synthesisIndex).toBeGreaterThanOrEqual(0)
     expect(parseIndex).toBeGreaterThan(admissionIndex)
     expect(identityIndex).toBeGreaterThan(parseIndex)
-    expect(screenIndex).toBeGreaterThan(identityIndex)
-    expect(persistIndex).toBeGreaterThan(screenIndex)
-    expect(synthesisIndex).toBeGreaterThan(identityIndex)
+    expect(identityIndex).toBeLessThan(synthesisIndex)
+    expect(assessIndex).toBeGreaterThan(identityIndex)
+    expect(persistIndex).toBeGreaterThan(assessIndex)
   })
 
   test('coverage distinguishes every admission state without new artifact fields', () => {
@@ -148,7 +144,6 @@ describe('ce:review raw-return admission contract', () => {
       'empty',
       'malformed',
       'never_returned',
-      'environment-screen',
       'validation unavailable',
     ]) {
       expect(`${OUTPUT_NORM} ${SKILL_NORM}`).toContain(token)
@@ -240,24 +235,24 @@ describe('ce:review raw-return admission contract', () => {
     }
   })
 
-  test('orders parent parsing after validator admission and before environment screening', () => {
-    // The contradictory ordering (screen before parse) must never reappear.
-    expect(SKILL_NORM).not.toMatch(/clean environment screen, parse/i)
-    expect(SKILL_NORM).not.toMatch(
-      /environment-value screen[^.]*before[^.]*parse/i,
-    )
+  test('orders parent parsing before dispatch identity binding in every document, and forbids the removed environment-value screen', () => {
+    // The removed environment-value screen must never reappear.
+    expect(SKILL_NORM).not.toMatch(/environment-value screen/i)
+    expect(SYNTH_NORM).not.toMatch(/environment-value screen/i)
+    expect(SKILL_NORM).not.toMatch(/environment-screen/i)
+    expect(SYNTH_NORM).not.toMatch(/environment-screen/i)
 
     for (const doc of [SKILL_NORM, SYNTH_NORM]) {
       const parseIndex = doc.search(
         /parse the already structurally validated JSON/i,
       )
-      const screenIndex = doc.search(/environment-value screen/i)
+      const identityIndex = doc.search(/dispatch identity binding/i)
       expect(parseIndex).toBeGreaterThanOrEqual(0)
-      expect(screenIndex).toBeGreaterThanOrEqual(0)
-      expect(parseIndex).toBeLessThan(screenIndex)
+      expect(identityIndex).toBeGreaterThanOrEqual(0)
+      expect(parseIndex).toBeLessThan(identityIndex)
     }
 
-    // Exit 1 forbids parent parse/screen/persist.
+    // Exit 1 forbids parent parse/persist.
     expect(SKILL_NORM).toMatch(/exit 1[^.]*(?:do not|never)[^.]*parse/i)
   })
 

@@ -28,11 +28,11 @@ reason. An unfinished `in_progress` artifact is evidence of an abnormal run,
 not evidence of a clean run. Never infer a clean run from an absent artifact.
 
 The artifact is parent-owned. Per-agent full-detail JSON files are written
-only for findings admitted after the parent completes schema and
-environment-value validation. A finding rejected by environment-value
-detection is not persisted; other findings from the same return may proceed.
-A payload rejected at top level, or a rejected, never-returned, or
-validation-unavailable persona, does not produce a per-agent file. If a later confidence or validation stage
+only for findings admitted after the parent completes schema validation. A
+finding rejected by schema validation is not persisted; other findings from
+the same return may proceed. A payload rejected at top level, or a rejected,
+never-returned, or validation-unavailable persona, does not produce a
+per-agent file. If a later confidence or validation stage
 changes an input disposition, the parent updates the record and synthesis
 ledger before finalizing the artifact.
 
@@ -131,7 +131,7 @@ The artifact must preserve these distinctions:
   When a rejected finding's severity is absent, malformed, or not a valid
   severity value, record it as `unknown`. Severity is metadata; recording it
   never includes the offending value. Do not enumerate rejected findings or
-  assign them input IDs. A finding-level environment rejection uses the same
+  assign them input IDs. A finding-level schema rejection uses the same
   summary entry while admitted findings from that return continue normally.
   New writers must emit a rejected-summary row only for `findings` or
   `malformed`. The schema_version 1 validator deliberately continues to accept a
@@ -183,8 +183,8 @@ is finalized; consumers can therefore tell whether the artifact describes the
 current checkout.
 
 Validation and persistence remain parent-side: no per-agent record or finding
-is written or merged until that finding passes schema and environment-value
-validation. Rejected findings are recorded through the single rejected-payload
+is written or merged until that finding passes schema validation. Rejected
+findings are recorded through the single rejected-payload
 ledger summary; admitted findings from the same return remain eligible for
 synthesis. Rejected or malformed persona returns do not fail the whole review;
 the review degrades while conforming returns continue through synthesis. Only
@@ -193,9 +193,9 @@ required run artifact is run-fatal.
 
 ## Raw-return admission and validation availability
 
-Before a persona return is parsed into fields, screened for environment values,
-assessed for evidence, synthesized, or persisted, the parent admits it with the
-packaged structural validator:
+Before a persona return is parsed into fields, assessed for evidence,
+synthesized, or persisted, the parent admits it with the packaged structural
+validator:
 
 ```bash
 # Resolve the validator relative to the skill's own directory.
@@ -214,16 +214,15 @@ containing exactly that delimiter. The payload travels on stdin, never in argv;
 never use unquoted interpolation or command substitution, and never write the
 payload to a temp file.
 
-The parent maps the result to `dispatch_outcome`, keeping lifecycle, structural
-validity, environment screening, and evidence assessment separate:
+The parent maps the result to `dispatch_outcome`, keeping lifecycle,
+structural validity, and evidence assessment separate:
 
 - **exit 0** — structurally admitted. Parse the already structurally validated
-  JSON without logging the raw text, then run the existing environment-value
-  screen over that parsed object before persistence. Zero findings is `empty`;
-  one or more findings is `findings`. Admission is structural only: it never
-  asserts that a finding's claims or cited evidence are true.
+  JSON without logging the raw text. Zero findings is `empty`; one or more
+  findings is `findings`. Admission is structural only: it never asserts that
+  a finding's claims or cited evidence are true.
 - **exit 1** — `malformed`. Record bounded validator diagnostics only; do not
-  parse, screen, or persist payload fields or values.
+  parse or persist payload fields or values.
 - **exit 2**, a missing or unreadable helper, or a launch failure — validation
   unavailable. Withhold the return and report the exact unavailability and what
   was withheld. Update that selected persona's preinitialized dispatch entry
@@ -237,13 +236,13 @@ validity, environment screening, and evidence assessment separate:
   not malformed and is not never_returned.
 
 **Dispatch identity binding.** Structural admission does not prove who produced a
-return. Immediately after `exit 0` and before the environment-value screen,
-persistence, or synthesis, the parent parses the admitted return's `reviewer`
+return. Immediately after `exit 0` and before persistence or synthesis, the
+parent parses the admitted return's `reviewer`
 field and confirms it equals the dispatched persona. A return whose `reviewer`
 does not match the dispatched persona is an identity mismatch: reject the whole
 return as `dispatch_outcome: "malformed"`, record only a bounded rejection reason
 naming the expected persona, set `run_status` to `degraded`, and do not admit,
-screen, persist, or synthesize its payload.
+persist, or synthesize its payload.
 
 `validation_unavailable` is an additive enum value: `schema_version` stays `1`,
 existing v1 artifacts remain valid, and no new field or migration is introduced.
@@ -256,34 +255,29 @@ that is a different object and phase, and these fields are never repurposed for
 raw-dispatch availability. These admission states are surfaced in the report's
 Coverage, which reports the exact unavailability and what was withheld.
 
-## Environment-value validation
+## Sensitive-evidence handling
 
-The parent recursively inspects every string leaf without logging the raw
-return or any matched value. Structural environment detectors remain
-unbounded and unchanged: `$NAME`, `${NAME}`, `process.env.NAME`,
-`os.environ[...]`, and `NAME=value` assignments using a known environment
-variable name are shape-based checks.
+Review artifacts may contain sensitive source-derived information. They are
+not certified secret-free.
 
-Value-based matching uses only non-empty runtime environment values that are
-at least 16 characters long and are not composed solely of digits, dots,
-dashes, or path-separator characters (forward slash or backslash). A
-value is also eligible regardless of length when
-its variable name contains one of `TOKEN`, `SECRET`, `KEY`, `PASSWORD`,
-`PASSWD`, `CREDENTIAL`, `AUTH`, `SESSION`, `COOKIE`, `PRIVATE`, `_PASS`,
-`_PWD`, `PASSPHRASE`, or `_SALT`, matched as a case-insensitive substring.
-Entries containing an underscore are matched against the variable name as
-written; the underscore is deliberate and prevents matching benign names that
-merely contain the bare word. Values that satisfy neither condition are not
-matched. A match is an exact or embedded match.
+Reviewers must describe credential and secret-handling defects without
+reproducing credential values. Cite repository-relative locations and
+behavioral evidence instead of the value itself. An environment-variable
+reference appearing in reviewed source (`process.env.API_KEY`,
+`${SECRET_TOKEN}`, and similar) is valid evidence and is never rejected for
+being a reference.
 
-If the offending string is inside one finding, drop that finding and record it
-through the rejected-payload summary entry; the remaining findings continue
-through validation and synthesis. If the offending string is outside any
-finding, reject the whole payload. Every rejection uses only the persona name,
-JSON path, and a fixed reason (`schema validation`, `environment-value
-detection`, or `malformed JSON`):
+The parent must not deliberately log, cache, or write a raw return to a
+temporary file. Diagnostics stay allowlisted to persona name, JSON path, and a
+fixed reason (`schema validation` or `malformed JSON`):
 `Rejected persona <name> return: field <JSON path> failed <reason>.` Never
-echo the matched value.
+exception text, raw validation-library issue objects, candidate values, or
+variable names.
+
+These are handling instructions that reduce accidental disclosure, not
+technical containment. Real containment would require restricting reviewer
+inputs and capabilities at the harness boundary, which this portable Node
+helper does not provide.
 
 ## Artifact validation
 
@@ -387,8 +381,8 @@ it is blocking unless another persona covered the lost surface with validated
 evidence. For this rule, a validated finding from another persona covers a
 lost risk-critical surface if and only if the finding's `file` appears in the
 lost persona's recorded `selection_surface`; validated evidence means at least
-one finding from that other persona's return passed complete schema and
-environment-value validation. A coverage note alone cannot satisfy this rule;
+one finding from that other persona's return passed complete schema
+validation. A coverage note alone cannot satisfy this rule;
 the verdict must reflect the missing risk-critical evidence.
 
 Finding-level rejection is keyed by the severities in
