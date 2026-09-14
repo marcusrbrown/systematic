@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type {
+  ApplyReviewAdjudicationResult,
   DeriveMergedFindingResult,
   MergeContributingFindings,
   MergedFindingModelDecision,
@@ -7,6 +8,7 @@ import type {
   ValidateAdjudicationResult,
 } from '../../src/lib/review-pipeline.js'
 import {
+  applyReviewAdjudication,
   deriveMergedFindingFields,
   validateAdjudication,
 } from '../../src/lib/review-pipeline.js'
@@ -642,5 +644,291 @@ describe('deriveMergedFindingFields', () => {
     expect(resultB.ok).toBe(true)
     if (!resultA.ok || !resultB.ok) return
     expect(resultA.value.fingerprint).not.toBe(resultB.value.fingerprint)
+  })
+})
+
+type ApplyDecision = Parameters<typeof applyReviewAdjudication>[0]['decisions']
+
+function expectApplyRejection(
+  result: ApplyReviewAdjudicationResult,
+  reason: string,
+): void {
+  expect(result.ok).toBe(false)
+  if (result.ok) return
+  expect(result.rejection.reason as string).toBe(reason)
+  expect('value' in result).toBe(false)
+}
+
+/**
+ * Builds a `PrepareOutput` directly from a fully custom set of surviving
+ * findings, bypassing the `prepared()` fixture (which hardcodes every
+ * finding's severity/confidence/file/line) so a test can control those
+ * fields per finding.
+ */
+function preparedFromFindings(
+  findings: PrepareOutput['surviving_findings'],
+): PrepareOutput {
+  return {
+    candidate_groups: [],
+    confidence_dispositions: findings.map((finding) => ({
+      confidence: finding.confidence,
+      disposition: 'surviving' as const,
+      input_id: finding.input_id,
+    })),
+    coverage_union: [],
+    singletons: findings.map((finding) => finding.input_id),
+    surviving_findings: findings,
+  }
+}
+
+describe('applyReviewAdjudication', () => {
+  test('a partition of one merge plus declined singletons produces both, with the merged finding carrying derived fields and singletons passing through', () => {
+    const groups = [
+      group('src/a.ts', [
+        { input_id: 'correctness#0', line: 10 },
+        { input_id: 'security#0', line: 12 },
+      ]),
+      group('src/b.ts', [
+        { input_id: 'correctness#1', line: 20 },
+        { input_id: 'security#1', line: 22 },
+      ]),
+    ]
+    const decisions: ApplyDecision = [
+      mergedDecision({
+        input_finding_ids: ['correctness#0', 'security#0'],
+        line: 10,
+      }),
+      declinedDecision('decline-1', 'correctness#1'),
+      declinedDecision('decline-2', 'security#1'),
+    ]
+
+    const result = applyReviewAdjudication({
+      prepared: prepared(groups, { singletons: ['correctness#2'] }),
+      decisions,
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.merged_findings).toHaveLength(4)
+
+    const merged = result.value.merged_findings.find(
+      (finding) => finding.finding_id === 'merge-1',
+    )
+    expect(merged).toBeDefined()
+    expect(merged?.file).toBe('src/a.ts')
+    expect(merged?.title).toBe('Duplicate finding across reviewers')
+    expect(merged?.why_it_matters).toBe(
+      'Both reviewers independently caught the same defect.',
+    )
+    expect(merged?.suggested_fix).toBe('Apply the shared fix once.')
+    expect(merged?.line).toBe(10)
+    expect(merged?.input_finding_ids).toEqual(['correctness#0', 'security#0'])
+    // Two distinct submitters -- the confidence-agreement boost applies.
+    expect(merged?.requires_verification).toBe(true)
+
+    const declined = result.value.merged_findings.find(
+      (finding) => finding.finding_id === 'decline-1',
+    )
+    expect(declined).toBeDefined()
+    expect(declined?.input_finding_ids).toEqual(['correctness#1'])
+    expect(declined?.title).toBe('Example issue')
+
+    const singleton = result.value.merged_findings.find(
+      (finding) => finding.finding_id === 'correctness#2',
+    )
+    expect(singleton).toBeDefined()
+    expect(singleton?.input_finding_ids).toEqual(['correctness#2'])
+
+    // The declined-separation reasons flow into the top-level disagreement
+    // facts since `MergedFindingSchema` has no dedicated field for them.
+    expect(result.value.disagreement_facts).toContain(
+      'Not corroborated by another reviewer.',
+    )
+  })
+
+  test('zero candidate groups with an empty decision set succeeds and passes every singleton through', () => {
+    const result = applyReviewAdjudication({
+      prepared: prepared([], { singletons: ['x#0', 'x#1'] }),
+      decisions: [],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.merged_findings).toHaveLength(2)
+    expect(
+      result.value.merged_findings.map((finding) => finding.finding_id).sort(),
+    ).toEqual(['x#0', 'x#1'])
+    expect(
+      result.value.merged_findings.every(
+        (finding) => finding.input_finding_ids.length === 1,
+      ),
+    ).toBe(true)
+  })
+
+  test('a rejection from partition validation aborts with no partial output', () => {
+    const groups = [
+      group('src/x.ts', [
+        { input_id: 'correctness#0', line: 5 },
+        { input_id: 'security#0', line: 6 },
+      ]),
+    ]
+    const decisions: ApplyDecision = [
+      declinedDecision('decline-1', 'unknown#0'),
+    ]
+
+    const result = applyReviewAdjudication({
+      prepared: prepared(groups),
+      decisions,
+    })
+
+    expectApplyRejection(result, 'unknown input id')
+  })
+
+  test('a rejection from field derivation aborts with no partial output', () => {
+    // Not reachable via a literal route-widening decision: the current
+    // `MergedDecisionSchema` carries no `proposed_route` field, so route
+    // narrowing can never be proposed through the wire adjudication
+    // envelope. `eligible_agreement_credit` is a real schema field, so an
+    // invalid agreement-credit claim exercises the same
+    // whole-derivation-rejects-with-no-partial-output guarantee instead.
+    const groups = [
+      group('src/x.ts', [
+        { input_id: 'correctness#0', line: 5 },
+        { input_id: 'security#0', line: 6 },
+      ]),
+    ]
+    const decisions: ApplyDecision = [
+      mergedDecision({
+        input_finding_ids: ['correctness#0', 'security#0'],
+        line: 5,
+        eligible_agreement_credit: ['performance'],
+      }),
+    ]
+
+    const result = applyReviewAdjudication({
+      prepared: prepared(groups),
+      decisions,
+    })
+
+    expectApplyRejection(result, 'agreement credit reviewer did not return')
+  })
+
+  test('the validator request set contains exactly P0/P1 findings plus requires_verification findings, and nothing else', () => {
+    const findings = [
+      {
+        ...survivingFinding('p0-low#0'),
+        severity: 'P0' as const,
+        requires_verification: false,
+        confidence: 0.5,
+      },
+      {
+        ...survivingFinding('p1-low#0'),
+        severity: 'P1' as const,
+        requires_verification: false,
+        confidence: 0.6,
+      },
+      {
+        ...survivingFinding('p2-verify#0'),
+        severity: 'P2' as const,
+        requires_verification: true,
+        confidence: 0.7,
+      },
+      {
+        ...survivingFinding('p2-plain#0'),
+        severity: 'P2' as const,
+        requires_verification: false,
+        confidence: 0.8,
+      },
+    ]
+
+    const result = applyReviewAdjudication({
+      prepared: preparedFromFindings(findings),
+      decisions: [],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(
+      result.value.validator_requests
+        .map((request) => request.finding_id)
+        .sort(),
+    ).toEqual(['p0-low#0', 'p1-low#0', 'p2-verify#0'])
+    expect(
+      result.value.validator_requests.some(
+        (request) => request.finding_id === 'p2-plain#0',
+      ),
+    ).toBe(false)
+  })
+
+  test('findings come out sorted by severity, then confidence descending, then path, then line', () => {
+    const findings = [
+      {
+        ...survivingFinding('alpha#0'),
+        severity: 'P1' as const,
+        confidence: 0.99,
+        file: 'src/z.ts',
+        line: 1,
+      },
+      {
+        ...survivingFinding('beta#0'),
+        severity: 'P0' as const,
+        confidence: 0.5,
+        file: 'src/a.ts',
+        line: 1,
+      },
+      {
+        ...survivingFinding('gamma#0'),
+        severity: 'P0' as const,
+        confidence: 0.5,
+        file: 'src/a.ts',
+        line: 9,
+      },
+    ]
+
+    const result = applyReviewAdjudication({
+      prepared: preparedFromFindings(findings),
+      decisions: [],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    // `beta` (P0) outranks `alpha` (P1) even with far lower confidence;
+    // `gamma` shares beta's severity and confidence but sorts after it by
+    // line, since both share the same path.
+    expect(
+      result.value.merged_findings.map((finding) => finding.finding_id),
+    ).toEqual(['beta#0', 'gamma#0', 'alpha#0'])
+  })
+
+  test('permuting decision order yields byte-identical output', () => {
+    const groups = [
+      group('src/a.ts', [
+        { input_id: 'correctness#0', line: 10 },
+        { input_id: 'security#0', line: 12 },
+      ]),
+      group('src/b.ts', [
+        { input_id: 'correctness#1', line: 20 },
+        { input_id: 'security#1', line: 22 },
+      ]),
+    ]
+    const decisions: ApplyDecision = [
+      mergedDecision({
+        input_finding_ids: ['correctness#0', 'security#0'],
+        line: 10,
+      }),
+      declinedDecision('decline-1', 'correctness#1'),
+      declinedDecision('decline-2', 'security#1'),
+    ]
+
+    const forward = applyReviewAdjudication({
+      prepared: prepared(groups, { singletons: ['correctness#2'] }),
+      decisions,
+    })
+    const reversed = applyReviewAdjudication({
+      prepared: prepared(groups, { singletons: ['correctness#2'] }),
+      decisions: [...decisions].reverse(),
+    })
+
+    expect(JSON.stringify(forward)).toBe(JSON.stringify(reversed))
   })
 })

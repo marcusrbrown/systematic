@@ -9,6 +9,7 @@ import {
   type AdjudicationEnvelopeSchema,
   AGGREGATE_STDIN_BYTE_CAP,
   isRouteTransitionAllowed,
+  MergeOutputSchema,
   type PipelineRoute,
   PrepareInputSchema,
   PrepareOutputSchema,
@@ -1234,5 +1235,402 @@ export function deriveMergedFindingFields(
       fingerprint,
       route: routeResult.value,
     },
+  }
+}
+
+// --- merge phase: adjudication application -----------------------------------
+//
+// Pure, side-effect-free assembly of the full merge phase: validates the
+// adjudication partition, derives every merged finding's mechanical fields,
+// emits the validator request set, sorts everything stably, and returns a
+// `MergeOutputSchema`-conforming result. This is assembly only -- the two
+// hard parts (`validateAdjudication`, `deriveMergedFindingFields`) already
+// exist above and are never re-derived here. Never reads `process.env`, the
+// filesystem, or the clock.
+
+export type MergeOutput = ReturnType<typeof MergeOutputSchema.parse>
+
+/** Raw application input: the prepared candidate state plus the model's
+ * adjudication decisions, matching `MergeInputSchema`'s two fields exactly. */
+export interface ApplyReviewAdjudicationInput {
+  readonly prepared: PrepareOutput
+  readonly decisions: AdjudicationDecisions
+}
+
+export type ApplyReviewAdjudicationResult =
+  | { readonly ok: true; readonly value: MergeOutput }
+  | {
+      readonly ok: false
+      readonly rejection: AdjudicationRejection | MergedFindingRejection
+    }
+
+/** Parses the persona prefix out of a stable `<persona>#<index>` input ID --
+ * the exact convention `screenReviewReturn` mints every input ID under. Used
+ * only where a reviewer identity is otherwise unavailable (a suppressed
+ * confidence disposition carries no `reviewer` field of its own). */
+function reviewerFromInputId(inputId: string): string {
+  const separatorIndex = inputId.indexOf('#')
+  return separatorIndex === -1 ? inputId : inputId.slice(0, separatorIndex)
+}
+
+/**
+ * Every reviewer whose `SubAgentReturn` contributed at least one admitted
+ * finding to this run -- the eligibility set `deriveMergedFindingFields`
+ * checks claimed agreement credit against. Surviving findings already carry
+ * their reviewer directly; a suppressed finding does not, so its reviewer is
+ * recovered from its stable input ID instead.
+ */
+function deriveReturnedReviewers(prepared: PrepareOutput): readonly string[] {
+  const reviewers = new Set<string>()
+  for (const finding of prepared.surviving_findings) {
+    reviewers.add(finding.reviewer)
+  }
+  for (const disposition of prepared.confidence_dispositions) {
+    if (disposition.disposition === 'suppressed') {
+      reviewers.add(reviewerFromInputId(disposition.input_id))
+    }
+  }
+  return [...reviewers]
+}
+
+function buildSurvivingFindingIndex(
+  prepared: PrepareOutput,
+): ReadonlyMap<string, SurvivingFinding> {
+  return new Map(
+    prepared.surviving_findings.map((finding) => [finding.input_id, finding]),
+  )
+}
+
+/** Resolves one stable input ID to its surviving finding. Unreachable in
+ * practice: `validateAdjudication` only accepts input IDs that are real
+ * candidate-group members, and every candidate-group member originates from
+ * `prepared.surviving_findings` in `prepareReviewCandidates` -- the two are
+ * always constructed from the same survivor set. Throws rather than
+ * returning a bounded rejection because a lookup miss here is a pipeline
+ * data-integrity violation, not a malformed model decision. */
+function requireSurvivingFinding(
+  index: ReadonlyMap<string, SurvivingFinding>,
+  inputId: string,
+): SurvivingFinding {
+  const finding = index.get(inputId)
+  if (!finding) {
+    throw new Error(
+      `applyReviewAdjudication: no surviving finding for input ID ${inputId}`,
+    )
+  }
+  return finding
+}
+
+/** Narrows a findings array to the non-empty tuple `deriveMergedFindingFields`
+ * requires. Unreachable in practice: every caller supplies either a
+ * validated merge group (`MergedDecisionSchema.input_finding_ids` is
+ * `.min(2)`, already enforced when `decisions` was parsed) or a duplicated
+ * singleton finding -- both always yield >= 2 entries. */
+function toContributingTuple(
+  findings: readonly SurvivingFinding[],
+): MergeContributingFindings {
+  const [first, second, ...rest] = findings
+  if (!first || !second) {
+    throw new Error(
+      'applyReviewAdjudication: contributing findings require at least two entries',
+    )
+  }
+  return [first, second, ...rest]
+}
+
+/** One assembled merged finding carrying both the fields the wire
+ * `MergedFindingSchema` exposes and the mechanical fields (`severity`,
+ * `confidence`, `fingerprint`) that only drive sorting and validator-request
+ * selection but never appear on the wire themselves. */
+interface MergedFindingAssembly {
+  readonly finding_id: string
+  readonly file: string
+  readonly title: string
+  readonly why_it_matters: string
+  readonly line: number
+  readonly evidence: SurvivingFinding['evidence']
+  readonly suggested_fix: SurvivingFinding['suggested_fix']
+  readonly input_finding_ids: readonly string[]
+  readonly agreement_credit?: readonly string[]
+  readonly severity: SurvivingFinding['severity']
+  readonly confidence: number
+  readonly fingerprint: string
+  readonly autofix_class: PipelineRoute['autofix_class']
+  readonly owner: PipelineRoute['owner']
+  readonly requires_verification: boolean
+}
+
+type AssembleFindingResult =
+  | { readonly ok: true; readonly value: MergedFindingAssembly }
+  | { readonly ok: false; readonly rejection: MergedFindingRejection }
+
+function assemblyFromDerivation(
+  base: {
+    readonly finding_id: string
+    readonly file: string
+    readonly title: string
+    readonly why_it_matters: string
+    readonly line: number
+    readonly evidence: SurvivingFinding['evidence']
+    readonly suggested_fix: SurvivingFinding['suggested_fix']
+    readonly input_finding_ids: readonly string[]
+  },
+  derived: DerivedMergedFindingFields,
+): MergedFindingAssembly {
+  return {
+    ...base,
+    agreement_credit:
+      derived.agreement_credit.length > 0
+        ? derived.agreement_credit
+        : undefined,
+    severity: derived.severity,
+    confidence: derived.confidence,
+    fingerprint: derived.fingerprint,
+    autofix_class: derived.route.autofix_class,
+    owner: derived.route.owner,
+    requires_verification: derived.route.requires_verification,
+  }
+}
+
+/** Assembles one merged group's finding: resolves its contributing survivors
+ * by stable input ID (sorted, so contributor order never depends on
+ * decision-citation order), derives its mechanical fields, and carries the
+ * model-owned narrative fields (title, why-it-matters, evidence, suggested
+ * fix, representative line) through untouched. */
+function assembleMergedGroupFinding(
+  group: ValidatedMergedGroup,
+  survivingIndex: ReadonlyMap<string, SurvivingFinding>,
+  returnedReviewers: readonly string[],
+): AssembleFindingResult {
+  const decision = group.decision
+  const sortedInputIds = [...decision.input_finding_ids].sort(compareStrings)
+  const contributing = toContributingTuple(
+    sortedInputIds.map((inputId) =>
+      requireSurvivingFinding(survivingIndex, inputId),
+    ),
+  )
+
+  const derived = deriveMergedFindingFields({
+    contributing,
+    decision: {
+      line: decision.line,
+      eligible_agreement_credit: decision.eligible_agreement_credit,
+      route_narrowing_reason: decision.route_narrowing_reason,
+    },
+    returned_reviewers: returnedReviewers,
+  })
+  if (!derived.ok) return derived
+
+  return {
+    ok: true,
+    value: assemblyFromDerivation(
+      {
+        finding_id: decision.decision_id,
+        file: group.file,
+        title: decision.title,
+        why_it_matters: decision.why_it_matters,
+        line: decision.line,
+        evidence: decision.evidence,
+        suggested_fix: decision.suggested_fix,
+        input_finding_ids: sortedInputIds,
+      },
+      derived.value,
+    ),
+  }
+}
+
+/** Assembles one singleton finding -- either a model-declined candidate or a
+ * true passthrough singleton that was never grouped. Both have exactly one
+ * contributing finding, so it is duplicated to satisfy
+ * `deriveMergedFindingFields`'s non-empty-tuple contract; every derivation
+ * in that function is idempotent under duplication (max/every/distinct-set
+ * operations), so the result is identical to a hypothetical single-input
+ * derivation. The model-owned narrative fields (title, why-it-matters,
+ * evidence, suggested fix) are carried through from the finding itself,
+ * since a singleton decision never states its own. */
+function assembleSingletonFinding(
+  findingId: string,
+  finding: SurvivingFinding,
+  decisionFields: { readonly route_narrowing_reason?: string },
+  returnedReviewers: readonly string[],
+): AssembleFindingResult {
+  const contributing: MergeContributingFindings = [finding, finding]
+
+  const derived = deriveMergedFindingFields({
+    contributing,
+    decision: {
+      line: finding.line,
+      route_narrowing_reason: decisionFields.route_narrowing_reason,
+    },
+    returned_reviewers: returnedReviewers,
+  })
+  if (!derived.ok) return derived
+
+  return {
+    ok: true,
+    value: assemblyFromDerivation(
+      {
+        finding_id: findingId,
+        file: normalizeRepoRelativePath(finding.file),
+        title: finding.title,
+        why_it_matters: finding.why_it_matters,
+        line: finding.line,
+        evidence: finding.evidence,
+        suggested_fix: finding.suggested_fix,
+        input_finding_ids: [finding.input_id],
+      },
+      derived.value,
+    ),
+  }
+}
+
+/**
+ * Total order over assembled findings: severity (`P0` first), then
+ * confidence descending, then normalized file path, then line, then
+ * fingerprint as the stable tiebreak. Every field is either mechanically
+ * derived or a stable input, so this order never depends on decision or
+ * candidate-group iteration order.
+ */
+function compareMergedFindingAssembly(
+  a: MergedFindingAssembly,
+  b: MergedFindingAssembly,
+): number {
+  const severityDelta = SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]
+  if (severityDelta !== 0) return severityDelta
+  if (a.confidence !== b.confidence) return b.confidence - a.confidence
+  const pathDelta = compareStrings(a.file, b.file)
+  if (pathDelta !== 0) return pathDelta
+  if (a.line !== b.line) return a.line - b.line
+  return compareStrings(a.fingerprint, b.fingerprint)
+}
+
+/** The validator request set is purely mechanical: exactly every merged
+ * finding that is `P0` or `P1`, plus every merged finding with
+ * `requires_verification: true`. Never model-influenced beyond the route
+ * `requires_verification` value `deriveMergedFindingFields` already
+ * computed. */
+function requiresValidatorRequest(assembly: MergedFindingAssembly): boolean {
+  return (
+    assembly.severity === 'P0' ||
+    assembly.severity === 'P1' ||
+    assembly.requires_verification
+  )
+}
+
+function toMergedFindingWireShape(
+  assembly: MergedFindingAssembly,
+): MergeOutput['merged_findings'][number] {
+  return {
+    finding_id: assembly.finding_id,
+    file: assembly.file,
+    title: assembly.title,
+    why_it_matters: assembly.why_it_matters,
+    line: assembly.line,
+    autofix_class: assembly.autofix_class,
+    owner: assembly.owner,
+    requires_verification: assembly.requires_verification,
+    evidence: assembly.evidence,
+    suggested_fix: assembly.suggested_fix,
+    input_finding_ids: [...assembly.input_finding_ids],
+    ...(assembly.agreement_credit
+      ? { agreement_credit: [...assembly.agreement_credit] }
+      : {}),
+  }
+}
+
+/**
+ * The top-level merge phase: validates the adjudication partition, derives
+ * every merged finding (one per merge group, one per declined singleton, one
+ * per passthrough singleton) via `deriveMergedFindingFields`, emits the
+ * mechanical validator request set, sorts everything stably, and parses the
+ * assembled result through `MergeOutputSchema` before returning success.
+ *
+ * Rejection is whole-phase only: a partition violation from
+ * `validateAdjudication` or a field-derivation violation from
+ * `deriveMergedFindingFields` (for any single group or singleton) aborts
+ * immediately with no partial output -- this function never accumulates
+ * merged findings past the first rejection, and never calls
+ * `MergeOutputSchema.parse` until every finding derived successfully.
+ *
+ * The top-level `disagreement_facts` collects every decision's own
+ * `disagreement_facts`, plus every declined decision's `declined_reason` --
+ * the "why these were not merged" narrative that has no dedicated field on
+ * `MergedFindingSchema` itself.
+ */
+export function applyReviewAdjudication(
+  input: ApplyReviewAdjudicationInput,
+): ApplyReviewAdjudicationResult {
+  const validated = validateAdjudication(input.prepared, input.decisions)
+  if (!validated.ok) return validated
+
+  const survivingIndex = buildSurvivingFindingIndex(input.prepared)
+  const returnedReviewers = deriveReturnedReviewers(input.prepared)
+
+  const assemblies: MergedFindingAssembly[] = []
+  const disagreementFacts: string[] = []
+
+  for (const group of validated.value.merged) {
+    const result = assembleMergedGroupFinding(
+      group,
+      survivingIndex,
+      returnedReviewers,
+    )
+    if (!result.ok) return result
+    assemblies.push(result.value)
+    if (group.decision.disagreement_facts) {
+      disagreementFacts.push(...group.decision.disagreement_facts)
+    }
+  }
+
+  for (const singleton of validated.value.declined) {
+    const finding = requireSurvivingFinding(
+      survivingIndex,
+      singleton.decision.input_finding_id,
+    )
+    const result = assembleSingletonFinding(
+      singleton.decision.decision_id,
+      finding,
+      { route_narrowing_reason: singleton.decision.route_narrowing_reason },
+      returnedReviewers,
+    )
+    if (!result.ok) return result
+    assemblies.push(result.value)
+    disagreementFacts.push(singleton.decision.declined_reason)
+    if (singleton.decision.disagreement_facts) {
+      disagreementFacts.push(...singleton.decision.disagreement_facts)
+    }
+  }
+
+  for (const inputId of validated.value.singletons) {
+    const finding = requireSurvivingFinding(survivingIndex, inputId)
+    const result = assembleSingletonFinding(
+      inputId,
+      finding,
+      {},
+      returnedReviewers,
+    )
+    if (!result.ok) return result
+    assemblies.push(result.value)
+  }
+
+  assemblies.sort(compareMergedFindingAssembly)
+  disagreementFacts.sort(compareStrings)
+
+  const mergedFindings = assemblies.map(toMergedFindingWireShape)
+  const validatorRequests = assemblies
+    .filter(requiresValidatorRequest)
+    .map((assembly) => ({
+      finding_id: assembly.finding_id,
+      file: assembly.file,
+      line: assembly.line,
+    }))
+
+  return {
+    ok: true,
+    value: MergeOutputSchema.parse({
+      merged_findings: mergedFindings,
+      validator_requests: validatorRequests,
+      disagreement_facts: disagreementFacts,
+    }),
   }
 }
