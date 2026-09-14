@@ -535,9 +535,7 @@ export const PlanAssessmentEnvelopeSchema = z
 // `mode` enum: it additionally accepts `report-only` for a run that never
 // writes an artifact. The artifact's own `mode` enum stays untouched.
 const ParentRunModeSchema = z.enum([
-  'interactive',
-  'autofix',
-  'headless',
+  ...ReviewArtifactSchema.shape.mode.options,
   'report-only',
 ] as const)
 
@@ -583,12 +581,12 @@ export const FinalizeInputSchema = z
 const FinalizedInputDispositionSchema = z
   .object({
     input_id: PipelineInputIdSchema,
-    disposition: z.enum([
+    disposition: DispositionSchema.extract([
       'suppressed',
       'filtered',
       'merged',
       'surviving',
-    ] as const),
+    ]),
     reason: PipelineReasonSchema.optional(),
   })
   .strict()

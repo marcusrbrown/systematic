@@ -7303,9 +7303,7 @@ var PlanAssessmentEnvelopeSchema = object({
   results: array(PlanAssessmentResultSchema).max(MAX_FINDINGS),
 }).strict()
 var ParentRunModeSchema = _enum([
-  'interactive',
-  'autofix',
-  'headless',
+  ...ReviewArtifactSchema.shape.mode.options,
   'report-only',
 ])
 var ParentRunMetadataSchema = object({
@@ -7333,7 +7331,12 @@ var FinalizeInputSchema = object({
 }).strict()
 var FinalizedInputDispositionSchema = object({
   input_id: PipelineInputIdSchema,
-  disposition: _enum(['suppressed', 'filtered', 'merged', 'surviving']),
+  disposition: DispositionSchema.extract([
+    'suppressed',
+    'filtered',
+    'merged',
+    'surviving',
+  ]),
   reason: PipelineReasonSchema.optional(),
 }).strict()
 var ReportQueueEntrySchema = object({
@@ -8580,6 +8583,18 @@ function checkSurvivorPartition(
           'merged finding references unknown survivor',
         )
       }
+      if (coveredInputIds.has(inputId)) {
+        return rejectFinalizeContext(
+          formatReviewArtifactIssuePath([
+            'merge',
+            'merged_findings',
+            findingIndex,
+            'input_finding_ids',
+            idIndex,
+          ]),
+          'survivor claimed by multiple merged findings',
+        )
+      }
       resolved.push(survivor)
       coveredInputIds.add(inputId)
     }
@@ -8600,18 +8615,47 @@ function checkSurvivorPartition(
   }
   return { ok: true, value: contributingByFindingId }
 }
-function checkValidatorRequestsResolve(validatorRequests, knownFindingIds) {
+function validatorRequestMismatches(request, findingById, expectedFindingIds) {
+  const finding = findingById.get(request.finding_id)
+  return (
+    !finding ||
+    !expectedFindingIds.has(request.finding_id) ||
+    request.file !== finding.file ||
+    request.line !== finding.line
+  )
+}
+function checkValidatorRequestsResolve(validatorRequests, mergedFindings) {
+  const findingById = new Map(
+    mergedFindings.map((finding) => [finding.finding_id, finding]),
+  )
+  const expectedFindingIds = new Set(
+    mergedFindings
+      .filter((finding) => requiresValidatorRequest(finding))
+      .map((finding) => finding.finding_id),
+  )
+  const seenFindingIds = new Set()
   for (const [index, request] of validatorRequests.entries()) {
-    if (!knownFindingIds.has(request.finding_id)) {
+    const path = formatReviewArtifactIssuePath([
+      'merge',
+      'validator_requests',
+      index,
+      'finding_id',
+    ])
+    if (
+      seenFindingIds.has(request.finding_id) ||
+      validatorRequestMismatches(request, findingById, expectedFindingIds)
+    ) {
       return {
-        path: formatReviewArtifactIssuePath([
-          'merge',
-          'validator_requests',
-          index,
-          'finding_id',
-        ]),
+        path,
         reason: 'validator request references unknown merged finding',
       }
+    }
+    seenFindingIds.add(request.finding_id)
+  }
+  if (seenFindingIds.size !== expectedFindingIds.size) {
+    return {
+      path: formatReviewArtifactIssuePath(['merge', 'validator_requests']),
+      reason: 'validator request references unknown merged finding',
     }
   }
   return
@@ -8635,14 +8679,20 @@ function checkDispatchRecordsJoin(dispatchRecords, selectedDispatches) {
       'dispatch record mismatch',
     )
   }
+  const seenPersonas = new Set()
   for (const [index, record] of dispatchRecords.entries()) {
     const selected = selectedByPersona.get(record.persona)
-    if (!selected || !dispatchRecordsEqual(record, selected)) {
+    if (
+      seenPersonas.has(record.persona) ||
+      !selected ||
+      !dispatchRecordsEqual(record, selected)
+    ) {
       return rejectFinalizeContext(
         formatReviewArtifactIssuePath(['dispatch_records', index]),
         'dispatch record mismatch',
       )
     }
+    seenPersonas.add(record.persona)
   }
   return { ok: true, value: selectedByPersona }
 }
@@ -8674,6 +8724,13 @@ function checkScreenResultsJoin(
   }
   return { ok: true, value: screenByReviewer }
 }
+function mergedFindingFileDiverges(finding, contributingSurvivors) {
+  const normalizedFindingFile = normalizeRepoRelativePath(finding.file)
+  return contributingSurvivors.some(
+    (survivor) =>
+      normalizeRepoRelativePath(survivor.file) !== normalizedFindingFile,
+  )
+}
 function mergedFindingDivergesFromDerivation(
   finding,
   contributingByFindingId,
@@ -8698,6 +8755,7 @@ function mergedFindingDivergesFromDerivation(
     returned_reviewers: returnedReviewers,
   })
   return (
+    mergedFindingFileDiverges(finding, resolved) ||
     !derivation.ok ||
     derivation.value.severity !== finding.severity ||
     derivation.value.confidence !== finding.confidence ||
@@ -8733,6 +8791,129 @@ function checkMergedFindingsMatchDerivation(
         reason: 'merged finding fields diverge from derivation',
       }
     }
+  }
+  return
+}
+function checkConfidenceDispositionsResolveScreenedFindings(
+  confidenceDispositions,
+  screenResults,
+) {
+  const screenedCounts = new Map()
+  for (const result of screenResults) {
+    for (const finding of result.result.admitted_findings) {
+      screenedCounts.set(
+        finding.input_id,
+        (screenedCounts.get(finding.input_id) ?? 0) + 1,
+      )
+    }
+  }
+  for (const [index, disposition] of confidenceDispositions.entries()) {
+    if (screenedCounts.get(disposition.input_id) !== 1) {
+      return {
+        path: formatReviewArtifactIssuePath([
+          'prepared',
+          'confidence_dispositions',
+          index,
+          'input_id',
+        ]),
+        reason: 'confidence disposition references unscreened finding',
+      }
+    }
+  }
+  return
+}
+function findUnavailableCitedReviewer(
+  finding,
+  findingIndex,
+  survivingIndex,
+  dispatchByPersona,
+) {
+  const citedReviewers = new Set()
+  for (const [idIndex, inputId] of finding.input_finding_ids.entries()) {
+    const survivor = survivingIndex.get(inputId)
+    if (!survivor) continue
+    citedReviewers.add(survivor.reviewer)
+    if (
+      dispatchByPersona.get(survivor.reviewer)?.dispatch_outcome ===
+      'validation_unavailable'
+    ) {
+      return {
+        citedReviewers,
+        rejection: {
+          path: formatReviewArtifactIssuePath([
+            'merge',
+            'merged_findings',
+            findingIndex,
+            'input_finding_ids',
+            idIndex,
+          ]),
+          reason: 'merged finding cites input from unavailable reviewer',
+        },
+      }
+    }
+  }
+  return { citedReviewers }
+}
+function findUnsupportedSubmitter(finding, findingIndex, citedReviewers) {
+  for (const [submitterIndex, submitter] of finding.submitters.entries()) {
+    if (!citedReviewers.has(submitter)) {
+      return {
+        path: formatReviewArtifactIssuePath([
+          'merge',
+          'merged_findings',
+          findingIndex,
+          'submitters',
+          submitterIndex,
+        ]),
+        reason: 'merged finding submitter not a cited reviewer',
+      }
+    }
+  }
+  return
+}
+function findOverlappingAgreementCredit(finding, findingIndex) {
+  const submitterSet = new Set(finding.submitters)
+  const agreementCredit = finding.agreement_credit ?? []
+  for (const [creditIndex, credit] of agreementCredit.entries()) {
+    if (submitterSet.has(credit)) {
+      return {
+        path: formatReviewArtifactIssuePath([
+          'merge',
+          'merged_findings',
+          findingIndex,
+          'agreement_credit',
+          creditIndex,
+        ]),
+        reason: 'merged finding agreement credit overlaps submitters',
+      }
+    }
+  }
+  return
+}
+function checkMergedFindingProvenance(
+  mergedFindings,
+  survivingIndex,
+  dispatchByPersona,
+) {
+  for (const [findingIndex, finding] of mergedFindings.entries()) {
+    const unavailable = findUnavailableCitedReviewer(
+      finding,
+      findingIndex,
+      survivingIndex,
+      dispatchByPersona,
+    )
+    if (unavailable.rejection) return unavailable.rejection
+    const unsupportedSubmitter = findUnsupportedSubmitter(
+      finding,
+      findingIndex,
+      unavailable.citedReviewers,
+    )
+    if (unsupportedSubmitter) return unsupportedSubmitter
+    const overlappingCredit = findOverlappingAgreementCredit(
+      finding,
+      findingIndex,
+    )
+    if (overlappingCredit) return overlappingCredit
   }
   return
 }
@@ -8792,7 +8973,7 @@ function deriveFinalizeContext(input) {
   if (!partition.ok) return partition
   const requestViolation = checkValidatorRequestsResolve(
     input.merge.validator_requests,
-    findingIds.value,
+    input.merge.merged_findings,
   )
   if (requestViolation) return { ok: false, rejection: requestViolation }
   const dispatchJoin = checkDispatchRecordsJoin(
@@ -8813,6 +8994,20 @@ function deriveFinalizeContext(input) {
     returnedReviewers,
   )
   if (derivationViolation) return { ok: false, rejection: derivationViolation }
+  const dispositionJoinViolation =
+    checkConfidenceDispositionsResolveScreenedFindings(
+      input.prepared.confidence_dispositions,
+      input.screen_results,
+    )
+  if (dispositionJoinViolation) {
+    return { ok: false, rejection: dispositionJoinViolation }
+  }
+  const provenanceViolation = checkMergedFindingProvenance(
+    input.merge.merged_findings,
+    survivingIndex,
+    dispatchJoin.value,
+  )
+  if (provenanceViolation) return { ok: false, rejection: provenanceViolation }
   return {
     ok: true,
     value: {
@@ -9215,8 +9410,12 @@ function buildAdmittedLedgerRows(input, unavailablePersonas) {
   const filteredReasons = buildFilteredReasonIndex(input.reconciled)
   const rows = []
   for (const entry of input.prepared.confidence_dispositions) {
-    const reviewer =
-      reviewerIndex.get(entry.input_id) ?? reviewerFromInputId(entry.input_id)
+    const reviewer = reviewerIndex.get(entry.input_id)
+    if (reviewer === undefined) {
+      throw new Error(
+        'buildInputLedger: confidence disposition has no resolvable reviewer',
+      )
+    }
     if (unavailablePersonas.has(reviewer)) continue
     const finalDisposition = dispositionIndex.get(entry.input_id)?.disposition
     if (finalDisposition === undefined) continue
@@ -9707,15 +9906,15 @@ function runPrepareSubcommand(options, outputSink, errorSink) {
   outputSink(JSON.stringify(result.value))
   return 0
 }
-function runMergeSubcommand(options, outputSink, errorSink) {
+function runAggregateStdinSubcommand(options, outputSink, errorSink, spec) {
   if (options.argv.slice(1).length > 0) {
-    errorSink(CE_REVIEW_MERGE_USAGE)
+    errorSink(spec.usage)
     return 2
   }
   const fd = 0
   const isTTY = options.isTTY ?? process.stdin.isTTY === true
   if (isTTY) {
-    errorSink(CE_REVIEW_MERGE_STDIN_TTY_MESSAGE)
+    errorSink(spec.ttyMessage)
     return 2
   }
   const read = readBoundedStdin(
@@ -9724,93 +9923,67 @@ function runMergeSubcommand(options, outputSink, errorSink) {
     AGGREGATE_STDIN_BYTE_CAP,
   )
   if (read.status === 'read-error') {
-    errorSink(CE_REVIEW_MERGE_STDIN_READ_FAILED_MESSAGE)
+    errorSink(spec.readFailedMessage)
     return 2
   }
   if (read.status === 'oversized') {
-    errorSink(CE_REVIEW_MERGE_STDIN_OVERSIZED_MESSAGE)
+    errorSink(spec.oversizedMessage)
     return 1
   }
   let text
   try {
     text = new TextDecoder('utf-8', { fatal: true }).decode(read.buffer)
   } catch {
-    errorSink(CE_REVIEW_MERGE_STDIN_INVALID_UTF8_MESSAGE)
+    errorSink(spec.invalidUtf8Message)
     return 1
   }
   let value
   try {
     value = JSON.parse(text)
   } catch {
-    errorSink(CE_REVIEW_MERGE_REJECTED_MESSAGE)
+    errorSink(spec.rejectedMessage)
     return 1
   }
-  const parsed = MergeInputSchema.safeParse(value)
+  const parsed = spec.schema.safeParse(value)
   if (!parsed.success) {
-    errorSink(CE_REVIEW_MERGE_REJECTED_MESSAGE)
+    errorSink(spec.rejectedMessage)
     return 1
   }
-  const result = applyReviewAdjudication({
-    prepared: parsed.data.prepared,
-    decisions: parsed.data.adjudication.decisions,
-  })
+  const result = spec.execute(parsed.data)
   if (!result.ok) {
-    errorSink(CE_REVIEW_MERGE_REJECTED_MESSAGE)
+    errorSink(spec.rejectedMessage)
     return 1
   }
   outputSink(JSON.stringify(result.value))
   return 0
 }
+function runMergeSubcommand(options, outputSink, errorSink) {
+  return runAggregateStdinSubcommand(options, outputSink, errorSink, {
+    execute: (input) =>
+      applyReviewAdjudication({
+        prepared: input.prepared,
+        decisions: input.adjudication.decisions,
+      }),
+    invalidUtf8Message: CE_REVIEW_MERGE_STDIN_INVALID_UTF8_MESSAGE,
+    oversizedMessage: CE_REVIEW_MERGE_STDIN_OVERSIZED_MESSAGE,
+    readFailedMessage: CE_REVIEW_MERGE_STDIN_READ_FAILED_MESSAGE,
+    rejectedMessage: CE_REVIEW_MERGE_REJECTED_MESSAGE,
+    schema: MergeInputSchema,
+    ttyMessage: CE_REVIEW_MERGE_STDIN_TTY_MESSAGE,
+    usage: CE_REVIEW_MERGE_USAGE,
+  })
+}
 function runFinalizeSubcommand(options, outputSink, errorSink) {
-  if (options.argv.slice(1).length > 0) {
-    errorSink(CE_REVIEW_FINALIZE_USAGE)
-    return 2
-  }
-  const fd = 0
-  const isTTY = options.isTTY ?? process.stdin.isTTY === true
-  if (isTTY) {
-    errorSink(CE_REVIEW_FINALIZE_STDIN_TTY_MESSAGE)
-    return 2
-  }
-  const read = readBoundedStdin(
-    fd,
-    options.readChunk ?? defaultReadChunk,
-    AGGREGATE_STDIN_BYTE_CAP,
-  )
-  if (read.status === 'read-error') {
-    errorSink(CE_REVIEW_FINALIZE_STDIN_READ_FAILED_MESSAGE)
-    return 2
-  }
-  if (read.status === 'oversized') {
-    errorSink(CE_REVIEW_FINALIZE_STDIN_OVERSIZED_MESSAGE)
-    return 1
-  }
-  let text
-  try {
-    text = new TextDecoder('utf-8', { fatal: true }).decode(read.buffer)
-  } catch {
-    errorSink(CE_REVIEW_FINALIZE_STDIN_INVALID_UTF8_MESSAGE)
-    return 1
-  }
-  let value
-  try {
-    value = JSON.parse(text)
-  } catch {
-    errorSink(CE_REVIEW_FINALIZE_REJECTED_MESSAGE)
-    return 1
-  }
-  const parsed = FinalizeInputSchema.safeParse(value)
-  if (!parsed.success) {
-    errorSink(CE_REVIEW_FINALIZE_REJECTED_MESSAGE)
-    return 1
-  }
-  const result = finalizeReview(parsed.data)
-  if (!result.ok) {
-    errorSink(CE_REVIEW_FINALIZE_REJECTED_MESSAGE)
-    return 1
-  }
-  outputSink(JSON.stringify(result.value))
-  return 0
+  return runAggregateStdinSubcommand(options, outputSink, errorSink, {
+    execute: (input) => finalizeReview(input),
+    invalidUtf8Message: CE_REVIEW_FINALIZE_STDIN_INVALID_UTF8_MESSAGE,
+    oversizedMessage: CE_REVIEW_FINALIZE_STDIN_OVERSIZED_MESSAGE,
+    readFailedMessage: CE_REVIEW_FINALIZE_STDIN_READ_FAILED_MESSAGE,
+    rejectedMessage: CE_REVIEW_FINALIZE_REJECTED_MESSAGE,
+    schema: FinalizeInputSchema,
+    ttyMessage: CE_REVIEW_FINALIZE_STDIN_TTY_MESSAGE,
+    usage: CE_REVIEW_FINALIZE_USAGE,
+  })
 }
 var processExceptionBoundaryInstalled = false
 function installProcessExceptionBoundary(errorSink) {

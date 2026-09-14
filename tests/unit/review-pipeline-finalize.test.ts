@@ -462,7 +462,11 @@ function finalizeContextScenario(): DeriveFinalizeContextInput {
   return {
     merge,
     prepared,
-    screen_results: [financeScreenResult('correctness')],
+    screen_results: [
+      financeScreenResult('correctness', {
+        admitted_findings: [admittedScreenFinding('correctness#0')],
+      }),
+    ],
     dispatch_records: [dispatchRecord('correctness')],
     parent_run_metadata: {
       selected_dispatches: [dispatchRecord('correctness')],
@@ -662,6 +666,186 @@ describe('deriveFinalizeContext', () => {
     expect(result.value.rejected_payloads).toEqual([
       { rejected_finding_count: 2 },
     ])
+  })
+
+  test('a duplicate persona in dispatch_records with a missing selected persona rejects', () => {
+    const scenario = finalizeContextScenario()
+
+    const result = deriveFinalizeContext({
+      ...scenario,
+      dispatch_records: [
+        dispatchRecord('correctness'),
+        dispatchRecord('correctness'),
+      ],
+      parent_run_metadata: {
+        selected_dispatches: [
+          dispatchRecord('correctness'),
+          dispatchRecord('security'),
+        ],
+      },
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe('dispatch record mismatch')
+  })
+
+  test('removing the validator request for a P1 finding rejects', () => {
+    const prepared = preparedOutput({
+      confidence_dispositions: [
+        confidenceDisposition('correctness#0', 'surviving'),
+      ],
+      surviving_findings: [
+        survivingFinding('correctness#0', 'correctness', { severity: 'P1' }),
+      ],
+      singletons: ['correctness#0'],
+    })
+    const merge = buildAdjudicatedMergeOutput(prepared)
+
+    const scenario: DeriveFinalizeContextInput = {
+      merge: { ...merge, validator_requests: [] },
+      prepared,
+      screen_results: [financeScreenResult('correctness')],
+      dispatch_records: [dispatchRecord('correctness')],
+      parent_run_metadata: {
+        selected_dispatches: [dispatchRecord('correctness')],
+      },
+    }
+
+    const result = deriveFinalizeContext(scenario)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe(
+      'validator request references unknown merged finding',
+    )
+  })
+
+  test('two merged findings citing the same input ID rejects', () => {
+    const survivor = survivingFinding('correctness#0', 'correctness')
+    const scenario: DeriveFinalizeContextInput = {
+      merge: mergeOutput(
+        [
+          mergedFinding('finding-a', { input_finding_ids: ['correctness#0'] }),
+          mergedFinding('finding-b', { input_finding_ids: ['correctness#0'] }),
+        ],
+        [],
+      ),
+      prepared: preparedOutput({
+        confidence_dispositions: [
+          confidenceDisposition('correctness#0', 'surviving'),
+        ],
+        surviving_findings: [survivor],
+        singletons: ['correctness#0'],
+      }),
+      screen_results: [financeScreenResult('correctness')],
+      dispatch_records: [dispatchRecord('correctness')],
+      parent_run_metadata: {
+        selected_dispatches: [dispatchRecord('correctness')],
+      },
+    }
+
+    const result = deriveFinalizeContext(scenario)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe(
+      'survivor claimed by multiple merged findings',
+    )
+  })
+
+  test('a merged finding file diverging from its contributing survivor rejects', () => {
+    const prepared = preparedOutput({
+      confidence_dispositions: [
+        confidenceDisposition('correctness#0', 'surviving'),
+      ],
+      surviving_findings: [
+        survivingFinding('correctness#0', 'correctness', {
+          requires_verification: false,
+          severity: 'P2',
+        }),
+      ],
+      singletons: ['correctness#0'],
+    })
+    const merge = buildAdjudicatedMergeOutput(prepared)
+    const tampered: MergeOutput = {
+      ...merge,
+      merged_findings: merge.merged_findings.map((finding, index) =>
+        index === 0 ? { ...finding, file: 'src/other.ts' } : finding,
+      ),
+    }
+
+    const scenario: DeriveFinalizeContextInput = {
+      merge: tampered,
+      prepared,
+      screen_results: [financeScreenResult('correctness')],
+      dispatch_records: [dispatchRecord('correctness')],
+      parent_run_metadata: {
+        selected_dispatches: [dispatchRecord('correctness')],
+      },
+    }
+
+    const result = deriveFinalizeContext(scenario)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe(
+      'merged finding fields diverge from derivation',
+    )
+  })
+
+  test('a suppressed confidence disposition with no screened finding rejects', () => {
+    const scenario = finalizeContextScenario()
+    const prepared: PrepareOutput = {
+      ...scenario.prepared,
+      confidence_dispositions: [
+        ...scenario.prepared.confidence_dispositions,
+        confidenceDisposition('ghost#0', 'suppressed'),
+      ],
+    }
+
+    const result = deriveFinalizeContext({ ...scenario, prepared })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe(
+      'confidence disposition references unscreened finding',
+    )
+  })
+
+  test('a merged finding citing input from an unavailable reviewer rejects', () => {
+    const prepared = preparedOutput({
+      confidence_dispositions: [
+        confidenceDisposition('security#0', 'surviving'),
+      ],
+      surviving_findings: [survivingFinding('security#0', 'security')],
+      singletons: ['security#0'],
+    })
+    const merge = buildAdjudicatedMergeOutput(prepared)
+    const unavailableDispatch = dispatchRecord('security', {
+      dispatch_outcome: 'validation_unavailable',
+    })
+
+    const scenario: DeriveFinalizeContextInput = {
+      merge,
+      prepared,
+      screen_results: [
+        financeScreenResult('security', {
+          admitted_findings: [admittedScreenFinding('security#0')],
+          dispatch_outcome: 'validation_unavailable',
+        }),
+      ],
+      dispatch_records: [unavailableDispatch],
+      parent_run_metadata: { selected_dispatches: [unavailableDispatch] },
+    }
+
+    const result = deriveFinalizeContext(scenario)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe(
+      'merged finding cites input from unavailable reviewer',
+    )
   })
 })
 
@@ -2386,5 +2570,72 @@ describe('finalizeReview', () => {
     expect(result.ok).toBe(false)
     if (result.ok) return
     expect('value' in result).toBe(false)
+  })
+
+  test('a suppressed disposition with no screened finding rejects identically in report-only and interactive', () => {
+    const base = finalizeReviewScenario()
+    const scenario: FinalizeReviewInput = {
+      ...base,
+      prepared: {
+        ...base.prepared,
+        confidence_dispositions: [
+          ...base.prepared.confidence_dispositions,
+          confidenceDisposition('ghost#0', 'suppressed'),
+        ],
+      },
+    }
+
+    const interactiveResult = finalizeReview(scenario)
+    const reportOnlyResult = finalizeReview({
+      ...scenario,
+      parent_run_metadata: {
+        ...scenario.parent_run_metadata,
+        mode: 'report-only',
+      },
+    })
+
+    expect(interactiveResult.ok).toBe(false)
+    expect(reportOnlyResult.ok).toBe(false)
+    if (interactiveResult.ok || reportOnlyResult.ok) return
+    expect(interactiveResult.rejection.reason).toBe(
+      'confidence disposition references unscreened finding',
+    )
+    expect(reportOnlyResult.rejection.reason).toBe(
+      interactiveResult.rejection.reason,
+    )
+  })
+
+  test('a cited input whose reviewer is unavailable in both dispatch arrays rejects identically in report-only and interactive', () => {
+    const base = finalizeReviewScenario()
+    const unavailableDispatch = dispatchRecord('correctness', {
+      dispatch_outcome: 'validation_unavailable',
+    })
+    const scenario: FinalizeReviewInput = {
+      ...base,
+      dispatch_records: [unavailableDispatch],
+      parent_run_metadata: {
+        ...base.parent_run_metadata,
+        selected_dispatches: [unavailableDispatch],
+      },
+    }
+
+    const interactiveResult = finalizeReview(scenario)
+    const reportOnlyResult = finalizeReview({
+      ...scenario,
+      parent_run_metadata: {
+        ...scenario.parent_run_metadata,
+        mode: 'report-only',
+      },
+    })
+
+    expect(interactiveResult.ok).toBe(false)
+    expect(reportOnlyResult.ok).toBe(false)
+    if (interactiveResult.ok || reportOnlyResult.ok) return
+    expect(interactiveResult.rejection.reason).toBe(
+      'merged finding cites input from unavailable reviewer',
+    )
+    expect(reportOnlyResult.rejection.reason).toBe(
+      interactiveResult.rejection.reason,
+    )
   })
 })

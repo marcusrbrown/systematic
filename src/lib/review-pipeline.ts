@@ -17,6 +17,7 @@ import {
   isRouteTransitionAllowed,
   MergeOutputSchema,
   type PipelineRoute,
+  type PlanAssessmentEnvelopeSchema,
   PrepareInputSchema,
   PrepareOutputSchema,
   ROUTE_REFUSAL_TABLE,
@@ -1608,12 +1609,23 @@ function compareMergedFindingAssembly(
   return compareStrings(a.finding_id, b.finding_id)
 }
 
+/** The subset of a merged finding's fields `requiresValidatorRequest` reads.
+ * Deliberately narrower than `MergedFindingAssembly`: the merge phase's
+ * in-progress assembly and the finalize phase's wire-shape merged finding
+ * (the same two fields, already on the wire) both satisfy this shape. */
+interface ValidatorRequestEligibility {
+  readonly severity: SurvivingFinding['severity']
+  readonly requires_verification: boolean
+}
+
 /** The validator request set is purely mechanical: exactly every merged
  * finding that is `P0` or `P1`, plus every merged finding with
  * `requires_verification: true`. Never model-influenced beyond the route
  * `requires_verification` value `deriveMergedFindingFields` already
  * computed. */
-function requiresValidatorRequest(assembly: MergedFindingAssembly): boolean {
+function requiresValidatorRequest(
+  assembly: ValidatorRequestEligibility,
+): boolean {
   return (
     assembly.severity === 'P0' ||
     assembly.severity === 'P1' ||
@@ -2044,11 +2056,16 @@ type FinalizeContextRejectReason =
   | 'duplicate merged finding ID'
   | 'merged finding references unknown survivor'
   | 'survivor missing from merge inputs'
+  | 'survivor claimed by multiple merged findings'
   | 'validator request references unknown merged finding'
   | 'dispatch record mismatch'
   | 'screen result missing for selected persona'
   | 'unexpected screen result for persona'
   | 'merged finding fields diverge from derivation'
+  | 'confidence disposition references unscreened finding'
+  | 'merged finding cites input from unavailable reviewer'
+  | 'merged finding submitter not a cited reviewer'
+  | 'merged finding agreement credit overlaps submitters'
 
 export interface FinalizeContextRejection {
   readonly path: string
@@ -2150,6 +2167,18 @@ function checkSurvivorPartition(
           'merged finding references unknown survivor',
         )
       }
+      if (coveredInputIds.has(inputId)) {
+        return rejectFinalizeContext(
+          formatReviewArtifactIssuePath([
+            'merge',
+            'merged_findings',
+            findingIndex,
+            'input_finding_ids',
+            idIndex,
+          ]),
+          'survivor claimed by multiple merged findings',
+        )
+      }
       resolved.push(survivor)
       coveredInputIds.add(inputId)
     }
@@ -2173,26 +2202,69 @@ function checkSurvivorPartition(
   return { ok: true, value: contributingByFindingId }
 }
 
-/** Every validator request must correspond to a merged finding this envelope
- * actually produced -- a request for an unknown finding ID is a
- * data-integrity violation, not a malformed model decision. */
+/** Whether one validator request is anything other than an exact match for
+ * its merged finding: an unknown finding ID, a finding that mechanically
+ * doesn't require a validator request, or a carried `file`/`line` that
+ * disagrees with the finding's own. */
+function validatorRequestMismatches(
+  request: MergeOutput['validator_requests'][number],
+  findingById: ReadonlyMap<string, MergeOutput['merged_findings'][number]>,
+  expectedFindingIds: ReadonlySet<string>,
+): boolean {
+  const finding = findingById.get(request.finding_id)
+  return (
+    !finding ||
+    !expectedFindingIds.has(request.finding_id) ||
+    request.file !== finding.file ||
+    request.line !== finding.line
+  )
+}
+
+/** The validator request set must equal exactly the mechanical set
+ * `requiresValidatorRequest` computes over `merge.merged_findings` -- no
+ * missing, extra, duplicate, or mismatched `file`/`line` request. A request
+ * for an unknown finding ID is a data-integrity violation, not a malformed
+ * model decision. */
 function checkValidatorRequestsResolve(
   validatorRequests: MergeOutput['validator_requests'],
-  knownFindingIds: ReadonlySet<string>,
+  mergedFindings: MergeOutput['merged_findings'],
 ): FinalizeContextRejection | undefined {
+  const findingById = new Map(
+    mergedFindings.map((finding) => [finding.finding_id, finding] as const),
+  )
+  const expectedFindingIds = new Set(
+    mergedFindings
+      .filter((finding) => requiresValidatorRequest(finding))
+      .map((finding) => finding.finding_id),
+  )
+
+  const seenFindingIds = new Set<string>()
   for (const [index, request] of validatorRequests.entries()) {
-    if (!knownFindingIds.has(request.finding_id)) {
+    const path = formatReviewArtifactIssuePath([
+      'merge',
+      'validator_requests',
+      index,
+      'finding_id',
+    ])
+    if (
+      seenFindingIds.has(request.finding_id) ||
+      validatorRequestMismatches(request, findingById, expectedFindingIds)
+    ) {
       return {
-        path: formatReviewArtifactIssuePath([
-          'merge',
-          'validator_requests',
-          index,
-          'finding_id',
-        ]),
+        path,
         reason: 'validator request references unknown merged finding',
       }
     }
+    seenFindingIds.add(request.finding_id)
   }
+
+  if (seenFindingIds.size !== expectedFindingIds.size) {
+    return {
+      path: formatReviewArtifactIssuePath(['merge', 'validator_requests']),
+      reason: 'validator request references unknown merged finding',
+    }
+  }
+
   return undefined
 }
 
@@ -2225,14 +2297,20 @@ function checkDispatchRecordsJoin(
     )
   }
 
+  const seenPersonas = new Set<string>()
   for (const [index, record] of dispatchRecords.entries()) {
     const selected = selectedByPersona.get(record.persona)
-    if (!selected || !dispatchRecordsEqual(record, selected)) {
+    if (
+      seenPersonas.has(record.persona) ||
+      !selected ||
+      !dispatchRecordsEqual(record, selected)
+    ) {
       return rejectFinalizeContext(
         formatReviewArtifactIssuePath(['dispatch_records', index]),
         'dispatch record mismatch',
       )
     }
+    seenPersonas.add(record.persona)
   }
 
   return { ok: true, value: selectedByPersona }
@@ -2276,6 +2354,20 @@ function checkScreenResultsJoin(
  * using the finding's own route and agreement-credit fields as the model
  * decision. Compares severity, confidence, pre_existing, fingerprint,
  * submitters, and route -- the KTD19 verifier's exact field list. */
+/** Whether the merged finding's carried `file` disagrees with any
+ * contributing survivor's file, compared as repo-relative paths after
+ * `normalizeRepoRelativePath`. */
+function mergedFindingFileDiverges(
+  finding: MergeOutput['merged_findings'][number],
+  contributingSurvivors: readonly SurvivingFinding[],
+): boolean {
+  const normalizedFindingFile = normalizeRepoRelativePath(finding.file)
+  return contributingSurvivors.some(
+    (survivor) =>
+      normalizeRepoRelativePath(survivor.file) !== normalizedFindingFile,
+  )
+}
+
 function mergedFindingDivergesFromDerivation(
   finding: MergeOutput['merged_findings'][number],
   contributingByFindingId: ReadonlyMap<string, readonly SurvivingFinding[]>,
@@ -2302,6 +2394,7 @@ function mergedFindingDivergesFromDerivation(
   })
 
   return (
+    mergedFindingFileDiverges(finding, resolved) ||
     !derivation.ok ||
     derivation.value.severity !== finding.severity ||
     derivation.value.confidence !== finding.confidence ||
@@ -2341,6 +2434,173 @@ function checkMergedFindingsMatchDerivation(
         reason: 'merged finding fields diverge from derivation',
       }
     }
+  }
+  return undefined
+}
+
+/** Every `prepared.confidence_dispositions` entry must resolve to exactly one
+ * screened finding across `screen_results[].result.admitted_findings`,
+ * matched by input ID. Screen is the only phase that mints an input ID from
+ * a real reviewer payload; a disposition with no matching screened finding
+ * (or more than one, which would mean a duplicate mint) names evidence that
+ * was never actually screened and must never be admitted to the ledger. */
+function checkConfidenceDispositionsResolveScreenedFindings(
+  confidenceDispositions: PrepareOutput['confidence_dispositions'],
+  screenResults: FinalizeScreenResults,
+): FinalizeContextRejection | undefined {
+  const screenedCounts = new Map<string, number>()
+  for (const result of screenResults) {
+    for (const finding of result.result.admitted_findings) {
+      screenedCounts.set(
+        finding.input_id,
+        (screenedCounts.get(finding.input_id) ?? 0) + 1,
+      )
+    }
+  }
+
+  for (const [index, disposition] of confidenceDispositions.entries()) {
+    if (screenedCounts.get(disposition.input_id) !== 1) {
+      return {
+        path: formatReviewArtifactIssuePath([
+          'prepared',
+          'confidence_dispositions',
+          index,
+          'input_id',
+        ]),
+        reason: 'confidence disposition references unscreened finding',
+      }
+    }
+  }
+  return undefined
+}
+
+/** Whether one merged finding cites an input whose reviewer was withheld
+ * (`validation_unavailable`). Returns the cited reviewers alongside so the
+ * caller can reuse them for the submitters check without re-walking
+ * `input_finding_ids`. Resolution to a real survivor is already enforced by
+ * `checkSurvivorPartition`, which runs before this check. */
+function findUnavailableCitedReviewer(
+  finding: MergeOutput['merged_findings'][number],
+  findingIndex: number,
+  survivingIndex: ReadonlyMap<string, SurvivingFinding>,
+  dispatchByPersona: ReadonlyMap<string, FinalizeDispatchRecord>,
+): {
+  readonly citedReviewers: ReadonlySet<string>
+  readonly rejection?: FinalizeContextRejection
+} {
+  const citedReviewers = new Set<string>()
+
+  for (const [idIndex, inputId] of finding.input_finding_ids.entries()) {
+    const survivor = survivingIndex.get(inputId)
+    if (!survivor) continue
+    citedReviewers.add(survivor.reviewer)
+
+    if (
+      dispatchByPersona.get(survivor.reviewer)?.dispatch_outcome ===
+      'validation_unavailable'
+    ) {
+      return {
+        citedReviewers,
+        rejection: {
+          path: formatReviewArtifactIssuePath([
+            'merge',
+            'merged_findings',
+            findingIndex,
+            'input_finding_ids',
+            idIndex,
+          ]),
+          reason: 'merged finding cites input from unavailable reviewer',
+        },
+      }
+    }
+  }
+
+  return { citedReviewers }
+}
+
+/** Whether one merged finding's `submitters` claim a reviewer that never
+ * contributed a cited input. */
+function findUnsupportedSubmitter(
+  finding: MergeOutput['merged_findings'][number],
+  findingIndex: number,
+  citedReviewers: ReadonlySet<string>,
+): FinalizeContextRejection | undefined {
+  for (const [submitterIndex, submitter] of finding.submitters.entries()) {
+    if (!citedReviewers.has(submitter)) {
+      return {
+        path: formatReviewArtifactIssuePath([
+          'merge',
+          'merged_findings',
+          findingIndex,
+          'submitters',
+          submitterIndex,
+        ]),
+        reason: 'merged finding submitter not a cited reviewer',
+      }
+    }
+  }
+  return undefined
+}
+
+/** Whether one merged finding's `agreement_credit` (when present) overlaps
+ * its own `submitters`. */
+function findOverlappingAgreementCredit(
+  finding: MergeOutput['merged_findings'][number],
+  findingIndex: number,
+): FinalizeContextRejection | undefined {
+  const submitterSet = new Set(finding.submitters)
+  const agreementCredit = finding.agreement_credit ?? []
+  for (const [creditIndex, credit] of agreementCredit.entries()) {
+    if (submitterSet.has(credit)) {
+      return {
+        path: formatReviewArtifactIssuePath([
+          'merge',
+          'merged_findings',
+          findingIndex,
+          'agreement_credit',
+          creditIndex,
+        ]),
+        reason: 'merged finding agreement credit overlaps submitters',
+      }
+    }
+  }
+  return undefined
+}
+
+/** Cross-reference checks a writing-mode artifact would otherwise only get
+ * from `ReviewArtifactSchema.parse`'s `superRefine`: report-only mode never
+ * builds a `ReviewArtifactSchema` value, so it would skip them entirely
+ * unless they run here instead, protecting both output kinds identically.
+ * Checks, per merged finding: every cited input's reviewer was not withheld
+ * (`validation_unavailable`); every `submitters` entry is the reviewer of at
+ * least one cited input; and `agreement_credit` (when present) never
+ * overlaps `submitters`. */
+function checkMergedFindingProvenance(
+  mergedFindings: MergeOutput['merged_findings'],
+  survivingIndex: ReadonlyMap<string, SurvivingFinding>,
+  dispatchByPersona: ReadonlyMap<string, FinalizeDispatchRecord>,
+): FinalizeContextRejection | undefined {
+  for (const [findingIndex, finding] of mergedFindings.entries()) {
+    const unavailable = findUnavailableCitedReviewer(
+      finding,
+      findingIndex,
+      survivingIndex,
+      dispatchByPersona,
+    )
+    if (unavailable.rejection) return unavailable.rejection
+
+    const unsupportedSubmitter = findUnsupportedSubmitter(
+      finding,
+      findingIndex,
+      unavailable.citedReviewers,
+    )
+    if (unsupportedSubmitter) return unsupportedSubmitter
+
+    const overlappingCredit = findOverlappingAgreementCredit(
+      finding,
+      findingIndex,
+    )
+    if (overlappingCredit) return overlappingCredit
   }
   return undefined
 }
@@ -2434,7 +2694,7 @@ export function deriveFinalizeContext(
 
   const requestViolation = checkValidatorRequestsResolve(
     input.merge.validator_requests,
-    findingIds.value,
+    input.merge.merged_findings,
   )
   if (requestViolation) return { ok: false, rejection: requestViolation }
 
@@ -2458,6 +2718,22 @@ export function deriveFinalizeContext(
     returnedReviewers,
   )
   if (derivationViolation) return { ok: false, rejection: derivationViolation }
+
+  const dispositionJoinViolation =
+    checkConfidenceDispositionsResolveScreenedFindings(
+      input.prepared.confidence_dispositions,
+      input.screen_results,
+    )
+  if (dispositionJoinViolation) {
+    return { ok: false, rejection: dispositionJoinViolation }
+  }
+
+  const provenanceViolation = checkMergedFindingProvenance(
+    input.merge.merged_findings,
+    survivingIndex,
+    dispatchJoin.value,
+  )
+  if (provenanceViolation) return { ok: false, rejection: provenanceViolation }
 
   return {
     ok: true,
@@ -3053,10 +3329,9 @@ export function deriveRiskCoverage(
  * verdict by itself. Deliberately carries no persona, no evidence, and no
  * input ID: unlike a reviewer's finding, nobody reviewed a line of code to
  * produce it, so it must never be mistaken for one. */
-export interface PlanAssessmentResult {
-  readonly kind: 'explicit_unmet_requirement' | 'inferred_gap'
-  readonly description: string
-}
+export type PlanAssessmentResult = z.infer<
+  typeof PlanAssessmentEnvelopeSchema
+>['results'][number]
 
 export interface RoutePlanAssessmentInput {
   /** Every plan-assessment result the model returned. Empty when the run
@@ -3425,8 +3700,16 @@ function buildAdmittedLedgerRows(
 
   const rows: AdmittedInputLedgerRow[] = []
   for (const entry of input.prepared.confidence_dispositions) {
-    const reviewer =
-      reviewerIndex.get(entry.input_id) ?? reviewerFromInputId(entry.input_id)
+    const reviewer = reviewerIndex.get(entry.input_id)
+    if (reviewer === undefined) {
+      // Unreachable: `deriveFinalizeContext` rejects any confidence
+      // disposition that does not resolve to exactly one screened finding
+      // before `buildInputLedger` ever runs, so every entry here is backed
+      // by either a surviving finding or a screen result.
+      throw new Error(
+        'buildInputLedger: confidence disposition has no resolvable reviewer',
+      )
+    }
     if (unavailablePersonas.has(reviewer)) continue
 
     const finalDisposition = dispositionIndex.get(entry.input_id)?.disposition
@@ -3713,27 +3996,6 @@ export type FinalizeReviewInput = FinalizeInputValue
 
 type FinalizeOutputValue = ReturnType<typeof FinalizeOutputSchema.parse>
 
-// A locally-typed mirror of the zod-inferred report projection shape, using
-// the `readonly` array types every other derivation in this module returns.
-// Zod's own inferred type (`FinalizeOutputValue`) uses mutable arrays, which
-// would force every readonly producer above to be copied just to satisfy
-// assignability; `parseFinalizeOutput` re-validates the assembled value
-// against `FinalizeOutputSchema` at runtime regardless; that call, not this
-// type, is the actual correctness gate.
-interface ReportProjectionValue {
-  readonly verdict: string
-  readonly findings: readonly SynthesizedFindingProjection[]
-  readonly applied_fixes: readonly string[]
-  readonly residual_actionable_work: readonly string[]
-  readonly advisory_outputs: readonly string[]
-  readonly coverage: ReviewCoverageSummary
-  readonly input_dispositions: readonly FinalizedInputDisposition[]
-  readonly disposition_counts: FinalDispositionCounts
-  readonly queues: FinalizeReviewDispositionsOutput['queues']
-  readonly pre_existing_findings: readonly PreExistingFinding[]
-  readonly risk_coverage?: readonly ArtifactRiskCoverageEntry[]
-}
-
 type FinalizeReviewRejection =
   | FinalizeContextRejection
   | ReconcileValidatorResultsRejection
@@ -3867,7 +4129,7 @@ function buildReportProjection(
   appliedFixes: readonly string[],
   pipelineOutput: RunReviewPipelineOutput,
   coverage: ReviewCoverageSummary,
-): ReportProjectionValue {
+) {
   const riskCoverage = projectRiskCoverage(pipelineOutput.risk_coverage)
   return {
     verdict: verdictText,

@@ -271,20 +271,48 @@ function runPrepareSubcommand(
   return 0
 }
 
-function runMergeSubcommand(
+interface AggregateStdinSubcommandSpec<Input> {
+  readonly usage: string
+  readonly ttyMessage: string
+  readonly readFailedMessage: string
+  readonly oversizedMessage: string
+  readonly invalidUtf8Message: string
+  readonly rejectedMessage: string
+  readonly schema: {
+    readonly safeParse: (
+      value: unknown,
+    ) =>
+      | { readonly success: true; readonly data: Input }
+      | { readonly success: false }
+  }
+  readonly execute: (
+    input: Input,
+  ) => { readonly ok: true; readonly value: unknown } | { readonly ok: false }
+}
+
+/**
+ * Shared skeleton for the `merge` and `finalize` subcommands: both read one
+ * bounded aggregate JSON envelope from stdin, decode/parse/schema-validate
+ * it, hand the validated input to a phase function, and emit its result.
+ * `prepare` does not fit this skeleton -- it feeds `prepareReviewCandidates`
+ * raw decoded text directly, with no `JSON.parse`/schema step of its own --
+ * so it stays a standalone implementation above.
+ */
+function runAggregateStdinSubcommand<Input>(
   options: CeReviewValidatorOptions,
   outputSink: (message: string) => void,
   errorSink: (message: string) => void,
+  spec: AggregateStdinSubcommandSpec<Input>,
 ): number {
   if (options.argv.slice(1).length > 0) {
-    errorSink(CE_REVIEW_MERGE_USAGE)
+    errorSink(spec.usage)
     return 2
   }
 
   const fd = 0
   const isTTY = options.isTTY ?? process.stdin.isTTY === true
   if (isTTY) {
-    errorSink(CE_REVIEW_MERGE_STDIN_TTY_MESSAGE)
+    errorSink(spec.ttyMessage)
     return 2
   }
 
@@ -294,11 +322,11 @@ function runMergeSubcommand(
     AGGREGATE_STDIN_BYTE_CAP,
   )
   if (read.status === 'read-error') {
-    errorSink(CE_REVIEW_MERGE_STDIN_READ_FAILED_MESSAGE)
+    errorSink(spec.readFailedMessage)
     return 2
   }
   if (read.status === 'oversized') {
-    errorSink(CE_REVIEW_MERGE_STDIN_OVERSIZED_MESSAGE)
+    errorSink(spec.oversizedMessage)
     return 1
   }
 
@@ -306,7 +334,7 @@ function runMergeSubcommand(
   try {
     text = new TextDecoder('utf-8', { fatal: true }).decode(read.buffer)
   } catch {
-    errorSink(CE_REVIEW_MERGE_STDIN_INVALID_UTF8_MESSAGE)
+    errorSink(spec.invalidUtf8Message)
     return 1
   }
 
@@ -314,22 +342,19 @@ function runMergeSubcommand(
   try {
     value = JSON.parse(text)
   } catch {
-    errorSink(CE_REVIEW_MERGE_REJECTED_MESSAGE)
+    errorSink(spec.rejectedMessage)
     return 1
   }
 
-  const parsed = MergeInputSchema.safeParse(value)
+  const parsed = spec.schema.safeParse(value)
   if (!parsed.success) {
-    errorSink(CE_REVIEW_MERGE_REJECTED_MESSAGE)
+    errorSink(spec.rejectedMessage)
     return 1
   }
 
-  const result = applyReviewAdjudication({
-    prepared: parsed.data.prepared,
-    decisions: parsed.data.adjudication.decisions,
-  })
+  const result = spec.execute(parsed.data)
   if (!result.ok) {
-    errorSink(CE_REVIEW_MERGE_REJECTED_MESSAGE)
+    errorSink(spec.rejectedMessage)
     return 1
   }
 
@@ -337,67 +362,42 @@ function runMergeSubcommand(
   return 0
 }
 
+function runMergeSubcommand(
+  options: CeReviewValidatorOptions,
+  outputSink: (message: string) => void,
+  errorSink: (message: string) => void,
+): number {
+  return runAggregateStdinSubcommand(options, outputSink, errorSink, {
+    execute: (input) =>
+      applyReviewAdjudication({
+        prepared: input.prepared,
+        decisions: input.adjudication.decisions,
+      }),
+    invalidUtf8Message: CE_REVIEW_MERGE_STDIN_INVALID_UTF8_MESSAGE,
+    oversizedMessage: CE_REVIEW_MERGE_STDIN_OVERSIZED_MESSAGE,
+    readFailedMessage: CE_REVIEW_MERGE_STDIN_READ_FAILED_MESSAGE,
+    rejectedMessage: CE_REVIEW_MERGE_REJECTED_MESSAGE,
+    schema: MergeInputSchema,
+    ttyMessage: CE_REVIEW_MERGE_STDIN_TTY_MESSAGE,
+    usage: CE_REVIEW_MERGE_USAGE,
+  })
+}
+
 function runFinalizeSubcommand(
   options: CeReviewValidatorOptions,
   outputSink: (message: string) => void,
   errorSink: (message: string) => void,
 ): number {
-  if (options.argv.slice(1).length > 0) {
-    errorSink(CE_REVIEW_FINALIZE_USAGE)
-    return 2
-  }
-
-  const fd = 0
-  const isTTY = options.isTTY ?? process.stdin.isTTY === true
-  if (isTTY) {
-    errorSink(CE_REVIEW_FINALIZE_STDIN_TTY_MESSAGE)
-    return 2
-  }
-
-  const read = readBoundedStdin(
-    fd,
-    options.readChunk ?? defaultReadChunk,
-    AGGREGATE_STDIN_BYTE_CAP,
-  )
-  if (read.status === 'read-error') {
-    errorSink(CE_REVIEW_FINALIZE_STDIN_READ_FAILED_MESSAGE)
-    return 2
-  }
-  if (read.status === 'oversized') {
-    errorSink(CE_REVIEW_FINALIZE_STDIN_OVERSIZED_MESSAGE)
-    return 1
-  }
-
-  let text: string
-  try {
-    text = new TextDecoder('utf-8', { fatal: true }).decode(read.buffer)
-  } catch {
-    errorSink(CE_REVIEW_FINALIZE_STDIN_INVALID_UTF8_MESSAGE)
-    return 1
-  }
-
-  let value: unknown
-  try {
-    value = JSON.parse(text)
-  } catch {
-    errorSink(CE_REVIEW_FINALIZE_REJECTED_MESSAGE)
-    return 1
-  }
-
-  const parsed = FinalizeInputSchema.safeParse(value)
-  if (!parsed.success) {
-    errorSink(CE_REVIEW_FINALIZE_REJECTED_MESSAGE)
-    return 1
-  }
-
-  const result = finalizeReview(parsed.data)
-  if (!result.ok) {
-    errorSink(CE_REVIEW_FINALIZE_REJECTED_MESSAGE)
-    return 1
-  }
-
-  outputSink(JSON.stringify(result.value))
-  return 0
+  return runAggregateStdinSubcommand(options, outputSink, errorSink, {
+    execute: (input) => finalizeReview(input),
+    invalidUtf8Message: CE_REVIEW_FINALIZE_STDIN_INVALID_UTF8_MESSAGE,
+    oversizedMessage: CE_REVIEW_FINALIZE_STDIN_OVERSIZED_MESSAGE,
+    readFailedMessage: CE_REVIEW_FINALIZE_STDIN_READ_FAILED_MESSAGE,
+    rejectedMessage: CE_REVIEW_FINALIZE_REJECTED_MESSAGE,
+    schema: FinalizeInputSchema,
+    ttyMessage: CE_REVIEW_FINALIZE_STDIN_TTY_MESSAGE,
+    usage: CE_REVIEW_FINALIZE_USAGE,
+  })
 }
 
 let processExceptionBoundaryInstalled = false
