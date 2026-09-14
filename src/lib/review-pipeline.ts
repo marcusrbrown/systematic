@@ -8,8 +8,11 @@ import {
 import {
   type AdjudicationEnvelopeSchema,
   AGGREGATE_STDIN_BYTE_CAP,
+  isRouteTransitionAllowed,
+  type PipelineRoute,
   PrepareInputSchema,
   PrepareOutputSchema,
+  ROUTE_REFUSAL_TABLE,
   ScreenOutputSchema,
 } from './review-pipeline-contract.js'
 import { validateReviewReturnValue } from './review-return-validator.js'
@@ -899,5 +902,337 @@ export function validateAdjudication(
       prepared.candidate_groups,
       prepared.singletons,
     ),
+  }
+}
+
+// --- merge phase: single merged-finding field derivation --------------------
+//
+// Pure, side-effect-free derivation of one merged finding's mechanical
+// fields from its contributing surviving findings plus the model's decision
+// fields for that one group. Assumes the caller already validated the
+// partition via `validateAdjudication` -- this never re-validates group
+// membership. Never trusts a model-supplied value for severity, submitters,
+// confidence, `pre_existing`, fingerprint, or route directly: every one of
+// those is recomputed from the contributing inputs, with the model only
+// permitted to narrow the derived route (never widen it, via
+// `isRouteTransitionAllowed`) and to claim additional agreement credit
+// (never inventing a reviewer who never returned, or double-counting an
+// existing submitter). Never reads `process.env`, the filesystem, or the
+// clock.
+
+type SurvivingFinding = PrepareOutput['surviving_findings'][number]
+
+/** A candidate group always has at least two members
+ * (`CandidateGroupSchema.members` is `.min(2)`), so the contributing set for
+ * one merge decision is a non-empty tuple by construction rather than a
+ * plain array that would need a defensive empty check on every derivation
+ * below. */
+export type MergeContributingFindings = readonly [
+  SurvivingFinding,
+  SurvivingFinding,
+  ...SurvivingFinding[],
+]
+
+/** The model-owned fields for one merge decision that this derivation
+ * consumes: the representative line it picked (already checked by
+ * `validateAdjudication` against the group's real member lines), any
+ * additional reviewers it claims agreed, and an optional narrower route with
+ * the reason narrowing requires. */
+export interface MergedFindingModelDecision {
+  readonly line: number
+  readonly eligible_agreement_credit?: readonly string[]
+  readonly proposed_route?: PipelineRoute
+  readonly route_narrowing_reason?: string
+}
+
+export interface DeriveMergedFindingInput {
+  readonly contributing: MergeContributingFindings
+  readonly decision: MergedFindingModelDecision
+  /** Every reviewer whose `SubAgentReturn` was actually admitted for this
+   * run -- the eligibility set agreement credit is checked against. */
+  readonly returned_reviewers: readonly string[]
+}
+
+export interface DerivedMergedFindingFields {
+  readonly severity: SurvivingFinding['severity']
+  readonly submitters: readonly string[]
+  readonly confidence: number
+  readonly agreement_credit: readonly string[]
+  readonly pre_existing: boolean
+  readonly fingerprint: string
+  readonly route: PipelineRoute
+}
+
+type MergedFindingRejectReason =
+  | 'route widening'
+  | 'route narrowing missing reason'
+  | 'duplicate agreement credit reviewer'
+  | 'agreement credit reviewer already a submitter'
+  | 'agreement credit reviewer did not return'
+
+/** One bounded, payload-safe rejection diagnostic: a fixed reason code and a
+ * safe JSON path only. Never payload content, never a finding title, never
+ * exception text. */
+export interface MergedFindingRejection {
+  readonly path: string
+  readonly reason: MergedFindingRejectReason
+}
+
+export type DeriveMergedFindingResult =
+  | { readonly ok: true; readonly value: DerivedMergedFindingFields }
+  | { readonly ok: false; readonly rejection: MergedFindingRejection }
+
+function rejectMergedFinding(
+  path: string,
+  reason: MergedFindingRejectReason,
+): { readonly ok: false; readonly rejection: MergedFindingRejection } {
+  return { ok: false, rejection: { path, reason } }
+}
+
+const SEVERITY_RANK: Record<SurvivingFinding['severity'], number> = {
+  P0: 0,
+  P1: 1,
+  P2: 2,
+  P3: 3,
+}
+
+/** The highest severity (`P0` outranks `P1` outranks `P2` outranks `P3`)
+ * among the contributing inputs -- never the first or last one, and never a
+ * model-supplied value. */
+function deriveSeverity(
+  contributing: MergeContributingFindings,
+): SurvivingFinding['severity'] {
+  return contributing.reduce<SurvivingFinding['severity']>(
+    (highest, finding) =>
+      SEVERITY_RANK[finding.severity] < SEVERITY_RANK[highest]
+        ? finding.severity
+        : highest,
+    contributing[0].severity,
+  )
+}
+
+/** The distinct reviewers of the contributing inputs, sorted for
+ * deterministic output. */
+function deriveSubmitters(
+  contributing: MergeContributingFindings,
+): readonly string[] {
+  return [...new Set(contributing.map((finding) => finding.reviewer))].sort(
+    compareStrings,
+  )
+}
+
+/**
+ * Validates the model's claimed agreement credit: each claimed reviewer
+ * must be distinct from every other claimed reviewer, must not already be a
+ * submitter, and must appear in the set of reviewers that actually
+ * returned. Returns the credited reviewers (sorted) or the first violation
+ * found, in claim order.
+ */
+function deriveAgreementCredit(
+  claimed: readonly string[] | undefined,
+  submitters: ReadonlySet<string>,
+  returnedReviewers: ReadonlySet<string>,
+):
+  | { readonly ok: true; readonly value: readonly string[] }
+  | { readonly ok: false; readonly rejection: MergedFindingRejection } {
+  if (!claimed || claimed.length === 0) return { ok: true, value: [] }
+
+  const credited = new Set<string>()
+  for (const [index, reviewer] of claimed.entries()) {
+    const path = formatReviewArtifactIssuePath([
+      'eligible_agreement_credit',
+      index,
+    ])
+    if (credited.has(reviewer)) {
+      return rejectMergedFinding(path, 'duplicate agreement credit reviewer')
+    }
+    if (submitters.has(reviewer)) {
+      return rejectMergedFinding(
+        path,
+        'agreement credit reviewer already a submitter',
+      )
+    }
+    if (!returnedReviewers.has(reviewer)) {
+      return rejectMergedFinding(
+        path,
+        'agreement credit reviewer did not return',
+      )
+    }
+    credited.add(reviewer)
+  }
+
+  return { ok: true, value: [...credited].sort(compareStrings) }
+}
+
+const CONFIDENCE_AGREEMENT_BOOST = 0.1
+const MAX_CONFIDENCE = 1
+
+/**
+ * The highest confidence among the contributing inputs, boosted by
+ * `CONFIDENCE_AGREEMENT_BOOST` when submitters plus eligible agreement
+ * credit together represent at least two distinct reviewers, capped at
+ * `MAX_CONFIDENCE`. Rounded to avoid floating-point artifacts from the
+ * addition. A single-reviewer finding never gets the boost.
+ */
+function deriveConfidence(
+  contributing: MergeContributingFindings,
+  distinctReviewerCount: number,
+): number {
+  const highest = contributing.reduce(
+    (max, finding) => Math.max(max, finding.confidence),
+    contributing[0].confidence,
+  )
+  if (distinctReviewerCount < 2) return highest
+  const boosted = Math.round((highest + CONFIDENCE_AGREEMENT_BOOST) * 100) / 100
+  return Math.min(MAX_CONFIDENCE, boosted)
+}
+
+/** `true` only when every contributing input is pre-existing; mixed
+ * evidence is actionable (`false`). */
+function derivePreExisting(contributing: MergeContributingFindings): boolean {
+  return contributing.every((finding) => finding.pre_existing)
+}
+
+/** A stable fingerprint derived from the normalized file path, the
+ * representative line, and the severity -- identical inputs always produce
+ * an identical fingerprint. */
+function deriveFingerprint(
+  normalizedFile: string,
+  representativeLine: number,
+  severity: SurvivingFinding['severity'],
+): string {
+  return `${normalizedFile}:${representativeLine}:${severity}`
+}
+
+/**
+ * The most permissive value, per the authored narrows-to table, that every
+ * contributing value can reach by narrowing. Never derives its own
+ * ordering: a candidate is valid only when every contributing value's table
+ * entry lists it, and the chosen candidate is the one whose own table entry
+ * lists every other valid candidate (the top of the valid subset).
+ */
+function meetOverNarrowsTo<Value extends string>(
+  narrowsTo: Record<Value, readonly Value[]>,
+  values: readonly Value[],
+): Value | undefined {
+  const domain = Object.keys(narrowsTo) as Value[]
+  const validCandidates = domain.filter((candidate) =>
+    values.every((value) => narrowsTo[value].includes(candidate)),
+  )
+  return validCandidates.find((candidate) =>
+    validCandidates.every((other) => narrowsTo[candidate].includes(other)),
+  )
+}
+
+/** The route meet: the most permissive `{autofix_class, owner,
+ * requires_verification}` that every contributing input permits, computed
+ * per field from the exported `ROUTE_REFUSAL_TABLE` rather than a
+ * hand-derived ordering. The `?? ` fallbacks are unreachable in practice --
+ * each field's table always includes a terminal value reachable from every
+ * other value -- but keep this total without a non-null assertion. */
+function deriveRouteMeet(
+  contributing: MergeContributingFindings,
+): PipelineRoute {
+  const autofixClasses = contributing.map((finding) => finding.autofix_class)
+  const owners = contributing.map((finding) => finding.owner)
+  const verifications = contributing.map((finding) =>
+    finding.requires_verification ? ('true' as const) : ('false' as const),
+  )
+
+  return {
+    autofix_class:
+      meetOverNarrowsTo(ROUTE_REFUSAL_TABLE.autofix_class, autofixClasses) ??
+      'advisory',
+    owner: meetOverNarrowsTo(ROUTE_REFUSAL_TABLE.owner, owners) ?? 'release',
+    requires_verification:
+      (meetOverNarrowsTo(
+        ROUTE_REFUSAL_TABLE.requires_verification,
+        verifications,
+      ) ?? 'true') === 'true',
+  }
+}
+
+/**
+ * Computes the route meet, then applies the model's proposed narrowing (if
+ * any). A proposed route with no reason is rejected; a proposed route that
+ * `isRouteTransitionAllowed` refuses from the meet (a widening or
+ * incomparable transition) is rejected as `'route widening'`.
+ */
+function deriveRoute(
+  contributing: MergeContributingFindings,
+  decision: MergedFindingModelDecision,
+):
+  | { readonly ok: true; readonly value: PipelineRoute }
+  | { readonly ok: false; readonly rejection: MergedFindingRejection } {
+  const meet = deriveRouteMeet(contributing)
+  if (!decision.proposed_route) return { ok: true, value: meet }
+
+  if (!decision.route_narrowing_reason) {
+    return rejectMergedFinding(
+      formatReviewArtifactIssuePath(['route_narrowing_reason']),
+      'route narrowing missing reason',
+    )
+  }
+
+  if (!isRouteTransitionAllowed(meet, decision.proposed_route)) {
+    return rejectMergedFinding(
+      formatReviewArtifactIssuePath(['proposed_route']),
+      'route widening',
+    )
+  }
+
+  return { ok: true, value: decision.proposed_route }
+}
+
+/**
+ * Derives one merged finding's mechanical fields -- severity, submitters,
+ * confidence, agreement credit, `pre_existing`, fingerprint, and route --
+ * from its contributing surviving findings plus the model's decision fields
+ * for that group. Assumes `validateAdjudication` already confirmed the
+ * partition; never re-validates group membership. Rejection is
+ * whole-decision only: an invalid agreement-credit claim or a route
+ * widening attempt rejects the whole derivation with a fixed reason code
+ * and a safe JSON path, never payload content.
+ */
+export function deriveMergedFindingFields(
+  input: DeriveMergedFindingInput,
+): DeriveMergedFindingResult {
+  const submitters = deriveSubmitters(input.contributing)
+  const submitterSet = new Set(submitters)
+  const returnedReviewerSet = new Set(input.returned_reviewers)
+
+  const agreementCreditResult = deriveAgreementCredit(
+    input.decision.eligible_agreement_credit,
+    submitterSet,
+    returnedReviewerSet,
+  )
+  if (!agreementCreditResult.ok) return agreementCreditResult
+
+  const routeResult = deriveRoute(input.contributing, input.decision)
+  if (!routeResult.ok) return routeResult
+
+  const severity = deriveSeverity(input.contributing)
+  const distinctReviewerCount =
+    submitters.length + agreementCreditResult.value.length
+  const confidence = deriveConfidence(input.contributing, distinctReviewerCount)
+  const preExisting = derivePreExisting(input.contributing)
+  const normalizedFile = normalizeRepoRelativePath(input.contributing[0].file)
+  const fingerprint = deriveFingerprint(
+    normalizedFile,
+    input.decision.line,
+    severity,
+  )
+
+  return {
+    ok: true,
+    value: {
+      severity,
+      submitters,
+      confidence,
+      agreement_credit: agreementCreditResult.value,
+      pre_existing: preExisting,
+      fingerprint,
+      route: routeResult.value,
+    },
   }
 }

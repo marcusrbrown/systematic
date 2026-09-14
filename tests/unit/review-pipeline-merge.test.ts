@@ -1,9 +1,15 @@
 import { describe, expect, test } from 'bun:test'
 import type {
+  DeriveMergedFindingResult,
+  MergeContributingFindings,
+  MergedFindingModelDecision,
   PrepareOutput,
   ValidateAdjudicationResult,
 } from '../../src/lib/review-pipeline.js'
-import { validateAdjudication } from '../../src/lib/review-pipeline.js'
+import {
+  deriveMergedFindingFields,
+  validateAdjudication,
+} from '../../src/lib/review-pipeline.js'
 
 type Decision = Parameters<typeof validateAdjudication>[1][number]
 type CandidateGroup = PrepareOutput['candidate_groups'][number]
@@ -313,5 +319,328 @@ describe('validateAdjudication', () => {
       'unexpected decisions for empty candidate set',
       'decisions',
     )
+  })
+})
+
+type SurvivingFinding = PrepareOutput['surviving_findings'][number]
+
+/**
+ * Builds one contributing surviving finding, starting from `survivingFinding`
+ * (the same fixture builder the `validateAdjudication` tests above use) and
+ * layering on per-test overrides.
+ */
+function contributingFinding(
+  inputId: string,
+  overrides: Partial<SurvivingFinding> = {},
+): SurvivingFinding {
+  return { ...survivingFinding(inputId), ...overrides }
+}
+
+const DEFAULT_ROUTE = {
+  autofix_class: 'gated_auto',
+  owner: 'downstream-resolver',
+  requires_verification: true,
+} as const
+
+function baseDecision(
+  overrides: Partial<MergedFindingModelDecision> = {},
+): MergedFindingModelDecision {
+  return { line: 1, ...overrides }
+}
+
+function expectMergedFindingRejection(
+  result: DeriveMergedFindingResult,
+  reason: string,
+  path: string,
+): void {
+  expect(result.ok).toBe(false)
+  if (result.ok) return
+  expect(result.rejection.reason as string).toBe(reason)
+  expect(result.rejection.path).toBe(path)
+  expect(Object.keys(result.rejection).sort()).toEqual(['path', 'reason'])
+  expect('value' in result).toBe(false)
+}
+
+describe('deriveMergedFindingFields', () => {
+  test('a single-reviewer input gets no confidence boost', () => {
+    const contributing: MergeContributingFindings = [
+      contributingFinding('correctness#0', { confidence: 0.85 }),
+      contributingFinding('correctness#1', { confidence: 0.7 }),
+    ]
+
+    const result = deriveMergedFindingFields({
+      contributing,
+      decision: baseDecision(),
+      returned_reviewers: ['correctness'],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.submitters).toEqual(['correctness'])
+    expect(result.value.confidence).toBe(0.85)
+  })
+
+  test('two distinct reviewers merge: submitters derived and sorted, +0.10 applied', () => {
+    const contributing: MergeContributingFindings = [
+      contributingFinding('security#0', { confidence: 0.85 }),
+      contributingFinding('correctness#0', { confidence: 0.8 }),
+    ]
+
+    const result = deriveMergedFindingFields({
+      contributing,
+      decision: baseDecision(),
+      returned_reviewers: ['correctness', 'security'],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.submitters).toEqual(['correctness', 'security'])
+    expect(result.value.confidence).toBe(0.95)
+  })
+
+  test('the confidence boost caps at 1.0 rather than exceeding it', () => {
+    const contributing: MergeContributingFindings = [
+      contributingFinding('security#0', { confidence: 0.95 }),
+      contributingFinding('correctness#0', { confidence: 0.9 }),
+    ]
+
+    const result = deriveMergedFindingFields({
+      contributing,
+      decision: baseDecision(),
+      returned_reviewers: ['correctness', 'security'],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.confidence).toBe(1)
+  })
+
+  test('severity is the maximum among contributing inputs, not the first or last', () => {
+    const contributing: MergeContributingFindings = [
+      contributingFinding('correctness#0', { severity: 'P2' }),
+      contributingFinding('security#0', { severity: 'P0' }),
+      contributingFinding('performance#0', { severity: 'P3' }),
+    ]
+
+    const result = deriveMergedFindingFields({
+      contributing,
+      decision: baseDecision(),
+      returned_reviewers: ['correctness', 'security', 'performance'],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.severity).toBe('P0')
+  })
+
+  test('all-pre-existing contributing inputs yield pre_existing true', () => {
+    const contributing: MergeContributingFindings = [
+      contributingFinding('correctness#0', { pre_existing: true }),
+      contributingFinding('security#0', { pre_existing: true }),
+    ]
+
+    const result = deriveMergedFindingFields({
+      contributing,
+      decision: baseDecision(),
+      returned_reviewers: ['correctness', 'security'],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.pre_existing).toBe(true)
+  })
+
+  test('mixed pre_existing evidence yields pre_existing false (actionable)', () => {
+    const contributing: MergeContributingFindings = [
+      contributingFinding('correctness#0', { pre_existing: true }),
+      contributingFinding('security#0', { pre_existing: false }),
+    ]
+
+    const result = deriveMergedFindingFields({
+      contributing,
+      decision: baseDecision(),
+      returned_reviewers: ['correctness', 'security'],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.pre_existing).toBe(false)
+  })
+
+  test('a route-widening attempt is rejected', () => {
+    const contributing: MergeContributingFindings = [
+      contributingFinding('correctness#0', { ...DEFAULT_ROUTE }),
+      contributingFinding('security#0', { ...DEFAULT_ROUTE }),
+    ]
+
+    const result = deriveMergedFindingFields({
+      contributing,
+      decision: baseDecision({
+        proposed_route: { ...DEFAULT_ROUTE, autofix_class: 'safe_auto' },
+        route_narrowing_reason: 'Model attempted to widen the route.',
+      }),
+      returned_reviewers: ['correctness', 'security'],
+    })
+
+    expectMergedFindingRejection(result, 'route widening', 'proposed_route')
+  })
+
+  test('a route-narrowing attempt with a reason is accepted', () => {
+    const contributing: MergeContributingFindings = [
+      contributingFinding('correctness#0', { ...DEFAULT_ROUTE }),
+      contributingFinding('security#0', { ...DEFAULT_ROUTE }),
+    ]
+
+    const result = deriveMergedFindingFields({
+      contributing,
+      decision: baseDecision({
+        proposed_route: { ...DEFAULT_ROUTE, autofix_class: 'manual' },
+        route_narrowing_reason: 'Only a human should apply this fix.',
+      }),
+      returned_reviewers: ['correctness', 'security'],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.route).toEqual({
+      ...DEFAULT_ROUTE,
+      autofix_class: 'manual',
+    })
+  })
+
+  test('the meet route is used when the model proposes no narrowing', () => {
+    const contributing: MergeContributingFindings = [
+      contributingFinding('correctness#0', {
+        ...DEFAULT_ROUTE,
+        autofix_class: 'safe_auto',
+      }),
+      contributingFinding('security#0', {
+        ...DEFAULT_ROUTE,
+        autofix_class: 'manual',
+      }),
+    ]
+
+    const result = deriveMergedFindingFields({
+      contributing,
+      decision: baseDecision(),
+      returned_reviewers: ['correctness', 'security'],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    // The meet must be reachable by narrowing from both safe_auto and
+    // manual; manual is the most permissive value that satisfies both.
+    expect(result.value.route.autofix_class).toBe('manual')
+  })
+
+  test('agreement credit naming a reviewer with no return is rejected', () => {
+    const contributing: MergeContributingFindings = [
+      contributingFinding('correctness#0'),
+      contributingFinding('security#0'),
+    ]
+
+    const result = deriveMergedFindingFields({
+      contributing,
+      decision: baseDecision({ eligible_agreement_credit: ['performance'] }),
+      returned_reviewers: ['correctness', 'security'],
+    })
+
+    expectMergedFindingRejection(
+      result,
+      'agreement credit reviewer did not return',
+      'eligible_agreement_credit.0',
+    )
+  })
+
+  test('agreement credit duplicating an existing submitter is rejected', () => {
+    const contributing: MergeContributingFindings = [
+      contributingFinding('correctness#0'),
+      contributingFinding('security#0'),
+    ]
+
+    const result = deriveMergedFindingFields({
+      contributing,
+      decision: baseDecision({ eligible_agreement_credit: ['correctness'] }),
+      returned_reviewers: ['correctness', 'security'],
+    })
+
+    expectMergedFindingRejection(
+      result,
+      'agreement credit reviewer already a submitter',
+      'eligible_agreement_credit.0',
+    )
+  })
+
+  test('agreement credit duplicated within the claim itself is rejected', () => {
+    const contributing: MergeContributingFindings = [
+      contributingFinding('correctness#0'),
+      contributingFinding('security#0'),
+    ]
+
+    const result = deriveMergedFindingFields({
+      contributing,
+      decision: baseDecision({
+        eligible_agreement_credit: ['performance', 'performance'],
+      }),
+      returned_reviewers: ['correctness', 'security', 'performance'],
+    })
+
+    expectMergedFindingRejection(
+      result,
+      'duplicate agreement credit reviewer',
+      'eligible_agreement_credit.1',
+    )
+  })
+
+  test('identical inputs produce an identical fingerprint', () => {
+    const contributing: MergeContributingFindings = [
+      contributingFinding('correctness#0', { file: 'src/example.ts' }),
+      contributingFinding('security#0', { file: 'src/example.ts' }),
+    ]
+    const decision = baseDecision({ line: 7 })
+
+    const first = deriveMergedFindingFields({
+      contributing,
+      decision,
+      returned_reviewers: ['correctness', 'security'],
+    })
+    const second = deriveMergedFindingFields({
+      contributing,
+      decision,
+      returned_reviewers: ['correctness', 'security'],
+    })
+
+    expect(first.ok).toBe(true)
+    expect(second.ok).toBe(true)
+    if (!first.ok || !second.ok) return
+    expect(first.value.fingerprint).toBe(second.value.fingerprint)
+  })
+
+  test('a different normalized path produces a different fingerprint', () => {
+    const contributingA: MergeContributingFindings = [
+      contributingFinding('correctness#0', { file: 'src/a.ts' }),
+      contributingFinding('security#0', { file: 'src/a.ts' }),
+    ]
+    const contributingB: MergeContributingFindings = [
+      contributingFinding('correctness#0', { file: 'src/b.ts' }),
+      contributingFinding('security#0', { file: 'src/b.ts' }),
+    ]
+    const decision = baseDecision({ line: 7 })
+
+    const resultA = deriveMergedFindingFields({
+      contributing: contributingA,
+      decision,
+      returned_reviewers: ['correctness', 'security'],
+    })
+    const resultB = deriveMergedFindingFields({
+      contributing: contributingB,
+      decision,
+      returned_reviewers: ['correctness', 'security'],
+    })
+
+    expect(resultA.ok).toBe(true)
+    expect(resultB.ok).toBe(true)
+    if (!resultA.ok || !resultB.ok) return
+    expect(resultA.value.fingerprint).not.toBe(resultB.value.fingerprint)
   })
 })
