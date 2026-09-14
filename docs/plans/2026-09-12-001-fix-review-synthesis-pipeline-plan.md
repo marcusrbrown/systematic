@@ -783,7 +783,7 @@ which adds only contracts and a generated reference.
     reviewed source, and a finding containing the digit `1`.
   - Snapshot the checkout before and after the subprocess to prove no writes.
 
-- [ ] **Unit 3: Prepare confidence-gated candidate groups**
+- [x] **Unit 3: Prepare confidence-gated candidate groups**
 
   **Files:**
   - Extend `src/lib/review-pipeline.ts`.
@@ -807,7 +807,7 @@ which adds only contracts and a generated reference.
     findings not becoming candidate groups, normalized-path grouping, and stable
     output under permuted input order.
 
-- [ ] **Unit 4: Apply strict adjudication and derive merged findings**
+- [x] **Unit 4: Apply strict adjudication and derive merged findings**
 
   **Files:**
   - Extend `src/lib/review-pipeline.ts`.

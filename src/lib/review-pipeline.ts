@@ -15,6 +15,7 @@ import {
   PrepareOutputSchema,
   ROUTE_REFUSAL_TABLE,
   ScreenOutputSchema,
+  type ValidatorLifecycleResultsSchema,
 } from './review-pipeline-contract.js'
 import { validateReviewReturnValue } from './review-return-validator.js'
 
@@ -1640,5 +1641,247 @@ export function applyReviewAdjudication(
       validator_requests: validatorRequests,
       disagreement_facts: disagreementFacts,
     }),
+  }
+}
+
+// --- finalize phase: validator lifecycle reconciliation ---------------------
+//
+// Pure, side-effect-free reconciliation of finding-validator lifecycle
+// results against the merge phase's validator request set. This is a
+// finalize-phase step: it only settles each merged finding's validation
+// state (validated / filtered / uncertain) and records lifecycle failures
+// for a later slice to surface. It never builds action queues, disposition
+// counts, risk coverage, plan-assessment routing, or the final artifact --
+// those are separate slices. Never reads `process.env`, the filesystem, or
+// the clock.
+
+type ValidatorLifecycleResults = z.infer<typeof ValidatorLifecycleResultsSchema>
+type ValidatorLifecycleRecord = ValidatorLifecycleResults[number]
+type ValidatorLifecycleResult = ValidatorLifecycleRecord['result']
+
+/** One merged finding carrying its reconciled validation state. `validated`
+ * is `true` when a validator confirmed the finding, `false` when a
+ * validator disproved it, and *absent* -- never coerced to either boolean
+ * -- both when the finding was never requested for validation and when its
+ * validator run failed or was unavailable. A consumer distinguishes those
+ * two absent cases by cross-referencing `lifecycle_failures`: a finding_id
+ * present there was requested but left uncertain by a `failed` or
+ * `unavailable` outcome; a finding_id absent from both `lifecycle_failures`
+ * and carrying no `validated` field was never requested at all. */
+export type ReconciledFinding = MergeOutput['merged_findings'][number] & {
+  readonly validated?: boolean
+}
+
+/** One recorded validator lifecycle failure: a requested finding whose
+ * validator run ended in uncertainty (`failed` or `unavailable`) rather
+ * than a definite answer. The `outcome` discriminant distinguishes a
+ * timeout/error from a validator that was never reachable at all. */
+export interface ValidatorLifecycleFailure {
+  readonly finding_id: string
+  readonly outcome: 'failed' | 'unavailable'
+  readonly reason: string
+}
+
+export interface ReconcileValidatorResultsOutput {
+  readonly findings: readonly ReconciledFinding[]
+  readonly filtered_finding_ids: readonly string[]
+  readonly filtered_input_ids: readonly string[]
+  readonly lifecycle_failures: readonly ValidatorLifecycleFailure[]
+  readonly degraded: boolean
+}
+
+type ReconcileValidatorResultsRejectReason =
+  | 'missing validator result'
+  | 'duplicate validator result'
+  | 'unrequested validator result'
+
+/** One bounded, payload-safe rejection diagnostic: a fixed reason code and a
+ * safe JSON path only. Never payload content, never a finding title. */
+export interface ReconcileValidatorResultsRejection {
+  readonly path: string
+  readonly reason: ReconcileValidatorResultsRejectReason
+}
+
+export interface ReconcileValidatorResultsInput {
+  readonly merge: MergeOutput
+  readonly validator_lifecycle_results: ValidatorLifecycleResults
+}
+
+export type ReconcileValidatorResultsResult =
+  | { readonly ok: true; readonly value: ReconcileValidatorResultsOutput }
+  | {
+      readonly ok: false
+      readonly rejection: ReconcileValidatorResultsRejection
+    }
+
+function rejectReconcile(
+  path: string,
+  reason: ReconcileValidatorResultsRejectReason,
+): {
+  readonly ok: false
+  readonly rejection: ReconcileValidatorResultsRejection
+} {
+  return { ok: false, rejection: { path, reason } }
+}
+
+/**
+ * Indexes the lifecycle results by finding ID, rejecting a duplicate result
+ * for the same finding ID or a result for a finding ID absent from the
+ * request set. Returns the first violation found, in result order.
+ */
+function indexLifecycleResults(
+  results: ValidatorLifecycleResults,
+  requestedIds: ReadonlySet<string>,
+):
+  | {
+      readonly ok: true
+      readonly value: ReadonlyMap<string, ValidatorLifecycleResult>
+    }
+  | {
+      readonly ok: false
+      readonly rejection: ReconcileValidatorResultsRejection
+    } {
+  const resultsByFindingId = new Map<string, ValidatorLifecycleResult>()
+  for (const [index, record] of results.entries()) {
+    const path = formatReviewArtifactIssuePath([
+      'validator_lifecycle_results',
+      index,
+      'finding_id',
+    ])
+    if (resultsByFindingId.has(record.finding_id)) {
+      return rejectReconcile(path, 'duplicate validator result')
+    }
+    if (!requestedIds.has(record.finding_id)) {
+      return rejectReconcile(path, 'unrequested validator result')
+    }
+    resultsByFindingId.set(record.finding_id, record.result)
+  }
+  return { ok: true, value: resultsByFindingId }
+}
+
+/**
+ * Every requested finding ID must have a corresponding lifecycle result.
+ * Returns the first missing request, in request order.
+ */
+function validateNoMissingResults(
+  validatorRequests: MergeOutput['validator_requests'],
+  resultsByFindingId: ReadonlyMap<string, ValidatorLifecycleResult>,
+): ReconcileValidatorResultsRejection | undefined {
+  for (const [index, request] of validatorRequests.entries()) {
+    if (!resultsByFindingId.has(request.finding_id)) {
+      return {
+        path: formatReviewArtifactIssuePath([
+          'validator_requests',
+          index,
+          'finding_id',
+        ]),
+        reason: 'missing validator result',
+      }
+    }
+  }
+  return undefined
+}
+
+interface ClassifiedFinding {
+  readonly finding: ReconciledFinding
+  readonly filtered: boolean
+  readonly failure?: ValidatorLifecycleFailure
+}
+
+/**
+ * Classifies one merged finding against its lifecycle result (if any):
+ * `true` validates it, `false` filters it, `failed`/`unavailable` leave it
+ * actionable but uncertain and record a lifecycle failure, and no result at
+ * all (never requested) leaves it untouched.
+ */
+function classifyFinding(
+  finding: MergeOutput['merged_findings'][number],
+  result: ValidatorLifecycleResult | undefined,
+): ClassifiedFinding {
+  if (!result) return { finding: { ...finding }, filtered: false }
+
+  if (result.outcome === 'true') {
+    return { finding: { ...finding, validated: true }, filtered: false }
+  }
+
+  if (result.outcome === 'false') {
+    return { finding: { ...finding, validated: false }, filtered: true }
+  }
+
+  return {
+    finding: { ...finding },
+    filtered: false,
+    failure: {
+      finding_id: finding.finding_id,
+      outcome: result.outcome,
+      reason: result.reason,
+    },
+  }
+}
+
+/**
+ * Reconciles the finding-validator lifecycle results against the merge
+ * output's validator request set, classifying every merged finding as
+ * validated, filtered, or left uncertain (see `ReconciledFinding` for the
+ * full state table). Rejection is whole-payload only: a missing result, a
+ * duplicate result, or a result for a finding that was never requested
+ * rejects everything, with a fixed reason code and a safe JSON path -- never
+ * payload content or a finding title.
+ *
+ * This reconciles validator results only -- it never builds action queues,
+ * disposition counts, risk coverage, plan-assessment routing, or the final
+ * artifact; those are separate slices. Never reads `process.env`, the
+ * filesystem, or the clock.
+ */
+export function reconcileValidatorResults(
+  input: ReconcileValidatorResultsInput,
+): ReconcileValidatorResultsResult {
+  const requestedIds = new Set(
+    input.merge.validator_requests.map((request) => request.finding_id),
+  )
+
+  const indexed = indexLifecycleResults(
+    input.validator_lifecycle_results,
+    requestedIds,
+  )
+  if (!indexed.ok) return indexed
+
+  const missingViolation = validateNoMissingResults(
+    input.merge.validator_requests,
+    indexed.value,
+  )
+  if (missingViolation) return { ok: false, rejection: missingViolation }
+
+  const findings: ReconciledFinding[] = []
+  const filteredFindingIds = new Set<string>()
+  const filteredInputIds = new Set<string>()
+  const lifecycleFailures: ValidatorLifecycleFailure[] = []
+
+  for (const finding of input.merge.merged_findings) {
+    const classified = classifyFinding(
+      finding,
+      indexed.value.get(finding.finding_id),
+    )
+    findings.push(classified.finding)
+    if (classified.filtered) {
+      filteredFindingIds.add(finding.finding_id)
+      for (const inputId of finding.input_finding_ids) {
+        filteredInputIds.add(inputId)
+      }
+    }
+    if (classified.failure) lifecycleFailures.push(classified.failure)
+  }
+
+  lifecycleFailures.sort((a, b) => compareStrings(a.finding_id, b.finding_id))
+
+  return {
+    ok: true,
+    value: {
+      findings,
+      filtered_finding_ids: [...filteredFindingIds].sort(compareStrings),
+      filtered_input_ids: [...filteredInputIds].sort(compareStrings),
+      lifecycle_failures: lifecycleFailures,
+      degraded: lifecycleFailures.length > 0,
+    },
   }
 }
