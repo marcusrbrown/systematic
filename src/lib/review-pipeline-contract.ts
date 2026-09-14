@@ -138,6 +138,23 @@ const CandidateGroupSchema = z
   })
   .strict()
 
+// A surviving admitted finding carries its stable input ID and the reviewer
+// that supplied it alongside the finding's own fields, reused wholesale from
+// `ParentFindingSchema` rather than restated. This is what lets the merge
+// phase derive a merged finding's severity, `pre_existing`, and conservative
+// route from real contributing-input data, and its submitters from the
+// reviewers that supplied them, instead of re-deriving from nothing.
+//
+// Only survivors of the confidence gate ever appear here. The gate runs
+// before grouping precisely so a suppressed finding can never re-enter the
+// pipeline; carrying a suppressed finding's body forward here would invite
+// exactly that. A suppressed input keeps only its existing
+// `confidence_dispositions` ledger entry.
+const SurvivingAdmittedFindingSchema = ParentFindingSchema.extend({
+  input_id: PipelineInputIdSchema,
+  reviewer: SubAgentReturnSchema.shape.reviewer,
+}).strict()
+
 export const PrepareOutputSchema = z
   .object({
     confidence_dispositions: z
@@ -148,6 +165,9 @@ export const PrepareOutputSchema = z
       .max(MAX_FINDINGS * MAX_PERSONAS),
     singletons: z.array(PipelineInputIdSchema).max(MAX_FINDINGS * MAX_PERSONAS),
     candidate_groups: z.array(CandidateGroupSchema).max(MAX_FINDINGS),
+    surviving_findings: z
+      .array(SurvivingAdmittedFindingSchema)
+      .max(MAX_FINDINGS * MAX_PERSONAS),
   })
   .strict()
 

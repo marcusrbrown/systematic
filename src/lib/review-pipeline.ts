@@ -341,9 +341,11 @@ function validatePrepareStructure(
 function applyConfidenceGate(screenResults: readonly PrepareScreenResult[]): {
   readonly confidenceDispositions: PrepareOutput['confidence_dispositions']
   readonly survivors: readonly PrepareSurvivor[]
+  readonly survivingFindings: PrepareOutput['surviving_findings']
 } {
   const confidenceDispositions: PrepareOutput['confidence_dispositions'] = []
   const survivors: PrepareSurvivor[] = []
+  const survivingFindings: PrepareOutput['surviving_findings'] = []
 
   for (const entry of screenResults) {
     for (const finding of entry.result.admitted_findings) {
@@ -359,6 +361,10 @@ function applyConfidenceGate(screenResults: readonly PrepareScreenResult[]): {
           normalizedFile: normalizeRepoRelativePath(finding.file),
           line: finding.line,
         })
+        survivingFindings.push({
+          ...finding,
+          reviewer: entry.reviewer,
+        })
       } else {
         confidenceDispositions.push({
           input_id: finding.input_id,
@@ -371,7 +377,8 @@ function applyConfidenceGate(screenResults: readonly PrepareScreenResult[]): {
   }
 
   confidenceDispositions.sort((a, b) => compareStrings(a.input_id, b.input_id))
-  return { confidenceDispositions, survivors }
+  survivingFindings.sort((a, b) => compareStrings(a.input_id, b.input_id))
+  return { confidenceDispositions, survivors, survivingFindings }
 }
 
 /**
@@ -486,7 +493,7 @@ export function prepareReviewCandidates(
     return rejectPrepare(structuralViolation.path, structuralViolation.reason)
   }
 
-  const { confidenceDispositions, survivors } =
+  const { confidenceDispositions, survivors, survivingFindings } =
     applyConfidenceGate(screenResults)
   const coverageUnion = computeCoverageUnion(selectedDispatches)
   const { candidateGroups, singletonIds } = groupCandidates(survivors)
@@ -496,6 +503,7 @@ export function prepareReviewCandidates(
     confidence_dispositions: confidenceDispositions,
     coverage_union: coverageUnion,
     singletons: singletonIds,
+    surviving_findings: survivingFindings,
   })
 
   return { ok: true, value: output }

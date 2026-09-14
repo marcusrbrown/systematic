@@ -7077,6 +7077,10 @@ var CandidateGroupSchema = object({
   file: RepoRelativePathSchema,
   members: array(CandidateGroupMemberSchema).min(2).max(MAX_FINDINGS),
 }).strict()
+var SurvivingAdmittedFindingSchema = ParentFindingSchema.extend({
+  input_id: PipelineInputIdSchema,
+  reviewer: SubAgentReturnSchema.shape.reviewer,
+}).strict()
 var PrepareOutputSchema = object({
   confidence_dispositions: array(ConfidenceDispositionSchema).max(
     MAX_FINDINGS * MAX_PERSONAS,
@@ -7086,6 +7090,9 @@ var PrepareOutputSchema = object({
   ),
   singletons: array(PipelineInputIdSchema).max(MAX_FINDINGS * MAX_PERSONAS),
   candidate_groups: array(CandidateGroupSchema).max(MAX_FINDINGS),
+  surviving_findings: array(SurvivingAdmittedFindingSchema).max(
+    MAX_FINDINGS * MAX_PERSONAS,
+  ),
 }).strict()
 var PER_FINDING_BYTE_ASSUMPTION = 8192
 var AGGREGATE_BYTE_CAP_HEADROOM = 65536
@@ -7550,6 +7557,7 @@ function validatePrepareStructure(screenResults, selectedDispatches) {
 function applyConfidenceGate(screenResults) {
   const confidenceDispositions = []
   const survivors = []
+  const survivingFindings = []
   for (const entry of screenResults) {
     for (const finding of entry.result.admitted_findings) {
       if (survivesConfidenceGate(finding)) {
@@ -7564,6 +7572,10 @@ function applyConfidenceGate(screenResults) {
           normalizedFile: normalizeRepoRelativePath(finding.file),
           line: finding.line,
         })
+        survivingFindings.push({
+          ...finding,
+          reviewer: entry.reviewer,
+        })
       } else {
         confidenceDispositions.push({
           input_id: finding.input_id,
@@ -7575,7 +7587,8 @@ function applyConfidenceGate(screenResults) {
     }
   }
   confidenceDispositions.sort((a, b) => compareStrings(a.input_id, b.input_id))
-  return { confidenceDispositions, survivors }
+  survivingFindings.sort((a, b) => compareStrings(a.input_id, b.input_id))
+  return { confidenceDispositions, survivors, survivingFindings }
 }
 function computeCoverageUnion(selectedDispatches) {
   const coverageSet = new Set()
@@ -7650,7 +7663,7 @@ function prepareReviewCandidates(input) {
   if (structuralViolation) {
     return rejectPrepare(structuralViolation.path, structuralViolation.reason)
   }
-  const { confidenceDispositions, survivors } =
+  const { confidenceDispositions, survivors, survivingFindings } =
     applyConfidenceGate(screenResults)
   const coverageUnion = computeCoverageUnion(selectedDispatches)
   const { candidateGroups, singletonIds } = groupCandidates(survivors)
@@ -7659,6 +7672,7 @@ function prepareReviewCandidates(input) {
     confidence_dispositions: confidenceDispositions,
     coverage_union: coverageUnion,
     singletons: singletonIds,
+    surviving_findings: survivingFindings,
   })
   return { ok: true, value: output }
 }

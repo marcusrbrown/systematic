@@ -45,6 +45,33 @@ function group(
   return { file, members: [...members] }
 }
 
+/**
+ * Builds a surviving admitted finding for the given stable input ID, inferring
+ * its reviewer from the conventional `<reviewer>#<index>` fixture shape used
+ * throughout this file's decisions and groups.
+ */
+function survivingFinding(
+  inputId: string,
+): PrepareOutput['surviving_findings'][number] {
+  return {
+    autofix_class: 'gated_auto',
+    confidence: 0.85,
+    disposition: 'surviving',
+    evidence: ['src/example.ts:1 demonstrates the issue.'],
+    file: 'src/example.ts',
+    input_id: inputId,
+    line: 1,
+    owner: 'downstream-resolver',
+    pre_existing: false,
+    requires_verification: true,
+    reviewer: inputId.split('#')[0] ?? inputId,
+    severity: 'P1',
+    suggested_fix: 'Apply the fix.',
+    title: 'Example issue',
+    why_it_matters: 'The example path can fail during normal execution.',
+  }
+}
+
 function prepared(
   candidateGroups: CandidateGroup[],
   options: {
@@ -52,6 +79,13 @@ function prepared(
     readonly suppressed?: readonly string[]
   } = {},
 ): PrepareOutput {
+  const survivingIds = [
+    ...candidateGroups.flatMap((candidateGroup) =>
+      candidateGroup.members.map((member) => member.input_id),
+    ),
+    ...(options.singletons ?? []),
+  ]
+
   return {
     candidate_groups: [...candidateGroups],
     confidence_dispositions: (options.suppressed ?? []).map((inputId) => ({
@@ -62,6 +96,7 @@ function prepared(
     })),
     coverage_union: [],
     singletons: [...(options.singletons ?? [])],
+    surviving_findings: survivingIds.map(survivingFinding),
   }
 }
 

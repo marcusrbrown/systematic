@@ -81,6 +81,13 @@ const prepareInputFixture: JsonObject = {
   ],
 }
 
+const survivingFindingFixture: JsonObject = {
+  ...rawFindingFixture,
+  disposition: 'surviving',
+  input_id: 'correctness-0',
+  reviewer: 'correctness',
+}
+
 const prepareOutputFixture: JsonObject = {
   confidence_dispositions: [
     {
@@ -92,6 +99,7 @@ const prepareOutputFixture: JsonObject = {
   coverage_union: ['src/example.ts'],
   singletons: ['correctness-0'],
   candidate_groups: [],
+  surviving_findings: [survivingFindingFixture],
 }
 
 describe('ScreenInputSchema', () => {
@@ -294,6 +302,50 @@ describe('PrepareOutputSchema', () => {
       ],
     })
     expect(result.success).toBe(true)
+  })
+
+  test('rejects an unknown key on a surviving finding', () => {
+    const result = PrepareOutputSchema.safeParse({
+      ...prepareOutputFixture,
+      surviving_findings: [{ ...survivingFindingFixture, extra: 'nope' }],
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('rejects a surviving finding missing its reviewer', () => {
+    const { reviewer: _reviewer, ...withoutReviewer } = survivingFindingFixture
+    const result = PrepareOutputSchema.safeParse({
+      ...prepareOutputFixture,
+      surviving_findings: [withoutReviewer],
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('surviving_findings bound tracks the exported MAX_FINDINGS * MAX_PERSONAS maxima', () => {
+    const atMax = Array.from(
+      { length: MAX_FINDINGS * MAX_PERSONAS },
+      (_, index) => ({
+        ...survivingFindingFixture,
+        input_id: `correctness-${index}`,
+      }),
+    )
+    const overMax = [
+      ...atMax,
+      { ...survivingFindingFixture, input_id: 'correctness-overflow' },
+    ]
+
+    expect(
+      PrepareOutputSchema.safeParse({
+        ...prepareOutputFixture,
+        surviving_findings: atMax,
+      }).success,
+    ).toBe(true)
+    expect(
+      PrepareOutputSchema.safeParse({
+        ...prepareOutputFixture,
+        surviving_findings: overMax,
+      }).success,
+    ).toBe(false)
   })
 })
 

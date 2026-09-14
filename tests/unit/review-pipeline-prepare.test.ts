@@ -332,6 +332,87 @@ describe('prepareReviewCandidates -- candidate grouping', () => {
   })
 })
 
+describe('prepareReviewCandidates -- surviving findings', () => {
+  test('every surviving input ID has a corresponding admitted finding entry, and no suppressed input ID appears among them', () => {
+    const surviving = makeAdmittedFinding({
+      confidence: 0.9,
+      input_id: 'correctness#0',
+    })
+    const suppressed = makeAdmittedFinding({
+      confidence: 0.1,
+      input_id: 'correctness#1',
+    })
+    const result = prepareReviewCandidates(
+      buildInput(
+        [makeScreenResult('correctness', [surviving, suppressed])],
+        [makeSelectedDispatch('correctness')],
+      ),
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error('expected acceptance')
+
+    const survivingIds = result.value.confidence_dispositions
+      .filter((entry) => entry.disposition === 'surviving')
+      .map((entry) => entry.input_id)
+    const suppressedIds = result.value.confidence_dispositions
+      .filter((entry) => entry.disposition === 'suppressed')
+      .map((entry) => entry.input_id)
+
+    expect(
+      result.value.surviving_findings.map((entry) => entry.input_id),
+    ).toEqual(survivingIds)
+    for (const suppressedId of suppressedIds) {
+      expect(
+        result.value.surviving_findings.some(
+          (entry) => entry.input_id === suppressedId,
+        ),
+      ).toBe(false)
+    }
+  })
+
+  test('surviving_findings arrives sorted by stable input ID, independent of input order', () => {
+    const findingA = makeAdmittedFinding({
+      confidence: 0.9,
+      input_id: 'security#0',
+    })
+    const findingB = makeAdmittedFinding({
+      confidence: 0.9,
+      input_id: 'correctness#0',
+    })
+
+    const forward = prepareReviewCandidates(
+      buildInput(
+        [
+          makeScreenResult('security', [findingA]),
+          makeScreenResult('correctness', [findingB]),
+        ],
+        [makeSelectedDispatch('security'), makeSelectedDispatch('correctness')],
+      ),
+    )
+    const reversed = prepareReviewCandidates(
+      buildInput(
+        [
+          makeScreenResult('correctness', [findingB]),
+          makeScreenResult('security', [findingA]),
+        ],
+        [makeSelectedDispatch('correctness'), makeSelectedDispatch('security')],
+      ),
+    )
+
+    expect(forward.ok).toBe(true)
+    expect(reversed.ok).toBe(true)
+    if (!forward.ok || !reversed.ok) throw new Error('expected acceptance')
+
+    expect(
+      forward.value.surviving_findings.map((entry) => entry.input_id),
+    ).toEqual(['correctness#0', 'security#0'])
+    expect(JSON.stringify(forward.value.surviving_findings)).toBe(
+      JSON.stringify(reversed.value.surviving_findings),
+    )
+  })
+})
+
 describe('prepareReviewCandidates -- determinism', () => {
   test('permuting the input order yields byte-identical output', () => {
     const correctnessFindingA = makeAdmittedFinding({
