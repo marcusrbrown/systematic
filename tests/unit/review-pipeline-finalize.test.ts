@@ -4,6 +4,7 @@ import type {
   FinalizeReviewDispositionsInput,
   LostRiskCriticalPersona,
   MergeOutput,
+  PlanAssessmentResult,
   PrepareOutput,
   ReconcileValidatorResultsInput,
   ReconcileValidatorResultsOutput,
@@ -12,6 +13,7 @@ import {
   deriveRiskCoverage,
   finalizeReviewDispositions,
   reconcileValidatorResults,
+  routePlanAssessment,
 } from '../../src/lib/review-pipeline.js'
 
 type LifecycleResults =
@@ -767,5 +769,141 @@ describe('deriveRiskCoverage', () => {
     )
 
     expect(result).toEqual([])
+  })
+})
+
+function planAssessmentResult(
+  kind: PlanAssessmentResult['kind'],
+  description: string,
+): PlanAssessmentResult {
+  return { kind, description }
+}
+
+describe('routePlanAssessment', () => {
+  test('an explicit unmet requirement produces residual actionable work and gates the verdict', () => {
+    const result = routePlanAssessment({
+      results: [
+        planAssessmentResult(
+          'explicit_unmet_requirement',
+          'Requirement R3 was not implemented.',
+        ),
+      ],
+    })
+
+    expect(result.residual_actionable_work).toEqual([
+      'Requirement R3 was not implemented.',
+    ])
+    expect(result.advisory_outputs).toEqual([])
+    expect(result.gated_by_explicit_unmet_requirement).toBe(true)
+  })
+
+  test('an inferred gap produces advisory output and does not gate the verdict by itself', () => {
+    const result = routePlanAssessment({
+      results: [
+        planAssessmentResult(
+          'inferred_gap',
+          'The plan did not mention rate limiting, but it may be missing.',
+        ),
+      ],
+    })
+
+    expect(result.residual_actionable_work).toEqual([])
+    expect(result.advisory_outputs).toEqual([
+      'The plan did not mention rate limiting, but it may be missing.',
+    ])
+    expect(result.gated_by_explicit_unmet_requirement).toBe(false)
+  })
+
+  test('neither kind carries a persona input identifier, and neither appears in any reviewer findings collection', () => {
+    const explicit = planAssessmentResult(
+      'explicit_unmet_requirement',
+      'Requirement R1 was not implemented.',
+    )
+    const inferred = planAssessmentResult(
+      'inferred_gap',
+      'Possible missing edge case.',
+    )
+
+    // PlanAssessmentResult has no input_id or reviewer field at all -- a
+    // plan-assessment result cannot carry a persona input identifier by
+    // construction, not merely by convention.
+    expect('input_id' in explicit).toBe(false)
+    expect('reviewer' in explicit).toBe(false)
+    expect('input_id' in inferred).toBe(false)
+    expect('reviewer' in inferred).toBe(false)
+
+    const result = routePlanAssessment({ results: [explicit, inferred] })
+
+    // The routed output never assembles anything resembling a reviewer
+    // findings collection -- only the two plain string channels and the
+    // gate flag.
+    expect(Object.keys(result).sort()).toEqual([
+      'advisory_outputs',
+      'gated_by_explicit_unmet_requirement',
+      'residual_actionable_work',
+    ])
+    // Every entry in both channels is a plain description string -- never a
+    // structured object that could carry an input_id or reviewer field.
+    for (const entry of [
+      ...result.residual_actionable_work,
+      ...result.advisory_outputs,
+    ]) {
+      expect(typeof entry).toBe('string')
+    }
+  })
+
+  test('a review with no plan assessment produces empty residual and advisory output and does not gate the verdict', () => {
+    const result = routePlanAssessment({ results: [] })
+
+    expect(result.residual_actionable_work).toEqual([])
+    expect(result.advisory_outputs).toEqual([])
+    expect(result.gated_by_explicit_unmet_requirement).toBe(false)
+  })
+
+  test('a mix of explicit and inferred results routes each to the correct channel', () => {
+    const result = routePlanAssessment({
+      results: [
+        planAssessmentResult(
+          'explicit_unmet_requirement',
+          'Requirement R2 was not implemented.',
+        ),
+        planAssessmentResult('inferred_gap', 'Possible missing test.'),
+        planAssessmentResult(
+          'explicit_unmet_requirement',
+          'Requirement R1 was not implemented.',
+        ),
+        planAssessmentResult('inferred_gap', 'Another suspected gap.'),
+      ],
+    })
+
+    expect(result.residual_actionable_work).toEqual([
+      'Requirement R1 was not implemented.',
+      'Requirement R2 was not implemented.',
+    ])
+    expect(result.advisory_outputs).toEqual([
+      'Another suspected gap.',
+      'Possible missing test.',
+    ])
+    expect(result.gated_by_explicit_unmet_requirement).toBe(true)
+  })
+
+  test('output is stable under permuted input order', () => {
+    const results: readonly PlanAssessmentResult[] = [
+      planAssessmentResult(
+        'explicit_unmet_requirement',
+        'Requirement R2 was not implemented.',
+      ),
+      planAssessmentResult('inferred_gap', 'Possible missing test.'),
+      planAssessmentResult(
+        'explicit_unmet_requirement',
+        'Requirement R1 was not implemented.',
+      ),
+      planAssessmentResult('inferred_gap', 'Another suspected gap.'),
+    ]
+
+    const resultA = routePlanAssessment({ results })
+    const resultB = routePlanAssessment({ results: [...results].reverse() })
+
+    expect(resultA).toEqual(resultB)
   })
 })

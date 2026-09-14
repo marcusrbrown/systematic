@@ -2373,3 +2373,79 @@ export function deriveRiskCoverage(
     )
     .sort((a, b) => compareStrings(a.persona, b.persona))
 }
+
+// --- plan-assessment routing phase -------------------------------------------
+//
+// Routes the model's plan-assessment results -- its judgment on whether a
+// plan's stated requirements were actually met by the work -- into the
+// correct output channels. Nobody reviewed a line of code to produce these
+// results: they carry no persona, no evidence, and no input ledger row, so
+// they are a deliberately distinct shape from a reviewer's admitted finding
+// and this phase never writes one into that collection. Identifying lost
+// personas, risk coverage, and the final artifact assembly are separate
+// slices; this phase only routes. Never reads `process.env`, the
+// filesystem, or the clock.
+
+/** One plan-assessment result the model produced while checking the plan's
+ * stated requirements against the work. `explicit_unmet_requirement` is a
+ * requirement the plan stated outright and the work demonstrably did not
+ * meet -- residual actionable work that gates the verdict.
+ * `inferred_gap` is something the model suspects is missing but the plan
+ * never stated outright -- advisory output only, and never gates the
+ * verdict by itself. Deliberately carries no persona, no evidence, and no
+ * input ID: unlike a reviewer's finding, nobody reviewed a line of code to
+ * produce it, so it must never be mistaken for one. */
+export interface PlanAssessmentResult {
+  readonly kind: 'explicit_unmet_requirement' | 'inferred_gap'
+  readonly description: string
+}
+
+export interface RoutePlanAssessmentInput {
+  /** Every plan-assessment result the model returned. Empty when the run
+   * had no plan to assess against -- never fabricated, and never a reason
+   * to silently relax the verdict gate. */
+  readonly results: readonly PlanAssessmentResult[]
+}
+
+export interface RoutedPlanAssessment {
+  readonly residual_actionable_work: readonly string[]
+  readonly advisory_outputs: readonly string[]
+  readonly gated_by_explicit_unmet_requirement: boolean
+}
+
+/**
+ * Routes plan-assessment results into their two output channels: explicit
+ * unmet requirements become residual actionable work and gate the verdict;
+ * inferred gaps become advisory-only output and never gate the verdict on
+ * their own. A run with no plan assessment (`results` empty) produces empty
+ * output on both channels and an ungated verdict -- never fabricated
+ * entries, never a silently relaxed gate. `PlanAssessmentResult` has no
+ * persona or input-ID field to carry, so a plan-assessment result can never
+ * be attributed to a reviewer or cross-referenced against the input ledger
+ * by construction, and this function never touches a findings collection.
+ * Output is sorted for determinism, so identical input in a different order
+ * always produces byte-identical output.
+ */
+export function routePlanAssessment(
+  input: RoutePlanAssessmentInput,
+): RoutedPlanAssessment {
+  const residualActionableWork: string[] = []
+  const advisoryOutputs: string[] = []
+
+  for (const result of input.results) {
+    if (result.kind === 'explicit_unmet_requirement') {
+      residualActionableWork.push(result.description)
+    } else {
+      advisoryOutputs.push(result.description)
+    }
+  }
+
+  residualActionableWork.sort(compareStrings)
+  advisoryOutputs.sort(compareStrings)
+
+  return {
+    residual_actionable_work: residualActionableWork,
+    advisory_outputs: advisoryOutputs,
+    gated_by_explicit_unmet_requirement: residualActionableWork.length > 0,
+  }
+}
