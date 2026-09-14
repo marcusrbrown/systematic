@@ -541,6 +541,63 @@ introducing a new dependency or unfamiliar API.
   — `src/ce-review-validator.ts` currently routes two subcommands — so the
   convention is set here. No other per-command special case ships without being
   documented centrally alongside the dispatch table.
+- KTD19. **Per-finding derived state crosses the wire; run-level aggregates
+  are derived at finalize; both are verified, neither is re-authored.** Landing
+  Units 1-4 exposed three contract gaps that blocked artifact assembly,
+  confirmed by independent review on 2026-09-14: the merge wire projected away
+  `severity`, `confidence`, `fingerprint`, `pre_existing`, and `submitters`
+  although `deriveMergedFindingFields` computes them and the phase table
+  promised them; the finalize envelope omitted prepared state and screen
+  results, so the ledger, rejected weights, coverage notes, and reviewer
+  ownership had no source; and the plan-assessment envelope arrived pre-routed
+  with a model-authored `run_status`, contradicting KTD12. The fix widens the
+  intermediate contract rather than recomputing inside `finalize`, under two
+  distinct rules:
+  - *Carried per-finding fields.* The merge wire carries every field
+    `deriveMergedFindingFields` produces. `finalize` takes prepared state and
+    the full screen-result set as inputs. Because every envelope between
+    helper calls passes through the parent, carried fields are trust inputs,
+    not proof: `finalize` re-runs the same derivation over the carried
+    survivors as a verifier and rejects any carried field that differs. The
+    derivation is reused, never duplicated, and the artifact is built from the
+    verified wire values.
+  - *Finalize-only aggregates.* Rejected-payload weights, lost risk-critical
+    personas, and run status exist only at finalize. They are derived there
+    from carried screen summaries and selected dispatches under the loss rules
+    in `skills/ce-review/references/synthesis-artifact-contract.md`
+    ("Risk-aware degraded verdict"), never accepted as authored envelope
+    fields, which would let a caller omit a loss or disagree with ledger
+    counts.
+  Rejected severities are extracted at screen time as bounded enum values
+  only, so the parent never carries rejected bodies. The plan-assessment
+  envelope supplies classified, unrouted results plus a verdict narrative.
+  `dispatch_records`, `parent_run_metadata.selected_dispatches`, and
+  `screen_results` must form an exact one-to-one join: any missing, duplicate,
+  or extra entry rejects before loss or coverage derivation runs. Only
+  `review-pipeline-schema.json` regenerates; KTD17 still holds.
+- KTD20. **The verdict path is corrected before it is exposed.** The same review
+  found six defects in the already-landed finalize steps, all in scope here
+  because a `clean` verdict that ignores them defeats the issue. Each maps to
+  one sub-unit: a `false` validator result drops its reason although the
+  artifact requires `validation_reason` (5.6); `clean` checks only three gates,
+  so every non-risk reviewer can fail and `validation_unavailable` never forces
+  degraded status per KTD16 (5.13); unconfirmed in-band findings enter action
+  queues although the stable derivations exclude them (5.7); a survivor missing
+  from the disposition ledger silently defaults to `surviving` instead of
+  rejecting (5.7); finding order has no final input-ID tie-breaker, so it is
+  not total (5.3); and lost-persona coverage candidates sort by model-owned
+  `finding_id` rather than the canonical severity/confidence/path/line order
+  (5.8), while the artifact refinement compares paths literally where the
+  helper normalizes them (5.9).
+- KTD21. **An unknowable rejected count produces no ledger row.** Both the
+  pipeline and the artifact rejected-summary shapes require a positive count,
+  and KTD17 forbids moving the artifact. A whole-payload rejection whose
+  finding count cannot be determined (unparseable JSON, an identity-mismatched
+  empty return) therefore yields only the dispatch entry with its outcome,
+  `rejection_reason`, and `input_finding_count: 0`, contributes zero rejected
+  weight, and creates no rejected-summary row. The loss rule already treats
+  that outcome as lost for a risk-critical persona, so nothing is silently
+  downgraded; the count is simply not invented.
 
 ---
 
@@ -657,7 +714,7 @@ flowchart TB
 | `screen` | Raw return bytes, expected persona, harness | Reviewer claims | Dispatch outcome, admitted parent findings with stable IDs, safe rejected summary, residual risks/testing gaps |
 | `prepare` | All screen results and selected dispatch metadata | None | Confidence dispositions, exact coverage union, stable singletons, complete candidate groups |
 | `merge` | Prepared state | Candidate partition, merged narrative, decline reasons, route narrowing, agreement credit | Derived severity/confidence/provenance/routes, merged findings, validator requests, disagreement facts |
-| `finalize` | Merge state, dispatches, validator lifecycle results, parent-attested run metadata | Plan assessment, verdict request/rationale, CE summaries, applied-fix outcomes | Filtered/surviving findings, queues, risk coverage, counts, stable order, and a writing-mode artifact or report-only projection |
+| `finalize` | Merge state, prepared state, every screen result, dispatches, validator lifecycle results, parent-attested run metadata | Unrouted plan-assessment results, verdict narrative, applied-fix outcomes | Filtered/surviving findings, ledger, queues, risk coverage, counts, derived run status, stable order, and a writing-mode artifact or report-only projection |
 
 ### Stable derivations
 
@@ -835,60 +892,189 @@ which adds only contracts and a generated reference.
     decision set, rejection of a non-empty decision set when no candidates
     exist, and deterministic output under permuted decisions.
 
+  Landed narrower than specified: the wire projection dropped the derived
+  severity, confidence, fingerprint, pre-existing state, and submitters. Unit
+  5.1-5.3 widen the wire; the derivation itself is unchanged (KTD19).
+
 - [ ] **Unit 5: Finalize validator outcomes, queues, coverage, and artifact**
 
-  Partially landed. Complete: validator lifecycle reconciliation, final
-  dispositions and weighted counts, action queues, risk-critical replacement
-  coverage, plan-assessment routing, and `runReviewPipeline`, which composes
-  those and derives the verdict with typed blocking reasons. Remaining: the
-  writing-mode artifact assembly and the report-only projection
-  (`finalizeReview`), then the `finalize` subcommand.
+  Partially landed: validator lifecycle reconciliation, final dispositions and
+  weighted counts, action queues, risk-critical replacement coverage,
+  plan-assessment routing, and `runReviewPipeline`. The remaining work is split
+  into the sub-units below because artifact assembly is blocked by the contract
+  gaps in KTD19 and the landed steps carry the defects in KTD20. Each sub-unit
+  is one function (or one schema change) with six to nine tests; a delegated
+  brief inlines the fields it needs and never sends the implementer to read the
+  aggregate artifact schema or this plan.
 
-  A brief for the remaining artifact work must inline the `ReviewArtifactSchema`
-  field list. Three dispatches died reading that 771-line schema to discover what
-  to populate.
+  Persistence stays with the parent (KTD13): the temp-file creation,
+  owner-only permissions, and non-success cleanup in R26 belong to Unit 6's
+  orchestration prose, not to the pure finalizer.
 
-  **Files:**
-  - Extend `src/lib/review-pipeline.ts`.
-  - Add `tests/unit/review-pipeline-finalize.test.ts`.
-  - Extend `src/ce-review-validator.ts` with `finalize` routing.
-  - Regenerate the generated helper.
-  - Extend `tests/unit/review-artifact-schema.test.ts` only for pipeline-produced
-    boundary cases not already pinned by the aggregate schema.
+  **Files (shared across sub-units):**
+  - Extend `src/lib/review-pipeline-contract.ts` and
+    `tests/unit/review-pipeline-contract.test.ts`.
+  - Extend `src/lib/review-pipeline.ts`; extend
+    `tests/unit/review-pipeline-screen.test.ts` and
+    `tests/unit/review-pipeline-merge.test.ts` where the amended function is
+    already covered there; add `tests/unit/review-pipeline-finalize.test.ts`.
+  - Extend `src/lib/review-artifact-schema.ts` and
+    `tests/unit/review-artifact-schema.test.ts` for the refinement only.
+  - Extend `src/ce-review-validator.ts` and
+    `tests/unit/ce-review-validator-routing.test.ts`; regenerate the helper.
+  - Regenerate `skills/ce-review/references/review-pipeline-schema.json`.
 
-  **Behavior:**
-  - Require exactly one validator lifecycle result per request and none for
-    unrequested findings.
-  - Apply true/false/failure/timeout semantics without converting unavailable
-    evidence into a validated claim.
-  - Preserve every `validation_unavailable` dispatch unchanged with count zero,
-    no ledger rows for that persona, degraded status, and risk-critical loss
-    evaluation where applicable.
-  - Reconcile input dispositions and weighted counts; form filtered,
-    pre-existing, fixer, residual-actionable, and report-only sets; sort every
-    machine-consumed list stably.
-  - Derive risk-critical replacement coverage and deterministic citation IDs.
-  - Route explicit and inferred plan-assessment results without fabricating
-    reviewer findings.
-  - Create the writing-mode temp file with exclusive creation and owner-only
-    permissions inside the run directory, and remove it on every non-success
-    exit (R26).
-  - Return a discriminated writing/report-only result. Build and parse writing-
-    mode artifacts through `ReviewArtifactSchema` before returning success;
-    report-only omits artifact-only mode and persistence fields.
+  - [ ] **5.1 Widen the intermediate contract (schema only)**
+    - Merge wire: add `severity`, `confidence`, `pre_existing`, `fingerprint`,
+      `submitters` to the merged-finding shape, reusing the artifact's leaves.
+    - Finalize input: add `prepared` and `screen_results`, reusing the prepare
+      envelope's existing shapes.
+    - Screen rejected summary: add `rejected_severities` with the artifact's
+      enum and the count-equals-length invariant.
+    - Plan assessment: replace the pre-routed fields with `results[]` of
+      `{kind, description}`; drop `run_status`; keep `verdict` as narrative.
+    - Pipeline parent metadata `mode` gains `report-only`; the artifact's mode
+      enum is untouched.
+    - Report projection gains `input_dispositions`, `disposition_counts`,
+      `queues`, `pre_existing_findings`, and `risk_coverage`.
+    - Tests: unknown key on each amended envelope rejects; severity-count
+      mismatch rejects; pre-routed plan fields reject; `report-only` accepted in
+      pipeline metadata and rejected by the artifact; regenerated pipeline JSON
+      Schema changes while both artifact schemas stay byte-identical.
 
-  **Test-first proof:**
-  - Cover validator true/false/timeout/malformed/unavailable, a merged finding
-    later filtered, all-reviewer failure, partial risk-critical rejection,
-    cross-persona on-surface coverage, self/off-surface/filtered/unavailable
-    non-coverage, explicit/inferred/no-plan outcomes, no-findings runs, queue
-    exclusivity, count reconciliation, and final schema conformance.
-  - Run the same finalizer fixture in writing and report-only modes and compare
-    the semantic projection of findings, ledger, queues, coverage, and verdict
-    before persistence.
-  - Replay identical phase inputs while varying excluded incidental caller data
-    such as cwd and artifact/temp paths; assert byte-identical output. Vary each
-    declared parent metadata field and assert only its defined output changes.
+  - [ ] **5.2 Carry pre-existing state and submitters through merge assembly**
+    - `assemblyFromDerivation` retains every derived field; nothing is
+      recomputed downstream.
+    - Tests: each carried field equals the derivation's value; absent agreement
+      credit stays absent; a permuted input order yields identical assembly.
+
+  - [ ] **5.3 Emit the complete merge wire and make finding order total**
+    - The wire projection emits every carried field.
+    - The assembly comparator adds a final stable input-ID tie-breaker so two
+      findings sharing severity, confidence, path, line, and fingerprint still
+      order deterministically.
+    - Tests: round-trip through the amended merge schema; every carried field
+      present on singletons and merged groups; identical-key findings order by
+      input ID; permuted decisions yield byte-identical output.
+
+  - [ ] **5.4 Extract rejected severities and honest counts at screen time**
+    - On finding-level rejection, extract only recognizable `P0`-`P3` values;
+      anything else becomes `unknown`. Never copy an offending value.
+    - A whole-payload rejection where no finding count is knowable (unparseable
+      JSON, identity mismatch on an empty return) emits the dispatch outcome
+      and reason with no rejected summary at all, rather than coercing zero to
+      one (KTD21).
+    - Tests: mixed valid and invalid severities; all unknown; count equals
+      length; unparseable payload has no summary; identity-mismatched empty
+      return has no summary; no rejected body text in output; environment
+      invariance preserved.
+
+  - [ ] **5.5 Validate cross-phase joins and derive loss and rejection inputs**
+    - New `deriveFinalizeContext` checks that survivors partition exactly into
+      merged-finding inputs, merged IDs are unique, validator requests
+      correspond to merged findings, and `dispatch_records`,
+      `parent_run_metadata.selected_dispatches`, and `screen_results` form an
+      exact one-to-one join; any mismatch rejects with a fixed reason and safe
+      path before any derivation runs.
+    - Re-runs `deriveMergedFindingFields` over each merged finding's carried
+      survivors and rejects when any carried `severity`, `confidence`,
+      `fingerprint`, `pre_existing`, `submitters`, or route differs (KTD19).
+    - Derives rejected-payload weights from screen summaries (a rejection with
+      no summary weighs zero, KTD21), lost risk-critical personas under the
+      contract's loss rules (malformed, never returned, unavailable, or a
+      partial rejection carrying `P0`, `P1`, or `unknown`), and admitted-input
+      ownership from ledger evidence rather than ID parsing.
+    - Tests: clean join; survivor missing from merge inputs rejects; duplicate
+      merged ID rejects; a selected dispatch with no screen result rejects;
+      dispatch copies disagree rejects; a tampered carried severity rejects;
+      each loss rule; a `P2`-only partial rejection is not a loss.
+
+  - [ ] **5.6 Preserve the disproving validator's reason**
+    - A `false` lifecycle result carries its reason onto the reconciled finding
+      so the artifact's `validation_reason` requirement is satisfied at source.
+    - Tests: `false` carries reason; `true` carries none; failed and unavailable
+      still record a lifecycle failure without a reason on the finding;
+      rejection paths unchanged.
+
+  - [ ] **5.7 Partition findings from carried state and exclude the uncertain**
+    - `partitionFindings` reads carried `pre_existing` instead of recomputing it
+      and keeps unconfirmed in-band findings out of every action queue while
+      still reporting them.
+    - A survivor absent from the disposition ledger rejects rather than
+      defaulting to `surviving`.
+    - Tests: queue exclusivity; unconfirmed in-band finding reported but not
+      queued; unconfirmed out-of-band finding queued; pre-existing from carried
+      state; missing ledger entry rejects; counts still sum to observed.
+
+  - [ ] **5.8 Order coverage candidates canonically and cite an admitted row**
+    - `deriveCoverageForLostPersona` selects the first eligible finding in the
+      canonical severity/confidence/path/line/tie-breaker order, then cites
+      that finding's lowest admitted input ID whose reviewer differs from the
+      lost persona. Missing ownership rejects; it never yields a satisfied
+      citation.
+    - Tests: two eligible findings pick by canonical order not ID; citation is
+      a cross-persona admitted row; self-owned-only inputs are not a citation;
+      off-surface, filtered, and unconfirmed in-band candidates excluded;
+      normalized-path surface match.
+
+  - [ ] **5.9 Tighten the artifact refinement without moving the schema**
+    - The risk-coverage refinement requires an explicit true validation for
+      in-band findings and compares surfaces through the shared path
+      normalizer.
+    - Tests: absent `validated` on an in-band finding rejects; explicit true
+      passes; out-of-band absent passes; normalized-equal paths pass;
+      `review-summary-schema.json` and `findings-schema.json` byte-identical
+      after regeneration.
+
+  - [ ] **5.10 Build the input ledger**
+    - New `buildInputLedger` emits admitted rows (owner, confidence, final
+      disposition, reason) and one rejected-summary row per rejected payload,
+      with no row for a `validation_unavailable` persona.
+    - Tests: every admitted input has exactly one row; suppressed rows keep
+      the gate reason; rejected rows carry the extracted severities; a
+      rejection with no summary has no row (KTD21); unavailable persona has
+      none; duplicate ID impossible; stable order.
+
+  - [ ] **5.11 Build review coverage**
+    - New `buildReviewCoverage` aggregates screen residual risks and testing
+      gaps, failed reviewers, validator failures, and disagreement facts into the
+      artifact's coverage shape with defined overflow behavior at the array
+      bounds, never silent truncation.
+    - Tests: aggregation across reviewers; dedupe; overflow rejects with a
+      fixed reason; failed reviewer list from dispatch outcomes; validator
+      failure reasons carried.
+
+  - [ ] **5.12 Project synthesized findings**
+    - New `projectSynthesizedFindings` nests provenance, applies validation
+      state and reason, and strips helper-only fields so the result parses
+      strictly.
+    - Tests: provenance nesting; absent agreement credit projects to an empty
+      list; filtered finding carries `validated: false` and reason; helper-only
+      keys absent; strict parse of every projected finding.
+
+  - [ ] **5.13 Compose `finalizeReview`**
+    - Composes the projections above, derives `run_status` (any
+      `validation_unavailable` or lost reviewer degrades; `clean` additionally
+      requires no failed reviewer), parses the writing-mode artifact through
+      `ReviewArtifactSchema` before returning, and returns the report-only
+      projection without an artifact wrapper.
+    - Tests: writing and report-only agree on findings, ledger, queues,
+      coverage, and verdict; all-reviewer failure is not clean; unavailable
+      persona degrades even when coverage is satisfied; artifact parse failure
+      surfaces as rejection with no partial output; varying incidental caller
+      data yields byte-identical output.
+
+  - [ ] **5.14 Add the `finalize` handler**
+    - Bounded stdin at the aggregate cap, no flags, exit 0/1/2 through the
+      shared boundary, fixed-reason diagnostics only.
+    - Tests: valid envelope exits 0 with parseable output; schema-invalid exits
+      1 with path/code only; oversized exits 1; flag or positional argument
+      exits 2; synchronous throw and rejected promise both hit the boundary.
+
+  - [ ] **5.15 Route the subcommand and regenerate the helper**
+    - Add `finalize` to the dispatch table; regenerate the bundled helper.
+    - Tests: routing parity for all six subcommands; drift gate current; helper
+      byte ceiling unchanged or explicitly re-justified.
 
 - [ ] **Unit 6: Replace prose execution with packaged helper invocations**
 
@@ -1144,6 +1330,22 @@ flowchart LR
 - AE22. In a writing mode, the persisted `review-summary.json` bytes are the exact
   successful `finalize` output. A test that re-sorts, re-counts, or re-serializes
   the helper result before writing fails.
+- AE23. Every non-risk reviewer returns `never_returned` and no finding exists.
+  Finalization reports zero counts and a degraded, non-clean run; the three
+  typed blocking reasons alone are not sufficient for `clean`.
+- AE24. A P1 finding's validator times out. The finding is reported with
+  `validated` absent, appears in no action queue, and cannot cite coverage; the
+  same finding with an explicit true result is queued and citable.
+- AE25. Two cross-persona findings are eligible to cover one lost security
+  surface. The citation is the admitted input row of the finding first in
+  canonical severity/confidence/path/line order, never the lower `finding_id`.
+- AE26. `finalize` receives a `dispatch_records` entry whose outcome disagrees
+  with `parent_run_metadata.selected_dispatches`, or a selected dispatch with no
+  screen result. Either call rejects with a fixed reason and safe path and
+  produces no partial output.
+- AE27. A merged finding arrives at `finalize` with a carried `severity` higher
+  than any contributing survivor's. The call rejects rather than persisting the
+  tampered value or silently recomputing it.
 
 ---
 
@@ -1172,6 +1374,8 @@ flowchart LR
 | Removing the screen is read as a regression in protection | Record what the screen actually reached: only values exported into the helper subprocess, matched literally. It never covered repository secrets, credential stores, or any encoded bypass, and a clean result never meant an artifact was safe to share. |
 | Review completeness varies by machine | Assert environment-invariant admission directly: identical payloads admit byte-identically under clean and polluted environments, in-process and through a real subprocess. |
 | The two contract families hand-mirror the same bounded leaves | Compose `review-pipeline.v1` from the canonical schemas in `src/lib/review-artifact-schema.ts` and test that a shared bound change moves both. |
+| A widened wire lets a tampered carried field reach the artifact | `finalize` re-runs the shared derivation as a verifier and rejects any carried field that differs; finalize-side tests mutate a carried severity, confidence, and `pre_existing` and prove rejection, never silent acceptance (KTD19). |
+| Delegated implementation returns empty on an oversized brief | Each Unit 5 sub-unit is one function with six to nine tests; briefs inline needed field lists and forbid reading the aggregate artifact schema or this plan. |
 
 ---
 
