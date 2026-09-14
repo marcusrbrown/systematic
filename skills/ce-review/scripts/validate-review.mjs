@@ -8416,16 +8416,1150 @@ function applyReviewAdjudication(input) {
     }),
   }
 }
+function rejectReconcile(path, reason) {
+  return { ok: false, rejection: { path, reason } }
+}
+function indexLifecycleResults(results, requestedIds) {
+  const resultsByFindingId = new Map()
+  for (const [index, record] of results.entries()) {
+    const path = formatReviewArtifactIssuePath([
+      'validator_lifecycle_results',
+      index,
+      'finding_id',
+    ])
+    if (resultsByFindingId.has(record.finding_id)) {
+      return rejectReconcile(path, 'duplicate validator result')
+    }
+    if (!requestedIds.has(record.finding_id)) {
+      return rejectReconcile(path, 'unrequested validator result')
+    }
+    resultsByFindingId.set(record.finding_id, record.result)
+  }
+  return { ok: true, value: resultsByFindingId }
+}
+function validateNoMissingResults(validatorRequests, resultsByFindingId) {
+  for (const [index, request] of validatorRequests.entries()) {
+    if (!resultsByFindingId.has(request.finding_id)) {
+      return {
+        path: formatReviewArtifactIssuePath([
+          'validator_requests',
+          index,
+          'finding_id',
+        ]),
+        reason: 'missing validator result',
+      }
+    }
+  }
+  return
+}
+function classifyFinding(finding, result) {
+  if (!result) return { finding: { ...finding }, filtered: false }
+  if (result.outcome === 'true') {
+    return { finding: { ...finding, validated: true }, filtered: false }
+  }
+  if (result.outcome === 'false') {
+    return {
+      finding: {
+        ...finding,
+        validated: false,
+        validation_reason: result.reason,
+      },
+      filtered: true,
+    }
+  }
+  return {
+    finding: { ...finding },
+    filtered: false,
+    failure: {
+      finding_id: finding.finding_id,
+      outcome: result.outcome,
+      reason: result.reason,
+    },
+  }
+}
+function reconcileValidatorResults(input) {
+  const requestedIds = new Set(
+    input.merge.validator_requests.map((request) => request.finding_id),
+  )
+  const indexed = indexLifecycleResults(
+    input.validator_lifecycle_results,
+    requestedIds,
+  )
+  if (!indexed.ok) return indexed
+  const missingViolation = validateNoMissingResults(
+    input.merge.validator_requests,
+    indexed.value,
+  )
+  if (missingViolation) return { ok: false, rejection: missingViolation }
+  const findings = []
+  const filteredFindingIds = new Set()
+  const filteredInputIds = new Set()
+  const lifecycleFailures = []
+  for (const finding of input.merge.merged_findings) {
+    const classified = classifyFinding(
+      finding,
+      indexed.value.get(finding.finding_id),
+    )
+    findings.push(classified.finding)
+    if (classified.filtered) {
+      filteredFindingIds.add(finding.finding_id)
+      for (const inputId of finding.input_finding_ids) {
+        filteredInputIds.add(inputId)
+      }
+    }
+    if (classified.failure) lifecycleFailures.push(classified.failure)
+  }
+  lifecycleFailures.sort((a, b) => compareStrings(a.finding_id, b.finding_id))
+  return {
+    ok: true,
+    value: {
+      findings,
+      filtered_finding_ids: [...filteredFindingIds].sort(compareStrings),
+      filtered_input_ids: [...filteredInputIds].sort(compareStrings),
+      lifecycle_failures: lifecycleFailures,
+      degraded: lifecycleFailures.length > 0,
+    },
+  }
+}
+function rejectFinalizeContext(path, reason) {
+  return { ok: false, rejection: { path, reason } }
+}
+function dispatchRecordsEqual(a, b) {
+  return (
+    a.persona === b.persona &&
+    a.dispatch_outcome === b.dispatch_outcome &&
+    JSON.stringify(a.selection_surface ?? []) ===
+      JSON.stringify(b.selection_surface ?? [])
+  )
+}
 var FINALIZE_CONTEXT_LOSS_DISPATCH_OUTCOMES = new Set([
   'malformed',
   'never_returned',
   'validation_unavailable',
 ])
 var FINALIZE_CONTEXT_LOSS_SEVERITIES = new Set(['P0', 'P1', 'unknown'])
+function checkNoDuplicateMergedFindingIds(mergedFindings) {
+  const seenFindingIds = new Set()
+  for (const [index, finding] of mergedFindings.entries()) {
+    if (seenFindingIds.has(finding.finding_id)) {
+      return rejectFinalizeContext(
+        formatReviewArtifactIssuePath([
+          'merge',
+          'merged_findings',
+          index,
+          'finding_id',
+        ]),
+        'duplicate merged finding ID',
+      )
+    }
+    seenFindingIds.add(finding.finding_id)
+  }
+  return { ok: true, value: seenFindingIds }
+}
+function checkSurvivorPartition(
+  mergedFindings,
+  survivingFindings,
+  survivingIndex,
+) {
+  const coveredInputIds = new Set()
+  const contributingByFindingId = new Map()
+  for (const [findingIndex, finding] of mergedFindings.entries()) {
+    const sortedIds = [...finding.input_finding_ids].sort(compareStrings)
+    const resolved = []
+    for (const [idIndex, inputId] of sortedIds.entries()) {
+      const survivor = survivingIndex.get(inputId)
+      if (!survivor) {
+        return rejectFinalizeContext(
+          formatReviewArtifactIssuePath([
+            'merge',
+            'merged_findings',
+            findingIndex,
+            'input_finding_ids',
+            idIndex,
+          ]),
+          'merged finding references unknown survivor',
+        )
+      }
+      resolved.push(survivor)
+      coveredInputIds.add(inputId)
+    }
+    contributingByFindingId.set(finding.finding_id, resolved)
+  }
+  for (const [survivorIndex, survivor] of survivingFindings.entries()) {
+    if (!coveredInputIds.has(survivor.input_id)) {
+      return rejectFinalizeContext(
+        formatReviewArtifactIssuePath([
+          'prepared',
+          'surviving_findings',
+          survivorIndex,
+          'input_id',
+        ]),
+        'survivor missing from merge inputs',
+      )
+    }
+  }
+  return { ok: true, value: contributingByFindingId }
+}
+function checkValidatorRequestsResolve(validatorRequests, knownFindingIds) {
+  for (const [index, request] of validatorRequests.entries()) {
+    if (!knownFindingIds.has(request.finding_id)) {
+      return {
+        path: formatReviewArtifactIssuePath([
+          'merge',
+          'validator_requests',
+          index,
+          'finding_id',
+        ]),
+        reason: 'validator request references unknown merged finding',
+      }
+    }
+  }
+  return
+}
+function checkDispatchRecordsJoin(dispatchRecords, selectedDispatches) {
+  if (dispatchRecords.length !== selectedDispatches.length) {
+    return rejectFinalizeContext(
+      formatReviewArtifactIssuePath(['dispatch_records']),
+      'dispatch record mismatch',
+    )
+  }
+  const selectedByPersona = new Map(
+    selectedDispatches.map((dispatch) => [dispatch.persona, dispatch]),
+  )
+  if (selectedByPersona.size !== selectedDispatches.length) {
+    return rejectFinalizeContext(
+      formatReviewArtifactIssuePath([
+        'parent_run_metadata',
+        'selected_dispatches',
+      ]),
+      'dispatch record mismatch',
+    )
+  }
+  for (const [index, record] of dispatchRecords.entries()) {
+    const selected = selectedByPersona.get(record.persona)
+    if (!selected || !dispatchRecordsEqual(record, selected)) {
+      return rejectFinalizeContext(
+        formatReviewArtifactIssuePath(['dispatch_records', index]),
+        'dispatch record mismatch',
+      )
+    }
+  }
+  return { ok: true, value: selectedByPersona }
+}
+function checkScreenResultsJoin(
+  screenResults,
+  dispatchRecords,
+  selectedByPersona,
+) {
+  const screenByReviewer = new Map()
+  for (const [index, result] of screenResults.entries()) {
+    if (
+      screenByReviewer.has(result.reviewer) ||
+      !selectedByPersona.has(result.reviewer)
+    ) {
+      return rejectFinalizeContext(
+        formatReviewArtifactIssuePath(['screen_results', index, 'reviewer']),
+        'unexpected screen result for persona',
+      )
+    }
+    screenByReviewer.set(result.reviewer, result)
+  }
+  for (const [index, record] of dispatchRecords.entries()) {
+    if (!screenByReviewer.has(record.persona)) {
+      return rejectFinalizeContext(
+        formatReviewArtifactIssuePath(['dispatch_records', index, 'persona']),
+        'screen result missing for selected persona',
+      )
+    }
+  }
+  return { ok: true, value: screenByReviewer }
+}
+function mergedFindingDivergesFromDerivation(
+  finding,
+  contributingByFindingId,
+  returnedReviewers,
+) {
+  const resolved = contributingByFindingId.get(finding.finding_id) ?? []
+  const contributing = toContributingTuple(
+    resolved.length >= 2 ? resolved : [...resolved, ...resolved],
+  )
+  const derivation = deriveMergedFindingFields({
+    contributing,
+    decision: {
+      line: finding.line,
+      eligible_agreement_credit: finding.agreement_credit,
+      proposed_route: {
+        autofix_class: finding.autofix_class,
+        owner: finding.owner,
+        requires_verification: finding.requires_verification,
+      },
+      route_narrowing_reason: 'carried route verification',
+    },
+    returned_reviewers: returnedReviewers,
+  })
+  return (
+    !derivation.ok ||
+    derivation.value.severity !== finding.severity ||
+    derivation.value.confidence !== finding.confidence ||
+    derivation.value.pre_existing !== finding.pre_existing ||
+    derivation.value.fingerprint !== finding.fingerprint ||
+    JSON.stringify(derivation.value.submitters) !==
+      JSON.stringify(finding.submitters) ||
+    derivation.value.route.autofix_class !== finding.autofix_class ||
+    derivation.value.route.owner !== finding.owner ||
+    derivation.value.route.requires_verification !==
+      finding.requires_verification
+  )
+}
+function checkMergedFindingsMatchDerivation(
+  mergedFindings,
+  contributingByFindingId,
+  returnedReviewers,
+) {
+  for (const [index, finding] of mergedFindings.entries()) {
+    if (
+      mergedFindingDivergesFromDerivation(
+        finding,
+        contributingByFindingId,
+        returnedReviewers,
+      )
+    ) {
+      return {
+        path: formatReviewArtifactIssuePath([
+          'merge',
+          'merged_findings',
+          index,
+        ]),
+        reason: 'merged finding fields diverge from derivation',
+      }
+    }
+  }
+  return
+}
+function deriveRejectedPayloadWeights(screenResults) {
+  const sorted = [...screenResults].sort((a, b) =>
+    compareStrings(a.reviewer, b.reviewer),
+  )
+  const weights = []
+  for (const result of sorted) {
+    const summary = result.result.rejected_summary
+    if (summary) {
+      weights.push({ rejected_finding_count: summary.rejected_finding_count })
+    }
+  }
+  return weights
+}
+function deriveLostRiskCriticalPersonas(dispatchRecords, screenByReviewer) {
+  const riskCriticalPersonas = new Set(RISK_CRITICAL_PERSONAS)
+  const lostPersonas = []
+  for (const record of dispatchRecords) {
+    if (!riskCriticalPersonas.has(record.persona)) continue
+    const selectionSurface = record.selection_surface ?? []
+    if (FINALIZE_CONTEXT_LOSS_DISPATCH_OUTCOMES.has(record.dispatch_outcome)) {
+      lostPersonas.push({
+        persona: record.persona,
+        selection_surface: selectionSurface,
+      })
+      continue
+    }
+    const rejectedSeverities =
+      screenByReviewer.get(record.persona)?.result.rejected_summary
+        ?.rejected_severities ?? []
+    if (
+      rejectedSeverities.some((severity) =>
+        FINALIZE_CONTEXT_LOSS_SEVERITIES.has(severity),
+      )
+    ) {
+      lostPersonas.push({
+        persona: record.persona,
+        selection_surface: selectionSurface,
+      })
+    }
+  }
+  return [...lostPersonas].sort((a, b) => compareStrings(a.persona, b.persona))
+}
+function deriveFinalizeContext(input) {
+  const findingIds = checkNoDuplicateMergedFindingIds(
+    input.merge.merged_findings,
+  )
+  if (!findingIds.ok) return findingIds
+  const survivingIndex = buildSurvivingFindingIndex(input.prepared)
+  const partition = checkSurvivorPartition(
+    input.merge.merged_findings,
+    input.prepared.surviving_findings,
+    survivingIndex,
+  )
+  if (!partition.ok) return partition
+  const requestViolation = checkValidatorRequestsResolve(
+    input.merge.validator_requests,
+    findingIds.value,
+  )
+  if (requestViolation) return { ok: false, rejection: requestViolation }
+  const dispatchJoin = checkDispatchRecordsJoin(
+    input.dispatch_records,
+    input.parent_run_metadata.selected_dispatches,
+  )
+  if (!dispatchJoin.ok) return dispatchJoin
+  const screenJoin = checkScreenResultsJoin(
+    input.screen_results,
+    input.dispatch_records,
+    dispatchJoin.value,
+  )
+  if (!screenJoin.ok) return screenJoin
+  const returnedReviewers = deriveReturnedReviewers(input.prepared)
+  const derivationViolation = checkMergedFindingsMatchDerivation(
+    input.merge.merged_findings,
+    partition.value,
+    returnedReviewers,
+  )
+  if (derivationViolation) return { ok: false, rejection: derivationViolation }
+  return {
+    ok: true,
+    value: {
+      rejected_payloads: deriveRejectedPayloadWeights(input.screen_results),
+      lost_risk_critical_personas: deriveLostRiskCriticalPersonas(
+        input.dispatch_records,
+        screenJoin.value,
+      ),
+    },
+  }
+}
+function deriveInputDispositions(prepared, reconciled) {
+  const filteredInputIds = new Set(reconciled.filtered_input_ids)
+  const findingByInputId = new Map()
+  for (const finding of reconciled.findings) {
+    for (const inputId of finding.input_finding_ids) {
+      findingByInputId.set(inputId, finding)
+    }
+  }
+  const dispositions = []
+  for (const [index, entry] of prepared.confidence_dispositions.entries()) {
+    if (entry.disposition === 'suppressed') {
+      dispositions.push({
+        input_id: entry.input_id,
+        disposition: 'suppressed',
+        reason: entry.reason,
+      })
+      continue
+    }
+    if (filteredInputIds.has(entry.input_id)) {
+      dispositions.push({ input_id: entry.input_id, disposition: 'filtered' })
+      continue
+    }
+    const finding = findingByInputId.get(entry.input_id)
+    if (finding === undefined) {
+      return {
+        ok: false,
+        rejection: {
+          path: formatReviewArtifactIssuePath([
+            'prepared',
+            'confidence_dispositions',
+            index,
+            'input_id',
+          ]),
+          reason: 'survivor missing from merged findings',
+        },
+      }
+    }
+    const isMerged = finding.input_finding_ids.length > 1
+    dispositions.push({
+      input_id: entry.input_id,
+      disposition: isMerged ? 'merged' : 'surviving',
+    })
+  }
+  return {
+    ok: true,
+    value: [...dispositions].sort((a, b) =>
+      compareStrings(a.input_id, b.input_id),
+    ),
+  }
+}
+function computeDispositionCounts(inputDispositions, rejectedPayloads) {
+  let surviving = 0
+  let merged = 0
+  let suppressed = 0
+  let filtered = 0
+  for (const entry of inputDispositions) {
+    if (entry.disposition === 'surviving') surviving += 1
+    else if (entry.disposition === 'merged') merged += 1
+    else if (entry.disposition === 'suppressed') suppressed += 1
+    else filtered += 1
+  }
+  const rejected = rejectedPayloads.reduce(
+    (total, payload) => total + payload.rejected_finding_count,
+    0,
+  )
+  return { surviving, merged, suppressed, filtered, rejected }
+}
+function routeForOwner(owner) {
+  if (owner === 'review-fixer') return 'fixer'
+  if (owner === 'release') return 'report_only'
+  return 'residual'
+}
+function partitionFindings(reconciled) {
+  const filteredFindingIds = new Set(reconciled.filtered_finding_ids)
+  const unconfirmedFindingIds = new Set(
+    reconciled.lifecycle_failures.map((failure) => failure.finding_id),
+  )
+  const preExistingFindings = []
+  const newFindings = []
+  const fixer = []
+  const residual = []
+  const reportOnly = []
+  for (const finding of reconciled.findings) {
+    if (filteredFindingIds.has(finding.finding_id)) continue
+    const unconfirmed = unconfirmedFindingIds.has(finding.finding_id)
+    const entry = { finding_id: finding.finding_id, unconfirmed }
+    if (finding.pre_existing) {
+      preExistingFindings.push(entry)
+      continue
+    }
+    newFindings.push(entry)
+    if (unconfirmed) continue
+    const route = routeForOwner(finding.owner)
+    if (route === 'fixer') fixer.push(entry)
+    else if (route === 'residual') residual.push(entry)
+    else reportOnly.push(entry)
+  }
+  const byFindingId = (a, b) => compareStrings(a.finding_id, b.finding_id)
+  return {
+    preExistingFindings: [...preExistingFindings].sort(byFindingId),
+    newFindings: [...newFindings].sort(byFindingId),
+    queues: {
+      fixer: [...fixer].sort(byFindingId),
+      residual: [...residual].sort(byFindingId),
+      report_only: [...reportOnly].sort(byFindingId),
+    },
+  }
+}
+function finalizeReviewDispositions(input) {
+  const inputDispositionsResult = deriveInputDispositions(
+    input.prepared,
+    input.reconciled,
+  )
+  if (!inputDispositionsResult.ok) return inputDispositionsResult
+  const dispositionCounts = computeDispositionCounts(
+    inputDispositionsResult.value,
+    input.rejected_payloads,
+  )
+  const { preExistingFindings, newFindings, queues } = partitionFindings(
+    input.reconciled,
+  )
+  return {
+    ok: true,
+    value: {
+      input_dispositions: inputDispositionsResult.value,
+      disposition_counts: dispositionCounts,
+      pre_existing_findings: preExistingFindings,
+      new_findings: newFindings,
+      queues,
+    },
+  }
+}
+function buildSurvivingReviewerIndex(prepared) {
+  const index = new Map()
+  for (const finding of prepared.surviving_findings) {
+    index.set(finding.input_id, finding.reviewer)
+  }
+  return index
+}
+function buildRequestedUncertainFindingIds(reconciled) {
+  return new Set(
+    reconciled.lifecycle_failures.map((failure) => failure.finding_id),
+  )
+}
+function findingOwners(finding, survivingReviewerIndex) {
+  const owners = new Set()
+  for (const inputId of finding.input_finding_ids) {
+    const reviewer = survivingReviewerIndex.get(inputId)
+    if (reviewer !== undefined) owners.add(reviewer)
+  }
+  return owners
+}
+function isValidationBandEligible(finding, requestedUncertainFindingIds) {
+  if (finding.validated === true) return true
+  if (finding.validated === false) return false
+  return !requestedUncertainFindingIds.has(finding.finding_id)
+}
+function isEligibleRiskCoverageCandidate(
+  finding,
+  lostPersona,
+  normalizedSurface,
+  survivingReviewerIndex,
+  requestedUncertainFindingIds,
+) {
+  if (finding.validated === false) return false
+  if (!normalizedSurface.has(normalizeRepoRelativePath(finding.file))) {
+    return false
+  }
+  const owners = findingOwners(finding, survivingReviewerIndex)
+  const hasCrossPersonaOwner = [...owners].some(
+    (owner) => owner !== lostPersona,
+  )
+  if (!hasCrossPersonaOwner) return false
+  return isValidationBandEligible(finding, requestedUncertainFindingIds)
+}
+function citedInputIdForLostPersona(
+  finding,
+  lostPersona,
+  survivingReviewerIndex,
+) {
+  const crossPersonaInputIds = finding.input_finding_ids.filter((inputId) => {
+    const reviewer = survivingReviewerIndex.get(inputId)
+    return reviewer !== undefined && reviewer !== lostPersona
+  })
+  if (crossPersonaInputIds.length === 0) return
+  return [...crossPersonaInputIds].sort(compareStrings)[0]
+}
+function deriveCoverageForLostPersona(
+  lostPersona,
+  reconciled,
+  survivingReviewerIndex,
+  requestedUncertainFindingIds,
+) {
+  const normalizedSurface = new Set(
+    lostPersona.selection_surface.map(normalizeRepoRelativePath),
+  )
+  const eligible = reconciled.findings
+    .filter((finding) =>
+      isEligibleRiskCoverageCandidate(
+        finding,
+        lostPersona.persona,
+        normalizedSurface,
+        survivingReviewerIndex,
+        requestedUncertainFindingIds,
+      ),
+    )
+    .sort(compareMergedFindingAssembly)
+  for (const candidate of eligible) {
+    const citedInputId = citedInputIdForLostPersona(
+      candidate,
+      lostPersona.persona,
+      survivingReviewerIndex,
+    )
+    if (citedInputId !== undefined) {
+      return {
+        persona: lostPersona.persona,
+        satisfied: true,
+        finding_id: candidate.finding_id,
+        input_finding_id: citedInputId,
+      }
+    }
+  }
+  return { persona: lostPersona.persona, satisfied: false }
+}
+function deriveRiskCoverage(input) {
+  const survivingReviewerIndex = buildSurvivingReviewerIndex(input.prepared)
+  const requestedUncertainFindingIds = buildRequestedUncertainFindingIds(
+    input.reconciled,
+  )
+  return input.lost_risk_critical_personas
+    .map((lostPersona) =>
+      deriveCoverageForLostPersona(
+        lostPersona,
+        input.reconciled,
+        survivingReviewerIndex,
+        requestedUncertainFindingIds,
+      ),
+    )
+    .sort((a, b) => compareStrings(a.persona, b.persona))
+}
+function routePlanAssessment(input) {
+  const residualActionableWork = []
+  const advisoryOutputs = []
+  for (const result of input.results) {
+    if (result.kind === 'explicit_unmet_requirement') {
+      residualActionableWork.push(result.description)
+    } else {
+      advisoryOutputs.push(result.description)
+    }
+  }
+  residualActionableWork.sort(compareStrings)
+  advisoryOutputs.sort(compareStrings)
+  return {
+    residual_actionable_work: residualActionableWork,
+    advisory_outputs: advisoryOutputs,
+    gated_by_explicit_unmet_requirement: residualActionableWork.length > 0,
+  }
+}
+function deriveVerdict(planAssessment, riskCoverage, reconciled) {
+  const blockingReasons = []
+  for (const description of planAssessment.residual_actionable_work) {
+    blockingReasons.push({
+      kind: 'explicit_unmet_plan_requirement',
+      description,
+    })
+  }
+  for (const coverage of riskCoverage) {
+    if (!coverage.satisfied) {
+      blockingReasons.push({
+        kind: 'unsatisfied_risk_coverage',
+        persona: coverage.persona,
+      })
+    }
+  }
+  for (const failure of reconciled.lifecycle_failures) {
+    blockingReasons.push({
+      kind: 'degraded_validator_lifecycle',
+      finding_id: failure.finding_id,
+      outcome: failure.outcome,
+    })
+  }
+  return {
+    clean: blockingReasons.length === 0,
+    blocking_reasons: blockingReasons,
+  }
+}
+function runReviewPipeline(input) {
+  const reconciled = reconcileValidatorResults({
+    merge: input.merge,
+    validator_lifecycle_results: input.validator_lifecycle_results,
+  })
+  if (!reconciled.ok) return reconciled
+  const finalized = finalizeReviewDispositions({
+    prepared: input.prepared,
+    reconciled: reconciled.value,
+    rejected_payloads: input.rejected_payloads,
+  })
+  if (!finalized.ok) return finalized
+  const riskCoverage = deriveRiskCoverage({
+    lost_risk_critical_personas: input.lost_risk_critical_personas,
+    prepared: input.prepared,
+    reconciled: reconciled.value,
+  })
+  const planAssessment = routePlanAssessment(input.plan_assessment)
+  const verdict = deriveVerdict(planAssessment, riskCoverage, reconciled.value)
+  return {
+    ok: true,
+    value: {
+      reconciled: reconciled.value,
+      finalized: finalized.value,
+      risk_coverage: riskCoverage,
+      plan_assessment: planAssessment,
+      verdict,
+    },
+  }
+}
+var LEDGER_ADMITTED_REASON =
+  'This input finding passed synthesis and was carried into the run.'
+var LEDGER_FILTERED_FALLBACK_REASON =
+  'A validator disproved the synthesized finding this input contributed to.'
+function buildAdmittedReviewerIndex(prepared, screenResults) {
+  const index = new Map()
+  for (const finding of prepared.surviving_findings) {
+    index.set(finding.input_id, finding.reviewer)
+  }
+  for (const result of screenResults) {
+    for (const finding of result.result.admitted_findings) {
+      if (!index.has(finding.input_id)) {
+        index.set(finding.input_id, result.reviewer)
+      }
+    }
+  }
+  return index
+}
+function buildConfidenceReasonIndex(prepared) {
+  const index = new Map()
+  for (const entry of prepared.confidence_dispositions) {
+    if (entry.disposition === 'suppressed' && entry.reason !== undefined) {
+      index.set(entry.input_id, entry.reason)
+    }
+  }
+  return index
+}
+function buildFilteredReasonIndex(reconciled) {
+  const index = new Map()
+  for (const finding of reconciled.findings) {
+    if (
+      finding.validated !== false ||
+      finding.validation_reason === undefined
+    ) {
+      continue
+    }
+    for (const inputId of finding.input_finding_ids) {
+      index.set(inputId, finding.validation_reason)
+    }
+  }
+  return index
+}
+function buildValidationUnavailablePersonas(dispatchRecords) {
+  return new Set(
+    dispatchRecords
+      .filter((record) => record.dispatch_outcome === 'validation_unavailable')
+      .map((record) => record.persona),
+  )
+}
+function admittedLedgerReason(
+  inputId,
+  disposition,
+  confidenceReasons,
+  filteredReasons,
+) {
+  if (disposition === 'suppressed') {
+    return confidenceReasons.get(inputId) ?? CONFIDENCE_GATE_SUPPRESSED_REASON
+  }
+  if (disposition === 'filtered') {
+    return filteredReasons.get(inputId) ?? LEDGER_FILTERED_FALLBACK_REASON
+  }
+  return LEDGER_ADMITTED_REASON
+}
+function buildAdmittedLedgerRows(input, unavailablePersonas) {
+  const reviewerIndex = buildAdmittedReviewerIndex(
+    input.prepared,
+    input.screen_results,
+  )
+  const dispositionIndex = new Map(
+    input.finalized.input_dispositions.map((entry) => [entry.input_id, entry]),
+  )
+  const confidenceReasons = buildConfidenceReasonIndex(input.prepared)
+  const filteredReasons = buildFilteredReasonIndex(input.reconciled)
+  const rows = []
+  for (const entry of input.prepared.confidence_dispositions) {
+    const reviewer =
+      reviewerIndex.get(entry.input_id) ?? reviewerFromInputId(entry.input_id)
+    if (unavailablePersonas.has(reviewer)) continue
+    const finalDisposition = dispositionIndex.get(entry.input_id)?.disposition
+    if (finalDisposition === undefined) continue
+    rows.push({
+      record_type: 'admitted',
+      input_id: entry.input_id,
+      reviewer,
+      confidence: entry.confidence,
+      disposition: finalDisposition,
+      reason: admittedLedgerReason(
+        entry.input_id,
+        finalDisposition,
+        confidenceReasons,
+        filteredReasons,
+      ),
+    })
+  }
+  return [...rows].sort((a, b) => compareStrings(a.input_id, b.input_id))
+}
+function buildRejectedLedgerRows(screenResults, unavailablePersonas) {
+  const rows = []
+  for (const result of screenResults) {
+    if (unavailablePersonas.has(result.reviewer)) continue
+    const summary = result.result.rejected_summary
+    if (!summary) continue
+    rows.push({
+      record_type: 'rejected_summary',
+      reviewer: result.reviewer,
+      dispatch_outcome: summary.dispatch_outcome,
+      rejected_finding_count: summary.rejected_finding_count,
+      rejected_severities: summary.rejected_severities,
+      disposition: 'rejected',
+      reason: summary.reason,
+    })
+  }
+  return [...rows].sort((a, b) => compareStrings(a.reviewer, b.reviewer))
+}
+function buildInputLedger(input) {
+  const unavailablePersonas = buildValidationUnavailablePersonas(
+    input.dispatch_records,
+  )
+  return [
+    ...buildAdmittedLedgerRows(input, unavailablePersonas),
+    ...buildRejectedLedgerRows(input.screen_results, unavailablePersonas),
+  ]
+}
+function dedupeSortedStrings(values) {
+  return [...new Set(values)].sort(compareStrings)
+}
+function checkCoverageArrayBound(field, values) {
+  if (values.length <= MAX_PERSONAS) return
+  return {
+    path: formatReviewArtifactIssuePath(['coverage', field]),
+    reason: 'coverage array exceeds bound',
+  }
+}
+function buildReviewCoverage(input) {
+  const residualRisks = dedupeSortedStrings(
+    input.screen_results.flatMap((result) => result.result.residual_risks),
+  )
+  const testingGaps = dedupeSortedStrings(
+    input.screen_results.flatMap((result) => result.result.testing_gaps),
+  )
+  const failedReviewers = dedupeSortedStrings(
+    input.dispatch_records
+      .filter((record) =>
+        FINALIZE_CONTEXT_LOSS_DISPATCH_OUTCOMES.has(record.dispatch_outcome),
+      )
+      .map((record) => record.persona),
+  )
+  const validatorFailures = input.reconciled.lifecycle_failures.map(
+    (failure) => failure.reason,
+  )
+  const intentUncertainty = [...input.merge.disagreement_facts]
+  const bounded = [
+    ['residual_risks', residualRisks],
+    ['testing_gaps', testingGaps],
+    ['failed_reviewers', failedReviewers],
+    ['validator_failures', validatorFailures],
+    ['intent_uncertainty', intentUncertainty],
+  ]
+  for (const [field, values] of bounded) {
+    const violation = checkCoverageArrayBound(field, values)
+    if (violation) return { ok: false, rejection: violation }
+  }
+  return {
+    ok: true,
+    value: {
+      reviewers: input.dispatch_records.length,
+      validators: input.validator_lifecycle_results.length,
+      residual_risks: residualRisks,
+      testing_gaps: testingGaps,
+      failed_reviewers: failedReviewers,
+      validator_failures: validatorFailures,
+      intent_uncertainty: intentUncertainty,
+    },
+  }
+}
+function projectOneSynthesizedFinding(finding) {
+  return {
+    title: finding.title,
+    severity: finding.severity,
+    file: finding.file,
+    line: finding.line,
+    why_it_matters: finding.why_it_matters,
+    autofix_class: finding.autofix_class,
+    owner: finding.owner,
+    requires_verification: finding.requires_verification,
+    confidence: finding.confidence,
+    evidence: finding.evidence,
+    pre_existing: finding.pre_existing,
+    ...(finding.suggested_fix !== undefined
+      ? { suggested_fix: finding.suggested_fix }
+      : {}),
+    ...(finding.validated !== undefined
+      ? { validated: finding.validated }
+      : {}),
+    ...(finding.validation_reason !== undefined
+      ? { validation_reason: finding.validation_reason }
+      : {}),
+    input_finding_ids: finding.input_finding_ids,
+    provenance: {
+      fingerprint: finding.fingerprint,
+      submitters: finding.submitters,
+      agreement_credit: finding.agreement_credit ?? [],
+    },
+  }
+}
+function projectSynthesizedFindings(input) {
+  return input.findings.map((finding) => projectOneSynthesizedFinding(finding))
+}
+var ARTIFACT_NON_CLEAN_VERDICT =
+  'Review did not reach a clean verdict; see blocking reasons and coverage for detail.'
+function deriveArtifactRunStatus(
+  reconciledDegraded,
+  dispatchRecords,
+  lostRiskCriticalPersonas,
+) {
+  if (reconciledDegraded) return 'degraded'
+  if (lostRiskCriticalPersonas.length > 0) return 'degraded'
+  const hasFailedReviewer = dispatchRecords.some((record) =>
+    FINALIZE_CONTEXT_LOSS_DISPATCH_OUTCOMES.has(record.dispatch_outcome),
+  )
+  return hasFailedReviewer ? 'degraded' : 'completed'
+}
+function deriveArtifactVerdictText(
+  planAssessmentVerdict,
+  runVerdict,
+  runStatus,
+) {
+  if (runVerdict.clean && runStatus === 'completed') {
+    return planAssessmentVerdict
+  }
+  return ARTIFACT_NON_CLEAN_VERDICT
+}
+function buildScreenResultIndex(screenResults) {
+  const index = new Map()
+  for (const result of screenResults) {
+    index.set(result.reviewer, result)
+  }
+  return index
+}
+function buildDispatchEntry(record, screenByReviewer) {
+  const screenResult = screenByReviewer.get(record.persona)
+  const inputFindingCount =
+    record.dispatch_outcome === 'validation_unavailable'
+      ? 0
+      : (screenResult?.result.admitted_findings.length ?? 0)
+  const rejectionReason = screenResult?.result.rejected_summary?.reason
+  const selectionSurface = record.selection_surface
+  return {
+    persona: record.persona,
+    dispatch_outcome: record.dispatch_outcome,
+    input_finding_count: inputFindingCount,
+    ...(rejectionReason !== undefined
+      ? { rejection_reason: rejectionReason }
+      : {}),
+    ...(selectionSurface !== undefined && selectionSurface.length > 0
+      ? { selection_surface: selectionSurface }
+      : {}),
+  }
+}
+function buildArtifactDispatches(dispatchRecords, screenByReviewer) {
+  return [...dispatchRecords]
+    .map((record) => buildDispatchEntry(record, screenByReviewer))
+    .sort((a, b) => compareStrings(a.persona, b.persona))
+}
+function projectRiskCoverage(riskCoverage) {
+  if (riskCoverage.length === 0) return
+  return riskCoverage.map((entry) => ({
+    persona: entry.persona,
+    satisfied: entry.satisfied,
+    ...(entry.input_finding_id !== undefined
+      ? { input_finding_id: entry.input_finding_id }
+      : {}),
+  }))
+}
+function buildReportProjection(
+  verdictText,
+  findings,
+  appliedFixes,
+  pipelineOutput,
+  coverage,
+) {
+  const riskCoverage = projectRiskCoverage(pipelineOutput.risk_coverage)
+  return {
+    verdict: verdictText,
+    findings,
+    applied_fixes: appliedFixes,
+    residual_actionable_work:
+      pipelineOutput.plan_assessment.residual_actionable_work,
+    advisory_outputs: pipelineOutput.plan_assessment.advisory_outputs,
+    coverage,
+    input_dispositions: pipelineOutput.finalized.input_dispositions,
+    disposition_counts: pipelineOutput.finalized.disposition_counts,
+    queues: pipelineOutput.finalized.queues,
+    pre_existing_findings: pipelineOutput.finalized.pre_existing_findings,
+    ...(riskCoverage !== undefined ? { risk_coverage: riskCoverage } : {}),
+  }
+}
+function parseFinalizeOutput(output) {
+  const parsed = FinalizeOutputSchema.safeParse(output)
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0]
+    return {
+      ok: false,
+      rejection: {
+        path: issue
+          ? formatReviewArtifactIssuePath(issue.path)
+          : JSON_ROOT_PATH,
+        reason: 'finalize output failed schema validation',
+      },
+    }
+  }
+  return { ok: true, value: parsed.data }
+}
+function finalizeReview(input) {
+  const context = deriveFinalizeContext({
+    merge: input.merge,
+    prepared: input.prepared,
+    screen_results: input.screen_results,
+    dispatch_records: input.dispatch_records,
+    parent_run_metadata: input.parent_run_metadata,
+  })
+  if (!context.ok) return context
+  const pipeline = runReviewPipeline({
+    merge: input.merge,
+    validator_lifecycle_results: input.validator_lifecycle_results,
+    prepared: input.prepared,
+    rejected_payloads: context.value.rejected_payloads,
+    lost_risk_critical_personas: context.value.lost_risk_critical_personas,
+    plan_assessment: input.plan_assessment,
+  })
+  if (!pipeline.ok) return pipeline
+  const coverage = buildReviewCoverage({
+    dispatch_records: input.dispatch_records,
+    validator_lifecycle_results: input.validator_lifecycle_results,
+    screen_results: input.screen_results,
+    reconciled: pipeline.value.reconciled,
+    merge: input.merge,
+  })
+  if (!coverage.ok) return coverage
+  const findings = projectSynthesizedFindings({
+    findings: pipeline.value.reconciled.findings,
+  })
+  const runStatus = deriveArtifactRunStatus(
+    pipeline.value.reconciled.degraded,
+    input.dispatch_records,
+    context.value.lost_risk_critical_personas,
+  )
+  const verdictText = deriveArtifactVerdictText(
+    input.plan_assessment.verdict,
+    pipeline.value.verdict,
+    runStatus,
+  )
+  const report = buildReportProjection(
+    verdictText,
+    findings,
+    input.parent_run_metadata.applied_fixes,
+    pipeline.value,
+    coverage.value,
+  )
+  if (input.parent_run_metadata.mode === 'report-only') {
+    return parseFinalizeOutput({ kind: 'report_only', ...report })
+  }
+  const ledger = buildInputLedger({
+    prepared: input.prepared,
+    screen_results: input.screen_results,
+    dispatch_records: input.dispatch_records,
+    finalized: pipeline.value.finalized,
+    reconciled: pipeline.value.reconciled,
+  })
+  const screenByReviewer = buildScreenResultIndex(input.screen_results)
+  const dispatches = buildArtifactDispatches(
+    input.dispatch_records,
+    screenByReviewer,
+  )
+  const riskCoverage = projectRiskCoverage(pipeline.value.risk_coverage)
+  const artifact = {
+    schema_version: 1,
+    run_id: input.parent_run_metadata.run_id,
+    branch: input.parent_run_metadata.branch,
+    head_sha: input.parent_run_metadata.head_sha,
+    mode: input.parent_run_metadata.mode,
+    harness: input.parent_run_metadata.harness,
+    run_status: runStatus,
+    verdict: verdictText,
+    completed_at: input.parent_run_metadata.timestamps.completed_at,
+    dispatches,
+    input_findings: ledger,
+    findings,
+    disposition_counts: pipeline.value.finalized.disposition_counts,
+    applied_fixes: input.parent_run_metadata.applied_fixes,
+    residual_actionable_work:
+      pipeline.value.plan_assessment.residual_actionable_work,
+    advisory_outputs: pipeline.value.plan_assessment.advisory_outputs,
+    coverage: coverage.value,
+    validation: input.parent_run_metadata.validation,
+    ...(riskCoverage !== undefined ? { risk_coverage: riskCoverage } : {}),
+  }
+  const parsedArtifact = ReviewArtifactSchema.safeParse(artifact)
+  if (!parsedArtifact.success) {
+    const issue = parsedArtifact.error.issues[0]
+    return {
+      ok: false,
+      rejection: {
+        path: issue
+          ? formatReviewArtifactIssuePath(issue.path)
+          : JSON_ROOT_PATH,
+        reason: 'artifact failed schema validation',
+      },
+    }
+  }
+  return parseFinalizeOutput({
+    kind: 'writing',
+    artifact: parsedArtifact.data,
+    report,
+  })
+}
 
 // src/ce-review-validator.ts
 var CE_REVIEW_VALIDATOR_USAGE =
-  'Usage: node validate-review.mjs <return|artifact|screen|prepare|merge> [...]'
+  'Usage: node validate-review.mjs <return|artifact|screen|prepare|merge|finalize> [...]'
 var CE_REVIEW_SCREEN_USAGE =
   'Usage: node validate-review.mjs screen --reviewer <name> --harness <name>'
 var CE_REVIEW_SCREEN_STDIN_TTY_MESSAGE =
@@ -8460,6 +9594,17 @@ var CE_REVIEW_MERGE_STDIN_OVERSIZED_MESSAGE =
 var CE_REVIEW_MERGE_STDIN_INVALID_UTF8_MESSAGE =
   'merge input is not valid UTF-8'
 var CE_REVIEW_MERGE_REJECTED_MESSAGE = 'merge rejected the aggregate envelope'
+var CE_REVIEW_FINALIZE_USAGE = 'Usage: node validate-review.mjs finalize'
+var CE_REVIEW_FINALIZE_STDIN_TTY_MESSAGE =
+  'finalize reads one aggregate JSON envelope from stdin; interactive input is not supported'
+var CE_REVIEW_FINALIZE_STDIN_READ_FAILED_MESSAGE =
+  'finalize could not read the aggregate envelope from stdin'
+var CE_REVIEW_FINALIZE_STDIN_OVERSIZED_MESSAGE =
+  'finalize input exceeds the aggregate byte cap'
+var CE_REVIEW_FINALIZE_STDIN_INVALID_UTF8_MESSAGE =
+  'finalize input is not valid UTF-8'
+var CE_REVIEW_FINALIZE_REJECTED_MESSAGE =
+  'finalize rejected the aggregate envelope'
 var SCREEN_FLAGS = ['--reviewer', '--harness']
 function isScreenFlag(token) {
   return SCREEN_FLAGS.includes(token)
@@ -8616,6 +9761,57 @@ function runMergeSubcommand(options, outputSink, errorSink) {
   outputSink(JSON.stringify(result.value))
   return 0
 }
+function runFinalizeSubcommand(options, outputSink, errorSink) {
+  if (options.argv.slice(1).length > 0) {
+    errorSink(CE_REVIEW_FINALIZE_USAGE)
+    return 2
+  }
+  const fd = 0
+  const isTTY = options.isTTY ?? process.stdin.isTTY === true
+  if (isTTY) {
+    errorSink(CE_REVIEW_FINALIZE_STDIN_TTY_MESSAGE)
+    return 2
+  }
+  const read = readBoundedStdin(
+    fd,
+    options.readChunk ?? defaultReadChunk,
+    AGGREGATE_STDIN_BYTE_CAP,
+  )
+  if (read.status === 'read-error') {
+    errorSink(CE_REVIEW_FINALIZE_STDIN_READ_FAILED_MESSAGE)
+    return 2
+  }
+  if (read.status === 'oversized') {
+    errorSink(CE_REVIEW_FINALIZE_STDIN_OVERSIZED_MESSAGE)
+    return 1
+  }
+  let text
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(read.buffer)
+  } catch {
+    errorSink(CE_REVIEW_FINALIZE_STDIN_INVALID_UTF8_MESSAGE)
+    return 1
+  }
+  let value
+  try {
+    value = JSON.parse(text)
+  } catch {
+    errorSink(CE_REVIEW_FINALIZE_REJECTED_MESSAGE)
+    return 1
+  }
+  const parsed = FinalizeInputSchema.safeParse(value)
+  if (!parsed.success) {
+    errorSink(CE_REVIEW_FINALIZE_REJECTED_MESSAGE)
+    return 1
+  }
+  const result = finalizeReview(parsed.data)
+  if (!result.ok) {
+    errorSink(CE_REVIEW_FINALIZE_REJECTED_MESSAGE)
+    return 1
+  }
+  outputSink(JSON.stringify(result.value))
+  return 0
+}
 var processExceptionBoundaryInstalled = false
 function installProcessExceptionBoundary(errorSink) {
   if (processExceptionBoundaryInstalled) return
@@ -8663,6 +9859,9 @@ function runCeReviewValidator(options) {
     if (subcommand === 'merge') {
       return runMergeSubcommand(options, outputSink, errorSink)
     }
+    if (subcommand === 'finalize') {
+      return runFinalizeSubcommand(options, outputSink, errorSink)
+    }
     errorSink(CE_REVIEW_VALIDATOR_USAGE)
     return 2
   } catch {
@@ -8688,6 +9887,12 @@ if (isMainModule) {
   process.exitCode = runCeReviewValidator({ argv: process.argv.slice(2) })
 }
 export {
+  CE_REVIEW_FINALIZE_REJECTED_MESSAGE,
+  CE_REVIEW_FINALIZE_STDIN_INVALID_UTF8_MESSAGE,
+  CE_REVIEW_FINALIZE_STDIN_OVERSIZED_MESSAGE,
+  CE_REVIEW_FINALIZE_STDIN_READ_FAILED_MESSAGE,
+  CE_REVIEW_FINALIZE_STDIN_TTY_MESSAGE,
+  CE_REVIEW_FINALIZE_USAGE,
   CE_REVIEW_MERGE_REJECTED_MESSAGE,
   CE_REVIEW_MERGE_STDIN_INVALID_UTF8_MESSAGE,
   CE_REVIEW_MERGE_STDIN_OVERSIZED_MESSAGE,

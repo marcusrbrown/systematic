@@ -3,11 +3,13 @@ import { fileURLToPath } from 'node:url'
 import { runClaudeCodeValidator } from './claude-code-validator.js'
 import {
   applyReviewAdjudication,
+  finalizeReview,
   prepareReviewCandidates,
   screenReviewReturn,
 } from './lib/review-pipeline.js'
 import {
   AGGREGATE_STDIN_BYTE_CAP,
+  FinalizeInputSchema,
   MergeInputSchema,
 } from './lib/review-pipeline-contract.js'
 import {
@@ -22,7 +24,7 @@ import {
  * validator shim (`skills/ce-review/scripts/validate-review.mjs`).
  *
  * This is a thin packaging compatibility shim, not a public extension point:
- * it dispatches exactly five subcommands and owns no validation logic
+ * it dispatches exactly six subcommands and owns no validation logic
  * beyond `screen`'s flag parsing and stdin plumbing.
  * - `return`   -> the bounded raw persona-return validator (stdin).
  * - `artifact` -> the existing aggregate review-artifact validator.
@@ -34,13 +36,16 @@ import {
  * - `merge`    -> executable adjudication application
  *                 (`applyReviewAdjudication`), reusing the same bounded
  *                 stdin reader with the aggregate byte cap.
+ * - `finalize` -> executable finalize-envelope synthesis (`finalizeReview`),
+ *                 reusing the same bounded stdin reader with the aggregate
+ *                 byte cap.
  *
  * It exists because shipped skill layouts cannot all rely on the npm CLI or
  * `dist/`; every harness invokes the committed bundle through `SKILL_DIR`.
  */
 
 export const CE_REVIEW_VALIDATOR_USAGE =
-  'Usage: node validate-review.mjs <return|artifact|screen|prepare|merge> [...]'
+  'Usage: node validate-review.mjs <return|artifact|screen|prepare|merge|finalize> [...]'
 
 export const CE_REVIEW_SCREEN_USAGE =
   'Usage: node validate-review.mjs screen --reviewer <name> --harness <name>'
@@ -96,6 +101,24 @@ export const CE_REVIEW_MERGE_STDIN_INVALID_UTF8_MESSAGE =
 
 export const CE_REVIEW_MERGE_REJECTED_MESSAGE =
   'merge rejected the aggregate envelope'
+
+export const CE_REVIEW_FINALIZE_USAGE =
+  'Usage: node validate-review.mjs finalize'
+
+export const CE_REVIEW_FINALIZE_STDIN_TTY_MESSAGE =
+  'finalize reads one aggregate JSON envelope from stdin; interactive input is not supported'
+
+export const CE_REVIEW_FINALIZE_STDIN_READ_FAILED_MESSAGE =
+  'finalize could not read the aggregate envelope from stdin'
+
+export const CE_REVIEW_FINALIZE_STDIN_OVERSIZED_MESSAGE =
+  'finalize input exceeds the aggregate byte cap'
+
+export const CE_REVIEW_FINALIZE_STDIN_INVALID_UTF8_MESSAGE =
+  'finalize input is not valid UTF-8'
+
+export const CE_REVIEW_FINALIZE_REJECTED_MESSAGE =
+  'finalize rejected the aggregate envelope'
 
 export interface CeReviewValidatorOptions {
   readonly argv: readonly string[]
@@ -314,6 +337,69 @@ function runMergeSubcommand(
   return 0
 }
 
+function runFinalizeSubcommand(
+  options: CeReviewValidatorOptions,
+  outputSink: (message: string) => void,
+  errorSink: (message: string) => void,
+): number {
+  if (options.argv.slice(1).length > 0) {
+    errorSink(CE_REVIEW_FINALIZE_USAGE)
+    return 2
+  }
+
+  const fd = 0
+  const isTTY = options.isTTY ?? process.stdin.isTTY === true
+  if (isTTY) {
+    errorSink(CE_REVIEW_FINALIZE_STDIN_TTY_MESSAGE)
+    return 2
+  }
+
+  const read = readBoundedStdin(
+    fd,
+    options.readChunk ?? defaultReadChunk,
+    AGGREGATE_STDIN_BYTE_CAP,
+  )
+  if (read.status === 'read-error') {
+    errorSink(CE_REVIEW_FINALIZE_STDIN_READ_FAILED_MESSAGE)
+    return 2
+  }
+  if (read.status === 'oversized') {
+    errorSink(CE_REVIEW_FINALIZE_STDIN_OVERSIZED_MESSAGE)
+    return 1
+  }
+
+  let text: string
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(read.buffer)
+  } catch {
+    errorSink(CE_REVIEW_FINALIZE_STDIN_INVALID_UTF8_MESSAGE)
+    return 1
+  }
+
+  let value: unknown
+  try {
+    value = JSON.parse(text)
+  } catch {
+    errorSink(CE_REVIEW_FINALIZE_REJECTED_MESSAGE)
+    return 1
+  }
+
+  const parsed = FinalizeInputSchema.safeParse(value)
+  if (!parsed.success) {
+    errorSink(CE_REVIEW_FINALIZE_REJECTED_MESSAGE)
+    return 1
+  }
+
+  const result = finalizeReview(parsed.data)
+  if (!result.ok) {
+    errorSink(CE_REVIEW_FINALIZE_REJECTED_MESSAGE)
+    return 1
+  }
+
+  outputSink(JSON.stringify(result.value))
+  return 0
+}
+
 let processExceptionBoundaryInstalled = false
 
 /**
@@ -383,6 +469,10 @@ export function runCeReviewValidator(
 
     if (subcommand === 'merge') {
       return runMergeSubcommand(options, outputSink, errorSink)
+    }
+
+    if (subcommand === 'finalize') {
+      return runFinalizeSubcommand(options, outputSink, errorSink)
     }
 
     errorSink(CE_REVIEW_VALIDATOR_USAGE)

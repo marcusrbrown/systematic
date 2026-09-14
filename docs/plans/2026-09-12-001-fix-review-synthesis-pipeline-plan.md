@@ -896,7 +896,7 @@ which adds only contracts and a generated reference.
   severity, confidence, fingerprint, pre-existing state, and submitters. Unit
   5.1-5.3 widen the wire; the derivation itself is unchanged (KTD19).
 
-- [ ] **Unit 5: Finalize validator outcomes, queues, coverage, and artifact**
+- [x] **Unit 5: Finalize validator outcomes, queues, coverage, and artifact**
 
   Partially landed: validator lifecycle reconciliation, final dispositions and
   weighted counts, action queues, risk-critical replacement coverage,
@@ -1064,14 +1064,14 @@ which adds only contracts and a generated reference.
       surfaces as rejection with no partial output; varying incidental caller
       data yields byte-identical output.
 
-  - [ ] **5.14 Add the `finalize` handler**
+  - [x] **5.14 Add the `finalize` handler**
     - Bounded stdin at the aggregate cap, no flags, exit 0/1/2 through the
       shared boundary, fixed-reason diagnostics only.
     - Tests: valid envelope exits 0 with parseable output; schema-invalid exits
       1 with path/code only; oversized exits 1; flag or positional argument
       exits 2; synchronous throw and rejected promise both hit the boundary.
 
-  - [ ] **5.15 Route the subcommand and regenerate the helper**
+  - [x] **5.15 Route the subcommand and regenerate the helper**
     - Add `finalize` to the dispatch table; regenerate the bundled helper.
     - Tests: routing parity for all six subcommands; drift gate current; helper
       byte ceiling unchanged or explicitly re-justified.

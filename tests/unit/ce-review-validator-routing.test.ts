@@ -224,6 +224,55 @@ const MERGE_REJECTED_INPUT = {
   },
 }
 
+const FINALIZE_ARGS = ['finalize'] as const
+
+// The smallest schema-conforming finalize envelope: a report-only run with
+// zero dispatches, so every join and coverage check has nothing to
+// reconcile and the run reaches a clean, empty report projection.
+const VALID_FINALIZE_INPUT = {
+  merge: {
+    disagreement_facts: [],
+    merged_findings: [],
+    validator_requests: [],
+  },
+  prepared: {
+    candidate_groups: [],
+    confidence_dispositions: [],
+    coverage_union: [],
+    singletons: [],
+    surviving_findings: [],
+  },
+  screen_results: [],
+  dispatch_records: [],
+  validator_lifecycle_results: [],
+  plan_assessment: { results: [], verdict: 'clean' },
+  parent_run_metadata: {
+    applied_fixes: [],
+    branch: 'main',
+    harness: 'opencode',
+    head_sha: 'a'.repeat(40),
+    mode: 'report-only',
+    run_id: 'run-1',
+    selected_dispatches: [],
+    timestamps: {
+      completed_at: '2026-01-01T00:05:00.000Z',
+      started_at: '2026-01-01T00:00:00.000Z',
+    },
+    validation: { reason: 'no autofix applied', status: 'not_attempted' },
+  },
+}
+
+// Schema-invalid: `parent_run_metadata.mode` is not one of the recognized
+// enum values, so `FinalizeInputSchema.safeParse` rejects before
+// `finalizeReview` ever runs.
+const FINALIZE_SCHEMA_INVALID_INPUT = {
+  ...VALID_FINALIZE_INPUT,
+  parent_run_metadata: {
+    ...VALID_FINALIZE_INPUT.parent_run_metadata,
+    mode: 'not-a-real-mode',
+  },
+}
+
 describe('screen: conforming input', () => {
   test('exits 0 with a parseable envelope and writes nothing to the cwd', () => {
     const cwd = makeCwd()
@@ -728,6 +777,191 @@ describe('merge: exception boundary', () => {
       let offset = 0
       const exitCode = mod.runCeReviewValidator({
         argv: ${JSON.stringify([...MERGE_ARGS])},
+        isTTY: false,
+        readChunk: (_fd, buffer, bufferOffset, length) => {
+          if (offset >= bytes.length) return 0
+          const n = Math.min(length, bytes.length - offset)
+          bytes.copy(buffer, bufferOffset, offset, offset + n)
+          offset += n
+          return n
+        },
+        outputSink: () => {},
+        errorSink: (message) => console.error(message),
+      })
+      console.log('SYNC_EXIT:' + exitCode)
+      Promise.reject(new Error('boom from rejected promise: should never reach stderr'))
+    `
+    const result = spawnSync('bun', ['-e', driver], {
+      encoding: 'utf8',
+      env: SAFE_ENV,
+      timeout: 30_000,
+    })
+
+    expect(result.stdout).toContain('SYNC_EXIT:0')
+    expect(result.stderr).toContain('internal error')
+    expect(result.stderr).not.toContain('boom from rejected promise')
+    expect(result.stderr).not.toContain('Error:')
+    expect(result.stderr).not.toContain('.ts:')
+    expect(result.stderr).not.toMatch(/at\s+\S+\s+\(/)
+    expect(result.status).toBe(1)
+  })
+})
+
+describe('finalize: conforming input', () => {
+  test('exits 0 with a parseable finalize result and writes nothing to the cwd', () => {
+    const cwd = makeCwd()
+    const before = snapshotTree(cwd)
+
+    const result = runValidator([...FINALIZE_ARGS], {
+      cwd,
+      input: JSON.stringify(VALID_FINALIZE_INPUT),
+    })
+
+    expect(result.exitCode, result.stderr).toBe(0)
+    expect(result.stderr).toBe('')
+    const parsed = JSON.parse(result.stdout) as { kind: string }
+    expect(['writing', 'report_only']).toContain(parsed.kind)
+    expect(snapshotTree(cwd)).toBe(before)
+  })
+})
+
+describe('finalize: argument parsing', () => {
+  test('an unknown flag exits 2', () => {
+    const result = runValidator([...FINALIZE_ARGS, '--bogus', 'x'], {
+      input: JSON.stringify(VALID_FINALIZE_INPUT),
+    })
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('Usage:')
+    expect(result.stdout).toBe('')
+  })
+
+  test('a stray positional argument exits 2', () => {
+    const result = runValidator([...FINALIZE_ARGS, 'extra'], {
+      input: JSON.stringify(VALID_FINALIZE_INPUT),
+    })
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('Usage:')
+    expect(result.stdout).toBe('')
+  })
+})
+
+describe('finalize: TTY', () => {
+  test('a TTY stdin exits 2 without reading stdin', () => {
+    const driver = `
+      const mod = await import(${JSON.stringify(pathToFileURL(VALIDATOR_ENTRY).href)})
+      let readCalled = false
+      const exitCode = mod.runCeReviewValidator({
+        argv: ${JSON.stringify([...FINALIZE_ARGS])},
+        isTTY: true,
+        readChunk: () => { readCalled = true; return 0 },
+        outputSink: () => {},
+        errorSink: (message) => console.error(message),
+      })
+      console.log('EXIT:' + exitCode)
+      console.log('READ:' + readCalled)
+    `
+    const result = spawnSync('bun', ['-e', driver], {
+      encoding: 'utf8',
+      env: SAFE_ENV,
+      timeout: 30_000,
+    })
+
+    expect(result.stdout).toContain('EXIT:2')
+    expect(result.stdout).toContain('READ:false')
+    expect(result.stderr).toContain('interactive input is not supported')
+  })
+})
+
+describe('finalize: stdin bounds', () => {
+  test('an over-cap payload exits 1 without echoing content', () => {
+    const oversized = Buffer.alloc(AGGREGATE_STDIN_BYTE_CAP + 1, 0x20)
+    const result = runValidator([...FINALIZE_ARGS], { input: oversized })
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain('byte cap')
+    expect(result.stdout).toBe('')
+  })
+})
+
+describe('finalize: rejection outcomes', () => {
+  test('malformed JSON exits 1 with the fixed rejected message and empty stdout', () => {
+    const result = runValidator([...FINALIZE_ARGS], { input: '{ not json' })
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain('finalize rejected the aggregate envelope')
+    expect(result.stdout).toBe('')
+  })
+
+  test('a schema-invalid envelope exits 1 with the fixed rejected message and empty stdout', () => {
+    const result = runValidator([...FINALIZE_ARGS], {
+      input: JSON.stringify(FINALIZE_SCHEMA_INVALID_INPUT),
+    })
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain('finalize rejected the aggregate envelope')
+    expect(result.stdout).toBe('')
+  })
+})
+
+describe('finalize: environment invariance', () => {
+  test('finalize is byte-identical under a clean environment and a polluted one', () => {
+    const payload = JSON.stringify(VALID_FINALIZE_INPUT)
+
+    const clean = runValidator([...FINALIZE_ARGS], {
+      env: SAFE_ENV,
+      input: payload,
+    })
+    const polluted = runValidator([...FINALIZE_ARGS], {
+      env: POLLUTED_ENV,
+      input: payload,
+    })
+
+    expect(clean.exitCode, clean.stderr).toBe(0)
+    expect(polluted.exitCode, polluted.stderr).toBe(0)
+    expect(polluted.stdout).toBe(clean.stdout)
+  })
+})
+
+describe('finalize: exception boundary', () => {
+  test('a thrown error during output exits through the boundary with no stack text on stderr', () => {
+    const driver = `
+      const mod = await import(${JSON.stringify(pathToFileURL(VALIDATOR_ENTRY).href)})
+      const bytes = Buffer.from(${JSON.stringify(JSON.stringify(VALID_FINALIZE_INPUT))})
+      let offset = 0
+      const exitCode = mod.runCeReviewValidator({
+        argv: ${JSON.stringify([...FINALIZE_ARGS])},
+        isTTY: false,
+        readChunk: (_fd, buffer, bufferOffset, length) => {
+          if (offset >= bytes.length) return 0
+          const n = Math.min(length, bytes.length - offset)
+          bytes.copy(buffer, bufferOffset, offset, offset + n)
+          offset += n
+          return n
+        },
+        outputSink: () => { throw new Error('boom from outputSink: should never reach stderr') },
+        errorSink: (message) => console.error(message),
+      })
+      console.log('EXIT:' + exitCode)
+    `
+    const result = spawnSync('bun', ['-e', driver], {
+      encoding: 'utf8',
+      env: SAFE_ENV,
+      timeout: 30_000,
+    })
+
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('EXIT:1')
+    expect(result.stderr).toContain('internal error')
+    expect(result.stderr).not.toContain('boom from outputSink')
+    expect(result.stderr).not.toContain('Error:')
+    expect(result.stderr).not.toContain('.ts:')
+    expect(result.stderr).not.toMatch(/at\s+\S+\s+\(/)
+  })
+
+  test('an unhandled rejected promise exits through the boundary with no stack text on stderr', () => {
+    const driver = `
+      const mod = await import(${JSON.stringify(pathToFileURL(VALIDATOR_ENTRY).href)})
+      const bytes = Buffer.from(${JSON.stringify(JSON.stringify(VALID_FINALIZE_INPUT))})
+      let offset = 0
+      const exitCode = mod.runCeReviewValidator({
+        argv: ${JSON.stringify([...FINALIZE_ARGS])},
         isTTY: false,
         readChunk: (_fd, buffer, bufferOffset, length) => {
           if (offset >= bytes.length) return 0
