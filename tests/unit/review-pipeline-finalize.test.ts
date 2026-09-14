@@ -8,12 +8,14 @@ import type {
   PrepareOutput,
   ReconcileValidatorResultsInput,
   ReconcileValidatorResultsOutput,
+  RunReviewPipelineInput,
 } from '../../src/lib/review-pipeline.js'
 import {
   deriveRiskCoverage,
   finalizeReviewDispositions,
   reconcileValidatorResults,
   routePlanAssessment,
+  runReviewPipeline,
 } from '../../src/lib/review-pipeline.js'
 
 type LifecycleResults =
@@ -903,6 +905,205 @@ describe('routePlanAssessment', () => {
 
     const resultA = routePlanAssessment({ results })
     const resultB = routePlanAssessment({ results: [...results].reverse() })
+
+    expect(resultA).toEqual(resultB)
+  })
+})
+
+function runPipelineScenario(
+  overrides: Partial<RunReviewPipelineInput> = {},
+): RunReviewPipelineInput {
+  return {
+    merge: mergeOutput([], []),
+    validator_lifecycle_results: [],
+    prepared: preparedOutput(),
+    rejected_payloads: [],
+    lost_risk_critical_personas: [],
+    plan_assessment: { results: [] },
+    ...overrides,
+  }
+}
+
+describe('runReviewPipeline', () => {
+  test('a run with nothing blocking reaches a clean verdict', () => {
+    const result = runReviewPipeline(runPipelineScenario())
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.verdict).toEqual({ clean: true, blocking_reasons: [] })
+  })
+
+  test('an explicit unmet plan requirement alone withholds the verdict and names the reason', () => {
+    const result = runReviewPipeline(
+      runPipelineScenario({
+        plan_assessment: {
+          results: [
+            planAssessmentResult(
+              'explicit_unmet_requirement',
+              'Requirement R1 was not implemented.',
+            ),
+          ],
+        },
+      }),
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.verdict).toEqual({
+      clean: false,
+      blocking_reasons: [
+        {
+          kind: 'explicit_unmet_plan_requirement',
+          description: 'Requirement R1 was not implemented.',
+        },
+      ],
+    })
+  })
+
+  test('unsatisfied risk-critical coverage alone withholds the verdict and names the persona', () => {
+    const result = runReviewPipeline(
+      runPipelineScenario({
+        lost_risk_critical_personas: [lostPersona('security')],
+      }),
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.risk_coverage).toEqual([
+      { persona: 'security', satisfied: false },
+    ])
+    expect(result.value.verdict).toEqual({
+      clean: false,
+      blocking_reasons: [
+        { kind: 'unsatisfied_risk_coverage', persona: 'security' },
+      ],
+    })
+  })
+
+  test('a degraded run alone withholds the verdict and names the finding', () => {
+    const finding = mergedFinding('f1', { input_finding_ids: ['f1-input'] })
+    const merge = mergeOutput([finding], ['f1'])
+
+    const result = runReviewPipeline(
+      runPipelineScenario({
+        merge,
+        validator_lifecycle_results: [
+          lifecycleResult('f1', {
+            outcome: 'failed',
+            reason: 'validator timed out',
+          }),
+        ],
+      }),
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.reconciled.degraded).toBe(true)
+    expect(result.value.verdict).toEqual({
+      clean: false,
+      blocking_reasons: [
+        {
+          kind: 'degraded_validator_lifecycle',
+          finding_id: 'f1',
+          outcome: 'failed',
+        },
+      ],
+    })
+  })
+
+  test('two blocking reasons at once are both reported, not just the first', () => {
+    const finding = mergedFinding('f1', { input_finding_ids: ['f1-input'] })
+    const merge = mergeOutput([finding], ['f1'])
+
+    const result = runReviewPipeline(
+      runPipelineScenario({
+        merge,
+        validator_lifecycle_results: [
+          lifecycleResult('f1', {
+            outcome: 'unavailable',
+            reason: 'validator not reachable',
+          }),
+        ],
+        plan_assessment: {
+          results: [
+            planAssessmentResult(
+              'explicit_unmet_requirement',
+              'Requirement R1 was not implemented.',
+            ),
+          ],
+        },
+      }),
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.verdict.clean).toBe(false)
+    expect(result.value.verdict.blocking_reasons).toEqual([
+      {
+        kind: 'explicit_unmet_plan_requirement',
+        description: 'Requirement R1 was not implemented.',
+      },
+      {
+        kind: 'degraded_validator_lifecycle',
+        finding_id: 'f1',
+        outcome: 'unavailable',
+      },
+    ])
+  })
+
+  test('a rejection from validator reconciliation aborts the run with no partial output', () => {
+    const finding = mergedFinding('f1', { input_finding_ids: ['f1-input'] })
+    const merge = mergeOutput([finding], ['f1'])
+
+    const result = runReviewPipeline(
+      runPipelineScenario({
+        merge,
+        validator_lifecycle_results: [],
+      }),
+    )
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe('missing validator result')
+    expect('value' in result).toBe(false)
+    expect(Object.keys(result).sort()).toEqual(['ok', 'rejection'])
+  })
+
+  test('output is byte-identical under permuted input order', () => {
+    const findingA = mergedFinding('f1', { input_finding_ids: ['f1-input'] })
+    const findingB = mergedFinding('f2', { input_finding_ids: ['f2-input'] })
+    const merge = mergeOutput([findingA, findingB], ['f1', 'f2'])
+
+    const resultF1 = lifecycleResult('f1', {
+      outcome: 'failed',
+      reason: 'timed out',
+    })
+    const resultF2 = lifecycleResult('f2', {
+      outcome: 'unavailable',
+      reason: 'not reachable',
+    })
+
+    const lostPersonas = [lostPersona('security'), lostPersona('reliability')]
+    const planResults = [
+      planAssessmentResult('explicit_unmet_requirement', 'B requirement.'),
+      planAssessmentResult('explicit_unmet_requirement', 'A requirement.'),
+    ]
+
+    const scenarioA = runPipelineScenario({
+      merge,
+      validator_lifecycle_results: [resultF1, resultF2],
+      lost_risk_critical_personas: lostPersonas,
+      plan_assessment: { results: planResults },
+    })
+    const scenarioB = runPipelineScenario({
+      merge,
+      validator_lifecycle_results: [resultF2, resultF1],
+      lost_risk_critical_personas: [...lostPersonas].reverse(),
+      plan_assessment: { results: [...planResults].reverse() },
+    })
+
+    const resultA = runReviewPipeline(scenarioA)
+    const resultB = runReviewPipeline(scenarioB)
 
     expect(resultA).toEqual(resultB)
   })

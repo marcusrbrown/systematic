@@ -2449,3 +2449,160 @@ export function routePlanAssessment(
     gated_by_explicit_unmet_requirement: residualActionableWork.length > 0,
   }
 }
+
+// --- verdict composition phase -----------------------------------------------
+//
+// Composes the four phase steps above in order and derives the run's
+// verdict. Never re-derives anything a phase step already computed -- this
+// is pure composition plus a verdict rollup over state each step already
+// produced. Never reads `process.env`, the filesystem, or the clock.
+
+export interface RunReviewPipelineInput {
+  readonly merge: MergeOutput
+  readonly validator_lifecycle_results: ValidatorLifecycleResults
+  readonly prepared: PrepareOutput
+  readonly rejected_payloads: readonly RejectedPayloadWeight[]
+  readonly lost_risk_critical_personas: readonly LostRiskCriticalPersona[]
+  readonly plan_assessment: RoutePlanAssessmentInput
+}
+
+/** One fact that withheld a clean verdict. Each `kind` is a distinct,
+ * independently-triggered block -- never collapsed into a shared shape --
+ * so a reader can always tell which of the three gating conditions fired
+ * and, within `explicit_unmet_plan_requirement` and
+ * `unsatisfied_risk_coverage`, which specific requirement or persona is
+ * responsible. */
+export type VerdictBlockingReason =
+  | {
+      readonly kind: 'explicit_unmet_plan_requirement'
+      readonly description: string
+    }
+  | {
+      readonly kind: 'unsatisfied_risk_coverage'
+      readonly persona: string
+    }
+  | {
+      readonly kind: 'degraded_validator_lifecycle'
+      readonly finding_id: string
+      readonly outcome: 'failed' | 'unavailable'
+    }
+
+export interface ReviewRunVerdict {
+  readonly clean: boolean
+  readonly blocking_reasons: readonly VerdictBlockingReason[]
+}
+
+export interface RunReviewPipelineOutput {
+  readonly reconciled: ReconcileValidatorResultsOutput
+  readonly finalized: FinalizeReviewDispositionsOutput
+  readonly risk_coverage: readonly RiskCoverageDerivation[]
+  readonly plan_assessment: RoutedPlanAssessment
+  readonly verdict: ReviewRunVerdict
+}
+
+export type RunReviewPipelineResult =
+  | { readonly ok: true; readonly value: RunReviewPipelineOutput }
+  | {
+      readonly ok: false
+      readonly rejection: ReconcileValidatorResultsRejection
+    }
+
+/**
+ * Derives the run's verdict from state the phase steps already computed.
+ * Three conditions block a clean verdict, each independently and each
+ * surfaced as its own `VerdictBlockingReason` entry rather than collapsed
+ * into a single boolean or string: an explicit unmet plan requirement (one
+ * entry per `routePlanAssessment`'s `residual_actionable_work` item), an
+ * unsatisfied risk-critical coverage for a lost persona (one entry per
+ * unsatisfied `deriveRiskCoverage` result), and a degraded validator
+ * lifecycle -- a validator that never answered (one entry per
+ * `reconcileValidatorResults`'s `lifecycle_failures` item). Every source
+ * list is already stably sorted by its producing step, so concatenating
+ * them in this fixed order keeps `blocking_reasons` byte-identical under
+ * permuted input.
+ */
+function deriveVerdict(
+  planAssessment: RoutedPlanAssessment,
+  riskCoverage: readonly RiskCoverageDerivation[],
+  reconciled: ReconcileValidatorResultsOutput,
+): ReviewRunVerdict {
+  const blockingReasons: VerdictBlockingReason[] = []
+
+  for (const description of planAssessment.residual_actionable_work) {
+    blockingReasons.push({
+      kind: 'explicit_unmet_plan_requirement',
+      description,
+    })
+  }
+
+  for (const coverage of riskCoverage) {
+    if (!coverage.satisfied) {
+      blockingReasons.push({
+        kind: 'unsatisfied_risk_coverage',
+        persona: coverage.persona,
+      })
+    }
+  }
+
+  for (const failure of reconciled.lifecycle_failures) {
+    blockingReasons.push({
+      kind: 'degraded_validator_lifecycle',
+      finding_id: failure.finding_id,
+      outcome: failure.outcome,
+    })
+  }
+
+  return {
+    clean: blockingReasons.length === 0,
+    blocking_reasons: blockingReasons,
+  }
+}
+
+/**
+ * Runs the full synthesis pipeline's finalize-and-verdict slice: calls
+ * `reconcileValidatorResults`, `finalizeReviewDispositions`,
+ * `deriveRiskCoverage`, and `routePlanAssessment` in order, then derives the
+ * run's verdict from their already-computed output. Never re-derives
+ * anything those four steps compute -- this is composition, not a fifth
+ * derivation. A rejection from `reconcileValidatorResults` aborts the whole
+ * run and is returned unchanged, with no partial output from the later
+ * steps. This step never builds the final artifact or the
+ * writing/report-only discriminated output -- that is a separate slice.
+ * Never reads `process.env`, the filesystem, or the clock.
+ */
+export function runReviewPipeline(
+  input: RunReviewPipelineInput,
+): RunReviewPipelineResult {
+  const reconciled = reconcileValidatorResults({
+    merge: input.merge,
+    validator_lifecycle_results: input.validator_lifecycle_results,
+  })
+  if (!reconciled.ok) return reconciled
+
+  const finalized = finalizeReviewDispositions({
+    prepared: input.prepared,
+    reconciled: reconciled.value,
+    rejected_payloads: input.rejected_payloads,
+  })
+
+  const riskCoverage = deriveRiskCoverage({
+    lost_risk_critical_personas: input.lost_risk_critical_personas,
+    prepared: input.prepared,
+    reconciled: reconciled.value,
+  })
+
+  const planAssessment = routePlanAssessment(input.plan_assessment)
+
+  const verdict = deriveVerdict(planAssessment, riskCoverage, reconciled.value)
+
+  return {
+    ok: true,
+    value: {
+      reconciled: reconciled.value,
+      finalized,
+      risk_coverage: riskCoverage,
+      plan_assessment: planAssessment,
+      verdict,
+    },
+  }
+}
