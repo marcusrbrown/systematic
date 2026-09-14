@@ -1026,7 +1026,7 @@ which adds only contracts and a generated reference.
       `review-summary-schema.json` and `findings-schema.json` byte-identical
       after regeneration.
 
-  - [ ] **5.10 Build the input ledger**
+  - [x] **5.10 Build the input ledger**
     - New `buildInputLedger` emits admitted rows (owner, confidence, final
       disposition, reason) and one rejected-summary row per rejected payload,
       with no row for a `validation_unavailable` persona.
@@ -1035,7 +1035,7 @@ which adds only contracts and a generated reference.
       rejection with no summary has no row (KTD21); unavailable persona has
       none; duplicate ID impossible; stable order.
 
-  - [ ] **5.11 Build review coverage**
+  - [x] **5.11 Build review coverage**
     - New `buildReviewCoverage` aggregates screen residual risks and testing
       gaps, failed reviewers, validator failures, and disagreement facts into the
       artifact's coverage shape with defined overflow behavior at the array
@@ -1044,7 +1044,7 @@ which adds only contracts and a generated reference.
       fixed reason; failed reviewer list from dispatch outcomes; validator
       failure reasons carried.
 
-  - [ ] **5.12 Project synthesized findings**
+  - [x] **5.12 Project synthesized findings**
     - New `projectSynthesizedFindings` nests provenance, applies validation
       state and reason, and strips helper-only fields so the result parses
       strictly.
@@ -1052,7 +1052,7 @@ which adds only contracts and a generated reference.
       list; filtered finding carries `validated: false` and reason; helper-only
       keys absent; strict parse of every projected finding.
 
-  - [ ] **5.13 Compose `finalizeReview`**
+  - [x] **5.13 Compose `finalizeReview`**
     - Composes the projections above, derives `run_status` (any
       `validation_unavailable` or lost reviewer degrades; `clean` additionally
       requires no failed reviewer), parses the writing-mode artifact through

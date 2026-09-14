@@ -1,26 +1,36 @@
 import { describe, expect, test } from 'bun:test'
+import { ReviewArtifactSchema } from '../../src/lib/review-artifact-schema.js'
 import type {
   ApplyReviewAdjudicationInput,
+  BuildInputLedgerInput,
+  BuildReviewCoverageInput,
   DeriveFinalizeContextInput,
   DeriveRiskCoverageInput,
   FinalizeReviewDispositionsInput,
+  FinalizeReviewInput,
   LostRiskCriticalPersona,
   MergeOutput,
   PlanAssessmentResult,
   PrepareOutput,
+  ProjectSynthesizedFindingsInput,
   ReconcileValidatorResultsInput,
   ReconcileValidatorResultsOutput,
   RunReviewPipelineInput,
 } from '../../src/lib/review-pipeline.js'
 import {
   applyReviewAdjudication,
+  buildInputLedger,
+  buildReviewCoverage,
   deriveFinalizeContext,
   deriveRiskCoverage,
+  finalizeReview,
   finalizeReviewDispositions,
+  projectSynthesizedFindings,
   reconcileValidatorResults,
   routePlanAssessment,
   runReviewPipeline,
 } from '../../src/lib/review-pipeline.js'
+import { FinalizeOutputSchema } from '../../src/lib/review-pipeline-contract.js'
 
 type LifecycleResults =
   ReconcileValidatorResultsInput['validator_lifecycle_results']
@@ -1584,5 +1594,797 @@ describe('runReviewPipeline', () => {
     const resultB = runReviewPipeline(scenarioB)
 
     expect(resultA).toEqual(resultB)
+  })
+})
+
+type LedgerAdmittedFinding =
+  FinalizeScreenResultFixture['result']['admitted_findings'][number]
+
+function admittedScreenFinding(
+  inputId: string,
+  overrides: Partial<LedgerAdmittedFinding> = {},
+): LedgerAdmittedFinding {
+  return {
+    input_id: inputId,
+    title: 'Example issue',
+    severity: 'P2',
+    file: 'src/example.ts',
+    line: 1,
+    why_it_matters: 'The example path can fail during normal execution.',
+    autofix_class: 'gated_auto',
+    owner: 'downstream-resolver',
+    requires_verification: true,
+    confidence: 0.8,
+    evidence: ['src/example.ts:1 demonstrates the issue.'],
+    pre_existing: false,
+    disposition: 'surviving',
+    ...overrides,
+  }
+}
+
+function ledgerFinalized(
+  inputDispositions: readonly {
+    readonly input_id: string
+    readonly disposition: 'surviving' | 'merged' | 'suppressed' | 'filtered'
+    readonly reason?: string
+  }[],
+) {
+  return {
+    input_dispositions: inputDispositions,
+    disposition_counts: {
+      surviving: 0,
+      merged: 0,
+      suppressed: 0,
+      filtered: 0,
+      rejected: 0,
+    },
+    pre_existing_findings: [],
+    new_findings: [],
+    queues: { fixer: [], residual: [], report_only: [] },
+  }
+}
+
+describe('buildInputLedger', () => {
+  test('every admitted input has exactly one row, ordered by input ID', () => {
+    const prepared = preparedOutput({
+      confidence_dispositions: [
+        confidenceDisposition('r2#0', 'surviving'),
+        confidenceDisposition('r1#0', 'surviving'),
+      ],
+      surviving_findings: [
+        survivingFinding('r2#0', 'r2'),
+        survivingFinding('r1#0', 'r1'),
+      ],
+    })
+
+    const result = buildInputLedger({
+      prepared,
+      screen_results: [
+        financeScreenResult('r1', {
+          admitted_findings: [admittedScreenFinding('r1#0')],
+        }),
+        financeScreenResult('r2', {
+          admitted_findings: [admittedScreenFinding('r2#0')],
+        }),
+      ],
+      dispatch_records: [dispatchRecord('r1'), dispatchRecord('r2')],
+      finalized: ledgerFinalized([
+        { input_id: 'r1#0', disposition: 'surviving' },
+        { input_id: 'r2#0', disposition: 'merged' },
+      ]),
+      reconciled: reconciledOutput(),
+    })
+
+    expect(result).toEqual([
+      {
+        record_type: 'admitted',
+        input_id: 'r1#0',
+        reviewer: 'r1',
+        confidence: 0.8,
+        disposition: 'surviving',
+        reason: expect.any(String),
+      },
+      {
+        record_type: 'admitted',
+        input_id: 'r2#0',
+        reviewer: 'r2',
+        confidence: 0.8,
+        disposition: 'merged',
+        reason: expect.any(String),
+      },
+    ])
+  })
+
+  test('a suppressed row keeps the confidence-gate reason', () => {
+    const prepared = preparedOutput({
+      confidence_dispositions: [
+        confidenceDisposition('r1#0', 'suppressed', {
+          reason: 'confidence below gate threshold',
+        }),
+      ],
+    })
+
+    const result = buildInputLedger({
+      prepared,
+      screen_results: [
+        financeScreenResult('r1', {
+          admitted_findings: [admittedScreenFinding('r1#0')],
+        }),
+      ],
+      dispatch_records: [dispatchRecord('r1')],
+      finalized: ledgerFinalized([
+        {
+          input_id: 'r1#0',
+          disposition: 'suppressed',
+          reason: 'confidence below gate threshold',
+        },
+      ]),
+      reconciled: reconciledOutput(),
+    })
+
+    expect(result).toEqual([
+      {
+        record_type: 'admitted',
+        input_id: 'r1#0',
+        reviewer: 'r1',
+        confidence: 0.8,
+        disposition: 'suppressed',
+        reason: 'confidence below gate threshold',
+      },
+    ])
+  })
+
+  test('a filtered row carries the disproving validator reason', () => {
+    const prepared = preparedOutput({
+      confidence_dispositions: [confidenceDisposition('r1#0', 'surviving')],
+      surviving_findings: [survivingFinding('r1#0', 'r1')],
+    })
+    const reconciled = reconciledOutput({
+      findings: [
+        {
+          ...mergedFinding('f1', { input_finding_ids: ['r1#0'] }),
+          validated: false,
+          validation_reason: 'The behavior described does not reproduce.',
+        },
+      ],
+      filtered_finding_ids: ['f1'],
+      filtered_input_ids: ['r1#0'],
+    })
+
+    const result = buildInputLedger({
+      prepared,
+      screen_results: [
+        financeScreenResult('r1', {
+          admitted_findings: [admittedScreenFinding('r1#0')],
+        }),
+      ],
+      dispatch_records: [dispatchRecord('r1')],
+      finalized: ledgerFinalized([
+        { input_id: 'r1#0', disposition: 'filtered' },
+      ]),
+      reconciled,
+    })
+
+    expect(result).toEqual([
+      {
+        record_type: 'admitted',
+        input_id: 'r1#0',
+        reviewer: 'r1',
+        confidence: 0.8,
+        disposition: 'filtered',
+        reason: 'The behavior described does not reproduce.',
+      },
+    ])
+  })
+
+  test('rejected rows carry the extracted severities, sorted by reviewer', () => {
+    const result = buildInputLedger({
+      prepared: preparedOutput(),
+      screen_results: [
+        financeScreenResult('r2', {
+          admitted_findings: [],
+          dispatch_outcome: 'malformed',
+          rejected_summary: {
+            dispatch_outcome: 'malformed',
+            rejected_finding_count: 2,
+            rejected_severities: ['P1', 'P2'],
+            reason: 'payload failed schema validation',
+          },
+        }),
+        financeScreenResult('r1', {
+          admitted_findings: [],
+          dispatch_outcome: 'malformed',
+          rejected_summary: {
+            dispatch_outcome: 'malformed',
+            rejected_finding_count: 1,
+            rejected_severities: ['unknown'],
+            reason: 'payload could not be parsed',
+          },
+        }),
+      ],
+      dispatch_records: [dispatchRecord('r1'), dispatchRecord('r2')],
+      finalized: ledgerFinalized([]),
+      reconciled: reconciledOutput(),
+    })
+
+    expect(result).toEqual([
+      {
+        record_type: 'rejected_summary',
+        reviewer: 'r1',
+        dispatch_outcome: 'malformed',
+        rejected_finding_count: 1,
+        rejected_severities: ['unknown'],
+        disposition: 'rejected',
+        reason: 'payload could not be parsed',
+      },
+      {
+        record_type: 'rejected_summary',
+        reviewer: 'r2',
+        dispatch_outcome: 'malformed',
+        rejected_finding_count: 2,
+        rejected_severities: ['P1', 'P2'],
+        disposition: 'rejected',
+        reason: 'payload failed schema validation',
+      },
+    ])
+  })
+
+  test('a rejection with no summary produces no row at all (KTD21)', () => {
+    const result = buildInputLedger({
+      prepared: preparedOutput(),
+      screen_results: [
+        financeScreenResult('r1', {
+          admitted_findings: [],
+          dispatch_outcome: 'malformed',
+        }),
+      ],
+      dispatch_records: [
+        dispatchRecord('r1', { dispatch_outcome: 'malformed' }),
+      ],
+      finalized: ledgerFinalized([]),
+      reconciled: reconciledOutput(),
+    })
+
+    expect(result).toEqual([])
+  })
+
+  test('a validation_unavailable persona has no ledger row of either kind', () => {
+    const prepared = preparedOutput({
+      confidence_dispositions: [confidenceDisposition('r1#0', 'surviving')],
+      surviving_findings: [survivingFinding('r1#0', 'r1')],
+    })
+
+    const result = buildInputLedger({
+      prepared,
+      screen_results: [
+        financeScreenResult('r1', {
+          admitted_findings: [admittedScreenFinding('r1#0')],
+          dispatch_outcome: 'validation_unavailable',
+        }),
+      ],
+      dispatch_records: [
+        dispatchRecord('r1', { dispatch_outcome: 'validation_unavailable' }),
+      ],
+      finalized: ledgerFinalized([
+        { input_id: 'r1#0', disposition: 'surviving' },
+      ]),
+      reconciled: reconciledOutput(),
+    })
+
+    expect(result).toEqual([])
+  })
+})
+
+describe('buildReviewCoverage', () => {
+  function coverageInput(
+    overrides: Partial<BuildReviewCoverageInput> = {},
+  ): BuildReviewCoverageInput {
+    return {
+      dispatch_records: [dispatchRecord('r1')],
+      validator_lifecycle_results: [],
+      screen_results: [financeScreenResult('r1')],
+      reconciled: reconciledOutput(),
+      merge: mergeOutput([], []),
+      ...overrides,
+    }
+  }
+
+  test('residual risks and testing gaps union across reviewers, deduped and sorted', () => {
+    const result = buildReviewCoverage(
+      coverageInput({
+        dispatch_records: [dispatchRecord('r1'), dispatchRecord('r2')],
+        screen_results: [
+          financeScreenResult('r1', {
+            residual_risks: ['Race condition under load.', 'Shared risk.'],
+            testing_gaps: ['No integration test for retries.'],
+          }),
+          financeScreenResult('r2', {
+            residual_risks: ['Shared risk.'],
+            testing_gaps: ['No load test.'],
+          }),
+        ],
+      }),
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.residual_risks).toEqual([
+      'Race condition under load.',
+      'Shared risk.',
+    ])
+    expect(result.value.testing_gaps).toEqual([
+      'No integration test for retries.',
+      'No load test.',
+    ])
+  })
+
+  test('failed reviewers list personas whose dispatch outcome was malformed, never_returned, or validation_unavailable', () => {
+    const result = buildReviewCoverage(
+      coverageInput({
+        dispatch_records: [
+          dispatchRecord('r1', { dispatch_outcome: 'malformed' }),
+          dispatchRecord('r2', { dispatch_outcome: 'never_returned' }),
+          dispatchRecord('r3', { dispatch_outcome: 'validation_unavailable' }),
+          dispatchRecord('r4', { dispatch_outcome: 'findings' }),
+        ],
+        screen_results: [
+          financeScreenResult('r1'),
+          financeScreenResult('r2'),
+          financeScreenResult('r3'),
+          financeScreenResult('r4'),
+        ],
+      }),
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.failed_reviewers).toEqual(['r1', 'r2', 'r3'])
+  })
+
+  test('validator failure reasons are carried one per lifecycle failure', () => {
+    const result = buildReviewCoverage(
+      coverageInput({
+        reconciled: reconciledOutput({
+          lifecycle_failures: [
+            {
+              finding_id: 'f1',
+              outcome: 'failed',
+              reason: 'validator timed out',
+            },
+            {
+              finding_id: 'f2',
+              outcome: 'unavailable',
+              reason: 'validator not reachable',
+            },
+          ],
+          degraded: true,
+        }),
+      }),
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.validator_failures).toEqual([
+      'validator timed out',
+      'validator not reachable',
+    ])
+  })
+
+  test('intent uncertainty passes through the merge phase disagreement facts', () => {
+    const result = buildReviewCoverage(
+      coverageInput({
+        merge: {
+          ...mergeOutput([], []),
+          disagreement_facts: ['Reviewers disagreed about severity.'],
+        },
+      }),
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.intent_uncertainty).toEqual([
+      'Reviewers disagreed about severity.',
+    ])
+  })
+
+  test('reviewers and validators report the dispatch and lifecycle-result counts', () => {
+    const result = buildReviewCoverage(
+      coverageInput({
+        dispatch_records: [dispatchRecord('r1'), dispatchRecord('r2')],
+        screen_results: [financeScreenResult('r1'), financeScreenResult('r2')],
+        validator_lifecycle_results: [
+          lifecycleResult('f1', { outcome: 'true' }),
+        ],
+      }),
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.reviewers).toBe(2)
+    expect(result.value.validators).toBe(1)
+  })
+
+  test('a union exceeding the MAX_PERSONAS bound rejects with a fixed reason instead of truncating', () => {
+    const manyRisks = Array.from({ length: 65 }, (_, index) => `Risk ${index}.`)
+    const result = buildReviewCoverage(
+      coverageInput({
+        screen_results: [
+          financeScreenResult('r1', { residual_risks: manyRisks }),
+        ],
+      }),
+    )
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection).toEqual({
+      path: 'coverage.residual_risks',
+      reason: 'coverage array exceeds bound',
+    })
+  })
+})
+
+describe('projectSynthesizedFindings', () => {
+  function projectInput(
+    overrides: Partial<ProjectSynthesizedFindingsInput> = {},
+  ): ProjectSynthesizedFindingsInput {
+    return { findings: [], ...overrides }
+  }
+
+  test('nests fingerprint, submitters, and agreement_credit under provenance and strips finding_id', () => {
+    const finding = mergedFinding('f1', {
+      input_finding_ids: ['a#0', 'b#0'],
+      fingerprint: 'src/example.ts:1:P1:f1',
+      submitters: ['correctness', 'reliability'],
+      agreement_credit: ['security'],
+    })
+
+    const projected = projectSynthesizedFindings(
+      projectInput({ findings: [finding] }),
+    )[0]
+    if (!projected) throw new Error('expected exactly one projected finding')
+
+    expect(projected.provenance).toEqual({
+      fingerprint: 'src/example.ts:1:P1:f1',
+      submitters: ['correctness', 'reliability'],
+      agreement_credit: ['security'],
+    })
+    expect('finding_id' in projected).toBe(false)
+    expect('fingerprint' in projected).toBe(false)
+    expect('submitters' in projected).toBe(false)
+    expect('agreement_credit' in projected).toBe(false)
+  })
+
+  test('absent agreement credit projects to an empty list, never omitted', () => {
+    const finding = mergedFinding('f1', { input_finding_ids: ['a#0'] })
+
+    const projected = projectSynthesizedFindings(
+      projectInput({ findings: [finding] }),
+    )[0]
+    if (!projected) throw new Error('expected exactly one projected finding')
+
+    expect(projected.provenance.agreement_credit).toEqual([])
+  })
+
+  test('a filtered finding carries validated: false and its validation reason', () => {
+    const finding = {
+      ...mergedFinding('f1', { input_finding_ids: ['a#0'] }),
+      validated: false,
+      validation_reason: 'Evidence could not be reproduced.',
+    }
+
+    const projected = projectSynthesizedFindings(
+      projectInput({ findings: [finding] }),
+    )[0]
+    if (!projected) throw new Error('expected exactly one projected finding')
+
+    expect(projected.validated).toBe(false)
+    expect(projected.validation_reason).toBe(
+      'Evidence could not be reproduced.',
+    )
+  })
+
+  test('a never-validated finding carries neither validated nor validation_reason', () => {
+    const finding = mergedFinding('f1', { input_finding_ids: ['a#0'] })
+
+    const projected = projectSynthesizedFindings(
+      projectInput({ findings: [finding] }),
+    )[0]
+    if (!projected) throw new Error('expected exactly one projected finding')
+
+    expect('validated' in projected).toBe(false)
+    expect('validation_reason' in projected).toBe(false)
+  })
+
+  test('projection preserves the reconciled order', () => {
+    const findings = [
+      mergedFinding('f1', { input_finding_ids: ['a#0'], title: 'First issue' }),
+      mergedFinding('f2', {
+        input_finding_ids: ['b#0'],
+        title: 'Second issue',
+      }),
+    ]
+
+    const projected = projectSynthesizedFindings(projectInput({ findings }))
+
+    expect(projected.map((finding) => finding.title)).toEqual([
+      'First issue',
+      'Second issue',
+    ])
+  })
+
+  test('every projected finding parses strictly against the artifact findings schema', () => {
+    const finding = mergedFinding('f1', {
+      input_finding_ids: ['a#0'],
+      submitters: ['correctness'],
+    })
+
+    const projected = projectSynthesizedFindings(
+      projectInput({ findings: [finding] }),
+    )
+
+    expect(() =>
+      ReviewArtifactSchema.shape.findings.parse(projected),
+    ).not.toThrow()
+  })
+})
+
+function finalizeReviewScenario(
+  overrides: Partial<FinalizeReviewInput> = {},
+): FinalizeReviewInput {
+  const prepared = preparedOutput({
+    confidence_dispositions: [
+      confidenceDisposition('correctness#0', 'surviving'),
+    ],
+    surviving_findings: [
+      survivingFinding('correctness#0', 'correctness', {
+        requires_verification: false,
+        severity: 'P3',
+      }),
+    ],
+    singletons: ['correctness#0'],
+  })
+  const merge = buildAdjudicatedMergeOutput(prepared)
+
+  return {
+    merge,
+    prepared,
+    screen_results: [
+      financeScreenResult('correctness', {
+        admitted_findings: [
+          admittedScreenFinding('correctness#0', {
+            requires_verification: false,
+            severity: 'P3',
+          }),
+        ],
+      }),
+    ],
+    dispatch_records: [dispatchRecord('correctness')],
+    validator_lifecycle_results: [],
+    plan_assessment: { verdict: 'All requirements met.', results: [] },
+    parent_run_metadata: {
+      run_id: 'run-1',
+      mode: 'interactive',
+      harness: 'opencode',
+      branch: 'main',
+      head_sha: 'a'.repeat(40),
+      selected_dispatches: [dispatchRecord('correctness')],
+      timestamps: {
+        started_at: '2026-01-01T00:00:00.000Z',
+        completed_at: '2026-01-01T00:05:00.000Z',
+      },
+      validation: { status: 'not_attempted', reason: 'no autofix applied' },
+      applied_fixes: [],
+    },
+    ...overrides,
+  }
+}
+
+describe('finalizeReview', () => {
+  test('a clean run reaches a completed, clean artifact that parses against ReviewArtifactSchema and FinalizeOutputSchema', () => {
+    const result = finalizeReview(finalizeReviewScenario())
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.kind).toBe('writing')
+    if (result.value.kind !== 'writing') return
+    const { artifact } = result.value
+    expect(artifact.run_status).toBe('completed')
+    expect(artifact.verdict).toBe('All requirements met.')
+    expect(() => ReviewArtifactSchema.parse(artifact)).not.toThrow()
+    expect(() => FinalizeOutputSchema.parse(result.value)).not.toThrow()
+  })
+
+  test('writing and report-only agree on findings, ledger-derived dispositions, queues, coverage, and verdict', () => {
+    const base = finalizeReviewScenario()
+    const writingResult = finalizeReview(base)
+    const reportOnlyResult = finalizeReview({
+      ...base,
+      parent_run_metadata: { ...base.parent_run_metadata, mode: 'report-only' },
+    })
+
+    expect(writingResult.ok).toBe(true)
+    expect(reportOnlyResult.ok).toBe(true)
+    if (!writingResult.ok || !reportOnlyResult.ok) return
+    expect(writingResult.value.kind).toBe('writing')
+    expect(reportOnlyResult.value.kind).toBe('report_only')
+    if (writingResult.value.kind !== 'writing') return
+    if (reportOnlyResult.value.kind !== 'report_only') return
+
+    expect(writingResult.value.report.findings).toEqual(
+      reportOnlyResult.value.findings,
+    )
+    expect(writingResult.value.report.input_dispositions).toEqual(
+      reportOnlyResult.value.input_dispositions,
+    )
+    expect(writingResult.value.report.queues).toEqual(
+      reportOnlyResult.value.queues,
+    )
+    expect(writingResult.value.report.coverage).toEqual(
+      reportOnlyResult.value.coverage,
+    )
+    expect(writingResult.value.report.verdict).toEqual(
+      reportOnlyResult.value.verdict,
+    )
+    expect(writingResult.value.artifact.verdict).toEqual(
+      reportOnlyResult.value.verdict,
+    )
+  })
+
+  test('an all-reviewer failure is not clean even when no risk-critical persona was selected', () => {
+    const failedDispatch = dispatchRecord('correctness', {
+      dispatch_outcome: 'malformed',
+    })
+    const scenario = finalizeReviewScenario({
+      dispatch_records: [failedDispatch],
+      screen_results: [
+        financeScreenResult('correctness', {
+          admitted_findings: [],
+          dispatch_outcome: 'malformed',
+        }),
+      ],
+      prepared: preparedOutput(),
+      merge: {
+        disagreement_facts: [],
+        merged_findings: [],
+        validator_requests: [],
+      },
+    })
+    const withMatchingSelection: FinalizeReviewInput = {
+      ...scenario,
+      parent_run_metadata: {
+        ...scenario.parent_run_metadata,
+        selected_dispatches: [failedDispatch],
+      },
+    }
+
+    const result = finalizeReview(withMatchingSelection)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.kind).toBe('writing')
+    if (result.value.kind !== 'writing') return
+    expect(result.value.artifact.run_status).toBe('degraded')
+    expect(result.value.artifact.verdict).not.toBe('All requirements met.')
+  })
+
+  test('an unavailable persona degrades the run even when risk coverage is otherwise satisfied', () => {
+    const securityDispatch = dispatchRecord('security', {
+      dispatch_outcome: 'validation_unavailable',
+      selection_surface: ['src/auth.ts'],
+    })
+    const scenario = finalizeReviewScenario({
+      dispatch_records: [dispatchRecord('correctness'), securityDispatch],
+      screen_results: [
+        financeScreenResult('correctness', {
+          admitted_findings: [
+            admittedScreenFinding('correctness#0', {
+              requires_verification: false,
+              severity: 'P3',
+            }),
+          ],
+        }),
+        financeScreenResult('security', {
+          admitted_findings: [],
+          dispatch_outcome: 'validation_unavailable',
+        }),
+      ],
+    })
+    const withMatchingSelection: FinalizeReviewInput = {
+      ...scenario,
+      parent_run_metadata: {
+        ...scenario.parent_run_metadata,
+        selected_dispatches: [dispatchRecord('correctness'), securityDispatch],
+      },
+    }
+
+    const result = finalizeReview(withMatchingSelection)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.kind).toBe('writing')
+    if (result.value.kind !== 'writing') return
+    // `security` had no recorded selection surface to lose, so risk coverage
+    // reports no unsatisfied persona for it -- yet `run_status` still
+    // degrades on the `validation_unavailable` dispatch outcome alone, per
+    // KTD20.
+    expect(result.value.artifact.run_status).toBe('degraded')
+  })
+
+  test('an artifact parse failure surfaces as a rejection with no partial output', () => {
+    const base = finalizeReviewScenario()
+    const scenario: FinalizeReviewInput = {
+      ...base,
+      parent_run_metadata: {
+        ...base.parent_run_metadata,
+        branch: 'x'.repeat(300),
+      },
+    }
+
+    const result = finalizeReview(scenario)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe('artifact failed schema validation')
+    expect('value' in result).toBe(false)
+    expect(Object.keys(result).sort()).toEqual(['ok', 'rejection'])
+  })
+
+  test('changing only run_id changes only run_id in the artifact', () => {
+    const scenarioA = finalizeReviewScenario()
+    const scenarioB: FinalizeReviewInput = {
+      ...scenarioA,
+      parent_run_metadata: {
+        ...scenarioA.parent_run_metadata,
+        run_id: 'run-2',
+      },
+    }
+
+    const resultA = finalizeReview(scenarioA)
+    const resultB = finalizeReview(scenarioB)
+
+    expect(resultA.ok).toBe(true)
+    expect(resultB.ok).toBe(true)
+    if (!resultA.ok || !resultB.ok) return
+    if (resultA.value.kind !== 'writing' || resultB.value.kind !== 'writing')
+      return
+
+    const { run_id: runIdA, ...restA } = resultA.value.artifact
+    const { run_id: runIdB, ...restB } = resultB.value.artifact
+    expect(runIdA).toBe('run-1')
+    expect(runIdB).toBe('run-2')
+    expect(restA).toEqual(restB)
+  })
+
+  test('a report-only run never wraps an artifact', () => {
+    const base = finalizeReviewScenario()
+    const scenario: FinalizeReviewInput = {
+      ...base,
+      parent_run_metadata: { ...base.parent_run_metadata, mode: 'report-only' },
+    }
+
+    const result = finalizeReview(scenario)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.kind).toBe('report_only')
+    expect('artifact' in result.value).toBe(false)
+    expect(() => FinalizeOutputSchema.parse(result.value)).not.toThrow()
+  })
+
+  test('a rejection from deriveFinalizeContext aborts finalizeReview with no partial output', () => {
+    const base = finalizeReviewScenario()
+    const scenario: FinalizeReviewInput = {
+      ...base,
+      dispatch_records: [
+        dispatchRecord('correctness'),
+        dispatchRecord('extra-persona'),
+      ],
+    }
+
+    const result = finalizeReview(scenario)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect('value' in result).toBe(false)
   })
 })

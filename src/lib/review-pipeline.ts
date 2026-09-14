@@ -2,8 +2,10 @@ import type { z } from 'zod'
 import { formatReviewArtifactIssuePath } from './review-artifact-path.js'
 import {
   MAX_FINDINGS,
+  MAX_PERSONAS,
   MAX_REASON_LENGTH,
   normalizeRepoRelativePath,
+  ReviewArtifactSchema,
   RISK_CRITICAL_PERSONAS,
   SubAgentReturnSchema,
 } from './review-artifact-schema.js'
@@ -11,6 +13,7 @@ import {
   type AdjudicationEnvelopeSchema,
   AGGREGATE_STDIN_BYTE_CAP,
   type FinalizeInputSchema,
+  FinalizeOutputSchema,
   isRouteTransitionAllowed,
   MergeOutputSchema,
   type PipelineRoute,
@@ -2014,7 +2017,7 @@ export function reconcileValidatorResults(
 // mismatching the envelope. Never reads `process.env`, the filesystem, or
 // the clock.
 
-type FinalizeInputValue = ReturnType<typeof FinalizeInputSchema.parse>
+export type FinalizeInputValue = ReturnType<typeof FinalizeInputSchema.parse>
 type FinalizeScreenResults = FinalizeInputValue['screen_results']
 type FinalizeScreenResult = FinalizeScreenResults[number]
 type FinalizeDispatchRecords = FinalizeInputValue['dispatch_records']
@@ -3263,4 +3266,766 @@ export function runReviewPipeline(
       verdict,
     },
   }
+}
+
+// --- input ledger phase: artifact ledger rows for every input finding -------
+//
+// Projects the run's admitted and rejected input findings into the artifact's
+// ledger shape: one admitted row per `prepared.confidence_dispositions` entry
+// (its final disposition and a required reason), plus one rejected-summary
+// row per screen result that actually carries a rejected summary. Per KTD21
+// an unknowable rejected count produces no row at all, and a persona whose
+// dispatch outcome is `validation_unavailable` contributes no row of either
+// kind -- unavailable evidence is neither admitted nor rejected. Never reads
+// `process.env`, the filesystem, or the clock.
+
+type BuildInputLedgerScreenResult = FinalizeScreenResults[number]
+type BuildInputLedgerRejectedSummary = NonNullable<
+  BuildInputLedgerScreenResult['result']['rejected_summary']
+>
+
+/** One admitted raw input's ledger row: its owning reviewer, the confidence
+ * the reviewer reported, its final disposition, and a required reason --
+ * the confidence-gate reason for `suppressed`, the disproving validator's
+ * reason for `filtered`, and a fixed phrase for `surviving`/`merged`. */
+export interface AdmittedInputLedgerRow {
+  readonly record_type: 'admitted'
+  readonly input_id: string
+  readonly reviewer: string
+  readonly confidence: number
+  readonly disposition: FinalInputDisposition
+  readonly reason: string
+}
+
+/** One whole-payload rejection's ledger row. Only emitted when the screen
+ * result actually carried a `rejected_summary` -- an unknowable rejected
+ * count (KTD21) produces no row at all. */
+export interface RejectedInputLedgerRow {
+  readonly record_type: 'rejected_summary'
+  readonly reviewer: string
+  readonly dispatch_outcome: BuildInputLedgerRejectedSummary['dispatch_outcome']
+  readonly rejected_finding_count: number
+  readonly rejected_severities: BuildInputLedgerRejectedSummary['rejected_severities']
+  readonly disposition: 'rejected'
+  readonly reason: string
+}
+
+export type InputLedgerRow = AdmittedInputLedgerRow | RejectedInputLedgerRow
+
+export interface BuildInputLedgerInput {
+  readonly prepared: PrepareOutput
+  readonly screen_results: FinalizeScreenResults
+  readonly dispatch_records: FinalizeDispatchRecords
+  readonly finalized: FinalizeReviewDispositionsOutput
+  readonly reconciled: ReconcileValidatorResultsOutput
+}
+
+const LEDGER_ADMITTED_REASON =
+  'This input finding passed synthesis and was carried into the run.'
+const LEDGER_FILTERED_FALLBACK_REASON =
+  'A validator disproved the synthesized finding this input contributed to.'
+
+/** Maps every admitted input ID to its owning reviewer: primarily from
+ * `prepared.surviving_findings`, which already carries the reviewer
+ * directly, and for suppressed inputs (absent from that list) from the
+ * screen result that admitted it. */
+function buildAdmittedReviewerIndex(
+  prepared: PrepareOutput,
+  screenResults: FinalizeScreenResults,
+): ReadonlyMap<string, string> {
+  const index = new Map<string, string>()
+  for (const finding of prepared.surviving_findings) {
+    index.set(finding.input_id, finding.reviewer)
+  }
+  for (const result of screenResults) {
+    for (const finding of result.result.admitted_findings) {
+      if (!index.has(finding.input_id)) {
+        index.set(finding.input_id, result.reviewer)
+      }
+    }
+  }
+  return index
+}
+
+/** Maps a suppressed input ID to the confidence-gate reason
+ * `prepared.confidence_dispositions` recorded for it. */
+function buildConfidenceReasonIndex(
+  prepared: PrepareOutput,
+): ReadonlyMap<string, string> {
+  const index = new Map<string, string>()
+  for (const entry of prepared.confidence_dispositions) {
+    if (entry.disposition === 'suppressed' && entry.reason !== undefined) {
+      index.set(entry.input_id, entry.reason)
+    }
+  }
+  return index
+}
+
+/** Maps a filtered input ID to the disproving validator's reason, read off
+ * the reconciled finding it contributed to (`validated: false` always
+ * carries `validation_reason`, per `classifyFinding`). */
+function buildFilteredReasonIndex(
+  reconciled: ReconcileValidatorResultsOutput,
+): ReadonlyMap<string, string> {
+  const index = new Map<string, string>()
+  for (const finding of reconciled.findings) {
+    if (
+      finding.validated !== false ||
+      finding.validation_reason === undefined
+    ) {
+      continue
+    }
+    for (const inputId of finding.input_finding_ids) {
+      index.set(inputId, finding.validation_reason)
+    }
+  }
+  return index
+}
+
+/** The set of personas whose dispatch outcome is `validation_unavailable`:
+ * withheld evidence that contributes no ledger row of either kind. */
+function buildValidationUnavailablePersonas(
+  dispatchRecords: FinalizeDispatchRecords,
+): ReadonlySet<string> {
+  return new Set(
+    dispatchRecords
+      .filter((record) => record.dispatch_outcome === 'validation_unavailable')
+      .map((record) => record.persona),
+  )
+}
+
+function admittedLedgerReason(
+  inputId: string,
+  disposition: FinalInputDisposition,
+  confidenceReasons: ReadonlyMap<string, string>,
+  filteredReasons: ReadonlyMap<string, string>,
+): string {
+  if (disposition === 'suppressed') {
+    return confidenceReasons.get(inputId) ?? CONFIDENCE_GATE_SUPPRESSED_REASON
+  }
+  if (disposition === 'filtered') {
+    return filteredReasons.get(inputId) ?? LEDGER_FILTERED_FALLBACK_REASON
+  }
+  return LEDGER_ADMITTED_REASON
+}
+
+function buildAdmittedLedgerRows(
+  input: BuildInputLedgerInput,
+  unavailablePersonas: ReadonlySet<string>,
+): readonly AdmittedInputLedgerRow[] {
+  const reviewerIndex = buildAdmittedReviewerIndex(
+    input.prepared,
+    input.screen_results,
+  )
+  const dispositionIndex = new Map(
+    input.finalized.input_dispositions.map((entry) => [entry.input_id, entry]),
+  )
+  const confidenceReasons = buildConfidenceReasonIndex(input.prepared)
+  const filteredReasons = buildFilteredReasonIndex(input.reconciled)
+
+  const rows: AdmittedInputLedgerRow[] = []
+  for (const entry of input.prepared.confidence_dispositions) {
+    const reviewer =
+      reviewerIndex.get(entry.input_id) ?? reviewerFromInputId(entry.input_id)
+    if (unavailablePersonas.has(reviewer)) continue
+
+    const finalDisposition = dispositionIndex.get(entry.input_id)?.disposition
+    if (finalDisposition === undefined) continue
+
+    rows.push({
+      record_type: 'admitted',
+      input_id: entry.input_id,
+      reviewer,
+      confidence: entry.confidence,
+      disposition: finalDisposition,
+      reason: admittedLedgerReason(
+        entry.input_id,
+        finalDisposition,
+        confidenceReasons,
+        filteredReasons,
+      ),
+    })
+  }
+  return [...rows].sort((a, b) => compareStrings(a.input_id, b.input_id))
+}
+
+function buildRejectedLedgerRows(
+  screenResults: FinalizeScreenResults,
+  unavailablePersonas: ReadonlySet<string>,
+): readonly RejectedInputLedgerRow[] {
+  const rows: RejectedInputLedgerRow[] = []
+  for (const result of screenResults) {
+    if (unavailablePersonas.has(result.reviewer)) continue
+    const summary = result.result.rejected_summary
+    if (!summary) continue
+    rows.push({
+      record_type: 'rejected_summary',
+      reviewer: result.reviewer,
+      dispatch_outcome: summary.dispatch_outcome,
+      rejected_finding_count: summary.rejected_finding_count,
+      rejected_severities: summary.rejected_severities,
+      disposition: 'rejected',
+      reason: summary.reason,
+    })
+  }
+  return [...rows].sort((a, b) => compareStrings(a.reviewer, b.reviewer))
+}
+
+/**
+ * Builds the artifact's input-finding ledger: one admitted row per
+ * `prepared.confidence_dispositions` entry, sorted by input ID, followed by
+ * one rejected-summary row per screen result that carried a
+ * `rejected_summary`, sorted by reviewer. A `validation_unavailable`
+ * persona contributes no row of either kind, and a rejection with no
+ * summary (KTD21) contributes no row at all -- never a fabricated count.
+ * Never reads `process.env`, the filesystem, or the clock.
+ */
+export function buildInputLedger(
+  input: BuildInputLedgerInput,
+): readonly InputLedgerRow[] {
+  const unavailablePersonas = buildValidationUnavailablePersonas(
+    input.dispatch_records,
+  )
+  return [
+    ...buildAdmittedLedgerRows(input, unavailablePersonas),
+    ...buildRejectedLedgerRows(input.screen_results, unavailablePersonas),
+  ]
+}
+
+// --- review coverage phase: aggregated reviewer and validator coverage ------
+//
+// Aggregates every screen result's residual risks and testing gaps, the
+// personas whose dispatch failed outright, the reasons a requested
+// validator never answered, and the merge phase's disagreement facts into
+// the artifact's `coverage` shape. Every array is bounded at `MAX_PERSONAS`;
+// a union that would exceed the bound rejects with a fixed reason rather
+// than silently truncating. Never reads `process.env`, the filesystem, or
+// the clock.
+
+export interface BuildReviewCoverageInput {
+  readonly dispatch_records: FinalizeDispatchRecords
+  readonly validator_lifecycle_results: ValidatorLifecycleResults
+  readonly screen_results: FinalizeScreenResults
+  readonly reconciled: ReconcileValidatorResultsOutput
+  readonly merge: MergeOutput
+}
+
+export interface ReviewCoverageSummary {
+  readonly reviewers: number
+  readonly validators: number
+  readonly residual_risks: readonly string[]
+  readonly testing_gaps: readonly string[]
+  readonly failed_reviewers: readonly string[]
+  readonly validator_failures: readonly string[]
+  readonly intent_uncertainty: readonly string[]
+}
+
+type BuildReviewCoverageRejectReason = 'coverage array exceeds bound'
+
+export interface BuildReviewCoverageRejection {
+  readonly path: string
+  readonly reason: BuildReviewCoverageRejectReason
+}
+
+export type BuildReviewCoverageResult =
+  | { readonly ok: true; readonly value: ReviewCoverageSummary }
+  | { readonly ok: false; readonly rejection: BuildReviewCoverageRejection }
+
+function dedupeSortedStrings(values: readonly string[]): readonly string[] {
+  return [...new Set(values)].sort(compareStrings)
+}
+
+function checkCoverageArrayBound(
+  field: string,
+  values: readonly string[],
+): BuildReviewCoverageRejection | undefined {
+  if (values.length <= MAX_PERSONAS) return undefined
+  return {
+    path: formatReviewArtifactIssuePath(['coverage', field]),
+    reason: 'coverage array exceeds bound',
+  }
+}
+
+/**
+ * Aggregates screen-phase and validator-phase evidence into the artifact's
+ * `coverage` shape: deduped, sorted unions of residual risks and testing
+ * gaps; the personas whose dispatch outcome was `malformed`,
+ * `never_returned`, or `validation_unavailable`; the disproving reasons for
+ * every requested validator that never answered; and the merge phase's
+ * disagreement facts, carried through unchanged. Every array is checked
+ * against `MAX_PERSONAS` before assembly -- an overflow rejects rather than
+ * silently truncating. Never reads `process.env`, the filesystem, or the
+ * clock.
+ */
+export function buildReviewCoverage(
+  input: BuildReviewCoverageInput,
+): BuildReviewCoverageResult {
+  const residualRisks = dedupeSortedStrings(
+    input.screen_results.flatMap((result) => result.result.residual_risks),
+  )
+  const testingGaps = dedupeSortedStrings(
+    input.screen_results.flatMap((result) => result.result.testing_gaps),
+  )
+  const failedReviewers = dedupeSortedStrings(
+    input.dispatch_records
+      .filter((record) =>
+        FINALIZE_CONTEXT_LOSS_DISPATCH_OUTCOMES.has(record.dispatch_outcome),
+      )
+      .map((record) => record.persona),
+  )
+  const validatorFailures = input.reconciled.lifecycle_failures.map(
+    (failure) => failure.reason,
+  )
+  const intentUncertainty = [...input.merge.disagreement_facts]
+
+  const bounded: readonly (readonly [string, readonly string[]])[] = [
+    ['residual_risks', residualRisks],
+    ['testing_gaps', testingGaps],
+    ['failed_reviewers', failedReviewers],
+    ['validator_failures', validatorFailures],
+    ['intent_uncertainty', intentUncertainty],
+  ]
+  for (const [field, values] of bounded) {
+    const violation = checkCoverageArrayBound(field, values)
+    if (violation) return { ok: false, rejection: violation }
+  }
+
+  return {
+    ok: true,
+    value: {
+      reviewers: input.dispatch_records.length,
+      validators: input.validator_lifecycle_results.length,
+      residual_risks: residualRisks,
+      testing_gaps: testingGaps,
+      failed_reviewers: failedReviewers,
+      validator_failures: validatorFailures,
+      intent_uncertainty: intentUncertainty,
+    },
+  }
+}
+
+// --- synthesized finding projection phase ------------------------------------
+//
+// Projects every reconciled finding into the artifact's synthesized-finding
+// shape: nests `fingerprint`, `submitters`, and `agreement_credit` under
+// `provenance`, carries `validated`/`validation_reason` through unchanged,
+// and strips the flat, helper-only `finding_id` so the result parses
+// strictly against `SynthesizedFindingSchema`. Never reads `process.env`,
+// the filesystem, or the clock.
+
+export interface SynthesizedFindingProvenanceProjection {
+  readonly fingerprint: string
+  readonly submitters: readonly string[]
+  readonly agreement_credit: readonly string[]
+}
+
+export interface SynthesizedFindingProjection {
+  readonly title: string
+  readonly severity: ReconciledFinding['severity']
+  readonly file: string
+  readonly line: number
+  readonly why_it_matters: string
+  readonly autofix_class: ReconciledFinding['autofix_class']
+  readonly owner: ReconciledFinding['owner']
+  readonly requires_verification: boolean
+  readonly confidence: number
+  readonly evidence: ReconciledFinding['evidence']
+  readonly pre_existing: boolean
+  readonly suggested_fix?: ReconciledFinding['suggested_fix']
+  readonly validated?: boolean
+  readonly validation_reason?: string
+  readonly input_finding_ids: readonly string[]
+  readonly provenance: SynthesizedFindingProvenanceProjection
+}
+
+export interface ProjectSynthesizedFindingsInput {
+  readonly findings: readonly ReconciledFinding[]
+}
+
+function projectOneSynthesizedFinding(
+  finding: ReconciledFinding,
+): SynthesizedFindingProjection {
+  return {
+    title: finding.title,
+    severity: finding.severity,
+    file: finding.file,
+    line: finding.line,
+    why_it_matters: finding.why_it_matters,
+    autofix_class: finding.autofix_class,
+    owner: finding.owner,
+    requires_verification: finding.requires_verification,
+    confidence: finding.confidence,
+    evidence: finding.evidence,
+    pre_existing: finding.pre_existing,
+    ...(finding.suggested_fix !== undefined
+      ? { suggested_fix: finding.suggested_fix }
+      : {}),
+    ...(finding.validated !== undefined
+      ? { validated: finding.validated }
+      : {}),
+    ...(finding.validation_reason !== undefined
+      ? { validation_reason: finding.validation_reason }
+      : {}),
+    input_finding_ids: finding.input_finding_ids,
+    provenance: {
+      fingerprint: finding.fingerprint,
+      submitters: finding.submitters,
+      agreement_credit: finding.agreement_credit ?? [],
+    },
+  }
+}
+
+/**
+ * Projects every reconciled finding into the artifact's synthesized-finding
+ * shape, in the reconciled order. Nests `fingerprint`, `submitters`, and
+ * `agreement_credit` under `provenance` (absent `agreement_credit` projects
+ * to an empty list, never omitted), carries `validated`/`validation_reason`
+ * through unchanged, and never emits the flat, helper-only `finding_id`.
+ * This is projection only -- it never re-validates referential integrity
+ * against the input ledger; `ReviewArtifactSchema.parse` is the actual
+ * enforcement point for that. Never reads `process.env`, the filesystem, or
+ * the clock.
+ */
+export function projectSynthesizedFindings(
+  input: ProjectSynthesizedFindingsInput,
+): readonly SynthesizedFindingProjection[] {
+  return input.findings.map((finding) => projectOneSynthesizedFinding(finding))
+}
+
+// --- finalizeReview composition phase ----------------------------------------
+//
+// Composes every phase above into the finalize envelope's discriminated
+// output: `deriveFinalizeContext`, then `runReviewPipeline`, then the input
+// ledger, review coverage, and synthesized-finding projections, then the
+// shared report projection both output kinds carry. A `report-only` run
+// returns that projection with no artifact wrapper; every other mode builds
+// the full `ReviewArtifactSchema` artifact and parses it before returning,
+// so a schema violation surfaces as a rejection with no partial output
+// rather than a malformed persisted artifact. `run_status` corrects KTD20's
+// gap: any dispatch outcome of `malformed`, `never_returned`, or
+// `validation_unavailable`, any lost risk-critical persona, or any
+// validator-lifecycle degradation forces `degraded`, not only a
+// risk-critical loss. The artifact's `verdict` narrative mirrors that same
+// gate rather than trusting the model's plan-assessment narrative to know
+// about it. Never reads `process.env`, the filesystem, or the clock.
+
+export type FinalizeReviewInput = FinalizeInputValue
+
+type FinalizeOutputValue = ReturnType<typeof FinalizeOutputSchema.parse>
+
+// A locally-typed mirror of the zod-inferred report projection shape, using
+// the `readonly` array types every other derivation in this module returns.
+// Zod's own inferred type (`FinalizeOutputValue`) uses mutable arrays, which
+// would force every readonly producer above to be copied just to satisfy
+// assignability; `parseFinalizeOutput` re-validates the assembled value
+// against `FinalizeOutputSchema` at runtime regardless; that call, not this
+// type, is the actual correctness gate.
+interface ReportProjectionValue {
+  readonly verdict: string
+  readonly findings: readonly SynthesizedFindingProjection[]
+  readonly applied_fixes: readonly string[]
+  readonly residual_actionable_work: readonly string[]
+  readonly advisory_outputs: readonly string[]
+  readonly coverage: ReviewCoverageSummary
+  readonly input_dispositions: readonly FinalizedInputDisposition[]
+  readonly disposition_counts: FinalDispositionCounts
+  readonly queues: FinalizeReviewDispositionsOutput['queues']
+  readonly pre_existing_findings: readonly PreExistingFinding[]
+  readonly risk_coverage?: readonly ArtifactRiskCoverageEntry[]
+}
+
+type FinalizeReviewRejection =
+  | FinalizeContextRejection
+  | ReconcileValidatorResultsRejection
+  | FinalizeReviewDispositionsRejection
+  | BuildReviewCoverageRejection
+  | {
+      readonly path: string
+      readonly reason: 'artifact failed schema validation'
+    }
+  | {
+      readonly path: string
+      readonly reason: 'finalize output failed schema validation'
+    }
+
+export type FinalizeReviewResult =
+  | { readonly ok: true; readonly value: FinalizeOutputValue }
+  | { readonly ok: false; readonly rejection: FinalizeReviewRejection }
+
+const ARTIFACT_NON_CLEAN_VERDICT =
+  'Review did not reach a clean verdict; see blocking reasons and coverage for detail.'
+
+/** `run_status` degrades on any of: a validator-lifecycle degradation, a
+ * lost risk-critical persona, or any reviewer whose dispatch outcome was
+ * `malformed`, `never_returned`, or `validation_unavailable` -- corrects
+ * KTD20's gap, where only a risk-critical loss forced degraded status. */
+function deriveArtifactRunStatus(
+  reconciledDegraded: boolean,
+  dispatchRecords: FinalizeDispatchRecords,
+  lostRiskCriticalPersonas: readonly LostRiskCriticalPersona[],
+): 'completed' | 'degraded' {
+  if (reconciledDegraded) return 'degraded'
+  if (lostRiskCriticalPersonas.length > 0) return 'degraded'
+  const hasFailedReviewer = dispatchRecords.some((record) =>
+    FINALIZE_CONTEXT_LOSS_DISPATCH_OUTCOMES.has(record.dispatch_outcome),
+  )
+  return hasFailedReviewer ? 'degraded' : 'completed'
+}
+
+/** The artifact's `verdict` narrative: the plan-assessment verdict text only
+ * when the run's own verdict is clean and `run_status` is `completed`;
+ * otherwise the fixed non-clean phrase. Never lets a model-authored
+ * narrative claim a clean run when either gate blocks it. */
+function deriveArtifactVerdictText(
+  planAssessmentVerdict: string,
+  runVerdict: ReviewRunVerdict,
+  runStatus: 'completed' | 'degraded',
+): string {
+  if (runVerdict.clean && runStatus === 'completed') {
+    return planAssessmentVerdict
+  }
+  return ARTIFACT_NON_CLEAN_VERDICT
+}
+
+function buildScreenResultIndex(
+  screenResults: FinalizeScreenResults,
+): ReadonlyMap<string, FinalizeScreenResult> {
+  const index = new Map<string, FinalizeScreenResult>()
+  for (const result of screenResults) {
+    index.set(result.reviewer, result)
+  }
+  return index
+}
+
+interface ArtifactDispatchEntry {
+  readonly persona: string
+  readonly dispatch_outcome: FinalizeDispatchRecord['dispatch_outcome']
+  readonly input_finding_count: number
+  readonly rejection_reason?: string
+  readonly selection_surface?: readonly string[]
+}
+
+function buildDispatchEntry(
+  record: FinalizeDispatchRecord,
+  screenByReviewer: ReadonlyMap<string, FinalizeScreenResult>,
+): ArtifactDispatchEntry {
+  const screenResult = screenByReviewer.get(record.persona)
+  const inputFindingCount =
+    record.dispatch_outcome === 'validation_unavailable'
+      ? 0
+      : (screenResult?.result.admitted_findings.length ?? 0)
+  const rejectionReason = screenResult?.result.rejected_summary?.reason
+  const selectionSurface = record.selection_surface
+
+  return {
+    persona: record.persona,
+    dispatch_outcome: record.dispatch_outcome,
+    input_finding_count: inputFindingCount,
+    ...(rejectionReason !== undefined
+      ? { rejection_reason: rejectionReason }
+      : {}),
+    ...(selectionSurface !== undefined && selectionSurface.length > 0
+      ? { selection_surface: selectionSurface }
+      : {}),
+  }
+}
+
+function buildArtifactDispatches(
+  dispatchRecords: FinalizeDispatchRecords,
+  screenByReviewer: ReadonlyMap<string, FinalizeScreenResult>,
+): readonly ArtifactDispatchEntry[] {
+  return [...dispatchRecords]
+    .map((record) => buildDispatchEntry(record, screenByReviewer))
+    .sort((a, b) => compareStrings(a.persona, b.persona))
+}
+
+interface ArtifactRiskCoverageEntry {
+  readonly persona: string
+  readonly satisfied: boolean
+  readonly input_finding_id?: string
+}
+
+/** Strips `finding_id` (a helper-only field with no artifact leaf) from
+ * every risk-coverage derivation and omits the field entirely when there is
+ * no lost risk-critical persona to report -- never an empty array. */
+function projectRiskCoverage(
+  riskCoverage: readonly RiskCoverageDerivation[],
+): readonly ArtifactRiskCoverageEntry[] | undefined {
+  if (riskCoverage.length === 0) return undefined
+  return riskCoverage.map((entry) => ({
+    persona: entry.persona,
+    satisfied: entry.satisfied,
+    ...(entry.input_finding_id !== undefined
+      ? { input_finding_id: entry.input_finding_id }
+      : {}),
+  }))
+}
+
+function buildReportProjection(
+  verdictText: string,
+  findings: readonly SynthesizedFindingProjection[],
+  appliedFixes: readonly string[],
+  pipelineOutput: RunReviewPipelineOutput,
+  coverage: ReviewCoverageSummary,
+): ReportProjectionValue {
+  const riskCoverage = projectRiskCoverage(pipelineOutput.risk_coverage)
+  return {
+    verdict: verdictText,
+    findings,
+    applied_fixes: appliedFixes,
+    residual_actionable_work:
+      pipelineOutput.plan_assessment.residual_actionable_work,
+    advisory_outputs: pipelineOutput.plan_assessment.advisory_outputs,
+    coverage,
+    input_dispositions: pipelineOutput.finalized.input_dispositions,
+    disposition_counts: pipelineOutput.finalized.disposition_counts,
+    queues: pipelineOutput.finalized.queues,
+    pre_existing_findings: pipelineOutput.finalized.pre_existing_findings,
+    ...(riskCoverage !== undefined ? { risk_coverage: riskCoverage } : {}),
+  }
+}
+
+function parseFinalizeOutput(output: unknown): FinalizeReviewResult {
+  const parsed = FinalizeOutputSchema.safeParse(output)
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0]
+    return {
+      ok: false,
+      rejection: {
+        path: issue
+          ? formatReviewArtifactIssuePath(issue.path)
+          : JSON_ROOT_PATH,
+        reason: 'finalize output failed schema validation',
+      },
+    }
+  }
+  return { ok: true, value: parsed.data }
+}
+
+/**
+ * Runs the full finalize envelope: `deriveFinalizeContext`, then
+ * `runReviewPipeline`, then the input ledger, review coverage, and
+ * synthesized-finding projections, then assembles the report projection
+ * both output kinds share. A `report-only` run returns that projection
+ * directly; every other mode also builds and parses the full
+ * `ReviewArtifactSchema` artifact, returning a rejection with the failing
+ * Zod path (never the message or input) and no partial output if it fails
+ * to parse. The whole result is parsed through `FinalizeOutputSchema`
+ * before returning. Any rejection from any step aborts the run with no
+ * partial output. Never reads `process.env`, the filesystem, or the clock.
+ */
+export function finalizeReview(
+  input: FinalizeReviewInput,
+): FinalizeReviewResult {
+  const context = deriveFinalizeContext({
+    merge: input.merge,
+    prepared: input.prepared,
+    screen_results: input.screen_results,
+    dispatch_records: input.dispatch_records,
+    parent_run_metadata: input.parent_run_metadata,
+  })
+  if (!context.ok) return context
+
+  const pipeline = runReviewPipeline({
+    merge: input.merge,
+    validator_lifecycle_results: input.validator_lifecycle_results,
+    prepared: input.prepared,
+    rejected_payloads: context.value.rejected_payloads,
+    lost_risk_critical_personas: context.value.lost_risk_critical_personas,
+    plan_assessment: input.plan_assessment,
+  })
+  if (!pipeline.ok) return pipeline
+
+  const coverage = buildReviewCoverage({
+    dispatch_records: input.dispatch_records,
+    validator_lifecycle_results: input.validator_lifecycle_results,
+    screen_results: input.screen_results,
+    reconciled: pipeline.value.reconciled,
+    merge: input.merge,
+  })
+  if (!coverage.ok) return coverage
+
+  const findings = projectSynthesizedFindings({
+    findings: pipeline.value.reconciled.findings,
+  })
+
+  const runStatus = deriveArtifactRunStatus(
+    pipeline.value.reconciled.degraded,
+    input.dispatch_records,
+    context.value.lost_risk_critical_personas,
+  )
+  const verdictText = deriveArtifactVerdictText(
+    input.plan_assessment.verdict,
+    pipeline.value.verdict,
+    runStatus,
+  )
+
+  const report = buildReportProjection(
+    verdictText,
+    findings,
+    input.parent_run_metadata.applied_fixes,
+    pipeline.value,
+    coverage.value,
+  )
+
+  if (input.parent_run_metadata.mode === 'report-only') {
+    return parseFinalizeOutput({ kind: 'report_only', ...report })
+  }
+
+  const ledger = buildInputLedger({
+    prepared: input.prepared,
+    screen_results: input.screen_results,
+    dispatch_records: input.dispatch_records,
+    finalized: pipeline.value.finalized,
+    reconciled: pipeline.value.reconciled,
+  })
+  const screenByReviewer = buildScreenResultIndex(input.screen_results)
+  const dispatches = buildArtifactDispatches(
+    input.dispatch_records,
+    screenByReviewer,
+  )
+  const riskCoverage = projectRiskCoverage(pipeline.value.risk_coverage)
+
+  const artifact = {
+    schema_version: 1 as const,
+    run_id: input.parent_run_metadata.run_id,
+    branch: input.parent_run_metadata.branch,
+    head_sha: input.parent_run_metadata.head_sha,
+    mode: input.parent_run_metadata.mode,
+    harness: input.parent_run_metadata.harness,
+    run_status: runStatus,
+    verdict: verdictText,
+    completed_at: input.parent_run_metadata.timestamps.completed_at,
+    dispatches,
+    input_findings: ledger,
+    findings,
+    disposition_counts: pipeline.value.finalized.disposition_counts,
+    applied_fixes: input.parent_run_metadata.applied_fixes,
+    residual_actionable_work:
+      pipeline.value.plan_assessment.residual_actionable_work,
+    advisory_outputs: pipeline.value.plan_assessment.advisory_outputs,
+    coverage: coverage.value,
+    validation: input.parent_run_metadata.validation,
+    ...(riskCoverage !== undefined ? { risk_coverage: riskCoverage } : {}),
+  }
+
+  const parsedArtifact = ReviewArtifactSchema.safeParse(artifact)
+  if (!parsedArtifact.success) {
+    const issue = parsedArtifact.error.issues[0]
+    return {
+      ok: false,
+      rejection: {
+        path: issue
+          ? formatReviewArtifactIssuePath(issue.path)
+          : JSON_ROOT_PATH,
+        reason: 'artifact failed schema validation',
+      },
+    }
+  }
+
+  return parseFinalizeOutput({
+    kind: 'writing',
+    artifact: parsedArtifact.data,
+    report,
+  })
 }
