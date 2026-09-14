@@ -67,9 +67,16 @@ subdirectory of core modules.
 - `src/lib/review-return-validator.ts` — bounded stdin validator for one raw `ce:review` persona
   return, backing `systematic validate-review-return` (`runReviewReturnValidator`,
   `validateReviewReturnValue`)
-- `src/ce-review-validator.ts` — skill-local Node shim (`runCeReviewValidator`) dispatching
-  `return`/`artifact`/`screen`/`prepare` (the latter two run `screenReviewReturn`/
-  `prepareReviewCandidates` from `src/lib/review-pipeline.ts`); bundled to
+- `src/ce-review-validator.ts` — skill-local Node shim (`runCeReviewValidator`) dispatching six
+  subcommands: `return`, `artifact`, `screen`, `prepare`, `merge`, `finalize`. `screen` takes
+  `--reviewer`/`--harness` flags plus a raw return on stdin (1 MiB cap); `prepare`, `merge`, and
+  `finalize` take no flags and share one strict-JSON stdin runner bounded by
+  `AGGREGATE_STDIN_BYTE_CAP`; all six share one exit-code vocabulary (0 ok, 1 rejection/oversized/
+  invalid UTF-8, 2 usage/TTY/read failure) and one exception boundary. `screen`/`prepare`/`merge`/
+  `finalize` run `screenReviewReturn`/`prepareReviewCandidates`/`applyReviewAdjudication`/
+  `finalizeReview` from `src/lib/review-pipeline.ts` (`finalizeReview` composes
+  `deriveFinalizeContext`, `buildInputLedger`, `buildReviewCoverage`, and
+  `projectSynthesizedFindings` with `runReviewPipeline`); bundled to
   `skills/ce-review/scripts/validate-review.mjs`
 
 ### `skills/`

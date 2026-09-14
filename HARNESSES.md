@@ -55,13 +55,17 @@ Behavioral enforcement rides a plugin output style (`force-for-plugin: true`), w
 
 Honest capability boundary: output-style enforcement is real and applies automatically on install, but it operates at the system-prompt level — the same layer as any other instruction the model receives — so it is strong guidance, not a hard gate the model cannot violate. Coverage also differs by surface: plugin-bundled hooks fire app-wide, including in Cowork, while a project-local `.claude/settings.json` hook fires in the Code tab but not in Cowork — state or enforcement reaching Cowork sessions has to come through the plugin, not a project-local hook. Integration coverage lives in `tests/integration/claude-code.test.ts` [CC-10].
 
-## Review-return validator — packaged paths
+## Review synthesis pipeline validator — packaged paths
 
-The raw-return and aggregate validators ship as one self-contained Node bundle,
+The raw-return validator and the four-phase synthesis pipeline (`screen`, `prepare`, `merge`,
+`finalize`) ship as one self-contained Node bundle,
 `skills/ce-review/scripts/validate-review.mjs`, generated from
 `src/ce-review-validator.ts` by `scripts/generate-ce-review-validator.ts` and
-gated by `bun run ce-review-validator:drift`. Recorded execution evidence for
-this surface:
+gated by `bun run ce-review-validator:drift`. The bundle dispatches six subcommands (`return`,
+`artifact`, `screen`, `prepare`, `merge`, `finalize`) through one shared exit-code vocabulary (0
+ok, 1 rejection/oversized/invalid UTF-8, 2 usage/TTY/read failure) and one exception boundary;
+`merge` and `finalize` run through one shared strict-JSON stdin runner bounded by
+`AGGREGATE_STDIN_BYTE_CAP`. Recorded execution evidence for this surface:
 
 - **npm / OpenCode / Pi package layout** — real Node execution from an extracted
   `npm pack --ignore-scripts` archive, resolving the script through its packaged
