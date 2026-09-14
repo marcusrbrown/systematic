@@ -652,6 +652,73 @@ describe('AdjudicationEnvelopeSchema', () => {
     })
     expect(result.success).toBe(false)
   })
+
+  test('accepts a proposed_route paired with a route_narrowing_reason on a merged decision', () => {
+    const result = AdjudicationEnvelopeSchema.safeParse({
+      decisions: [
+        {
+          ...mergedDecisionFixture,
+          proposed_route: {
+            autofix_class: 'manual',
+            owner: 'downstream-resolver',
+            requires_verification: true,
+          },
+          route_narrowing_reason: 'Only a human should apply this fix.',
+        },
+      ],
+    })
+    expect(result.success).toBe(true)
+  })
+
+  test('rejects a proposed_route without a route_narrowing_reason on a merged decision', () => {
+    const result = AdjudicationEnvelopeSchema.safeParse({
+      decisions: [
+        {
+          ...mergedDecisionFixture,
+          proposed_route: {
+            autofix_class: 'manual',
+            owner: 'downstream-resolver',
+            requires_verification: true,
+          },
+        },
+      ],
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('rejects a proposed_route without a route_narrowing_reason on a declined decision', () => {
+    const result = AdjudicationEnvelopeSchema.safeParse({
+      decisions: [
+        {
+          ...declinedDecisionFixture,
+          proposed_route: {
+            autofix_class: 'advisory',
+            owner: 'human',
+            requires_verification: true,
+          },
+        },
+      ],
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('rejects an unknown key on a proposed_route', () => {
+    const result = AdjudicationEnvelopeSchema.safeParse({
+      decisions: [
+        {
+          ...mergedDecisionFixture,
+          proposed_route: {
+            autofix_class: 'manual',
+            owner: 'downstream-resolver',
+            requires_verification: true,
+            extra: 'nope',
+          },
+          route_narrowing_reason: 'Only a human should apply this fix.',
+        },
+      ],
+    })
+    expect(result.success).toBe(false)
+  })
 })
 
 describe('MergeInputSchema / MergeOutputSchema', () => {

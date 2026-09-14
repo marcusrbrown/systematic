@@ -7101,8 +7101,47 @@ var AGGREGATE_STDIN_BYTE_CAP =
   AGGREGATE_BYTE_CAP_HEADROOM
 var AutofixClassRouteSchema = ParentFindingSchema.shape.autofix_class
 var OwnerRouteSchema = ParentFindingSchema.shape.owner
+var AUTOFIX_CLASS_NARROWS_TO = {
+  safe_auto: ['safe_auto', 'gated_auto', 'manual', 'advisory'],
+  gated_auto: ['gated_auto', 'manual', 'advisory'],
+  manual: ['manual', 'advisory'],
+  advisory: ['advisory'],
+}
+var OWNER_NARROWS_TO = {
+  'review-fixer': ['review-fixer', 'downstream-resolver', 'human', 'release'],
+  'downstream-resolver': ['downstream-resolver', 'release'],
+  human: ['human', 'release'],
+  release: ['release'],
+}
+var REQUIRES_VERIFICATION_NARROWS_TO = {
+  false: ['false', 'true'],
+  true: ['true'],
+}
+var ROUTE_REFUSAL_TABLE = {
+  autofix_class: AUTOFIX_CLASS_NARROWS_TO,
+  owner: OWNER_NARROWS_TO,
+  requires_verification: REQUIRES_VERIFICATION_NARROWS_TO,
+}
+var isRouteTransitionAllowed = (from, to) => {
+  const autofixAllowed = ROUTE_REFUSAL_TABLE.autofix_class[
+    from.autofix_class
+  ].includes(to.autofix_class)
+  const ownerAllowed = ROUTE_REFUSAL_TABLE.owner[from.owner].includes(to.owner)
+  const fromVerification = from.requires_verification ? 'true' : 'false'
+  const toVerification = to.requires_verification ? 'true' : 'false'
+  const verificationAllowed =
+    ROUTE_REFUSAL_TABLE.requires_verification[fromVerification].includes(
+      toVerification,
+    )
+  return autofixAllowed && ownerAllowed && verificationAllowed
+}
 var AgreementCreditSchema = SubAgentReturnSchema.shape.reviewer
 var DisagreementFactsSchema = array(PipelineReasonSchema).max(MAX_FINDINGS)
+var ProposedRouteSchema = object({
+  autofix_class: AutofixClassRouteSchema,
+  owner: OwnerRouteSchema,
+  requires_verification: ParentFindingSchema.shape.requires_verification,
+}).strict()
 var MergedDecisionSchema = object({
   decision_id: PipelineInputIdSchema,
   disposition: literal('merged'),
@@ -7116,6 +7155,7 @@ var MergedDecisionSchema = object({
   eligible_agreement_credit: array(AgreementCreditSchema)
     .max(MAX_PERSONAS)
     .optional(),
+  proposed_route: ProposedRouteSchema.optional(),
   route_narrowing_reason: PipelineReasonSchema.optional(),
 }).strict()
 var DeclinedDecisionSchema = object({
@@ -7124,6 +7164,7 @@ var DeclinedDecisionSchema = object({
   input_finding_id: PipelineInputIdSchema,
   declined_reason: PipelineReasonSchema,
   disagreement_facts: DisagreementFactsSchema.optional(),
+  proposed_route: ProposedRouteSchema.optional(),
   route_narrowing_reason: PipelineReasonSchema.optional(),
 }).strict()
 var MergeDecisionSchema = discriminatedUnion('disposition', [
@@ -7146,6 +7187,14 @@ var AdjudicationEnvelopeSchema = object({
         })
       }
       seenDecisionIds.add(decision.decision_id)
+      if (decision.proposed_route && !decision.route_narrowing_reason) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['decisions', decisionIndex, 'route_narrowing_reason'],
+          message:
+            'route_narrowing_reason is required when proposed_route is present',
+        })
+      }
       if (decision.disposition === 'merged') {
         decision.input_finding_ids.forEach((inputId, inputIndex) => {
           if (seenInputIds.has(inputId)) {
@@ -7676,10 +7725,602 @@ function prepareReviewCandidates(input) {
   })
   return { ok: true, value: output }
 }
+function rejectAdjudication(path, reason) {
+  return { ok: false, rejection: { path, reason } }
+}
+function citedInputIds(decision) {
+  return decision.disposition === 'merged'
+    ? decision.input_finding_ids
+    : [decision.input_finding_id]
+}
+function citationPath(decision, decisionIndex, citedIndex) {
+  return decision.disposition === 'merged'
+    ? formatReviewArtifactIssuePath([
+        'decisions',
+        decisionIndex,
+        'input_finding_ids',
+        citedIndex,
+      ])
+    : formatReviewArtifactIssuePath([
+        'decisions',
+        decisionIndex,
+        'input_finding_id',
+      ])
+}
+function buildCandidateIndex(candidateGroups) {
+  const groupIndexByInputId = new Map()
+  candidateGroups.forEach((group, groupIndex) => {
+    for (const member of group.members) {
+      groupIndexByInputId.set(member.input_id, groupIndex)
+    }
+  })
+  return { groupIndexByInputId }
+}
+function buildSuppressedSet(confidenceDispositions) {
+  const suppressed = new Set()
+  for (const disposition of confidenceDispositions) {
+    if (disposition.disposition === 'suppressed') {
+      suppressed.add(disposition.input_id)
+    }
+  }
+  return suppressed
+}
+function validateCitations(decisions, index, suppressed) {
+  const seen = new Set()
+  for (const [decisionIndex, decision] of decisions.entries()) {
+    for (const [citedIndex, inputId] of citedInputIds(decision).entries()) {
+      const path = citationPath(decision, decisionIndex, citedIndex)
+      if (suppressed.has(inputId)) {
+        return { path, reason: 'suppressed input id' }
+      }
+      if (!index.groupIndexByInputId.has(inputId)) {
+        return { path, reason: 'unknown input id' }
+      }
+      if (seen.has(inputId)) {
+        return { path, reason: 'duplicate input id citation' }
+      }
+      seen.add(inputId)
+    }
+  }
+  return
+}
+function validateNoOmissions(candidateGroups, citedIds) {
+  for (const [groupIndex, group] of candidateGroups.entries()) {
+    for (const [memberIndex, member] of group.members.entries()) {
+      if (!citedIds.has(member.input_id)) {
+        return {
+          path: formatReviewArtifactIssuePath([
+            'candidate_groups',
+            groupIndex,
+            'members',
+            memberIndex,
+            'input_id',
+          ]),
+          reason: 'omitted eligible input id',
+        }
+      }
+    }
+  }
+  return
+}
+function collectCitedIds(decisions) {
+  const cited = new Set()
+  for (const decision of decisions) {
+    for (const inputId of citedInputIds(decision)) cited.add(inputId)
+  }
+  return cited
+}
+function validateMergedDecisionConsistency(
+  decision,
+  decisionIndex,
+  index,
+  candidateGroups,
+) {
+  const ids = decision.input_finding_ids
+  const firstId = ids[0]
+  if (firstId === undefined) return
+  const expectedGroupIndex = index.groupIndexByInputId.get(firstId)
+  if (expectedGroupIndex === undefined) return
+  for (const [citedIndex, inputId] of ids.entries()) {
+    const groupIndex = index.groupIndexByInputId.get(inputId)
+    if (groupIndex !== expectedGroupIndex) {
+      return {
+        path: formatReviewArtifactIssuePath([
+          'decisions',
+          decisionIndex,
+          'input_finding_ids',
+          citedIndex,
+        ]),
+        reason: 'cross-group input id citation',
+      }
+    }
+  }
+  const group = candidateGroups[expectedGroupIndex]
+  if (group && !group.members.some((member) => member.line === decision.line)) {
+    return {
+      path: formatReviewArtifactIssuePath(['decisions', decisionIndex, 'line']),
+      reason: 'representative line mismatch',
+    }
+  }
+  return
+}
+function validateMergedDecisions(decisions, index, candidateGroups) {
+  for (const [decisionIndex, decision] of decisions.entries()) {
+    if (decision.disposition !== 'merged') continue
+    const violation = validateMergedDecisionConsistency(
+      decision,
+      decisionIndex,
+      index,
+      candidateGroups,
+    )
+    if (violation) return violation
+  }
+  return
+}
+function resolveDecisionFile(decision, index, candidateGroups) {
+  const firstId = citedInputIds(decision)[0]
+  if (firstId === undefined) return
+  const groupIndex = index.groupIndexByInputId.get(firstId)
+  if (groupIndex === undefined) return
+  return candidateGroups[groupIndex]?.file
+}
+function buildValidatedPartition(
+  decisions,
+  index,
+  candidateGroups,
+  singletons,
+) {
+  const merged = []
+  const declined = []
+  for (const decision of decisions) {
+    const file = resolveDecisionFile(decision, index, candidateGroups) ?? ''
+    if (decision.disposition === 'merged') {
+      merged.push({ decision, file })
+    } else {
+      declined.push({ decision, file })
+    }
+  }
+  merged.sort((a, b) =>
+    compareStrings(a.decision.decision_id, b.decision.decision_id),
+  )
+  declined.sort((a, b) =>
+    compareStrings(a.decision.decision_id, b.decision.decision_id),
+  )
+  return {
+    merged,
+    declined,
+    singletons: [...singletons].sort(compareStrings),
+  }
+}
+function validateAdjudication(prepared, decisions) {
+  if (prepared.candidate_groups.length === 0) {
+    if (decisions.length > 0) {
+      return rejectAdjudication(
+        formatReviewArtifactIssuePath(['decisions']),
+        'unexpected decisions for empty candidate set',
+      )
+    }
+    return {
+      ok: true,
+      value: buildValidatedPartition(
+        decisions,
+        buildCandidateIndex([]),
+        [],
+        prepared.singletons,
+      ),
+    }
+  }
+  const index = buildCandidateIndex(prepared.candidate_groups)
+  const suppressed = buildSuppressedSet(prepared.confidence_dispositions)
+  const citationViolation = validateCitations(decisions, index, suppressed)
+  if (citationViolation) {
+    return { ok: false, rejection: citationViolation }
+  }
+  const citedIds = collectCitedIds(decisions)
+  const omissionViolation = validateNoOmissions(
+    prepared.candidate_groups,
+    citedIds,
+  )
+  if (omissionViolation) {
+    return { ok: false, rejection: omissionViolation }
+  }
+  const mergedViolation = validateMergedDecisions(
+    decisions,
+    index,
+    prepared.candidate_groups,
+  )
+  if (mergedViolation) {
+    return { ok: false, rejection: mergedViolation }
+  }
+  return {
+    ok: true,
+    value: buildValidatedPartition(
+      decisions,
+      index,
+      prepared.candidate_groups,
+      prepared.singletons,
+    ),
+  }
+}
+function rejectMergedFinding(path, reason) {
+  return { ok: false, rejection: { path, reason } }
+}
+var SEVERITY_RANK = {
+  P0: 0,
+  P1: 1,
+  P2: 2,
+  P3: 3,
+}
+function deriveSeverity(contributing) {
+  return contributing.reduce(
+    (highest, finding) =>
+      SEVERITY_RANK[finding.severity] < SEVERITY_RANK[highest]
+        ? finding.severity
+        : highest,
+    contributing[0].severity,
+  )
+}
+function deriveSubmitters(contributing) {
+  return [...new Set(contributing.map((finding) => finding.reviewer))].sort(
+    compareStrings,
+  )
+}
+function deriveAgreementCredit(claimed, submitters, returnedReviewers) {
+  if (!claimed || claimed.length === 0) return { ok: true, value: [] }
+  const credited = new Set()
+  for (const [index, reviewer] of claimed.entries()) {
+    const path = formatReviewArtifactIssuePath([
+      'eligible_agreement_credit',
+      index,
+    ])
+    if (credited.has(reviewer)) {
+      return rejectMergedFinding(path, 'duplicate agreement credit reviewer')
+    }
+    if (submitters.has(reviewer)) {
+      return rejectMergedFinding(
+        path,
+        'agreement credit reviewer already a submitter',
+      )
+    }
+    if (!returnedReviewers.has(reviewer)) {
+      return rejectMergedFinding(
+        path,
+        'agreement credit reviewer did not return',
+      )
+    }
+    credited.add(reviewer)
+  }
+  return { ok: true, value: [...credited].sort(compareStrings) }
+}
+var CONFIDENCE_AGREEMENT_BOOST = 0.1
+var MAX_CONFIDENCE = 1
+function deriveConfidence(contributing, distinctReviewerCount) {
+  const highest = contributing.reduce(
+    (max, finding) => Math.max(max, finding.confidence),
+    contributing[0].confidence,
+  )
+  if (distinctReviewerCount < 2) return highest
+  const boosted = Math.round((highest + CONFIDENCE_AGREEMENT_BOOST) * 100) / 100
+  return Math.min(MAX_CONFIDENCE, boosted)
+}
+function derivePreExisting(contributing) {
+  return contributing.every((finding) => finding.pre_existing)
+}
+function deriveFingerprint(normalizedFile, representativeLine, severity) {
+  return `${normalizedFile}:${representativeLine}:${severity}`
+}
+function meetOverNarrowsTo(narrowsTo, values) {
+  const domain = Object.keys(narrowsTo)
+  const validCandidates = domain.filter((candidate) =>
+    values.every((value) => narrowsTo[value].includes(candidate)),
+  )
+  return validCandidates.find((candidate) =>
+    validCandidates.every((other) => narrowsTo[candidate].includes(other)),
+  )
+}
+function deriveRouteMeet(contributing) {
+  const autofixClasses = contributing.map((finding) => finding.autofix_class)
+  const owners = contributing.map((finding) => finding.owner)
+  const verifications = contributing.map((finding) =>
+    finding.requires_verification ? 'true' : 'false',
+  )
+  return {
+    autofix_class:
+      meetOverNarrowsTo(ROUTE_REFUSAL_TABLE.autofix_class, autofixClasses) ??
+      'advisory',
+    owner: meetOverNarrowsTo(ROUTE_REFUSAL_TABLE.owner, owners) ?? 'release',
+    requires_verification:
+      (meetOverNarrowsTo(
+        ROUTE_REFUSAL_TABLE.requires_verification,
+        verifications,
+      ) ?? 'true') === 'true',
+  }
+}
+function deriveRoute(contributing, decision) {
+  const meet = deriveRouteMeet(contributing)
+  if (!decision.proposed_route) return { ok: true, value: meet }
+  if (!decision.route_narrowing_reason) {
+    return rejectMergedFinding(
+      formatReviewArtifactIssuePath(['route_narrowing_reason']),
+      'route narrowing missing reason',
+    )
+  }
+  if (!isRouteTransitionAllowed(meet, decision.proposed_route)) {
+    return rejectMergedFinding(
+      formatReviewArtifactIssuePath(['proposed_route']),
+      'route widening',
+    )
+  }
+  return { ok: true, value: decision.proposed_route }
+}
+function deriveMergedFindingFields(input) {
+  const submitters = deriveSubmitters(input.contributing)
+  const submitterSet = new Set(submitters)
+  const returnedReviewerSet = new Set(input.returned_reviewers)
+  const agreementCreditResult = deriveAgreementCredit(
+    input.decision.eligible_agreement_credit,
+    submitterSet,
+    returnedReviewerSet,
+  )
+  if (!agreementCreditResult.ok) return agreementCreditResult
+  const routeResult = deriveRoute(input.contributing, input.decision)
+  if (!routeResult.ok) return routeResult
+  const severity = deriveSeverity(input.contributing)
+  const distinctReviewerCount =
+    submitters.length + agreementCreditResult.value.length
+  const confidence = deriveConfidence(input.contributing, distinctReviewerCount)
+  const preExisting = derivePreExisting(input.contributing)
+  const normalizedFile = normalizeRepoRelativePath(input.contributing[0].file)
+  const fingerprint = deriveFingerprint(
+    normalizedFile,
+    input.decision.line,
+    severity,
+  )
+  return {
+    ok: true,
+    value: {
+      severity,
+      submitters,
+      confidence,
+      agreement_credit: agreementCreditResult.value,
+      pre_existing: preExisting,
+      fingerprint,
+      route: routeResult.value,
+    },
+  }
+}
+function reviewerFromInputId(inputId) {
+  const separatorIndex = inputId.indexOf('#')
+  return separatorIndex === -1 ? inputId : inputId.slice(0, separatorIndex)
+}
+function deriveReturnedReviewers(prepared) {
+  const reviewers = new Set()
+  for (const finding of prepared.surviving_findings) {
+    reviewers.add(finding.reviewer)
+  }
+  for (const disposition of prepared.confidence_dispositions) {
+    if (disposition.disposition === 'suppressed') {
+      reviewers.add(reviewerFromInputId(disposition.input_id))
+    }
+  }
+  return [...reviewers]
+}
+function buildSurvivingFindingIndex(prepared) {
+  return new Map(
+    prepared.surviving_findings.map((finding) => [finding.input_id, finding]),
+  )
+}
+function requireSurvivingFinding(index, inputId) {
+  const finding = index.get(inputId)
+  if (!finding) {
+    throw new Error(
+      `applyReviewAdjudication: no surviving finding for input ID ${inputId}`,
+    )
+  }
+  return finding
+}
+function toContributingTuple(findings) {
+  const [first, second, ...rest] = findings
+  if (!first || !second) {
+    throw new Error(
+      'applyReviewAdjudication: contributing findings require at least two entries',
+    )
+  }
+  return [first, second, ...rest]
+}
+function assemblyFromDerivation(base, derived) {
+  return {
+    ...base,
+    agreement_credit:
+      derived.agreement_credit.length > 0
+        ? derived.agreement_credit
+        : undefined,
+    severity: derived.severity,
+    confidence: derived.confidence,
+    fingerprint: derived.fingerprint,
+    autofix_class: derived.route.autofix_class,
+    owner: derived.route.owner,
+    requires_verification: derived.route.requires_verification,
+  }
+}
+function assembleMergedGroupFinding(group, survivingIndex, returnedReviewers) {
+  const decision = group.decision
+  const sortedInputIds = [...decision.input_finding_ids].sort(compareStrings)
+  const contributing = toContributingTuple(
+    sortedInputIds.map((inputId) =>
+      requireSurvivingFinding(survivingIndex, inputId),
+    ),
+  )
+  const derived = deriveMergedFindingFields({
+    contributing,
+    decision: {
+      line: decision.line,
+      eligible_agreement_credit: decision.eligible_agreement_credit,
+      proposed_route: decision.proposed_route,
+      route_narrowing_reason: decision.route_narrowing_reason,
+    },
+    returned_reviewers: returnedReviewers,
+  })
+  if (!derived.ok) return derived
+  return {
+    ok: true,
+    value: assemblyFromDerivation(
+      {
+        finding_id: decision.decision_id,
+        file: group.file,
+        title: decision.title,
+        why_it_matters: decision.why_it_matters,
+        line: decision.line,
+        evidence: decision.evidence,
+        suggested_fix: decision.suggested_fix,
+        input_finding_ids: sortedInputIds,
+      },
+      derived.value,
+    ),
+  }
+}
+function assembleSingletonFinding(
+  findingId,
+  finding,
+  decisionFields,
+  returnedReviewers,
+) {
+  const contributing = [finding, finding]
+  const derived = deriveMergedFindingFields({
+    contributing,
+    decision: {
+      line: finding.line,
+      proposed_route: decisionFields.proposed_route,
+      route_narrowing_reason: decisionFields.route_narrowing_reason,
+    },
+    returned_reviewers: returnedReviewers,
+  })
+  if (!derived.ok) return derived
+  return {
+    ok: true,
+    value: assemblyFromDerivation(
+      {
+        finding_id: findingId,
+        file: normalizeRepoRelativePath(finding.file),
+        title: finding.title,
+        why_it_matters: finding.why_it_matters,
+        line: finding.line,
+        evidence: finding.evidence,
+        suggested_fix: finding.suggested_fix,
+        input_finding_ids: [finding.input_id],
+      },
+      derived.value,
+    ),
+  }
+}
+function compareMergedFindingAssembly(a, b) {
+  const severityDelta = SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]
+  if (severityDelta !== 0) return severityDelta
+  if (a.confidence !== b.confidence) return b.confidence - a.confidence
+  const pathDelta = compareStrings(a.file, b.file)
+  if (pathDelta !== 0) return pathDelta
+  if (a.line !== b.line) return a.line - b.line
+  return compareStrings(a.fingerprint, b.fingerprint)
+}
+function requiresValidatorRequest(assembly) {
+  return (
+    assembly.severity === 'P0' ||
+    assembly.severity === 'P1' ||
+    assembly.requires_verification
+  )
+}
+function toMergedFindingWireShape(assembly) {
+  return {
+    finding_id: assembly.finding_id,
+    file: assembly.file,
+    title: assembly.title,
+    why_it_matters: assembly.why_it_matters,
+    line: assembly.line,
+    autofix_class: assembly.autofix_class,
+    owner: assembly.owner,
+    requires_verification: assembly.requires_verification,
+    evidence: assembly.evidence,
+    suggested_fix: assembly.suggested_fix,
+    input_finding_ids: [...assembly.input_finding_ids],
+    ...(assembly.agreement_credit
+      ? { agreement_credit: [...assembly.agreement_credit] }
+      : {}),
+  }
+}
+function applyReviewAdjudication(input) {
+  const validated = validateAdjudication(input.prepared, input.decisions)
+  if (!validated.ok) return validated
+  const survivingIndex = buildSurvivingFindingIndex(input.prepared)
+  const returnedReviewers = deriveReturnedReviewers(input.prepared)
+  const assemblies = []
+  const disagreementFacts = []
+  for (const group of validated.value.merged) {
+    const result = assembleMergedGroupFinding(
+      group,
+      survivingIndex,
+      returnedReviewers,
+    )
+    if (!result.ok) return result
+    assemblies.push(result.value)
+    if (group.decision.disagreement_facts) {
+      disagreementFacts.push(...group.decision.disagreement_facts)
+    }
+  }
+  for (const singleton of validated.value.declined) {
+    const finding = requireSurvivingFinding(
+      survivingIndex,
+      singleton.decision.input_finding_id,
+    )
+    const result = assembleSingletonFinding(
+      singleton.decision.decision_id,
+      finding,
+      {
+        proposed_route: singleton.decision.proposed_route,
+        route_narrowing_reason: singleton.decision.route_narrowing_reason,
+      },
+      returnedReviewers,
+    )
+    if (!result.ok) return result
+    assemblies.push(result.value)
+    disagreementFacts.push(singleton.decision.declined_reason)
+    if (singleton.decision.disagreement_facts) {
+      disagreementFacts.push(...singleton.decision.disagreement_facts)
+    }
+  }
+  for (const inputId of validated.value.singletons) {
+    const finding = requireSurvivingFinding(survivingIndex, inputId)
+    const result = assembleSingletonFinding(
+      inputId,
+      finding,
+      {},
+      returnedReviewers,
+    )
+    if (!result.ok) return result
+    assemblies.push(result.value)
+  }
+  assemblies.sort(compareMergedFindingAssembly)
+  disagreementFacts.sort(compareStrings)
+  const mergedFindings = assemblies.map(toMergedFindingWireShape)
+  const validatorRequests = assemblies
+    .filter(requiresValidatorRequest)
+    .map((assembly) => ({
+      finding_id: assembly.finding_id,
+      file: assembly.file,
+      line: assembly.line,
+    }))
+  return {
+    ok: true,
+    value: MergeOutputSchema.parse({
+      merged_findings: mergedFindings,
+      validator_requests: validatorRequests,
+      disagreement_facts: disagreementFacts,
+    }),
+  }
+}
 
 // src/ce-review-validator.ts
 var CE_REVIEW_VALIDATOR_USAGE =
-  'Usage: node validate-review.mjs <return|artifact|screen|prepare> [...]'
+  'Usage: node validate-review.mjs <return|artifact|screen|prepare|merge> [...]'
 var CE_REVIEW_SCREEN_USAGE =
   'Usage: node validate-review.mjs screen --reviewer <name> --harness <name>'
 var CE_REVIEW_SCREEN_STDIN_TTY_MESSAGE =
@@ -7704,6 +8345,16 @@ var CE_REVIEW_PREPARE_STDIN_INVALID_UTF8_MESSAGE =
   'prepare input is not valid UTF-8'
 var CE_REVIEW_PREPARE_REJECTED_MESSAGE =
   'prepare rejected the aggregate envelope'
+var CE_REVIEW_MERGE_USAGE = 'Usage: node validate-review.mjs merge'
+var CE_REVIEW_MERGE_STDIN_TTY_MESSAGE =
+  'merge reads one aggregate JSON envelope from stdin; interactive input is not supported'
+var CE_REVIEW_MERGE_STDIN_READ_FAILED_MESSAGE =
+  'merge could not read the aggregate envelope from stdin'
+var CE_REVIEW_MERGE_STDIN_OVERSIZED_MESSAGE =
+  'merge input exceeds the aggregate byte cap'
+var CE_REVIEW_MERGE_STDIN_INVALID_UTF8_MESSAGE =
+  'merge input is not valid UTF-8'
+var CE_REVIEW_MERGE_REJECTED_MESSAGE = 'merge rejected the aggregate envelope'
 var SCREEN_FLAGS = ['--reviewer', '--harness']
 function isScreenFlag(token) {
   return SCREEN_FLAGS.includes(token)
@@ -7806,6 +8457,60 @@ function runPrepareSubcommand(options, outputSink, errorSink) {
   outputSink(JSON.stringify(result.value))
   return 0
 }
+function runMergeSubcommand(options, outputSink, errorSink) {
+  if (options.argv.slice(1).length > 0) {
+    errorSink(CE_REVIEW_MERGE_USAGE)
+    return 2
+  }
+  const fd = 0
+  const isTTY = options.isTTY ?? process.stdin.isTTY === true
+  if (isTTY) {
+    errorSink(CE_REVIEW_MERGE_STDIN_TTY_MESSAGE)
+    return 2
+  }
+  const read = readBoundedStdin(
+    fd,
+    options.readChunk ?? defaultReadChunk,
+    AGGREGATE_STDIN_BYTE_CAP,
+  )
+  if (read.status === 'read-error') {
+    errorSink(CE_REVIEW_MERGE_STDIN_READ_FAILED_MESSAGE)
+    return 2
+  }
+  if (read.status === 'oversized') {
+    errorSink(CE_REVIEW_MERGE_STDIN_OVERSIZED_MESSAGE)
+    return 1
+  }
+  let text
+  try {
+    text = new TextDecoder('utf-8', { fatal: true }).decode(read.buffer)
+  } catch {
+    errorSink(CE_REVIEW_MERGE_STDIN_INVALID_UTF8_MESSAGE)
+    return 1
+  }
+  let value
+  try {
+    value = JSON.parse(text)
+  } catch {
+    errorSink(CE_REVIEW_MERGE_REJECTED_MESSAGE)
+    return 1
+  }
+  const parsed = MergeInputSchema.safeParse(value)
+  if (!parsed.success) {
+    errorSink(CE_REVIEW_MERGE_REJECTED_MESSAGE)
+    return 1
+  }
+  const result = applyReviewAdjudication({
+    prepared: parsed.data.prepared,
+    decisions: parsed.data.adjudication.decisions,
+  })
+  if (!result.ok) {
+    errorSink(CE_REVIEW_MERGE_REJECTED_MESSAGE)
+    return 1
+  }
+  outputSink(JSON.stringify(result.value))
+  return 0
+}
 var processExceptionBoundaryInstalled = false
 function installProcessExceptionBoundary(errorSink) {
   if (processExceptionBoundaryInstalled) return
@@ -7850,6 +8555,9 @@ function runCeReviewValidator(options) {
     if (subcommand === 'prepare') {
       return runPrepareSubcommand(options, outputSink, errorSink)
     }
+    if (subcommand === 'merge') {
+      return runMergeSubcommand(options, outputSink, errorSink)
+    }
     errorSink(CE_REVIEW_VALIDATOR_USAGE)
     return 2
   } catch {
@@ -7875,6 +8583,12 @@ if (isMainModule) {
   process.exitCode = runCeReviewValidator({ argv: process.argv.slice(2) })
 }
 export {
+  CE_REVIEW_MERGE_REJECTED_MESSAGE,
+  CE_REVIEW_MERGE_STDIN_INVALID_UTF8_MESSAGE,
+  CE_REVIEW_MERGE_STDIN_OVERSIZED_MESSAGE,
+  CE_REVIEW_MERGE_STDIN_READ_FAILED_MESSAGE,
+  CE_REVIEW_MERGE_STDIN_TTY_MESSAGE,
+  CE_REVIEW_MERGE_USAGE,
   CE_REVIEW_PREPARE_REJECTED_MESSAGE,
   CE_REVIEW_PREPARE_STDIN_INVALID_UTF8_MESSAGE,
   CE_REVIEW_PREPARE_STDIN_OVERSIZED_MESSAGE,

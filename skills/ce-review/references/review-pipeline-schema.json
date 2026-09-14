@@ -142,6 +142,41 @@
                       "description": "Persona name that produced this output (e.g., 'correctness', 'security')"
                     }
                   },
+                  "proposed_route": {
+                    "type": "object",
+                    "properties": {
+                      "autofix_class": {
+                        "type": "string",
+                        "enum": [
+                          "safe_auto",
+                          "gated_auto",
+                          "manual",
+                          "advisory"
+                        ],
+                        "description": "Reviewer's conservative recommendation for how this issue should be handled after synthesis"
+                      },
+                      "owner": {
+                        "type": "string",
+                        "enum": [
+                          "review-fixer",
+                          "downstream-resolver",
+                          "human",
+                          "release"
+                        ],
+                        "description": "Who should own the next action for this finding after synthesis"
+                      },
+                      "requires_verification": {
+                        "type": "boolean",
+                        "description": "Whether any fix for this finding must be re-verified with targeted tests or a follow-up review pass"
+                      }
+                    },
+                    "required": [
+                      "autofix_class",
+                      "owner",
+                      "requires_verification"
+                    ],
+                    "additionalProperties": false
+                  },
                   "route_narrowing_reason": {
                     "type": "string",
                     "minLength": 1,
@@ -194,6 +229,41 @@
                       "maxLength": 2048,
                       "pattern": "\\S"
                     }
+                  },
+                  "proposed_route": {
+                    "type": "object",
+                    "properties": {
+                      "autofix_class": {
+                        "type": "string",
+                        "enum": [
+                          "safe_auto",
+                          "gated_auto",
+                          "manual",
+                          "advisory"
+                        ],
+                        "description": "Reviewer's conservative recommendation for how this issue should be handled after synthesis"
+                      },
+                      "owner": {
+                        "type": "string",
+                        "enum": [
+                          "review-fixer",
+                          "downstream-resolver",
+                          "human",
+                          "release"
+                        ],
+                        "description": "Who should own the next action for this finding after synthesis"
+                      },
+                      "requires_verification": {
+                        "type": "boolean",
+                        "description": "Whether any fix for this finding must be re-verified with targeted tests or a follow-up review pass"
+                      }
+                    },
+                    "required": [
+                      "autofix_class",
+                      "owner",
+                      "requires_verification"
+                    ],
+                    "additionalProperties": false
                   },
                   "route_narrowing_reason": {
                     "type": "string",

@@ -785,12 +785,9 @@ describe('applyReviewAdjudication', () => {
   })
 
   test('a rejection from field derivation aborts with no partial output', () => {
-    // Not reachable via a literal route-widening decision: the current
-    // `MergedDecisionSchema` carries no `proposed_route` field, so route
-    // narrowing can never be proposed through the wire adjudication
-    // envelope. `eligible_agreement_credit` is a real schema field, so an
-    // invalid agreement-credit claim exercises the same
-    // whole-derivation-rejects-with-no-partial-output guarantee instead.
+    // Exercised via an invalid `eligible_agreement_credit` claim -- a real
+    // schema field independent of route narrowing -- to prove the same
+    // whole-derivation-rejects-with-no-partial-output guarantee.
     const groups = [
       group('src/x.ts', [
         { input_id: 'correctness#0', line: 5 },
@@ -811,6 +808,63 @@ describe('applyReviewAdjudication', () => {
     })
 
     expectApplyRejection(result, 'agreement credit reviewer did not return')
+  })
+
+  test('a narrowing proposed route with a reason flows through the wire envelope and is applied', () => {
+    const groups = [
+      group('src/x.ts', [
+        { input_id: 'correctness#0', line: 5 },
+        { input_id: 'security#0', line: 6 },
+      ]),
+    ]
+    const decisions: ApplyDecision = [
+      mergedDecision({
+        input_finding_ids: ['correctness#0', 'security#0'],
+        line: 5,
+        proposed_route: { ...DEFAULT_ROUTE, autofix_class: 'manual' },
+        route_narrowing_reason: 'Only a human should apply this fix.',
+      }),
+    ]
+
+    const result = applyReviewAdjudication({
+      prepared: prepared(groups),
+      decisions,
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const merged = result.value.merged_findings.find(
+      (finding) => finding.finding_id === 'merge-1',
+    )
+    expect(merged?.autofix_class).toBe('manual')
+    expect(merged?.owner).toBe(DEFAULT_ROUTE.owner)
+    expect(merged?.requires_verification).toBe(
+      DEFAULT_ROUTE.requires_verification,
+    )
+  })
+
+  test('a widening proposed route arriving through the wire envelope is rejected', () => {
+    const groups = [
+      group('src/x.ts', [
+        { input_id: 'correctness#0', line: 5 },
+        { input_id: 'security#0', line: 6 },
+      ]),
+    ]
+    const decisions: ApplyDecision = [
+      mergedDecision({
+        input_finding_ids: ['correctness#0', 'security#0'],
+        line: 5,
+        proposed_route: { ...DEFAULT_ROUTE, autofix_class: 'safe_auto' },
+        route_narrowing_reason: 'Model attempted to widen the route.',
+      }),
+    ]
+
+    const result = applyReviewAdjudication({
+      prepared: prepared(groups),
+      decisions,
+    })
+
+    expectApplyRejection(result, 'route widening')
   })
 
   test('the validator request set contains exactly P0/P1 findings plus requires_verification findings, and nothing else', () => {

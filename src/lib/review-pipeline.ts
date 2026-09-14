@@ -1415,6 +1415,7 @@ function assembleMergedGroupFinding(
     decision: {
       line: decision.line,
       eligible_agreement_credit: decision.eligible_agreement_credit,
+      proposed_route: decision.proposed_route,
       route_narrowing_reason: decision.route_narrowing_reason,
     },
     returned_reviewers: returnedReviewers,
@@ -1451,7 +1452,10 @@ function assembleMergedGroupFinding(
 function assembleSingletonFinding(
   findingId: string,
   finding: SurvivingFinding,
-  decisionFields: { readonly route_narrowing_reason?: string },
+  decisionFields: {
+    readonly proposed_route?: PipelineRoute
+    readonly route_narrowing_reason?: string
+  },
   returnedReviewers: readonly string[],
 ): AssembleFindingResult {
   const contributing: MergeContributingFindings = [finding, finding]
@@ -1460,6 +1464,7 @@ function assembleSingletonFinding(
     contributing,
     decision: {
       line: finding.line,
+      proposed_route: decisionFields.proposed_route,
       route_narrowing_reason: decisionFields.route_narrowing_reason,
     },
     returned_reviewers: returnedReviewers,
@@ -1590,7 +1595,10 @@ export function applyReviewAdjudication(
     const result = assembleSingletonFinding(
       singleton.decision.decision_id,
       finding,
-      { route_narrowing_reason: singleton.decision.route_narrowing_reason },
+      {
+        proposed_route: singleton.decision.proposed_route,
+        route_narrowing_reason: singleton.decision.route_narrowing_reason,
+      },
       returnedReviewers,
     )
     if (!result.ok) return result

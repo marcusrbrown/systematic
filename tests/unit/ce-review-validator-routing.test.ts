@@ -161,6 +161,69 @@ const VALID_PREPARE_INPUT = {
 
 const PREPARE_ARGS = ['prepare'] as const
 
+const MERGE_ARGS = ['merge'] as const
+
+function survivingFindingFixture(inputId: string): Record<string, unknown> {
+  return {
+    ...BASE_FINDING,
+    disposition: 'surviving',
+    input_id: inputId,
+    reviewer: inputId.split('#')[0],
+  }
+}
+
+const MERGE_CANDIDATE_GROUP = {
+  file: 'src/example.ts',
+  members: [
+    { input_id: 'correctness#0', line: 42 },
+    { input_id: 'security#0', line: 42 },
+  ],
+}
+
+const MERGE_SURVIVING_FINDINGS = [
+  survivingFindingFixture('correctness#0'),
+  survivingFindingFixture('security#0'),
+]
+
+const VALID_MERGE_INPUT = {
+  adjudication: {
+    decisions: [
+      {
+        decision_id: 'merge-1',
+        disposition: 'merged',
+        evidence: ['src/example.ts:42 shows the merged issue.'],
+        input_finding_ids: ['correctness#0', 'security#0'],
+        line: 42,
+        suggested_fix: 'Apply the shared fix once.',
+        title: 'Duplicate finding across reviewers',
+        why_it_matters: 'Both reviewers independently caught the same defect.',
+      },
+    ],
+  },
+  prepared: {
+    candidate_groups: [MERGE_CANDIDATE_GROUP],
+    confidence_dispositions: [],
+    coverage_union: [],
+    singletons: [],
+    surviving_findings: MERGE_SURVIVING_FINDINGS,
+  },
+}
+
+// Schema-valid but structurally rejected: the candidate group's members are
+// never cited by any decision, so `applyReviewAdjudication` rejects with
+// `'omitted eligible input id'` -- distinct from a malformed-envelope
+// (schema-level) rejection.
+const MERGE_REJECTED_INPUT = {
+  adjudication: { decisions: [] },
+  prepared: {
+    candidate_groups: [MERGE_CANDIDATE_GROUP],
+    confidence_dispositions: [],
+    coverage_union: [],
+    singletons: [],
+    surviving_findings: MERGE_SURVIVING_FINDINGS,
+  },
+}
+
 describe('screen: conforming input', () => {
   test('exits 0 with a parseable envelope and writes nothing to the cwd', () => {
     const cwd = makeCwd()
@@ -500,6 +563,167 @@ describe('prepare: exception boundary', () => {
       let offset = 0
       const exitCode = mod.runCeReviewValidator({
         argv: ${JSON.stringify([...PREPARE_ARGS])},
+        isTTY: false,
+        readChunk: (_fd, buffer, bufferOffset, length) => {
+          if (offset >= bytes.length) return 0
+          const n = Math.min(length, bytes.length - offset)
+          bytes.copy(buffer, bufferOffset, offset, offset + n)
+          offset += n
+          return n
+        },
+        outputSink: () => {},
+        errorSink: (message) => console.error(message),
+      })
+      console.log('SYNC_EXIT:' + exitCode)
+      Promise.reject(new Error('boom from rejected promise: should never reach stderr'))
+    `
+    const result = spawnSync('bun', ['-e', driver], {
+      encoding: 'utf8',
+      env: SAFE_ENV,
+      timeout: 30_000,
+    })
+
+    expect(result.stdout).toContain('SYNC_EXIT:0')
+    expect(result.stderr).toContain('internal error')
+    expect(result.stderr).not.toContain('boom from rejected promise')
+    expect(result.stderr).not.toContain('Error:')
+    expect(result.stderr).not.toContain('.ts:')
+    expect(result.stderr).not.toMatch(/at\s+\S+\s+\(/)
+    expect(result.status).toBe(1)
+  })
+})
+
+describe('merge: conforming input', () => {
+  test('exits 0 with a parseable merge result and writes nothing to the cwd', () => {
+    const cwd = makeCwd()
+    const before = snapshotTree(cwd)
+
+    const result = runValidator([...MERGE_ARGS], {
+      cwd,
+      input: JSON.stringify(VALID_MERGE_INPUT),
+    })
+
+    expect(result.exitCode, result.stderr).toBe(0)
+    expect(result.stderr).toBe('')
+    const parsed = JSON.parse(result.stdout) as {
+      merged_findings: readonly { finding_id: string }[]
+    }
+    expect(parsed.merged_findings).toHaveLength(1)
+    expect(parsed.merged_findings[0]?.finding_id).toBe('merge-1')
+    expect(snapshotTree(cwd)).toBe(before)
+  })
+})
+
+describe('merge: argument parsing', () => {
+  test('an unknown flag exits 2', () => {
+    const result = runValidator([...MERGE_ARGS, '--bogus', 'x'], {
+      input: JSON.stringify(VALID_MERGE_INPUT),
+    })
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('Usage:')
+    expect(result.stdout).toBe('')
+  })
+
+  test('a stray positional argument exits 2', () => {
+    const result = runValidator([...MERGE_ARGS, 'extra'], {
+      input: JSON.stringify(VALID_MERGE_INPUT),
+    })
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('Usage:')
+    expect(result.stdout).toBe('')
+  })
+})
+
+describe('merge: stdin bounds', () => {
+  test('an over-cap payload exits 1 without echoing content', () => {
+    const oversized = Buffer.alloc(AGGREGATE_STDIN_BYTE_CAP + 1, 0x20)
+    const result = runValidator([...MERGE_ARGS], { input: oversized })
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain('byte cap')
+    expect(result.stdout).toBe('')
+  })
+})
+
+describe('merge: rejection outcomes', () => {
+  test('a malformed envelope exits 1', () => {
+    const result = runValidator([...MERGE_ARGS], { input: '{ not json' })
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain('rejected the aggregate envelope')
+    expect(result.stdout).toBe('')
+  })
+
+  test('an adjudication rejection from applyReviewAdjudication exits 1', () => {
+    const result = runValidator([...MERGE_ARGS], {
+      input: JSON.stringify(MERGE_REJECTED_INPUT),
+    })
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr).toContain('rejected the aggregate envelope')
+    expect(result.stdout).toBe('')
+  })
+})
+
+describe('merge: environment invariance', () => {
+  test('merge is byte-identical under a clean environment and a polluted one', () => {
+    const payload = JSON.stringify(VALID_MERGE_INPUT)
+
+    const clean = runValidator([...MERGE_ARGS], {
+      env: SAFE_ENV,
+      input: payload,
+    })
+    const polluted = runValidator([...MERGE_ARGS], {
+      env: POLLUTED_ENV,
+      input: payload,
+    })
+
+    expect(clean.exitCode, clean.stderr).toBe(0)
+    expect(polluted.exitCode, polluted.stderr).toBe(0)
+    expect(polluted.stdout).toBe(clean.stdout)
+  })
+})
+
+describe('merge: exception boundary', () => {
+  test('a thrown error during output exits through the boundary with no stack text on stderr', () => {
+    const driver = `
+      const mod = await import(${JSON.stringify(pathToFileURL(VALIDATOR_ENTRY).href)})
+      const bytes = Buffer.from(${JSON.stringify(JSON.stringify(VALID_MERGE_INPUT))})
+      let offset = 0
+      const exitCode = mod.runCeReviewValidator({
+        argv: ${JSON.stringify([...MERGE_ARGS])},
+        isTTY: false,
+        readChunk: (_fd, buffer, bufferOffset, length) => {
+          if (offset >= bytes.length) return 0
+          const n = Math.min(length, bytes.length - offset)
+          bytes.copy(buffer, bufferOffset, offset, offset + n)
+          offset += n
+          return n
+        },
+        outputSink: () => { throw new Error('boom from outputSink: should never reach stderr') },
+        errorSink: (message) => console.error(message),
+      })
+      console.log('EXIT:' + exitCode)
+    `
+    const result = spawnSync('bun', ['-e', driver], {
+      encoding: 'utf8',
+      env: SAFE_ENV,
+      timeout: 30_000,
+    })
+
+    expect(result.status).toBe(0)
+    expect(result.stdout).toContain('EXIT:1')
+    expect(result.stderr).toContain('internal error')
+    expect(result.stderr).not.toContain('boom from outputSink')
+    expect(result.stderr).not.toContain('Error:')
+    expect(result.stderr).not.toContain('.ts:')
+    expect(result.stderr).not.toMatch(/at\s+\S+\s+\(/)
+  })
+
+  test('an unhandled rejected promise exits through the boundary with no stack text on stderr', () => {
+    const driver = `
+      const mod = await import(${JSON.stringify(pathToFileURL(VALIDATOR_ENTRY).href)})
+      const bytes = Buffer.from(${JSON.stringify(JSON.stringify(VALID_MERGE_INPUT))})
+      let offset = 0
+      const exitCode = mod.runCeReviewValidator({
+        argv: ${JSON.stringify([...MERGE_ARGS])},
         isTTY: false,
         readChunk: (_fd, buffer, bufferOffset, length) => {
           if (offset >= bytes.length) return 0

@@ -295,6 +295,22 @@ const AgreementCreditSchema = SubAgentReturnSchema.shape.reviewer
 
 const DisagreementFactsSchema = z.array(PipelineReasonSchema).max(MAX_FINDINGS)
 
+// A model-proposed narrower route. Reuses the same canonical leaf schemas
+// `deriveRouteMeet`'s inputs are built from (`AutofixClassRouteSchema`,
+// `OwnerRouteSchema`, and `ParentFindingSchema`'s `requires_verification`)
+// rather than restating their enums here. Pairing with
+// `route_narrowing_reason` is enforced below in
+// `AdjudicationEnvelopeSchema`'s `superRefine`, not per-field here, so both
+// decision schemas stay plain `ZodObject`s usable inside
+// `z.discriminatedUnion`.
+const ProposedRouteSchema = z
+  .object({
+    autofix_class: AutofixClassRouteSchema,
+    owner: OwnerRouteSchema,
+    requires_verification: ParentFindingSchema.shape.requires_verification,
+  })
+  .strict()
+
 const MergedDecisionSchema = z
   .object({
     decision_id: PipelineInputIdSchema,
@@ -310,6 +326,7 @@ const MergedDecisionSchema = z
       .array(AgreementCreditSchema)
       .max(MAX_PERSONAS)
       .optional(),
+    proposed_route: ProposedRouteSchema.optional(),
     route_narrowing_reason: PipelineReasonSchema.optional(),
   })
   .strict()
@@ -321,6 +338,7 @@ const DeclinedDecisionSchema = z
     input_finding_id: PipelineInputIdSchema,
     declined_reason: PipelineReasonSchema,
     disagreement_facts: DisagreementFactsSchema.optional(),
+    proposed_route: ProposedRouteSchema.optional(),
     route_narrowing_reason: PipelineReasonSchema.optional(),
   })
   .strict()
@@ -348,6 +366,15 @@ export const AdjudicationEnvelopeSchema = z
         })
       }
       seenDecisionIds.add(decision.decision_id)
+
+      if (decision.proposed_route && !decision.route_narrowing_reason) {
+        ctx.addIssue({
+          code: 'custom',
+          path: ['decisions', decisionIndex, 'route_narrowing_reason'],
+          message:
+            'route_narrowing_reason is required when proposed_route is present',
+        })
+      }
 
       if (decision.disposition === 'merged') {
         decision.input_finding_ids.forEach((inputId, inputIndex) => {
