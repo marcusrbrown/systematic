@@ -2194,3 +2194,182 @@ export function finalizeReviewDispositions(
     queues,
   }
 }
+
+// --- risk coverage phase: replacement evidence for a lost persona -----------
+//
+// A review selects certain risk-critical personas because they cover
+// risk-critical surfaces. When one of those personas is lost -- its return
+// was malformed, it never returned, or its validator was unavailable -- the
+// surface it was selected for went unreviewed unless a *different* persona
+// independently produced eligible evidence on that same surface. Identifying
+// which personas are risk-critical and lost is a routing concern owned by a
+// separate slice; this phase is already handed exactly that set.
+
+/** One risk-critical persona whose dispatch was lost, paired with the
+ * selection surface it was recorded as covering. */
+export interface LostRiskCriticalPersona {
+  readonly persona: string
+  readonly selection_surface: readonly string[]
+}
+
+export interface DeriveRiskCoverageInput {
+  readonly lost_risk_critical_personas: readonly LostRiskCriticalPersona[]
+  readonly prepared: PrepareOutput
+  readonly reconciled: ReconcileValidatorResultsOutput
+}
+
+/** One lost persona's coverage verdict. `finding_id` is present only when
+ * `satisfied` is `true`, and names the reconciled finding whose evidence
+ * covers the lost surface. */
+export interface RiskCoverageDerivation {
+  readonly persona: string
+  readonly satisfied: boolean
+  readonly finding_id?: string
+}
+
+/** Maps every surviving input's stable ID to the reviewer that submitted it,
+ * so a reconciled finding's contributing personas can be recovered from its
+ * `input_finding_ids`. */
+function buildSurvivingReviewerIndex(
+  prepared: PrepareOutput,
+): ReadonlyMap<string, string> {
+  const index = new Map<string, string>()
+  for (const finding of prepared.surviving_findings) {
+    index.set(finding.input_id, finding.reviewer)
+  }
+  return index
+}
+
+/** Finding IDs that were requested for validation and left uncertain by a
+ * `failed` or `unavailable` outcome -- present in `lifecycle_failures`. A
+ * finding absent from this set and carrying no `validated` field was never
+ * requested at all. */
+function buildRequestedUncertainFindingIds(
+  reconciled: ReconcileValidatorResultsOutput,
+): ReadonlySet<string> {
+  return new Set(
+    reconciled.lifecycle_failures.map((failure) => failure.finding_id),
+  )
+}
+
+/** The distinct reviewers whose surviving input findings contributed to this
+ * reconciled finding. */
+function findingOwners(
+  finding: ReconciledFinding,
+  survivingReviewerIndex: ReadonlyMap<string, string>,
+): ReadonlySet<string> {
+  const owners = new Set<string>()
+  for (const inputId of finding.input_finding_ids) {
+    const reviewer = survivingReviewerIndex.get(inputId)
+    if (reviewer !== undefined) owners.add(reviewer)
+  }
+  return owners
+}
+
+/** A finding inside the validation band (requested for validation) is
+ * eligible only after an explicit `true` result; a `failed`/`unavailable`
+ * validator leaves it uncertain, never eligible. A finding outside the band
+ * (never requested) is eligible without one. */
+function isValidationBandEligible(
+  finding: ReconciledFinding,
+  requestedUncertainFindingIds: ReadonlySet<string>,
+): boolean {
+  if (finding.validated === true) return true
+  if (finding.validated === false) return false
+  return !requestedUncertainFindingIds.has(finding.finding_id)
+}
+
+/** Whether one reconciled finding can stand in for a lost risk-critical
+ * persona's coverage: cross-persona, on the lost persona's recorded
+ * surface, not filtered by a disproving validation, and validation-band
+ * eligible. */
+function isEligibleRiskCoverageCandidate(
+  finding: ReconciledFinding,
+  lostPersona: string,
+  normalizedSurface: ReadonlySet<string>,
+  survivingReviewerIndex: ReadonlyMap<string, string>,
+  requestedUncertainFindingIds: ReadonlySet<string>,
+): boolean {
+  // Not filtered: a finding disproven by a `false` validation covers nothing.
+  if (finding.validated === false) return false
+
+  // On-surface: compare through the same normalization surfaces were grouped
+  // under, so this can never disagree with candidate grouping.
+  if (!normalizedSurface.has(normalizeRepoRelativePath(finding.file))) {
+    return false
+  }
+
+  // Cross-persona: the lost persona cannot cover its own surface with its
+  // own surviving evidence.
+  const owners = findingOwners(finding, survivingReviewerIndex)
+  const hasCrossPersonaOwner = [...owners].some(
+    (owner) => owner !== lostPersona,
+  )
+  if (!hasCrossPersonaOwner) return false
+
+  return isValidationBandEligible(finding, requestedUncertainFindingIds)
+}
+
+/** Derives one lost risk-critical persona's coverage verdict. Eligible
+ * candidates are ordered by the final stable finding order (`finding_id`),
+ * so the citation is deterministic and unaffected by input permutation. */
+function deriveCoverageForLostPersona(
+  lostPersona: LostRiskCriticalPersona,
+  reconciled: ReconcileValidatorResultsOutput,
+  survivingReviewerIndex: ReadonlyMap<string, string>,
+  requestedUncertainFindingIds: ReadonlySet<string>,
+): RiskCoverageDerivation {
+  const normalizedSurface = new Set(
+    lostPersona.selection_surface.map(normalizeRepoRelativePath),
+  )
+
+  const eligible = reconciled.findings
+    .filter((finding) =>
+      isEligibleRiskCoverageCandidate(
+        finding,
+        lostPersona.persona,
+        normalizedSurface,
+        survivingReviewerIndex,
+        requestedUncertainFindingIds,
+      ),
+    )
+    .sort((a, b) => compareStrings(a.finding_id, b.finding_id))
+
+  const citation = eligible[0]
+  return citation === undefined
+    ? { persona: lostPersona.persona, satisfied: false }
+    : {
+        persona: lostPersona.persona,
+        satisfied: true,
+        finding_id: citation.finding_id,
+      }
+}
+
+/**
+ * Derives risk-critical replacement coverage for every lost risk-critical
+ * persona: whether a *different* persona's validated, on-surface evidence
+ * independently covers the surface the lost persona was selected for. This
+ * step never identifies which personas are risk-critical or lost, never
+ * builds plan-assessment routing, and never assembles the final artifact --
+ * those are separate slices. Never reads `process.env`, the filesystem, or
+ * the clock.
+ */
+export function deriveRiskCoverage(
+  input: DeriveRiskCoverageInput,
+): readonly RiskCoverageDerivation[] {
+  const survivingReviewerIndex = buildSurvivingReviewerIndex(input.prepared)
+  const requestedUncertainFindingIds = buildRequestedUncertainFindingIds(
+    input.reconciled,
+  )
+
+  return input.lost_risk_critical_personas
+    .map((lostPersona) =>
+      deriveCoverageForLostPersona(
+        lostPersona,
+        input.reconciled,
+        survivingReviewerIndex,
+        requestedUncertainFindingIds,
+      ),
+    )
+    .sort((a, b) => compareStrings(a.persona, b.persona))
+}

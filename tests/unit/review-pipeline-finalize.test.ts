@@ -1,12 +1,15 @@
 import { describe, expect, test } from 'bun:test'
 import type {
+  DeriveRiskCoverageInput,
   FinalizeReviewDispositionsInput,
+  LostRiskCriticalPersona,
   MergeOutput,
   PrepareOutput,
   ReconcileValidatorResultsInput,
   ReconcileValidatorResultsOutput,
 } from '../../src/lib/review-pipeline.js'
 import {
+  deriveRiskCoverage,
   finalizeReviewDispositions,
   reconcileValidatorResults,
 } from '../../src/lib/review-pipeline.js'
@@ -562,5 +565,207 @@ describe('finalizeReviewDispositions', () => {
     const resultB = finalizeReviewDispositions(permuted)
 
     expect(resultA).toEqual(resultB)
+  })
+})
+
+function lostPersona(
+  persona: string,
+  overrides: Partial<LostRiskCriticalPersona> = {},
+): LostRiskCriticalPersona {
+  return {
+    persona,
+    selection_surface: ['src/example.ts'],
+    ...overrides,
+  }
+}
+
+function riskCoverageScenario(
+  overrides: Partial<DeriveRiskCoverageInput> = {},
+): DeriveRiskCoverageInput {
+  return {
+    lost_risk_critical_personas: [lostPersona('security')],
+    prepared: preparedOutput(),
+    reconciled: reconciledOutput(),
+    ...overrides,
+  }
+}
+
+describe('deriveRiskCoverage', () => {
+  test('a cross-persona, on-surface, validated finding satisfies coverage and cites it', () => {
+    const result = deriveRiskCoverage(
+      riskCoverageScenario({
+        prepared: preparedOutput({
+          surviving_findings: [survivingFinding('cov#0', 'reliability')],
+        }),
+        reconciled: reconciledOutput({
+          findings: [mergedFinding('f-cov', { input_finding_ids: ['cov#0'] })],
+        }),
+      }),
+    )
+
+    expect(result).toEqual([
+      { persona: 'security', satisfied: true, finding_id: 'f-cov' },
+    ])
+  })
+
+  test('a finding owned solely by the lost persona itself is unsatisfied', () => {
+    const result = deriveRiskCoverage(
+      riskCoverageScenario({
+        prepared: preparedOutput({
+          surviving_findings: [survivingFinding('cov#0', 'security')],
+        }),
+        reconciled: reconciledOutput({
+          findings: [mergedFinding('f-cov', { input_finding_ids: ['cov#0'] })],
+        }),
+      }),
+    )
+
+    expect(result).toEqual([{ persona: 'security', satisfied: false }])
+  })
+
+  test('an off-surface finding does not satisfy coverage', () => {
+    const result = deriveRiskCoverage(
+      riskCoverageScenario({
+        prepared: preparedOutput({
+          surviving_findings: [
+            survivingFinding('cov#0', 'reliability', { file: 'src/other.ts' }),
+          ],
+        }),
+        reconciled: reconciledOutput({
+          findings: [
+            mergedFinding('f-cov', {
+              input_finding_ids: ['cov#0'],
+              file: 'src/other.ts',
+            }),
+          ],
+        }),
+      }),
+    )
+
+    expect(result).toEqual([{ persona: 'security', satisfied: false }])
+  })
+
+  test('a finding filtered by a false validation does not satisfy coverage', () => {
+    const result = deriveRiskCoverage(
+      riskCoverageScenario({
+        prepared: preparedOutput({
+          surviving_findings: [survivingFinding('cov#0', 'reliability')],
+        }),
+        reconciled: reconciledOutput({
+          findings: [
+            {
+              ...mergedFinding('f-cov', { input_finding_ids: ['cov#0'] }),
+              validated: false,
+            },
+          ],
+          filtered_finding_ids: ['f-cov'],
+          filtered_input_ids: ['cov#0'],
+        }),
+      }),
+    )
+
+    expect(result).toEqual([{ persona: 'security', satisfied: false }])
+  })
+
+  test('a validation-band finding with an unavailable validator does not satisfy coverage', () => {
+    const result = deriveRiskCoverage(
+      riskCoverageScenario({
+        prepared: preparedOutput({
+          surviving_findings: [survivingFinding('cov#0', 'reliability')],
+        }),
+        reconciled: reconciledOutput({
+          findings: [mergedFinding('f-cov', { input_finding_ids: ['cov#0'] })],
+          lifecycle_failures: [
+            {
+              finding_id: 'f-cov',
+              outcome: 'unavailable',
+              reason: 'validator not reachable',
+            },
+          ],
+        }),
+      }),
+    )
+
+    expect(result).toEqual([{ persona: 'security', satisfied: false }])
+  })
+
+  test('a validation-band finding with a true result satisfies coverage', () => {
+    const result = deriveRiskCoverage(
+      riskCoverageScenario({
+        prepared: preparedOutput({
+          surviving_findings: [survivingFinding('cov#0', 'reliability')],
+        }),
+        reconciled: reconciledOutput({
+          findings: [
+            {
+              ...mergedFinding('f-cov', { input_finding_ids: ['cov#0'] }),
+              validated: true,
+            },
+          ],
+        }),
+      }),
+    )
+
+    expect(result).toEqual([
+      { persona: 'security', satisfied: true, finding_id: 'f-cov' },
+    ])
+  })
+
+  test('a candidate outside the validation band needs no result to satisfy coverage', () => {
+    const result = deriveRiskCoverage(
+      riskCoverageScenario({
+        prepared: preparedOutput({
+          surviving_findings: [survivingFinding('cov#0', 'reliability')],
+        }),
+        reconciled: reconciledOutput({
+          findings: [mergedFinding('f-cov', { input_finding_ids: ['cov#0'] })],
+        }),
+      }),
+    )
+
+    expect(result).toEqual([
+      { persona: 'security', satisfied: true, finding_id: 'f-cov' },
+    ])
+  })
+
+  test('citation among two eligible candidates is deterministic and stable under permuted input', () => {
+    const prepared = preparedOutput({
+      surviving_findings: [
+        survivingFinding('a#0', 'reliability'),
+        survivingFinding('b#0', 'performance'),
+      ],
+    })
+    const findingHigh = mergedFinding('f-b', { input_finding_ids: ['a#0'] })
+    const findingLow = mergedFinding('f-a', { input_finding_ids: ['b#0'] })
+
+    const orderedResult = deriveRiskCoverage(
+      riskCoverageScenario({
+        prepared,
+        reconciled: reconciledOutput({
+          findings: [findingHigh, findingLow],
+        }),
+      }),
+    )
+    const permutedResult = deriveRiskCoverage(
+      riskCoverageScenario({
+        prepared,
+        reconciled: reconciledOutput({
+          findings: [findingLow, findingHigh],
+        }),
+      }),
+    )
+
+    expect(orderedResult).toEqual([
+      { persona: 'security', satisfied: true, finding_id: 'f-a' },
+    ])
+    expect(orderedResult).toEqual(permutedResult)
+  })
+
+  test('no lost risk-critical persona produces empty coverage output rather than fabricated entries', () => {
+    const result = deriveRiskCoverage(
+      riskCoverageScenario({ lost_risk_critical_personas: [] }),
+    )
+
+    expect(result).toEqual([])
   })
 })
