@@ -4298,8 +4298,8 @@ function buildReportProjection(
   appliedFixes: readonly string[],
   pipelineOutput: RunReviewPipelineOutput,
   coverage: ReviewCoverageSummary,
+  riskCoverage: readonly ArtifactRiskCoverageEntry[] | undefined,
 ) {
-  const riskCoverage = projectRiskCoverage(pipelineOutput.risk_coverage)
   return {
     verdict: verdictText,
     findings,
@@ -4394,12 +4394,32 @@ export function finalizeReview(
     runStatus,
   )
 
+  // Dispatches, the projected risk-coverage entries, and the semantic gate
+  // all run before the report-only/writing branch so both output kinds are
+  // built from, and validated against, the same data: report-only carries
+  // `risk_coverage` in its projection too, so it must pass the identical
+  // gate rather than skipping it via an early return.
+  const screenByReviewer = buildScreenResultIndex(input.screen_results)
+  const dispatches = buildArtifactDispatches(
+    input.dispatch_records,
+    screenByReviewer,
+  )
+  const riskCoverage = projectRiskCoverage(pipeline.value.risk_coverage)
+
+  const riskCoverageSemantics = checkRiskCoverageSemantics({
+    dispatches,
+    findings,
+    risk_coverage: riskCoverage,
+  })
+  if (!riskCoverageSemantics.ok) return riskCoverageSemantics
+
   const report = buildReportProjection(
     verdictText,
     findings,
     input.parent_run_metadata.applied_fixes,
     pipeline.value,
     coverage.value,
+    riskCoverage,
   )
 
   if (input.parent_run_metadata.mode === 'report-only') {
@@ -4413,12 +4433,6 @@ export function finalizeReview(
     finalized: pipeline.value.finalized,
     reconciled: pipeline.value.reconciled,
   })
-  const screenByReviewer = buildScreenResultIndex(input.screen_results)
-  const dispatches = buildArtifactDispatches(
-    input.dispatch_records,
-    screenByReviewer,
-  )
-  const riskCoverage = projectRiskCoverage(pipeline.value.risk_coverage)
 
   const artifact = {
     schema_version: 1 as const,
@@ -4442,13 +4456,6 @@ export function finalizeReview(
     validation: input.parent_run_metadata.validation,
     ...(riskCoverage !== undefined ? { risk_coverage: riskCoverage } : {}),
   }
-
-  const riskCoverageSemantics = checkRiskCoverageSemantics({
-    dispatches,
-    findings,
-    risk_coverage: riskCoverage,
-  })
-  if (!riskCoverageSemantics.ok) return riskCoverageSemantics
 
   const parsedArtifact = ReviewArtifactSchema.safeParse(artifact)
   if (!parsedArtifact.success) {

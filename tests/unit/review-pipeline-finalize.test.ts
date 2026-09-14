@@ -2,7 +2,6 @@ import { describe, expect, test } from 'bun:test'
 import { ReviewArtifactSchema } from '../../src/lib/review-artifact-schema.js'
 import type {
   ApplyReviewAdjudicationInput,
-  BuildInputLedgerInput,
   BuildReviewCoverageInput,
   DeriveFinalizeContextInput,
   DeriveRiskCoverageInput,
@@ -942,6 +941,48 @@ describe('deriveFinalizeContext', () => {
     )
   })
 
+  test('a never_returned dispatch record for a non-risk-critical persona with no screen result does not reject, and the run degrades through finalizeReview', () => {
+    const neverReturnedDispatch = dispatchRecord('testing', {
+      dispatch_outcome: 'never_returned',
+    })
+    const scenario: DeriveFinalizeContextInput = {
+      merge: mergeOutput([], []),
+      prepared: preparedOutput(),
+      screen_results: [],
+      dispatch_records: [neverReturnedDispatch],
+      parent_run_metadata: {
+        selected_dispatches: [neverReturnedDispatch],
+        validation: NOT_ATTEMPTED_VALIDATION,
+      },
+    }
+
+    const result = deriveFinalizeContext(scenario)
+
+    expect(result.ok).toBe(true)
+
+    const reviewBase = finalizeReviewScenario()
+    const reviewResult = finalizeReview({
+      ...reviewBase,
+      dispatch_records: [...reviewBase.dispatch_records, neverReturnedDispatch],
+      parent_run_metadata: {
+        ...reviewBase.parent_run_metadata,
+        selected_dispatches: [
+          ...reviewBase.parent_run_metadata.selected_dispatches,
+          neverReturnedDispatch,
+        ],
+      },
+    })
+
+    expect(reviewResult.ok).toBe(true)
+    if (!reviewResult.ok) return
+    expect(reviewResult.value.kind).toBe('writing')
+    if (reviewResult.value.kind !== 'writing') return
+    expect(reviewResult.value.artifact.run_status).toBe('degraded')
+    expect(reviewResult.value.report.coverage.failed_reviewers).toContain(
+      'testing',
+    )
+  })
+
   test('permuted selection_surface order between dispatch_records and selected_dispatches passes', () => {
     const scenario = finalizeContextScenario()
 
@@ -980,6 +1021,31 @@ describe('deriveFinalizeContext', () => {
         selected_dispatches: [
           dispatchRecord('correctness', {
             selection_surface: ['src/a.ts', 'src/a.ts'],
+          }),
+        ],
+      },
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe('duplicate selection surface entry')
+  })
+
+  test('a normalized-collision selection_surface entry on a risk-critical persona rejects', () => {
+    const scenario = finalizeContextScenario()
+
+    const result = deriveFinalizeContext({
+      ...scenario,
+      dispatch_records: [
+        dispatchRecord('security', {
+          selection_surface: ['src/example.ts', './src/example.ts'],
+        }),
+      ],
+      parent_run_metadata: {
+        ...scenario.parent_run_metadata,
+        selected_dispatches: [
+          dispatchRecord('security', {
+            selection_surface: ['src/example.ts', './src/example.ts'],
           }),
         ],
       },
@@ -2733,6 +2799,99 @@ describe('finalizeReview', () => {
     )
     expect(writingResult.value.artifact.verdict).toEqual(
       reportOnlyResult.value.verdict,
+    )
+  })
+
+  // `checkRiskCoverageSemantics` runs before the report-only/writing branch
+  // so both output kinds are gated identically -- report-only's projection
+  // carries `risk_coverage` too and is externally visible, so it must not
+  // skip the check via the early return. A genuine violation is not
+  // reachable through `finalizeReview`: `deriveRiskCoverage` only ever cites
+  // a candidate that `isEligibleRiskCoverageCandidate` (on-surface,
+  // cross-persona) and `isValidationBandEligible` (in-band candidates need
+  // an explicit `true`) already accepted, and `requiresValidatorRequest`
+  // guarantees every in-band finding was requested for validation, so an
+  // absent `validated` on an in-band finding always lands it in
+  // `lifecycle_failures` and makes it ineligible at derivation -- the same
+  // rule the gate re-checks. So this test instead pins report-only and
+  // writing to produce byte-identical `risk_coverage` for a real satisfied
+  // loss, proving both paths run through the same gate and projection.
+  test('writing and report-only produce identical risk_coverage for a satisfied risk-critical persona loss', () => {
+    const correctnessDispatch = dispatchRecord('correctness')
+    const securityDispatch = dispatchRecord('security', {
+      dispatch_outcome: 'malformed',
+      selection_surface: ['src/auth.ts'],
+    })
+    const prepared = preparedOutput({
+      confidence_dispositions: [
+        confidenceDisposition('correctness#0', 'surviving'),
+      ],
+      surviving_findings: [
+        survivingFinding('correctness#0', 'correctness', {
+          file: 'src/auth.ts',
+          requires_verification: false,
+          severity: 'P3',
+        }),
+      ],
+      singletons: ['correctness#0'],
+    })
+    const merge = buildAdjudicatedMergeOutput(prepared)
+    const base = finalizeReviewScenario({
+      dispatch_records: [correctnessDispatch, securityDispatch],
+      screen_results: [
+        financeScreenResult('correctness', {
+          admitted_findings: [
+            admittedScreenFinding('correctness#0', {
+              file: 'src/auth.ts',
+              requires_verification: false,
+              severity: 'P3',
+            }),
+          ],
+        }),
+        financeScreenResult('security', {
+          admitted_findings: [],
+          dispatch_outcome: 'malformed',
+        }),
+      ],
+      prepared,
+      merge,
+    })
+    const scenario: FinalizeReviewInput = {
+      ...base,
+      parent_run_metadata: {
+        ...base.parent_run_metadata,
+        selected_dispatches: [correctnessDispatch, securityDispatch],
+      },
+    }
+
+    const writingResult = finalizeReview(scenario)
+    const reportOnlyResult = finalizeReview({
+      ...scenario,
+      parent_run_metadata: {
+        ...scenario.parent_run_metadata,
+        mode: 'report-only',
+      },
+    })
+
+    expect(writingResult.ok).toBe(true)
+    expect(reportOnlyResult.ok).toBe(true)
+    if (!writingResult.ok || !reportOnlyResult.ok) return
+    if (writingResult.value.kind !== 'writing') {
+      throw new Error('expected writing kind')
+    }
+    if (reportOnlyResult.value.kind !== 'report_only') {
+      throw new Error('expected report_only kind')
+    }
+
+    expect(writingResult.value.artifact.risk_coverage).toEqual([
+      {
+        persona: 'security',
+        satisfied: true,
+        input_finding_id: 'correctness#0',
+      },
+    ])
+    expect(reportOnlyResult.value.risk_coverage).toEqual(
+      writingResult.value.artifact.risk_coverage,
     )
   })
 
