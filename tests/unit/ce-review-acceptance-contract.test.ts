@@ -40,17 +40,24 @@ const OUTPUT = read('skills/ce-review/references/review-output-template.md')
 const OUTPUT_NORM = normalize(OUTPUT)
 const SUBAGENT = read('skills/ce-review/references/subagent-template.md')
 const SUBAGENT_NORM = normalize(SUBAGENT)
+const PIPELINE = read('skills/ce-review/references/pipeline-invocation.md')
+const PIPELINE_NORM = normalize(PIPELINE)
 const HARNESSES_NORM = normalize(read('HARNESSES.md'))
+const ALL_NORM = `${SKILL_NORM} ${SYNTH_NORM} ${PIPELINE_NORM} ${OUTPUT_NORM} ${SUBAGENT_NORM}`
 
-const rawValidatorBlock = fencedBlocks(SKILL).find((block) =>
-  block.includes('validate-review.mjs" return'),
+// `screen` replaced the standalone `return` invocation as the skill-level raw
+// return admission call (U6); its full block, including the fresh-delimiter
+// heredoc, now lives in the shared pipeline-invocation reference rather than
+// being duplicated at every call site.
+const rawValidatorBlock = fencedBlocks(PIPELINE).find((block) =>
+  block.includes('validate-review.mjs" screen'),
 )
 
 describe('ce:review raw-return admission contract', () => {
   test('feeds returned payloads to the skill-local validator before parsing, synthesis, or persistence', () => {
     expect(rawValidatorBlock).toBeDefined()
-    expect(SKILL_NORM).toContain(
-      'node "$SKILL_DIR/scripts/validate-review.mjs" return',
+    expect(PIPELINE_NORM).toContain(
+      'node "$SKILL_DIR/scripts/validate-review.mjs" screen',
     )
     expect(SKILL_NORM).toMatch(
       /before (?:parsing|any field parse|synthesis|persistence)/i,
@@ -66,14 +73,14 @@ describe('ce:review raw-return admission contract', () => {
     // Payload never appears in argv: the node command line carries no JSON.
     const nodeLine = block
       .split('\n')
-      .find((line) => line.includes('validate-review.mjs" return'))
+      .find((line) => line.includes('validate-review.mjs" screen'))
     expect(nodeLine).toBeDefined()
     expect(nodeLine).not.toContain('{')
   })
 
   test('explicitly forbids interpolation and command substitution for the payload', () => {
-    expect(SKILL_NORM).toMatch(/single-quoted heredoc/i)
-    expect(SKILL_NORM).toMatch(/command substitution/i)
+    expect(ALL_NORM).toMatch(/single-quoted heredoc/i)
+    expect(ALL_NORM).toMatch(/command substitution/i)
   })
 
   test('maps lifecycle and validator exits to dispatch outcomes', () => {
@@ -178,7 +185,9 @@ describe('ce:review raw-return admission contract', () => {
   })
 
   test('requires a fresh, verified, collision-free heredoc delimiter', () => {
-    for (const doc of [SKILL_NORM, SYNTH_NORM]) {
+    // SKILL.md keeps a terse call site (U6); the full delimiter mechanics live
+    // in the canonical synthesis contract and the pipeline invocation reference.
+    for (const doc of [SYNTH_NORM, PIPELINE_NORM]) {
       expect(doc).toMatch(/fresh delimiter/i)
       expect(doc).toMatch(/safe token alphabet/i)
       expect(doc).toMatch(/absent as a complete line/i)
@@ -213,7 +222,7 @@ describe('ce:review raw-return admission contract', () => {
         'touch "$CANARY"',
       ].join('\n')
       const script = [
-        `node "$SKILL_DIR/scripts/validate-review.mjs" return <<'${documentedDelimiter}'`,
+        `node "$SKILL_DIR/scripts/validate-review.mjs" screen --reviewer correctness --harness opencode <<'${documentedDelimiter}'`,
         payload,
         documentedDelimiter,
       ].join('\n')
@@ -286,6 +295,67 @@ describe('ce:review raw-return admission contract', () => {
     expect(HARNESSES_NORM).toMatch(
       /(?:not|no)[^.]*(?:live|real)[^.]*(?:Pi|OCX|Claude)/i,
     )
+  })
+})
+
+describe('ce:review pipeline phase invocation ordering (U6 acceptance)', () => {
+  test('orders screen before persistence, prepare before adjudication, merge before validator dispatch, and finalize after validator results and before persistence/report rendering', () => {
+    const screenIndex = SKILL_NORM.search(/#### Screen each return/i)
+    const stage5Index = SKILL_NORM.search(/### Stage 5: Merge findings/i)
+    const prepareIndex = SKILL_NORM.search(/Run `prepare`/i)
+    const adjudicateIndex = SKILL_NORM.search(
+      /Adjudicate every candidate group/i,
+    )
+    const mergeIndex = SKILL_NORM.search(/Run `merge`/i)
+    const stage5bIndex = SKILL_NORM.search(/### Stage 5b: Validation pass/i)
+    const validatorDispatchIndex = SKILL_NORM.search(
+      /spawn one validator subagent in parallel/i,
+    )
+    const stage6Index = SKILL_NORM.search(
+      /### Stage 6: Synthesize and present/i,
+    )
+    const finalizeIndex = SKILL_NORM.search(
+      /Call `finalize` with `applied_fixes: \[\]`/i,
+    )
+    const persistIndex = SKILL_NORM.search(
+      /#### Step 4: Emit artifacts and downstream handoff/i,
+    )
+
+    expect(screenIndex).toBeGreaterThanOrEqual(0)
+    expect(stage5Index).toBeGreaterThan(screenIndex)
+    expect(prepareIndex).toBeGreaterThan(stage5Index)
+    expect(adjudicateIndex).toBeGreaterThan(prepareIndex)
+    expect(mergeIndex).toBeGreaterThan(adjudicateIndex)
+    expect(stage5bIndex).toBeGreaterThan(mergeIndex)
+    expect(validatorDispatchIndex).toBeGreaterThan(stage5bIndex)
+    expect(stage6Index).toBeGreaterThan(validatorDispatchIndex)
+    expect(finalizeIndex).toBeGreaterThan(stage6Index)
+    expect(persistIndex).toBeGreaterThan(finalizeIndex)
+  })
+
+  test('every phase invocation in pipeline-invocation.md resolves through the shared SKILL_DIR anchor', () => {
+    for (const phase of ['screen', 'prepare', 'merge', 'finalize']) {
+      expect(PIPELINE_NORM).toContain(
+        `node "$SKILL_DIR/scripts/validate-review.mjs" ${phase}`,
+      )
+    }
+  })
+
+  test('report-only omits ignore preparation, run directory, temp file, artifact write, and artifact validation while still invoking every pure phase', () => {
+    expect(SKILL_NORM).toMatch(
+      /report-only mode never runs this step[^:]*no ignore preparation[^:]*no run directory[^:]*no temp file[^:]*no artifact write[^:]*no `artifact` subcommand validation/i,
+    )
+    for (const phase of ['screen', 'prepare', 'merge', 'finalize']) {
+      expect(SKILL_NORM).toContain(phase)
+    }
+  })
+
+  test('never-bypass language forbids hand-synthesizing phase output on helper failure', () => {
+    expect(PIPELINE_NORM).toMatch(/never-bypass/i)
+    expect(PIPELINE_NORM).toMatch(
+      /helper failure[^.]*never[^.]*permission[^.]*hand-synthes/i,
+    )
+    expect(SKILL_NORM).toMatch(/never-bypass/i)
   })
 })
 

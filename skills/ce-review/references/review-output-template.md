@@ -130,6 +130,7 @@ This fails because: no pipe-delimited tables, no severity-grouped `###` headers,
 - **Route column** shows the synthesized handling decision as ``<autofix_class> -> <owner>``.
 - **Header includes** scope, intent, and reviewer team with per-conditional justifications
 - **Mode line** -- include `interactive`, `autofix`, `report-only`, or `headless`
+- **Requirements Completeness section** -- include only when a plan was found in Stage 2b. Render the met/not-addressed/partially-addressed checklist, then list the plan-assessment routing output as its own bullet lists: `explicit_unmet_requirement` results appear as `report.residual_actionable_work` bullets (they gate the verdict); `inferred_gap` results appear as `report.advisory_outputs` bullets (they never gate the verdict alone). Neither kind is a finding -- they never gain a file, line, reviewer, confidence, or route, and never appear in a severity table. Omit the section entirely when no plan was found.
 - **Applied Fixes section** -- include only when a fix phase ran in this review invocation
 - **Residual Actionable Work section** -- include only when unresolved actionable findings were handed off for later work
 - **Pre-existing section** -- separate table, no confidence column (these are informational)

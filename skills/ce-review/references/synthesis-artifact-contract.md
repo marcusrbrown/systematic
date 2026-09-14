@@ -195,24 +195,17 @@ required run artifact is run-fatal.
 
 Before a persona return is parsed into fields, assessed for evidence,
 synthesized, or persisted, the parent admits it with the packaged structural
-validator:
-
-```bash
-# Resolve the validator relative to the skill's own directory.
-SKILL_DIR="<skill directory stated when this skill loads>";
-node "$SKILL_DIR/scripts/validate-review.mjs" return <<'REVIEW_RETURN_A1B2C3D4'
-<the persona's returned JSON payload, copied verbatim>
-REVIEW_RETURN_A1B2C3D4
-```
+validator's `screen` phase, which structurally admits the return and binds it
+to the dispatched persona in one call, replacing the former separate
+raw-return-admission and dispatch-identity-binding steps. The full envelope,
+the invocation block, and the never-bypass rule are canonically defined in
+[pipeline invocation: screen](./pipeline-invocation.md#screen); this section
+states the resulting contract.
 
 Before each invocation, choose a fresh delimiter for that exact raw payload from
 a safe token alphabet (`A-Z`, `0-9`, `_`), verify the delimiter is absent as a
 complete line in that exact payload, and never reuse a fixed delimiter. The
-`REVIEW_RETURN_A1B2C3D4` token above is only an illustration. Open the heredoc
-with a single-quoted heredoc opener (`<<'DELIM'`) and close it with a line
-containing exactly that delimiter. The payload travels on stdin, never in argv;
-never use unquoted interpolation or command substitution, and never write the
-payload to a temp file.
+payload travels on stdin, never in argv, command substitution, or a temp file.
 
 The parent maps the result to `dispatch_outcome`, keeping lifecycle,
 structural validity, and evidence assessment separate:
@@ -222,7 +215,8 @@ structural validity, and evidence assessment separate:
   findings is `findings`. Admission is structural only: it never asserts that
   a finding's claims or cited evidence are true.
 - **exit 1** — `malformed`. Record bounded validator diagnostics only; do not
-  parse or persist payload fields or values.
+  parse or persist payload fields or values. This covers malformed JSON, a
+  schema violation, and a dispatch identity mismatch alike.
 - **exit 2**, a missing or unreadable helper, or a launch failure — validation
   unavailable. Withhold the return and report the exact unavailability and what
   was withheld. Update that selected persona's preinitialized dispatch entry
@@ -235,14 +229,15 @@ structural validity, and evidence assessment separate:
   task-lifecycle fact for a task that did not return. Validation unavailable is
   not malformed and is not never_returned.
 
-**Dispatch identity binding.** Structural admission does not prove who produced a
-return. Immediately after `exit 0` and before persistence or synthesis, the
-parent parses the admitted return's `reviewer`
-field and confirms it equals the dispatched persona. A return whose `reviewer`
-does not match the dispatched persona is an identity mismatch: reject the whole
-return as `dispatch_outcome: "malformed"`, record only a bounded rejection reason
-naming the expected persona, set `run_status` to `degraded`, and do not admit,
-persist, or synthesize its payload.
+**Dispatch identity binding** is folded into `screen`: it confirms the
+returned `reviewer` field matches the dispatched persona before it returns
+`exit 0`. A return whose `reviewer` does not match the dispatched persona is
+an identity mismatch: `screen` rejects the whole return as `dispatch_outcome:
+"malformed"`, and the parent records only a bounded rejection reason naming
+the expected persona, sets `run_status` to `degraded`, and does not admit,
+persist, or synthesize its payload. The stdin-only, flag-scoped validator
+cannot see dispatch context beyond `--reviewer`/`--harness`, so this
+comparison is `screen`'s own responsibility, not a separate parent step.
 
 `validation_unavailable` is an additive enum value: `schema_version` stays `1`,
 existing v1 artifacts remain valid, and no new field or migration is introduced.

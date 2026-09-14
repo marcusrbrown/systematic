@@ -1076,7 +1076,7 @@ which adds only contracts and a generated reference.
     - Tests: routing parity for all six subcommands; drift gate current; helper
       byte ceiling unchanged or explicitly re-justified.
 
-- [ ] **Unit 6: Replace prose execution with packaged helper invocations**
+- [x] **Unit 6: Replace prose execution with packaged helper invocations**
 
   **Files:**
   - Update `skills/ce-review/SKILL.md` Stages 4-6 and post-review handoff.
