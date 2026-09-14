@@ -172,9 +172,6 @@ function resolveReviewArtifactPath(input, cwd, options = {}) {
   return { ok: true, path: canonicalTarget }
 }
 
-// src/lib/review-artifact-schema.ts
-import path2 from 'node:path'
-
 // node_modules/.bun/zod@4.6.2/node_modules/zod/v4/core/util.js
 function getEnumValues(entries) {
   const numericValues = Object.values(entries).filter(
@@ -6403,7 +6400,6 @@ var REVIEW_ARTIFACT_CUSTOM_MESSAGES = [
   'provenance.agreement_credit must not contain duplicate reviewers',
   'provenance.agreement_credit must not overlap provenance.submitters',
   'provenance.agreement_credit requires an eligible returned persona with admitted evidence',
-  'satisfied risk coverage must cite a validated finding on the lost persona selection surface',
   'satisfied risk coverage must cite an admitted ledger row owned by another persona',
 ]
 var boundedText = (maxLength) => string2().min(1).max(maxLength).regex(/\S/)
@@ -6430,9 +6426,6 @@ var HarnessSchema = _enum(['opencode', 'pi', 'claude-code'])
 var RepoRelativePathSchema = boundedText(256).regex(
   /^(?!\/)(?![A-Za-z]:[\\/])(?!\\).+/,
 )
-function normalizeRepoRelativePath(filePath) {
-  return path2.posix.normalize(filePath.replaceAll('\\', '/'))
-}
 var ReviewerSchema = boundedText(MAX_REVIEWER_LENGTH)
 var BranchSchema = string2().max(MAX_BRANCH_LENGTH)
 var HeadShaSchema = string2().regex(/^[0-9a-f]{40}$/)
@@ -6849,32 +6842,6 @@ var ReviewArtifactSchema = object({
         ctx.addIssue({
           code: 'custom',
           path: ['risk_coverage', coverageIndex, 'input_finding_id'],
-          message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[19],
-        })
-        return
-      }
-      const lostDispatch = artifact.dispatches.find(
-        (dispatch) => dispatch.persona === coverage.persona,
-      )
-      const normalizedSurface = new Set(
-        (lostDispatch?.selection_surface ?? []).map(normalizeRepoRelativePath),
-      )
-      const covered = artifact.findings.some((finding) => {
-        if (!finding.input_finding_ids.includes(citedId)) return false
-        const inValidationBand =
-          finding.severity === 'P0' ||
-          finding.severity === 'P1' ||
-          finding.requires_verification
-        const validationSatisfied = inValidationBand
-          ? finding.validated === true
-          : finding.validated !== false
-        if (!validationSatisfied) return false
-        return normalizedSurface.has(normalizeRepoRelativePath(finding.file))
-      })
-      if (!covered) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['risk_coverage', coverageIndex, 'input_finding_id'],
           message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[18],
         })
       }
@@ -7031,6 +6998,9 @@ function runClaudeCodeValidator(options) {
 }
 if (false) {
 }
+
+// src/lib/review-pipeline.ts
+import path2 from 'node:path'
 
 // src/lib/review-pipeline-contract.ts
 var boundedText2 = (maxLength) => string2().min(1).max(maxLength).regex(/\S/)
@@ -7506,6 +7476,9 @@ function runReviewReturnValidator(options) {
 }
 
 // src/lib/review-pipeline.ts
+function normalizeRepoRelativePath(filePath) {
+  return path2.posix.normalize(filePath.replaceAll('\\', '/'))
+}
 var JSON_ROOT_PATH = '$'
 var RECOGNIZED_SEVERITIES = ['P0', 'P1', 'P2', 'P3']
 function classifyRejectedSeverity(value) {
@@ -9661,6 +9634,47 @@ function buildArtifactDispatches(dispatchRecords, screenByReviewer) {
     .map((record) => buildDispatchEntry(record, screenByReviewer))
     .sort((a, b) => compareStrings(a.persona, b.persona))
 }
+function checkRiskCoverageSemantics(artifactCandidate) {
+  const coverage = artifactCandidate.risk_coverage
+  if (coverage === undefined) return { ok: true }
+  for (const [coverageIndex, entry] of coverage.entries()) {
+    if (!entry.satisfied || entry.input_finding_id === undefined) continue
+    const citedId = entry.input_finding_id
+    const dispatch = artifactCandidate.dispatches.find(
+      (record) => record.persona === entry.persona,
+    )
+    const normalizedSurface = new Set(
+      (dispatch?.selection_surface ?? []).map(normalizeRepoRelativePath),
+    )
+    const covered = artifactCandidate.findings.some((finding) => {
+      if (!finding.input_finding_ids.includes(citedId)) return false
+      const inValidationBand =
+        finding.severity === 'P0' ||
+        finding.severity === 'P1' ||
+        finding.requires_verification
+      const validationSatisfied = inValidationBand
+        ? finding.validated === true
+        : finding.validated !== false
+      if (!validationSatisfied) return false
+      return normalizedSurface.has(normalizeRepoRelativePath(finding.file))
+    })
+    if (!covered) {
+      return {
+        ok: false,
+        rejection: {
+          path: formatReviewArtifactIssuePath([
+            'risk_coverage',
+            coverageIndex,
+            'input_finding_id',
+          ]),
+          reason:
+            'satisfied risk coverage must cite a validated finding on the lost persona selection surface',
+        },
+      }
+    }
+  }
+  return { ok: true }
+}
 function projectRiskCoverage(riskCoverage) {
   if (riskCoverage.length === 0) return
   return riskCoverage.map((entry) => ({
@@ -9797,6 +9811,12 @@ function finalizeReview(input) {
     validation: input.parent_run_metadata.validation,
     ...(riskCoverage !== undefined ? { risk_coverage: riskCoverage } : {}),
   }
+  const riskCoverageSemantics = checkRiskCoverageSemantics({
+    dispatches,
+    findings,
+    risk_coverage: riskCoverage,
+  })
+  if (!riskCoverageSemantics.ok) return riskCoverageSemantics
   const parsedArtifact = ReviewArtifactSchema.safeParse(artifact)
   if (!parsedArtifact.success) {
     const issue = parsedArtifact.error.issues[0]

@@ -21,6 +21,7 @@ import {
   applyReviewAdjudication,
   buildInputLedger,
   buildReviewCoverage,
+  checkRiskCoverageSemantics,
   deriveFinalizeContext,
   deriveRiskCoverage,
   finalizeReview,
@@ -2507,6 +2508,129 @@ describe('projectSynthesizedFindings', () => {
     expect(() =>
       ReviewArtifactSchema.shape.findings.parse(projected),
     ).not.toThrow()
+  })
+})
+
+describe('checkRiskCoverageSemantics', () => {
+  function dispatchEntry(
+    persona: string,
+    overrides: {
+      readonly selection_surface?: readonly string[]
+    } = {},
+  ) {
+    return {
+      persona,
+      dispatch_outcome: 'findings' as const,
+      input_finding_count: 1,
+      ...overrides,
+    }
+  }
+
+  function projectedFinding(
+    findingId: string,
+    overrides: Partial<MergeOutput['merged_findings'][number]> & {
+      readonly validated?: boolean
+    } = {},
+  ) {
+    const { validated, ...mergedOverrides } = overrides
+    const finding = {
+      ...mergedFinding(findingId, mergedOverrides),
+      ...(validated !== undefined ? { validated } : {}),
+    }
+    const [projected] = projectSynthesizedFindings({ findings: [finding] })
+    if (!projected) throw new Error('expected exactly one projected finding')
+    return projected
+  }
+
+  test('rejects an in-band cited finding without an explicit true validation', () => {
+    const finding = projectedFinding('f1', {
+      input_finding_ids: ['correctness#1'],
+      file: 'src/auth.ts',
+    })
+
+    const result = checkRiskCoverageSemantics({
+      dispatches: [
+        dispatchEntry('security', { selection_surface: ['src/auth.ts'] }),
+      ],
+      findings: [finding],
+      risk_coverage: [
+        {
+          persona: 'security',
+          satisfied: true,
+          input_finding_id: 'correctness#1',
+        },
+      ],
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection).toEqual({
+      path: 'risk_coverage.0.input_finding_id',
+      reason:
+        'satisfied risk coverage must cite a validated finding on the lost persona selection surface',
+    })
+  })
+
+  test("rejects a citation whose finding file does not normalize to the lost persona's selection surface", () => {
+    const finding = projectedFinding('f2', {
+      input_finding_ids: ['correctness#2'],
+      file: 'src/other.ts',
+      validated: true,
+    })
+
+    const result = checkRiskCoverageSemantics({
+      dispatches: [
+        dispatchEntry('security', { selection_surface: ['src/auth.ts'] }),
+      ],
+      findings: [finding],
+      risk_coverage: [
+        {
+          persona: 'security',
+          satisfied: true,
+          input_finding_id: 'correctness#2',
+        },
+      ],
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection).toEqual({
+      path: 'risk_coverage.0.input_finding_id',
+      reason:
+        'satisfied risk coverage must cite a validated finding on the lost persona selection surface',
+    })
+  })
+
+  test('passes when the cited finding file and selection surface normalize to the same path despite differing spellings', () => {
+    const finding = projectedFinding('f3', {
+      input_finding_ids: ['correctness#3'],
+      file: 'src\\nested\\.\\auth.ts',
+      validated: true,
+    })
+
+    const result = checkRiskCoverageSemantics({
+      dispatches: [
+        dispatchEntry('security', {
+          selection_surface: ['./src/nested/auth.ts'],
+        }),
+      ],
+      findings: [finding],
+      risk_coverage: [
+        {
+          persona: 'security',
+          satisfied: true,
+          input_finding_id: 'correctness#3',
+        },
+      ],
+    })
+
+    expect(result.ok).toBe(true)
+  })
+
+  test('passes when risk_coverage is absent', () => {
+    const result = checkRiskCoverageSemantics({ dispatches: [], findings: [] })
+
+    expect(result.ok).toBe(true)
   })
 })
 

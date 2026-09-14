@@ -1,4 +1,3 @@
-import path from 'node:path'
 import { z } from 'zod'
 
 const MAX_REVIEWER_LENGTH = 64
@@ -32,7 +31,6 @@ export const REVIEW_ARTIFACT_CUSTOM_MESSAGES = [
   'provenance.agreement_credit must not contain duplicate reviewers',
   'provenance.agreement_credit must not overlap provenance.submitters',
   'provenance.agreement_credit requires an eligible returned persona with admitted evidence',
-  'satisfied risk coverage must cite a validated finding on the lost persona selection surface',
   'satisfied risk coverage must cite an admitted ledger row owned by another persona',
 ] as const
 
@@ -80,23 +78,6 @@ export const HarnessSchema = z.enum(['opencode', 'pi', 'claude-code'] as const)
 export const RepoRelativePathSchema = boundedText(256).regex(
   /^(?!\/)(?![A-Za-z]:[\\/])(?!\\).+/,
 )
-
-/**
- * Normalizes a repo-relative path for grouping, sorting, and any later
- * surface comparison. Collapses `\`-style separators to `/`, then applies
- * POSIX lexical normalization (redundant slashes, `.` segments, and a
- * leading `./`). Never touches the filesystem or the process environment --
- * this is a pure string transform.
- *
- * Defined here rather than in `review-pipeline.ts` so this module's own
- * risk-coverage surface comparison can reuse it without importing from the
- * pipeline module, which already imports from this one -- that direction
- * would create an import cycle. `review-pipeline.ts` re-exports this symbol
- * so every existing pipeline caller is unaffected.
- */
-export function normalizeRepoRelativePath(filePath: string): string {
-  return path.posix.normalize(filePath.replaceAll('\\', '/'))
-}
 
 const ReviewerSchema = boundedText(MAX_REVIEWER_LENGTH)
 const BranchSchema = z.string().max(MAX_BRANCH_LENGTH)
@@ -632,43 +613,12 @@ export const ReviewArtifactSchema = z
 
       // Satisfied coverage must come from another persona: a lost risk-critical
       // persona cannot clear its own surface with its own surviving evidence
-      // while part of its return was rejected or withheld.
+      // while part of its return was rejected or withheld. Semantic checks --
+      // validation-band and selection-surface agreement -- are pipeline rules
+      // enforced by `checkRiskCoverageSemantics` in `review-pipeline.ts`
+      // before this schema ever parses a writing-mode artifact; this
+      // structural schema stays limited to referential integrity.
       if (owner === coverage.persona) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['risk_coverage', coverageIndex, 'input_finding_id'],
-          message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[19],
-        })
-        return
-      }
-
-      // The citation must resolve to a validated synthesized finding whose file
-      // belongs to the failed persona's recorded selection surface. A finding
-      // in the validation band (P0/P1, or requires_verification) must carry an
-      // explicit true validation -- absent is "never validated", not proof;
-      // an out-of-band finding was never sent for validation, so absent is
-      // expected there. Surfaces compare through the shared path normalizer
-      // rather than literal string equality, matching how the pipeline
-      // grouped and compared them in the first place.
-      const lostDispatch = artifact.dispatches.find(
-        (dispatch) => dispatch.persona === coverage.persona,
-      )
-      const normalizedSurface = new Set(
-        (lostDispatch?.selection_surface ?? []).map(normalizeRepoRelativePath),
-      )
-      const covered = artifact.findings.some((finding) => {
-        if (!finding.input_finding_ids.includes(citedId)) return false
-        const inValidationBand =
-          finding.severity === 'P0' ||
-          finding.severity === 'P1' ||
-          finding.requires_verification
-        const validationSatisfied = inValidationBand
-          ? finding.validated === true
-          : finding.validated !== false
-        if (!validationSatisfied) return false
-        return normalizedSurface.has(normalizeRepoRelativePath(finding.file))
-      })
-      if (!covered) {
         ctx.addIssue({
           code: 'custom',
           path: ['risk_coverage', coverageIndex, 'input_finding_id'],

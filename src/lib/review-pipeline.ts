@@ -1,10 +1,10 @@
+import path from 'node:path'
 import type { z } from 'zod'
 import { formatReviewArtifactIssuePath } from './review-artifact-path.js'
 import {
   MAX_FINDINGS,
   MAX_PERSONAS,
   MAX_REASON_LENGTH,
-  normalizeRepoRelativePath,
   ReviewArtifactSchema,
   RISK_CRITICAL_PERSONAS,
   SubAgentReturnSchema,
@@ -26,13 +26,16 @@ import {
 } from './review-pipeline-contract.js'
 import { validateReviewReturnValue } from './review-return-validator.js'
 
-// Re-exported for backward compatibility: every existing internal caller in
-// this module still refers to `normalizeRepoRelativePath` by its own name,
-// and any external importer of this module keeps working unchanged. The
-// implementation itself lives in `review-artifact-schema.ts` so that
-// module's own risk-coverage surface comparison can reuse it without an
-// import cycle back into this one.
-export { normalizeRepoRelativePath } from './review-artifact-schema.js'
+/**
+ * Normalizes a repo-relative path for grouping, sorting, and any later
+ * surface comparison. Collapses `\`-style separators to `/`, then applies
+ * POSIX lexical normalization (redundant slashes, `.` segments, and a
+ * leading `./`). Never touches the filesystem or the process environment --
+ * this is a pure string transform.
+ */
+export function normalizeRepoRelativePath(filePath: string): string {
+  return path.posix.normalize(filePath.replaceAll('\\', '/'))
+}
 
 /**
  * Pure, side-effect-free admission of one reviewer's raw `ce:review` return.
@@ -4082,6 +4085,7 @@ type FinalizeReviewRejection =
   | ReconcileValidatorResultsRejection
   | FinalizeReviewDispositionsRejection
   | BuildReviewCoverageRejection
+  | RiskCoverageSemanticsRejection
   | {
       readonly path: string
       readonly reason: 'artifact failed schema validation'
@@ -4191,6 +4195,85 @@ interface ArtifactRiskCoverageEntry {
   readonly persona: string
   readonly satisfied: boolean
   readonly input_finding_id?: string
+}
+
+interface RiskCoverageSemanticsInput {
+  readonly dispatches: readonly ArtifactDispatchEntry[]
+  readonly findings: readonly SynthesizedFindingProjection[]
+  readonly risk_coverage?: readonly ArtifactRiskCoverageEntry[]
+}
+
+interface RiskCoverageSemanticsRejection {
+  readonly path: string
+  readonly reason: 'satisfied risk coverage must cite a validated finding on the lost persona selection surface'
+}
+
+type RiskCoverageSemanticsResult =
+  | { readonly ok: true }
+  | { readonly ok: false; readonly rejection: RiskCoverageSemanticsRejection }
+
+/**
+ * Defensive pipeline-side assertion that every satisfied risk-coverage entry
+ * cites a validated finding on the lost persona's recorded selection
+ * surface. `deriveRiskCoverage` already guarantees this at derivation time
+ * -- `isEligibleRiskCoverageCandidate` enforces the on-surface rule and
+ * `isValidationBandEligible` enforces the validation-band rule before a
+ * candidate can ever be cited -- so this check restates that guarantee at
+ * the pipeline boundary rather than deriving it independently, protecting
+ * against a future regression in artifact assembly. Surfaces compare
+ * through `normalizeRepoRelativePath` so alternate spellings (mixed
+ * separators, dot segments) of the same surface entry still match. This is
+ * the pipeline-owned counterpart to `ReviewArtifactSchema`'s structural
+ * `risk_coverage` refinement, which only checks referential integrity.
+ * Never reads `process.env`, the filesystem, or the clock.
+ */
+export function checkRiskCoverageSemantics(
+  artifactCandidate: RiskCoverageSemanticsInput,
+): RiskCoverageSemanticsResult {
+  const coverage = artifactCandidate.risk_coverage
+  if (coverage === undefined) return { ok: true }
+
+  for (const [coverageIndex, entry] of coverage.entries()) {
+    if (!entry.satisfied || entry.input_finding_id === undefined) continue
+    const citedId = entry.input_finding_id
+
+    const dispatch = artifactCandidate.dispatches.find(
+      (record) => record.persona === entry.persona,
+    )
+    const normalizedSurface = new Set(
+      (dispatch?.selection_surface ?? []).map(normalizeRepoRelativePath),
+    )
+
+    const covered = artifactCandidate.findings.some((finding) => {
+      if (!finding.input_finding_ids.includes(citedId)) return false
+      const inValidationBand =
+        finding.severity === 'P0' ||
+        finding.severity === 'P1' ||
+        finding.requires_verification
+      const validationSatisfied = inValidationBand
+        ? finding.validated === true
+        : finding.validated !== false
+      if (!validationSatisfied) return false
+      return normalizedSurface.has(normalizeRepoRelativePath(finding.file))
+    })
+
+    if (!covered) {
+      return {
+        ok: false,
+        rejection: {
+          path: formatReviewArtifactIssuePath([
+            'risk_coverage',
+            coverageIndex,
+            'input_finding_id',
+          ]),
+          reason:
+            'satisfied risk coverage must cite a validated finding on the lost persona selection surface',
+        },
+      }
+    }
+  }
+
+  return { ok: true }
 }
 
 /** Strips `finding_id` (a helper-only field with no artifact leaf) from
@@ -4359,6 +4442,13 @@ export function finalizeReview(
     validation: input.parent_run_metadata.validation,
     ...(riskCoverage !== undefined ? { risk_coverage: riskCoverage } : {}),
   }
+
+  const riskCoverageSemantics = checkRiskCoverageSemantics({
+    dispatches,
+    findings,
+    risk_coverage: riskCoverage,
+  })
+  if (!riskCoverageSemantics.ok) return riskCoverageSemantics
 
   const parsedArtifact = ReviewArtifactSchema.safeParse(artifact)
   if (!parsedArtifact.success) {
