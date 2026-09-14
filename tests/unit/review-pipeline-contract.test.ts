@@ -989,6 +989,20 @@ describe('FinalizeInputSchema / FinalizeOutputSchema', () => {
     expect(result.success).toBe(false)
   })
 
+  test('accepts a dispatch record carrying selection_reason', () => {
+    const withSelectionReason = {
+      ...finalizeInputFixture,
+      dispatch_records: [
+        {
+          ...selectedDispatchFixture,
+          selection_reason: 'Touches example.ts directly.',
+        },
+      ],
+    }
+    const result = FinalizeInputSchema.safeParse(withSelectionReason)
+    expect(result.success).toBe(true)
+  })
+
   test('accepts a conforming writing-mode finalize output', () => {
     const result = FinalizeOutputSchema.safeParse({
       kind: 'writing',

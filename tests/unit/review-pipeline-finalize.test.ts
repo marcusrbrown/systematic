@@ -440,6 +440,14 @@ function dispatchRecord(
   }
 }
 
+// `deriveFinalizeContext` only accepts a `not_attempted` validation envelope
+// (item 011): the persisted artifact is built before artifact
+// self-validation can run, so this is the only truthful pre-write value.
+const NOT_ATTEMPTED_VALIDATION = {
+  status: 'not_attempted' as const,
+  reason: 'no autofix applied',
+}
+
 function buildAdjudicatedMergeOutput(prepared: PrepareOutput): MergeOutput {
   const decisions: ApplyReviewAdjudicationInput['decisions'] = []
   const result = applyReviewAdjudication({ prepared, decisions })
@@ -470,6 +478,7 @@ function finalizeContextScenario(): DeriveFinalizeContextInput {
     dispatch_records: [dispatchRecord('correctness')],
     parent_run_metadata: {
       selected_dispatches: [dispatchRecord('correctness')],
+      validation: NOT_ATTEMPTED_VALIDATION,
     },
   }
 }
@@ -587,7 +596,10 @@ describe('deriveFinalizeContext', () => {
           }),
         ],
         dispatch_records: [record],
-        parent_run_metadata: { selected_dispatches: [record] },
+        parent_run_metadata: {
+          selected_dispatches: [record],
+          validation: NOT_ATTEMPTED_VALIDATION,
+        },
       }
 
       const result = deriveFinalizeContext(scenario)
@@ -620,7 +632,10 @@ describe('deriveFinalizeContext', () => {
         }),
       ],
       dispatch_records: [record],
-      parent_run_metadata: { selected_dispatches: [record] },
+      parent_run_metadata: {
+        selected_dispatches: [record],
+        validation: NOT_ATTEMPTED_VALIDATION,
+      },
     }
 
     const result = deriveFinalizeContext(scenario)
@@ -655,7 +670,10 @@ describe('deriveFinalizeContext', () => {
         }),
       ],
       dispatch_records: [record],
-      parent_run_metadata: { selected_dispatches: [record] },
+      parent_run_metadata: {
+        selected_dispatches: [record],
+        validation: NOT_ATTEMPTED_VALIDATION,
+      },
     }
 
     const result = deriveFinalizeContext(scenario)
@@ -682,6 +700,7 @@ describe('deriveFinalizeContext', () => {
           dispatchRecord('correctness'),
           dispatchRecord('security'),
         ],
+        validation: NOT_ATTEMPTED_VALIDATION,
       },
     })
 
@@ -709,6 +728,7 @@ describe('deriveFinalizeContext', () => {
       dispatch_records: [dispatchRecord('correctness')],
       parent_run_metadata: {
         selected_dispatches: [dispatchRecord('correctness')],
+        validation: NOT_ATTEMPTED_VALIDATION,
       },
     }
 
@@ -742,6 +762,7 @@ describe('deriveFinalizeContext', () => {
       dispatch_records: [dispatchRecord('correctness')],
       parent_run_metadata: {
         selected_dispatches: [dispatchRecord('correctness')],
+        validation: NOT_ATTEMPTED_VALIDATION,
       },
     }
 
@@ -782,6 +803,7 @@ describe('deriveFinalizeContext', () => {
       dispatch_records: [dispatchRecord('correctness')],
       parent_run_metadata: {
         selected_dispatches: [dispatchRecord('correctness')],
+        validation: NOT_ATTEMPTED_VALIDATION,
       },
     }
 
@@ -836,7 +858,10 @@ describe('deriveFinalizeContext', () => {
         }),
       ],
       dispatch_records: [unavailableDispatch],
-      parent_run_metadata: { selected_dispatches: [unavailableDispatch] },
+      parent_run_metadata: {
+        selected_dispatches: [unavailableDispatch],
+        validation: NOT_ATTEMPTED_VALIDATION,
+      },
     }
 
     const result = deriveFinalizeContext(scenario)
@@ -845,6 +870,179 @@ describe('deriveFinalizeContext', () => {
     if (result.ok) return
     expect(result.rejection.reason).toBe(
       'merged finding cites input from unavailable reviewer',
+    )
+  })
+
+  test('a validation_unavailable dispatch record with no screen result does not reject', () => {
+    const unavailableDispatch = dispatchRecord('security', {
+      dispatch_outcome: 'validation_unavailable',
+    })
+    const scenario: DeriveFinalizeContextInput = {
+      merge: mergeOutput([], []),
+      prepared: preparedOutput(),
+      screen_results: [],
+      dispatch_records: [unavailableDispatch],
+      parent_run_metadata: {
+        selected_dispatches: [unavailableDispatch],
+        validation: NOT_ATTEMPTED_VALIDATION,
+      },
+    }
+
+    const result = deriveFinalizeContext(scenario)
+
+    expect(result.ok).toBe(true)
+  })
+
+  test('an extra screen result for an unselected persona still rejects even when another persona is exempt', () => {
+    const unavailableDispatch = dispatchRecord('security', {
+      dispatch_outcome: 'validation_unavailable',
+    })
+    const scenario: DeriveFinalizeContextInput = {
+      merge: mergeOutput([], []),
+      prepared: preparedOutput(),
+      screen_results: [financeScreenResult('testing')],
+      dispatch_records: [unavailableDispatch],
+      parent_run_metadata: {
+        selected_dispatches: [unavailableDispatch],
+        validation: NOT_ATTEMPTED_VALIDATION,
+      },
+    }
+
+    const result = deriveFinalizeContext(scenario)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe('unexpected screen result for persona')
+  })
+
+  test('a screen result whose outcome disagrees with an exempt dispatch record rejects', () => {
+    const unavailableDispatch = dispatchRecord('security', {
+      dispatch_outcome: 'validation_unavailable',
+    })
+    const scenario: DeriveFinalizeContextInput = {
+      merge: mergeOutput([], []),
+      prepared: preparedOutput(),
+      screen_results: [
+        financeScreenResult('security', { dispatch_outcome: 'findings' }),
+      ],
+      dispatch_records: [unavailableDispatch],
+      parent_run_metadata: {
+        selected_dispatches: [unavailableDispatch],
+        validation: NOT_ATTEMPTED_VALIDATION,
+      },
+    }
+
+    const result = deriveFinalizeContext(scenario)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe(
+      'screen result outcome does not match dispatch record',
+    )
+  })
+
+  test('permuted selection_surface order between dispatch_records and selected_dispatches passes', () => {
+    const scenario = finalizeContextScenario()
+
+    const result = deriveFinalizeContext({
+      ...scenario,
+      dispatch_records: [
+        dispatchRecord('correctness', {
+          selection_surface: ['src/a.ts', 'src/b.ts'],
+        }),
+      ],
+      parent_run_metadata: {
+        ...scenario.parent_run_metadata,
+        selected_dispatches: [
+          dispatchRecord('correctness', {
+            selection_surface: ['src/b.ts', 'src/a.ts'],
+          }),
+        ],
+      },
+    })
+
+    expect(result.ok).toBe(true)
+  })
+
+  test('a duplicate selection_surface entry rejects', () => {
+    const scenario = finalizeContextScenario()
+
+    const result = deriveFinalizeContext({
+      ...scenario,
+      dispatch_records: [
+        dispatchRecord('correctness', {
+          selection_surface: ['src/a.ts', 'src/a.ts'],
+        }),
+      ],
+      parent_run_metadata: {
+        ...scenario.parent_run_metadata,
+        selected_dispatches: [
+          dispatchRecord('correctness', {
+            selection_surface: ['src/a.ts', 'src/a.ts'],
+          }),
+        ],
+      },
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe('duplicate selection surface entry')
+  })
+
+  test('dispatch_records and selected_dispatches disagreeing on selection_reason rejects', () => {
+    const scenario = finalizeContextScenario()
+
+    const result = deriveFinalizeContext({
+      ...scenario,
+      dispatch_records: [
+        dispatchRecord('correctness', { selection_reason: 'Reason A.' }),
+      ],
+      parent_run_metadata: {
+        ...scenario.parent_run_metadata,
+        selected_dispatches: [
+          dispatchRecord('correctness', { selection_reason: 'Reason B.' }),
+        ],
+      },
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe('dispatch record mismatch')
+  })
+
+  test('a parent_run_metadata.validation status other than not_attempted rejects', () => {
+    const scenario = finalizeContextScenario()
+
+    const result = deriveFinalizeContext({
+      ...scenario,
+      parent_run_metadata: {
+        ...scenario.parent_run_metadata,
+        validation: { status: 'passed' },
+      },
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe(
+      'validation must be not_attempted at finalize',
+    )
+  })
+
+  test('a parent_run_metadata.validation status of failed rejects identically', () => {
+    const scenario = finalizeContextScenario()
+
+    const result = deriveFinalizeContext({
+      ...scenario,
+      parent_run_metadata: {
+        ...scenario.parent_run_metadata,
+        validation: { status: 'failed', reason: 'Self-validation failed.' },
+      },
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe(
+      'validation must be not_attempted at finalize',
     )
   })
 })
@@ -2652,6 +2850,20 @@ describe('finalizeReview', () => {
     })
     const scenario: FinalizeReviewInput = {
       ...base,
+      // Screen result outcome agrees with the (forged) dispatch outcome so
+      // this exercises the provenance check below, not the screen-result
+      // outcome-agreement check (item 010).
+      screen_results: base.screen_results.map((result) =>
+        result.reviewer === 'correctness'
+          ? {
+              ...result,
+              result: {
+                ...result.result,
+                dispatch_outcome: 'validation_unavailable',
+              },
+            }
+          : result,
+      ),
       dispatch_records: [unavailableDispatch],
       parent_run_metadata: {
         ...base.parent_run_metadata,
@@ -2677,5 +2889,117 @@ describe('finalizeReview', () => {
     expect(reportOnlyResult.rejection.reason).toBe(
       interactiveResult.rejection.reason,
     )
+  })
+
+  test('a validation_unavailable dispatch with no screen result completes as degraded with no ledger row for it', () => {
+    const unavailableDispatch = dispatchRecord('testing', {
+      dispatch_outcome: 'validation_unavailable',
+    })
+    const prepared = preparedOutput()
+    const merge = buildAdjudicatedMergeOutput(prepared)
+    const scenario: FinalizeReviewInput = {
+      merge,
+      prepared,
+      screen_results: [],
+      dispatch_records: [unavailableDispatch],
+      validator_lifecycle_results: [],
+      plan_assessment: { verdict: 'All requirements met.', results: [] },
+      parent_run_metadata: {
+        run_id: 'run-1',
+        mode: 'interactive',
+        harness: 'opencode',
+        branch: 'main',
+        head_sha: 'a'.repeat(40),
+        selected_dispatches: [unavailableDispatch],
+        timestamps: {
+          started_at: '2026-01-01T00:00:00.000Z',
+          completed_at: '2026-01-01T00:05:00.000Z',
+        },
+        validation: NOT_ATTEMPTED_VALIDATION,
+        applied_fixes: [],
+      },
+    }
+
+    const result = finalizeReview(scenario)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.kind).toBe('writing')
+    if (result.value.kind !== 'writing') return
+    expect(result.value.artifact.run_status).toBe('degraded')
+    expect(
+      result.value.artifact.input_findings.some(
+        (finding) => finding.reviewer === 'testing',
+      ),
+    ).toBe(false)
+  })
+
+  test('a selected conditional dispatch with selection_reason retains both it and selection_surface in the writing artifact', () => {
+    const conditionalDispatch = dispatchRecord('correctness', {
+      selection_surface: ['src/example.ts'],
+      selection_reason: 'Touches example.ts directly.',
+    })
+    const base = finalizeReviewScenario({
+      dispatch_records: [conditionalDispatch],
+    })
+    const scenario: FinalizeReviewInput = {
+      ...base,
+      parent_run_metadata: {
+        ...base.parent_run_metadata,
+        selected_dispatches: [conditionalDispatch],
+      },
+    }
+
+    const result = finalizeReview(scenario)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.kind).toBe('writing')
+    if (result.value.kind !== 'writing') return
+    const dispatch = result.value.artifact.dispatches.find(
+      (entry) => entry.persona === 'correctness',
+    )
+    expect(dispatch?.selection_surface).toEqual(['src/example.ts'])
+    expect(dispatch?.selection_reason).toBe('Touches example.ts directly.')
+  })
+
+  test('a validation status other than not_attempted rejects identically in report-only and interactive', () => {
+    const base = finalizeReviewScenario()
+    for (const validation of [
+      { status: 'passed' as const },
+      { status: 'failed' as const, reason: 'Self-validation failed.' },
+    ]) {
+      const scenario: FinalizeReviewInput = {
+        ...base,
+        parent_run_metadata: { ...base.parent_run_metadata, validation },
+      }
+
+      const interactiveResult = finalizeReview(scenario)
+      const reportOnlyResult = finalizeReview({
+        ...scenario,
+        parent_run_metadata: {
+          ...scenario.parent_run_metadata,
+          mode: 'report-only',
+        },
+      })
+
+      expect(interactiveResult.ok, validation.status).toBe(false)
+      expect(reportOnlyResult.ok, validation.status).toBe(false)
+      if (interactiveResult.ok || reportOnlyResult.ok) continue
+      expect(interactiveResult.rejection.reason).toBe(
+        'validation must be not_attempted at finalize',
+      )
+      expect(reportOnlyResult.rejection.reason).toBe(
+        interactiveResult.rejection.reason,
+      )
+    }
+  })
+
+  test('validation not_attempted with a reason is accepted', () => {
+    const scenario = finalizeReviewScenario()
+
+    const result = finalizeReview(scenario)
+
+    expect(result.ok).toBe(true)
   })
 })

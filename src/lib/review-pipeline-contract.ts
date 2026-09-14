@@ -107,6 +107,7 @@ const SelectedDispatchSchema = z
       .array(RepoRelativePathSchema)
       .max(MAX_FINDINGS)
       .optional(),
+    selection_reason: PipelineReasonSchema.optional(),
   })
   .strict()
 

@@ -198,8 +198,12 @@ is the model's Stage 2b requirements check: each result's `kind` routes it --
 clean verdict; `inferred_gap` becomes advisory-only output and never blocks
 the verdict by itself. Neither kind becomes a finding. `parent_run_metadata`
 carries the run's own identity and mode; `validation` is the artifact
-self-validation status set from the [artifact validation](./synthesis-artifact-contract.md#artifact-validation)
-step, required for every status except `passed`.
+self-validation envelope, but finalize is called before that
+[artifact validation](./synthesis-artifact-contract.md#artifact-validation)
+step can run, so the only truthful value at that point is
+`{status: "not_attempted", reason}` -- finalize rejects any other value.
+The post-write validation status is reported by the parent in the rendered
+Coverage section, never rewritten into the persisted artifact.
 
 **Output:** `{ kind:'writing', artifact, report }` or `{ kind:'report_only', ...report }`.
 `report` carries `verdict`, `findings`, `applied_fixes`,

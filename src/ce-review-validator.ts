@@ -1,6 +1,8 @@
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { runClaudeCodeValidator } from './claude-code-validator.js'
+import { formatReviewArtifactIssuePath } from './lib/review-artifact-path.js'
+import { HarnessSchema } from './lib/review-artifact-schema.js'
 import {
   applyReviewAdjudication,
   finalizeReview,
@@ -48,7 +50,7 @@ export const CE_REVIEW_VALIDATOR_USAGE =
   'Usage: node validate-review.mjs <return|artifact|screen|prepare|merge|finalize> [...]'
 
 export const CE_REVIEW_SCREEN_USAGE =
-  'Usage: node validate-review.mjs screen --reviewer <name> --harness <name>'
+  'Usage: node validate-review.mjs screen --reviewer <name> --harness <opencode|pi|claude-code>'
 
 export const CE_REVIEW_SCREEN_STDIN_TTY_MESSAGE =
   'screen reads one raw reviewer return from stdin; interactive input is not supported'
@@ -166,8 +168,19 @@ function parseScreenFlags(argv: readonly string[]): ScreenFlagParse {
   const reviewer = values.get('--reviewer')
   const harness = values.get('--harness')
   if (reviewer === undefined || harness === undefined) return { ok: false }
+  if (!HarnessSchema.safeParse(harness).success) return { ok: false }
 
   return { harness, ok: true, reviewer }
+}
+
+/** Bounded, payload-safe rejection message: `<phase> rejected the aggregate
+ * envelope: <reason> at <path>`. `reason` is a fixed-vocabulary string from
+ * the pipeline and `path` is a safe JSON pointer; never payload content. */
+function formatAggregateRejectionMessage(
+  rejectedMessage: string,
+  rejection: { readonly path: string; readonly reason: string },
+): string {
+  return `${rejectedMessage}: ${rejection.reason} at ${rejection.path}`
 }
 
 function runScreenSubcommand(
@@ -263,7 +276,12 @@ function runPrepareSubcommand(
 
   const result = prepareReviewCandidates({ raw_input: text })
   if (!result.ok) {
-    errorSink(CE_REVIEW_PREPARE_REJECTED_MESSAGE)
+    errorSink(
+      formatAggregateRejectionMessage(
+        CE_REVIEW_PREPARE_REJECTED_MESSAGE,
+        result.rejection,
+      ),
+    )
     return 1
   }
 
@@ -279,15 +297,24 @@ interface AggregateStdinSubcommandSpec<Input> {
   readonly invalidUtf8Message: string
   readonly rejectedMessage: string
   readonly schema: {
-    readonly safeParse: (
-      value: unknown,
-    ) =>
+    readonly safeParse: (value: unknown) =>
       | { readonly success: true; readonly data: Input }
-      | { readonly success: false }
+      | {
+          readonly success: false
+          readonly error: {
+            readonly issues: readonly {
+              readonly path: readonly PropertyKey[]
+              readonly code: string
+            }[]
+          }
+        }
   }
-  readonly execute: (
-    input: Input,
-  ) => { readonly ok: true; readonly value: unknown } | { readonly ok: false }
+  readonly execute: (input: Input) =>
+    | { readonly ok: true; readonly value: unknown }
+    | {
+        readonly ok: false
+        readonly rejection: { readonly path: string; readonly reason: string }
+      }
 }
 
 /**
@@ -348,13 +375,20 @@ function runAggregateStdinSubcommand<Input>(
 
   const parsed = spec.schema.safeParse(value)
   if (!parsed.success) {
-    errorSink(spec.rejectedMessage)
+    const issue = parsed.error.issues[0]
+    errorSink(
+      issue
+        ? `${formatReviewArtifactIssuePath(issue.path)} ${issue.code}`
+        : spec.rejectedMessage,
+    )
     return 1
   }
 
   const result = spec.execute(parsed.data)
   if (!result.ok) {
-    errorSink(spec.rejectedMessage)
+    errorSink(
+      formatAggregateRejectionMessage(spec.rejectedMessage, result.rejection),
+    )
     return 1
   }
 
@@ -403,6 +437,23 @@ function runFinalizeSubcommand(
 let processExceptionBoundaryInstalled = false
 
 /**
+ * The subcommand currently being dispatched, set once at the top of
+ * {@link runCeReviewValidator} before entering its `try` block. Both the
+ * process-scope exception boundary and the top-level `catch` read this at
+ * fault time (not at closure-creation time) so a fatal error names the
+ * phase that actually failed, even though the boundary itself installs its
+ * handlers only once per process.
+ */
+let activeSubcommandPhase = 'unknown'
+
+/** Fixed-template fatal message naming the active subcommand. Keeps
+ * {@link CE_REVIEW_SCREEN_INTERNAL_ERROR_MESSAGE} exported for backward
+ * compatibility, but the text actually emitted always names the phase. */
+function formatInternalErrorMessage(phase: string): string {
+  return `ce-review-validator: internal error in ${phase}`
+}
+
+/**
  * Install process-scope `unhandledRejection`/`uncaughtException` handlers
  * exactly once per process, routed through the same fixed-reason-code
  * boundary as a synchronous throw. Without this, an untrapped async
@@ -416,7 +467,7 @@ function installProcessExceptionBoundary(
   processExceptionBoundaryInstalled = true
 
   const handleFatal = (): void => {
-    errorSink(CE_REVIEW_SCREEN_INTERNAL_ERROR_MESSAGE)
+    errorSink(formatInternalErrorMessage(activeSubcommandPhase))
     process.exitCode = 1
   }
   process.on('unhandledRejection', handleFatal)
@@ -433,9 +484,10 @@ export function runCeReviewValidator(
 
   installProcessExceptionBoundary(errorSink)
 
-  try {
-    const subcommand = options.argv[0]
+  const subcommand = options.argv[0]
+  activeSubcommandPhase = subcommand ?? 'unknown'
 
+  try {
     if (subcommand === 'return') {
       return runReviewReturnValidator({
         argv: [
@@ -478,7 +530,7 @@ export function runCeReviewValidator(
     errorSink(CE_REVIEW_VALIDATOR_USAGE)
     return 2
   } catch {
-    errorSink(CE_REVIEW_SCREEN_INTERNAL_ERROR_MESSAGE)
+    errorSink(formatInternalErrorMessage(activeSubcommandPhase))
     return 1
   }
 }

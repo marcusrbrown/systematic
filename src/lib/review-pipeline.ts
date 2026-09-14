@@ -2043,7 +2043,7 @@ export interface DeriveFinalizeContextInput {
   readonly dispatch_records: FinalizeDispatchRecords
   readonly parent_run_metadata: Pick<
     FinalizeParentRunMetadata,
-    'selected_dispatches'
+    'selected_dispatches' | 'validation'
   >
 }
 
@@ -2059,13 +2059,16 @@ type FinalizeContextRejectReason =
   | 'survivor claimed by multiple merged findings'
   | 'validator request references unknown merged finding'
   | 'dispatch record mismatch'
+  | 'duplicate selection surface entry'
   | 'screen result missing for selected persona'
   | 'unexpected screen result for persona'
+  | 'screen result outcome does not match dispatch record'
   | 'merged finding fields diverge from derivation'
   | 'confidence disposition references unscreened finding'
   | 'merged finding cites input from unavailable reviewer'
   | 'merged finding submitter not a cited reviewer'
   | 'merged finding agreement credit overlaps submitters'
+  | 'validation must be not_attempted at finalize'
 
 export interface FinalizeContextRejection {
   readonly path: string
@@ -2087,6 +2090,27 @@ type FinalizeContextCheckResult<Value> =
   | { readonly ok: true; readonly value: Value }
   | { readonly ok: false; readonly rejection: FinalizeContextRejection }
 
+/** Normalizes a `selection_surface` for order-insensitive comparison: each
+ * entry through `normalizeRepoRelativePath`, then sorted. `undefined` stays
+ * `undefined` so an absent surface never compares equal to an empty one. */
+function normalizeSelectionSurface(
+  surface: readonly string[] | undefined,
+): readonly string[] | undefined {
+  if (surface === undefined) return undefined
+  return [...surface].map(normalizeRepoRelativePath).sort(compareStrings)
+}
+
+/** Whether a `selection_surface` contains a duplicate entry once normalized
+ * -- checked before comparison so a duplicate is always its own rejection
+ * rather than a silent dedup. */
+function selectionSurfaceHasDuplicates(
+  surface: readonly string[] | undefined,
+): boolean {
+  if (surface === undefined) return false
+  const normalized = surface.map(normalizeRepoRelativePath)
+  return new Set(normalized).size !== normalized.length
+}
+
 function dispatchRecordsEqual(
   a: FinalizeDispatchRecord,
   b: FinalizeDispatchRecord,
@@ -2094,8 +2118,9 @@ function dispatchRecordsEqual(
   return (
     a.persona === b.persona &&
     a.dispatch_outcome === b.dispatch_outcome &&
-    JSON.stringify(a.selection_surface ?? []) ===
-      JSON.stringify(b.selection_surface ?? [])
+    JSON.stringify(normalizeSelectionSurface(a.selection_surface) ?? []) ===
+      JSON.stringify(normalizeSelectionSurface(b.selection_surface) ?? []) &&
+    a.selection_reason === b.selection_reason
   )
 }
 
@@ -2300,11 +2325,26 @@ function checkDispatchRecordsJoin(
   const seenPersonas = new Set<string>()
   for (const [index, record] of dispatchRecords.entries()) {
     const selected = selectedByPersona.get(record.persona)
+    if (seenPersonas.has(record.persona) || !selected) {
+      return rejectFinalizeContext(
+        formatReviewArtifactIssuePath(['dispatch_records', index]),
+        'dispatch record mismatch',
+      )
+    }
     if (
-      seenPersonas.has(record.persona) ||
-      !selected ||
-      !dispatchRecordsEqual(record, selected)
+      selectionSurfaceHasDuplicates(record.selection_surface) ||
+      selectionSurfaceHasDuplicates(selected.selection_surface)
     ) {
+      return rejectFinalizeContext(
+        formatReviewArtifactIssuePath([
+          'dispatch_records',
+          index,
+          'selection_surface',
+        ]),
+        'duplicate selection surface entry',
+      )
+    }
+    if (!dispatchRecordsEqual(record, selected)) {
       return rejectFinalizeContext(
         formatReviewArtifactIssuePath(['dispatch_records', index]),
         'dispatch record mismatch',
@@ -2316,8 +2356,18 @@ function checkDispatchRecordsJoin(
   return { ok: true, value: selectedByPersona }
 }
 
+/** Dispatch outcomes for which the corresponding helper never ran, so no
+ * screen result exists for the persona by definition. */
+const SCREEN_RESULT_EXEMPT_DISPATCH_OUTCOMES = new Set<string>([
+  'validation_unavailable',
+  'never_returned',
+])
+
 /** `screen_results` must contain exactly one result per selected persona,
- * none extra. */
+ * none extra -- except a persona whose dispatch outcome exempts it (its
+ * helper never ran, so it has no screen result by definition). If a screen
+ * result IS present for an exempt persona, it still joins 1:1 and its own
+ * `dispatch_outcome` must agree with the dispatch record's. */
 function checkScreenResultsJoin(
   screenResults: FinalizeScreenResults,
   dispatchRecords: FinalizeDispatchRecords,
@@ -2338,10 +2388,24 @@ function checkScreenResultsJoin(
   }
 
   for (const [index, record] of dispatchRecords.entries()) {
-    if (!screenByReviewer.has(record.persona)) {
+    const screenResult = screenByReviewer.get(record.persona)
+    if (!screenResult) {
+      if (SCREEN_RESULT_EXEMPT_DISPATCH_OUTCOMES.has(record.dispatch_outcome)) {
+        continue
+      }
       return rejectFinalizeContext(
         formatReviewArtifactIssuePath(['dispatch_records', index, 'persona']),
         'screen result missing for selected persona',
+      )
+    }
+    if (screenResult.result.dispatch_outcome !== record.dispatch_outcome) {
+      return rejectFinalizeContext(
+        formatReviewArtifactIssuePath([
+          'dispatch_records',
+          index,
+          'dispatch_outcome',
+        ]),
+        'screen result outcome does not match dispatch record',
       )
     }
   }
@@ -2679,6 +2743,23 @@ function deriveLostRiskCriticalPersonas(
 export function deriveFinalizeContext(
   input: DeriveFinalizeContextInput,
 ): DeriveFinalizeContextResult {
+  // The persisted artifact is built before the artifact self-validation step
+  // can run, so `not_attempted` is the only truthful value finalize can carry
+  // through. Checked before any other branch so report-only and writing
+  // agree; the parent's post-write artifact-validation step is the only
+  // writer of the final status, reported in the rendered Coverage section
+  // rather than rewritten into the artifact.
+  if (input.parent_run_metadata.validation.status !== 'not_attempted') {
+    return rejectFinalizeContext(
+      formatReviewArtifactIssuePath([
+        'parent_run_metadata',
+        'validation',
+        'status',
+      ]),
+      'validation must be not_attempted at finalize',
+    )
+  }
+
   const findingIds = checkNoDuplicateMergedFindingIds(
     input.merge.merged_findings,
   )
@@ -4065,6 +4146,7 @@ interface ArtifactDispatchEntry {
   readonly input_finding_count: number
   readonly rejection_reason?: string
   readonly selection_surface?: readonly string[]
+  readonly selection_reason?: string
 }
 
 function buildDispatchEntry(
@@ -4078,6 +4160,7 @@ function buildDispatchEntry(
       : (screenResult?.result.admitted_findings.length ?? 0)
   const rejectionReason = screenResult?.result.rejected_summary?.reason
   const selectionSurface = record.selection_surface
+  const selectionReason = record.selection_reason
 
   return {
     persona: record.persona,
@@ -4088,6 +4171,9 @@ function buildDispatchEntry(
       : {}),
     ...(selectionSurface !== undefined && selectionSurface.length > 0
       ? { selection_surface: selectionSurface }
+      : {}),
+    ...(selectionReason !== undefined
+      ? { selection_reason: selectionReason }
       : {}),
   }
 }
@@ -4184,7 +4270,10 @@ export function finalizeReview(
     prepared: input.prepared,
     screen_results: input.screen_results,
     dispatch_records: input.dispatch_records,
-    parent_run_metadata: input.parent_run_metadata,
+    parent_run_metadata: {
+      selected_dispatches: input.parent_run_metadata.selected_dispatches,
+      validation: input.parent_run_metadata.validation,
+    },
   })
   if (!context.ok) return context
 

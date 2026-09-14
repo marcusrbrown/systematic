@@ -356,6 +356,27 @@ describe('screen: flag parsing', () => {
     expect(result.exitCode).toBe(2)
     expect(result.stderr).toContain('Usage:')
   })
+
+  test('an unrecognized --harness value exits 2 with a usage message', () => {
+    const result = runValidator(
+      ['screen', '--reviewer', 'correctness', '--harness', 'bogus-harness'],
+      { input: JSON.stringify(VALID_RETURN) },
+    )
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('Usage:')
+    expect(result.stdout).toBe('')
+  })
+
+  test.each(['opencode', 'pi', 'claude-code'] as const)(
+    'a valid --harness value of %s exits 0',
+    (harness) => {
+      const result = runValidator(
+        ['screen', '--reviewer', 'correctness', '--harness', harness],
+        { input: JSON.stringify(VALID_RETURN) },
+      )
+      expect(result.exitCode, result.stderr).toBe(0)
+    },
+  )
 })
 
 describe('screen: stdin bounds', () => {
@@ -451,7 +472,7 @@ describe('screen: exception boundary', () => {
 
     expect(result.status).toBe(0)
     expect(result.stdout).toContain('EXIT:1')
-    expect(result.stderr).toContain('internal error')
+    expect(result.stderr).toContain('internal error in screen')
     expect(result.stderr).not.toContain('boom from outputSink')
     expect(result.stderr).not.toContain('Error:')
     expect(result.stderr).not.toContain('.ts:')
@@ -486,7 +507,7 @@ describe('screen: exception boundary', () => {
     })
 
     expect(result.stdout).toContain('SYNC_EXIT:0')
-    expect(result.stderr).toContain('internal error')
+    expect(result.stderr).toContain('internal error in screen')
     expect(result.stderr).not.toContain('boom from rejected promise')
     expect(result.stderr).not.toContain('Error:')
     expect(result.stderr).not.toContain('.ts:')
@@ -602,7 +623,7 @@ describe('prepare: exception boundary', () => {
 
     expect(result.status).toBe(0)
     expect(result.stdout).toContain('EXIT:1')
-    expect(result.stderr).toContain('internal error')
+    expect(result.stderr).toContain('internal error in prepare')
     expect(result.stderr).not.toContain('boom from outputSink')
     expect(result.stderr).not.toContain('Error:')
     expect(result.stderr).not.toContain('.ts:')
@@ -637,7 +658,7 @@ describe('prepare: exception boundary', () => {
     })
 
     expect(result.stdout).toContain('SYNC_EXIT:0')
-    expect(result.stderr).toContain('internal error')
+    expect(result.stderr).toContain('internal error in prepare')
     expect(result.stderr).not.toContain('boom from rejected promise')
     expect(result.stderr).not.toContain('Error:')
     expect(result.stderr).not.toContain('.ts:')
@@ -705,12 +726,14 @@ describe('merge: rejection outcomes', () => {
     expect(result.stdout).toBe('')
   })
 
-  test('an adjudication rejection from applyReviewAdjudication exits 1', () => {
+  test('an adjudication rejection from applyReviewAdjudication exits 1 with the fixed reason and a path', () => {
     const result = runValidator([...MERGE_ARGS], {
       input: JSON.stringify(MERGE_REJECTED_INPUT),
     })
     expect(result.exitCode).toBe(1)
-    expect(result.stderr).toContain('rejected the aggregate envelope')
+    expect(result.stderr).toContain('merge rejected the aggregate envelope')
+    expect(result.stderr).toContain('omitted eligible input id')
+    expect(result.stderr).toContain(' at ')
     expect(result.stdout).toBe('')
   })
 })
@@ -763,7 +786,7 @@ describe('merge: exception boundary', () => {
 
     expect(result.status).toBe(0)
     expect(result.stdout).toContain('EXIT:1')
-    expect(result.stderr).toContain('internal error')
+    expect(result.stderr).toContain('internal error in merge')
     expect(result.stderr).not.toContain('boom from outputSink')
     expect(result.stderr).not.toContain('Error:')
     expect(result.stderr).not.toContain('.ts:')
@@ -798,7 +821,7 @@ describe('merge: exception boundary', () => {
     })
 
     expect(result.stdout).toContain('SYNC_EXIT:0')
-    expect(result.stderr).toContain('internal error')
+    expect(result.stderr).toContain('internal error in merge')
     expect(result.stderr).not.toContain('boom from rejected promise')
     expect(result.stderr).not.toContain('Error:')
     expect(result.stderr).not.toContain('.ts:')
@@ -890,12 +913,14 @@ describe('finalize: rejection outcomes', () => {
     expect(result.stdout).toBe('')
   })
 
-  test('a schema-invalid envelope exits 1 with the fixed rejected message and empty stdout', () => {
+  test('a schema-invalid envelope exits 1 with a path and code but not the offending value', () => {
     const result = runValidator([...FINALIZE_ARGS], {
       input: JSON.stringify(FINALIZE_SCHEMA_INVALID_INPUT),
     })
     expect(result.exitCode).toBe(1)
-    expect(result.stderr).toContain('finalize rejected the aggregate envelope')
+    expect(result.stderr).toContain('parent_run_metadata.mode')
+    expect(result.stderr).not.toContain('not-a-real-mode')
+    expect(result.stderr).not.toContain('rejected the aggregate envelope')
     expect(result.stdout).toBe('')
   })
 })
@@ -948,7 +973,7 @@ describe('finalize: exception boundary', () => {
 
     expect(result.status).toBe(0)
     expect(result.stdout).toContain('EXIT:1')
-    expect(result.stderr).toContain('internal error')
+    expect(result.stderr).toContain('internal error in finalize')
     expect(result.stderr).not.toContain('boom from outputSink')
     expect(result.stderr).not.toContain('Error:')
     expect(result.stderr).not.toContain('.ts:')
@@ -983,7 +1008,7 @@ describe('finalize: exception boundary', () => {
     })
 
     expect(result.stdout).toContain('SYNC_EXIT:0')
-    expect(result.stderr).toContain('internal error')
+    expect(result.stderr).toContain('internal error in finalize')
     expect(result.stderr).not.toContain('boom from rejected promise')
     expect(result.stderr).not.toContain('Error:')
     expect(result.stderr).not.toContain('.ts:')

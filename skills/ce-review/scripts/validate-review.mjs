@@ -7080,6 +7080,7 @@ var SelectedDispatchSchema = object({
   persona: SubAgentReturnSchema.shape.reviewer,
   dispatch_outcome: DispatchOutcomeSchema,
   selection_surface: array(RepoRelativePathSchema).max(MAX_FINDINGS).optional(),
+  selection_reason: PipelineReasonSchema.optional(),
 }).strict()
 var PrepareInputSchema = object({
   screen_results: array(ScreenResultSchema).max(MAX_PERSONAS),
@@ -8527,12 +8528,22 @@ function reconcileValidatorResults(input) {
 function rejectFinalizeContext(path, reason) {
   return { ok: false, rejection: { path, reason } }
 }
+function normalizeSelectionSurface(surface) {
+  if (surface === undefined) return
+  return [...surface].map(normalizeRepoRelativePath).sort(compareStrings)
+}
+function selectionSurfaceHasDuplicates(surface) {
+  if (surface === undefined) return false
+  const normalized = surface.map(normalizeRepoRelativePath)
+  return new Set(normalized).size !== normalized.length
+}
 function dispatchRecordsEqual(a, b) {
   return (
     a.persona === b.persona &&
     a.dispatch_outcome === b.dispatch_outcome &&
-    JSON.stringify(a.selection_surface ?? []) ===
-      JSON.stringify(b.selection_surface ?? [])
+    JSON.stringify(normalizeSelectionSurface(a.selection_surface) ?? []) ===
+      JSON.stringify(normalizeSelectionSurface(b.selection_surface) ?? []) &&
+    a.selection_reason === b.selection_reason
   )
 }
 var FINALIZE_CONTEXT_LOSS_DISPATCH_OUTCOMES = new Set([
@@ -8682,11 +8693,26 @@ function checkDispatchRecordsJoin(dispatchRecords, selectedDispatches) {
   const seenPersonas = new Set()
   for (const [index, record] of dispatchRecords.entries()) {
     const selected = selectedByPersona.get(record.persona)
+    if (seenPersonas.has(record.persona) || !selected) {
+      return rejectFinalizeContext(
+        formatReviewArtifactIssuePath(['dispatch_records', index]),
+        'dispatch record mismatch',
+      )
+    }
     if (
-      seenPersonas.has(record.persona) ||
-      !selected ||
-      !dispatchRecordsEqual(record, selected)
+      selectionSurfaceHasDuplicates(record.selection_surface) ||
+      selectionSurfaceHasDuplicates(selected.selection_surface)
     ) {
+      return rejectFinalizeContext(
+        formatReviewArtifactIssuePath([
+          'dispatch_records',
+          index,
+          'selection_surface',
+        ]),
+        'duplicate selection surface entry',
+      )
+    }
+    if (!dispatchRecordsEqual(record, selected)) {
       return rejectFinalizeContext(
         formatReviewArtifactIssuePath(['dispatch_records', index]),
         'dispatch record mismatch',
@@ -8696,6 +8722,10 @@ function checkDispatchRecordsJoin(dispatchRecords, selectedDispatches) {
   }
   return { ok: true, value: selectedByPersona }
 }
+var SCREEN_RESULT_EXEMPT_DISPATCH_OUTCOMES = new Set([
+  'validation_unavailable',
+  'never_returned',
+])
 function checkScreenResultsJoin(
   screenResults,
   dispatchRecords,
@@ -8715,10 +8745,24 @@ function checkScreenResultsJoin(
     screenByReviewer.set(result.reviewer, result)
   }
   for (const [index, record] of dispatchRecords.entries()) {
-    if (!screenByReviewer.has(record.persona)) {
+    const screenResult = screenByReviewer.get(record.persona)
+    if (!screenResult) {
+      if (SCREEN_RESULT_EXEMPT_DISPATCH_OUTCOMES.has(record.dispatch_outcome)) {
+        continue
+      }
       return rejectFinalizeContext(
         formatReviewArtifactIssuePath(['dispatch_records', index, 'persona']),
         'screen result missing for selected persona',
+      )
+    }
+    if (screenResult.result.dispatch_outcome !== record.dispatch_outcome) {
+      return rejectFinalizeContext(
+        formatReviewArtifactIssuePath([
+          'dispatch_records',
+          index,
+          'dispatch_outcome',
+        ]),
+        'screen result outcome does not match dispatch record',
       )
     }
   }
@@ -8960,6 +9004,16 @@ function deriveLostRiskCriticalPersonas(dispatchRecords, screenByReviewer) {
   return [...lostPersonas].sort((a, b) => compareStrings(a.persona, b.persona))
 }
 function deriveFinalizeContext(input) {
+  if (input.parent_run_metadata.validation.status !== 'not_attempted') {
+    return rejectFinalizeContext(
+      formatReviewArtifactIssuePath([
+        'parent_run_metadata',
+        'validation',
+        'status',
+      ]),
+      'validation must be not_attempted at finalize',
+    )
+  }
   const findingIds = checkNoDuplicateMergedFindingIds(
     input.merge.merged_findings,
   )
@@ -9586,6 +9640,7 @@ function buildDispatchEntry(record, screenByReviewer) {
       : (screenResult?.result.admitted_findings.length ?? 0)
   const rejectionReason = screenResult?.result.rejected_summary?.reason
   const selectionSurface = record.selection_surface
+  const selectionReason = record.selection_reason
   return {
     persona: record.persona,
     dispatch_outcome: record.dispatch_outcome,
@@ -9595,6 +9650,9 @@ function buildDispatchEntry(record, screenByReviewer) {
       : {}),
     ...(selectionSurface !== undefined && selectionSurface.length > 0
       ? { selection_surface: selectionSurface }
+      : {}),
+    ...(selectionReason !== undefined
+      ? { selection_reason: selectionReason }
       : {}),
   }
 }
@@ -9658,7 +9716,10 @@ function finalizeReview(input) {
     prepared: input.prepared,
     screen_results: input.screen_results,
     dispatch_records: input.dispatch_records,
-    parent_run_metadata: input.parent_run_metadata,
+    parent_run_metadata: {
+      selected_dispatches: input.parent_run_metadata.selected_dispatches,
+      validation: input.parent_run_metadata.validation,
+    },
   })
   if (!context.ok) return context
   const pipeline = runReviewPipeline({
@@ -9760,7 +9821,7 @@ function finalizeReview(input) {
 var CE_REVIEW_VALIDATOR_USAGE =
   'Usage: node validate-review.mjs <return|artifact|screen|prepare|merge|finalize> [...]'
 var CE_REVIEW_SCREEN_USAGE =
-  'Usage: node validate-review.mjs screen --reviewer <name> --harness <name>'
+  'Usage: node validate-review.mjs screen --reviewer <name> --harness <opencode|pi|claude-code>'
 var CE_REVIEW_SCREEN_STDIN_TTY_MESSAGE =
   'screen reads one raw reviewer return from stdin; interactive input is not supported'
 var CE_REVIEW_SCREEN_STDIN_READ_FAILED_MESSAGE =
@@ -9824,7 +9885,11 @@ function parseScreenFlags(argv) {
   const reviewer = values.get('--reviewer')
   const harness = values.get('--harness')
   if (reviewer === undefined || harness === undefined) return { ok: false }
+  if (!HarnessSchema.safeParse(harness).success) return { ok: false }
   return { harness, ok: true, reviewer }
+}
+function formatAggregateRejectionMessage(rejectedMessage, rejection) {
+  return `${rejectedMessage}: ${rejection.reason} at ${rejection.path}`
 }
 function runScreenSubcommand(options, outputSink, errorSink) {
   const flags = parseScreenFlags(options.argv.slice(1))
@@ -9900,7 +9965,12 @@ function runPrepareSubcommand(options, outputSink, errorSink) {
   }
   const result = prepareReviewCandidates({ raw_input: text })
   if (!result.ok) {
-    errorSink(CE_REVIEW_PREPARE_REJECTED_MESSAGE)
+    errorSink(
+      formatAggregateRejectionMessage(
+        CE_REVIEW_PREPARE_REJECTED_MESSAGE,
+        result.rejection,
+      ),
+    )
     return 1
   }
   outputSink(JSON.stringify(result.value))
@@ -9946,12 +10016,19 @@ function runAggregateStdinSubcommand(options, outputSink, errorSink, spec) {
   }
   const parsed = spec.schema.safeParse(value)
   if (!parsed.success) {
-    errorSink(spec.rejectedMessage)
+    const issue = parsed.error.issues[0]
+    errorSink(
+      issue
+        ? `${formatReviewArtifactIssuePath(issue.path)} ${issue.code}`
+        : spec.rejectedMessage,
+    )
     return 1
   }
   const result = spec.execute(parsed.data)
   if (!result.ok) {
-    errorSink(spec.rejectedMessage)
+    errorSink(
+      formatAggregateRejectionMessage(spec.rejectedMessage, result.rejection),
+    )
     return 1
   }
   outputSink(JSON.stringify(result.value))
@@ -9986,11 +10063,15 @@ function runFinalizeSubcommand(options, outputSink, errorSink) {
   })
 }
 var processExceptionBoundaryInstalled = false
+var activeSubcommandPhase = 'unknown'
+function formatInternalErrorMessage(phase) {
+  return `ce-review-validator: internal error in ${phase}`
+}
 function installProcessExceptionBoundary(errorSink) {
   if (processExceptionBoundaryInstalled) return
   processExceptionBoundaryInstalled = true
   const handleFatal = () => {
-    errorSink(CE_REVIEW_SCREEN_INTERNAL_ERROR_MESSAGE)
+    errorSink(formatInternalErrorMessage(activeSubcommandPhase))
     process.exitCode = 1
   }
   process.on('unhandledRejection', handleFatal)
@@ -10000,8 +10081,9 @@ function runCeReviewValidator(options) {
   const outputSink = options.outputSink ?? ((message) => console.log(message))
   const errorSink = options.errorSink ?? ((message) => console.error(message))
   installProcessExceptionBoundary(errorSink)
+  const subcommand = options.argv[0]
+  activeSubcommandPhase = subcommand ?? 'unknown'
   try {
-    const subcommand = options.argv[0]
     if (subcommand === 'return') {
       return runReviewReturnValidator({
         argv: [
@@ -10038,7 +10120,7 @@ function runCeReviewValidator(options) {
     errorSink(CE_REVIEW_VALIDATOR_USAGE)
     return 2
   } catch {
-    errorSink(CE_REVIEW_SCREEN_INTERNAL_ERROR_MESSAGE)
+    errorSink(formatInternalErrorMessage(activeSubcommandPhase))
     return 1
   }
 }
