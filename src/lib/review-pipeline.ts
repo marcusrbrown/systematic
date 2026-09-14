@@ -1885,3 +1885,312 @@ export function reconcileValidatorResults(
     },
   }
 }
+
+// --- finalize phase: dispositions, counts, and action queues ----------------
+//
+// Pure, side-effect-free derivation of every admitted input's final
+// disposition, the weighted disposition counts, and the action queues that
+// partition surviving actionable findings by owner. Consumes only
+// `reconcileValidatorResults`'s output, the `prepare`-phase ledger, and the
+// rejected-payload weights the screen phase already recorded -- every
+// disposition, count, and queue placement is derived from that admitted
+// state, never from anything a model supplied. This is dispositions, counts,
+// and queues only: risk coverage, plan-assessment routing, and final
+// artifact assembly are separate slices. Never reads `process.env`, the
+// filesystem, or the clock.
+
+/** The final disposition of one admitted raw input: suppressed by the
+ * confidence gate, filtered by a disproven validation, folded into a
+ * synthesized (multi-input) finding, or surviving as its own finding.
+ * Mutually exclusive and exhaustive over every entry in
+ * `PrepareOutput['confidence_dispositions']` -- a rejected input never
+ * reaches this vocabulary at all, since whole-payload rejection happens
+ * before the `prepare` phase and is counted separately (see
+ * `FinalDispositionCounts.rejected`). */
+export type FinalInputDisposition =
+  | 'suppressed'
+  | 'filtered'
+  | 'merged'
+  | 'surviving'
+
+/** One admitted raw input's final disposition. `reason` carries the
+ * confidence-gate suppression reason when present; every other disposition
+ * has no reason of its own to report here. */
+export interface FinalizedInputDisposition {
+  readonly input_id: string
+  readonly disposition: FinalInputDisposition
+  readonly reason?: string
+}
+
+/** One rejected reviewer payload's weight for the disposition-count total:
+ * the number of findings a whole-payload rejection discarded, exactly as
+ * `screenReviewReturn` recorded it in `ScreenRejectedSummarySchema`. A
+ * rejected payload contributes one weighted entry here, never one row per
+ * discarded finding -- so the disposition-count total stays anchored to
+ * findings actually observed rather than to ledger row count. */
+export interface RejectedPayloadWeight {
+  readonly rejected_finding_count: number
+}
+
+/** Every admitted-plus-rejected disposition count, weighted by findings
+ * observed rather than by ledger rows. `rejected` sums every
+ * `RejectedPayloadWeight.rejected_finding_count`; the other four fields each
+ * count one `FinalizedInputDisposition` entry. The five fields always sum to
+ * the total findings observed (admitted inputs plus rejected weight) --
+ * verified by the caller, since this module never asserts its own output. */
+export interface FinalDispositionCounts {
+  readonly surviving: number
+  readonly merged: number
+  readonly suppressed: number
+  readonly filtered: number
+  readonly rejected: number
+}
+
+/** Where one actionable, surviving finding routes to: a fixer can take it
+ * directly (`owner: 'review-fixer'`), it needs a human or a downstream
+ * resolver (`owner: 'downstream-resolver' | 'human'`), or it is terminal and
+ * report-only (`owner: 'release'`). Derived solely from the finding's own
+ * mechanically-computed `owner` field -- never from anything a model
+ * proposed beyond the narrowing `deriveMergedFindingFields` already
+ * validated. */
+export type FindingActionRoute = 'fixer' | 'residual' | 'report_only'
+
+/** One finding placed in an action queue. `unconfirmed` is `true` when the
+ * finding's validator run failed or was unavailable -- nobody disproved it,
+ * so it stays actionable, but a later slice needs to know it was never
+ * confirmed either. */
+export interface QueuedFinding {
+  readonly finding_id: string
+  readonly unconfirmed: boolean
+}
+
+/** One reported finding that is not in any action queue because it predates
+ * the current change: every one of its contributing raw inputs was already
+ * `pre_existing`. Still reported, but not the same actionable class as a
+ * newly introduced finding. */
+export interface PreExistingFinding {
+  readonly finding_id: string
+  readonly unconfirmed: boolean
+}
+
+export interface FinalizeReviewDispositionsInput {
+  readonly prepared: PrepareOutput
+  readonly reconciled: ReconcileValidatorResultsOutput
+  readonly rejected_payloads: readonly RejectedPayloadWeight[]
+}
+
+export interface FinalizeReviewDispositionsOutput {
+  readonly input_dispositions: readonly FinalizedInputDisposition[]
+  readonly disposition_counts: FinalDispositionCounts
+  readonly pre_existing_findings: readonly PreExistingFinding[]
+  readonly new_findings: readonly QueuedFinding[]
+  readonly queues: {
+    readonly fixer: readonly QueuedFinding[]
+    readonly residual: readonly QueuedFinding[]
+    readonly report_only: readonly QueuedFinding[]
+  }
+}
+
+/**
+ * Derives every admitted raw input's final disposition from the state the
+ * earlier phases already established: `prepared.confidence_dispositions`
+ * for suppression, `reconciled.filtered_input_ids` for a disproven
+ * validation, and, for everything else, whether the input's synthesized
+ * finding (looked up via its `input_finding_ids`) carries more than one
+ * contributing input (`merged`) or exactly one (`surviving`). Every input
+ * finds its finding by construction: `applyReviewAdjudication` places every
+ * confidence-gate survivor into exactly one merge group or singleton.
+ */
+function deriveInputDispositions(
+  prepared: PrepareOutput,
+  reconciled: ReconcileValidatorResultsOutput,
+): readonly FinalizedInputDisposition[] {
+  const filteredInputIds = new Set(reconciled.filtered_input_ids)
+  const findingByInputId = new Map<string, ReconciledFinding>()
+  for (const finding of reconciled.findings) {
+    for (const inputId of finding.input_finding_ids) {
+      findingByInputId.set(inputId, finding)
+    }
+  }
+
+  const dispositions = prepared.confidence_dispositions.map(
+    (entry): FinalizedInputDisposition => {
+      if (entry.disposition === 'suppressed') {
+        return {
+          input_id: entry.input_id,
+          disposition: 'suppressed',
+          reason: entry.reason,
+        }
+      }
+      if (filteredInputIds.has(entry.input_id)) {
+        return { input_id: entry.input_id, disposition: 'filtered' }
+      }
+      const finding = findingByInputId.get(entry.input_id)
+      const isMerged =
+        finding !== undefined && finding.input_finding_ids.length > 1
+      return {
+        input_id: entry.input_id,
+        disposition: isMerged ? 'merged' : 'surviving',
+      }
+    },
+  )
+
+  return [...dispositions].sort((a, b) =>
+    compareStrings(a.input_id, b.input_id),
+  )
+}
+
+/**
+ * Sums each disposition's weight: one per admitted input for the first four
+ * fields, and the rejected-payload weights (never one per discarded
+ * finding) for `rejected`.
+ */
+function computeDispositionCounts(
+  inputDispositions: readonly FinalizedInputDisposition[],
+  rejectedPayloads: readonly RejectedPayloadWeight[],
+): FinalDispositionCounts {
+  let surviving = 0
+  let merged = 0
+  let suppressed = 0
+  let filtered = 0
+
+  for (const entry of inputDispositions) {
+    if (entry.disposition === 'surviving') surviving += 1
+    else if (entry.disposition === 'merged') merged += 1
+    else if (entry.disposition === 'suppressed') suppressed += 1
+    else filtered += 1
+  }
+
+  const rejected = rejectedPayloads.reduce(
+    (total, payload) => total + payload.rejected_finding_count,
+    0,
+  )
+
+  return { surviving, merged, suppressed, filtered, rejected }
+}
+
+/**
+ * Whether one synthesized finding is entirely pre-existing: every raw input
+ * it was built from (resolved back through `prepared.surviving_findings`)
+ * reported `pre_existing: true`. Mirrors `derivePreExisting`'s all-inputs
+ * rule from the merge phase rather than inventing a different one; mixed
+ * evidence is never pre-existing.
+ */
+function isFindingPreExisting(
+  finding: ReconciledFinding,
+  survivingByInputId: ReadonlyMap<string, SurvivingFinding>,
+): boolean {
+  return finding.input_finding_ids.every(
+    (inputId) => survivingByInputId.get(inputId)?.pre_existing === true,
+  )
+}
+
+/** The action queue one finding's mechanically-derived `owner` routes to. */
+function routeForOwner(
+  owner: MergeOutput['merged_findings'][number]['owner'],
+): FindingActionRoute {
+  if (owner === 'review-fixer') return 'fixer'
+  if (owner === 'release') return 'report_only'
+  return 'residual'
+}
+
+interface PartitionedFindings {
+  readonly preExistingFindings: readonly PreExistingFinding[]
+  readonly newFindings: readonly QueuedFinding[]
+  readonly queues: FinalizeReviewDispositionsOutput['queues']
+}
+
+/**
+ * Partitions every non-filtered reconciled finding into the pre-existing
+ * report list or exactly one action queue. A finding filtered by a `false`
+ * validation is excluded entirely -- it enters no queue and is not reported
+ * here. `unconfirmed` marks a finding whose validator run failed or was
+ * unavailable (present in `reconciled.lifecycle_failures`): still
+ * actionable, since nobody disproved it, but never confirmed either.
+ */
+function partitionFindings(
+  prepared: PrepareOutput,
+  reconciled: ReconcileValidatorResultsOutput,
+): PartitionedFindings {
+  const survivingByInputId = buildSurvivingFindingIndex(prepared)
+  const filteredFindingIds = new Set(reconciled.filtered_finding_ids)
+  const unconfirmedFindingIds = new Set(
+    reconciled.lifecycle_failures.map((failure) => failure.finding_id),
+  )
+
+  const preExistingFindings: PreExistingFinding[] = []
+  const newFindings: QueuedFinding[] = []
+  const fixer: QueuedFinding[] = []
+  const residual: QueuedFinding[] = []
+  const reportOnly: QueuedFinding[] = []
+
+  for (const finding of reconciled.findings) {
+    if (filteredFindingIds.has(finding.finding_id)) continue
+
+    const unconfirmed = unconfirmedFindingIds.has(finding.finding_id)
+    const entry: QueuedFinding = { finding_id: finding.finding_id, unconfirmed }
+
+    if (isFindingPreExisting(finding, survivingByInputId)) {
+      preExistingFindings.push(entry)
+      continue
+    }
+
+    newFindings.push(entry)
+    const route = routeForOwner(finding.owner)
+    if (route === 'fixer') fixer.push(entry)
+    else if (route === 'residual') residual.push(entry)
+    else reportOnly.push(entry)
+  }
+
+  const byFindingId = (a: QueuedFinding, b: QueuedFinding) =>
+    compareStrings(a.finding_id, b.finding_id)
+
+  return {
+    preExistingFindings: [...preExistingFindings].sort(byFindingId),
+    newFindings: [...newFindings].sort(byFindingId),
+    queues: {
+      fixer: [...fixer].sort(byFindingId),
+      residual: [...residual].sort(byFindingId),
+      report_only: [...reportOnly].sort(byFindingId),
+    },
+  }
+}
+
+/**
+ * The finalize-phase dispositions, counts, and action-queue step: derives
+ * every admitted input's final disposition, the weighted disposition
+ * counts (including the rejected-payload weight), the pre-existing/new
+ * finding split, and the three mutually exclusive, collectively exhaustive
+ * action queues (`fixer`, `residual`, `report_only`) that partition every
+ * surviving actionable finding by its mechanically-derived `owner`.
+ *
+ * Every list is sorted by a stable key (`input_id` or `finding_id`), so
+ * identical input in a different order always produces byte-identical
+ * output. This step never builds risk coverage, plan-assessment routing, or
+ * the final artifact -- those are separate slices. Never reads
+ * `process.env`, the filesystem, or the clock.
+ */
+export function finalizeReviewDispositions(
+  input: FinalizeReviewDispositionsInput,
+): FinalizeReviewDispositionsOutput {
+  const inputDispositions = deriveInputDispositions(
+    input.prepared,
+    input.reconciled,
+  )
+  const dispositionCounts = computeDispositionCounts(
+    inputDispositions,
+    input.rejected_payloads,
+  )
+  const { preExistingFindings, newFindings, queues } = partitionFindings(
+    input.prepared,
+    input.reconciled,
+  )
+
+  return {
+    input_dispositions: inputDispositions,
+    disposition_counts: dispositionCounts,
+    pre_existing_findings: preExistingFindings,
+    new_findings: newFindings,
+    queues,
+  }
+}
