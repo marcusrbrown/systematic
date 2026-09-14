@@ -33,11 +33,31 @@ function makeTempDir(): string {
 }
 
 /**
+ * Write a fake installed-package `node_modules/<name>/package.json` so
+ * `resolveInstalledDependencyVersion` can resolve it, mirroring a real
+ * `bun install` layout closely enough for the digest to walk.
+ */
+function writeInstalledPackage(
+  root: string,
+  name: string,
+  version: string,
+): void {
+  const dir = path.join(root, 'node_modules', name)
+  fs.mkdirSync(dir, { recursive: true })
+  fs.writeFileSync(
+    path.join(dir, 'package.json'),
+    `${JSON.stringify({ name, version }, null, 2)}\n`,
+    'utf8',
+  )
+}
+
+/**
  * Build a minimal, self-contained source tree matching the real repo's
  * shape closely enough for `computeSourceDigest`/`checkValidator` to walk:
  * an entry file with a relative import and a bare (external) import, a
- * transitive local dependency, a copy of the generator script, and a
- * `package.json` declaring the external dependency's version.
+ * transitive local dependency, a copy of the generator script, a
+ * `package.json` declaring the external dependency's version range, and a
+ * matching `node_modules/<name>/package.json` for its resolved version.
  */
 function buildFixture(): string {
   const root = makeTempDir()
@@ -78,6 +98,7 @@ function buildFixture(): string {
     `${JSON.stringify({ dependencies: { zod: '4.6.2' } }, null, 2)}\n`,
     'utf8',
   )
+  writeInstalledPackage(root, 'zod', '4.6.2')
 
   return root
 }
@@ -153,6 +174,60 @@ describe('computeSourceDigest', () => {
     )
 
     expect(computeSourceDigest(root)).toBe(baseline)
+  })
+
+  test('changes when the installed dependency version differs from the declared range, even though the range itself is unchanged', () => {
+    // `zod` is declared as `4.6.2` (exact) in buildFixture's package.json;
+    // switch the fixture to a range declaration that a different installed
+    // version still satisfies, to isolate "installed version differs" from
+    // "declared range differs" (already covered above).
+    const root = buildFixture()
+    fs.writeFileSync(
+      path.join(root, 'package.json'),
+      `${JSON.stringify({ dependencies: { zod: '^4.6.0' } }, null, 2)}\n`,
+      'utf8',
+    )
+    writeInstalledPackage(root, 'zod', '4.6.2')
+    const baseline = computeSourceDigest(root)
+
+    // A within-range resolution bump: the declared range `^4.6.0` still
+    // matches `4.6.5`, but the installed bytes differ.
+    writeInstalledPackage(root, 'zod', '4.6.5')
+
+    expect(computeSourceDigest(root)).not.toBe(baseline)
+  })
+
+  test('throws a clear error instead of silently falling back to the declared range when a dependency is not installed', () => {
+    const root = buildFixture()
+    fs.rmSync(path.join(root, 'node_modules/zod'), {
+      force: true,
+      recursive: true,
+    })
+
+    expect(() => computeSourceDigest(root)).toThrow(
+      /cannot resolve the installed version of "zod"/,
+    )
+  })
+
+  test('includes a source file reachable only through a dynamic relative import() in the digest', () => {
+    const root = buildFixture()
+    fs.writeFileSync(
+      path.join(root, 'src/lib/dynamic.ts'),
+      "export function dynamicHelper(): string {\n  return 'dynamic'\n}\n",
+      'utf8',
+    )
+    fs.appendFileSync(
+      path.join(root, 'src/ce-review-validator.ts'),
+      "\nexport async function loadDynamic() {\n  return import('./lib/dynamic.js')\n}\n",
+    )
+    const baseline = computeSourceDigest(root)
+
+    fs.appendFileSync(
+      path.join(root, 'src/lib/dynamic.ts'),
+      '\nexport const extra = 1\n',
+    )
+
+    expect(computeSourceDigest(root)).not.toBe(baseline)
   })
 })
 

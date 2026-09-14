@@ -1653,6 +1653,72 @@ describe('deriveFinalizeContext', () => {
 
     expect(result.ok).toBe(true)
   })
+
+  test('a survivor whose input ID was never screened and never carries a confidence disposition rejects', () => {
+    // `ghost#0` never appears in any screen result's `admitted_findings`,
+    // and no `confidence_dispositions` entry cites it either -- it is
+    // entirely fabricated, not merely tampered. The confidence-dispositions
+    // loop in `checkConfidenceDispositionsResolveScreenedFindings` only
+    // walks `confidence_dispositions`, so an empty ledger never trips it;
+    // this pins the survivor-side join catching it instead.
+    const prepared = preparedOutput({
+      confidence_dispositions: [],
+      surviving_findings: [survivingFinding('ghost#0', 'correctness')],
+      singletons: ['ghost#0'],
+    })
+    const merge = buildAdjudicatedMergeOutput(prepared)
+
+    const scenario: DeriveFinalizeContextInput = {
+      merge,
+      prepared,
+      screen_results: [
+        financeScreenResult('correctness', { admitted_findings: [] }),
+      ],
+      dispatch_records: [dispatchRecord('correctness')],
+      parent_run_metadata: {
+        selected_dispatches: [dispatchRecord('correctness')],
+        validation: NOT_ATTEMPTED_VALIDATION,
+      },
+    }
+
+    const result = deriveFinalizeContext(scenario)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe(
+      'surviving finding references unscreened input',
+    )
+  })
+
+  test('a survivor whose input ID was screened and carries a matching confidence disposition still accepts', () => {
+    const prepared = preparedOutput({
+      confidence_dispositions: [
+        confidenceDisposition('correctness#0', 'surviving'),
+      ],
+      surviving_findings: [survivingFinding('correctness#0', 'correctness')],
+      singletons: ['correctness#0'],
+    })
+    const merge = buildAdjudicatedMergeOutput(prepared)
+
+    const scenario: DeriveFinalizeContextInput = {
+      merge,
+      prepared,
+      screen_results: [
+        financeScreenResult('correctness', {
+          admitted_findings: [admittedScreenFinding('correctness#0')],
+        }),
+      ],
+      dispatch_records: [dispatchRecord('correctness')],
+      parent_run_metadata: {
+        selected_dispatches: [dispatchRecord('correctness')],
+        validation: NOT_ATTEMPTED_VALIDATION,
+      },
+    }
+
+    const result = deriveFinalizeContext(scenario)
+
+    expect(result.ok).toBe(true)
+  })
 })
 
 describe('finalizeReviewDispositions', () => {

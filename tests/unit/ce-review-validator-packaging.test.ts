@@ -716,6 +716,47 @@ describe('generator drift', () => {
       fs.writeFileSync(VALIDATOR_SRC, original)
     }
   })
+
+  // The gate's intended boundary, pinned explicitly: `--check` proves
+  // provenance ("this bundle was built from these sources"), not tamper
+  // resistance ("nobody touched this bundle since it was built"). Appending
+  // code after the stamped banner is a body edit the gate cannot see -- an
+  // accepted residual, not a bug -- while touching the banner/digest line
+  // itself is exactly what the gate exists to catch. These two tests pin
+  // that boundary so it stays a design decision, not an accident.
+
+  test('accepted residual: appending code after the intact banner still passes --check, because the gate proves provenance, not tamper-resistance', () => {
+    const original = fs.readFileSync(VALIDATOR_SRC, 'utf8')
+    try {
+      const tampered = `${original}\n// appended after generation; the banner and digest line above are untouched\nexport const tamperedBodyMarker = true\n`
+      fs.writeFileSync(VALIDATOR_SRC, tampered)
+      const result = runGenerator(['--check'])
+
+      expect(result.exitCode, result.stderr).toBe(0)
+    } finally {
+      fs.writeFileSync(VALIDATOR_SRC, original)
+    }
+  })
+
+  test('by design: editing the banner text itself (not just the digest value) fails --check, since the banner is the provenance the gate reads', () => {
+    const original = fs.readFileSync(VALIDATOR_SRC, 'utf8')
+    try {
+      const tampered = original.replace(
+        '// Run `bun run ce-review-validator:build` to regenerate.',
+        '// Run `bun run ce-review-validator:build` to regenerate. (edited)',
+      )
+      expect(tampered).not.toBe(original)
+      fs.writeFileSync(VALIDATOR_SRC, tampered)
+      const result = runGenerator(['--check'])
+
+      expect(result.exitCode).toBe(1)
+      expect(`${result.stdout}${result.stderr}`).toContain(
+        'missing its provenance header',
+      )
+    } finally {
+      fs.writeFileSync(VALIDATOR_SRC, original)
+    }
+  })
 })
 
 // ═══════════════════════════════════════════════════════════════════════════

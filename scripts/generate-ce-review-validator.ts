@@ -11,8 +11,9 @@
  *
  * `--check` verifies provenance -- that the committed bundle was generated
  * from the current sources (a digest over the entry's transitive relative
- * imports, this generator's own content, and the declared versions of any
- * external dependencies it pulls in) -- not byte equality of the bundle
+ * and dynamic imports, this generator's own content, and both the declared
+ * range and actually-installed version of any external dependency it pulls
+ * in) -- not byte equality of the bundle
  * itself. Byte equality would assert "this exact bundler and these exact
  * installed dependency versions emit these exact bytes today", which breaks
  * on unrelated Bun/dependency upgrades even when the source is current.
@@ -152,16 +153,38 @@ function sha256Hex(content: string): string {
 }
 
 /**
- * Extract the module specifiers a source file's `import`/`export ... from`
- * statements reference. Sufficient for this repository's controlled source
- * set -- every import/export-from specifier in TS source appears as
- * `from '...'` or `from "..."`, including multi-line named-import blocks
- * (the `from` clause and its string always share a line).
+ * Extract the module specifiers a source file references, through both
+ * static `import`/`export ... from` statements and dynamic `import(...)`
+ * calls with a literal string argument. Sufficient for this repository's
+ * controlled source set -- every static import/export-from specifier in TS
+ * source appears as `from '...'` or `from "..."`, including multi-line
+ * named-import blocks, because Biome's enforced formatting keeps the `from`
+ * clause and its string on one line; a dynamic import's literal argument is
+ * similarly always `import('...')`/`import("...")` on one line under that
+ * same formatting.
+ *
+ * This regex-over-text approach can, in principle, false-positive on a
+ * comment or string literal that happens to contain `from '...'` or
+ * `import('...')` text. That is not a silent gap for this gate: this
+ * function only ever scans the validator entry's own transitive first-party
+ * `.ts` files (never arbitrary or untrusted content), and a false-positive
+ * match is handled loudly either way -- `resolveRelativeImport` throws if
+ * the extracted text does not resolve to a real relative import target, and
+ * if it coincidentally does resolve, the referenced file is simply
+ * over-included in the digest (harmless for a staleness check). The failure
+ * modes are "throw" or "over-include", never "silently miss".
  */
 function extractImportSpecifiers(content: string): string[] {
   const specifiers: string[] = []
-  const pattern = /\bfrom\s+(['"])([^'"]+)\1/g
-  for (const match of content.matchAll(pattern)) {
+  const staticPattern = /\bfrom\s+(['"])([^'"]+)\1/g
+  for (const match of content.matchAll(staticPattern)) {
+    const specifier = match[2]
+    if (specifier !== undefined) {
+      specifiers.push(specifier)
+    }
+  }
+  const dynamicPattern = /\bimport\s*\(\s*(['"])([^'"]+)\1/g
+  for (const match of content.matchAll(dynamicPattern)) {
     const specifier = match[2]
     if (specifier !== undefined) {
       specifiers.push(specifier)
@@ -192,10 +215,11 @@ interface SourceInputs {
 }
 
 /**
- * Walk the transitive relative-import graph reachable from `entryPath`,
- * collecting every reachable repo-local `.ts` file and every bare (external)
- * specifier encountered. Bare specifiers and `node:` builtins are not
- * followed.
+ * Walk the transitive relative-import graph reachable from `entryPath`
+ * (through both static `import`/`export ... from` and dynamic `import(...)`
+ * calls -- see `extractImportSpecifiers`), collecting every reachable
+ * repo-local `.ts` file and every bare (external) specifier encountered.
+ * Bare specifiers and `node:` builtins are not followed.
  */
 function collectSourceInputs(entryPath: string): SourceInputs {
   const files = new Set<string>()
@@ -226,25 +250,90 @@ interface PackageManifest {
   dependencies?: Record<string, string>
 }
 
-function readDependencyVersion(rootDir: string, specifier: string): string {
+function readDeclaredDependencyRange(
+  rootDir: string,
+  specifier: string,
+): string {
   const manifestPath = path.join(rootDir, 'package.json')
   const manifest = JSON.parse(
     fs.readFileSync(manifestPath, 'utf8'),
   ) as PackageManifest
-  const version = manifest.dependencies?.[specifier]
-  if (version === undefined) {
+  const range = manifest.dependencies?.[specifier]
+  if (range === undefined) {
     throw new Error(
       `"${specifier}" is imported by the ce-review validator entry but is not declared in package.json dependencies`,
     )
   }
-  return version
+  return range
+}
+
+interface InstalledPackageManifest {
+  version?: unknown
+}
+
+/**
+ * Resolve the actually-installed version of an external dependency by
+ * reading its on-disk `node_modules/<specifier>/package.json`. A declared
+ * range (e.g. `^4.3.1`) does not capture a within-range resolution bump --
+ * two installs satisfying the same range can ship different bytes -- so the
+ * digest must key on what is actually installed, not the range. This reads
+ * `node_modules` rather than parsing `bun.lock` because CI always runs
+ * `bun install` before tests, making `node_modules` the deterministic,
+ * already-resolved source of truth without a bespoke lockfile parser.
+ * Throws loudly if the package is not installed rather than silently
+ * falling back to the declared range, which would recreate the same
+ * digest-blind-spot this function exists to close.
+ */
+function resolveInstalledDependencyVersion(
+  rootDir: string,
+  specifier: string,
+): string {
+  const manifestPath = path.join(
+    rootDir,
+    'node_modules',
+    specifier,
+    'package.json',
+  )
+  let raw: string
+  try {
+    raw = fs.readFileSync(manifestPath, 'utf8')
+  } catch (error) {
+    throw new Error(
+      `cannot resolve the installed version of "${specifier}": ${manifestPath} could not be read (${errorMessage(error)}). Run \`bun install\`.`,
+    )
+  }
+  const manifest = JSON.parse(raw) as InstalledPackageManifest
+  if (typeof manifest.version !== 'string' || manifest.version.length === 0) {
+    throw new Error(
+      `cannot resolve the installed version of "${specifier}": ${manifestPath} has no valid "version" field`,
+    )
+  }
+  return manifest.version
+}
+
+/**
+ * Describe an external dependency for the digest as both its declared range
+ * and its actually-installed version. Keeping both is strictly more
+ * information than either alone: the declared range still changes the
+ * digest when a contributor edits it (unchanged behavior), and the
+ * installed version additionally changes the digest when a within-range
+ * resolution bump changes the bundle's inlined contents.
+ */
+function describeExternalDependency(
+  rootDir: string,
+  specifier: string,
+): string {
+  const declaredRange = readDeclaredDependencyRange(rootDir, specifier)
+  const installedVersion = resolveInstalledDependencyVersion(rootDir, specifier)
+  return `${specifier}@${declaredRange}=>${installedVersion}`
 }
 
 /**
  * Compute the provenance digest for the validator bundle: a sha256 over a
  * canonical listing of every reachable source file's content hash, this
- * generator's own content, and every external dependency's declared version.
- * Changing any input source file, the generator itself, or a dependency
+ * generator's own content, and every external dependency's declared range
+ * plus its actually-installed version. Changing any input source file, the
+ * generator itself, a dependency's declared range, or its resolved install
  * version changes the digest.
  */
 export function computeSourceDigest(rootDir = PROJECT_ROOT): string {
@@ -262,10 +351,7 @@ export function computeSourceDigest(rootDir = PROJECT_ROOT): string {
     .sort()
 
   const externalLines = [...externals]
-    .map(
-      (specifier) =>
-        `${specifier}@${readDependencyVersion(rootDir, specifier)}`,
-    )
+    .map((specifier) => describeExternalDependency(rootDir, specifier))
     .sort()
 
   const canonical = [...fileLines, ...externalLines].join('\n')

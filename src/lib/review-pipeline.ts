@@ -1,8 +1,8 @@
 import path from 'node:path'
 import type { z } from 'zod'
 import { formatReviewArtifactIssuePath } from './review-artifact-path.js'
+import type { HarnessSchema } from './review-artifact-schema.js'
 import {
-  HarnessSchema,
   MAX_FINDINGS,
   MAX_PERSONAS,
   MAX_REASON_LENGTH,
@@ -2170,6 +2170,7 @@ type FinalizeContextRejectReason =
   | 'merged finding submitter not a cited reviewer'
   | 'merged finding agreement credit overlaps submitters'
   | 'surviving finding diverges from its screened finding'
+  | 'surviving finding references unscreened input'
   | 'duplicate confidence disposition'
   | 'validation must be not_attempted at finalize'
 
@@ -2675,15 +2676,18 @@ function checkNoDuplicateConfidenceDispositions(
  * a real reviewer payload; a disposition with no matching screened finding
  * (or more than one, which would mean a duplicate mint) names evidence that
  * was never actually screened and must never be admitted to the ledger.
- * Every `prepared.surviving_findings` entry must also carry the same
- * `reviewer`, `confidence`, `file`, `line`, and `severity` as the screened
- * finding that minted its input ID -- `prepare` only ever narrows a
- * screened finding down to a survivor, so any divergence between the two
- * records means the survivor's data was laundered after screening, which
- * would otherwise go undetected: every downstream ownership decision
- * (`deriveSubmitters`, `findUnavailableCitedReviewer`,
- * `buildAdmittedReviewerIndex`, `deriveRiskCoverage`'s cross-persona test)
- * trusts the survivor's carried fields rather than re-resolving them. */
+ * Every `prepared.surviving_findings` entry must also resolve to a screened
+ * finding by input ID, and carry the same `reviewer`, `confidence`, `file`,
+ * `line`, and `severity` as that screened finding -- `prepare` only ever
+ * narrows a screened finding down to a survivor, so a survivor whose input
+ * ID resolves to no screened finding at all is not narrowed from anything
+ * real (a fabricated input ID, never mirrored into `confidence_dispositions`
+ * either), and a survivor whose fields disagree with what was screened was
+ * laundered after screening. Both would otherwise go undetected: every
+ * downstream ownership decision (`deriveSubmitters`,
+ * `findUnavailableCitedReviewer`, `buildAdmittedReviewerIndex`,
+ * `deriveRiskCoverage`'s cross-persona test) trusts the survivor's carried
+ * fields rather than re-resolving them. */
 function checkConfidenceDispositionsResolveScreenedFindings(
   prepared: Pick<
     PrepareOutput,
@@ -2736,19 +2740,32 @@ function checkConfidenceDispositionsResolveScreenedFindings(
   }
 
   for (const [index, survivor] of prepared.surviving_findings.entries()) {
-    // The confidence-dispositions loop above already rejects any input ID
-    // that does not resolve to exactly one screened finding, and every
-    // survivor's input ID is mirrored into `confidence_dispositions` by
-    // construction, so `screened` always resolves once that loop passes.
+    // The confidence-dispositions loop above only rejects an input ID that
+    // appears IN `confidence_dispositions` without resolving to exactly one
+    // screened finding -- it says nothing about a survivor whose input ID
+    // was never mirrored into `confidence_dispositions` at all. That
+    // mirroring is a property of an honest producer, not something this
+    // function can assume of untrusted carried state, so `screened` must be
+    // checked directly here rather than relied on to have resolved already.
     const screened = screenedByInputId.get(survivor.input_id)
+    if (screened === undefined) {
+      return {
+        path: formatReviewArtifactIssuePath([
+          'prepared',
+          'surviving_findings',
+          index,
+          'input_id',
+        ]),
+        reason: 'surviving finding references unscreened input',
+      }
+    }
     if (
-      screened !== undefined &&
-      (screened.reviewer !== survivor.reviewer ||
-        screened.confidence !== survivor.confidence ||
-        normalizeRepoRelativePath(screened.file) !==
-          normalizeRepoRelativePath(survivor.file) ||
-        screened.line !== survivor.line ||
-        screened.severity !== survivor.severity)
+      screened.reviewer !== survivor.reviewer ||
+      screened.confidence !== survivor.confidence ||
+      normalizeRepoRelativePath(screened.file) !==
+        normalizeRepoRelativePath(survivor.file) ||
+      screened.line !== survivor.line ||
+      screened.severity !== survivor.severity
     ) {
       return {
         path: formatReviewArtifactIssuePath([
