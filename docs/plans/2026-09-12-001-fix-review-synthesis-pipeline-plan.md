@@ -969,7 +969,7 @@ which adds only contracts and a generated reference.
       return has no summary; no rejected body text in output; environment
       invariance preserved.
 
-  - [ ] **5.5 Validate cross-phase joins and derive loss and rejection inputs**
+  - [x] **5.5 Validate cross-phase joins and derive loss and rejection inputs**
     - New `deriveFinalizeContext` checks that survivors partition exactly into
       merged-finding inputs, merged IDs are unique, validator requests
       correspond to merged findings, and `dispatch_records`,
@@ -989,14 +989,14 @@ which adds only contracts and a generated reference.
       dispatch copies disagree rejects; a tampered carried severity rejects;
       each loss rule; a `P2`-only partial rejection is not a loss.
 
-  - [ ] **5.6 Preserve the disproving validator's reason**
+  - [x] **5.6 Preserve the disproving validator's reason**
     - A `false` lifecycle result carries its reason onto the reconciled finding
       so the artifact's `validation_reason` requirement is satisfied at source.
     - Tests: `false` carries reason; `true` carries none; failed and unavailable
       still record a lifecycle failure without a reason on the finding;
       rejection paths unchanged.
 
-  - [ ] **5.7 Partition findings from carried state and exclude the uncertain**
+  - [x] **5.7 Partition findings from carried state and exclude the uncertain**
     - `partitionFindings` reads carried `pre_existing` instead of recomputing it
       and keeps unconfirmed in-band findings out of every action queue while
       still reporting them.
@@ -1006,7 +1006,7 @@ which adds only contracts and a generated reference.
       queued; unconfirmed out-of-band finding queued; pre-existing from carried
       state; missing ledger entry rejects; counts still sum to observed.
 
-  - [ ] **5.8 Order coverage candidates canonically and cite an admitted row**
+  - [x] **5.8 Order coverage candidates canonically and cite an admitted row**
     - `deriveCoverageForLostPersona` selects the first eligible finding in the
       canonical severity/confidence/path/line/tie-breaker order, then cites
       that finding's lowest admitted input ID whose reviewer differs from the
@@ -1017,7 +1017,7 @@ which adds only contracts and a generated reference.
       off-surface, filtered, and unconfirmed in-band candidates excluded;
       normalized-path surface match.
 
-  - [ ] **5.9 Tighten the artifact refinement without moving the schema**
+  - [x] **5.9 Tighten the artifact refinement without moving the schema**
     - The risk-coverage refinement requires an explicit true validation for
       in-band findings and compares surfaces through the shared path
       normalizer.

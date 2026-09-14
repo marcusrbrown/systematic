@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type {
+  ApplyReviewAdjudicationInput,
+  DeriveFinalizeContextInput,
   DeriveRiskCoverageInput,
   FinalizeReviewDispositionsInput,
   LostRiskCriticalPersona,
@@ -11,6 +13,8 @@ import type {
   RunReviewPipelineInput,
 } from '../../src/lib/review-pipeline.js'
 import {
+  applyReviewAdjudication,
+  deriveFinalizeContext,
   deriveRiskCoverage,
   finalizeReviewDispositions,
   reconcileValidatorResults,
@@ -91,7 +95,7 @@ describe('reconcileValidatorResults', () => {
     expect(result.value.degraded).toBe(false)
   })
 
-  test('a false result filters the finding and every contributing input', () => {
+  test('a false result filters the finding, carries the reason as validation_reason, and filters every contributing input', () => {
     const finding = mergedFinding('f1', { input_finding_ids: ['a#0', 'b#0'] })
     const merge = mergeOutput([finding], ['f1'])
     const result = reconcileValidatorResults({
@@ -106,11 +110,55 @@ describe('reconcileValidatorResults', () => {
 
     expect(result.ok).toBe(true)
     if (!result.ok) return
-    expect(result.value.findings).toEqual([{ ...finding, validated: false }])
+    expect(result.value.findings).toEqual([
+      {
+        ...finding,
+        validated: false,
+        validation_reason: 'disproven by validator',
+      },
+    ])
     expect(result.value.filtered_finding_ids).toEqual(['f1'])
     expect(result.value.filtered_input_ids).toEqual(['a#0', 'b#0'])
     expect(result.value.lifecycle_failures).toEqual([])
     expect(result.value.degraded).toBe(false)
+  })
+
+  test('a true result carries no validation_reason', () => {
+    const finding = mergedFinding('f1')
+    const merge = mergeOutput([finding], ['f1'])
+    const result = reconcileValidatorResults({
+      merge,
+      validator_lifecycle_results: [lifecycleResult('f1', { outcome: 'true' })],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const [reconciled] = result.value.findings
+    expect(reconciled).toBeDefined()
+    expect('validation_reason' in (reconciled ?? {})).toBe(false)
+  })
+
+  test('failed and unavailable outcomes record a lifecycle failure without a validation_reason on the finding', () => {
+    const finding = mergedFinding('f1')
+    const merge = mergeOutput([finding], ['f1'])
+    const result = reconcileValidatorResults({
+      merge,
+      validator_lifecycle_results: [
+        lifecycleResult('f1', {
+          outcome: 'failed',
+          reason: 'validator timed out',
+        }),
+      ],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const [reconciled] = result.value.findings
+    expect(reconciled).toBeDefined()
+    expect('validation_reason' in (reconciled ?? {})).toBe(false)
+    expect(result.value.lifecycle_failures).toEqual([
+      { finding_id: 'f1', outcome: 'failed', reason: 'validator timed out' },
+    ])
   })
 
   test('a failed result leaves validated absent, keeps the finding visible, records the failure, and degrades the run', () => {
@@ -350,6 +398,263 @@ function reconciledOutput(
   }
 }
 
+type FinalizeScreenResultFixture =
+  DeriveFinalizeContextInput['screen_results'][number]
+type FinalizeDispatchRecordFixture =
+  DeriveFinalizeContextInput['dispatch_records'][number]
+
+function financeScreenResult(
+  reviewer: string,
+  overrides: Partial<FinalizeScreenResultFixture['result']> = {},
+): FinalizeScreenResultFixture {
+  return {
+    reviewer,
+    result: {
+      admitted_findings: [],
+      dispatch_outcome: 'findings',
+      residual_risks: [],
+      testing_gaps: [],
+      ...overrides,
+    },
+  }
+}
+
+function dispatchRecord(
+  persona: string,
+  overrides: Partial<FinalizeDispatchRecordFixture> = {},
+): FinalizeDispatchRecordFixture {
+  return {
+    persona,
+    dispatch_outcome: 'findings',
+    ...overrides,
+  }
+}
+
+function buildAdjudicatedMergeOutput(prepared: PrepareOutput): MergeOutput {
+  const decisions: ApplyReviewAdjudicationInput['decisions'] = []
+  const result = applyReviewAdjudication({ prepared, decisions })
+  if (!result.ok) {
+    throw new Error('test fixture: unexpected adjudication rejection')
+  }
+  return result.value
+}
+
+function finalizeContextScenario(): DeriveFinalizeContextInput {
+  const prepared = preparedOutput({
+    confidence_dispositions: [
+      confidenceDisposition('correctness#0', 'surviving'),
+    ],
+    surviving_findings: [survivingFinding('correctness#0', 'correctness')],
+    singletons: ['correctness#0'],
+  })
+  const merge = buildAdjudicatedMergeOutput(prepared)
+
+  return {
+    merge,
+    prepared,
+    screen_results: [financeScreenResult('correctness')],
+    dispatch_records: [dispatchRecord('correctness')],
+    parent_run_metadata: {
+      selected_dispatches: [dispatchRecord('correctness')],
+    },
+  }
+}
+
+describe('deriveFinalizeContext', () => {
+  test('a clean, well-formed envelope produces no rejected payloads and no lost personas', () => {
+    const result = deriveFinalizeContext(finalizeContextScenario())
+
+    expect(result).toEqual({
+      ok: true,
+      value: { rejected_payloads: [], lost_risk_critical_personas: [] },
+    })
+  })
+
+  test('a survivor missing from the merged findings rejects', () => {
+    const scenario = finalizeContextScenario()
+    const prepared: PrepareOutput = {
+      ...scenario.prepared,
+      confidence_dispositions: [
+        ...scenario.prepared.confidence_dispositions,
+        confidenceDisposition('correctness#1', 'surviving'),
+      ],
+      surviving_findings: [
+        ...scenario.prepared.surviving_findings,
+        survivingFinding('correctness#1', 'correctness'),
+      ],
+    }
+
+    const result = deriveFinalizeContext({ ...scenario, prepared })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe('survivor missing from merge inputs')
+  })
+
+  test('a duplicate merged finding ID rejects', () => {
+    const scenario = finalizeContextScenario()
+    const merge: MergeOutput = {
+      ...scenario.merge,
+      merged_findings: [
+        ...scenario.merge.merged_findings,
+        ...scenario.merge.merged_findings,
+      ],
+    }
+
+    const result = deriveFinalizeContext({ ...scenario, merge })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe('duplicate merged finding ID')
+  })
+
+  test('a selected dispatch with no screen result rejects', () => {
+    const scenario = finalizeContextScenario()
+
+    const result = deriveFinalizeContext({ ...scenario, screen_results: [] })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe(
+      'screen result missing for selected persona',
+    )
+  })
+
+  test('dispatch_records disagreeing with parent_run_metadata.selected_dispatches rejects', () => {
+    const scenario = finalizeContextScenario()
+
+    const result = deriveFinalizeContext({
+      ...scenario,
+      dispatch_records: [
+        dispatchRecord('correctness', { dispatch_outcome: 'empty' }),
+      ],
+    })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe('dispatch record mismatch')
+  })
+
+  test('a tampered carried severity rejects', () => {
+    const scenario = finalizeContextScenario()
+    const merge: MergeOutput = {
+      ...scenario.merge,
+      merged_findings: scenario.merge.merged_findings.map((finding) => ({
+        ...finding,
+        severity: 'P0',
+      })),
+    }
+
+    const result = deriveFinalizeContext({ ...scenario, merge })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe(
+      'merged finding fields diverge from derivation',
+    )
+  })
+
+  test('each always-lost dispatch outcome marks a selected risk-critical persona lost', () => {
+    for (const dispatchOutcome of [
+      'malformed',
+      'never_returned',
+      'validation_unavailable',
+    ] as const) {
+      const record = dispatchRecord('security', {
+        dispatch_outcome: dispatchOutcome,
+        selection_surface: ['src/auth.ts'],
+      })
+      const scenario: DeriveFinalizeContextInput = {
+        merge: mergeOutput([], []),
+        prepared: preparedOutput(),
+        screen_results: [
+          financeScreenResult('security', {
+            dispatch_outcome: dispatchOutcome,
+          }),
+        ],
+        dispatch_records: [record],
+        parent_run_metadata: { selected_dispatches: [record] },
+      }
+
+      const result = deriveFinalizeContext(scenario)
+
+      expect(result.ok, dispatchOutcome).toBe(true)
+      if (!result.ok) continue
+      expect(result.value.lost_risk_critical_personas).toEqual([
+        { persona: 'security', selection_surface: ['src/auth.ts'] },
+      ])
+    }
+  })
+
+  test('a rejected summary carrying P0, P1, or unknown severities is a loss even when the dispatch outcome is findings', () => {
+    const record = dispatchRecord('security', {
+      dispatch_outcome: 'findings',
+      selection_surface: ['src/auth.ts'],
+    })
+    const scenario: DeriveFinalizeContextInput = {
+      merge: mergeOutput([], []),
+      prepared: preparedOutput(),
+      screen_results: [
+        financeScreenResult('security', {
+          dispatch_outcome: 'findings',
+          rejected_summary: {
+            dispatch_outcome: 'malformed',
+            rejected_finding_count: 1,
+            rejected_severities: ['P1'],
+            reason: 'One finding failed schema validation.',
+          },
+        }),
+      ],
+      dispatch_records: [record],
+      parent_run_metadata: { selected_dispatches: [record] },
+    }
+
+    const result = deriveFinalizeContext(scenario)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.lost_risk_critical_personas).toEqual([
+      { persona: 'security', selection_surface: ['src/auth.ts'] },
+    ])
+    expect(result.value.rejected_payloads).toEqual([
+      { rejected_finding_count: 1 },
+    ])
+  })
+
+  test('a P2/P3-only partial rejection is not a loss', () => {
+    const record = dispatchRecord('security', {
+      dispatch_outcome: 'findings',
+      selection_surface: ['src/auth.ts'],
+    })
+    const scenario: DeriveFinalizeContextInput = {
+      merge: mergeOutput([], []),
+      prepared: preparedOutput(),
+      screen_results: [
+        financeScreenResult('security', {
+          dispatch_outcome: 'findings',
+          rejected_summary: {
+            dispatch_outcome: 'malformed',
+            rejected_finding_count: 2,
+            rejected_severities: ['P2', 'P3'],
+            reason: 'Two findings failed schema validation.',
+          },
+        }),
+      ],
+      dispatch_records: [record],
+      parent_run_metadata: { selected_dispatches: [record] },
+    }
+
+    const result = deriveFinalizeContext(scenario)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.lost_risk_critical_personas).toEqual([])
+    expect(result.value.rejected_payloads).toEqual([
+      { rejected_finding_count: 2 },
+    ])
+  })
+})
+
 describe('finalizeReviewDispositions', () => {
   function buildScenario(): FinalizeReviewDispositionsInput {
     const prepared = preparedOutput({
@@ -379,6 +684,7 @@ describe('finalizeReviewDispositions', () => {
         mergedFinding('f-merged', {
           input_finding_ids: ['r2#0', 'r2#1'],
           owner: 'downstream-resolver',
+          pre_existing: true,
         }),
         mergedFinding('f-filtered', {
           input_finding_ids: ['r4#0'],
@@ -399,7 +705,9 @@ describe('finalizeReviewDispositions', () => {
   test('every admitted input receives exactly one disposition', () => {
     const result = finalizeReviewDispositions(buildScenario())
 
-    expect(result.input_dispositions).toEqual([
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.input_dispositions).toEqual([
       { input_id: 'r1#0', disposition: 'surviving' },
       { input_id: 'r2#0', disposition: 'merged' },
       { input_id: 'r2#1', disposition: 'merged' },
@@ -410,14 +718,16 @@ describe('finalizeReviewDispositions', () => {
       },
       { input_id: 'r4#0', disposition: 'filtered' },
     ])
-    const ids = result.input_dispositions.map((entry) => entry.input_id)
+    const ids = result.value.input_dispositions.map((entry) => entry.input_id)
     expect(new Set(ids).size).toBe(ids.length)
   })
 
   test('disposition counts sum to findings observed, including a weighted rejected-payload entry', () => {
     const result = finalizeReviewDispositions(buildScenario())
 
-    expect(result.disposition_counts).toEqual({
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.disposition_counts).toEqual({
       surviving: 1,
       merged: 2,
       suppressed: 1,
@@ -432,41 +742,78 @@ describe('finalizeReviewDispositions', () => {
       0,
     )
     const { surviving, merged, suppressed, filtered, rejected } =
-      result.disposition_counts
+      result.value.disposition_counts
     expect(surviving + merged + suppressed + filtered + rejected).toBe(
       admittedObserved + rejectedObserved,
     )
   })
 
-  test('pre-existing findings are separated from newly introduced ones', () => {
+  test("pre-existing findings are separated from newly introduced ones, reading the finding's carried pre_existing field", () => {
     const result = finalizeReviewDispositions(buildScenario())
 
-    expect(result.pre_existing_findings).toEqual([
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.pre_existing_findings).toEqual([
       { finding_id: 'f-merged', unconfirmed: false },
     ])
-    expect(result.new_findings).toEqual([
+    expect(result.value.new_findings).toEqual([
       { finding_id: 'f-single', unconfirmed: false },
     ])
+  })
+
+  test('pre-existing status trusts the carried pre_existing field rather than recomputing it from surviving_findings', () => {
+    // f-merged's contributing survivors (r2#0, r2#1) are both pre_existing in
+    // `prepared`, but the merged finding's own carried `pre_existing` is
+    // false -- the carried field wins, proving this reads the finding
+    // directly instead of re-deriving from `prepared.surviving_findings`.
+    const scenario = buildScenario()
+    const reconciled = {
+      ...scenario.reconciled,
+      findings: scenario.reconciled.findings.map((finding) =>
+        finding.finding_id === 'f-merged'
+          ? { ...finding, pre_existing: false }
+          : finding,
+      ),
+    }
+
+    const result = finalizeReviewDispositions({ ...scenario, reconciled })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(
+      result.value.pre_existing_findings.some(
+        (entry) => entry.finding_id === 'f-merged',
+      ),
+    ).toBe(false)
+    expect(
+      result.value.new_findings.some(
+        (entry) => entry.finding_id === 'f-merged',
+      ),
+    ).toBe(true)
   })
 
   test('a filtered finding enters no queue', () => {
     const result = finalizeReviewDispositions(buildScenario())
 
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
     const allQueued = [
-      ...result.queues.fixer,
-      ...result.queues.residual,
-      ...result.queues.report_only,
+      ...result.value.queues.fixer,
+      ...result.value.queues.residual,
+      ...result.value.queues.report_only,
     ]
     expect(allQueued.some((entry) => entry.finding_id === 'f-filtered')).toBe(
       false,
     )
     expect(
-      result.pre_existing_findings.some(
+      result.value.pre_existing_findings.some(
         (entry) => entry.finding_id === 'f-filtered',
       ),
     ).toBe(false)
     expect(
-      result.new_findings.some((entry) => entry.finding_id === 'f-filtered'),
+      result.value.new_findings.some(
+        (entry) => entry.finding_id === 'f-filtered',
+      ),
     ).toBe(false)
   })
 
@@ -506,10 +853,12 @@ describe('finalizeReviewDispositions', () => {
       rejected_payloads: [],
     })
 
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
     const queueLists = [
-      result.queues.fixer,
-      result.queues.residual,
-      result.queues.report_only,
+      result.value.queues.fixer,
+      result.value.queues.residual,
+      result.value.queues.report_only,
     ]
     const seen = new Set<string>()
     for (const queue of queueLists) {
@@ -519,20 +868,20 @@ describe('finalizeReviewDispositions', () => {
       }
     }
     expect(seen).toEqual(
-      new Set(result.new_findings.map((entry) => entry.finding_id)),
+      new Set(result.value.new_findings.map((entry) => entry.finding_id)),
     )
-    expect(result.queues.fixer.map((entry) => entry.finding_id)).toEqual([
+    expect(result.value.queues.fixer.map((entry) => entry.finding_id)).toEqual([
       'f-fixer',
     ])
-    expect(result.queues.residual.map((entry) => entry.finding_id)).toEqual([
-      'f-human',
-    ])
-    expect(result.queues.report_only.map((entry) => entry.finding_id)).toEqual([
-      'f-release',
-    ])
+    expect(
+      result.value.queues.residual.map((entry) => entry.finding_id),
+    ).toEqual(['f-human'])
+    expect(
+      result.value.queues.report_only.map((entry) => entry.finding_id),
+    ).toEqual(['f-release'])
   })
 
-  test('a finding whose validator was unavailable still appears in a queue and stays marked unconfirmed', () => {
+  test('an unconfirmed in-band finding is still reported but excluded from every action queue', () => {
     const scenario = buildScenario()
     const result = finalizeReviewDispositions({
       ...scenario,
@@ -548,9 +897,49 @@ describe('finalizeReviewDispositions', () => {
       },
     })
 
-    expect(result.queues.fixer).toEqual([
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.queues.fixer).toEqual([])
+    expect(result.value.queues.residual).toEqual([])
+    expect(result.value.queues.report_only).toEqual([])
+    expect(result.value.new_findings).toEqual([
       { finding_id: 'f-single', unconfirmed: true },
     ])
+  })
+
+  test('an out-of-band finding (never requested for validation) is queued normally', () => {
+    // f-single is never mentioned in lifecycle_failures, so it was either
+    // never requested or was confirmed -- either way it is not "unconfirmed"
+    // and stays in its owner's queue exactly as before.
+    const result = finalizeReviewDispositions(buildScenario())
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.queues.fixer).toEqual([
+      { finding_id: 'f-single', unconfirmed: false },
+    ])
+  })
+
+  test('a surviving confidence disposition whose finding cannot be found in the merged findings rejects rather than defaulting to surviving', () => {
+    const scenario = buildScenario()
+    const prepared: PrepareOutput = {
+      ...scenario.prepared,
+      confidence_dispositions: [
+        ...scenario.prepared.confidence_dispositions,
+        confidenceDisposition('ghost#0', 'surviving'),
+      ],
+    }
+
+    const result = finalizeReviewDispositions({ ...scenario, prepared })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe(
+      'survivor missing from merged findings',
+    )
+    expect(result.rejection.path).toBe(
+      'prepared.confidence_dispositions.5.input_id',
+    )
   })
 
   test('output is byte-identical under permuted input order', () => {
@@ -613,7 +1002,12 @@ describe('deriveRiskCoverage', () => {
     )
 
     expect(result).toEqual([
-      { persona: 'security', satisfied: true, finding_id: 'f-cov' },
+      {
+        persona: 'security',
+        satisfied: true,
+        finding_id: 'f-cov',
+        input_finding_id: 'cov#0',
+      },
     ])
   })
 
@@ -716,7 +1110,12 @@ describe('deriveRiskCoverage', () => {
     )
 
     expect(result).toEqual([
-      { persona: 'security', satisfied: true, finding_id: 'f-cov' },
+      {
+        persona: 'security',
+        satisfied: true,
+        finding_id: 'f-cov',
+        input_finding_id: 'cov#0',
+      },
     ])
   })
 
@@ -733,7 +1132,37 @@ describe('deriveRiskCoverage', () => {
     )
 
     expect(result).toEqual([
-      { persona: 'security', satisfied: true, finding_id: 'f-cov' },
+      {
+        persona: 'security',
+        satisfied: true,
+        finding_id: 'f-cov',
+        input_finding_id: 'cov#0',
+      },
+    ])
+  })
+
+  test('surface matching normalizes both the lost persona surface and the finding path', () => {
+    const result = deriveRiskCoverage(
+      riskCoverageScenario({
+        lost_risk_critical_personas: [
+          lostPersona('security', { selection_surface: ['./src/example.ts'] }),
+        ],
+        prepared: preparedOutput({
+          surviving_findings: [survivingFinding('cov#0', 'reliability')],
+        }),
+        reconciled: reconciledOutput({
+          findings: [mergedFinding('f-cov', { input_finding_ids: ['cov#0'] })],
+        }),
+      }),
+    )
+
+    expect(result).toEqual([
+      {
+        persona: 'security',
+        satisfied: true,
+        finding_id: 'f-cov',
+        input_finding_id: 'cov#0',
+      },
     ])
   })
 
@@ -765,9 +1194,53 @@ describe('deriveRiskCoverage', () => {
     )
 
     expect(orderedResult).toEqual([
-      { persona: 'security', satisfied: true, finding_id: 'f-a' },
+      {
+        persona: 'security',
+        satisfied: true,
+        finding_id: 'f-a',
+        input_finding_id: 'b#0',
+      },
     ])
     expect(orderedResult).toEqual(permutedResult)
+  })
+
+  test('candidates are ordered by canonical severity/confidence/path/line/fingerprint order, not by finding_id', () => {
+    // finding_id alphabetical order would pick 'f-a' (P2); the canonical
+    // order (severity first) must pick 'f-z' (P0) instead.
+    const prepared = preparedOutput({
+      surviving_findings: [
+        survivingFinding('a#0', 'reliability', { severity: 'P2' }),
+        survivingFinding('z#0', 'performance', { severity: 'P0' }),
+      ],
+    })
+    const findingP2 = mergedFinding('f-a', {
+      input_finding_ids: ['a#0'],
+      severity: 'P2',
+      fingerprint: 'src/example.ts:1:P2:f-a',
+    })
+    const findingP0 = mergedFinding('f-z', {
+      input_finding_ids: ['z#0'],
+      severity: 'P0',
+      fingerprint: 'src/example.ts:1:P0:f-z',
+    })
+
+    const result = deriveRiskCoverage(
+      riskCoverageScenario({
+        prepared,
+        reconciled: reconciledOutput({
+          findings: [findingP2, findingP0],
+        }),
+      }),
+    )
+
+    expect(result).toEqual([
+      {
+        persona: 'security',
+        satisfied: true,
+        finding_id: 'f-z',
+        input_finding_id: 'z#0',
+      },
+    ])
   })
 
   test('no lost risk-critical persona produces empty coverage output rather than fabricated entries', () => {

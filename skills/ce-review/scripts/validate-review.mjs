@@ -172,6 +172,9 @@ function resolveReviewArtifactPath(input, cwd, options = {}) {
   return { ok: true, path: canonicalTarget }
 }
 
+// src/lib/review-artifact-schema.ts
+import path2 from 'node:path'
+
 // node_modules/.bun/zod@4.6.2/node_modules/zod/v4/core/util.js
 function getEnumValues(entries) {
   const numericValues = Object.values(entries).filter(
@@ -6427,6 +6430,9 @@ var HarnessSchema = _enum(['opencode', 'pi', 'claude-code'])
 var RepoRelativePathSchema = boundedText(256).regex(
   /^(?!\/)(?![A-Za-z]:[\\/])(?!\\).+/,
 )
+function normalizeRepoRelativePath(filePath) {
+  return path2.posix.normalize(filePath.replaceAll('\\', '/'))
+}
 var ReviewerSchema = boundedText(MAX_REVIEWER_LENGTH)
 var BranchSchema = string2().max(MAX_BRANCH_LENGTH)
 var HeadShaSchema = string2().regex(/^[0-9a-f]{40}$/)
@@ -6850,13 +6856,21 @@ var ReviewArtifactSchema = object({
       const lostDispatch = artifact.dispatches.find(
         (dispatch) => dispatch.persona === coverage.persona,
       )
-      const surface = lostDispatch?.selection_surface ?? []
-      const covered = artifact.findings.some(
-        (finding) =>
-          finding.input_finding_ids.includes(citedId) &&
-          finding.validated !== false &&
-          surface.includes(finding.file),
+      const normalizedSurface = new Set(
+        (lostDispatch?.selection_surface ?? []).map(normalizeRepoRelativePath),
       )
+      const covered = artifact.findings.some((finding) => {
+        if (!finding.input_finding_ids.includes(citedId)) return false
+        const inValidationBand =
+          finding.severity === 'P0' ||
+          finding.severity === 'P1' ||
+          finding.requires_verification
+        const validationSatisfied = inValidationBand
+          ? finding.validated === true
+          : finding.validated !== false
+        if (!validationSatisfied) return false
+        return normalizedSurface.has(normalizeRepoRelativePath(finding.file))
+      })
       if (!covered) {
         ctx.addIssue({
           code: 'custom',
@@ -7017,9 +7031,6 @@ function runClaudeCodeValidator(options) {
 }
 if (false) {
 }
-
-// src/lib/review-pipeline.ts
-import path2 from 'node:path'
 
 // src/lib/review-pipeline-contract.ts
 var boundedText2 = (maxLength) => string2().min(1).max(maxLength).regex(/\S/)
@@ -7602,9 +7613,6 @@ function compareStrings(a, b) {
   if (a < b) return -1
   if (a > b) return 1
   return 0
-}
-function normalizeRepoRelativePath(filePath) {
-  return path2.posix.normalize(filePath.replaceAll('\\', '/'))
 }
 function payloadByteLength(rawInput) {
   if (typeof rawInput === 'string') return Buffer.byteLength(rawInput, 'utf8')
@@ -8408,6 +8416,12 @@ function applyReviewAdjudication(input) {
     }),
   }
 }
+var FINALIZE_CONTEXT_LOSS_DISPATCH_OUTCOMES = new Set([
+  'malformed',
+  'never_returned',
+  'validation_unavailable',
+])
+var FINALIZE_CONTEXT_LOSS_SEVERITIES = new Set(['P0', 'P1', 'unknown'])
 
 // src/ce-review-validator.ts
 var CE_REVIEW_VALIDATOR_USAGE =

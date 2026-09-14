@@ -1,3 +1,4 @@
+import path from 'node:path'
 import { z } from 'zod'
 
 const MAX_REVIEWER_LENGTH = 64
@@ -80,12 +81,29 @@ export const RepoRelativePathSchema = boundedText(256).regex(
   /^(?!\/)(?![A-Za-z]:[\\/])(?!\\).+/,
 )
 
+/**
+ * Normalizes a repo-relative path for grouping, sorting, and any later
+ * surface comparison. Collapses `\`-style separators to `/`, then applies
+ * POSIX lexical normalization (redundant slashes, `.` segments, and a
+ * leading `./`). Never touches the filesystem or the process environment --
+ * this is a pure string transform.
+ *
+ * Defined here rather than in `review-pipeline.ts` so this module's own
+ * risk-coverage surface comparison can reuse it without importing from the
+ * pipeline module, which already imports from this one -- that direction
+ * would create an import cycle. `review-pipeline.ts` re-exports this symbol
+ * so every existing pipeline caller is unaffected.
+ */
+export function normalizeRepoRelativePath(filePath: string): string {
+  return path.posix.normalize(filePath.replaceAll('\\', '/'))
+}
+
 const ReviewerSchema = boundedText(MAX_REVIEWER_LENGTH)
 const BranchSchema = z.string().max(MAX_BRANCH_LENGTH)
 const HeadShaSchema = z.string().regex(/^[0-9a-f]{40}$/)
 const CompletedAtSchema = z.iso.datetime({ offset: false })
 const ReasonSchema = boundedText(MAX_REASON_LENGTH)
-const RISK_CRITICAL_PERSONAS = [
+export const RISK_CRITICAL_PERSONAS = [
   'security',
   'data-migrations',
   'api-contract',
@@ -625,17 +643,31 @@ export const ReviewArtifactSchema = z
       }
 
       // The citation must resolve to a validated synthesized finding whose file
-      // belongs to the failed persona's recorded selection surface.
+      // belongs to the failed persona's recorded selection surface. A finding
+      // in the validation band (P0/P1, or requires_verification) must carry an
+      // explicit true validation -- absent is "never validated", not proof;
+      // an out-of-band finding was never sent for validation, so absent is
+      // expected there. Surfaces compare through the shared path normalizer
+      // rather than literal string equality, matching how the pipeline
+      // grouped and compared them in the first place.
       const lostDispatch = artifact.dispatches.find(
         (dispatch) => dispatch.persona === coverage.persona,
       )
-      const surface = lostDispatch?.selection_surface ?? []
-      const covered = artifact.findings.some(
-        (finding) =>
-          finding.input_finding_ids.includes(citedId) &&
-          finding.validated !== false &&
-          surface.includes(finding.file),
+      const normalizedSurface = new Set(
+        (lostDispatch?.selection_surface ?? []).map(normalizeRepoRelativePath),
       )
+      const covered = artifact.findings.some((finding) => {
+        if (!finding.input_finding_ids.includes(citedId)) return false
+        const inValidationBand =
+          finding.severity === 'P0' ||
+          finding.severity === 'P1' ||
+          finding.requires_verification
+        const validationSatisfied = inValidationBand
+          ? finding.validated === true
+          : finding.validated !== false
+        if (!validationSatisfied) return false
+        return normalizedSurface.has(normalizeRepoRelativePath(finding.file))
+      })
       if (!covered) {
         ctx.addIssue({
           code: 'custom',

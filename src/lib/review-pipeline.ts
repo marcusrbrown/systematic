@@ -1,14 +1,16 @@
-import path from 'node:path'
 import type { z } from 'zod'
 import { formatReviewArtifactIssuePath } from './review-artifact-path.js'
 import {
   MAX_FINDINGS,
   MAX_REASON_LENGTH,
+  normalizeRepoRelativePath,
+  RISK_CRITICAL_PERSONAS,
   SubAgentReturnSchema,
 } from './review-artifact-schema.js'
 import {
   type AdjudicationEnvelopeSchema,
   AGGREGATE_STDIN_BYTE_CAP,
+  type FinalizeInputSchema,
   isRouteTransitionAllowed,
   MergeOutputSchema,
   type PipelineRoute,
@@ -19,6 +21,14 @@ import {
   type ValidatorLifecycleResultsSchema,
 } from './review-pipeline-contract.js'
 import { validateReviewReturnValue } from './review-return-validator.js'
+
+// Re-exported for backward compatibility: every existing internal caller in
+// this module still refers to `normalizeRepoRelativePath` by its own name,
+// and any external importer of this module keeps working unchanged. The
+// implementation itself lives in `review-artifact-schema.ts` so that
+// module's own risk-coverage surface comparison can reuse it without an
+// import cycle back into this one.
+export { normalizeRepoRelativePath } from './review-artifact-schema.js'
 
 /**
  * Pure, side-effect-free admission of one reviewer's raw `ce:review` return.
@@ -277,21 +287,6 @@ function compareStrings(a: string, b: string): number {
   if (a < b) return -1
   if (a > b) return 1
   return 0
-}
-
-/**
- * Normalizes a repo-relative path for grouping, sorting, and any later
- * surface comparison. Collapses `\`-style separators to `/`, then applies
- * POSIX lexical normalization (redundant slashes, `.` segments, and a
- * leading `./`). Never touches the filesystem or the process environment --
- * this is a pure string transform.
- *
- * Exported so every later phase that needs to compare surfaces uses this
- * exact function; divergent normalization between grouping and comparison
- * is a real bug class here.
- */
-export function normalizeRepoRelativePath(filePath: string): string {
-  return path.posix.normalize(filePath.replaceAll('\\', '/'))
 }
 
 /**
@@ -1561,6 +1556,21 @@ function assembleSingletonFinding(
   }
 }
 
+/** The subset of a merged finding's fields the canonical order sorts by.
+ * Deliberately narrower than `MergedFindingAssembly`: both the merge
+ * phase's in-progress assembly and the finalize phase's `ReconciledFinding`
+ * (the same fields, already on the wire) satisfy this shape, so one
+ * comparator serves both without either phase re-deriving order from a
+ * different field set. */
+interface MergedFindingOrderKey {
+  readonly finding_id: string
+  readonly file: string
+  readonly severity: SurvivingFinding['severity']
+  readonly confidence: number
+  readonly fingerprint: string
+  readonly line: number
+}
+
 /**
  * Total order over assembled findings: severity (`P0` first), then
  * confidence descending, then normalized file path, then line, then
@@ -1575,10 +1585,14 @@ function assembleSingletonFinding(
  * Without a further key, that case would leave relative order undefined
  * (not total); `finding_id` is unique per assembly and breaks that tie
  * deterministically.
+ *
+ * Reused by the risk-coverage phase's `deriveCoverageForLostPersona` to
+ * order lost-persona citation candidates -- never a second, divergent
+ * ordering.
  */
 function compareMergedFindingAssembly(
-  a: MergedFindingAssembly,
-  b: MergedFindingAssembly,
+  a: MergedFindingOrderKey,
+  b: MergedFindingOrderKey,
 ): number {
   const severityDelta = SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity]
   if (severityDelta !== 0) return severityDelta
@@ -1756,6 +1770,12 @@ type ValidatorLifecycleResult = ValidatorLifecycleRecord['result']
  * and carrying no `validated` field was never requested at all. */
 export type ReconciledFinding = MergeOutput['merged_findings'][number] & {
   readonly validated?: boolean
+  /** The disproving validator's own reason, carried onto the finding only
+   * when `validated` is `false` -- satisfies the artifact's
+   * `validation_reason` requirement at source instead of losing the reason
+   * on the way from the lifecycle result to the reconciled finding. Absent
+   * whenever `validated` is not `false`. */
+  readonly validation_reason?: string
 }
 
 /** One recorded validator lifecycle failure: a requested finding whose
@@ -1891,7 +1911,14 @@ function classifyFinding(
   }
 
   if (result.outcome === 'false') {
-    return { finding: { ...finding, validated: false }, filtered: true }
+    return {
+      finding: {
+        ...finding,
+        validated: false,
+        validation_reason: result.reason,
+      },
+      filtered: true,
+    }
   }
 
   return {
@@ -1968,6 +1995,475 @@ export function reconcileValidatorResults(
       filtered_input_ids: [...filteredInputIds].sort(compareStrings),
       lifecycle_failures: lifecycleFailures,
       degraded: lifecycleFailures.length > 0,
+    },
+  }
+}
+
+// --- finalize context phase: cross-phase join validation and loss/rejection
+// derivation ------------------------------------------------------------------
+//
+// Everything the finalize phase and the risk-coverage phase need but cannot
+// derive from their own trusted-input assumptions: `rejected_payloads` and
+// `lost_risk_critical_personas`. Per KTD19, every carried field on the merge
+// wire is a trust input, not proof -- this phase re-runs
+// `deriveMergedFindingFields` over the carried survivors as a verifier and
+// rejects any carried field that diverges. It also validates that
+// `dispatch_records`, `parent_run_metadata.selected_dispatches`, and
+// `screen_results` form an exact one-to-one join before deriving anything,
+// so a caller can never omit a loss or disagree with ledger counts by
+// mismatching the envelope. Never reads `process.env`, the filesystem, or
+// the clock.
+
+type FinalizeInputValue = ReturnType<typeof FinalizeInputSchema.parse>
+type FinalizeScreenResults = FinalizeInputValue['screen_results']
+type FinalizeScreenResult = FinalizeScreenResults[number]
+type FinalizeDispatchRecords = FinalizeInputValue['dispatch_records']
+type FinalizeDispatchRecord = FinalizeDispatchRecords[number]
+type FinalizeParentRunMetadata = FinalizeInputValue['parent_run_metadata']
+
+export interface DeriveFinalizeContextInput {
+  readonly merge: MergeOutput
+  readonly prepared: PrepareOutput
+  readonly screen_results: FinalizeScreenResults
+  readonly dispatch_records: FinalizeDispatchRecords
+  readonly parent_run_metadata: Pick<
+    FinalizeParentRunMetadata,
+    'selected_dispatches'
+  >
+}
+
+export interface FinalizeContext {
+  readonly rejected_payloads: readonly RejectedPayloadWeight[]
+  readonly lost_risk_critical_personas: readonly LostRiskCriticalPersona[]
+}
+
+type FinalizeContextRejectReason =
+  | 'duplicate merged finding ID'
+  | 'merged finding references unknown survivor'
+  | 'survivor missing from merge inputs'
+  | 'validator request references unknown merged finding'
+  | 'dispatch record mismatch'
+  | 'screen result missing for selected persona'
+  | 'unexpected screen result for persona'
+  | 'merged finding fields diverge from derivation'
+
+export interface FinalizeContextRejection {
+  readonly path: string
+  readonly reason: FinalizeContextRejectReason
+}
+
+export type DeriveFinalizeContextResult =
+  | { readonly ok: true; readonly value: FinalizeContext }
+  | { readonly ok: false; readonly rejection: FinalizeContextRejection }
+
+function rejectFinalizeContext(
+  path: string,
+  reason: FinalizeContextRejectReason,
+): { readonly ok: false; readonly rejection: FinalizeContextRejection } {
+  return { ok: false, rejection: { path, reason } }
+}
+
+type FinalizeContextCheckResult<Value> =
+  | { readonly ok: true; readonly value: Value }
+  | { readonly ok: false; readonly rejection: FinalizeContextRejection }
+
+function dispatchRecordsEqual(
+  a: FinalizeDispatchRecord,
+  b: FinalizeDispatchRecord,
+): boolean {
+  return (
+    a.persona === b.persona &&
+    a.dispatch_outcome === b.dispatch_outcome &&
+    JSON.stringify(a.selection_surface ?? []) ===
+      JSON.stringify(b.selection_surface ?? [])
+  )
+}
+
+const FINALIZE_CONTEXT_LOSS_DISPATCH_OUTCOMES = new Set<string>([
+  'malformed',
+  'never_returned',
+  'validation_unavailable',
+])
+const FINALIZE_CONTEXT_LOSS_SEVERITIES = new Set<string>([
+  'P0',
+  'P1',
+  'unknown',
+])
+
+/** Rejects a duplicate `finding_id` in `merge.merged_findings` -- every later
+ * step indexes by `finding_id`, so a duplicate would silently shadow one of
+ * the two rows. Returns the full ID set on success, reused to validate
+ * `validator_requests` below without a second pass. */
+function checkNoDuplicateMergedFindingIds(
+  mergedFindings: MergeOutput['merged_findings'],
+): FinalizeContextCheckResult<ReadonlySet<string>> {
+  const seenFindingIds = new Set<string>()
+  for (const [index, finding] of mergedFindings.entries()) {
+    if (seenFindingIds.has(finding.finding_id)) {
+      return rejectFinalizeContext(
+        formatReviewArtifactIssuePath([
+          'merge',
+          'merged_findings',
+          index,
+          'finding_id',
+        ]),
+        'duplicate merged finding ID',
+      )
+    }
+    seenFindingIds.add(finding.finding_id)
+  }
+  return { ok: true, value: seenFindingIds }
+}
+
+/** Checks that survivors partition exactly into merged-finding inputs: every
+ * merged finding's input IDs must resolve to a real survivor, and every
+ * survivor must be covered by some merged finding. Also builds the
+ * per-finding contributing tuple the KTD19 verifier reuses, so survivors are
+ * resolved only once. */
+function checkSurvivorPartition(
+  mergedFindings: MergeOutput['merged_findings'],
+  survivingFindings: PrepareOutput['surviving_findings'],
+  survivingIndex: ReadonlyMap<string, SurvivingFinding>,
+): FinalizeContextCheckResult<
+  ReadonlyMap<string, readonly SurvivingFinding[]>
+> {
+  const coveredInputIds = new Set<string>()
+  const contributingByFindingId = new Map<string, readonly SurvivingFinding[]>()
+
+  for (const [findingIndex, finding] of mergedFindings.entries()) {
+    const sortedIds = [...finding.input_finding_ids].sort(compareStrings)
+    const resolved: SurvivingFinding[] = []
+    for (const [idIndex, inputId] of sortedIds.entries()) {
+      const survivor = survivingIndex.get(inputId)
+      if (!survivor) {
+        return rejectFinalizeContext(
+          formatReviewArtifactIssuePath([
+            'merge',
+            'merged_findings',
+            findingIndex,
+            'input_finding_ids',
+            idIndex,
+          ]),
+          'merged finding references unknown survivor',
+        )
+      }
+      resolved.push(survivor)
+      coveredInputIds.add(inputId)
+    }
+    contributingByFindingId.set(finding.finding_id, resolved)
+  }
+
+  for (const [survivorIndex, survivor] of survivingFindings.entries()) {
+    if (!coveredInputIds.has(survivor.input_id)) {
+      return rejectFinalizeContext(
+        formatReviewArtifactIssuePath([
+          'prepared',
+          'surviving_findings',
+          survivorIndex,
+          'input_id',
+        ]),
+        'survivor missing from merge inputs',
+      )
+    }
+  }
+
+  return { ok: true, value: contributingByFindingId }
+}
+
+/** Every validator request must correspond to a merged finding this envelope
+ * actually produced -- a request for an unknown finding ID is a
+ * data-integrity violation, not a malformed model decision. */
+function checkValidatorRequestsResolve(
+  validatorRequests: MergeOutput['validator_requests'],
+  knownFindingIds: ReadonlySet<string>,
+): FinalizeContextRejection | undefined {
+  for (const [index, request] of validatorRequests.entries()) {
+    if (!knownFindingIds.has(request.finding_id)) {
+      return {
+        path: formatReviewArtifactIssuePath([
+          'merge',
+          'validator_requests',
+          index,
+          'finding_id',
+        ]),
+        reason: 'validator request references unknown merged finding',
+      }
+    }
+  }
+  return undefined
+}
+
+/** The exact one-to-one join: `dispatch_records` and
+ * `parent_run_metadata.selected_dispatches` must agree on every persona's
+ * `(dispatch_outcome, selection_surface)`, with no missing, duplicate, or
+ * extra entry on either side. Returns the selected-dispatch index by
+ * persona, reused by the screen-results join below. */
+function checkDispatchRecordsJoin(
+  dispatchRecords: FinalizeDispatchRecords,
+  selectedDispatches: FinalizeDispatchRecords,
+): FinalizeContextCheckResult<ReadonlyMap<string, FinalizeDispatchRecord>> {
+  if (dispatchRecords.length !== selectedDispatches.length) {
+    return rejectFinalizeContext(
+      formatReviewArtifactIssuePath(['dispatch_records']),
+      'dispatch record mismatch',
+    )
+  }
+
+  const selectedByPersona = new Map(
+    selectedDispatches.map((dispatch) => [dispatch.persona, dispatch] as const),
+  )
+  if (selectedByPersona.size !== selectedDispatches.length) {
+    return rejectFinalizeContext(
+      formatReviewArtifactIssuePath([
+        'parent_run_metadata',
+        'selected_dispatches',
+      ]),
+      'dispatch record mismatch',
+    )
+  }
+
+  for (const [index, record] of dispatchRecords.entries()) {
+    const selected = selectedByPersona.get(record.persona)
+    if (!selected || !dispatchRecordsEqual(record, selected)) {
+      return rejectFinalizeContext(
+        formatReviewArtifactIssuePath(['dispatch_records', index]),
+        'dispatch record mismatch',
+      )
+    }
+  }
+
+  return { ok: true, value: selectedByPersona }
+}
+
+/** `screen_results` must contain exactly one result per selected persona,
+ * none extra. */
+function checkScreenResultsJoin(
+  screenResults: FinalizeScreenResults,
+  dispatchRecords: FinalizeDispatchRecords,
+  selectedByPersona: ReadonlyMap<string, FinalizeDispatchRecord>,
+): FinalizeContextCheckResult<ReadonlyMap<string, FinalizeScreenResult>> {
+  const screenByReviewer = new Map<string, FinalizeScreenResult>()
+  for (const [index, result] of screenResults.entries()) {
+    if (
+      screenByReviewer.has(result.reviewer) ||
+      !selectedByPersona.has(result.reviewer)
+    ) {
+      return rejectFinalizeContext(
+        formatReviewArtifactIssuePath(['screen_results', index, 'reviewer']),
+        'unexpected screen result for persona',
+      )
+    }
+    screenByReviewer.set(result.reviewer, result)
+  }
+
+  for (const [index, record] of dispatchRecords.entries()) {
+    if (!screenByReviewer.has(record.persona)) {
+      return rejectFinalizeContext(
+        formatReviewArtifactIssuePath(['dispatch_records', index, 'persona']),
+        'screen result missing for selected persona',
+      )
+    }
+  }
+
+  return { ok: true, value: screenByReviewer }
+}
+
+/** Whether one merged finding's carried fields diverge from a fresh
+ * `deriveMergedFindingFields` re-derivation over its carried survivors,
+ * using the finding's own route and agreement-credit fields as the model
+ * decision. Compares severity, confidence, pre_existing, fingerprint,
+ * submitters, and route -- the KTD19 verifier's exact field list. */
+function mergedFindingDivergesFromDerivation(
+  finding: MergeOutput['merged_findings'][number],
+  contributingByFindingId: ReadonlyMap<string, readonly SurvivingFinding[]>,
+  returnedReviewers: readonly string[],
+): boolean {
+  const resolved = contributingByFindingId.get(finding.finding_id) ?? []
+  const contributing = toContributingTuple(
+    resolved.length >= 2 ? resolved : [...resolved, ...resolved],
+  )
+
+  const derivation = deriveMergedFindingFields({
+    contributing,
+    decision: {
+      line: finding.line,
+      eligible_agreement_credit: finding.agreement_credit,
+      proposed_route: {
+        autofix_class: finding.autofix_class,
+        owner: finding.owner,
+        requires_verification: finding.requires_verification,
+      },
+      route_narrowing_reason: 'carried route verification',
+    },
+    returned_reviewers: returnedReviewers,
+  })
+
+  return (
+    !derivation.ok ||
+    derivation.value.severity !== finding.severity ||
+    derivation.value.confidence !== finding.confidence ||
+    derivation.value.pre_existing !== finding.pre_existing ||
+    derivation.value.fingerprint !== finding.fingerprint ||
+    JSON.stringify(derivation.value.submitters) !==
+      JSON.stringify(finding.submitters) ||
+    derivation.value.route.autofix_class !== finding.autofix_class ||
+    derivation.value.route.owner !== finding.owner ||
+    derivation.value.route.requires_verification !==
+      finding.requires_verification
+  )
+}
+
+/** KTD19 verifier: re-runs `deriveMergedFindingFields` over every merged
+ * finding's carried survivors and rejects the first one whose carried
+ * fields diverge from the fresh derivation. */
+function checkMergedFindingsMatchDerivation(
+  mergedFindings: MergeOutput['merged_findings'],
+  contributingByFindingId: ReadonlyMap<string, readonly SurvivingFinding[]>,
+  returnedReviewers: readonly string[],
+): FinalizeContextRejection | undefined {
+  for (const [index, finding] of mergedFindings.entries()) {
+    if (
+      mergedFindingDivergesFromDerivation(
+        finding,
+        contributingByFindingId,
+        returnedReviewers,
+      )
+    ) {
+      return {
+        path: formatReviewArtifactIssuePath([
+          'merge',
+          'merged_findings',
+          index,
+        ]),
+        reason: 'merged finding fields diverge from derivation',
+      }
+    }
+  }
+  return undefined
+}
+
+/** Rejected-payload weights: every screen result carrying a rejected summary
+ * contributes its recorded count; a rejection with no summary weighs zero
+ * (KTD21), so it contributes nothing rather than a fabricated entry. Sorted
+ * by reviewer for deterministic output. */
+function deriveRejectedPayloadWeights(
+  screenResults: FinalizeScreenResults,
+): readonly RejectedPayloadWeight[] {
+  const sorted = [...screenResults].sort((a, b) =>
+    compareStrings(a.reviewer, b.reviewer),
+  )
+  const weights: RejectedPayloadWeight[] = []
+  for (const result of sorted) {
+    const summary = result.result.rejected_summary
+    if (summary) {
+      weights.push({ rejected_finding_count: summary.rejected_finding_count })
+    }
+  }
+  return weights
+}
+
+/** Lost risk-critical personas: a selected risk-critical persona is lost
+ * when its dispatch outcome is malformed, never returned, or unavailable,
+ * or when its screen result's rejected summary carries a P0, P1, or unknown
+ * severity. A P2/P3-only partial rejection is not a loss. Sorted by persona
+ * for deterministic output. */
+function deriveLostRiskCriticalPersonas(
+  dispatchRecords: FinalizeDispatchRecords,
+  screenByReviewer: ReadonlyMap<string, FinalizeScreenResult>,
+): readonly LostRiskCriticalPersona[] {
+  const riskCriticalPersonas = new Set<string>(RISK_CRITICAL_PERSONAS)
+  const lostPersonas: LostRiskCriticalPersona[] = []
+
+  for (const record of dispatchRecords) {
+    if (!riskCriticalPersonas.has(record.persona)) continue
+
+    const selectionSurface = record.selection_surface ?? []
+
+    if (FINALIZE_CONTEXT_LOSS_DISPATCH_OUTCOMES.has(record.dispatch_outcome)) {
+      lostPersonas.push({
+        persona: record.persona,
+        selection_surface: selectionSurface,
+      })
+      continue
+    }
+
+    const rejectedSeverities =
+      screenByReviewer.get(record.persona)?.result.rejected_summary
+        ?.rejected_severities ?? []
+    if (
+      rejectedSeverities.some((severity) =>
+        FINALIZE_CONTEXT_LOSS_SEVERITIES.has(severity),
+      )
+    ) {
+      lostPersonas.push({
+        persona: record.persona,
+        selection_surface: selectionSurface,
+      })
+    }
+  }
+
+  return [...lostPersonas].sort((a, b) => compareStrings(a.persona, b.persona))
+}
+
+/**
+ * Validates the finalize envelope's cross-phase joins and derives the two
+ * inputs only finalize can compute: rejected-payload weights (from screen
+ * summaries) and lost risk-critical personas (from the loss rules in
+ * `synthesis-artifact-contract.md`). Rejection is whole-envelope only, with
+ * a fixed reason and a safe JSON path, never payload content -- and always
+ * happens before any derivation runs.
+ */
+export function deriveFinalizeContext(
+  input: DeriveFinalizeContextInput,
+): DeriveFinalizeContextResult {
+  const findingIds = checkNoDuplicateMergedFindingIds(
+    input.merge.merged_findings,
+  )
+  if (!findingIds.ok) return findingIds
+
+  const survivingIndex = buildSurvivingFindingIndex(input.prepared)
+  const partition = checkSurvivorPartition(
+    input.merge.merged_findings,
+    input.prepared.surviving_findings,
+    survivingIndex,
+  )
+  if (!partition.ok) return partition
+
+  const requestViolation = checkValidatorRequestsResolve(
+    input.merge.validator_requests,
+    findingIds.value,
+  )
+  if (requestViolation) return { ok: false, rejection: requestViolation }
+
+  const dispatchJoin = checkDispatchRecordsJoin(
+    input.dispatch_records,
+    input.parent_run_metadata.selected_dispatches,
+  )
+  if (!dispatchJoin.ok) return dispatchJoin
+
+  const screenJoin = checkScreenResultsJoin(
+    input.screen_results,
+    input.dispatch_records,
+    dispatchJoin.value,
+  )
+  if (!screenJoin.ok) return screenJoin
+
+  const returnedReviewers = deriveReturnedReviewers(input.prepared)
+  const derivationViolation = checkMergedFindingsMatchDerivation(
+    input.merge.merged_findings,
+    partition.value,
+    returnedReviewers,
+  )
+  if (derivationViolation) return { ok: false, rejection: derivationViolation }
+
+  return {
+    ok: true,
+    value: {
+      rejected_payloads: deriveRejectedPayloadWeights(input.screen_results),
+      lost_risk_critical_personas: deriveLostRiskCriticalPersonas(
+        input.dispatch_records,
+        screenJoin.value,
+      ),
     },
   }
 }
@@ -2077,6 +2573,28 @@ export interface FinalizeReviewDispositionsOutput {
   }
 }
 
+type FinalizeReviewDispositionsRejectReason =
+  'survivor missing from merged findings'
+
+export interface FinalizeReviewDispositionsRejection {
+  readonly path: string
+  readonly reason: FinalizeReviewDispositionsRejectReason
+}
+
+export type FinalizeReviewDispositionsResult =
+  | { readonly ok: true; readonly value: FinalizeReviewDispositionsOutput }
+  | {
+      readonly ok: false
+      readonly rejection: FinalizeReviewDispositionsRejection
+    }
+
+type DeriveInputDispositionsResult =
+  | { readonly ok: true; readonly value: readonly FinalizedInputDisposition[] }
+  | {
+      readonly ok: false
+      readonly rejection: FinalizeReviewDispositionsRejection
+    }
+
 /**
  * Derives every admitted raw input's final disposition from the state the
  * earlier phases already established: `prepared.confidence_dispositions`
@@ -2085,12 +2603,15 @@ export interface FinalizeReviewDispositionsOutput {
  * finding (looked up via its `input_finding_ids`) carries more than one
  * contributing input (`merged`) or exactly one (`surviving`). Every input
  * finds its finding by construction: `applyReviewAdjudication` places every
- * confidence-gate survivor into exactly one merge group or singleton.
+ * confidence-gate survivor into exactly one merge group or singleton -- a
+ * surviving disposition whose finding cannot be found is a data-integrity
+ * violation between the carried `prepared` and `reconciled` state, and
+ * rejects rather than silently defaulting to `surviving`.
  */
 function deriveInputDispositions(
   prepared: PrepareOutput,
   reconciled: ReconcileValidatorResultsOutput,
-): readonly FinalizedInputDisposition[] {
+): DeriveInputDispositionsResult {
   const filteredInputIds = new Set(reconciled.filtered_input_ids)
   const findingByInputId = new Map<string, ReconciledFinding>()
   for (const finding of reconciled.findings) {
@@ -2099,31 +2620,48 @@ function deriveInputDispositions(
     }
   }
 
-  const dispositions = prepared.confidence_dispositions.map(
-    (entry): FinalizedInputDisposition => {
-      if (entry.disposition === 'suppressed') {
-        return {
-          input_id: entry.input_id,
-          disposition: 'suppressed',
-          reason: entry.reason,
-        }
-      }
-      if (filteredInputIds.has(entry.input_id)) {
-        return { input_id: entry.input_id, disposition: 'filtered' }
-      }
-      const finding = findingByInputId.get(entry.input_id)
-      const isMerged =
-        finding !== undefined && finding.input_finding_ids.length > 1
-      return {
+  const dispositions: FinalizedInputDisposition[] = []
+  for (const [index, entry] of prepared.confidence_dispositions.entries()) {
+    if (entry.disposition === 'suppressed') {
+      dispositions.push({
         input_id: entry.input_id,
-        disposition: isMerged ? 'merged' : 'surviving',
+        disposition: 'suppressed',
+        reason: entry.reason,
+      })
+      continue
+    }
+    if (filteredInputIds.has(entry.input_id)) {
+      dispositions.push({ input_id: entry.input_id, disposition: 'filtered' })
+      continue
+    }
+    const finding = findingByInputId.get(entry.input_id)
+    if (finding === undefined) {
+      return {
+        ok: false,
+        rejection: {
+          path: formatReviewArtifactIssuePath([
+            'prepared',
+            'confidence_dispositions',
+            index,
+            'input_id',
+          ]),
+          reason: 'survivor missing from merged findings',
+        },
       }
-    },
-  )
+    }
+    const isMerged = finding.input_finding_ids.length > 1
+    dispositions.push({
+      input_id: entry.input_id,
+      disposition: isMerged ? 'merged' : 'surviving',
+    })
+  }
 
-  return [...dispositions].sort((a, b) =>
-    compareStrings(a.input_id, b.input_id),
-  )
+  return {
+    ok: true,
+    value: [...dispositions].sort((a, b) =>
+      compareStrings(a.input_id, b.input_id),
+    ),
+  }
 }
 
 /**
@@ -2155,22 +2693,6 @@ function computeDispositionCounts(
   return { surviving, merged, suppressed, filtered, rejected }
 }
 
-/**
- * Whether one synthesized finding is entirely pre-existing: every raw input
- * it was built from (resolved back through `prepared.surviving_findings`)
- * reported `pre_existing: true`. Mirrors `derivePreExisting`'s all-inputs
- * rule from the merge phase rather than inventing a different one; mixed
- * evidence is never pre-existing.
- */
-function isFindingPreExisting(
-  finding: ReconciledFinding,
-  survivingByInputId: ReadonlyMap<string, SurvivingFinding>,
-): boolean {
-  return finding.input_finding_ids.every(
-    (inputId) => survivingByInputId.get(inputId)?.pre_existing === true,
-  )
-}
-
 /** The action queue one finding's mechanically-derived `owner` routes to. */
 function routeForOwner(
   owner: MergeOutput['merged_findings'][number]['owner'],
@@ -2190,15 +2712,17 @@ interface PartitionedFindings {
  * Partitions every non-filtered reconciled finding into the pre-existing
  * report list or exactly one action queue. A finding filtered by a `false`
  * validation is excluded entirely -- it enters no queue and is not reported
- * here. `unconfirmed` marks a finding whose validator run failed or was
- * unavailable (present in `reconciled.lifecycle_failures`): still
- * actionable, since nobody disproved it, but never confirmed either.
+ * here. Pre-existing status reads the finding's own carried `pre_existing`
+ * field (KTD19-verified upstream) rather than recomputing it from
+ * `prepared.surviving_findings`. `unconfirmed` marks a finding whose
+ * validator run failed or was unavailable (present in
+ * `reconciled.lifecycle_failures`); such a finding is still reported --
+ * pre-existing or new -- but excluded from every action queue, since
+ * nobody confirmed it actionable either way.
  */
 function partitionFindings(
-  prepared: PrepareOutput,
   reconciled: ReconcileValidatorResultsOutput,
 ): PartitionedFindings {
-  const survivingByInputId = buildSurvivingFindingIndex(prepared)
   const filteredFindingIds = new Set(reconciled.filtered_finding_ids)
   const unconfirmedFindingIds = new Set(
     reconciled.lifecycle_failures.map((failure) => failure.finding_id),
@@ -2216,12 +2740,14 @@ function partitionFindings(
     const unconfirmed = unconfirmedFindingIds.has(finding.finding_id)
     const entry: QueuedFinding = { finding_id: finding.finding_id, unconfirmed }
 
-    if (isFindingPreExisting(finding, survivingByInputId)) {
+    if (finding.pre_existing) {
       preExistingFindings.push(entry)
       continue
     }
 
     newFindings.push(entry)
+    if (unconfirmed) continue
+
     const route = routeForOwner(finding.owner)
     if (route === 'fixer') fixer.push(entry)
     else if (route === 'residual') residual.push(entry)
@@ -2258,26 +2784,30 @@ function partitionFindings(
  */
 export function finalizeReviewDispositions(
   input: FinalizeReviewDispositionsInput,
-): FinalizeReviewDispositionsOutput {
-  const inputDispositions = deriveInputDispositions(
+): FinalizeReviewDispositionsResult {
+  const inputDispositionsResult = deriveInputDispositions(
     input.prepared,
     input.reconciled,
   )
+  if (!inputDispositionsResult.ok) return inputDispositionsResult
+
   const dispositionCounts = computeDispositionCounts(
-    inputDispositions,
+    inputDispositionsResult.value,
     input.rejected_payloads,
   )
   const { preExistingFindings, newFindings, queues } = partitionFindings(
-    input.prepared,
     input.reconciled,
   )
 
   return {
-    input_dispositions: inputDispositions,
-    disposition_counts: dispositionCounts,
-    pre_existing_findings: preExistingFindings,
-    new_findings: newFindings,
-    queues,
+    ok: true,
+    value: {
+      input_dispositions: inputDispositionsResult.value,
+      disposition_counts: dispositionCounts,
+      pre_existing_findings: preExistingFindings,
+      new_findings: newFindings,
+      queues,
+    },
   }
 }
 
@@ -2304,13 +2834,17 @@ export interface DeriveRiskCoverageInput {
   readonly reconciled: ReconcileValidatorResultsOutput
 }
 
-/** One lost persona's coverage verdict. `finding_id` is present only when
- * `satisfied` is `true`, and names the reconciled finding whose evidence
- * covers the lost surface. */
+/** One lost persona's coverage verdict. `finding_id` and `input_finding_id`
+ * are present only when `satisfied` is `true`: `finding_id` names the
+ * reconciled finding whose evidence covers the lost surface, and
+ * `input_finding_id` names the specific admitted input row -- owned by a
+ * different persona than the lost one -- that finding cites as its cross-
+ * persona evidence. */
 export interface RiskCoverageDerivation {
   readonly persona: string
   readonly satisfied: boolean
   readonly finding_id?: string
+  readonly input_finding_id?: string
 }
 
 /** Maps every surviving input's stable ID to the reviewer that submitted it,
@@ -2396,9 +2930,35 @@ function isEligibleRiskCoverageCandidate(
   return isValidationBandEligible(finding, requestedUncertainFindingIds)
 }
 
+/** The lowest (lexicographically) admitted input ID among `finding`'s
+ * `input_finding_ids` whose reviewer -- resolved via `survivingReviewerIndex`
+ * ledger evidence, never by parsing the ID -- differs from `lostPersona`.
+ * `undefined` when no contributing input has cross-persona ownership: the
+ * finding is not a valid citation for this persona, regardless of what
+ * `isEligibleRiskCoverageCandidate` already concluded from its aggregate
+ * owner set. */
+function citedInputIdForLostPersona(
+  finding: ReconciledFinding,
+  lostPersona: string,
+  survivingReviewerIndex: ReadonlyMap<string, string>,
+): string | undefined {
+  const crossPersonaInputIds = finding.input_finding_ids.filter((inputId) => {
+    const reviewer = survivingReviewerIndex.get(inputId)
+    return reviewer !== undefined && reviewer !== lostPersona
+  })
+  if (crossPersonaInputIds.length === 0) return undefined
+  return [...crossPersonaInputIds].sort(compareStrings)[0]
+}
+
 /** Derives one lost risk-critical persona's coverage verdict. Eligible
- * candidates are ordered by the final stable finding order (`finding_id`),
- * so the citation is deterministic and unaffected by input permutation. */
+ * candidates are ordered by the canonical merged-finding order (severity,
+ * confidence, normalized path, line, fingerprint, then finding ID) -- the
+ * same total order the merge phase already established via
+ * `compareMergedFindingAssembly` -- so the citation is deterministic,
+ * unaffected by input permutation, and never keyed on the model-owned
+ * `finding_id` alone. A candidate that cannot resolve a cross-persona
+ * admitted input ID from ledger evidence is skipped rather than cited:
+ * missing ownership never yields a satisfied citation. */
 function deriveCoverageForLostPersona(
   lostPersona: LostRiskCriticalPersona,
   reconciled: ReconcileValidatorResultsOutput,
@@ -2419,16 +2979,25 @@ function deriveCoverageForLostPersona(
         requestedUncertainFindingIds,
       ),
     )
-    .sort((a, b) => compareStrings(a.finding_id, b.finding_id))
+    .sort(compareMergedFindingAssembly)
 
-  const citation = eligible[0]
-  return citation === undefined
-    ? { persona: lostPersona.persona, satisfied: false }
-    : {
+  for (const candidate of eligible) {
+    const citedInputId = citedInputIdForLostPersona(
+      candidate,
+      lostPersona.persona,
+      survivingReviewerIndex,
+    )
+    if (citedInputId !== undefined) {
+      return {
         persona: lostPersona.persona,
         satisfied: true,
-        finding_id: citation.finding_id,
+        finding_id: candidate.finding_id,
+        input_finding_id: citedInputId,
       }
+    }
+  }
+
+  return { persona: lostPersona.persona, satisfied: false }
 }
 
 /**
@@ -2590,7 +3159,9 @@ export type RunReviewPipelineResult =
   | { readonly ok: true; readonly value: RunReviewPipelineOutput }
   | {
       readonly ok: false
-      readonly rejection: ReconcileValidatorResultsRejection
+      readonly rejection:
+        | ReconcileValidatorResultsRejection
+        | FinalizeReviewDispositionsRejection
     }
 
 /**
@@ -2670,6 +3241,7 @@ export function runReviewPipeline(
     reconciled: reconciled.value,
     rejected_payloads: input.rejected_payloads,
   })
+  if (!finalized.ok) return finalized
 
   const riskCoverage = deriveRiskCoverage({
     lost_risk_critical_personas: input.lost_risk_critical_personas,
@@ -2685,7 +3257,7 @@ export function runReviewPipeline(
     ok: true,
     value: {
       reconciled: reconciled.value,
-      finalized,
+      finalized: finalized.value,
       risk_coverage: riskCoverage,
       plan_assessment: planAssessment,
       verdict,
