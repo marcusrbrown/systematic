@@ -114,10 +114,27 @@ const ConfidenceDispositionSchema = z
   })
   .strict()
 
+// A member carries its stable input ID and the line its original finding
+// reported, together, so a downstream consumer can verify member ordering
+// (line, then stable input ID) and check a merge decision's representative
+// line against real group data. The member's file is intentionally omitted:
+// it is redundant against the group-level `file` every member was grouped
+// under, and this schema's own construction (see `groupCandidates` in
+// `review-pipeline.ts`) makes a member/group file mismatch structurally
+// unrepresentable. Reuses the canonical line leaf (`ParentFindingSchema`'s
+// `line`, sourced from `review-artifact-schema.ts`) rather than restating
+// its bounds.
+const CandidateGroupMemberSchema = z
+  .object({
+    input_id: PipelineInputIdSchema,
+    line: ParentFindingSchema.shape.line,
+  })
+  .strict()
+
 const CandidateGroupSchema = z
   .object({
     file: RepoRelativePathSchema,
-    input_finding_ids: z.array(PipelineInputIdSchema).min(2).max(MAX_FINDINGS),
+    members: z.array(CandidateGroupMemberSchema).min(2).max(MAX_FINDINGS),
   })
   .strict()
 

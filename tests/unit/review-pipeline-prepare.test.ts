@@ -243,7 +243,10 @@ describe('prepareReviewCandidates -- candidate grouping', () => {
     expect(result.value.candidate_groups).toHaveLength(1)
     const group = result.value.candidate_groups[0]
     expect(group?.file).toBe('src/example.ts')
-    expect(group?.input_finding_ids).toEqual(['correctness#0', 'security#0'])
+    expect(group?.members).toEqual([
+      { input_id: 'correctness#0', line: 10 },
+      { input_id: 'security#0', line: 10 },
+    ])
     expect(result.value.singletons).toEqual([])
   })
 
@@ -291,6 +294,41 @@ describe('prepareReviewCandidates -- candidate grouping', () => {
     if (!result.ok) throw new Error('expected acceptance')
     expect(result.value.candidate_groups).toHaveLength(1)
     expect(result.value.candidate_groups[0]?.file).toBe('src/example.ts')
+  })
+
+  test('a candidate group arrives sorted by line, then stable input ID', () => {
+    const tiedAtLineFive = makeAdmittedFinding({
+      input_id: 'correctness#1',
+      line: 5,
+    })
+    const alsoAtLineFive = makeAdmittedFinding({
+      input_id: 'security#0',
+      line: 5,
+    })
+    const atLineTwenty = makeAdmittedFinding({
+      input_id: 'correctness#0',
+      line: 20,
+    })
+    const result = prepareReviewCandidates(
+      buildInput(
+        [
+          makeScreenResult('correctness', [atLineTwenty, tiedAtLineFive]),
+          makeScreenResult('security', [alsoAtLineFive]),
+        ],
+        [makeSelectedDispatch('correctness'), makeSelectedDispatch('security')],
+      ),
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error('expected acceptance')
+    expect(result.value.candidate_groups).toHaveLength(1)
+    // Two members tie at line 5; the stable input ID breaks the tie
+    // ('correctness#1' < 'security#0'). The line-20 member sorts last.
+    expect(result.value.candidate_groups[0]?.members).toEqual([
+      { input_id: 'correctness#1', line: 5 },
+      { input_id: 'security#0', line: 5 },
+      { input_id: 'correctness#0', line: 20 },
+    ])
   })
 })
 

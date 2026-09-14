@@ -118,9 +118,9 @@ Review artifact contract
   src/lib/review-artifact-schema.ts      — Zod source of truth for the ce:review run-level artifact
   src/lib/review-artifact-path.ts        — bounded artifact path, JSON reading, and issue projection helpers
   src/lib/review-return-validator.ts     — bounded stdin validator for one raw persona return (validate-review-return)
-  src/lib/review-pipeline-contract.ts    — review-pipeline.v1 strict Zod contracts for the screen/prepare phase envelopes, composed from review-artifact-schema.ts
+  src/lib/review-pipeline-contract.ts    — review-pipeline.v1 strict Zod contracts for the full synthesis-pipeline envelope family (screen, prepare, adjudication, merge, validator-lifecycle-result, plan-assessment, finalize), composed from review-artifact-schema.ts
   src/lib/review-pipeline.ts             — pure screenReviewReturn (binds a raw persona return to the expected reviewer), prepareReviewCandidates (confidence-gates admitted findings, then groups them into candidate pairs via normalizeRepoRelativePath, never merging), and validateAdjudication (checks a model's merge/decline decisions form a valid partition over the prepared candidate set, rejecting outright rather than repairing; computes no merged-finding fields); none depend on the process environment
-  src/ce-review-validator.ts             — skill-local Node shim dispatching `return`/`artifact`; bundled to skills/ce-review/scripts/validate-review.mjs
+  src/ce-review-validator.ts             — skill-local Node shim dispatching `return`/`artifact`/`screen`/`prepare` (the latter two call screenReviewReturn/prepareReviewCandidates); bundled to skills/ce-review/scripts/validate-review.mjs
 
 ```
 
@@ -238,8 +238,12 @@ config stays in sync with the generated bundled assets. Run via `bun run registr
 
 **Review artifact contract** (`src/lib/review-artifact-schema.ts`) — Zod source of truth for the
 `ce:review` run-level `review-summary.json` artifact. `scripts/generate-review-artifact-schema.ts`
-generates the committed JSON Schema at `skills/ce-review/references/review-summary-schema.json` and
-is gated against drift via `--check` (`bun run review-schema:drift`). `systematic
+generates the committed JSON Schema at `skills/ce-review/references/review-summary-schema.json`,
+plus `findings-schema.json` and `review-pipeline-schema.json` (the latter covers only the
+model-authored `review-pipeline.v1` envelopes — adjudication, validator-lifecycle-result, and
+plan-assessment — from `review-pipeline-contract.ts`; helper-produced phase state stays
+TypeScript-only, in `review-pipeline.ts` and its tests), and is gated against drift via `--check`
+(`bun run review-schema:drift`). `systematic
 validate-review-artifact <path>` (`src/cli.ts`) validates any artifact against it and ships in
 `dist/`. `ce:review` stamps `schema_version` on the artifact it writes and runs the validator against
 it before reporting a verdict; a failing artifact is repaired and re-validated, never deleted or

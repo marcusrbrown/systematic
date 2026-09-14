@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'bun:test'
 import type {
-  AdjudicationCandidateGroup,
-  PreparedAdjudicationState,
+  PrepareOutput,
   ValidateAdjudicationResult,
 } from '../../src/lib/review-pipeline.js'
 import { validateAdjudication } from '../../src/lib/review-pipeline.js'
 
 type Decision = Parameters<typeof validateAdjudication>[1][number]
+type CandidateGroup = PrepareOutput['candidate_groups'][number]
 
 function mergedDecision(
   overrides: Partial<Record<string, unknown>> = {},
@@ -40,38 +40,28 @@ function declinedDecision(
 
 function group(
   file: string,
-  members: readonly {
-    readonly input_id: string
-    readonly line: number
-    readonly file?: string
-  }[],
-): AdjudicationCandidateGroup {
-  return {
-    file,
-    members: members.map((member) => ({
-      file: member.file ?? file,
-      input_id: member.input_id,
-      line: member.line,
-    })),
-  }
+  members: { readonly input_id: string; readonly line: number }[],
+): CandidateGroup {
+  return { file, members: [...members] }
 }
 
 function prepared(
-  candidateGroups: readonly AdjudicationCandidateGroup[],
+  candidateGroups: CandidateGroup[],
   options: {
     readonly singletons?: readonly string[]
     readonly suppressed?: readonly string[]
   } = {},
-): PreparedAdjudicationState {
+): PrepareOutput {
   return {
-    candidate_groups: candidateGroups,
+    candidate_groups: [...candidateGroups],
     confidence_dispositions: (options.suppressed ?? []).map((inputId) => ({
       confidence: 0.4,
       disposition: 'suppressed' as const,
       input_id: inputId,
       reason: 'confidence below gate threshold',
     })),
-    singletons: options.singletons ?? [],
+    coverage_union: [],
+    singletons: [...(options.singletons ?? [])],
   }
 }
 
@@ -263,23 +253,7 @@ describe('validateAdjudication', () => {
     )
   })
 
-  test("rejects an input ID whose file does not match its decision's file (case 6)", () => {
-    const groups = [
-      group('src/x.ts', [
-        { input_id: 'correctness#0', line: 5 },
-        { input_id: 'security#0', file: 'src/wrong.ts', line: 6 },
-      ]),
-    ]
-    const result = validateAdjudication(prepared(groups), [
-      mergedDecision({
-        input_finding_ids: ['correctness#0', 'security#0'],
-        line: 5,
-      }),
-    ])
-    expectRejection(result, 'file mismatch', 'decisions.0.input_finding_ids.1')
-  })
-
-  test('rejects a representative line that is not one of the group members lines (case 7)', () => {
+  test('rejects a representative line that is not one of the group members lines (case 6)', () => {
     const groups = [
       group('src/x.ts', [
         { input_id: 'correctness#0', line: 5 },
@@ -295,7 +269,7 @@ describe('validateAdjudication', () => {
     expectRejection(result, 'representative line mismatch', 'decisions.0.line')
   })
 
-  test('rejects a non-empty decision set when there are no candidate groups (case 8)', () => {
+  test('rejects a non-empty decision set when there are no candidate groups (case 7)', () => {
     const result = validateAdjudication(prepared([]), [
       declinedDecision('decline-1', 'correctness#0'),
     ])

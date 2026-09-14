@@ -7069,9 +7069,13 @@ var ConfidenceDispositionSchema = object({
   confidence: ParentFindingSchema.shape.confidence,
   reason: PipelineReasonSchema.optional(),
 }).strict()
+var CandidateGroupMemberSchema = object({
+  input_id: PipelineInputIdSchema,
+  line: ParentFindingSchema.shape.line,
+}).strict()
 var CandidateGroupSchema = object({
   file: RepoRelativePathSchema,
-  input_finding_ids: array(PipelineInputIdSchema).min(2).max(MAX_FINDINGS),
+  members: array(CandidateGroupMemberSchema).min(2).max(MAX_FINDINGS),
 }).strict()
 var PrepareOutputSchema = object({
   confidence_dispositions: array(ConfidenceDispositionSchema).max(
@@ -7603,7 +7607,10 @@ function groupCandidates(survivors) {
       })
       candidateGroups.push({
         file,
-        input_finding_ids: sortedMembers.map((member) => member.inputId),
+        members: sortedMembers.map((member) => ({
+          input_id: member.inputId,
+          line: member.line,
+        })),
       })
     } else {
       for (const member of members) {

@@ -240,8 +240,27 @@ describe('PrepareOutputSchema', () => {
       candidate_groups: [
         {
           file: 'src/example.ts',
-          input_finding_ids: ['correctness-0', 'security-0'],
+          members: [
+            { input_id: 'correctness-0', line: 10 },
+            { input_id: 'security-0', line: 12 },
+          ],
           extra: 'nope',
+        },
+      ],
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('rejects an unknown key on a candidate group member', () => {
+    const result = PrepareOutputSchema.safeParse({
+      ...prepareOutputFixture,
+      candidate_groups: [
+        {
+          file: 'src/example.ts',
+          members: [
+            { input_id: 'correctness-0', line: 10, extra: 'nope' },
+            { input_id: 'security-0', line: 12 },
+          ],
         },
       ],
     })
@@ -254,7 +273,7 @@ describe('PrepareOutputSchema', () => {
       candidate_groups: [
         {
           file: 'src/example.ts',
-          input_finding_ids: ['correctness-0'],
+          members: [{ input_id: 'correctness-0', line: 10 }],
         },
       ],
     })
@@ -267,7 +286,10 @@ describe('PrepareOutputSchema', () => {
       candidate_groups: [
         {
           file: 'src/example.ts',
-          input_finding_ids: ['correctness-0', 'security-0'],
+          members: [
+            { input_id: 'correctness-0', line: 10 },
+            { input_id: 'security-0', line: 12 },
+          ],
         },
       ],
     })

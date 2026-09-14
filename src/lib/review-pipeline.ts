@@ -424,7 +424,10 @@ function groupCandidates(survivors: readonly PrepareSurvivor[]): {
       })
       candidateGroups.push({
         file,
-        input_finding_ids: sortedMembers.map((member) => member.inputId),
+        members: sortedMembers.map((member) => ({
+          input_id: member.inputId,
+          line: member.line,
+        })),
       })
     } else {
       for (const member of members) {
@@ -508,38 +511,12 @@ export function prepareReviewCandidates(
 // confidence, provenance, routing); that is a later derivation step's job.
 // Never reads `process.env`, the filesystem, or the clock.
 
-/**
- * One candidate-group member as needed for adjudication validation: the
- * stable input ID plus the file and line the member's original finding
- * carried. `PrepareOutputSchema`'s wire-level `candidate_groups` intentionally
- * omit this (the model already saw it during screening and re-sending it
- * would bloat the adjudication payload for no reason) but validation needs it
- * to check group membership, file consistency, and representative-line
- * validity without re-deriving it from screen results.
- */
-export interface AdjudicationCandidateMember {
-  readonly input_id: string
-  readonly file: string
-  readonly line: number
-}
-
-/** One candidate group as needed for adjudication validation: the file every
- * member was grouped under, plus each member's own file/line for the
- * consistency checks below. */
-export interface AdjudicationCandidateGroup {
-  readonly file: string
-  readonly members: readonly AdjudicationCandidateMember[]
-}
-
-/** The prepared state `validateAdjudication` checks decisions against:
- * confidence dispositions (to detect a decision citing a suppressed ID),
- * the true singletons that never needed a decision, and the candidate groups
- * eligible for adjudication. */
-export interface PreparedAdjudicationState {
-  readonly confidence_dispositions: PrepareOutput['confidence_dispositions']
-  readonly singletons: readonly string[]
-  readonly candidate_groups: readonly AdjudicationCandidateGroup[]
-}
+/** One candidate group exactly as `prepareReviewCandidates` emits it on the
+ * wire: the file every member was grouped under, plus each member's stable
+ * input ID and line. `validateAdjudication` consumes this real shape
+ * directly rather than a bespoke stand-in -- a member's file is never
+ * tracked separately because it is always the group's file. */
+type CandidateGroup = PrepareOutput['candidate_groups'][number]
 
 type AdjudicationDecisions = z.infer<
   typeof AdjudicationEnvelopeSchema
@@ -579,7 +556,6 @@ type AdjudicationRejectReason =
   | 'duplicate input id citation'
   | 'omitted eligible input id'
   | 'cross-group input id citation'
-  | 'file mismatch'
   | 'representative line mismatch'
   | 'unexpected decisions for empty candidate set'
 
@@ -629,25 +605,22 @@ function citationPath(
 
 interface CandidateIndex {
   readonly groupIndexByInputId: ReadonlyMap<string, number>
-  readonly memberByInputId: ReadonlyMap<string, AdjudicationCandidateMember>
 }
 
 function buildCandidateIndex(
-  candidateGroups: readonly AdjudicationCandidateGroup[],
+  candidateGroups: readonly CandidateGroup[],
 ): CandidateIndex {
   const groupIndexByInputId = new Map<string, number>()
-  const memberByInputId = new Map<string, AdjudicationCandidateMember>()
   candidateGroups.forEach((group, groupIndex) => {
     for (const member of group.members) {
       groupIndexByInputId.set(member.input_id, groupIndex)
-      memberByInputId.set(member.input_id, member)
     }
   })
-  return { groupIndexByInputId, memberByInputId }
+  return { groupIndexByInputId }
 }
 
 function buildSuppressedSet(
-  confidenceDispositions: PreparedAdjudicationState['confidence_dispositions'],
+  confidenceDispositions: PrepareOutput['confidence_dispositions'],
 ): ReadonlySet<string> {
   const suppressed = new Set<string>()
   for (const disposition of confidenceDispositions) {
@@ -696,7 +669,7 @@ function validateCitations(
  * prepared candidate groups, since no decision references it.
  */
 function validateNoOmissions(
-  candidateGroups: readonly AdjudicationCandidateGroup[],
+  candidateGroups: readonly CandidateGroup[],
   citedIds: ReadonlySet<string>,
 ): AdjudicationRejection | undefined {
   for (const [groupIndex, group] of candidateGroups.entries()) {
@@ -731,15 +704,16 @@ function collectCitedIds(
 /**
  * Validates one merged decision's internal consistency: every cited member
  * must belong to the same candidate group (never a cross-group merge the
- * model invented), every member's own file must match that group's file, and
- * the decision's representative `line` must be one of the group members'
- * lines.
+ * model invented), and the decision's representative `line` must be one of
+ * the group members' lines. A member/group file mismatch is not checked
+ * here -- the real envelope only tracks `file` at the group level, so it is
+ * structurally impossible for a member to disagree with its own group.
  */
 function validateMergedDecisionConsistency(
   decision: MergedMergeDecision,
   decisionIndex: number,
   index: CandidateIndex,
-  candidateGroups: readonly AdjudicationCandidateGroup[],
+  candidateGroups: readonly CandidateGroup[],
 ): AdjudicationRejection | undefined {
   const ids = decision.input_finding_ids
   const firstId = ids[0]
@@ -760,20 +734,6 @@ function validateMergedDecisionConsistency(
         reason: 'cross-group input id citation',
       }
     }
-
-    const member = index.memberByInputId.get(inputId)
-    const group = candidateGroups[groupIndex]
-    if (member && group && member.file !== group.file) {
-      return {
-        path: formatReviewArtifactIssuePath([
-          'decisions',
-          decisionIndex,
-          'input_finding_ids',
-          citedIndex,
-        ]),
-        reason: 'file mismatch',
-      }
-    }
   }
 
   const group = candidateGroups[expectedGroupIndex]
@@ -787,14 +747,14 @@ function validateMergedDecisionConsistency(
 }
 
 /**
- * Validates every merged decision's group/file/line consistency, in
- * decision order. Returns the first violation found, or `undefined` when
- * every merged decision is sound.
+ * Validates every merged decision's group/line consistency, in decision
+ * order. Returns the first violation found, or `undefined` when every
+ * merged decision is sound.
  */
 function validateMergedDecisions(
   decisions: AdjudicationDecisions,
   index: CandidateIndex,
-  candidateGroups: readonly AdjudicationCandidateGroup[],
+  candidateGroups: readonly CandidateGroup[],
 ): AdjudicationRejection | undefined {
   for (const [decisionIndex, decision] of decisions.entries()) {
     if (decision.disposition !== 'merged') continue
@@ -812,10 +772,13 @@ function validateMergedDecisions(
 function resolveDecisionFile(
   decision: MergeDecision,
   index: CandidateIndex,
+  candidateGroups: readonly CandidateGroup[],
 ): string | undefined {
   const firstId = citedInputIds(decision)[0]
   if (firstId === undefined) return undefined
-  return index.memberByInputId.get(firstId)?.file
+  const groupIndex = index.groupIndexByInputId.get(firstId)
+  if (groupIndex === undefined) return undefined
+  return candidateGroups[groupIndex]?.file
 }
 
 /**
@@ -828,13 +791,14 @@ function resolveDecisionFile(
 function buildValidatedPartition(
   decisions: AdjudicationDecisions,
   index: CandidateIndex,
+  candidateGroups: readonly CandidateGroup[],
   singletons: readonly string[],
 ): ValidatedAdjudication {
   const merged: ValidatedMergedGroup[] = []
   const declined: ValidatedDeclinedSingleton[] = []
 
   for (const decision of decisions) {
-    const file = resolveDecisionFile(decision, index) ?? ''
+    const file = resolveDecisionFile(decision, index, candidateGroups) ?? ''
     if (decision.disposition === 'merged') {
       merged.push({ decision, file })
     } else {
@@ -872,7 +836,7 @@ function buildValidatedPartition(
  * partition validity.
  */
 export function validateAdjudication(
-  prepared: PreparedAdjudicationState,
+  prepared: PrepareOutput,
   decisions: AdjudicationDecisions,
 ): ValidateAdjudicationResult {
   if (prepared.candidate_groups.length === 0) {
@@ -887,6 +851,7 @@ export function validateAdjudication(
       value: buildValidatedPartition(
         decisions,
         buildCandidateIndex([]),
+        [],
         prepared.singletons,
       ),
     }
@@ -920,6 +885,11 @@ export function validateAdjudication(
 
   return {
     ok: true,
-    value: buildValidatedPartition(decisions, index, prepared.singletons),
+    value: buildValidatedPartition(
+      decisions,
+      index,
+      prepared.candidate_groups,
+      prepared.singletons,
+    ),
   }
 }
