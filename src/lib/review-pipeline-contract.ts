@@ -8,8 +8,10 @@ import {
   MAX_PERSONAS,
   MAX_REASON_LENGTH,
   ParentFindingSchema,
+  ProvenanceSchema,
   RepoRelativePathSchema,
   ReviewArtifactSchema,
+  SeveritySchema,
   SubAgentReturnSchema,
 } from './review-artifact-schema.js'
 
@@ -59,9 +61,19 @@ export const ScreenRejectedSummarySchema = z
   .object({
     dispatch_outcome: RejectedSummaryDispatchOutcomeSchema,
     rejected_finding_count: z.number().int().positive().max(MAX_FINDINGS),
+    rejected_severities: z.array(SeveritySchema).max(MAX_FINDINGS),
     reason: PipelineReasonSchema,
   })
   .strict()
+  .superRefine((summary, ctx) => {
+    if (summary.rejected_severities.length !== summary.rejected_finding_count) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['rejected_severities'],
+        message: 'severity count must match rejected finding count',
+      })
+    }
+  })
 
 export const ScreenOutputSchema = z
   .object({
@@ -438,6 +450,11 @@ const MergedFindingSchema = z
       .array(AgreementCreditSchema)
       .max(MAX_PERSONAS)
       .optional(),
+    severity: ParentFindingSchema.shape.severity,
+    confidence: ParentFindingSchema.shape.confidence,
+    pre_existing: ParentFindingSchema.shape.pre_existing,
+    fingerprint: ProvenanceSchema.shape.fingerprint,
+    submitters: ProvenanceSchema.shape.submitters,
   })
   .strict()
 
@@ -493,20 +510,41 @@ export const ValidatorLifecycleResultsSchema = z
   .array(ValidatorLifecycleRecordSchema)
   .max(MAX_FINDINGS)
 
+// A model-proposed plan-assessment result: an unrouted classification plus
+// a description. Kept structurally distinct from `routePlanAssessment`'s
+// `PlanAssessmentResult` TypeScript type (which this schema's inferred type
+// must match) because the model authors JSON, not a TypeScript value.
+const PlanAssessmentResultSchema = z
+  .object({
+    kind: z.enum(['explicit_unmet_requirement', 'inferred_gap'] as const),
+    description: PipelineReasonSchema,
+  })
+  .strict()
+
+// `run_status`, `residual_actionable_work`, and `advisory_outputs` are
+// deliberately absent: those are pre-routed outputs `routePlanAssessment`
+// derives from `results`, not fields a model may author directly (KTD12).
 export const PlanAssessmentEnvelopeSchema = z
   .object({
     verdict: ReviewArtifactSchema.shape.verdict,
-    run_status: ReviewArtifactSchema.shape.run_status,
-    residual_actionable_work:
-      ReviewArtifactSchema.shape.residual_actionable_work,
-    advisory_outputs: ReviewArtifactSchema.shape.advisory_outputs,
+    results: z.array(PlanAssessmentResultSchema).max(MAX_FINDINGS),
   })
   .strict()
+
+// The pipeline's parent-run mode is a superset of the artifact's persisted
+// `mode` enum: it additionally accepts `report-only` for a run that never
+// writes an artifact. The artifact's own `mode` enum stays untouched.
+const ParentRunModeSchema = z.enum([
+  'interactive',
+  'autofix',
+  'headless',
+  'report-only',
+] as const)
 
 export const ParentRunMetadataSchema = z
   .object({
     run_id: ReviewArtifactSchema.shape.run_id,
-    mode: ReviewArtifactSchema.shape.mode,
+    mode: ParentRunModeSchema,
     harness: ReviewArtifactSchema.shape.harness,
     branch: ReviewArtifactSchema.shape.branch,
     head_sha: ReviewArtifactSchema.shape.head_sha,
@@ -525,10 +563,51 @@ export const ParentRunMetadataSchema = z
 export const FinalizeInputSchema = z
   .object({
     merge: MergeOutputSchema,
+    // Reused wholesale from the earlier phases rather than restated: `finalize`
+    // re-derives the ledger, rejected weights, coverage notes, and reviewer
+    // ownership from this carried state (KTD19), never from anything the
+    // model authors.
+    prepared: PrepareOutputSchema,
+    screen_results: PrepareInputSchema.shape.screen_results,
     dispatch_records: z.array(SelectedDispatchSchema).max(MAX_PERSONAS),
     validator_lifecycle_results: ValidatorLifecycleResultsSchema,
     plan_assessment: PlanAssessmentEnvelopeSchema,
     parent_run_metadata: ParentRunMetadataSchema,
+  })
+  .strict()
+
+// One admitted raw input's final disposition on the report wire. Mirrors
+// `finalizeReviewDispositions`'s `FinalizedInputDisposition` TypeScript
+// shape; not an artifact leaf, since the persisted artifact only carries the
+// coarser `input_findings` ledger, not this per-input disposition detail.
+const FinalizedInputDispositionSchema = z
+  .object({
+    input_id: PipelineInputIdSchema,
+    disposition: z.enum([
+      'suppressed',
+      'filtered',
+      'merged',
+      'surviving',
+    ] as const),
+    reason: PipelineReasonSchema.optional(),
+  })
+  .strict()
+
+// One finding placed in an action queue or reported as pre-existing.
+// Mirrors `finalizeReviewDispositions`'s `QueuedFinding` / `PreExistingFinding`
+// TypeScript shapes, which are structurally identical.
+const ReportQueueEntrySchema = z
+  .object({
+    finding_id: PipelineInputIdSchema,
+    unconfirmed: z.boolean(),
+  })
+  .strict()
+
+const ReportQueuesSchema = z
+  .object({
+    fixer: z.array(ReportQueueEntrySchema).max(MAX_FINDINGS),
+    residual: z.array(ReportQueueEntrySchema).max(MAX_FINDINGS),
+    report_only: z.array(ReportQueueEntrySchema).max(MAX_FINDINGS),
   })
   .strict()
 
@@ -541,6 +620,13 @@ const ReportProjectionSchema = z
       ReviewArtifactSchema.shape.residual_actionable_work,
     advisory_outputs: ReviewArtifactSchema.shape.advisory_outputs,
     coverage: ReviewArtifactSchema.shape.coverage,
+    input_dispositions: z
+      .array(FinalizedInputDispositionSchema)
+      .max(MAX_FINDINGS * MAX_PERSONAS),
+    disposition_counts: ReviewArtifactSchema.shape.disposition_counts,
+    queues: ReportQueuesSchema,
+    pre_existing_findings: z.array(ReportQueueEntrySchema).max(MAX_FINDINGS),
+    risk_coverage: ReviewArtifactSchema.shape.risk_coverage,
   })
   .strict()
 

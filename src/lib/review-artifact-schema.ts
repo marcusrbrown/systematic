@@ -94,7 +94,17 @@ const RISK_CRITICAL_PERSONAS = [
 ] as const
 const RiskCriticalPersonaSchema = z.enum(RISK_CRITICAL_PERSONAS)
 const FindingTitleSchema = boundedText(256)
-const SeveritySchema = z.enum(['P0', 'P1', 'P2', 'P3', 'unknown'] as const)
+// Exported for reuse by `review-pipeline-contract.ts`, which extracts
+// rejected-severity classifications and carries a merged finding's severity
+// across the pipeline wire using this same bounded enum rather than
+// restating it.
+export const SeveritySchema = z.enum([
+  'P0',
+  'P1',
+  'P2',
+  'P3',
+  'unknown',
+] as const)
 const FindingSeveritySchema = SeveritySchema.exclude(['unknown'])
 const AutofixClassSchema = z.enum([
   'safe_auto',
@@ -162,7 +172,10 @@ export const InputFindingSchema = z.discriminatedUnion('record_type', [
   RejectedInputFindingSchema,
 ])
 
-const ProvenanceSchema = z
+// Exported for reuse by `review-pipeline-contract.ts`, which carries a
+// merged finding's `fingerprint` and `submitters` across the pipeline wire
+// using these same leaves rather than restating their bounds.
+export const ProvenanceSchema = z
   .object({
     fingerprint: boundedText(512),
     submitters: z.array(ReviewerSchema).max(MAX_PERSONAS),

@@ -2,11 +2,13 @@ import { describe, expect, test } from 'bun:test'
 import {
   MAX_FINDINGS,
   MAX_PERSONAS,
+  ReviewArtifactSchema,
 } from '../../src/lib/review-artifact-schema.js'
 import {
   AdjudicationEnvelopeSchema,
   AGGREGATE_BYTE_CAP_HEADROOM,
   AGGREGATE_STDIN_BYTE_CAP,
+  FinalizeInputSchema,
   FinalizeOutputSchema,
   isRouteTransitionAllowed,
   MergeInputSchema,
@@ -150,6 +152,37 @@ describe('ScreenOutputSchema', () => {
       rejected_summary: {
         dispatch_outcome: 'malformed',
         rejected_finding_count: 1,
+        rejected_severities: ['P1'],
+        reason: 'Reviewer output did not parse as JSON.',
+      },
+    })
+    expect(result.success).toBe(true)
+  })
+
+  test('rejects a rejected summary whose severity count does not match the finding count', () => {
+    const result = ScreenOutputSchema.safeParse({
+      ...screenOutputFixture,
+      admitted_findings: [],
+      dispatch_outcome: 'malformed',
+      rejected_summary: {
+        dispatch_outcome: 'malformed',
+        rejected_finding_count: 2,
+        rejected_severities: ['P1'],
+        reason: 'Reviewer output did not parse as JSON.',
+      },
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('accepts an unknown rejected severity classification', () => {
+    const result = ScreenOutputSchema.safeParse({
+      ...screenOutputFixture,
+      admitted_findings: [],
+      dispatch_outcome: 'malformed',
+      rejected_summary: {
+        dispatch_outcome: 'malformed',
+        rejected_finding_count: 1,
+        rejected_severities: ['unknown'],
         reason: 'Reviewer output did not parse as JSON.',
       },
     })
@@ -460,6 +493,11 @@ const mergedFindingFixture: JsonObject = {
   evidence: ['src/example.ts:42 shows the merged issue.'],
   suggested_fix: 'Apply the suggested fix here.',
   input_finding_ids: ['correctness-0', 'security-0'],
+  severity: 'P1',
+  confidence: 0.85,
+  pre_existing: false,
+  fingerprint: 'src/example.ts:42:P1',
+  submitters: ['correctness', 'security'],
 }
 
 const validatorRequestFixture: JsonObject = {
@@ -482,9 +520,16 @@ const selectedDispatchFixture: JsonObject = {
 
 const planAssessmentFixture: JsonObject = {
   verdict: 'Ready to merge after minor fixups.',
-  run_status: 'completed',
-  residual_actionable_work: [],
-  advisory_outputs: [],
+  results: [
+    {
+      kind: 'explicit_unmet_requirement',
+      description: 'The plan required a migration script that was not added.',
+    },
+    {
+      kind: 'inferred_gap',
+      description: 'Retry backoff for the new client is not covered by a test.',
+    },
+  ],
 }
 
 const parentRunMetadataFixture: JsonObject = {
@@ -537,6 +582,21 @@ const reportProjectionFixture: JsonObject = {
     validator_failures: [],
     intent_uncertainty: [],
   },
+  input_dispositions: [{ input_id: 'correctness-0', disposition: 'surviving' }],
+  disposition_counts: {
+    surviving: 0,
+    merged: 1,
+    suppressed: 0,
+    filtered: 0,
+    rejected: 0,
+  },
+  queues: {
+    fixer: [],
+    residual: [{ finding_id: 'decision-0', unconfirmed: false }],
+    report_only: [],
+  },
+  pre_existing_findings: [],
+  risk_coverage: [],
 }
 
 const reviewArtifactFixture: JsonObject = {
@@ -583,6 +643,8 @@ const reviewArtifactFixture: JsonObject = {
 
 const finalizeInputFixture: JsonObject = {
   merge: mergeOutputFixture,
+  prepared: prepareOutputFixture,
+  screen_results: prepareInputFixture.screen_results,
   dispatch_records: [selectedDispatchFixture],
   validator_lifecycle_results: [
     { finding_id: 'decision-0', result: { outcome: 'true' } },
@@ -737,6 +799,36 @@ describe('MergeInputSchema / MergeOutputSchema', () => {
     })
     expect(result.success).toBe(false)
   })
+
+  test('rejects an unknown key on a merged finding', () => {
+    const result = MergeOutputSchema.safeParse({
+      ...mergeOutputFixture,
+      merged_findings: [{ ...mergedFindingFixture, extra: 'nope' }],
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('rejects a merged finding missing a carried mechanical field', () => {
+    const { submitters: _submitters, ...withoutSubmitters } =
+      mergedFindingFixture
+    const result = MergeOutputSchema.safeParse({
+      ...mergeOutputFixture,
+      merged_findings: [withoutSubmitters],
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('carries severity, confidence, pre_existing, fingerprint, and submitters on the wire', () => {
+    const result = MergeOutputSchema.safeParse(mergeOutputFixture)
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    const [finding] = result.data.merged_findings
+    expect(finding?.severity).toBe('P1')
+    expect(finding?.confidence).toBe(0.85)
+    expect(finding?.pre_existing).toBe(false)
+    expect(finding?.fingerprint).toBe('src/example.ts:42:P1')
+    expect(finding?.submitters).toEqual(['correctness', 'security'])
+  })
 })
 
 describe('ValidatorLifecycleResultSchema', () => {
@@ -801,6 +893,41 @@ describe('PlanAssessmentEnvelopeSchema', () => {
     })
     expect(result.success).toBe(false)
   })
+
+  test('accepts an empty results array', () => {
+    const result = PlanAssessmentEnvelopeSchema.safeParse({
+      verdict: planAssessmentFixture.verdict,
+      results: [],
+    })
+    expect(result.success).toBe(true)
+  })
+
+  test('rejects an unknown key on a result entry', () => {
+    const result = PlanAssessmentEnvelopeSchema.safeParse({
+      verdict: planAssessmentFixture.verdict,
+      results: [{ kind: 'inferred_gap', description: 'x', extra: 'nope' }],
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('rejects the pre-routed run_status field', () => {
+    const result = PlanAssessmentEnvelopeSchema.safeParse({
+      verdict: planAssessmentFixture.verdict,
+      results: [],
+      run_status: 'completed',
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('rejects the pre-routed residual_actionable_work and advisory_outputs fields', () => {
+    const result = PlanAssessmentEnvelopeSchema.safeParse({
+      verdict: planAssessmentFixture.verdict,
+      results: [],
+      residual_actionable_work: [],
+      advisory_outputs: [],
+    })
+    expect(result.success).toBe(false)
+  })
 })
 
 describe('ParentRunMetadataSchema', () => {
@@ -817,12 +944,49 @@ describe('ParentRunMetadataSchema', () => {
     })
     expect(result.success).toBe(false)
   })
+
+  test('accepts report-only as a mode', () => {
+    const result = ParentRunMetadataSchema.safeParse({
+      ...parentRunMetadataFixture,
+      mode: 'report-only',
+    })
+    expect(result.success).toBe(true)
+  })
+
+  test('the artifact mode enum still rejects report-only', () => {
+    const result = ReviewArtifactSchema.safeParse({
+      ...reviewArtifactFixture,
+      mode: 'report-only',
+    })
+    expect(result.success).toBe(false)
+  })
 })
 
 describe('FinalizeInputSchema / FinalizeOutputSchema', () => {
   test('accepts a conforming finalize input', () => {
-    const result = MergeOutputSchema.safeParse(finalizeInputFixture.merge)
+    const result = FinalizeInputSchema.safeParse(finalizeInputFixture)
     expect(result.success).toBe(true)
+  })
+
+  test('rejects an unknown top-level key on a finalize input', () => {
+    const result = FinalizeInputSchema.safeParse({
+      ...finalizeInputFixture,
+      extra: 'nope',
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('rejects a finalize input missing screen_results', () => {
+    const { screen_results: _screenResults, ...withoutScreenResults } =
+      finalizeInputFixture
+    const result = FinalizeInputSchema.safeParse(withoutScreenResults)
+    expect(result.success).toBe(false)
+  })
+
+  test('rejects a finalize input missing prepared', () => {
+    const { prepared: _prepared, ...withoutPrepared } = finalizeInputFixture
+    const result = FinalizeInputSchema.safeParse(withoutPrepared)
+    expect(result.success).toBe(false)
   })
 
   test('accepts a conforming writing-mode finalize output', () => {
@@ -864,5 +1028,43 @@ describe('FinalizeInputSchema / FinalizeOutputSchema', () => {
       artifact: reviewArtifactFixture,
     })
     expect(result.success).toBe(false)
+  })
+
+  test('rejects an unknown key on the report projection', () => {
+    const result = FinalizeOutputSchema.safeParse({
+      kind: 'report_only',
+      ...reportProjectionFixture,
+      extra: 'nope',
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('rejects a report projection missing disposition_counts', () => {
+    const { disposition_counts: _dispositionCounts, ...withoutCounts } =
+      reportProjectionFixture
+    const result = FinalizeOutputSchema.safeParse({
+      kind: 'report_only',
+      ...withoutCounts,
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('rejects a report projection missing queues', () => {
+    const { queues: _queues, ...withoutQueues } = reportProjectionFixture
+    const result = FinalizeOutputSchema.safeParse({
+      kind: 'report_only',
+      ...withoutQueues,
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('accepts a report projection that omits the optional risk_coverage', () => {
+    const { risk_coverage: _riskCoverage, ...withoutRiskCoverage } =
+      reportProjectionFixture
+    const result = FinalizeOutputSchema.safeParse({
+      kind: 'report_only',
+      ...withoutRiskCoverage,
+    })
+    expect(result.success).toBe(true)
   })
 })

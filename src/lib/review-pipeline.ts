@@ -2,6 +2,7 @@ import path from 'node:path'
 import type { z } from 'zod'
 import { formatReviewArtifactIssuePath } from './review-artifact-path.js'
 import {
+  MAX_FINDINGS,
   MAX_REASON_LENGTH,
   SubAgentReturnSchema,
 } from './review-artifact-schema.js'
@@ -45,6 +46,43 @@ type PipelineRejectReason = 'schema validation' | 'malformed JSON'
 
 const JSON_ROOT_PATH = '$'
 
+const RECOGNIZED_SEVERITIES = ['P0', 'P1', 'P2', 'P3'] as const
+type RecognizedSeverity = (typeof RECOGNIZED_SEVERITIES)[number]
+type RejectedSeverity = RecognizedSeverity | 'unknown'
+
+function classifyRejectedSeverity(value: unknown): RejectedSeverity {
+  return typeof value === 'string' &&
+    (RECOGNIZED_SEVERITIES as readonly string[]).includes(value)
+    ? (value as RecognizedSeverity)
+    : 'unknown'
+}
+
+/**
+ * Extracts each finding's severity from a whole-payload rejection's raw JSON
+ * value, without trusting any of it: only a recognizable `P0`-`P3` string is
+ * copied through, and any other value -- malformed, wrong type, or absent --
+ * becomes `unknown` rather than being forwarded verbatim onto the wire.
+ * Returns `undefined` when the payload's finding count cannot even be
+ * determined (not an object, or no array-typed `findings` property) or
+ * exceeds `MAX_FINDINGS` (too many to represent in a bounded
+ * `rejected_summary`) -- the "unknowable count" case KTD21 requires to carry
+ * no rejected-summary row at all, distinct from a determined count of zero
+ * (also no row, but for a different reason: see `wholePayloadRejection`).
+ */
+function extractRejectedSeverities(
+  rawValue: unknown,
+): readonly RejectedSeverity[] | undefined {
+  if (typeof rawValue !== 'object' || rawValue === null) return undefined
+  const findings = (rawValue as Record<string, unknown>).findings
+  if (!Array.isArray(findings)) return undefined
+  if (findings.length > MAX_FINDINGS) return undefined
+  return findings.map((finding) =>
+    typeof finding === 'object' && finding !== null
+      ? classifyRejectedSeverity((finding as Record<string, unknown>).severity)
+      : 'unknown',
+  )
+}
+
 function formatDiagnostic(
   persona: string,
   fieldPath: readonly (string | number)[] | string,
@@ -73,20 +111,38 @@ function parseRawReturn(
   }
 }
 
+/**
+ * Builds a whole-payload rejection's `ScreenOutput`. Per KTD21, a
+ * rejected-summary row requires a positive finding count with a real
+ * meaning: when the rejected findings' severities cannot be determined at
+ * all (unparseable JSON) or the determined count is zero (an
+ * identity-mismatched empty return), no `rejected_summary` is emitted at
+ * all -- the count is never coerced from zero to one, and no reason text
+ * escapes into the output for that case.
+ */
 function wholePayloadRejection(
   persona: string,
   fieldPath: readonly (string | number)[] | string,
   reason: PipelineRejectReason,
-  knownFindingsCount: number,
+  rejectedSeverities: readonly RejectedSeverity[] | undefined,
 ): ScreenOutput {
+  const rejectedFindingCount = rejectedSeverities?.length ?? 0
+
   return ScreenOutputSchema.parse({
     admitted_findings: [],
     dispatch_outcome: 'malformed',
-    rejected_summary: {
-      dispatch_outcome: 'malformed',
-      reason: truncateReason(formatDiagnostic(persona, fieldPath, reason)),
-      rejected_finding_count: Math.max(1, knownFindingsCount),
-    },
+    ...(rejectedFindingCount > 0
+      ? {
+          rejected_summary: {
+            dispatch_outcome: 'malformed',
+            reason: truncateReason(
+              formatDiagnostic(persona, fieldPath, reason),
+            ),
+            rejected_finding_count: rejectedFindingCount,
+            rejected_severities: rejectedSeverities,
+          },
+        }
+      : {}),
     residual_risks: [],
     testing_gaps: [],
   })
@@ -109,13 +165,23 @@ export function screenReviewReturn(
 
   const parsed = parseRawReturn(input.raw_return)
   if (!parsed.ok) {
-    return wholePayloadRejection(persona, JSON_ROOT_PATH, 'malformed JSON', 0)
+    return wholePayloadRejection(
+      persona,
+      JSON_ROOT_PATH,
+      'malformed JSON',
+      undefined,
+    )
   }
 
   const validation = validateReviewReturnValue(parsed.value)
   if (!validation.ok) {
     const fieldPath = validation.issues[0]?.path ?? JSON_ROOT_PATH
-    return wholePayloadRejection(persona, fieldPath, 'schema validation', 0)
+    return wholePayloadRejection(
+      persona,
+      fieldPath,
+      'schema validation',
+      extractRejectedSeverities(parsed.value),
+    )
   }
 
   const raw = SubAgentReturnSchema.parse(parsed.value)
@@ -125,7 +191,7 @@ export function screenReviewReturn(
       persona,
       'reviewer',
       'schema validation',
-      raw.findings.length,
+      raw.findings.map((finding) => finding.severity),
     )
   }
 
@@ -1339,10 +1405,11 @@ function toContributingTuple(
   return [first, second, ...rest]
 }
 
-/** One assembled merged finding carrying both the fields the wire
- * `MergedFindingSchema` exposes and the mechanical fields (`severity`,
- * `confidence`, `fingerprint`) that only drive sorting and validator-request
- * selection but never appear on the wire themselves. */
+/** One assembled merged finding carrying every field `MergedFindingSchema`
+ * exposes on the wire, including the mechanically-derived fields
+ * (`severity`, `confidence`, `pre_existing`, `fingerprint`, `submitters`)
+ * that `deriveMergedFindingFields` produces and `toMergedFindingWireShape`
+ * carries through untouched, never recomputed downstream (KTD19). */
 interface MergedFindingAssembly {
   readonly finding_id: string
   readonly file: string
@@ -1355,7 +1422,9 @@ interface MergedFindingAssembly {
   readonly agreement_credit?: readonly string[]
   readonly severity: SurvivingFinding['severity']
   readonly confidence: number
+  readonly pre_existing: boolean
   readonly fingerprint: string
+  readonly submitters: readonly string[]
   readonly autofix_class: PipelineRoute['autofix_class']
   readonly owner: PipelineRoute['owner']
   readonly requires_verification: boolean
@@ -1386,7 +1455,9 @@ function assemblyFromDerivation(
         : undefined,
     severity: derived.severity,
     confidence: derived.confidence,
+    pre_existing: derived.pre_existing,
     fingerprint: derived.fingerprint,
+    submitters: derived.submitters,
     autofix_class: derived.route.autofix_class,
     owner: derived.route.owner,
     requires_verification: derived.route.requires_verification,
@@ -1493,9 +1564,17 @@ function assembleSingletonFinding(
 /**
  * Total order over assembled findings: severity (`P0` first), then
  * confidence descending, then normalized file path, then line, then
- * fingerprint as the stable tiebreak. Every field is either mechanically
- * derived or a stable input, so this order never depends on decision or
- * candidate-group iteration order.
+ * fingerprint, then the stable input finding ID as a final tiebreak. Every
+ * field is either mechanically derived or a stable input, so this order
+ * never depends on decision or candidate-group iteration order.
+ *
+ * The finding-ID tiebreak is necessary, not redundant with fingerprint:
+ * `deriveFingerprint` computes its value purely from normalized file, line,
+ * and severity, so two distinct findings that already tie on all of
+ * severity/confidence/path/line also tie on fingerprint by construction.
+ * Without a further key, that case would leave relative order undefined
+ * (not total); `finding_id` is unique per assembly and breaks that tie
+ * deterministically.
  */
 function compareMergedFindingAssembly(
   a: MergedFindingAssembly,
@@ -1507,7 +1586,9 @@ function compareMergedFindingAssembly(
   const pathDelta = compareStrings(a.file, b.file)
   if (pathDelta !== 0) return pathDelta
   if (a.line !== b.line) return a.line - b.line
-  return compareStrings(a.fingerprint, b.fingerprint)
+  const fingerprintDelta = compareStrings(a.fingerprint, b.fingerprint)
+  if (fingerprintDelta !== 0) return fingerprintDelta
+  return compareStrings(a.finding_id, b.finding_id)
 }
 
 /** The validator request set is purely mechanical: exactly every merged
@@ -1538,6 +1619,11 @@ function toMergedFindingWireShape(
     evidence: assembly.evidence,
     suggested_fix: assembly.suggested_fix,
     input_finding_ids: [...assembly.input_finding_ids],
+    severity: assembly.severity,
+    confidence: assembly.confidence,
+    pre_existing: assembly.pre_existing,
+    fingerprint: assembly.fingerprint,
+    submitters: [...assembly.submitters],
     ...(assembly.agreement_credit
       ? { agreement_credit: [...assembly.agreement_credit] }
       : {}),

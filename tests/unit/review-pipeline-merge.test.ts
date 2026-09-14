@@ -12,6 +12,7 @@ import {
   deriveMergedFindingFields,
   validateAdjudication,
 } from '../../src/lib/review-pipeline.js'
+import { MergeOutputSchema } from '../../src/lib/review-pipeline-contract.js'
 
 type Decision = Parameters<typeof validateAdjudication>[1][number]
 type CandidateGroup = PrepareOutput['candidate_groups'][number]
@@ -984,5 +985,147 @@ describe('applyReviewAdjudication', () => {
     })
 
     expect(JSON.stringify(forward)).toBe(JSON.stringify(reversed))
+  })
+
+  test('every carried mechanical field (severity, confidence, pre_existing, fingerprint, submitters) is present on both merged groups and singletons', () => {
+    const groups = [
+      group('src/a.ts', [
+        { input_id: 'correctness#0', line: 10 },
+        { input_id: 'security#0', line: 10 },
+      ]),
+    ]
+    const decisions: ApplyDecision = [
+      mergedDecision({
+        input_finding_ids: ['correctness#0', 'security#0'],
+        line: 10,
+      }),
+    ]
+
+    const result = applyReviewAdjudication({
+      prepared: prepared(groups, { singletons: ['correctness#1'] }),
+      decisions,
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+
+    const merged = result.value.merged_findings.find(
+      (finding) => finding.finding_id === 'merge-1',
+    )
+    expect(merged?.severity).toBe('P1')
+    expect(merged?.confidence).toBeGreaterThan(0)
+    expect(merged?.pre_existing).toBe(false)
+    // Fingerprint derives from the contributing finding's own file
+    // ('src/example.ts', the `survivingFinding` fixture default), not the
+    // candidate group's nominal file ('src/a.ts').
+    expect(merged?.fingerprint).toBe('src/example.ts:10:P1')
+    // Two distinct submitters, sorted.
+    expect(merged?.submitters).toEqual(['correctness', 'security'])
+
+    const singleton = result.value.merged_findings.find(
+      (finding) => finding.finding_id === 'correctness#1',
+    )
+    expect(singleton?.severity).toBe('P1')
+    expect(singleton?.confidence).toBeGreaterThan(0)
+    expect(singleton?.pre_existing).toBe(false)
+    expect(singleton?.fingerprint).toBe('src/example.ts:1:P1')
+    expect(singleton?.submitters).toEqual(['correctness'])
+  })
+
+  test('pre_existing is true only when every contributing input is pre-existing', () => {
+    const mixedZero = { ...survivingFinding('mixed#0'), pre_existing: true }
+    const mixedOne = { ...survivingFinding('mixed#1'), pre_existing: false }
+    const allPreFinding = {
+      ...survivingFinding('all-pre#0'),
+      pre_existing: true,
+    }
+
+    const customPrepared: PrepareOutput = {
+      candidate_groups: [
+        group('src/example.ts', [
+          { input_id: 'mixed#0', line: 1 },
+          { input_id: 'mixed#1', line: 1 },
+        ]),
+      ],
+      confidence_dispositions: [mixedZero, mixedOne, allPreFinding].map(
+        (finding) => ({
+          confidence: finding.confidence,
+          disposition: 'surviving' as const,
+          input_id: finding.input_id,
+        }),
+      ),
+      coverage_union: [],
+      singletons: ['all-pre#0'],
+      surviving_findings: [mixedZero, mixedOne, allPreFinding],
+    }
+
+    const result = applyReviewAdjudication({
+      prepared: customPrepared,
+      decisions: [
+        mergedDecision({
+          decision_id: 'merge-mixed',
+          input_finding_ids: ['mixed#0', 'mixed#1'],
+          line: 1,
+        }),
+      ],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+
+    const mixed = result.value.merged_findings.find(
+      (finding) => finding.finding_id === 'merge-mixed',
+    )
+    expect(mixed?.pre_existing).toBe(false)
+
+    const allPre = result.value.merged_findings.find(
+      (finding) => finding.finding_id === 'all-pre#0',
+    )
+    expect(allPre?.pre_existing).toBe(true)
+  })
+
+  test('round-trips through the amended MergeOutputSchema', () => {
+    const groups = [
+      group('src/a.ts', [
+        { input_id: 'correctness#0', line: 10 },
+        { input_id: 'security#0', line: 10 },
+      ]),
+    ]
+    const result = applyReviewAdjudication({
+      prepared: prepared(groups, { singletons: ['correctness#1'] }),
+      decisions: [
+        mergedDecision({
+          input_finding_ids: ['correctness#0', 'security#0'],
+          line: 10,
+        }),
+      ],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(MergeOutputSchema.safeParse(result.value).success).toBe(true)
+  })
+
+  test('two findings tied on severity, confidence, path, line, and fingerprint order deterministically by finding ID', () => {
+    const findings = [
+      { ...survivingFinding('zulu#0'), file: 'src/tied.ts', line: 5 },
+      { ...survivingFinding('alpha#0'), file: 'src/tied.ts', line: 5 },
+    ]
+
+    const result = applyReviewAdjudication({
+      prepared: preparedFromFindings(findings),
+      decisions: [],
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    // Both tie on every earlier key (same severity, confidence, path, line,
+    // and therefore the same derived fingerprint) -- only the finding ID
+    // breaks the tie, and 'alpha#0' sorts before 'zulu#0'.
+    const [first, second] = result.value.merged_findings
+    expect(first?.fingerprint).toBe(second?.fingerprint)
+    expect(
+      result.value.merged_findings.map((finding) => finding.finding_id),
+    ).toEqual(['alpha#0', 'zulu#0'])
   })
 })

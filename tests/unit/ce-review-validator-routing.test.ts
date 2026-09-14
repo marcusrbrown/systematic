@@ -321,9 +321,13 @@ describe('screen: stdin bounds', () => {
 
 describe('screen: rejection outcomes', () => {
   test('malformed JSON exits 1', () => {
+    // Per KTD21, unparseable JSON's finding count is genuinely unknowable,
+    // so screenReviewReturn emits no rejected_summary row at all -- the CLI
+    // falls back to its generic rejection message rather than echoing a
+    // reason derived from a summary that does not exist.
     const result = runValidator(SCREEN_ARGS, { input: '{ not json' })
     expect(result.exitCode).toBe(1)
-    expect(result.stderr).toContain('malformed JSON')
+    expect(result.stderr).toContain('screen rejected the reviewer return')
     expect(result.stdout).toBe('')
   })
 

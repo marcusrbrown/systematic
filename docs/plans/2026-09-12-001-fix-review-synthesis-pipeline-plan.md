@@ -924,7 +924,7 @@ which adds only contracts and a generated reference.
     `tests/unit/ce-review-validator-routing.test.ts`; regenerate the helper.
   - Regenerate `skills/ce-review/references/review-pipeline-schema.json`.
 
-  - [ ] **5.1 Widen the intermediate contract (schema only)**
+  - [x] **5.1 Widen the intermediate contract (schema only)**
     - Merge wire: add `severity`, `confidence`, `pre_existing`, `fingerprint`,
       `submitters` to the merged-finding shape, reusing the artifact's leaves.
     - Finalize input: add `prepared` and `screen_results`, reusing the prepare
@@ -942,13 +942,13 @@ which adds only contracts and a generated reference.
       pipeline metadata and rejected by the artifact; regenerated pipeline JSON
       Schema changes while both artifact schemas stay byte-identical.
 
-  - [ ] **5.2 Carry pre-existing state and submitters through merge assembly**
+  - [x] **5.2 Carry pre-existing state and submitters through merge assembly**
     - `assemblyFromDerivation` retains every derived field; nothing is
       recomputed downstream.
     - Tests: each carried field equals the derivation's value; absent agreement
       credit stays absent; a permuted input order yields identical assembly.
 
-  - [ ] **5.3 Emit the complete merge wire and make finding order total**
+  - [x] **5.3 Emit the complete merge wire and make finding order total**
     - The wire projection emits every carried field.
     - The assembly comparator adds a final stable input-ID tie-breaker so two
       findings sharing severity, confidence, path, line, and fingerprint still
@@ -957,7 +957,7 @@ which adds only contracts and a generated reference.
       present on singletons and merged groups; identical-key findings order by
       input ID; permuted decisions yield byte-identical output.
 
-  - [ ] **5.4 Extract rejected severities and honest counts at screen time**
+  - [x] **5.4 Extract rejected severities and honest counts at screen time**
     - On finding-level rejection, extract only recognizable `P0`-`P3` values;
       anything else becomes `unknown`. Never copy an offending value.
     - A whole-payload rejection where no finding count is knowable (unparseable

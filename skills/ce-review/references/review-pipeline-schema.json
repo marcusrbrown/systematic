@@ -362,37 +362,29 @@
           "maxLength": 256,
           "pattern": "\\S"
         },
-        "run_status": {
-          "type": "string",
-          "enum": ["in_progress", "completed", "degraded", "abnormal"]
-        },
-        "residual_actionable_work": {
+        "results": {
           "maxItems": 32,
           "type": "array",
           "items": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 2048,
-            "pattern": "\\S"
-          }
-        },
-        "advisory_outputs": {
-          "maxItems": 32,
-          "type": "array",
-          "items": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 2048,
-            "pattern": "\\S"
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": ["explicit_unmet_requirement", "inferred_gap"]
+              },
+              "description": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 2048,
+                "pattern": "\\S"
+              }
+            },
+            "required": ["kind", "description"],
+            "additionalProperties": false
           }
         }
       },
-      "required": [
-        "verdict",
-        "run_status",
-        "residual_actionable_work",
-        "advisory_outputs"
-      ],
+      "required": ["verdict", "results"],
       "additionalProperties": false
     }
   }

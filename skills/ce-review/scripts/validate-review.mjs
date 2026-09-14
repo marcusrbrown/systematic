@@ -7041,8 +7041,19 @@ var AdmittedScreenFindingSchema = ParentFindingSchema.extend({
 var ScreenRejectedSummarySchema = object({
   dispatch_outcome: RejectedSummaryDispatchOutcomeSchema2,
   rejected_finding_count: number2().int().positive().max(MAX_FINDINGS),
+  rejected_severities: array(SeveritySchema).max(MAX_FINDINGS),
   reason: PipelineReasonSchema,
-}).strict()
+})
+  .strict()
+  .superRefine((summary, ctx) => {
+    if (summary.rejected_severities.length !== summary.rejected_finding_count) {
+      ctx.addIssue({
+        code: 'custom',
+        path: ['rejected_severities'],
+        message: 'severity count must match rejected finding count',
+      })
+    }
+  })
 var ScreenOutputSchema = object({
   dispatch_outcome: DispatchOutcomeSchema,
   admitted_findings: array(AdmittedScreenFindingSchema).max(MAX_FINDINGS),
@@ -7245,6 +7256,11 @@ var MergedFindingSchema = object({
   suggested_fix: ParentFindingSchema.shape.suggested_fix,
   input_finding_ids: array(PipelineInputIdSchema).min(1).max(MAX_FINDINGS),
   agreement_credit: array(AgreementCreditSchema).max(MAX_PERSONAS).optional(),
+  severity: ParentFindingSchema.shape.severity,
+  confidence: ParentFindingSchema.shape.confidence,
+  pre_existing: ParentFindingSchema.shape.pre_existing,
+  fingerprint: ProvenanceSchema.shape.fingerprint,
+  submitters: ProvenanceSchema.shape.submitters,
 }).strict()
 var MergeOutputSchema = object({
   merged_findings: array(MergedFindingSchema).max(MAX_FINDINGS),
@@ -7267,15 +7283,23 @@ var ValidatorLifecycleRecordSchema = object({
 var ValidatorLifecycleResultsSchema = array(ValidatorLifecycleRecordSchema).max(
   MAX_FINDINGS,
 )
+var PlanAssessmentResultSchema = object({
+  kind: _enum(['explicit_unmet_requirement', 'inferred_gap']),
+  description: PipelineReasonSchema,
+}).strict()
 var PlanAssessmentEnvelopeSchema = object({
   verdict: ReviewArtifactSchema.shape.verdict,
-  run_status: ReviewArtifactSchema.shape.run_status,
-  residual_actionable_work: ReviewArtifactSchema.shape.residual_actionable_work,
-  advisory_outputs: ReviewArtifactSchema.shape.advisory_outputs,
+  results: array(PlanAssessmentResultSchema).max(MAX_FINDINGS),
 }).strict()
+var ParentRunModeSchema = _enum([
+  'interactive',
+  'autofix',
+  'headless',
+  'report-only',
+])
 var ParentRunMetadataSchema = object({
   run_id: ReviewArtifactSchema.shape.run_id,
-  mode: ReviewArtifactSchema.shape.mode,
+  mode: ParentRunModeSchema,
   harness: ReviewArtifactSchema.shape.harness,
   branch: ReviewArtifactSchema.shape.branch,
   head_sha: ReviewArtifactSchema.shape.head_sha,
@@ -7289,10 +7313,26 @@ var ParentRunMetadataSchema = object({
 }).strict()
 var FinalizeInputSchema = object({
   merge: MergeOutputSchema,
+  prepared: PrepareOutputSchema,
+  screen_results: PrepareInputSchema.shape.screen_results,
   dispatch_records: array(SelectedDispatchSchema).max(MAX_PERSONAS),
   validator_lifecycle_results: ValidatorLifecycleResultsSchema,
   plan_assessment: PlanAssessmentEnvelopeSchema,
   parent_run_metadata: ParentRunMetadataSchema,
+}).strict()
+var FinalizedInputDispositionSchema = object({
+  input_id: PipelineInputIdSchema,
+  disposition: _enum(['suppressed', 'filtered', 'merged', 'surviving']),
+  reason: PipelineReasonSchema.optional(),
+}).strict()
+var ReportQueueEntrySchema = object({
+  finding_id: PipelineInputIdSchema,
+  unconfirmed: boolean2(),
+}).strict()
+var ReportQueuesSchema = object({
+  fixer: array(ReportQueueEntrySchema).max(MAX_FINDINGS),
+  residual: array(ReportQueueEntrySchema).max(MAX_FINDINGS),
+  report_only: array(ReportQueueEntrySchema).max(MAX_FINDINGS),
 }).strict()
 var ReportProjectionSchema = object({
   verdict: ReviewArtifactSchema.shape.verdict,
@@ -7301,6 +7341,13 @@ var ReportProjectionSchema = object({
   residual_actionable_work: ReviewArtifactSchema.shape.residual_actionable_work,
   advisory_outputs: ReviewArtifactSchema.shape.advisory_outputs,
   coverage: ReviewArtifactSchema.shape.coverage,
+  input_dispositions: array(FinalizedInputDispositionSchema).max(
+    MAX_FINDINGS * MAX_PERSONAS,
+  ),
+  disposition_counts: ReviewArtifactSchema.shape.disposition_counts,
+  queues: ReportQueuesSchema,
+  pre_existing_findings: array(ReportQueueEntrySchema).max(MAX_FINDINGS),
+  risk_coverage: ReviewArtifactSchema.shape.risk_coverage,
 }).strict()
 var FinalizeOutputSchema = discriminatedUnion('kind', [
   object({
@@ -7445,6 +7492,23 @@ function runReviewReturnValidator(options) {
 
 // src/lib/review-pipeline.ts
 var JSON_ROOT_PATH = '$'
+var RECOGNIZED_SEVERITIES = ['P0', 'P1', 'P2', 'P3']
+function classifyRejectedSeverity(value) {
+  return typeof value === 'string' && RECOGNIZED_SEVERITIES.includes(value)
+    ? value
+    : 'unknown'
+}
+function extractRejectedSeverities(rawValue) {
+  if (typeof rawValue !== 'object' || rawValue === null) return
+  const findings = rawValue.findings
+  if (!Array.isArray(findings)) return
+  if (findings.length > MAX_FINDINGS) return
+  return findings.map((finding) =>
+    typeof finding === 'object' && finding !== null
+      ? classifyRejectedSeverity(finding.severity)
+      : 'unknown',
+  )
+}
 function formatDiagnostic(persona, fieldPath, reason) {
   const jsonPath =
     typeof fieldPath === 'string'
@@ -7464,15 +7528,23 @@ function parseRawReturn(rawReturn) {
     return { ok: false }
   }
 }
-function wholePayloadRejection(persona, fieldPath, reason, knownFindingsCount) {
+function wholePayloadRejection(persona, fieldPath, reason, rejectedSeverities) {
+  const rejectedFindingCount = rejectedSeverities?.length ?? 0
   return ScreenOutputSchema.parse({
     admitted_findings: [],
     dispatch_outcome: 'malformed',
-    rejected_summary: {
-      dispatch_outcome: 'malformed',
-      reason: truncateReason(formatDiagnostic(persona, fieldPath, reason)),
-      rejected_finding_count: Math.max(1, knownFindingsCount),
-    },
+    ...(rejectedFindingCount > 0
+      ? {
+          rejected_summary: {
+            dispatch_outcome: 'malformed',
+            reason: truncateReason(
+              formatDiagnostic(persona, fieldPath, reason),
+            ),
+            rejected_finding_count: rejectedFindingCount,
+            rejected_severities: rejectedSeverities,
+          },
+        }
+      : {}),
     residual_risks: [],
     testing_gaps: [],
   })
@@ -7481,12 +7553,22 @@ function screenReviewReturn(input) {
   const persona = input.expected_reviewer
   const parsed = parseRawReturn(input.raw_return)
   if (!parsed.ok) {
-    return wholePayloadRejection(persona, JSON_ROOT_PATH, 'malformed JSON', 0)
+    return wholePayloadRejection(
+      persona,
+      JSON_ROOT_PATH,
+      'malformed JSON',
+      undefined,
+    )
   }
   const validation = validateReviewReturnValue(parsed.value)
   if (!validation.ok) {
     const fieldPath = validation.issues[0]?.path ?? JSON_ROOT_PATH
-    return wholePayloadRejection(persona, fieldPath, 'schema validation', 0)
+    return wholePayloadRejection(
+      persona,
+      fieldPath,
+      'schema validation',
+      extractRejectedSeverities(parsed.value),
+    )
   }
   const raw = SubAgentReturnSchema.parse(parsed.value)
   if (raw.reviewer !== persona) {
@@ -7494,7 +7576,7 @@ function screenReviewReturn(input) {
       persona,
       'reviewer',
       'schema validation',
-      raw.findings.length,
+      raw.findings.map((finding) => finding.severity),
     )
   }
   const admittedFindings = raw.findings.map((finding, originalIndex) => ({
@@ -8137,7 +8219,9 @@ function assemblyFromDerivation(base, derived) {
         : undefined,
     severity: derived.severity,
     confidence: derived.confidence,
+    pre_existing: derived.pre_existing,
     fingerprint: derived.fingerprint,
+    submitters: derived.submitters,
     autofix_class: derived.route.autofix_class,
     owner: derived.route.owner,
     requires_verification: derived.route.requires_verification,
@@ -8220,7 +8304,9 @@ function compareMergedFindingAssembly(a, b) {
   const pathDelta = compareStrings(a.file, b.file)
   if (pathDelta !== 0) return pathDelta
   if (a.line !== b.line) return a.line - b.line
-  return compareStrings(a.fingerprint, b.fingerprint)
+  const fingerprintDelta = compareStrings(a.fingerprint, b.fingerprint)
+  if (fingerprintDelta !== 0) return fingerprintDelta
+  return compareStrings(a.finding_id, b.finding_id)
 }
 function requiresValidatorRequest(assembly) {
   return (
@@ -8242,6 +8328,11 @@ function toMergedFindingWireShape(assembly) {
     evidence: assembly.evidence,
     suggested_fix: assembly.suggested_fix,
     input_finding_ids: [...assembly.input_finding_ids],
+    severity: assembly.severity,
+    confidence: assembly.confidence,
+    pre_existing: assembly.pre_existing,
+    fingerprint: assembly.fingerprint,
+    submitters: [...assembly.submitters],
     ...(assembly.agreement_credit
       ? { agreement_credit: [...assembly.agreement_credit] }
       : {}),

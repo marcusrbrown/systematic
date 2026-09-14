@@ -28,13 +28,18 @@ function mergedFinding(
 ): MergeOutput['merged_findings'][number] {
   return {
     autofix_class: 'gated_auto',
+    confidence: 0.85,
     evidence: ['src/example.ts:1 demonstrates the issue.'],
     file: 'src/example.ts',
     finding_id: findingId,
+    fingerprint: `src/example.ts:1:P1:${findingId}`,
     input_finding_ids: [`${findingId}-input`],
     line: 1,
     owner: 'downstream-resolver',
+    pre_existing: false,
     requires_verification: true,
+    severity: 'P1',
+    submitters: ['correctness'],
     suggested_fix: 'Apply the fix.',
     title: 'Example issue',
     why_it_matters: 'The example path can fail during normal execution.',
