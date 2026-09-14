@@ -2494,6 +2494,46 @@ describe('finalizeReview', () => {
     expect(result.value.artifact.run_status).toBe('degraded')
   })
 
+  test('a never-returned persona degrades the run even when risk coverage is otherwise satisfied', () => {
+    const testingDispatch = dispatchRecord('testing', {
+      dispatch_outcome: 'never_returned',
+    })
+    const scenario = finalizeReviewScenario({
+      dispatch_records: [dispatchRecord('correctness'), testingDispatch],
+      screen_results: [
+        financeScreenResult('correctness', {
+          admitted_findings: [
+            admittedScreenFinding('correctness#0', {
+              requires_verification: false,
+              severity: 'P3',
+            }),
+          ],
+        }),
+        financeScreenResult('testing', {
+          admitted_findings: [],
+          dispatch_outcome: 'never_returned',
+        }),
+      ],
+    })
+    const withMatchingSelection: FinalizeReviewInput = {
+      ...scenario,
+      parent_run_metadata: {
+        ...scenario.parent_run_metadata,
+        selected_dispatches: [dispatchRecord('correctness'), testingDispatch],
+      },
+    }
+
+    const result = finalizeReview(withMatchingSelection)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.kind).toBe('writing')
+    if (result.value.kind !== 'writing') return
+    expect(result.value.artifact.run_status).toBe('degraded')
+    expect(result.value.artifact.verdict).not.toBe('All requirements met.')
+    expect(result.value.report.coverage.failed_reviewers).toContain('testing')
+  })
+
   test('an artifact parse failure surfaces as a rejection with no partial output', () => {
     const base = finalizeReviewScenario()
     const scenario: FinalizeReviewInput = {
