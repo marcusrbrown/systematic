@@ -234,14 +234,25 @@ Choose a fresh delimiter the same way as `screen`'s. Read the exit status:
 
 ### Persisting the artifact
 
-In interactive, autofix, and headless modes, after the persisted `finalize`
-call succeeds, capture its stdout to a temp file created exclusively with
+Writing-mode `finalize` stdout is the wrapper
+`{ kind: 'writing', artifact, report }`, not the artifact by itself. In
+interactive, autofix, and headless modes, after the persisted `finalize` call
+succeeds, extract only the captured stdout's `artifact` member -- never the
+whole wrapper -- and write that JSON to a temp file created exclusively with
 owner-only permissions in the same `.context/systematic/ce-review/<run-id>`
 directory as the final artifact, then atomically rename it over
-`review-summary.json`. Remove the temp file on any non-success (a rejected
-`finalize` call, a write failure, or an interrupted run) instead of leaving a
-partial file behind. Only after the rename succeeds does the parent run the
-existing `artifact` subcommand (see the
+`review-summary.json`. Render the report from the same captured stdout's
+`report` member. No `jq` dependency is assumed; Node performs the extraction:
+
+```bash
+node -e 'const r=JSON.parse(require("fs").readFileSync(0,"utf8"));process.stdout.write(JSON.stringify(r.artifact))' \
+  < "$FINALIZE_STDOUT" > "$TEMP_FILE"
+```
+
+Remove the temp file on any non-success (a rejected `finalize` call, a write
+failure, or an interrupted run) instead of leaving a partial file behind.
+Only after the rename succeeds does the parent run the existing `artifact`
+subcommand (see the
 [synthesis artifact contract](./synthesis-artifact-contract.md#artifact-validation))
 against the persisted path. Report-only never creates the run directory,
 never writes a temp file, and never runs `artifact` validation -- it has no

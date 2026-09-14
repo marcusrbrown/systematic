@@ -1123,7 +1123,7 @@ which adds only contracts and a generated reference.
     artifact writes, and artifact validation while still invoking every pure
     phase.
 
-- [ ] **Unit 7: Prove package delivery and one real orchestration path**
+- [x] **Unit 7: Prove package delivery and one real orchestration path**
 
   **Files:**
   - Extend `tests/unit/ce-review-validator-packaging.test.ts`.
@@ -1328,8 +1328,9 @@ flowchart LR
   request, while a P1 and a `requires_verification: true` P3 both do. The request
   set contains exactly those findings and no others.
 - AE22. In a writing mode, the persisted `review-summary.json` bytes are the exact
-  successful `finalize` output. A test that re-sorts, re-counts, or re-serializes
-  the helper result before writing fails.
+  `artifact` member of the successful `finalize` output, extracted from the
+  `{kind, artifact, report}` wrapper and written verbatim. A test that re-sorts,
+  re-counts, or re-serializes the helper result before writing fails.
 - AE23. Every non-risk reviewer returns `never_returned` and no finding exists.
   Finalization reports zero counts and a degraded, non-clean run; the three
   typed blocking reasons alone are not sufficient for `clean`.
