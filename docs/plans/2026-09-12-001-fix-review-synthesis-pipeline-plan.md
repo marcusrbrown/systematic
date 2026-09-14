@@ -1,7 +1,7 @@
 ---
 title: "fix: Make the review synthesis pipeline executable"
 type: fix
-status: active
+status: completed
 date: 2026-09-12
 deepened: 2026-09-12
 ---
