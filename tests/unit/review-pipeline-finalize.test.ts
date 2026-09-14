@@ -7,6 +7,7 @@ import type {
   DeriveRiskCoverageInput,
   FinalizeReviewDispositionsInput,
   FinalizeReviewInput,
+  InputLedgerRow,
   LostRiskCriticalPersona,
   MergeOutput,
   PlanAssessmentResult,
@@ -20,6 +21,7 @@ import {
   applyReviewAdjudication,
   buildInputLedger,
   buildReviewCoverage,
+  checkDispositionCountsReconcileLedger,
   checkRiskCoverageSemantics,
   deriveFinalizeContext,
   deriveRiskCoverage,
@@ -422,6 +424,7 @@ function financeScreenResult(
     result: {
       admitted_findings: [],
       dispatch_outcome: 'findings',
+      harness: 'opencode',
       residual_risks: [],
       testing_gaps: [],
       ...overrides,
@@ -491,6 +494,112 @@ describe('deriveFinalizeContext', () => {
       ok: true,
       value: { rejected_payloads: [], lost_risk_critical_personas: [] },
     })
+  })
+
+  test('a carried route that narrows owner from review-fixer to release is accepted, not rejected', () => {
+    // Pins current behavior: the KTD19 verifier (`checkMergedFindingsMatchDerivation`
+    // via `mergedFindingDivergesFromDerivation`) reconstructs a "proposed_route"
+    // straight from the carried finding's own owner/autofix_class/requires_verification
+    // and always fabricates a placeholder `route_narrowing_reason` -- it verifies
+    // only that the carried route is a *structurally valid narrowing* of the
+    // meet derived from contributing survivors, never the original model
+    // decision's actual reason (which is not carried on `MergedFindingSchema`
+    // at all). A P0 finding whose declined decision narrows `owner` all the
+    // way to `release` -- moving it from the fixer queue to report_only -- is
+    // therefore accepted here exactly as any other valid narrowing would be.
+    // This is deliberate: `OWNER_NARROWS_TO` treats `release` as the terminal,
+    // most-conservative owner, so narrowing toward it is the same "always
+    // allow narrowing, never allow widening" rule every other route field
+    // follows -- but it also means the original narrowing reason is not
+    // recoverable downstream once merge has run.
+    //
+    // A declined decision must cite an eligible *candidate-group* member --
+    // `validateAdjudication` rejects any decision at all when
+    // `prepared.candidate_groups` is empty (`'unexpected decisions for empty
+    // candidate set'`), and a passthrough `singletons` entry never needs (or
+    // accepts) a decision citing it. So the P0 finding under test is placed
+    // in a two-member candidate group alongside an unrelated `security#0`
+    // finding, which is declined plainly (no route narrowing) purely to
+    // satisfy `validateNoOmissions` -- every eligible group member must be
+    // cited by exactly one decision, merged or declined.
+    const prepared = preparedOutput({
+      confidence_dispositions: [
+        confidenceDisposition('correctness#0', 'surviving'),
+        confidenceDisposition('security#0', 'surviving'),
+      ],
+      surviving_findings: [
+        survivingFinding('correctness#0', 'correctness', {
+          owner: 'review-fixer',
+          severity: 'P0',
+        }),
+        survivingFinding('security#0', 'security'),
+      ],
+      candidate_groups: [
+        {
+          file: 'src/example.ts',
+          members: [
+            { input_id: 'correctness#0', line: 1 },
+            { input_id: 'security#0', line: 1 },
+          ],
+        },
+      ],
+    })
+    const decisions: ApplyReviewAdjudicationInput['decisions'] = [
+      {
+        decision_id: 'declined-narrowed-0',
+        disposition: 'declined',
+        input_finding_id: 'correctness#0',
+        declined_reason: 'Escalated to release per policy, not auto-fixed.',
+        proposed_route: {
+          autofix_class: 'advisory',
+          owner: 'release',
+          requires_verification: true,
+        },
+        route_narrowing_reason: 'Escalated to release per policy.',
+      },
+      {
+        decision_id: 'declined-plain-0',
+        disposition: 'declined',
+        input_finding_id: 'security#0',
+        declined_reason: 'Not corroborated by another reviewer.',
+      },
+    ]
+    const mergeResult = applyReviewAdjudication({ prepared, decisions })
+    expect(mergeResult.ok).toBe(true)
+    if (!mergeResult.ok) return
+    expect(mergeResult.value.merged_findings).toHaveLength(2)
+    const narrowed = mergeResult.value.merged_findings.find(
+      (finding) => finding.finding_id === 'declined-narrowed-0',
+    )
+    expect(narrowed?.owner).toBe('release')
+
+    const result = deriveFinalizeContext({
+      merge: mergeResult.value,
+      prepared,
+      screen_results: [
+        financeScreenResult('correctness', {
+          admitted_findings: [
+            admittedScreenFinding('correctness#0', { severity: 'P0' }),
+          ],
+        }),
+        financeScreenResult('security', {
+          admitted_findings: [admittedScreenFinding('security#0')],
+        }),
+      ],
+      dispatch_records: [
+        dispatchRecord('correctness'),
+        dispatchRecord('security'),
+      ],
+      parent_run_metadata: {
+        selected_dispatches: [
+          dispatchRecord('correctness'),
+          dispatchRecord('security'),
+        ],
+        validation: NOT_ATTEMPTED_VALIDATION,
+      },
+    })
+
+    expect(result.ok).toBe(true)
   })
 
   test('a survivor missing from the merged findings rejects', () => {
@@ -816,6 +925,316 @@ describe('deriveFinalizeContext', () => {
     )
   })
 
+  test('a merged finding line not matching any contributing survivor rejects', () => {
+    const prepared = preparedOutput({
+      confidence_dispositions: [
+        confidenceDisposition('correctness#0', 'surviving'),
+        confidenceDisposition('security#0', 'surviving'),
+      ],
+      surviving_findings: [
+        survivingFinding('correctness#0', 'correctness', { line: 5 }),
+        survivingFinding('security#0', 'security', { line: 9 }),
+      ],
+      candidate_groups: [
+        {
+          file: 'src/example.ts',
+          members: [
+            { input_id: 'correctness#0', line: 5 },
+            { input_id: 'security#0', line: 9 },
+          ],
+        },
+      ],
+    })
+    const decisions: ApplyReviewAdjudicationInput['decisions'] = [
+      {
+        decision_id: 'merge-1',
+        disposition: 'merged',
+        input_finding_ids: ['correctness#0', 'security#0'],
+        line: 9,
+        title: 'Duplicate finding across reviewers',
+        why_it_matters: 'Both reviewers independently caught the same defect.',
+        evidence: [
+          'src/example.ts:9 shows both reviewers flagged the same defect.',
+        ],
+        suggested_fix: 'Apply the shared fix once.',
+      },
+    ]
+    const adjudicated = applyReviewAdjudication({ prepared, decisions })
+    if (!adjudicated.ok) {
+      throw new Error('test fixture: unexpected adjudication rejection')
+    }
+    const merge = adjudicated.value
+    const tampered: MergeOutput = {
+      ...merge,
+      merged_findings: merge.merged_findings.map((finding) =>
+        finding.finding_id === 'merge-1'
+          ? {
+              ...finding,
+              line: 42,
+              fingerprint: `${finding.file}:42:${finding.severity}`,
+            }
+          : finding,
+      ),
+      validator_requests: merge.validator_requests.map((request) =>
+        request.finding_id === 'merge-1' ? { ...request, line: 42 } : request,
+      ),
+    }
+
+    const scenario: DeriveFinalizeContextInput = {
+      merge: tampered,
+      prepared,
+      screen_results: [
+        financeScreenResult('correctness', {
+          admitted_findings: [admittedScreenFinding('correctness#0')],
+        }),
+        financeScreenResult('security', {
+          admitted_findings: [admittedScreenFinding('security#0')],
+        }),
+      ],
+      dispatch_records: [
+        dispatchRecord('correctness'),
+        dispatchRecord('security'),
+      ],
+      parent_run_metadata: {
+        selected_dispatches: [
+          dispatchRecord('correctness'),
+          dispatchRecord('security'),
+        ],
+        validation: NOT_ATTEMPTED_VALIDATION,
+      },
+    }
+
+    const result = deriveFinalizeContext(scenario)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe(
+      'merged finding fields diverge from derivation',
+    )
+  })
+
+  test('a merged finding line matching a non-first contributing survivor accepts', () => {
+    const prepared = preparedOutput({
+      confidence_dispositions: [
+        confidenceDisposition('correctness#0', 'surviving'),
+        confidenceDisposition('security#0', 'surviving'),
+      ],
+      surviving_findings: [
+        survivingFinding('correctness#0', 'correctness', { line: 5 }),
+        survivingFinding('security#0', 'security', { line: 9 }),
+      ],
+      candidate_groups: [
+        {
+          file: 'src/example.ts',
+          members: [
+            { input_id: 'correctness#0', line: 5 },
+            { input_id: 'security#0', line: 9 },
+          ],
+        },
+      ],
+    })
+    // The decision's representative line (9) is `security#0`'s line, the
+    // *second* survivor once sorted by input ID (`correctness#0` <
+    // `security#0`) -- proving the check does not just special-case the
+    // first contributing survivor.
+    const decisions: ApplyReviewAdjudicationInput['decisions'] = [
+      {
+        decision_id: 'merge-1',
+        disposition: 'merged',
+        input_finding_ids: ['correctness#0', 'security#0'],
+        line: 9,
+        title: 'Duplicate finding across reviewers',
+        why_it_matters: 'Both reviewers independently caught the same defect.',
+        evidence: [
+          'src/example.ts:9 shows both reviewers flagged the same defect.',
+        ],
+        suggested_fix: 'Apply the shared fix once.',
+      },
+    ]
+    const adjudicated = applyReviewAdjudication({ prepared, decisions })
+    if (!adjudicated.ok) {
+      throw new Error('test fixture: unexpected adjudication rejection')
+    }
+
+    const scenario: DeriveFinalizeContextInput = {
+      merge: adjudicated.value,
+      prepared,
+      screen_results: [
+        financeScreenResult('correctness', {
+          admitted_findings: [
+            admittedScreenFinding('correctness#0', { line: 5 }),
+          ],
+        }),
+        financeScreenResult('security', {
+          admitted_findings: [admittedScreenFinding('security#0', { line: 9 })],
+        }),
+      ],
+      dispatch_records: [
+        dispatchRecord('correctness'),
+        dispatchRecord('security'),
+      ],
+      parent_run_metadata: {
+        selected_dispatches: [
+          dispatchRecord('correctness'),
+          dispatchRecord('security'),
+        ],
+        validation: NOT_ATTEMPTED_VALIDATION,
+      },
+    }
+
+    const result = deriveFinalizeContext(scenario)
+
+    expect(result.ok).toBe(true)
+  })
+
+  test('a fabricated agreement_credit laundering a matching confidence boost rejects', () => {
+    const prepared = preparedOutput({
+      confidence_dispositions: [
+        confidenceDisposition('correctness#0', 'surviving'),
+        confidenceDisposition('security#0', 'surviving'),
+      ],
+      surviving_findings: [
+        survivingFinding('correctness#0', 'correctness'),
+        survivingFinding('security#0', 'security'),
+      ],
+      singletons: ['correctness#0', 'security#0'],
+    })
+    const merge = buildAdjudicatedMergeOutput(prepared)
+    // `correctness#0` is a true passthrough singleton (one submitter,
+    // `correctness`). `security` genuinely returned in this run (its own
+    // singleton, `security#0`) but never contributed to `correctness#0`, so
+    // crediting it here is fabricated -- and the +0.10 confidence bump is
+    // recomputed to stay self-consistent with the fabricated credit.
+    const tampered: MergeOutput = {
+      ...merge,
+      merged_findings: merge.merged_findings.map((finding) =>
+        finding.finding_id === 'correctness#0'
+          ? { ...finding, agreement_credit: ['security'], confidence: 0.9 }
+          : finding,
+      ),
+    }
+
+    const scenario: DeriveFinalizeContextInput = {
+      merge: tampered,
+      prepared,
+      screen_results: [
+        financeScreenResult('correctness', {
+          admitted_findings: [admittedScreenFinding('correctness#0')],
+        }),
+        financeScreenResult('security', {
+          admitted_findings: [admittedScreenFinding('security#0')],
+        }),
+      ],
+      dispatch_records: [
+        dispatchRecord('correctness'),
+        dispatchRecord('security'),
+      ],
+      parent_run_metadata: {
+        selected_dispatches: [
+          dispatchRecord('correctness'),
+          dispatchRecord('security'),
+        ],
+        validation: NOT_ATTEMPTED_VALIDATION,
+      },
+    }
+
+    const result = deriveFinalizeContext(scenario)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe(
+      'merged finding fields diverge from derivation',
+    )
+  })
+
+  test('a legitimately credited merged finding is accepted with its boosted confidence', () => {
+    const prepared = preparedOutput({
+      confidence_dispositions: [
+        confidenceDisposition('correctness#0', 'surviving'),
+        confidenceDisposition('security#0', 'surviving'),
+        confidenceDisposition('testing#0', 'surviving'),
+      ],
+      surviving_findings: [
+        survivingFinding('correctness#0', 'correctness'),
+        survivingFinding('security#0', 'security'),
+        survivingFinding('testing#0', 'testing', { file: 'src/other.ts' }),
+      ],
+      candidate_groups: [
+        {
+          file: 'src/example.ts',
+          members: [
+            { input_id: 'correctness#0', line: 1 },
+            { input_id: 'security#0', line: 1 },
+          ],
+        },
+      ],
+      singletons: ['testing#0'],
+    })
+    // `testing` genuinely returned (its own singleton, `testing#0`) and is
+    // not a submitter of the merged group, so crediting it is legitimate --
+    // exactly what `deriveMergedFindingFields` itself would produce.
+    const decisions: ApplyReviewAdjudicationInput['decisions'] = [
+      {
+        decision_id: 'merge-1',
+        disposition: 'merged',
+        input_finding_ids: ['correctness#0', 'security#0'],
+        line: 1,
+        title: 'Duplicate finding across reviewers',
+        why_it_matters: 'Both reviewers independently caught the same defect.',
+        evidence: [
+          'src/example.ts:1 shows both reviewers flagged the same defect.',
+        ],
+        suggested_fix: 'Apply the shared fix once.',
+        eligible_agreement_credit: ['testing'],
+      },
+    ]
+    const adjudicated = applyReviewAdjudication({ prepared, decisions })
+    if (!adjudicated.ok) {
+      throw new Error('test fixture: unexpected adjudication rejection')
+    }
+
+    const scenario: DeriveFinalizeContextInput = {
+      merge: adjudicated.value,
+      prepared,
+      screen_results: [
+        financeScreenResult('correctness', {
+          admitted_findings: [admittedScreenFinding('correctness#0')],
+        }),
+        financeScreenResult('security', {
+          admitted_findings: [admittedScreenFinding('security#0')],
+        }),
+        financeScreenResult('testing', {
+          admitted_findings: [
+            admittedScreenFinding('testing#0', { file: 'src/other.ts' }),
+          ],
+        }),
+      ],
+      dispatch_records: [
+        dispatchRecord('correctness'),
+        dispatchRecord('security'),
+        dispatchRecord('testing'),
+      ],
+      parent_run_metadata: {
+        selected_dispatches: [
+          dispatchRecord('correctness'),
+          dispatchRecord('security'),
+          dispatchRecord('testing'),
+        ],
+        validation: NOT_ATTEMPTED_VALIDATION,
+      },
+    }
+
+    const result = deriveFinalizeContext(scenario)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const finding = scenario.merge.merged_findings.find(
+      (candidate) => candidate.finding_id === 'merge-1',
+    )
+    expect(finding?.agreement_credit).toEqual(['testing'])
+    expect(finding?.confidence).toBe(0.9)
+  })
+
   test('a suppressed confidence disposition with no screened finding rejects', () => {
     const scenario = finalizeContextScenario()
     const prepared: PrepareOutput = {
@@ -1112,6 +1531,128 @@ describe('deriveFinalizeContext', () => {
       'validation must be not_attempted at finalize',
     )
   })
+
+  test('a survivor whose reviewer diverges from the screen result that admitted its ID rejects', () => {
+    const prepared = preparedOutput({
+      confidence_dispositions: [
+        confidenceDisposition('correctness#0', 'surviving'),
+      ],
+      // `security` never actually screened this input -- only `correctness`
+      // did, below -- so the carried reviewer is laundered.
+      surviving_findings: [survivingFinding('correctness#0', 'security')],
+      singletons: ['correctness#0'],
+    })
+    const merge = buildAdjudicatedMergeOutput(prepared)
+
+    const scenario: DeriveFinalizeContextInput = {
+      merge,
+      prepared,
+      screen_results: [
+        financeScreenResult('correctness', {
+          admitted_findings: [admittedScreenFinding('correctness#0')],
+        }),
+      ],
+      dispatch_records: [dispatchRecord('correctness')],
+      parent_run_metadata: {
+        selected_dispatches: [dispatchRecord('correctness')],
+        validation: NOT_ATTEMPTED_VALIDATION,
+      },
+    }
+
+    const result = deriveFinalizeContext(scenario)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe(
+      'surviving finding diverges from its screened finding',
+    )
+  })
+
+  test('a survivor whose confidence was raised above its screened value rejects', () => {
+    const prepared = preparedOutput({
+      confidence_dispositions: [
+        confidenceDisposition('correctness#0', 'surviving', {
+          confidence: 0.95,
+        }),
+      ],
+      surviving_findings: [
+        survivingFinding('correctness#0', 'correctness', { confidence: 0.95 }),
+      ],
+      singletons: ['correctness#0'],
+    })
+    const merge = buildAdjudicatedMergeOutput(prepared)
+
+    const scenario: DeriveFinalizeContextInput = {
+      merge,
+      prepared,
+      screen_results: [
+        financeScreenResult('correctness', {
+          admitted_findings: [
+            admittedScreenFinding('correctness#0', { confidence: 0.6 }),
+          ],
+        }),
+      ],
+      dispatch_records: [dispatchRecord('correctness')],
+      parent_run_metadata: {
+        selected_dispatches: [dispatchRecord('correctness')],
+        validation: NOT_ATTEMPTED_VALIDATION,
+      },
+    }
+
+    const result = deriveFinalizeContext(scenario)
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe(
+      'surviving finding diverges from its screened finding',
+    )
+  })
+
+  test('an untampered survivor whose fields match its screened finding accepts', () => {
+    const prepared = preparedOutput({
+      confidence_dispositions: [
+        confidenceDisposition('correctness#0', 'surviving', {
+          confidence: 0.72,
+        }),
+      ],
+      surviving_findings: [
+        survivingFinding('correctness#0', 'correctness', {
+          confidence: 0.72,
+          file: 'src/other.ts',
+          line: 9,
+          severity: 'P1',
+        }),
+      ],
+      singletons: ['correctness#0'],
+    })
+    const merge = buildAdjudicatedMergeOutput(prepared)
+
+    const scenario: DeriveFinalizeContextInput = {
+      merge,
+      prepared,
+      screen_results: [
+        financeScreenResult('correctness', {
+          admitted_findings: [
+            admittedScreenFinding('correctness#0', {
+              confidence: 0.72,
+              file: 'src/other.ts',
+              line: 9,
+              severity: 'P1',
+            }),
+          ],
+        }),
+      ],
+      dispatch_records: [dispatchRecord('correctness')],
+      parent_run_metadata: {
+        selected_dispatches: [dispatchRecord('correctness')],
+        validation: NOT_ATTEMPTED_VALIDATION,
+      },
+    }
+
+    const result = deriveFinalizeContext(scenario)
+
+    expect(result.ok).toBe(true)
+  })
 })
 
 describe('finalizeReviewDispositions', () => {
@@ -1158,6 +1699,29 @@ describe('finalizeReviewDispositions', () => {
       prepared,
       reconciled,
       rejected_payloads: [{ rejected_finding_count: 3 }],
+      screen_results: [
+        financeScreenResult('r1', {
+          admitted_findings: [admittedScreenFinding('r1#0')],
+        }),
+        financeScreenResult('r2', {
+          admitted_findings: [
+            admittedScreenFinding('r2#0'),
+            admittedScreenFinding('r2#1'),
+          ],
+        }),
+        financeScreenResult('r3', {
+          admitted_findings: [admittedScreenFinding('r3#0')],
+        }),
+        financeScreenResult('r4', {
+          admitted_findings: [admittedScreenFinding('r4#0')],
+        }),
+      ],
+      dispatch_records: [
+        dispatchRecord('r1'),
+        dispatchRecord('r2'),
+        dispatchRecord('r3'),
+        dispatchRecord('r4'),
+      ],
     }
   }
 
@@ -1310,6 +1874,8 @@ describe('finalizeReviewDispositions', () => {
       prepared,
       reconciled,
       rejected_payloads: [],
+      screen_results: [],
+      dispatch_records: [],
     })
 
     expect(result.ok).toBe(true)
@@ -1379,6 +1945,41 @@ describe('finalizeReviewDispositions', () => {
     ])
   })
 
+  test('an unconfirmed finding never enters an action queue, so every queued entry has unconfirmed: false', () => {
+    // f-single would normally land in queues.fixer (owner: 'review-fixer' in
+    // buildScenario); marking it unconfirmed via lifecycle_failures removes
+    // it from every queue instead of carrying unconfirmed: true into one.
+    // This pins the invariant that queues.*[].unconfirmed can only ever be
+    // false -- partitionFindings routes an unconfirmed finding to
+    // new_findings only, never into fixer/residual/report_only.
+    const scenario = buildScenario()
+    const result = finalizeReviewDispositions({
+      ...scenario,
+      reconciled: {
+        ...scenario.reconciled,
+        lifecycle_failures: [
+          {
+            finding_id: 'f-single',
+            outcome: 'unavailable',
+            reason: 'validator not reachable',
+          },
+        ],
+      },
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const allQueued = [
+      ...result.value.queues.fixer,
+      ...result.value.queues.residual,
+      ...result.value.queues.report_only,
+    ]
+    expect(allQueued.every((entry) => entry.unconfirmed === false)).toBe(true)
+    expect(allQueued.some((entry) => entry.finding_id === 'f-single')).toBe(
+      false,
+    )
+  })
+
   test('a surviving confidence disposition whose finding cannot be found in the merged findings rejects rather than defaulting to surviving', () => {
     const scenario = buildScenario()
     const prepared: PrepareOutput = {
@@ -1416,6 +2017,8 @@ describe('finalizeReviewDispositions', () => {
         findings: [...scenario.reconciled.findings].reverse(),
       },
       rejected_payloads: [...scenario.rejected_payloads].reverse(),
+      screen_results: [...scenario.screen_results].reverse(),
+      dispatch_records: [...scenario.dispatch_records].reverse(),
     }
 
     const resultA = finalizeReviewDispositions(scenario)
@@ -1857,6 +2460,8 @@ function runPipelineScenario(
     rejected_payloads: [],
     lost_risk_critical_personas: [],
     plan_assessment: { results: [] },
+    screen_results: [],
+    dispatch_records: [],
     ...overrides,
   }
 }
@@ -2321,6 +2926,79 @@ describe('buildInputLedger', () => {
     })
 
     expect(result).toEqual([])
+  })
+})
+
+describe('checkDispositionCountsReconcileLedger', () => {
+  test('a disposition count whose admitted-weight sum matches the admitted ledger row count reconciles', () => {
+    const ledger: readonly InputLedgerRow[] = [
+      {
+        record_type: 'admitted',
+        input_id: 'a#0',
+        reviewer: 'a',
+        confidence: 0.8,
+        disposition: 'surviving',
+        reason: 'x',
+      },
+      {
+        record_type: 'admitted',
+        input_id: 'b#0',
+        reviewer: 'b',
+        confidence: 0.8,
+        disposition: 'suppressed',
+        reason: 'x',
+      },
+      {
+        record_type: 'rejected_summary',
+        reviewer: 'c',
+        dispatch_outcome: 'malformed',
+        rejected_finding_count: 2,
+        rejected_severities: ['P1'],
+        disposition: 'rejected',
+        reason: 'x',
+      },
+    ]
+
+    const result = checkDispositionCountsReconcileLedger(
+      { surviving: 1, merged: 0, suppressed: 1, filtered: 0, rejected: 2 },
+      ledger,
+    )
+
+    expect(result.ok).toBe(true)
+  })
+
+  test('a deliberately mismatched count set is rejected', () => {
+    const ledger: readonly InputLedgerRow[] = [
+      {
+        record_type: 'admitted',
+        input_id: 'a#0',
+        reviewer: 'a',
+        confidence: 0.8,
+        disposition: 'surviving',
+        reason: 'x',
+      },
+      {
+        record_type: 'admitted',
+        input_id: 'b#0',
+        reviewer: 'b',
+        confidence: 0.8,
+        disposition: 'suppressed',
+        reason: 'x',
+      },
+    ]
+
+    const result = checkDispositionCountsReconcileLedger(
+      // Claims three admitted-weight findings; the ledger only carries two
+      // admitted rows.
+      { surviving: 2, merged: 0, suppressed: 1, filtered: 0, rejected: 2 },
+      ledger,
+    )
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe(
+      'disposition counts do not reconcile with the admitted input ledger',
+    )
   })
 })
 
@@ -3171,6 +3849,147 @@ describe('finalizeReview', () => {
     )
     expect(reportOnlyResult.rejection.reason).toBe(
       interactiveResult.rejection.reason,
+    )
+  })
+
+  test('a duplicate confidence disposition entry rejects identically in report-only and interactive', () => {
+    const base = finalizeReviewScenario()
+    const scenario: FinalizeReviewInput = {
+      ...base,
+      prepared: {
+        ...base.prepared,
+        confidence_dispositions: [
+          ...base.prepared.confidence_dispositions,
+          confidenceDisposition('correctness#0', 'surviving'),
+        ],
+      },
+    }
+
+    const interactiveResult = finalizeReview(scenario)
+    const reportOnlyResult = finalizeReview({
+      ...scenario,
+      parent_run_metadata: {
+        ...scenario.parent_run_metadata,
+        mode: 'report-only',
+      },
+    })
+
+    expect(interactiveResult.ok).toBe(false)
+    expect(reportOnlyResult.ok).toBe(false)
+    if (interactiveResult.ok || reportOnlyResult.ok) return
+    expect(interactiveResult.rejection.reason).toBe(
+      'duplicate confidence disposition',
+    )
+    expect(reportOnlyResult.rejection.reason).toBe(
+      interactiveResult.rejection.reason,
+    )
+  })
+
+  test('disposition_counts excludes a validation_unavailable persona and reconciles with the admitted ledger row count plus rejected weight', () => {
+    const prepared = preparedOutput({
+      confidence_dispositions: [
+        confidenceDisposition('correctness#0', 'surviving'),
+        confidenceDisposition('correctness#1', 'suppressed', {
+          reason: 'confidence below gate threshold',
+        }),
+        // `security` is withheld (validation_unavailable) but still minted a
+        // screened, suppressed finding -- it must contribute no ledger row
+        // and no disposition-count weight, per KTD21.
+        confidenceDisposition('security#0', 'suppressed', {
+          reason: 'confidence below gate threshold',
+        }),
+      ],
+      surviving_findings: [
+        survivingFinding('correctness#0', 'correctness', {
+          requires_verification: false,
+          severity: 'P3',
+        }),
+      ],
+      singletons: ['correctness#0'],
+    })
+    const merge = buildAdjudicatedMergeOutput(prepared)
+
+    const scenario: FinalizeReviewInput = {
+      merge,
+      prepared,
+      screen_results: [
+        financeScreenResult('correctness', {
+          admitted_findings: [
+            admittedScreenFinding('correctness#0', {
+              requires_verification: false,
+              severity: 'P3',
+            }),
+            admittedScreenFinding('correctness#1'),
+          ],
+        }),
+        financeScreenResult('security', {
+          admitted_findings: [admittedScreenFinding('security#0')],
+          dispatch_outcome: 'validation_unavailable',
+        }),
+        financeScreenResult('testing', {
+          admitted_findings: [],
+          dispatch_outcome: 'malformed',
+          rejected_summary: {
+            dispatch_outcome: 'malformed',
+            rejected_finding_count: 2,
+            rejected_severities: ['P1', 'P2'],
+            reason: 'payload failed schema validation',
+          },
+        }),
+      ],
+      dispatch_records: [
+        dispatchRecord('correctness'),
+        dispatchRecord('security', {
+          dispatch_outcome: 'validation_unavailable',
+          selection_surface: ['src/example.ts'],
+        }),
+        dispatchRecord('testing', { dispatch_outcome: 'malformed' }),
+      ],
+      validator_lifecycle_results: [],
+      plan_assessment: { verdict: 'All requirements met.', results: [] },
+      parent_run_metadata: {
+        run_id: 'run-1',
+        mode: 'interactive',
+        harness: 'opencode',
+        branch: 'main',
+        head_sha: 'a'.repeat(40),
+        selected_dispatches: [
+          dispatchRecord('correctness'),
+          dispatchRecord('security', {
+            dispatch_outcome: 'validation_unavailable',
+            selection_surface: ['src/example.ts'],
+          }),
+          dispatchRecord('testing', { dispatch_outcome: 'malformed' }),
+        ],
+        timestamps: {
+          started_at: '2026-01-01T00:00:00.000Z',
+          completed_at: '2026-01-01T00:05:00.000Z',
+        },
+        validation: { status: 'not_attempted', reason: 'no autofix applied' },
+        applied_fixes: [],
+      },
+    }
+
+    const result = finalizeReview(scenario)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.kind).toBe('writing')
+    if (result.value.kind !== 'writing') return
+    const { artifact } = result.value
+    expect(artifact.disposition_counts).toEqual({
+      surviving: 1,
+      merged: 0,
+      suppressed: 1,
+      filtered: 0,
+      rejected: 2,
+    })
+    const admittedRows = artifact.input_findings.filter(
+      (row) => row.record_type === 'admitted',
+    )
+    expect(admittedRows).toHaveLength(2)
+    expect(admittedRows.some((row) => row.input_id === 'security#0')).toBe(
+      false,
     )
   })
 

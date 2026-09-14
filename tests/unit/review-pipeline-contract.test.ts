@@ -65,6 +65,7 @@ const screenOutputFixture: JsonObject = {
   admitted_findings: [admittedFindingFixture],
   residual_risks: [],
   testing_gaps: [],
+  harness: 'opencode',
 }
 
 const prepareInputFixture: JsonObject = {
@@ -199,6 +200,20 @@ describe('ScreenOutputSchema', () => {
         reason: 'Reviewer output did not parse as JSON.',
       },
     })
+    expect(result.success).toBe(false)
+  })
+
+  test('rejects an unknown harness value', () => {
+    const result = ScreenOutputSchema.safeParse({
+      ...screenOutputFixture,
+      harness: 'not-a-harness',
+    })
+    expect(result.success).toBe(false)
+  })
+
+  test('rejects a missing harness field', () => {
+    const { harness: _harness, ...withoutHarness } = screenOutputFixture
+    const result = ScreenOutputSchema.safeParse(withoutHarness)
     expect(result.success).toBe(false)
   })
 
@@ -382,12 +397,259 @@ describe('PrepareOutputSchema', () => {
   })
 })
 
+// A realistic (not maximal) envelope: ~12 personas each contributing ~5
+// findings, with typical rather than bound-maxing string lengths. Exists to
+// catch a future change that pushes ordinary envelopes toward the cap --
+// `AGGREGATE_STDIN_BYTE_CAP`'s own formula test above already pins the
+// pathological-maximum side of that arithmetic.
+const REALISTIC_PERSONA_COUNT = 12
+const REALISTIC_FINDINGS_PER_PERSONA = 5
+
+const REALISTIC_PERSONA_INDICES = Array.from(
+  { length: REALISTIC_PERSONA_COUNT },
+  (_, index) => index,
+)
+const REALISTIC_FINDING_INDICES = Array.from(
+  { length: REALISTIC_FINDINGS_PER_PERSONA },
+  (_, index) => index,
+)
+const REALISTIC_ENTRIES = REALISTIC_PERSONA_INDICES.flatMap((personaIndex) =>
+  REALISTIC_FINDING_INDICES.map((findingIndex) => ({
+    personaIndex,
+    findingIndex,
+  })),
+)
+
+const realisticPersona = (personaIndex: number): string =>
+  `persona-${personaIndex}`
+const realisticFile = (personaIndex: number): string =>
+  `src/module-${personaIndex}.ts`
+const realisticInputId = (personaIndex: number, findingIndex: number): string =>
+  `${realisticPersona(personaIndex)}-finding-${findingIndex}`
+
+const realisticRawFinding = (
+  personaIndex: number,
+  findingIndex: number,
+): JsonObject => {
+  const line = 10 + findingIndex
+  const file = realisticFile(personaIndex)
+  return {
+    title: `Issue ${personaIndex}-${findingIndex} in module boundary handling`,
+    severity: 'P2',
+    file,
+    line,
+    why_it_matters:
+      'This path is reachable during normal request handling and can leave state inconsistent if the caller does not check the return value.',
+    autofix_class: 'manual',
+    owner: 'review-fixer',
+    requires_verification: false,
+    confidence: 0.72,
+    evidence: [`${file}:${line} shows the unchecked path.`],
+    pre_existing: false,
+    suggested_fix: 'Check the return value and propagate the error.',
+  }
+}
+
+const realisticSurvivingFinding = (
+  personaIndex: number,
+  findingIndex: number,
+): JsonObject => ({
+  ...realisticRawFinding(personaIndex, findingIndex),
+  disposition: 'surviving',
+  input_id: realisticInputId(personaIndex, findingIndex),
+  reviewer: realisticPersona(personaIndex),
+})
+
+const realisticAdmittedFinding = (
+  personaIndex: number,
+  findingIndex: number,
+): JsonObject => ({
+  ...realisticRawFinding(personaIndex, findingIndex),
+  disposition: 'surviving',
+  input_id: realisticInputId(personaIndex, findingIndex),
+})
+
+const realisticConfidenceDisposition = (
+  personaIndex: number,
+  findingIndex: number,
+): JsonObject => ({
+  input_id: realisticInputId(personaIndex, findingIndex),
+  disposition: 'surviving',
+  confidence: 0.72,
+})
+
+const realisticPreparedOutput: JsonObject = {
+  confidence_dispositions: REALISTIC_ENTRIES.map(
+    ({ personaIndex, findingIndex }) =>
+      realisticConfidenceDisposition(personaIndex, findingIndex),
+  ),
+  coverage_union: REALISTIC_PERSONA_INDICES.map(realisticFile),
+  singletons: REALISTIC_ENTRIES.map(({ personaIndex, findingIndex }) =>
+    realisticInputId(personaIndex, findingIndex),
+  ),
+  candidate_groups: [],
+  surviving_findings: REALISTIC_ENTRIES.map(({ personaIndex, findingIndex }) =>
+    realisticSurvivingFinding(personaIndex, findingIndex),
+  ),
+}
+
+// `AdjudicationEnvelopeSchema.decisions` is bounded at `MAX_FINDINGS`
+// (persona-independent), not `MAX_FINDINGS * MAX_PERSONAS`: only findings
+// entering merge adjudication get a decision, and most findings remain
+// singletons that never do. One declined decision per persona (well under
+// the bound) reflects that.
+const realisticDeclinedDecision = (personaIndex: number): JsonObject => ({
+  decision_id: `decision-${realisticInputId(personaIndex, 0)}`,
+  disposition: 'declined',
+  input_finding_id: realisticInputId(personaIndex, 0),
+  declined_reason: 'Only one reviewer flagged this input finding.',
+})
+
+const realisticMergeInputFixture: JsonObject = {
+  prepared: realisticPreparedOutput,
+  adjudication: {
+    decisions: REALISTIC_PERSONA_INDICES.map(realisticDeclinedDecision),
+  },
+}
+
+const realisticMergedFinding = (personaIndex: number): JsonObject => {
+  const file = realisticFile(personaIndex)
+  return {
+    finding_id: `merged-${personaIndex}`,
+    file,
+    title: `Merged issue for module ${personaIndex}`,
+    why_it_matters:
+      'Two reviewers independently flagged the same unchecked return value on this path.',
+    line: 10,
+    autofix_class: 'manual',
+    owner: 'review-fixer',
+    requires_verification: false,
+    evidence: [`${file}:10 shows the shared issue.`],
+    suggested_fix: 'Check the return value and propagate the error.',
+    input_finding_ids: [
+      realisticInputId(personaIndex, 0),
+      realisticInputId(personaIndex, 1),
+    ],
+    severity: 'P2',
+    confidence: 0.72,
+    pre_existing: false,
+    fingerprint: `${file}:10:P2`,
+    submitters: [realisticPersona(personaIndex)],
+  }
+}
+
+const realisticValidatorRequest = (personaIndex: number): JsonObject => ({
+  finding_id: `merged-${personaIndex}`,
+  file: realisticFile(personaIndex),
+  line: 10,
+})
+
+const realisticMergeOutputFixture: JsonObject = {
+  merged_findings: REALISTIC_PERSONA_INDICES.map(realisticMergedFinding),
+  validator_requests: REALISTIC_PERSONA_INDICES.map(realisticValidatorRequest),
+  disagreement_facts: [],
+}
+
+const realisticScreenResult = (personaIndex: number): JsonObject => ({
+  reviewer: realisticPersona(personaIndex),
+  result: {
+    dispatch_outcome: 'findings',
+    admitted_findings: REALISTIC_FINDING_INDICES.map((findingIndex) =>
+      realisticAdmittedFinding(personaIndex, findingIndex),
+    ),
+    residual_risks: [],
+    testing_gaps: [],
+    harness: 'opencode',
+  },
+})
+
+const realisticSelectedDispatch = (personaIndex: number): JsonObject => ({
+  persona: realisticPersona(personaIndex),
+  dispatch_outcome: 'findings',
+  selection_surface: [realisticFile(personaIndex)],
+})
+
+const realisticValidatorLifecycleResult = (
+  personaIndex: number,
+): JsonObject => ({
+  finding_id: `merged-${personaIndex}`,
+  result: { outcome: 'true' },
+})
+
+const realisticParentRunMetadata: JsonObject = {
+  run_id: 'run-realistic',
+  mode: 'interactive',
+  harness: 'opencode',
+  branch: 'main',
+  head_sha: 'a'.repeat(40),
+  selected_dispatches: REALISTIC_PERSONA_INDICES.map(realisticSelectedDispatch),
+  timestamps: {
+    started_at: '2026-01-01T00:00:00.000Z',
+    completed_at: '2026-01-01T00:05:00.000Z',
+  },
+  validation: { status: 'passed' },
+  applied_fixes: [],
+}
+
+const realisticFinalizeInputFixture: JsonObject = {
+  merge: realisticMergeOutputFixture,
+  prepared: realisticPreparedOutput,
+  screen_results: REALISTIC_PERSONA_INDICES.map(realisticScreenResult),
+  dispatch_records: REALISTIC_PERSONA_INDICES.map(realisticSelectedDispatch),
+  validator_lifecycle_results: REALISTIC_PERSONA_INDICES.map(
+    realisticValidatorLifecycleResult,
+  ),
+  plan_assessment: {
+    verdict: 'Ready to merge after minor fixups.',
+    results: [
+      {
+        kind: 'inferred_gap',
+        description:
+          'Retry backoff for the new client is not covered by a test.',
+      },
+    ],
+  },
+  parent_run_metadata: realisticParentRunMetadata,
+}
+
 describe('AGGREGATE_STDIN_BYTE_CAP', () => {
   test('equals its stated formula', () => {
     expect(AGGREGATE_STDIN_BYTE_CAP).toBe(
       MAX_PERSONAS * MAX_FINDINGS * PER_FINDING_BYTE_ASSUMPTION +
         AGGREGATE_BYTE_CAP_HEADROOM,
     )
+  })
+
+  test('a realistic-scale merge envelope (12 personas, ~5 findings each) parses and stays comfortably under the cap', () => {
+    expect(MergeInputSchema.safeParse(realisticMergeInputFixture).success).toBe(
+      true,
+    )
+
+    const measuredBytes = Buffer.byteLength(
+      JSON.stringify(realisticMergeInputFixture),
+    )
+    const headroomMultiple = AGGREGATE_STDIN_BYTE_CAP / measuredBytes
+    expect(
+      measuredBytes,
+      `realistic merge envelope measured ${measuredBytes} bytes, ` +
+        `${headroomMultiple.toFixed(1)}x under the ${AGGREGATE_STDIN_BYTE_CAP}-byte cap`,
+    ).toBeLessThan(AGGREGATE_STDIN_BYTE_CAP)
+  })
+
+  test('a realistic-scale finalize envelope (12 personas, ~5 findings each) parses and stays comfortably under the cap', () => {
+    expect(
+      FinalizeInputSchema.safeParse(realisticFinalizeInputFixture).success,
+    ).toBe(true)
+
+    const measuredBytes = Buffer.byteLength(
+      JSON.stringify(realisticFinalizeInputFixture),
+    )
+    const headroomMultiple = AGGREGATE_STDIN_BYTE_CAP / measuredBytes
+    expect(
+      measuredBytes,
+      `realistic finalize envelope measured ${measuredBytes} bytes, ` +
+        `${headroomMultiple.toFixed(1)}x under the ${AGGREGATE_STDIN_BYTE_CAP}-byte cap`,
+    ).toBeLessThan(AGGREGATE_STDIN_BYTE_CAP)
   })
 })
 

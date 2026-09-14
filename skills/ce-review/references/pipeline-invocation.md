@@ -36,7 +36,7 @@ return on stdin through a fresh single-quoted heredoc delimiter -- never
 argv, command substitution, or a temp file -- exactly as the packaged
 validator's `return` subcommand was invoked before this phase replaced it.
 
-**Output** (`exit 0`): `{ dispatch_outcome, admitted_findings[{input_id, ...finding}], rejected_summary?{dispatch_outcome, rejected_finding_count, rejected_severities, reason}, residual_risks[], testing_gaps[] }`.
+**Output** (`exit 0`): `{ dispatch_outcome, admitted_findings[{input_id, ...finding}], rejected_summary?{dispatch_outcome, rejected_finding_count, rejected_severities, reason}, residual_risks[], testing_gaps[], harness }`.
 `admitted_findings` carries each finding with a stable `<reviewer>#<index>`
 `input_id` and `disposition: "surviving"` pre-assigned. A whole-payload
 rejection (malformed JSON, schema violation, or an identity mismatch between
@@ -63,9 +63,9 @@ Read the exit status:
 
 - **exit 0** -- structurally admitted. Parse the already structurally
   validated JSON without logging the raw text; the parent may then attach
-  `harness` and `dispatch_outcome` from this result to the persisted
-  per-agent dispatch record. `dispatch_outcome: "empty"` means zero findings;
-  `"findings"` means one or more admitted findings.
+  both `harness` and `dispatch_outcome` from this result to the persisted
+  per-agent dispatch record. `dispatch_outcome: "empty"` means zero
+  findings; `"findings"` means one or more admitted findings.
 - **exit 1** -- the whole return is `dispatch_outcome: "malformed"`, covering
   malformed JSON, a schema violation, and a `reviewer`-field identity
   mismatch alike. Retain only the bounded validator diagnostic on stderr in

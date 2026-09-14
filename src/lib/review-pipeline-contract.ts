@@ -82,6 +82,10 @@ export const ScreenOutputSchema = z
     rejected_summary: ScreenRejectedSummarySchema.optional(),
     residual_risks: SubAgentReturnSchema.shape.residual_risks,
     testing_gaps: SubAgentReturnSchema.shape.testing_gaps,
+    // Echoes `ScreenInputSchema.invoking_harness` back on the result so a
+    // dispatch record's harness reflects what the validator actually
+    // observed, not a value the parent separately remembers.
+    harness: HarnessSchema,
   })
   .strict()
 
@@ -186,9 +190,9 @@ export const PrepareOutputSchema = z
 
 // --- Aggregate stdin byte cap ----------------------------------------------
 //
-// `prepare` reads every selected persona's screen result from stdin in one
-// aggregate payload, so its bound must scale with the same shape maxima the
-// contract above already enforces rather than an arbitrary convenience value.
+// `prepare`, `merge`, and `finalize` each read one aggregate JSON envelope
+// from stdin, bounded by this same fixed ceiling. It is a resource guard on
+// untrusted stdin, not a schema-derived accommodation for every caller.
 
 // Conservative per-finding serialized-byte assumption: the largest bounded
 // string fields on one `ParentFindingSchema` entry (title <= 256,
@@ -201,9 +205,18 @@ export const PER_FINDING_BYTE_ASSUMPTION = 8_192
 // rather than finding count.
 export const AGGREGATE_BYTE_CAP_HEADROOM = 65_536
 
-// Worst case: every selected persona (MAX_PERSONAS) contributes up to
-// MAX_FINDINGS admitted findings, each at most PER_FINDING_BYTE_ASSUMPTION
-// bytes serialized, plus AGGREGATE_BYTE_CAP_HEADROOM for structural overhead.
+// Arithmetic below is sized off `prepare`'s stdin only: every selected
+// persona (MAX_PERSONAS) contributes up to MAX_FINDINGS admitted findings,
+// each at most PER_FINDING_BYTE_ASSUMPTION bytes, plus
+// AGGREGATE_BYTE_CAP_HEADROOM. `merge` and `finalize` restate the same
+// finding set across several independently max-bounded fields (e.g.
+// `prepared.surviving_findings` and `prepared.confidence_dispositions` each
+// up to MAX_FINDINGS * MAX_PERSONAS entries; `finalize` also repeats
+// `screen_results`), so their theoretical maxima exceed this cap: a
+// maximal-but-schema-legal `merge` envelope measures ~22.8 MiB, a maximal
+// `finalize` envelope ~45.3 MiB. That is intentional -- an envelope above
+// the cap is rejected as oversized by design, and a real review run's
+// envelopes stay orders of magnitude below it.
 export const AGGREGATE_STDIN_BYTE_CAP =
   MAX_PERSONAS * MAX_FINDINGS * PER_FINDING_BYTE_ASSUMPTION +
   AGGREGATE_BYTE_CAP_HEADROOM

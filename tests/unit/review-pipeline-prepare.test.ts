@@ -36,6 +36,7 @@ function makeScreenResult(
     result: {
       admitted_findings: findings,
       dispatch_outcome: findings.length === 0 ? 'empty' : 'findings',
+      harness: 'opencode',
       residual_risks: [],
       testing_gaps: [],
     },

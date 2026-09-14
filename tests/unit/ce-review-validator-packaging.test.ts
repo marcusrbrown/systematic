@@ -334,6 +334,7 @@ const PIPELINE_PREPARE_INPUT = {
           },
         ],
         dispatch_outcome: 'findings',
+        harness: 'opencode',
         residual_risks: [],
         testing_gaps: [],
       },
@@ -676,14 +677,27 @@ describe('generator drift', () => {
     expect(generateValidatorContent()).toBe(generateValidatorContent())
   })
 
-  test('stale committed bytes fail --check and name the path', () => {
+  test('a stamped digest that no longer matches sources fails --check and names the path', () => {
+    // `--check` verifies provenance (the stamped `source-digest:` line against a
+    // freshly recomputed digest of the sources), not byte equality of the
+    // bundle -- see scripts/generate-ce-review-validator.ts's docblock.
+    // Corrupting the stamped digest is the failure mode that models stale
+    // committed bytes under that design.
     const original = fs.readFileSync(VALIDATOR_SRC, 'utf8')
     try {
-      fs.writeFileSync(VALIDATOR_SRC, `${original}\n`)
+      const corrupted = original.replace(
+        /^\/\/ source-digest: [0-9a-f]{64}$/m,
+        `// source-digest: ${'0'.repeat(64)}`,
+      )
+      expect(corrupted).not.toBe(original)
+      fs.writeFileSync(VALIDATOR_SRC, corrupted)
       const result = runGenerator(['--check'])
 
       expect(result.exitCode).toBe(1)
       expect(`${result.stdout}${result.stderr}`).toContain(VALIDATOR_REL)
+      expect(`${result.stdout}${result.stderr}`).toContain(
+        'generated from different sources',
+      )
     } finally {
       fs.writeFileSync(VALIDATOR_SRC, original)
     }
@@ -877,10 +891,12 @@ describe('finalize: repair-class fixture reaches a conforming artifact with no r
 
     const correctnessScreen = screenReviewReturn({
       expected_reviewer: 'correctness',
+      invoking_harness: 'opencode',
       raw_return: correctnessReturn,
     })
     const maintainabilityScreen = screenReviewReturn({
       expected_reviewer: 'maintainability',
+      invoking_harness: 'opencode',
       raw_return: maintainabilityReturn,
     })
     // Constructed directly, never through `screenReviewReturn`: the screen
@@ -889,6 +905,7 @@ describe('finalize: repair-class fixture reaches a conforming artifact with no r
     const securityScreen = {
       admitted_findings: [],
       dispatch_outcome: 'validation_unavailable',
+      harness: 'opencode',
       residual_risks: [],
       testing_gaps: [],
     }

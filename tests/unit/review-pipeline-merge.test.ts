@@ -1129,3 +1129,177 @@ describe('applyReviewAdjudication', () => {
     ).toEqual(['alpha#0', 'zulu#0'])
   })
 })
+
+describe('applyReviewAdjudication: duplicate/colliding assembled finding IDs', () => {
+  test('a non-colliding control -- one merge group, one declined singleton, one passthrough singleton, all with distinct IDs -- still succeeds', () => {
+    const groups = [
+      group('src/a.ts', [
+        { input_id: 'correctness#0', line: 10 },
+        { input_id: 'security#0', line: 12 },
+      ]),
+    ]
+    const decisions: ApplyDecision = [
+      mergedDecision({
+        decision_id: 'merge-control',
+        input_finding_ids: ['correctness#0', 'security#0'],
+        line: 10,
+      }),
+    ]
+
+    const result = applyReviewAdjudication({
+      prepared: prepared(groups, { singletons: ['passthrough-control#0'] }),
+      decisions,
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(
+      result.value.merged_findings.map((finding) => finding.finding_id).sort(),
+    ).toEqual(['merge-control', 'passthrough-control#0'])
+  })
+
+  test('two merge group decisions sharing a decision_id are rejected (duplicate merged group decision id)', () => {
+    const groups = [
+      group('src/a.ts', [
+        { input_id: 'correctness#0', line: 10 },
+        { input_id: 'security#0', line: 12 },
+      ]),
+      group('src/b.ts', [
+        { input_id: 'correctness#1', line: 20 },
+        { input_id: 'security#1', line: 22 },
+      ]),
+    ]
+    const decisions: ApplyDecision = [
+      mergedDecision({
+        decision_id: 'dup-merge',
+        input_finding_ids: ['correctness#0', 'security#0'],
+        line: 10,
+      }),
+      mergedDecision({
+        decision_id: 'dup-merge',
+        input_finding_ids: ['correctness#1', 'security#1'],
+        line: 20,
+      }),
+    ]
+
+    const result = applyReviewAdjudication({
+      prepared: prepared(groups),
+      decisions,
+    })
+
+    expectApplyRejection(result, 'duplicate merged group decision id')
+  })
+
+  test('two declined decisions sharing a decision_id are rejected (duplicate declined decision id)', () => {
+    const groups = [
+      group('src/a.ts', [
+        { input_id: 'correctness#0', line: 10 },
+        { input_id: 'security#0', line: 12 },
+      ]),
+    ]
+    const decisions: ApplyDecision = [
+      declinedDecision('dup-decline', 'correctness#0'),
+      declinedDecision('dup-decline', 'security#0'),
+    ]
+
+    const result = applyReviewAdjudication({
+      prepared: prepared(groups),
+      decisions,
+    })
+
+    expectApplyRejection(result, 'duplicate declined decision id')
+  })
+
+  test('a passthrough singletons array carrying a duplicate input ID is rejected (duplicate passthrough singleton input id)', () => {
+    // `PrepareOutputSchema.singletons` (`review-pipeline-contract.ts`) is a
+    // plain bounded array with no uniqueness refinement, so a duplicate
+    // reaches `applyReviewAdjudication` unfiltered.
+    const result = applyReviewAdjudication({
+      prepared: prepared([], { singletons: ['dup#0', 'dup#0'] }),
+      decisions: [],
+    })
+
+    expectApplyRejection(result, 'duplicate passthrough singleton input id')
+  })
+
+  test('a declined decision_id colliding with a merge group decision_id is rejected (declined decision id collides with merged group decision id)', () => {
+    const groups = [
+      group('src/a.ts', [
+        { input_id: 'correctness#0', line: 10 },
+        { input_id: 'security#0', line: 12 },
+      ]),
+      group('src/b.ts', [
+        { input_id: 'correctness#1', line: 20 },
+        { input_id: 'security#1', line: 22 },
+      ]),
+    ]
+    const decisions: ApplyDecision = [
+      mergedDecision({
+        decision_id: 'collide',
+        input_finding_ids: ['correctness#0', 'security#0'],
+        line: 10,
+      }),
+      declinedDecision('collide', 'correctness#1'),
+      declinedDecision('other', 'security#1'),
+    ]
+
+    const result = applyReviewAdjudication({
+      prepared: prepared(groups),
+      decisions,
+    })
+
+    expectApplyRejection(
+      result,
+      'declined decision id collides with merged group decision id',
+    )
+  })
+
+  test('a declined decision_id colliding with a passthrough singleton input_id is rejected (declined decision id collides with passthrough singleton input id)', () => {
+    const groups = [
+      group('src/a.ts', [
+        { input_id: 'correctness#0', line: 10 },
+        { input_id: 'security#0', line: 12 },
+      ]),
+    ]
+    const decisions: ApplyDecision = [
+      declinedDecision('d1', 'correctness#0'),
+      declinedDecision('collide', 'security#0'),
+    ]
+
+    const result = applyReviewAdjudication({
+      prepared: prepared(groups, { singletons: ['collide'] }),
+      decisions,
+    })
+
+    expectApplyRejection(
+      result,
+      'declined decision id collides with passthrough singleton input id',
+    )
+  })
+
+  test('a passthrough singleton input_id colliding with a merge group decision_id is rejected (passthrough singleton input id collides with merged group decision id)', () => {
+    const groups = [
+      group('src/a.ts', [
+        { input_id: 'correctness#0', line: 10 },
+        { input_id: 'security#0', line: 12 },
+      ]),
+    ]
+    const decisions: ApplyDecision = [
+      mergedDecision({
+        decision_id: 'collide',
+        input_finding_ids: ['correctness#0', 'security#0'],
+        line: 10,
+      }),
+    ]
+
+    const result = applyReviewAdjudication({
+      prepared: prepared(groups, { singletons: ['collide'] }),
+      decisions,
+    })
+
+    expectApplyRejection(
+      result,
+      'passthrough singleton input id collides with merged group decision id',
+    )
+  })
+})

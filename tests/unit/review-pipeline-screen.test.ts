@@ -41,6 +41,7 @@ describe('screenReviewReturn', () => {
   test('admits a conforming return', () => {
     const result = screenReviewReturn({
       expected_reviewer: 'correctness',
+      invoking_harness: 'opencode',
       raw_return: makeReturn(),
     })
 
@@ -54,6 +55,7 @@ describe('screenReviewReturn', () => {
   test('admits an empty return with no findings', () => {
     const result = screenReviewReturn({
       expected_reviewer: 'correctness',
+      invoking_harness: 'opencode',
       raw_return: makeReturn({ findings: [] }),
     })
 
@@ -65,6 +67,7 @@ describe('screenReviewReturn', () => {
   test('rejects a malformed-JSON raw return with no rejected-summary row (KTD21: unknowable count)', () => {
     const result = screenReviewReturn({
       expected_reviewer: 'correctness',
+      invoking_harness: 'opencode',
       raw_return: '{not json',
     })
 
@@ -81,6 +84,7 @@ describe('screenReviewReturn', () => {
   test('rejects a return that fails schema validation with zero known findings and no rejected-summary row', () => {
     const result = screenReviewReturn({
       expected_reviewer: 'correctness',
+      invoking_harness: 'opencode',
       raw_return: { findings: [], reviewer: 'correctness' }, // missing required arrays
     })
 
@@ -91,6 +95,7 @@ describe('screenReviewReturn', () => {
   test('rejects a return that fails schema validation and extracts mixed valid/invalid severities', () => {
     const result = screenReviewReturn({
       expected_reviewer: 'correctness',
+      invoking_harness: 'opencode',
       raw_return: {
         // Missing required residual_risks/testing_gaps arrays, so the whole
         // payload fails schema validation -- but its findings array is still
@@ -116,6 +121,7 @@ describe('screenReviewReturn', () => {
   test('rejects a return that fails schema validation with every severity unrecognizable', () => {
     const result = screenReviewReturn({
       expected_reviewer: 'correctness',
+      invoking_harness: 'opencode',
       raw_return: {
         findings: [
           makeFinding({ severity: 'CRITICAL' }),
@@ -136,6 +142,7 @@ describe('screenReviewReturn', () => {
   test('rejects a reviewer-identity mismatch and extracts the count and severities from valid findings', () => {
     const result = screenReviewReturn({
       expected_reviewer: 'security',
+      invoking_harness: 'opencode',
       raw_return: makeReturn({ reviewer: 'correctness' }),
     })
 
@@ -151,6 +158,7 @@ describe('screenReviewReturn', () => {
   test('rejects an identity-mismatched empty return with no rejected-summary row (KTD21)', () => {
     const result = screenReviewReturn({
       expected_reviewer: 'security',
+      invoking_harness: 'opencode',
       raw_return: makeReturn({ reviewer: 'correctness', findings: [] }),
     })
 
@@ -163,6 +171,7 @@ describe('screenReviewReturn', () => {
   test('rejects a return with more than MAX_FINDINGS findings with no rejected-summary row and does not throw', () => {
     const result = screenReviewReturn({
       expected_reviewer: 'correctness',
+      invoking_harness: 'opencode',
       raw_return: {
         // 33 findings, all valid shape except the last has an invalid
         // severity field, so the whole payload fails schema validation --
@@ -185,6 +194,7 @@ describe('screenReviewReturn', () => {
   test('rejects a return with exactly MAX_FINDINGS findings and emits a rejected-summary row with the full count', () => {
     const result = screenReviewReturn({
       expected_reviewer: 'correctness',
+      invoking_harness: 'opencode',
       raw_return: {
         // 32 findings, all valid shape but missing required top-level
         // residual_risks/testing_gaps arrays, so the whole payload fails
@@ -210,7 +220,11 @@ describe('screenReviewReturn', () => {
       ],
     })
 
-    const input = { expected_reviewer: 'correctness', raw_return: raw }
+    const input = {
+      expected_reviewer: 'correctness',
+      invoking_harness: 'opencode' as const,
+      raw_return: raw,
+    }
     const baseline = screenReviewReturn(input)
 
     const originalEnv = { ...process.env }
@@ -238,7 +252,11 @@ describe('screenReviewReturn', () => {
       reviewer: 'correctness',
     }
 
-    const input = { expected_reviewer: 'correctness', raw_return: raw }
+    const input = {
+      expected_reviewer: 'correctness',
+      invoking_harness: 'opencode' as const,
+      raw_return: raw,
+    }
     const baseline = screenReviewReturn(input)
 
     const originalEnv = { ...process.env }
@@ -272,6 +290,7 @@ describe('screenReviewReturn', () => {
 
     const result = screenReviewReturn({
       expected_reviewer: 'correctness',
+      invoking_harness: 'opencode',
       raw_return: raw,
     })
 
@@ -292,11 +311,36 @@ describe('screenReviewReturn', () => {
 
     const result = screenReviewReturn({
       expected_reviewer: 'correctness',
+      invoking_harness: 'opencode',
       raw_return: raw,
     })
 
     expect(result.dispatch_outcome).toBe('findings')
     expect(result.admitted_findings).toHaveLength(1)
     expect(result.rejected_summary).toBeUndefined()
+  })
+
+  test.each(['opencode', 'pi', 'claude-code'] as const)(
+    'echoes back the invoking harness %s on the result',
+    (harness) => {
+      const result = screenReviewReturn({
+        expected_reviewer: 'correctness',
+        invoking_harness: harness,
+        raw_return: makeReturn(),
+      })
+
+      expect(result.harness).toBe(harness)
+    },
+  )
+
+  test('echoes back the invoking harness on a whole-payload rejection', () => {
+    const result = screenReviewReturn({
+      expected_reviewer: 'correctness',
+      invoking_harness: 'pi',
+      raw_return: '{not json',
+    })
+
+    expect(result.dispatch_outcome).toBe('malformed')
+    expect(result.harness).toBe('pi')
   })
 })

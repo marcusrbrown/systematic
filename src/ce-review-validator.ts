@@ -1,5 +1,7 @@
 import fs from 'node:fs'
 import { fileURLToPath } from 'node:url'
+import type { z } from 'zod'
+
 import { runClaudeCodeValidator } from './claude-code-validator.js'
 import { formatReviewArtifactIssuePath } from './lib/review-artifact-path.js'
 import { HarnessSchema } from './lib/review-artifact-schema.js'
@@ -13,6 +15,7 @@ import {
   AGGREGATE_STDIN_BYTE_CAP,
   FinalizeInputSchema,
   MergeInputSchema,
+  ScreenInputSchema,
 } from './lib/review-pipeline-contract.js'
 import {
   defaultReadChunk,
@@ -64,6 +67,9 @@ export const CE_REVIEW_SCREEN_STDIN_OVERSIZED_MESSAGE =
 export const CE_REVIEW_SCREEN_STDIN_INVALID_UTF8_MESSAGE =
   'screen input is not valid UTF-8'
 
+export const CE_REVIEW_SCREEN_STDIN_EMPTY_MESSAGE =
+  'screen received empty stdin'
+
 export const CE_REVIEW_SCREEN_REJECTED_MESSAGE =
   'screen rejected the reviewer return'
 
@@ -84,6 +90,9 @@ export const CE_REVIEW_PREPARE_STDIN_OVERSIZED_MESSAGE =
 export const CE_REVIEW_PREPARE_STDIN_INVALID_UTF8_MESSAGE =
   'prepare input is not valid UTF-8'
 
+export const CE_REVIEW_PREPARE_STDIN_EMPTY_MESSAGE =
+  'prepare received empty stdin'
+
 export const CE_REVIEW_PREPARE_REJECTED_MESSAGE =
   'prepare rejected the aggregate envelope'
 
@@ -100,6 +109,8 @@ export const CE_REVIEW_MERGE_STDIN_OVERSIZED_MESSAGE =
 
 export const CE_REVIEW_MERGE_STDIN_INVALID_UTF8_MESSAGE =
   'merge input is not valid UTF-8'
+
+export const CE_REVIEW_MERGE_STDIN_EMPTY_MESSAGE = 'merge received empty stdin'
 
 export const CE_REVIEW_MERGE_REJECTED_MESSAGE =
   'merge rejected the aggregate envelope'
@@ -118,6 +129,9 @@ export const CE_REVIEW_FINALIZE_STDIN_OVERSIZED_MESSAGE =
 
 export const CE_REVIEW_FINALIZE_STDIN_INVALID_UTF8_MESSAGE =
   'finalize input is not valid UTF-8'
+
+export const CE_REVIEW_FINALIZE_STDIN_EMPTY_MESSAGE =
+  'finalize received empty stdin'
 
 export const CE_REVIEW_FINALIZE_REJECTED_MESSAGE =
   'finalize rejected the aggregate envelope'
@@ -139,7 +153,11 @@ function isScreenFlag(token: string): token is ScreenFlag {
 }
 
 type ScreenFlagParse =
-  | { readonly ok: true; readonly reviewer: string; readonly harness: string }
+  | {
+      readonly ok: true
+      readonly reviewer: string
+      readonly harness: z.infer<typeof HarnessSchema>
+    }
   | { readonly ok: false }
 
 /**
@@ -166,9 +184,18 @@ function parseScreenFlags(argv: readonly string[]): ScreenFlagParse {
   }
 
   const reviewer = values.get('--reviewer')
-  const harness = values.get('--harness')
-  if (reviewer === undefined || harness === undefined) return { ok: false }
-  if (!HarnessSchema.safeParse(harness).success) return { ok: false }
+  const rawHarness = values.get('--harness')
+  if (reviewer === undefined || rawHarness === undefined) return { ok: false }
+  const harnessParse = HarnessSchema.safeParse(rawHarness)
+  if (!harnessParse.success) return { ok: false }
+  const harness = harnessParse.data
+  // Validated against the same schema `screenReviewReturn` binds
+  // `expected_reviewer` to (`ScreenInputSchema`), so an invalid argv value
+  // is rejected here as a usage error rather than reaching
+  // `screenReviewReturn` and being recorded as a malformed persona payload.
+  if (!ScreenInputSchema.shape.expected_reviewer.safeParse(reviewer).success) {
+    return { ok: false }
+  }
 
   return { harness, ok: true, reviewer }
 }
@@ -219,8 +246,14 @@ function runScreenSubcommand(
     return 1
   }
 
+  if (text.trim() === '') {
+    errorSink(CE_REVIEW_SCREEN_STDIN_EMPTY_MESSAGE)
+    return 2
+  }
+
   const result = screenReviewReturn({
     expected_reviewer: flags.reviewer,
+    invoking_harness: flags.harness,
     raw_return: text,
   })
 
@@ -274,6 +307,11 @@ function runPrepareSubcommand(
     return 1
   }
 
+  if (text.trim() === '') {
+    errorSink(CE_REVIEW_PREPARE_STDIN_EMPTY_MESSAGE)
+    return 2
+  }
+
   const result = prepareReviewCandidates({ raw_input: text })
   if (!result.ok) {
     errorSink(
@@ -295,20 +333,9 @@ interface AggregateStdinSubcommandSpec<Input> {
   readonly readFailedMessage: string
   readonly oversizedMessage: string
   readonly invalidUtf8Message: string
+  readonly emptyMessage: string
   readonly rejectedMessage: string
-  readonly schema: {
-    readonly safeParse: (value: unknown) =>
-      | { readonly success: true; readonly data: Input }
-      | {
-          readonly success: false
-          readonly error: {
-            readonly issues: readonly {
-              readonly path: readonly PropertyKey[]
-              readonly code: string
-            }[]
-          }
-        }
-  }
+  readonly schema: z.ZodType<Input>
   readonly execute: (input: Input) =>
     | { readonly ok: true; readonly value: unknown }
     | {
@@ -365,6 +392,11 @@ function runAggregateStdinSubcommand<Input>(
     return 1
   }
 
+  if (text.trim() === '') {
+    errorSink(spec.emptyMessage)
+    return 2
+  }
+
   let value: unknown
   try {
     value = JSON.parse(text)
@@ -378,7 +410,10 @@ function runAggregateStdinSubcommand<Input>(
     const issue = parsed.error.issues[0]
     errorSink(
       issue
-        ? `${formatReviewArtifactIssuePath(issue.path)} ${issue.code}`
+        ? formatAggregateRejectionMessage(spec.rejectedMessage, {
+            path: formatReviewArtifactIssuePath(issue.path),
+            reason: issue.code,
+          })
         : spec.rejectedMessage,
     )
     return 1
@@ -402,6 +437,7 @@ function runMergeSubcommand(
   errorSink: (message: string) => void,
 ): number {
   return runAggregateStdinSubcommand(options, outputSink, errorSink, {
+    emptyMessage: CE_REVIEW_MERGE_STDIN_EMPTY_MESSAGE,
     execute: (input) =>
       applyReviewAdjudication({
         prepared: input.prepared,
@@ -423,6 +459,7 @@ function runFinalizeSubcommand(
   errorSink: (message: string) => void,
 ): number {
   return runAggregateStdinSubcommand(options, outputSink, errorSink, {
+    emptyMessage: CE_REVIEW_FINALIZE_STDIN_EMPTY_MESSAGE,
     execute: (input) => finalizeReview(input),
     invalidUtf8Message: CE_REVIEW_FINALIZE_STDIN_INVALID_UTF8_MESSAGE,
     oversizedMessage: CE_REVIEW_FINALIZE_STDIN_OVERSIZED_MESSAGE,
@@ -436,15 +473,28 @@ function runFinalizeSubcommand(
 
 let processExceptionBoundaryInstalled = false
 
+interface ActiveInvocation {
+  readonly phase: string
+  readonly errorSink: (message: string) => void
+}
+
 /**
- * The subcommand currently being dispatched, set once at the top of
- * {@link runCeReviewValidator} before entering its `try` block. Both the
- * process-scope exception boundary and the top-level `catch` read this at
- * fault time (not at closure-creation time) so a fatal error names the
- * phase that actually failed, even though the boundary itself installs its
- * handlers only once per process.
+ * The subcommand and error sink currently being dispatched, replaced
+ * wholesale at the top of every {@link runCeReviewValidator} call before
+ * entering its `try` block. The process-scope exception boundary reads both
+ * fields from here at fault time (not at closure-creation time), so a fatal
+ * error is always routed through the CURRENT call's injected `errorSink` and
+ * names the CURRENT call's phase -- even though the boundary's own listener
+ * registration happens only once per process. Without this indirection, the
+ * boundary's closure would capture only the first call's `errorSink`
+ * forever, silently misrouting later calls' fatal errors (relevant to the
+ * unit suite, which calls `runCeReviewValidator` repeatedly with distinct
+ * injected sinks in the same process; the real CLI only ever calls it once).
  */
-let activeSubcommandPhase = 'unknown'
+let activeInvocation: ActiveInvocation = {
+  errorSink: (message: string) => console.error(message),
+  phase: 'unknown',
+}
 
 /** Fixed-template fatal message naming the active subcommand. Keeps
  * {@link CE_REVIEW_SCREEN_INTERNAL_ERROR_MESSAGE} exported for backward
@@ -458,16 +508,18 @@ function formatInternalErrorMessage(phase: string): string {
  * exactly once per process, routed through the same fixed-reason-code
  * boundary as a synchronous throw. Without this, an untrapped async
  * rejection prints a raw stack straight to stderr and defeats the no-echo
- * contract this shim exists to enforce.
+ * contract this shim exists to enforce. The listener itself is installed
+ * only once, but it always reads {@link activeInvocation} at fault time, so
+ * it stays correct across repeated calls.
  */
-function installProcessExceptionBoundary(
-  errorSink: (message: string) => void,
-): void {
+function installProcessExceptionBoundary(): void {
   if (processExceptionBoundaryInstalled) return
   processExceptionBoundaryInstalled = true
 
   const handleFatal = (): void => {
-    errorSink(formatInternalErrorMessage(activeSubcommandPhase))
+    activeInvocation.errorSink(
+      formatInternalErrorMessage(activeInvocation.phase),
+    )
     process.exitCode = 1
   }
   process.on('unhandledRejection', handleFatal)
@@ -482,10 +534,9 @@ export function runCeReviewValidator(
   const errorSink =
     options.errorSink ?? ((message: string) => console.error(message))
 
-  installProcessExceptionBoundary(errorSink)
-
   const subcommand = options.argv[0]
-  activeSubcommandPhase = subcommand ?? 'unknown'
+  activeInvocation = { errorSink, phase: subcommand ?? 'unknown' }
+  installProcessExceptionBoundary()
 
   try {
     if (subcommand === 'return') {
@@ -530,7 +581,7 @@ export function runCeReviewValidator(
     errorSink(CE_REVIEW_VALIDATOR_USAGE)
     return 2
   } catch {
-    errorSink(formatInternalErrorMessage(activeSubcommandPhase))
+    errorSink(formatInternalErrorMessage(activeInvocation.phase))
     return 1
   }
 }

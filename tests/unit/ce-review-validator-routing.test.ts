@@ -18,6 +18,8 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
+
+import { CE_REVIEW_SCREEN_REJECTED_MESSAGE } from '../../src/ce-review-validator.js'
 import { AGGREGATE_STDIN_BYTE_CAP } from '../../src/lib/review-pipeline-contract.js'
 
 const ROOT_DIR = path.resolve(import.meta.dirname, '../..')
@@ -144,6 +146,7 @@ const VALID_PREPARE_INPUT = {
       result: {
         admitted_findings: [ADMITTED_FINDING],
         dispatch_outcome: 'findings',
+        harness: 'claude-code',
         residual_risks: [],
         testing_gaps: [],
       },
@@ -367,14 +370,44 @@ describe('screen: flag parsing', () => {
     expect(result.stdout).toBe('')
   })
 
+  test('an empty --reviewer value exits 2 with a usage message, never reaching screenReviewReturn', () => {
+    const result = runValidator(
+      ['screen', '--reviewer', '', '--harness', 'claude-code'],
+      { input: JSON.stringify(VALID_RETURN) },
+    )
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('Usage:')
+    expect(result.stderr).not.toContain(CE_REVIEW_SCREEN_REJECTED_MESSAGE)
+    expect(result.stdout).toBe('')
+  })
+
+  test('an over-long --reviewer value exits 2 with a usage message', () => {
+    const result = runValidator(
+      ['screen', '--reviewer', 'x'.repeat(65), '--harness', 'claude-code'],
+      { input: JSON.stringify(VALID_RETURN) },
+    )
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('Usage:')
+    expect(result.stdout).toBe('')
+  })
+
+  test('a valid --reviewer value still exits 0', () => {
+    const result = runValidator(SCREEN_ARGS, {
+      input: JSON.stringify(VALID_RETURN),
+    })
+    expect(result.exitCode, result.stderr).toBe(0)
+  })
+
   test.each(['opencode', 'pi', 'claude-code'] as const)(
-    'a valid --harness value of %s exits 0',
+    'a valid --harness value of %s exits 0 and the result carries that harness',
     (harness) => {
       const result = runValidator(
         ['screen', '--reviewer', 'correctness', '--harness', harness],
         { input: JSON.stringify(VALID_RETURN) },
       )
       expect(result.exitCode, result.stderr).toBe(0)
+      const parsed = JSON.parse(result.stdout) as { readonly harness: string }
+      expect(parsed.harness).toBe(harness)
     },
   )
 })
@@ -385,6 +418,14 @@ describe('screen: stdin bounds', () => {
     const result = runValidator(SCREEN_ARGS, { input: oversized })
     expect(result.exitCode).toBe(1)
     expect(result.stderr).toContain('1 MiB')
+    expect(result.stdout).toBe('')
+  })
+
+  test('empty stdin exits 2 with the empty-stdin message, not a malformed-payload rejection', () => {
+    const result = runValidator(SCREEN_ARGS, { input: '' })
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('empty stdin')
+    expect(result.stderr).not.toContain(CE_REVIEW_SCREEN_REJECTED_MESSAGE)
     expect(result.stdout).toBe('')
   })
 })
@@ -564,6 +605,14 @@ describe('prepare: stdin bounds', () => {
     expect(result.stderr).toContain('byte cap')
     expect(result.stdout).toBe('')
   })
+
+  test('empty stdin exits 2 with the empty-stdin message, not a malformed-envelope rejection', () => {
+    const result = runValidator([...PREPARE_ARGS], { input: '' })
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('empty stdin')
+    expect(result.stderr).not.toContain('rejected the aggregate envelope')
+    expect(result.stdout).toBe('')
+  })
 })
 
 describe('prepare: rejection outcomes', () => {
@@ -716,6 +765,14 @@ describe('merge: stdin bounds', () => {
     expect(result.stderr).toContain('byte cap')
     expect(result.stdout).toBe('')
   })
+
+  test('empty stdin exits 2 with the empty-stdin message, not a malformed-envelope rejection', () => {
+    const result = runValidator([...MERGE_ARGS], { input: '' })
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('empty stdin')
+    expect(result.stderr).not.toContain('rejected the aggregate envelope')
+    expect(result.stdout).toBe('')
+  })
 })
 
 describe('merge: rejection outcomes', () => {
@@ -734,6 +791,15 @@ describe('merge: rejection outcomes', () => {
     expect(result.stderr).toContain('merge rejected the aggregate envelope')
     expect(result.stderr).toContain('omitted eligible input id')
     expect(result.stderr).toContain(' at ')
+    expect(result.stdout).toBe('')
+  })
+
+  test('a schema-invalid envelope exits 1 wrapped in the same rejection shape as every other phase, with a path and code but not the offending value', () => {
+    const result = runValidator([...MERGE_ARGS], { input: '{}' })
+    expect(result.exitCode).toBe(1)
+    expect(result.stderr.trim()).toBe(
+      'merge rejected the aggregate envelope: invalid_type at prepared',
+    )
     expect(result.stdout).toBe('')
   })
 })
@@ -903,6 +969,14 @@ describe('finalize: stdin bounds', () => {
     expect(result.stderr).toContain('byte cap')
     expect(result.stdout).toBe('')
   })
+
+  test('empty stdin exits 2 with the empty-stdin message, not a malformed-envelope rejection', () => {
+    const result = runValidator([...FINALIZE_ARGS], { input: '' })
+    expect(result.exitCode).toBe(2)
+    expect(result.stderr).toContain('empty stdin')
+    expect(result.stderr).not.toContain('rejected the aggregate envelope')
+    expect(result.stdout).toBe('')
+  })
 })
 
 describe('finalize: rejection outcomes', () => {
@@ -913,14 +987,15 @@ describe('finalize: rejection outcomes', () => {
     expect(result.stdout).toBe('')
   })
 
-  test('a schema-invalid envelope exits 1 with a path and code but not the offending value', () => {
+  test('a schema-invalid envelope exits 1 wrapped in the same rejection shape as every other phase, with a path and code but not the offending value', () => {
     const result = runValidator([...FINALIZE_ARGS], {
       input: JSON.stringify(FINALIZE_SCHEMA_INVALID_INPUT),
     })
     expect(result.exitCode).toBe(1)
-    expect(result.stderr).toContain('parent_run_metadata.mode')
+    expect(result.stderr.trim()).toBe(
+      'finalize rejected the aggregate envelope: invalid_value at parent_run_metadata.mode',
+    )
     expect(result.stderr).not.toContain('not-a-real-mode')
-    expect(result.stderr).not.toContain('rejected the aggregate envelope')
     expect(result.stdout).toBe('')
   })
 })
@@ -1056,5 +1131,74 @@ describe('return and artifact keep their existing behavior', () => {
     const result = runValidator([])
     expect(result.exitCode).toBe(2)
     expect(result.stderr).toContain('return|artifact')
+  })
+})
+
+describe('process exception boundary: sink freshness across repeated calls', () => {
+  test('two sequential runCeReviewValidator calls with different injected sinks each receive their own fatal output', () => {
+    // The process-scope unhandledRejection/uncaughtException listener is
+    // installed only once per process (U6). This proves it still routes a
+    // fatal error through the CURRENT call's injected errorSink -- not the
+    // FIRST call's -- by making two successful synchronous calls with
+    // distinct sinks and then triggering one unhandled rejection: it must
+    // land only in the second call's sink.
+    const driver = `
+      const mod = await import(${JSON.stringify(pathToFileURL(VALIDATOR_ENTRY).href)})
+      const sinkAMessages = []
+      const sinkBMessages = []
+
+      const screenBytes = Buffer.from(${JSON.stringify(JSON.stringify(VALID_RETURN))})
+      let screenOffset = 0
+      const exitA = mod.runCeReviewValidator({
+        argv: ${JSON.stringify([...SCREEN_ARGS])},
+        isTTY: false,
+        readChunk: (_fd, buffer, bufferOffset, length) => {
+          if (screenOffset >= screenBytes.length) return 0
+          const n = Math.min(length, screenBytes.length - screenOffset)
+          screenBytes.copy(buffer, bufferOffset, screenOffset, screenOffset + n)
+          screenOffset += n
+          return n
+        },
+        outputSink: () => {},
+        errorSink: (message) => sinkAMessages.push(message),
+      })
+      console.log('EXIT_A:' + exitA)
+
+      const prepareBytes = Buffer.from(${JSON.stringify(JSON.stringify(VALID_PREPARE_INPUT))})
+      let prepareOffset = 0
+      const exitB = mod.runCeReviewValidator({
+        argv: ${JSON.stringify([...PREPARE_ARGS])},
+        isTTY: false,
+        readChunk: (_fd, buffer, bufferOffset, length) => {
+          if (prepareOffset >= prepareBytes.length) return 0
+          const n = Math.min(length, prepareBytes.length - prepareOffset)
+          prepareBytes.copy(buffer, bufferOffset, prepareOffset, prepareOffset + n)
+          prepareOffset += n
+          return n
+        },
+        outputSink: () => {},
+        errorSink: (message) => sinkBMessages.push(message),
+      })
+      console.log('EXIT_B:' + exitB)
+
+      Promise.reject(new Error('boom after both calls: should route to sinkB only'))
+
+      setTimeout(() => {
+        console.log('SINK_A:' + JSON.stringify(sinkAMessages))
+        console.log('SINK_B:' + JSON.stringify(sinkBMessages))
+      }, 50)
+    `
+    const result = spawnSync('bun', ['-e', driver], {
+      encoding: 'utf8',
+      env: SAFE_ENV,
+      timeout: 30_000,
+    })
+
+    expect(result.stdout).toContain('EXIT_A:0')
+    expect(result.stdout).toContain('EXIT_B:0')
+    expect(result.stdout).toContain('SINK_A:[]')
+    expect(result.stdout).toContain(
+      'SINK_B:["ce-review-validator: internal error in prepare"]',
+    )
   })
 })

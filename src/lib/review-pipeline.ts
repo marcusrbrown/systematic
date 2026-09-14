@@ -2,6 +2,7 @@ import path from 'node:path'
 import type { z } from 'zod'
 import { formatReviewArtifactIssuePath } from './review-artifact-path.js'
 import {
+  HarnessSchema,
   MAX_FINDINGS,
   MAX_PERSONAS,
   MAX_REASON_LENGTH,
@@ -57,6 +58,7 @@ export type ScreenOutput = ReturnType<typeof ScreenOutputSchema.parse>
 export interface ScreenReviewReturnInput {
   readonly raw_return: unknown
   readonly expected_reviewer: string
+  readonly invoking_harness: z.infer<typeof HarnessSchema>
 }
 
 type PipelineRejectReason = 'schema validation' | 'malformed JSON'
@@ -142,6 +144,7 @@ function wholePayloadRejection(
   fieldPath: readonly (string | number)[] | string,
   reason: PipelineRejectReason,
   rejectedSeverities: readonly RejectedSeverity[] | undefined,
+  harness: z.infer<typeof HarnessSchema>,
 ): ScreenOutput {
   const rejectedFindingCount = rejectedSeverities?.length ?? 0
 
@@ -162,6 +165,7 @@ function wholePayloadRejection(
       : {}),
     residual_risks: [],
     testing_gaps: [],
+    harness,
   })
 }
 
@@ -179,6 +183,7 @@ export function screenReviewReturn(
   input: ScreenReviewReturnInput,
 ): ScreenOutput {
   const persona = input.expected_reviewer
+  const harness = input.invoking_harness
 
   const parsed = parseRawReturn(input.raw_return)
   if (!parsed.ok) {
@@ -187,6 +192,7 @@ export function screenReviewReturn(
       JSON_ROOT_PATH,
       'malformed JSON',
       undefined,
+      harness,
     )
   }
 
@@ -198,6 +204,7 @@ export function screenReviewReturn(
       fieldPath,
       'schema validation',
       extractRejectedSeverities(parsed.value),
+      harness,
     )
   }
 
@@ -209,6 +216,7 @@ export function screenReviewReturn(
       'reviewer',
       'schema validation',
       raw.findings.map((finding) => finding.severity),
+      harness,
     )
   }
 
@@ -227,6 +235,7 @@ export function screenReviewReturn(
     dispatch_outcome: dispatchOutcome,
     residual_risks: raw.residual_risks,
     testing_gaps: raw.testing_gaps,
+    harness,
   })
 }
 
@@ -639,6 +648,12 @@ type AdjudicationRejectReason =
   | 'cross-group input id citation'
   | 'representative line mismatch'
   | 'unexpected decisions for empty candidate set'
+  | 'duplicate merged group decision id'
+  | 'duplicate declined decision id'
+  | 'duplicate passthrough singleton input id'
+  | 'declined decision id collides with merged group decision id'
+  | 'declined decision id collides with passthrough singleton input id'
+  | 'passthrough singleton input id collides with merged group decision id'
 
 /** One bounded, payload-safe rejection diagnostic: a fixed reason code and a
  * safe JSON path only. Never payload content, never a finding title, never
@@ -1662,6 +1677,68 @@ function toMergedFindingWireShape(
   }
 }
 
+/** Which of the three assembly sources produced one assembled finding's
+ * `finding_id`: a merge group's model-chosen `decision_id`, a declined
+ * singleton's model-chosen `decision_id`, or a passthrough singleton's
+ * carried-through `input_id`. Tracked only to name a collision's origin in
+ * `checkNoDuplicateAssembledFindingIds`'s rejection reason -- never exposed
+ * on `MergedFindingAssembly` itself. */
+type MergeAssemblyOrigin =
+  | 'merged group'
+  | 'declined decision'
+  | 'passthrough singleton'
+
+interface MergeAssemblyOriginEntry {
+  readonly finding_id: string
+  readonly origin: MergeAssemblyOrigin
+}
+
+function mergeFindingIdCollisionReason(
+  first: MergeAssemblyOrigin,
+  second: MergeAssemblyOrigin,
+): AdjudicationRejectReason {
+  if (first === second) {
+    if (first === 'merged group') return 'duplicate merged group decision id'
+    if (first === 'declined decision') return 'duplicate declined decision id'
+    return 'duplicate passthrough singleton input id'
+  }
+  const pair = [first, second].sort(compareStrings).join('|')
+  if (pair === 'declined decision|merged group') {
+    return 'declined decision id collides with merged group decision id'
+  }
+  if (pair === 'declined decision|passthrough singleton') {
+    return 'declined decision id collides with passthrough singleton input id'
+  }
+  return 'passthrough singleton input id collides with merged group decision id'
+}
+
+/** Rejects a `finding_id` collision between any two of the three assembly
+ * sources (merge group, declined singleton, passthrough singleton) before
+ * `MergeOutputSchema.parse` -- so a colliding ID fails closed at merge
+ * rather than surviving an entire validator dispatch round to be caught
+ * only by finalize's `checkNoDuplicateMergedFindingIds`. Never namespaces
+ * or rewrites a colliding ID; a collision is always a hard rejection. */
+function checkNoDuplicateAssembledFindingIds(
+  origins: readonly MergeAssemblyOriginEntry[],
+): AdjudicationRejection | undefined {
+  const seen = new Map<string, MergeAssemblyOrigin>()
+  for (const [index, entry] of origins.entries()) {
+    const priorOrigin = seen.get(entry.finding_id)
+    if (priorOrigin !== undefined) {
+      return {
+        path: formatReviewArtifactIssuePath([
+          'merge_assembly',
+          index,
+          'finding_id',
+        ]),
+        reason: mergeFindingIdCollisionReason(priorOrigin, entry.origin),
+      }
+    }
+    seen.set(entry.finding_id, entry.origin)
+  }
+  return undefined
+}
+
 /**
  * The top-level merge phase: validates the adjudication partition, derives
  * every merged finding (one per merge group, one per declined singleton, one
@@ -1674,7 +1751,12 @@ function toMergedFindingWireShape(
  * `deriveMergedFindingFields` (for any single group or singleton) aborts
  * immediately with no partial output -- this function never accumulates
  * merged findings past the first rejection, and never calls
- * `MergeOutputSchema.parse` until every finding derived successfully.
+ * `MergeOutputSchema.parse` until every finding derived successfully. A
+ * `finding_id` collision across the three assembly sources -- a merge
+ * group's or declined singleton's model-chosen `decision_id`, or a
+ * passthrough singleton's carried-through `input_id` -- also rejects before
+ * parsing (`checkNoDuplicateAssembledFindingIds`), never silently
+ * namespaced or rewritten.
  *
  * The top-level `disagreement_facts` collects every decision's own
  * `disagreement_facts`, plus every declined decision's `declined_reason` --
@@ -1691,6 +1773,7 @@ export function applyReviewAdjudication(
   const returnedReviewers = deriveReturnedReviewers(input.prepared)
 
   const assemblies: MergedFindingAssembly[] = []
+  const assemblyOrigins: MergeAssemblyOriginEntry[] = []
   const disagreementFacts: string[] = []
 
   for (const group of validated.value.merged) {
@@ -1701,6 +1784,10 @@ export function applyReviewAdjudication(
     )
     if (!result.ok) return result
     assemblies.push(result.value)
+    assemblyOrigins.push({
+      finding_id: result.value.finding_id,
+      origin: 'merged group',
+    })
     if (group.decision.disagreement_facts) {
       disagreementFacts.push(...group.decision.disagreement_facts)
     }
@@ -1722,6 +1809,10 @@ export function applyReviewAdjudication(
     )
     if (!result.ok) return result
     assemblies.push(result.value)
+    assemblyOrigins.push({
+      finding_id: result.value.finding_id,
+      origin: 'declined decision',
+    })
     disagreementFacts.push(singleton.decision.declined_reason)
     if (singleton.decision.disagreement_facts) {
       disagreementFacts.push(...singleton.decision.disagreement_facts)
@@ -1738,7 +1829,14 @@ export function applyReviewAdjudication(
     )
     if (!result.ok) return result
     assemblies.push(result.value)
+    assemblyOrigins.push({
+      finding_id: result.value.finding_id,
+      origin: 'passthrough singleton',
+    })
   }
+
+  const collision = checkNoDuplicateAssembledFindingIds(assemblyOrigins)
+  if (collision) return { ok: false, rejection: collision }
 
   assemblies.sort(compareMergedFindingAssembly)
   disagreementFacts.sort(compareStrings)
@@ -2071,6 +2169,8 @@ type FinalizeContextRejectReason =
   | 'merged finding cites input from unavailable reviewer'
   | 'merged finding submitter not a cited reviewer'
   | 'merged finding agreement credit overlaps submitters'
+  | 'surviving finding diverges from its screened finding'
+  | 'duplicate confidence disposition'
   | 'validation must be not_attempted at finalize'
 
 export interface FinalizeContextRejection {
@@ -2095,7 +2195,9 @@ type FinalizeContextCheckResult<Value> =
 
 /** Normalizes a `selection_surface` for order-insensitive comparison: each
  * entry through `normalizeRepoRelativePath`, then sorted. `undefined` stays
- * `undefined` so an absent surface never compares equal to an empty one. */
+ * `undefined` here -- its one caller, `dispatchRecordsEqual`, applies `?? []`
+ * on both sides before comparing, so an absent surface and an explicitly
+ * empty one compare equal there (both mean "no surface"), deliberately. */
 function normalizeSelectionSurface(
   surface: readonly string[] | undefined,
 ): readonly string[] | undefined {
@@ -2419,8 +2521,9 @@ function checkScreenResultsJoin(
 /** Whether one merged finding's carried fields diverge from a fresh
  * `deriveMergedFindingFields` re-derivation over its carried survivors,
  * using the finding's own route and agreement-credit fields as the model
- * decision. Compares severity, confidence, pre_existing, fingerprint,
- * submitters, and route -- the KTD19 verifier's exact field list. */
+ * decision. Compares file, line, severity, confidence, pre_existing,
+ * fingerprint, submitters, agreement credit, and route -- the KTD19
+ * verifier's exact field list. */
 /** Whether the merged finding's carried `file` disagrees with any
  * contributing survivor's file, compared as repo-relative paths after
  * `normalizeRepoRelativePath`. */
@@ -2433,6 +2536,36 @@ function mergedFindingFileDiverges(
     (survivor) =>
       normalizeRepoRelativePath(survivor.file) !== normalizedFindingFile,
   )
+}
+
+/** Whether the merged finding's carried `line` disagrees with every
+ * contributing survivor's line -- the finalize-phase counterpart to
+ * `validateMergedDecisionConsistency`'s merge-phase rule that the
+ * representative line must be one of the group members' real lines. Without
+ * this, a tampered `line` can recompute `fingerprint` from itself and pass
+ * every other check unwitnessed. */
+function mergedFindingLineDiverges(
+  finding: MergeOutput['merged_findings'][number],
+  contributingSurvivors: readonly SurvivingFinding[],
+): boolean {
+  return !contributingSurvivors.some(
+    (survivor) => survivor.line === finding.line,
+  )
+}
+
+/** The `eligible_agreement_credit` claim to re-derive against. Only a real
+ * merge group (two or more `input_finding_ids`) can legitimately claim
+ * agreement credit -- `assembleSingletonFinding` never sets it, by
+ * construction. Feeding a single-input finding's own carried
+ * `agreement_credit` back in as its claim would let a credit that could
+ * never have been legitimately produced roundtrip as self-consistent, so a
+ * single-input finding's claim is always re-derived from nothing. */
+function eligibleAgreementCreditClaim(
+  finding: MergeOutput['merged_findings'][number],
+): readonly string[] | undefined {
+  return finding.input_finding_ids.length >= 2
+    ? finding.agreement_credit
+    : undefined
 }
 
 function mergedFindingDivergesFromDerivation(
@@ -2449,7 +2582,7 @@ function mergedFindingDivergesFromDerivation(
     contributing,
     decision: {
       line: finding.line,
-      eligible_agreement_credit: finding.agreement_credit,
+      eligible_agreement_credit: eligibleAgreementCreditClaim(finding),
       proposed_route: {
         autofix_class: finding.autofix_class,
         owner: finding.owner,
@@ -2462,6 +2595,7 @@ function mergedFindingDivergesFromDerivation(
 
   return (
     mergedFindingFileDiverges(finding, resolved) ||
+    mergedFindingLineDiverges(finding, resolved) ||
     !derivation.ok ||
     derivation.value.severity !== finding.severity ||
     derivation.value.confidence !== finding.confidence ||
@@ -2469,6 +2603,8 @@ function mergedFindingDivergesFromDerivation(
     derivation.value.fingerprint !== finding.fingerprint ||
     JSON.stringify(derivation.value.submitters) !==
       JSON.stringify(finding.submitters) ||
+    JSON.stringify(derivation.value.agreement_credit) !==
+      JSON.stringify(finding.agreement_credit ?? []) ||
     derivation.value.route.autofix_class !== finding.autofix_class ||
     derivation.value.route.owner !== finding.owner ||
     derivation.value.route.requires_verification !==
@@ -2505,27 +2641,87 @@ function checkMergedFindingsMatchDerivation(
   return undefined
 }
 
+/** Rejects a `prepared.confidence_dispositions` array containing more than
+ * one entry for the same input ID. A duplicate silently double-counts in
+ * `computeDispositionCounts` and produces two identical ledger rows in
+ * `buildAdmittedLedgerRows` -- writing mode currently only catches this
+ * late, via `ReviewArtifactSchema`'s generic `input_findings` referential
+ * check, and report-only mode does not catch it at all. This check names
+ * the real cause in both modes. */
+function checkNoDuplicateConfidenceDispositions(
+  confidenceDispositions: PrepareOutput['confidence_dispositions'],
+): FinalizeContextRejection | undefined {
+  const seen = new Set<string>()
+  for (const [index, entry] of confidenceDispositions.entries()) {
+    if (seen.has(entry.input_id)) {
+      return {
+        path: formatReviewArtifactIssuePath([
+          'prepared',
+          'confidence_dispositions',
+          index,
+          'input_id',
+        ]),
+        reason: 'duplicate confidence disposition',
+      }
+    }
+    seen.add(entry.input_id)
+  }
+  return undefined
+}
+
 /** Every `prepared.confidence_dispositions` entry must resolve to exactly one
  * screened finding across `screen_results[].result.admitted_findings`,
  * matched by input ID. Screen is the only phase that mints an input ID from
  * a real reviewer payload; a disposition with no matching screened finding
  * (or more than one, which would mean a duplicate mint) names evidence that
- * was never actually screened and must never be admitted to the ledger. */
+ * was never actually screened and must never be admitted to the ledger.
+ * Every `prepared.surviving_findings` entry must also carry the same
+ * `reviewer`, `confidence`, `file`, `line`, and `severity` as the screened
+ * finding that minted its input ID -- `prepare` only ever narrows a
+ * screened finding down to a survivor, so any divergence between the two
+ * records means the survivor's data was laundered after screening, which
+ * would otherwise go undetected: every downstream ownership decision
+ * (`deriveSubmitters`, `findUnavailableCitedReviewer`,
+ * `buildAdmittedReviewerIndex`, `deriveRiskCoverage`'s cross-persona test)
+ * trusts the survivor's carried fields rather than re-resolving them. */
 function checkConfidenceDispositionsResolveScreenedFindings(
-  confidenceDispositions: PrepareOutput['confidence_dispositions'],
+  prepared: Pick<
+    PrepareOutput,
+    'confidence_dispositions' | 'surviving_findings'
+  >,
   screenResults: FinalizeScreenResults,
 ): FinalizeContextRejection | undefined {
   const screenedCounts = new Map<string, number>()
+  const screenedByInputId = new Map<
+    string,
+    {
+      readonly reviewer: string
+      readonly confidence: number
+      readonly file: string
+      readonly line: number
+      readonly severity: SurvivingFinding['severity']
+    }
+  >()
   for (const result of screenResults) {
     for (const finding of result.result.admitted_findings) {
       screenedCounts.set(
         finding.input_id,
         (screenedCounts.get(finding.input_id) ?? 0) + 1,
       )
+      screenedByInputId.set(finding.input_id, {
+        reviewer: result.reviewer,
+        confidence: finding.confidence,
+        file: finding.file,
+        line: finding.line,
+        severity: finding.severity,
+      })
     }
   }
 
-  for (const [index, disposition] of confidenceDispositions.entries()) {
+  for (const [
+    index,
+    disposition,
+  ] of prepared.confidence_dispositions.entries()) {
     if (screenedCounts.get(disposition.input_id) !== 1) {
       return {
         path: formatReviewArtifactIssuePath([
@@ -2538,6 +2734,33 @@ function checkConfidenceDispositionsResolveScreenedFindings(
       }
     }
   }
+
+  for (const [index, survivor] of prepared.surviving_findings.entries()) {
+    // The confidence-dispositions loop above already rejects any input ID
+    // that does not resolve to exactly one screened finding, and every
+    // survivor's input ID is mirrored into `confidence_dispositions` by
+    // construction, so `screened` always resolves once that loop passes.
+    const screened = screenedByInputId.get(survivor.input_id)
+    if (
+      screened !== undefined &&
+      (screened.reviewer !== survivor.reviewer ||
+        screened.confidence !== survivor.confidence ||
+        normalizeRepoRelativePath(screened.file) !==
+          normalizeRepoRelativePath(survivor.file) ||
+        screened.line !== survivor.line ||
+        screened.severity !== survivor.severity)
+    ) {
+      return {
+        path: formatReviewArtifactIssuePath([
+          'prepared',
+          'surviving_findings',
+          index,
+        ]),
+        reason: 'surviving finding diverges from its screened finding',
+      }
+    }
+  }
+
   return undefined
 }
 
@@ -2803,9 +3026,16 @@ export function deriveFinalizeContext(
   )
   if (derivationViolation) return { ok: false, rejection: derivationViolation }
 
+  const duplicateDispositionViolation = checkNoDuplicateConfidenceDispositions(
+    input.prepared.confidence_dispositions,
+  )
+  if (duplicateDispositionViolation) {
+    return { ok: false, rejection: duplicateDispositionViolation }
+  }
+
   const dispositionJoinViolation =
     checkConfidenceDispositionsResolveScreenedFindings(
-      input.prepared.confidence_dispositions,
+      input.prepared,
       input.screen_results,
     )
   if (dispositionJoinViolation) {
@@ -2880,9 +3110,13 @@ export interface RejectedPayloadWeight {
 /** Every admitted-plus-rejected disposition count, weighted by findings
  * observed rather than by ledger rows. `rejected` sums every
  * `RejectedPayloadWeight.rejected_finding_count`; the other four fields each
- * count one `FinalizedInputDisposition` entry. The five fields always sum to
- * the total findings observed (admitted inputs plus rejected weight) --
- * verified by the caller, since this module never asserts its own output. */
+ * count one `FinalizedInputDisposition` entry, excluding any entry owned by
+ * a `validation_unavailable` persona -- the same exclusion
+ * `buildAdmittedLedgerRows` applies to the ledger, so the four admitted-
+ * weight fields always sum to the admitted row count in the ledger
+ * `finalizeReview` builds alongside it. That invariant is asserted by
+ * `checkDispositionCountsReconcileLedger` in `finalizeReview`, not left
+ * aspirational. */
 export interface FinalDispositionCounts {
   readonly surviving: number
   readonly merged: number
@@ -2900,10 +3134,19 @@ export interface FinalDispositionCounts {
  * validated. */
 export type FindingActionRoute = 'fixer' | 'residual' | 'report_only'
 
-/** One finding placed in an action queue. `unconfirmed` is `true` when the
- * finding's validator run failed or was unavailable -- nobody disproved it,
- * so it stays actionable, but a later slice needs to know it was never
- * confirmed either. */
+/** One finding placed in an action queue, or reported via `new_findings` /
+ * `pre_existing_findings` outside any queue. A finding whose validator run
+ * failed or was unavailable (present in `reconciled.lifecycle_failures`) is
+ * excluded from every action queue entirely -- nobody disproved it, but
+ * nobody confirmed it either, so `partitionFindings` will not auto-action
+ * it. It still surfaces through `new_findings` (or `pre_existing_findings`)
+ * with `unconfirmed: true`, and `reconcileValidatorResults`'s degraded
+ * validator lifecycle keeps the run from reaching a clean verdict
+ * (`deriveVerdict`'s `validator lifecycle degraded` blocking reason). As a
+ * consequence, `unconfirmed` is always `false` on every entry actually
+ * placed in `queues.fixer` / `queues.residual` / `queues.report_only` --
+ * see `partitionFindings`'s `an unconfirmed finding never enters an action
+ * queue` test. */
 export interface QueuedFinding {
   readonly finding_id: string
   readonly unconfirmed: boolean
@@ -2922,6 +3165,8 @@ export interface FinalizeReviewDispositionsInput {
   readonly prepared: PrepareOutput
   readonly reconciled: ReconcileValidatorResultsOutput
   readonly rejected_payloads: readonly RejectedPayloadWeight[]
+  readonly screen_results: FinalizeScreenResults
+  readonly dispatch_records: FinalizeDispatchRecords
 }
 
 export interface FinalizeReviewDispositionsOutput {
@@ -2969,11 +3214,18 @@ type DeriveInputDispositionsResult =
  * confidence-gate survivor into exactly one merge group or singleton -- a
  * surviving disposition whose finding cannot be found is a data-integrity
  * violation between the carried `prepared` and `reconciled` state, and
- * rejects rather than silently defaulting to `surviving`.
+ * rejects rather than silently defaulting to `surviving`. An entry whose
+ * owning reviewer (resolved via `reviewerIndex`) belongs to
+ * `unavailablePersonas` is skipped entirely -- withheld evidence is neither
+ * admitted nor rejected (KTD21), the same exclusion `buildAdmittedLedgerRows`
+ * applies to the ledger, so this list and the ledger always describe the
+ * same row set.
  */
 function deriveInputDispositions(
   prepared: PrepareOutput,
   reconciled: ReconcileValidatorResultsOutput,
+  reviewerIndex: ReadonlyMap<string, string>,
+  unavailablePersonas: ReadonlySet<string>,
 ): DeriveInputDispositionsResult {
   const filteredInputIds = new Set(reconciled.filtered_input_ids)
   const findingByInputId = new Map<string, ReconciledFinding>()
@@ -2985,6 +3237,8 @@ function deriveInputDispositions(
 
   const dispositions: FinalizedInputDisposition[] = []
   for (const [index, entry] of prepared.confidence_dispositions.entries()) {
+    const reviewer = reviewerIndex.get(entry.input_id)
+    if (reviewer !== undefined && unavailablePersonas.has(reviewer)) continue
     if (entry.disposition === 'suppressed') {
       dispositions.push({
         input_id: entry.input_id,
@@ -3148,9 +3402,18 @@ function partitionFindings(
 export function finalizeReviewDispositions(
   input: FinalizeReviewDispositionsInput,
 ): FinalizeReviewDispositionsResult {
+  const reviewerIndex = buildAdmittedReviewerIndex(
+    input.prepared,
+    input.screen_results,
+  )
+  const unavailablePersonas = buildValidationUnavailablePersonas(
+    input.dispatch_records,
+  )
   const inputDispositionsResult = deriveInputDispositions(
     input.prepared,
     input.reconciled,
+    reviewerIndex,
+    unavailablePersonas,
   )
   if (!inputDispositionsResult.ok) return inputDispositionsResult
 
@@ -3481,6 +3744,8 @@ export interface RunReviewPipelineInput {
   readonly rejected_payloads: readonly RejectedPayloadWeight[]
   readonly lost_risk_critical_personas: readonly LostRiskCriticalPersona[]
   readonly plan_assessment: RoutePlanAssessmentInput
+  readonly screen_results: FinalizeScreenResults
+  readonly dispatch_records: FinalizeDispatchRecords
 }
 
 /** One fact that withheld a clean verdict. Each `kind` is a distinct,
@@ -3602,6 +3867,8 @@ export function runReviewPipeline(
     prepared: input.prepared,
     reconciled: reconciled.value,
     rejected_payloads: input.rejected_payloads,
+    screen_results: input.screen_results,
+    dispatch_records: input.dispatch_records,
   })
   if (!finalized.ok) return finalized
 
@@ -4086,6 +4353,7 @@ type FinalizeReviewRejection =
   | FinalizeReviewDispositionsRejection
   | BuildReviewCoverageRejection
   | RiskCoverageSemanticsRejection
+  | DispositionLedgerReconciliationRejection
   | {
       readonly path: string
       readonly reason: 'artifact failed schema validation'
@@ -4276,6 +4544,59 @@ export function checkRiskCoverageSemantics(
   return { ok: true }
 }
 
+interface DispositionLedgerReconciliationRejection {
+  readonly path: string
+  readonly reason: 'disposition counts do not reconcile with the admitted input ledger'
+}
+
+type DispositionLedgerReconciliationResult =
+  | { readonly ok: true }
+  | {
+      readonly ok: false
+      readonly rejection: DispositionLedgerReconciliationRejection
+    }
+
+/**
+ * Defensive pipeline-side assertion that `disposition_counts`' four
+ * admitted-weight fields (`surviving` + `merged` + `suppressed` +
+ * `filtered`) sum to the number of `record_type: 'admitted'` rows in the
+ * independently-derived input ledger -- the documented invariant on
+ * `FinalDispositionCounts` ("the five fields always sum to the total
+ * findings observed"), restated here as the actual verifier instead of left
+ * aspirational. `disposition_counts` (via `deriveInputDispositions`) and
+ * the ledger (via `buildAdmittedLedgerRows`) both exclude
+ * `validation_unavailable` personas by construction, so this should never
+ * trip in a correctly wired pipeline; it exists to catch a future
+ * regression that lets the two derivations drift apart, the same role
+ * `checkRiskCoverageSemantics` plays for risk coverage. Never reads
+ * `process.env`, the filesystem, or the clock.
+ */
+export function checkDispositionCountsReconcileLedger(
+  dispositionCounts: FinalDispositionCounts,
+  ledger: readonly InputLedgerRow[],
+): DispositionLedgerReconciliationResult {
+  const admittedLedgerRowCount = ledger.filter(
+    (row) => row.record_type === 'admitted',
+  ).length
+  const dispositionAdmittedSum =
+    dispositionCounts.surviving +
+    dispositionCounts.merged +
+    dispositionCounts.suppressed +
+    dispositionCounts.filtered
+
+  if (dispositionAdmittedSum !== admittedLedgerRowCount) {
+    return {
+      ok: false,
+      rejection: {
+        path: formatReviewArtifactIssuePath(['disposition_counts']),
+        reason:
+          'disposition counts do not reconcile with the admitted input ledger',
+      },
+    }
+  }
+  return { ok: true }
+}
+
 /** Strips `finding_id` (a helper-only field with no artifact leaf) from
  * every risk-coverage derivation and omits the field entirely when there is
  * no lost risk-critical persona to report -- never an empty array. */
@@ -4367,6 +4688,8 @@ export function finalizeReview(
     rejected_payloads: context.value.rejected_payloads,
     lost_risk_critical_personas: context.value.lost_risk_critical_personas,
     plan_assessment: input.plan_assessment,
+    screen_results: input.screen_results,
+    dispatch_records: input.dispatch_records,
   })
   if (!pipeline.ok) return pipeline
 
@@ -4433,6 +4756,12 @@ export function finalizeReview(
     finalized: pipeline.value.finalized,
     reconciled: pipeline.value.reconciled,
   })
+
+  const dispositionReconciliation = checkDispositionCountsReconcileLedger(
+    pipeline.value.finalized.disposition_counts,
+    ledger,
+  )
+  if (!dispositionReconciliation.ok) return dispositionReconciliation
 
   const artifact = {
     schema_version: 1 as const,

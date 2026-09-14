@@ -446,10 +446,12 @@ const PIPELINE_SECURITY_MALFORMED_PAYLOAD =
 
 const PIPELINE_CORRECTNESS_SCREEN = screenReviewReturn({
   expected_reviewer: 'correctness',
+  invoking_harness: 'opencode',
   raw_return: PIPELINE_CORRECTNESS_RETURN,
 })
 const PIPELINE_MAINTAINABILITY_SCREEN = screenReviewReturn({
   expected_reviewer: 'maintainability',
+  invoking_harness: 'opencode',
   raw_return: PIPELINE_MAINTAINABILITY_RETURN,
 })
 // Constructed directly, never through `screenReviewReturn`: the real `screen`
@@ -460,6 +462,7 @@ const PIPELINE_MAINTAINABILITY_SCREEN = screenReviewReturn({
 const PIPELINE_SECURITY_SCREEN = {
   admitted_findings: [],
   dispatch_outcome: 'malformed',
+  harness: 'opencode',
   residual_risks: [],
   testing_gaps: [],
 }
