@@ -837,6 +837,17 @@ which adds only contracts and a generated reference.
 
 - [ ] **Unit 5: Finalize validator outcomes, queues, coverage, and artifact**
 
+  Partially landed. Complete: validator lifecycle reconciliation, final
+  dispositions and weighted counts, action queues, risk-critical replacement
+  coverage, plan-assessment routing, and `runReviewPipeline`, which composes
+  those and derives the verdict with typed blocking reasons. Remaining: the
+  writing-mode artifact assembly and the report-only projection
+  (`finalizeReview`), then the `finalize` subcommand.
+
+  A brief for the remaining artifact work must inline the `ReviewArtifactSchema`
+  field list. Three dispatches died reading that 771-line schema to discover what
+  to populate.
+
   **Files:**
   - Extend `src/lib/review-pipeline.ts`.
   - Add `tests/unit/review-pipeline-finalize.test.ts`.
