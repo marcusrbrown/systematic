@@ -130,6 +130,7 @@ This fails because: no pipe-delimited tables, no severity-grouped `###` headers,
 - **Route column** shows the synthesized handling decision as ``<autofix_class> -> <owner>``.
 - **Header includes** scope, intent, and reviewer team with per-conditional justifications
 - **Mode line** -- include `interactive`, `autofix`, `report-only`, or `headless`
+- **Requirements Completeness section** -- include only when a plan was found in Stage 2b. Render the met/not-addressed/partially-addressed checklist, then list the plan-assessment routing output as its own bullet lists: `explicit_unmet_requirement` results appear as `report.residual_actionable_work` bullets (they gate the verdict); `inferred_gap` results appear as `report.advisory_outputs` bullets (they never gate the verdict alone). Neither kind is a finding -- they never gain a file, line, reviewer, confidence, or route, and never appear in a severity table. Omit the section entirely when no plan was found.
 - **Applied Fixes section** -- include only when a fix phase ran in this review invocation
 - **Residual Actionable Work section** -- include only when unresolved actionable findings were handed off for later work
 - **Pre-existing section** -- separate table, no confidence column (these are informational)
@@ -137,7 +138,7 @@ This fails because: no pipe-delimited tables, no severity-grouped `###` headers,
 - **Learnings & Past Solutions section** -- render only when CE `learnings-researcher` was selected and returned relevant output; results with links to docs/solutions/ files. Omit otherwise.
 - **Agent-Native Gaps section** -- render only when CE `agent-native-reviewer` was selected and returned relevant output. Omit otherwise.
 - **Deployment Notes section** -- key checklist items from deployment-verification-agent. Omit if the agent did not run.
-- **Coverage section** -- suppressed count with original confidences, residual risks, testing gaps, failed reviewers, disposition reconciliation, and risk-coverage entries with their citing input finding IDs and blocked-entry exit conditions. For raw returns, distinguish `findings`, `empty`, `malformed`, `never_returned`, `validation_unavailable` (the persisted raw dispatch outcome, distinct from the artifact-level `validation.status: "unavailable"`), and `environment-screen` rejection, and state what was admitted or withheld
+- **Coverage section** -- suppressed count with original confidences, residual risks, testing gaps, failed reviewers, disposition reconciliation, and risk-coverage entries with their citing input finding IDs and blocked-entry exit conditions. For raw returns, distinguish `findings`, `empty`, `malformed`, `never_returned`, and `validation_unavailable` (the persisted raw dispatch outcome, distinct from the artifact-level `validation.status: "unavailable"`), and state what was admitted or withheld
 - **Summary uses blockquotes** for verdict, reasoning, and fix order
 - **Horizontal rule** (`---`) separates findings from verdict
 - **`###` headers** for each section -- never plain text headers

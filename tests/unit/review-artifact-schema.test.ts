@@ -1058,30 +1058,6 @@ describe('review artifact schema', () => {
           },
         ],
       }),
-      // Satisfied risk coverage cites evidence outside the lost surface.
-      artifactWith({
-        dispatches: [
-          {
-            persona: 'correctness',
-            dispatch_outcome: 'findings',
-            input_finding_count: 1,
-          },
-          {
-            persona: 'security',
-            dispatch_outcome: 'malformed',
-            input_finding_count: 0,
-            rejection_reason: 'The persona return failed schema validation.',
-            selection_surface: ['src/auth.ts'],
-          },
-        ],
-        risk_coverage: [
-          {
-            persona: 'security',
-            satisfied: true,
-            input_finding_id: 'correctness#1',
-          },
-        ],
-      }),
       // Satisfied risk coverage cites the lost persona's own evidence.
       artifactWith({
         dispatches: [
@@ -2151,7 +2127,7 @@ describe('referential integrity across the artifact ledger and synthesis', () =>
     }
   })
 
-  test('rejects a satisfied risk-coverage citation outside the lost persona selection surface', () => {
+  test('accepts a satisfied risk-coverage citation outside the lost persona selection surface (surface agreement is a pipeline rule, not a schema rule)', () => {
     const result = ReviewArtifactSchema.safeParse(
       artifactWith({
         dispatches: [
@@ -2178,19 +2154,10 @@ describe('referential integrity across the artifact ledger and synthesis', () =>
       }),
     )
 
-    expect(result.success).toBe(false)
-    if (!result.success) {
-      expect(
-        result.error.issues.some(
-          (issue) =>
-            issue.path.join('.') === 'risk_coverage.0.input_finding_id' &&
-            issue.message === REVIEW_ARTIFACT_CUSTOM_MESSAGES[18],
-        ),
-      ).toBe(true)
-    }
+    expect(result.success).toBe(true)
   })
 
-  test('rejects a satisfied risk-coverage citation backed only by a non-validated finding', () => {
+  test('accepts a satisfied risk-coverage citation backed only by a non-validated finding (validation-band agreement is a pipeline rule, not a schema rule)', () => {
     const result = ReviewArtifactSchema.safeParse(
       artifactWith({
         dispatches: [
@@ -2224,16 +2191,153 @@ describe('referential integrity across the artifact ledger and synthesis', () =>
       }),
     )
 
-    expect(result.success).toBe(false)
-    if (!result.success) {
-      expect(
-        result.error.issues.some(
-          (issue) =>
-            issue.path.join('.') === 'risk_coverage.0.input_finding_id' &&
-            issue.message === REVIEW_ARTIFACT_CUSTOM_MESSAGES[18],
-        ),
-      ).toBe(true)
-    }
+    expect(result.success).toBe(true)
+  })
+
+  test('accepts a satisfied risk-coverage citation whose in-band cited finding has no explicit validation (validation-band agreement is a pipeline rule, not a schema rule)', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'findings',
+            input_finding_count: 1,
+          },
+          {
+            persona: 'security',
+            dispatch_outcome: 'malformed',
+            input_finding_count: 0,
+            rejection_reason: 'The persona return failed schema validation.',
+            selection_surface: ['src/auth.ts'],
+          },
+        ],
+        findings: [
+          findingCiting(['correctness#1'], ['correctness'], {
+            file: 'src/auth.ts',
+            validated: undefined,
+            validation_reason: undefined,
+          }),
+        ],
+        risk_coverage: [
+          {
+            persona: 'security',
+            satisfied: true,
+            input_finding_id: 'correctness#1',
+          },
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(true)
+  })
+
+  test('accepts a satisfied risk-coverage citation whose in-band cited finding is explicitly validated true', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'findings',
+            input_finding_count: 1,
+          },
+          {
+            persona: 'security',
+            dispatch_outcome: 'malformed',
+            input_finding_count: 0,
+            rejection_reason: 'The persona return failed schema validation.',
+            selection_surface: ['src/auth.ts'],
+          },
+        ],
+        findings: [
+          findingCiting(['correctness#1'], ['correctness'], {
+            file: 'src/auth.ts',
+          }),
+        ],
+        risk_coverage: [
+          {
+            persona: 'security',
+            satisfied: true,
+            input_finding_id: 'correctness#1',
+          },
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(true)
+  })
+
+  test('accepts a satisfied risk-coverage citation whose out-of-band cited finding has no explicit validation', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'findings',
+            input_finding_count: 1,
+          },
+          {
+            persona: 'security',
+            dispatch_outcome: 'malformed',
+            input_finding_count: 0,
+            rejection_reason: 'The persona return failed schema validation.',
+            selection_surface: ['src/auth.ts'],
+          },
+        ],
+        findings: [
+          findingCiting(['correctness#1'], ['correctness'], {
+            file: 'src/auth.ts',
+            severity: 'P3',
+            requires_verification: false,
+            validated: undefined,
+            validation_reason: undefined,
+          }),
+        ],
+        risk_coverage: [
+          {
+            persona: 'security',
+            satisfied: true,
+            input_finding_id: 'correctness#1',
+          },
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(true)
+  })
+
+  test('accepts a satisfied risk-coverage citation whose surface normalizes to the same path as the cited finding', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        dispatches: [
+          {
+            persona: 'correctness',
+            dispatch_outcome: 'findings',
+            input_finding_count: 1,
+          },
+          {
+            persona: 'security',
+            dispatch_outcome: 'malformed',
+            input_finding_count: 0,
+            rejection_reason: 'The persona return failed schema validation.',
+            selection_surface: ['src/auth.ts'],
+          },
+        ],
+        findings: [
+          findingCiting(['correctness#1'], ['correctness'], {
+            file: './src/auth.ts',
+          }),
+        ],
+        risk_coverage: [
+          {
+            persona: 'security',
+            satisfied: true,
+            input_finding_id: 'correctness#1',
+          },
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(true)
   })
 
   test('rejects nonexistent and unavailable agreement_credit personas', () => {
@@ -2405,7 +2509,7 @@ describe('referential integrity across the artifact ledger and synthesis', () =>
         result.error.issues.some(
           (issue) =>
             issue.path.join('.') === 'risk_coverage.0.input_finding_id' &&
-            issue.message === REVIEW_ARTIFACT_CUSTOM_MESSAGES[19],
+            issue.message === REVIEW_ARTIFACT_CUSTOM_MESSAGES[18],
         ),
       ).toBe(true)
     }

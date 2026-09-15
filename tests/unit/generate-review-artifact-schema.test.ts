@@ -2,8 +2,10 @@ import { describe, expect, test } from 'bun:test'
 import fs from 'node:fs'
 import path from 'node:path'
 import {
+  generatePipelineSchemaContent,
   generateSchemaContent,
   normalizeForCompare,
+  PIPELINE_SCHEMA_RELATIVE_PATH,
   REVIEW_SCHEMA_RELATIVE_PATH,
   REVIEW_SCHEMA_TARGETS,
 } from '../../scripts/generate-review-artifact-schema.js'
@@ -146,17 +148,30 @@ describe('review artifact schema generator', () => {
     expect(output(result)).toContain(FINDINGS_SCHEMA_RELATIVE_PATH)
   })
 
-  test('owns exactly the two ce:review schemas and isolates document-review', () => {
+  test('owns exactly the three ce:review schemas and isolates document-review', () => {
     const targets = REVIEW_SCHEMA_TARGETS.map((target) => target.relativePath)
 
     expect(targets).toEqual([
       'skills/ce-review/references/review-summary-schema.json',
       'skills/ce-review/references/findings-schema.json',
+      PIPELINE_SCHEMA_RELATIVE_PATH,
     ])
     expect(targets).not.toContain(
       'skills/document-review/references/findings-schema.json',
     )
     expect(generateSchemaContent()).not.toContain('document-review')
+  })
+
+  test('the generated pipeline schema excludes helper-produced internal phase state', () => {
+    const pipelineSchema = JSON.parse(generatePipelineSchemaContent()) as {
+      readonly definitions: Record<string, unknown>
+    }
+    const definitionNames = Object.keys(pipelineSchema.definitions)
+
+    expect(definitionNames).not.toContain('screenOutput')
+    expect(definitionNames).not.toContain('prepareOutput')
+    expect(definitionNames).not.toContain('mergeOutput')
+    expect(definitionNames).not.toContain('finalizeOutput')
   })
 
   test('keeps the shared final-v1 safe-integer line bound in both committed schemas', () => {

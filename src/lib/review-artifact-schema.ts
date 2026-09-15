@@ -3,10 +3,14 @@ import { z } from 'zod'
 const MAX_REVIEWER_LENGTH = 64
 const MAX_RUN_ID_LENGTH = 64
 const MAX_BRANCH_LENGTH = 256
-const MAX_INPUT_ID_LENGTH = 128
-const MAX_REASON_LENGTH = 2048
-const MAX_FINDINGS = 32
-const MAX_PERSONAS = 64
+
+// Exported for reuse by `review-pipeline-contract.ts`, which composes its
+// screen/prepare envelopes from these same bounds so a change here propagates
+// to the pipeline contract instead of drifting behind a duplicated literal.
+export const MAX_INPUT_ID_LENGTH = 128
+export const MAX_REASON_LENGTH = 2048
+export const MAX_FINDINGS = 32
+export const MAX_PERSONAS = 64
 
 export const REVIEW_ARTIFACT_CUSTOM_MESSAGES = [
   'severity count must match rejected finding count',
@@ -27,7 +31,6 @@ export const REVIEW_ARTIFACT_CUSTOM_MESSAGES = [
   'provenance.agreement_credit must not contain duplicate reviewers',
   'provenance.agreement_credit must not overlap provenance.submitters',
   'provenance.agreement_credit requires an eligible returned persona with admitted evidence',
-  'satisfied risk coverage must cite a validated finding on the lost persona selection surface',
   'satisfied risk coverage must cite an admitted ledger row owned by another persona',
 ] as const
 
@@ -81,7 +84,7 @@ const BranchSchema = z.string().max(MAX_BRANCH_LENGTH)
 const HeadShaSchema = z.string().regex(/^[0-9a-f]{40}$/)
 const CompletedAtSchema = z.iso.datetime({ offset: false })
 const ReasonSchema = boundedText(MAX_REASON_LENGTH)
-const RISK_CRITICAL_PERSONAS = [
+export const RISK_CRITICAL_PERSONAS = [
   'security',
   'data-migrations',
   'api-contract',
@@ -90,7 +93,17 @@ const RISK_CRITICAL_PERSONAS = [
 ] as const
 const RiskCriticalPersonaSchema = z.enum(RISK_CRITICAL_PERSONAS)
 const FindingTitleSchema = boundedText(256)
-const SeveritySchema = z.enum(['P0', 'P1', 'P2', 'P3', 'unknown'] as const)
+// Exported for reuse by `review-pipeline-contract.ts`, which extracts
+// rejected-severity classifications and carries a merged finding's severity
+// across the pipeline wire using this same bounded enum rather than
+// restating it.
+export const SeveritySchema = z.enum([
+  'P0',
+  'P1',
+  'P2',
+  'P3',
+  'unknown',
+] as const)
 const FindingSeveritySchema = SeveritySchema.exclude(['unknown'])
 const AutofixClassSchema = z.enum([
   'safe_auto',
@@ -158,7 +171,10 @@ export const InputFindingSchema = z.discriminatedUnion('record_type', [
   RejectedInputFindingSchema,
 ])
 
-const ProvenanceSchema = z
+// Exported for reuse by `review-pipeline-contract.ts`, which carries a
+// merged finding's `fingerprint` and `submitters` across the pipeline wire
+// using these same leaves rather than restating their bounds.
+export const ProvenanceSchema = z
   .object({
     fingerprint: boundedText(512),
     submitters: z.array(ReviewerSchema).max(MAX_PERSONAS),
@@ -597,29 +613,12 @@ export const ReviewArtifactSchema = z
 
       // Satisfied coverage must come from another persona: a lost risk-critical
       // persona cannot clear its own surface with its own surviving evidence
-      // while part of its return was rejected or withheld.
+      // while part of its return was rejected or withheld. Semantic checks --
+      // validation-band and selection-surface agreement -- are pipeline rules
+      // enforced by `checkRiskCoverageSemantics` in `review-pipeline.ts`
+      // before this schema ever parses a writing-mode artifact; this
+      // structural schema stays limited to referential integrity.
       if (owner === coverage.persona) {
-        ctx.addIssue({
-          code: 'custom',
-          path: ['risk_coverage', coverageIndex, 'input_finding_id'],
-          message: REVIEW_ARTIFACT_CUSTOM_MESSAGES[19],
-        })
-        return
-      }
-
-      // The citation must resolve to a validated synthesized finding whose file
-      // belongs to the failed persona's recorded selection surface.
-      const lostDispatch = artifact.dispatches.find(
-        (dispatch) => dispatch.persona === coverage.persona,
-      )
-      const surface = lostDispatch?.selection_surface ?? []
-      const covered = artifact.findings.some(
-        (finding) =>
-          finding.input_finding_ids.includes(citedId) &&
-          finding.validated !== false &&
-          surface.includes(finding.file),
-      )
-      if (!covered) {
         ctx.addIssue({
           code: 'custom',
           path: ['risk_coverage', coverageIndex, 'input_finding_id'],
