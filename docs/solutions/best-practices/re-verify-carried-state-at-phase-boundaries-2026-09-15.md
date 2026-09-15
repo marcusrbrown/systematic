@@ -66,12 +66,18 @@ counts disagreed with its own ledger.
    lets a duplicated persona mask a lost one. Missing, duplicate, and extra members
    must each fail, with distinguishable reasons.
 
-5. **"By construction" is not an argument available to a verifier.** A verifier exists
-   because its input is untrusted. A guard that skips its comparison when the
-   corroborating record is absent — justified by a comment asserting the record is
-   always present — is circular: absence is exactly what a fabricated identifier
-   produces. Absent evidence is a rejection, not a no-op, and it deserves a reason
-   distinct from "the values disagree".
+5. **"By construction" is not an argument available to a verifier — about its input.**
+   A verifier exists because its input is untrusted. A guard that skips its comparison
+   when the corroborating record is absent — justified by a comment asserting the
+   record is always present — is circular: absence is exactly what a fabricated
+   identifier produces. Absent evidence is a rejection, not a no-op, and it deserves a
+   reason distinct from "the values disagree".
+
+   Note the boundary against rule 3, which looks like the opposite advice. A
+   by-construction fact about *local producer code you control* is admissible when it
+   is used to **refuse** a claim outright — that is strictly stronger than comparing
+   it. The same reasoning about *carried input* is inadmissible when it is used to
+   **skip** a comparison. Refusing is verification; skipping is trust.
 
 6. **If two derivations must reconcile, enforce it at both ends and assert it.** Apply
    the same inclusion and exclusion rules to each derivation, then add a real
