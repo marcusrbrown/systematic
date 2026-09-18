@@ -342,6 +342,12 @@
             "maxLength": 2048,
             "pattern": "\\S"
           },
+          "route_narrowing_reason": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 2048,
+            "pattern": "\\S"
+          },
           "input_finding_ids": {
             "minItems": 1,
             "maxItems": 32,

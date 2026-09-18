@@ -1445,6 +1445,7 @@ interface MergedFindingAssembly {
   readonly autofix_class: PipelineRoute['autofix_class']
   readonly owner: PipelineRoute['owner']
   readonly requires_verification: boolean
+  readonly route_narrowing_reason?: string
 }
 
 type AssembleFindingResult =
@@ -1461,6 +1462,7 @@ function assemblyFromDerivation(
     readonly evidence: SurvivingFinding['evidence']
     readonly suggested_fix: SurvivingFinding['suggested_fix']
     readonly input_finding_ids: readonly string[]
+    readonly route_narrowing_reason?: string
   },
   derived: DerivedMergedFindingFields,
 ): MergedFindingAssembly {
@@ -1523,6 +1525,10 @@ function assembleMergedGroupFinding(
         evidence: decision.evidence,
         suggested_fix: decision.suggested_fix,
         input_finding_ids: sortedInputIds,
+        route_narrowing_reason:
+          decision.proposed_route !== undefined
+            ? decision.route_narrowing_reason
+            : undefined,
       },
       derived.value,
     ),
@@ -1572,6 +1578,10 @@ function assembleSingletonFinding(
         evidence: finding.evidence,
         suggested_fix: finding.suggested_fix,
         input_finding_ids: [finding.input_id],
+        route_narrowing_reason:
+          decisionFields.proposed_route !== undefined
+            ? decisionFields.route_narrowing_reason
+            : undefined,
       },
       derived.value,
     ),
@@ -1673,6 +1683,9 @@ function toMergedFindingWireShape(
     submitters: [...assembly.submitters],
     ...(assembly.agreement_credit
       ? { agreement_credit: [...assembly.agreement_credit] }
+      : {}),
+    ...(assembly.route_narrowing_reason !== undefined
+      ? { route_narrowing_reason: assembly.route_narrowing_reason }
       : {}),
   }
 }
@@ -2165,6 +2178,7 @@ type FinalizeContextRejectReason =
   | 'unexpected screen result for persona'
   | 'screen result outcome does not match dispatch record'
   | 'merged finding fields diverge from derivation'
+  | 'merged finding route narrowing reason mismatch'
   | 'confidence disposition references unscreened finding'
   | 'merged finding cites input from unavailable reviewer'
   | 'merged finding submitter not a cited reviewer'
@@ -2569,27 +2583,57 @@ function eligibleAgreementCreditClaim(
     : undefined
 }
 
+/** Whether a merged finding's carried route is strictly narrower than the
+ * route meet over its contributing survivors -- field-by-field, matching
+ * `deriveRouteMeet`'s per-field ordering rather than re-deriving it. */
+function mergedFindingRouteNarrowed(
+  finding: MergeOutput['merged_findings'][number],
+  meet: PipelineRoute,
+): boolean {
+  return (
+    finding.autofix_class !== meet.autofix_class ||
+    finding.owner !== meet.owner ||
+    finding.requires_verification !== meet.requires_verification
+  )
+}
+
+/** KTD19 verifier: the carried `route_narrowing_reason` and the carried
+ * route must agree. A route strictly narrower than the meet over
+ * contributing survivors requires a reason (the merge-phase `deriveRoute`
+ * rule, now checked against the real carried reason instead of a fabricated
+ * one); a route equal to the meet must not carry one -- a reason with no
+ * narrowing is a false provenance claim. */
+function mergedFindingRouteReasonMismatch(
+  finding: MergeOutput['merged_findings'][number],
+  meet: PipelineRoute,
+): boolean {
+  return mergedFindingRouteNarrowed(finding, meet)
+    ? finding.route_narrowing_reason === undefined
+    : finding.route_narrowing_reason !== undefined
+}
+
 function mergedFindingDivergesFromDerivation(
   finding: MergeOutput['merged_findings'][number],
-  contributingByFindingId: ReadonlyMap<string, readonly SurvivingFinding[]>,
+  resolved: readonly SurvivingFinding[],
+  contributing: MergeContributingFindings,
+  meet: PipelineRoute,
   returnedReviewers: readonly string[],
 ): boolean {
-  const resolved = contributingByFindingId.get(finding.finding_id) ?? []
-  const contributing = toContributingTuple(
-    resolved.length >= 2 ? resolved : [...resolved, ...resolved],
-  )
+  const narrowed = mergedFindingRouteNarrowed(finding, meet)
 
   const derivation = deriveMergedFindingFields({
     contributing,
     decision: {
       line: finding.line,
       eligible_agreement_credit: eligibleAgreementCreditClaim(finding),
-      proposed_route: {
-        autofix_class: finding.autofix_class,
-        owner: finding.owner,
-        requires_verification: finding.requires_verification,
-      },
-      route_narrowing_reason: 'carried route verification',
+      proposed_route: narrowed
+        ? {
+            autofix_class: finding.autofix_class,
+            owner: finding.owner,
+            requires_verification: finding.requires_verification,
+          }
+        : undefined,
+      route_narrowing_reason: finding.route_narrowing_reason,
     },
     returned_reviewers: returnedReviewers,
   })
@@ -2622,10 +2666,30 @@ function checkMergedFindingsMatchDerivation(
   returnedReviewers: readonly string[],
 ): FinalizeContextRejection | undefined {
   for (const [index, finding] of mergedFindings.entries()) {
+    const resolved = contributingByFindingId.get(finding.finding_id) ?? []
+    const contributing = toContributingTuple(
+      resolved.length >= 2 ? resolved : [...resolved, ...resolved],
+    )
+    const meet = deriveRouteMeet(contributing)
+
+    if (mergedFindingRouteReasonMismatch(finding, meet)) {
+      return {
+        path: formatReviewArtifactIssuePath([
+          'merge',
+          'merged_findings',
+          index,
+          'route_narrowing_reason',
+        ]),
+        reason: 'merged finding route narrowing reason mismatch',
+      }
+    }
+
     if (
       mergedFindingDivergesFromDerivation(
         finding,
-        contributingByFindingId,
+        resolved,
+        contributing,
+        meet,
         returnedReviewers,
       )
     ) {
@@ -4285,6 +4349,7 @@ export interface SynthesizedFindingProjection {
   readonly suggested_fix?: ReconciledFinding['suggested_fix']
   readonly validated?: boolean
   readonly validation_reason?: string
+  readonly route_narrowing_reason?: string
   readonly input_finding_ids: readonly string[]
   readonly provenance: SynthesizedFindingProvenanceProjection
 }
@@ -4316,6 +4381,9 @@ function projectOneSynthesizedFinding(
       : {}),
     ...(finding.validation_reason !== undefined
       ? { validation_reason: finding.validation_reason }
+      : {}),
+    ...(finding.route_narrowing_reason !== undefined
+      ? { route_narrowing_reason: finding.route_narrowing_reason }
       : {}),
     input_finding_ids: finding.input_finding_ids,
     provenance: {

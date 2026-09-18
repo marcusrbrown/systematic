@@ -469,6 +469,14 @@ const MergedFindingSchema = z
     pre_existing: ParentFindingSchema.shape.pre_existing,
     fingerprint: ProvenanceSchema.shape.fingerprint,
     submitters: ProvenanceSchema.shape.submitters,
+    // The model's justification for narrowing this finding's route below the
+    // route meet over its contributing survivors -- carried through from the
+    // merge-phase decision (`MergedDecisionSchema`/`DeclinedDecisionSchema`)
+    // so the finalize-phase KTD19 verifier can check it against the real
+    // reason instead of a fabricated placeholder. Reuses `PipelineReasonSchema`
+    // rather than restating its bounds; present only when the finding's route
+    // actually narrowed the meet.
+    route_narrowing_reason: PipelineReasonSchema.optional(),
   })
   .strict()
 

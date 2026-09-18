@@ -842,6 +842,40 @@ describe('applyReviewAdjudication', () => {
     expect(merged?.requires_verification).toBe(
       DEFAULT_ROUTE.requires_verification,
     )
+    expect(merged?.route_narrowing_reason).toBe(
+      'Only a human should apply this fix.',
+    )
+  })
+
+  test('a narrowing proposed route equal to the meet carries no route_narrowing_reason when the model proposes none', () => {
+    // `assembleMergedGroupFinding` only carries `route_narrowing_reason` onto
+    // the wire when the model's decision actually set `proposed_route` --
+    // never merely because the finding's mechanical route happens to match
+    // what a narrowing would have produced.
+    const groups = [
+      group('src/x.ts', [
+        { input_id: 'correctness#0', line: 5 },
+        { input_id: 'security#0', line: 6 },
+      ]),
+    ]
+    const decisions: ApplyDecision = [
+      mergedDecision({
+        input_finding_ids: ['correctness#0', 'security#0'],
+        line: 5,
+      }),
+    ]
+
+    const result = applyReviewAdjudication({
+      prepared: prepared(groups),
+      decisions,
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const merged = result.value.merged_findings.find(
+      (finding) => finding.finding_id === 'merge-1',
+    )
+    expect('route_narrowing_reason' in (merged ?? {})).toBe(false)
   })
 
   test('a widening proposed route arriving through the wire envelope is rejected', () => {

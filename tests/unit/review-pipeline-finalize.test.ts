@@ -496,22 +496,21 @@ describe('deriveFinalizeContext', () => {
     })
   })
 
-  test('a carried route that narrows owner from review-fixer to release is accepted, not rejected', () => {
-    // Pins current behavior: the KTD19 verifier (`checkMergedFindingsMatchDerivation`
-    // via `mergedFindingDivergesFromDerivation`) reconstructs a "proposed_route"
-    // straight from the carried finding's own owner/autofix_class/requires_verification
-    // and always fabricates a placeholder `route_narrowing_reason` -- it verifies
-    // only that the carried route is a *structurally valid narrowing* of the
-    // meet derived from contributing survivors, never the original model
-    // decision's actual reason (which is not carried on `MergedFindingSchema`
-    // at all). A P0 finding whose declined decision narrows `owner` all the
-    // way to `release` -- moving it from the fixer queue to report_only -- is
-    // therefore accepted here exactly as any other valid narrowing would be.
-    // This is deliberate: `OWNER_NARROWS_TO` treats `release` as the terminal,
-    // most-conservative owner, so narrowing toward it is the same "always
-    // allow narrowing, never allow widening" rule every other route field
-    // follows -- but it also means the original narrowing reason is not
-    // recoverable downstream once merge has run.
+  test('a carried route that narrows owner from review-fixer to release is accepted, and its reason is carried onto the merged finding', () => {
+    // Updated for the route-narrowing-reason fix: `MergedFindingSchema` now
+    // carries the model's real `route_narrowing_reason` on the merge wire
+    // (`review-pipeline-contract.ts`), and the KTD19 verifier
+    // (`checkMergedFindingsMatchDerivation`, via `mergedFindingRouteReasonMismatch`
+    // and `mergedFindingDivergesFromDerivation`) checks that real reason
+    // against the route meet instead of a fabricated placeholder. A P0
+    // finding whose declined decision narrows `owner` all the way to
+    // `release` -- moving it from the fixer queue to report_only -- is
+    // accepted here because the narrowing is real *and* its reason is
+    // carried through untouched, satisfying the new pairing check.
+    // `OWNER_NARROWS_TO` treats `release` as the terminal, most-conservative
+    // owner, so narrowing toward it is the same "always allow narrowing,
+    // never allow widening" rule every other route field follows -- and now
+    // the original narrowing reason survives merge instead of being lost.
     //
     // A declined decision must cite an eligible *candidate-group* member --
     // `validateAdjudication` rejects any decision at all when
@@ -572,6 +571,13 @@ describe('deriveFinalizeContext', () => {
       (finding) => finding.finding_id === 'declined-narrowed-0',
     )
     expect(narrowed?.owner).toBe('release')
+    expect(narrowed?.route_narrowing_reason).toBe(
+      'Escalated to release per policy.',
+    )
+    const plain = mergeResult.value.merged_findings.find(
+      (finding) => finding.finding_id === 'declined-plain-0',
+    )
+    expect('route_narrowing_reason' in (plain ?? {})).toBe(false)
 
     const result = deriveFinalizeContext({
       merge: mergeResult.value,
@@ -600,6 +606,53 @@ describe('deriveFinalizeContext', () => {
     })
 
     expect(result.ok).toBe(true)
+  })
+
+  test('a merged finding whose route narrows from the meet but carries no route_narrowing_reason rejects', () => {
+    // Before the fix, `mergedFindingDivergesFromDerivation` always fabricated
+    // a placeholder `route_narrowing_reason` before re-deriving, so this case
+    // silently passed at finalize no matter what the carried finding actually
+    // carried. The fabrication is gone; a narrowed route with no real reason
+    // now rejects.
+    const scenario = finalizeContextScenario()
+    const merge: MergeOutput = {
+      ...scenario.merge,
+      merged_findings: scenario.merge.merged_findings.map((finding) =>
+        finding.finding_id === 'correctness#0'
+          ? { ...finding, owner: 'release' }
+          : finding,
+      ),
+    }
+
+    const result = deriveFinalizeContext({ ...scenario, merge })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe(
+      'merged finding route narrowing reason mismatch',
+    )
+  })
+
+  test('a merged finding whose route equals the meet but carries a route_narrowing_reason rejects', () => {
+    // A reason with no real narrowing is a false provenance claim -- the
+    // route-meet/reason pairing must hold in both directions.
+    const scenario = finalizeContextScenario()
+    const merge: MergeOutput = {
+      ...scenario.merge,
+      merged_findings: scenario.merge.merged_findings.map((finding) =>
+        finding.finding_id === 'correctness#0'
+          ? { ...finding, route_narrowing_reason: 'Not actually narrower.' }
+          : finding,
+      ),
+    }
+
+    const result = deriveFinalizeContext({ ...scenario, merge })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe(
+      'merged finding route narrowing reason mismatch',
+    )
   })
 
   test('a survivor missing from the merged findings rejects', () => {
@@ -3288,6 +3341,34 @@ describe('projectSynthesizedFindings', () => {
     expect('validation_reason' in projected).toBe(false)
   })
 
+  test('a carried route_narrowing_reason reaches the projected artifact finding', () => {
+    const finding = mergedFinding('f1', {
+      input_finding_ids: ['a#0'],
+      owner: 'release',
+      route_narrowing_reason: 'Escalated to release per policy.',
+    })
+
+    const projected = projectSynthesizedFindings(
+      projectInput({ findings: [finding] }),
+    )[0]
+    if (!projected) throw new Error('expected exactly one projected finding')
+
+    expect(projected.route_narrowing_reason).toBe(
+      'Escalated to release per policy.',
+    )
+  })
+
+  test('no carried route_narrowing_reason projects without the field', () => {
+    const finding = mergedFinding('f1', { input_finding_ids: ['a#0'] })
+
+    const projected = projectSynthesizedFindings(
+      projectInput({ findings: [finding] }),
+    )[0]
+    if (!projected) throw new Error('expected exactly one projected finding')
+
+    expect('route_narrowing_reason' in projected).toBe(false)
+  })
+
   test('projection preserves the reconciled order', () => {
     const findings = [
       mergedFinding('f1', { input_finding_ids: ['a#0'], title: 'First issue' }),
@@ -3318,6 +3399,50 @@ describe('projectSynthesizedFindings', () => {
     expect(() =>
       ReviewArtifactSchema.shape.findings.parse(projected),
     ).not.toThrow()
+  })
+})
+
+describe('route narrowing to release', () => {
+  test('a P0 finding narrowed to release routes to report_only, unexplained by no other queue, and carries its reason into the persisted artifact', () => {
+    const finding = mergedFinding('p0-release', {
+      input_finding_ids: ['r1#0'],
+      owner: 'release',
+      severity: 'P0',
+      route_narrowing_reason: 'Escalated to release: requires legal sign-off.',
+    })
+    const prepared = preparedOutput({
+      confidence_dispositions: [confidenceDisposition('r1#0', 'surviving')],
+      surviving_findings: [survivingFinding('r1#0', 'r1')],
+    })
+    const reconciled = reconciledOutput({ findings: [finding] })
+
+    const dispositions = finalizeReviewDispositions({
+      prepared,
+      reconciled,
+      rejected_payloads: [],
+      screen_results: [
+        financeScreenResult('r1', {
+          admitted_findings: [admittedScreenFinding('r1#0')],
+        }),
+      ],
+      dispatch_records: [dispatchRecord('r1')],
+    })
+
+    expect(dispositions.ok).toBe(true)
+    if (!dispositions.ok) return
+    expect(
+      dispositions.value.queues.report_only.map((entry) => entry.finding_id),
+    ).toEqual(['p0-release'])
+    expect(dispositions.value.queues.fixer).toEqual([])
+    expect(dispositions.value.queues.residual).toEqual([])
+
+    const [projected] = projectSynthesizedFindings({ findings: [finding] })
+    if (!projected) throw new Error('expected exactly one projected finding')
+    expect(projected.owner).toBe('release')
+    expect(projected.severity).toBe('P0')
+    expect(projected.route_narrowing_reason).toBe(
+      'Escalated to release: requires legal sign-off.',
+    )
   })
 })
 

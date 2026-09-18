@@ -198,6 +198,19 @@ const SynthesizedFindingFieldsSchema = z
     suggested_fix: z.string().max(2048).nullable().optional(),
     validated: z.boolean().optional(),
     validation_reason: ReasonSchema.optional(),
+    // The model's justification for narrowing this finding's route below the
+    // route meet over its contributing survivors, threaded from the merge
+    // wire (`MergedFindingSchema.route_narrowing_reason` in
+    // `review-pipeline-contract.ts`) through `projectSynthesizedFindings`.
+    // Optional and additive -- schema_version stays 1. No conditional
+    // requirement is expressed here (unlike `validation_reason`'s
+    // `superRefine` pairing with `validated === false`): whether a route
+    // actually narrowed depends on the route meet over contributing
+    // survivors, which this artifact-level schema cannot see. That pairing
+    // is enforced upstream in the pipeline, by the finalize-phase KTD19
+    // verifier (`mergedFindingRouteReasonMismatch` in `review-pipeline.ts`),
+    // before this schema ever sees the finding.
+    route_narrowing_reason: ReasonSchema.optional(),
     input_finding_ids: z
       .array(boundedText(MAX_INPUT_ID_LENGTH))
       .min(1)
