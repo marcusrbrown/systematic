@@ -646,7 +646,8 @@ function printRoutingTable(loaded: SourceAwareConfigResult): void {
   }
 }
 
-function printResolvedSection(): void {
+/** Returns false when the configuration failed to load, so the caller can exit non-zero the way `--json` already does. */
+function printResolvedSection(): boolean {
   let loaded: SourceAwareConfigResult
   try {
     loaded = loadConfigWithSources(process.cwd())
@@ -654,13 +655,18 @@ function printResolvedSection(): void {
     // Surface the same message `--json` already returns (see
     // buildConfigShowJson). Without it the user sees only "unavailable"
     // and has no way to learn which file or key rejected the load.
-    console.log(
-      '\nResolved configuration: unavailable (the configuration failed to load).',
+    //
+    // Both lines go to stderr, together: this is the failure report, and
+    // splitting it across streams would leave either half unreadable. The
+    // `--json` branch keeps its envelope on stdout because that document is
+    // the machine-readable output, error field included.
+    console.error(
+      'Resolved configuration: unavailable (the configuration failed to load).',
     )
-    console.log(
+    console.error(
       `  Reason: ${error instanceof Error ? error.message : String(error)}`,
     )
-    return
+    return false
   }
 
   const { metadata, overlays } = loaded
@@ -676,13 +682,14 @@ function printResolvedSection(): void {
     console.log(
       '  No profiles are selected and no per-agent/category overlays are defined.',
     )
-    return
+    return true
   }
 
   printProfileSummary(metadata)
   console.log('')
   console.log('  Routing:')
   printRoutingTable(loaded)
+  return true
 }
 
 interface ConfigShowJsonRoutingResolution {
@@ -823,7 +830,9 @@ function configShow(options: { json: boolean }): void {
     console.log(fs.readFileSync(paths.userConfig, 'utf-8'))
   }
 
-  printResolvedSection()
+  // A failed load exits 1 in both renderings: the same failure must not
+  // report success in prose and failure under `--json`.
+  if (!printResolvedSection()) process.exit(1)
 }
 
 function parseConfigShowArgs(rest: string[]): { json: boolean } {

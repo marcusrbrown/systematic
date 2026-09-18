@@ -743,20 +743,49 @@ describe('cli config show', () => {
 
       const result = runCli(['config', 'show'], project, { HOME: home })
 
-      expect(result.exitCode).toBe(0)
-      expect(result.stdout).toContain('Resolved configuration: unavailable')
-      expect(result.stdout).toContain('categories.review.model')
-      expect(result.stdout).toContain(
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain('Resolved configuration: unavailable')
+      expect(result.stderr).toContain('categories.review.model')
+      expect(result.stderr).toContain(
         'only valid in user config or OPENCODE_CONFIG_DIR config',
       )
+      // The whole failure report lands on one stream, so neither half is
+      // stranded: nothing about it leaks back onto stdout.
+      expect(result.stdout).not.toContain('Resolved configuration: unavailable')
+      expect(result.stdout).not.toContain('Reason:')
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
   })
 
-  // The prose reason must agree with the `--json` reason; they read the
-  // same Error. This is the regression that would reintroduce the split.
-  it('the load-failure reason matches the --json error message', () => {
+  // A malformed config fails earlier than the trust boundary, at the JSONC
+  // parse. It names the file but has no key to name, so any prose or docs
+  // promising "the file and key" over-promises for this shape.
+  it('a malformed config reports the parse failure, naming no key', () => {
+    const root = mkTempCwd()
+    const home = path.join(root, 'home')
+    const project = path.join(root, 'project')
+    try {
+      fs.mkdirSync(path.join(project, '.opencode'), { recursive: true })
+      fs.mkdirSync(home, { recursive: true })
+      fs.writeFileSync(
+        path.join(project, '.opencode', 'systematic.json'),
+        '{,]',
+      )
+
+      const result = runCli(['config', 'show'], project, { HOME: home })
+
+      expect(result.exitCode).toBe(1)
+      expect(result.stderr).toContain('Resolved configuration: unavailable')
+      expect(result.stderr).toContain('JSONC parse error')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  // The prose reason and exit code must both agree with `--json`; they read
+  // the same Error. This is the regression that would reintroduce the split.
+  it('the load-failure reason and exit code match --json', () => {
     const root = mkTempCwd()
     const home = path.join(root, 'home')
     const project = path.join(root, 'project')
@@ -771,9 +800,17 @@ describe('cli config show', () => {
       const json = runCli(['config', 'show', '--json'], project, { HOME: home })
 
       expect(json.exitCode).toBe(1)
+      // The `--json` envelope stays on stdout even on failure: that document
+      // is the machine-readable output, error field included, so a consumer
+      // can still pipe it. Only the prose report moves to stderr.
       const parsed = JSON.parse(json.stdout) as { error: string }
       expect(parsed.error).toContain('agents.correctness-reviewer.model')
-      expect(prose.stdout).toContain(parsed.error)
+      expect(prose.stderr).toContain(parsed.error)
+      expect(prose.exitCode).toBe(json.exitCode)
+      // The asymmetry runs both ways: prose diagnostics must never leak
+      // into the `--json` branch, or a consumer reading stderr for errors
+      // would find the same failure reported twice, in two shapes.
+      expect(json.stderr).toBe('')
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }

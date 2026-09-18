@@ -152,6 +152,8 @@ With the `work` profile above selected by a repository:
 
 `source` tells you which layer supplied each value: `level` is `agent` or `category`, `form` is `block`, `flat`, or `legacy-pi-subagents`.
 
+Both forms exit `1` when the configuration fails to load, and `0` otherwise, so a script can branch on the exit status rather than parsing the output. Plain `config show` reports the failure on stderr — naming the file and the reason it was rejected — so redirect with `2>&1` before copying the output into an issue. `--json` keeps its envelope on stdout with the same reason under `error`.
+
 ## Troubleshooting
 
 - **A selected profile name is not defined.** Systematic warns once and uses your own default `profile` instead; with no usable default it runs on base configuration. `config show` reports the fallback under `profileFallback`.
