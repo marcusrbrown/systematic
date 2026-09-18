@@ -13,8 +13,7 @@ tags:
   - manual-probes
   - prose-control
 symptoms: []
-root_cause: inconclusive_measurement
-resolution_type: documentation
+resolution_type: documentation_update
 related_components:
   - manual-probes
   - plugin-runtime

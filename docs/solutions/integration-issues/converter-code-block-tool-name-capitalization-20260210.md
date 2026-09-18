@@ -1,9 +1,11 @@
 ---
 title: "Converter Skips Code Blocks: 47 Broken Tool Name Examples in orchestrating-swarms"
 date: 2026-02-10
+module: converter
+problem_type: integration_issue
 severity: high
 category: integration-issues
-component: converter
+component: tooling
 tags:
   - converter
   - code-blocks
@@ -15,8 +17,8 @@ symptoms:
   - "Code examples show Task({ instead of task({ after CC→OC conversion"
   - "Users copying code examples from skill documentation get runtime errors"
   - "47 instances of capitalized Task({ in orchestrating-swarms SKILL.md"
-root_cause: "Converter intentionally skips fenced code blocks to avoid false positives (e.g., 'Task' as a noun). Manual code block audit step in convert-cc-defs skill was missed during batch import of a 1718-line file."
-resolution_type: process
+root_cause: missing_workflow_step
+resolution_type: workflow_improvement
 confidence: verified
 related: []
 ---

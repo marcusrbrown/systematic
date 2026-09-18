@@ -3,9 +3,18 @@ title: Multi-file batch imports drop tree-structured content without an integrit
 date: 2026-02-19
 last_refreshed: 2026-05-16
 category: integration-issues
+module: content-integrity
 problem_type: integration_issue
 component: tooling
 severity: high
+symptoms:
+  - A workflow reports "imported N items" but the tree contains only the top-level file per item
+  - "`references/`, `scripts/`, `assets/` directories are empty or missing for items that should have them"
+  - "Dependent skills, plugins, or agents fail at runtime with \"Cannot find file\" long after the import"
+  - Verification grep returns green because it asserts presence of top-level files, not sub-files
+  - The git diff shows N files added, matching the top-level enumeration, giving false confidence
+root_cause: missing_workflow_step
+resolution_type: tooling_addition
 applies_when:
   - A batch import or sync workflow consumes a manifest of file paths and copies them into the local tree
   - The import code path may silently fail per-file without aggregate signal (return null, swallow exceptions, skip on first missing dependency)

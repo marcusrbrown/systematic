@@ -92,6 +92,7 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
+import yaml from 'js-yaml'
 import {
   isValidAgentColor,
   OPENCODE_AGENT_COLOR_TOKENS,
@@ -215,6 +216,7 @@ export interface FrontmatterViolation {
     | 'malformed-frontmatter'
     | 'missing-frontmatter'
     | 'parse-safety'
+    | 'schema-violation'
   field?: string
   message: string
   remediation: string
@@ -343,6 +345,7 @@ export interface CheckResult {
   bannedPatterns: BannedPatternHit[]
   frontmatterViolations: FrontmatterViolation[]
   parseSafetyViolations: FrontmatterViolation[]
+  solutionSchemaViolations: FrontmatterViolation[]
   agentModelViolations: AgentModelViolation[]
   agentModeViolations: AgentModeViolation[]
   agentColorViolations: AgentColorViolation[]
@@ -596,7 +599,7 @@ export function discoverCategories(rootDir: string): string[] {
 export interface ScanTargets {
   markdown: string[] // repo-relative paths under skills/ and agents/
   typescript: string[] // repo-relative paths under src/ (excluding markdown)
-  solutionMarkdown: string[] // repo-relative paths under docs/solutions/ (parse-safety only)
+  solutionMarkdown: string[] // repo-relative paths under docs/solutions/ (parse-safety + compound-schema validation)
   rootDocuments: string[] // named contributor-facing root docs (hook parity only)
 }
 
@@ -628,10 +631,11 @@ const INLINE_HOOK_REGEX = /`([^`\n]+)`/g
  *
  * - `markdown`: skills/ and agents/ markdown — full invariant suite.
  * - `typescript`: src/ TypeScript — banned-pattern scan.
- * - `solutionMarkdown`: docs/solutions/ markdown — parse-safety check ONLY.
- *   Deliberately NOT merged into `markdown` to keep banned-pattern enforcement
- *   scoped to skills+agents+src; historical solution docs may legitimately
- *   reference CC/CEP terms.
+ * - `solutionMarkdown`: docs/solutions/ markdown — parse-safety plus
+ *   compound-schema validation (`checkSolutionSchema`), not the full invariant
+ *   suite. Deliberately NOT merged into `markdown` to keep banned-pattern
+ *   enforcement scoped to skills+agents+src; historical solution docs may
+ *   legitimately reference CC/CEP terms.
  */
 export function collectScanTargets(rootDir: string): ScanTargets {
   const markdown: string[] = []
@@ -1114,6 +1118,507 @@ function isQuotedValue(value: string): boolean {
     (trimmed.startsWith('"') && trimmed.endsWith('"') && trimmed.length >= 2) ||
     (trimmed.startsWith("'") && trimmed.endsWith("'") && trimmed.length >= 2)
   )
+}
+
+// ---------------------------------------------------------------------------
+// Solution-doc schema validation (docs/solutions/**)
+// ---------------------------------------------------------------------------
+
+/**
+ * Path to the ce:compound schema, relative to rootDir. This is the single
+ * source of truth for solution-doc frontmatter vocabulary — enum values,
+ * required fields, and the date pattern are all derived from this file at
+ * runtime rather than hardcoded here, so the gate cannot drift from the
+ * schema it enforces.
+ */
+const COMPOUND_SCHEMA_RELATIVE_PATH =
+  'skills/ce-compound/references/schema.yaml'
+
+// Paths under docs/solutions/ (repo-relative) that are not themselves
+// solution docs — e.g. a future docs/solutions/README.md or index page —
+// and are therefore exempt from checkSolutionSchema's required-field
+// validation. All 90 current files are genuine solution docs, so this is
+// seeded empty. A real solution doc that fails schema validation does NOT
+// belong here: fix the doc, don't exempt it.
+export const SOLUTION_SCHEMA_EXEMPTIONS: ReadonlySet<string> = new Set()
+
+interface CompoundSchema {
+  bugProblemTypes: ReadonlySet<string>
+  knowledgeProblemTypes: ReadonlySet<string>
+  allProblemTypes: ReadonlySet<string>
+  componentValues: ReadonlySet<string>
+  severityValues: ReadonlySet<string>
+  datePattern: RegExp
+  rootCauseValues: ReadonlySet<string>
+  resolutionTypeValues: ReadonlySet<string>
+}
+
+function schemaRecord(
+  parent: Record<string, unknown>,
+  key: string,
+  context: string,
+): Record<string, unknown> {
+  const value = parent[key]
+  if (!isRecord(value)) {
+    throw new Error(
+      `Malformed compound schema (${COMPOUND_SCHEMA_RELATIVE_PATH}): expected \`${context}\` to be a mapping.`,
+    )
+  }
+  return value
+}
+
+function schemaStringArray(
+  parent: Record<string, unknown>,
+  key: string,
+  context: string,
+): string[] {
+  const value = parent[key]
+  if (!Array.isArray(value) || !value.every((v) => typeof v === 'string')) {
+    throw new Error(
+      `Malformed compound schema (${COMPOUND_SCHEMA_RELATIVE_PATH}): expected \`${context}\` to be an array of strings.`,
+    )
+  }
+  return value
+}
+
+function schemaString(
+  parent: Record<string, unknown>,
+  key: string,
+  context: string,
+): string {
+  const value = parent[key]
+  if (typeof value !== 'string') {
+    throw new Error(
+      `Malformed compound schema (${COMPOUND_SCHEMA_RELATIVE_PATH}): expected \`${context}\` to be a string.`,
+    )
+  }
+  return value
+}
+
+/**
+ * Load and derive the compound-schema vocabulary from schema.yaml. Returns
+ * null when the schema file does not exist (e.g. minimal test fixtures that
+ * do not exercise this check) — solution-schema validation is skipped in
+ * that case rather than treated as a violation. Throws when the schema file
+ * exists but does not have the expected shape, since that is a real defect
+ * in the source of truth itself.
+ */
+function loadCompoundSchema(rootDir: string): CompoundSchema | null {
+  const schemaPath = path.join(rootDir, COMPOUND_SCHEMA_RELATIVE_PATH)
+  if (!fs.existsSync(schemaPath)) return null
+
+  const raw = fs.readFileSync(schemaPath, 'utf8')
+  const parsed: unknown = yaml.load(raw, { schema: yaml.JSON_SCHEMA })
+  if (!isRecord(parsed)) {
+    throw new Error(
+      `Malformed compound schema (${COMPOUND_SCHEMA_RELATIVE_PATH}): expected a mapping at the top level.`,
+    )
+  }
+
+  const tracks = schemaRecord(parsed, 'tracks', 'tracks')
+  const bugTrack = schemaRecord(tracks, 'bug', 'tracks.bug')
+  const knowledgeTrack = schemaRecord(tracks, 'knowledge', 'tracks.knowledge')
+  const bugProblemTypes = new Set(
+    schemaStringArray(bugTrack, 'problem_types', 'tracks.bug.problem_types'),
+  )
+  const knowledgeProblemTypes = new Set(
+    schemaStringArray(
+      knowledgeTrack,
+      'problem_types',
+      'tracks.knowledge.problem_types',
+    ),
+  )
+
+  const requiredFields = schemaRecord(
+    parsed,
+    'required_fields',
+    'required_fields',
+  )
+  const componentField = schemaRecord(
+    requiredFields,
+    'component',
+    'required_fields.component',
+  )
+  const severityField = schemaRecord(
+    requiredFields,
+    'severity',
+    'required_fields.severity',
+  )
+  const dateField = schemaRecord(requiredFields, 'date', 'required_fields.date')
+  const componentValues = new Set(
+    schemaStringArray(
+      componentField,
+      'values',
+      'required_fields.component.values',
+    ),
+  )
+  const severityValues = new Set(
+    schemaStringArray(
+      severityField,
+      'values',
+      'required_fields.severity.values',
+    ),
+  )
+  const datePatternSource = schemaString(
+    dateField,
+    'pattern',
+    'required_fields.date.pattern',
+  )
+  let datePattern: RegExp
+  try {
+    datePattern = new RegExp(datePatternSource)
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    throw new Error(
+      `Malformed compound schema (${COMPOUND_SCHEMA_RELATIVE_PATH}): expected \`required_fields.date.pattern\` to be a valid regular expression: ${reason}`,
+    )
+  }
+
+  const trackRules = schemaRecord(parsed, 'track_rules', 'track_rules')
+  const bugRules = schemaRecord(trackRules, 'bug', 'track_rules.bug')
+  const bugRequired = schemaRecord(
+    bugRules,
+    'required',
+    'track_rules.bug.required',
+  )
+  const rootCauseField = schemaRecord(
+    bugRequired,
+    'root_cause',
+    'track_rules.bug.required.root_cause',
+  )
+  const resolutionTypeField = schemaRecord(
+    bugRequired,
+    'resolution_type',
+    'track_rules.bug.required.resolution_type',
+  )
+  const rootCauseValues = new Set(
+    schemaStringArray(
+      rootCauseField,
+      'values',
+      'track_rules.bug.required.root_cause.values',
+    ),
+  )
+  const resolutionTypeValues = new Set(
+    schemaStringArray(
+      resolutionTypeField,
+      'values',
+      'track_rules.bug.required.resolution_type.values',
+    ),
+  )
+
+  return {
+    bugProblemTypes,
+    knowledgeProblemTypes,
+    allProblemTypes: new Set([...bugProblemTypes, ...knowledgeProblemTypes]),
+    componentValues,
+    severityValues,
+    datePattern,
+    rootCauseValues,
+    resolutionTypeValues,
+  }
+}
+
+function isNonEmptyStringArray(value: unknown): value is string[] {
+  return (
+    Array.isArray(value) &&
+    value.length > 0 &&
+    value.every((v) => typeof v === 'string')
+  )
+}
+
+function pushSchemaViolation(
+  relPath: string,
+  field: string,
+  message: string,
+  remediation: string,
+  violations: FrontmatterViolation[],
+): void {
+  violations.push({
+    file: relPath,
+    rule: 'schema-violation',
+    field,
+    message,
+    remediation,
+  })
+}
+
+/**
+ * Checks presence of a shared required field. Returns true when present as a
+ * non-empty (post-trim) string, matching the schema's declared `type: string`.
+ *
+ * Distinguishes two failure modes in the emitted message: a field that is
+ * absent, null, or an empty string is reported as "missing"; a field that is
+ * present but the wrong type (e.g. an array/object) or whitespace-only is
+ * reported as a distinct "must be a non-empty string" violation, since it is
+ * not literally missing from the frontmatter.
+ */
+function checkSolutionRequiredField(
+  relPath: string,
+  data: Record<string, unknown>,
+  field: string,
+  violations: FrontmatterViolation[],
+): boolean {
+  const value = data[field]
+  if (typeof value === 'string' && value.trim() !== '') {
+    return true
+  }
+
+  const isPresentWrongShape =
+    Object.hasOwn(data, field) && value !== null && value !== ''
+  const message = isPresentWrongShape
+    ? `Solution-doc frontmatter field \`${field}\` must be a non-empty string, got ${JSON.stringify(value)}.`
+    : `Solution-doc frontmatter is missing required field \`${field}\`.`
+  pushSchemaViolation(
+    relPath,
+    field,
+    message,
+    `Add \`${field}\` to frontmatter per ${COMPOUND_SCHEMA_RELATIVE_PATH}.`,
+    violations,
+  )
+  return false
+}
+
+/**
+ * Checks that a present field's string value is a member of `allowed`. Does
+ * nothing when the field is absent — absence is reported separately by
+ * `checkSolutionRequiredField` for required fields, and root_cause /
+ * resolution_type are only conditionally required.
+ */
+function checkSolutionEnumField(
+  relPath: string,
+  data: Record<string, unknown>,
+  field: string,
+  allowed: ReadonlySet<string>,
+  violations: FrontmatterViolation[],
+): void {
+  if (!Object.hasOwn(data, field)) return
+  const value = data[field]
+  if (typeof value === 'string' && allowed.has(value)) return
+  pushSchemaViolation(
+    relPath,
+    field,
+    `Solution-doc frontmatter field \`${field}\` value ${JSON.stringify(value)} is not in the allowed vocabulary defined in ${COMPOUND_SCHEMA_RELATIVE_PATH}.`,
+    `Use one of the enum values defined for \`${field}\` in ${COMPOUND_SCHEMA_RELATIVE_PATH}.`,
+    violations,
+  )
+}
+
+function checkSolutionDate(
+  relPath: string,
+  data: Record<string, unknown>,
+  datePattern: RegExp,
+  violations: FrontmatterViolation[],
+): void {
+  if (!Object.hasOwn(data, 'date')) return
+  const value = data.date
+  if (typeof value === 'string' && datePattern.test(value)) return
+  pushSchemaViolation(
+    relPath,
+    'date',
+    `Solution-doc frontmatter field \`date\` value ${JSON.stringify(value)} does not match the required pattern ${datePattern.source}.`,
+    `Use YYYY-MM-DD format for \`date\` per ${COMPOUND_SCHEMA_RELATIVE_PATH}.`,
+    violations,
+  )
+}
+
+/**
+ * Bug-track docs (problem_type in tracks.bug.problem_types) must carry
+ * symptoms, root_cause, and resolution_type. Per schema.yaml's backward-
+ * compatibility note, the reverse is NOT enforced: knowledge-track docs may
+ * carry these same fields as harmless legacy data.
+ *
+ * Returns whether root_cause/resolution_type passed their required-field
+ * check, so the caller can skip the corresponding enum check and avoid
+ * double-reporting one defect as two violations.
+ */
+function checkBugTrackRequiredFields(
+  relPath: string,
+  data: Record<string, unknown>,
+  violations: FrontmatterViolation[],
+): { rootCauseOk: boolean; resolutionTypeOk: boolean } {
+  if (!isNonEmptyStringArray(data.symptoms)) {
+    pushSchemaViolation(
+      relPath,
+      'symptoms',
+      'Bug-track solution doc is missing required field `symptoms` (must be a non-empty array of strings).',
+      `Add a \`symptoms\` array with at least one entry per ${COMPOUND_SCHEMA_RELATIVE_PATH}.`,
+      violations,
+    )
+  }
+  const rootCauseOk = checkSolutionRequiredField(
+    relPath,
+    data,
+    'root_cause',
+    violations,
+  )
+  const resolutionTypeOk = checkSolutionRequiredField(
+    relPath,
+    data,
+    'resolution_type',
+    violations,
+  )
+  return { rootCauseOk, resolutionTypeOk }
+}
+
+function scanSolutionSchema(
+  relPath: string,
+  content: string,
+  schema: CompoundSchema,
+  violations: FrontmatterViolation[],
+): void {
+  const parsed = parseFrontmatter(content)
+
+  if (parsed.parseError) {
+    violations.push({
+      file: relPath,
+      rule: 'malformed-frontmatter',
+      message:
+        'Solution-doc frontmatter is malformed YAML and cannot be parsed.',
+      remediation:
+        'Fix the YAML syntax error (check indentation and quoting) so the frontmatter parses — see the YAML-quoting hazards documented in ' +
+        `${COMPOUND_SCHEMA_RELATIVE_PATH}.`,
+    })
+    return
+  }
+
+  if (!parsed.hadFrontmatter) {
+    violations.push({
+      file: relPath,
+      rule: 'missing-frontmatter',
+      message: 'Solution doc is missing YAML frontmatter.',
+      remediation: `Add frontmatter matching ${COMPOUND_SCHEMA_RELATIVE_PATH}.`,
+    })
+    return
+  }
+
+  if (!isRecord(parsed.data)) {
+    violations.push({
+      file: relPath,
+      rule: 'schema-violation',
+      message: 'Solution-doc frontmatter did not parse to a YAML mapping.',
+      remediation: `Ensure frontmatter is a mapping matching ${COMPOUND_SCHEMA_RELATIVE_PATH}.`,
+    })
+    return
+  }
+
+  const data = parsed.data
+  checkSolutionRequiredField(relPath, data, 'module', violations)
+  const dateOk = checkSolutionRequiredField(relPath, data, 'date', violations)
+  const problemTypeOk = checkSolutionRequiredField(
+    relPath,
+    data,
+    'problem_type',
+    violations,
+  )
+  const componentOk = checkSolutionRequiredField(
+    relPath,
+    data,
+    'component',
+    violations,
+  )
+  const severityOk = checkSolutionRequiredField(
+    relPath,
+    data,
+    'severity',
+    violations,
+  )
+
+  // Only run the enum/date checks when the required-field check for the same
+  // field already passed — otherwise a present-but-null (or wrong-type) field
+  // would be reported twice: once as missing, once as off-vocabulary.
+  if (problemTypeOk) {
+    checkSolutionEnumField(
+      relPath,
+      data,
+      'problem_type',
+      schema.allProblemTypes,
+      violations,
+    )
+  }
+  if (componentOk) {
+    checkSolutionEnumField(
+      relPath,
+      data,
+      'component',
+      schema.componentValues,
+      violations,
+    )
+  }
+  if (severityOk) {
+    checkSolutionEnumField(
+      relPath,
+      data,
+      'severity',
+      schema.severityValues,
+      violations,
+    )
+  }
+
+  const problemType = data.problem_type
+  let rootCauseOk = true
+  let resolutionTypeOk = true
+  if (
+    typeof problemType === 'string' &&
+    schema.bugProblemTypes.has(problemType)
+  ) {
+    const bugTrackResult = checkBugTrackRequiredFields(
+      relPath,
+      data,
+      violations,
+    )
+    rootCauseOk = bugTrackResult.rootCauseOk
+    resolutionTypeOk = bugTrackResult.resolutionTypeOk
+  }
+
+  if (rootCauseOk) {
+    checkSolutionEnumField(
+      relPath,
+      data,
+      'root_cause',
+      schema.rootCauseValues,
+      violations,
+    )
+  }
+  if (resolutionTypeOk) {
+    checkSolutionEnumField(
+      relPath,
+      data,
+      'resolution_type',
+      schema.resolutionTypeValues,
+      violations,
+    )
+  }
+
+  if (dateOk) {
+    checkSolutionDate(relPath, data, schema.datePattern, violations)
+  }
+}
+
+/**
+ * Validates docs/solutions/** frontmatter against the ce:compound schema
+ * (skills/ce-compound/references/schema.yaml). Distinct from
+ * `checkFrontmatterParseSafety`, which only bans unquoted inline comments —
+ * this check actually parses the frontmatter and enforces the schema's
+ * required fields, enums, and date pattern. Returns an empty array when the
+ * schema file itself does not exist in `rootDir` (see `loadCompoundSchema`).
+ */
+export function checkSolutionSchema(
+  rootDir: string,
+  solutionMarkdownFiles: readonly string[],
+  exemptSolutions: ReadonlySet<string> = SOLUTION_SCHEMA_EXEMPTIONS,
+): FrontmatterViolation[] {
+  const violations: FrontmatterViolation[] = []
+  const schema = loadCompoundSchema(rootDir)
+  if (schema === null) return violations
+
+  for (const relPath of solutionMarkdownFiles) {
+    if (exemptSolutions.has(relPath)) continue
+    const content = readFileSafe(path.join(rootDir, relPath))
+    if (content === null) continue
+    scanSolutionSchema(relPath, content, schema, violations)
+  }
+
+  return violations
 }
 
 export function checkAgentColors(
@@ -2378,6 +2883,10 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     rootDir,
     targets.solutionMarkdown,
   )
+  const solutionSchemaViolations = checkSolutionSchema(
+    rootDir,
+    targets.solutionMarkdown,
+  )
   const agentModelViolations = checkAgentModel(rootDir, targets.markdown)
   const agentModeViolations = checkAgentMode(rootDir, targets.markdown)
   const agentColorViolations = checkAgentColors(rootDir, targets.markdown)
@@ -2430,6 +2939,7 @@ export function checkContentIntegrity(rootDir: string): CheckResult {
     bannedPatterns,
     frontmatterViolations,
     parseSafetyViolations,
+    solutionSchemaViolations,
     agentModelViolations,
     agentModeViolations,
     agentColorViolations,
@@ -2489,6 +2999,10 @@ function printResult(result: CheckResult, verbose: boolean): void {
     result.parseSafetyViolations,
     'Parse-safety violations',
   )
+  printFrontmatterViolations(
+    result.solutionSchemaViolations,
+    'Solution-doc schema violations',
+  )
   printAgentModelViolations(result.agentModelViolations)
   printAgentModeViolations(result.agentModeViolations)
   printAgentColorViolations(result.agentColorViolations)
@@ -2525,6 +3039,7 @@ function printResult(result: CheckResult, verbose: boolean): void {
         `scanStats: ${result.scanStats.markdownFiles} md + ${result.scanStats.typescriptFiles} ts + ${result.scanStats.solutionMarkdownFiles} solution-md + ${result.scanStats.rootDocuments} root docs\n` +
         `frontmatterViolations: ${result.frontmatterViolations.length}\n` +
         `parseSafetyViolations: ${result.parseSafetyViolations.length}\n` +
+        `solutionSchemaViolations: ${result.solutionSchemaViolations.length}\n` +
         `agentModelViolations: ${result.agentModelViolations.length}\n` +
         `agentModeViolations: ${result.agentModeViolations.length}\n` +
         `agentColorViolations: ${result.agentColorViolations.length}\n` +
@@ -2773,6 +3288,7 @@ function totalViolations(result: CheckResult): number {
     result.bannedPatterns.length +
     result.frontmatterViolations.length +
     result.parseSafetyViolations.length +
+    result.solutionSchemaViolations.length +
     result.agentModelViolations.length +
     result.agentModeViolations.length +
     result.agentColorViolations.length +

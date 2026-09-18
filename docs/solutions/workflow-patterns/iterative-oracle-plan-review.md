@@ -1,9 +1,11 @@
 ---
 title: Iterative Oracle Plan Review Loop
 date: 2026-02-12
+module: workflow-system
+problem_type: workflow_issue
 category: workflow-patterns
 tags: [oracle, subagent, plan-review, iterative-feedback, quality-gate, session-continuity]
-component: workflow-system
+component: development_workflow
 severity: low
 resolution_time: ~30 minutes per review cycle
 ---

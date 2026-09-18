@@ -25,6 +25,7 @@ import {
   checkReferenceIntegrity,
   checkRemovedNamesOverlap,
   checkSkillReferenceIntegrity,
+  checkSolutionSchema,
   checkStalePlanStatus,
   checkSubfileReferences,
   collectScanTargets,
@@ -118,6 +119,73 @@ const FIXTURE_PLUGIN_HOOKS = [
   'event',
   'experimental.chat.system.transform',
 ] as const
+
+/**
+ * Minimal ce:compound schema fixture matching the shape `loadCompoundSchema`
+ * reads: tracks.{bug,knowledge}.problem_types, required_fields.{component,
+ * severity,date}, and track_rules.bug.required.{root_cause,resolution_type}.
+ * `extraProblemType` lets a test prove the gate reads vocabulary from this
+ * file at runtime rather than a hardcoded list.
+ */
+function writeSchemaFixture(
+  root: string,
+  options: { extraProblemType?: string } = {},
+): void {
+  const knowledgeProblemTypes = ['best_practice', 'workflow_issue']
+  if (options.extraProblemType) {
+    knowledgeProblemTypes.push(options.extraProblemType)
+  }
+  writeFile(
+    root,
+    'skills/ce-compound/references/schema.yaml',
+    [
+      'tracks:',
+      '  bug:',
+      '    problem_types:',
+      '      - build_error',
+      '      - test_failure',
+      '  knowledge:',
+      '    problem_types:',
+      ...knowledgeProblemTypes.map((v) => `      - ${v}`),
+      'required_fields:',
+      '  module:',
+      '    type: string',
+      '  date:',
+      '    type: string',
+      "    pattern: '^\\d{4}-\\d{2}-\\d{2}$'",
+      '  problem_type:',
+      '    type: enum',
+      '  component:',
+      '    type: enum',
+      '    values:',
+      '      - tooling',
+      '      - documentation',
+      '  severity:',
+      '    type: enum',
+      '    values:',
+      '      - critical',
+      '      - high',
+      '      - medium',
+      '      - low',
+      'track_rules:',
+      '  bug:',
+      '    required:',
+      '      symptoms:',
+      '        type: array[string]',
+      '      root_cause:',
+      '        type: enum',
+      '        values:',
+      '          - config_error',
+      '          - logic_error',
+      '      resolution_type:',
+      '        type: enum',
+      '        values:',
+      '          - code_fix',
+      '          - documentation_update',
+      '',
+    ].join('\n'),
+  )
+}
 
 // ---------------------------------------------------------------------------
 
@@ -3363,6 +3431,688 @@ describe('checkFrontmatterParseSafety', () => {
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// checkSolutionSchema — ce:compound schema enforcement
+// ---------------------------------------------------------------------------
+
+describe('checkSolutionSchema', () => {
+  test('reports the gate reads vocabulary from schema.yaml, not a hardcoded list', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSchemaFixture(root, { extraProblemType: 'totally_custom_type' })
+      writeFile(
+        root,
+        'docs/solutions/best-practices/custom.md',
+        [
+          '---',
+          'module: foo',
+          'date: 2026-01-01',
+          'problem_type: totally_custom_type',
+          'component: tooling',
+          'severity: low',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkSolutionSchema(root, [
+        'docs/solutions/best-practices/custom.md',
+      ])
+      // totally_custom_type is not a real ce:compound value; it only passes
+      // because writeSchemaFixture injected it into the fixture schema.yaml.
+      expect(violations).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags frontmatter that fails to parse (unquoted colon-space in a sequence item)', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSchemaFixture(root)
+      writeFile(
+        root,
+        'docs/solutions/best-practices/unparseable.md',
+        [
+          '---',
+          'module: foo',
+          'date: 2026-01-01',
+          'applies_when:',
+          "  - Emitting JSON Schema with reused: 'ref' enabled",
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkSolutionSchema(root, [
+        'docs/solutions/best-practices/unparseable.md',
+      ])
+      expect(violations).toHaveLength(1)
+      expect(violations[0]).toMatchObject({
+        file: 'docs/solutions/best-practices/unparseable.md',
+        rule: 'malformed-frontmatter',
+      })
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags a missing required field', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSchemaFixture(root)
+      writeFile(
+        root,
+        'docs/solutions/best-practices/missing-field.md',
+        [
+          '---',
+          'date: 2026-01-01',
+          'problem_type: best_practice',
+          'component: tooling',
+          'severity: low',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkSolutionSchema(root, [
+        'docs/solutions/best-practices/missing-field.md',
+      ])
+      expect(violations).toContainEqual(
+        expect.objectContaining({
+          file: 'docs/solutions/best-practices/missing-field.md',
+          rule: 'schema-violation',
+          field: 'module',
+        }),
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags an off-enum component', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSchemaFixture(root)
+      writeFile(
+        root,
+        'docs/solutions/best-practices/bad-component.md',
+        [
+          '---',
+          'module: foo',
+          'date: 2026-01-01',
+          'problem_type: best_practice',
+          'component: invented_component',
+          'severity: low',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkSolutionSchema(root, [
+        'docs/solutions/best-practices/bad-component.md',
+      ])
+      expect(violations).toContainEqual(
+        expect.objectContaining({
+          file: 'docs/solutions/best-practices/bad-component.md',
+          rule: 'schema-violation',
+          field: 'component',
+        }),
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags an off-enum problem_type', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSchemaFixture(root)
+      writeFile(
+        root,
+        'docs/solutions/best-practices/bad-problem-type.md',
+        [
+          '---',
+          'module: foo',
+          'date: 2026-01-01',
+          'problem_type: not_a_real_problem_type',
+          'component: tooling',
+          'severity: low',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkSolutionSchema(root, [
+        'docs/solutions/best-practices/bad-problem-type.md',
+      ])
+      expect(violations).toContainEqual(
+        expect.objectContaining({
+          file: 'docs/solutions/best-practices/bad-problem-type.md',
+          rule: 'schema-violation',
+          field: 'problem_type',
+        }),
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags a bad date format', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSchemaFixture(root)
+      writeFile(
+        root,
+        'docs/solutions/best-practices/bad-date.md',
+        [
+          '---',
+          'module: foo',
+          'date: 05/17/2026',
+          'problem_type: best_practice',
+          'component: tooling',
+          'severity: low',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkSolutionSchema(root, [
+        'docs/solutions/best-practices/bad-date.md',
+      ])
+      expect(violations).toContainEqual(
+        expect.objectContaining({
+          file: 'docs/solutions/best-practices/bad-date.md',
+          rule: 'schema-violation',
+          field: 'date',
+        }),
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags a bug-track doc missing symptoms', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSchemaFixture(root)
+      writeFile(
+        root,
+        'docs/solutions/build-errors/missing-symptoms.md',
+        [
+          '---',
+          'module: foo',
+          'date: 2026-01-01',
+          'problem_type: build_error',
+          'component: tooling',
+          'severity: high',
+          'root_cause: config_error',
+          'resolution_type: code_fix',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkSolutionSchema(root, [
+        'docs/solutions/build-errors/missing-symptoms.md',
+      ])
+      expect(violations).toContainEqual(
+        expect.objectContaining({
+          file: 'docs/solutions/build-errors/missing-symptoms.md',
+          rule: 'schema-violation',
+          field: 'symptoms',
+        }),
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('accepts a knowledge-track doc carrying legacy bug-track fields (backward compatibility)', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSchemaFixture(root)
+      writeFile(
+        root,
+        'docs/solutions/best-practices/legacy.md',
+        [
+          '---',
+          'module: foo',
+          'date: 2026-01-01',
+          'problem_type: best_practice',
+          'component: tooling',
+          'severity: low',
+          'symptoms:',
+          '  - "some legacy symptom"',
+          'root_cause: config_error',
+          'resolution_type: code_fix',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkSolutionSchema(root, [
+        'docs/solutions/best-practices/legacy.md',
+      ])
+      expect(violations).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('accepts a fully valid bug-track doc', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSchemaFixture(root)
+      writeFile(
+        root,
+        'docs/solutions/build-errors/valid-bug.md',
+        [
+          '---',
+          'module: foo',
+          'date: 2026-01-01',
+          'problem_type: build_error',
+          'component: tooling',
+          'severity: high',
+          'symptoms:',
+          '  - "build fails with a cryptic error"',
+          'root_cause: config_error',
+          'resolution_type: code_fix',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkSolutionSchema(root, [
+        'docs/solutions/build-errors/valid-bug.md',
+      ])
+      expect(violations).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('accepts a fully valid knowledge-track doc', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSchemaFixture(root)
+      writeFile(
+        root,
+        'docs/solutions/best-practices/valid-knowledge.md',
+        [
+          '---',
+          'module: foo',
+          'date: 2026-01-01',
+          'problem_type: best_practice',
+          'component: documentation',
+          'severity: medium',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkSolutionSchema(root, [
+        'docs/solutions/best-practices/valid-knowledge.md',
+      ])
+      expect(violations).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('returns no violations when schema.yaml does not exist in rootDir (graceful no-op)', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'docs/solutions/best-practices/no-schema.md',
+        ['---', 'problem_type: garbage', '---', 'body'].join('\n'),
+      )
+      const violations = checkSolutionSchema(root, [
+        'docs/solutions/best-practices/no-schema.md',
+      ])
+      expect(violations).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('checkContentIntegrity surfaces solutionSchemaViolations and the inline-comment ban still fires independently', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSchemaFixture(root)
+      writeFile(
+        root,
+        'docs/solutions/best-practices/both-problems.md',
+        [
+          '---',
+          'module: foo',
+          'date: 2026-01-01',
+          'problem_type: invented_type',
+          'component: tooling',
+          'severity: low',
+          'notes: cache miss # under load',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const result = checkContentIntegrity(root)
+
+      // Schema-violation from the invented problem_type
+      expect(result.solutionSchemaViolations).toContainEqual(
+        expect.objectContaining({
+          file: 'docs/solutions/best-practices/both-problems.md',
+          rule: 'schema-violation',
+          field: 'problem_type',
+        }),
+      )
+
+      // Parse-safety ban still fires independently for the unquoted inline comment
+      expect(result.parseSafetyViolations).toContainEqual(
+        expect.objectContaining({
+          file: 'docs/solutions/best-practices/both-problems.md',
+          rule: 'parse-safety',
+          field: 'notes',
+        }),
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('reports exactly one violation for a present-but-null required field, not two', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSchemaFixture(root)
+      writeFile(
+        root,
+        'docs/solutions/best-practices/null-component.md',
+        [
+          '---',
+          'module: foo',
+          'date: 2026-01-01',
+          'problem_type: best_practice',
+          'component:',
+          'severity: low',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkSolutionSchema(root, [
+        'docs/solutions/best-practices/null-component.md',
+      ])
+      const componentViolations = violations.filter(
+        (v) => v.field === 'component',
+      )
+      expect(componentViolations).toHaveLength(1)
+      expect(componentViolations[0]).toMatchObject({
+        rule: 'schema-violation',
+        field: 'component',
+      })
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags a present-but-non-string required field with a distinct message, not "missing"', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSchemaFixture(root)
+      writeFile(
+        root,
+        'docs/solutions/best-practices/array-module.md',
+        [
+          '---',
+          'module: []',
+          'date: 2026-01-01',
+          'problem_type: best_practice',
+          'component: tooling',
+          'severity: low',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkSolutionSchema(root, [
+        'docs/solutions/best-practices/array-module.md',
+      ])
+      const moduleViolations = violations.filter((v) => v.field === 'module')
+      expect(moduleViolations).toHaveLength(1)
+      expect(moduleViolations[0]?.message).not.toContain(
+        'missing required field',
+      )
+      expect(moduleViolations[0]?.message).toContain(
+        'must be a non-empty string',
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('accepts a knowledge-track doc carrying resolution_type without root_cause', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSchemaFixture(root)
+      writeFile(
+        root,
+        'docs/solutions/best-practices/resolution-only.md',
+        [
+          '---',
+          'module: foo',
+          'date: 2026-01-01',
+          'problem_type: best_practice',
+          'component: tooling',
+          'severity: low',
+          'resolution_type: code_fix',
+          '---',
+          'body',
+        ].join('\n'),
+      )
+      const violations = checkSolutionSchema(root, [
+        'docs/solutions/best-practices/resolution-only.md',
+      ])
+      expect(violations).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags a solution doc with no frontmatter block at all', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSchemaFixture(root)
+      writeFile(
+        root,
+        'docs/solutions/best-practices/no-frontmatter.md',
+        '# Just a heading\n\nNo frontmatter here.\n',
+      )
+      const violations = checkSolutionSchema(root, [
+        'docs/solutions/best-practices/no-frontmatter.md',
+      ])
+      expect(violations).toEqual([
+        expect.objectContaining({
+          file: 'docs/solutions/best-practices/no-frontmatter.md',
+          rule: 'missing-frontmatter',
+        }),
+      ])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('flags frontmatter that parses to a YAML sequence instead of a mapping, without a field', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSchemaFixture(root)
+      writeFile(
+        root,
+        'docs/solutions/best-practices/sequence-frontmatter.md',
+        ['---', '- a', '- b', '---', 'body'].join('\n'),
+      )
+      const violations = checkSolutionSchema(root, [
+        'docs/solutions/best-practices/sequence-frontmatter.md',
+      ])
+      expect(violations).toHaveLength(1)
+      expect(violations[0]).toMatchObject({
+        file: 'docs/solutions/best-practices/sequence-frontmatter.md',
+        rule: 'schema-violation',
+      })
+      expect(violations[0]?.field).toBeUndefined()
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('an exempted path with invalid frontmatter produces no violation', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSchemaFixture(root)
+      writeFile(
+        root,
+        'docs/solutions/README.md',
+        '# Index\n\nNot a solution doc.\n',
+      )
+      const violations = checkSolutionSchema(
+        root,
+        ['docs/solutions/README.md'],
+        new Set(['docs/solutions/README.md']),
+      )
+      expect(violations).toEqual([])
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('a non-exempted path with the same invalid frontmatter content produces a violation', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeSchemaFixture(root)
+      writeFile(
+        root,
+        'docs/solutions/best-practices/not-exempt.md',
+        '# Index\n\nNot a solution doc.\n',
+      )
+      const violations = checkSolutionSchema(root, [
+        'docs/solutions/best-practices/not-exempt.md',
+      ])
+      expect(violations.length).toBeGreaterThan(0)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------
+// loadCompoundSchema — malformed schema.yaml (exercised via checkSolutionSchema,
+// since loadCompoundSchema itself is not exported)
+// ---------------------------------------------------------------------------
+
+describe('loadCompoundSchema — malformed schema.yaml throws', () => {
+  test('throws when tracks is not a mapping (schemaRecord)', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'skills/ce-compound/references/schema.yaml',
+        'tracks: not_a_mapping\n',
+      )
+      expect(() => checkSolutionSchema(root, [])).toThrow(
+        /Malformed compound schema \(skills\/ce-compound\/references\/schema\.yaml\): expected `tracks` to be a mapping\./,
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('throws when a problem_types list is not an array of strings (schemaStringArray)', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'skills/ce-compound/references/schema.yaml',
+        [
+          'tracks:',
+          '  bug:',
+          '    problem_types: not_an_array',
+          '  knowledge:',
+          '    problem_types:',
+          '      - best_practice',
+          '',
+        ].join('\n'),
+      )
+      expect(() => checkSolutionSchema(root, [])).toThrow(
+        /Malformed compound schema \(skills\/ce-compound\/references\/schema\.yaml\): expected `tracks\.bug\.problem_types` to be an array of strings\./,
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('throws when required_fields.date.pattern is not a string (schemaString)', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'skills/ce-compound/references/schema.yaml',
+        [
+          'tracks:',
+          '  bug:',
+          '    problem_types:',
+          '      - build_error',
+          '  knowledge:',
+          '    problem_types:',
+          '      - best_practice',
+          'required_fields:',
+          '  component:',
+          '    values:',
+          '      - tooling',
+          '  severity:',
+          '    values:',
+          '      - low',
+          '  date:',
+          '    pattern:',
+          '      - not',
+          '      - a',
+          '      - string',
+          '',
+        ].join('\n'),
+      )
+      expect(() => checkSolutionSchema(root, [])).toThrow(
+        /Malformed compound schema \(skills\/ce-compound\/references\/schema\.yaml\): expected `required_fields\.date\.pattern` to be a string\./,
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('reports an unparseable date.pattern regex in the same shape as its siblings', () => {
+    const root = makeFixtureRepo()
+    try {
+      writeFile(
+        root,
+        'skills/ce-compound/references/schema.yaml',
+        [
+          'tracks:',
+          '  bug:',
+          '    problem_types:',
+          '      - build_error',
+          '  knowledge:',
+          '    problem_types:',
+          '      - best_practice',
+          'required_fields:',
+          '  component:',
+          '    values:',
+          '      - tooling',
+          '  severity:',
+          '    values:',
+          '      - low',
+          '  date:',
+          "    pattern: '[unterminated'",
+          '',
+        ].join('\n'),
+      )
+      expect(() => checkSolutionSchema(root, [])).toThrow(
+        /Malformed compound schema \(skills\/ce-compound\/references\/schema\.yaml\): expected `required_fields\.date\.pattern` to be a valid regular expression:/,
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  test('does not throw when loading the real repo schema.yaml', () => {
+    expect(() => checkSolutionSchema(REPO_ROOT, [])).not.toThrow()
   })
 })
 

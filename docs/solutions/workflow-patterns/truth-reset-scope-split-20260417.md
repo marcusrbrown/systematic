@@ -1,9 +1,11 @@
 ---
 title: 'Truth Reset: Narrow Initiatives Outperform Bundled Ones, and Document-Review Convergence Is a Scope Signal'
 date: 2026-04-17
+module: ce-brainstorm-to-ship-pipeline
+problem_type: workflow_issue
 severity: medium
 category: workflow-patterns
-component: ce-brainstorm-to-ship-pipeline
+component: development_workflow
 tags:
   - workflow-patterns
   - scope-management
@@ -18,7 +20,7 @@ symptoms:
   - "Bundled 'credibility reset' plan (24 requirements, 20 implementation units, 3 PRs, 3.0.0 major bump) produced reviewer convergence on 'overscoped'"
   - 'Three independent persona reviewers (product-lens, scope-guardian, feasibility) arrived at the same recommendation from different angles'
   - "First attempt mixed three distinct initiatives (trust repair, portfolio rationalization, infra improvements) that share a theme but have different risk profiles and user impact"
-root_cause: "A single plan that addresses multiple distinct problem classes simultaneously accumulates risk from all of them while providing value only proportional to the smallest shippable subset. Narrow initiatives let trust repair ship cleanly as a minor release while deferring breaking catalog changes and infrastructure improvements to their own dedicated cycles — each with its own brainstorm, research, and plan rather than inherited scope from an overstuffed parent."
+root_cause: scope_issue
 resolution_type: workflow_improvement
 confidence: verified
 related:

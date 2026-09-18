@@ -1,6 +1,9 @@
 ---
 title: Code Review Fixes for OCX Registry Support
 date: 2026-02-11
+module: registry
+problem_type: best_practice
+component: tooling
 category: code-quality
 severity: medium
 components:
