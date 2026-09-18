@@ -1046,6 +1046,12 @@ export interface DerivedMergedFindingFields {
   readonly pre_existing: boolean
   readonly fingerprint: string
   readonly route: PipelineRoute
+  /** Whether `route` actually differs from the route meet computed over
+   * `contributing` -- true only for a genuine narrowing, never merely
+   * because the model supplied a `proposed_route`. Assembly uses this,
+   * rather than presence of a proposal, to decide whether
+   * `route_narrowing_reason` belongs on the wire. */
+  readonly route_differs_from_meet: boolean
 }
 
 type MergedFindingRejectReason =
@@ -1209,6 +1215,18 @@ function meetOverNarrowsTo<Value extends string>(
   )
 }
 
+/** Whether two routes are field-by-field identical. Shared by `deriveRoute`
+ * (to detect an identity proposal) and `mergedFindingRouteNarrowed` (to
+ * detect a carried route that diverges from the meet), so the two never
+ * drift into separately hand-rolled comparisons. */
+function routesEqual(a: PipelineRoute, b: PipelineRoute): boolean {
+  return (
+    a.autofix_class === b.autofix_class &&
+    a.owner === b.owner &&
+    a.requires_verification === b.requires_verification
+  )
+}
+
 /** The route meet: the most permissive `{autofix_class, owner,
  * requires_verification}` that every contributing input permits, computed
  * per field from the exported `ROUTE_REFUSAL_TABLE` rather than a
@@ -1241,16 +1259,29 @@ function deriveRouteMeet(
  * Computes the route meet, then applies the model's proposed narrowing (if
  * any). A proposed route with no reason is rejected; a proposed route that
  * `isRouteTransitionAllowed` refuses from the meet (a widening or
- * incomparable transition) is rejected as `'route widening'`.
+ * incomparable transition) is rejected as `'route widening'`. The ok result
+ * also reports `differsFromMeet` -- whether the resolved route is actually
+ * distinct from the meet computed here -- so assembly can decide whether
+ * `route_narrowing_reason` belongs on the wire without recomputing the meet
+ * a second time. A `proposed_route` identical to the meet (an identity
+ * "narrowing") is accepted like any other valid transition; the model
+ * cannot see `ROUTE_REFUSAL_TABLE` and so cannot know in advance that its
+ * proposal was already the meet.
  */
 function deriveRoute(
   contributing: MergeContributingFindings,
   decision: MergedFindingModelDecision,
 ):
-  | { readonly ok: true; readonly value: PipelineRoute }
+  | {
+      readonly ok: true
+      readonly value: PipelineRoute
+      readonly differsFromMeet: boolean
+    }
   | { readonly ok: false; readonly rejection: MergedFindingRejection } {
   const meet = deriveRouteMeet(contributing)
-  if (!decision.proposed_route) return { ok: true, value: meet }
+  if (!decision.proposed_route) {
+    return { ok: true, value: meet, differsFromMeet: false }
+  }
 
   if (!decision.route_narrowing_reason) {
     return rejectMergedFinding(
@@ -1266,7 +1297,11 @@ function deriveRoute(
     )
   }
 
-  return { ok: true, value: decision.proposed_route }
+  return {
+    ok: true,
+    value: decision.proposed_route,
+    differsFromMeet: !routesEqual(meet, decision.proposed_route),
+  }
 }
 
 /**
@@ -1318,6 +1353,7 @@ export function deriveMergedFindingFields(
       pre_existing: preExisting,
       fingerprint,
       route: routeResult.value,
+      route_differs_from_meet: routeResult.differsFromMeet,
     },
   }
 }
@@ -1525,10 +1561,9 @@ function assembleMergedGroupFinding(
         evidence: decision.evidence,
         suggested_fix: decision.suggested_fix,
         input_finding_ids: sortedInputIds,
-        route_narrowing_reason:
-          decision.proposed_route !== undefined
-            ? decision.route_narrowing_reason
-            : undefined,
+        route_narrowing_reason: derived.value.route_differs_from_meet
+          ? decision.route_narrowing_reason
+          : undefined,
       },
       derived.value,
     ),
@@ -1578,10 +1613,9 @@ function assembleSingletonFinding(
         evidence: finding.evidence,
         suggested_fix: finding.suggested_fix,
         input_finding_ids: [finding.input_id],
-        route_narrowing_reason:
-          decisionFields.proposed_route !== undefined
-            ? decisionFields.route_narrowing_reason
-            : undefined,
+        route_narrowing_reason: derived.value.route_differs_from_meet
+          ? decisionFields.route_narrowing_reason
+          : undefined,
       },
       derived.value,
     ),
@@ -2583,17 +2617,24 @@ function eligibleAgreementCreditClaim(
     : undefined
 }
 
-/** Whether a merged finding's carried route is strictly narrower than the
- * route meet over its contributing survivors -- field-by-field, matching
- * `deriveRouteMeet`'s per-field ordering rather than re-deriving it. */
+/** Whether a merged finding's carried route differs from the route meet
+ * over its contributing survivors -- field-by-field, via the shared
+ * `routesEqual` helper. Despite the name, this is direction-agnostic: a
+ * carried route that *widens* also reports `true` here. Callers that care
+ * about direction (a genuine narrowing vs. a widening) must additionally
+ * consult `isRouteTransitionAllowed` or a re-derivation, as
+ * `mergedFindingDivergesFromDerivation` does. */
 function mergedFindingRouteNarrowed(
   finding: MergeOutput['merged_findings'][number],
   meet: PipelineRoute,
 ): boolean {
-  return (
-    finding.autofix_class !== meet.autofix_class ||
-    finding.owner !== meet.owner ||
-    finding.requires_verification !== meet.requires_verification
+  return !routesEqual(
+    {
+      autofix_class: finding.autofix_class,
+      owner: finding.owner,
+      requires_verification: finding.requires_verification,
+    },
+    meet,
   )
 }
 
@@ -2612,13 +2653,18 @@ function mergedFindingRouteReasonMismatch(
     : finding.route_narrowing_reason !== undefined
 }
 
+interface MergedFindingDivergenceContext {
+  readonly finding: MergeOutput['merged_findings'][number]
+  readonly resolved: readonly SurvivingFinding[]
+  readonly contributing: MergeContributingFindings
+  readonly meet: PipelineRoute
+  readonly returnedReviewers: readonly string[]
+}
+
 function mergedFindingDivergesFromDerivation(
-  finding: MergeOutput['merged_findings'][number],
-  resolved: readonly SurvivingFinding[],
-  contributing: MergeContributingFindings,
-  meet: PipelineRoute,
-  returnedReviewers: readonly string[],
+  context: MergedFindingDivergenceContext,
 ): boolean {
+  const { finding, resolved, contributing, meet, returnedReviewers } = context
   const narrowed = mergedFindingRouteNarrowed(finding, meet)
 
   const derivation = deriveMergedFindingFields({
@@ -2659,7 +2705,13 @@ function mergedFindingDivergesFromDerivation(
 
 /** KTD19 verifier: re-runs `deriveMergedFindingFields` over every merged
  * finding's carried survivors and rejects the first one whose carried
- * fields diverge from the fresh derivation. */
+ * fields diverge from the fresh derivation. The divergence check runs
+ * before the narrowing/reason pairing check: `mergedFindingRouteNarrowed`
+ * only means "differs from the meet", not "narrows", so a carried route
+ * that *widens* with no reason would otherwise surface the less precise
+ * pairing-mismatch diagnostic instead of the more accurate
+ * divergence-from-derivation one (divergence re-derives the route and
+ * catches a widening attempt directly via `isRouteTransitionAllowed`). */
 function checkMergedFindingsMatchDerivation(
   mergedFindings: MergeOutput['merged_findings'],
   contributingByFindingId: ReadonlyMap<string, readonly SurvivingFinding[]>,
@@ -2672,6 +2724,25 @@ function checkMergedFindingsMatchDerivation(
     )
     const meet = deriveRouteMeet(contributing)
 
+    if (
+      mergedFindingDivergesFromDerivation({
+        finding,
+        resolved,
+        contributing,
+        meet,
+        returnedReviewers,
+      })
+    ) {
+      return {
+        path: formatReviewArtifactIssuePath([
+          'merge',
+          'merged_findings',
+          index,
+        ]),
+        reason: 'merged finding fields diverge from derivation',
+      }
+    }
+
     if (mergedFindingRouteReasonMismatch(finding, meet)) {
       return {
         path: formatReviewArtifactIssuePath([
@@ -2681,25 +2752,6 @@ function checkMergedFindingsMatchDerivation(
           'route_narrowing_reason',
         ]),
         reason: 'merged finding route narrowing reason mismatch',
-      }
-    }
-
-    if (
-      mergedFindingDivergesFromDerivation(
-        finding,
-        resolved,
-        contributing,
-        meet,
-        returnedReviewers,
-      )
-    ) {
-      return {
-        path: formatReviewArtifactIssuePath([
-          'merge',
-          'merged_findings',
-          index,
-        ]),
-        reason: 'merged finding fields diverge from derivation',
       }
     }
   }

@@ -849,9 +849,14 @@ describe('applyReviewAdjudication', () => {
 
   test('a narrowing proposed route equal to the meet carries no route_narrowing_reason when the model proposes none', () => {
     // `assembleMergedGroupFinding` only carries `route_narrowing_reason` onto
-    // the wire when the model's decision actually set `proposed_route` --
-    // never merely because the finding's mechanical route happens to match
-    // what a narrowing would have produced.
+    // the wire when `deriveRoute` reports the resolved route actually
+    // differs from the meet (`DerivedMergedFindingFields.route_differs_from_meet`)
+    // -- never merely because the decision set `proposed_route`. This case
+    // has no `proposed_route` at all, so the resolved route is the meet
+    // itself and no reason is ever in play, but the fix that carries
+    // reasons conditionally is the same either way (see the KTD24
+    // identity-proposal regression tests in review-pipeline-finalize.test.ts
+    // for the case where `proposed_route` *is* set but equals the meet).
     const groups = [
       group('src/x.ts', [
         { input_id: 'correctness#0', line: 5 },
