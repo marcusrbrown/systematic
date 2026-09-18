@@ -599,7 +599,7 @@ export function discoverCategories(rootDir: string): string[] {
 export interface ScanTargets {
   markdown: string[] // repo-relative paths under skills/ and agents/
   typescript: string[] // repo-relative paths under src/ (excluding markdown)
-  solutionMarkdown: string[] // repo-relative paths under docs/solutions/ (parse-safety only)
+  solutionMarkdown: string[] // repo-relative paths under docs/solutions/ (parse-safety + compound-schema validation)
   rootDocuments: string[] // named contributor-facing root docs (hook parity only)
 }
 
@@ -631,10 +631,11 @@ const INLINE_HOOK_REGEX = /`([^`\n]+)`/g
  *
  * - `markdown`: skills/ and agents/ markdown — full invariant suite.
  * - `typescript`: src/ TypeScript — banned-pattern scan.
- * - `solutionMarkdown`: docs/solutions/ markdown — parse-safety check ONLY.
- *   Deliberately NOT merged into `markdown` to keep banned-pattern enforcement
- *   scoped to skills+agents+src; historical solution docs may legitimately
- *   reference CC/CEP terms.
+ * - `solutionMarkdown`: docs/solutions/ markdown — parse-safety plus
+ *   compound-schema validation (`checkSolutionSchema`), not the full invariant
+ *   suite. Deliberately NOT merged into `markdown` to keep banned-pattern
+ *   enforcement scoped to skills+agents+src; historical solution docs may
+ *   legitimately reference CC/CEP terms.
  */
 export function collectScanTargets(rootDir: string): ScanTargets {
   const markdown: string[] = []

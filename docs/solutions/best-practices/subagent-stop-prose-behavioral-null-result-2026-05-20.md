@@ -13,7 +13,6 @@ tags:
   - manual-probes
   - prose-control
 symptoms: []
-root_cause: incomplete_setup
 resolution_type: documentation_update
 related_components:
   - manual-probes
