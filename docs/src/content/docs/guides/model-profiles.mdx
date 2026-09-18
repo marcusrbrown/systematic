@@ -152,6 +152,8 @@ With the `work` profile above selected by a repository:
 
 `source` tells you which layer supplied each value: `level` is `agent` or `category`, `form` is `block`, `flat`, or `legacy-pi-subagents`.
 
+Both forms exit `1` when the configuration fails to load, printing the file and key that rejected it, and `0` otherwise — so a script can branch on the exit status rather than parsing the output.
+
 ## Troubleshooting
 
 - **A selected profile name is not defined.** Systematic warns once and uses your own default `profile` instead; with no usable default it runs on base configuration. `config show` reports the fallback under `profileFallback`.
