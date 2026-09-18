@@ -1134,6 +1134,14 @@ function isQuotedValue(value: string): boolean {
 const COMPOUND_SCHEMA_RELATIVE_PATH =
   'skills/ce-compound/references/schema.yaml'
 
+// Paths under docs/solutions/ (repo-relative) that are not themselves
+// solution docs — e.g. a future docs/solutions/README.md or index page —
+// and are therefore exempt from checkSolutionSchema's required-field
+// validation. All 90 current files are genuine solution docs, so this is
+// seeded empty. A real solution doc that fails schema validation does NOT
+// belong here: fix the doc, don't exempt it.
+export const SOLUTION_SCHEMA_EXEMPTIONS: ReadonlySet<string> = new Set()
+
 interface CompoundSchema {
   bugProblemTypes: ReadonlySet<string>
   knowledgeProblemTypes: ReadonlySet<string>
@@ -1251,9 +1259,20 @@ function loadCompoundSchema(rootDir: string): CompoundSchema | null {
       'required_fields.severity.values',
     ),
   )
-  const datePattern = new RegExp(
-    schemaString(dateField, 'pattern', 'required_fields.date.pattern'),
+  const datePatternSource = schemaString(
+    dateField,
+    'pattern',
+    'required_fields.date.pattern',
   )
+  let datePattern: RegExp
+  try {
+    datePattern = new RegExp(datePatternSource)
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    throw new Error(
+      `Malformed compound schema (${COMPOUND_SCHEMA_RELATIVE_PATH}): expected \`required_fields.date.pattern\` to be a valid regular expression: ${reason}`,
+    )
+  }
 
   const trackRules = schemaRecord(parsed, 'track_rules', 'track_rules')
   const bugRules = schemaRecord(trackRules, 'bug', 'track_rules.bug')
@@ -1324,8 +1343,14 @@ function pushSchemaViolation(
 }
 
 /**
- * Checks presence of a shared required field. Returns true when present with
- * a non-empty value.
+ * Checks presence of a shared required field. Returns true when present as a
+ * non-empty (post-trim) string, matching the schema's declared `type: string`.
+ *
+ * Distinguishes two failure modes in the emitted message: a field that is
+ * absent, null, or an empty string is reported as "missing"; a field that is
+ * present but the wrong type (e.g. an array/object) or whitespace-only is
+ * reported as a distinct "must be a non-empty string" violation, since it is
+ * not literally missing from the frontmatter.
  */
 function checkSolutionRequiredField(
   relPath: string,
@@ -1334,13 +1359,19 @@ function checkSolutionRequiredField(
   violations: FrontmatterViolation[],
 ): boolean {
   const value = data[field]
-  if (Object.hasOwn(data, field) && value !== null && value !== '') {
+  if (typeof value === 'string' && value.trim() !== '') {
     return true
   }
+
+  const isPresentWrongShape =
+    Object.hasOwn(data, field) && value !== null && value !== ''
+  const message = isPresentWrongShape
+    ? `Solution-doc frontmatter field \`${field}\` must be a non-empty string, got ${JSON.stringify(value)}.`
+    : `Solution-doc frontmatter is missing required field \`${field}\`.`
   pushSchemaViolation(
     relPath,
     field,
-    `Solution-doc frontmatter is missing required field \`${field}\`.`,
+    message,
     `Add \`${field}\` to frontmatter per ${COMPOUND_SCHEMA_RELATIVE_PATH}.`,
     violations,
   )
@@ -1395,12 +1426,16 @@ function checkSolutionDate(
  * symptoms, root_cause, and resolution_type. Per schema.yaml's backward-
  * compatibility note, the reverse is NOT enforced: knowledge-track docs may
  * carry these same fields as harmless legacy data.
+ *
+ * Returns whether root_cause/resolution_type passed their required-field
+ * check, so the caller can skip the corresponding enum check and avoid
+ * double-reporting one defect as two violations.
  */
 function checkBugTrackRequiredFields(
   relPath: string,
   data: Record<string, unknown>,
   violations: FrontmatterViolation[],
-): void {
+): { rootCauseOk: boolean; resolutionTypeOk: boolean } {
   if (!isNonEmptyStringArray(data.symptoms)) {
     pushSchemaViolation(
       relPath,
@@ -1410,8 +1445,19 @@ function checkBugTrackRequiredFields(
       violations,
     )
   }
-  checkSolutionRequiredField(relPath, data, 'root_cause', violations)
-  checkSolutionRequiredField(relPath, data, 'resolution_type', violations)
+  const rootCauseOk = checkSolutionRequiredField(
+    relPath,
+    data,
+    'root_cause',
+    violations,
+  )
+  const resolutionTypeOk = checkSolutionRequiredField(
+    relPath,
+    data,
+    'resolution_type',
+    violations,
+  )
+  return { rootCauseOk, resolutionTypeOk }
 }
 
 function scanSolutionSchema(
@@ -1457,54 +1503,94 @@ function scanSolutionSchema(
 
   const data = parsed.data
   checkSolutionRequiredField(relPath, data, 'module', violations)
-  checkSolutionRequiredField(relPath, data, 'date', violations)
-  checkSolutionRequiredField(relPath, data, 'problem_type', violations)
-  checkSolutionRequiredField(relPath, data, 'component', violations)
-  checkSolutionRequiredField(relPath, data, 'severity', violations)
-
-  checkSolutionEnumField(
+  const dateOk = checkSolutionRequiredField(relPath, data, 'date', violations)
+  const problemTypeOk = checkSolutionRequiredField(
     relPath,
     data,
     'problem_type',
-    schema.allProblemTypes,
     violations,
   )
-  checkSolutionEnumField(
+  const componentOk = checkSolutionRequiredField(
     relPath,
     data,
     'component',
-    schema.componentValues,
     violations,
   )
-  checkSolutionEnumField(
+  const severityOk = checkSolutionRequiredField(
     relPath,
     data,
     'severity',
-    schema.severityValues,
     violations,
   )
-  checkSolutionEnumField(
-    relPath,
-    data,
-    'root_cause',
-    schema.rootCauseValues,
-    violations,
-  )
-  checkSolutionEnumField(
-    relPath,
-    data,
-    'resolution_type',
-    schema.resolutionTypeValues,
-    violations,
-  )
-  checkSolutionDate(relPath, data, schema.datePattern, violations)
+
+  // Only run the enum/date checks when the required-field check for the same
+  // field already passed — otherwise a present-but-null (or wrong-type) field
+  // would be reported twice: once as missing, once as off-vocabulary.
+  if (problemTypeOk) {
+    checkSolutionEnumField(
+      relPath,
+      data,
+      'problem_type',
+      schema.allProblemTypes,
+      violations,
+    )
+  }
+  if (componentOk) {
+    checkSolutionEnumField(
+      relPath,
+      data,
+      'component',
+      schema.componentValues,
+      violations,
+    )
+  }
+  if (severityOk) {
+    checkSolutionEnumField(
+      relPath,
+      data,
+      'severity',
+      schema.severityValues,
+      violations,
+    )
+  }
 
   const problemType = data.problem_type
+  let rootCauseOk = true
+  let resolutionTypeOk = true
   if (
     typeof problemType === 'string' &&
     schema.bugProblemTypes.has(problemType)
   ) {
-    checkBugTrackRequiredFields(relPath, data, violations)
+    const bugTrackResult = checkBugTrackRequiredFields(
+      relPath,
+      data,
+      violations,
+    )
+    rootCauseOk = bugTrackResult.rootCauseOk
+    resolutionTypeOk = bugTrackResult.resolutionTypeOk
+  }
+
+  if (rootCauseOk) {
+    checkSolutionEnumField(
+      relPath,
+      data,
+      'root_cause',
+      schema.rootCauseValues,
+      violations,
+    )
+  }
+  if (resolutionTypeOk) {
+    checkSolutionEnumField(
+      relPath,
+      data,
+      'resolution_type',
+      schema.resolutionTypeValues,
+      violations,
+    )
+  }
+
+  if (dateOk) {
+    checkSolutionDate(relPath, data, schema.datePattern, violations)
   }
 }
 
@@ -1519,12 +1605,14 @@ function scanSolutionSchema(
 export function checkSolutionSchema(
   rootDir: string,
   solutionMarkdownFiles: readonly string[],
+  exemptSolutions: ReadonlySet<string> = SOLUTION_SCHEMA_EXEMPTIONS,
 ): FrontmatterViolation[] {
   const violations: FrontmatterViolation[] = []
   const schema = loadCompoundSchema(rootDir)
   if (schema === null) return violations
 
   for (const relPath of solutionMarkdownFiles) {
+    if (exemptSolutions.has(relPath)) continue
     const content = readFileSafe(path.join(rootDir, relPath))
     if (content === null) continue
     scanSolutionSchema(relPath, content, schema, violations)
