@@ -3,7 +3,8 @@ title: content-integrity has no non-failing warning channel; gate checks are vio
 category: best_practice
 problem_type: best_practice
 module: content-integrity
-component: ci-gate-design
+component: tooling
+severity: low
 tags:
   - ci-gate
   - content-integrity

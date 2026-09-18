@@ -1,9 +1,11 @@
 ---
 title: 'Reconciliation-Only Sync Creates Phantom References When Upstream Adds New Agents'
 date: 2026-04-17
+module: content-integrity
+problem_type: integration_issue
 severity: high
 category: workflow-issues
-component: content-integrity-gate
+component: tooling
 tags:
   - reference-integrity
   - phantom-references
@@ -17,7 +19,7 @@ symptoms:
   - 'Runtime failure when user has Slack MCP tools configured and the skill triggers the dispatch branch'
   - 'No build-time or test-time signal — markdown content is not validated against filesystem'
   - 'Issue not surfaced by any CI check; caught only by a ce:review pass post-hoc'
-root_cause: 'The reconciliation-only sync policy treats each CEP definition independently and does NOT validate reference integrity between updated and new definitions. When CEP upstream added a new `slack-researcher` agent AND updated three existing skills (`ce-brainstorm`, `ce-ideate`, `ce-plan`) to dispatch it, the sync policy imported the skill content updates (classified as "hash changes" in bucket 1) but skipped the new agent (classified as "new upstream" in bucket 2, explicitly out of scope for reconciliation-only). The three skills ended up with dangling references to an agent that was never imported.'
+root_cause: missing_workflow_step
 resolution_type: workflow_improvement
 confidence: verified
 related:

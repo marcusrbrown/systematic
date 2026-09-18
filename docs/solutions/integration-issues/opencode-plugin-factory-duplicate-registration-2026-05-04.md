@@ -3,9 +3,18 @@ title: 'OpenCode plugin multi-source loading: per-load registration with marker-
 date: 2026-05-04
 last_refreshed: 2026-05-16
 category: integration-issues
+module: systematic-plugin
 problem_type: integration_issue
 component: tooling
 severity: medium
+symptoms:
+  - "`systematic_skill` appeared twice in the LLM-visible tool catalog"
+  - "`experimental.chat.system.transform` ran twice on every prompt, stacking the bootstrap block N times"
+  - Under the singleton guard, only the first-loaded source's behavior was visible and the second was silently shadowed
+  - A contributor with both npm and local-source configs saw the npm version, never their local changes
+  - No error surfaced; OpenCode reported a healthy plugin
+root_cause: logic_error
+resolution_type: code_fix
 applies_when:
   - Designing an OpenCode plugin that may be loaded from multiple opencode.json sources in the same process
   - A plugin must inject content into the system prompt array idempotently across multiple registrations

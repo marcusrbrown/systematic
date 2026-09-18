@@ -18,7 +18,7 @@ symptoms:
   - JSONL or other side-channel log stays empty for an entire probe run with no error in stderr
   - opencode serve process keeps running normally; no traceback, no warning, no degraded mode
   - The same hook works in isolation (different fixture, different invocation) but fails silently in the real fixture
-root_cause: unhandled_effect_defect
+root_cause: logic_error
 resolution_type: code_fix
 related_components:
   - manual-probes

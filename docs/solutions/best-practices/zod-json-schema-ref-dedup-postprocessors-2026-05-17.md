@@ -7,7 +7,7 @@ problem_type: best_practice
 component: tooling
 severity: medium
 applies_when:
-  - Emitting JSON Schema from Zod 4 with `reused: 'ref'` enabled
+  - "Emitting JSON Schema from Zod 4 with `reused: 'ref'` enabled"
   - Post-processing the emitted schema by walking property paths
   - Mutating `required` arrays, injecting `allOf` conditionals, or otherwise rewriting schema nodes after emission
   - Schemas carry `.describe()` / `.default()` / `.examples()` metadata alongside structural bodies

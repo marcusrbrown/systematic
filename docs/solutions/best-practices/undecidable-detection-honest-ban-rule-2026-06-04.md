@@ -3,7 +3,8 @@ title: When detection is undecidable, ban the pattern instead of guessing
 category: best_practice
 problem_type: best_practice
 module: content-integrity
-component: frontmatter-parse-safety
+component: tooling
+severity: medium
 tags:
   - yaml
   - frontmatter

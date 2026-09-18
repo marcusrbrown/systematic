@@ -1,9 +1,11 @@
 ---
 title: 'Zsh `for` Loops Silently Fail on Unquoted Variables: 41 Unconverted Files Shipped Past Verification'
 date: 2026-04-17
+module: batch-conversion-tooling
+problem_type: integration_issue
 severity: high
 category: integration-issues
-component: batch-conversion-tooling
+component: tooling
 tags:
   - zsh
   - bash
@@ -19,7 +21,7 @@ symptoms:
   - 'Downstream verification grep returns zero results, falsely signaling "clean"'
   - '41 files containing residual `Claude Code`, `compound-engineering:`, `CLAUDE.md`, `AskUserQuestion`, `${CLAUDE_PLUGIN_ROOT}` refs shipped into a commit after both conversion and verification "passed"'
   - 'Issue discovered only when a downstream consumer spot-reviewed the diff and flagged untouched references'
-root_cause: 'Zsh does NOT word-split unquoted `$variable` in `for` loops by default (unlike bash). A loop like `FILES=$(git diff --name-only); for f in $FILES; do ... done` iterates ONCE in zsh, with `$f` bound to the entire multi-line string. `[ -f "$f" ] || continue` returns false (the multi-line blob is not a file path), the loop body is skipped, and every `sed` or `grep` inside never runs. Because BOTH the conversion loop AND the verification loop used the same broken pattern, both failed together — producing a misleadingly "clean" verification signal.'
+root_cause: logic_error
 resolution_type: workflow_improvement
 confidence: verified
 related:
