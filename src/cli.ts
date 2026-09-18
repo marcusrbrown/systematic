@@ -655,10 +655,15 @@ function printResolvedSection(): boolean {
     // Surface the same message `--json` already returns (see
     // buildConfigShowJson). Without it the user sees only "unavailable"
     // and has no way to learn which file or key rejected the load.
-    console.log(
+    //
+    // Both lines go to stderr, together: this is the failure report, and
+    // splitting it across streams would leave either half unreadable. The
+    // `--json` branch keeps its envelope on stdout because that document is
+    // the machine-readable output, error field included.
+    console.error(
       '\nResolved configuration: unavailable (the configuration failed to load).',
     )
-    console.log(
+    console.error(
       `  Reason: ${error instanceof Error ? error.message : String(error)}`,
     )
     return false

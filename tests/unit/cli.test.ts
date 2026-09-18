@@ -744,11 +744,15 @@ describe('cli config show', () => {
       const result = runCli(['config', 'show'], project, { HOME: home })
 
       expect(result.exitCode).toBe(1)
-      expect(result.stdout).toContain('Resolved configuration: unavailable')
-      expect(result.stdout).toContain('categories.review.model')
-      expect(result.stdout).toContain(
+      expect(result.stderr).toContain('Resolved configuration: unavailable')
+      expect(result.stderr).toContain('categories.review.model')
+      expect(result.stderr).toContain(
         'only valid in user config or OPENCODE_CONFIG_DIR config',
       )
+      // The whole failure report lands on one stream, so neither half is
+      // stranded: nothing about it leaks back onto stdout.
+      expect(result.stdout).not.toContain('Resolved configuration: unavailable')
+      expect(result.stdout).not.toContain('Reason:')
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
@@ -771,9 +775,12 @@ describe('cli config show', () => {
       const json = runCli(['config', 'show', '--json'], project, { HOME: home })
 
       expect(json.exitCode).toBe(1)
+      // The `--json` envelope stays on stdout even on failure: that document
+      // is the machine-readable output, error field included, so a consumer
+      // can still pipe it. Only the prose report moves to stderr.
       const parsed = JSON.parse(json.stdout) as { error: string }
       expect(parsed.error).toContain('agents.correctness-reviewer.model')
-      expect(prose.stdout).toContain(parsed.error)
+      expect(prose.stderr).toContain(parsed.error)
       expect(prose.exitCode).toBe(json.exitCode)
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
