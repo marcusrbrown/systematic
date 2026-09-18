@@ -725,6 +725,60 @@ describe('cli config show', () => {
     }
   })
 
+  // A project config carrying a trust-protected overlay field makes
+  // loadConfigWithSources throw. The prose renderer used to swallow that
+  // Error entirely, leaving the user with "unavailable" and no reason,
+  // while `--json` already surfaced `error.message`. The rejection itself
+  // is a deliberate trust boundary and stays; only the diagnostic changes.
+  it('a load failure prints the reason, naming the offending file and key', () => {
+    const root = mkTempCwd()
+    const home = path.join(root, 'home')
+    const project = path.join(root, 'project')
+    try {
+      fs.mkdirSync(project, { recursive: true })
+      fs.mkdirSync(home, { recursive: true })
+      writeProjectConfig(project, {
+        categories: { review: { model: 'anthropic/haiku' } },
+      })
+
+      const result = runCli(['config', 'show'], project, { HOME: home })
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).toContain('Resolved configuration: unavailable')
+      expect(result.stdout).toContain('categories.review.model')
+      expect(result.stdout).toContain(
+        'only valid in user config or OPENCODE_CONFIG_DIR config',
+      )
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  // The prose reason must agree with the `--json` reason; they read the
+  // same Error. This is the regression that would reintroduce the split.
+  it('the load-failure reason matches the --json error message', () => {
+    const root = mkTempCwd()
+    const home = path.join(root, 'home')
+    const project = path.join(root, 'project')
+    try {
+      fs.mkdirSync(project, { recursive: true })
+      fs.mkdirSync(home, { recursive: true })
+      writeProjectConfig(project, {
+        agents: { 'correctness-reviewer': { model: 'anthropic/haiku' } },
+      })
+
+      const prose = runCli(['config', 'show'], project, { HOME: home })
+      const json = runCli(['config', 'show', '--json'], project, { HOME: home })
+
+      expect(json.exitCode).toBe(1)
+      const parsed = JSON.parse(json.stdout) as { error: string }
+      expect(parsed.error).toContain('agents.correctness-reviewer.model')
+      expect(prose.stdout).toContain(parsed.error)
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
   describe('--json', () => {
     // Both the prose routing table and the --json routing array must
     // exclude a disabled agent.
