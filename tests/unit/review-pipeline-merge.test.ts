@@ -842,6 +842,45 @@ describe('applyReviewAdjudication', () => {
     expect(merged?.requires_verification).toBe(
       DEFAULT_ROUTE.requires_verification,
     )
+    expect(merged?.route_narrowing_reason).toBe(
+      'Only a human should apply this fix.',
+    )
+  })
+
+  test('a narrowing proposed route equal to the meet carries no route_narrowing_reason when the model proposes none', () => {
+    // `assembleMergedGroupFinding` only carries `route_narrowing_reason` onto
+    // the wire when `deriveRoute` reports the resolved route actually
+    // differs from the meet (`DerivedMergedFindingFields.route_differs_from_meet`)
+    // -- never merely because the decision set `proposed_route`. This case
+    // has no `proposed_route` at all, so the resolved route is the meet
+    // itself and no reason is ever in play, but the fix that carries
+    // reasons conditionally is the same either way (see the KTD24
+    // identity-proposal regression tests in review-pipeline-finalize.test.ts
+    // for the case where `proposed_route` *is* set but equals the meet).
+    const groups = [
+      group('src/x.ts', [
+        { input_id: 'correctness#0', line: 5 },
+        { input_id: 'security#0', line: 6 },
+      ]),
+    ]
+    const decisions: ApplyDecision = [
+      mergedDecision({
+        input_finding_ids: ['correctness#0', 'security#0'],
+        line: 5,
+      }),
+    ]
+
+    const result = applyReviewAdjudication({
+      prepared: prepared(groups),
+      decisions,
+    })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const merged = result.value.merged_findings.find(
+      (finding) => finding.finding_id === 'merge-1',
+    )
+    expect('route_narrowing_reason' in (merged ?? {})).toBe(false)
   })
 
   test('a widening proposed route arriving through the wire envelope is rejected', () => {

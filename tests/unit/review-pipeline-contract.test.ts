@@ -1091,6 +1091,32 @@ describe('MergeInputSchema / MergeOutputSchema', () => {
     expect(finding?.fingerprint).toBe('src/example.ts:42:P1')
     expect(finding?.submitters).toEqual(['correctness', 'security'])
   })
+
+  test('accepts a merged finding carrying route_narrowing_reason', () => {
+    const result = MergeOutputSchema.safeParse({
+      ...mergeOutputFixture,
+      merged_findings: [
+        {
+          ...mergedFindingFixture,
+          route_narrowing_reason: 'Escalated to release per policy.',
+        },
+      ],
+    })
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    const [finding] = result.data.merged_findings
+    expect(finding?.route_narrowing_reason).toBe(
+      'Escalated to release per policy.',
+    )
+  })
+
+  test('a merged finding without route_narrowing_reason still validates', () => {
+    const result = MergeOutputSchema.safeParse(mergeOutputFixture)
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    const [finding] = result.data.merged_findings
+    expect('route_narrowing_reason' in (finding ?? {})).toBe(false)
+  })
 })
 
 describe('ValidatorLifecycleResultSchema', () => {

@@ -138,14 +138,32 @@ supplies the arithmetic and the narrowing rule.
 **Input:** `{ prepared:<prepare output>, adjudication:<model envelope with decisions[]> }`.
 Build one `decisions[]` entry for every candidate-group member: a `merged`
 decision citing 2+ input IDs from the same group with the merged finding's
-`title`, `why_it_matters`, `evidence`, `line`, `proposed_route` (when the
-merge's route should narrow), `route_narrowing_reason` (required whenever
-`proposed_route` is present), and optional `disagreement_facts` and
-`eligible_agreement_credit`; or a `declined` decision citing exactly one
-input ID with a `declined_reason` explaining why it stays a separate defect.
-Every candidate-group member must be cited by exactly one decision -- no
-omissions, no double-citations. `prepare`'s true singletons need no decision
-at all.
+`title`, `why_it_matters`, `evidence`, `line`, an optional `proposed_route`,
+`route_narrowing_reason` (required whenever `proposed_route` is present),
+and optional `disagreement_facts` and `eligible_agreement_credit`; or a
+`declined` decision citing exactly one input ID with a `declined_reason`
+explaining why it stays a separate defect. Every candidate-group member must
+be cited by exactly one decision -- no omissions, no double-citations.
+`prepare`'s true singletons need no decision at all.
+
+Omit `proposed_route` unless the route genuinely narrows: strictly narrower
+than every contributing finding's own route, per the authored
+narrows-only transitions (`autofix_class`, `owner`, `requires_verification`
+each only ever narrow, never widen). A proposal that turns out to equal the
+resolved route meet over the group's contributors -- for example, proposing
+`owner: 'release'` for a group whose members are already routed to
+incomparable owners whose meet is `release` -- is accepted, not rejected;
+the merge phase simply carries no reason forward for it, since
+`route_narrowing_reason` is defined for the pipeline's route-narrowing
+provenance, not for every proposal a model happens to submit. A proposal
+that genuinely widens the route (or is incomparable to it) is rejected.
+
+The pairing between a merged finding's carried route and its
+`route_narrowing_reason` is enforced only inside this pipeline (the
+finalize-phase verifier), not by the persisted artifact's schema -- a
+hand-authored `review-summary.json` carrying a `route_narrowing_reason` next
+to a route that does not actually narrow will still pass `systematic
+validate-review-artifact`.
 
 **Output:** `{ merged_findings, validator_requests[{finding_id,file,line}], disagreement_facts }`.
 `validator_requests` names the merged findings that fall inside the Stage 5b

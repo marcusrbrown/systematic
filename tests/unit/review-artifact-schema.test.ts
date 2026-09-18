@@ -388,6 +388,37 @@ describe('review artifact schema', () => {
     expect(result.success).toBe(true)
   })
 
+  test('accepts a finding carrying route_narrowing_reason', () => {
+    const result = ReviewArtifactSchema.safeParse(
+      artifactWith({
+        findings: [
+          {
+            ...baseFinding,
+            owner: 'release',
+            input_finding_ids: ['correctness#1'],
+            route_narrowing_reason: 'Escalated to release per policy.',
+            provenance: {
+              fingerprint: 'src/example.ts|42',
+              submitters: ['correctness'],
+              agreement_credit: [],
+            },
+          },
+        ],
+      }),
+    )
+
+    expect(result.success).toBe(true)
+  })
+
+  test('accepts a finding that omits route_narrowing_reason', () => {
+    const result = ReviewArtifactSchema.safeParse(baseArtifact)
+
+    expect(result.success).toBe(true)
+    if (!result.success) return
+    const [finding] = result.data.findings
+    expect(finding && 'route_narrowing_reason' in finding).toBe(false)
+  })
+
   test('rejects a declined merge entry missing a required field', () => {
     const entry = {
       file: 'src/example.ts',

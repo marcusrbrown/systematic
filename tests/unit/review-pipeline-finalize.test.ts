@@ -496,22 +496,21 @@ describe('deriveFinalizeContext', () => {
     })
   })
 
-  test('a carried route that narrows owner from review-fixer to release is accepted, not rejected', () => {
-    // Pins current behavior: the KTD19 verifier (`checkMergedFindingsMatchDerivation`
-    // via `mergedFindingDivergesFromDerivation`) reconstructs a "proposed_route"
-    // straight from the carried finding's own owner/autofix_class/requires_verification
-    // and always fabricates a placeholder `route_narrowing_reason` -- it verifies
-    // only that the carried route is a *structurally valid narrowing* of the
-    // meet derived from contributing survivors, never the original model
-    // decision's actual reason (which is not carried on `MergedFindingSchema`
-    // at all). A P0 finding whose declined decision narrows `owner` all the
-    // way to `release` -- moving it from the fixer queue to report_only -- is
-    // therefore accepted here exactly as any other valid narrowing would be.
-    // This is deliberate: `OWNER_NARROWS_TO` treats `release` as the terminal,
-    // most-conservative owner, so narrowing toward it is the same "always
-    // allow narrowing, never allow widening" rule every other route field
-    // follows -- but it also means the original narrowing reason is not
-    // recoverable downstream once merge has run.
+  test('a carried route that narrows owner from review-fixer to release is accepted, and its reason is carried onto the merged finding', () => {
+    // Updated for the route-narrowing-reason fix: `MergedFindingSchema` now
+    // carries the model's real `route_narrowing_reason` on the merge wire
+    // (`review-pipeline-contract.ts`), and the KTD19 verifier
+    // (`checkMergedFindingsMatchDerivation`, via `mergedFindingRouteReasonMismatch`
+    // and `mergedFindingDivergesFromDerivation`) checks that real reason
+    // against the route meet instead of a fabricated placeholder. A P0
+    // finding whose declined decision narrows `owner` all the way to
+    // `release` -- moving it from the fixer queue to report_only -- is
+    // accepted here because the narrowing is real *and* its reason is
+    // carried through untouched, satisfying the new pairing check.
+    // `OWNER_NARROWS_TO` treats `release` as the terminal, most-conservative
+    // owner, so narrowing toward it is the same "always allow narrowing,
+    // never allow widening" rule every other route field follows -- and now
+    // the original narrowing reason survives merge instead of being lost.
     //
     // A declined decision must cite an eligible *candidate-group* member --
     // `validateAdjudication` rejects any decision at all when
@@ -572,6 +571,13 @@ describe('deriveFinalizeContext', () => {
       (finding) => finding.finding_id === 'declined-narrowed-0',
     )
     expect(narrowed?.owner).toBe('release')
+    expect(narrowed?.route_narrowing_reason).toBe(
+      'Escalated to release per policy.',
+    )
+    const plain = mergeResult.value.merged_findings.find(
+      (finding) => finding.finding_id === 'declined-plain-0',
+    )
+    expect('route_narrowing_reason' in (plain ?? {})).toBe(false)
 
     const result = deriveFinalizeContext({
       merge: mergeResult.value,
@@ -600,6 +606,250 @@ describe('deriveFinalizeContext', () => {
     })
 
     expect(result.ok).toBe(true)
+  })
+
+  test('an identity proposed_route with a reason merges cleanly and finalizes with no reason carried on the wire (regression: KTD24)', () => {
+    // The confirmed bug: a model proposing a route that happens to equal the
+    // route meet, with a reason, must merge and finalize successfully with
+    // no reason carried -- not trip the pairing check that only tolerates a
+    // reason when the carried route differs from the meet.
+    const prepared = preparedOutput({
+      confidence_dispositions: [
+        confidenceDisposition('correctness#0', 'surviving'),
+        confidenceDisposition('security#0', 'surviving'),
+      ],
+      surviving_findings: [
+        survivingFinding('correctness#0', 'correctness'),
+        survivingFinding('security#0', 'security'),
+      ],
+      candidate_groups: [
+        {
+          file: 'src/example.ts',
+          members: [
+            { input_id: 'correctness#0', line: 1 },
+            { input_id: 'security#0', line: 1 },
+          ],
+        },
+      ],
+    })
+    const decisions: ApplyReviewAdjudicationInput['decisions'] = [
+      {
+        decision_id: 'merge-identity-0',
+        disposition: 'merged',
+        input_finding_ids: ['correctness#0', 'security#0'],
+        line: 1,
+        title: 'Duplicate finding across reviewers',
+        why_it_matters: 'Both reviewers independently caught the same defect.',
+        evidence: [
+          'src/example.ts:1 shows both reviewers flagged the same defect.',
+        ],
+        suggested_fix: 'Apply the shared fix once.',
+        // Identical to both survivors' (and thus the meet's) route -- the
+        // model reasonably believes this narrows, but it does not.
+        proposed_route: {
+          autofix_class: 'gated_auto',
+          owner: 'downstream-resolver',
+          requires_verification: true,
+        },
+        route_narrowing_reason: 'Escalated for consistency with policy.',
+      },
+    ]
+
+    const mergeResult = applyReviewAdjudication({ prepared, decisions })
+    expect(mergeResult.ok).toBe(true)
+    if (!mergeResult.ok) return
+    const merged = mergeResult.value.merged_findings.find(
+      (finding) => finding.finding_id === 'merge-identity-0',
+    )
+    expect('route_narrowing_reason' in (merged ?? {})).toBe(false)
+
+    const result = deriveFinalizeContext({
+      merge: mergeResult.value,
+      prepared,
+      screen_results: [
+        financeScreenResult('correctness', {
+          admitted_findings: [admittedScreenFinding('correctness#0')],
+        }),
+        financeScreenResult('security', {
+          admitted_findings: [admittedScreenFinding('security#0')],
+        }),
+      ],
+      dispatch_records: [
+        dispatchRecord('correctness'),
+        dispatchRecord('security'),
+      ],
+      parent_run_metadata: {
+        selected_dispatches: [
+          dispatchRecord('correctness'),
+          dispatchRecord('security'),
+        ],
+        validation: NOT_ATTEMPTED_VALIDATION,
+      },
+    })
+
+    expect(result.ok).toBe(true)
+  })
+
+  test('a proposed owner of release over incomparable downstream-resolver/human survivors merges cleanly and finalizes (regression: KTD24)', () => {
+    // The exact case reproduced in review: `downstream-resolver` and `human`
+    // are incomparable owners whose meet is already `release`
+    // (`ROUTE_REFUSAL_TABLE.owner`). A model proposing `owner: 'release'`
+    // cannot know that from the outside, reasonably believes it is
+    // narrowing, and supplies a reason -- this must not fail finalize.
+    const prepared = preparedOutput({
+      confidence_dispositions: [
+        confidenceDisposition('correctness#0', 'surviving'),
+        confidenceDisposition('security#0', 'surviving'),
+      ],
+      surviving_findings: [
+        survivingFinding('correctness#0', 'correctness', {
+          owner: 'downstream-resolver',
+        }),
+        survivingFinding('security#0', 'security', { owner: 'human' }),
+      ],
+      candidate_groups: [
+        {
+          file: 'src/example.ts',
+          members: [
+            { input_id: 'correctness#0', line: 1 },
+            { input_id: 'security#0', line: 1 },
+          ],
+        },
+      ],
+    })
+    const decisions: ApplyReviewAdjudicationInput['decisions'] = [
+      {
+        decision_id: 'merge-incomparable-0',
+        disposition: 'merged',
+        input_finding_ids: ['correctness#0', 'security#0'],
+        line: 1,
+        title: 'Duplicate finding across reviewers',
+        why_it_matters: 'Both reviewers independently caught the same defect.',
+        evidence: [
+          'src/example.ts:1 shows both reviewers flagged the same defect.',
+        ],
+        suggested_fix: 'Apply the shared fix once.',
+        proposed_route: {
+          autofix_class: 'gated_auto',
+          owner: 'release',
+          requires_verification: true,
+        },
+        route_narrowing_reason: 'Escalated to release since owners disagree.',
+      },
+    ]
+
+    const mergeResult = applyReviewAdjudication({ prepared, decisions })
+    expect(mergeResult.ok).toBe(true)
+    if (!mergeResult.ok) return
+    const merged = mergeResult.value.merged_findings.find(
+      (finding) => finding.finding_id === 'merge-incomparable-0',
+    )
+    expect(merged?.owner).toBe('release')
+    expect('route_narrowing_reason' in (merged ?? {})).toBe(false)
+
+    const result = deriveFinalizeContext({
+      merge: mergeResult.value,
+      prepared,
+      screen_results: [
+        financeScreenResult('correctness', {
+          admitted_findings: [admittedScreenFinding('correctness#0')],
+        }),
+        financeScreenResult('security', {
+          admitted_findings: [admittedScreenFinding('security#0')],
+        }),
+      ],
+      dispatch_records: [
+        dispatchRecord('correctness'),
+        dispatchRecord('security'),
+      ],
+      parent_run_metadata: {
+        selected_dispatches: [
+          dispatchRecord('correctness'),
+          dispatchRecord('security'),
+        ],
+        validation: NOT_ATTEMPTED_VALIDATION,
+      },
+    })
+
+    expect(result.ok).toBe(true)
+  })
+
+  test('a merged finding whose route narrows from the meet but carries no route_narrowing_reason rejects', () => {
+    // Before the fix, `mergedFindingDivergesFromDerivation` always fabricated
+    // a placeholder `route_narrowing_reason` before re-deriving, so this case
+    // silently passed at finalize no matter what the carried finding actually
+    // carried. The fabrication is gone; a narrowed route with no real reason
+    // now rejects. The divergence check runs before the narrowing/reason
+    // pairing check (`checkMergedFindingsMatchDerivation`'s KTD24 reorder),
+    // so re-deriving with the carried (differing, reasonless) route trips
+    // `deriveRoute`'s own "route narrowing missing reason" rejection first,
+    // surfacing as a derivation divergence rather than the pairing-mismatch
+    // reason.
+    const scenario = finalizeContextScenario()
+    const merge: MergeOutput = {
+      ...scenario.merge,
+      merged_findings: scenario.merge.merged_findings.map((finding) =>
+        finding.finding_id === 'correctness#0'
+          ? { ...finding, owner: 'release' }
+          : finding,
+      ),
+    }
+
+    const result = deriveFinalizeContext({ ...scenario, merge })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe(
+      'merged finding fields diverge from derivation',
+    )
+  })
+
+  test('a merged finding whose route widens from the meet with no route_narrowing_reason rejects as a derivation divergence, not a pairing mismatch (regression: KTD24 ordering)', () => {
+    // Pins which of the two KTD19/KTD24 checks wins for a widened carried
+    // route with no reason: `checkMergedFindingsMatchDerivation` runs the
+    // divergence check before the narrowing/reason pairing check, so this
+    // surfaces as 'merged finding fields diverge from derivation' (caught by
+    // re-derivation's own `isRouteTransitionAllowed` refusal), not 'merged
+    // finding route narrowing reason mismatch'.
+    const scenario = finalizeContextScenario()
+    const merge: MergeOutput = {
+      ...scenario.merge,
+      merged_findings: scenario.merge.merged_findings.map((finding) =>
+        finding.finding_id === 'correctness#0'
+          ? { ...finding, owner: 'review-fixer' }
+          : finding,
+      ),
+    }
+
+    const result = deriveFinalizeContext({ ...scenario, merge })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe(
+      'merged finding fields diverge from derivation',
+    )
+  })
+
+  test('a merged finding whose route equals the meet but carries a route_narrowing_reason rejects', () => {
+    // A reason with no real narrowing is a false provenance claim -- the
+    // route-meet/reason pairing must hold in both directions.
+    const scenario = finalizeContextScenario()
+    const merge: MergeOutput = {
+      ...scenario.merge,
+      merged_findings: scenario.merge.merged_findings.map((finding) =>
+        finding.finding_id === 'correctness#0'
+          ? { ...finding, route_narrowing_reason: 'Not actually narrower.' }
+          : finding,
+      ),
+    }
+
+    const result = deriveFinalizeContext({ ...scenario, merge })
+
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.rejection.reason).toBe(
+      'merged finding route narrowing reason mismatch',
+    )
   })
 
   test('a survivor missing from the merged findings rejects', () => {
@@ -3288,6 +3538,34 @@ describe('projectSynthesizedFindings', () => {
     expect('validation_reason' in projected).toBe(false)
   })
 
+  test('a carried route_narrowing_reason reaches the projected artifact finding', () => {
+    const finding = mergedFinding('f1', {
+      input_finding_ids: ['a#0'],
+      owner: 'release',
+      route_narrowing_reason: 'Escalated to release per policy.',
+    })
+
+    const projected = projectSynthesizedFindings(
+      projectInput({ findings: [finding] }),
+    )[0]
+    if (!projected) throw new Error('expected exactly one projected finding')
+
+    expect(projected.route_narrowing_reason).toBe(
+      'Escalated to release per policy.',
+    )
+  })
+
+  test('no carried route_narrowing_reason projects without the field', () => {
+    const finding = mergedFinding('f1', { input_finding_ids: ['a#0'] })
+
+    const projected = projectSynthesizedFindings(
+      projectInput({ findings: [finding] }),
+    )[0]
+    if (!projected) throw new Error('expected exactly one projected finding')
+
+    expect('route_narrowing_reason' in projected).toBe(false)
+  })
+
   test('projection preserves the reconciled order', () => {
     const findings = [
       mergedFinding('f1', { input_finding_ids: ['a#0'], title: 'First issue' }),
@@ -3318,6 +3596,50 @@ describe('projectSynthesizedFindings', () => {
     expect(() =>
       ReviewArtifactSchema.shape.findings.parse(projected),
     ).not.toThrow()
+  })
+})
+
+describe('route narrowing to release', () => {
+  test('a P0 finding narrowed to release routes to report_only, unexplained by no other queue, and carries its reason into the persisted artifact', () => {
+    const finding = mergedFinding('p0-release', {
+      input_finding_ids: ['r1#0'],
+      owner: 'release',
+      severity: 'P0',
+      route_narrowing_reason: 'Escalated to release: requires legal sign-off.',
+    })
+    const prepared = preparedOutput({
+      confidence_dispositions: [confidenceDisposition('r1#0', 'surviving')],
+      surviving_findings: [survivingFinding('r1#0', 'r1')],
+    })
+    const reconciled = reconciledOutput({ findings: [finding] })
+
+    const dispositions = finalizeReviewDispositions({
+      prepared,
+      reconciled,
+      rejected_payloads: [],
+      screen_results: [
+        financeScreenResult('r1', {
+          admitted_findings: [admittedScreenFinding('r1#0')],
+        }),
+      ],
+      dispatch_records: [dispatchRecord('r1')],
+    })
+
+    expect(dispositions.ok).toBe(true)
+    if (!dispositions.ok) return
+    expect(
+      dispositions.value.queues.report_only.map((entry) => entry.finding_id),
+    ).toEqual(['p0-release'])
+    expect(dispositions.value.queues.fixer).toEqual([])
+    expect(dispositions.value.queues.residual).toEqual([])
+
+    const [projected] = projectSynthesizedFindings({ findings: [finding] })
+    if (!projected) throw new Error('expected exactly one projected finding')
+    expect(projected.owner).toBe('release')
+    expect(projected.severity).toBe('P0')
+    expect(projected.route_narrowing_reason).toBe(
+      'Escalated to release: requires legal sign-off.',
+    )
   })
 })
 
@@ -3496,6 +3818,118 @@ function finalizeReviewScenario(
 }
 
 describe('finalizeReview', () => {
+  test('a genuine route narrowing survives the full merge-to-finalize round trip and reaches the persisted artifact', () => {
+    // Closes the coverage gap the KTD24 review found: every other finalize
+    // test either hand-mutates a `MergeOutput` fixture or hand-builds a
+    // `mergedFinding` directly, so nothing fed real `applyReviewAdjudication`
+    // output through `finalizeReview` end to end. This drives a genuine
+    // owner narrowing (review-fixer -> release) through the real merge
+    // phase, into `finalizeReview`, and asserts the resulting artifact both
+    // carries the real reason and parses strictly against
+    // `ReviewArtifactSchema`.
+    const prepared = preparedOutput({
+      confidence_dispositions: [
+        confidenceDisposition('correctness#0', 'surviving'),
+        confidenceDisposition('security#0', 'surviving'),
+      ],
+      surviving_findings: [
+        survivingFinding('correctness#0', 'correctness', {
+          owner: 'review-fixer',
+          severity: 'P0',
+        }),
+        survivingFinding('security#0', 'security'),
+      ],
+      candidate_groups: [
+        {
+          file: 'src/example.ts',
+          members: [
+            { input_id: 'correctness#0', line: 1 },
+            { input_id: 'security#0', line: 1 },
+          ],
+        },
+      ],
+    })
+    const decisions: ApplyReviewAdjudicationInput['decisions'] = [
+      {
+        decision_id: 'declined-narrowed-0',
+        disposition: 'declined',
+        input_finding_id: 'correctness#0',
+        declined_reason: 'Escalated to release per policy, not auto-fixed.',
+        proposed_route: {
+          autofix_class: 'advisory',
+          owner: 'release',
+          requires_verification: true,
+        },
+        route_narrowing_reason: 'Escalated to release per policy.',
+      },
+      {
+        decision_id: 'declined-plain-0',
+        disposition: 'declined',
+        input_finding_id: 'security#0',
+        declined_reason: 'Not corroborated by another reviewer.',
+      },
+    ]
+    const mergeResult = applyReviewAdjudication({ prepared, decisions })
+    expect(mergeResult.ok).toBe(true)
+    if (!mergeResult.ok) return
+
+    const result = finalizeReview(
+      finalizeReviewScenario({
+        merge: mergeResult.value,
+        prepared,
+        screen_results: [
+          financeScreenResult('correctness', {
+            admitted_findings: [
+              admittedScreenFinding('correctness#0', { severity: 'P0' }),
+            ],
+          }),
+          financeScreenResult('security', {
+            admitted_findings: [admittedScreenFinding('security#0')],
+          }),
+        ],
+        dispatch_records: [
+          dispatchRecord('correctness'),
+          dispatchRecord('security', {
+            selection_surface: ['src/example.ts'],
+          }),
+        ],
+        validator_lifecycle_results: [
+          lifecycleResult('declined-narrowed-0', { outcome: 'true' }),
+          lifecycleResult('declined-plain-0', { outcome: 'true' }),
+        ],
+        parent_run_metadata: {
+          ...finalizeReviewScenario().parent_run_metadata,
+          selected_dispatches: [
+            dispatchRecord('correctness'),
+            dispatchRecord('security', {
+              selection_surface: ['src/example.ts'],
+            }),
+          ],
+        },
+      }),
+    )
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.value.kind).toBe('writing')
+    if (result.value.kind !== 'writing') return
+    const { artifact } = result.value
+    const narrowed = artifact.findings.find((finding) =>
+      finding.input_finding_ids.includes('correctness#0'),
+    )
+    if (!narrowed)
+      throw new Error('expected the narrowed finding on the artifact')
+    expect(narrowed.owner).toBe('release')
+    expect(narrowed.route_narrowing_reason).toBe(
+      'Escalated to release per policy.',
+    )
+    const plain = artifact.findings.find((finding) =>
+      finding.input_finding_ids.includes('security#0'),
+    )
+    expect(plain && 'route_narrowing_reason' in plain).toBe(false)
+    expect(() => ReviewArtifactSchema.parse(artifact)).not.toThrow()
+  })
+
   test('a clean run reaches a completed, clean artifact that parses against ReviewArtifactSchema and FinalizeOutputSchema', () => {
     const result = finalizeReview(finalizeReviewScenario())
 
