@@ -743,7 +743,7 @@ describe('cli config show', () => {
 
       const result = runCli(['config', 'show'], project, { HOME: home })
 
-      expect(result.exitCode).toBe(0)
+      expect(result.exitCode).toBe(1)
       expect(result.stdout).toContain('Resolved configuration: unavailable')
       expect(result.stdout).toContain('categories.review.model')
       expect(result.stdout).toContain(
@@ -754,9 +754,9 @@ describe('cli config show', () => {
     }
   })
 
-  // The prose reason must agree with the `--json` reason; they read the
-  // same Error. This is the regression that would reintroduce the split.
-  it('the load-failure reason matches the --json error message', () => {
+  // The prose reason and exit code must both agree with `--json`; they read
+  // the same Error. This is the regression that would reintroduce the split.
+  it('the load-failure reason and exit code match --json', () => {
     const root = mkTempCwd()
     const home = path.join(root, 'home')
     const project = path.join(root, 'project')
@@ -774,6 +774,7 @@ describe('cli config show', () => {
       const parsed = JSON.parse(json.stdout) as { error: string }
       expect(parsed.error).toContain('agents.correctness-reviewer.model')
       expect(prose.stdout).toContain(parsed.error)
+      expect(prose.exitCode).toBe(json.exitCode)
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }

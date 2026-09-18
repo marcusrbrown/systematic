@@ -646,7 +646,8 @@ function printRoutingTable(loaded: SourceAwareConfigResult): void {
   }
 }
 
-function printResolvedSection(): void {
+/** Returns false when the configuration failed to load, so the caller can exit non-zero the way `--json` already does. */
+function printResolvedSection(): boolean {
   let loaded: SourceAwareConfigResult
   try {
     loaded = loadConfigWithSources(process.cwd())
@@ -660,7 +661,7 @@ function printResolvedSection(): void {
     console.log(
       `  Reason: ${error instanceof Error ? error.message : String(error)}`,
     )
-    return
+    return false
   }
 
   const { metadata, overlays } = loaded
@@ -676,13 +677,14 @@ function printResolvedSection(): void {
     console.log(
       '  No profiles are selected and no per-agent/category overlays are defined.',
     )
-    return
+    return true
   }
 
   printProfileSummary(metadata)
   console.log('')
   console.log('  Routing:')
   printRoutingTable(loaded)
+  return true
 }
 
 interface ConfigShowJsonRoutingResolution {
@@ -823,7 +825,9 @@ function configShow(options: { json: boolean }): void {
     console.log(fs.readFileSync(paths.userConfig, 'utf-8'))
   }
 
-  printResolvedSection()
+  // A failed load exits 1 in both renderings: the same failure must not
+  // report success in prose and failure under `--json`.
+  if (!printResolvedSection()) process.exit(1)
 }
 
 function parseConfigShowArgs(rest: string[]): { json: boolean } {
