@@ -661,7 +661,7 @@ function printResolvedSection(): boolean {
     // `--json` branch keeps its envelope on stdout because that document is
     // the machine-readable output, error field included.
     console.error(
-      '\nResolved configuration: unavailable (the configuration failed to load).',
+      'Resolved configuration: unavailable (the configuration failed to load).',
     )
     console.error(
       `  Reason: ${error instanceof Error ? error.message : String(error)}`,
