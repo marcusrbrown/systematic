@@ -1665,7 +1665,13 @@ model: gpt-4
       expect(config.agent?.['correctness-reviewer']?.temperature).toBe(0.33)
     })
 
+    // A malformed project config must fail closed: the handler throws
+    // rather than silently falling back to a default configuration.
     test('malformed systematic.json surfaces schema validation error from config loader', async () => {
+      createCategorizedAgent('review', 'correctness-reviewer', {
+        name: 'correctness-reviewer',
+        description: 'Reviews correctness',
+      })
       writeSystematicConfig({ disabled_skills: 'not-an-array' })
 
       const handler = createConfigHandler({
@@ -1682,6 +1688,76 @@ model: gpt-4
       )
       await expect(handler(config)).rejects.toThrow(expectedConfigPath)
       await expect(handler(config)).rejects.toThrow('disabled_skills')
+    })
+
+    // An invalid project field must not discard a trusted custom-config
+    // permission/model overlay restricting a bundled agent.
+    test('invalid project disabled_skills does not discard a trusted permission/model overlay (fails closed, does not emit an unrestricted agent)', async () => {
+      createCategorizedAgent('review', 'correctness-reviewer', {
+        name: 'correctness-reviewer',
+        description: 'Reviews correctness',
+      })
+      writeCustomSystematicConfig({
+        agents: {
+          'correctness-reviewer': {
+            model: 'private/local',
+            permission: { bash: 'deny' },
+          },
+        },
+      })
+      writeSystematicConfig({ disabled_skills: 'not-an-array' })
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      const before = structuredClone(config)
+
+      await expect(handler(config)).rejects.toThrow('disabled_skills')
+
+      // Fail closed: no unrestricted (default permission, no model pin)
+      // agent entry was emitted.
+      expect(config).toEqual(before)
+    })
+
+    // Malformed (unparsable) project JSON must not discard a trusted
+    // user-config disabled_agents entry.
+    test('malformed project JSON does not discard a trusted disabled_agents entry (fails closed, does not re-enable the agent)', async () => {
+      createCategorizedAgent('review', 'correctness-reviewer', {
+        name: 'correctness-reviewer',
+        description: 'Reviews correctness',
+      })
+      const userConfigDir = path.join(testDir, 'home', '.config/opencode')
+      fs.mkdirSync(userConfigDir, { recursive: true })
+      fs.writeFileSync(
+        path.join(userConfigDir, 'systematic.json'),
+        JSON.stringify({ disabled_agents: ['correctness-reviewer'] }),
+      )
+      fs.mkdirSync(path.join(projectDir, '.opencode'), { recursive: true })
+      fs.writeFileSync(
+        path.join(projectDir, '.opencode/systematic.json'),
+        '{ this is not valid json',
+      )
+
+      const handler = createConfigHandler({
+        directory: projectDir,
+        bundledSkillsDir: path.join(bundledDir, 'skills'),
+        bundledAgentsDir: path.join(bundledDir, 'agents'),
+        bundledCommandsDir: path.join(bundledDir, 'commands'),
+      })
+
+      const config: Config = {}
+      const before = structuredClone(config)
+
+      await expect(handler(config)).rejects.toThrow()
+
+      // Fail closed: the agent the user disabled was not re-registered.
+      expect(config).toEqual(before)
+      expect(config.agent).toBeUndefined()
     })
 
     test('removed docs category does not prevent all bundled agents from being emitted', async () => {

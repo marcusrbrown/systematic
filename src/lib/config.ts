@@ -236,7 +236,7 @@ interface FileConfigSource extends ConfigSourceBase {
  * `loadConfigWithSources`). A distinct discriminated-union member, not a
  * boolean flag layered on a `FileConfigSource` -- it has no `trust` field at
  * all, so every place that decides project-only behavior
- * (`rejectProjectSecurityOverlay` via `source.trust === 'project'`,
+ * (`stripProjectSecurityOverlay` via `source.trust === 'project'`,
  * `preserveSecurityFields`) type-narrows away from this member first and
  * can never mistake it for a project source. It may be defined in EITHER
  * the user config file or the custom (`OPENCODE_CONFIG_DIR`) config file --
@@ -299,6 +299,79 @@ const PROTECTED_OVERLAY_FIELD_PATHS = {
 >
 
 const PROJECT_PROTECTED_FIELDS = new Set(['workflow_guard', 'profiles'])
+
+/** Max rendered length (including a truncation ellipsis) for untrusted text interpolated into a diagnostic message. */
+const MAX_DIAGNOSTIC_TEXT = 200
+
+/** Max detailed per-field strip warnings emitted for one project source load, before the rest collapse into a single summary. */
+const MAX_STRIP_WARNINGS = 20
+
+const DIAGNOSTIC_ELLIPSIS = '\u2026'
+
+/**
+ * Render untrusted text (a project-authored `agents`/`categories` key, or a
+ * config file path) safely for interpolation into a diagnostic message.
+ * Ordinary short text passes through unchanged. Control characters (C0,
+ * DEL, C1) and the Unicode line separators (U+2028/U+2029) are escaped to
+ * `\uXXXX` so they cannot inject fake terminal/log lines. Output is capped
+ * at `MAX_DIAGNOSTIC_TEXT` characters (ellipsis included); the raw input is
+ * only ever scanned up to that same bound, so an arbitrarily large input
+ * costs bounded work, not `JSON.stringify`-over-everything work.
+ */
+function sanitizeDiagnosticText(input: string): string {
+  const budget = MAX_DIAGNOSTIC_TEXT - DIAGNOSTIC_ELLIPSIS.length
+  let rendered = ''
+  let truncated = false
+  for (const char of input) {
+    if (rendered.length >= budget) {
+      truncated = true
+      break
+    }
+    const code = char.codePointAt(0) ?? 0
+    const isControl =
+      code <= 0x1f ||
+      code === 0x7f ||
+      (code >= 0x80 && code <= 0x9f) ||
+      code === 0x2028 ||
+      code === 0x2029
+    const piece = isControl ? `\\u${code.toString(16).padStart(4, '0')}` : char
+    if (rendered.length + piece.length > budget) {
+      truncated = true
+      break
+    }
+    rendered += piece
+  }
+  return truncated ? `${rendered}${DIAGNOSTIC_ELLIPSIS}` : rendered
+}
+
+/**
+ * Bound the number of detailed strip warnings emitted for one project
+ * source load. The first `MAX_STRIP_WARNINGS` messages pass straight
+ * through to `warningSink`; every one after that is counted instead of
+ * emitted, so a project config with hundreds of protected fields can't
+ * flood the warning sink -- stripping itself is never affected, only how
+ * many of its warnings are individually reported. State is local to one
+ * call (a fresh counter per load), not module-global.
+ */
+function createBoundedStripWarningSink(
+  warningSink: (message: string) => void,
+): { readonly sink: (message: string) => void; suppressedCount(): number } {
+  let emitted = 0
+  let suppressed = 0
+  return {
+    sink(message: string) {
+      if (emitted < MAX_STRIP_WARNINGS) {
+        emitted++
+        warningSink(message)
+      } else {
+        suppressed++
+      }
+    },
+    suppressedCount() {
+      return suppressed
+    },
+  }
+}
 
 /**
  * The set of currently-bundled skill names. Used to identify removed names
@@ -656,6 +729,7 @@ function loadConfigSource(
   filePath: string,
   trust: ConfigSourceKind,
   invalidSource: 'throw' | 'report',
+  warningSink: (message: string) => void,
 ): { metadata: ConfigSourceMetadata; source: FileConfigSource | null } {
   try {
     const rawConfig = loadJsoncFile(filePath)
@@ -667,8 +741,17 @@ function loadConfigSource(
     }
 
     const protectedFields = collectProjectProtectedFields(rawConfig, trust)
-    const config =
+    const topLevelStripped =
       trust === 'project' ? stripProjectProtectedFields(rawConfig) : rawConfig
+    // Security-overlay fields are stripped here, pre-validation -- see `stripProjectSecurityOverlayFields`.
+    const config =
+      trust === 'project'
+        ? stripProjectSecurityOverlayFields(
+            topLevelStripped,
+            filePath,
+            warningSink,
+          )
+        : topLevelStripped
 
     const result = SystematicConfigSchema.safeParse(config)
     if (!result.success) {
@@ -792,6 +875,86 @@ function stripProjectProtectedFields(
     delete (config as Record<string, unknown>)[field]
   }
   return config
+}
+
+/**
+ * Strip `SECURITY_OVERLAY_FIELDS` from every `agents.<key>`/`categories.<key>`
+ * entry of a project-trust raw config, BEFORE schema validation -- see the
+ * call site in `loadConfigSource` for why this must happen ahead of
+ * `SystematicConfigSchema.safeParse` rather than only at merge time.
+ * Delegates the actual per-entry stripping (and its warning message) to
+ * `stripProjectSecurityOverlay`, the same function the merge layer used to
+ * call -- there is exactly one strip-and-warn implementation, just one call
+ * site earlier in the pipeline now.
+ *
+ * A non-record `agents`/`categories` map, or a non-record per-key entry, is
+ * left completely untouched (same object reference) so
+ * `SystematicConfigSchema.safeParse` still reports its own "expected
+ * object"-shaped error for that malformed shape -- ordinary validation, not
+ * this sanitation step, owns that failure mode.
+ */
+function stripProjectSecurityOverlayFields(
+  rawConfig: RawSystematicConfig,
+  filePath: string,
+  warningSink: (message: string) => void,
+): RawSystematicConfig {
+  const bounded = createBoundedStripWarningSink(warningSink)
+  const agents = stripSecurityOverlayEntries(
+    rawConfig.agents,
+    'agents',
+    filePath,
+    bounded.sink,
+  )
+  const categories = stripSecurityOverlayEntries(
+    rawConfig.categories,
+    'categories',
+    filePath,
+    bounded.sink,
+  )
+  const suppressed = bounded.suppressedCount()
+  if (suppressed > 0) {
+    warningSink(
+      `[systematic] ${suppressed} additional project-config security-field warning(s) in (${sanitizeDiagnosticText(filePath)}) were suppressed.`,
+    )
+  }
+  if (agents === rawConfig.agents && categories === rawConfig.categories) {
+    return rawConfig
+  }
+  return { ...rawConfig, agents, categories } as RawSystematicConfig
+}
+
+function stripSecurityOverlayEntries(
+  overlayMap: unknown,
+  mapKey: 'agents' | 'categories',
+  filePath: string,
+  warningSink: (message: string) => void,
+): unknown {
+  if (!isRecord(overlayMap)) return overlayMap
+
+  let changed = false
+  const result: Record<string, unknown> = {}
+  for (const [key, value] of Object.entries(overlayMap)) {
+    if (!isRecord(value)) {
+      result[key] = value
+      continue
+    }
+    const stripped = stripProjectSecurityOverlay(
+      filePath,
+      `${mapKey}.${key}`,
+      value,
+      warningSink,
+    )
+    if (stripped === value) {
+      result[key] = stripped
+      continue
+    }
+    changed = true
+    // Drop an entry stripping left empty, so trusted settings elsewhere
+    // survive instead of being replaced by a bare `{}` fragment.
+    if (Object.keys(stripped).length === 0) continue
+    result[key] = stripped
+  }
+  return changed ? result : overlayMap
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -975,7 +1138,7 @@ function resolveActiveProfile(
 
   if (fallbackLookup !== undefined && trustedDefault !== undefined) {
     input.warningSink(
-      `[systematic] profile "${requested}" (selected by ${selection.source} config) is not defined in \`profiles\`; falling back to your default profile "${trustedDefault}". See ${PROFILE_DOCS_URL} for how to define a profile.`,
+      `[systematic] profile "${sanitizeDiagnosticText(requested)}" (selected by ${selection.source} config) is not defined in \`profiles\`; falling back to your default profile "${sanitizeDiagnosticText(trustedDefault)}". See ${PROFILE_DOCS_URL} for how to define a profile.`,
     )
     return {
       activeProfile: trustedDefault,
@@ -992,12 +1155,12 @@ function resolveActiveProfile(
       : ` (selected by ${selection.source} config)`
   const alsoMissingNote =
     trustedDefault !== undefined && trustedDefault !== requested
-      ? ` Your default profile "${trustedDefault}" is also not defined in \`profiles\`.`
+      ? ` Your default profile "${sanitizeDiagnosticText(trustedDefault)}" is also not defined in \`profiles\`.`
       : trustedDefault === undefined
         ? ' No default profile is configured (`profile` in your user config).'
         : ''
   input.warningSink(
-    `[systematic] profile "${requested}"${sourceNote} is not defined in \`profiles\`; using base configuration (no profile).${alsoMissingNote} See ${PROFILE_DOCS_URL} for how to define a profile.`,
+    `[systematic] profile "${sanitizeDiagnosticText(requested)}"${sourceNote} is not defined in \`profiles\`; using base configuration (no profile).${alsoMissingNote} See ${PROFILE_DOCS_URL} for how to define a profile.`,
   )
   return {
     activeProfile: null,
@@ -1030,6 +1193,76 @@ export function loadConfig(
   return loadConfigWithSources(projectDir, options).config
 }
 
+/** The custom config path, only when it canonically resolves to the same file as the project config path. */
+function resolveAliasedCustomConfigPath(
+  paths: { readonly projectConfig: string; readonly customConfig?: string },
+  includeProject: boolean,
+): string | undefined {
+  if (!includeProject || paths.customConfig === undefined) return undefined
+  const sameFile =
+    resolveConfigSourcePath(paths.projectConfig) ===
+    resolveConfigSourcePath(paths.customConfig)
+  return sameFile ? paths.customConfig : undefined
+}
+
+/**
+ * A warning sink that buffers messages (instead of discarding them) when
+ * aliased, so the caller can flush them verbatim if the custom-trust pass
+ * of the same file turns out NOT to succeed -- in that case the fields the
+ * project pass stripped are not actually guaranteed to apply via custom
+ * trust, so the warnings must not be lost. Passes through unchanged when
+ * not aliased. The buffer is bounded by whatever bound the caller (the
+ * project-trust `stripProjectSecurityOverlayFields` pass) already applies.
+ */
+function createAliasStripTracker(
+  warningSink: (message: string) => void,
+  aliasedCustomConfigPath: string | undefined,
+): {
+  readonly sink: (message: string) => void
+  readonly buffered: readonly string[]
+} {
+  if (aliasedCustomConfigPath === undefined) {
+    return { sink: warningSink, buffered: [] }
+  }
+  const buffered: string[] = []
+  return {
+    sink: (message: string) => {
+      buffered.push(message)
+    },
+    buffered,
+  }
+}
+
+/**
+ * Report what happened during an aliased project/custom load: if both
+ * passes succeeded, discard the buffered per-field strip warnings and emit
+ * one summary notice instead; otherwise flush the buffered warnings
+ * verbatim, since the custom-trust pass can't be relied on to have
+ * actually applied those fields.
+ */
+function emitAliasDiagnostics(input: {
+  readonly aliasedCustomConfigPath: string | undefined
+  readonly buffered: readonly string[]
+  readonly customLoaded: boolean
+  readonly projectConfigPath: string
+  readonly projectLoaded: boolean
+  readonly warningSink: (message: string) => void
+}): void {
+  if (
+    input.aliasedCustomConfigPath === undefined ||
+    input.buffered.length === 0
+  ) {
+    return
+  }
+  if (input.projectLoaded && input.customLoaded) {
+    input.warningSink(
+      `[systematic] project config (${sanitizeDiagnosticText(input.projectConfigPath)}) and custom config (${sanitizeDiagnosticText(input.aliasedCustomConfigPath)}) resolve to the same file; security-overlay fields stripped from the project pass apply through the custom-trust pass instead.`,
+    )
+    return
+  }
+  for (const message of input.buffered) input.warningSink(message)
+}
+
 export function loadConfigWithSources(
   projectDir: string,
   options?: LoadConfigOptions,
@@ -1039,19 +1272,52 @@ export function loadConfigWithSources(
   const paths = getConfigPaths(projectDir, options)
   const warningSink = options?.warningSink ?? console.warn
 
-  const user = loadConfigSource(paths.userConfig, 'user', invalidSource)
+  // If project and custom resolve to the same real file, the project pass
+  // still strips and validates as usual, but its per-field strip warnings
+  // are buffered rather than emitted immediately. If the custom pass of
+  // that SAME file also loads, those fields apply through it via ordinary
+  // merge precedence, so the buffered warnings are dropped in favor of one
+  // alias summary below; otherwise they are flushed as normal.
+  const aliasedCustomConfigPath = resolveAliasedCustomConfigPath(
+    paths,
+    includeProject,
+  )
+  const projectStrip = createAliasStripTracker(
+    warningSink,
+    aliasedCustomConfigPath,
+  )
+
+  const user = loadConfigSource(
+    paths.userConfig,
+    'user',
+    invalidSource,
+    warningSink,
+  )
   const project = includeProject
-    ? loadConfigSource(paths.projectConfig, 'project', invalidSource)
+    ? loadConfigSource(
+        paths.projectConfig,
+        'project',
+        invalidSource,
+        projectStrip.sink,
+      )
     : {
         metadata: { kind: 'project' as const, presence: 'absent' as const },
         source: null,
       }
   const custom = paths.customConfig
-    ? loadConfigSource(paths.customConfig, 'custom', invalidSource)
+    ? loadConfigSource(paths.customConfig, 'custom', invalidSource, warningSink)
     : {
         metadata: { kind: 'custom' as const, presence: 'absent' as const },
         source: null,
       }
+  emitAliasDiagnostics({
+    aliasedCustomConfigPath,
+    buffered: projectStrip.buffered,
+    customLoaded: custom.source !== null,
+    projectConfigPath: paths.projectConfig,
+    projectLoaded: project.source !== null,
+    warningSink,
+  })
   const userSource = user.source
   const projectSource = project.source
   const customSource = custom.source
@@ -1604,10 +1870,7 @@ function mergeOverlayMap(
       throwInvalidOverlay(source.path, keyPath)
     }
 
-    if (source.kind === 'file' && source.trust === 'project') {
-      rejectProjectSecurityOverlay(source.path, keyPath, value)
-    }
-
+    // Project-trust security fields were already stripped pre-validation -- see `stripProjectSecurityOverlayFields`.
     const previous = target[key]
     const nextValue = resolveOverlayEntryValue(previous?.value, value, source)
 
@@ -1644,18 +1907,35 @@ function resolveOverlayEntryValue(
   return next
 }
 
-function rejectProjectSecurityOverlay(
+/**
+ * Strip every present `SECURITY_OVERLAY_FIELDS` member from a project-trust
+ * overlay fragment, warning once per offending field, and return the
+ * stripped fragment for the caller to merge instead of the raw value. A
+ * project config cannot dictate routing (`SECURITY_OVERLAY_FIELDS` is
+ * user/custom-only) but that must only drop the offending field, not the
+ * whole config load -- see issue #992. Returns `value` unchanged (same
+ * reference) when nothing was stripped, so a fragment with no security
+ * fields allocates nothing extra.
+ */
+function stripProjectSecurityOverlay(
   sourcePath: string,
   keyPath: string,
   value: Record<string, unknown>,
-): void {
+  warningSink: (message: string) => void,
+): Record<string, unknown> {
+  const safeKeyPath = sanitizeDiagnosticText(keyPath)
+  const safeSourcePath = sanitizeDiagnosticText(sourcePath)
+  let stripped: Record<string, unknown> | undefined
   for (const field of SECURITY_OVERLAY_FIELDS) {
     if (Object.hasOwn(value, field)) {
-      throw new Error(
-        `Invalid Systematic config in ${sourcePath}: ${keyPath}.${field} is only valid in user config or OPENCODE_CONFIG_DIR config`,
+      stripped ??= { ...value }
+      delete stripped[field]
+      warningSink(
+        `[systematic] \`${safeKeyPath}.${field}\` in project config (${safeSourcePath}) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored.`,
       )
     }
   }
+  return stripped ?? value
 }
 
 function preserveSecurityFields(
@@ -1722,13 +2002,15 @@ const PI_SUBAGENTS_PROTECTED_FIELD_SET = new Set(PI_SUBAGENTS_PROTECTED_FIELDS)
 
 /**
  * Merge `pi_subagents.categories`/`pi_subagents.agents` overlays across
- * config sources, in trust order. Unlike the portable `SECURITY_OVERLAY_FIELDS`
- * (model/variant/skills/permission on `agents`/`categories`), which reject a
- * project-sourced attempt outright, the pi_subagents-protected fields
- * (`thinking`, `tools`, `skills`) are silently stripped from project-sourced
- * config before merge — project config simply cannot grant them. `max_turns`
- * is trust-any and passes through unchanged. This mirrors the plan's R18
- * trust lattice: project cannot grant tools/skills to an exported persona.
+ * config sources, in trust order. Like the portable `SECURITY_OVERLAY_FIELDS`
+ * (model/variant/skills/permission on `agents`/`categories`, stripped from
+ * raw project config before schema validation in `loadConfigSource` --
+ * see `stripProjectSecurityOverlayFields`), the pi_subagents-protected
+ * fields (`thinking`, `tools`, `skills`) are silently stripped from
+ * project-sourced config before merge — project config simply cannot grant
+ * them. `max_turns` is trust-any and passes through unchanged. This mirrors
+ * the plan's R18 trust lattice: project cannot grant tools/skills to an
+ * exported persona.
  */
 function mergePiSubagentsOverlaySources(
   sources: readonly FileConfigSource[],

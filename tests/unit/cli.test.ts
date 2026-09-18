@@ -725,12 +725,14 @@ describe('cli config show', () => {
     }
   })
 
-  // A project config carrying a trust-protected overlay field makes
-  // loadConfigWithSources throw. The prose renderer used to swallow that
-  // Error entirely, leaving the user with "unavailable" and no reason,
-  // while `--json` already surfaced `error.message`. The rejection itself
-  // is a deliberate trust boundary and stays; only the diagnostic changes.
-  it('a load failure prints the reason, naming the offending file and key', () => {
+  // A project config carrying a trust-protected overlay field must NOT make
+  // `loadConfigWithSources` throw (issue #992): that used to drop the
+  // plugin's entire config contribution (all bundled agents) from a single
+  // offending project file. The trust boundary itself stays -- the field is
+  // stripped and never applies -- but the config load, and `config show`,
+  // both succeed, with the diagnostic downgraded to a warning on stderr
+  // naming the offending file and key.
+  it('a project security-overlay field warns and is ignored, not a load failure', () => {
     const root = mkTempCwd()
     const home = path.join(root, 'home')
     const project = path.join(root, 'project')
@@ -743,16 +745,13 @@ describe('cli config show', () => {
 
       const result = runCli(['config', 'show'], project, { HOME: home })
 
-      expect(result.exitCode).toBe(1)
-      expect(result.stderr).toContain('Resolved configuration: unavailable')
+      expect(result.exitCode).toBe(0)
       expect(result.stderr).toContain('categories.review.model')
       expect(result.stderr).toContain(
         'only valid in user config or OPENCODE_CONFIG_DIR config',
       )
-      // The whole failure report lands on one stream, so neither half is
-      // stranded: nothing about it leaks back onto stdout.
-      expect(result.stdout).not.toContain('Resolved configuration: unavailable')
-      expect(result.stdout).not.toContain('Reason:')
+      expect(result.stderr).toContain('has been ignored')
+      expect(result.stdout).toContain('Resolved configuration:')
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
@@ -785,6 +784,12 @@ describe('cli config show', () => {
 
   // The prose reason and exit code must both agree with `--json`; they read
   // the same Error. This is the regression that would reintroduce the split.
+  //
+  // A project security-overlay field (e.g. `agents.x.model`) no longer
+  // triggers a genuine load failure (issue #992: it is stripped and warned
+  // instead, see the test above), so this exercises a still-throwing
+  // failure -- a malformed overlay VALUE, not a trust violation -- that
+  // still names both the file and the key.
   it('the load-failure reason and exit code match --json', () => {
     const root = mkTempCwd()
     const home = path.join(root, 'home')
@@ -793,7 +798,7 @@ describe('cli config show', () => {
       fs.mkdirSync(project, { recursive: true })
       fs.mkdirSync(home, { recursive: true })
       writeProjectConfig(project, {
-        agents: { 'correctness-reviewer': { model: 'anthropic/haiku' } },
+        agents: { 'correctness-reviewer': 'not-an-object' },
       })
 
       const prose = runCli(['config', 'show'], project, { HOME: home })
@@ -804,7 +809,7 @@ describe('cli config show', () => {
       // is the machine-readable output, error field included, so a consumer
       // can still pipe it. Only the prose report moves to stderr.
       const parsed = JSON.parse(json.stdout) as { error: string }
-      expect(parsed.error).toContain('agents.correctness-reviewer.model')
+      expect(parsed.error).toContain('agents.correctness-reviewer')
       expect(prose.stderr).toContain(parsed.error)
       expect(prose.exitCode).toBe(json.exitCode)
       // The asymmetry runs both ways: prose diagnostics must never leak
