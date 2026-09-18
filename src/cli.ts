@@ -650,9 +650,15 @@ function printResolvedSection(): void {
   let loaded: SourceAwareConfigResult
   try {
     loaded = loadConfigWithSources(process.cwd())
-  } catch {
+  } catch (error) {
+    // Surface the same message `--json` already returns (see
+    // buildConfigShowJson). Without it the user sees only "unavailable"
+    // and has no way to learn which file or key rejected the load.
     console.log(
       '\nResolved configuration: unavailable (the configuration failed to load).',
+    )
+    console.log(
+      `  Reason: ${error instanceof Error ? error.message : String(error)}`,
     )
     return
   }
