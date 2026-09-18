@@ -552,6 +552,33 @@ describe('harness routing blocks and profiles rendering', () => {
     const content = generateFn('2.11.0')
     expect(content).toContain('#profile-bundle-overlay-fields')
   })
+
+  test('the agents and categories sections document that stripped-empty project entries are dropped, not merged, and that an explicit {} is not', () => {
+    const content = generateFn('2.11.0')
+    const dropExplanation =
+      'If stripping trust-protected fields from a project-config entry leaves it empty, the entry is dropped instead of merged, so an earlier same-key entry from user (or active-profile) config keeps its nonprotected fields.'
+    const explicitEmptyExplanation =
+      'An entry the project explicitly sets to `{}` is not emptied by stripping, so it merges as normal and replaces that earlier entry\u2019s nonprotected fields, carrying over only the protected ones'
+    const agentsSection = content.slice(
+      content.indexOf('## agents'),
+      content.indexOf('## categories'),
+    )
+    const categoriesSection = content.slice(
+      content.indexOf('## categories'),
+      content.indexOf('## profiles'),
+    )
+    for (const section of [agentsSection, categoriesSection]) {
+      expect(section).toContain(dropExplanation)
+      expect(section).toContain(explicitEmptyExplanation)
+      // The corrected wording must NOT claim custom (OPENCODE_CONFIG_DIR)
+      // config is what an explicit `{}` replaces -- custom loads AFTER
+      // project in the merge chain, so it can never be the "earlier"
+      // entry a project-trust merge overwrites.
+      expect(section).not.toMatch(
+        /entry already set in trusted \(user or `OPENCODE_CONFIG_DIR`\)/,
+      )
+    }
+  })
 })
 
 describe('--version flag semver validation', () => {

@@ -336,6 +336,10 @@ describe('config', () => {
               message.includes('resolve to the same file'),
             ),
           ).toHaveLength(1)
+          // The stripped field applied through the custom-trust pass of the
+          // same file, so it is not genuinely "blocked" -- must not appear
+          // in observation metadata (regression for the duplicate-record bug).
+          expect(result.metadata.protectedFields).toEqual([])
         } finally {
           delete process.env.OPENCODE_CONFIG_DIR
         }
@@ -366,6 +370,15 @@ describe('config', () => {
             `[systematic] \`agents.correctness-reviewer.model\` in project config (${projectConfigPath}) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored.`,
           ])
           expect(result.config.agents).toEqual({})
+          // No aliasing here -- the field is genuinely blocked (never applied
+          // anywhere), so its record must be retained.
+          expect(result.metadata.protectedFields).toEqual([
+            {
+              fieldPath: 'agents.*.model',
+              outcome: 'blocked',
+              sourceKind: 'project',
+            },
+          ])
         } finally {
           delete process.env.OPENCODE_CONFIG_DIR
           fs.rmSync(customDir, { recursive: true, force: true })
@@ -405,6 +418,9 @@ describe('config', () => {
               message.includes('resolve to the same file'),
             ),
           ).toHaveLength(1)
+          // Same duplicate-suppression invariant applies through a symlinked
+          // custom config dir, not just a direct path alias.
+          expect(result.metadata.protectedFields).toEqual([])
         } finally {
           delete process.env.OPENCODE_CONFIG_DIR
         }
@@ -461,6 +477,16 @@ describe('config', () => {
           expect(result.metadata.sources).toContainEqual(
             expect.objectContaining({ kind: 'custom', presence: 'invalid' }),
           )
+          // The custom-trust pass of the aliased file failed, so the field
+          // never actually applied -- its blocked record must be retained,
+          // not suppressed as a false "applied via custom" duplicate.
+          expect(result.metadata.protectedFields).toEqual([
+            {
+              fieldPath: 'agents.*.model',
+              outcome: 'blocked',
+              sourceKind: 'project',
+            },
+          ])
         } finally {
           delete process.env.OPENCODE_CONFIG_DIR
         }
@@ -490,6 +516,48 @@ describe('config', () => {
 
           expect(warnings).toHaveLength(1)
           expect(warnings[0]).toContain('resolve to the same file')
+        } finally {
+          delete process.env.OPENCODE_CONFIG_DIR
+        }
+      })
+
+      test('alias success also suppresses duplicate blocked records for top-level `profiles`/`workflow_guard`', () => {
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir)
+        fs.writeFileSync(
+          path.join(projectConfigDir, 'systematic.json'),
+          JSON.stringify({
+            workflow_guard: { mode: 'protected' },
+            profiles: {
+              personal: {
+                agents: { 'correctness-reviewer': { model: 'a/personal' } },
+              },
+            },
+          }),
+        )
+        process.env.OPENCODE_CONFIG_DIR = projectConfigDir
+
+        try {
+          const result = loadConfigWithSources(testDir)
+
+          // Both top-level protected fields applied through the custom-trust
+          // pass of the identical file -- neither should be reported blocked.
+          expect(result.metadata.protectedFields).toEqual([])
+
+          // Consumer evidence: the capability snapshot the CLI ships (and
+          // any other consumer of `metadata.protectedFields`) must not
+          // surface a stale "blocked" record either -- it reads whatever
+          // array `buildConfigObservationMetadata` handed it, unmodified.
+          const serialized = serializeCapabilitySnapshot(
+            buildCapabilitySnapshot({
+              argv: ['systematic', 'capabilities'],
+              clock: () => Date.parse(OBSERVED_AT),
+              config: result.metadata,
+              package: { name: '@fro.bot/systematic', version: '1.2.3' },
+              roots: [],
+            }),
+          )
+          expect(serialized).not.toContain('blocked')
         } finally {
           delete process.env.OPENCODE_CONFIG_DIR
         }
@@ -3309,6 +3377,43 @@ describe('config', () => {
       // Exactly one warning about the stripped `profiles` map, plus exactly
       // one about the missing selector fallback -- not more.
       expect(warnings).toHaveLength(2)
+    })
+
+    test('a control-character project path cannot forge a line in the `profiles`-ignored warning', () => {
+      writeUserConfig({
+        profiles: {
+          personal: {
+            agents: { 'correctness-reviewer': { model: 'a/personal' } },
+          },
+        },
+      })
+      const weirdProjectDir = path.join(
+        testDir,
+        'proj\n\u001b[31mFAKE\u001b[0m',
+      )
+      fs.mkdirSync(path.join(weirdProjectDir, '.opencode'), {
+        recursive: true,
+      })
+      fs.writeFileSync(
+        path.join(weirdProjectDir, '.opencode/systematic.json'),
+        JSON.stringify({
+          profile: 'personal',
+          profiles: {
+            personal: {
+              agents: { 'correctness-reviewer': { model: 'a/sneaky' } },
+            },
+          },
+        }),
+      )
+
+      loadConfigWithSources(weirdProjectDir, { warningSink })
+
+      const profilesWarning = warnings.find((w) => w.includes('`profiles`'))
+      expect(profilesWarning).toBeDefined()
+      expect(profilesWarning).not.toContain('\n')
+      expect(profilesWarning).not.toContain('\u001b')
+      expect(profilesWarning).toContain('\\u000a')
+      expect(profilesWarning).toContain('\\u001b')
     })
 
     // `profiles` defined in custom (OPENCODE_CONFIG_DIR) config is honoured:

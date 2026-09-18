@@ -920,7 +920,10 @@ function stripProjectSecurityOverlayFields(
   if (agents === rawConfig.agents && categories === rawConfig.categories) {
     return rawConfig
   }
-  return { ...rawConfig, agents, categories } as RawSystematicConfig
+  const result: RawSystematicConfig = { ...rawConfig }
+  if (agents !== rawConfig.agents) result.agents = agents
+  if (categories !== rawConfig.categories) result.categories = categories
+  return result
 }
 
 function stripSecurityOverlayEntries(
@@ -1210,9 +1213,14 @@ function resolveAliasedCustomConfigPath(
  * aliased, so the caller can flush them verbatim if the custom-trust pass
  * of the same file turns out NOT to succeed -- in that case the fields the
  * project pass stripped are not actually guaranteed to apply via custom
- * trust, so the warnings must not be lost. Passes through unchanged when
- * not aliased. The buffer is bounded by whatever bound the caller (the
- * project-trust `stripProjectSecurityOverlayFields` pass) already applies.
+ * trust, so the warnings must not be lost. This flush only happens under
+ * `invalidSource: 'report'`; under the default `'throw'` mode a failed
+ * custom-trust pass aborts `loadConfigWithSources` before `emitAliasDiagnostics`
+ * runs, and the original thrown error is what the caller sees -- the buffered
+ * strip warnings are simply never flushed, which is intentional (already
+ * covered by existing tests). Passes through unchanged when not aliased. The
+ * buffer is bounded by whatever bound the caller (the project-trust
+ * `stripProjectSecurityOverlayFields` pass) already applies.
  */
 function createAliasStripTracker(
   warningSink: (message: string) => void,
@@ -1340,7 +1348,7 @@ export function loadConfigWithSources(
     )
   ) {
     warningSink(
-      `[systematic] \`profiles\` in project config (${projectSource.path}) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored. Its bundles are not selectable even if this project also sets \`profile\`.`,
+      `[systematic] \`profiles\` in project config (${sanitizeDiagnosticText(projectSource.path)}) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored. Its bundles are not selectable even if this project also sets \`profile\`.`,
     )
   }
 
@@ -1602,9 +1610,7 @@ function buildConfigObservationMetadata(
     if (authority) authorities.push(authority)
   }
 
-  const protectedFields = summary.sources.flatMap(
-    (source) => source.protectedFields,
-  )
+  const protectedFields = collectVisibleProtectedFields(summary.sources)
   const sources = dedupeSourceMetadata(
     [summary.custom, summary.project, summary.user],
     sourcePaths,
@@ -1617,6 +1623,38 @@ function buildConfigObservationMetadata(
     profileSelectorSource: summary.profileSelection.profileSelectorSource,
     profileFallback: summary.profileSelection.profileFallback,
   }
+}
+
+/**
+ * `collectProjectProtectedFields` records a "blocked" entry for every
+ * project-trust field this load stripped, unconditionally -- it runs before
+ * the custom pass even starts (see the call site in `loadConfigSource`) and
+ * has no way to know whether a same-file custom-trust load will later apply
+ * those exact fields anyway (see `resolveAliasedCustomConfigPath` /
+ * `emitAliasDiagnostics`, which already handle this for the warning-text
+ * side of aliasing). When the project and custom configs are the *same*
+ * canonical file and the custom-trust pass of that file loaded successfully,
+ * the stripped fields DID take effect -- through the custom pass, at full
+ * trust -- so reporting them as "blocked" in `ConfigObservationMetadata` is
+ * misleading duplication. Drop the project source's protected-field records
+ * in that case; keep them (they are genuinely blocked) whenever the custom
+ * pass isn't aliased to the same file, or failed to load (`report` mode).
+ */
+function collectVisibleProtectedFields(
+  sources: readonly FileConfigSource[],
+): readonly ConfigProtectedFieldMetadata[] {
+  const projectSource = sources.find((source) => source.trust === 'project')
+  const customSource = sources.find((source) => source.trust === 'custom')
+  const projectAppliedViaCustom =
+    projectSource !== undefined &&
+    customSource !== undefined &&
+    projectSource.canonicalPath === customSource.canonicalPath
+
+  return sources.flatMap((source) =>
+    projectAppliedViaCustom && source.trust === 'project'
+      ? []
+      : source.protectedFields,
+  )
 }
 
 function dedupeSourceMetadata(
