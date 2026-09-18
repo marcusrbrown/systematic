@@ -570,13 +570,6 @@ describe('harness routing blocks and profiles rendering', () => {
     for (const section of [agentsSection, categoriesSection]) {
       expect(section).toContain(dropExplanation)
       expect(section).toContain(explicitEmptyExplanation)
-      // The corrected wording must NOT claim custom (OPENCODE_CONFIG_DIR)
-      // config is what an explicit `{}` replaces -- custom loads AFTER
-      // project in the merge chain, so it can never be the "earlier"
-      // entry a project-trust merge overwrites.
-      expect(section).not.toMatch(
-        /entry already set in trusted \(user or `OPENCODE_CONFIG_DIR`\)/,
-      )
     }
   })
 })

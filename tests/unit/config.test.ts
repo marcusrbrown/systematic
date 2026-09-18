@@ -21,6 +21,10 @@ import {
   warnDroppedNames,
 } from '../../src/lib/config.js'
 import {
+  REMOVED_BUNDLED_AGENT_CATEGORIES,
+  REMOVED_BUNDLED_AGENT_NAMES,
+} from '../../src/lib/removed-names.js'
+import {
   type RoutingTarget,
   resolveRouting,
 } from '../../src/lib/routing-resolver.js'
@@ -521,13 +525,14 @@ describe('config', () => {
         }
       })
 
-      test('alias success also suppresses duplicate blocked records for top-level `profiles`/`workflow_guard`', () => {
+      test('alias success actually applies top-level `workflow_guard`/selected `profiles` bundle (not just an empty protectedFields list) and suppresses their duplicate blocked records', () => {
         const projectConfigDir = path.join(testDir, '.opencode')
         fs.mkdirSync(projectConfigDir)
         fs.writeFileSync(
           path.join(projectConfigDir, 'systematic.json'),
           JSON.stringify({
-            workflow_guard: { mode: 'protected' },
+            profile: 'personal',
+            workflow_guard: { mode: 'protected', debug: true },
             profiles: {
               personal: {
                 agents: { 'correctness-reviewer': { model: 'a/personal' } },
@@ -540,24 +545,40 @@ describe('config', () => {
         try {
           const result = loadConfigWithSources(testDir)
 
+          // Real effect, not just "no blocked record": workflow_guard took
+          // hold (project-trust would have stripped it to DEFAULT_CONFIG's
+          // observe/false) and the project-selected `personal` profile's
+          // overlay actually merged into the effective config.
+          expect(result.config.workflow_guard).toEqual({
+            mode: 'protected',
+            debug: true,
+          })
+          expect(result.metadata.activeProfile).toBe('personal')
+          expect(result.config.agents?.['correctness-reviewer']?.model).toBe(
+            'a/personal',
+          )
+
           // Both top-level protected fields applied through the custom-trust
           // pass of the identical file -- neither should be reported blocked.
           expect(result.metadata.protectedFields).toEqual([])
 
           // Consumer evidence: the capability snapshot the CLI ships (and
           // any other consumer of `metadata.protectedFields`) must not
-          // surface a stale "blocked" record either -- it reads whatever
-          // array `buildConfigObservationMetadata` handed it, unmodified.
-          const serialized = serializeCapabilitySnapshot(
-            buildCapabilitySnapshot({
-              argv: ['systematic', 'capabilities'],
-              clock: () => Date.parse(OBSERVED_AT),
-              config: result.metadata,
-              package: { name: '@fro.bot/systematic', version: '1.2.3' },
-              roots: [],
-            }),
-          )
-          expect(serialized).not.toContain('blocked')
+          // surface a stale "blocked" record either -- assert the parsed,
+          // structured fact list directly rather than string-matching the
+          // serialized JSON.
+          const snapshot = buildCapabilitySnapshot({
+            argv: ['systematic', 'capabilities'],
+            clock: () => Date.parse(OBSERVED_AT),
+            config: result.metadata,
+            package: { name: '@fro.bot/systematic', version: '1.2.3' },
+            roots: [],
+          })
+          expect(
+            snapshot.facts.filter(
+              (fact) => fact.factId === 'config-protected-field',
+            ),
+          ).toEqual([])
         } finally {
           delete process.env.OPENCODE_CONFIG_DIR
         }
@@ -1276,6 +1297,61 @@ describe('config', () => {
             `[systematic] \`agents.totally-not-a-real-agent.model\` in project config (${projectConfigPath}) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored.`,
           ])
           expect(result.config.agents).toEqual({})
+        })
+
+        test('a genuinely-removed agent/category name (from the real removed-name inventory) with only protected fields is stripped-to-empty before the removed-name drop path ever sees it', () => {
+          // Real inventory entries, not invented strings: `agents` keys are
+          // schema-rejected unless the entry is stripped to `{}` first (see
+          // `AgentOverlaySchema`'s object description); `categories` keys
+          // that are still present after merge get a *different* "no longer
+          // a bundled name" warning via `warnDroppedNames`/`REMOVED_AGENT_CATEGORIES_SET`.
+          // A removed name using only protected fields must take the first
+          // path (discarded pre-validation) and never reach the second.
+          const removedAgentName = REMOVED_BUNDLED_AGENT_NAMES[0]
+          const removedCategoryName = REMOVED_BUNDLED_AGENT_CATEGORIES[0]
+          if (
+            removedAgentName === undefined ||
+            removedCategoryName === undefined
+          ) {
+            throw new Error(
+              'REMOVED_BUNDLED_AGENT_NAMES/REMOVED_BUNDLED_AGENT_CATEGORIES must be non-empty for this regression to be meaningful',
+            )
+          }
+
+          const projectConfigDir = path.join(testDir, '.opencode')
+          fs.mkdirSync(projectConfigDir)
+          const projectConfigPath = path.join(
+            projectConfigDir,
+            'systematic.json',
+          )
+          fs.writeFileSync(
+            projectConfigPath,
+            JSON.stringify({
+              agents: { [removedAgentName]: { model: 'openai/x' } },
+              categories: { [removedCategoryName]: { model: 'openai/x' } },
+            }),
+          )
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          const result = loadConfigWithSources(testDir, { warningSink })
+
+          // Both entries were discarded by protected-field stripping before
+          // validation, so the load succeeds and both maps end up empty.
+          expect(result.config.agents).toEqual({})
+          expect(result.config.categories).toEqual({})
+          // Only the protected-field-strip warning fires for each -- never
+          // the separate "no longer a bundled name" removed-name warning,
+          // since the key never survives to reach that check.
+          expect(warnings).toEqual([
+            `[systematic] \`agents.${removedAgentName}.model\` in project config (${projectConfigPath}) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored.`,
+            `[systematic] \`categories.${removedCategoryName}.model\` in project config (${projectConfigPath}) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored.`,
+          ])
+          expect(
+            warnings.some((message) =>
+              message.includes('no longer a bundled name'),
+            ),
+          ).toBe(false)
         })
 
         test('an unknown agent name still rejects when it has a permitted field or is an explicit {}', () => {
