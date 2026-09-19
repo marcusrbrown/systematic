@@ -6,6 +6,7 @@ import { z } from 'zod'
 import { INTERNAL_AGENT_SIGNATURES } from './bootstrap.js'
 import type {
   OpencodeOperationObserver,
+  OperationObserverReasonCode,
   OperationObserverRemoteResult,
   OperationObserverRemoteSnapshot,
   OperationObserverResult,
@@ -242,6 +243,7 @@ interface SessionRuntime {
   readonly hooks: OpencodeWorkflowGuardHooks
   status(): WorkflowStatus
   readStatus(): WorkflowStatus
+  unavailableCause(): GuardUnavailableCause | undefined
   refreshReadback(): Promise<void>
   observeReceipt(input: unknown): EvidenceObservationResult
   prepareTransition(input: unknown): TransitionPrepareResult
@@ -386,6 +388,28 @@ interface MarkerDocument {
     enforcement: OpencodeWorkflowGuardConfig['mode']
     statusDigest: string
   }
+}
+
+// Bounded first-cause diagnostic for a `seedRemoteScopes`/`seedRemoteScope`
+// failure that led to `markUnavailable()`. Side-channel only: surfaced on
+// `systematic_workflow_status` tool output (see `statusForTool`), never on a
+// receipt envelope, marker envelope, or anything covered by an integrity
+// digest. Never carries raw command output, paths, or tokens.
+type GuardUnavailableCauseKind =
+  | 'observer-not-configured'
+  | 'local-snapshot-error'
+  | 'local-snapshot-unavailable'
+  | 'remote-scope-unreadable'
+  | 'remote-scope-missing-resource'
+  | 'remote-scope-unavailable'
+  | 'remote-readback-rejected'
+
+interface GuardUnavailableCause {
+  readonly site: 'seed-remote-scopes' | 'seed-remote-scope'
+  readonly kind: GuardUnavailableCauseKind
+  readonly operation?: RemoteOperation
+  readonly reasonCode?: OperationObserverReasonCode | WorkflowReasonCode
+  readonly timedOut: boolean
 }
 
 const startToolShape = {
@@ -1166,13 +1190,22 @@ function isSuccessfulAfter(output: unknown): output is HostOutput {
   return parseHostOutput(output) !== undefined
 }
 
-function statusForTool(status: WorkflowStatus): string {
+function statusForTool(
+  status: WorkflowStatus,
+  unavailableCause?: GuardUnavailableCause,
+): string {
   return JSON.stringify({
     state: status.state,
     reasonCode: status.reasonCode,
     ...(status.repair ? { repair: status.repair } : {}),
     satisfiedOperations: status.satisfiedOperations,
     missingOperations: status.missingOperations,
+    // Mode has no path back to 'protected', but 'unavailable' -> 'disabled'
+    // is reachable via attested control. Emit only while still unavailable
+    // so the field doesn't outlive the state it describes.
+    ...(unavailableCause && status.state === 'unavailable'
+      ? { firstUnavailableCause: unavailableCause }
+      : {}),
   })
 }
 
@@ -1448,6 +1481,20 @@ function createSessionRuntime(
   const pendingQuestionChallenges = new Map<string, PendingQuestionChallenge>()
   const blockedQuestionCalls = new Map<string, string>()
   const consumedQuestionTargets = new Set<TransitionTarget>()
+  let firstUnavailableCause: GuardUnavailableCause | undefined
+
+  // Single choke point for every `guard.startUnit()` call. The reset below is
+  // currently unreachable: mode has no path back to 'protected' ('disabled'
+  // is reachable but startUnit rejects there too). Here so the diagnostic
+  // stays correct if mode recovery is ever added.
+  function startFreshUnit(
+    input: unknown,
+    policy?: RuntimeUnitPolicy,
+  ): StartUnitResult {
+    const result = guard.startUnit(input, policy)
+    if (result.status === 'started') firstUnavailableCause = undefined
+    return result
+  }
 
   function effectiveTargetContext(): {
     parentTargetRoot: string
@@ -2277,9 +2324,18 @@ function createSessionRuntime(
     options.runtimeRequiredOperations ?? [],
   )
 
-  function markUnavailable(): void {
+  // `cause` is only recorded if THIS call is the one that actually flips
+  // mode to 'unavailable' (setMode returns 'changed', not 'unchanged') and
+  // no cause is stored yet. This binds the diagnostic to the real transition
+  // instead of to whichever concurrent caller finished computing a cause
+  // first, so a failure suspended mid-seed can never overwrite (or follow)
+  // an unrelated cause that already won the race.
+  function markUnavailable(cause?: GuardUnavailableCause): void {
     if (options.config.mode === 'disabled') return
-    guard.setMode({ mode: 'unavailable' })
+    const result = guard.setMode({ mode: 'unavailable' })
+    if (cause && result.status === 'changed' && !firstUnavailableCause) {
+      firstUnavailableCause = cause
+    }
   }
 
   function bindCall(
@@ -3026,43 +3082,89 @@ function createSessionRuntime(
     }
   }
 
+  // Returns the cause on failure instead of writing it directly: the caller
+  // must pass it to markUnavailable(cause), which is the only place that
+  // commits it, atomically with the mode transition. Never write
+  // firstUnavailableCause from here — see markUnavailable().
   async function seedRemoteScopes(
     operations: readonly ReceiptOperation[],
-  ): Promise<boolean> {
+  ): Promise<GuardUnavailableCause | undefined> {
     const remoteOperations = operations.filter(remoteOperation)
-    if (remoteOperations.length === 0) return true
+    if (remoteOperations.length === 0) return undefined
     const remoteSnapshot = options.observer?.remoteSnapshot
-    if (!remoteSnapshot || !options.observer) return false
+    if (!remoteSnapshot || !options.observer) {
+      return {
+        site: 'seed-remote-scopes',
+        kind: 'observer-not-configured',
+        timedOut: false,
+      }
+    }
     let local: OperationObserverResult
     try {
       local = await options.observer.snapshot()
     } catch {
-      return false
-    }
-    if (local.status === 'unavailable') return false
-    for (const operation of remoteOperations) {
-      if (!(await seedRemoteScope(remoteSnapshot, operation, local.snapshot))) {
-        return false
+      return {
+        site: 'seed-remote-scopes',
+        kind: 'local-snapshot-error',
+        timedOut: false,
       }
     }
-    return true
+    if (local.status === 'unavailable') {
+      return {
+        site: 'seed-remote-scopes',
+        kind: 'local-snapshot-unavailable',
+        reasonCode: local.reasonCode,
+        timedOut: local.reasonCode === 'command-timeout',
+      }
+    }
+    for (const operation of remoteOperations) {
+      const cause = await seedRemoteScope(
+        remoteSnapshot,
+        operation,
+        local.snapshot,
+      )
+      if (cause) return cause
+    }
+    return undefined
   }
 
   async function seedRemoteScope(
     reader: NonNullable<OpencodeOperationObserver['remoteSnapshot']>,
     operation: RemoteOperation,
     local: OperationObserverSnapshot,
-  ): Promise<boolean> {
+  ): Promise<GuardUnavailableCause | undefined> {
     const result = await readRemoteScope(reader, operation, 'before')
-    if (!result) return false
+    if (!result) {
+      return {
+        site: 'seed-remote-scope',
+        kind: 'remote-scope-unreadable',
+        operation,
+        timedOut: false,
+      }
+    }
     if (result.status === 'missing-resource') {
-      return (
+      const allowed =
         operation === 'pr-creation' ||
         operation === 'check-readback' ||
         operation === 'review-readback'
-      )
+      return allowed
+        ? undefined
+        : {
+            site: 'seed-remote-scope',
+            kind: 'remote-scope-missing-resource',
+            operation,
+            timedOut: false,
+          }
     }
-    if (result.status !== 'available') return false
+    if (result.status !== 'available') {
+      return {
+        site: 'seed-remote-scope',
+        kind: 'remote-scope-unavailable',
+        operation,
+        reasonCode: result.reasonCode,
+        timedOut: result.reasonCode === 'command-timeout',
+      }
+    }
     const observed = guard.observeReadback(
       remoteReadbackInput(
         operation,
@@ -3072,7 +3174,16 @@ function createSessionRuntime(
         operation !== 'pr-creation',
       ),
     )
-    return observed.status !== 'rejected'
+    if (observed.status === 'rejected') {
+      return {
+        site: 'seed-remote-scope',
+        kind: 'remote-readback-rejected',
+        operation,
+        reasonCode: observed.reasonCode,
+        timedOut: false,
+      }
+    }
+    return undefined
   }
 
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: host skill completion preserves ordering and marker projection
@@ -3144,10 +3255,11 @@ function createSessionRuntime(
       )
       const status = guard.status()
       if (!status.unit || status.unit.status === 'completed') {
-        guard.startUnit({}, runtimePolicy)
-        if (!(await seedRemoteScopes(runtimePolicy.requiredOperations ?? []))) {
-          markUnavailable()
-        }
+        startFreshUnit({}, runtimePolicy)
+        const cause = await seedRemoteScopes(
+          runtimePolicy.requiredOperations ?? [],
+        )
+        if (cause) markUnavailable(cause)
       }
     }
   }
@@ -3173,7 +3285,7 @@ function createSessionRuntime(
       return
     }
     if (!isSuccessfulAfter(output)) return
-    const result = guard.startUnit(pending.input, runtimePolicy)
+    const result = startFreshUnit(pending.input, runtimePolicy)
     if (
       result.status === 'rejected' &&
       (result.reasonCode === 'guard-unavailable' ||
@@ -3181,11 +3293,11 @@ function createSessionRuntime(
     ) {
       markUnavailable()
     }
-    if (
-      result.status === 'started' &&
-      !(await seedRemoteScopes(runtimePolicy.requiredOperations ?? []))
-    ) {
-      markUnavailable()
+    if (result.status === 'started') {
+      const cause = await seedRemoteScopes(
+        runtimePolicy.requiredOperations ?? [],
+      )
+      if (cause) markUnavailable(cause)
     }
     if (result.status === 'started') {
       const startedStatus = guard.status()
@@ -4037,6 +4149,7 @@ function createSessionRuntime(
       return initialized ? guard.status() : unavailableWorkflowStatus()
     },
     readStatus,
+    unavailableCause: () => firstUnavailableCause,
     refreshReadback,
     observeReceipt: (input) => {
       ensureSynchronousRuntime()
@@ -4053,7 +4166,7 @@ function createSessionRuntime(
     startUnit: (input, policy) => {
       ensureSynchronousRuntime()
       return initialized
-        ? guard.startUnit(input, policy)
+        ? startFreshUnit(input, policy)
         : { status: 'rejected', reasonCode: 'guard-unavailable' }
     },
     control,
@@ -4194,7 +4307,7 @@ export function createOpencodeWorkflowGuard(
         return {
           title: 'Workflow guard status',
           output: statusToolSchema.safeParse(input).success
-            ? statusForTool(runtime.readStatus())
+            ? statusForTool(runtime.readStatus(), runtime.unavailableCause())
             : unavailableToolResult(),
         }
       },
