@@ -350,7 +350,7 @@ function renderTopLevelSection(
   // update the "above" wording in the string below to match the new layout.
   const crossRef =
     key === 'agents' || key === 'categories'
-      ? '\n\nPer-entry overlay fields are documented in the [Agent/Category Overlay Fields](#agentcategory-overlay-fields) section above.'
+      ? '\n\nPer-entry overlay fields are documented in the [Agent/Category Overlay Fields](#agentcategory-overlay-fields) section above.\n\nIf stripping trust-protected fields from a project-config entry leaves it empty, the entry is dropped instead of merged, so an earlier same-key entry from user (or active-profile) config keeps its nonprotected fields. An entry the project explicitly sets to `{}` is not emptied by stripping, so it merges as normal and replaces that earlier entry’s nonprotected fields, carrying over only the protected ones — custom config, if it also sets the key, is merged afterward and still applies on top regardless.'
       : key === 'profiles'
         ? "\n\nEach named bundle's `agents`/`categories` entries have the same shape as the top-level `agents`/`categories` overlays above, restricted to a routing-only field subset — see [Profile Bundle Overlay Fields](#profile-bundle-overlay-fields) below."
         : key === 'pi_subagents'

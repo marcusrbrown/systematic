@@ -21,6 +21,10 @@ import {
   warnDroppedNames,
 } from '../../src/lib/config.js'
 import {
+  REMOVED_BUNDLED_AGENT_CATEGORIES,
+  REMOVED_BUNDLED_AGENT_NAMES,
+} from '../../src/lib/removed-names.js'
+import {
   type RoutingTarget,
   resolveRouting,
 } from '../../src/lib/routing-resolver.js'
@@ -305,6 +309,546 @@ describe('config', () => {
       })
     })
 
+    describe('project and custom config resolving to the same file', () => {
+      test('direct alias: one notice, no ignored-field warnings, protected field applied', () => {
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir)
+        fs.writeFileSync(
+          path.join(projectConfigDir, 'systematic.json'),
+          JSON.stringify({
+            agents: { 'correctness-reviewer': { model: 'openai/aliased' } },
+          }),
+        )
+        process.env.OPENCODE_CONFIG_DIR = projectConfigDir
+
+        try {
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          const result = loadConfigWithSources(testDir, { warningSink })
+
+          expect(result.config.agents?.['correctness-reviewer']?.model).toBe(
+            'openai/aliased',
+          )
+          expect(
+            warnings.some((message) =>
+              message.includes('is only valid in user config'),
+            ),
+          ).toBe(false)
+          expect(
+            warnings.filter((message) =>
+              message.includes('resolve to the same file'),
+            ),
+          ).toHaveLength(1)
+          expect(warnings[0]).toContain(
+            'apply through the custom-trust pass instead',
+          )
+          // The stripped field applied through the custom-trust pass of the
+          // same file, so it is not genuinely "blocked" -- must not appear
+          // in observation metadata (regression for the duplicate-record bug).
+          expect(result.metadata.protectedFields).toEqual([])
+        } finally {
+          delete process.env.OPENCODE_CONFIG_DIR
+        }
+      })
+
+      test('non-alias: separate project and custom paths keep prior strip-warning behavior', () => {
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir)
+        const projectConfigPath = path.join(projectConfigDir, 'systematic.json')
+        fs.writeFileSync(
+          projectConfigPath,
+          JSON.stringify({
+            agents: { 'correctness-reviewer': { model: 'openai/project' } },
+          }),
+        )
+        const customDir = fs.mkdtempSync(
+          path.join(os.tmpdir(), 'systematic-custom-'),
+        )
+        process.env.OPENCODE_CONFIG_DIR = customDir
+
+        try {
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          const result = loadConfigWithSources(testDir, { warningSink })
+
+          expect(warnings).toEqual([
+            `[systematic] \`agents.correctness-reviewer.model\` in project config (${projectConfigPath}) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored.`,
+          ])
+          expect(result.config.agents).toEqual({})
+          // No aliasing here -- the field is genuinely blocked (never applied
+          // anywhere), so its record must be retained.
+          expect(result.metadata.protectedFields).toEqual([
+            {
+              fieldPath: 'agents.*.model',
+              outcome: 'blocked',
+              sourceKind: 'project',
+            },
+          ])
+        } finally {
+          delete process.env.OPENCODE_CONFIG_DIR
+          fs.rmSync(customDir, { recursive: true, force: true })
+        }
+      })
+
+      test('symlink alias: a symlinked custom config directory resolving to the project file behaves the same as a direct alias', () => {
+        const realProjectDir = path.join(testDir, 'real-project')
+        const realConfigDir = path.join(realProjectDir, '.opencode')
+        fs.mkdirSync(realConfigDir, { recursive: true })
+        fs.writeFileSync(
+          path.join(realConfigDir, 'systematic.json'),
+          JSON.stringify({
+            agents: { 'correctness-reviewer': { model: 'openai/aliased' } },
+          }),
+        )
+        const aliasedCustomDir = path.join(testDir, 'aliased-custom')
+        fs.symlinkSync(realConfigDir, aliasedCustomDir, 'dir')
+        process.env.OPENCODE_CONFIG_DIR = aliasedCustomDir
+
+        try {
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          const result = loadConfigWithSources(realProjectDir, { warningSink })
+
+          expect(result.config.agents?.['correctness-reviewer']?.model).toBe(
+            'openai/aliased',
+          )
+          expect(
+            warnings.some((message) =>
+              message.includes('is only valid in user config'),
+            ),
+          ).toBe(false)
+          expect(
+            warnings.filter((message) =>
+              message.includes('resolve to the same file'),
+            ),
+          ).toHaveLength(1)
+          expect(warnings[0]).toContain(
+            'apply through the custom-trust pass instead',
+          )
+          // Same duplicate-suppression invariant applies through a symlinked
+          // custom config dir, not just a direct path alias.
+          expect(result.metadata.protectedFields).toEqual([])
+        } finally {
+          delete process.env.OPENCODE_CONFIG_DIR
+        }
+      })
+
+      test('an invalid-shape protected field still rejects via the custom-trust pass when aliased', () => {
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir)
+        fs.writeFileSync(
+          path.join(projectConfigDir, 'systematic.json'),
+          JSON.stringify({
+            agents: { 'correctness-reviewer': { model: 42 } },
+          }),
+        )
+        process.env.OPENCODE_CONFIG_DIR = projectConfigDir
+
+        try {
+          expect(() => loadConfigWithSources(testDir)).toThrow('model')
+        } finally {
+          delete process.env.OPENCODE_CONFIG_DIR
+        }
+      })
+
+      test('alias + invalid protected field + report mode: buffered strip warnings flush and no alias notice is emitted, without throwing', () => {
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir)
+        fs.writeFileSync(
+          path.join(projectConfigDir, 'systematic.json'),
+          JSON.stringify({
+            agents: { 'correctness-reviewer': { model: 42 } },
+          }),
+        )
+        process.env.OPENCODE_CONFIG_DIR = projectConfigDir
+
+        try {
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          const result = loadConfigWithSources(testDir, {
+            warningSink,
+            invalidSource: 'report',
+          })
+
+          expect(
+            warnings.some((message) =>
+              message.includes('is only valid in user config'),
+            ),
+          ).toBe(true)
+          expect(
+            warnings.some((message) =>
+              message.includes('resolve to the same file'),
+            ),
+          ).toBe(false)
+          expect(result.metadata.sources).toContainEqual(
+            expect.objectContaining({ kind: 'custom', presence: 'invalid' }),
+          )
+          // The custom-trust pass of the aliased file failed, so the field
+          // never actually applied -- its blocked record must be retained,
+          // not suppressed as a false "applied via custom" duplicate.
+          expect(result.metadata.protectedFields).toEqual([
+            {
+              fieldPath: 'agents.*.model',
+              outcome: 'blocked',
+              sourceKind: 'project',
+            },
+          ])
+        } finally {
+          delete process.env.OPENCODE_CONFIG_DIR
+        }
+      })
+
+      test('alias + valid protected fields: buffered strip warnings are discarded and exactly one alias notice is emitted', () => {
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir)
+        fs.writeFileSync(
+          path.join(projectConfigDir, 'systematic.json'),
+          JSON.stringify({
+            agents: {
+              'correctness-reviewer': {
+                model: 'openai/aliased',
+                permission: { bash: 'allow' },
+              },
+            },
+          }),
+        )
+        process.env.OPENCODE_CONFIG_DIR = projectConfigDir
+
+        try {
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          loadConfigWithSources(testDir, { warningSink })
+
+          expect(warnings).toHaveLength(1)
+          expect(warnings[0]).toContain('resolve to the same file')
+          expect(warnings[0]).toContain(
+            'apply through the custom-trust pass instead',
+          )
+        } finally {
+          delete process.env.OPENCODE_CONFIG_DIR
+        }
+      })
+
+      test('alias success (top-level-only: `profiles`/`workflow_guard`, no agents/categories overlay) actually applies them, emits no false "ignored"/"not selectable" warning, and gives exactly one accurate alias notice', () => {
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir)
+        fs.writeFileSync(
+          path.join(projectConfigDir, 'systematic.json'),
+          JSON.stringify({
+            profile: 'personal',
+            workflow_guard: { mode: 'protected', debug: true },
+            profiles: {
+              personal: {
+                agents: { 'correctness-reviewer': { model: 'a/personal' } },
+              },
+            },
+          }),
+        )
+        process.env.OPENCODE_CONFIG_DIR = projectConfigDir
+
+        try {
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          const result = loadConfigWithSources(testDir, { warningSink })
+
+          // Real effect, not just "no blocked record": workflow_guard took
+          // hold (project-trust would have stripped it to DEFAULT_CONFIG's
+          // observe/false) and the project-selected `personal` profile's
+          // overlay actually merged into the effective config.
+          expect(result.config.workflow_guard).toEqual({
+            mode: 'protected',
+            debug: true,
+          })
+          expect(result.metadata.activeProfile).toBe('personal')
+          expect(result.config.agents?.['correctness-reviewer']?.model).toBe(
+            'a/personal',
+          )
+
+          // Regression: `profiles` genuinely applied through the identical
+          // custom-trust file, so its project-trust "ignored"/"not
+          // selectable" warning must not fire -- even though this project
+          // config has zero agents/categories security-overlay fields to
+          // strip (the only case that used to feed the alias-notice buffer).
+          expect(
+            warnings.some((message) =>
+              message.includes('is only valid in user config'),
+            ),
+          ).toBe(false)
+          // Exactly one accurate alias notice takes its place.
+          expect(
+            warnings.filter((message) =>
+              message.includes('resolve to the same file'),
+            ),
+          ).toHaveLength(1)
+          expect(warnings).toHaveLength(1)
+          expect(warnings[0]).toContain(
+            'apply through the custom-trust pass instead',
+          )
+
+          // Both top-level protected fields applied through the custom-trust
+          // pass of the identical file -- neither should be reported blocked.
+          expect(result.metadata.protectedFields).toEqual([])
+
+          // Consumer evidence: the capability snapshot the CLI ships (and
+          // any other consumer of `metadata.protectedFields`) must not
+          // surface a stale "blocked" record either -- assert the parsed,
+          // structured fact list directly rather than string-matching the
+          // serialized JSON.
+          const snapshot = buildCapabilitySnapshot({
+            argv: ['systematic', 'capabilities'],
+            clock: () => Date.parse(OBSERVED_AT),
+            config: result.metadata,
+            package: { name: '@fro.bot/systematic', version: '1.2.3' },
+            roots: [],
+          })
+          expect(
+            snapshot.facts.filter(
+              (fact) => fact.factId === 'config-protected-field',
+            ),
+          ).toEqual([])
+        } finally {
+          delete process.env.OPENCODE_CONFIG_DIR
+        }
+      })
+
+      test('alias success (workflow_guard-only, no `profiles`/no overlay fields) still gets one truthful alias notice, not silence', () => {
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir)
+        fs.writeFileSync(
+          path.join(projectConfigDir, 'systematic.json'),
+          JSON.stringify({
+            workflow_guard: { mode: 'protected', debug: true },
+          }),
+        )
+        process.env.OPENCODE_CONFIG_DIR = projectConfigDir
+
+        try {
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          const result = loadConfigWithSources(testDir, { warningSink })
+
+          // workflow_guard has no dedicated "ignored" warning at all, so this
+          // case previously produced zero buffered messages and emitAliasDiagnostics
+          // stayed silent even though the field genuinely applied via custom trust.
+          expect(result.config.workflow_guard).toEqual({
+            mode: 'protected',
+            debug: true,
+          })
+          expect(result.metadata.protectedFields).toEqual([])
+          expect(warnings).toEqual([
+            expect.stringContaining('resolve to the same file'),
+          ])
+          expect(warnings[0]).toContain(
+            'apply through the custom-trust pass instead',
+          )
+        } finally {
+          delete process.env.OPENCODE_CONFIG_DIR
+        }
+      })
+
+      test('alias + top-level-only invalid `workflow_guard` + report mode: the `profiles`-ignored warning is flushed verbatim (not silently dropped) and blocked-field metadata is retained', () => {
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir)
+        fs.writeFileSync(
+          path.join(projectConfigDir, 'systematic.json'),
+          JSON.stringify({
+            workflow_guard: { mode: 'bogus-mode' },
+            profiles: {
+              personal: {
+                agents: { 'correctness-reviewer': { model: 'a/personal' } },
+              },
+            },
+          }),
+        )
+        process.env.OPENCODE_CONFIG_DIR = projectConfigDir
+
+        try {
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          const result = loadConfigWithSources(testDir, {
+            warningSink,
+            invalidSource: 'report',
+          })
+
+          // The custom-trust pass of the aliased file failed (invalid mode
+          // enum value), so `profiles` never actually applied -- its ignored
+          // warning must still surface, not be silently swallowed the way
+          // the successful-alias case swallows it.
+          expect(
+            warnings.some(
+              (message) =>
+                message.includes('`profiles`') &&
+                message.includes('is only valid in user config'),
+            ),
+          ).toBe(true)
+          // No false accurate-alias notice either -- it did not, in fact,
+          // apply through custom trust.
+          expect(
+            warnings.some((message) =>
+              message.includes('resolve to the same file'),
+            ),
+          ).toBe(false)
+          expect(result.metadata.sources).toContainEqual(
+            expect.objectContaining({ kind: 'custom', presence: 'invalid' }),
+          )
+          expect(result.metadata.protectedFields).toEqual([
+            {
+              fieldPath: 'profiles',
+              outcome: 'blocked',
+              sourceKind: 'project',
+            },
+            {
+              fieldPath: 'workflow_guard',
+              outcome: 'blocked',
+              sourceKind: 'project',
+            },
+          ])
+        } finally {
+          delete process.env.OPENCODE_CONFIG_DIR
+        }
+      })
+
+      test('alias success with a mixed overlay + top-level protected payload (agents.model AND profiles) still emits exactly one accurate alias notice, not one per field', () => {
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir)
+        fs.writeFileSync(
+          path.join(projectConfigDir, 'systematic.json'),
+          JSON.stringify({
+            agents: { 'correctness-reviewer': { model: 'openai/aliased' } },
+            profiles: {
+              personal: {
+                agents: { 'correctness-reviewer': { model: 'a/personal' } },
+              },
+            },
+          }),
+        )
+        process.env.OPENCODE_CONFIG_DIR = projectConfigDir
+
+        try {
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          const result = loadConfigWithSources(testDir, { warningSink })
+
+          expect(result.config.agents?.['correctness-reviewer']?.model).toBe(
+            'openai/aliased',
+          )
+          expect(
+            warnings.some((message) =>
+              message.includes('is only valid in user config'),
+            ),
+          ).toBe(false)
+          expect(warnings).toEqual([
+            expect.stringContaining('resolve to the same file'),
+          ])
+          expect(warnings[0]).toContain(
+            'apply through the custom-trust pass instead',
+          )
+          expect(result.metadata.protectedFields).toEqual([])
+        } finally {
+          delete process.env.OPENCODE_CONFIG_DIR
+        }
+      })
+
+      test('alias + profile-bundle validation failure: load throws and no alias-success notice is emitted', () => {
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir)
+        fs.writeFileSync(
+          path.join(projectConfigDir, 'systematic.json'),
+          JSON.stringify({
+            profiles: {
+              p: {
+                categories: {
+                  'not-a-real-category': { model: 'openai/x' },
+                },
+              },
+            },
+          }),
+        )
+        process.env.OPENCODE_CONFIG_DIR = projectConfigDir
+
+        try {
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          // Schema-valid at both project and custom-trust parse time; the
+          // profile bundle's category key is only checked by
+          // `assertAllProfileBundlesAreValid`, which runs AFTER the alias
+          // success notice used to be emitted -- so the notice must not
+          // fire for a load that never actually returns a config.
+          expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
+            'profiles.p.categories.not-a-real-category is not a bundled agent category',
+          )
+          expect(
+            warnings.some((message) =>
+              message.includes('apply through the custom-trust pass instead'),
+            ),
+          ).toBe(false)
+          // The stable identifying half of the alias notice -- catches a
+          // reworded success notice that dropped the exact phrase above but
+          // still claims the alias applied.
+          expect(
+            warnings.some((message) =>
+              message.includes('resolve to the same file'),
+            ),
+          ).toBe(false)
+        } finally {
+          delete process.env.OPENCODE_CONFIG_DIR
+        }
+      })
+
+      test('alias + routing-invariant failure (variant with no model): load throws and no alias-success notice is emitted', () => {
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir)
+        fs.writeFileSync(
+          path.join(projectConfigDir, 'systematic.json'),
+          JSON.stringify({
+            agents: { 'correctness-reviewer': { variant: 'high' } },
+          }),
+        )
+        process.env.OPENCODE_CONFIG_DIR = projectConfigDir
+
+        try {
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          // `variant` is a security-overlay field, stripped from the project
+          // pass but present (unstripped) via the aliased custom-trust pass,
+          // so both passes load successfully -- the throw only comes from
+          // the post-merge routing-invariant check, which runs AFTER the
+          // alias success notice used to be emitted.
+          //
+          // Match the distinctive `assertRoutingInvariants` diagnostic itself
+          // (not just the agent name), so this proves the load failed for the
+          // intended reason -- a qualifier resolving without a model -- and
+          // not from some unrelated error that happens to mention the agent.
+          expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
+            /agents\.correctness-reviewer\.variant resolves to "high" on the opencode harness, but no model resolves for agents\.correctness-reviewer on opencode/,
+          )
+          expect(
+            warnings.some((message) =>
+              message.includes('apply through the custom-trust pass instead'),
+            ),
+          ).toBe(false)
+          expect(
+            warnings.some((message) =>
+              message.includes('resolve to the same file'),
+            ),
+          ).toBe(false)
+        } finally {
+          delete process.env.OPENCODE_CONFIG_DIR
+        }
+      })
+    })
+
     describe('array merging', () => {
       test('merges arrays without duplicates', () => {
         const projectConfigDir = path.join(testDir, '.opencode')
@@ -493,55 +1037,106 @@ describe('config', () => {
         )
       })
 
-      test('project overlays cannot configure model, permission, or managed skills', () => {
+      test('project overlays warn and strip model, permission, and managed skills (issue #992)', () => {
         const projectConfigDir = path.join(testDir, '.opencode')
         fs.mkdirSync(projectConfigDir)
         const projectConfigPath = path.join(projectConfigDir, 'systematic.json')
 
-        for (const config of [
+        const cases: Array<{
+          config: Record<string, unknown>
+          warningField: string
+          agents: Record<string, Record<string, unknown>>
+          categories: Record<string, Record<string, unknown>>
+        }> = [
           {
-            agents: {
-              'correctness-reviewer': { model: 'openai/gpt-5' },
+            config: {
+              agents: {
+                'correctness-reviewer': { model: 'openai/gpt-5' },
+              },
             },
+            warningField: 'agents.correctness-reviewer.model',
+            // Protected-only entry: stripping empties it entirely, so it is
+            // dropped rather than retained as `{}` (F3).
+            agents: {},
+            categories: {},
           },
-          { categories: { review: { model: 'openai/gpt-5' } } },
           {
-            agents: {
-              'correctness-reviewer': { permission: { bash: 'allow' } },
-            },
+            config: { categories: { review: { model: 'openai/gpt-5' } } },
+            warningField: 'categories.review.model',
+            agents: {},
+            categories: {},
           },
-          { categories: { review: { skills: ['ce:review'] } } },
-        ]) {
-          fs.writeFileSync(projectConfigPath, JSON.stringify(config))
+          {
+            config: {
+              agents: {
+                'correctness-reviewer': { permission: { bash: 'allow' } },
+              },
+            },
+            warningField: 'agents.correctness-reviewer.permission',
+            agents: {},
+            categories: {},
+          },
+          {
+            config: { categories: { review: { skills: ['ce:review'] } } },
+            warningField: 'categories.review.skills',
+            agents: {},
+            categories: {},
+          },
+        ]
 
-          expect(() => loadConfigWithSources(testDir)).toThrow(
-            projectConfigPath,
-          )
-          expect(() => loadConfigWithSources(testDir)).toThrow(
-            /only valid in user config or OPENCODE_CONFIG_DIR config/,
-          )
+        for (const testCase of cases) {
+          fs.writeFileSync(projectConfigPath, JSON.stringify(testCase.config))
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          const result = loadConfigWithSources(testDir, { warningSink })
+
+          expect(warnings).toEqual([
+            `[systematic] \`${testCase.warningField}\` in project config (${projectConfigPath}) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored.`,
+          ])
+          expect(result.config.agents).toEqual(testCase.agents)
+          expect(result.config.categories).toEqual(testCase.categories)
         }
       })
 
-      test('project overlays reject model: null as security field violation', () => {
+      test('project overlays warn and strip model: null as a security field (issue #992)', () => {
         const projectConfigDir = path.join(testDir, '.opencode')
         fs.mkdirSync(projectConfigDir)
         const projectConfigPath = path.join(projectConfigDir, 'systematic.json')
 
-        for (const config of [
+        const cases: Array<{
+          config: Record<string, unknown>
+          warningField: string
+          agents: Record<string, Record<string, unknown>>
+          categories: Record<string, Record<string, unknown>>
+        }> = [
           {
-            agents: { 'correctness-reviewer': { model: null } },
+            config: { agents: { 'correctness-reviewer': { model: null } } },
+            warningField: 'agents.correctness-reviewer.model',
+            // Protected-only entry: dropped rather than retained as `{}` (F3).
+            agents: {},
+            categories: {},
           },
-          { categories: { review: { model: null } } },
-        ]) {
-          fs.writeFileSync(projectConfigPath, JSON.stringify(config))
+          {
+            config: { categories: { review: { model: null } } },
+            warningField: 'categories.review.model',
+            agents: {},
+            categories: {},
+          },
+        ]
 
-          expect(() => loadConfigWithSources(testDir)).toThrow(
-            projectConfigPath,
-          )
-          expect(() => loadConfigWithSources(testDir)).toThrow(
-            /only valid in user config or OPENCODE_CONFIG_DIR config/,
-          )
+        for (const testCase of cases) {
+          fs.writeFileSync(projectConfigPath, JSON.stringify(testCase.config))
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          const result = loadConfigWithSources(testDir, { warningSink })
+
+          expect(warnings).toEqual([
+            `[systematic] \`${testCase.warningField}\` in project config (${projectConfigPath}) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored.`,
+          ])
+          expect(result.config.agents).toEqual(testCase.agents)
+          expect(result.config.categories).toEqual(testCase.categories)
         }
       })
 
@@ -597,35 +1192,694 @@ describe('config', () => {
         })
       })
 
-      test('project overlays cannot configure variant in agents or categories', () => {
+      test('project overlays warn and strip variant in agents or categories (issue #992)', () => {
         const projectConfigDir = path.join(testDir, '.opencode')
         fs.mkdirSync(projectConfigDir)
         const projectConfigPath = path.join(projectConfigDir, 'systematic.json')
 
-        for (const config of [
+        const cases: Array<{
+          config: Record<string, unknown>
+          warningFields: string[]
+          agents: Record<string, Record<string, unknown>>
+          categories: Record<string, Record<string, unknown>>
+        }> = [
           {
-            agents: {
-              'correctness-reviewer': {
-                model: 'openai/gpt-5',
-                variant: 'large-context',
+            config: {
+              agents: {
+                'correctness-reviewer': {
+                  model: 'openai/gpt-5',
+                  variant: 'large-context',
+                },
               },
             },
+            warningFields: [
+              'agents.correctness-reviewer.model',
+              'agents.correctness-reviewer.variant',
+            ],
+            // Both fields present are protected: the entry is empty after
+            // stripping and is dropped rather than retained as `{}` (F3).
+            agents: {},
+            categories: {},
           },
           {
-            categories: {
-              review: { model: 'openai/gpt-5', variant: 'small' },
+            config: {
+              categories: {
+                review: { model: 'openai/gpt-5', variant: 'small' },
+              },
             },
+            warningFields: [
+              'categories.review.model',
+              'categories.review.variant',
+            ],
+            agents: {},
+            categories: {},
           },
-        ]) {
-          fs.writeFileSync(projectConfigPath, JSON.stringify(config))
+        ]
 
-          expect(() => loadConfigWithSources(testDir)).toThrow(
-            projectConfigPath,
+        for (const testCase of cases) {
+          fs.writeFileSync(projectConfigPath, JSON.stringify(testCase.config))
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          const result = loadConfigWithSources(testDir, { warningSink })
+
+          expect(warnings).toEqual(
+            testCase.warningFields.map(
+              (field) =>
+                `[systematic] \`${field}\` in project config (${projectConfigPath}) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored.`,
+            ),
           )
-          expect(() => loadConfigWithSources(testDir)).toThrow(
-            /only valid in user config or OPENCODE_CONFIG_DIR config/,
-          )
+          expect(result.config.agents).toEqual(testCase.agents)
+          expect(result.config.categories).toEqual(testCase.categories)
         }
+      })
+
+      // Issue #992 gap: SECURITY_OVERLAY_FIELDS stripping used to happen only
+      // at merge time (`stripProjectSecurityOverlay` inside `mergeOverlayMap`),
+      // AFTER `SystematicConfigSchema.safeParse`. A project-set protected field
+      // with an INVALID value shape (e.g. `model: 42` instead of a string) never
+      // reached the merge-time strip -- it failed schema validation first and
+      // threw, even though a validly-typed protected field (e.g. `model:
+      // 'openai/gpt-5'`, covered above) was always silently stripped and
+      // warned instead of failing. The strip must happen on the raw parsed
+      // JSONC BEFORE schema validation so both cases behave identically: the
+      // field is dropped and warned about regardless of whether its value
+      // would otherwise have passed the field's own schema.
+      describe('invalid-shape project security fields are stripped before schema validation (issue #992 gap)', () => {
+        test('project model: 42 is stripped with the exact strip warning; a permitted sibling field (temperature) survives and the load succeeds', () => {
+          const projectConfigDir = path.join(testDir, '.opencode')
+          fs.mkdirSync(projectConfigDir)
+          const projectConfigPath = path.join(
+            projectConfigDir,
+            'systematic.json',
+          )
+          fs.writeFileSync(
+            projectConfigPath,
+            JSON.stringify({
+              agents: {
+                'correctness-reviewer': { model: 42, temperature: 0.5 },
+              },
+            }),
+          )
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          const result = loadConfigWithSources(testDir, { warningSink })
+
+          expect(warnings).toEqual([
+            `[systematic] \`agents.correctness-reviewer.model\` in project config (${projectConfigPath}) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored.`,
+          ])
+          expect(result.config.agents).toEqual({
+            'correctness-reviewer': { temperature: 0.5 },
+          })
+        })
+
+        test('invalid-shape values for every SECURITY_OVERLAY_FIELDS member are stripped (not a load failure) in both agents and categories', () => {
+          const projectConfigDir = path.join(testDir, '.opencode')
+          fs.mkdirSync(projectConfigDir)
+          const projectConfigPath = path.join(
+            projectConfigDir,
+            'systematic.json',
+          )
+
+          const invalidShapes: Record<string, unknown> = {
+            model: 42,
+            variant: ['not-a-string'],
+            skills: 'not-an-array',
+            permission: 'not-a-record',
+            opencode: 'not-an-object',
+            pi: 'not-an-object',
+          }
+
+          for (const [field, invalidValue] of Object.entries(invalidShapes)) {
+            fs.writeFileSync(
+              projectConfigPath,
+              JSON.stringify({
+                agents: { 'correctness-reviewer': { [field]: invalidValue } },
+                categories: { review: { [field]: invalidValue } },
+              }),
+            )
+            const warnings: string[] = []
+            const warningSink = (message: string) => warnings.push(message)
+
+            const result = loadConfigWithSources(testDir, { warningSink })
+
+            expect(warnings).toEqual([
+              `[systematic] \`agents.correctness-reviewer.${field}\` in project config (${projectConfigPath}) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored.`,
+              `[systematic] \`categories.review.${field}\` in project config (${projectConfigPath}) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored.`,
+            ])
+            // Protected-only entry: stripping empties it entirely, so it
+            // is dropped rather than retained as `{}` (F3).
+            expect(result.config.agents).toEqual({})
+            expect(result.config.categories).toEqual({})
+          }
+        })
+
+        test('a malformed PERMITTED field (temperature: "high") still fails validation -- only SECURITY_OVERLAY_FIELDS are pre-stripped', () => {
+          const projectConfigDir = path.join(testDir, '.opencode')
+          fs.mkdirSync(projectConfigDir)
+          const projectConfigPath = path.join(
+            projectConfigDir,
+            'systematic.json',
+          )
+          fs.writeFileSync(
+            projectConfigPath,
+            JSON.stringify({
+              agents: { 'correctness-reviewer': { temperature: 'high' } },
+            }),
+          )
+
+          expect(() => loadConfig(testDir)).toThrow(projectConfigPath)
+          expect(() => loadConfig(testDir)).toThrow('temperature')
+        })
+
+        test('an invalid-shape protected field in USER or CUSTOM config still fails validation -- pre-schema stripping is project-trust only', () => {
+          const userConfigFilePath = writeUserConfig({
+            agents: { 'correctness-reviewer': { model: 42 } },
+          })
+          expect(() => loadConfig(testDir)).toThrow(userConfigFilePath)
+          expect(() => loadConfig(testDir)).toThrow('model')
+
+          fs.rmSync(userConfigFilePath)
+
+          const customDir = fs.mkdtempSync(
+            path.join(os.tmpdir(), 'systematic-custom-'),
+          )
+          process.env.OPENCODE_CONFIG_DIR = customDir
+          try {
+            const customConfigPath = path.join(customDir, 'systematic.json')
+            fs.writeFileSync(
+              customConfigPath,
+              JSON.stringify({
+                agents: {
+                  'correctness-reviewer': { permission: 'not-a-record' },
+                },
+              }),
+            )
+            expect(() => loadConfig(testDir)).toThrow(customConfigPath)
+            expect(() => loadConfig(testDir)).toThrow('permission')
+          } finally {
+            delete process.env.OPENCODE_CONFIG_DIR
+          }
+        })
+
+        test('the warning sink receives exactly one warning per stripped field, with no raw value echoed', () => {
+          const projectConfigDir = path.join(testDir, '.opencode')
+          fs.mkdirSync(projectConfigDir)
+          const projectConfigPath = path.join(
+            projectConfigDir,
+            'systematic.json',
+          )
+          const secretLikeValue = 'sk-do-not-leak-me-12345'
+          fs.writeFileSync(
+            projectConfigPath,
+            JSON.stringify({
+              agents: {
+                'correctness-reviewer': {
+                  model: secretLikeValue,
+                  permission: { bash: 'allow' },
+                },
+              },
+              categories: {
+                review: { skills: ['ce:review'] },
+              },
+            }),
+          )
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          loadConfigWithSources(testDir, { warningSink })
+
+          expect(warnings).toHaveLength(3)
+          expect(warnings).toEqual([
+            `[systematic] \`agents.correctness-reviewer.model\` in project config (${projectConfigPath}) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored.`,
+            `[systematic] \`agents.correctness-reviewer.permission\` in project config (${projectConfigPath}) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored.`,
+            `[systematic] \`categories.review.skills\` in project config (${projectConfigPath}) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored.`,
+          ])
+          for (const warning of warnings) {
+            expect(warning).not.toContain(secretLikeValue)
+            expect(warning).not.toContain('allow')
+            expect(warning).not.toContain('ce:review')
+          }
+        })
+      })
+
+      // F3: an entry made empty SOLELY by stripping (it had content before,
+      // all of which was project-protected) is dropped entirely rather than
+      // retained as `{}`. Retaining `{}` still counts as a project-supplied
+      // overlay fragment for that key, and the project same-key merge
+      // (`preserveSecurityFields`) fully replaces a previous value's
+      // non-security fields with the fragment's -- wiping trusted settings
+      // the project config never even named. An explicit `{}` (nothing to
+      // strip) is unaffected and keeps prior semantics.
+      describe('a protected-only project entry that strips to empty is dropped, not retained as {} (F3)', () => {
+        test('trusted model/permission/temperature/hidden/disable/steps all survive a project protected-only entry', () => {
+          writeUserConfig({
+            agents: {
+              'correctness-reviewer': {
+                model: 'openai/trusted-model',
+                permission: { bash: 'deny' },
+                temperature: 0.1,
+                hidden: true,
+                disable: false,
+                steps: 5,
+              },
+            },
+          })
+
+          const projectConfigDir = path.join(testDir, '.opencode')
+          fs.mkdirSync(projectConfigDir)
+          fs.writeFileSync(
+            path.join(projectConfigDir, 'systematic.json'),
+            JSON.stringify({
+              agents: {
+                'correctness-reviewer': {
+                  model: 'openai/attacker-model',
+                  permission: { bash: 'allow' },
+                },
+              },
+            }),
+          )
+
+          const result = loadConfigWithSources(testDir)
+
+          expect(result.config.agents?.['correctness-reviewer']).toEqual({
+            model: 'openai/trusted-model',
+            permission: { bash: 'deny' },
+            temperature: 0.1,
+            hidden: true,
+            disable: false,
+            steps: 5,
+          })
+        })
+
+        test('an explicit project {} entry keeps prior semantics (non-security fields still replaced, not preserved)', () => {
+          writeUserConfig({
+            agents: {
+              'correctness-reviewer': {
+                model: 'openai/trusted-model',
+                permission: { bash: 'deny' },
+                temperature: 0.1,
+                hidden: true,
+              },
+            },
+          })
+
+          const projectConfigDir = path.join(testDir, '.opencode')
+          fs.mkdirSync(projectConfigDir)
+          fs.writeFileSync(
+            path.join(projectConfigDir, 'systematic.json'),
+            JSON.stringify({
+              agents: { 'correctness-reviewer': {} },
+            }),
+          )
+
+          const result = loadConfigWithSources(testDir)
+
+          expect(result.config.agents?.['correctness-reviewer']).toEqual({
+            model: 'openai/trusted-model',
+            permission: { bash: 'deny' },
+          })
+        })
+
+        test('a project entry mixing a protected field with a permitted field (temperature) keeps prior merge semantics', () => {
+          writeUserConfig({
+            agents: {
+              'correctness-reviewer': {
+                model: 'openai/trusted-model',
+                permission: { bash: 'deny' },
+                temperature: 0.1,
+                hidden: true,
+              },
+            },
+          })
+
+          const projectConfigDir = path.join(testDir, '.opencode')
+          fs.mkdirSync(projectConfigDir)
+          fs.writeFileSync(
+            path.join(projectConfigDir, 'systematic.json'),
+            JSON.stringify({
+              agents: {
+                'correctness-reviewer': {
+                  model: 'openai/attacker-model',
+                  temperature: 0.4,
+                },
+              },
+            }),
+          )
+
+          const result = loadConfigWithSources(testDir)
+
+          expect(result.config.agents?.['correctness-reviewer']).toEqual({
+            model: 'openai/trusted-model',
+            permission: { bash: 'deny' },
+            temperature: 0.4,
+          })
+        })
+
+        test('an unknown agent name with only protected fields is discarded with a warning, and the load succeeds', () => {
+          const projectConfigDir = path.join(testDir, '.opencode')
+          fs.mkdirSync(projectConfigDir)
+          const projectConfigPath = path.join(
+            projectConfigDir,
+            'systematic.json',
+          )
+          fs.writeFileSync(
+            projectConfigPath,
+            JSON.stringify({
+              agents: {
+                'totally-not-a-real-agent': { model: 'openai/x' },
+              },
+            }),
+          )
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          const result = loadConfigWithSources(testDir, { warningSink })
+
+          expect(warnings).toEqual([
+            `[systematic] \`agents.totally-not-a-real-agent.model\` in project config (${projectConfigPath}) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored.`,
+          ])
+          expect(result.config.agents).toEqual({})
+        })
+
+        test('a genuinely-removed agent/category name (from the real removed-name inventory) with only protected fields is stripped-to-empty before the removed-name drop path ever sees it', () => {
+          // Real inventory entries, not invented strings: `agents` keys are
+          // schema-rejected unless the entry is stripped to `{}` first (see
+          // `AgentOverlaySchema`'s object description); `categories` keys
+          // that are still present after merge get a *different* "no longer
+          // a bundled name" warning via `warnDroppedNames`/`REMOVED_AGENT_CATEGORIES_SET`.
+          // A removed name using only protected fields must take the first
+          // path (discarded pre-validation) and never reach the second.
+          const removedAgentName = REMOVED_BUNDLED_AGENT_NAMES[0]
+          const removedCategoryName = REMOVED_BUNDLED_AGENT_CATEGORIES[0]
+          if (
+            removedAgentName === undefined ||
+            removedCategoryName === undefined
+          ) {
+            throw new Error(
+              'REMOVED_BUNDLED_AGENT_NAMES/REMOVED_BUNDLED_AGENT_CATEGORIES must be non-empty for this regression to be meaningful',
+            )
+          }
+
+          const projectConfigDir = path.join(testDir, '.opencode')
+          fs.mkdirSync(projectConfigDir)
+          const projectConfigPath = path.join(
+            projectConfigDir,
+            'systematic.json',
+          )
+          fs.writeFileSync(
+            projectConfigPath,
+            JSON.stringify({
+              agents: { [removedAgentName]: { model: 'openai/x' } },
+              categories: { [removedCategoryName]: { model: 'openai/x' } },
+            }),
+          )
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          const result = loadConfigWithSources(testDir, { warningSink })
+
+          // Both entries were discarded by protected-field stripping before
+          // validation, so the load succeeds and both maps end up empty.
+          expect(result.config.agents).toEqual({})
+          expect(result.config.categories).toEqual({})
+          // Only the protected-field-strip warning fires for each -- never
+          // the separate "no longer a bundled name" removed-name warning,
+          // since the key never survives to reach that check.
+          expect(warnings).toEqual([
+            `[systematic] \`agents.${removedAgentName}.model\` in project config (${projectConfigPath}) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored.`,
+            `[systematic] \`categories.${removedCategoryName}.model\` in project config (${projectConfigPath}) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored.`,
+          ])
+          expect(
+            warnings.some((message) =>
+              message.includes('no longer a bundled name'),
+            ),
+          ).toBe(false)
+        })
+
+        test('an unknown agent name still rejects when it has a permitted field or is an explicit {}', () => {
+          const projectConfigDir = path.join(testDir, '.opencode')
+          fs.mkdirSync(projectConfigDir)
+          const projectConfigPath = path.join(
+            projectConfigDir,
+            'systematic.json',
+          )
+
+          fs.writeFileSync(
+            projectConfigPath,
+            JSON.stringify({
+              agents: {
+                'totally-not-a-real-agent': { temperature: 0.5 },
+              },
+            }),
+          )
+          expect(() => loadConfig(testDir)).toThrow(projectConfigPath)
+          expect(() => loadConfig(testDir)).toThrow('totally-not-a-real-agent')
+
+          fs.writeFileSync(
+            projectConfigPath,
+            JSON.stringify({
+              agents: { 'totally-not-a-real-agent': {} },
+            }),
+          )
+          expect(() => loadConfig(testDir)).toThrow(projectConfigPath)
+          expect(() => loadConfig(testDir)).toThrow('totally-not-a-real-agent')
+        })
+      })
+
+      describe('strip-warning diagnostics sanitize untrusted text and bound their own volume', () => {
+        test('a category key and project path with control characters never leak a raw control character into a warning', () => {
+          const weirdProjectDir = path.join(
+            testDir,
+            'proj\n\u001b[31mFAKE\u001b[0m',
+          )
+          fs.mkdirSync(path.join(weirdProjectDir, '.opencode'), {
+            recursive: true,
+          })
+          fs.writeFileSync(
+            path.join(weirdProjectDir, '.opencode/systematic.json'),
+            JSON.stringify({
+              categories: {
+                'evil\ncategory\u001b[0m': { model: 'openai/x' },
+              },
+            }),
+          )
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          loadConfigWithSources(weirdProjectDir, { warningSink })
+
+          expect(warnings.length).toBeGreaterThan(0)
+          for (const warning of warnings) {
+            expect(warning).not.toContain('\n')
+            expect(warning).not.toContain('\u001b')
+          }
+          expect(warnings.join('\n')).toContain('\\u000a')
+          expect(warnings.join('\n')).toContain('\\u001b')
+        })
+
+        test('an overlong category key is bounded and ellipsized rather than rendered in full', () => {
+          const projectConfigDir = path.join(testDir, '.opencode')
+          fs.mkdirSync(projectConfigDir)
+          const longKey = 'a'.repeat(500)
+          fs.writeFileSync(
+            path.join(projectConfigDir, 'systematic.json'),
+            JSON.stringify({
+              categories: { [longKey]: { model: 'openai/x' } },
+            }),
+          )
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          loadConfigWithSources(testDir, { warningSink })
+
+          expect(warnings).toHaveLength(1)
+          expect(warnings[0]).toContain('\u2026')
+          expect(warnings[0]).not.toContain('a'.repeat(200))
+        })
+
+        test('40+ protected-field strips across many entries yield 20 detailed warnings plus one summary warning', () => {
+          const projectConfigDir = path.join(testDir, '.opencode')
+          fs.mkdirSync(projectConfigDir)
+          const categories: Record<string, Record<string, unknown>> = {}
+          for (let index = 0; index < 7; index++) {
+            categories[`cat${index}`] = {
+              model: 'openai/x',
+              variant: 'v',
+              skills: ['s'],
+              permission: { bash: 'allow' },
+              opencode: {},
+              pi: {},
+            }
+          }
+          fs.writeFileSync(
+            path.join(projectConfigDir, 'systematic.json'),
+            JSON.stringify({ categories }),
+          )
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          loadConfigWithSources(testDir, { warningSink })
+
+          const detailed = warnings.filter((message) =>
+            message.includes('is only valid in user config'),
+          )
+          const summaries = warnings.filter((message) =>
+            message.includes('were suppressed'),
+          )
+          expect(detailed).toHaveLength(20)
+          expect(summaries).toHaveLength(1)
+          expect(summaries[0]).toContain('22')
+          expect(warnings).toHaveLength(21)
+        })
+
+        test('the top-level `profiles`-ignored warning shares the same 20-detail cap as overlay-field strips', () => {
+          const projectConfigDir = path.join(testDir, '.opencode')
+          fs.mkdirSync(projectConfigDir)
+          const categories: Record<string, Record<string, unknown>> = {}
+          for (let index = 0; index < 3; index++) {
+            categories[`cat${index}`] = {
+              model: 'openai/x',
+              variant: 'v',
+              skills: ['s'],
+              permission: { bash: 'allow' },
+              opencode: {},
+              pi: {},
+            }
+          }
+          // 18 fields above + 2 more here = exactly 20 -- the whole detail
+          // budget, before `profiles` is even considered. Previously
+          // `profiles` bypassed this cap entirely and would have been
+          // emitted as a 21st detailed warning regardless.
+          categories.cat3 = { model: 'openai/x', variant: 'v' }
+          fs.writeFileSync(
+            path.join(projectConfigDir, 'systematic.json'),
+            JSON.stringify({
+              categories,
+              profiles: { p: { agents: {} } },
+            }),
+          )
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          loadConfigWithSources(testDir, {
+            warningSink,
+            invalidSource: 'report',
+          })
+
+          const detailed = warnings.filter((message) =>
+            message.includes('is only valid in user config'),
+          )
+          const summaries = warnings.filter((message) =>
+            message.includes('were suppressed'),
+          )
+          expect(detailed).toHaveLength(20)
+          expect(
+            detailed.some((message) => message.includes('`profiles`')),
+          ).toBe(false)
+          expect(summaries).toHaveLength(1)
+          expect(summaries[0]).toContain('1')
+          expect(warnings).toHaveLength(21)
+        })
+
+        test('an ordinary short key and path produce the exact prior warning text, unchanged', () => {
+          const projectConfigDir = path.join(testDir, '.opencode')
+          fs.mkdirSync(projectConfigDir)
+          const projectConfigPath = path.join(
+            projectConfigDir,
+            'systematic.json',
+          )
+          fs.writeFileSync(
+            projectConfigPath,
+            JSON.stringify({
+              agents: { 'correctness-reviewer': { model: 'openai/x' } },
+            }),
+          )
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          loadConfigWithSources(testDir, { warningSink })
+
+          expect(warnings).toEqual([
+            `[systematic] \`agents.correctness-reviewer.model\` in project config (${projectConfigPath}) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored.`,
+          ])
+        })
+
+        test('two independent loads each get their own 20-warning budget', () => {
+          const projectConfigDir = path.join(testDir, '.opencode')
+          fs.mkdirSync(projectConfigDir)
+          const categories: Record<string, Record<string, unknown>> = {}
+          for (let index = 0; index < 4; index++) {
+            categories[`cat${index}`] = {
+              model: 'openai/x',
+              variant: 'v',
+              skills: ['s'],
+              permission: { bash: 'allow' },
+              opencode: {},
+              pi: {},
+            }
+          }
+          fs.writeFileSync(
+            path.join(projectConfigDir, 'systematic.json'),
+            JSON.stringify({ categories }),
+          )
+
+          const firstWarnings: string[] = []
+          loadConfigWithSources(testDir, {
+            warningSink: (message) => firstWarnings.push(message),
+          })
+          const secondWarnings: string[] = []
+          loadConfigWithSources(testDir, {
+            warningSink: (message) => secondWarnings.push(message),
+          })
+
+          for (const warnings of [firstWarnings, secondWarnings]) {
+            const detailed = warnings.filter((message) =>
+              message.includes('is only valid in user config'),
+            )
+            const summaries = warnings.filter((message) =>
+              message.includes('were suppressed'),
+            )
+            expect(detailed).toHaveLength(20)
+            expect(summaries).toHaveLength(1)
+          }
+        })
+
+        test('every protected field is stripped from the merged config even when its warning was suppressed', () => {
+          const projectConfigDir = path.join(testDir, '.opencode')
+          fs.mkdirSync(projectConfigDir)
+          const categories: Record<string, Record<string, unknown>> = {}
+          for (let index = 0; index < 4; index++) {
+            categories[`cat${index}`] = {
+              model: 'openai/x',
+              variant: 'v',
+              skills: ['s'],
+              permission: { bash: 'allow' },
+              opencode: {},
+              pi: {},
+              temperature: index,
+            }
+          }
+          fs.writeFileSync(
+            path.join(projectConfigDir, 'systematic.json'),
+            JSON.stringify({ categories }),
+          )
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          const result = loadConfigWithSources(testDir, { warningSink })
+
+          const summaries = warnings.filter((message) =>
+            message.includes('were suppressed'),
+          )
+          expect(summaries).toHaveLength(1)
+          for (let index = 0; index < 4; index++) {
+            expect(result.config.categories?.[`cat${index}`]).toEqual({
+              temperature: index,
+            })
+          }
+        })
       })
 
       test('project same-key overlay preserves variant from higher-trust config', () => {
@@ -1030,13 +2284,20 @@ describe('config', () => {
       )
     })
 
-    test('malformed agents.<key>.model is rejected with nested field path in error', () => {
+    // `model` is a SECURITY_OVERLAY_FIELDS member: a project-trust source has
+    // it stripped (with a warning) before schema validation regardless of
+    // its shape (see the `agent and category overlays` describe block for
+    // that behavior's dedicated coverage), so it can no longer stand in for
+    // "any malformed nested agent field" here. `hidden` is not
+    // trust-protected, so a malformed value for it still reaches schema
+    // validation and rejects with a nested field path.
+    test('malformed agents.<key>.hidden is rejected with nested field path in error', () => {
       const configPath = writeProjectConfig({
-        agents: { 'correctness-reviewer': { model: {} } },
+        agents: { 'correctness-reviewer': { hidden: 'not-a-boolean' } },
       })
       expect(() => loadConfig(testDir)).toThrow(configPath)
       expect(() => loadConfig(testDir)).toThrow(
-        'agents.correctness-reviewer.model',
+        'agents.correctness-reviewer.hidden',
       )
     })
 
@@ -2330,6 +3591,37 @@ describe('config', () => {
       })
     })
 
+    test('a control-character profile selector cannot forge a line in the missing-profile warning', () => {
+      writeProjectConfig({ profile: 'evil\ncat\u001b[31mFAKE\u001b[0m' })
+
+      loadConfigWithSources(testDir, { warningSink })
+
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]).not.toContain('\n')
+      expect(warnings[0]).not.toContain('\u001b')
+      expect(warnings[0]).toContain('\\u000a')
+      expect(warnings[0]).toContain('\\u001b')
+    })
+
+    test('a control-character trusted default profile name cannot forge a line in the fallback warning', () => {
+      writeUserConfig({
+        profile: 'safe\ndefault',
+        profiles: {
+          'safe\ndefault': {
+            agents: { 'correctness-reviewer': { model: 'a/personal' } },
+          },
+        },
+      })
+      writeProjectConfig({ profile: 'ghost' })
+
+      loadConfigWithSources(testDir, { warningSink })
+
+      expect(warnings).toHaveLength(1)
+      expect(warnings[0]).not.toContain('\n')
+      expect(warnings[0]).toContain('\\u000a')
+      expect(warnings[0]).toContain('falling back to your default profile')
+    })
+
     // Case 8: custom names undefined, user default defined and valid.
     test('case 8: custom selects a missing profile, falls back to defined user default', () => {
       writeUserConfig({
@@ -2474,6 +3766,43 @@ describe('config', () => {
       // Exactly one warning about the stripped `profiles` map, plus exactly
       // one about the missing selector fallback -- not more.
       expect(warnings).toHaveLength(2)
+    })
+
+    test('a control-character project path cannot forge a line in the `profiles`-ignored warning', () => {
+      writeUserConfig({
+        profiles: {
+          personal: {
+            agents: { 'correctness-reviewer': { model: 'a/personal' } },
+          },
+        },
+      })
+      const weirdProjectDir = path.join(
+        testDir,
+        'proj\n\u001b[31mFAKE\u001b[0m',
+      )
+      fs.mkdirSync(path.join(weirdProjectDir, '.opencode'), {
+        recursive: true,
+      })
+      fs.writeFileSync(
+        path.join(weirdProjectDir, '.opencode/systematic.json'),
+        JSON.stringify({
+          profile: 'personal',
+          profiles: {
+            personal: {
+              agents: { 'correctness-reviewer': { model: 'a/sneaky' } },
+            },
+          },
+        }),
+      )
+
+      loadConfigWithSources(weirdProjectDir, { warningSink })
+
+      const profilesWarning = warnings.find((w) => w.includes('`profiles`'))
+      expect(profilesWarning).toBeDefined()
+      expect(profilesWarning).not.toContain('\n')
+      expect(profilesWarning).not.toContain('\u001b')
+      expect(profilesWarning).toContain('\\u000a')
+      expect(profilesWarning).toContain('\\u001b')
     })
 
     // `profiles` defined in custom (OPENCODE_CONFIG_DIR) config is honoured:

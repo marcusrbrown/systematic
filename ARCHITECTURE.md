@@ -306,9 +306,21 @@ entry from a `profiles` map (routing-only `agents`/`categories` overlays) define
 chain entry between user base and project (`user base → active profile → project → custom`, later
 wins); every other merge in `loadConfigWithSources` keeps the three-source chain above. Only a
 **custom** overlay can override a profile-supplied routing choice. A **project** overlay cannot:
-routing fields are exactly `SECURITY_OVERLAY_FIELDS`, which a project file may not set at all
-(`rejectProjectSecurityOverlay` fails the load rather than stripping), and which
-`preserveSecurityFields` carries over from the profile if a non-file project source supplies them.
+protected overlay fields (`SECURITY_OVERLAY_FIELDS` — model, variant, skills, permission, opencode,
+pi; includes routing) are stripped from a project-trust source before schema validation, not merely
+at merge time (issue #992). An overlay entry emptied solely by that stripping is dropped rather than
+kept as `{}`, so an explicit empty entry or one with remaining permitted fields keeps its existing
+semantics. Detailed strip warnings are capped at 20 per load, naming the file and key path; any
+excess is reported only as a suppressed-count summary, not an unbounded warning per field. An
+unknown `agents` key in a project overlay is likewise discarded before the unknown-key check if
+stripping leaves it empty, rather than reported as an unknown key (`categories` has no unknown-key
+schema check to bypass). The guarantee attaches to
+source trust, not physical path — `OPENCODE_CONFIG_DIR` names a directory/source that separately
+carries custom trust; when the project and custom paths alias to the same canonical file and the
+custom source loads successfully, both trust passes still run in normal precedence order and the
+resulting diagnostic states the file's fields apply as custom. If the custom source fails to load,
+report-mode falls back to the project strip warnings instead. `preserveSecurityFields` carries a
+previously-trusted value's protected fields forward across a project overlay on the same key.
 `profiles` is in `PROJECT_PROTECTED_FIELDS` (`src/lib/config.ts`) alongside `workflow_guard` — a
 top-level-key list distinct from the per-overlay `SECURITY_OVERLAY_FIELDS` above: a project
 `systematic.json` may select a profile, but a `profiles` map it defines is ignored with a warning,

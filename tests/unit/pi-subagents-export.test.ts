@@ -2136,7 +2136,15 @@ describe('config-aware export: model + pi_subagents field application', () => {
     }
   })
 
-  test('project-sourced agents.x.pi is rejected outright (SECURITY_OVERLAY_FIELDS boundary, not silently stripped like legacy pi_subagents fields)', () => {
+  // A project-sourced `agents.x.pi` block is a SECURITY_OVERLAY_FIELDS
+  // member -- same trust boundary as `model`/`variant`/`skills`/`permission`.
+  // Before issue #992 this made the whole config load throw; now it is
+  // stripped and warned about (via `loadConfigWithSources`'s default
+  // `console.warn` sink), same outcome as the legacy pi_subagents fields
+  // (silently stripped) except this one warns. Either way the export itself
+  // must still succeed and the project-sourced `pi` block must never reach
+  // the emitted persona frontmatter.
+  test('project-sourced agents.x.pi is stripped, not silently applied (SECURITY_OVERLAY_FIELDS boundary, issue #992)', () => {
     setupFakeHome()
     try {
       const cwd = mkTmp()
@@ -2153,9 +2161,12 @@ describe('config-aware export: model + pi_subagents field application', () => {
 
       const agentsRoot = path.join(cwd, '.pi', 'agents')
       const result = exportPersonas(agentsRoot, { scope: 'project', cwd })
-      expect(result.status).toBe('error')
-      expect(result.error).toContain('pi')
-      expect(fs.existsSync(agentsRoot)).toBe(false)
+      expect(result.status).toBe('ok')
+      const content = fs.readFileSync(
+        path.join(agentsRoot, 'systematic-repo-research-analyst.md'),
+        'utf-8',
+      )
+      expect(content).not.toMatch(/^thinking: /m)
     } finally {
       restoreHome()
     }

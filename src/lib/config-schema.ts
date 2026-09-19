@@ -351,7 +351,7 @@ function createProfileBundleSchema(
         .optional()
         .meta({
           description:
-            'Per-agent routing overlays for this profile, keyed by bundled agent name (bare or qualified category/name), using the same routing-only field set as every profile entry. Unknown keys are rejected with a Zod parse error, exactly like the top-level `agents` field.',
+            'Per-agent routing overlays for this profile, keyed by bundled agent name (bare or qualified category/name), using the same routing-only field set as every profile entry. Unknown keys are rejected with a Zod parse error.',
           examples: [
             { 'correctness-reviewer': { model: 'openai/gpt-6-astra' } },
           ],
@@ -568,7 +568,7 @@ export function createSystematicConfigSchema(
         .default({})
         .meta({
           description:
-            'Per-agent configuration overlays keyed by bundled agent name (bare or qualified category/name). Unknown keys are rejected with a Zod parse error. To overlay a user-defined agent, configure it through OpenCode-native config (.opencode/opencode.json) instead.',
+            'Per-agent configuration overlays keyed by bundled agent name (bare or qualified category/name). Unknown keys are rejected with a Zod parse error, except that a project config entry under an unknown key is discarded before that check if stripping trust-protected fields leaves it empty. To overlay a user-defined agent, configure it through OpenCode-native config (.opencode/opencode.json) instead. Trust-protected fields (model, variant, skills, permission, opencode, pi) are only valid in user config or OPENCODE_CONFIG_DIR config — a project config setting them has that field ignored with a warning; other fields in the same overlay still apply.',
           examples: [
             { 'correctness-reviewer': { temperature: 0.1 } },
             { 'review/correctness-reviewer': { temperature: 0.1 } },
@@ -580,7 +580,7 @@ export function createSystematicConfigSchema(
         .default({})
         .meta({
           description:
-            'Per-category configuration overlays keyed by category name',
+            'Per-category configuration overlays keyed by category name. Trust-protected fields (model, variant, skills, permission, opencode, pi) are only valid in user config or OPENCODE_CONFIG_DIR config — a project config setting them has that field ignored with a warning; other fields in the same overlay still apply.',
           examples: [{ review: { model: 'anthropic/claude-opus-5' } }, {}],
         }),
       profiles: z

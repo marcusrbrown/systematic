@@ -527,7 +527,7 @@ JSON Schema URL for IDE autocomplete. The value is informational only — the lo
 
 ## agents
 
-Per-agent configuration overlays keyed by bundled agent name (bare or qualified category/name). Unknown keys are rejected with a Zod parse error. To overlay a user-defined agent, configure it through OpenCode-native config (.opencode/opencode.json) instead.
+Per-agent configuration overlays keyed by bundled agent name (bare or qualified category/name). Unknown keys are rejected with a Zod parse error, except that a project config entry under an unknown key is discarded before that check if stripping trust-protected fields leaves it empty. To overlay a user-defined agent, configure it through OpenCode-native config (.opencode/opencode.json) instead. Trust-protected fields (model, variant, skills, permission, opencode, pi) are only valid in user config or OPENCODE_CONFIG_DIR config — a project config setting them has that field ignored with a warning; other fields in the same overlay still apply.
 
 **Type:** `object`
 **Default:** `{}`
@@ -556,9 +556,11 @@ Per-agent configuration overlays keyed by bundled agent name (bare or qualified 
 
 Per-entry overlay fields are documented in the [Agent/Category Overlay Fields](#agentcategory-overlay-fields) section above.
 
+If stripping trust-protected fields from a project-config entry leaves it empty, the entry is dropped instead of merged, so an earlier same-key entry from user (or active-profile) config keeps its nonprotected fields. An entry the project explicitly sets to `{}` is not emptied by stripping, so it merges as normal and replaces that earlier entry’s nonprotected fields, carrying over only the protected ones — custom config, if it also sets the key, is merged afterward and still applies on top regardless.
+
 ## categories
 
-Per-category configuration overlays keyed by category name
+Per-category configuration overlays keyed by category name. Trust-protected fields (model, variant, skills, permission, opencode, pi) are only valid in user config or OPENCODE_CONFIG_DIR config — a project config setting them has that field ignored with a warning; other fields in the same overlay still apply.
 
 **Type:** `object`
 **Default:** `{}`
@@ -578,6 +580,8 @@ Per-category configuration overlays keyed by category name
 
 
 Per-entry overlay fields are documented in the [Agent/Category Overlay Fields](#agentcategory-overlay-fields) section above.
+
+If stripping trust-protected fields from a project-config entry leaves it empty, the entry is dropped instead of merged, so an earlier same-key entry from user (or active-profile) config keeps its nonprotected fields. An entry the project explicitly sets to `{}` is not emptied by stripping, so it merges as normal and replaces that earlier entry’s nonprotected fields, carrying over only the protected ones — custom config, if it also sets the key, is merged afterward and still applies on top regardless.
 
 ## profiles
 
