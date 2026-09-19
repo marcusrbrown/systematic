@@ -41,10 +41,70 @@ export type OverlayConfig = Record<string, unknown>
 
 export type OverlayConfigMap = Record<string, OverlayConfig>
 
+/**
+ * Which FILE-level source contributed the winning value for one routing
+ * field -- distinct from `RoutingFieldSource.level`/`.form` in
+ * `routing-resolver.ts`, which describe SHAPE provenance (agent vs
+ * category, block vs flat), not file provenance. Reuses `ConfigSourceKind`
+ * for the non-profile cases (a plain agents/categories overlay entry from
+ * that trust level) and adds the three profile-bundle variants, since a
+ * bundle's own trust level (which file defined `profiles.<name>`) is a
+ * genuinely different fact from an ordinary same-trust overlay -- most
+ * importantly, `'project-profile'` is the only origin an advisory
+ * (project-sourced) bundle can ever produce, and is exactly the tag
+ * `config show` needs to make "the project bundle applied something"
+ * distinguishable from "the project bundle got fully absorbed by user
+ * config" (every field's origin reads `'user'`, never `'project-profile'`).
+ */
+export type RoutingValueOrigin =
+  | ConfigSourceKind
+  | 'user-profile'
+  | 'custom-profile'
+  | 'project-profile'
+
+/**
+ * Per-leaf file-provenance for the exact set of fields
+ * `routing-resolver.ts` ever reads off a merged agent/category overlay
+ * value: the two flat fields (`model`, `variant`) and the four
+ * harness-block fields (`opencode.model`, `opencode.variant`, `pi.model`,
+ * `pi.thinking`). Deliberately NOT a generic recursive mirror of
+ * `OverlayConfig`'s shape -- routing is the only consumer, and a generic
+ * tree would have to track every overlay field (`mode`, `color`, `steps`,
+ * `hidden`, `disable`, `skills`, `permission`, ...) for no benefit, since
+ * none of those ever feed routing resolution.
+ *
+ * A leaf is `undefined` when no source in the merge chain has ever set
+ * that field as an OWN property for this key -- distinct from the field
+ * being unresolved at the routing layer (which can also happen when a
+ * lower-precedence layer, e.g. category, is shadowed by a higher one, e.g.
+ * agent, that DOES have an origin here).
+ */
+export interface RoutingFieldOrigins {
+  readonly model?: RoutingValueOrigin
+  readonly variant?: RoutingValueOrigin
+  readonly opencodeModel?: RoutingValueOrigin
+  readonly opencodeVariant?: RoutingValueOrigin
+  readonly piModel?: RoutingValueOrigin
+  readonly piThinking?: RoutingValueOrigin
+}
+
 export interface SourcedOverlayConfig {
   value: OverlayConfig
   sourcePath: string
   keyPath: string
+  /**
+   * Per-routing-field file provenance for `value`, updated in lockstep
+   * with `value` at every merge step (see `resolveOverlayEntryOrigin`) --
+   * attached to the value that actually won, never derived after the fact
+   * from `sourcePath` (which is last-writer-wins across the WHOLE entry,
+   * not per field; see that field's doc comment for the trap this avoids).
+   * Optional and possibly `{}` for overlay maps this file's merge doesn't
+   * populate origins for (`pi_subagents`, and `routing-resolver.ts`'s
+   * `toSourcedOverlayMap` placeholder adapter for already-flattened
+   * inputs) -- routing resolution treats a missing leaf as "no known
+   * origin", never as an error.
+   */
+  origins?: RoutingFieldOrigins
 }
 
 export interface SourcedOverlayConfigMap {
@@ -154,6 +214,28 @@ export interface SourceAwareConfigResult {
    * the post-merge qualifier check, without recomputing it.
    */
   piSubagentsOverlays: SourcedOverlayConfigMap
+  /**
+   * The (non-canonical) `path` of the file that defined the active
+   * profile's bundle content -- `profileSelection.bundleSource.path`,
+   * verbatim -- or `null` when no profile is active. Deliberately lives
+   * here and NOT on `ConfigObservationMetadata`: `capability-snapshot.ts`
+   * runs loader metadata through `assertAllowedKeys`, a hardcoded-allowlist
+   * gate that THROWS on any unknown key (see its doc comment), and only
+   * `.metadata` -- never the rest of `SourceAwareConfigResult` -- is an
+   * input to the capability snapshot. Adding a field to
+   * `ConfigObservationMetadata` would silently break `systematic
+   * capabilities` (`runCapabilities` catches the throw and prints
+   * "Capabilities diagnostic unavailable", naming no cause) exactly the way
+   * the duplicated `CONFIG_PROTECTED_FIELD_PATHS` literal already did once
+   * before (see that file's `allow_project_profiles` addition). Consumers
+   * (`systematic config show`) read `loaded.activeProfileSourcePath`
+   * directly, never `loaded.metadata.activeProfileSourcePath`. Uses `path`
+   * (matching `getConfigPaths`/`Configuration locations`'s non-canonical
+   * values), not `canonicalPath` -- printing the canonical path would
+   * disagree with the `Configuration locations` block a few lines above it
+   * for a symlinked config directory.
+   */
+  activeProfileSourcePath: string | null
 }
 
 export interface PiSubagentsOverlayMap {
@@ -275,6 +357,18 @@ interface ProfileBundleConfigSource extends ConfigSourceBase {
    * the top level.
    */
   readonly profileName: string
+  /**
+   * The trust level of the FILE that defined this bundle's `profiles.<name>`
+   * entry -- `profileSelection.bundleSource.trust`, carried onto the
+   * pseudo-source itself so `originForSource` can tag a routing field's
+   * origin as `'user-profile'`/`'custom-profile'`/`'project-profile'`
+   * without threading `profileSelection` separately through the merge
+   * functions. Distinct from this pseudo-source having no `trust` field of
+   * its own (see this interface's doc comment) -- `bundleTrust` names
+   * where the bundle's CONTENT came from, not a trust level this
+   * pseudo-source itself holds for stripping/preservation purposes.
+   */
+  readonly bundleTrust: ConfigSourceKind
 }
 
 type ConfigSource = FileConfigSource | ProfileBundleConfigSource
@@ -1682,6 +1776,7 @@ export function loadConfigWithSources(
           },
           protectedFields: [],
           profileName: profileSelection.activeProfile,
+          bundleTrust: profileSelection.bundleSource.trust,
         }
       : null
 
@@ -1866,6 +1961,7 @@ export function loadConfigWithSources(
     }),
     overlays,
     piSubagentsOverlays: mergedPiSubagentsOverlays,
+    activeProfileSourcePath: profileSelection.bundleSource?.path ?? null,
   }
 }
 
@@ -2223,13 +2319,99 @@ function mergeOverlayMap(
     // Project-trust security fields were already stripped pre-validation -- see `stripProjectSecurityOverlayFields`.
     const previous = target[key]
     const nextValue = resolveOverlayEntryValue(previous?.value, value, source)
+    const nextOrigins = resolveOverlayEntryOrigin(
+      previous?.origins,
+      value,
+      source,
+    )
 
     target[key] = {
       value: nextValue,
       sourcePath: source.path,
       keyPath,
+      origins: nextOrigins,
     }
   }
+}
+
+/**
+ * The `RoutingValueOrigin` tag for whichever file contributed a value at
+ * this merge step -- `ConfigSourceKind` verbatim for an ordinary
+ * agents/categories overlay entry, or the bundle-trust-qualified
+ * `*-profile` variant for the profile-bundle pseudo-source (see
+ * `RoutingValueOrigin`'s doc comment).
+ */
+function originForSource(source: ConfigSource): RoutingValueOrigin {
+  if (source.kind === 'profile-bundle') {
+    return `${source.bundleTrust}-profile` as const
+  }
+  return source.trust
+}
+
+/**
+ * Build a `RoutingFieldOrigins` fragment from the raw (pre-merge) overlay
+ * fragment a single source contributed at this key -- one leaf per routing
+ * field the fragment sets as an OWN property, tagged with `tag`. A field
+ * absent from `fragment` (including a whole missing `opencode`/`pi` block)
+ * produces no leaf at all, so spreading this over a `previous` origins
+ * fragment (see `resolveOverlayEntryOrigin`) never clobbers an inherited
+ * leaf with an accidental `undefined`.
+ */
+function routingOriginsFromOwnFields(
+  fragment: OverlayConfig,
+  tag: RoutingValueOrigin,
+): RoutingFieldOrigins {
+  const origins: {
+    -readonly [K in keyof RoutingFieldOrigins]?: RoutingValueOrigin
+  } = {}
+  if (Object.hasOwn(fragment, 'model')) origins.model = tag
+  if (Object.hasOwn(fragment, 'variant')) origins.variant = tag
+  const opencodeBlock = fragment.opencode
+  if (isRecord(opencodeBlock)) {
+    if (Object.hasOwn(opencodeBlock, 'model')) origins.opencodeModel = tag
+    if (Object.hasOwn(opencodeBlock, 'variant')) origins.opencodeVariant = tag
+  }
+  const piBlock = fragment.pi
+  if (isRecord(piBlock)) {
+    if (Object.hasOwn(piBlock, 'model')) origins.piModel = tag
+    if (Object.hasOwn(piBlock, 'thinking')) origins.piThinking = tag
+  }
+  return origins
+}
+
+/**
+ * The origins-tracking counterpart to `resolveOverlayEntryValue` -- same
+ * per-key policy switch, kept in lockstep so a routing field's recorded
+ * origin is always attached to the value that actually won, never derived
+ * after the fact from `sourcePath` (see `SourcedOverlayConfig.origins`'s
+ * doc comment for the trap this avoids).
+ *
+ * The three VALUE-level preserving strategies
+ * (`mergeProfileOverlayValue` for a profile-bundle source or a user
+ * overlay merging over an advisory project bundle; `preserveSecurityFields`
+ * for a project-trust source) differ from each other in general -- but for
+ * ONLY the six routing leaves this type tracks, all three reduce to the
+ * same rule: a leaf `own` sets wins, a leaf `own` doesn't set inherits
+ * `previous`. (`preserveSecurityFields`'s project-trust case is exactly
+ * this already, since `own` is always empty there -- a project-trust
+ * fragment can never own-set `model`/`variant`/`opencode`/`pi`, already
+ * stripped pre-validation.) Only an ordinary custom/user full-replace
+ * (`resolveOverlayEntryValue`'s final `return next`) starts fresh from
+ * `own` alone, matching that strategy discarding every field `next`
+ * doesn't restate.
+ */
+function resolveOverlayEntryOrigin(
+  previous: RoutingFieldOrigins | undefined,
+  fragment: OverlayConfig,
+  source: ConfigSource,
+): RoutingFieldOrigins {
+  const own = routingOriginsFromOwnFields(fragment, originForSource(source))
+  if (!previous) return own
+  const preserves =
+    source.kind === 'profile-bundle' ||
+    source.trust === 'project' ||
+    source.trust === 'user'
+  return preserves ? { ...previous, ...own } : own
 }
 
 /**

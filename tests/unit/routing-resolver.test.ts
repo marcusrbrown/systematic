@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import type {
   OverlayConfig,
+  RoutingFieldOrigins,
   SourcedOverlayConfig,
   SourcedOverlayConfigMap,
 } from '../../src/lib/config.js'
@@ -435,6 +436,156 @@ describe('resolveRouting', () => {
     })
     expect(resolution.model).toBeUndefined()
     expect(resolution.source.model).toBeUndefined()
+  })
+
+  // `origin` is FILE provenance (which trust level / profile bundle
+  // contributed the winning value), tracked separately from `level`/`form`
+  // (SHAPE provenance). These tests feed hand-built `origins` directly --
+  // how the merge actually populates them field-by-field is `config.ts`'s
+  // concern (see `resolveOverlayEntryOrigin`); this only proves the
+  // resolver reads the correct leaf for whichever layer/field wins.
+  describe('origin attribution (RoutingFieldSource.origin)', () => {
+    function overlayWithOrigins(
+      value: OverlayConfig,
+      origins: RoutingFieldOrigins,
+    ): SourcedOverlayConfig {
+      return {
+        value,
+        sourcePath: '/fake/systematic.json',
+        keyPath: 'fake',
+        origins,
+      }
+    }
+
+    test('opencode model+variant resolve with their independently tracked origins', () => {
+      const merged: SourcedOverlayConfigMap = {
+        agents: {
+          oracle: overlayWithOrigins(
+            {
+              opencode: { model: 'anthropic/project-model', variant: 'v-user' },
+            },
+            { opencodeModel: 'project-profile', opencodeVariant: 'user' },
+          ),
+        },
+        categories: {},
+      }
+      const resolution = resolveRouting({
+        overlays: merged,
+        piSubagentsOverlays: EMPTY_PI_SUBAGENTS,
+        target: target('oracle', 'review'),
+        harness: 'opencode',
+      })
+      expect(resolution.source.model).toEqual({
+        level: 'agent',
+        form: 'block',
+        origin: 'project-profile',
+      })
+      expect(resolution.source.qualifier).toEqual({
+        level: 'agent',
+        form: 'block',
+        origin: 'user',
+      })
+    })
+
+    test('pi model and thinking resolve with their independently tracked origins', () => {
+      const merged: SourcedOverlayConfigMap = {
+        agents: {
+          oracle: overlayWithOrigins(
+            { pi: { model: 'anthropic/user-pi', thinking: 'high' } },
+            { piModel: 'user', piThinking: 'user-profile' },
+          ),
+        },
+        categories: {},
+      }
+      const resolution = resolveRouting({
+        overlays: merged,
+        piSubagentsOverlays: EMPTY_PI_SUBAGENTS,
+        target: target('oracle', 'review'),
+        harness: 'pi',
+      })
+      expect(resolution.source.model).toEqual({
+        level: 'agent',
+        form: 'block',
+        origin: 'user',
+      })
+      expect(resolution.source.qualifier).toEqual({
+        level: 'agent',
+        form: 'block',
+        origin: 'user-profile',
+      })
+    })
+
+    test('a category-level flat model reports the category origin when no agent-level value exists', () => {
+      const merged: SourcedOverlayConfigMap = {
+        agents: {},
+        categories: {
+          review: overlayWithOrigins(
+            { model: 'anthropic/custom-category' },
+            { model: 'custom' },
+          ),
+        },
+      }
+      const resolution = resolveRouting({
+        overlays: merged,
+        piSubagentsOverlays: EMPTY_PI_SUBAGENTS,
+        target: target('oracle', 'review'),
+        harness: 'pi',
+      })
+      expect(resolution.model).toBe('anthropic/custom-category')
+      expect(resolution.source.model).toEqual({
+        level: 'category',
+        form: 'flat',
+        origin: 'custom',
+      })
+    })
+
+    test('a legacy pi_subagents-sourced qualifier has no origin (that map is not origin-tracked)', () => {
+      const merged = overlays({ oracle: { model: 'anthropic/base' } })
+      const legacyOverlays: SourcedOverlayConfigMap = {
+        agents: {
+          oracle: {
+            value: { thinking: 'medium' },
+            sourcePath: '',
+            keyPath: 'oracle',
+          },
+        },
+        categories: {},
+      }
+      const resolution = resolveRouting({
+        overlays: merged,
+        piSubagentsOverlays: legacyOverlays,
+        target: target('oracle', 'review'),
+        harness: 'pi',
+      })
+      expect(resolution.qualifier).toBe('medium')
+      expect(resolution.source.qualifier).toEqual({
+        level: 'agent',
+        form: 'legacy-pi-subagents',
+      })
+      expect(resolution.source.qualifier?.origin).toBeUndefined()
+    })
+
+    test('an overlay built via toSourcedOverlayMap (no real origins) resolves with origin undefined', () => {
+      const flatAgents = { oracle: { model: 'anthropic/flattened' } }
+      const merged: SourcedOverlayConfigMap = {
+        agents: {
+          oracle: {
+            value: flatAgents.oracle,
+            sourcePath: '',
+            keyPath: 'oracle',
+          },
+        },
+        categories: {},
+      }
+      const resolution = resolveRouting({
+        overlays: merged,
+        piSubagentsOverlays: EMPTY_PI_SUBAGENTS,
+        target: target('oracle', 'review'),
+        harness: 'opencode',
+      })
+      expect(resolution.model).toBe('anthropic/flattened')
+      expect(resolution.source.model?.origin).toBeUndefined()
+    })
   })
 })
 

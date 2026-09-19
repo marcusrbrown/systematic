@@ -591,7 +591,7 @@ export function createSystematicConfigSchema(
         .default({})
         .meta({
           description:
-            'Named routing-only overlay bundles, selectable by name via the profile field. Only valid in user config or OPENCODE_CONFIG_DIR config — a project config may select a profile but may not define this field.',
+            'Named routing-only overlay bundles, selectable by name via the profile field. Valid in user config and OPENCODE_CONFIG_DIR config. A project config may always select a profile, but may only define this field when the user sets allow_project_profiles; a project-defined bundle is advisory and fills only routing the user has not set.',
           examples: [
             {
               personal: {

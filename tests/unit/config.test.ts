@@ -1044,6 +1044,7 @@ describe('config', () => {
           value: { model: 'openai/gpt-5' },
           sourcePath: userConfigPath,
           keyPath: 'agents.correctness-reviewer',
+          origins: { model: 'user' },
         })
       })
 
@@ -4349,6 +4350,56 @@ describe('config', () => {
         ).not.toContain('a/project')
       })
 
+      // Isolates the CHAIN POSITION decision in `buildOverlaySources` from
+      // "the project bundle simply never entered the merge at all" (a
+      // different failure mode that would ALSO make the previous test pass
+      // trivially). Two assertions are required together: a field only the
+      // project bundle sets (no user collision) must apply -- proving the
+      // bundle genuinely is in the chain -- and, on the SAME agent, a field
+      // BOTH sides set must resolve to the user's value with the project's
+      // value appearing nowhere -- proving it sits at position 0 (before
+      // user base), not position 1 (after, like a normal profile). Verified
+      // red-then-green: this test fails when `buildOverlaySources`'s
+      // `bundleSourceTrust === 'project'` check is inverted (confirmed by
+      // temporarily flipping it), with `correctness-reviewer.model`
+      // resolving to `'a/project-loses'` instead of `'a/user-wins'`.
+      test('chain position pins the advisory outcome: a project-sourced bundle sits before user base, not after (buildOverlaySources)', () => {
+        writeUserConfig({
+          allow_project_profiles: true,
+          agents: { 'correctness-reviewer': { model: 'a/user-wins' } },
+        })
+        writeProjectConfig({
+          profile: 'proj',
+          profiles: {
+            proj: {
+              agents: {
+                'correctness-reviewer': {
+                  model: 'a/project-loses',
+                  opencode: { model: 'a/project-fills-gap' },
+                },
+              },
+            },
+          },
+        })
+
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        // Proof the bundle IS in the merge chain at all: a field only the
+        // project sets (no user collision) applies.
+        expect(
+          result.config.agents?.['correctness-reviewer']?.opencode,
+        ).toEqual({ model: 'a/project-fills-gap' })
+        // Proof the CHAIN POSITION (not just presence) is correct: on the
+        // field both sides set, user wins and the project's value appears
+        // nowhere.
+        expect(result.config.agents?.['correctness-reviewer']?.model).toBe(
+          'a/user-wins',
+        )
+        expect(
+          JSON.stringify(result.config.agents?.['correctness-reviewer']),
+        ).not.toContain('a/project-loses')
+      })
+
       // The trap case: whole-entry replacement of the accumulated value by
       // the user's own overlay would erase the project's `opencode.model`
       // (the user only restates `variant`), leaving a qualifier with no
@@ -4387,6 +4438,46 @@ describe('config', () => {
         expect(result.config.agents?.['correctness-reviewer']?.pi).toEqual({
           model: 'a/project-pi',
         })
+      })
+
+      // Extends the trap case above to the PROVENANCE surface: the previous
+      // test only proves both values survive the merge. This proves each
+      // one is attributed to the source that actually supplied it -- a
+      // qualifier (opencode.variant) from user config and a model
+      // (opencode.model) from the project bundle, on the SAME agent, so a
+      // symmetric origin bug (e.g. one that always tags a winning field
+      // `'user'` regardless of which source really set it) can't hide
+      // behind only ever checking `model`.
+      test('the trap case, extended to provenance: opencode.variant origin is user and opencode.model origin is project-profile', () => {
+        writeUserConfig({
+          allow_project_profiles: true,
+          agents: {
+            'correctness-reviewer': { opencode: { variant: 'high' } },
+          },
+        })
+        writeProjectConfig({
+          profile: 'proj',
+          profiles: {
+            proj: {
+              agents: {
+                'correctness-reviewer': {
+                  opencode: { model: 'a/project-opencode' },
+                  pi: { model: 'a/project-pi' },
+                },
+              },
+            },
+          },
+        })
+
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        expect(result.overlays.agents['correctness-reviewer']?.origins).toEqual(
+          {
+            opencodeModel: 'project-profile',
+            opencodeVariant: 'user',
+            piModel: 'project-profile',
+          },
+        )
       })
 
       test('full absorption: every target the project bundle sets is already set by user config → the merged result is identical to loading with no project bundle at all', () => {
