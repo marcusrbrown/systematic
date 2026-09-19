@@ -31,6 +31,12 @@ import {
 
 const OBSERVED_AT = '2026-08-13T12:34:56.000Z'
 
+// SYSTEMATIC_PROFILE is cleared from the ambient environment by the
+// tests/setup.ts preload (see bunfig.toml) before any test file runs, so
+// this suite is hermetic against it by construction. Tests that
+// deliberately want it set use `withEnvProfile` below and restore it
+// afterward.
+
 describe('config', () => {
   let testDir: string
   let originalOsHomedir: (() => string) | undefined
@@ -3286,6 +3292,17 @@ describe('config', () => {
       }
     }
 
+    function withEnvProfile<T>(value: string, fn: () => T): T {
+      const previous = process.env.SYSTEMATIC_PROFILE
+      process.env.SYSTEMATIC_PROFILE = value
+      try {
+        return fn()
+      } finally {
+        if (previous === undefined) delete process.env.SYSTEMATIC_PROFILE
+        else process.env.SYSTEMATIC_PROFILE = previous
+      }
+    }
+
     // Case 1: no selector anywhere.
     test('case 1: no source sets profile → base configuration, no warning', () => {
       writeUserConfig({
@@ -3477,6 +3494,155 @@ describe('config', () => {
           model: 'a/ci',
         })
         expect(warnings).toEqual([])
+      })
+    })
+
+    test('SYSTEMATIC_PROFILE wins over a user-config profile selecting a different bundle', () => {
+      writeUserConfig({
+        profile: 'personal',
+        profiles: {
+          personal: {
+            agents: { 'correctness-reviewer': { model: 'a/personal' } },
+          },
+          work: { agents: { 'correctness-reviewer': { model: 'a/work' } } },
+        },
+      })
+
+      withEnvProfile('work', () => {
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        expect(result.metadata.activeProfile).toBe('work')
+        expect(result.metadata.profileSelectorSource).toBe('environment')
+        expect(result.config.agents?.['correctness-reviewer']).toEqual({
+          model: 'a/work',
+        })
+        expect(warnings).toEqual([])
+      })
+    })
+
+    test('SYSTEMATIC_PROFILE wins over a project-set profile selector', () => {
+      writeUserConfig({
+        profiles: {
+          work: { agents: { 'correctness-reviewer': { model: 'a/work' } } },
+          ci: { agents: { 'correctness-reviewer': { model: 'a/ci' } } },
+        },
+      })
+      writeProjectConfig({ profile: 'work' })
+
+      withEnvProfile('ci', () => {
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        expect(result.metadata.activeProfile).toBe('ci')
+        expect(result.metadata.profileSelectorSource).toBe('environment')
+        expect(warnings).toEqual([])
+      })
+    })
+
+    test('SYSTEMATIC_PROFILE wins over a custom-config profile selector, the otherwise-strongest source', () => {
+      writeUserConfig({
+        profiles: {
+          work: { agents: { 'correctness-reviewer': { model: 'a/work' } } },
+          ci: { agents: { 'correctness-reviewer': { model: 'a/ci' } } },
+          env: { agents: { 'correctness-reviewer': { model: 'a/env' } } },
+        },
+      })
+      writeProjectConfig({ profile: 'work' })
+
+      withCustomConfig({ profile: 'ci' }, () => {
+        withEnvProfile('env', () => {
+          const result = loadConfigWithSources(testDir, { warningSink })
+
+          expect(result.metadata.activeProfile).toBe('env')
+          expect(result.metadata.profileSelectorSource).toBe('environment')
+          expect(warnings).toEqual([])
+        })
+      })
+    })
+
+    test('SYSTEMATIC_PROFILE naming a nonexistent bundle falls back like a missing config selector, with a warning naming the environment', () => {
+      writeUserConfig({
+        profile: 'personal',
+        profiles: {
+          personal: {
+            agents: { 'correctness-reviewer': { model: 'a/personal' } },
+          },
+        },
+      })
+
+      withEnvProfile('ghost', () => {
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        expect(result.metadata.activeProfile).toBe('personal')
+        expect(result.metadata.profileSelectorSource).toBe('environment')
+        expect(result.metadata.profileFallback).toEqual({
+          requested: 'ghost',
+          usedDefault: 'personal',
+        })
+        expect(warnings).toHaveLength(1)
+        expect(warnings[0]).toBe(
+          '[systematic] profile "ghost" (selected by SYSTEMATIC_PROFILE) is not defined in `profiles`; falling back to your default profile "personal". See https://fro.bot/systematic/reference/configuration#profiles for how to define a profile.',
+        )
+      })
+    })
+
+    test('SYSTEMATIC_PROFILE set to an empty or whitespace-only value is treated as unset', () => {
+      writeUserConfig({
+        profiles: {
+          work: { agents: { 'correctness-reviewer': { model: 'a/work' } } },
+        },
+      })
+      writeProjectConfig({ profile: 'work' })
+
+      withEnvProfile('', () => {
+        const result = loadConfigWithSources(testDir, { warningSink })
+        expect(result.metadata.activeProfile).toBe('work')
+        expect(result.metadata.profileSelectorSource).toBe('project')
+      })
+
+      withEnvProfile('   ', () => {
+        const result = loadConfigWithSources(testDir, { warningSink })
+        expect(result.metadata.activeProfile).toBe('work')
+        expect(result.metadata.profileSelectorSource).toBe('project')
+      })
+    })
+
+    // Project `profiles` is protected/stripped (PROJECT_PROTECTED_FIELDS) --
+    // SYSTEMATIC_PROFILE naming a bundle that exists only there must not
+    // reach it. This is the guard proving the env var can never select
+    // content the project itself supplied.
+    test('SYSTEMATIC_PROFILE naming a project-only profiles bundle cannot select it; normal fallback applies', () => {
+      writeUserConfig({
+        profiles: {
+          personal: {
+            agents: { 'correctness-reviewer': { model: 'a/personal' } },
+          },
+        },
+      })
+      const projectConfigPath = writeProjectConfig({
+        profiles: {
+          sneaky: {
+            agents: { 'correctness-reviewer': { model: 'a/sneaky' } },
+          },
+        },
+      })
+
+      withEnvProfile('sneaky', () => {
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        expect(result.metadata.activeProfile).toBeNull()
+        expect(result.metadata.profileSelectorSource).toBe('environment')
+        expect(result.metadata.profileFallback).toEqual({
+          requested: 'sneaky',
+          usedDefault: null,
+        })
+        expect(result.config.agents?.['correctness-reviewer']).toBeUndefined()
+
+        const profilesWarning = warnings.find((w) => w.includes('`profiles`'))
+        expect(profilesWarning).toBeDefined()
+        expect(profilesWarning).toContain(projectConfigPath)
+        // One warning for the stripped project `profiles` map, one for the
+        // missing-name fallback -- not more.
+        expect(warnings).toHaveLength(2)
       })
     })
 

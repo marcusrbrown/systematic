@@ -47,12 +47,17 @@ function snapshotTree(root: string): string {
   return entries.join('\n')
 }
 
+// SYSTEMATIC_PROFILE selects an active profile bundle, so it must not leak
+// from this test runner's own ambient environment into a spawned CLI --
+// only a test that explicitly passes it via `extraEnv` should set it.
 function runCli(
   args: string[],
   cwd: string,
   extraEnv?: Record<string, string>,
 ): { stdout: string; stderr: string; exitCode: number } {
-  const env = extraEnv ? { ...process.env, ...extraEnv } : process.env
+  const env: Record<string, string | undefined> = { ...process.env }
+  delete env.SYSTEMATIC_PROFILE
+  Object.assign(env, extraEnv)
   const result = spawnSync('bun', [CLI_PATH, ...args], {
     cwd,
     encoding: 'utf8',
@@ -310,6 +315,20 @@ describe('cli capabilities', () => {
       expect(parsed.identity?.argv?.subcommand).toBe('capabilities')
       expect(JSON.stringify(parsed)).not.toContain(cwd)
       expect(fs.readdirSync(cwd)).toEqual(before)
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
+  it('exits 0 with SYSTEMATIC_PROFILE set, even naming a bundle that does not exist', () => {
+    const cwd = mkTempCwd()
+    try {
+      const result = runCli(['capabilities'], cwd, {
+        SYSTEMATIC_PROFILE: 'whatever-does-not-exist',
+      })
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).not.toContain('Capabilities diagnostic unavailable')
     } finally {
       fs.rmSync(cwd, { recursive: true, force: true })
     }
@@ -603,6 +622,60 @@ describe('cli config show', () => {
       expect(result.exitCode).toBe(0)
       expect(result.stdout).toContain('Active profile: fast')
       expect(result.stdout).toContain('Selected by:    user')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('SYSTEMATIC_PROFILE reports environment as the selector source in prose and --json', () => {
+    const root = mkTempCwd()
+    const home = path.join(root, 'home')
+    const project = path.join(root, 'project')
+    try {
+      fs.mkdirSync(project, { recursive: true })
+      writeUserConfig(home, {
+        profile: 'fast',
+        profiles: {
+          fast: {
+            agents: { 'correctness-reviewer': { model: 'anthropic/haiku' } },
+          },
+          slow: {
+            agents: { 'correctness-reviewer': { model: 'anthropic/opus' } },
+          },
+        },
+      })
+
+      const prose = runCli(['config', 'show'], project, {
+        HOME: home,
+        SYSTEMATIC_PROFILE: 'slow',
+      })
+      expect(prose.exitCode).toBe(0)
+      expect(prose.stdout).toContain('Active profile: slow')
+      expect(prose.stdout).toContain('Selected by:    environment')
+      // Not just the active-profile label: the routing table must actually
+      // resolve to the environment-selected bundle's model.
+      expect(prose.stdout).toContain('model=anthropic/opus')
+
+      const json = runCli(['config', 'show', '--json'], project, {
+        HOME: home,
+        SYSTEMATIC_PROFILE: 'slow',
+      })
+      expect(json.exitCode).toBe(0)
+      const parsed = JSON.parse(json.stdout) as Record<string, unknown>
+      expect(parsed.activeProfile).toBe('slow')
+      expect(parsed.profileSelectorSource).toBe('environment')
+      const routing = parsed.routing as Array<Record<string, unknown>>
+      const entry = routing.find(
+        (r) =>
+          (r.target as Record<string, unknown>).agentKey ===
+          'correctness-reviewer',
+      )
+      expect(entry).toBeDefined()
+      const opencode = (entry as Record<string, unknown>).opencode as Record<
+        string,
+        unknown
+      >
+      expect(opencode.model).toBe('anthropic/opus')
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }
