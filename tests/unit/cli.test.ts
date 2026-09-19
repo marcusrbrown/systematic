@@ -315,6 +315,20 @@ describe('cli capabilities', () => {
     }
   })
 
+  it('exits 0 with SYSTEMATIC_PROFILE set, even naming a bundle that does not exist', () => {
+    const cwd = mkTempCwd()
+    try {
+      const result = runCli(['capabilities'], cwd, {
+        SYSTEMATIC_PROFILE: 'whatever-does-not-exist',
+      })
+
+      expect(result.exitCode).toBe(0)
+      expect(result.stdout).not.toContain('Capabilities diagnostic unavailable')
+    } finally {
+      fs.rmSync(cwd, { recursive: true, force: true })
+    }
+  })
+
   it('documents read-only standalone observation and non-runtime scope in help', () => {
     const cwd = mkTempCwd()
     try {
@@ -603,6 +617,45 @@ describe('cli config show', () => {
       expect(result.exitCode).toBe(0)
       expect(result.stdout).toContain('Active profile: fast')
       expect(result.stdout).toContain('Selected by:    user')
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it('SYSTEMATIC_PROFILE reports environment as the selector source in prose and --json', () => {
+    const root = mkTempCwd()
+    const home = path.join(root, 'home')
+    const project = path.join(root, 'project')
+    try {
+      fs.mkdirSync(project, { recursive: true })
+      writeUserConfig(home, {
+        profile: 'fast',
+        profiles: {
+          fast: {
+            agents: { 'correctness-reviewer': { model: 'anthropic/haiku' } },
+          },
+          slow: {
+            agents: { 'correctness-reviewer': { model: 'anthropic/opus' } },
+          },
+        },
+      })
+
+      const prose = runCli(['config', 'show'], project, {
+        HOME: home,
+        SYSTEMATIC_PROFILE: 'slow',
+      })
+      expect(prose.exitCode).toBe(0)
+      expect(prose.stdout).toContain('Active profile: slow')
+      expect(prose.stdout).toContain('Selected by:    environment')
+
+      const json = runCli(['config', 'show', '--json'], project, {
+        HOME: home,
+        SYSTEMATIC_PROFILE: 'slow',
+      })
+      expect(json.exitCode).toBe(0)
+      const parsed = JSON.parse(json.stdout) as Record<string, unknown>
+      expect(parsed.activeProfile).toBe('slow')
+      expect(parsed.profileSelectorSource).toBe('environment')
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }

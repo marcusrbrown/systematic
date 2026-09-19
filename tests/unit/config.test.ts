@@ -3286,6 +3286,17 @@ describe('config', () => {
       }
     }
 
+    function withEnvProfile<T>(value: string, fn: () => T): T {
+      const previous = process.env.SYSTEMATIC_PROFILE
+      process.env.SYSTEMATIC_PROFILE = value
+      try {
+        return fn()
+      } finally {
+        if (previous === undefined) delete process.env.SYSTEMATIC_PROFILE
+        else process.env.SYSTEMATIC_PROFILE = previous
+      }
+    }
+
     // Case 1: no selector anywhere.
     test('case 1: no source sets profile → base configuration, no warning', () => {
       writeUserConfig({
@@ -3477,6 +3488,114 @@ describe('config', () => {
           model: 'a/ci',
         })
         expect(warnings).toEqual([])
+      })
+    })
+
+    test('SYSTEMATIC_PROFILE wins over a user-config profile selecting a different bundle', () => {
+      writeUserConfig({
+        profile: 'personal',
+        profiles: {
+          personal: {
+            agents: { 'correctness-reviewer': { model: 'a/personal' } },
+          },
+          work: { agents: { 'correctness-reviewer': { model: 'a/work' } } },
+        },
+      })
+
+      withEnvProfile('work', () => {
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        expect(result.metadata.activeProfile).toBe('work')
+        expect(result.metadata.profileSelectorSource).toBe('environment')
+        expect(result.config.agents?.['correctness-reviewer']).toEqual({
+          model: 'a/work',
+        })
+        expect(warnings).toEqual([])
+      })
+    })
+
+    test('SYSTEMATIC_PROFILE wins over a project-set profile selector', () => {
+      writeUserConfig({
+        profiles: {
+          work: { agents: { 'correctness-reviewer': { model: 'a/work' } } },
+          ci: { agents: { 'correctness-reviewer': { model: 'a/ci' } } },
+        },
+      })
+      writeProjectConfig({ profile: 'work' })
+
+      withEnvProfile('ci', () => {
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        expect(result.metadata.activeProfile).toBe('ci')
+        expect(result.metadata.profileSelectorSource).toBe('environment')
+        expect(warnings).toEqual([])
+      })
+    })
+
+    test('SYSTEMATIC_PROFILE wins over a custom-config profile selector, the otherwise-strongest source', () => {
+      writeUserConfig({
+        profiles: {
+          work: { agents: { 'correctness-reviewer': { model: 'a/work' } } },
+          ci: { agents: { 'correctness-reviewer': { model: 'a/ci' } } },
+          env: { agents: { 'correctness-reviewer': { model: 'a/env' } } },
+        },
+      })
+      writeProjectConfig({ profile: 'work' })
+
+      withCustomConfig({ profile: 'ci' }, () => {
+        withEnvProfile('env', () => {
+          const result = loadConfigWithSources(testDir, { warningSink })
+
+          expect(result.metadata.activeProfile).toBe('env')
+          expect(result.metadata.profileSelectorSource).toBe('environment')
+          expect(warnings).toEqual([])
+        })
+      })
+    })
+
+    test('SYSTEMATIC_PROFILE naming a nonexistent bundle falls back like a missing config selector, with a warning naming the environment', () => {
+      writeUserConfig({
+        profile: 'personal',
+        profiles: {
+          personal: {
+            agents: { 'correctness-reviewer': { model: 'a/personal' } },
+          },
+        },
+      })
+
+      withEnvProfile('ghost', () => {
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        expect(result.metadata.activeProfile).toBe('personal')
+        expect(result.metadata.profileSelectorSource).toBe('environment')
+        expect(result.metadata.profileFallback).toEqual({
+          requested: 'ghost',
+          usedDefault: 'personal',
+        })
+        expect(warnings).toHaveLength(1)
+        expect(warnings[0]).toContain('ghost')
+        expect(warnings[0]).toContain('environment')
+      })
+    })
+
+    test('SYSTEMATIC_PROFILE set to an empty or whitespace-only value is treated as unset', () => {
+      writeUserConfig({
+        profiles: {
+          work: { agents: { 'correctness-reviewer': { model: 'a/work' } } },
+        },
+      })
+      writeProjectConfig({ profile: 'work' })
+
+      withEnvProfile('', () => {
+        const result = loadConfigWithSources(testDir, { warningSink })
+        expect(result.metadata.activeProfile).toBe('work')
+        expect(result.metadata.profileSelectorSource).toBe('project')
+      })
+
+      withEnvProfile('   ', () => {
+        const result = loadConfigWithSources(testDir, { warningSink })
+        expect(result.metadata.activeProfile).toBe('work')
+        expect(result.metadata.profileSelectorSource).toBe('project')
       })
     })
 

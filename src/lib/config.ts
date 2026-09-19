@@ -110,12 +110,14 @@ export interface ConfigProtectedFieldMetadata {
  * The source kind that supplied the winning `profile` selector value, or
  * `null` when no source set `profile` at all (case 1 of the selection table
  * in plan 2026-09-04-002-feat-model-config-profiles, Unit 2). This names
- * whichever source's value won the `custom ?? project ?? user` selector
- * lookup -- including when that value turned out to name a missing bundle
- * and the loader fell back to the user's own default (see
- * {@link ConfigObservationMetadata.profileFallback}).
+ * whichever source's value won the `SYSTEMATIC_PROFILE ?? custom ?? project
+ * ?? user` selector lookup -- including when that value turned out to name
+ * a missing bundle and the loader fell back to the user's own default (see
+ * {@link ConfigObservationMetadata.profileFallback}). `'environment'` is
+ * distinct from `ConfigSourceKind` deliberately: it names an env var
+ * override, never a config file, and must never be mistaken for one.
  */
-export type ProfileSelectorSource = ConfigSourceKind | null
+export type ProfileSelectorSource = ConfigSourceKind | 'environment' | null
 
 /**
  * Present when the winning `profile` selector named a bundle absent from
@@ -1010,19 +1012,26 @@ const NO_PROFILE_SELECTION: ProfileSelectionResult = {
 
 /**
  * Resolve the winning `profile` selector value across sources, strongest
- * first: custom, then project, then user. A source's `profile` is
- * considered "set" as soon as it is not `undefined` -- an explicit `null`
- * counts as set and wins outright (it means "base configuration",
+ * first: `SYSTEMATIC_PROFILE` env var, then custom, then project, then
+ * user. The env var outranks every config source, including custom --
+ * selection only, it can never supply bundle content. A source's `profile`
+ * is considered "set" as soon as it is not `undefined` -- an explicit
+ * `null` counts as set and wins outright (it means "base configuration",
  * intentionally, and must not fall through to a weaker source's name). Only
  * a truly absent field (the source doesn't have `profile` at all, or the
- * source itself doesn't exist) falls through to the next candidate.
+ * source itself doesn't exist) falls through to the next candidate. The env
+ * var follows the same `?.trim()` pattern as `OPENCODE_CONFIG_DIR`
+ * (line ~2253): a blank or whitespace-only value is treated as unset.
  *
  * Returns `null` when no source set `profile` at all (selection table case 1).
  */
 function resolveProfileSelector(input: ProfileSelectionInput): {
   value: string | null
-  source: ConfigSourceKind
+  source: ConfigSourceKind | 'environment'
 } | null {
+  const envProfile = process.env.SYSTEMATIC_PROFILE?.trim()
+  if (envProfile) return { value: envProfile, source: 'environment' }
+
   const candidates: readonly [ConfigSourceKind, string | null | undefined][] = [
     ['custom', input.customConfig?.profile],
     ['project', input.projectConfig?.profile],
