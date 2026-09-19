@@ -25,6 +25,7 @@ const CONFIG_AUTHORITY_FIELD_PATHS = [
 const CONFIG_PROTECTED_FIELD_PATHS = [
   'workflow_guard',
   'profiles',
+  'allow_project_profiles',
   'agents.*.model',
   'agents.*.permission',
   'agents.*.skills',

@@ -833,6 +833,23 @@ false
 ```
 
 
+## allow_project_profiles
+
+Allow a repository's project config to define its own `profiles` map. User-owned only — only valid in user config or OPENCODE_CONFIG_DIR config; a project config setting this field has it ignored (a project cannot grant itself a permission it does not already have). Defaults to false.
+
+**Type:** `boolean`
+**Default:** `false`
+**Examples:**
+
+```json
+true
+```
+
+```json
+false
+```
+
+
 ## Profile Bundle Overlay Fields
 
 Each named bundle under `profiles` may set `agents.<name>` and `categories.<name>` entries using a routing-only subset of the [Agent/Category Overlay Fields](#agentcategory-overlay-fields): `model`, `variant`, `temperature`, `top_p`, and the harness routing blocks `opencode`/`pi`. Non-routing fields (`permission`, `skills`, `mode`, `hidden`, `disable`, `steps`, `color`) are rejected.

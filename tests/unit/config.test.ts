@@ -623,6 +623,66 @@ describe('config', () => {
         }
       })
 
+      test('alias success with `allow_project_profiles: true` in the aliased file: opt-in and `profiles` both apply through the custom-trust pass, one accurate alias notice, no "ignored" warnings', () => {
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir)
+        fs.writeFileSync(
+          path.join(projectConfigDir, 'systematic.json'),
+          JSON.stringify({
+            allow_project_profiles: true,
+            profile: 'personal',
+            workflow_guard: { mode: 'protected', debug: true },
+            profiles: {
+              personal: {
+                agents: { 'correctness-reviewer': { model: 'a/personal' } },
+              },
+            },
+          }),
+        )
+        process.env.OPENCODE_CONFIG_DIR = projectConfigDir
+
+        try {
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          const result = loadConfigWithSources(testDir, { warningSink })
+
+          expect(result.config.workflow_guard).toEqual({
+            mode: 'protected',
+            debug: true,
+          })
+          expect(result.metadata.activeProfile).toBe('personal')
+          expect(result.config.agents?.['correctness-reviewer']?.model).toBe(
+            'a/personal',
+          )
+
+          // Neither `profiles` nor `allow_project_profiles` produces an
+          // "ignored"/"not selectable" warning -- the opt-in, resolved from
+          // the custom-trust pass of this identical file BEFORE the project
+          // pass ran, means the project pass never even blocked `profiles`
+          // in the first place; `allow_project_profiles` itself is still
+          // unconditionally blocked in the project pass but applies through
+          // the custom-trust pass, same as `workflow_guard`.
+          expect(
+            warnings.some((message) =>
+              message.includes('is only valid in user config'),
+            ),
+          ).toBe(false)
+          expect(
+            warnings.filter((message) =>
+              message.includes('resolve to the same file'),
+            ),
+          ).toHaveLength(1)
+          expect(warnings).toHaveLength(1)
+
+          // Same alias-transparency guarantee as the pre-existing top-level
+          // alias test: nothing shows up as "blocked" in the merged metadata.
+          expect(result.metadata.protectedFields).toEqual([])
+        } finally {
+          delete process.env.OPENCODE_CONFIG_DIR
+        }
+      })
+
       test('alias success (workflow_guard-only, no `profiles`/no overlay fields) still gets one truthful alias notice, not silence', () => {
         const projectConfigDir = path.join(testDir, '.opencode')
         fs.mkdirSync(projectConfigDir)
@@ -3934,6 +3994,592 @@ describe('config', () => {
       expect(warnings).toHaveLength(2)
     })
 
+    describe('allow_project_profiles opt-in gates the strip', () => {
+      test('opt-in ON via user config: project-defined `profiles` is not stripped and produces no "ignored" warning', () => {
+        writeUserConfig({ allow_project_profiles: true })
+        writeProjectConfig({
+          profiles: {
+            sneaky: {
+              agents: { 'correctness-reviewer': { model: 'a/sneaky' } },
+            },
+          },
+        })
+
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        // No project-trust "ignored"/"not selectable" warning for `profiles`
+        // at all -- with the opt-in on, `profiles` was never recorded as a
+        // blocked field in the first place (see `collectProjectProtectedFields`).
+        expect(warnings.some((message) => message.includes('`profiles`'))).toBe(
+          false,
+        )
+        expect(
+          result.metadata.protectedFields.some(
+            (field) => field.fieldPath === 'profiles',
+          ),
+        ).toBe(false)
+      })
+
+      test('opt-in ON, malformed project `profiles`: rejected by normal schema validation, not silently dropped', () => {
+        writeUserConfig({ allow_project_profiles: true })
+        const projectConfigPath = writeProjectConfig({
+          profiles: {
+            sneaky: {
+              // Unknown agent key -- rejected by the strict per-bundle schema.
+              // If `profiles` had still been stripped pre-validation (the
+              // opt-in-off behavior), this would never reach the schema and
+              // would load silently instead of throwing.
+              agents: { 'not-a-real-agent-name': { model: 'a/x' } },
+            },
+          },
+        })
+
+        expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
+          projectConfigPath,
+        )
+        expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
+          'not-a-real-agent-name',
+        )
+      })
+
+      test('opt-in ON via custom config only, user config absent: project-defined `profiles` still survives (ordering regression)', () => {
+        // No writeUserConfig call at all -- the opt-in exists ONLY in the
+        // OPENCODE_CONFIG_DIR custom source. If the opt-in were resolved
+        // from user config only, or resolved after the project source was
+        // already parsed, this would fall back to the opt-in-off behavior
+        // and the malformed `profiles` map below would be silently dropped
+        // instead of rejected.
+        const customDir = fs.mkdtempSync(
+          path.join(os.tmpdir(), 'systematic-allow-project-profiles-custom-'),
+        )
+        process.env.OPENCODE_CONFIG_DIR = customDir
+        fs.writeFileSync(
+          path.join(customDir, 'systematic.json'),
+          JSON.stringify({ allow_project_profiles: true }),
+        )
+        const projectConfigPath = writeProjectConfig({
+          profiles: {
+            sneaky: { agents: { 'not-a-real-agent-name': { model: 'a/x' } } },
+          },
+        })
+
+        try {
+          expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
+            projectConfigPath,
+          )
+          expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
+            'not-a-real-agent-name',
+          )
+        } finally {
+          delete process.env.OPENCODE_CONFIG_DIR
+          fs.rmSync(customDir, { recursive: true, force: true })
+        }
+      })
+
+      test('opt-in ON via custom config only, user config explicitly false: custom still wins (ordering regression)', () => {
+        writeUserConfig({ allow_project_profiles: false })
+        const customDir = fs.mkdtempSync(
+          path.join(os.tmpdir(), 'systematic-allow-project-profiles-custom-'),
+        )
+        process.env.OPENCODE_CONFIG_DIR = customDir
+        fs.writeFileSync(
+          path.join(customDir, 'systematic.json'),
+          JSON.stringify({ allow_project_profiles: true }),
+        )
+        const projectConfigPath = writeProjectConfig({
+          profiles: {
+            sneaky: { agents: { 'not-a-real-agent-name': { model: 'a/x' } } },
+          },
+        })
+
+        try {
+          expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
+            projectConfigPath,
+          )
+          expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
+            'not-a-real-agent-name',
+          )
+        } finally {
+          delete process.env.OPENCODE_CONFIG_DIR
+          fs.rmSync(customDir, { recursive: true, force: true })
+        }
+      })
+
+      test('opt-in ON, project defines no `profiles`: no warning, no change', () => {
+        writeUserConfig({ allow_project_profiles: true })
+        writeProjectConfig({ disabled_skills: ['ce:plan'] })
+
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        expect(warnings).toEqual([])
+        expect(result.config.disabled_skills).toEqual(['ce:plan'])
+      })
+    })
+
+    // A project bundle is findable by name (lookup + validation) and, as of
+    // the advisory-merge slice, its routing-only fields DO apply -- but only
+    // advisorily (never overriding user-owned config). See the dedicated
+    // `allow_project_profiles opt-in: advisory merge` describe block below
+    // for the merge-precedence guarantees; these tests cover lookup,
+    // fallback, and validation only.
+    describe('allow_project_profiles opt-in: project bundle lookup', () => {
+      test('opt-in ON: project defines and selects a name that exists nowhere else → resolves and its routing applies advisorily (no user config to be silent over)', () => {
+        writeUserConfig({ allow_project_profiles: true })
+        writeProjectConfig({
+          profile: 'proj-only',
+          profiles: {
+            'proj-only': {
+              agents: { 'correctness-reviewer': { model: 'a/proj-only' } },
+            },
+          },
+        })
+
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        expect(result.metadata.activeProfile).toBe('proj-only')
+        expect(result.metadata.profileSelectorSource).toBe('project')
+        expect(result.metadata.profileFallback).toBeNull()
+        expect(warnings).toEqual([])
+        // User config never mentions this agent, so the project bundle's
+        // value applies -- the advisory-merge guarantee is "applies only
+        // where user config is silent", not "never applies".
+        expect(result.config.agents?.['correctness-reviewer']?.model).toBe(
+          'a/proj-only',
+        )
+      })
+
+      test('opt-in ON, project selects a name that exists nowhere: the existing missing-name fallback applies unchanged', () => {
+        writeUserConfig({ allow_project_profiles: true, profile: 'default' })
+        writeProjectConfig({ profile: 'ghost' })
+
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        expect(result.metadata.activeProfile).toBeNull()
+        expect(result.metadata.profileSelectorSource).toBe('project')
+        expect(result.metadata.profileFallback).toEqual({
+          requested: 'ghost',
+          usedDefault: null,
+        })
+        expect(warnings).toHaveLength(1)
+        expect(warnings[0]).toContain('is not defined in `profiles`')
+      })
+
+      test('opt-in ON, a project bundle references an unknown agent key: rejected at schema parse time', () => {
+        writeUserConfig({ allow_project_profiles: true })
+        const projectConfigPath = writeProjectConfig({
+          profiles: {
+            sneaky: {
+              agents: { 'not-a-real-agent-name': { model: 'a/x' } },
+            },
+          },
+        })
+
+        expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
+          projectConfigPath,
+        )
+        expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
+          'not-a-real-agent-name',
+        )
+      })
+
+      test('opt-in ON, a project bundle names an unknown category: rejected by assertAllProfileBundlesAreValid', () => {
+        writeUserConfig({ allow_project_profiles: true })
+        writeProjectConfig({
+          profiles: {
+            sneaky: { categories: { 'not-a-real-category': { model: 'a/x' } } },
+          },
+        })
+
+        expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
+          'not-a-real-category',
+        )
+      })
+
+      test('opt-in ON, an invalid project bundle that is NOT selected still fails the load (repository-wide bug, same as user/custom)', () => {
+        writeUserConfig({ allow_project_profiles: true, profile: 'fine' })
+        writeProjectConfig({
+          // `fine` is selected; `broken` is never selected by anyone, but its
+          // unknown category must still fail the whole load.
+          profiles: {
+            fine: { agents: { 'correctness-reviewer': { model: 'a/fine' } } },
+            broken: { categories: { 'not-a-real-category': {} } },
+          },
+        })
+
+        expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
+          'not-a-real-category',
+        )
+      })
+    })
+
+    // `bundleSource` attribution is now observable through the public
+    // surface: `result.overlays.<map>.<key>.sourcePath` reflects whichever
+    // file's step in the merge chain last touched that key (see
+    // `mergeOverlayMap`) -- for a key only the winning bundle sets, that IS
+    // the bundle's defining file. No direct `resolveActiveProfile` access
+    // is needed anymore (see the exports note at this file's top-level
+    // import list).
+    describe('bundleSource attribution (anti-shadowing order), asserted through the public surface', () => {
+      test('opt-in ON, name exists only in project: resolves, and the merged overlay attributes to the project config file', () => {
+        writeUserConfig({ allow_project_profiles: true })
+        const projectConfigPath = writeProjectConfig({
+          profile: 'proj-only',
+          profiles: {
+            'proj-only': {
+              agents: { 'correctness-reviewer': { model: 'a/proj-only' } },
+            },
+          },
+        })
+
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        expect(result.metadata.activeProfile).toBe('proj-only')
+        expect(result.config.agents?.['correctness-reviewer']?.model).toBe(
+          'a/proj-only',
+        )
+        expect(result.overlays.agents['correctness-reviewer']?.sourcePath).toBe(
+          projectConfigPath,
+        )
+      })
+
+      test('opt-in ON, same name in both user and project: the user bundle wins, and the merged overlay attributes to the user config file', () => {
+        const userConfigPath = writeUserConfig({
+          allow_project_profiles: true,
+          profiles: {
+            shared: {
+              agents: { 'correctness-reviewer': { model: 'a/user' } },
+            },
+          },
+        })
+        writeProjectConfig({
+          profile: 'shared',
+          profiles: {
+            shared: {
+              agents: { 'correctness-reviewer': { model: 'a/project' } },
+            },
+          },
+        })
+
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        expect(result.metadata.activeProfile).toBe('shared')
+        expect(result.config.agents?.['correctness-reviewer']?.model).toBe(
+          'a/user',
+        )
+        expect(result.overlays.agents['correctness-reviewer']?.sourcePath).toBe(
+          userConfigPath,
+        )
+      })
+
+      test('opt-in ON, same name in both custom and project: custom wins', () => {
+        writeUserConfig({ allow_project_profiles: true })
+        writeProjectConfig({
+          profile: 'shared',
+          profiles: {
+            shared: {
+              agents: { 'correctness-reviewer': { model: 'a/project' } },
+            },
+          },
+        })
+
+        withCustomConfig(
+          {
+            profiles: {
+              shared: {
+                agents: { 'correctness-reviewer': { model: 'a/custom' } },
+              },
+            },
+          },
+          (customDir) => {
+            const customConfigPath = path.join(customDir, 'systematic.json')
+            const result = loadConfigWithSources(testDir, { warningSink })
+
+            expect(result.metadata.activeProfile).toBe('shared')
+            expect(result.config.agents?.['correctness-reviewer']?.model).toBe(
+              'a/custom',
+            )
+            expect(
+              result.overlays.agents['correctness-reviewer']?.sourcePath,
+            ).toBe(customConfigPath)
+          },
+        )
+      })
+    })
+
+    describe('allow_project_profiles opt-in: advisory merge', () => {
+      test('project bundle routes an agent the user config never mentions: the project value applies', () => {
+        writeUserConfig({ allow_project_profiles: true })
+        writeProjectConfig({
+          profile: 'proj',
+          profiles: {
+            proj: {
+              agents: { 'correctness-reviewer': { model: 'a/project' } },
+            },
+          },
+        })
+
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        expect(result.config.agents?.['correctness-reviewer']?.model).toBe(
+          'a/project',
+        )
+      })
+
+      test('user config sets model on an agent the project bundle also sets: the user value survives and the project value appears nowhere', () => {
+        writeUserConfig({
+          allow_project_profiles: true,
+          agents: { 'correctness-reviewer': { model: 'a/user-direct' } },
+        })
+        writeProjectConfig({
+          profile: 'proj',
+          profiles: {
+            proj: {
+              agents: { 'correctness-reviewer': { model: 'a/project' } },
+            },
+          },
+        })
+
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        expect(result.config.agents?.['correctness-reviewer']?.model).toBe(
+          'a/user-direct',
+        )
+        expect(
+          JSON.stringify(result.config.agents?.['correctness-reviewer']),
+        ).not.toContain('a/project')
+      })
+
+      // The trap case: whole-entry replacement of the accumulated value by
+      // the user's own overlay would erase the project's `opencode.model`
+      // (the user only restates `variant`), leaving a qualifier with no
+      // model -- `assertRoutingInvariants` would then throw, breaking the
+      // whole config load because the user customised one unrelated field.
+      // Verified red-then-green: this test fails under whole-entry
+      // replacement (confirmed by temporarily reverting the
+      // `source.trust === 'user'` branch in `resolveOverlayEntryValue`
+      // before implementing it) and passes with the field-additive merge.
+      test('the trap case: user sets only opencode.variant; project bundle sets opencode.model AND pi.model; all three survive and routing invariants pass', () => {
+        writeUserConfig({
+          allow_project_profiles: true,
+          agents: {
+            'correctness-reviewer': { opencode: { variant: 'high' } },
+          },
+        })
+        writeProjectConfig({
+          profile: 'proj',
+          profiles: {
+            proj: {
+              agents: {
+                'correctness-reviewer': {
+                  opencode: { model: 'a/project-opencode' },
+                  pi: { model: 'a/project-pi' },
+                },
+              },
+            },
+          },
+        })
+
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        expect(
+          result.config.agents?.['correctness-reviewer']?.opencode,
+        ).toEqual({ model: 'a/project-opencode', variant: 'high' })
+        expect(result.config.agents?.['correctness-reviewer']?.pi).toEqual({
+          model: 'a/project-pi',
+        })
+      })
+
+      test('full absorption: every target the project bundle sets is already set by user config → the merged result is identical to loading with no project bundle at all', () => {
+        writeUserConfig({
+          allow_project_profiles: true,
+          agents: {
+            'correctness-reviewer': {
+              model: 'a/user',
+              opencode: { model: 'a/user-opencode', variant: 'high' },
+              pi: { model: 'a/user-pi' },
+            },
+          },
+        })
+        writeProjectConfig({
+          profile: 'proj',
+          profiles: {
+            proj: {
+              agents: {
+                'correctness-reviewer': {
+                  model: 'a/project',
+                  opencode: { model: 'a/project-opencode', variant: 'low' },
+                  pi: { model: 'a/project-pi' },
+                },
+              },
+            },
+          },
+        })
+
+        const withBundle = loadConfigWithSources(testDir, { warningSink })
+
+        // Same user config, but a project config that never selects a
+        // profile at all.
+        writeProjectConfig({})
+        const withoutBundle = loadConfigWithSources(testDir, { warningSink })
+
+        expect(withBundle.config.agents?.['correctness-reviewer']).toEqual(
+          withoutBundle.config.agents?.['correctness-reviewer'],
+        )
+        expect(withBundle.config.agents?.['correctness-reviewer']?.model).toBe(
+          'a/user',
+        )
+      })
+
+      test('a user-sourced profile is active while an opted-in project bundle also exists: the user profile retains its override semantics over user base, unchanged from today', () => {
+        writeUserConfig({
+          allow_project_profiles: true,
+          profile: 'personal',
+          agents: { 'correctness-reviewer': { model: 'a/user-base' } },
+          profiles: {
+            personal: {
+              agents: { 'correctness-reviewer': { model: 'a/user-profile' } },
+            },
+          },
+        })
+        // A project bundle exists and the opt-in is on, but the user's own
+        // `profile` selector wins the selection outright -- the project
+        // bundle's content must never even be consulted.
+        writeProjectConfig({
+          profiles: {
+            other: {
+              agents: { 'correctness-reviewer': { model: 'a/project' } },
+            },
+          },
+        })
+
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        expect(result.metadata.activeProfile).toBe('personal')
+        expect(result.metadata.profileSelectorSource).toBe('user')
+        expect(result.config.agents?.['correctness-reviewer']?.model).toBe(
+          'a/user-profile',
+        )
+      })
+
+      test('project bundle sets a category-level value where user set an agent-level value, and the reverse: normal agent-over-category layering is unaffected by advisory merge', () => {
+        writeUserConfig({
+          allow_project_profiles: true,
+          agents: { 'correctness-reviewer': { model: 'a/user-agent-level' } },
+          categories: { review: { model: 'a/user-category-level' } },
+        })
+        writeProjectConfig({
+          profile: 'proj',
+          profiles: {
+            proj: {
+              categories: { review: { model: 'a/project-category-level' } },
+            },
+          },
+        })
+
+        const forward = loadConfigWithSources(testDir, { warningSink })
+        const forwardTarget: RoutingTarget = {
+          agentKey: 'correctness-reviewer',
+          category: 'review',
+        }
+        const forwardResolution = resolveRouting({
+          overlays: forward.overlays,
+          piSubagentsOverlays: forward.piSubagentsOverlays,
+          target: forwardTarget,
+          harness: 'opencode',
+        })
+        // User's agent-level value wins over the project's category-level
+        // value -- ordinary agent-over-category layering, unrelated to trust.
+        expect(forwardResolution.model).toBe('a/user-agent-level')
+
+        // Reverse: user sets only a category-level value; the project bundle
+        // sets an agent-level value for the SAME agent. The project's
+        // agent-level entry fills a layer the user never touched, so it
+        // applies -- the advisory guarantee is per overlay key
+        // (agents.<key> vs categories.<key>), not "any value anywhere for
+        // this agent blocks the project bundle".
+        writeUserConfig({
+          allow_project_profiles: true,
+          categories: { review: { model: 'a/user-category-level' } },
+        })
+        writeProjectConfig({
+          profile: 'proj',
+          profiles: {
+            proj: {
+              agents: {
+                'correctness-reviewer': { model: 'a/project-agent-level' },
+              },
+            },
+          },
+        })
+
+        const reverse = loadConfigWithSources(testDir, { warningSink })
+        const reverseResolution = resolveRouting({
+          overlays: reverse.overlays,
+          piSubagentsOverlays: reverse.piSubagentsOverlays,
+          target: forwardTarget,
+          harness: 'opencode',
+        })
+        expect(reverseResolution.model).toBe('a/project-agent-level')
+      })
+
+      test('project bundle sets a qualifier with no model resolvable anywhere: assertRoutingInvariants still throws', () => {
+        writeUserConfig({ allow_project_profiles: true })
+        writeProjectConfig({
+          profile: 'proj',
+          profiles: {
+            proj: {
+              agents: {
+                'correctness-reviewer': { opencode: { variant: 'high' } },
+              },
+            },
+          },
+        })
+
+        expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
+          /correctness-reviewer/,
+        )
+        expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
+          /opencode/,
+        )
+      })
+
+      test('routing resolved through resolveRouting reflects the advisory outcome, not just the raw overlay map', () => {
+        writeUserConfig({
+          allow_project_profiles: true,
+          agents: {
+            'correctness-reviewer': { opencode: { variant: 'high' } },
+          },
+        })
+        writeProjectConfig({
+          profile: 'proj',
+          profiles: {
+            proj: {
+              agents: {
+                'correctness-reviewer': {
+                  opencode: { model: 'a/project-opencode' },
+                },
+              },
+            },
+          },
+        })
+
+        const result = loadConfigWithSources(testDir, { warningSink })
+        const target: RoutingTarget = {
+          agentKey: 'correctness-reviewer',
+          category: 'review',
+        }
+        const resolution = resolveRouting({
+          overlays: result.overlays,
+          piSubagentsOverlays: result.piSubagentsOverlays,
+          target,
+          harness: 'opencode',
+        })
+
+        expect(resolution.model).toBe('a/project-opencode')
+        expect(resolution.qualifier).toBe('high')
+      })
+    })
+
     test('a control-character project path cannot forge a line in the `profiles`-ignored warning', () => {
       writeUserConfig({
         profiles: {
@@ -4732,6 +5378,167 @@ describe('config', () => {
         )
       })
     })
+  })
+})
+
+describe('allow_project_profiles', () => {
+  let testDir: string
+  let originalOsHomedir: (() => string) | undefined
+
+  beforeEach(() => {
+    testDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-allow-project-profiles-test-'),
+    )
+    originalOsHomedir = os.homedir
+    os.homedir = () => path.join(testDir, 'home')
+  })
+
+  afterEach(() => {
+    if (originalOsHomedir) os.homedir = originalOsHomedir
+    fs.rmSync(testDir, { recursive: true, force: true })
+    delete process.env.OPENCODE_CONFIG_DIR
+  })
+
+  function userConfigPath(): string {
+    return path.join(os.homedir(), '.config', 'opencode', 'systematic.json')
+  }
+
+  function writeUserConfig(config: Record<string, unknown>): string {
+    const filePath = userConfigPath()
+    fs.mkdirSync(path.dirname(filePath), { recursive: true })
+    fs.writeFileSync(filePath, JSON.stringify(config))
+    return filePath
+  }
+
+  function writeProjectConfig(config: Record<string, unknown>): string {
+    const projectConfigDir = path.join(testDir, '.opencode')
+    fs.mkdirSync(projectConfigDir, { recursive: true })
+    const filePath = path.join(projectConfigDir, 'systematic.json')
+    fs.writeFileSync(filePath, JSON.stringify(config))
+    return filePath
+  }
+
+  function withCustomConfig<T>(
+    config: Record<string, unknown>,
+    fn: (customDir: string) => T,
+  ): T {
+    const customDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), 'systematic-allow-project-profiles-custom-'),
+    )
+    process.env.OPENCODE_CONFIG_DIR = customDir
+    fs.writeFileSync(
+      path.join(customDir, 'systematic.json'),
+      JSON.stringify(config),
+    )
+    try {
+      return fn(customDir)
+    } finally {
+      delete process.env.OPENCODE_CONFIG_DIR
+      fs.rmSync(customDir, { recursive: true, force: true })
+    }
+  }
+
+  test('user config sets allow_project_profiles true → loaded config reports true', () => {
+    writeUserConfig({ allow_project_profiles: true })
+
+    const result = loadConfig(testDir)
+
+    expect(result.allow_project_profiles).toBe(true)
+  })
+
+  test('OPENCODE_CONFIG_DIR (custom) config sets it true while user config sets false → custom wins', () => {
+    writeUserConfig({ allow_project_profiles: false })
+
+    withCustomConfig({ allow_project_profiles: true }, () => {
+      const result = loadConfig(testDir)
+      expect(result.allow_project_profiles).toBe(true)
+    })
+  })
+
+  test('neither source sets it → effective value is false', () => {
+    writeUserConfig({})
+
+    const result = loadConfig(testDir)
+
+    expect(result.allow_project_profiles).toBe(false)
+    expect(result.allow_project_profiles).toBe(
+      DEFAULT_CONFIG.allow_project_profiles,
+    )
+  })
+
+  test('project config sets it true → stripped, effective value stays false, and a protected-field warning names it', () => {
+    const projectConfigPath = writeProjectConfig({
+      allow_project_profiles: true,
+    })
+    const warnings: string[] = []
+    const warningSink = (message: string) => warnings.push(message)
+
+    const result = loadConfigWithSources(testDir, { warningSink })
+
+    expect(result.config.allow_project_profiles).toBe(false)
+    expect(warnings).toContainEqual(
+      `[systematic] \`allow_project_profiles\` in project config (${projectConfigPath}) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored.`,
+    )
+    expect(result.metadata.protectedFields).toContainEqual({
+      fieldPath: 'allow_project_profiles',
+      outcome: 'blocked',
+      sourceKind: 'project',
+    })
+  })
+
+  test('self-authorization: project sets allow_project_profiles: true AND defines profiles in the same file → both stripped, both warned, bundle never selectable', () => {
+    const projectConfigPath = writeProjectConfig({
+      allow_project_profiles: true,
+      profile: 'sneaky',
+      profiles: {
+        sneaky: {
+          agents: { 'correctness-reviewer': { model: 'a/sneaky' } },
+        },
+      },
+    })
+    const warnings: string[] = []
+    const warningSink = (message: string) => warnings.push(message)
+
+    const result = loadConfigWithSources(testDir, { warningSink })
+
+    // The opt-in a project grants itself never takes effect.
+    expect(result.config.allow_project_profiles).toBe(false)
+
+    // Because the opt-in never took effect, `profiles` was stripped exactly
+    // as if `allow_project_profiles` had never been mentioned in this file.
+    const allowProjectProfilesWarning = warnings.find((message) =>
+      message.includes('`allow_project_profiles`'),
+    )
+    const profilesWarning = warnings.find(
+      (message) =>
+        message.includes('`profiles`') &&
+        message.includes('is only valid in user config'),
+    )
+    expect(allowProjectProfilesWarning).toBeDefined()
+    expect(allowProjectProfilesWarning).toContain(projectConfigPath)
+    expect(profilesWarning).toBeDefined()
+    expect(profilesWarning).toContain(projectConfigPath)
+
+    expect(result.metadata.protectedFields).toContainEqual({
+      fieldPath: 'allow_project_profiles',
+      outcome: 'blocked',
+      sourceKind: 'project',
+    })
+    expect(result.metadata.protectedFields).toContainEqual({
+      fieldPath: 'profiles',
+      outcome: 'blocked',
+      sourceKind: 'project',
+    })
+
+    // No bundle from the project's own map is resolvable -- the selector
+    // falls back exactly like the missing-name case (no other source
+    // defines `sneaky`).
+    expect(result.metadata.activeProfile).toBeNull()
+    expect(result.metadata.profileFallback).toEqual({
+      requested: 'sneaky',
+      usedDefault: null,
+    })
+    expect(result.config.agents?.['correctness-reviewer']).toBeUndefined()
   })
 })
 

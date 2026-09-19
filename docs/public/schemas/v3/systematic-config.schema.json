@@ -17,26 +17,29 @@
     "profile": {
       "$ref": "#/definitions/__schema69"
     },
-    "disabled_skills": {
+    "allow_project_profiles": {
       "$ref": "#/definitions/__schema71"
     },
+    "disabled_skills": {
+      "$ref": "#/definitions/__schema72"
+    },
     "disabled_agents": {
-      "$ref": "#/definitions/__schema73"
+      "$ref": "#/definitions/__schema74"
     },
     "disabled_commands": {
-      "$ref": "#/definitions/__schema75"
+      "$ref": "#/definitions/__schema76"
     },
     "bootstrap": {
-      "$ref": "#/definitions/__schema77"
+      "$ref": "#/definitions/__schema78"
     },
     "workflow_guard": {
-      "$ref": "#/definitions/__schema83"
+      "$ref": "#/definitions/__schema84"
     },
     "pi_subagents": {
-      "$ref": "#/definitions/__schema87"
+      "$ref": "#/definitions/__schema88"
     },
     "skills_as_commands": {
-      "$ref": "#/definitions/__schema98"
+      "$ref": "#/definitions/__schema99"
     }
   },
   "additionalProperties": false,
@@ -1890,16 +1893,23 @@
       ]
     },
     "__schema71": {
+      "default": false,
+      "type": "boolean",
+      "description": "Allow a repository's project config to define its own `profiles` map. User-owned only — only valid in user config or OPENCODE_CONFIG_DIR config; a project config setting this field has it ignored (a project cannot grant itself a permission it does not already have). Defaults to false.",
+      "examples": [true, false],
+      "trust": "project-or-higher"
+    },
+    "__schema72": {
       "default": [],
       "description": "Array of bundled skill names to disable globally. Unknown skill names are rejected at parse time.",
       "examples": [["ce:plan", "ce:review"]],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema72"
+          "$ref": "#/definitions/__schema73"
         }
       ]
     },
-    "__schema72": {
+    "__schema73": {
       "type": "array",
       "items": {
         "type": "string",
@@ -1957,7 +1967,7 @@
         ]
       }
     },
-    "__schema73": {
+    "__schema74": {
       "default": [],
       "description": "Array of bundled agent names (bare or qualified category/name) to disable globally. Unknown agent names are rejected at parse time.",
       "examples": [
@@ -1966,11 +1976,11 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema74"
+          "$ref": "#/definitions/__schema75"
         }
       ]
     },
-    "__schema74": {
+    "__schema75": {
       "type": "array",
       "items": {
         "type": "string",
@@ -2080,23 +2090,23 @@
         ]
       }
     },
-    "__schema75": {
+    "__schema76": {
       "default": [],
       "description": "Array of command names to disable globally",
       "examples": [["deprecated-migration-helper"]],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema76"
+          "$ref": "#/definitions/__schema77"
         }
       ]
     },
-    "__schema76": {
+    "__schema77": {
       "type": "array",
       "items": {
         "type": "string"
       }
     },
-    "__schema77": {
+    "__schema78": {
       "default": {
         "enabled": true
       },
@@ -2111,18 +2121,18 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema78"
+          "$ref": "#/definitions/__schema79"
         }
       ]
     },
-    "__schema78": {
+    "__schema79": {
       "type": "object",
       "properties": {
         "enabled": {
-          "$ref": "#/definitions/__schema79"
+          "$ref": "#/definitions/__schema80"
         },
         "file": {
-          "$ref": "#/definitions/__schema81"
+          "$ref": "#/definitions/__schema82"
         }
       },
       "additionalProperties": false,
@@ -2136,32 +2146,32 @@
         }
       ]
     },
-    "__schema79": {
+    "__schema80": {
       "default": true,
       "description": "Enable bootstrap prompt injection into every conversation",
       "examples": [true, false],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema80"
+          "$ref": "#/definitions/__schema81"
         }
       ]
     },
-    "__schema80": {
+    "__schema81": {
       "type": "boolean"
     },
-    "__schema81": {
+    "__schema82": {
       "description": "Path to a custom bootstrap prompt file",
       "examples": ["~/.config/opencode/bootstrap.md"],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema82"
+          "$ref": "#/definitions/__schema83"
         }
       ]
     },
-    "__schema82": {
+    "__schema83": {
       "type": "string"
     },
-    "__schema83": {
+    "__schema84": {
       "default": {
         "mode": "observe",
         "debug": false
@@ -2175,11 +2185,11 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema84"
+          "$ref": "#/definitions/__schema85"
         }
       ]
     },
-    "__schema84": {
+    "__schema85": {
       "type": "object",
       "properties": {
         "mode": {
@@ -2188,7 +2198,7 @@
           "examples": ["observe", "protected", "disabled"],
           "allOf": [
             {
-              "$ref": "#/definitions/__schema85"
+              "$ref": "#/definitions/__schema86"
             }
           ]
         },
@@ -2198,21 +2208,21 @@
           "examples": [false, true],
           "allOf": [
             {
-              "$ref": "#/definitions/__schema86"
+              "$ref": "#/definitions/__schema87"
             }
           ]
         }
       },
       "additionalProperties": false
     },
-    "__schema85": {
+    "__schema86": {
       "type": "string",
       "enum": ["observe", "protected", "disabled"]
     },
-    "__schema86": {
+    "__schema87": {
       "type": "boolean"
     },
-    "__schema87": {
+    "__schema88": {
       "default": {
         "categories": {},
         "agents": {}
@@ -2234,11 +2244,11 @@
       ],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema88"
+          "$ref": "#/definitions/__schema89"
         }
       ]
     },
-    "__schema88": {
+    "__schema89": {
       "type": "object",
       "properties": {
         "categories": {
@@ -2254,7 +2264,7 @@
           ],
           "allOf": [
             {
-              "$ref": "#/definitions/__schema89"
+              "$ref": "#/definitions/__schema90"
             }
           ]
         },
@@ -2271,14 +2281,14 @@
           ],
           "allOf": [
             {
-              "$ref": "#/definitions/__schema97"
+              "$ref": "#/definitions/__schema98"
             }
           ]
         }
       },
       "additionalProperties": false
     },
-    "__schema89": {
+    "__schema90": {
       "type": "object",
       "propertyNames": {
         "type": "string"
@@ -2292,12 +2302,12 @@
         ],
         "allOf": [
           {
-            "$ref": "#/definitions/__schema96"
+            "$ref": "#/definitions/__schema97"
           }
         ]
       }
     },
-    "__schema90": {
+    "__schema91": {
       "trust": "project-or-higher",
       "allOf": [
         {
@@ -2305,7 +2315,7 @@
         }
       ]
     },
-    "__schema91": {
+    "__schema92": {
       "type": "integer",
       "minimum": 0,
       "maximum": 9007199254740991,
@@ -2313,48 +2323,48 @@
       "examples": [0, 10, 25],
       "trust": "any"
     },
-    "__schema92": {
+    "__schema93": {
       "type": "string",
       "minLength": 1,
       "description": "pi-subagents comma-selector tool string (built-ins, */all/none, or extension selectors)",
       "examples": ["*", "read,grep,glob", "none"],
       "trust": "project-or-higher"
     },
-    "__schema93": {
+    "__schema94": {
       "anyOf": [
         {
-          "$ref": "#/definitions/__schema94"
+          "$ref": "#/definitions/__schema95"
         },
         {
-          "$ref": "#/definitions/__schema95"
+          "$ref": "#/definitions/__schema96"
         }
       ],
       "description": "pi-subagents skills selector: true (all) or a comma-separated list of skill names",
       "examples": [true, "ce:plan,ce:review"],
       "trust": "project-or-higher"
     },
-    "__schema94": {
+    "__schema95": {
       "type": "boolean",
       "const": true
     },
-    "__schema95": {
+    "__schema96": {
       "type": "string",
       "minLength": 1
     },
-    "__schema96": {
+    "__schema97": {
       "type": "object",
       "properties": {
         "thinking": {
-          "$ref": "#/definitions/__schema90"
-        },
-        "max_turns": {
           "$ref": "#/definitions/__schema91"
         },
-        "tools": {
+        "max_turns": {
           "$ref": "#/definitions/__schema92"
         },
-        "skills": {
+        "tools": {
           "$ref": "#/definitions/__schema93"
+        },
+        "skills": {
+          "$ref": "#/definitions/__schema94"
         }
       },
       "additionalProperties": false,
@@ -2366,26 +2376,26 @@
         }
       ]
     },
-    "__schema97": {
+    "__schema98": {
       "type": "object",
       "propertyNames": {
         "type": "string"
       },
       "additionalProperties": {
-        "$ref": "#/definitions/__schema96"
+        "$ref": "#/definitions/__schema97"
       }
     },
-    "__schema98": {
+    "__schema99": {
       "default": true,
       "description": "Register skills discovered from user/project skill directories (OpenCode config and other agent-harness-standard locations) as slash commands. Default true.",
       "examples": [true, false],
       "allOf": [
         {
-          "$ref": "#/definitions/__schema99"
+          "$ref": "#/definitions/__schema100"
         }
       ]
     },
-    "__schema99": {
+    "__schema100": {
       "type": "boolean"
     }
   }

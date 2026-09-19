@@ -604,6 +604,13 @@ export function createSystematicConfigSchema(
           ],
         }),
       profile: profileSchema,
+      allow_project_profiles: trustProtected(
+        z.boolean().meta({
+          description:
+            "Allow a repository's project config to define its own `profiles` map. User-owned only — only valid in user config or OPENCODE_CONFIG_DIR config; a project config setting this field has it ignored (a project cannot grant itself a permission it does not already have). Defaults to false.",
+          examples: [true, false],
+        }),
+      ).default(false),
       disabled_skills: z
         // z.enum requires a non-empty tuple; skillNames is guaranteed non-empty
         // by the sanity check in generateBundledNamesContent. Removed names are
