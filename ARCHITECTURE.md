@@ -224,11 +224,12 @@ contract violations, banned CC/CEP patterns, and stale `docs/plans/` status. Ign
 blocks, it flags plans marked `status: active` with at least one ticked checkbox and no unticked
 checkboxes. It does not inspect deliverables or verify that work shipped. `checkSolutionSchema`
 additionally validates every `docs/solutions/**` frontmatter against
-`skills/ce-compound/references/schema.yaml` — the enum vocabularies (`problem_type`, `component`,
-`severity`, bug-track `root_cause`/`resolution_type`), the `date` pattern, and bug-track-only
-required fields (`symptoms`, `root_cause`, `resolution_type`) are all derived from that schema file
-at runtime rather than hardcoded, so the gate cannot drift from the contract it enforces. Must pass
-before any release.
+`skills/ce-compound/references/schema.yaml`. The enum vocabularies (`problem_type`, `component`,
+`severity`, bug-track `root_cause`/`resolution_type`) and the `date` pattern are read from that
+schema file at runtime, so changing a vocabulary there takes effect without editing the gate. The
+required-field list is hardcoded in the gate, and schema constraints such as array maximums and
+optional-field patterns are not enforced — changing either still requires a matching validator
+change. Must pass before any release.
 
 **Receipt-backed workflow guard** (`src/lib/workflow-guard.ts` plus the OpenCode adapter in
 `src/lib/opencode-workflow-guard.ts`, `opencode-operation-observer.ts`, and `receipt-classifier.ts`
