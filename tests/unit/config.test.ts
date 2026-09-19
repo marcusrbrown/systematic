@@ -525,7 +525,7 @@ describe('config', () => {
         }
       })
 
-      test('alias success actually applies top-level `workflow_guard`/selected `profiles` bundle (not just an empty protectedFields list) and suppresses their duplicate blocked records', () => {
+      test('alias success (top-level-only: `profiles`/`workflow_guard`, no agents/categories overlay) actually applies them, emits no false "ignored"/"not selectable" warning, and gives exactly one accurate alias notice', () => {
         const projectConfigDir = path.join(testDir, '.opencode')
         fs.mkdirSync(projectConfigDir)
         fs.writeFileSync(
@@ -543,7 +543,10 @@ describe('config', () => {
         process.env.OPENCODE_CONFIG_DIR = projectConfigDir
 
         try {
-          const result = loadConfigWithSources(testDir)
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          const result = loadConfigWithSources(testDir, { warningSink })
 
           // Real effect, not just "no blocked record": workflow_guard took
           // hold (project-trust would have stripped it to DEFAULT_CONFIG's
@@ -557,6 +560,24 @@ describe('config', () => {
           expect(result.config.agents?.['correctness-reviewer']?.model).toBe(
             'a/personal',
           )
+
+          // Regression: `profiles` genuinely applied through the identical
+          // custom-trust file, so its project-trust "ignored"/"not
+          // selectable" warning must not fire -- even though this project
+          // config has zero agents/categories security-overlay fields to
+          // strip (the only case that used to feed the alias-notice buffer).
+          expect(
+            warnings.some((message) =>
+              message.includes('is only valid in user config'),
+            ),
+          ).toBe(false)
+          // Exactly one accurate alias notice takes its place.
+          expect(
+            warnings.filter((message) =>
+              message.includes('resolve to the same file'),
+            ),
+          ).toHaveLength(1)
+          expect(warnings).toHaveLength(1)
 
           // Both top-level protected fields applied through the custom-trust
           // pass of the identical file -- neither should be reported blocked.
@@ -579,6 +600,141 @@ describe('config', () => {
               (fact) => fact.factId === 'config-protected-field',
             ),
           ).toEqual([])
+        } finally {
+          delete process.env.OPENCODE_CONFIG_DIR
+        }
+      })
+
+      test('alias success (workflow_guard-only, no `profiles`/no overlay fields) still gets one truthful alias notice, not silence', () => {
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir)
+        fs.writeFileSync(
+          path.join(projectConfigDir, 'systematic.json'),
+          JSON.stringify({
+            workflow_guard: { mode: 'protected', debug: true },
+          }),
+        )
+        process.env.OPENCODE_CONFIG_DIR = projectConfigDir
+
+        try {
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          const result = loadConfigWithSources(testDir, { warningSink })
+
+          // workflow_guard has no dedicated "ignored" warning at all, so this
+          // case previously produced zero buffered messages and emitAliasDiagnostics
+          // stayed silent even though the field genuinely applied via custom trust.
+          expect(result.config.workflow_guard).toEqual({
+            mode: 'protected',
+            debug: true,
+          })
+          expect(result.metadata.protectedFields).toEqual([])
+          expect(warnings).toEqual([
+            expect.stringContaining('resolve to the same file'),
+          ])
+        } finally {
+          delete process.env.OPENCODE_CONFIG_DIR
+        }
+      })
+
+      test('alias + top-level-only invalid `workflow_guard` + report mode: the `profiles`-ignored warning is flushed verbatim (not silently dropped) and blocked-field metadata is retained', () => {
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir)
+        fs.writeFileSync(
+          path.join(projectConfigDir, 'systematic.json'),
+          JSON.stringify({
+            workflow_guard: { mode: 'bogus-mode' },
+            profiles: {
+              personal: {
+                agents: { 'correctness-reviewer': { model: 'a/personal' } },
+              },
+            },
+          }),
+        )
+        process.env.OPENCODE_CONFIG_DIR = projectConfigDir
+
+        try {
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          const result = loadConfigWithSources(testDir, {
+            warningSink,
+            invalidSource: 'report',
+          })
+
+          // The custom-trust pass of the aliased file failed (invalid mode
+          // enum value), so `profiles` never actually applied -- its ignored
+          // warning must still surface, not be silently swallowed the way
+          // the successful-alias case swallows it.
+          expect(
+            warnings.some(
+              (message) =>
+                message.includes('`profiles`') &&
+                message.includes('is only valid in user config'),
+            ),
+          ).toBe(true)
+          // No false accurate-alias notice either -- it did not, in fact,
+          // apply through custom trust.
+          expect(
+            warnings.some((message) =>
+              message.includes('resolve to the same file'),
+            ),
+          ).toBe(false)
+          expect(result.metadata.sources).toContainEqual(
+            expect.objectContaining({ kind: 'custom', presence: 'invalid' }),
+          )
+          expect(result.metadata.protectedFields).toEqual([
+            {
+              fieldPath: 'profiles',
+              outcome: 'blocked',
+              sourceKind: 'project',
+            },
+            {
+              fieldPath: 'workflow_guard',
+              outcome: 'blocked',
+              sourceKind: 'project',
+            },
+          ])
+        } finally {
+          delete process.env.OPENCODE_CONFIG_DIR
+        }
+      })
+
+      test('alias success with a mixed overlay + top-level protected payload (agents.model AND profiles) still emits exactly one accurate alias notice, not one per field', () => {
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir)
+        fs.writeFileSync(
+          path.join(projectConfigDir, 'systematic.json'),
+          JSON.stringify({
+            agents: { 'correctness-reviewer': { model: 'openai/aliased' } },
+            profiles: {
+              personal: {
+                agents: { 'correctness-reviewer': { model: 'a/personal' } },
+              },
+            },
+          }),
+        )
+        process.env.OPENCODE_CONFIG_DIR = projectConfigDir
+
+        try {
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          const result = loadConfigWithSources(testDir, { warningSink })
+
+          expect(result.config.agents?.['correctness-reviewer']?.model).toBe(
+            'openai/aliased',
+          )
+          expect(
+            warnings.some((message) =>
+              message.includes('is only valid in user config'),
+            ),
+          ).toBe(false)
+          expect(warnings).toEqual([
+            expect.stringContaining('resolve to the same file'),
+          ])
+          expect(result.metadata.protectedFields).toEqual([])
         } finally {
           delete process.env.OPENCODE_CONFIG_DIR
         }

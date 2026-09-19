@@ -1211,16 +1211,13 @@ function resolveAliasedCustomConfigPath(
 /**
  * A warning sink that buffers messages (instead of discarding them) when
  * aliased, so the caller can flush them verbatim if the custom-trust pass
- * of the same file turns out NOT to succeed -- in that case the fields the
- * project pass stripped are not actually guaranteed to apply via custom
- * trust, so the warnings must not be lost. This flush only happens under
- * `invalidSource: 'report'`; under the default `'throw'` mode a failed
- * custom-trust pass aborts `loadConfigWithSources` before `emitAliasDiagnostics`
- * runs, and the original thrown error is what the caller sees -- the buffered
- * strip warnings are simply never flushed, which is intentional (already
- * covered by existing tests). Passes through unchanged when not aliased. The
- * buffer is bounded by whatever bound the caller (the project-trust
- * `stripProjectSecurityOverlayFields` pass) already applies.
+ * of the same file fails -- those stripped fields aren't guaranteed to
+ * apply via custom trust then, so the warnings must not be lost. Used for
+ * every project-trust protected-field warning (overlay strips and the
+ * top-level `profiles`-ignored warning). Under `'throw'` mode a failed
+ * custom-trust pass aborts before `emitAliasDiagnostics` runs, so the
+ * buffer is intentionally never flushed there. Passes through unchanged
+ * when not aliased.
  */
 function createAliasStripTracker(
   warningSink: (message: string) => void,
@@ -1242,29 +1239,31 @@ function createAliasStripTracker(
 }
 
 /**
- * Report what happened during an aliased project/custom load: if both
- * passes succeeded, discard the buffered per-field strip warnings and emit
- * one summary notice instead; otherwise flush the buffered warnings
- * verbatim, since the custom-trust pass can't be relied on to have
- * actually applied those fields.
+ * Report what happened during an aliased project/custom load. Eligibility
+ * is not just "a warning got buffered": `workflow_guard` has no dedicated
+ * ignored-warning, so a workflow_guard-only project config buffers nothing
+ * yet still needs the notice -- `hasProtectedFields` covers that. If both
+ * passes succeeded, discard any buffered strip warnings and emit one
+ * summary notice instead; otherwise flush the buffered warnings verbatim.
  */
 function emitAliasDiagnostics(input: {
   readonly aliasedCustomConfigPath: string | undefined
   readonly buffered: readonly string[]
   readonly customLoaded: boolean
+  readonly hasProtectedFields: boolean
   readonly projectConfigPath: string
   readonly projectLoaded: boolean
   readonly warningSink: (message: string) => void
 }): void {
   if (
     input.aliasedCustomConfigPath === undefined ||
-    input.buffered.length === 0
+    (input.buffered.length === 0 && !input.hasProtectedFields)
   ) {
     return
   }
   if (input.projectLoaded && input.customLoaded) {
     input.warningSink(
-      `[systematic] project config (${sanitizeDiagnosticText(input.projectConfigPath)}) and custom config (${sanitizeDiagnosticText(input.aliasedCustomConfigPath)}) resolve to the same file; security-overlay fields stripped from the project pass apply through the custom-trust pass instead.`,
+      `[systematic] project config (${sanitizeDiagnosticText(input.projectConfigPath)}) and custom config (${sanitizeDiagnosticText(input.aliasedCustomConfigPath)}) resolve to the same file; protected fields stripped from the project pass (security-overlay fields, \`profiles\`, \`workflow_guard\`) apply through the custom-trust pass instead.`,
     )
     return
   }
@@ -1318,17 +1317,35 @@ export function loadConfigWithSources(
         metadata: { kind: 'custom' as const, presence: 'absent' as const },
         source: null,
       }
+  const userSource = user.source
+  const projectSource = project.source
+  const customSource = custom.source
+
+  // `profiles` is protected and already stripped from `projectSource.config`
+  // -- warn once so a project author isn't left wondering why their bundles
+  // never applied. Routed through `projectStrip.sink`, not `warningSink`
+  // directly, so aliasing can buffer/suppress it like the strip warnings
+  // below (see `emitAliasDiagnostics`).
+  if (
+    projectSource?.protectedFields.some(
+      (field) => field.fieldPath === 'profiles',
+    )
+  ) {
+    projectStrip.sink(
+      `[systematic] \`profiles\` in project config (${sanitizeDiagnosticText(projectSource.path)}) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored. Its bundles are not selectable even if this project also sets \`profile\`.`,
+    )
+  }
+
   emitAliasDiagnostics({
     aliasedCustomConfigPath,
     buffered: projectStrip.buffered,
     customLoaded: custom.source !== null,
+    hasProtectedFields: (projectSource?.protectedFields.length ?? 0) > 0,
     projectConfigPath: paths.projectConfig,
     projectLoaded: project.source !== null,
     warningSink,
   })
-  const userSource = user.source
-  const projectSource = project.source
-  const customSource = custom.source
+
   const sources = [userSource, projectSource, customSource].filter(
     (source): source is FileConfigSource => source !== null,
   )
@@ -1337,20 +1354,6 @@ export function loadConfigWithSources(
   const customConfig = customSource?.config
 
   const warned = new Set<string>()
-
-  // Project's `profiles` map is protected (see PROJECT_PROTECTED_FIELDS) and
-  // already stripped from `projectSource.config` by this point -- warn once
-  // that it was ignored so a project author isn't left wondering why their
-  // bundles never applied.
-  if (
-    projectSource?.protectedFields.some(
-      (field) => field.fieldPath === 'profiles',
-    )
-  ) {
-    warningSink(
-      `[systematic] \`profiles\` in project config (${sanitizeDiagnosticText(projectSource.path)}) is only valid in user config or OPENCODE_CONFIG_DIR config and has been ignored. Its bundles are not selectable even if this project also sets \`profile\`.`,
-    )
-  }
 
   assertAllProfileBundlesAreValid(userConfig, customConfig)
 
