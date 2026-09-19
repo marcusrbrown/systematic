@@ -31,25 +31,11 @@ import {
 
 const OBSERVED_AT = '2026-08-13T12:34:56.000Z'
 
-// File-level hermetic guard: SYSTEMATIC_PROFILE now selects an active
-// profile bundle (it used to mean nothing), so an ambient value in the
-// test runner's own environment would silently steer any test in this
-// file that loads config. Clear it before every test and restore whatever
-// was there afterward, regardless of which describe/test set it.
-let ambientSystematicProfile: string | undefined
-
-beforeEach(() => {
-  ambientSystematicProfile = process.env.SYSTEMATIC_PROFILE
-  delete process.env.SYSTEMATIC_PROFILE
-})
-
-afterEach(() => {
-  if (ambientSystematicProfile === undefined) {
-    delete process.env.SYSTEMATIC_PROFILE
-  } else {
-    process.env.SYSTEMATIC_PROFILE = ambientSystematicProfile
-  }
-})
+// SYSTEMATIC_PROFILE is cleared from the ambient environment by the
+// tests/setup.ts preload (see bunfig.toml) before any test file runs, so
+// this suite is hermetic against it by construction. Tests that
+// deliberately want it set use `withEnvProfile` below and restore it
+// afterward.
 
 describe('config', () => {
   let testDir: string
