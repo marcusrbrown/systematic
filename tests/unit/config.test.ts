@@ -31,6 +31,26 @@ import {
 
 const OBSERVED_AT = '2026-08-13T12:34:56.000Z'
 
+// File-level hermetic guard: SYSTEMATIC_PROFILE now selects an active
+// profile bundle (it used to mean nothing), so an ambient value in the
+// test runner's own environment would silently steer any test in this
+// file that loads config. Clear it before every test and restore whatever
+// was there afterward, regardless of which describe/test set it.
+let ambientSystematicProfile: string | undefined
+
+beforeEach(() => {
+  ambientSystematicProfile = process.env.SYSTEMATIC_PROFILE
+  delete process.env.SYSTEMATIC_PROFILE
+})
+
+afterEach(() => {
+  if (ambientSystematicProfile === undefined) {
+    delete process.env.SYSTEMATIC_PROFILE
+  } else {
+    process.env.SYSTEMATIC_PROFILE = ambientSystematicProfile
+  }
+})
+
 describe('config', () => {
   let testDir: string
   let originalOsHomedir: (() => string) | undefined
@@ -3573,8 +3593,9 @@ describe('config', () => {
           usedDefault: 'personal',
         })
         expect(warnings).toHaveLength(1)
-        expect(warnings[0]).toContain('ghost')
-        expect(warnings[0]).toContain('environment')
+        expect(warnings[0]).toBe(
+          '[systematic] profile "ghost" (selected by SYSTEMATIC_PROFILE) is not defined in `profiles`; falling back to your default profile "personal". See https://fro.bot/systematic/reference/configuration#profiles for how to define a profile.',
+        )
       })
     })
 
@@ -3596,6 +3617,46 @@ describe('config', () => {
         const result = loadConfigWithSources(testDir, { warningSink })
         expect(result.metadata.activeProfile).toBe('work')
         expect(result.metadata.profileSelectorSource).toBe('project')
+      })
+    })
+
+    // Project `profiles` is protected/stripped (PROJECT_PROTECTED_FIELDS) --
+    // SYSTEMATIC_PROFILE naming a bundle that exists only there must not
+    // reach it. This is the guard proving the env var can never select
+    // content the project itself supplied.
+    test('SYSTEMATIC_PROFILE naming a project-only profiles bundle cannot select it; normal fallback applies', () => {
+      writeUserConfig({
+        profiles: {
+          personal: {
+            agents: { 'correctness-reviewer': { model: 'a/personal' } },
+          },
+        },
+      })
+      const projectConfigPath = writeProjectConfig({
+        profiles: {
+          sneaky: {
+            agents: { 'correctness-reviewer': { model: 'a/sneaky' } },
+          },
+        },
+      })
+
+      withEnvProfile('sneaky', () => {
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        expect(result.metadata.activeProfile).toBeNull()
+        expect(result.metadata.profileSelectorSource).toBe('environment')
+        expect(result.metadata.profileFallback).toEqual({
+          requested: 'sneaky',
+          usedDefault: null,
+        })
+        expect(result.config.agents?.['correctness-reviewer']).toBeUndefined()
+
+        const profilesWarning = warnings.find((w) => w.includes('`profiles`'))
+        expect(profilesWarning).toBeDefined()
+        expect(profilesWarning).toContain(projectConfigPath)
+        // One warning for the stripped project `profiles` map, one for the
+        // missing-name fallback -- not more.
+        expect(warnings).toHaveLength(2)
       })
     })
 

@@ -47,12 +47,17 @@ function snapshotTree(root: string): string {
   return entries.join('\n')
 }
 
+// SYSTEMATIC_PROFILE selects an active profile bundle, so it must not leak
+// from this test runner's own ambient environment into a spawned CLI --
+// only a test that explicitly passes it via `extraEnv` should set it.
 function runCli(
   args: string[],
   cwd: string,
   extraEnv?: Record<string, string>,
 ): { stdout: string; stderr: string; exitCode: number } {
-  const env = extraEnv ? { ...process.env, ...extraEnv } : process.env
+  const env: Record<string, string | undefined> = { ...process.env }
+  delete env.SYSTEMATIC_PROFILE
+  Object.assign(env, extraEnv)
   const result = spawnSync('bun', [CLI_PATH, ...args], {
     cwd,
     encoding: 'utf8',
@@ -647,6 +652,9 @@ describe('cli config show', () => {
       expect(prose.exitCode).toBe(0)
       expect(prose.stdout).toContain('Active profile: slow')
       expect(prose.stdout).toContain('Selected by:    environment')
+      // Not just the active-profile label: the routing table must actually
+      // resolve to the environment-selected bundle's model.
+      expect(prose.stdout).toContain('model=anthropic/opus')
 
       const json = runCli(['config', 'show', '--json'], project, {
         HOME: home,
@@ -656,6 +664,18 @@ describe('cli config show', () => {
       const parsed = JSON.parse(json.stdout) as Record<string, unknown>
       expect(parsed.activeProfile).toBe('slow')
       expect(parsed.profileSelectorSource).toBe('environment')
+      const routing = parsed.routing as Array<Record<string, unknown>>
+      const entry = routing.find(
+        (r) =>
+          (r.target as Record<string, unknown>).agentKey ===
+          'correctness-reviewer',
+      )
+      expect(entry).toBeDefined()
+      const opencode = (entry as Record<string, unknown>).opencode as Record<
+        string,
+        unknown
+      >
+      expect(opencode.model).toBe('anthropic/opus')
     } finally {
       fs.rmSync(root, { recursive: true, force: true })
     }

@@ -1096,6 +1096,18 @@ function trustedDefaultProfileName(
 }
 
 /**
+ * Human-readable label for a selector source used in diagnostic warnings.
+ * The three config kinds read as `"<kind> config"`; the environment reads
+ * as the variable name itself (`SYSTEMATIC_PROFILE`), never `"environment
+ * config"` -- there is no config file to name, and conflating the two
+ * would contradict `ProfileSelectorSource`'s doc comment distinguishing an
+ * env override from a config source.
+ */
+function selectorSourceLabel(source: ConfigSourceKind | 'environment'): string {
+  return source === 'environment' ? 'SYSTEMATIC_PROFILE' : `${source} config`
+}
+
+/**
  * Resolve which named profile bundle (if any) is active for this load,
  * implementing the selection table from plan
  * 2026-09-04-002-feat-model-config-profiles (Unit 2). The named bundle is
@@ -1148,7 +1160,7 @@ function resolveActiveProfile(
 
   if (fallbackLookup !== undefined && trustedDefault !== undefined) {
     input.warningSink(
-      `[systematic] profile "${sanitizeDiagnosticText(requested)}" (selected by ${selection.source} config) is not defined in \`profiles\`; falling back to your default profile "${sanitizeDiagnosticText(trustedDefault)}". See ${PROFILE_DOCS_URL} for how to define a profile.`,
+      `[systematic] profile "${sanitizeDiagnosticText(requested)}" (selected by ${selectorSourceLabel(selection.source)}) is not defined in \`profiles\`; falling back to your default profile "${sanitizeDiagnosticText(trustedDefault)}". See ${PROFILE_DOCS_URL} for how to define a profile.`,
     )
     return {
       activeProfile: trustedDefault,
@@ -1162,7 +1174,7 @@ function resolveActiveProfile(
   const sourceNote =
     selection.source === 'user'
       ? ''
-      : ` (selected by ${selection.source} config)`
+      : ` (selected by ${selectorSourceLabel(selection.source)})`
   const alsoMissingNote =
     trustedDefault !== undefined && trustedDefault !== requested
       ? ` Your default profile "${sanitizeDiagnosticText(trustedDefault)}" is also not defined in \`profiles\`.`
