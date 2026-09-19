@@ -4377,6 +4377,10 @@ describe('OpenCode workflow guard adapter', () => {
       }
 
       const pushBefore = deferredResult<OperationObserverRemoteResult>()
+      // Latch, not a microtask-turn count: the stub signals it has actually
+      // been entered and is suspended on `pushBefore`, so the test never
+      // depends on how many awaits precede the remoteSnapshot call.
+      const enteredRemoteSnapshot = deferredResult<void>()
       const controllableObserver: OpencodeOperationObserver = {
         targetDigest: OPERATION_SCOPE.workspaceIdentity,
         validateRegisteredWorktree: (candidateDirectory) => ({
@@ -4389,8 +4393,10 @@ describe('OpenCode workflow guard adapter', () => {
           return { status: 'available', snapshot: operationSnapshot() }
         },
         async remoteSnapshot(operation, phase) {
-          if (operation === 'push' && phase === 'before')
+          if (operation === 'push' && phase === 'before') {
+            enteredRemoteSnapshot.resolve()
             return pushBefore.promise
+          }
           return { status: 'unavailable', reasonCode: 'remote-missing-field' }
         },
       }
@@ -4417,9 +4423,7 @@ describe('OpenCode workflow guard adapter', () => {
         },
         { title: 'x', output: 'y', metadata: {} },
       )
-      await Promise.resolve()
-      await Promise.resolve()
-      await Promise.resolve()
+      await enteredRemoteSnapshot.promise
 
       // While unit 1's seeding is still suspended, a wholly unrelated
       // markUnavailable() (bindCall conflict, no cause) wins the transition.
