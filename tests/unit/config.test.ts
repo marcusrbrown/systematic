@@ -340,6 +340,9 @@ describe('config', () => {
               message.includes('resolve to the same file'),
             ),
           ).toHaveLength(1)
+          expect(warnings[0]).toContain(
+            'apply through the custom-trust pass instead',
+          )
           // The stripped field applied through the custom-trust pass of the
           // same file, so it is not genuinely "blocked" -- must not appear
           // in observation metadata (regression for the duplicate-record bug).
@@ -422,6 +425,9 @@ describe('config', () => {
               message.includes('resolve to the same file'),
             ),
           ).toHaveLength(1)
+          expect(warnings[0]).toContain(
+            'apply through the custom-trust pass instead',
+          )
           // Same duplicate-suppression invariant applies through a symlinked
           // custom config dir, not just a direct path alias.
           expect(result.metadata.protectedFields).toEqual([])
@@ -520,6 +526,9 @@ describe('config', () => {
 
           expect(warnings).toHaveLength(1)
           expect(warnings[0]).toContain('resolve to the same file')
+          expect(warnings[0]).toContain(
+            'apply through the custom-trust pass instead',
+          )
         } finally {
           delete process.env.OPENCODE_CONFIG_DIR
         }
@@ -578,6 +587,9 @@ describe('config', () => {
             ),
           ).toHaveLength(1)
           expect(warnings).toHaveLength(1)
+          expect(warnings[0]).toContain(
+            'apply through the custom-trust pass instead',
+          )
 
           // Both top-level protected fields applied through the custom-trust
           // pass of the identical file -- neither should be reported blocked.
@@ -633,6 +645,9 @@ describe('config', () => {
           expect(warnings).toEqual([
             expect.stringContaining('resolve to the same file'),
           ])
+          expect(warnings[0]).toContain(
+            'apply through the custom-trust pass instead',
+          )
         } finally {
           delete process.env.OPENCODE_CONFIG_DIR
         }
@@ -734,7 +749,82 @@ describe('config', () => {
           expect(warnings).toEqual([
             expect.stringContaining('resolve to the same file'),
           ])
+          expect(warnings[0]).toContain(
+            'apply through the custom-trust pass instead',
+          )
           expect(result.metadata.protectedFields).toEqual([])
+        } finally {
+          delete process.env.OPENCODE_CONFIG_DIR
+        }
+      })
+
+      test('alias + profile-bundle validation failure: load throws and no alias-success notice is emitted', () => {
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir)
+        fs.writeFileSync(
+          path.join(projectConfigDir, 'systematic.json'),
+          JSON.stringify({
+            profiles: {
+              p: {
+                categories: {
+                  'not-a-real-category': { model: 'openai/x' },
+                },
+              },
+            },
+          }),
+        )
+        process.env.OPENCODE_CONFIG_DIR = projectConfigDir
+
+        try {
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          // Schema-valid at both project and custom-trust parse time; the
+          // profile bundle's category key is only checked by
+          // `assertAllProfileBundlesAreValid`, which runs AFTER the alias
+          // success notice used to be emitted -- so the notice must not
+          // fire for a load that never actually returns a config.
+          expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
+            'profiles.p.categories.not-a-real-category is not a bundled agent category',
+          )
+          expect(
+            warnings.some((message) =>
+              message.includes('apply through the custom-trust pass instead'),
+            ),
+          ).toBe(false)
+        } finally {
+          delete process.env.OPENCODE_CONFIG_DIR
+        }
+      })
+
+      test('alias + routing-invariant failure (variant with no model): load throws and no alias-success notice is emitted', () => {
+        const projectConfigDir = path.join(testDir, '.opencode')
+        fs.mkdirSync(projectConfigDir)
+        fs.writeFileSync(
+          path.join(projectConfigDir, 'systematic.json'),
+          JSON.stringify({
+            agents: { 'correctness-reviewer': { variant: 'high' } },
+          }),
+        )
+        process.env.OPENCODE_CONFIG_DIR = projectConfigDir
+
+        try {
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          // `variant` is a security-overlay field, stripped from the project
+          // pass but present (unstripped) via the aliased custom-trust pass,
+          // so both passes load successfully -- the throw only comes from
+          // the post-merge routing-invariant check, which runs AFTER the
+          // alias success notice used to be emitted.
+          expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
+            /correctness-reviewer/,
+          )
+          expect(
+            warnings.some((message) =>
+              message.includes('apply through the custom-trust pass instead'),
+            ),
+          ).toBe(false)
         } finally {
           delete process.env.OPENCODE_CONFIG_DIR
         }
@@ -1623,6 +1713,55 @@ describe('config', () => {
           expect(detailed).toHaveLength(20)
           expect(summaries).toHaveLength(1)
           expect(summaries[0]).toContain('22')
+          expect(warnings).toHaveLength(21)
+        })
+
+        test('the top-level `profiles`-ignored warning shares the same 20-detail cap as overlay-field strips', () => {
+          const projectConfigDir = path.join(testDir, '.opencode')
+          fs.mkdirSync(projectConfigDir)
+          const categories: Record<string, Record<string, unknown>> = {}
+          for (let index = 0; index < 3; index++) {
+            categories[`cat${index}`] = {
+              model: 'openai/x',
+              variant: 'v',
+              skills: ['s'],
+              permission: { bash: 'allow' },
+              opencode: {},
+              pi: {},
+            }
+          }
+          // 18 fields above + 2 more here = exactly 20 -- the whole detail
+          // budget, before `profiles` is even considered. Previously
+          // `profiles` bypassed this cap entirely and would have been
+          // emitted as a 21st detailed warning regardless.
+          categories.cat3 = { model: 'openai/x', variant: 'v' }
+          fs.writeFileSync(
+            path.join(projectConfigDir, 'systematic.json'),
+            JSON.stringify({
+              categories,
+              profiles: { p: { agents: {} } },
+            }),
+          )
+          const warnings: string[] = []
+          const warningSink = (message: string) => warnings.push(message)
+
+          loadConfigWithSources(testDir, {
+            warningSink,
+            invalidSource: 'report',
+          })
+
+          const detailed = warnings.filter((message) =>
+            message.includes('is only valid in user config'),
+          )
+          const summaries = warnings.filter((message) =>
+            message.includes('were suppressed'),
+          )
+          expect(detailed).toHaveLength(20)
+          expect(
+            detailed.some((message) => message.includes('`profiles`')),
+          ).toBe(false)
+          expect(summaries).toHaveLength(1)
+          expect(summaries[0]).toContain('1')
           expect(warnings).toHaveLength(21)
         })
 
