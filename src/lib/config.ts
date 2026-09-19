@@ -13,6 +13,10 @@ import {
   BUNDLED_SKILL_NAMES,
 } from './bundled-names.js'
 import {
+  CONFIG_PROTECTED_FIELD_PATHS,
+  type ConfigProtectedFieldPath,
+} from './config-protected-fields.js'
+import {
   PI_SUBAGENTS_PROTECTED_FIELDS,
   SECURITY_OVERLAY_FIELDS,
   SystematicConfigSchema,
@@ -120,23 +124,7 @@ export const CONFIG_AUTHORITY_FIELD_PATHS = [
   'workflow_guard.mode',
 ] as const
 
-export const CONFIG_PROTECTED_FIELD_PATHS = [
-  'workflow_guard',
-  'profiles',
-  'allow_project_profiles',
-  'agents.*.model',
-  'agents.*.permission',
-  'agents.*.skills',
-  'agents.*.variant',
-  'agents.*.opencode',
-  'agents.*.pi',
-  'categories.*.model',
-  'categories.*.permission',
-  'categories.*.skills',
-  'categories.*.variant',
-  'categories.*.opencode',
-  'categories.*.pi',
-] as const
+export { CONFIG_PROTECTED_FIELD_PATHS, type ConfigProtectedFieldPath }
 
 export type ConfigSourceKind = 'custom' | 'project' | 'user'
 export type ConfigSourcePresence = 'absent' | 'invalid' | 'present'
@@ -147,8 +135,6 @@ export type ConfigSourceErrorCode =
   | 'source-invalid'
 export type ConfigAuthorityFieldPath =
   (typeof CONFIG_AUTHORITY_FIELD_PATHS)[number]
-export type ConfigProtectedFieldPath =
-  (typeof CONFIG_PROTECTED_FIELD_PATHS)[number]
 
 export interface ConfigSourceMetadata {
   readonly errorCode?: ConfigSourceErrorCode
@@ -1551,8 +1537,15 @@ function buildAliasSuccessNotice(input: {
  * `warningSink` today (project trust is the only one that strips/warns
  * inside `loadConfigSource`), so loading them ahead of the project source
  * -- which the opt-in resolution requires -- does not reorder any
- * observable warning and leaves the project-pass-only alias-buffering
- * machinery in `loadConfigWithSources` untouched.
+ * observable WARNING and leaves the project-pass-only alias-buffering
+ * machinery in `loadConfigWithSources` untouched. It does change ONE other
+ * thing: under `invalidSource: 'throw'`, when the project and custom paths
+ * alias to the same canonical file and that file is malformed, the
+ * custom-trust pass now loads (and throws) before the project-trust pass
+ * would have, so the thrown diagnostic names custom as the failing source
+ * instead of project. Nothing pinned relies on the old ordering, but this
+ * is a real behavior change, not a no-op reorder -- see ARCHITECTURE.md's
+ * "Named model profiles" section for the full explanation.
  */
 function loadUserAndCustomSources(
   paths: ReturnType<typeof getConfigPaths>,

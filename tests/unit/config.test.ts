@@ -4480,6 +4480,97 @@ describe('config', () => {
         )
       })
 
+      // KNOWN ASYMMETRY, PINNED AS DOCUMENTED FACT -- NOT A DESIRABLE OUTCOME.
+      // `resolveOverlayEntryValue`'s field-additive branch only fires for
+      // `source.trust === 'user'` (user base merging over an advisory
+      // project-sourced bundle). An ordinary CUSTOM overlay at the same key
+      // still falls through to the function's final `return next` --
+      // whole-entry replacement -- exactly as it always has for a normal
+      // (non-advisory) profile; custom trust was never given a field-additive
+      // branch of its own. In the advisory chain
+      // (`[profileEntry, userSource, project, custom]`), that means a custom
+      // config setting only `opencode.variant` on an agent whose project
+      // bundle supplies `opencode.model` wholesale-replaces the accumulated
+      // value, erasing the model and reproducing the exact trap case slice 4
+      // exists to prevent -- but only for `user`, not for `custom`.
+      //
+      // This is deliberately NOT fixed here: making custom field-additive too
+      // would change existing non-advisory-profile semantics for every
+      // custom overlay, not just this feature, which is out of scope for a
+      // documentation/test-only pass. This test exists so the throw is a
+      // pinned, known fact rather than a silent trap for the next person who
+      // combines an opted-in project bundle with a custom config overlay.
+      test('KNOWN ASYMMETRY: a custom overlay whole-replaces an advisory project bundle, reproducing the trap-case load failure (not fixed here)', () => {
+        writeUserConfig({ allow_project_profiles: true })
+        writeProjectConfig({
+          profile: 'proj',
+          profiles: {
+            proj: {
+              agents: {
+                'correctness-reviewer': {
+                  opencode: { model: 'a/project-opencode' },
+                },
+              },
+            },
+          },
+        })
+
+        withCustomConfig(
+          {
+            agents: {
+              'correctness-reviewer': { opencode: { variant: 'high' } },
+            },
+          },
+          () => {
+            expect(() =>
+              loadConfigWithSources(testDir, { warningSink }),
+            ).toThrow(
+              'Invalid Systematic config: agents.correctness-reviewer.variant resolves to "high" on the opencode harness, but no model resolves for agents.correctness-reviewer on opencode at any layer (agent, category, block, or flat). Set a model at the same layer or a lower one, or remove the qualifier.',
+            )
+          },
+        )
+      })
+
+      // KNOWN QUIRK, PINNED AS DOCUMENTED FACT -- pre-existing
+      // `preserveSecurityFields` behavior, newly reachable via an advisory
+      // bundle. `preserveSecurityFields` (used for a project-trust source's
+      // OWN direct overlay at the same key, position 2 in the advisory
+      // chain) only carries `SECURITY_OVERLAY_FIELDS` (model, variant,
+      // skills, permission, opencode, pi) forward from `previous` --
+      // `temperature`/`top_p` are not in that list, so when the SAME
+      // project config both defines a selected profile bundle setting
+      // `temperature`/`top_p` on an agent AND sets its own direct overlay
+      // on that SAME agent (for an unrelated field), the bundle's
+      // `temperature`/`top_p` are silently dropped -- neither preserved
+      // (not a security field) nor restated by the project's own overlay
+      // (which never mentioned them). Not fixed here: this is unrelated,
+      // pre-existing `preserveSecurityFields` behavior that only became
+      // reachable through this specific combination; changing it is out of
+      // scope for a documentation/test-only pass.
+      test("KNOWN QUIRK: a project-trust overlay on the same key as an advisory bundle silently drops the bundle's temperature/top_p (preserveSecurityFields only carries security fields forward)", () => {
+        writeUserConfig({ allow_project_profiles: true })
+        writeProjectConfig({
+          profile: 'proj',
+          profiles: {
+            proj: {
+              agents: {
+                'correctness-reviewer': { temperature: 0.3, top_p: 0.8 },
+              },
+            },
+          },
+          // Project's OWN direct overlay on the same agent -- unrelated
+          // field, but its mere presence triggers `preserveSecurityFields`
+          // for this key at merge time.
+          agents: { 'correctness-reviewer': { mode: 'primary' } },
+        })
+
+        const result = loadConfigWithSources(testDir, { warningSink })
+
+        expect(result.config.agents?.['correctness-reviewer']).toEqual({
+          mode: 'primary',
+        })
+      })
+
       test('full absorption: every target the project bundle sets is already set by user config → the merged result is identical to loading with no project bundle at all', () => {
         writeUserConfig({
           allow_project_profiles: true,

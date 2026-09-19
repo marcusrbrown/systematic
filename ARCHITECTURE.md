@@ -61,6 +61,7 @@ Coarse module pipeline, roughly in dependency order:
 Config loading
   src/lib/config.ts          — loadConfig: JSONC loading, 3-source merge (env > project > user)
   src/lib/config-schema.ts   — SystematicConfigSchema (Zod), validateConfig, SECURITY_OVERLAY_FIELDS
+  src/lib/config-protected-fields.ts — CONFIG_PROTECTED_FIELD_PATHS: dependency-free (imports nothing), shared verbatim by config.ts and capability-snapshot.ts so the two never drift
 
 Asset discovery
   src/lib/walk-dir.ts        — walkDir: recursive directory walker (foundation for all discovery)
@@ -332,6 +333,16 @@ custom source loads successfully, both trust passes still run in normal preceden
 resulting diagnostic states the file's fields apply as custom. If the custom source fails to load,
 report-mode falls back to the project strip warnings instead. `preserveSecurityFields` carries a
 previously-trusted value's protected fields forward across a project overlay on the same key.
+
+One load-order exception exists for `invalidSource: 'throw'` (the default): `loadUserAndCustomSources`
+(below) loads user and custom fully, ahead of project, so the opt-in can be resolved before the
+project source is parsed. When the project and custom paths alias to the same canonical file AND that
+file is malformed (JSONC parse failure or schema-invalid), the custom-trust pass now throws first,
+naming custom as the failing source — before this feature's reordering, the project-trust pass loaded
+first and would have thrown with project attribution instead. No test asserting a specific outcome for
+that combination broke; this is a real, observable change in which trust level a thrown diagnostic
+names for an aliased-and-malformed file, not a claim that the reorder has zero effect on
+exception-path behavior.
 `workflow_guard` and `allow_project_profiles` are in `PROJECT_ALWAYS_PROTECTED_FIELDS`
 (`src/lib/config.ts`) — a top-level-key list distinct from the per-overlay `SECURITY_OVERLAY_FIELDS`
 above, and unconditional: no project source can ever set either field, regardless of anything else
@@ -353,13 +364,22 @@ bundle content, subject to two structural constraints:
   source's own `profiles` map. A project source setting `allow_project_profiles: true` alongside a
   `profiles` map in the same file has both fields stripped exactly as if the opt-in were never
   mentioned — self-authorization is unreachable, not merely rejected by a runtime check.
-- **A project-defined bundle name can never shadow a user- or custom-defined one.** `lookupProfileBundle`
-  consults custom, then user, then — only when the opt-in resolved `true` — project, in that fixed
-  order; a name collision always resolves to the custom or user definition. Every profile bundle from
-  every source that may define one (custom, user, and — under the opt-in — project) is validated by
-  `assertAllProfileBundlesAreValid` regardless of whether it is currently selected, matching the
-  existing user/custom validate-always behavior: a malformed bundle in a shared repository is a
-  repository bug that surfaces for everyone, not only whoever happens to select it.
+- **A project-defined bundle name can never shadow a name a user or custom source *defined*.**
+  `lookupProfileBundle` consults custom, then user, then — only when the opt-in resolved `true` —
+  project, in that fixed order; a name collision always resolves to the custom or user definition.
+  This does NOT extend to a name a user or custom source only *referenced* via `profile` (its
+  top-level selector) without ever defining a matching `profiles` entry: `trustedDefaultProfileName`
+  returns the user's own `profile` string as the fallback candidate, and that name is looked up
+  through the SAME custom-then-user-then-project order as any other selection. If the user's
+  `profile` names a bundle absent (or typoed) from every user/custom `profiles` map, an opted-in
+  project's `profiles` entry of that exact name is still consulted and can supply content for it —
+  the missing-name warning does not fire, because the name resolves, just not to anything the user
+  wrote. Every profile bundle from every source that may define one (custom, user, and — under the
+  opt-in — project) is validated by `assertAllProfileBundlesAreValid` regardless of whether it is
+  currently selected, matching the existing user/custom validate-always behavior: a malformed bundle
+  in a shared repository is a repository bug that surfaces for everyone, not only whoever happens to
+  select it — including, under the opt-in, a repository whose project bundle nobody in the loading
+  session ever selects.
 
 A project-sourced active bundle's chain position depends on that provenance and differs from a
 user/custom-sourced one: `buildOverlaySources` inserts a user- or custom-sourced bundle after user
