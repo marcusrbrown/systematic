@@ -792,6 +792,14 @@ describe('config', () => {
               message.includes('apply through the custom-trust pass instead'),
             ),
           ).toBe(false)
+          // The stable identifying half of the alias notice -- catches a
+          // reworded success notice that dropped the exact phrase above but
+          // still claims the alias applied.
+          expect(
+            warnings.some((message) =>
+              message.includes('resolve to the same file'),
+            ),
+          ).toBe(false)
         } finally {
           delete process.env.OPENCODE_CONFIG_DIR
         }
@@ -817,12 +825,22 @@ describe('config', () => {
           // so both passes load successfully -- the throw only comes from
           // the post-merge routing-invariant check, which runs AFTER the
           // alias success notice used to be emitted.
+          //
+          // Match the distinctive `assertRoutingInvariants` diagnostic itself
+          // (not just the agent name), so this proves the load failed for the
+          // intended reason -- a qualifier resolving without a model -- and
+          // not from some unrelated error that happens to mention the agent.
           expect(() => loadConfigWithSources(testDir, { warningSink })).toThrow(
-            /correctness-reviewer/,
+            /agents\.correctness-reviewer\.variant resolves to "high" on the opencode harness, but no model resolves for agents\.correctness-reviewer on opencode/,
           )
           expect(
             warnings.some((message) =>
               message.includes('apply through the custom-trust pass instead'),
+            ),
+          ).toBe(false)
+          expect(
+            warnings.some((message) =>
+              message.includes('resolve to the same file'),
             ),
           ).toBe(false)
         } finally {

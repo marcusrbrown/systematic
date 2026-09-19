@@ -1399,7 +1399,7 @@ export function loadConfigWithSources(
   const suppressedStripCount = boundedProjectStrip.suppressedCount()
   if (suppressedStripCount > 0) {
     projectStrip.sink(
-      `[systematic] ${suppressedStripCount} additional project-config security-field warning(s) in (${sanitizeDiagnosticText(paths.projectConfig)}) were suppressed.`,
+      `[systematic] ${suppressedStripCount} additional project-config protected-field warning(s) in (${sanitizeDiagnosticText(paths.projectConfig)}) were suppressed.`,
     )
   }
 
