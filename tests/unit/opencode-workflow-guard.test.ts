@@ -4196,6 +4196,122 @@ describe('OpenCode workflow guard adapter', () => {
     expect(status(unavailable).state).toBe('unavailable')
   })
 
+  describe('guard-unavailable first-cause diagnostic (seedRemoteScopes)', () => {
+    // sequenceObserver's default remoteResults is `{}`: any operation/phase
+    // key not supplied resolves to `{status:'unavailable', reasonCode:
+    // 'remote-missing-field'}` (see helper above), reproducing the real
+    // seeding failure from CI run 35405852057 (push scenario, zero mint
+    // markers, guard-unavailable).
+    function pushSeedingFailureAdapter(): OpencodeWorkflowGuard {
+      return createAdapter(
+        'observe',
+        false,
+        sequenceObserver([operationSnapshot()]),
+        ['push'],
+      )
+    }
+
+    test('seeding failure records first-cause site, operation, and reasonCode', async () => {
+      const adapter = pushSeedingFailureAdapter()
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      expect(status(adapter).state).toBe('unavailable')
+
+      const result = await getTool(
+        adapter,
+        'systematic_workflow_status',
+      ).execute({}, toolContext())
+      const parsed = JSON.parse(expectToolOutput(result).output)
+      expect(parsed.firstUnavailableCause).toEqual({
+        site: 'seed-remote-scope',
+        kind: 'remote-scope-unavailable',
+        operation: 'push',
+        reasonCode: 'remote-missing-field',
+        timedOut: false,
+      })
+    })
+
+    test('a later, unrelated markUnavailable() does not overwrite the recorded cause', async () => {
+      const adapter = pushSeedingFailureAdapter()
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      expect(status(adapter).state).toBe('unavailable')
+
+      const before = JSON.parse(
+        expectToolOutput(
+          await getTool(adapter, 'systematic_workflow_status').execute(
+            {},
+            toolContext(),
+          ),
+        ).output,
+      )
+      expect(before.firstUnavailableCause).toBeDefined()
+
+      // Trigger a second, wholly unrelated markUnavailable(): reusing a
+      // callID across two different call kinds (skill vs start) trips the
+      // bindCall conflict path (opencode-workflow-guard.ts bindCall()),
+      // which never touches the seeding first-cause record.
+      await adapter.hooks['tool.execute.before'](
+        {
+          tool: 'systematic_skill',
+          sessionID: SESSION_A,
+          callID: 'reused-call',
+        },
+        { args: { name: 'ce:work' } },
+      )
+      await adapter.hooks['tool.execute.before'](
+        {
+          tool: 'systematic_workflow_start',
+          sessionID: SESSION_A,
+          callID: 'reused-call',
+        },
+        { args: {} },
+      )
+
+      const after = JSON.parse(
+        expectToolOutput(
+          await getTool(adapter, 'systematic_workflow_status').execute(
+            {},
+            toolContext(),
+          ),
+        ).output,
+      )
+      expect(after.firstUnavailableCause).toEqual(before.firstUnavailableCause)
+    })
+
+    test('cause is absent when the guard never goes unavailable', async () => {
+      const adapter = createAdapter('observe')
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      expect(status(adapter).state).not.toBe('unavailable')
+
+      const result = await getTool(
+        adapter,
+        'systematic_workflow_status',
+      ).execute({}, toolContext())
+      const parsed = JSON.parse(expectToolOutput(result).output)
+      expect(parsed.firstUnavailableCause).toBeUndefined()
+    })
+
+    test('the diagnostic never enters the marker envelope', async () => {
+      const adapter = pushSeedingFailureAdapter()
+      await observeSkill(adapter, 'systematic_skill', 'ce:work')
+      expect(status(adapter).state).toBe('unavailable')
+
+      const output: { system: string[] } = { system: [] }
+      await adapter.hooks['experimental.chat.system.transform'](
+        { sessionID: SESSION_A },
+        output,
+      )
+      const marker = output.system.join('\n')
+      expect(marker).toContain('guard-unavailable')
+      expect(marker).not.toContain('firstUnavailableCause')
+      const markerJson = JSON.parse(
+        marker.slice(marker.indexOf('{'), marker.lastIndexOf('}') + 1),
+      )
+      expect(Object.keys(markerJson).sort()).toEqual(
+        ['aggregate', 'protocolVersion', 'sources'].sort(),
+      )
+    })
+  })
+
   test('before-only operation is abandoned at the next status boundary', async () => {
     const adapter = createAdapter(
       'observe',
